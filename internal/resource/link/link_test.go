@@ -170,6 +170,29 @@ func TestHaveAbsentSymlink(t *testing.T) {
 	}
 }
 
+func TestAbsentSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.txt")
+	link := filepath.Join(dir, "link.txt")
+	if err := os.WriteFile(target, []byte("t"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	Absent(link)
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Errorf("expected %s to be removed", link)
+	}
+
+	// Idempotent: removing a missing link is not an error (direct call to
+	// avoid duplicate registration in the one-per-process registry).
+	if err := ensureAbsent(link); err != nil {
+		t.Fatalf("absent on missing link: %v", err)
+	}
+}
+
 func TestHaveAbsentWithoutKindRegistersGenericLink(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "whatever")

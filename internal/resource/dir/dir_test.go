@@ -99,6 +99,28 @@ func TestHaveAbsentPruneDirectoryRecursive(t *testing.T) {
 	}
 }
 
+func TestAbsentPruneDirectoryRecursive(t *testing.T) {
+	tmp := t.TempDir()
+	target := filepath.Join(tmp, "d")
+	if err := os.MkdirAll(filepath.Join(target, "sub", "deep"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "sub", "f.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	Absent(target, WithPrune())
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Errorf("expected %s to be removed recursively", target)
+	}
+
+	// Idempotent: removing a missing tree is not an error.
+	d := &Dir{path: target, absent: true, prune: true}
+	if err := ensureAbsent(d); err != nil {
+		t.Fatalf("prune on missing tree: %v", err)
+	}
+}
+
 func TestHaveDirectoryWithSource(t *testing.T) {
 	t.Run("recursive copy", func(t *testing.T) {
 		tmp := t.TempDir()

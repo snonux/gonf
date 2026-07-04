@@ -182,6 +182,25 @@ func TestHaveAbsent(t *testing.T) {
 	}
 }
 
+func TestAbsent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gone.txt")
+	if err := os.WriteFile(path, []byte("bye"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	Absent(path)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("expected %s to be removed", path)
+	}
+
+	// Idempotent: removing a missing file is not an error (direct call to
+	// avoid duplicate registration in the one-per-process registry).
+	if err := ensureAbsent(path); err != nil {
+		t.Fatalf("absent on missing file: %v", err)
+	}
+}
+
 func TestResolveStripsTmplSuffixWhenSourceHasTmplSuffix(t *testing.T) {
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "foo.conf.tmpl")

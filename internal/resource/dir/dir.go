@@ -222,3 +222,8 @@ func Have(path string, opts ...Option) resource.Resource {
 
 	return res
 }
+
+func Absent(path string, opts ...Option) resource.Resource {
+	opts = append(opts, IsAbsent())
+	return Have(path, opts...)
+}

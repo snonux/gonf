@@ -33,6 +33,7 @@ func Run() error {
 
 	// 7. Ensuring something is absent
 	file.Have("/tmp/gonf_old.txt", file.IsAbsent())
+	file.Absent("/tmp/gonf_old.txt") // Alternative way
 
 	// 8. A directory tree copied from source, reconciled, with a distinct
 	// file mode from the directory's own mode
@@ -49,6 +50,7 @@ func Run() error {
 	// something real to demonstrate.
 	_ = os.MkdirAll("/tmp/gonf_stale_dir/nested", 0o755)
 	dir.Have("/tmp/gonf_stale_dir", dir.IsAbsent(), dir.WithPrune())
+	dir.Absent("/tmp/gonf_stale_dir", dir.WithPrune()) // Alternative way
 
 	// 10. Non-recursively removing an empty directory
 	_ = os.Mkdir("/tmp/gonf_stale_empty_dir", 0o755)
@@ -57,6 +59,7 @@ func Run() error {
 	// 11. Ensuring a symlink is absent
 	_ = os.Symlink("/tmp/gonf_hello.txt", "/tmp/gonf_stale_link")
 	link.Have("/tmp/gonf_stale_link", link.IsAbsent())
+	link.Absent("/tmp/gonf_stale_link") // Alternative way
 
 	// 12. Ensuring a hardlink is absent
 	_ = os.Link("/tmp/gonf_hello.txt", "/tmp/gonf_stale_hardlink")
