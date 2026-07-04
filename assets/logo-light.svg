@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Gonf logo</title>
+  <desc id="desc">Nested configuration layers: concentric rotated squares representing layered configuration management</desc>
+  <rect width="256" height="256" rx="36" fill="#f4f0e8"/>
+  <circle cx="128" cy="128" r="108" fill="#18212b"/>
+  <rect x="60" y="60" width="136" height="136"
+        fill="none" stroke="#dce5eb" stroke-width="12" stroke-linejoin="round"
+        transform="rotate(45 128 128)"/>
+  <rect x="75" y="75" width="106" height="106"
+        fill="none" stroke="#7f8e99" stroke-width="11" stroke-linejoin="round"
+        transform="rotate(30 128 128)"/>
+  <rect x="88" y="88" width="80" height="80"
+        fill="none" stroke="#dce5eb" stroke-width="10" stroke-linejoin="round"
+        transform="rotate(15 128 128)"/>
+  <rect x="100" y="100" width="56" height="56"
+        fill="none" stroke="#7f8e99" stroke-width="9" stroke-linejoin="round"/>
+  <circle cx="128" cy="128" r="48" fill="none" stroke="#06b6d4" stroke-width="12"/>
+  <circle cx="128" cy="128" r="10" fill="#f4f0e8"/>
+</svg>
