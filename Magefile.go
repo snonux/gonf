@@ -32,7 +32,6 @@ func Build() error {
 	return run("go", "build", "-o", binName, "./cmd/gonf")
 }
 
-
 // Run builds and runs the program.
 func Run() error {
 	fmt.Println("running...")
@@ -45,7 +44,7 @@ func Run() error {
 // Test runs all unit tests.
 func Test() error {
 	fmt.Println("testing...")
-	return run("go", "test", "./...")
+	return run("go", "test", "-v", "./...")
 }
 
 // Lint runs go vet.

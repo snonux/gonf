@@ -91,7 +91,7 @@ func IsSymlink(target string) Option {
 	}
 }
 
-func Hardlink(target string) Option {
+func IsHardlink(target string) Option {
 	return func(f *File) {
 		f.hardlink = true
 		f.hardlinkTarget = target
@@ -104,10 +104,19 @@ func PruneDirectory() Option {
 	}
 }
 
-func Have(path string, opts ...Option) error {
+func Have(path string, opts ...Option) resource.Resource {
+	res, err := have(path, opts...)
+	if err != nil {
+		log.Fatalf("failed to apply file resource %s: %v", path, err)
+	}
+
+	return res
+}
+
+func have(path string, opts ...Option) (resource.Resource, error) {
 	curr, err := user.Current()
 	if err != nil {
-		log.Fatalf("failed to get current user for default: %v", err)
+		return resource.Resource{}, fmt.Errorf("failed to get current user for default: %w", err)
 	}
 
 	f := &File{
@@ -127,34 +136,36 @@ func Have(path string, opts ...Option) error {
 // Apply dispatches to the concrete resource implementation based on the
 // options that were set. Each kind lives in its own file:
 // regular_file.go, directory.go and symlink.go.
-func (f *File) Apply() error {
+func (f *File) Apply() (resource.Resource, error) {
+	var res resource.Resource
+
 	switch {
 	case f.absent:
-		_ = resource.Register(f.resourceType(), f.path)
-		return f.haveAbsent()
+		res = resource.Register(f.resourceType(), f.path)
+		return res, f.haveAbsent()
 
 	case f.symlink:
-		_ = resource.Register("Symlink", f.path)
-		return f.haveSymlink()
+		res = resource.Register("Symlink", f.path)
+		return res, f.haveSymlink()
 
 	case f.hardlink:
-		_ = resource.Register("Hardlink", f.path)
-		return f.haveHardlink()
+		res = resource.Register("Hardlink", f.path)
+		return res, f.haveHardlink()
 
 	case f.directory:
 		if !f.modeSet {
 			f.mode = 0o750
 		}
-		_ = resource.Register("Directory", f.path)
-		return f.haveDirectory()
+		res = resource.Register("Directory", f.path)
+		return res, f.haveDirectory()
 
 	default:
-		_ = resource.Register("File", f.path)
+		res = resource.Register("File", f.path)
 		content, err := f.resolveContent()
 		if err != nil {
-			return fmt.Errorf("failed to resolve content for %s: %w", f.path, err)
+			return res, fmt.Errorf("failed to resolve content for %s: %w", f.path, err)
 		}
-		return f.haveRegularFile(content)
+		return res, f.haveRegularFile(content)
 	}
 }
 

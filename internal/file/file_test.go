@@ -101,9 +101,7 @@ func TestHaveStringCreateNewFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "new.txt")
 
-	if err := Have(path, WithContent("hello world")); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	Have(path, WithContent("hello world"))
 
 	got, err := os.ReadFile(path)
 	if err != nil {
@@ -119,9 +117,7 @@ func TestHaveMode(t *testing.T) {
 	path := filepath.Join(dir, "mode.txt")
 	mode := os.FileMode(0o600)
 
-	if err := Have(path, WithContent("mode test"), WithMode(mode)); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	Have(path, WithContent("mode test"), WithMode(mode))
 
 	info, err := os.Stat(path)
 	if err != nil {
@@ -138,9 +134,7 @@ func TestHaveSourceFile(t *testing.T) {
 	sourcePath := filepath.Join("..", "..", "assets", "testfiles", "test.txt")
 	targetPath := filepath.Join(dir, "target.txt")
 
-	if err := Have(targetPath, WithSource(sourcePath)); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	Have(targetPath, WithSource(sourcePath))
 
 	got, err := os.ReadFile(targetPath)
 	if err != nil {
@@ -157,9 +151,7 @@ func TestHaveTemplateFile(t *testing.T) {
 	sourcePath := filepath.Join("..", "..", "assets", "testfiles", "test.tmpl")
 	targetPath := filepath.Join(dir, "target.conf")
 
-	if err := Have(targetPath, WithSource(sourcePath)); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	Have(targetPath, WithSource(sourcePath))
 
 	got, err := os.ReadFile(targetPath)
 	if err != nil {
@@ -176,9 +168,7 @@ func TestHaveDirectoryCreate(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sub", "nested")
 
-	if err := Have(path, IsDirectory()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	Have(path, IsDirectory())
 
 	info, err := os.Stat(path)
 	if err != nil {
@@ -223,7 +213,7 @@ func TestHaveDirectoryFailsWhenFileExists(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := Have(path, IsDirectory()); err == nil {
+	if _, err := have(path, IsDirectory()); err == nil {
 		t.Error("expected error when a regular file is in the way of a directory")
 	}
 }
@@ -236,9 +226,7 @@ func TestHaveSymlinkCreateAndIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := Have(link, IsSymlink(target)); err != nil {
-		t.Fatalf("create: %v", err)
-	}
+	Have(link, IsSymlink(target))
 	got, err := os.Readlink(link)
 	if err != nil {
 		t.Fatalf("readlink: %v", err)
@@ -269,9 +257,7 @@ func TestHaveSymlinkRepoints(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := Have(link, IsSymlink(newT)); err != nil {
-		t.Fatalf("repoint: %v", err)
-	}
+	Have(link, IsSymlink(newT))
 	got, err := os.Readlink(link)
 	if err != nil {
 		t.Fatal(err)
@@ -292,9 +278,7 @@ func TestHaveSymlinkMovesRealFileAside(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := Have(link, IsSymlink(target)); err != nil {
-		t.Fatalf("symlink over real file: %v", err)
-	}
+	Have(link, IsSymlink(target))
 
 	got, err := os.Readlink(link)
 	if err != nil {
@@ -315,9 +299,7 @@ func TestHaveAbsent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := Have(path, IsAbsent()); err != nil {
-		t.Fatalf("absent: %v", err)
-	}
+	Have(path, IsAbsent())
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("expected %s to be removed", path)
 	}
@@ -338,9 +320,7 @@ func TestHaveHardlinkCreateAndIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := Have(link, Hardlink(target)); err != nil {
-		t.Fatalf("create: %v", err)
-	}
+	Have(link, IsHardlink(target))
 
 	ti, err := os.Stat(target)
 	if err != nil {
@@ -373,9 +353,7 @@ func TestHaveHardlinkMovesRealFileAside(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := Have(link, Hardlink(target)); err != nil {
-		t.Fatalf("hardlink over real file: %v", err)
-	}
+	Have(link, IsHardlink(target))
 
 	ti, err := os.Stat(target)
 	if err != nil {
@@ -396,7 +374,7 @@ func TestHaveHardlinkMovesRealFileAside(t *testing.T) {
 func TestHaveHardlinkMissingTarget(t *testing.T) {
 	dir := t.TempDir()
 	link := filepath.Join(dir, "link")
-	if err := Have(link, Hardlink(filepath.Join(dir, "nope"))); err == nil {
+	if _, err := have(link, IsHardlink(filepath.Join(dir, "nope"))); err == nil {
 		t.Error("expected error when hardlink target does not exist")
 	}
 }
@@ -408,7 +386,7 @@ func TestHaveAbsentNonEmptyDirWithoutPruneFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := Have(target, IsAbsent()); err == nil {
+	if _, err := have(target, IsAbsent()); err == nil {
 		t.Error("expected error removing a non-empty directory without PruneDirectory()")
 	}
 	if _, err := os.Stat(target); err != nil {
@@ -426,9 +404,7 @@ func TestHaveAbsentPruneDirectoryRecursive(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := Have(target, IsAbsent(), PruneDirectory()); err != nil {
-		t.Fatalf("prune remove: %v", err)
-	}
+	Have(target, IsAbsent(), PruneDirectory())
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
 		t.Errorf("expected %s to be removed recursively", target)
 	}
