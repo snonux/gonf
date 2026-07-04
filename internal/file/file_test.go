@@ -31,7 +31,7 @@ func TestWriteTmpFile(t *testing.T) {
 	tmpPath := filepath.Join(dir, "test.tmp")
 	content := []byte("temp content")
 
-	if err := writeTmpFile(tmpPath, content); err != nil {
+	if err := writeTmpFile(tmpPath, content, 0o644); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -101,7 +101,7 @@ func TestHaveStringCreateNewFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "new.txt")
 
-	if err := Have(path, "hello world"); err != nil {
+	if err := Have(path, WithContent("hello world")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -114,12 +114,31 @@ func TestHaveStringCreateNewFile(t *testing.T) {
 	}
 }
 
+func TestHaveMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mode.txt")
+	mode := os.FileMode(0o600)
+
+	if err := Have(path, WithContent("mode test"), WithMode(mode)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Mask to check only permission bits
+	if info.Mode().Perm() != mode {
+		t.Errorf("expected mode %v, got %v", mode, info.Mode().Perm())
+	}
+}
+
 func TestHaveSourceFile(t *testing.T) {
 	dir := t.TempDir()
 	sourcePath := filepath.Join("..", "..", "assets", "testfiles", "test.txt")
 	targetPath := filepath.Join(dir, "target.txt")
 
-	if err := Have(targetPath, "source://"+sourcePath); err != nil {
+	if err := Have(targetPath, WithSource(sourcePath)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -138,7 +157,7 @@ func TestHaveTemplateFile(t *testing.T) {
 	sourcePath := filepath.Join("..", "..", "assets", "testfiles", "test.tmpl")
 	targetPath := filepath.Join(dir, "target.conf")
 
-	if err := Have(targetPath, "source://"+sourcePath); err != nil {
+	if err := Have(targetPath, WithSource(sourcePath)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -147,7 +166,7 @@ func TestHaveTemplateFile(t *testing.T) {
 		t.Fatalf("reading file: %v", err)
 	}
 
-	expectedParam := "source://" + sourcePath
+	expectedParam := sourcePath
 	if !strings.Contains(string(got), expectedParam) {
 		t.Errorf("expected content to contain Param %q, got %q", expectedParam, string(got))
 	}

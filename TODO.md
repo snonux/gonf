@@ -5,34 +5,11 @@ Perl [Rex](https://www.rexify.org/) `Rexfile` used to install
 `~/git/dotfiles`. It is derived from an audit of that Rexfile
 (`~/git/dotfiles/Rexfile`).
 
-## 0. Fix the current build (blocker)
-
-`gonf` does not compile today:
-
-- `internal/file/content.go` and `internal/file/file.go` both declare
-  `resolveContent` and `applyTemplate` → duplicate declarations.
-- Decide on one implementation and delete the other. Note the two copies
-  have **different signatures / semantics**:
-  - `file.go`: `resolveContent(param, targetPath)` — templating triggered by
-    the *target* path ending in `.tmpl`, plus a `source://` check on param.
-  - `content.go`: `resolveContent(path, param)` — templating triggered by the
-    *source* path.
-- The `File.Have(path, param)` API conflates the trigger and the target
-  (see the `TestHaveSourceFile` comment in `file_test.go`). A source file and
-  its install destination must be **separate arguments**, e.g.
-  `file.Have(dst, source://src, mode)`.
-
-Until this is fixed nothing else can be built or tested.
-
 ## 1. File resource — missing capabilities
 
 The Rexfile uses `file` for far more than "write these bytes". gonf's
 `file.Have` currently only manages content + checksum idempotency. Missing:
 
-- **Permissions / mode.** Every Rexfile `file` call sets a mode
-  (`0600`, `0640`, `0700`, `0750`). gonf ignores mode entirely. Need to accept
-  and enforce a file mode, and only chmod when it differs (stay idempotent).
-- **Separate source vs. destination path** (see section 0).
 - **`ensure => 'absent'`.** Remove a file if present. Used by `prune_dir`.
 - **`ensure => 'directory'`.** See section 2.
 
