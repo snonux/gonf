@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"log"
 	"sync"
-
-	"codeberg.org/snonux/gonf/internal/resource"
 )
 
 var (
@@ -13,20 +11,21 @@ var (
 	once sync.Once
 )
 
-func initRepository() {
+func getRepository() repository {
 	once.Do(func() {
 		repo = newRepository()
 	})
+	return repo
 }
 
 type repository struct {
-	registered map[string]resource.Resource
+	registered map[string]Resource
 	mu         *sync.Mutex
 }
 
 func newRepository() repository {
 	return repository{
-		registered: make(map[string]resource.Resource),
+		registered: make(map[string]Resource),
 		mu:         new(sync.Mutex),
 	}
 }
@@ -44,7 +43,3 @@ func (r repository) register(res Resource) error {
 
 	return nil
 }
-
-// func (r repository)(res Resource) error {
-// 	return nil
-// }
