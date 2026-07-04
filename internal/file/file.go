@@ -15,12 +15,23 @@ import (
 )
 
 type File struct {
-	path   string
-	param  string
-	source string
-	user   string
-	group  string
-	mode   os.FileMode
+	path    string
+	param   string
+	source  string
+	user    string
+	group   string
+	mode    os.FileMode
+	modeSet bool
+	absent  bool
+
+	symlink       bool
+	symlinkTarget string
+
+	hardlink       bool
+	hardlinkTarget string
+
+	directory      bool
+	pruneDirectory bool // with Absent(): remove directory recursively
 }
 
 type Option func(*File)
@@ -57,6 +68,39 @@ func WithGroup(group string) Option {
 func WithMode(mode os.FileMode) Option {
 	return func(f *File) {
 		f.mode = mode
+		f.modeSet = true
+	}
+}
+
+func IsAbsent() Option {
+	return func(f *File) {
+		f.absent = true
+	}
+}
+
+func IsDirectory() Option {
+	return func(f *File) {
+		f.directory = true
+	}
+}
+
+func IsSymlink(target string) Option {
+	return func(f *File) {
+		f.symlink = true
+		f.symlinkTarget = target
+	}
+}
+
+func Hardlink(target string) Option {
+	return func(f *File) {
+		f.hardlink = true
+		f.hardlinkTarget = target
+	}
+}
+
+func PruneDirectory() Option {
+	return func(f *File) {
+		f.pruneDirectory = true
 	}
 }
 
@@ -80,15 +124,53 @@ func Have(path string, opts ...Option) error {
 	return f.Apply()
 }
 
+// Apply dispatches to the concrete resource implementation based on the
+// options that were set. Each kind lives in its own file:
+// regular_file.go, directory.go and symlink.go.
 func (f *File) Apply() error {
-	_ = resource.Register("File", f.path)
+	switch {
+	case f.absent:
+		_ = resource.Register(f.resourceType(), f.path)
+		return f.haveAbsent()
 
-	content, err := f.resolveContent()
-	if err != nil {
-		log.Fatalf("failed to resolve content for %s: %v", f.path, err)
+	case f.symlink:
+		_ = resource.Register("Symlink", f.path)
+		return f.haveSymlink()
+
+	case f.hardlink:
+		_ = resource.Register("Hardlink", f.path)
+		return f.haveHardlink()
+
+	case f.directory:
+		if !f.modeSet {
+			f.mode = 0o750
+		}
+		_ = resource.Register("Directory", f.path)
+		return f.haveDirectory()
+
+	default:
+		_ = resource.Register("File", f.path)
+		content, err := f.resolveContent()
+		if err != nil {
+			return fmt.Errorf("failed to resolve content for %s: %w", f.path, err)
+		}
+		return f.haveRegularFile(content)
 	}
+}
 
-	return f.have(content)
+// resourceType returns the registry type name for this resource, used when the
+// concrete kind matters for registration (e.g. absent works for any kind).
+func (f *File) resourceType() string {
+	switch {
+	case f.symlink:
+		return "Symlink"
+	case f.hardlink:
+		return "Hardlink"
+	case f.directory:
+		return "Directory"
+	default:
+		return "File"
+	}
 }
 
 func (f *File) resolveContent() ([]byte, error) {
@@ -132,24 +214,6 @@ func (f *File) applyTemplate(content []byte) ([]byte, error) {
 		return nil, fmt.Errorf("template execute error: %w", err)
 	}
 	return buf.Bytes(), nil
-}
-
-func (f *File) have(content []byte) error {
-	log.Printf("processing file: %s", f.path)
-	existingChecksum := getChecksum(f.path)
-	newChecksum := sha256.Sum256(content)
-	log.Printf("computed checksum for new content: %x", newChecksum)
-
-	tmpPath := f.path + ".tmp"
-	if err := writeTmpFile(tmpPath, content, f.mode); err != nil {
-		return err
-	}
-
-	if err := updateFromTmp(tmpPath, f.path, existingChecksum != newChecksum); err != nil {
-		return err
-	}
-
-	return f.applyAttributes()
 }
 
 func (f *File) applyAttributes() error {

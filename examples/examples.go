@@ -15,5 +15,17 @@ func Run() error {
 		return fmt.Errorf("failed to create foo.txt: %w", err)
 	}
 
+	if err := file.Have("/tmp/gonf_example_dir", file.IsDirectory(), file.WithMode(0o755)); err != nil {
+		return fmt.Errorf("failed to create example dir: %w", err)
+	}
+
+	if err := file.Have("/tmp/gonf_example_link", file.IsSymlink("/tmp/foo.txt")); err != nil {
+		return fmt.Errorf("failed to create example symlink: %w", err)
+	}
+
+	if err := file.Have("/tmp/gonf_example_hardlink", file.Hardlink("/tmp/foo.txt")); err != nil {
+		return fmt.Errorf("failed to create example hardlink: %w", err)
+	}
+
 	return nil
 }
