@@ -8,9 +8,15 @@ import (
 	"codeberg.org/snonux/gonf/internal/resource"
 )
 
-func HaveString(path, content string) error {
+func Have(path, param string) error {
 	_ = resource.Register("File", path)
-	return have(path, []byte(content))
+
+	content, err := resolveContent(param, path)
+	if err != nil {
+		log.Fatalf("failed to resolve content for %s: %v", path, err)
+	}
+
+	return have(path, content)
 }
 
 func getChecksum(path string) [32]byte {

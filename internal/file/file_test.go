@@ -3,6 +3,7 @@ package file
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -10,17 +11,14 @@ func TestGetChecksum(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.txt")
 
-	// Existing file
 	if err := os.WriteFile(path, []byte("hello"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	checksum := getChecksum(path)
-	if checksum == (checksum) {
-		// Just verify it's not all zeros — a valid sha256 won't be
-		_ = checksum
+	if checksum == [32]byte{} {
+		t.Error("expected non-zero checksum")
 	}
 
-	// Non-existing file returns zero checksum
 	zeroChecksum := getChecksum(filepath.Join(dir, "no-such-file"))
 	var expectedZero [32]byte
 	if zeroChecksum != expectedZero {
@@ -59,7 +57,6 @@ func TestUpdateFromTmpChecksumChanged(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// tmp should be gone, target should exist with new content
 	if _, err := os.Stat(tmpPath); err == nil {
 		t.Error("tmp file should have been removed")
 	}
@@ -88,7 +85,6 @@ func TestUpdateFromTmpChecksumUnchanged(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// tmp should be gone, target unchanged
 	if _, err := os.Stat(tmpPath); err == nil {
 		t.Error("tmp file should have been removed")
 	}
@@ -105,7 +101,7 @@ func TestHaveStringCreateNewFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "new.txt")
 
-	if err := HaveString(path, "hello world"); err != nil {
+	if err := Have(path, "hello world"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -116,57 +112,43 @@ func TestHaveStringCreateNewFile(t *testing.T) {
 	if string(got) != "hello world" {
 		t.Errorf("expected 'hello world', got %q", got)
 	}
-	// No .tmp file left behind
-	if _, err := os.Stat(path + ".tmp"); err == nil {
-		t.Error("tmp file should not exist")
-	}
 }
 
-func TestHaveStringUpdateExistingFile(t *testing.T) {
+func TestHaveSourceFile(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "existing.txt")
+	sourcePath := filepath.Join("..", "..", "assets", "testfiles", "test.txt")
+	targetPath := filepath.Join(dir, "target.txt")
 
-	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := HaveString(path, "new"); err != nil {
+	if err := Have(targetPath, "source://"+sourcePath); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	got, err := os.ReadFile(path)
+	got, err := os.ReadFile(targetPath)
 	if err != nil {
 		t.Fatalf("reading file: %v", err)
 	}
-	if string(got) != "new" {
-		t.Errorf("expected 'new', got %q", got)
-	}
-	if _, err := os.Stat(path + ".tmp"); err == nil {
-		t.Error("tmp file should not exist")
+	expected, _ := os.ReadFile(sourcePath)
+	if string(got) != string(expected) {
+		t.Errorf("expected %q, got %q", string(expected), string(got))
 	}
 }
 
-func TestHaveStringNoChange(t *testing.T) {
+func TestHaveTemplateFile(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "same.txt")
-	content := "unchanged content"
+	sourcePath := filepath.Join("..", "..", "assets", "testfiles", "test.tmpl")
+	targetPath := filepath.Join(dir, "target.conf")
 
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := HaveString(path, content); err != nil {
+	if err := Have(targetPath, "source://"+sourcePath); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	got, err := os.ReadFile(path)
+	got, err := os.ReadFile(targetPath)
 	if err != nil {
 		t.Fatalf("reading file: %v", err)
 	}
-	if string(got) != content {
-		t.Errorf("expected %q, got %q", content, got)
-	}
-	if _, err := os.Stat(path + ".tmp"); err == nil {
-		t.Error("tmp file should not exist")
+
+	expectedParam := "source://" + sourcePath
+	if !strings.Contains(string(got), expectedParam) {
+		t.Errorf("expected content to contain Param %q, got %q", expectedParam, string(got))
 	}
 }

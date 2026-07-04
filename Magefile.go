@@ -21,10 +21,25 @@ func run(cmd string, args ...string) error {
 	return c.Run()
 }
 
+// Default runs the program.
+func Default() error {
+	return Run()
+}
+
 // Build compiles the binary.
 func Build() error {
 	fmt.Println("building...")
 	return run("go", "build", "-o", binName, "./cmd/gonf")
+}
+
+
+// Run builds and runs the program.
+func Run() error {
+	fmt.Println("running...")
+	if err := Build(); err != nil {
+		return err
+	}
+	return run("./"+binName, "version")
 }
 
 // Test runs all unit tests.

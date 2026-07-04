@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
+	"codeberg.org/snonux/gonf/examples"
 	"codeberg.org/snonux/gonf/internal"
-	"codeberg.org/snonux/gonf/internal/file"
 	"codeberg.org/snonux/gonf/internal/resources"
 )
 
@@ -19,5 +19,9 @@ func main() {
 	}
 
 	resources.Init()
-	file.HaveString("/tmp/foo.txt", "hi")
+
+	if err := examples.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "example run error: %v\n", err)
+		os.Exit(1)
+	}
 }

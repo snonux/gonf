@@ -2,6 +2,7 @@ package resource
 
 import (
 	"fmt"
+	"log"
 )
 
 type Resource struct {
@@ -18,7 +19,7 @@ func Register(type_, name string) Resource {
 	}
 
 	if err := getRepository().register(r); err != nil {
-		panic(err)
+		log.Fatalf("resource registration failed: %v", err)
 	}
 
 	return r
