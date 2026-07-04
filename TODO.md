@@ -7,39 +7,19 @@ Perl [Rex](https://www.rexify.org/) `Rexfile` used to install
 
 ## 1. File resource — missing capabilities
 
-The Rexfile uses `file` for far more than "write these bytes". gonf's
-`file.Have` currently only manages content + checksum idempotency. Missing:
-
-- **`ensure => 'absent'`.** Remove a file if present. Used by `prune_dir`.
-- **`ensure => 'directory'`.** See section 2.
+DONE!
 
 ## 2. Directory resource
 
-Rexfile creates directories with a mode all over the place
-(`~/.config/*`, `~/scripts`, `~/QuickEdit`, `~/.config/systemd/user`, agent
-tool dirs). gonf has no directory concept. Need:
-
-- `Have`-style directory resource: create if missing, enforce mode,
-  idempotent, register in the resource registry.
+DONE! `internal/resource/dir` provides a `Have`-style directory resource:
+create if missing, enforce mode, idempotent, registers in the resource
+registry. It also supports installing a source tree (`WithSource`), pruning
+stale destination entries (`WithPrune`), and a file mode independent of the
+directory's own mode (`WithFileMode`).
 
 ## 3. Symlink resource
 
-The Rexfile does a lot of symlink management, none of which gonf supports:
-
-- fish `conf.d` → `~/.config/fish/conf.d` (with rename-to-`.old` fallback).
-- gitsyncer config dir symlink.
-- Agent tool dirs: `~/.cursor`, `~/.claude`, `~/.agents`, `~/.opencode`,
-  `~/.pi`, `~/.amp`, `~/.codex` each get `commands`/`skills`/`prompts`
-  symlinks into `~/Notes/Prompts/...`.
-- `~/QuickEdit/*` symlinks to many source dirs.
-
-Needs a symlink resource that:
-
-- Creates a symlink to a target.
-- Is idempotent: leaves it alone if it already points at the right place.
-- Repoints if it points elsewhere.
-- Refuses (or has an explicit policy) to clobber a real file/dir; supports the
-  Rexfile's rename-existing-dir-to-`.old` behavior where needed.
+DONE!
 
 ## 4. Glob / multi-file installs
 
@@ -50,10 +30,7 @@ sway, waybar, scripts, systemd units, calendar, pipewire).
 
 ## 5. Prune / reconcile stale files
 
-`prune_dir` removes regular files in a destination whose basename is not in the
-source glob (used for `~/scripts`), while leaving dotfiles and subdirectories
-untouched. gonf needs a prune/reconcile operation so removed source files also
-disappear from the destination.
+DONE!
 
 ## 6. Package resource (multi-OS)
 
@@ -135,3 +112,7 @@ just calls a hardcoded `examples.Run()`. Need:
 5. Package resource with per-OS backends (section 6).
 6. Tasks + CLI (section 11), then git-config / line-in-file / polish
    (sections 9, 10, 12).
+
+## More ideas:
+
+* Have file.Absent instead or as an alias for file.Have(path, IsAbsent())   or so
