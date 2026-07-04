@@ -1,3 +1,22 @@
+## More ideas:
+
+Dont have to write:
+
+file.Have("file.txt", file.WithOwner("paul"))
+
+instead, have:
+
+file.Have("file.txt", WithOwner("paul"))
+
+and have all With... methods in a separate package which we import directly with *.
+
+for this, we need to make the With... functions more generic, based on interfaces and we have here for example
+
+type Owner interface {
+  SetOwner(owner string)
+}
+
+and if there is no interface match, error!
 # TODO — Features needed to replace the dotfiles Rexfile
 
 This document lists the features `gonf` needs before it can replace the
@@ -11,11 +30,7 @@ DONE!
 
 ## 2. Directory resource
 
-DONE! `internal/resource/dir` provides a `Have`-style directory resource:
-create if missing, enforce mode, idempotent, registers in the resource
-registry. It also supports installing a source tree (`WithSource`), pruning
-stale destination entries (`WithPrune`), and a file mode independent of the
-directory's own mode (`WithFileMode`).
+DONE! 
 
 ## 3. Symlink resource
 
@@ -113,6 +128,3 @@ just calls a hardcoded `examples.Run()`. Need:
 6. Tasks + CLI (section 11), then git-config / line-in-file / polish
    (sections 9, 10, 12).
 
-## More ideas:
-
-* Have file.Absent instead or as an alias for file.Have(path, IsAbsent())   or so
