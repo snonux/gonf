@@ -18,6 +18,10 @@ func getRepository() repository {
 	return repo
 }
 
+func resetRepository() {
+	repo = newRepository()
+}
+
 type repository struct {
 	registered map[string]Resource
 	mu         *sync.Mutex

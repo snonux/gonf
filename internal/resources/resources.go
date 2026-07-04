@@ -8,26 +8,10 @@ import (
 	"codeberg.org/snonux/gonf/internal/resource"
 )
 
-var (
-	registry resources
-	once     sync.Once
-	mu       sync.Mutex
-)
-
 func Init() {
 	once.Do(func() {
 		registry = new()
 	})
-}
-
-type resources struct {
-	registered map[string]resource.Resource
-}
-
-func new() resources {
-	return resources{
-		registered: make(map[string]resource.Resource),
-	}
 }
 
 func Register(res resource.Resource) error {
@@ -42,4 +26,20 @@ func Register(res resource.Resource) error {
 	log.Printf("Registered resource %v\n", res)
 
 	return nil
+}
+
+var (
+	registry resources
+	once     sync.Once
+	mu       sync.Mutex
+)
+
+type resources struct {
+	registered map[string]resource.Resource
+}
+
+func new() resources {
+	return resources{
+		registered: make(map[string]resource.Resource),
+	}
 }

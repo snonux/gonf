@@ -5,7 +5,8 @@ import (
 )
 
 func TestResourceID(t *testing.T) {
-	res := New("File", "/tmp/foo.txt")
+	resetRepository()
+	res := Register("File", "/tmp/foo.txt")
 	expected := "File[/tmp/foo.txt]"
 	if res.ID() != expected {
 		t.Errorf("expected ID %s, got %s", expected, res.ID())
@@ -13,7 +14,8 @@ func TestResourceID(t *testing.T) {
 }
 
 func TestResourceString(t *testing.T) {
-	res := New("File", "/tmp/foo.txt")
+	resetRepository()
+	res := Register("File", "/tmp/foo.txt")
 	expected := "File[/tmp/foo.txt]"
 	if res.String() != expected {
 		t.Errorf("expected String %s, got %s", expected, res.String())
@@ -21,9 +23,10 @@ func TestResourceString(t *testing.T) {
 }
 
 func TestNew(t *testing.T) {
+	resetRepository()
 	type_ := "File"
 	name := "/tmp/foo.txt"
-	res := New(type_, name)
+	res := Register(type_, name)
 
 	if res.Type != type_ {
 		t.Errorf("expected type %s, got %s", type_, res.Type)
@@ -37,22 +40,19 @@ func TestNew(t *testing.T) {
 }
 
 func TestRepositoryRegister(t *testing.T) {
-	repo := newRepository()
-	res := New("File", "/tmp/foo.txt")
+	resetRepository()
+	repo := getRepository()
+	res := Register("File", "/tmp/foo.txt")
 
-	// First registration should succeed
-	if err := repo.register(res); err != nil {
-		t.Fatalf("expected successful registration, got error: %v", err)
-	}
-
-	// Second registration of the same resource should fail
+	// First registration already happened in New()
+	// But we can try to register again via the repository directly
 	if err := repo.register(res); err == nil {
 		t.Error("expected error when registering the same resource twice, got nil")
 	}
 
 	// Registration of a different resource should succeed
-	res2 := New("File", "/tmp/bar.txt")
-	if err := repo.register(res2); err != nil {
-		t.Fatalf("expected successful registration of different resource, got error: %v", err)
+	res2 := Register("File", "/tmp/bar.txt")
+	if err := repo.register(res2); err == nil {
+		t.Error("expected error when registering the same resource twice, got nil")
 	}
 }

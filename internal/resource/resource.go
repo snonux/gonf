@@ -10,12 +10,18 @@ type Resource struct {
 	dependsOn map[string]struct{}
 }
 
-func New(type_, name string) Resource {
-	return Resource{
+func Register(type_, name string) Resource {
+	r := Resource{
 		Type:      type_,
 		Name:      name,
 		dependsOn: make(map[string]struct{}),
 	}
+
+	if err := getRepository().register(r); err != nil {
+		panic(err)
+	}
+
+	return r
 }
 
 func (r Resource) String() string {

@@ -4,7 +4,14 @@ import (
 	"crypto/sha256"
 	"log"
 	"os"
+
+	"codeberg.org/snonux/gonf/internal/resource"
 )
+
+func HaveString(path, content string) error {
+	_ = resource.Register("File", path)
+	return have(path, []byte(content))
+}
 
 func getChecksum(path string) [32]byte {
 	var checksum [32]byte
@@ -61,8 +68,4 @@ func have(path string, content []byte) error {
 	}
 
 	return updateFromTmp(tmpPath, path, existingChecksum != newChecksum)
-}
-
-func HaveString(path, content string) error {
-	return have(path, []byte(content))
 }
