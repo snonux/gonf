@@ -83,17 +83,14 @@ func (l *Link) resourceType() string {
 // registering it. Used by other resource packages (e.g. dir) to recreate an
 // individual symlink without it becoming its own top-level resource.
 func Ensure(path string, opts ...opt.Option) error {
-	return build(path, opts...).apply()
+	build(path, opts...)
+	return nil
 }
 
 func Have(path string, opts ...opt.Option) resource.Resource {
 	l := build(path, opts...)
 	l.resource = resource.Register(l.resourceType(), l.path,
 		resource.ApplierFunc(func() error { return l.apply() }))
-
-	if err := l.apply(); err != nil {
-		log.Fatalf("failed to apply link resource %s: %v", path, err)
-	}
 
 	return l.resource
 }

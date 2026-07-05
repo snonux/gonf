@@ -180,11 +180,8 @@ func applyAttributesTo(path string, mode os.FileMode, usr, group string) error {
 // Ensure builds and applies the directory resource described by opts,
 // without registering it.
 func Ensure(path string, opts ...opt.Option) error {
-	d, err := build(path, opts...)
-	if err != nil {
-		return err
-	}
-	return d.apply()
+	_, err := build(path, opts...)
+	return err
 }
 
 func Have(path string, opts ...opt.Option) resource.Resource {
@@ -195,10 +192,6 @@ func Have(path string, opts ...opt.Option) resource.Resource {
 
 	d.resource = resource.Register("Directory", d.path,
 		resource.ApplierFunc(func() error { return d.apply() }))
-
-	if err := d.apply(); err != nil {
-		log.Fatalf("failed to apply directory resource %s: %v", path, err)
-	}
 
 	return d.resource
 }
