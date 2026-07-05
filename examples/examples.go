@@ -3,6 +3,7 @@ package examples
 import (
 	"os"
 
+	"codeberg.org/snonux/gonf/internal/resource"
 	"codeberg.org/snonux/gonf/internal/resource/dir"
 	"codeberg.org/snonux/gonf/internal/resource/file"
 	"codeberg.org/snonux/gonf/internal/resource/link"
@@ -68,6 +69,8 @@ func Run() error {
 	// 12. Ensuring a hardlink is absent
 	_ = os.Link("/tmp/gonf_hello.txt", "/tmp/gonf_stale_hardlink")
 	link.Have("/tmp/gonf_stale_hardlink", IsAbsent())
+
+	resource.Apply()
 
 	return nil
 }
