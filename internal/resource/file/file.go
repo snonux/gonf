@@ -15,13 +15,14 @@ import (
 )
 
 type File struct {
-	path    string
-	content string
-	source  string // bare path, no "source://" prefix
-	user    string
-	group   string
-	mode    os.FileMode
-	absent  bool
+	resource resource.Resource
+	path     string
+	content  string
+	source   string // bare path, no "source://" prefix
+	user     string
+	group    string
+	mode     os.FileMode
+	absent   bool
 }
 
 // SetContent implements opt.Contented. Setting literal content clears any
@@ -223,13 +224,14 @@ func Have(path string, opts ...opt.Option) resource.Resource {
 		log.Fatalf("failed to apply file resource %s: %v", path, err)
 	}
 
-	res := resource.Register("File", f.targetPath())
+	f.resource = resource.Register("File", f.targetPath(),
+		resource.ApplierFunc(func() error { return f.apply() }))
 
 	if err := f.apply(); err != nil {
 		log.Fatalf("failed to apply file resource %s: %v", path, err)
 	}
 
-	return res
+	return f.resource
 }
 
 func Absent(path string, opts ...opt.Option) resource.Resource {

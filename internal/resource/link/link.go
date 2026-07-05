@@ -18,10 +18,11 @@ const (
 )
 
 type Link struct {
-	path   string
-	target string
-	kind   kind
-	absent bool
+	resource resource.Resource
+	path     string
+	target   string
+	kind     kind
+	absent   bool
 }
 
 // SetSymlink implements opt.Linkable.
@@ -87,13 +88,14 @@ func Ensure(path string, opts ...opt.Option) error {
 
 func Have(path string, opts ...opt.Option) resource.Resource {
 	l := build(path, opts...)
-	res := resource.Register(l.resourceType(), l.path)
+	l.resource = resource.Register(l.resourceType(), l.path,
+		resource.ApplierFunc(func() error { return l.apply() }))
 
 	if err := l.apply(); err != nil {
 		log.Fatalf("failed to apply link resource %s: %v", path, err)
 	}
 
-	return res
+	return l.resource
 }
 
 func Absent(path string, opts ...opt.Option) resource.Resource {

@@ -12,6 +12,7 @@ import (
 )
 
 type Dir struct {
+	resource resource.Resource
 	path     string
 	source   string
 	user     string
@@ -192,13 +193,14 @@ func Have(path string, opts ...opt.Option) resource.Resource {
 		log.Fatalf("failed to apply directory resource %s: %v", path, err)
 	}
 
-	res := resource.Register("Directory", d.path)
+	d.resource = resource.Register("Directory", d.path,
+		resource.ApplierFunc(func() error { return d.apply() }))
 
 	if err := d.apply(); err != nil {
 		log.Fatalf("failed to apply directory resource %s: %v", path, err)
 	}
 
-	return res
+	return d.resource
 }
 
 func Absent(path string, opts ...opt.Option) resource.Resource {
