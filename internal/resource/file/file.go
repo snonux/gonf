@@ -211,8 +211,11 @@ func ensureAbsent(path string) error {
 // registering it. Used by other resource packages (e.g. dir) to write an
 // individual file without it becoming its own top-level resource.
 func Ensure(path string, opts ...opt.Option) error {
-	_, err := build(path, opts...)
-	return err
+	f, err := build(path, opts...)
+	if err != nil {
+		return err
+	}
+	return f.apply()
 }
 
 func Have(path string, opts ...opt.Option) resource.Resource {

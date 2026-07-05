@@ -18,7 +18,7 @@ func getRepository() *repository {
 	return &repo
 }
 
-func resetRepository() {
+func ResetRepository() {
 	repo = newRepository()
 }
 

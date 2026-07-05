@@ -5,15 +5,21 @@ import (
 	"path/filepath"
 	"testing"
 
+	resource "codeberg.org/snonux/gonf/internal/resource"
 	"codeberg.org/snonux/gonf/internal/resource/file"
+
 	. "codeberg.org/snonux/gonf/internal/resource/opt"
 )
 
 func TestHaveDirectoryCreate(t *testing.T) {
+	resource.ResetRepository()
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "sub", "nested")
 
 	Have(path)
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
 
 	info, err := os.Stat(path)
 	if err != nil {
@@ -28,6 +34,7 @@ func TestHaveDirectoryCreate(t *testing.T) {
 }
 
 func TestHaveDirectoryIdempotentWithMode(t *testing.T) {
+	resource.ResetRepository()
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "d")
 
@@ -52,6 +59,7 @@ func TestHaveDirectoryIdempotentWithMode(t *testing.T) {
 }
 
 func TestHaveDirectoryFailsWhenFileExists(t *testing.T) {
+	resource.ResetRepository()
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "afile")
 	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
@@ -64,6 +72,7 @@ func TestHaveDirectoryFailsWhenFileExists(t *testing.T) {
 }
 
 func TestHaveAbsentNonEmptyDirWithoutPruneFails(t *testing.T) {
+	resource.ResetRepository()
 	tmp := t.TempDir()
 	target := filepath.Join(tmp, "d")
 	if err := os.MkdirAll(filepath.Join(target, "sub"), 0o755); err != nil {
@@ -79,6 +88,7 @@ func TestHaveAbsentNonEmptyDirWithoutPruneFails(t *testing.T) {
 }
 
 func TestHaveAbsentPruneDirectoryRecursive(t *testing.T) {
+	resource.ResetRepository()
 	tmp := t.TempDir()
 	target := filepath.Join(tmp, "d")
 	if err := os.MkdirAll(filepath.Join(target, "sub", "deep"), 0o755); err != nil {
@@ -89,6 +99,9 @@ func TestHaveAbsentPruneDirectoryRecursive(t *testing.T) {
 	}
 
 	Have(target, IsAbsent(), WithPrune())
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
 		t.Errorf("expected %s to be removed recursively", target)
 	}
@@ -101,6 +114,7 @@ func TestHaveAbsentPruneDirectoryRecursive(t *testing.T) {
 }
 
 func TestAbsentPruneDirectoryRecursive(t *testing.T) {
+	resource.ResetRepository()
 	tmp := t.TempDir()
 	target := filepath.Join(tmp, "d")
 	if err := os.MkdirAll(filepath.Join(target, "sub", "deep"), 0o755); err != nil {
@@ -111,6 +125,9 @@ func TestAbsentPruneDirectoryRecursive(t *testing.T) {
 	}
 
 	Absent(target, WithPrune())
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
 		t.Errorf("expected %s to be removed recursively", target)
 	}
@@ -124,6 +141,7 @@ func TestAbsentPruneDirectoryRecursive(t *testing.T) {
 
 func TestHaveDirectoryWithSource(t *testing.T) {
 	t.Run("recursive copy", func(t *testing.T) {
+		resource.ResetRepository()
 		tmp := t.TempDir()
 		src := t.TempDir()
 		dst := filepath.Join(tmp, "dst")
@@ -142,6 +160,9 @@ func TestHaveDirectoryWithSource(t *testing.T) {
 		}
 
 		Have(dst, WithSource(src))
+		if err := resource.Apply(); err != nil {
+			t.Fatalf("Apply failed: %v", err)
+		}
 
 		if data, err := os.ReadFile(filepath.Join(dst, "file.txt")); err != nil || string(data) != "hello" {
 			t.Errorf("expected 'hello' at %s, got %q err %v", filepath.Join(dst, "file.txt"), string(data), err)
@@ -152,6 +173,7 @@ func TestHaveDirectoryWithSource(t *testing.T) {
 	})
 
 	t.Run("pruning", func(t *testing.T) {
+		resource.ResetRepository()
 		tmp := t.TempDir()
 		src := t.TempDir()
 		dst := filepath.Join(tmp, "dst")
@@ -174,6 +196,9 @@ func TestHaveDirectoryWithSource(t *testing.T) {
 		}
 
 		Have(dst, WithSource(src), WithPrune())
+		if err := resource.Apply(); err != nil {
+			t.Fatalf("Apply failed: %v", err)
+		}
 
 		if _, err := os.Stat(extra); !os.IsNotExist(err) {
 			t.Errorf("expected %s to be pruned", extra)
@@ -188,6 +213,7 @@ func TestHaveDirectoryWithSource(t *testing.T) {
 }
 
 func TestSourceCopyUsesFileModeDefaultNotDirMode(t *testing.T) {
+	resource.ResetRepository()
 	tmp := t.TempDir()
 	src := t.TempDir()
 	dst := filepath.Join(tmp, "dst")
@@ -197,6 +223,9 @@ func TestSourceCopyUsesFileModeDefaultNotDirMode(t *testing.T) {
 	}
 
 	Have(dst, WithSource(src))
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
 
 	dirInfo, err := os.Stat(dst)
 	if err != nil {
@@ -216,6 +245,7 @@ func TestSourceCopyUsesFileModeDefaultNotDirMode(t *testing.T) {
 }
 
 func TestSourceCopyRespectsExplicitWithFileMode(t *testing.T) {
+	resource.ResetRepository()
 	tmp := t.TempDir()
 	src := t.TempDir()
 	dst := filepath.Join(tmp, "dst")
@@ -225,6 +255,9 @@ func TestSourceCopyRespectsExplicitWithFileMode(t *testing.T) {
 	}
 
 	Have(dst, WithSource(src), WithMode(0o755), WithFileMode(0o600))
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
 
 	dirInfo, err := os.Stat(dst)
 	if err != nil {
@@ -244,6 +277,7 @@ func TestSourceCopyRespectsExplicitWithFileMode(t *testing.T) {
 }
 
 func TestSourceCopyStripsTmplSuffixOnCopiedFile(t *testing.T) {
+	resource.ResetRepository()
 	tmp := t.TempDir()
 	src := t.TempDir()
 	dst := filepath.Join(tmp, "dst")
@@ -253,6 +287,9 @@ func TestSourceCopyStripsTmplSuffixOnCopiedFile(t *testing.T) {
 	}
 
 	Have(dst, WithSource(src))
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
 
 	if _, err := os.Stat(filepath.Join(dst, "foo.conf")); err != nil {
 		t.Errorf("expected de-suffixed foo.conf to exist: %v", err)
@@ -263,6 +300,7 @@ func TestSourceCopyStripsTmplSuffixOnCopiedFile(t *testing.T) {
 }
 
 func TestSourceCopyWithPruneKeepsTemplatedFile(t *testing.T) {
+	resource.ResetRepository()
 	tmp := t.TempDir()
 	src := t.TempDir()
 	dst := filepath.Join(tmp, "dst")
@@ -275,6 +313,9 @@ func TestSourceCopyWithPruneKeepsTemplatedFile(t *testing.T) {
 	// apply; a de-suffixed templated file must not be pruned just because
 	// its own name has no direct match in the source tree.
 	Have(dst, WithSource(src), WithPrune())
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
 
 	if _, err := os.Stat(filepath.Join(dst, "foo.conf")); err != nil {
 		t.Errorf("expected foo.conf to survive pruning, got %v", err)
@@ -282,6 +323,7 @@ func TestSourceCopyWithPruneKeepsTemplatedFile(t *testing.T) {
 }
 
 func TestSourceCopyParamMatchesSingleFilePath(t *testing.T) {
+	resource.ResetRepository()
 	tmp := t.TempDir()
 	src := t.TempDir()
 	dst := filepath.Join(tmp, "dst")
@@ -291,6 +333,9 @@ func TestSourceCopyParamMatchesSingleFilePath(t *testing.T) {
 	}
 
 	Have(dst, WithSource(src))
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
 	viaDir, err := os.ReadFile(filepath.Join(dst, "foo.conf"))
 	if err != nil {
 		t.Fatal(err)
@@ -311,6 +356,7 @@ func TestSourceCopyParamMatchesSingleFilePath(t *testing.T) {
 }
 
 func TestSourceCopyRecreatesSymlinkNotContent(t *testing.T) {
+	resource.ResetRepository()
 	tmp := t.TempDir()
 	src := t.TempDir()
 	dst := filepath.Join(tmp, "dst")
@@ -323,6 +369,9 @@ func TestSourceCopyRecreatesSymlinkNotContent(t *testing.T) {
 	}
 
 	Have(dst, WithSource(src))
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
 
 	linkPath := filepath.Join(dst, "link.txt")
 	info, err := os.Lstat(linkPath)

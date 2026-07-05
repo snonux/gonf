@@ -70,7 +70,5 @@ func Run() error {
 	_ = os.Link("/tmp/gonf_hello.txt", "/tmp/gonf_stale_hardlink")
 	link.Have("/tmp/gonf_stale_hardlink", IsAbsent())
 
-	resource.Apply()
-
-	return nil
+	return resource.Apply()
 }

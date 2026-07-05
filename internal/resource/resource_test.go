@@ -5,7 +5,7 @@ import (
 )
 
 func TestResourceID(t *testing.T) {
-	resetRepository()
+	ResetRepository()
 	res := Register("File", "/tmp/foo.txt", &mockApplier{})
 	expected := "File[/tmp/foo.txt]"
 	if res.ID() != expected {
@@ -14,7 +14,7 @@ func TestResourceID(t *testing.T) {
 }
 
 func TestResourceString(t *testing.T) {
-	resetRepository()
+	ResetRepository()
 	res := Register("File", "/tmp/foo.txt", &mockApplier{})
 	expected := "File[/tmp/foo.txt]"
 	if res.String() != expected {
@@ -23,7 +23,7 @@ func TestResourceString(t *testing.T) {
 }
 
 func TestNew(t *testing.T) {
-	resetRepository()
+	ResetRepository()
 	type_ := "File"
 	name := "/tmp/foo.txt"
 	res := Register(type_, name, &mockApplier{})
@@ -40,7 +40,7 @@ func TestNew(t *testing.T) {
 }
 
 func TestRepositoryRegister(t *testing.T) {
-	resetRepository()
+	ResetRepository()
 	repo := getRepository()
 	res := Register("File", "/tmp/foo.txt", &mockApplier{})
 
@@ -56,7 +56,3 @@ func TestRepositoryRegister(t *testing.T) {
 		t.Error("expected error when registering the same resource twice, got nil")
 	}
 }
-
-type mockApplier struct{}
-
-func (m *mockApplier) Apply() error { return nil }

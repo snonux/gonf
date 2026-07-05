@@ -5,10 +5,12 @@ import (
 	"path/filepath"
 	"testing"
 
+	"codeberg.org/snonux/gonf/internal/resource"
 	. "codeberg.org/snonux/gonf/internal/resource/opt"
 )
 
 func TestHaveSymlinkCreateAndIdempotent(t *testing.T) {
+	resource.ResetRepository()
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target.txt")
 	link := filepath.Join(dir, "link.txt")
@@ -17,6 +19,9 @@ func TestHaveSymlinkCreateAndIdempotent(t *testing.T) {
 	}
 
 	Have(link, WithSymlink(target))
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
 	got, err := os.Readlink(link)
 	if err != nil {
 		t.Fatalf("readlink: %v", err)
@@ -34,6 +39,7 @@ func TestHaveSymlinkCreateAndIdempotent(t *testing.T) {
 }
 
 func TestHaveSymlinkRepoints(t *testing.T) {
+	resource.ResetRepository()
 	dir := t.TempDir()
 	old := filepath.Join(dir, "old.txt")
 	newT := filepath.Join(dir, "new.txt")
@@ -48,6 +54,9 @@ func TestHaveSymlinkRepoints(t *testing.T) {
 	}
 
 	Have(link, WithSymlink(newT))
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
 	got, err := os.Readlink(link)
 	if err != nil {
 		t.Fatal(err)
@@ -58,6 +67,7 @@ func TestHaveSymlinkRepoints(t *testing.T) {
 }
 
 func TestHaveSymlinkMovesRealFileAside(t *testing.T) {
+	resource.ResetRepository()
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target.txt")
 	link := filepath.Join(dir, "real")
@@ -69,6 +79,9 @@ func TestHaveSymlinkMovesRealFileAside(t *testing.T) {
 	}
 
 	Have(link, WithSymlink(target))
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
 
 	got, err := os.Readlink(link)
 	if err != nil {
@@ -83,6 +96,7 @@ func TestHaveSymlinkMovesRealFileAside(t *testing.T) {
 }
 
 func TestHaveHardlinkCreateAndIdempotent(t *testing.T) {
+	resource.ResetRepository()
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target.txt")
 	link := filepath.Join(dir, "link.txt")
@@ -91,6 +105,9 @@ func TestHaveHardlinkCreateAndIdempotent(t *testing.T) {
 	}
 
 	Have(link, WithHardlink(target))
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
 
 	ti, err := os.Stat(target)
 	if err != nil {
@@ -113,6 +130,7 @@ func TestHaveHardlinkCreateAndIdempotent(t *testing.T) {
 }
 
 func TestHaveHardlinkMovesRealFileAside(t *testing.T) {
+	resource.ResetRepository()
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target.txt")
 	link := filepath.Join(dir, "real")
@@ -124,6 +142,9 @@ func TestHaveHardlinkMovesRealFileAside(t *testing.T) {
 	}
 
 	Have(link, WithHardlink(target))
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
 
 	ti, err := os.Stat(target)
 	if err != nil {
@@ -142,6 +163,7 @@ func TestHaveHardlinkMovesRealFileAside(t *testing.T) {
 }
 
 func TestHaveHardlinkMissingTarget(t *testing.T) {
+	resource.ResetRepository()
 	dir := t.TempDir()
 	link := filepath.Join(dir, "link")
 	if err := Ensure(link, WithHardlink(filepath.Join(dir, "nope"))); err == nil {
@@ -150,6 +172,7 @@ func TestHaveHardlinkMissingTarget(t *testing.T) {
 }
 
 func TestHaveAbsentSymlink(t *testing.T) {
+	resource.ResetRepository()
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target.txt")
 	link := filepath.Join(dir, "link.txt")
@@ -161,6 +184,9 @@ func TestHaveAbsentSymlink(t *testing.T) {
 	}
 
 	Have(link, IsAbsent())
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
 	if _, err := os.Lstat(link); !os.IsNotExist(err) {
 		t.Errorf("expected %s to be removed", link)
 	}
@@ -173,6 +199,7 @@ func TestHaveAbsentSymlink(t *testing.T) {
 }
 
 func TestAbsentSymlink(t *testing.T) {
+	resource.ResetRepository()
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target.txt")
 	link := filepath.Join(dir, "link.txt")
@@ -184,6 +211,9 @@ func TestAbsentSymlink(t *testing.T) {
 	}
 
 	Absent(link)
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
 	if _, err := os.Lstat(link); !os.IsNotExist(err) {
 		t.Errorf("expected %s to be removed", link)
 	}
@@ -196,6 +226,7 @@ func TestAbsentSymlink(t *testing.T) {
 }
 
 func TestHaveAbsentWithoutKindRegistersGenericLink(t *testing.T) {
+	resource.ResetRepository()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "whatever")
 
@@ -206,6 +237,7 @@ func TestHaveAbsentWithoutKindRegistersGenericLink(t *testing.T) {
 }
 
 func TestBuildRequiresKindOrAbsent(t *testing.T) {
+	resource.ResetRepository()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nope")
 	if err := Ensure(path); err == nil {

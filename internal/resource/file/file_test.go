@@ -6,10 +6,12 @@ import (
 	"strings"
 	"testing"
 
+	"codeberg.org/snonux/gonf/internal/resource"
 	. "codeberg.org/snonux/gonf/internal/resource/opt"
 )
 
 func TestGetChecksum(t *testing.T) {
+	resource.ResetRepository()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.txt")
 
@@ -29,6 +31,7 @@ func TestGetChecksum(t *testing.T) {
 }
 
 func TestWriteTmpFile(t *testing.T) {
+	resource.ResetRepository()
 	dir := t.TempDir()
 	tmpPath := filepath.Join(dir, "test.tmp")
 	content := []byte("temp content")
@@ -47,6 +50,7 @@ func TestWriteTmpFile(t *testing.T) {
 }
 
 func TestUpdateFromTmpChecksumChanged(t *testing.T) {
+	resource.ResetRepository()
 	dir := t.TempDir()
 	tmpPath := filepath.Join(dir, "test.tmp")
 	path := filepath.Join(dir, "test.txt")
@@ -72,6 +76,7 @@ func TestUpdateFromTmpChecksumChanged(t *testing.T) {
 }
 
 func TestUpdateFromTmpChecksumUnchanged(t *testing.T) {
+	resource.ResetRepository()
 	dir := t.TempDir()
 	tmpPath := filepath.Join(dir, "test.tmp")
 	path := filepath.Join(dir, "test.txt")
@@ -100,10 +105,14 @@ func TestUpdateFromTmpChecksumUnchanged(t *testing.T) {
 }
 
 func TestHaveStringCreateNewFile(t *testing.T) {
+	resource.ResetRepository()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "new.txt")
 
 	Have(path, WithContent("hello world"))
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
 
 	got, err := os.ReadFile(path)
 	if err != nil {
@@ -115,11 +124,15 @@ func TestHaveStringCreateNewFile(t *testing.T) {
 }
 
 func TestHaveMode(t *testing.T) {
+	resource.ResetRepository()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mode.txt")
 	mode := os.FileMode(0o600)
 
 	Have(path, WithContent("mode test"), WithMode(mode))
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
 
 	info, err := os.Stat(path)
 	if err != nil {
@@ -131,11 +144,15 @@ func TestHaveMode(t *testing.T) {
 }
 
 func TestHaveSourceFile(t *testing.T) {
+	resource.ResetRepository()
 	dir := t.TempDir()
 	sourcePath := filepath.Join("..", "..", "..", "assets", "testfiles", "test.txt")
 	targetPath := filepath.Join(dir, "target.txt")
 
 	Have(targetPath, WithSource(sourcePath))
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
 
 	got, err := os.ReadFile(targetPath)
 	if err != nil {
@@ -148,11 +165,15 @@ func TestHaveSourceFile(t *testing.T) {
 }
 
 func TestHaveTemplateFile(t *testing.T) {
+	resource.ResetRepository()
 	dir := t.TempDir()
 	sourcePath := filepath.Join("..", "..", "..", "assets", "testfiles", "test.tmpl")
 	targetPath := filepath.Join(dir, "target.conf")
 
 	Have(targetPath, WithSource(sourcePath))
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
 
 	got, err := os.ReadFile(targetPath)
 	if err != nil {
@@ -166,6 +187,7 @@ func TestHaveTemplateFile(t *testing.T) {
 }
 
 func TestHaveAbsent(t *testing.T) {
+	resource.ResetRepository()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "gone.txt")
 	if err := os.WriteFile(path, []byte("bye"), 0o644); err != nil {
@@ -173,6 +195,9 @@ func TestHaveAbsent(t *testing.T) {
 	}
 
 	Have(path, IsAbsent())
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("expected %s to be removed", path)
 	}
@@ -185,6 +210,7 @@ func TestHaveAbsent(t *testing.T) {
 }
 
 func TestAbsent(t *testing.T) {
+	resource.ResetRepository()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "gone.txt")
 	if err := os.WriteFile(path, []byte("bye"), 0o644); err != nil {
@@ -192,6 +218,9 @@ func TestAbsent(t *testing.T) {
 	}
 
 	Absent(path)
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("expected %s to be removed", path)
 	}
@@ -204,6 +233,7 @@ func TestAbsent(t *testing.T) {
 }
 
 func TestResolveStripsTmplSuffixWhenSourceHasTmplSuffix(t *testing.T) {
+	resource.ResetRepository()
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "foo.conf.tmpl")
 	if err := os.WriteFile(sourcePath, []byte("hello {{.Param}}"), 0o644); err != nil {
@@ -231,6 +261,7 @@ func TestResolveStripsTmplSuffixWhenSourceHasTmplSuffix(t *testing.T) {
 }
 
 func TestResolveDoesNotStripTmplWhenOnlyContentTriggersTemplate(t *testing.T) {
+	resource.ResetRepository()
 	dir := t.TempDir()
 	targetPath := filepath.Join(dir, "foo.conf.tmpl")
 
@@ -244,6 +275,7 @@ func TestResolveDoesNotStripTmplWhenOnlyContentTriggersTemplate(t *testing.T) {
 }
 
 func TestParamIsBareSourcePathNoPrefix(t *testing.T) {
+	resource.ResetRepository()
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "src.tmpl")
 	if err := os.WriteFile(sourcePath, []byte("{{.Param}}"), 0o644); err != nil {
