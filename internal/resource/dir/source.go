@@ -9,6 +9,7 @@ import (
 
 	"codeberg.org/snonux/gonf/internal/resource/file"
 	"codeberg.org/snonux/gonf/internal/resource/link"
+	"codeberg.org/snonux/gonf/internal/resource/opt"
 )
 
 // copySourceTree mirrors d.source into d.path, dispatching each entry by
@@ -63,7 +64,7 @@ func copySourceSymlink(sourcePath, target string) error {
 	if err != nil {
 		return fmt.Errorf("failed to read symlink %s: %w", sourcePath, err)
 	}
-	return link.Ensure(target, link.IsSymlink(rawTarget))
+	return link.Ensure(target, opt.WithSymlink(rawTarget))
 }
 
 // copySourceFile delegates writing a single copied file to the file
@@ -73,10 +74,10 @@ func copySourceSymlink(sourcePath, target string) error {
 // dir needs no special-casing of its own.
 func copySourceFile(d *Dir, sourcePath, target string) error {
 	return file.Ensure(target,
-		file.WithSource(sourcePath),
-		file.WithMode(d.fileMode),
-		file.WithUser(d.user),
-		file.WithGroup(d.group),
+		opt.WithSource(sourcePath),
+		opt.WithMode(d.fileMode),
+		opt.WithOwner(d.user),
+		opt.WithGroup(d.group),
 	)
 }
 

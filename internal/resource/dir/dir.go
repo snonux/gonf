@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"codeberg.org/snonux/gonf/internal/resource"
+	"codeberg.org/snonux/gonf/internal/resource/opt"
 )
 
 type Dir struct {
@@ -21,51 +22,28 @@ type Dir struct {
 	absent   bool
 }
 
-type Option func(*Dir)
+// SetSource implements opt.Sourced.
+func (d *Dir) SetSource(source string) { d.source = source }
 
-func WithSource(source string) Option {
-	return func(d *Dir) {
-		d.source = source
-	}
-}
+// SetOwner implements opt.Owner.
+func (d *Dir) SetOwner(user string) { d.user = user }
 
-func WithUser(user string) Option {
-	return func(d *Dir) {
-		d.user = user
-	}
-}
+// SetGroup implements opt.Grouped.
+func (d *Dir) SetGroup(group string) { d.group = group }
 
-func WithGroup(group string) Option {
-	return func(d *Dir) {
-		d.group = group
-	}
-}
+// SetMode implements opt.Moded (the directory's own mode).
+func (d *Dir) SetMode(mode os.FileMode) { d.mode = mode }
 
-func WithMode(mode os.FileMode) Option {
-	return func(d *Dir) {
-		d.mode = mode
-	}
-}
+// SetFileMode implements opt.FileModed (mode for files copied from source).
+func (d *Dir) SetFileMode(mode os.FileMode) { d.fileMode = mode }
 
-func WithFileMode(mode os.FileMode) Option {
-	return func(d *Dir) {
-		d.fileMode = mode
-	}
-}
+// SetPrune implements opt.Prunable.
+func (d *Dir) SetPrune() { d.prune = true }
 
-func WithPrune() Option {
-	return func(d *Dir) {
-		d.prune = true
-	}
-}
+// SetAbsent implements opt.Absentable.
+func (d *Dir) SetAbsent() { d.absent = true }
 
-func IsAbsent() Option {
-	return func(d *Dir) {
-		d.absent = true
-	}
-}
-
-func build(path string, opts ...Option) (*Dir, error) {
+func build(path string, opts ...opt.Option) (*Dir, error) {
 	curr, err := user.Current()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get current user for default: %w", err)
@@ -79,8 +57,8 @@ func build(path string, opts ...Option) (*Dir, error) {
 		group:    curr.Gid,
 	}
 
-	for _, opt := range opts {
-		opt(d)
+	for _, o := range opts {
+		o(d)
 	}
 
 	return d, nil
@@ -200,7 +178,7 @@ func applyAttributesTo(path string, mode os.FileMode, usr, group string) error {
 
 // Ensure builds and applies the directory resource described by opts,
 // without registering it.
-func Ensure(path string, opts ...Option) error {
+func Ensure(path string, opts ...opt.Option) error {
 	d, err := build(path, opts...)
 	if err != nil {
 		return err
@@ -208,7 +186,7 @@ func Ensure(path string, opts ...Option) error {
 	return d.apply()
 }
 
-func Have(path string, opts ...Option) resource.Resource {
+func Have(path string, opts ...opt.Option) resource.Resource {
 	d, err := build(path, opts...)
 	if err != nil {
 		log.Fatalf("failed to apply directory resource %s: %v", path, err)
@@ -223,7 +201,7 @@ func Have(path string, opts ...Option) resource.Resource {
 	return res
 }
 
-func Absent(path string, opts ...Option) resource.Resource {
-	opts = append(opts, IsAbsent())
+func Absent(path string, opts ...opt.Option) resource.Resource {
+	opts = append(opts, opt.IsAbsent())
 	return Have(path, opts...)
 }

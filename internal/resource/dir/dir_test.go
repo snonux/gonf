@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"codeberg.org/snonux/gonf/internal/resource/file"
+	. "codeberg.org/snonux/gonf/internal/resource/opt"
 )
 
 func TestHaveDirectoryCreate(t *testing.T) {
@@ -296,7 +297,7 @@ func TestSourceCopyParamMatchesSingleFilePath(t *testing.T) {
 	}
 
 	singleTarget := filepath.Join(tmp, "single.conf")
-	if err := file.Ensure(singleTarget, file.WithSource(sourcePath)); err != nil {
+	if err := file.Ensure(singleTarget, WithSource(sourcePath)); err != nil {
 		t.Fatal(err)
 	}
 	viaFile, err := os.ReadFile(singleTarget)

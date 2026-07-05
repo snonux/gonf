@@ -1,22 +1,3 @@
-## More ideas:
-
-Dont have to write:
-
-file.Have("file.txt", file.WithOwner("paul"))
-
-instead, have:
-
-file.Have("file.txt", WithOwner("paul"))
-
-and have all With... methods in a separate package which we import directly with *.
-
-for this, we need to make the With... functions more generic, based on interfaces and we have here for example
-
-type Owner interface {
-  SetOwner(owner string)
-}
-
-and if there is no interface match, error!
 # TODO — Features needed to replace the dotfiles Rexfile
 
 This document lists the features `gonf` needs before it can replace the

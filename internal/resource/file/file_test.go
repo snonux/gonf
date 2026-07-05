@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	. "codeberg.org/snonux/gonf/internal/resource/opt"
 )
 
 func TestGetChecksum(t *testing.T) {

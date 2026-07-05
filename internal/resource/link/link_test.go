@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	. "codeberg.org/snonux/gonf/internal/resource/opt"
 )
 
 func TestHaveSymlinkCreateAndIdempotent(t *testing.T) {
@@ -14,7 +16,7 @@ func TestHaveSymlinkCreateAndIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	Have(link, IsSymlink(target))
+	Have(link, WithSymlink(target))
 	got, err := os.Readlink(link)
 	if err != nil {
 		t.Fatalf("readlink: %v", err)
@@ -45,7 +47,7 @@ func TestHaveSymlinkRepoints(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	Have(link, IsSymlink(newT))
+	Have(link, WithSymlink(newT))
 	got, err := os.Readlink(link)
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +68,7 @@ func TestHaveSymlinkMovesRealFileAside(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	Have(link, IsSymlink(target))
+	Have(link, WithSymlink(target))
 
 	got, err := os.Readlink(link)
 	if err != nil {
@@ -88,7 +90,7 @@ func TestHaveHardlinkCreateAndIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	Have(link, IsHardlink(target))
+	Have(link, WithHardlink(target))
 
 	ti, err := os.Stat(target)
 	if err != nil {
@@ -121,7 +123,7 @@ func TestHaveHardlinkMovesRealFileAside(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	Have(link, IsHardlink(target))
+	Have(link, WithHardlink(target))
 
 	ti, err := os.Stat(target)
 	if err != nil {
@@ -142,7 +144,7 @@ func TestHaveHardlinkMovesRealFileAside(t *testing.T) {
 func TestHaveHardlinkMissingTarget(t *testing.T) {
 	dir := t.TempDir()
 	link := filepath.Join(dir, "link")
-	if err := Ensure(link, IsHardlink(filepath.Join(dir, "nope"))); err == nil {
+	if err := Ensure(link, WithHardlink(filepath.Join(dir, "nope"))); err == nil {
 		t.Error("expected error when hardlink target does not exist")
 	}
 }

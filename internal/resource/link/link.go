@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"codeberg.org/snonux/gonf/internal/resource"
+	"codeberg.org/snonux/gonf/internal/resource/opt"
 )
 
 type kind int
@@ -23,32 +24,25 @@ type Link struct {
 	absent bool
 }
 
-type Option func(*Link)
-
-func IsSymlink(target string) Option {
-	return func(l *Link) {
-		l.kind = symlinkKind
-		l.target = target
-	}
+// SetSymlink implements opt.Linkable.
+func (l *Link) SetSymlink(target string) {
+	l.kind = symlinkKind
+	l.target = target
 }
 
-func IsHardlink(target string) Option {
-	return func(l *Link) {
-		l.kind = hardlinkKind
-		l.target = target
-	}
+// SetHardlink implements opt.Linkable.
+func (l *Link) SetHardlink(target string) {
+	l.kind = hardlinkKind
+	l.target = target
 }
 
-func IsAbsent() Option {
-	return func(l *Link) {
-		l.absent = true
-	}
-}
+// SetAbsent implements opt.Absentable.
+func (l *Link) SetAbsent() { l.absent = true }
 
-func build(path string, opts ...Option) *Link {
+func build(path string, opts ...opt.Option) *Link {
 	l := &Link{path: path}
-	for _, opt := range opts {
-		opt(l)
+	for _, o := range opts {
+		o(l)
 	}
 	return l
 }
@@ -87,11 +81,11 @@ func (l *Link) resourceType() string {
 // Ensure builds and applies the link resource described by opts, without
 // registering it. Used by other resource packages (e.g. dir) to recreate an
 // individual symlink without it becoming its own top-level resource.
-func Ensure(path string, opts ...Option) error {
+func Ensure(path string, opts ...opt.Option) error {
 	return build(path, opts...).apply()
 }
 
-func Have(path string, opts ...Option) resource.Resource {
+func Have(path string, opts ...opt.Option) resource.Resource {
 	l := build(path, opts...)
 	res := resource.Register(l.resourceType(), l.path)
 
@@ -102,8 +96,8 @@ func Have(path string, opts ...Option) resource.Resource {
 	return res
 }
 
-func Absent(path string, opts ...Option) resource.Resource {
-	opts = append(opts, IsAbsent())
+func Absent(path string, opts ...opt.Option) resource.Resource {
+	opts = append(opts, opt.IsAbsent())
 	return Have(path, opts...)
 }
 

@@ -11,6 +11,7 @@ import (
 	"text/template"
 
 	"codeberg.org/snonux/gonf/internal/resource"
+	"codeberg.org/snonux/gonf/internal/resource/opt"
 )
 
 type File struct {
@@ -23,47 +24,33 @@ type File struct {
 	absent  bool
 }
 
-type Option func(*File)
-
-func WithContent(content string) Option {
-	return func(f *File) {
-		f.content = content
-		f.source = ""
-	}
+// SetContent implements opt.Contented. Setting literal content clears any
+// previously configured source, as the two are mutually exclusive.
+func (f *File) SetContent(content string) {
+	f.content = content
+	f.source = ""
 }
 
-func WithSource(source string) Option {
-	return func(f *File) {
-		f.source = source
-		f.content = ""
-	}
+// SetSource implements opt.Sourced. Setting a source clears any previously
+// configured literal content, as the two are mutually exclusive.
+func (f *File) SetSource(source string) {
+	f.source = source
+	f.content = ""
 }
 
-func WithUser(user string) Option {
-	return func(f *File) {
-		f.user = user
-	}
-}
+// SetOwner implements opt.Owner.
+func (f *File) SetOwner(user string) { f.user = user }
 
-func WithGroup(group string) Option {
-	return func(f *File) {
-		f.group = group
-	}
-}
+// SetGroup implements opt.Grouped.
+func (f *File) SetGroup(group string) { f.group = group }
 
-func WithMode(mode os.FileMode) Option {
-	return func(f *File) {
-		f.mode = mode
-	}
-}
+// SetMode implements opt.Moded.
+func (f *File) SetMode(mode os.FileMode) { f.mode = mode }
 
-func IsAbsent() Option {
-	return func(f *File) {
-		f.absent = true
-	}
-}
+// SetAbsent implements opt.Absentable.
+func (f *File) SetAbsent() { f.absent = true }
 
-func build(path string, opts ...Option) (*File, error) {
+func build(path string, opts ...opt.Option) (*File, error) {
 	curr, err := user.Current()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get current user for default: %w", err)
@@ -76,8 +63,8 @@ func build(path string, opts ...Option) (*File, error) {
 		group: curr.Gid,
 	}
 
-	for _, opt := range opts {
-		opt(f)
+	for _, o := range opts {
+		o(f)
 	}
 
 	return f, nil
@@ -222,7 +209,7 @@ func ensureAbsent(path string) error {
 // Ensure builds and applies the file resource described by opts, without
 // registering it. Used by other resource packages (e.g. dir) to write an
 // individual file without it becoming its own top-level resource.
-func Ensure(path string, opts ...Option) error {
+func Ensure(path string, opts ...opt.Option) error {
 	f, err := build(path, opts...)
 	if err != nil {
 		return err
@@ -230,7 +217,7 @@ func Ensure(path string, opts ...Option) error {
 	return f.apply()
 }
 
-func Have(path string, opts ...Option) resource.Resource {
+func Have(path string, opts ...opt.Option) resource.Resource {
 	f, err := build(path, opts...)
 	if err != nil {
 		log.Fatalf("failed to apply file resource %s: %v", path, err)
@@ -245,7 +232,7 @@ func Have(path string, opts ...Option) resource.Resource {
 	return res
 }
 
-func Absent(path string, opts ...Option) resource.Resource {
-	opts = append(opts, IsAbsent())
+func Absent(path string, opts ...opt.Option) resource.Resource {
+	opts = append(opts, opt.IsAbsent())
 	return Have(path, opts...)
 }
