@@ -4,8 +4,7 @@ import (
 	"os"
 
 	. "codeberg.org/snonux/gonf/api"
-	. "codeberg.org/snonux/gonf/api/option"
-	"codeberg.org/snonux/gonf/internal/resource"
+	. "codeberg.org/snonux/gonf/api/options"
 )
 
 func Run() error {
@@ -68,5 +67,5 @@ func Run() error {
 	_ = os.Link("/tmp/gonf_hello.txt", "/tmp/gonf_stale_hardlink")
 	Link("/tmp/gonf_stale_hardlink", IsAbsent())
 
-	return resource.Apply()
+	return Apply()
 }

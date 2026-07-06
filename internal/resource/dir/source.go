@@ -9,7 +9,7 @@ import (
 
 	"codeberg.org/snonux/gonf/internal/resource/file"
 	"codeberg.org/snonux/gonf/internal/resource/link"
-	opt "codeberg.org/snonux/gonf/api/option"
+	opt "codeberg.org/snonux/gonf/api/options"
 )
 
 // copySourceTree mirrors d.source into d.path, dispatching each entry by

@@ -1,6 +1,6 @@
 // Package option provides interface-based, resource-agnostic configuration
 // options shared by the file, dir, and link resource packages.
-package option
+package options
 
 import (
 	"log"

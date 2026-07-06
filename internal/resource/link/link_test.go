@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"codeberg.org/snonux/gonf/internal/resource"
-	. "codeberg.org/snonux/gonf/api/option"
+	. "codeberg.org/snonux/gonf/api/options"
 )
 
 func TestPresentSymlinkCreateAndIdempotent(t *testing.T) {

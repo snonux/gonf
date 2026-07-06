@@ -7,7 +7,7 @@ import (
 	"os/user"
 	"strconv"
 
-	opt "codeberg.org/snonux/gonf/api/option"
+	opt "codeberg.org/snonux/gonf/api/options"
 	"codeberg.org/snonux/gonf/internal/resource"
 )
 
