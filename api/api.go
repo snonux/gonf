@@ -5,6 +5,7 @@ import (
 	"codeberg.org/snonux/gonf/internal/resource/dir"
 	"codeberg.org/snonux/gonf/internal/resource/file"
 	"codeberg.org/snonux/gonf/internal/resource/link"
+	"codeberg.org/snonux/gonf/internal/resource/pkg"
 )
 
 // File creates a file resource.
@@ -37,6 +38,12 @@ func NoLink(path string, opts ...options.Option) Resource {
 	return link.Absent(path, opts...)
 }
 
-// func Package(name string, ...options.Options) Resource {
-// 	return pkg.Present(name, opts...)
-// }
+// Package creates a package resource.
+func Package(name string, opts ...options.Option) Resource {
+	return pkg.Present(name, opts...)
+}
+
+// NoPackage creates a package resource that is ensured to be absent.
+func NoPackage(name string, opts ...options.Option) Resource {
+	return pkg.Absent(name, opts...)
+}

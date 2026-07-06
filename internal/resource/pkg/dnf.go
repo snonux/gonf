@@ -2,23 +2,21 @@ package pkg
 
 import (
 	"fmt"
-	"log"
 
 	"codeberg.org/snonux/gonf/internal/exec"
 )
 
-func applyDNF(name string, ensure Ensure) error {
+func applyDNF(p *Package) error {
 	var args []string
 
-	switch ensure {
-	case PkgPresent:
-		args = []string{"install", "-y", name}
-	case PkgAbsent:
-		args = []string{"remove", "-y", name}
-	case PkgLatest:
-		args = []string{"install", "-y", name}
-	default:
-		log.Fatalf("unsupported ensure state: %v", ensure)
+	if p.absent {
+		args = []string{"remove", "-y", p.name}
+	} else if p.latest {
+		// update ensures the package is installed and updated to the latest version.
+		args = []string{"update", "-y", p.name}
+	} else {
+		// install ensures the package is installed, but does not update it if already present.
+		args = []string{"install", "-y", p.name}
 	}
 
 	stdout, stderr, exitCode, err := exec.Run("dnf", args...)

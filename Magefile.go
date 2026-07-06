@@ -44,7 +44,14 @@ func Run() error {
 // Test runs all unit tests.
 func Test() error {
 	fmt.Println("testing...")
-	return run("go", "test", "-v", "./...")
+	return run("go", "test", "-v", "-count=1", "./...")
+}
+
+// TestDNF runs DNF-specific integration tests. This requires root privileges.
+func TestDNF() error {
+	fmt.Println("testing DNF integration...")
+	// Use 'env' to set the variable for the go test command
+	return run("env", "GONF_RUN_DNF_TESTS=1", "go", "test", "-v", "-count=1", "./internal/resource/pkg/...")
 }
 
 // Lint runs go vet.

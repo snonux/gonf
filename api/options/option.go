@@ -21,6 +21,7 @@ type (
 	FileModed  interface{ SetFileMode(os.FileMode) }
 	Prunable   interface{ SetPrune() }
 	Absentable interface{ SetAbsent() }
+	Latestable interface{ SetLatest() }
 	Linkable   interface {
 		SetSymlink(target string)
 		SetHardlink(target string)
@@ -116,6 +117,17 @@ var IsAbsent = func(t any) {
 }
 
 func IsAbsentFunc() Option { return IsAbsent }
+
+// IsLatest marks the package resource to be updated to the latest version.
+var IsLatest = func(t any) {
+	r, ok := t.(Latestable)
+	if !ok {
+		log.Fatalf("%T does not support IsLatest", t)
+	}
+	r.SetLatest()
+}
+
+func IsLatestFunc() Option { return IsLatest }
 
 // WithSymlink makes the resource a symbolic link pointing at target.
 func WithSymlink(target string) Option {
