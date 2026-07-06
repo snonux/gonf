@@ -6,7 +6,7 @@ import (
 	"os"
 
 	"codeberg.org/snonux/gonf/internal/resource"
-	"codeberg.org/snonux/gonf/internal/resource/opt"
+	opt "codeberg.org/snonux/gonf/api/option"
 )
 
 type kind int

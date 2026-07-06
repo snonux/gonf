@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"codeberg.org/snonux/gonf/internal/resource"
-	. "codeberg.org/snonux/gonf/internal/resource/opt"
+	. "codeberg.org/snonux/gonf/api/option"
 )
 
 func TestGetChecksum(t *testing.T) {

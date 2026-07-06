@@ -8,7 +8,7 @@ import (
 	resource "codeberg.org/snonux/gonf/internal/resource"
 	"codeberg.org/snonux/gonf/internal/resource/file"
 
-	. "codeberg.org/snonux/gonf/internal/resource/opt"
+	. "codeberg.org/snonux/gonf/api/option"
 )
 
 func TestHaveDirectoryCreate(t *testing.T) {

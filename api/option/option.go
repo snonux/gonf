@@ -1,22 +1,6 @@
-// Package opt provides interface-based, resource-agnostic configuration
+// Package option provides interface-based, resource-agnostic configuration
 // options shared by the file, dir, and link resource packages.
-//
-// It is designed to be dot-imported at call sites so options read as bare
-// WithMode(...) / WithOwner(...) calls regardless of the resource type:
-//
-//	import (
-//		"codeberg.org/snonux/gonf/internal/resource/file"
-//		. "codeberg.org/snonux/gonf/internal/resource/opt"
-//	)
-//
-//	file.Have("file.txt", WithOwner("paul"), WithMode(0o755))
-//
-// Each option targets a small capability interface (Owner, Moded, ...). A
-// resource implements only the setters it supports. Applying an option to a
-// resource that lacks the matching interface (e.g. WithPrune on a file) is a
-// programming error in the resource declaration and aborts the program via
-// log.Fatalf.
-package opt
+package option
 
 import (
 	"log"
