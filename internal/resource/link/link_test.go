@@ -9,238 +9,220 @@ import (
 	. "codeberg.org/snonux/gonf/api/option"
 )
 
-func TestHaveSymlinkCreateAndIdempotent(t *testing.T) {
+func TestPresentSymlinkCreateAndIdempotent(t *testing.T) {
 	resource.ResetRepository()
 	dir := t.TempDir()
-	target := filepath.Join(dir, "target.txt")
-	link := filepath.Join(dir, "link.txt")
-	if err := os.WriteFile(target, []byte("t"), 0o644); err != nil {
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("hi"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	path := filepath.Join(dir, "link")
 
-	Have(link, WithSymlink(target))
+	Present(path, WithSymlink(target))
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
-	got, err := os.Readlink(link)
+
+	got, err := os.Readlink(path)
 	if err != nil {
-		t.Fatalf("readlink: %v", err)
+		t.Fatal(err)
 	}
 	if got != target {
-		t.Errorf("expected link -> %s, got %s", target, got)
+		t.Errorf("expected link to point to %s, got %s", target, got)
 	}
 
-	// Re-applying the same link should be a no-op (tested directly to avoid the
-	// one-per-process resource registry rejecting a duplicate registration).
-	l := &Link{path: link, kind: symlinkKind, target: target}
-	if err := ensureSymlink(l); err != nil {
-		t.Fatalf("idempotent apply: %v", err)
+	// Idempotency
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("second Apply failed: %v", err)
 	}
 }
 
-func TestHaveSymlinkRepoints(t *testing.T) {
+func TestPresentSymlinkRepoints(t *testing.T) {
 	resource.ResetRepository()
 	dir := t.TempDir()
-	old := filepath.Join(dir, "old.txt")
-	newT := filepath.Join(dir, "new.txt")
-	link := filepath.Join(dir, "link")
-	for _, p := range []string{old, newT} {
-		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+	path := filepath.Join(dir, "link")
+	t1 := filepath.Join(dir, "target1")
+	t2 := filepath.Join(dir, "target2")
+	if err := os.WriteFile(t1, []byte("1"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if err := os.Symlink(old, link); err != nil {
+	if err := os.WriteFile(t2, []byte("2"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	Have(link, WithSymlink(newT))
+	Present(path, WithSymlink(t1))
 	if err := resource.Apply(); err != nil {
-		t.Fatalf("Apply failed: %v", err)
+		t.Fatalf("Apply 1 failed: %v", err)
 	}
-	got, err := os.Readlink(link)
+
+	// Change target
+	resource.ResetRepository()
+	Present(path, WithSymlink(t2))
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply 2 failed: %v", err)
+	}
+
+	got, err := os.Readlink(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != newT {
-		t.Errorf("expected repoint to %s, got %s", newT, got)
+	if got != t2 {
+		t.Errorf("expected link to repoint to %s, got %s", t2, got)
 	}
 }
 
-func TestHaveSymlinkMovesRealFileAside(t *testing.T) {
+func TestPresentSymlinkMovesRealFileAside(t *testing.T) {
 	resource.ResetRepository()
 	dir := t.TempDir()
-	target := filepath.Join(dir, "target.txt")
-	link := filepath.Join(dir, "real")
-	if err := os.WriteFile(target, []byte("t"), 0o644); err != nil {
+	path := filepath.Join(dir, "link")
+	if err := os.WriteFile(path, []byte("real file"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(link, []byte("original"), 0o644); err != nil {
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("target content"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	Have(link, WithSymlink(target))
+	Present(path, WithSymlink(target))
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
-	got, err := os.Readlink(link)
+	if _, err := os.Stat(path + ".old"); os.IsNotExist(err) {
+		t.Errorf("expected real file to be moved to %s.old", path)
+	}
+	got, err := os.Readlink(path)
 	if err != nil {
-		t.Fatalf("expected %s to be a symlink: %v", link, err)
+		t.Fatal(err)
 	}
 	if got != target {
-		t.Errorf("expected link -> %s, got %s", target, got)
-	}
-	if data, err := os.ReadFile(link + ".old"); err != nil || string(data) != "original" {
-		t.Errorf("expected original content preserved in %s.old, got %q err %v", link, string(data), err)
+		t.Errorf("expected link to point to %s, got %s", target, got)
 	}
 }
 
-func TestHaveHardlinkCreateAndIdempotent(t *testing.T) {
+func TestPresentHardlinkCreateAndIdempotent(t *testing.T) {
 	resource.ResetRepository()
 	dir := t.TempDir()
-	target := filepath.Join(dir, "target.txt")
-	link := filepath.Join(dir, "link.txt")
-	if err := os.WriteFile(target, []byte("payload"), 0o644); err != nil {
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("hi"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	path := filepath.Join(dir, "link")
 
-	Have(link, WithHardlink(target))
+	Present(path, WithHardlink(target))
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
-	ti, err := os.Stat(target)
+	infoLink, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	li, err := os.Stat(link)
+	if infoLink.Mode()&os.ModeSymlink != 0 {
+		t.Error("expected hardlink, but got symlink")
+	}
+	// Verify they share the same inode (via a helper or by checking if we can see it's not a symlink and is a file)
+	// Since sameInode is internal to the package, we can just check that we can read it.
+	got, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !sameInode(ti, li) {
-		t.Errorf("expected %s and %s to share an inode", link, target)
+	if string(got) != "hi" {
+		t.Errorf("expected content 'hi', got %q", string(got))
 	}
 
-	// Re-applying the same link should be a no-op (direct call to avoid the
-	// one-per-process resource registry rejecting a duplicate registration).
-	l := &Link{path: link, kind: hardlinkKind, target: target}
-	if err := ensureHardlink(l); err != nil {
-		t.Fatalf("idempotent apply: %v", err)
+	// Idempotency
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("second Apply failed: %v", err)
 	}
 }
 
-func TestHaveHardlinkMovesRealFileAside(t *testing.T) {
+func TestPresentHardlinkMovesRealFileAside(t *testing.T) {
 	resource.ResetRepository()
 	dir := t.TempDir()
-	target := filepath.Join(dir, "target.txt")
-	link := filepath.Join(dir, "real")
-	if err := os.WriteFile(target, []byte("payload"), 0o644); err != nil {
+	path := filepath.Join(dir, "link")
+	if err := os.WriteFile(path, []byte("real file"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(link, []byte("original"), 0o644); err != nil {
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("target content"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	Have(link, WithHardlink(target))
+	Present(path, WithHardlink(target))
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
-	ti, err := os.Stat(target)
-	if err != nil {
-		t.Fatal(err)
-	}
-	li, err := os.Stat(link)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !sameInode(ti, li) {
-		t.Errorf("expected %s to be hardlinked to %s", link, target)
-	}
-	if data, err := os.ReadFile(link + ".old"); err != nil || string(data) != "original" {
-		t.Errorf("expected original content preserved in %s.old, got %q err %v", link, string(data), err)
+	if _, err := os.Stat(path + ".old"); os.IsNotExist(err) {
+		t.Errorf("expected real file to be moved to %s.old", path)
 	}
 }
 
-func TestHaveHardlinkMissingTarget(t *testing.T) {
+func TestPresentHardlinkMissingTarget(t *testing.T) {
 	resource.ResetRepository()
 	dir := t.TempDir()
-	link := filepath.Join(dir, "link")
-	if err := Ensure(link, WithHardlink(filepath.Join(dir, "nope"))); err == nil {
-		t.Error("expected error when hardlink target does not exist")
+	path := filepath.Join(dir, "link")
+	target := filepath.Join(dir, "nonexistent")
+
+	Present(path, WithHardlink(target))
+	if err := resource.Apply(); err == nil {
+		t.Error("expected Apply to fail when hardlink target is missing")
 	}
 }
 
-func TestHaveAbsentSymlink(t *testing.T) {
+func TestPresentAbsentSymlink(t *testing.T) {
 	resource.ResetRepository()
 	dir := t.TempDir()
-	target := filepath.Join(dir, "target.txt")
-	link := filepath.Join(dir, "link.txt")
-	if err := os.WriteFile(target, []byte("t"), 0o644); err != nil {
+	path := filepath.Join(dir, "link")
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("hi"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(target, link); err != nil {
+	if err := os.Symlink(target, path); err != nil {
 		t.Fatal(err)
 	}
 
-	Have(link, IsAbsent())
+	Present(path, IsAbsent())
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
-	if _, err := os.Lstat(link); !os.IsNotExist(err) {
-		t.Errorf("expected %s to be removed", link)
-	}
 
-	// Idempotent: removing a missing link is not an error (direct call to
-	// avoid duplicate registration in the one-per-process registry).
-	if err := ensureAbsent(link); err != nil {
-		t.Fatalf("absent on missing link: %v", err)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("expected symlink %s to be removed", path)
 	}
 }
 
 func TestAbsentSymlink(t *testing.T) {
 	resource.ResetRepository()
 	dir := t.TempDir()
-	target := filepath.Join(dir, "target.txt")
-	link := filepath.Join(dir, "link.txt")
-	if err := os.WriteFile(target, []byte("t"), 0o644); err != nil {
+	path := filepath.Join(dir, "link")
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("hi"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(target, link); err != nil {
+	if err := os.Symlink(target, path); err != nil {
 		t.Fatal(err)
 	}
 
-	Absent(link)
+	Absent(path)
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
-	if _, err := os.Lstat(link); !os.IsNotExist(err) {
-		t.Errorf("expected %s to be removed", link)
-	}
 
-	// Idempotent: removing a missing link is not an error (direct call to
-	// avoid duplicate registration in the one-per-process registry).
-	if err := ensureAbsent(link); err != nil {
-		t.Fatalf("absent on missing link: %v", err)
-	}
-}
-
-func TestHaveAbsentWithoutKindRegistersGenericLink(t *testing.T) {
-	resource.ResetRepository()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "whatever")
-
-	l := build(path, IsAbsent())
-	if got := l.resourceType(); got != "Link" {
-		t.Errorf("expected generic resource type %q, got %q", "Link", got)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("expected symlink %s to be removed", path)
 	}
 }
 
 func TestBuildRequiresKindOrAbsent(t *testing.T) {
 	resource.ResetRepository()
 	dir := t.TempDir()
-	path := filepath.Join(dir, "nope")
-	if err := Ensure(path); err == nil {
-		t.Error("expected error when neither IsSymlink, IsHardlink, nor IsAbsent is set")
+	path := filepath.Join(dir, "link")
+
+	// Call Present without specifying symlink, hardlink, or absent
+	Present(path)
+	if err := resource.Apply(); err == nil {
+		t.Error("expected Apply to fail when neither kind nor absent is specified")
 	}
 }

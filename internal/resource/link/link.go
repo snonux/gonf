@@ -5,8 +5,8 @@ import (
 	"log"
 	"os"
 
-	"codeberg.org/snonux/gonf/internal/resource"
 	opt "codeberg.org/snonux/gonf/api/option"
+	"codeberg.org/snonux/gonf/internal/resource"
 )
 
 type kind int
@@ -86,7 +86,7 @@ func Ensure(path string, opts ...opt.Option) error {
 	return build(path, opts...).apply()
 }
 
-func Have(path string, opts ...opt.Option) resource.Resource {
+func Present(path string, opts ...opt.Option) resource.Resource {
 	l := build(path, opts...)
 	l.resource = resource.Register(l.resourceType(), l.path,
 		resource.ApplierFunc(func() error { return l.apply() }))
@@ -96,7 +96,7 @@ func Have(path string, opts ...opt.Option) resource.Resource {
 
 func Absent(path string, opts ...opt.Option) resource.Resource {
 	opts = append(opts, opt.IsAbsent())
-	return Have(path, opts...)
+	return Present(path, opts...)
 }
 
 func ensureAbsent(path string) error {

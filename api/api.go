@@ -10,7 +10,7 @@ import (
 
 // File creates a file resource.
 func File(path string, opts ...option.Option) resource.Resource {
-	return file.Have(path, opts...)
+	return file.Present(path, opts...)
 }
 
 // NoFile creates a file resource that is ensured to be absent.
@@ -20,7 +20,7 @@ func NoFile(path string, opts ...option.Option) resource.Resource {
 
 // Dir creates a directory resource.
 func Dir(path string, opts ...option.Option) resource.Resource {
-	return dir.Have(path, opts...)
+	return dir.Present(path, opts...)
 }
 
 // NoDir creates a directory resource that is ensured to be absent.
@@ -30,7 +30,7 @@ func NoDir(path string, opts ...option.Option) resource.Resource {
 
 // Link creates a link resource (symbolic or hard).
 func Link(path string, opts ...option.Option) resource.Resource {
-	return link.Have(path, opts...)
+	return link.Present(path, opts...)
 }
 
 // NoLink creates a link resource that is ensured to be absent.

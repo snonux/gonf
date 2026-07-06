@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"codeberg.org/snonux/gonf/internal/resource"
 	. "codeberg.org/snonux/gonf/api/option"
+	"codeberg.org/snonux/gonf/internal/resource"
 )
 
 func TestGetChecksum(t *testing.T) {
@@ -104,12 +104,12 @@ func TestUpdateFromTmpChecksumUnchanged(t *testing.T) {
 	}
 }
 
-func TestHaveStringCreateNewFile(t *testing.T) {
+func TestPresentStringCreateNewFile(t *testing.T) {
 	resource.ResetRepository()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "new.txt")
 
-	Have(path, WithContent("hello world"))
+	Present(path, WithContent("hello world"))
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
@@ -123,13 +123,13 @@ func TestHaveStringCreateNewFile(t *testing.T) {
 	}
 }
 
-func TestHaveMode(t *testing.T) {
+func TestPresentMode(t *testing.T) {
 	resource.ResetRepository()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mode.txt")
 	mode := os.FileMode(0o600)
 
-	Have(path, WithContent("mode test"), WithMode(mode))
+	Present(path, WithContent("mode test"), WithMode(mode))
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
@@ -143,13 +143,13 @@ func TestHaveMode(t *testing.T) {
 	}
 }
 
-func TestHaveSourceFile(t *testing.T) {
+func TestPresentSourceFile(t *testing.T) {
 	resource.ResetRepository()
 	dir := t.TempDir()
 	sourcePath := filepath.Join("..", "..", "..", "assets", "testfiles", "test.txt")
 	targetPath := filepath.Join(dir, "target.txt")
 
-	Have(targetPath, WithSource(sourcePath))
+	Present(targetPath, WithSource(sourcePath))
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
@@ -164,13 +164,13 @@ func TestHaveSourceFile(t *testing.T) {
 	}
 }
 
-func TestHaveTemplateFile(t *testing.T) {
+func TestPresentTemplateFile(t *testing.T) {
 	resource.ResetRepository()
 	dir := t.TempDir()
 	sourcePath := filepath.Join("..", "..", "..", "assets", "testfiles", "test.tmpl")
 	targetPath := filepath.Join(dir, "target.conf")
 
-	Have(targetPath, WithSource(sourcePath))
+	Present(targetPath, WithSource(sourcePath))
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestHaveTemplateFile(t *testing.T) {
 	}
 }
 
-func TestHaveAbsent(t *testing.T) {
+func TestPresentAbsent(t *testing.T) {
 	resource.ResetRepository()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "gone.txt")
@@ -194,7 +194,7 @@ func TestHaveAbsent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	Have(path, IsAbsent())
+	Present(path, IsAbsent())
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}

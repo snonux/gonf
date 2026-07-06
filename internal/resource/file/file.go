@@ -10,8 +10,8 @@ import (
 	"strings"
 	"text/template"
 
-	"codeberg.org/snonux/gonf/internal/resource"
 	opt "codeberg.org/snonux/gonf/api/option"
+	"codeberg.org/snonux/gonf/internal/resource"
 )
 
 type File struct {
@@ -218,7 +218,7 @@ func Ensure(path string, opts ...opt.Option) error {
 	return f.apply()
 }
 
-func Have(path string, opts ...opt.Option) resource.Resource {
+func Present(path string, opts ...opt.Option) resource.Resource {
 	f, err := build(path, opts...)
 	if err != nil {
 		log.Fatalf("failed to apply file resource %s: %v", path, err)
@@ -232,5 +232,5 @@ func Have(path string, opts ...opt.Option) resource.Resource {
 
 func Absent(path string, opts ...opt.Option) resource.Resource {
 	opts = append(opts, opt.IsAbsent())
-	return Have(path, opts...)
+	return Present(path, opts...)
 }

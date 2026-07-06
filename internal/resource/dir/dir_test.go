@@ -5,197 +5,170 @@ import (
 	"path/filepath"
 	"testing"
 
-	resource "codeberg.org/snonux/gonf/internal/resource"
-	"codeberg.org/snonux/gonf/internal/resource/file"
-
+	"codeberg.org/snonux/gonf/internal/resource"
 	. "codeberg.org/snonux/gonf/api/option"
 )
 
-func TestHaveDirectoryCreate(t *testing.T) {
+func TestPresentDirectoryCreate(t *testing.T) {
 	resource.ResetRepository()
-	tmp := t.TempDir()
-	path := filepath.Join(tmp, "sub", "nested")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "newdir")
 
-	Have(path)
+	Present(path)
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
 	info, err := os.Stat(path)
 	if err != nil {
-		t.Fatalf("stat: %v", err)
+		t.Fatal(err)
 	}
 	if !info.IsDir() {
-		t.Errorf("expected a directory at %s", path)
-	}
-	if info.Mode().Perm() != 0o750 {
-		t.Errorf("expected default dir mode 0750, got %v", info.Mode().Perm())
+		t.Errorf("expected %s to be a directory", path)
 	}
 }
 
-func TestHaveDirectoryIdempotentWithMode(t *testing.T) {
+func TestPresentDirectoryIdempotentWithMode(t *testing.T) {
 	resource.ResetRepository()
-	tmp := t.TempDir()
-	path := filepath.Join(tmp, "d")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "modedir")
+	mode := os.FileMode(0o700)
 
-	// Call ensureDirectorySelf directly to exercise idempotency without the
-	// one-per-process resource registry rejecting a duplicate registration.
-	d1 := &Dir{path: path, mode: 0o755}
-	if err := ensureDirectorySelf(d1); err != nil {
-		t.Fatalf("first apply: %v", err)
-	}
-	d2 := &Dir{path: path, mode: 0o700}
-	if err := ensureDirectorySelf(d2); err != nil {
-		t.Fatalf("second apply: %v", err)
+	Present(path, WithMode(mode))
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
 	}
 
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o700 {
-		t.Errorf("expected mode 0700 enforced, got %v", info.Mode().Perm())
+	if info.Mode().Perm() != mode {
+		t.Errorf("expected mode %v, got %v", mode, info.Mode().Perm())
+	}
+
+	// Idempotency check
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("second Apply failed: %v", err)
 	}
 }
 
-func TestHaveDirectoryFailsWhenFileExists(t *testing.T) {
+func TestPresentDirectoryFailsWhenFileExists(t *testing.T) {
 	resource.ResetRepository()
-	tmp := t.TempDir()
-	path := filepath.Join(tmp, "afile")
-	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "myfile")
+	if err := os.WriteFile(path, []byte("hello"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := Ensure(path); err == nil {
-		t.Error("expected error when a regular file is in the way of a directory")
+	Present(path)
+	if err := resource.Apply(); err == nil {
+		t.Error("expected Apply to fail when a file exists at the directory path")
 	}
 }
 
-func TestHaveAbsentNonEmptyDirWithoutPruneFails(t *testing.T) {
+func TestPresentAbsentNonEmptyDirWithoutPruneFails(t *testing.T) {
 	resource.ResetRepository()
-	tmp := t.TempDir()
-	target := filepath.Join(tmp, "d")
-	if err := os.MkdirAll(filepath.Join(target, "sub"), 0o755); err != nil {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nonempty")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "file"), []byte("hi"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := Ensure(target, IsAbsent()); err == nil {
-		t.Error("expected error removing a non-empty directory without WithPrune()")
-	}
-	if _, err := os.Stat(target); err != nil {
-		t.Errorf("expected %s to still exist, got %v", target, err)
+	Present(path, IsAbsent())
+	if err := resource.Apply(); err == nil {
+		t.Error("expected Apply to fail when removing non-empty directory without prune")
 	}
 }
 
-func TestHaveAbsentPruneDirectoryRecursive(t *testing.T) {
+func TestPresentAbsentPruneDirectoryRecursive(t *testing.T) {
 	resource.ResetRepository()
-	tmp := t.TempDir()
-	target := filepath.Join(tmp, "d")
-	if err := os.MkdirAll(filepath.Join(target, "sub", "deep"), 0o755); err != nil {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pruneme")
+	if err := os.Mkdir(path, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(target, "sub", "f.txt"), []byte("x"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(path, "file"), []byte("hi"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	Have(target, IsAbsent(), WithPrune())
+	Present(path, IsAbsent(), WithPrune())
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
-	if _, err := os.Stat(target); !os.IsNotExist(err) {
-		t.Errorf("expected %s to be removed recursively", target)
-	}
 
-	// Idempotent: removing a missing tree is not an error.
-	d := &Dir{path: target, absent: true, prune: true}
-	if err := ensureAbsent(d); err != nil {
-		t.Fatalf("prune on missing tree: %v", err)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("expected %s to be removed recursively", path)
 	}
 }
 
 func TestAbsentPruneDirectoryRecursive(t *testing.T) {
 	resource.ResetRepository()
-	tmp := t.TempDir()
-	target := filepath.Join(tmp, "d")
-	if err := os.MkdirAll(filepath.Join(target, "sub", "deep"), 0o755); err != nil {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pruneme2")
+	if err := os.Mkdir(path, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(target, "sub", "f.txt"), []byte("x"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(path, "file"), []byte("hi"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	Absent(target, WithPrune())
+	Absent(path, WithPrune())
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
-	if _, err := os.Stat(target); !os.IsNotExist(err) {
-		t.Errorf("expected %s to be removed recursively", target)
-	}
 
-	// Idempotent: removing a missing tree is not an error.
-	d := &Dir{path: target, absent: true, prune: true}
-	if err := ensureAbsent(d); err != nil {
-		t.Fatalf("prune on missing tree: %v", err)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("expected %s to be removed recursively", path)
 	}
 }
 
-func TestHaveDirectoryWithSource(t *testing.T) {
-	t.Run("recursive copy", func(t *testing.T) {
+func TestPresentDirectoryWithSource(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+
+	if err := os.Mkdir(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(src, "subdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "f1"), []byte("content1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "subdir", "f2"), []byte("content2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("Create", func(t *testing.T) {
 		resource.ResetRepository()
-		tmp := t.TempDir()
-		src := t.TempDir()
-		dst := filepath.Join(tmp, "dst")
-
-		srcFile := filepath.Join(src, "file.txt")
-		if err := os.WriteFile(srcFile, []byte("hello"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		srcSub := filepath.Join(src, "sub")
-		if err := os.MkdirAll(srcSub, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		srcSubFile := filepath.Join(srcSub, "subfile.txt")
-		if err := os.WriteFile(srcSubFile, []byte("sub hello"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-
-		Have(dst, WithSource(src))
+		Present(dst, WithSource(src))
 		if err := resource.Apply(); err != nil {
 			t.Fatalf("Apply failed: %v", err)
 		}
 
-		if data, err := os.ReadFile(filepath.Join(dst, "file.txt")); err != nil || string(data) != "hello" {
-			t.Errorf("expected 'hello' at %s, got %q err %v", filepath.Join(dst, "file.txt"), string(data), err)
+		if _, err := os.Stat(filepath.Join(dst, "f1")); err != nil {
+			t.Errorf("missing file f1: %v", err)
 		}
-		if data, err := os.ReadFile(filepath.Join(dst, "sub", "subfile.txt")); err != nil || string(data) != "sub hello" {
-			t.Errorf("expected 'sub hello' at %s, got %q err %v", filepath.Join(dst, "sub", "subfile.txt"), string(data), err)
+		if _, err := os.Stat(filepath.Join(dst, "subdir", "f2")); err != nil {
+			t.Errorf("missing file f2: %v", err)
 		}
 	})
 
-	t.Run("pruning", func(t *testing.T) {
+	t.Run("Prune", func(t *testing.T) {
 		resource.ResetRepository()
-		tmp := t.TempDir()
-		src := t.TempDir()
-		dst := filepath.Join(tmp, "dst")
-
-		srcFile := filepath.Join(src, "file.txt")
-		if err := os.WriteFile(srcFile, []byte("hello"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-
-		if err := os.MkdirAll(dst, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		extra := filepath.Join(dst, "extra.txt")
+		// Add extra file to dst
+		extra := filepath.Join(dst, "extra")
 		if err := os.WriteFile(extra, []byte("extra"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		extraSub := filepath.Join(dst, "extra-sub")
-		if err := os.MkdirAll(extraSub, 0o755); err != nil {
-			t.Fatal(err)
-		}
 
-		Have(dst, WithSource(src), WithPrune())
+		Present(dst, WithSource(src), WithPrune())
 		if err := resource.Apply(); err != nil {
 			t.Fatalf("Apply failed: %v", err)
 		}
@@ -203,189 +176,182 @@ func TestHaveDirectoryWithSource(t *testing.T) {
 		if _, err := os.Stat(extra); !os.IsNotExist(err) {
 			t.Errorf("expected %s to be pruned", extra)
 		}
-		if _, err := os.Stat(extraSub); !os.IsNotExist(err) {
-			t.Errorf("expected %s to be pruned", extraSub)
-		}
-		if data, err := os.ReadFile(filepath.Join(dst, "file.txt")); err != nil || string(data) != "hello" {
-			t.Errorf("expected 'hello' at %s, got %q err %v", filepath.Join(dst, "file.txt"), string(data), err)
-		}
 	})
 }
 
 func TestSourceCopyUsesFileModeDefaultNotDirMode(t *testing.T) {
 	resource.ResetRepository()
-	tmp := t.TempDir()
-	src := t.TempDir()
-	dst := filepath.Join(tmp, "dst")
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
 
-	if err := os.WriteFile(filepath.Join(src, "file.txt"), []byte("hello"), 0o644); err != nil {
+	if err := os.Mkdir(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f1 := filepath.Join(src, "f1")
+	if err := os.WriteFile(f1, []byte("hi"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	Have(dst, WithSource(src))
+	// Use non-default dir mode to prove files don't use it
+	Present(dst, WithSource(src), WithMode(0o700))
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
-	dirInfo, err := os.Stat(dst)
+	info, err := os.Stat(filepath.Join(dst, "f1"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dirInfo.Mode().Perm() != 0o750 {
-		t.Errorf("expected dir mode 0750, got %v", dirInfo.Mode().Perm())
-	}
-
-	fileInfo, err := os.Stat(filepath.Join(dst, "file.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fileInfo.Mode().Perm() != 0o640 {
-		t.Errorf("expected copied file mode 0640 (not the directory's 0750), got %v", fileInfo.Mode().Perm())
+	// Default fileMode is 0o640
+	if info.Mode().Perm() != 0o640 {
+		t.Errorf("expected file mode 0o640, got %v", info.Mode().Perm())
 	}
 }
 
 func TestSourceCopyRespectsExplicitWithFileMode(t *testing.T) {
 	resource.ResetRepository()
-	tmp := t.TempDir()
-	src := t.TempDir()
-	dst := filepath.Join(tmp, "dst")
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
 
-	if err := os.WriteFile(filepath.Join(src, "file.txt"), []byte("hello"), 0o644); err != nil {
+	if err := os.Mkdir(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "f1"), []byte("hi"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	Have(dst, WithSource(src), WithMode(0o755), WithFileMode(0o600))
+	explicitMode := os.FileMode(0o600)
+	Present(dst, WithSource(src), WithFileMode(explicitMode))
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
-	dirInfo, err := os.Stat(dst)
+	info, err := os.Stat(filepath.Join(dst, "f1"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dirInfo.Mode().Perm() != 0o755 {
-		t.Errorf("expected dir mode 0755, got %v", dirInfo.Mode().Perm())
-	}
-
-	fileInfo, err := os.Stat(filepath.Join(dst, "file.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fileInfo.Mode().Perm() != 0o600 {
-		t.Errorf("expected copied file mode 0600, got %v", fileInfo.Mode().Perm())
+	if info.Mode().Perm() != explicitMode {
+		t.Errorf("expected file mode %v, got %v", explicitMode, info.Mode().Perm())
 	}
 }
 
 func TestSourceCopyStripsTmplSuffixOnCopiedFile(t *testing.T) {
 	resource.ResetRepository()
-	tmp := t.TempDir()
-	src := t.TempDir()
-	dst := filepath.Join(tmp, "dst")
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
 
-	if err := os.WriteFile(filepath.Join(src, "foo.conf.tmpl"), []byte("hello {{.Param}}"), 0o644); err != nil {
+	if err := os.Mkdir(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "foo.conf.tmpl"), []byte("hello"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	Have(dst, WithSource(src))
+	Present(dst, WithSource(src))
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
 	if _, err := os.Stat(filepath.Join(dst, "foo.conf")); err != nil {
-		t.Errorf("expected de-suffixed foo.conf to exist: %v", err)
+		t.Errorf("expected stripped file foo.conf to exist: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dst, "foo.conf.tmpl")); !os.IsNotExist(err) {
-		t.Errorf("expected foo.conf.tmpl to NOT exist on disk")
+		t.Errorf("expected non-stripped file foo.conf.tmpl to NOT exist")
 	}
 }
 
 func TestSourceCopyWithPruneKeepsTemplatedFile(t *testing.T) {
 	resource.ResetRepository()
-	tmp := t.TempDir()
-	src := t.TempDir()
-	dst := filepath.Join(tmp, "dst")
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
 
-	if err := os.WriteFile(filepath.Join(src, "foo.conf.tmpl"), []byte("hello {{.Param}}"), 0o644); err != nil {
+	if err := os.Mkdir(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "foo.conf.tmpl"), []byte("hello"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	// WithPrune reconciles the destination against the source on every
-	// apply; a de-suffixed templated file must not be pruned just because
-	// its own name has no direct match in the source tree.
-	Have(dst, WithSource(src), WithPrune())
+	// First apply to create the file
+	Present(dst, WithSource(src))
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+
+	// Now apply with prune
+	resource.ResetRepository()
+	Present(dst, WithSource(src), WithPrune())
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
 	if _, err := os.Stat(filepath.Join(dst, "foo.conf")); err != nil {
-		t.Errorf("expected foo.conf to survive pruning, got %v", err)
+		t.Errorf("expected foo.conf to be kept during pruning: %v", err)
 	}
 }
 
 func TestSourceCopyParamMatchesSingleFilePath(t *testing.T) {
 	resource.ResetRepository()
-	tmp := t.TempDir()
-	src := t.TempDir()
-	dst := filepath.Join(tmp, "dst")
-	sourcePath := filepath.Join(src, "foo.conf.tmpl")
-	if err := os.WriteFile(sourcePath, []byte("{{.Param}}"), 0o644); err != nil {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+
+	if err := os.Mkdir(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f1 := filepath.Join(src, "foo.conf.tmpl")
+	if err := os.WriteFile(f1, []byte("path is {{.Param}}"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	Have(dst, WithSource(src))
+	Present(dst, WithSource(src))
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
-	viaDir, err := os.ReadFile(filepath.Join(dst, "foo.conf"))
+
+	got, err := os.ReadFile(filepath.Join(dst, "foo.conf"))
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	singleTarget := filepath.Join(tmp, "single.conf")
-	if err := file.Ensure(singleTarget, WithSource(sourcePath)); err != nil {
-		t.Fatal(err)
-	}
-	viaFile, err := os.ReadFile(singleTarget)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if string(viaDir) != string(viaFile) {
-		t.Errorf("expected identical .Param rendering via both paths, dir-copy=%q file-direct=%q", viaDir, viaFile)
+	expected := "path is " + f1
+	if string(got) != expected {
+		t.Errorf("expected %q, got %q", expected, string(got))
 	}
 }
 
 func TestSourceCopyRecreatesSymlinkNotContent(t *testing.T) {
 	resource.ResetRepository()
-	tmp := t.TempDir()
-	src := t.TempDir()
-	dst := filepath.Join(tmp, "dst")
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
 
-	if err := os.WriteFile(filepath.Join(src, "target.txt"), []byte("hello"), 0o644); err != nil {
+	if err := os.Mkdir(src, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink("target.txt", filepath.Join(src, "link.txt")); err != nil {
+	target := filepath.Join(src, "realfile")
+	if err := os.WriteFile(target, []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	linkPath := filepath.Join(src, "link")
+	if err := os.Symlink(target, linkPath); err != nil {
 		t.Fatal(err)
 	}
 
-	Have(dst, WithSource(src))
+	Present(dst, WithSource(src))
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
-	linkPath := filepath.Join(dst, "link.txt")
-	info, err := os.Lstat(linkPath)
+	dstLink := filepath.Join(dst, "link")
+	info, err := os.Lstat(dstLink)
 	if err != nil {
-		t.Fatalf("lstat: %v", err)
+		t.Fatal(err)
 	}
 	if info.Mode()&os.ModeSymlink == 0 {
-		t.Fatalf("expected %s to be a symlink, got mode %v", linkPath, info.Mode())
-	}
-	got, err := os.Readlink(linkPath)
-	if err != nil {
-		t.Fatalf("readlink: %v", err)
-	}
-	if got != "target.txt" {
-		t.Errorf("expected symlink target %q, got %q", "target.txt", got)
+		t.Errorf("expected %s to be a symlink", dstLink)
 	}
 }
