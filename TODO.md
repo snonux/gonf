@@ -19,10 +19,7 @@ DONE!
 
 ## 4. Glob / multi-file installs
 
-The `ensure_dir` helper installs `"$DOT/foo/*"` into a destination dir. gonf
-`file.Have` handles a single file. Need a way to install a glob of source files
-into a destination directory (helix, ghostty, hexai, lazygit, opencode, tmux,
-sway, waybar, scripts, systemd units, calendar, pipewire).
+MAYBE LATER, JUST USE NATIVE GO GLOB FOR NOW!
 
 ## 5. Prune / reconcile stale files
 

@@ -231,6 +231,6 @@ func Present(path string, opts ...opt.Option) resource.Resource {
 }
 
 func Absent(path string, opts ...opt.Option) resource.Resource {
-	opts = append(opts, opt.IsAbsent())
+	opts = append(opts, opt.IsAbsent)
 	return Present(path, opts...)
 }

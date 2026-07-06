@@ -183,7 +183,7 @@ func TestPresentAbsentSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	Present(path, IsAbsent())
+	Present(path, IsAbsent)
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}

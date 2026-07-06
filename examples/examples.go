@@ -32,7 +32,7 @@ func Run() error {
 
 	// 7. Ensuring something is absent (two equivalent styles; each resource
 	// path may only be declared once per run, so they use distinct paths)
-	File("/tmp/gonf_old.txt", IsAbsent())
+	File("/tmp/gonf_old.txt", IsAbsent)
 	NoFile("/tmp/gonf_old_alt.txt") // Alternative way
 
 	// 8. A directory tree copied from source, reconciled, with a distinct
@@ -40,7 +40,7 @@ func Run() error {
 	Dir(
 		"/tmp/gonf_dir_from_source",
 		WithSource("assets/testfiles"),
-		WithPrune(),
+		WithPrune,
 		WithFileMode(0o644),
 	)
 
@@ -49,23 +49,23 @@ func Run() error {
 	// (rather than reusing #8's path) to give WithPrune's recursive removal
 	// something real to demonstrate.
 	_ = os.MkdirAll("/tmp/gonf_stale_dir/nested", 0o755)
-	Dir("/tmp/gonf_stale_dir", IsAbsent(), WithPrune())
+	Dir("/tmp/gonf_stale_dir", IsAbsent, WithPrune)
 	_ = os.MkdirAll("/tmp/gonf_stale_dir_alt/nested", 0o755)
-	NoDir("/tmp/gonf_stale_dir_alt", WithPrune()) // Alternative way
+	NoDir("/tmp/gonf_stale_dir_alt", WithPrune) // Alternative way
 
 	// 10. Non-recursively removing an empty directory
 	_ = os.Mkdir("/tmp/gonf_stale_empty_dir", 0o755)
-	Dir("/tmp/gonf_stale_empty_dir", IsAbsent())
+	Dir("/tmp/gonf_stale_empty_dir", IsAbsent)
 
 	// 11. Ensuring a symlink is absent
 	_ = os.Symlink("/tmp/gonf_hello.txt", "/tmp/gonf_stale_link")
-	Link("/tmp/gonf_stale_link", IsAbsent())
+	Link("/tmp/gonf_stale_link", IsAbsent)
 	_ = os.Symlink("/tmp/gonf_hello.txt", "/tmp/gonf_stale_link_alt")
 	NoLink("/tmp/gonf_stale_link_alt") // Alternative way
 
 	// 12. Ensuring a hardlink is absent
 	_ = os.Link("/tmp/gonf_hello.txt", "/tmp/gonf_stale_hardlink")
-	Link("/tmp/gonf_stale_hardlink", IsAbsent())
+	Link("/tmp/gonf_stale_hardlink", IsAbsent)
 
 	return Apply()
 }

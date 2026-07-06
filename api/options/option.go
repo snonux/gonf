@@ -96,26 +96,26 @@ func WithFileMode(mode os.FileMode) Option {
 
 // WithPrune enables reconciliation of extra destination entries during a
 // source copy, and recursive removal during IsAbsent().
-func WithPrune() Option {
-	return func(t any) {
-		r, ok := t.(Prunable)
-		if !ok {
-			log.Fatalf("%T does not support WithPrune", t)
-		}
-		r.SetPrune()
+var WithPrune = func(t any) {
+	r, ok := t.(Prunable)
+	if !ok {
+		log.Fatalf("%T does not support WithPrune", t)
 	}
+	r.SetPrune()
 }
 
+func WithPruneFunc() Option { return WithPrune }
+
 // IsAbsent marks the resource for removal.
-func IsAbsent() Option {
-	return func(t any) {
-		r, ok := t.(Absentable)
-		if !ok {
-			log.Fatalf("%T does not support IsAbsent", t)
-		}
-		r.SetAbsent()
+var IsAbsent = func(t any) {
+	r, ok := t.(Absentable)
+	if !ok {
+		log.Fatalf("%T does not support IsAbsent", t)
 	}
+	r.SetAbsent()
 }
+
+func IsAbsentFunc() Option { return IsAbsent }
 
 // WithSymlink makes the resource a symbolic link pointing at target.
 func WithSymlink(target string) Option {

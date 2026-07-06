@@ -78,7 +78,7 @@ func TestPresentAbsentNonEmptyDirWithoutPruneFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	Present(path, IsAbsent())
+	Present(path, IsAbsent)
 	if err := resource.Apply(); err == nil {
 		t.Error("expected Apply to fail when removing non-empty directory without prune")
 	}
@@ -95,7 +95,7 @@ func TestPresentAbsentPruneDirectoryRecursive(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	Present(path, IsAbsent(), WithPrune())
+	Present(path, IsAbsent, WithPrune)
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestAbsentPruneDirectoryRecursive(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	Absent(path, WithPrune())
+	Absent(path, WithPrune)
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestPresentDirectoryWithSource(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		Present(dst, WithSource(src), WithPrune())
+		Present(dst, WithSource(src), WithPrune)
 		if err := resource.Apply(); err != nil {
 			t.Fatalf("Apply failed: %v", err)
 		}
@@ -284,7 +284,7 @@ func TestSourceCopyWithPruneKeepsTemplatedFile(t *testing.T) {
 
 	// Now apply with prune
 	resource.ResetRepository()
-	Present(dst, WithSource(src), WithPrune())
+	Present(dst, WithSource(src), WithPrune)
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}

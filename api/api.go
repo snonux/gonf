@@ -36,3 +36,7 @@ func Link(path string, opts ...options.Option) Resource {
 func NoLink(path string, opts ...options.Option) Resource {
 	return link.Absent(path, opts...)
 }
+
+// func Package(name string, ...options.Options) Resource {
+// 	return pkg.Present(name, opts...)
+// }
