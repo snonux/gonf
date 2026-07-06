@@ -42,11 +42,39 @@ func TestApplyDNF(t *testing.T) {
 		if err := applyDNF(p); err != nil {
 			t.Errorf("applyDNF Absent failed: %v", err)
 		}
+	})
 
-		// // Restore the package so we don't leave the system in a changed state
-		// p.absent = false
-		// if err := applyDNF(p); err != nil {
-		// 	t.Errorf("failed to restore package tig after Absent test: %v", err)
-		// }
+	t.Run("NonExistentPresent", func(t *testing.T) {
+		pErr := &Package{
+			name:   "non-existent-package-gonf-12345",
+			absent: false,
+			latest: false,
+		}
+		if err := applyDNF(pErr); err == nil {
+			t.Error("applyDNF Present should have failed for non-existent package")
+		}
+	})
+
+	t.Run("NonExistentLatest", func(t *testing.T) {
+		pErr := &Package{
+			name:   "non-existent-package-gonf-12345",
+			absent: false,
+			latest: true,
+		}
+		if err := applyDNF(pErr); err == nil {
+			t.Error("applyDNF Latest should have failed for non-existent package")
+		}
+	})
+
+	t.Run("NonExistentAbsent", func(t *testing.T) {
+		pErr := &Package{
+			name:   "non-existent-package-gonf-12345",
+			absent: true,
+			latest: false,
+		}
+		// dnf remove is typically idempotent; removing a non-existent package should not error.
+		if err := applyDNF(pErr); err != nil {
+			t.Errorf("applyDNF Absent should be idempotent for non-existent package, but got error: %v", err)
+		}
 	})
 }

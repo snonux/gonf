@@ -67,5 +67,10 @@ func Run() error {
 	_ = os.Link("/tmp/gonf_hello.txt", "/tmp/gonf_stale_hardlink")
 	Link("/tmp/gonf_stale_hardlink", IsAbsent)
 
+	// 13. Package management
+	Package("tig")           // Ensure installed (Present)
+	Package("vim", IsLatest) // Ensure installed and latest version
+	NoPackage("nano")        // Ensure absent
+
 	return Apply()
 }
