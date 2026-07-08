@@ -89,7 +89,7 @@ func (r *repository) apply() error {
 
 	for _, res := range order {
 		log.Printf("Applying resource %v", res)
-		if err := res.Apply.Apply(); err != nil {
+		if err := res.Apply(); err != nil {
 			return fmt.Errorf("failed to apply %v: %w", res, err)
 		}
 	}

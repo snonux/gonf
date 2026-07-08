@@ -18,7 +18,7 @@ func (f ApplierFunc) Apply() error {
 type Resource struct {
 	Type      string
 	Name      string
-	Apply     Applier
+	applier   Applier
 	dependsOn map[string]struct{}
 }
 
@@ -26,7 +26,7 @@ func Register(type_, name string, apply Applier) Resource {
 	r := Resource{
 		Type:      type_,
 		Name:      name,
-		Apply:     apply,
+		applier:   apply,
 		dependsOn: make(map[string]struct{}),
 	}
 
@@ -43,4 +43,8 @@ func (r Resource) String() string {
 
 func (r Resource) ID() string {
 	return fmt.Sprintf("%s[%s]", r.Type, r.Name)
+}
+
+func (r Resource) Apply() error {
+	return r.applier.Apply()
 }

@@ -72,5 +72,37 @@ func Run() error {
 	Package("vim", IsLatest) // Ensure installed and latest version
 	NoPackage("nano")        // Ensure absent
 
+	// 14. Multi-resource declarations
+	// Create multiple files with the same options
+	File(Elems(
+		"/tmp/gonf_multi1.txt",
+		"/tmp/gonf_multi2.txt",
+	), WithContent("Multi-file content"), WithMode(0o644))
+
+	// Create multiple directories
+	Dir(Elems(
+		"/tmp/gonf_multi_dir1",
+		"/tmp/gonf_multi_dir2",
+	), WithMode(0o755))
+
+	// Install multiple packages and ensure they are latest
+	Package(Elems(
+		"htop",
+		"curl",
+		"wget",
+	), IsLatest)
+
+	// Remove multiple packages
+	NoPackage(Elems(
+		"old-pkg1",
+		"old-pkg2",
+	))
+
+	// Remove multiple files
+	NoFile(Elems(
+		"/tmp/stale1.txt",
+		"/tmp/stale2.txt",
+	))
+
 	return Apply()
 }
