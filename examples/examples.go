@@ -67,10 +67,10 @@ func Run() error {
 	_ = os.Link("/tmp/gonf_hello.txt", "/tmp/gonf_stale_hardlink")
 	Link("/tmp/gonf_stale_hardlink", IsAbsent)
 
-	// 13. Package management
-	Package("tig")           // Ensure installed (Present)
-	Package("vim", IsLatest) // Ensure installed and latest version
-	NoPackage("nano")        // Ensure absent
+	// // 13. Package management
+	// Package("tig")           // Ensure installed (Present)
+	// Package("vim", IsLatest) // Ensure installed and latest version
+	// NoPackage("nano")        // Ensure absent
 
 	// 14. Multi-resource declarations
 	// Create multiple files with the same options
@@ -86,23 +86,40 @@ func Run() error {
 	), WithMode(0o755))
 
 	// Install multiple packages and ensure they are latest
-	Package(Elems(
-		"htop",
-		"curl",
-		"wget",
-	), IsLatest)
+	// Package(Elems(
+	// 	"htop",
+	// 	"curl",
+	// 	"wget",
+	// ), IsLatest)
 
-	// Remove multiple packages
-	NoPackage(Elems(
-		"old-pkg1",
-		"old-pkg2",
-	))
+	// // Remove multiple packages
+	// NoPackage(Elems(
+	// 	"old-pkg1",
+	// 	"old-pkg2",
+	// ))
 
 	// Remove multiple files
 	NoFile(Elems(
 		"/tmp/stale1.txt",
 		"/tmp/stale2.txt",
 	))
+
+	// 15. Ordering with DependsOn. bar.txt is only applied after foo.txt.
+	fooRes := File("/tmp/gonf_foo.txt", WithContent("foo"))
+	File("/tmp/gonf_bar.txt", WithContent("bar"), DependsOn(fooRes))
+
+	// DependsOn also accepts multi-resources; the dependent then waits for
+	// every individual member of the multi.
+	multiRes := File(Elems(
+		"/tmp/gonf_dep1.txt",
+		"/tmp/gonf_dep2.txt",
+	), WithContent("dep"))
+	File("/tmp/gonf_after_multi.txt", WithContent("after"), DependsOn(multiRes))
+
+	// DependsOn works across resource types and accepts several resources at
+	// once: this directory is created only after both the file and the multi
+	// above have been applied.
+	Dir("/tmp/gonf_after_dir", DependsOn(fooRes, multiRes))
 
 	return Apply()
 }

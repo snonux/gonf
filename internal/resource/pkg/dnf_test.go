@@ -3,6 +3,8 @@ package pkg
 import (
 	"os"
 	"testing"
+
+	"codeberg.org/snonux/gonf/internal/resource/embed"
 )
 
 func TestApplyDNF(t *testing.T) {
@@ -21,7 +23,7 @@ func TestApplyDNF(t *testing.T) {
 	}
 
 	t.Run("Present", func(t *testing.T) {
-		p.absent = false
+		p.Absent = false
 		p.latest = false
 		if err := applyDNF(p); err != nil {
 			t.Errorf("applyDNF Present failed: %v", err)
@@ -29,7 +31,7 @@ func TestApplyDNF(t *testing.T) {
 	})
 
 	t.Run("Latest", func(t *testing.T) {
-		p.absent = false
+		p.Absent = false
 		p.latest = true
 		if err := applyDNF(p); err != nil {
 			t.Errorf("applyDNF Latest failed: %v", err)
@@ -37,7 +39,7 @@ func TestApplyDNF(t *testing.T) {
 	})
 
 	t.Run("Absent", func(t *testing.T) {
-		p.absent = true
+		p.Absent = true
 		p.latest = false
 		if err := applyDNF(p); err != nil {
 			t.Errorf("applyDNF Absent failed: %v", err)
@@ -46,9 +48,9 @@ func TestApplyDNF(t *testing.T) {
 
 	t.Run("NonExistentPresent", func(t *testing.T) {
 		pErr := &Package{
-			name:   "non-existent-package-gonf-12345",
-			absent: false,
-			latest: false,
+			name:    "non-existent-package-gonf-12345",
+			Absence: embed.Absence{Absent: false},
+			latest:  false,
 		}
 		if err := applyDNF(pErr); err == nil {
 			t.Error("applyDNF Present should have failed for non-existent package")
@@ -57,9 +59,9 @@ func TestApplyDNF(t *testing.T) {
 
 	t.Run("NonExistentLatest", func(t *testing.T) {
 		pErr := &Package{
-			name:   "non-existent-package-gonf-12345",
-			absent: false,
-			latest: true,
+			name:    "non-existent-package-gonf-12345",
+			Absence: embed.Absence{Absent: false},
+			latest:  true,
 		}
 		if err := applyDNF(pErr); err == nil {
 			t.Error("applyDNF Latest should have failed for non-existent package")
@@ -68,9 +70,9 @@ func TestApplyDNF(t *testing.T) {
 
 	t.Run("NonExistentAbsent", func(t *testing.T) {
 		pErr := &Package{
-			name:   "non-existent-package-gonf-12345",
-			absent: true,
-			latest: false,
+			name:    "non-existent-package-gonf-12345",
+			Absence: embed.Absence{Absent: true},
+			latest:  false,
 		}
 		// dnf remove is typically idempotent; removing a non-existent package should not error.
 		if err := applyDNF(pErr); err != nil {

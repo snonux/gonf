@@ -9,7 +9,7 @@ import (
 func applyDNF(p *Package) error {
 	var args []string
 
-	if p.absent {
+	if p.Absent {
 		args = []string{"remove", "-y", p.name}
 	} else if p.latest {
 		// update ensures the package is installed and updated to the latest version.

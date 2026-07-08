@@ -7,6 +7,7 @@ import (
 
 	opt "codeberg.org/snonux/gonf/api/options"
 	"codeberg.org/snonux/gonf/internal/resource"
+	"codeberg.org/snonux/gonf/internal/resource/embed"
 )
 
 type kind int
@@ -18,11 +19,12 @@ const (
 )
 
 type Link struct {
+	embed.DependsOn
+	embed.Absence
 	resource resource.Resource
 	path     string
 	target   string
 	kind     kind
-	absent   bool
 }
 
 // SetSymlink implements opt.Linkable.
@@ -36,9 +38,6 @@ func (l *Link) SetHardlink(target string) {
 	l.kind = hardlinkKind
 	l.target = target
 }
-
-// SetAbsent implements opt.Absentable.
-func (l *Link) SetAbsent() { l.absent = true }
 
 func build(path string, opts ...opt.Option) *Link {
 	l := &Link{path: path}
@@ -54,7 +53,7 @@ func build(path string, opts ...opt.Option) *Link {
 // was validated.
 func (l *Link) apply() error {
 	switch {
-	case l.absent:
+	case l.Absent:
 		return ensureAbsent(l.path)
 	case l.kind == symlinkKind:
 		return ensureSymlink(l)
@@ -89,7 +88,7 @@ func Ensure(path string, opts ...opt.Option) error {
 func Present(path string, opts ...opt.Option) resource.Resource {
 	l := build(path, opts...)
 	l.resource = resource.Register(l.resourceType(), l.path,
-		resource.ApplierFunc(func() error { return l.apply() }))
+		resource.ApplierFunc(func() error { return l.apply() }), l.DependsOn.IDs...)
 
 	return l.resource
 }

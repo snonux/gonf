@@ -3,6 +3,8 @@ package resource
 import (
 	"fmt"
 	"log"
+	"sort"
+	"strings"
 	"sync"
 )
 
@@ -70,7 +72,10 @@ func (r *repository) apply() error {
 		}
 
 		visiting[id] = true
-		for depID := range res.dependsOn {
+		// Visit dependencies in sorted order so the resulting apply order is
+		// stable and the log output is reproducible.
+		for _, depID := range res.sortedDependsOn() {
+			log.Printf("Resolving dependency of %v: needs %s first", res, depID)
 			if err := visit(depID); err != nil {
 				return err
 			}
@@ -81,14 +86,33 @@ func (r *repository) apply() error {
 		return nil
 	}
 
+	// Seed the traversal from a sorted list of roots so the overall order is
+	// deterministic regardless of map iteration order.
+	roots := make([]string, 0, len(r.registered))
 	for id := range r.registered {
+		roots = append(roots, id)
+	}
+	sort.Strings(roots)
+
+	for _, id := range roots {
 		if err := visit(id); err != nil {
 			return err
 		}
 	}
 
+	orderIDs := make([]string, 0, len(order))
 	for _, res := range order {
-		log.Printf("Applying resource %v", res)
+		orderIDs = append(orderIDs, res.ID())
+	}
+	log.Printf("Resolved apply order: %s", strings.Join(orderIDs, " -> "))
+
+	for _, res := range order {
+		if deps := res.sortedDependsOn(); len(deps) > 0 {
+			log.Printf("Applying resource %v (dependencies already applied: %s)",
+				res, strings.Join(deps, ", "))
+		} else {
+			log.Printf("Applying resource %v (no dependencies)", res)
+		}
 		if err := res.Apply(); err != nil {
 			return fmt.Errorf("failed to apply %v: %w", res, err)
 		}

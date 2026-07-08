@@ -9,9 +9,12 @@ import (
 
 	opt "codeberg.org/snonux/gonf/api/options"
 	"codeberg.org/snonux/gonf/internal/resource"
+	"codeberg.org/snonux/gonf/internal/resource/embed"
 )
 
 type Dir struct {
+	embed.DependsOn
+	embed.Absence
 	resource resource.Resource
 	path     string
 	source   string
@@ -20,7 +23,6 @@ type Dir struct {
 	mode     os.FileMode // this directory's own mode, default 0o750
 	fileMode os.FileMode // mode for regular files copied from source, default 0o640
 	prune    bool        // reconciles extra dest files during a source copy, and recursive-remove during IsAbsent()
-	absent   bool
 }
 
 // SetSource implements opt.Sourced.
@@ -40,9 +42,6 @@ func (d *Dir) SetFileMode(mode os.FileMode) { d.fileMode = mode }
 
 // SetPrune implements opt.Prunable.
 func (d *Dir) SetPrune() { d.prune = true }
-
-// SetAbsent implements opt.Absentable.
-func (d *Dir) SetAbsent() { d.absent = true }
 
 func build(path string, opts ...opt.Option) (*Dir, error) {
 	curr, err := user.Current()
@@ -68,7 +67,7 @@ func build(path string, opts ...opt.Option) (*Dir, error) {
 // apply performs the idempotent OS work for d without registering a
 // resource.
 func (d *Dir) apply() error {
-	if d.absent {
+	if d.Absent {
 		return ensureAbsent(d)
 	}
 
@@ -194,7 +193,7 @@ func Present(path string, opts ...opt.Option) resource.Resource {
 	}
 
 	d.resource = resource.Register("Directory", d.path,
-		resource.ApplierFunc(func() error { return d.apply() }))
+		resource.ApplierFunc(func() error { return d.apply() }), d.DependsOn.IDs...)
 
 	return d.resource
 }

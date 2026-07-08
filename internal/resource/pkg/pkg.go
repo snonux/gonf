@@ -6,15 +6,16 @@ import (
 
 	opt "codeberg.org/snonux/gonf/api/options"
 	"codeberg.org/snonux/gonf/internal/resource"
+	"codeberg.org/snonux/gonf/internal/resource/embed"
 )
 
 type Package struct {
+	embed.DependsOn
+	embed.Absence
 	name   string
-	absent bool
 	latest bool
 }
 
-func (p *Package) SetAbsent() { p.absent = true }
 func (p *Package) SetLatest() { p.latest = true }
 
 func (p *Package) apply() error {
@@ -41,7 +42,7 @@ func Present(name string, opts ...opt.Option) resource.Resource {
 	}
 
 	return resource.Register("Package", p.name,
-		resource.ApplierFunc(func() error { return p.apply() }))
+		resource.ApplierFunc(func() error { return p.apply() }), p.DependsOn.IDs...)
 }
 
 func Absent(name string, opts ...opt.Option) resource.Resource {

@@ -48,6 +48,53 @@ func TestApply(t *testing.T) {
 			wantOrder: []string{"C", "B", "A"},
 		},
 		{
+			name: "independent resources apply in sorted order",
+			setup: func(r *repository, logs *[]string) {
+				// Registered/visited in a deterministic, sorted order
+				// regardless of map iteration.
+				r.registered["C"] = Resource{
+					Type: "T", Name: "C",
+					applier: &mockApplier{name: "C", logs: logs},
+				}
+				r.registered["A"] = Resource{
+					Type: "T", Name: "A",
+					applier: &mockApplier{name: "A", logs: logs},
+				}
+				r.registered["B"] = Resource{
+					Type: "T", Name: "B",
+					applier: &mockApplier{name: "B", logs: logs},
+				}
+			},
+			wantOrder: []string{"A", "B", "C"},
+		},
+		{
+			name: "diamond dependency",
+			setup: func(r *repository, logs *[]string) {
+				// D depends on B and C; both B and C depend on A. A must run
+				// once, before B and C, which run before D.
+				r.registered["A"] = Resource{
+					Type: "T", Name: "A",
+					applier: &mockApplier{name: "A", logs: logs},
+				}
+				r.registered["B"] = Resource{
+					Type: "T", Name: "B",
+					applier:   &mockApplier{name: "B", logs: logs},
+					dependsOn: map[string]struct{}{"A": {}},
+				}
+				r.registered["C"] = Resource{
+					Type: "T", Name: "C",
+					applier:   &mockApplier{name: "C", logs: logs},
+					dependsOn: map[string]struct{}{"A": {}},
+				}
+				r.registered["D"] = Resource{
+					Type: "T", Name: "D",
+					applier:   &mockApplier{name: "D", logs: logs},
+					dependsOn: map[string]struct{}{"B": {}, "C": {}},
+				}
+			},
+			wantOrder: []string{"A", "B", "C", "D"},
+		},
+		{
 			name: "circular dependency",
 			setup: func(r *repository, logs *[]string) {
 				r.registered["A"] = Resource{

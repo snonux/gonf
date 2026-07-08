@@ -5,6 +5,13 @@ import (
 	"strings"
 )
 
+// Dependency is implemented by anything that can be depended upon. It returns
+// the flattened list of individual resource IDs, so that depending on a Multi
+// expands into a dependency on each of its members individually.
+type Dependency interface {
+	Dependencies() []string
+}
+
 // Multi is a collection of resources that satisfies the api.Resource interface.
 type Multi []Resource
 
@@ -26,6 +33,19 @@ func (m Multi) ID() string {
 	}
 
 	return strings.Join(ids, "+")
+}
+
+// Dependencies flattens the Multi into the IDs of each of its members, so a
+// dependency on a Multi becomes an individual dependency on every resource it
+// contains.
+func (m Multi) Dependencies() []string {
+	ids := make([]string, 0, len(m))
+
+	for _, res := range m {
+		ids = append(ids, res.Dependencies()...)
+	}
+
+	return ids
 }
 
 func (m Multi) Apply() error {

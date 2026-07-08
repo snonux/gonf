@@ -12,9 +12,12 @@ import (
 
 	opt "codeberg.org/snonux/gonf/api/options"
 	"codeberg.org/snonux/gonf/internal/resource"
+	"codeberg.org/snonux/gonf/internal/resource/embed"
 )
 
 type File struct {
+	embed.DependsOn
+	embed.Absence
 	resource resource.Resource
 	path     string
 	content  string
@@ -22,7 +25,6 @@ type File struct {
 	user     string
 	group    string
 	mode     os.FileMode
-	absent   bool
 }
 
 // SetContent implements opt.Contented. Setting literal content clears any
@@ -48,9 +50,6 @@ func (f *File) SetGroup(group string) { f.group = group }
 // SetMode implements opt.Moded.
 func (f *File) SetMode(mode os.FileMode) { f.mode = mode }
 
-// SetAbsent implements opt.Absentable.
-func (f *File) SetAbsent() { f.absent = true }
-
 func build(path string, opts ...opt.Option) (*File, error) {
 	curr, err := user.Current()
 	if err != nil {
@@ -74,7 +73,7 @@ func build(path string, opts ...opt.Option) (*File, error) {
 // apply performs the idempotent OS work for f without registering a
 // resource.
 func (f *File) apply() error {
-	if f.absent {
+	if f.Absent {
 		return ensureAbsent(f.targetPath())
 	}
 
@@ -225,7 +224,7 @@ func Present(path string, opts ...opt.Option) resource.Resource {
 	}
 
 	f.resource = resource.Register("File", f.targetPath(),
-		resource.ApplierFunc(func() error { return f.apply() }))
+		resource.ApplierFunc(func() error { return f.apply() }), f.DependsOn.IDs...)
 
 	return f.resource
 }

@@ -5,6 +5,8 @@ package options
 import (
 	"log"
 	"os"
+
+	"codeberg.org/snonux/gonf/internal/resource"
 )
 
 // Option configures a resource. It is applied to the concrete resource value
@@ -22,11 +24,30 @@ type (
 	Prunable   interface{ SetPrune() }
 	Absentable interface{ SetAbsent() }
 	Latestable interface{ SetLatest() }
+	Dependable interface{ AddDependency(id string) }
 	Linkable   interface {
 		SetSymlink(target string)
 		SetHardlink(target string)
 	}
 )
+
+// DependsOn declares that the resource being configured must be applied only
+// after every given resource has been applied. Each argument may be a single
+// resource or a Multi; a Multi is expanded so the dependency is recorded for
+// each of its members individually.
+func DependsOn(deps ...resource.Dependency) Option {
+	return func(t any) {
+		r, ok := t.(Dependable)
+		if !ok {
+			log.Fatalf("%T does not support DependsOn", t)
+		}
+		for _, dep := range deps {
+			for _, id := range dep.Dependencies() {
+				r.AddDependency(id)
+			}
+		}
+	}
+}
 
 // WithOwner sets the owning user of the resource.
 func WithOwner(owner string) Option {
