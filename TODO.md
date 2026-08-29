@@ -77,8 +77,8 @@ just calls a hardcoded `examples.Run()`. Need:
 - Report of what changed vs. what was already in the desired state.
 - ~~`resources` registry vs. `resource` repository were **two separate
   registries** doing the same job.~~ Consolidated: the `resources` package
-  was removed and its `Init()` moved to `resource.Init()` (eager
-  initialization of the lazy repository).
+  (with its never-called `Register` and no-op `Init`) was removed; the
+  resource repository initializes lazily on first use.
 
 ## Suggested implementation order
 
