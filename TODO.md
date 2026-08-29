@@ -75,9 +75,10 @@ just calls a hardcoded `examples.Run()`. Need:
   and quieter default output.
 - Dry-run / "diff" mode to preview changes before applying.
 - Report of what changed vs. what was already in the desired state.
-- `resources` registry vs. `resource` repository are currently **two separate
-  registries** doing the same job (`resources/resources.go` and
-  `resource/repository.go`). Consolidate to one.
+- ~~`resources` registry vs. `resource` repository were **two separate
+  registries** doing the same job.~~ Consolidated: the `resources` package
+  was removed and its `Init()` moved to `resource.Init()` (eager
+  initialization of the lazy repository).
 
 ## Suggested implementation order
 

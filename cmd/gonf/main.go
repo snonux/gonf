@@ -7,7 +7,7 @@ import (
 
 	"codeberg.org/snonux/gonf/examples"
 	"codeberg.org/snonux/gonf/internal"
-	"codeberg.org/snonux/gonf/resources"
+	"codeberg.org/snonux/gonf/resource"
 )
 
 func main() {
@@ -18,7 +18,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	resources.Init()
+	resource.Init()
 
 	if err := examples.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "example run error: %v\n", err)
