@@ -76,8 +76,8 @@ just calls a hardcoded `examples.Run()`. Need:
 - Dry-run / "diff" mode to preview changes before applying.
 - Report of what changed vs. what was already in the desired state.
 - `resources` registry vs. `resource` repository are currently **two separate
-  registries** doing the same job (`internal/resources/resources.go` and
-  `internal/resource/repository.go`). Consolidate to one.
+  registries** doing the same job (`resources/resources.go` and
+  `resource/repository.go`). Consolidate to one.
 
 ## Suggested implementation order
 

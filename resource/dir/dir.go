@@ -1,3 +1,5 @@
+// Package dir implements the directory resource, including copying and
+// pruning source trees.
 package dir
 
 import (
@@ -8,8 +10,8 @@ import (
 	"strconv"
 
 	opt "codeberg.org/snonux/gonf/api/options"
-	"codeberg.org/snonux/gonf/internal/resource"
-	"codeberg.org/snonux/gonf/internal/resource/embed"
+	"codeberg.org/snonux/gonf/resource"
+	"codeberg.org/snonux/gonf/resource/embed"
 )
 
 type Dir struct {

@@ -1,3 +1,6 @@
+// Package resources provides a standalone global registry for tracking
+// registered resources (separate from the resource package's apply
+// repository; see TODO.md for the planned consolidation of the two).
 package resources
 
 import (
@@ -5,7 +8,7 @@ import (
 	"log"
 	"sync"
 
-	"codeberg.org/snonux/gonf/internal/resource"
+	"codeberg.org/snonux/gonf/resource"
 )
 
 func Init() {

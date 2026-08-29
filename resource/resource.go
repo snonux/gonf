@@ -1,3 +1,7 @@
+// Package resource defines gonf's core resource abstraction: the Resource
+// type, the repository that applies registered resources in dependency
+// order, and shared helpers such as Multi. Concrete resource kinds (file,
+// dir, link, pkg) live in subpackages.
 package resource
 
 import (

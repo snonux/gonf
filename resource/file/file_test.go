@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	. "codeberg.org/snonux/gonf/api/options"
-	"codeberg.org/snonux/gonf/internal/resource"
+	"codeberg.org/snonux/gonf/resource"
 )
 
 func TestGetChecksum(t *testing.T) {
@@ -146,7 +146,7 @@ func TestPresentMode(t *testing.T) {
 func TestPresentSourceFile(t *testing.T) {
 	resource.ResetRepository()
 	dir := t.TempDir()
-	sourcePath := filepath.Join("..", "..", "..", "assets", "testfiles", "test.txt")
+	sourcePath := filepath.Join("..", "..", "assets", "testfiles", "test.txt")
 	targetPath := filepath.Join(dir, "target.txt")
 
 	Present(targetPath, WithSource(sourcePath))
@@ -167,7 +167,7 @@ func TestPresentSourceFile(t *testing.T) {
 func TestPresentTemplateFile(t *testing.T) {
 	resource.ResetRepository()
 	dir := t.TempDir()
-	sourcePath := filepath.Join("..", "..", "..", "assets", "testfiles", "test.tmpl")
+	sourcePath := filepath.Join("..", "..", "assets", "testfiles", "test.tmpl")
 	targetPath := filepath.Join(dir, "target.conf")
 
 	Present(targetPath, WithSource(sourcePath))

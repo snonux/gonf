@@ -7,7 +7,7 @@ import (
 
 	"codeberg.org/snonux/gonf/examples"
 	"codeberg.org/snonux/gonf/internal"
-	"codeberg.org/snonux/gonf/internal/resources"
+	"codeberg.org/snonux/gonf/resources"
 )
 
 func main() {

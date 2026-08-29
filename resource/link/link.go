@@ -1,3 +1,4 @@
+// Package link implements the link resource for symbolic and hard links.
 package link
 
 import (
@@ -6,8 +7,8 @@ import (
 	"os"
 
 	opt "codeberg.org/snonux/gonf/api/options"
-	"codeberg.org/snonux/gonf/internal/resource"
-	"codeberg.org/snonux/gonf/internal/resource/embed"
+	"codeberg.org/snonux/gonf/resource"
+	"codeberg.org/snonux/gonf/resource/embed"
 )
 
 type kind int

@@ -1,3 +1,5 @@
+// Package file implements the file resource: regular files from literal
+// content or a source file, with optional template rendering.
 package file
 
 import (
@@ -12,8 +14,8 @@ import (
 	"text/template"
 
 	opt "codeberg.org/snonux/gonf/api/options"
-	"codeberg.org/snonux/gonf/internal/resource"
-	"codeberg.org/snonux/gonf/internal/resource/embed"
+	"codeberg.org/snonux/gonf/resource"
+	"codeberg.org/snonux/gonf/resource/embed"
 )
 
 type File struct {

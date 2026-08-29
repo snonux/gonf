@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"codeberg.org/snonux/gonf/internal/resource/file"
-	"codeberg.org/snonux/gonf/internal/resource/link"
+	"codeberg.org/snonux/gonf/resource/file"
+	"codeberg.org/snonux/gonf/resource/link"
 	opt "codeberg.org/snonux/gonf/api/options"
 )
 

@@ -1,3 +1,5 @@
+// Package embed holds state common to all concrete resource types (dependency
+// tracking and absence marking), embedded rather than redeclared.
 package embed
 
 // DependsOn is embedded into concrete resource types to give them the ability

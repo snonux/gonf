@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"codeberg.org/snonux/gonf/internal/resource/embed"
+	"codeberg.org/snonux/gonf/resource/embed"
 )
 
 func TestApplyDNF(t *testing.T) {

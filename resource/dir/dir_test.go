@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"codeberg.org/snonux/gonf/internal/resource"
+	"codeberg.org/snonux/gonf/resource"
 	. "codeberg.org/snonux/gonf/api/options"
 )
 

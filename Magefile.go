@@ -51,7 +51,7 @@ func Test() error {
 func TestDNF() error {
 	fmt.Println("testing DNF integration...")
 	// Use 'env' to set the variable for the go test command
-	return run("env", "GONF_RUN_DNF_TESTS=1", "go", "test", "-v", "-count=1", "./internal/resource/pkg/...")
+	return run("env", "GONF_RUN_DNF_TESTS=1", "go", "test", "-v", "-count=1", "./resource/pkg/...")
 }
 
 // Lint runs go vet.

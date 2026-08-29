@@ -1,3 +1,4 @@
+// Package pkg implements the package resource with per-OS backends (dnf).
 package pkg
 
 import (
@@ -5,8 +6,8 @@ import (
 	"os"
 
 	opt "codeberg.org/snonux/gonf/api/options"
-	"codeberg.org/snonux/gonf/internal/resource"
-	"codeberg.org/snonux/gonf/internal/resource/embed"
+	"codeberg.org/snonux/gonf/resource"
+	"codeberg.org/snonux/gonf/resource/embed"
 )
 
 type Package struct {

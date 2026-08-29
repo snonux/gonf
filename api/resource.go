@@ -1,12 +1,10 @@
 package api
 
 import (
-	internal "codeberg.org/snonux/gonf/internal/resource"
+	"codeberg.org/snonux/gonf/resource"
 )
 
-// Resource represents a system resource managed by gonfs.
-// It is an interface to hide the internal implementation details
-// of the resource registry.
+// Resource represents a system resource managed by gonf.
 type Resource interface {
 	ID() string
 	String() string
@@ -17,5 +15,5 @@ type Resource interface {
 }
 
 func Apply() error {
-	return internal.Apply()
+	return resource.Apply()
 }
