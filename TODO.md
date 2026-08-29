@@ -27,14 +27,7 @@ DONE!
 
 ## 6. Package resource (multi-OS)
 
-The biggest missing piece. Rexfile has `pkg_termux`, `pkg_freebsd`,
-`pkg_fedora`, `pkg_rocky` tasks, each installing a package list via
-`pkg $name, ensure => 'installed'`. gonf has no package management. Need:
-
-- A package resource with idempotent "installed" semantics.
-- Backends per platform: Termux (`pkg`), FreeBSD (`pkg`),
-  Fedora/Rocky (`dnf`), and ideally room for apt/brew later.
-- Ability to declare per-OS package lists.
+DONE (for Fedora!)
 
 ## 7. Command execution (`run`)
 
@@ -48,21 +41,11 @@ idempotency guard / "unless" condition).
 
 ## 8. OS and host detection / conditionals
 
-Rexfile branches on:
-
-- OS: `$^O eq 'linux' | 'darwin' | 'freebsd'` (hexai, zsh, gitconfig,
-  quickedit, tmux_rocky).
-- Hostname: `hostname =~ /rocky/` for tmux rocky overrides.
-
-gonf needs runtime facts (OS, hostname, maybe distro) and a clean way for
-config to branch on them.
+DONE! Go can do that natively relatively easily!
 
 ## 9. Idempotent key/value config (git config)
 
-`home_gitconfig` sets ~13 `git config --global` keys. Ideally gonf offers a
-resource that sets a key to a value idempotently (read current, set if
-different) rather than always shelling out. Minimum: implement via the command
-resource (section 7); nice-to-have: a dedicated git-config resource.
+we will see!
 
 ## 10. In-place file editing (append-line-if-absent)
 

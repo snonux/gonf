@@ -15,17 +15,19 @@ type Option func(any)
 
 // Capability interfaces. A resource implements only the setters it supports.
 type (
-	Owner      interface{ SetOwner(string) }
-	Grouped    interface{ SetGroup(string) }
-	Moded      interface{ SetMode(os.FileMode) }
-	Sourced    interface{ SetSource(string) }
-	Contented  interface{ SetContent(string) }
-	FileModed  interface{ SetFileMode(os.FileMode) }
-	Prunable   interface{ SetPrune() }
-	Absentable interface{ SetAbsent() }
-	Latestable interface{ SetLatest() }
-	Dependable interface{ AddDependency(id string) }
-	Linkable   interface {
+	Owner         interface{ SetOwner(string) }
+	Grouped       interface{ SetGroup(string) }
+	Moded         interface{ SetMode(os.FileMode) }
+	Sourced       interface{ SetSource(string) }
+	Contented     interface{ SetContent(string) }
+	LineAddable   interface{ SetAddLine(string) }
+	LineRemovable interface{ SetRemoveLine(string) }
+	FileModed     interface{ SetFileMode(os.FileMode) }
+	Prunable      interface{ SetPrune() }
+	Absentable    interface{ SetAbsent() }
+	Latestable    interface{ SetLatest() }
+	Dependable    interface{ AddDependency(id string) }
+	Linkable      interface {
 		SetSymlink(target string)
 		SetHardlink(target string)
 	}
@@ -101,6 +103,26 @@ func WithContent(content string) Option {
 			log.Fatalf("%T does not support WithContent", t)
 		}
 		r.SetContent(content)
+	}
+}
+
+func WithLine(content string) Option {
+	return func(t any) {
+		r, ok := t.(LineAddable)
+		if !ok {
+			log.Fatalf("%T does not support WithLine", t)
+		}
+		r.SetAddLine(content)
+	}
+}
+
+func WithoutLine(content string) Option {
+	return func(t any) {
+		r, ok := t.(LineRemovable)
+		if !ok {
+			log.Fatalf("%T does not support WithoutLine", t)
+		}
+		r.SetRemoveLine(content)
 	}
 }
 

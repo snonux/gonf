@@ -1,6 +1,7 @@
 package file
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"log"
@@ -18,13 +19,15 @@ import (
 type File struct {
 	embed.DependsOn
 	embed.Absence
-	resource resource.Resource
-	path     string
-	content  string
-	source   string // bare path, no "source://" prefix
-	user     string
-	group    string
-	mode     os.FileMode
+	resource   resource.Resource
+	path       string
+	content    string
+	source     string // bare path, no "source://" prefix
+	user       string
+	group      string
+	addLine    string
+	removeLine string
+	mode       os.FileMode
 }
 
 // SetContent implements opt.Contented. Setting literal content clears any
@@ -39,6 +42,16 @@ func (f *File) SetContent(content string) {
 func (f *File) SetSource(source string) {
 	f.source = source
 	f.content = ""
+}
+
+// TODO: Implement to the end
+func (f *File) SetAddLine(line string) {
+	f.addLine = line
+}
+
+// TODO: Implement to the end.
+func (f *File) SetRemoveline(line string) {
+	f.removeLine = line
 }
 
 // SetOwner implements opt.Owner.
@@ -77,7 +90,7 @@ func (f *File) apply() error {
 		return ensureAbsent(f.targetPath())
 	}
 
-	finalPath, content, err := f.resolve()
+	finalPath, content, err := f.resolveFromSourceOrContent()
 	if err != nil {
 		return fmt.Errorf("failed to resolve content for %s: %w", f.path, err)
 	}
@@ -105,22 +118,43 @@ func (f *File) shouldRenderTemplate() bool {
 	return strings.HasSuffix(f.path, ".tmpl") || strings.HasSuffix(f.source, ".tmpl")
 }
 
-// resolve reads f's content (from source or literal content), renders it as
+func (f *File) resolveLine() (string, []byte, error) {
+	file, err := os.Open(f.path)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to read file %s: %w", f.path, err)
+	}
+	defer file.Close()
+
+	var sb strings.Builder
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == f.removeLine {
+			continue
+		}
+		sb.WriteString(line)
+		sb.WriteString("\n")
+	}
+
+	return f.path, []byte(sb.String()), nil
+}
+
+// resolveFromSourceOrContent reads f's content (from source or literal content), renders it as
 // a template if applicable, and returns the final on-disk path alongside the
 // resulting bytes. Param is always the bare source path when source-based
 // (never a "source://"-prefixed string), or the literal content when
 // content-based — one definition used by both the single-file path and by
 // dir's per-file delegation.
-func (f *File) resolve() (string, []byte, error) {
+func (f *File) resolveFromSourceOrContent() (string, []byte, error) {
 	var content []byte
 	param := f.content
 
 	if f.source != "" {
-		data, err := os.ReadFile(f.source)
+		bytes, err := os.ReadFile(f.source)
 		if err != nil {
 			return "", nil, fmt.Errorf("failed to read source file %s: %w", f.source, err)
 		}
-		content = data
+		content = bytes
 		param = f.source
 	} else {
 		content = []byte(f.content)
@@ -134,7 +168,7 @@ func (f *File) resolve() (string, []byte, error) {
 		content = rendered
 	}
 
-	return f.targetPath(), content, nil
+	return f.targetPath(), content, nil // TODO: Why do we need targetPath()? cant we just return f.path?
 }
 
 func (f *File) applyTemplateToContent(content []byte, param string) ([]byte, error) {
