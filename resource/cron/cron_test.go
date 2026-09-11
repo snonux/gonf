@@ -58,15 +58,45 @@ func TestMergeUnclosedBeginKeepsTail(t *testing.T) {
 		name: "job", user: "root", command: "/bin/true",
 		minute: "1", hour: "2", monthday: "*", month: "*", weekday: "*",
 	}
-	out, changed := mergeCrontab(existing, "job", c.block())
+	desired := c.block()
+	out, changed := mergeCrontab(existing, "job", desired)
 	if !changed {
-		t.Fatal("expected change when adding closed block beside unclosed marker")
+		t.Fatal("expected change when healing unclosed marker")
 	}
 	if !strings.Contains(out, "MAILTO=root") || !strings.Contains(out, "/bin/echo keep") {
 		t.Fatalf("unclosed BEGIN must not drop tail: %q", out)
 	}
-	if !strings.Contains(out, "# END GONF Cron[job]") {
-		t.Fatalf("expected closed block: %q", out)
+	if strings.Count(out, beginMarker("job")) != 1 || !strings.Contains(out, endMarker("job")) {
+		t.Fatalf("expected one closed block: %q", out)
+	}
+	out2, changed2 := mergeCrontab(out, "job", desired)
+	if changed2 {
+		t.Fatalf("healed crontab must be idempotent, got %q", out2)
+	}
+
+	// Absent clears unclosed marker alone.
+	onlyBroken := "# BEGIN GONF Cron[job]\nMAILTO=root\n"
+	out3, changed3 := mergeCrontab(onlyBroken, "job", "")
+	if !changed3 || strings.Contains(out3, beginMarker("job")) || !strings.Contains(out3, "MAILTO=root") {
+		t.Fatalf("absent should drop unclosed BEGIN: %q", out3)
+	}
+}
+
+func TestPresentRejectsBadEnvAndBlankCommand(t *testing.T) {
+	resource.ResetRepository()
+	Present("x", opt.WithCommand("/bin/true"), opt.WithCronEnv("NOTANENV"))
+	if err := resource.Apply(); err == nil {
+		t.Fatal("expected error for env without =")
+	}
+	resource.ResetRepository()
+	Present("x", opt.WithCommand("   "))
+	if err := resource.Apply(); err == nil {
+		t.Fatal("expected error for blank command")
+	}
+	resource.ResetRepository()
+	Present("x", opt.WithCommand("/bin/true"), opt.WithCronUser(""))
+	if err := resource.Apply(); err == nil {
+		t.Fatal("expected error for empty cron user")
 	}
 }
 

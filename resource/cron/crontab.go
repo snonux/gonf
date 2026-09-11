@@ -47,7 +47,7 @@ func writeCrontab(userName, content string) error {
 }
 
 // mergeCrontab replaces or removes all named GONF blocks. desired empty → remove.
-// Unclosed BEGIN markers are treated as ordinary lines (nothing is dropped).
+// An unclosed BEGIN for name is healed by dropping only that marker line (tail kept).
 func mergeCrontab(current, name, desired string) (string, bool) {
 	begin := beginMarker(name)
 	end := endMarker(name)
@@ -55,6 +55,7 @@ func mergeCrontab(current, name, desired string) (string, bool) {
 	lines := splitKeep(current)
 	var out []string
 	found := 0
+	healed := false
 	i := 0
 	for i < len(lines) {
 		trim := strings.TrimSpace(lines[i])
@@ -63,20 +64,21 @@ func mergeCrontab(current, name, desired string) (string, bool) {
 			i++
 			continue
 		}
-		// Look ahead for a matching END; if missing, keep BEGIN as ordinary text.
 		endIdx := -1
 		for j := i + 1; j < len(lines); j++ {
-			if strings.TrimSpace(lines[j]) == end {
-				endIdx = j
+			t := strings.TrimSpace(lines[j])
+			if t == begin {
 				break
 			}
-			// Nested BEGIN for same name: stop; treat outer as corrupt ordinary text.
-			if strings.TrimSpace(lines[j]) == begin {
+			if t == end {
+				endIdx = j
 				break
 			}
 		}
 		if endIdx < 0 {
-			out = append(out, lines[i])
+			// Corrupt/unclosed marker: drop BEGIN only so we never wipe the crontab.
+			found++
+			healed = true
 			i++
 			continue
 		}
@@ -97,13 +99,12 @@ func mergeCrontab(current, name, desired string) (string, bool) {
 		return body, true
 	}
 
-	if found == 1 {
+	if found == 1 && !healed {
 		oldBlock := extractBlock(current, name)
 		if oldBlock == desired {
 			return current, false
 		}
 	}
-	// found==0 → add; found>1 → collapse duplicates to a single desired block.
 	return body + desired, true
 }
 
@@ -116,6 +117,10 @@ func extractBlock(current, name string) string {
 	for _, line := range lines {
 		trim := strings.TrimSpace(line)
 		if trim == begin {
+			if inBlock {
+				// Nested BEGIN: abandon incomplete extract.
+				return ""
+			}
 			inBlock = true
 			b.WriteString(begin)
 			b.WriteByte('\n')
