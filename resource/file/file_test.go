@@ -298,3 +298,115 @@ func TestParamIsBareSourcePathNoPrefix(t *testing.T) {
 		t.Errorf("Param unexpectedly contains the removed \"source://\" prefix: %q", string(got))
 	}
 }
+
+func TestWithLineCreatesMissingFile(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tmux.conf")
+
+	if err := Ensure(path, WithLine("source-file rocky.conf")); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "source-file rocky.conf\n" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestWithLineIdempotent(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tmux.conf")
+	initial := "a\nsource-file rocky.conf\nb\n"
+	if err := os.WriteFile(path, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Ensure(path, WithLine("source-file rocky.conf")); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != initial {
+		t.Fatalf("content changed: %q", got)
+	}
+}
+
+func TestWithLineAppends(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tmux.conf")
+	if err := os.WriteFile(path, []byte("set -g prefix C-a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Ensure(path, WithLine("source-file rocky.conf")); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "set -g prefix C-a\nsource-file rocky.conf\n"
+	if string(got) != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestWithoutLineRemoves(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tmux.local.conf")
+	if err := os.WriteFile(path, []byte("x\nsource-file rocky.conf\ny\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Ensure(path, WithoutLine("source-file rocky.conf")); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "x\ny\n" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestWithoutLineMissingFile(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "missing.conf")
+
+	if err := Ensure(path, WithoutLine("source-file rocky.conf")); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("file should not have been created")
+	}
+}
+
+func TestWithLineAndWithoutLineReplace(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conf")
+	if err := os.WriteFile(path, []byte("keep\nold-line\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Ensure(path, WithoutLine("old-line"), WithLine("new-line")); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "keep\nnew-line\n" {
+		t.Fatalf("got %q", got)
+	}
+}

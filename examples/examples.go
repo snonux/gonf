@@ -56,6 +56,11 @@ func demoFiles() {
 		"/tmp/stale1.txt",
 		"/tmp/stale2.txt",
 	))
+
+	// Line-in-file: ensure a line is present / absent idempotently.
+	_ = os.WriteFile("/tmp/gonf_line_base.conf", []byte("keep-me\nstale-line\n"), 0o644)
+	File("/tmp/gonf_line_base.conf", WithoutLine("stale-line"), WithLine("desired-line"))
+	File("/tmp/gonf_line_append.conf", WithLine("source-file rocky.conf"))
 }
 
 func demoLinks() {

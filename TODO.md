@@ -44,10 +44,8 @@ we will see!
 
 ## 10. In-place file editing (append-line-if-absent)
 
-`home_tmux_rocky` edits existing files: removes a stale `source-file` line from
-`tmux.local.conf` and appends a `source-file` line to the end of `tmux.conf`
-only if not already present. Need a "line in file" style resource
-(ensure line present/absent, idempotent) to cover this.
+DONE! `WithLine` / `WithoutLine` on `File` — exact-match idempotent
+append/remove (covers `home_tmux_rocky`).
 
 ## 11. Tasks, descriptions, and a CLI
 

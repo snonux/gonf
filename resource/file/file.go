@@ -46,13 +46,13 @@ func (f *File) SetSource(source string) {
 	f.content = ""
 }
 
-// TODO: Implement to the end
+// SetAddLine implements opt.LineAddable.
 func (f *File) SetAddLine(line string) {
 	f.addLine = line
 }
 
-// TODO: Implement to the end.
-func (f *File) SetRemoveline(line string) {
+// SetRemoveLine implements opt.LineRemovable.
+func (f *File) SetRemoveLine(line string) {
 	f.removeLine = line
 }
 
@@ -64,6 +64,11 @@ func (f *File) SetGroup(group string) { f.group = group }
 
 // SetMode implements opt.Moded.
 func (f *File) SetMode(mode os.FileMode) { f.mode = mode }
+
+var (
+	_ opt.LineAddable   = (*File)(nil)
+	_ opt.LineRemovable = (*File)(nil)
+)
 
 func build(path string, opts ...opt.Option) (*File, error) {
 	curr, err := user.Current()
@@ -82,7 +87,15 @@ func build(path string, opts ...opt.Option) (*File, error) {
 		o(f)
 	}
 
+	if f.lineEdit() && (f.content != "" || f.source != "") {
+		log.Fatalf("file %s: WithLine/WithoutLine cannot be combined with WithContent/WithSource", path)
+	}
+
 	return f, nil
+}
+
+func (f *File) lineEdit() bool {
+	return f.addLine != "" || f.removeLine != ""
 }
 
 // apply performs the idempotent OS work for f without registering a
@@ -90,6 +103,18 @@ func build(path string, opts ...opt.Option) (*File, error) {
 func (f *File) apply() error {
 	if f.Absent {
 		return ensureAbsent(f.targetPath())
+	}
+
+	if f.lineEdit() {
+		finalPath, content, noop, err := f.resolveLine()
+		if err != nil {
+			return fmt.Errorf("failed to resolve line edits for %s: %w", f.path, err)
+		}
+		if noop {
+			log.Printf("no line edits needed for missing file %s", finalPath)
+			return nil
+		}
+		return f.ensureFile(finalPath, content)
 	}
 
 	finalPath, content, err := f.resolveFromSourceOrContent()
@@ -120,25 +145,52 @@ func (f *File) shouldRenderTemplate() bool {
 	return strings.HasSuffix(f.path, ".tmpl") || strings.HasSuffix(f.source, ".tmpl")
 }
 
-func (f *File) resolveLine() (string, []byte, error) {
-	file, err := os.Open(f.path)
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to read file %s: %w", f.path, err)
+// resolveLine applies WithoutLine then WithLine to the on-disk file.
+// noop is true when the file is missing and only removal was requested
+// (already absent — nothing to write).
+func (f *File) resolveLine() (path string, content []byte, noop bool, err error) {
+	path = f.path
+	raw, readErr := os.ReadFile(path)
+	if readErr != nil {
+		if !os.IsNotExist(readErr) {
+			return "", nil, false, fmt.Errorf("failed to read file %s: %w", path, readErr)
+		}
+		if f.addLine == "" {
+			return path, nil, true, nil
+		}
+		return path, []byte(f.addLine + "\n"), false, nil
 	}
-	defer file.Close()
 
-	var sb strings.Builder
-	scanner := bufio.NewScanner(file)
+	var kept []string
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
 	for scanner.Scan() {
 		line := scanner.Text()
-		if line == f.removeLine {
+		if f.removeLine != "" && line == f.removeLine {
 			continue
 		}
-		sb.WriteString(line)
-		sb.WriteString("\n")
+		kept = append(kept, line)
+	}
+	if err := scanner.Err(); err != nil {
+		return "", nil, false, fmt.Errorf("failed to scan file %s: %w", path, err)
 	}
 
-	return f.path, []byte(sb.String()), nil
+	if f.addLine != "" {
+		found := false
+		for _, line := range kept {
+			if line == f.addLine {
+				found = true
+				break
+			}
+		}
+		if !found {
+			kept = append(kept, f.addLine)
+		}
+	}
+
+	if len(kept) == 0 {
+		return path, []byte{}, false, nil
+	}
+	return path, []byte(strings.Join(kept, "\n") + "\n"), false, nil
 }
 
 // resolveFromSourceOrContent reads f's content (from source or literal content), renders it as
