@@ -4,6 +4,7 @@ import (
 	"github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/cmd"
+	"github.com/snonux/gonf/resource/cron"
 	"github.com/snonux/gonf/resource/dir"
 	"github.com/snonux/gonf/resource/file"
 	"github.com/snonux/gonf/resource/link"
@@ -123,7 +124,7 @@ func NoPackage[T Path](name T, opts ...options.Option) Resource {
 
 // Service ensures one or more OS services are running and enabled at boot.
 // The backend is selected automatically: systemd on Linux, rcctl on OpenBSD,
-// service(8) on FreeBSD.
+// service(8) on FreeBSD and NetBSD.
 func Service[T Path](name T, opts ...options.Option) Resource {
 	switch v := any(name).(type) {
 	case string:
@@ -146,6 +147,18 @@ func Services(names []string, opts ...options.Option) Resource {
 // NoService ensures one or more OS services are stopped and disabled.
 func NoService[T Path](name T, opts ...options.Option) Resource {
 	return Service(name, append(opts, options.IsAbsent)...)
+}
+
+// Cron ensures a named crontab entry for a user (default root).
+// Schedule fields default to "*". Requires WithCommand unless absent.
+// Inspired by Puppet's cron type (command, user, minute/hour/monthday/month/weekday, env).
+func Cron(name string, opts ...options.Option) Resource {
+	return cron.Present(name, opts...)
+}
+
+// NoCron removes a named crontab entry (use WithCronUser for non-root).
+func NoCron(name string, opts ...options.Option) Resource {
+	return cron.Absent(name, opts...)
 }
 
 // Command registers a command resource that runs name with args on Apply.

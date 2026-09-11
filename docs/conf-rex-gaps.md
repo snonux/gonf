@@ -36,7 +36,7 @@ These block a faithful port of conf:
 | `template(...)` with rich data (maps, arrays, closures, secrets) | `.tmpl` = env + `.Param` only | Most `frontends/*.tpl` |
 | Secrets from `./secrets/` (`$secrets`) | No secret helper | Tokens, keys in templates |
 | `append_if_no_such_line` | `WithLine` / `WithoutLine` (partial) | Idempotent line append API |
-| Rex Cron API (`cron add`) | None | Playground/canary; most prod cron is shell-merged |
+| Rex Cron API (`cron add`) | **`Cron` / `NoCron`** (local crontab markers; per-user + root) | Remote still required for conf fleet |
 | Multi-Rexfile `require` composition | One Go module + `RegisterMethods` | Organizational only (solvable in Go) |
 
 ## Workable via `Command` (verbose, not first-class)

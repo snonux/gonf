@@ -40,9 +40,17 @@ type (
 		SetSymlink(target string)
 		SetHardlink(target string)
 	}
-	Restartable interface{ SetRestart() }
-	Reloadable  interface{ SetReload() }
-	UserService interface{ SetUser() }
+	Restartable  interface{ SetRestart() }
+	Reloadable   interface{ SetReload() }
+	UserService  interface{ SetUser() }
+	CronUserable interface{ SetCronUser(string) }
+	Commandable  interface{ SetCommand(string) }
+	Minuteable   interface{ SetMinute(string) }
+	Hourable     interface{ SetHour(string) }
+	Monthdayable interface{ SetMonthday(string) }
+	Monthable    interface{ SetMonth(string) }
+	Weekdayable  interface{ SetWeekday(string) }
+	CronEnvable  interface{ AddCronEnv(string) }
 )
 
 // Guard describes an Unless/OnlyIf probe: run Name with Args and treat the
@@ -253,6 +261,94 @@ var WithUser = func(t any) {
 }
 
 func WithUserFunc() Option { return WithUser }
+
+// WithCronUser sets the account whose crontab is managed (default "root").
+func WithCronUser(user string) Option {
+	return func(t any) {
+		r, ok := t.(CronUserable)
+		if !ok {
+			log.Fatalf("%T does not support WithCronUser", t)
+		}
+		r.SetCronUser(user)
+	}
+}
+
+// WithCommand sets the command line for a Cron resource (Puppet-inspired).
+func WithCommand(cmd string) Option {
+	return func(t any) {
+		r, ok := t.(Commandable)
+		if !ok {
+			log.Fatalf("%T does not support WithCommand", t)
+		}
+		r.SetCommand(cmd)
+	}
+}
+
+// WithMinute sets the cron minute field (default "*").
+func WithMinute(v string) Option {
+	return func(t any) {
+		r, ok := t.(Minuteable)
+		if !ok {
+			log.Fatalf("%T does not support WithMinute", t)
+		}
+		r.SetMinute(v)
+	}
+}
+
+// WithHour sets the cron hour field (default "*").
+func WithHour(v string) Option {
+	return func(t any) {
+		r, ok := t.(Hourable)
+		if !ok {
+			log.Fatalf("%T does not support WithHour", t)
+		}
+		r.SetHour(v)
+	}
+}
+
+// WithMonthday sets the cron day-of-month field (default "*").
+func WithMonthday(v string) Option {
+	return func(t any) {
+		r, ok := t.(Monthdayable)
+		if !ok {
+			log.Fatalf("%T does not support WithMonthday", t)
+		}
+		r.SetMonthday(v)
+	}
+}
+
+// WithMonth sets the cron month field (default "*").
+func WithMonth(v string) Option {
+	return func(t any) {
+		r, ok := t.(Monthable)
+		if !ok {
+			log.Fatalf("%T does not support WithMonth", t)
+		}
+		r.SetMonth(v)
+	}
+}
+
+// WithWeekday sets the cron day-of-week field (default "*").
+func WithWeekday(v string) Option {
+	return func(t any) {
+		r, ok := t.(Weekdayable)
+		if !ok {
+			log.Fatalf("%T does not support WithWeekday", t)
+		}
+		r.SetWeekday(v)
+	}
+}
+
+// WithCronEnv appends an environment assignment (KEY=VAL) above the cron line.
+func WithCronEnv(kv string) Option {
+	return func(t any) {
+		r, ok := t.(CronEnvable)
+		if !ok {
+			log.Fatalf("%T does not support WithCronEnv", t)
+		}
+		r.AddCronEnv(kv)
+	}
+}
 
 // WithSymlink makes the resource a symbolic link pointing at target.
 func WithSymlink(target string) Option {
