@@ -1,5 +1,6 @@
-// Package option provides interface-based, resource-agnostic configuration
-// options shared by the file, dir, and link resource packages.
+// Package options provides interface-based, resource-agnostic configuration
+// options shared by concrete resource packages (file, dir, link, pkg, service,
+// cron, cmd, …).
 package options
 
 import (

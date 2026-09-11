@@ -43,13 +43,13 @@ These block a faithful port of conf:
 
 Conf already shells out for some of these; gonf can do the same with `Command` + `Unless` / `OnlyIf` / `Creates`, but without dedicated resource semantics:
 
-- Crontab merge (`crontab -l | grep -v …; append; crontab`) — rsync, nsd failover, pf exporter, gogios
 - Ad-hoc `run` + `unless` probes
-- `systemctl` / `rcctl` / `doas`
 - User creation (`adduser` / `usermod` + guards) for `_dserver`, `_gogios`
 - Custom package URL installs
 - Local write + remote `doas install` (garage pattern)
 - “If any of these files changed, reload once” (r-nodes `$changed` + `daemon-reload`) — gonf notes change status but has no fan-in helper
+
+(Service, Package, and Cron are first-class for *local* apply; remotes still need SSH.)
 
 ## Already covered for *local* apply
 
@@ -60,6 +60,7 @@ Ignoring remotes, these map reasonably:
 - Command guards
 - Task registration, aggregates, `-list` / dry-run
 - Symlinks (gonf is ahead of conf Rex here)
+- Package / Service / Cron (local apply)
 
 The **dotfiles** laptop port shows that local Linux home/pkg workflows are in good shape. Conf is a different problem.
 
@@ -67,12 +68,12 @@ The **dotfiles** laptop port shows that local Linux home/pkg workflows are in go
 
 1. **Remote execution** — SSH inventory, per-group auth/sudo, parallel apply
 2. **Package backends** — OpenBSD `pkg_add`, FreeBSD `pkg`, custom repo/`PKG_PATH`
-3. **Service resource** — **done for local apply** (`Service` auto-detects systemd / rcctl / FreeBSD); still need remote for conf fleet
+3. **Service resource** — **done for local apply** (`Service` auto-detects systemd / rcctl / FreeBSD / NetBSD); still need remote for conf fleet
 4. **Richer templates** — arbitrary data/functions, not only process env
 5. **Secrets loading** convention (files under a secrets dir, never committed)
-6. Nice-to-have: **Cron** resource or crontab-merge helper; **on_change fan-in** for one reload after many file updates
+6. Nice-to-have: **on_change fan-in** for one reload after many file updates
 
-Without items 1–2 and 4, `frontends/Rexfile` cannot be replaced meaningfully (Service alone is not enough without remotes).
+Without items 1–2 and 4, `frontends/Rexfile` cannot be replaced meaningfully (Service alone is not enough without remotes). Cron is already available locally (`Cron` / `NoCron`).
 
 ## Non-gaps / out of scope
 

@@ -80,11 +80,8 @@ func Absent(name string, opts ...opt.Option) resource.Resource {
 
 func (c *Cron) apply() error {
 	id := fmt.Sprintf("Cron[%s/%s]", c.user, c.name)
-	if !c.Absent && c.command == "" {
-		return fmt.Errorf("%s: WithCommand is required", id)
-	}
-	if strings.ContainsAny(c.name, " \t\n") {
-		return fmt.Errorf("%s: name must not contain whitespace", id)
+	if err := c.validate(); err != nil {
+		return fmt.Errorf("%s: %w", id, err)
 	}
 
 	current, err := readCrontab(c.user)
@@ -114,6 +111,44 @@ func (c *Cron) apply() error {
 	}
 	logger.Info("updated crontab for %s (job %s)", c.user, c.name)
 	resource.Note(id, resource.StatusChanged)
+	return nil
+}
+
+func (c *Cron) validate() error {
+	if c.name == "" {
+		return fmt.Errorf("name must not be empty")
+	}
+	if strings.ContainsAny(c.name, " \t\n[]") {
+		return fmt.Errorf("name must not contain whitespace or brackets")
+	}
+	if !c.Absent && c.command == "" {
+		return fmt.Errorf("WithCommand is required")
+	}
+	if strings.ContainsAny(c.command, "\n\r") {
+		return fmt.Errorf("command must not contain newlines")
+	}
+	for _, field := range []struct {
+		label, value string
+	}{
+		{"minute", c.minute},
+		{"hour", c.hour},
+		{"monthday", c.monthday},
+		{"month", c.month},
+		{"weekday", c.weekday},
+	} {
+		if field.value == "" || strings.ContainsAny(field.value, " \t\n\r") {
+			return fmt.Errorf("%s field must be non-empty and free of whitespace", field.label)
+		}
+	}
+	for _, e := range c.env {
+		if e == "" || strings.ContainsAny(e, "\n\r") {
+			return fmt.Errorf("WithCronEnv values must be non-empty single-line KEY=VAL")
+		}
+		if strings.HasPrefix(strings.TrimSpace(e), "# BEGIN GONF") ||
+			strings.HasPrefix(strings.TrimSpace(e), "# END GONF") {
+			return fmt.Errorf("WithCronEnv must not look like a GONF marker")
+		}
+	}
 	return nil
 }
 

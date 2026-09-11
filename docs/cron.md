@@ -39,11 +39,15 @@ rejects `-u` for your own account without privileges). Other users still use
 ## Live tests
 
 ```bash
-# local
-sudo env GONF_RUN_CRON_TESTS=1 go test ./resource/cron/ -run LiveCron -v
+# root crontab (needs privilege)
+sudo env GONF_RUN_CRON_TESTS=1 go test ./resource/cron/ -run LiveCronRoundTrip -v
+
+# per-user crontab + env (must run as non-root; do not use sudo)
+env GONF_RUN_CRON_TESTS=1 go test ./resource/cron/ -run LiveCronPerUser -v
 
 # cross-compile + remote (example FreeBSD)
 GOOS=freebsd GOARCH=amd64 go test -c -o /tmp/cron_freebsd.test ./resource/cron/
 scp /tmp/cron_freebsd.test paul@f0.lan:
-ssh paul@f0.lan 'doas env GONF_RUN_CRON_TESTS=1 ./cron_freebsd.test -test.v -test.run LiveCron'
+ssh paul@f0.lan 'doas env GONF_RUN_CRON_TESTS=1 ./cron_freebsd.test -test.v -test.run LiveCronRoundTrip'
+ssh paul@f0.lan 'env GONF_RUN_CRON_TESTS=1 ./cron_freebsd.test -test.v -test.run LiveCronPerUser'
 ```
