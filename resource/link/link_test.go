@@ -226,3 +226,54 @@ func TestBuildRequiresKindOrAbsent(t *testing.T) {
 		t.Error("expected Apply to fail when neither kind nor absent is specified")
 	}
 }
+
+func TestSymlinkRefusesMissingTarget(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "link")
+	missing := filepath.Join(dir, "does-not-exist")
+
+	Present(path, WithSymlink(missing))
+	if err := resource.Apply(); err == nil {
+		t.Fatal("expected Apply to fail for missing symlink target")
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatal("broken symlink should not have been created")
+	}
+}
+
+func TestSymlinkRefusesExistingDanglingLink(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "link")
+	missing := filepath.Join(dir, "gone")
+	if err := os.Symlink(missing, path); err != nil {
+		t.Fatal(err)
+	}
+
+	Present(path, WithSymlink(missing))
+	if err := resource.Apply(); err == nil {
+		t.Fatal("expected Apply to fail for existing dangling symlink")
+	}
+}
+
+func TestSymlinkAllowsRelativeTarget(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "target"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "link")
+
+	Present(path, WithSymlink("target"))
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	got, err := os.Readlink(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "target" {
+		t.Fatalf("got %q", got)
+	}
+}
