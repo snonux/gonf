@@ -1,24 +1,13 @@
 package main
 
 import (
-	"flag"
-	"fmt"
 	"os"
 
+	"github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/examples"
-	"github.com/snonux/gonf/internal"
 )
 
 func main() {
-	version := flag.Bool("version", false, "Print version")
-
-	if *version {
-		fmt.Println(internal.Version)
-		os.Exit(0)
-	}
-
-	if err := examples.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "example run error: %v\n", err)
-		os.Exit(1)
-	}
+	examples.Register()
+	os.Exit(api.CLI())
 }

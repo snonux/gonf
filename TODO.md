@@ -51,17 +51,9 @@ only if not already present. Need a "line in file" style resource
 
 ## 11. Tasks, descriptions, and a CLI
 
-Rexfile is organized into named tasks with `desc`, an aggregate `home` task
-that runs every `home_*` task, and Rex's CLI to run a chosen task. gonf today
-just calls a hardcoded `examples.Run()`. Need:
-
-- A way to declare named units of work (tasks/groups) with descriptions.
-- CLI to list tasks and run one, several, or all
-  (replace the `--version`-only flag handling in `cmd/gonf/main.go`, which is
-  also currently buggy — it reads `*version` before `flag.Parse()`).
-- An aggregate/dependency mechanism (the `home` = all `home_*` pattern), which
-  ties into the existing `dependsOn` field on `Resource` that is currently
-  unused.
+DONE! `api.Task` / `Matching` / `Run` / `Tasks` plus `api.CLI`
+(`-list`, `-version`, run named tasks). Aggregates via
+`Run(Matching("^home_")...)`.
 
 ## 12. Nice-to-haves / smaller gaps
 
