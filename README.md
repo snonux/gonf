@@ -9,3 +9,7 @@ Pure-Go syntax KISS configuration management system for personal use. Built with
 - `List(...)` builds a `[]string` for multi-path resources, `Command` args, and `EachKV` pairs (formerly `Elems`).
 - Task registration: `Task`, `RegisterMethods`, `Aggregate`, `CLI`.
 - Path helpers: `Home`, `Expand`, `SyncDir`, `InstallFile`, `SymlinkMap`, …
+
+## Docs
+
+- [Replacing `~/git/conf` Rex — missing features](docs/conf-rex-gaps.md)
