@@ -31,13 +31,8 @@ DONE (for Fedora!)
 
 ## 7. Command execution (`run`)
 
-Rexfile shells out with `run "..."` for things gonf can't currently do:
-
-- `git config --global ...` (idempotent global git config, section 9).
-- `systemctl --user daemon-reload`, `systemctl --user enable <timer>`.
-
-Need a command/exec resource (run a command, capture output, optional
-idempotency guard / "unless" condition).
+DONE! `api.Command` with `Unless` / `OnlyIf` / `Creates` / `WithDir` /
+`WithEnv` / `WithName`. Covers Rexfile `git config`, `systemctl`, etc.
 
 ## 8. OS and host detection / conditionals
 

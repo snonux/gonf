@@ -121,5 +121,15 @@ func Run() error {
 	// above have been applied.
 	Dir("/tmp/gonf_after_dir", DependsOn(fooRes, multiRes))
 
+	// 16. Command resource with idempotency guards
+	Command("touch", Elems("/tmp/gonf_cmd_marker"),
+		Creates("/tmp/gonf_cmd_marker"),
+		WithName("touch-marker"),
+	)
+	Command("true", nil,
+		Unless("true", nil),
+		WithName("unless-demo"),
+	)
+
 	return Apply()
 }

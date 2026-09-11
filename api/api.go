@@ -3,6 +3,7 @@ package api
 import (
 	"codeberg.org/snonux/gonf/api/options"
 	"codeberg.org/snonux/gonf/resource"
+	"codeberg.org/snonux/gonf/resource/cmd"
 	"codeberg.org/snonux/gonf/resource/dir"
 	"codeberg.org/snonux/gonf/resource/file"
 	"codeberg.org/snonux/gonf/resource/link"
@@ -117,4 +118,10 @@ func Packages(names []string, opts ...options.Option) Resource {
 // NoPackage creates one or more package resources that are ensured to be absent.
 func NoPackage[T Path](name T, opts ...options.Option) Resource {
 	return Package(name, append(opts, options.IsAbsent)...)
+}
+
+// Command registers a command resource that runs name with args on Apply.
+// Use options.Unless, options.OnlyIf, or options.Creates for idempotency.
+func Command(name string, args []string, opts ...options.Option) Resource {
+	return cmd.Present(name, args, opts...)
 }

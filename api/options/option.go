@@ -27,11 +27,42 @@ type (
 	Absentable    interface{ SetAbsent() }
 	Latestable    interface{ SetLatest() }
 	Dependable    interface{ AddDependency(id string) }
-	Linkable      interface {
+	Named         interface{ SetName(string) }
+	Dirable       interface{ SetDir(string) }
+	Envable       interface{ SetEnv(map[string]string) }
+	Creatable     interface{ SetCreates(string) }
+	Guardable     interface {
+		SetUnless(*Guard)
+		SetOnlyIf(*Guard)
+	}
+	Linkable interface {
 		SetSymlink(target string)
 		SetHardlink(target string)
 	}
 )
+
+// Guard describes an Unless/OnlyIf probe: run Name with Args and treat the
+// probe as successful when the exit code matches ExpectExit and, if
+// ExpectStdout is non-empty, when trimmed stdout equals that string.
+type Guard struct {
+	Name         string
+	Args         []string
+	ExpectExit   int
+	ExpectStdout string
+}
+
+// GuardOption configures a Guard built by Unless or OnlyIf.
+type GuardOption func(*Guard)
+
+// ExpectExit sets the exit code that makes a guard succeed (default 0).
+func ExpectExit(code int) GuardOption {
+	return func(g *Guard) { g.ExpectExit = code }
+}
+
+// ExpectStdout requires trimmed stdout to equal want for the guard to succeed.
+func ExpectStdout(want string) GuardOption {
+	return func(g *Guard) { g.ExpectStdout = want }
+}
 
 // DependsOn declares that the resource being configured must be applied only
 // after every given resource has been applied. Each argument may be a single
@@ -192,4 +223,82 @@ func WithHardlink(target string) Option {
 		}
 		r.SetHardlink(target)
 	}
+}
+
+// WithName overrides the resource's registry name (used in its ID).
+func WithName(name string) Option {
+	return func(t any) {
+		r, ok := t.(Named)
+		if !ok {
+			log.Fatalf("%T does not support WithName", t)
+		}
+		r.SetName(name)
+	}
+}
+
+// WithDir sets the working directory for a command resource.
+func WithDir(dir string) Option {
+	return func(t any) {
+		r, ok := t.(Dirable)
+		if !ok {
+			log.Fatalf("%T does not support WithDir", t)
+		}
+		r.SetDir(dir)
+	}
+}
+
+// WithEnv merges extra environment variables into the command's environment.
+func WithEnv(env map[string]string) Option {
+	return func(t any) {
+		r, ok := t.(Envable)
+		if !ok {
+			log.Fatalf("%T does not support WithEnv", t)
+		}
+		r.SetEnv(env)
+	}
+}
+
+// Creates skips applying the command when path already exists.
+func Creates(path string) Option {
+	return func(t any) {
+		r, ok := t.(Creatable)
+		if !ok {
+			log.Fatalf("%T does not support Creates", t)
+		}
+		r.SetCreates(path)
+	}
+}
+
+// Unless skips the command when the guard probe succeeds.
+func Unless(name string, args []string, opts ...GuardOption) Option {
+	return func(t any) {
+		r, ok := t.(Guardable)
+		if !ok {
+			log.Fatalf("%T does not support Unless", t)
+		}
+		r.SetUnless(newGuard(name, args, opts...))
+	}
+}
+
+// OnlyIf runs the command only when the guard probe succeeds.
+func OnlyIf(name string, args []string, opts ...GuardOption) Option {
+	return func(t any) {
+		r, ok := t.(Guardable)
+		if !ok {
+			log.Fatalf("%T does not support OnlyIf", t)
+		}
+		r.SetOnlyIf(newGuard(name, args, opts...))
+	}
+}
+
+func newGuard(name string, args []string, opts ...GuardOption) *Guard {
+	g := &Guard{
+		Name:       name,
+		Args:       args,
+		ExpectExit: 0,
+	}
+	for _, o := range opts {
+		o(g)
+	}
+	return g
 }

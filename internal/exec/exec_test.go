@@ -1,18 +1,21 @@
 package exec
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func TestRun(t *testing.T) {
 	tests := []struct {
-		name           string
-		cmd            string
-		args           []string
-		wantStdout     string
-		wantStderr     string
-		wantExitCode   int
-		wantErr        bool
+		name         string
+		cmd          string
+		args         []string
+		wantStdout   string
+		wantStderr   string
+		wantExitCode int
+		wantErr      bool
 	}{
 		{
 			name:         "success",
@@ -28,8 +31,8 @@ func TestRun(t *testing.T) {
 			cmd:          "ls",
 			args:         []string{"/non-existent-directory-12345"},
 			wantStdout:   "",
-			wantStderr:   "", // ls stderr varies by OS, but should not be empty usually.
-			wantExitCode: 2,  // Typical for ls non-existent
+			wantStderr:   "",
+			wantExitCode: 2,
 			wantErr:      false,
 		},
 		{
@@ -59,11 +62,74 @@ func TestRun(t *testing.T) {
 			if tt.name == "success" && stdout != tt.wantStdout {
 				t.Errorf("Run() stdout = %q, want %q", stdout, tt.wantStdout)
 			}
-			
-			// For ls error, we just check that stderr is not empty since exact text varies
+
 			if tt.name == "fail-exit-code" && stderr == "" {
 				t.Errorf("Run() stderr = %q, want non-empty", stderr)
 			}
 		})
+	}
+}
+
+func TestRunWithDir(t *testing.T) {
+	dir := t.TempDir()
+	stdout, _, exitCode, err := RunWith(Opts{Dir: dir}, "pwd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exitCode != 0 {
+		t.Fatalf("exit %d", exitCode)
+	}
+	got := strings.TrimSpace(stdout)
+	want, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = filepath.EvalSymlinks(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("pwd = %q, want %q", got, want)
+	}
+}
+
+func TestMergeEnv(t *testing.T) {
+	t.Setenv("GONF_MERGE_BASE", "base")
+	merged := MergeEnv(map[string]string{
+		"GONF_MERGE_BASE": "override",
+		"GONF_MERGE_NEW":  "new",
+	})
+
+	env := map[string]string{}
+	for _, kv := range merged {
+		k, v, ok := splitEnv(kv)
+		if ok {
+			env[k] = v
+		}
+	}
+	if env["GONF_MERGE_BASE"] != "override" {
+		t.Fatalf("base = %q", env["GONF_MERGE_BASE"])
+	}
+	if env["GONF_MERGE_NEW"] != "new" {
+		t.Fatalf("new = %q", env["GONF_MERGE_NEW"])
+	}
+	if _, ok := env["PATH"]; !ok {
+		t.Fatal("expected PATH to be preserved")
+	}
+}
+
+func TestRunWithEnv(t *testing.T) {
+	stdout, _, exitCode, err := RunWith(
+		Opts{Env: append(os.Environ(), "GONF_RUNWITH=yes")},
+		"sh", "-c", "printf '%s' \"$GONF_RUNWITH\"",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exitCode != 0 {
+		t.Fatalf("exit %d", exitCode)
+	}
+	if stdout != "yes" {
+		t.Fatalf("stdout = %q", stdout)
 	}
 }
