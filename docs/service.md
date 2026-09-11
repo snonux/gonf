@@ -12,9 +12,11 @@ OS-agnostic service/daemon management. The backend is selected automatically:
 ```go
 Service("httpd")                    // started + enabled at boot
 Service("httpd", WithRestart)       // converge, then restart once
-Service("foo.timer", WithUser)      // systemd --user only
+Service("foo", WithUser)            // systemd --user only
 NoService("olddaemon")              // stopped + disabled
 ```
+
+For dedicated systemd timer units, prefer [`Timer` / `NoTimer`](timer.md).
 
 Requires sufficient privileges (root / `doas`), same as `Package`.
 

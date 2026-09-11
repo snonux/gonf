@@ -14,5 +14,6 @@ Pure-Go syntax KISS configuration management system for personal use. Built with
 
 - [Package resource](docs/package.md) — OS-auto-detect dnf / pkg_add / pkg / pkgin
 - [Service resource](docs/service.md) — OS-auto-detect systemd / rcctl / FreeBSD+NetBSD `service`
+- [Timer resource](docs/timer.md) — systemd `.timer` units (Linux; `--user` supported)
 - [Cron resource](docs/cron.md) — Puppet-inspired per-user crontab jobs
 - [Replacing `~/git/conf` Rex — missing features](docs/conf-rex-gaps.md)

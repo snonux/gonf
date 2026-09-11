@@ -10,6 +10,7 @@ import (
 	"github.com/snonux/gonf/resource/link"
 	"github.com/snonux/gonf/resource/pkg"
 	svc "github.com/snonux/gonf/resource/service"
+	"github.com/snonux/gonf/resource/timer"
 )
 
 // Path constraint for resources that can be defined as a single item or a list.
@@ -159,6 +160,33 @@ func Cron(name string, opts ...options.Option) Resource {
 // NoCron removes a named crontab entry (use WithCronUser for non-root).
 func NoCron(name string, opts ...options.Option) Resource {
 	return cron.Absent(name, opts...)
+}
+
+// Timer ensures one or more systemd .timer units are active and enabled.
+// Linux/systemd only. Names without a ".timer" suffix get one appended.
+// Use WithUser for the systemd user bus.
+func Timer[T Path](name T, opts ...options.Option) Resource {
+	switch v := any(name).(type) {
+	case string:
+		return timer.Present(v, opts...)
+	case []string:
+		return Timers(v, opts...)
+	default:
+		panic("Timer: name must be string or []string")
+	}
+}
+
+func Timers(names []string, opts ...options.Option) Resource {
+	var resources []resource.Resource
+	for _, name := range names {
+		resources = append(resources, timer.Present(name, opts...))
+	}
+	return resource.Multi(resources)
+}
+
+// NoTimer ensures one or more systemd .timer units are stopped and disabled.
+func NoTimer[T Path](name T, opts ...options.Option) Resource {
+	return Timer(name, append(opts, options.IsAbsent)...)
 }
 
 // Command registers a command resource that runs name with args on Apply.
