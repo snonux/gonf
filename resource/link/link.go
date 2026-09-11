@@ -3,10 +3,10 @@ package link
 
 import (
 	"fmt"
-	"log"
 	"os"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
 )
@@ -48,10 +48,6 @@ func build(path string, opts ...opt.Option) *Link {
 	return l
 }
 
-// apply performs the idempotent OS work for l without registering a
-// resource. Kind-vs-absent validation happens here (not in build) to match
-// the pre-split behavior where a resource was registered before its target
-// was validated.
 func (l *Link) apply() error {
 	switch {
 	case l.Absent:
@@ -65,9 +61,6 @@ func (l *Link) apply() error {
 	}
 }
 
-// resourceType returns the registry type name for l. Absent links with no
-// kind specified register generically as "Link", since removal doesn't
-// depend on knowing the prior kind.
 func (l *Link) resourceType() string {
 	switch l.kind {
 	case symlinkKind:
@@ -80,8 +73,7 @@ func (l *Link) resourceType() string {
 }
 
 // Ensure builds and applies the link resource described by opts, without
-// registering it. Used by other resource packages (e.g. dir) to recreate an
-// individual symlink without it becoming its own top-level resource.
+// registering it.
 func Ensure(path string, opts ...opt.Option) error {
 	return build(path, opts...).apply()
 }
@@ -100,16 +92,30 @@ func Absent(path string, opts ...opt.Option) resource.Resource {
 }
 
 func ensureAbsent(path string) error {
-	log.Printf("ensuring link absent: %s", path)
+	id := fmt.Sprintf("Link[%s]", path)
+	logger.Debug("ensuring link absent: %s", path)
+
+	if _, err := os.Lstat(path); os.IsNotExist(err) {
+		logger.Debug("%s already absent", path)
+		resource.Note(id, resource.StatusOK)
+		return nil
+	}
+
+	if resource.DryRun() {
+		resource.Note(id, resource.StatusWouldChange)
+		logger.Info("dry-run: would remove %s", path)
+		return nil
+	}
 
 	if err := os.Remove(path); err != nil {
 		if os.IsNotExist(err) {
-			log.Printf("%s already absent", path)
+			resource.Note(id, resource.StatusOK)
 			return nil
 		}
 		return fmt.Errorf("failed to remove %s: %w", path, err)
 	}
 
-	log.Printf("removed %s", path)
+	resource.Note(id, resource.StatusChanged)
+	logger.Info("removed %s", path)
 	return nil
 }

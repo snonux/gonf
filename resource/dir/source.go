@@ -3,13 +3,14 @@ package dir
 import (
 	"fmt"
 	"io/fs"
-	"log"
 	"os"
 	"path/filepath"
 
+	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/file"
 	"github.com/snonux/gonf/resource/link"
-	opt "github.com/snonux/gonf/api/options"
 )
 
 // copySourceTree mirrors d.source into d.path, dispatching each entry by
@@ -18,7 +19,7 @@ import (
 // a symlink in the source tree is recreated as a symlink rather than read as
 // file content.
 func copySourceTree(d *Dir) error {
-	log.Printf("installing files from source %s to %s", d.source, d.path)
+	logger.Debug("installing files from source %s to %s", d.source, d.path)
 
 	return filepath.WalkDir(d.source, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -88,7 +89,7 @@ func copySourceFile(d *Dir, sourcePath, target string) error {
 // otherwise every templated file would be pruned immediately after being
 // copied.
 func pruneTree(d *Dir) error {
-	log.Printf("pruning destination directory %s", d.path)
+	logger.Debug("pruning destination directory %s", d.path)
 
 	return filepath.WalkDir(d.path, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -107,7 +108,7 @@ func pruneTree(d *Dir) error {
 			return nil
 		}
 
-		log.Printf("pruning %s", path)
+		logger.Debug("pruning %s", path)
 		if err := os.RemoveAll(path); err != nil {
 			return fmt.Errorf("failed to prune %s: %w", path, err)
 		}
@@ -124,4 +125,96 @@ func sourceEntryExists(source, rel string) bool {
 	}
 	_, err := os.Lstat(filepath.Join(source, rel) + ".tmpl")
 	return err == nil
+}
+
+// copySourceGlob installs regular files matching d.sourceGlob into d.path as
+// basename entries (flat, Rex ensure_dir style).
+func copySourceGlob(d *Dir) error {
+	matches, err := filepath.Glob(d.sourceGlob)
+	if err != nil {
+		return fmt.Errorf("invalid source glob %q: %w", d.sourceGlob, err)
+	}
+	logger.Debug("installing glob %s (%d matches) into %s", d.sourceGlob, len(matches), d.path)
+
+	for _, match := range matches {
+		info, err := os.Lstat(match)
+		if err != nil {
+			return fmt.Errorf("stat glob match %s: %w", match, err)
+		}
+		if info.IsDir() {
+			continue
+		}
+		// Follow symlink-to-file; skip symlink-to-dir and other non-regular.
+		if info.Mode()&os.ModeSymlink != 0 {
+			targetInfo, err := os.Stat(match)
+			if err != nil || targetInfo.IsDir() || !targetInfo.Mode().IsRegular() {
+				continue
+			}
+		} else if !info.Mode().IsRegular() {
+			continue
+		}
+
+		target := filepath.Join(d.path, filepath.Base(match))
+		if err := copySourceFile(d, match, target); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// pruneGlob removes regular files directly under d.path whose basename is not
+// among the current glob matches. Subdirectories and unmatched names that are
+// not plain files are left alone (Rex prune_dir).
+func pruneGlob(d *Dir) error {
+	matches, err := filepath.Glob(d.sourceGlob)
+	if err != nil {
+		return fmt.Errorf("invalid source glob %q: %w", d.sourceGlob, err)
+	}
+	keep := make(map[string]struct{}, len(matches))
+	for _, match := range matches {
+		info, err := os.Lstat(match)
+		if err != nil {
+			continue
+		}
+		if info.IsDir() {
+			continue
+		}
+		keep[filepath.Base(match)] = struct{}{}
+	}
+
+	entries, err := os.ReadDir(d.path)
+	if err != nil {
+		return fmt.Errorf("read dest %s for prune: %w", d.path, err)
+	}
+	logger.Debug("pruning destination directory %s against glob %s", d.path, d.sourceGlob)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		// Skip anything that isn't a regular file (e.g. nested symlink dirs).
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		name := entry.Name()
+		if _, ok := keep[name]; ok {
+			continue
+		}
+		path := filepath.Join(d.path, name)
+		if resource.DryRun() {
+			resource.Note(fmt.Sprintf("File[%s]", path), resource.StatusWouldChange)
+			logger.Info("dry-run: would prune %s", path)
+			continue
+		}
+		logger.Debug("pruning %s", path)
+		if err := os.Remove(path); err != nil {
+			return fmt.Errorf("failed to prune %s: %w", path, err)
+		}
+		resource.Note(fmt.Sprintf("File[%s]", path), resource.StatusChanged)
+		logger.Info("pruned %s", path)
+	}
+	return nil
 }

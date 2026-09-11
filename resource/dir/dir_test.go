@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/snonux/gonf/resource"
 	. "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/resource"
 )
 
 func TestPresentDirectoryCreate(t *testing.T) {
@@ -353,5 +353,85 @@ func TestSourceCopyRecreatesSymlinkNotContent(t *testing.T) {
 	}
 	if info.Mode()&os.ModeSymlink == 0 {
 		t.Errorf("expected %s to be a symlink", dstLink)
+	}
+}
+
+func TestSourceGlobInstallsMatchingFiles(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+	if err := os.Mkdir(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a.rb", "b.rb", "skip.txt"} {
+		if err := os.WriteFile(filepath.Join(src, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	Present(dst, WithSourceGlob(filepath.Join(src, "*.rb")), WithFileMode(0o640))
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	for _, name := range []string{"a.rb", "b.rb"} {
+		got, err := os.ReadFile(filepath.Join(dst, name))
+		if err != nil {
+			t.Fatalf("missing %s: %v", name, err)
+		}
+		if string(got) != name {
+			t.Fatalf("%s content = %q", name, got)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dst, "skip.txt")); !os.IsNotExist(err) {
+		t.Fatal("skip.txt should not have been installed")
+	}
+
+	// Idempotent
+	resource.ResetRepository()
+	Present(dst, WithSourceGlob(filepath.Join(src, "*.rb")), WithFileMode(0o640))
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("second Apply: %v", err)
+	}
+}
+
+func TestSourceGlobPrune(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "keep.rb"), []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dst, "keep.rb"), []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dst, "old.rb"), []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dst, "subdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	Present(dst, WithSourceGlob(filepath.Join(src, "*.rb")), WithPrune)
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dst, "old.rb")); !os.IsNotExist(err) {
+		t.Fatal("old.rb should have been pruned")
+	}
+	if _, err := os.Stat(filepath.Join(dst, "keep.rb")); err != nil {
+		t.Fatal("keep.rb should remain")
+	}
+	if _, err := os.Stat(filepath.Join(dst, "subdir")); err != nil {
+		t.Fatal("subdir should not be pruned")
 	}
 }

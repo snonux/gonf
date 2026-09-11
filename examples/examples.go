@@ -61,6 +61,13 @@ func demoFiles() {
 	_ = os.WriteFile("/tmp/gonf_line_base.conf", []byte("keep-me\nstale-line\n"), 0o644)
 	File("/tmp/gonf_line_base.conf", WithoutLine("stale-line"), WithLine("desired-line"))
 	File("/tmp/gonf_line_append.conf", WithLine("source-file rocky.conf"))
+
+	// Flat glob install into a destination directory.
+	Dir("/tmp/gonf_glob_dst",
+		WithSourceGlob("assets/testfiles/*"),
+		WithMode(0o755),
+		WithFileMode(0o644),
+	)
 }
 
 func demoLinks() {
@@ -100,4 +107,13 @@ func demoCommands() {
 		Unless("true", nil),
 		WithName("unless-demo"),
 	)
+
+	EachKV(Elems(
+		"demo.key", "demo-value",
+		"demo.other", "other-value",
+	), func(key, val string) {
+		Command("true", nil,
+			WithName("kv."+key+"="+val),
+		)
+	})
 }

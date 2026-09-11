@@ -4,12 +4,12 @@ package cmd
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"strings"
 
 	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/exec"
+	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
 )
@@ -71,7 +71,8 @@ func defaultName(bin string, args []string) string {
 func (c *Cmd) apply() error {
 	if c.creates != "" {
 		if _, err := os.Stat(c.creates); err == nil {
-			log.Printf("skipping %s: %s already exists", c.id(), c.creates)
+			logger.Info("skipping %s: %s already exists", c.id(), c.creates)
+			resource.Note(c.id(), resource.StatusSkipped)
 			return nil
 		} else if !os.IsNotExist(err) {
 			return fmt.Errorf("creates check for %s: %w", c.creates, err)
@@ -84,7 +85,8 @@ func (c *Cmd) apply() error {
 			return fmt.Errorf("unless guard for %s: %w", c.id(), err)
 		}
 		if ok {
-			log.Printf("skipping %s: unless guard succeeded", c.id())
+			logger.Info("skipping %s: unless guard succeeded", c.id())
+			resource.Note(c.id(), resource.StatusSkipped)
 			return nil
 		}
 	}
@@ -95,7 +97,8 @@ func (c *Cmd) apply() error {
 			return fmt.Errorf("onlyIf guard for %s: %w", c.id(), err)
 		}
 		if !ok {
-			log.Printf("skipping %s: onlyIf guard did not succeed", c.id())
+			logger.Info("skipping %s: onlyIf guard did not succeed", c.id())
+			resource.Note(c.id(), resource.StatusSkipped)
 			return nil
 		}
 	}
@@ -108,12 +111,18 @@ func (c *Cmd) id() string {
 }
 
 func (c *Cmd) run() error {
+	if resource.DryRun() {
+		resource.Note(c.id(), resource.StatusWouldChange)
+		logger.Info("dry-run: would run %s %s", c.bin, strings.Join(c.args, " "))
+		return nil
+	}
+
 	opts := exec.Opts{Dir: c.dir}
 	if c.env != nil {
 		opts.Env = exec.MergeEnv(c.env)
 	}
 
-	log.Printf("running %s: %s %s", c.id(), c.bin, strings.Join(c.args, " "))
+	logger.Info("running %s: %s %s", c.id(), c.bin, strings.Join(c.args, " "))
 	stdout, stderr, exitCode, err := exec.RunWith(opts, c.bin, c.args...)
 	if err != nil {
 		return fmt.Errorf("failed to execute %s: %w", c.bin, err)
@@ -123,16 +132,15 @@ func (c *Cmd) run() error {
 			c.bin, exitCode, stdout, stderr)
 	}
 	if stdout != "" {
-		log.Printf("%s stdout: %s", c.id(), strings.TrimSpace(stdout))
+		logger.Debug("%s stdout: %s", c.id(), strings.TrimSpace(stdout))
 	}
+	resource.Note(c.id(), resource.StatusChanged)
 	return nil
 }
 
 func guardPasses(g *opt.Guard) (bool, error) {
 	stdout, _, exitCode, err := exec.Run(g.Name, g.Args...)
 	if err != nil {
-		// Binary missing etc.: treat as guard failure (do not skip / do not run
-		// OnlyIf), but surface start errors so misconfiguration is obvious.
 		return false, err
 	}
 	if exitCode != g.ExpectExit {

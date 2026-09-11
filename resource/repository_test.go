@@ -32,12 +32,12 @@ func TestApply(t *testing.T) {
 				// A depends on B, B depends on C
 				r.registered["A"] = Resource{
 					Type: "T", Name: "A",
-					applier: &mockApplier{name: "A", logs: logs},
+					applier:   &mockApplier{name: "A", logs: logs},
 					dependsOn: map[string]struct{}{"B": {}},
 				}
 				r.registered["B"] = Resource{
 					Type: "T", Name: "B",
-					applier: &mockApplier{name: "B", logs: logs},
+					applier:   &mockApplier{name: "B", logs: logs},
 					dependsOn: map[string]struct{}{"C": {}},
 				}
 				r.registered["C"] = Resource{
@@ -99,12 +99,12 @@ func TestApply(t *testing.T) {
 			setup: func(r *repository, logs *[]string) {
 				r.registered["A"] = Resource{
 					Type: "T", Name: "A",
-					applier: &mockApplier{name: "A", logs: logs},
+					applier:   &mockApplier{name: "A", logs: logs},
 					dependsOn: map[string]struct{}{"B": {}},
 				}
 				r.registered["B"] = Resource{
 					Type: "T", Name: "B",
-					applier: &mockApplier{name: "B", logs: logs},
+					applier:   &mockApplier{name: "B", logs: logs},
 					dependsOn: map[string]struct{}{"A": {}},
 				}
 			},
@@ -116,7 +116,7 @@ func TestApply(t *testing.T) {
 			setup: func(r *repository, logs *[]string) {
 				r.registered["A"] = Resource{
 					Type: "T", Name: "A",
-					applier: &mockApplier{name: "A", logs: logs},
+					applier:   &mockApplier{name: "A", logs: logs},
 					dependsOn: map[string]struct{}{"Missing": {}},
 				}
 			},

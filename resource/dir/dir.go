@@ -4,7 +4,7 @@ package dir
 
 import (
 	"fmt"
-	"log"
+	"github.com/snonux/gonf/internal/logger"
 	"os"
 	"os/user"
 	"strconv"
@@ -17,18 +17,22 @@ import (
 type Dir struct {
 	embed.DependsOn
 	embed.Absence
-	resource resource.Resource
-	path     string
-	source   string
-	user     string
-	group    string
-	mode     os.FileMode // this directory's own mode, default 0o750
-	fileMode os.FileMode // mode for regular files copied from source, default 0o640
-	prune    bool        // reconciles extra dest files during a source copy, and recursive-remove during IsAbsent()
+	resource   resource.Resource
+	path       string
+	source     string
+	sourceGlob string
+	user       string
+	group      string
+	mode       os.FileMode // this directory's own mode, default 0o750
+	fileMode   os.FileMode // mode for regular files copied from source, default 0o640
+	prune      bool        // reconciles extra dest files during a source copy, and recursive-remove during IsAbsent()
 }
 
 // SetSource implements opt.Sourced.
 func (d *Dir) SetSource(source string) { d.source = source }
+
+// SetSourceGlob implements opt.SourceGlobable.
+func (d *Dir) SetSourceGlob(pattern string) { d.sourceGlob = pattern }
 
 // SetOwner implements opt.Owner.
 func (d *Dir) SetOwner(user string) { d.user = user }
@@ -44,6 +48,11 @@ func (d *Dir) SetFileMode(mode os.FileMode) { d.fileMode = mode }
 
 // SetPrune implements opt.Prunable.
 func (d *Dir) SetPrune() { d.prune = true }
+
+var (
+	_ opt.Sourced        = (*Dir)(nil)
+	_ opt.SourceGlobable = (*Dir)(nil)
+)
 
 func build(path string, opts ...opt.Option) (*Dir, error) {
 	curr, err := user.Current()
@@ -63,6 +72,10 @@ func build(path string, opts ...opt.Option) (*Dir, error) {
 		o(d)
 	}
 
+	if d.source != "" && d.sourceGlob != "" {
+		logger.Fatal("directory %s: WithSource and WithSourceGlob are mutually exclusive", path)
+	}
+
 	return d, nil
 }
 
@@ -77,16 +90,21 @@ func (d *Dir) apply() error {
 		return err
 	}
 
-	if d.source == "" {
-		return nil
-	}
-
-	if err := copySourceTree(d); err != nil {
-		return err
-	}
-
-	if d.prune {
-		return pruneTree(d)
+	switch {
+	case d.sourceGlob != "":
+		if err := copySourceGlob(d); err != nil {
+			return err
+		}
+		if d.prune {
+			return pruneGlob(d)
+		}
+	case d.source != "":
+		if err := copySourceTree(d); err != nil {
+			return err
+		}
+		if d.prune {
+			return pruneTree(d)
+		}
 	}
 
 	return nil
@@ -96,7 +114,8 @@ func (d *Dir) apply() error {
 // mode and ownership. It is idempotent: an existing directory only has its
 // attributes re-enforced, and an existing non-directory is an error.
 func ensureDirectorySelf(d *Dir) error {
-	log.Printf("processing directory: %s", d.path)
+	id := fmt.Sprintf("Directory[%s]", d.path)
+	logger.Debug("processing directory: %s", d.path)
 
 	info, err := os.Lstat(d.path)
 	switch {
@@ -104,13 +123,24 @@ func ensureDirectorySelf(d *Dir) error {
 		if !info.IsDir() {
 			return fmt.Errorf("%s exists and is not a directory", d.path)
 		}
-		log.Printf("directory %s already exists", d.path)
+		logger.Debug("directory %s already exists", d.path)
+		resource.Note(id, resource.StatusOK)
+		if resource.DryRun() {
+			return nil
+		}
 
 	case os.IsNotExist(err):
-		log.Printf("creating directory %s with mode %v", d.path, d.mode)
+		if resource.DryRun() {
+			resource.Note(id, resource.StatusWouldChange)
+			logger.Info("dry-run: would create directory %s", d.path)
+			return nil
+		}
+		logger.Debug("creating directory %s with mode %v", d.path, d.mode)
 		if err := os.MkdirAll(d.path, d.mode); err != nil {
 			return fmt.Errorf("failed to create directory %s: %w", d.path, err)
 		}
+		resource.Note(id, resource.StatusChanged)
+		logger.Info("created directory %s", d.path)
 
 	default:
 		return fmt.Errorf("failed to stat %s: %w", d.path, err)
@@ -124,7 +154,20 @@ func ensureDirectorySelf(d *Dir) error {
 // combine with WithPrune() to remove a directory and its contents
 // recursively.
 func ensureAbsent(d *Dir) error {
-	log.Printf("ensuring absent: %s", d.path)
+	id := fmt.Sprintf("Directory[%s]", d.path)
+	logger.Debug("ensuring absent: %s", d.path)
+
+	if _, err := os.Lstat(d.path); os.IsNotExist(err) {
+		logger.Debug("%s already absent", d.path)
+		resource.Note(id, resource.StatusOK)
+		return nil
+	}
+
+	if resource.DryRun() {
+		resource.Note(id, resource.StatusWouldChange)
+		logger.Info("dry-run: would remove %s", d.path)
+		return nil
+	}
 
 	remove := os.Remove
 	if d.prune {
@@ -133,13 +176,14 @@ func ensureAbsent(d *Dir) error {
 
 	if err := remove(d.path); err != nil {
 		if os.IsNotExist(err) {
-			log.Printf("%s already absent", d.path)
+			resource.Note(id, resource.StatusOK)
 			return nil
 		}
 		return fmt.Errorf("failed to remove %s: %w", d.path, err)
 	}
 
-	log.Printf("removed %s", d.path)
+	resource.Note(id, resource.StatusChanged)
+	logger.Info("removed %s", d.path)
 	return nil
 }
 
@@ -150,7 +194,7 @@ func applyAttributesTo(path string, mode os.FileMode, usr, group string) error {
 	if err := os.Chmod(path, mode); err != nil {
 		return fmt.Errorf("failed to chmod %s to %v: %w", path, mode, err)
 	}
-	log.Printf("set mode %v for %s", mode, path)
+	logger.Debug("set mode %v for %s", mode, path)
 
 	uid, gid := -1, -1
 
@@ -173,7 +217,7 @@ func applyAttributesTo(path string, mode os.FileMode, usr, group string) error {
 	if err := os.Chown(path, uid, gid); err != nil {
 		return fmt.Errorf("failed to chown %s to %s:%s: %w", path, usr, group, err)
 	}
-	log.Printf("set owner %s:%s for %s", usr, group, path)
+	logger.Debug("set owner %s:%s for %s", usr, group, path)
 
 	return nil
 }
@@ -191,7 +235,7 @@ func Ensure(path string, opts ...opt.Option) error {
 func Present(path string, opts ...opt.Option) resource.Resource {
 	d, err := build(path, opts...)
 	if err != nil {
-		log.Fatalf("failed to apply directory resource %s: %v", path, err)
+		logger.Fatal("failed to apply directory resource %s: %v", path, err)
 	}
 
 	d.resource = resource.Register("Directory", d.path,

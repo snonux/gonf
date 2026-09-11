@@ -6,8 +6,9 @@ package resource
 
 import (
 	"fmt"
-	"log"
 	"sort"
+
+	"github.com/snonux/gonf/internal/logger"
 )
 
 type Applier interface {
@@ -41,7 +42,7 @@ func Register(type_, name string, apply Applier, deps ...string) Resource {
 	}
 
 	if err := getRepository().register(r); err != nil {
-		log.Fatalf("resource registration failed: %v", err)
+		logger.Fatal("resource registration failed: %v", err)
 	}
 
 	return r

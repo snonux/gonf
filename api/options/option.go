@@ -15,23 +15,24 @@ type Option func(any)
 
 // Capability interfaces. A resource implements only the setters it supports.
 type (
-	Owner         interface{ SetOwner(string) }
-	Grouped       interface{ SetGroup(string) }
-	Moded         interface{ SetMode(os.FileMode) }
-	Sourced       interface{ SetSource(string) }
-	Contented     interface{ SetContent(string) }
-	LineAddable   interface{ SetAddLine(string) }
-	LineRemovable interface{ SetRemoveLine(string) }
-	FileModed     interface{ SetFileMode(os.FileMode) }
-	Prunable      interface{ SetPrune() }
-	Absentable    interface{ SetAbsent() }
-	Latestable    interface{ SetLatest() }
-	Dependable    interface{ AddDependency(id string) }
-	Named         interface{ SetName(string) }
-	Dirable       interface{ SetDir(string) }
-	Envable       interface{ SetEnv(map[string]string) }
-	Creatable     interface{ SetCreates(string) }
-	Guardable     interface {
+	Owner          interface{ SetOwner(string) }
+	Grouped        interface{ SetGroup(string) }
+	Moded          interface{ SetMode(os.FileMode) }
+	Sourced        interface{ SetSource(string) }
+	SourceGlobable interface{ SetSourceGlob(string) }
+	Contented      interface{ SetContent(string) }
+	LineAddable    interface{ SetAddLine(string) }
+	LineRemovable  interface{ SetRemoveLine(string) }
+	FileModed      interface{ SetFileMode(os.FileMode) }
+	Prunable       interface{ SetPrune() }
+	Absentable     interface{ SetAbsent() }
+	Latestable     interface{ SetLatest() }
+	Dependable     interface{ AddDependency(id string) }
+	Named          interface{ SetName(string) }
+	Dirable        interface{ SetDir(string) }
+	Envable        interface{ SetEnv(map[string]string) }
+	Creatable      interface{ SetCreates(string) }
+	Guardable      interface {
 		SetUnless(*Guard)
 		SetOnlyIf(*Guard)
 	}
@@ -123,6 +124,18 @@ func WithSource(source string) Option {
 			log.Fatalf("%T does not support WithSource", t)
 		}
 		r.SetSource(source)
+	}
+}
+
+// WithSourceGlob copies regular files matching pattern into a directory as
+// basename entries (flat install). Mutually exclusive with WithSource.
+func WithSourceGlob(pattern string) Option {
+	return func(t any) {
+		r, ok := t.(SourceGlobable)
+		if !ok {
+			log.Fatalf("%T does not support WithSourceGlob", t)
+		}
+		r.SetSourceGlob(pattern)
 	}
 }
 

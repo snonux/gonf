@@ -4,19 +4,26 @@ import (
 	"fmt"
 
 	"github.com/snonux/gonf/internal/exec"
+	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/resource"
 )
 
 func applyDNF(p *Package) error {
+	id := fmt.Sprintf("Package[%s]", p.name)
 	var args []string
 
 	if p.Absent {
 		args = []string{"remove", "-y", p.name}
 	} else if p.latest {
-		// update ensures the package is installed and updated to the latest version.
 		args = []string{"update", "-y", p.name}
 	} else {
-		// install ensures the package is installed, but does not update it if already present.
 		args = []string{"install", "-y", p.name}
+	}
+
+	if resource.DryRun() {
+		resource.Note(id, resource.StatusWouldChange)
+		logger.Info("dry-run: would run dnf %v", args)
+		return nil
 	}
 
 	stdout, stderr, exitCode, err := exec.Run("dnf", args...)
@@ -28,5 +35,7 @@ func applyDNF(p *Package) error {
 		return fmt.Errorf("dnf failed with exit code %d: %s\n%s", exitCode, stdout, stderr)
 	}
 
+	resource.Note(id, resource.StatusChanged)
+	logger.Info("dnf %v completed", args)
 	return nil
 }

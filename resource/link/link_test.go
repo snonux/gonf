@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/snonux/gonf/resource"
 	. "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/resource"
 )
 
 func TestPresentSymlinkCreateAndIdempotent(t *testing.T) {

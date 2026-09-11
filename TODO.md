@@ -19,7 +19,8 @@ DONE!
 
 ## 4. Glob / multi-file installs
 
-MAYBE LATER, JUST USE NATIVE GO GLOB FOR NOW!
+DONE! `Dir(..., WithSourceGlob("src/*"), WithFileMode(...), WithPrune)` —
+flat Rex-style install of matching regular files into the destination.
 
 ## 5. Prune / reconcile stale files
 
@@ -40,7 +41,8 @@ DONE! Go can do that natively relatively easily!
 
 ## 9. Idempotent key/value config (git config)
 
-we will see!
+DONE enough: use `EachKV(Elems(key, val, ...), ...)` with `Command` +
+`Unless` / `ExpectStdout`. No dedicated GitConfig resource.
 
 ## 10. In-place file editing (append-line-if-absent)
 
@@ -55,15 +57,11 @@ DONE! `api.Task` / `Matching` / `Run` / `Tasks` plus `api.CLI`
 
 ## 12. Nice-to-haves / smaller gaps
 
-- Structured logging with levels (Rexfile uses `Rex::Logger::info/warn`);
-  gonf uses stdlib `log` with verbose per-file debug lines — consider levels
-  and quieter default output.
-- Dry-run / "diff" mode to preview changes before applying.
-- Report of what changed vs. what was already in the desired state.
-- ~~`resources` registry vs. `resource` repository were **two separate
-  registries** doing the same job.~~ Consolidated: the `resources` package
-  (with its never-called `Register` and no-op `Init`) was removed; the
-  resource repository initializes lazily on first use.
+DONE!
+- Leveled logging via `internal/logger` (`-verbose` / `-quiet`).
+- Dry-run (`-dry-run` / `-n`) with WouldChange notes.
+- End-of-apply summary (ok / changed / skipped / would-change).
+- ~~Dual registries~~ consolidated earlier.
 
 ## Suggested implementation order
 

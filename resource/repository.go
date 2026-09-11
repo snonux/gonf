@@ -2,10 +2,12 @@ package resource
 
 import (
 	"fmt"
-	"log"
+	"os"
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/snonux/gonf/internal/logger"
 )
 
 var (
@@ -44,7 +46,7 @@ func (r *repository) register(res Resource) error {
 	}
 
 	r.registered[res.ID()] = res
-	log.Printf("Registered resource %v\n", res)
+	logger.Debug("Registered resource %v", res)
 
 	return nil
 }
@@ -52,6 +54,8 @@ func (r *repository) register(res Resource) error {
 func (r *repository) apply() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	ResetReport()
 
 	visited := make(map[string]bool)
 	visiting := make(map[string]bool)
@@ -72,10 +76,8 @@ func (r *repository) apply() error {
 		}
 
 		visiting[id] = true
-		// Visit dependencies in sorted order so the resulting apply order is
-		// stable and the log output is reproducible.
 		for _, depID := range res.sortedDependsOn() {
-			log.Printf("Resolving dependency of %v: needs %s first", res, depID)
+			logger.Debug("Resolving dependency of %v: needs %s first", res, depID)
 			if err := visit(depID); err != nil {
 				return err
 			}
@@ -86,8 +88,6 @@ func (r *repository) apply() error {
 		return nil
 	}
 
-	// Seed the traversal from a sorted list of roots so the overall order is
-	// deterministic regardless of map iteration order.
 	roots := make([]string, 0, len(r.registered))
 	for id := range r.registered {
 		roots = append(roots, id)
@@ -104,20 +104,21 @@ func (r *repository) apply() error {
 	for _, res := range order {
 		orderIDs = append(orderIDs, res.ID())
 	}
-	log.Printf("Resolved apply order: %s", strings.Join(orderIDs, " -> "))
+	logger.Debug("Resolved apply order: %s", strings.Join(orderIDs, " -> "))
 
 	for _, res := range order {
 		if deps := res.sortedDependsOn(); len(deps) > 0 {
-			log.Printf("Applying resource %v (dependencies already applied: %s)",
+			logger.Debug("Applying resource %v (dependencies already applied: %s)",
 				res, strings.Join(deps, ", "))
 		} else {
-			log.Printf("Applying resource %v (no dependencies)", res)
+			logger.Debug("Applying resource %v (no dependencies)", res)
 		}
 		if err := res.Apply(); err != nil {
 			return fmt.Errorf("failed to apply %v: %w", res, err)
 		}
 	}
 
+	PrintSummary(os.Stderr)
 	return nil
 }
 

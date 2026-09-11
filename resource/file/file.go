@@ -6,7 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"log"
+	"github.com/snonux/gonf/internal/logger"
 	"os"
 	"os/user"
 	"strconv"
@@ -88,7 +88,7 @@ func build(path string, opts ...opt.Option) (*File, error) {
 	}
 
 	if f.lineEdit() && (f.content != "" || f.source != "") {
-		log.Fatalf("file %s: WithLine/WithoutLine cannot be combined with WithContent/WithSource", path)
+		logger.Fatal("file %s: WithLine/WithoutLine cannot be combined with WithContent/WithSource", path)
 	}
 
 	return f, nil
@@ -111,7 +111,8 @@ func (f *File) apply() error {
 			return fmt.Errorf("failed to resolve line edits for %s: %w", f.path, err)
 		}
 		if noop {
-			log.Printf("no line edits needed for missing file %s", finalPath)
+			logger.Debug("no line edits needed for missing file %s", finalPath)
+			resource.Note(fmt.Sprintf("File[%s]", finalPath), resource.StatusSkipped)
 			return nil
 		}
 		return f.ensureFile(finalPath, content)
@@ -251,7 +252,7 @@ func (f *File) applyAttributesTo(path string) error {
 	if err := os.Chmod(path, f.mode); err != nil {
 		return fmt.Errorf("failed to chmod %s to %v: %w", path, f.mode, err)
 	}
-	log.Printf("set mode %v for %s", f.mode, path)
+	logger.Debug("set mode %v for %s", f.mode, path)
 
 	uid, gid := -1, -1
 
@@ -274,23 +275,37 @@ func (f *File) applyAttributesTo(path string) error {
 	if err := os.Chown(path, uid, gid); err != nil {
 		return fmt.Errorf("failed to chown %s to %s:%s: %w", path, f.user, f.group, err)
 	}
-	log.Printf("set owner %s:%s for %s", f.user, f.group, path)
+	logger.Debug("set owner %s:%s for %s", f.user, f.group, path)
 
 	return nil
 }
 
 func ensureAbsent(path string) error {
-	log.Printf("ensuring absent: %s", path)
+	id := fmt.Sprintf("File[%s]", path)
+	logger.Debug("ensuring absent: %s", path)
+
+	if _, err := os.Lstat(path); os.IsNotExist(err) {
+		logger.Debug("%s already absent", path)
+		resource.Note(id, resource.StatusOK)
+		return nil
+	}
+
+	if resource.DryRun() {
+		resource.Note(id, resource.StatusWouldChange)
+		logger.Info("dry-run: would remove %s", path)
+		return nil
+	}
 
 	if err := os.Remove(path); err != nil {
 		if os.IsNotExist(err) {
-			log.Printf("%s already absent", path)
+			resource.Note(id, resource.StatusOK)
 			return nil
 		}
 		return fmt.Errorf("failed to remove %s: %w", path, err)
 	}
 
-	log.Printf("removed %s", path)
+	resource.Note(id, resource.StatusChanged)
+	logger.Info("removed %s", path)
 	return nil
 }
 
@@ -308,7 +323,7 @@ func Ensure(path string, opts ...opt.Option) error {
 func Present(path string, opts ...opt.Option) resource.Resource {
 	f, err := build(path, opts...)
 	if err != nil {
-		log.Fatalf("failed to apply file resource %s: %v", path, err)
+		logger.Fatal("failed to apply file resource %s: %v", path, err)
 	}
 
 	f.resource = resource.Register("File", f.targetPath(),

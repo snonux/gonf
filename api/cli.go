@@ -6,12 +6,16 @@ import (
 	"os"
 
 	"github.com/snonux/gonf/internal"
+	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/resource"
 )
 
 // CLI parses flags and runs or lists tasks. Returns a process exit code.
 //
 //	gonf -version
 //	gonf -list
+//	gonf -verbose | -quiet
+//	gonf -dry-run | -n
 //	gonf <task> [task...]
 func CLI() int {
 	fs := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
@@ -19,9 +23,26 @@ func CLI() int {
 
 	version := fs.Bool("version", false, "Print version")
 	list := fs.Bool("list", false, "List registered tasks")
+	verbose := fs.Bool("verbose", false, "Debug logging")
+	quiet := fs.Bool("quiet", false, "Only warnings and errors (summary still printed)")
+	dryRun := fs.Bool("dry-run", false, "Preview changes without applying them")
+	dryRunShort := fs.Bool("n", false, "Alias for -dry-run")
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return 2
+	}
+
+	switch {
+	case *verbose:
+		logger.SetLevel(logger.LevelDebug)
+	case *quiet:
+		logger.SetLevel(logger.LevelWarn)
+	default:
+		logger.SetLevel(logger.LevelInfo)
+	}
+
+	if *dryRun || *dryRunShort {
+		resource.SetDryRun(true)
 	}
 
 	if *version {
@@ -47,7 +68,7 @@ func CLI() int {
 
 	names := fs.Args()
 	if len(names) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: gonf [-list] [-version] <task> [task...]")
+		fmt.Fprintln(os.Stderr, "usage: gonf [-list] [-version] [-verbose|-quiet] [-dry-run|-n] <task> [task...]")
 		return 2
 	}
 
