@@ -7,20 +7,13 @@ import (
 	. "github.com/snonux/gonf/api/options"
 )
 
-// Register declares the demo tasks used by cmd/gonf.
-func Register() {
-	Task("demo_files", "Demo file and directory resources", demoFiles)
-	Task("demo_links", "Demo symlink and hardlink resources", demoLinks)
-	Task("demo_deps", "Demo DependsOn ordering", demoDeps)
-	Task("demo_commands", "Demo Command resource with guards", demoCommands)
-	Task("demo", "Run all demo_* tasks", func() {
-		_ = Run(Matching("^demo_")...)
-	})
-}
+// Demo holds example task methods registered via RegisterMethods.
+type Demo struct{}
 
-func demoFiles() {
+func (Demo) DescFiles() string { return "Demo file and directory resources" }
+func (Demo) Files() {
 	File("/tmp/gonf_hello.txt", WithContent("Hello World!"))
-	File("/tmp/gonf_example.conf", WithSource("assets/testfiles/test.tmpl"))
+	InstallFile("/tmp/gonf_example.conf", "assets/testfiles/test.tmpl")
 	File("/tmp/gonf_secret.txt", WithContent("top secret"), WithMode(0o600))
 	Dir("/tmp/gonf_dir", WithMode(0o755))
 
@@ -57,25 +50,20 @@ func demoFiles() {
 		"/tmp/stale2.txt",
 	))
 
-	// Line-in-file: ensure a line is present / absent idempotently.
 	_ = os.WriteFile("/tmp/gonf_line_base.conf", []byte("keep-me\nstale-line\n"), 0o644)
 	File("/tmp/gonf_line_base.conf", WithoutLine("stale-line"), WithLine("desired-line"))
 	File("/tmp/gonf_line_append.conf", WithLine("source-file rocky.conf"))
 
-	// Flat glob install into a destination directory.
-	Dir("/tmp/gonf_glob_dst",
-		WithSourceGlob("assets/testfiles/*"),
-		WithMode(0o755),
-		WithFileMode(0o644),
-	)
+	SyncDir("/tmp/gonf_glob_dst", "assets/testfiles/*", WithMode(0o755), WithFileMode(0o644))
 }
 
-func demoLinks() {
-	// Ensure a target exists so symlink/hardlink demos have something to point at.
+func (Demo) DescLinks() string { return "Demo symlink and hardlink resources" }
+func (Demo) Links() {
 	File("/tmp/gonf_hello.txt", WithContent("Hello World!"))
 
 	Link("/tmp/gonf_link", WithSymlink("/tmp/gonf_hello.txt"))
 	Link("/tmp/gonf_hardlink", WithHardlink("/tmp/gonf_hello.txt"))
+	LinkIfExists("/tmp/gonf_link_if", "/tmp/gonf_hello.txt")
 
 	_ = os.Symlink("/tmp/gonf_hello.txt", "/tmp/gonf_stale_link")
 	Link("/tmp/gonf_stale_link", IsAbsent)
@@ -86,7 +74,8 @@ func demoLinks() {
 	Link("/tmp/gonf_stale_hardlink", IsAbsent)
 }
 
-func demoDeps() {
+func (Demo) DescDeps() string { return "Demo DependsOn ordering" }
+func (Demo) Deps() {
 	fooRes := File("/tmp/gonf_foo.txt", WithContent("foo"))
 	File("/tmp/gonf_bar.txt", WithContent("bar"), DependsOn(fooRes))
 
@@ -98,7 +87,8 @@ func demoDeps() {
 	Dir("/tmp/gonf_after_dir", DependsOn(fooRes, multiRes))
 }
 
-func demoCommands() {
+func (Demo) DescCommands() string { return "Demo Command resource with guards" }
+func (Demo) Commands() {
 	Command("touch", Elems("/tmp/gonf_cmd_marker"),
 		Creates("/tmp/gonf_cmd_marker"),
 		WithName("touch-marker"),
