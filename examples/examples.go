@@ -3,8 +3,8 @@ package examples
 import (
 	"os"
 
-	. "codeberg.org/snonux/gonf/api"
-	. "codeberg.org/snonux/gonf/api/options"
+	. "github.com/snonux/gonf/api"
+	. "github.com/snonux/gonf/api/options"
 )
 
 func Run() error {

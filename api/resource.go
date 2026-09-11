@@ -1,7 +1,7 @@
 package api
 
 import (
-	"codeberg.org/snonux/gonf/resource"
+	"github.com/snonux/gonf/resource"
 )
 
 // Resource represents a system resource managed by gonf.

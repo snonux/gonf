@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	opt "codeberg.org/snonux/gonf/api/options"
-	"codeberg.org/snonux/gonf/resource"
+	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/resource"
 )
 
 func TestCreatesSkipsWhenPathExists(t *testing.T) {

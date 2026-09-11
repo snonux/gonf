@@ -7,9 +7,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"codeberg.org/snonux/gonf/resource/file"
-	"codeberg.org/snonux/gonf/resource/link"
-	opt "codeberg.org/snonux/gonf/api/options"
+	"github.com/snonux/gonf/resource/file"
+	"github.com/snonux/gonf/resource/link"
+	opt "github.com/snonux/gonf/api/options"
 )
 
 // copySourceTree mirrors d.source into d.path, dispatching each entry by

@@ -1,13 +1,13 @@
 package api
 
 import (
-	"codeberg.org/snonux/gonf/api/options"
-	"codeberg.org/snonux/gonf/resource"
-	"codeberg.org/snonux/gonf/resource/cmd"
-	"codeberg.org/snonux/gonf/resource/dir"
-	"codeberg.org/snonux/gonf/resource/file"
-	"codeberg.org/snonux/gonf/resource/link"
-	"codeberg.org/snonux/gonf/resource/pkg"
+	"github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/resource"
+	"github.com/snonux/gonf/resource/cmd"
+	"github.com/snonux/gonf/resource/dir"
+	"github.com/snonux/gonf/resource/file"
+	"github.com/snonux/gonf/resource/link"
+	"github.com/snonux/gonf/resource/pkg"
 )
 
 // Path constraint for resources that can be defined as a single item or a list.

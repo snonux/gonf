@@ -11,7 +11,7 @@ import (
 
 var (
 	binName = "gonf"
-	mod     = "codeberg.org/snonux/gonf"
+	mod     = "github.com/snonux/gonf"
 )
 
 func run(cmd string, args ...string) error {

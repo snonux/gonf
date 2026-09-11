@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"codeberg.org/snonux/gonf/resource"
-	. "codeberg.org/snonux/gonf/api/options"
+	"github.com/snonux/gonf/resource"
+	. "github.com/snonux/gonf/api/options"
 )
 
 func TestPresentDirectoryCreate(t *testing.T) {

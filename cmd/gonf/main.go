@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"codeberg.org/snonux/gonf/examples"
-	"codeberg.org/snonux/gonf/internal"
+	"github.com/snonux/gonf/examples"
+	"github.com/snonux/gonf/internal"
 )
 
 func main() {

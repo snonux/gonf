@@ -5,9 +5,9 @@ import (
 	"errors"
 	"os"
 
-	opt "codeberg.org/snonux/gonf/api/options"
-	"codeberg.org/snonux/gonf/resource"
-	"codeberg.org/snonux/gonf/resource/embed"
+	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/resource"
+	"github.com/snonux/gonf/resource/embed"
 )
 
 type Package struct {

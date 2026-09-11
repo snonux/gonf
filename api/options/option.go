@@ -6,7 +6,7 @@ import (
 	"log"
 	"os"
 
-	"codeberg.org/snonux/gonf/resource"
+	"github.com/snonux/gonf/resource"
 )
 
 // Option configures a resource. It is applied to the concrete resource value

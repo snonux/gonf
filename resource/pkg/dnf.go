@@ -3,7 +3,7 @@ package pkg
 import (
 	"fmt"
 
-	"codeberg.org/snonux/gonf/internal/exec"
+	"github.com/snonux/gonf/internal/exec"
 )
 
 func applyDNF(p *Package) error {

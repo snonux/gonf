@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	. "codeberg.org/snonux/gonf/api/options"
-	"codeberg.org/snonux/gonf/resource"
+	. "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/resource"
 )
 
 func TestGetChecksum(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"codeberg.org/snonux/gonf/resource"
+	"github.com/snonux/gonf/resource"
 )
 
 // fakeTarget implements the Dependable capability so the DependsOn option can
