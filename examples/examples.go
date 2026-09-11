@@ -35,17 +35,17 @@ func (Demo) Files() {
 	_ = os.Mkdir("/tmp/gonf_stale_empty_dir", 0o755)
 	Dir("/tmp/gonf_stale_empty_dir", IsAbsent)
 
-	File(Elems(
+	File(List(
 		"/tmp/gonf_multi1.txt",
 		"/tmp/gonf_multi2.txt",
 	), WithContent("Multi-file content"), WithMode(0o644))
 
-	Dir(Elems(
+	Dir(List(
 		"/tmp/gonf_multi_dir1",
 		"/tmp/gonf_multi_dir2",
 	), WithMode(0o755))
 
-	NoFile(Elems(
+	NoFile(List(
 		"/tmp/stale1.txt",
 		"/tmp/stale2.txt",
 	))
@@ -79,7 +79,7 @@ func (Demo) Deps() {
 	fooRes := File("/tmp/gonf_foo.txt", WithContent("foo"))
 	File("/tmp/gonf_bar.txt", WithContent("bar"), DependsOn(fooRes))
 
-	multiRes := File(Elems(
+	multiRes := File(List(
 		"/tmp/gonf_dep1.txt",
 		"/tmp/gonf_dep2.txt",
 	), WithContent("dep"))
@@ -89,7 +89,7 @@ func (Demo) Deps() {
 
 func (Demo) DescCommands() string { return "Demo Command resource with guards" }
 func (Demo) Commands() {
-	Command("touch", Elems("/tmp/gonf_cmd_marker"),
+	Command("touch", List("/tmp/gonf_cmd_marker"),
 		Creates("/tmp/gonf_cmd_marker"),
 		WithName("touch-marker"),
 	)
@@ -98,7 +98,7 @@ func (Demo) Commands() {
 		WithName("unless-demo"),
 	)
 
-	EachKV(Elems(
+	EachKV(List(
 		"demo.key", "demo-value",
 		"demo.other", "other-value",
 	), func(key, val string) {

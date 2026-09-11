@@ -41,7 +41,7 @@ DONE! Go can do that natively relatively easily!
 
 ## 9. Idempotent key/value config (git config)
 
-DONE enough: use `EachKV(Elems(key, val, ...), ...)` with `Command` +
+DONE enough: use `EachKV(List(key, val, ...), ...)` with `Command` +
 `Unless` / `ExpectStdout`. No dedicated GitConfig resource.
 
 ## 10. In-place file editing (append-line-if-absent)

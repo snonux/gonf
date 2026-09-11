@@ -5,7 +5,7 @@ import (
 	"log"
 )
 
-// ParseKV interprets a flat key/value list (as from Elems) into pairs.
+// ParseKV interprets a flat key/value list (as from List) into pairs.
 // An odd-length list is an error.
 func ParseKV(kv []string) ([][2]string, error) {
 	if len(kv)%2 != 0 {
@@ -18,7 +18,7 @@ func ParseKV(kv []string) ([][2]string, error) {
 	return out, nil
 }
 
-// EachKV calls fn for each consecutive key/value in kv (typically from Elems).
+// EachKV calls fn for each consecutive key/value in kv (typically from List).
 // An odd-length list is a fatal error.
 func EachKV(kv []string, fn func(key, val string)) {
 	pairs, err := ParseKV(kv)

@@ -90,8 +90,8 @@ func NoLink[T Path](path T, opts ...options.Option) Resource {
 	return Link(path, append(opts, options.IsAbsent)...)
 }
 
-// Elems is a helper to create a slice of strings from variadic arguments.
-func Elems(paths ...string) []string {
+// List is a helper to create a slice of strings from variadic arguments.
+func List(paths ...string) []string {
 	return paths
 }
 

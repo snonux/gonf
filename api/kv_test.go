@@ -22,7 +22,7 @@ func TestParseKV(t *testing.T) {
 
 func TestEachKV(t *testing.T) {
 	var keys, vals []string
-	EachKV(Elems("k1", "v1", "k2", "v2"), func(k, v string) {
+	EachKV(List("k1", "v1", "k2", "v2"), func(k, v string) {
 		keys = append(keys, k)
 		vals = append(vals, v)
 	})
