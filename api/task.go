@@ -5,12 +5,13 @@ import (
 	"log"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/snonux/gonf/resource"
 )
 
-// TaskInfo is a registered task's name and description for listing.
+// TaskInfo is an activated task's name and description for listing.
 type TaskInfo struct {
 	Name        string
 	Description string
@@ -22,14 +23,53 @@ type task struct {
 	fn          func()
 }
 
+type taskCandidate struct {
+	name        string
+	description string
+	fn          func()
+	when        []func(Facts) bool
+}
+
+// TaskOption configures a deferred task candidate.
+type TaskOption func(*taskCandidate)
+
 var (
-	tasksMu sync.Mutex
-	tasks   = map[string]task{}
+	tasksMu    sync.Mutex
+	candidates []taskCandidate
+	tasks      = map[string]task{}
+	activated  bool
 )
 
-// Task registers a named unit of work. Call from init or an explicit
-// Register(). Duplicate names are a fatal error.
-func Task(name, description string, fn func()) {
+// When skips activating the task unless pred(facts) is true.
+func When(pred func(Facts) bool) TaskOption {
+	return func(c *taskCandidate) {
+		if pred != nil {
+			c.when = append(c.when, pred)
+		}
+	}
+}
+
+// WhenLinux is When(func(f Facts) bool { return f.GOOS == "linux" }).
+func WhenLinux() TaskOption {
+	return When(func(f Facts) bool { return f.GOOS == "linux" })
+}
+
+// WhenProfile activates only when Facts.Profile is one of profiles.
+func WhenProfile(profiles ...string) TaskOption {
+	return When(ProfileIs(profiles...))
+}
+
+// WhenHostnameContains activates when Facts.Hostname contains substr.
+func WhenHostnameContains(substr string) TaskOption {
+	return When(func(f Facts) bool {
+		return strings.Contains(strings.ToLower(f.Hostname), strings.ToLower(substr))
+	})
+}
+
+// Task queues a named unit of work for activation. Call from init() or
+// RegisterMethods. Duplicate candidate names are a fatal error.
+// Activation (When filtering) happens in Activate / CLI / Run.
+func Task(name, description string, fn func(), opts ...TaskOption) {
 	if name == "" {
 		log.Fatal("Task: name must not be empty")
 	}
@@ -37,18 +77,69 @@ func Task(name, description string, fn func()) {
 		log.Fatalf("Task %q: fn must not be nil", name)
 	}
 
+	c := taskCandidate{name: name, description: description, fn: fn}
+	for _, o := range opts {
+		o(&c)
+	}
+
 	tasksMu.Lock()
 	defer tasksMu.Unlock()
 
-	if _, exists := tasks[name]; exists {
-		log.Fatalf("Task %q already registered", name)
+	for _, existing := range candidates {
+		if existing.name == name {
+			log.Fatalf("Task %q already queued", name)
+		}
 	}
-	tasks[name] = task{name: name, description: description, fn: fn}
+	if activated {
+		if _, exists := tasks[name]; exists {
+			log.Fatalf("Task %q already registered", name)
+		}
+	}
+	candidates = append(candidates, c)
+	activated = false // new candidates require re-activation
 }
 
-// Matching returns registered task names matching pattern (sorted).
-// An invalid regexp is a fatal error.
+// Activate commits queued candidates whose When predicates pass for facts.
+// It is safe to call multiple times; each call rebuilds the active task map
+// from the full candidate list.
+func Activate(facts Facts) {
+	tasksMu.Lock()
+	defer tasksMu.Unlock()
+	activateLocked(facts)
+}
+
+func activateLocked(facts Facts) {
+	tasks = map[string]task{}
+	for _, c := range candidates {
+		if !whenPasses(c.when, facts) {
+			continue
+		}
+		tasks[c.name] = task{name: c.name, description: c.description, fn: c.fn}
+	}
+	activated = true
+}
+
+func whenPasses(preds []func(Facts) bool, facts Facts) bool {
+	for _, p := range preds {
+		if !p(facts) {
+			return false
+		}
+	}
+	return true
+}
+
+func ensureActivated() {
+	tasksMu.Lock()
+	defer tasksMu.Unlock()
+	if !activated {
+		activateLocked(DetectFacts())
+	}
+}
+
+// Matching returns activated task names matching pattern (sorted).
 func Matching(pattern string) []string {
+	ensureActivated()
+
 	re, err := regexp.Compile(pattern)
 	if err != nil {
 		log.Fatalf("Matching: invalid pattern %q: %v", pattern, err)
@@ -67,8 +158,10 @@ func Matching(pattern string) []string {
 	return names
 }
 
-// Tasks returns all registered tasks sorted by name.
+// Tasks returns all activated tasks sorted by name.
 func Tasks() []TaskInfo {
+	ensureActivated()
+
 	tasksMu.Lock()
 	defer tasksMu.Unlock()
 
@@ -80,10 +173,10 @@ func Tasks() []TaskInfo {
 	return out
 }
 
-// Run runs each named task sequentially: reset the resource repository, call
-// the task function (which registers resources), then Apply. Nested Run calls
-// (e.g. an aggregate task) are supported.
+// Run runs each named activated task sequentially.
 func Run(names ...string) error {
+	ensureActivated()
+
 	if len(names) == 0 {
 		return fmt.Errorf("Run: no tasks specified")
 	}
@@ -112,9 +205,12 @@ func runOne(name string) error {
 	return nil
 }
 
-// ResetTasks clears the task registry. Intended for tests.
+// ResetTasks clears candidates and activated tasks. Intended for tests.
 func ResetTasks() {
 	tasksMu.Lock()
 	defer tasksMu.Unlock()
+	candidates = nil
 	tasks = map[string]task{}
+	activated = false
+	profileOverride = ""
 }

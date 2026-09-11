@@ -14,6 +14,7 @@ import (
 //
 //	gonf -version
 //	gonf -list
+//	gonf -profile=fedora
 //	gonf -verbose | -quiet
 //	gonf -dry-run | -n
 //	gonf <task> [task...]
@@ -23,6 +24,7 @@ func CLI() int {
 
 	version := fs.Bool("version", false, "Print version")
 	list := fs.Bool("list", false, "List registered tasks")
+	profile := fs.String("profile", "", "Override detected profile (fedora, rocky, ...)")
 	verbose := fs.Bool("verbose", false, "Debug logging")
 	quiet := fs.Bool("quiet", false, "Only warnings and errors (summary still printed)")
 	dryRun := fs.Bool("dry-run", false, "Preview changes without applying them")
@@ -44,6 +46,13 @@ func CLI() int {
 	if *dryRun || *dryRunShort {
 		resource.SetDryRun(true)
 	}
+
+	if *profile != "" {
+		SetProfileOverride(*profile)
+	}
+
+	// Resolve When guards after -profile so init()-queued tasks see CLI facts.
+	Activate(DetectFacts())
 
 	if *version {
 		fmt.Println(internal.Version)
@@ -68,7 +77,7 @@ func CLI() int {
 
 	names := fs.Args()
 	if len(names) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: gonf [-list] [-version] [-verbose|-quiet] [-dry-run|-n] <task> [task...]")
+		fmt.Fprintln(os.Stderr, "usage: gonf [-list] [-version] [-profile=...] [-verbose|-quiet] [-dry-run|-n] <task> [task...]")
 		return 2
 	}
 

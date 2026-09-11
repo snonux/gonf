@@ -1,0 +1,143 @@
+package api
+
+import (
+	"fmt"
+	"reflect"
+	"unicode"
+)
+
+// RegisterOption configures RegisterMethods.
+type RegisterOption func(*registerConfig)
+
+type registerConfig struct {
+	prefix    string
+	groupWhen []func(Facts) bool
+}
+
+// WithPrefix prepends prefix to each CamelCase→snake_case method name.
+func WithPrefix(prefix string) RegisterOption {
+	return func(c *registerConfig) { c.prefix = prefix }
+}
+
+// WithGroupWhen applies When predicates to every method registered in the call.
+func WithGroupWhen(preds ...func(Facts) bool) RegisterOption {
+	return func(c *registerConfig) {
+		c.groupWhen = append(c.groupWhen, preds...)
+	}
+}
+
+// RegisterMethods queues tasks from exported methods on v (struct or pointer).
+//
+// Naming: method Helix → "helix", with WithPrefix("home_") → "home_helix".
+// Companions (optional):
+//   - DescHelix() string — description (else empty)
+//   - WhenHelix(Facts) bool — per-task When predicate
+//
+// Methods named Desc* or When* are not registered as tasks.
+func RegisterMethods(v any, opts ...RegisterOption) {
+	cfg := registerConfig{}
+	for _, o := range opts {
+		o(&cfg)
+	}
+
+	rv := reflect.ValueOf(v)
+	if rv.Kind() == reflect.Pointer {
+		if rv.IsNil() {
+			panic("RegisterMethods: nil pointer")
+		}
+	} else if rv.Kind() != reflect.Struct {
+		panic(fmt.Sprintf("RegisterMethods: want struct or *struct, got %T", v))
+	}
+
+	// Prefer pointer methods if value is addressable / we have a pointer.
+	rt := rv.Type()
+	if rv.Kind() == reflect.Struct && rv.CanAddr() {
+		rv = rv.Addr()
+		rt = rv.Type()
+	} else if rv.Kind() == reflect.Struct {
+		// Non-addressable value: use value methods only; wrap in pointer via New+Set if needed.
+		ptr := reflect.New(rv.Type())
+		ptr.Elem().Set(rv)
+		rv = ptr
+		rt = rv.Type()
+	}
+
+	typeNames := map[string]struct{}{}
+	for i := 0; i < rt.NumMethod(); i++ {
+		m := rt.Method(i)
+		name := m.Name
+		if isCompanionName(name) {
+			continue
+		}
+		typeNames[name] = struct{}{}
+	}
+
+	for name := range typeNames {
+		method := rv.MethodByName(name)
+		if !method.IsValid() {
+			continue
+		}
+		mt := method.Type()
+		if mt.NumIn() != 0 || mt.NumOut() != 0 {
+			continue // only func()
+		}
+
+		taskName := cfg.prefix + camelToSnake(name)
+		desc := ""
+		if d := rv.MethodByName("Desc" + name); d.IsValid() {
+			dt := d.Type()
+			if dt.NumIn() == 0 && dt.NumOut() == 1 && dt.Out(0).Kind() == reflect.String {
+				desc = d.Call(nil)[0].String()
+			}
+		}
+
+		fn := method.Interface().(func())
+
+		var taskOpts []TaskOption
+		for _, p := range cfg.groupWhen {
+			pred := p
+			taskOpts = append(taskOpts, When(pred))
+		}
+		if w := rv.MethodByName("When" + name); w.IsValid() {
+			wt := w.Type()
+			if wt.NumIn() == 1 && wt.In(0) == reflect.TypeOf(Facts{}) &&
+				wt.NumOut() == 1 && wt.Out(0).Kind() == reflect.Bool {
+				wMethod := w
+				taskOpts = append(taskOpts, When(func(f Facts) bool {
+					return wMethod.Call([]reflect.Value{reflect.ValueOf(f)})[0].Bool()
+				}))
+			}
+		}
+
+		Task(taskName, desc, fn, taskOpts...)
+	}
+}
+
+func isCompanionName(name string) bool {
+	return (len(name) > 4 && name[:4] == "Desc") ||
+		(len(name) > 4 && name[:4] == "When")
+}
+
+// camelToSnake converts Helix → helix, TmuxRocky → tmux_rocky.
+func camelToSnake(s string) string {
+	if s == "" {
+		return s
+	}
+	var b []rune
+	runes := []rune(s)
+	for i, r := range runes {
+		if unicode.IsUpper(r) {
+			if i > 0 {
+				prev := runes[i-1]
+				nextLower := i+1 < len(runes) && unicode.IsLower(runes[i+1])
+				if unicode.IsLower(prev) || (unicode.IsUpper(prev) && nextLower) {
+					b = append(b, '_')
+				}
+			}
+			b = append(b, unicode.ToLower(r))
+			continue
+		}
+		b = append(b, r)
+	}
+	return string(b)
+}
