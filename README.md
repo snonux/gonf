@@ -12,4 +12,5 @@ Pure-Go syntax KISS configuration management system for personal use. Built with
 
 ## Docs
 
+- [Service resource](docs/service.md) — OS-auto-detect systemd / rcctl / FreeBSD `service`
 - [Replacing `~/git/conf` Rex — missing features](docs/conf-rex-gaps.md)

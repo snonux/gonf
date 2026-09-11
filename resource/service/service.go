@@ -1,0 +1,116 @@
+// Package service implements the service resource with per-OS backends
+// (systemd, OpenBSD rcctl, FreeBSD service/sysrc).
+package service
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"runtime"
+
+	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/resource"
+	"github.com/snonux/gonf/resource/embed"
+)
+
+// Service manages a named OS service/daemon.
+type Service struct {
+	embed.DependsOn
+	embed.Absence
+	name    string
+	restart bool
+	reload  bool
+	user    bool // systemd --user only
+}
+
+func (s *Service) SetRestart() { s.restart = true }
+func (s *Service) SetReload()  { s.reload = true }
+func (s *Service) SetUser()    { s.user = true }
+
+var (
+	_ opt.Absentable  = (*Service)(nil)
+	_ opt.Restartable = (*Service)(nil)
+	_ opt.Reloadable  = (*Service)(nil)
+	_ opt.UserService = (*Service)(nil)
+	_ opt.Dependable  = (*Service)(nil)
+)
+
+func (s *Service) apply() error {
+	mgr, err := detectServiceManager()
+	if err != nil {
+		return err
+	}
+	if s.user && mgr != "systemd" {
+		return fmt.Errorf("Service[%s]: WithUser is only supported on systemd", s.name)
+	}
+
+	switch mgr {
+	case "systemd":
+		return applySystemd(s)
+	case "rcctl":
+		return applyRcctl(s)
+	case "freebsd":
+		return applyFreeBSD(s)
+	default:
+		return errors.New("unsupported service manager")
+	}
+}
+
+// Present registers a service that should be running and enabled at boot.
+func Present(name string, opts ...opt.Option) resource.Resource {
+	s := &Service{name: name}
+	for _, o := range opts {
+		o(s)
+	}
+	return resource.Register("Service", s.name,
+		resource.ApplierFunc(func() error { return s.apply() }), s.DependsOn.IDs...)
+}
+
+// Absent registers a service that should be stopped and disabled.
+func Absent(name string, opts ...opt.Option) resource.Resource {
+	opts = append(opts, opt.IsAbsent)
+	return Present(name, opts...)
+}
+
+func detectServiceManager() (string, error) {
+	switch runtime.GOOS {
+	case "openbsd":
+		return "rcctl", nil
+	case "freebsd":
+		return "freebsd", nil
+	case "linux":
+		if exists("/run/systemd/system") {
+			return "systemd", nil
+		}
+		if _, err := os.Stat("/usr/bin/systemctl"); err == nil {
+			return "systemd", nil
+		}
+		if _, err := os.Stat("/bin/systemctl"); err == nil {
+			return "systemd", nil
+		}
+		return "", errors.New("unable to detect service manager on linux")
+	default:
+		return "", fmt.Errorf("unable to detect service manager on %s", runtime.GOOS)
+	}
+}
+
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func noteResult(id string, changed bool) {
+	if resource.DryRun() {
+		if changed {
+			resource.Note(id, resource.StatusWouldChange)
+		} else {
+			resource.Note(id, resource.StatusOK)
+		}
+		return
+	}
+	if changed {
+		resource.Note(id, resource.StatusChanged)
+	} else {
+		resource.Note(id, resource.StatusOK)
+	}
+}

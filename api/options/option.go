@@ -40,6 +40,9 @@ type (
 		SetSymlink(target string)
 		SetHardlink(target string)
 	}
+	Restartable interface{ SetRestart() }
+	Reloadable  interface{ SetReload() }
+	UserService interface{ SetUser() }
 )
 
 // Guard describes an Unless/OnlyIf probe: run Name with Args and treat the
@@ -215,6 +218,41 @@ var IsLatest = func(t any) {
 }
 
 func IsLatestFunc() Option { return IsLatest }
+
+// WithRestart restarts the service once during this apply after converging
+// to the desired running state.
+var WithRestart = func(t any) {
+	r, ok := t.(Restartable)
+	if !ok {
+		log.Fatalf("%T does not support WithRestart", t)
+	}
+	r.SetRestart()
+}
+
+func WithRestartFunc() Option { return WithRestart }
+
+// WithReload reloads the service once during this apply when supported;
+// otherwise restarts. Takes precedence over WithRestart when both are set.
+var WithReload = func(t any) {
+	r, ok := t.(Reloadable)
+	if !ok {
+		log.Fatalf("%T does not support WithReload", t)
+	}
+	r.SetReload()
+}
+
+func WithReloadFunc() Option { return WithReload }
+
+// WithUser selects the systemd user bus (--user). Only valid on systemd.
+var WithUser = func(t any) {
+	r, ok := t.(UserService)
+	if !ok {
+		log.Fatalf("%T does not support WithUser", t)
+	}
+	r.SetUser()
+}
+
+func WithUserFunc() Option { return WithUser }
 
 // WithSymlink makes the resource a symbolic link pointing at target.
 func WithSymlink(target string) Option {

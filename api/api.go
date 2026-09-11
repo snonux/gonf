@@ -8,6 +8,7 @@ import (
 	"github.com/snonux/gonf/resource/file"
 	"github.com/snonux/gonf/resource/link"
 	"github.com/snonux/gonf/resource/pkg"
+	svc "github.com/snonux/gonf/resource/service"
 )
 
 // Path constraint for resources that can be defined as a single item or a list.
@@ -118,6 +119,33 @@ func Packages(names []string, opts ...options.Option) Resource {
 // NoPackage creates one or more package resources that are ensured to be absent.
 func NoPackage[T Path](name T, opts ...options.Option) Resource {
 	return Package(name, append(opts, options.IsAbsent)...)
+}
+
+// Service ensures one or more OS services are running and enabled at boot.
+// The backend is selected automatically: systemd on Linux, rcctl on OpenBSD,
+// service(8) on FreeBSD.
+func Service[T Path](name T, opts ...options.Option) Resource {
+	switch v := any(name).(type) {
+	case string:
+		return svc.Present(v, opts...)
+	case []string:
+		return Services(v, opts...)
+	default:
+		panic("Service: name must be string or []string")
+	}
+}
+
+func Services(names []string, opts ...options.Option) Resource {
+	var resources []resource.Resource
+	for _, name := range names {
+		resources = append(resources, svc.Present(name, opts...))
+	}
+	return resource.Multi(resources)
+}
+
+// NoService ensures one or more OS services are stopped and disabled.
+func NoService[T Path](name T, opts ...options.Option) Resource {
+	return Service(name, append(opts, options.IsAbsent)...)
 }
 
 // Command registers a command resource that runs name with args on Apply.

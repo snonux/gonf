@@ -32,7 +32,7 @@ These block a faithful port of conf:
 | SSH groups, `user` / `sudo` / `auth for`, `parallelism`, `connection->server` | None | Target frontends, garage, r-nodes |
 | `run_task … on => connection->server` | Local `Run` only | Same |
 | `pkg` via OpenBSD `pkg_add`, FreeBSD `pkg`, custom `PKG_PATH` | **dnf only** | `base`, DTail, Gogios, etc. |
-| `service` / restart (rcctl, systemd) | No Service resource | httpd, relayd, nsd, timers, garage |
+| `service` / restart (rcctl, systemd) | **`Service` / `NoService`** (local; systemd / rcctl / FreeBSD) | Remote still required for conf fleet |
 | `template(...)` with rich data (maps, arrays, closures, secrets) | `.tmpl` = env + `.Param` only | Most `frontends/*.tpl` |
 | Secrets from `./secrets/` (`$secrets`) | No secret helper | Tokens, keys in templates |
 | `append_if_no_such_line` | `WithLine` / `WithoutLine` (partial) | Idempotent line append API |
@@ -67,12 +67,12 @@ The **dotfiles** laptop port shows that local Linux home/pkg workflows are in go
 
 1. **Remote execution** — SSH inventory, per-group auth/sudo, parallel apply
 2. **Package backends** — OpenBSD `pkg_add`, FreeBSD `pkg`, custom repo/`PKG_PATH`
-3. **Service resource** (or strong conventions) for OpenBSD rc and systemd
+3. **Service resource** — **done for local apply** (`Service` auto-detects systemd / rcctl / FreeBSD); still need remote for conf fleet
 4. **Richer templates** — arbitrary data/functions, not only process env
 5. **Secrets loading** convention (files under a secrets dir, never committed)
 6. Nice-to-have: **Cron** resource or crontab-merge helper; **on_change fan-in** for one reload after many file updates
 
-Without items 1–4, `frontends/Rexfile` cannot be replaced meaningfully.
+Without items 1–2 and 4, `frontends/Rexfile` cannot be replaced meaningfully (Service alone is not enough without remotes).
 
 ## Non-gaps / out of scope
 
