@@ -27,6 +27,10 @@ func TestDetectServiceManager(t *testing.T) {
 		if mgr != "freebsd" {
 			t.Fatalf("freebsd mgr = %q", mgr)
 		}
+	case "netbsd":
+		if mgr != "netbsd" {
+			t.Fatalf("netbsd mgr = %q", mgr)
+		}
 	}
 }
 
@@ -42,6 +46,8 @@ func TestPresentIdempotentWithFakeRunner(t *testing.T) {
 		runCmd = fakeRcctlAlreadyOK
 	case "freebsd":
 		runCmd = fakeFreeBSDAlreadyOK
+	case "netbsd":
+		runCmd = fakeNetBSDAlreadyOK
 	default:
 		t.Skip("unsupported GOOS")
 	}
@@ -79,6 +85,13 @@ func TestWithRestartIssuesRestart(t *testing.T) {
 				sawRestart = true
 			}
 			return fakeFreeBSDAlreadyOK(name, args...)
+		}
+	case "netbsd":
+		runCmd = func(name string, args ...string) (string, string, int, error) {
+			if name == netbsdService && contains(args, "restart") {
+				sawRestart = true
+			}
+			return fakeNetBSDAlreadyOK(name, args...)
 		}
 	default:
 		t.Skip("unsupported GOOS")
@@ -157,6 +170,22 @@ func fakeFreeBSDAlreadyOK(name string, args ...string) (string, string, int, err
 	return "", "unexpected service " + join(args), 1, nil
 }
 
+func fakeNetBSDAlreadyOK(name string, args ...string) (string, string, int, error) {
+	if name != netbsdService {
+		return "", "", 1, nil
+	}
+	if len(args) >= 1 && args[0] == "-e" {
+		return "/etc/rc.d/uptimed\n", "", 0, nil
+	}
+	if contains(args, "status") {
+		return "", "", 0, nil
+	}
+	if contains(args, "restart") || contains(args, "reload") {
+		return "", "", 0, nil
+	}
+	return "", "unexpected service " + join(args), 1, nil
+}
+
 func join(args []string) string {
 	out := ""
 	for i, a := range args {
@@ -176,8 +205,9 @@ func TestLiveUptimedPresent(t *testing.T) {
 	if os.Getenv("GONF_RUN_BSD_SERVICE_TESTS") != "1" {
 		t.Skip("set GONF_RUN_BSD_SERVICE_TESTS=1 for live service tests")
 	}
+	name := liveServiceName()
 	resource.ResetRepository()
-	Present("uptimed")
+	Present(name)
 	if err := resource.Apply(); err != nil {
 		t.Fatal(err)
 	}
@@ -187,9 +217,17 @@ func TestLiveUptimedRestart(t *testing.T) {
 	if os.Getenv("GONF_RUN_BSD_SERVICE_TESTS") != "1" {
 		t.Skip("set GONF_RUN_BSD_SERVICE_TESTS=1 for live service tests")
 	}
+	name := liveServiceName()
 	resource.ResetRepository()
-	Present("uptimed", opt.WithRestart)
+	Present(name, opt.WithRestart)
 	if err := resource.Apply(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func liveServiceName() string {
+	if runtime.GOOS == "netbsd" {
+		return "bozohttpd" // small daemon present on pi0.lan
+	}
+	return "uptimed"
 }

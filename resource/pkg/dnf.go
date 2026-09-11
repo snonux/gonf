@@ -3,7 +3,6 @@ package pkg
 import (
 	"fmt"
 
-	"github.com/snonux/gonf/internal/exec"
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource"
 )
@@ -26,7 +25,7 @@ func applyDNF(p *Package) error {
 		return nil
 	}
 
-	stdout, stderr, exitCode, err := exec.Run("dnf", args...)
+	stdout, stderr, exitCode, err := runCmd("dnf", args...)
 	if err != nil {
 		return fmt.Errorf("failed to execute dnf: %w", err)
 	}

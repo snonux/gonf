@@ -31,8 +31,8 @@ These block a faithful port of conf:
 |---------------------|------------|----------------|
 | SSH groups, `user` / `sudo` / `auth for`, `parallelism`, `connection->server` | None | Target frontends, garage, r-nodes |
 | `run_task … on => connection->server` | Local `Run` only | Same |
-| `pkg` via OpenBSD `pkg_add`, FreeBSD `pkg`, custom `PKG_PATH` | **dnf only** | `base`, DTail, Gogios, etc. |
-| `service` / restart (rcctl, systemd) | **`Service` / `NoService`** (local; systemd / rcctl / FreeBSD) | Remote still required for conf fleet |
+| `pkg` via OpenBSD `pkg_add`, FreeBSD `pkg`, custom `PKG_PATH` | **`Package`** local backends (dnf / OpenBSD / FreeBSD / NetBSD pkgin); custom `PKG_PATH` still manual | Remote still required |
+| `service` / restart (rcctl, systemd) | **`Service` / `NoService`** (local; systemd / rcctl / FreeBSD / NetBSD) | Remote still required for conf fleet |
 | `template(...)` with rich data (maps, arrays, closures, secrets) | `.tmpl` = env + `.Param` only | Most `frontends/*.tpl` |
 | Secrets from `./secrets/` (`$secrets`) | No secret helper | Tokens, keys in templates |
 | `append_if_no_such_line` | `WithLine` / `WithoutLine` (partial) | Idempotent line append API |

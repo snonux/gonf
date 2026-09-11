@@ -1,5 +1,5 @@
 // Package service implements the service resource with per-OS backends
-// (systemd, OpenBSD rcctl, FreeBSD service/sysrc).
+// (systemd, OpenBSD rcctl, FreeBSD/NetBSD service(8)).
 package service
 
 import (
@@ -51,6 +51,8 @@ func (s *Service) apply() error {
 		return applyRcctl(s)
 	case "freebsd":
 		return applyFreeBSD(s)
+	case "netbsd":
+		return applyNetBSD(s)
 	default:
 		return errors.New("unsupported service manager")
 	}
@@ -78,6 +80,8 @@ func detectServiceManager() (string, error) {
 		return "rcctl", nil
 	case "freebsd":
 		return "freebsd", nil
+	case "netbsd":
+		return "netbsd", nil
 	case "linux":
 		if exists("/run/systemd/system") {
 			return "systemd", nil

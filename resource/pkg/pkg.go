@@ -1,11 +1,14 @@
-// Package pkg implements the package resource with per-OS backends (dnf).
+// Package pkg implements the package resource with per-OS backends.
 package pkg
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"runtime"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/exec"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
 )
@@ -19,6 +22,9 @@ type Package struct {
 
 func (p *Package) SetLatest() { p.latest = true }
 
+// runCmd is swapped in unit tests.
+var runCmd = exec.Run
+
 func (p *Package) apply() error {
 	pkgMan, err := detectPackageManager()
 	if err != nil {
@@ -28,6 +34,12 @@ func (p *Package) apply() error {
 	switch pkgMan {
 	case "dnf":
 		return applyDNF(p)
+	case "openbsd":
+		return applyOpenBSD(p)
+	case "freebsd":
+		return applyFreeBSDPkg(p)
+	case "netbsd":
+		return applyNetBSD(p)
 	}
 
 	return errors.New("unsupported package manager")
@@ -52,20 +64,55 @@ func Absent(name string, opts ...opt.Option) resource.Resource {
 }
 
 func detectPackageManager() (string, error) {
-	switch {
-	case exists("/etc/fedora-release"):
-		fallthrough
-	case exists("/etc/centos-release"):
-		fallthrough
-	case exists("/etc/redhat-release"):
-		fallthrough
-	case exists("/etc/rocky-release"):
-		return "dnf", nil
+	switch runtime.GOOS {
+	case "openbsd":
+		return "openbsd", nil
+	case "freebsd":
+		return "freebsd", nil
+	case "netbsd":
+		return "netbsd", nil
+	case "linux":
+		switch {
+		case exists("/etc/fedora-release"),
+			exists("/etc/centos-release"),
+			exists("/etc/redhat-release"),
+			exists("/etc/rocky-release"):
+			return "dnf", nil
+		}
+		return "", errors.New("unable to detect package manager on linux")
+	default:
+		return "", fmt.Errorf("unable to detect package manager on %s", runtime.GOOS)
 	}
-	return "", errors.New("unable to detect package manager!")
 }
 
 func exists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+func notePkg(id string, changed bool) {
+	if resource.DryRun() {
+		if changed {
+			resource.Note(id, resource.StatusWouldChange)
+		} else {
+			resource.Note(id, resource.StatusOK)
+		}
+		return
+	}
+	if changed {
+		resource.Note(id, resource.StatusChanged)
+	} else {
+		resource.Note(id, resource.StatusOK)
+	}
+}
+
+func runOrErr(bin string, args ...string) error {
+	stdout, stderr, code, err := runCmd(bin, args...)
+	if err != nil {
+		return fmt.Errorf("%s %v: %w", bin, args, err)
+	}
+	if code != 0 {
+		return fmt.Errorf("%s %v failed (exit %d): %s%s", bin, args, code, stdout, stderr)
+	}
+	return nil
 }

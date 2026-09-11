@@ -7,6 +7,7 @@ OS-agnostic service/daemon management. The backend is selected automatically:
 | Linux (systemd) | `systemctl` |
 | OpenBSD | `rcctl` |
 | FreeBSD | `service`(8) |
+| NetBSD | `service`(8) + `/etc/rc.conf.d` for enable |
 
 ```go
 Service("httpd")                    // started + enabled at boot
@@ -21,14 +22,14 @@ Requires sufficient privileges (root / `doas`), same as `Package`.
 
 Cross-compile tests on the laptop; do **not** install Go on the hosts:
 
+| Host | GOOS/GOARCH | User | Service under test |
+|------|-------------|------|--------------------|
+| `f0.lan` | freebsd/amd64 | `paul` | `uptimed` |
+| `fishfinger.buetow.org` | openbsd/amd64 | `rex` | `uptimed` |
+| `pi0.lan` | netbsd/arm64 | `paul` | `bozohttpd` |
+
 ```bash
-GOOS=freebsd GOARCH=amd64 go test -c -o /tmp/service_freebsd.test ./resource/service/
-scp /tmp/service_freebsd.test paul@f0.lan:
-ssh paul@f0.lan 'doas env GONF_RUN_BSD_SERVICE_TESTS=1 ./service_freebsd.test -test.v -test.run LiveUptimed'
-
-GOOS=openbsd GOARCH=amd64 go test -c -o /tmp/service_openbsd.test ./resource/service/
-scp /tmp/service_openbsd.test rex@fishfinger.buetow.org:
-ssh rex@fishfinger.buetow.org 'doas env GONF_RUN_BSD_SERVICE_TESTS=1 ./service_openbsd.test -test.v -test.run LiveUptimed'
+GOOS=netbsd GOARCH=arm64 go test -c -o /tmp/service_netbsd.test ./resource/service/
+scp /tmp/service_netbsd.test paul@pi0.lan:
+ssh paul@pi0.lan 'doas env PATH=/usr/sbin:/usr/pkg/bin:$PATH GONF_RUN_BSD_SERVICE_TESTS=1 ./service_netbsd.test -test.v -test.run LiveUptimed'
 ```
-
-Uses the small `uptimed` daemon already present on f0 and fishfinger.
