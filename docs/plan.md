@@ -9,6 +9,8 @@ gonf plan -o dir …        RecordPlan → write plan.jsonl (+ blobs/)
 gonf apply plan.jsonl     DecodePlan → Apply          (any host with gonf)
 gonf apply -              DecodePush from stdin       (JSONL or GONF-PUSH/1)
 gonf push [-n] [-id] [-- ssh…] user@host <task>…  # stream over ssh
+gonf fleet [-n] [-j N] <fleet> <task>…            # parallel push to inventory
+gonf hosts | fleets                               # list inventory
 ```
 
 ## Why
@@ -70,10 +72,32 @@ if err := ApplyPlan(ops, planDir); err != nil { /* … */ }
 | `gonf plan [-o dir\|-stdout] [-id name] <task>…` | Write `dir/plan.jsonl` (+ `blobs/`), or print JSONL to stdout |
 | `gonf apply [-n\|-dry-run] <plan.jsonl\|->` | Apply a plan file, or read **GONF-PUSH/1** / bare JSONL from stdin |
 | `gonf push [-n] [-id name] [-- ssh-args…] user@host <task>…` | Record in memory, stream over `ssh` to remote `gonf apply -` |
+| `gonf fleet [-n] [-j N] [-id name] <fleet> <task>…` | Resolve inventory fleet; record once; parallel push to each host |
+| `gonf hosts` / `gonf fleets` | List registered inventory |
+
+### Inventory DSL (`Host` / `Fleet`)
+
+```go
+blowfish := Host("blowfish",
+    WithSSHUser("rex"), WithSSHHost("blowfish.buetow.org"), WithSSHPort(2))
+fishfinger := Host("fishfinger",
+    WithSSHUser("rex"), WithSSHHost("fishfinger.buetow.org"), WithSSHPort(2))
+Fleet("frontends", blowfish, fishfinger) // default parallelism 5
+
+// Later / other packages:
+_ = PushHost(MustHost("blowfish"), "id")
+_ = PushFleet("frontends", "base", "commons")
+```
+
+`Host` / `Fleet` auto-register. Look up with `LookupHost` / `MustHost` /
+`LookupFleet` / `MustFleet`. `Fleet` takes **`HostRef` handles** (not name
+strings); a host may appear **at most once** per fleet. Parallelism:
+`.Parallel(n)` on the fleet handle (`n < 1` → all hosts at once). Sudo/doas is
+out of scope.
 
 ### Remote push (no local disk spill)
 
-`push` records into an in-memory blob store, then encodes **GONF-PUSH/1**:
+`push` / `fleet` record into an in-memory blob store, then encode **GONF-PUSH/1**:
 
 1. Optional gzip+tar of blobs (dirs `0700`, files `0600` on the remote staging tree)
 2. Gzip of the plan JSONL
@@ -82,11 +106,16 @@ Remote `apply -` stages under `$TMPDIR/gonf-apply/<uid>/`, sweeps stale dirs on
 startup, applies, then wipes the run dir. Inline content threshold is **512 KiB**
 (`plan.MaxInlineContent`); larger files become blobs in the push stream.
 
+`PushFleet` records and encodes **once**, then fans the same bytes out over SSH
+in parallel (errgroup limit from the fleet or `-j`).
+
 Example:
 
 ```text
 gonf push -n user@host home_helix home_tmux
 gonf push -- -p 2222 user@host home_helix
+gonf fleet -n frontends base commons
+gonf fleet -j 2 garage garage_deploy
 ```
 
 Global flags (`-profile`, `-verbose`, `-quiet`, `-dry-run` / `-n`) still apply.

@@ -22,6 +22,8 @@ gonf plan -stdout <task>…          # print plan JSONL to stdout
 gonf apply [-n] out/plan.jsonl     # apply on this or another host
 gonf apply -                       # apply GONF-PUSH/1 or JSONL from stdin
 gonf push [-n] user@host <task>…   # RecordPlan in memory → ssh → apply -
+gonf hosts / fleets                # list Host/Fleet inventory
+gonf fleet [-n] [-j N] <fleet> <task>…  # parallel push to a fleet
 ```
 
 ## Docs

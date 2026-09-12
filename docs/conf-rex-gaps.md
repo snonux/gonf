@@ -2,9 +2,9 @@
 
 This document compares the Rexfiles under [`~/git/conf`](https://codeberg.org/snonux/conf) (personal fleet CM) with what [gonf](https://github.com/snonux/gonf) can do today.
 
-**Summary:** gonf is a strong fit for *local* configuration (as with the Fedora `dotfiles` consumer) and can now **serialize** a plan and **apply** it on another host that has a gonf binary ([plan.md](plan.md)). Conf Rex is still ahead on **SSH inventory / sudo / parallel fleet orchestration** and rich templates/secrets.
+**Summary:** gonf is a strong fit for *local* configuration (as with the Fedora `dotfiles` consumer) and can **push** plans over SSH to one host or a **named fleet** in parallel ([plan.md](plan.md)). Conf Rex is still ahead on **sudo/doas**, rich templates, and secrets.
 
-**Local package and service management is in place** — see [package.md](package.md) and [service.md](service.md). Closing the conf gap now needs **SSH transport/orchestration**, richer templates, and secrets — not more pkg/service backends.
+**Local package and service management is in place** — see [package.md](package.md) and [service.md](service.md). Closing the conf gap now needs **privilege escalation**, richer templates, and secrets — not more pkg/service backends.
 
 ## Conf Rexfile inventory
 
@@ -20,15 +20,16 @@ This document compares the Rexfiles under [`~/git/conf`](https://codeberg.org/sn
 
 ```text
 Rex (conf):  rex task  →  SSH groups / sudo  →  remote file|pkg|service|run
-gonf today:  gonf push →  GONF-PUSH/1 over ssh →  gonf apply - on target
-             gonf plan →  JSONL (+blobs)       →  gonf apply (manual ship)
-             gonf task →  RecordPlan+Apply locally (same engine)
+gonf today:  gonf fleet →  Host/Fleet inventory → parallel GONF-PUSH/1 over ssh
+             gonf push  →  one host → gonf apply -
+             gonf plan  →  JSONL (+blobs) → gonf apply (manual ship)
+             gonf task  →  RecordPlan+Apply locally (same engine)
 ```
 
-gonf can produce a portable plan and apply it anywhere gonf runs. **`gonf push`**
-streams an in-memory plan over `ssh` to remote `gonf apply -` (no local disk
-spill). It still lacks Rex-style **SSH groups, sudo/auth, and parallel fleet
-targeting** — inventory and privilege escalation remain bring-your-own.
+gonf can produce a portable plan and apply it anywhere gonf runs. **`Host` /
+`Fleet`** register SSH inventory in Go; **`gonf fleet`** / `PushFleet` fan out
+in parallel. It still lacks Rex-style **sudo/doas** — the SSH user must already
+be able to apply as themselves.
 
 ## Critical gaps
 
@@ -36,8 +37,8 @@ These block a faithful port of conf:
 
 | Conf Rex capability | gonf today | Why it matters |
 |---------------------|------------|----------------|
-| SSH groups, `user` / `sudo` / `auth for`, `parallelism`, `connection->server` | **Partial:** `gonf push` over one SSH host; no groups/sudo/parallel | Target frontends, garage, r-nodes |
-| `run_task … on => connection->server` | `gonf push user@host <tasks…>` (or plan + manual ship) | Same |
+| SSH groups, `user` / `sudo` / `auth for`, `parallelism`, `connection->server` | **Partial:** `Host`/`Fleet` + parallel `PushFleet`; **no sudo/doas** | Target frontends, garage, r-nodes |
+| `run_task … on => connection->server` | `gonf fleet <name> <tasks…>` or `PushHost` / `gonf push` | Same |
 | `pkg` via OpenBSD `pkg_add`, FreeBSD `pkg`, custom `PKG_PATH` | **Done locally / in plans:** `Package` / `NoPackage`; custom `PKG_PATH` still manual | Fleet still needs transport |
 | `service` / restart (rcctl, systemd, FreeBSD/NetBSD `service`) | **Done locally / in plans:** `Service` / `NoService` | Fleet still needs transport |
 | `template(...)` with rich data (maps, arrays, closures, secrets) | `.tmpl` = env + `.Param` only | Most `frontends/*.tpl` |
@@ -76,14 +77,14 @@ The **dotfiles** laptop port shows that local Linux home/pkg workflows are in go
 
 ## Minimum feature set to replace conf Rex
 
-1. **Remote orchestration** — SSH inventory, per-group auth/sudo, parallel apply (**still the main blocker**; plan serialize/apply exists — see [plan.md](plan.md))
+1. **Remote orchestration** — **Host/Fleet + parallel push done**; sudo/doas still missing ([plan.md](plan.md))
 2. **Package backends** — **done** for plan/local apply; custom repo/`PKG_PATH` optional
 3. **Service resource** — **done** for plan/local apply
 4. **Richer templates** — arbitrary data/functions, not only process env
 5. **Secrets loading** convention (files under a secrets dir, never committed)
 6. Nice-to-have: **on_change fan-in** for one reload after many file updates
 
-Without item 1 (and 4 for most frontend templates), `frontends/Rexfile` cannot be replaced meaningfully. Local/plan Package/Service/Cron are already available.
+Without item 4 (and sudo for some hosts), `frontends/Rexfile` cannot be replaced fully. Inventory/parallel push and local/plan Package/Service/Cron are already available.
 
 ## Non-gaps / out of scope
 

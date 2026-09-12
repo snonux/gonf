@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/snonux/gonf/plan"
@@ -26,6 +27,74 @@ var sshRunner = func(stdin io.Reader, argv []string) error {
 	return cmd.Run()
 }
 
+// PushTarget is one SSH destination (inventory optional).
+type PushTarget struct {
+	User     string
+	Host     string // SSH hostname or user@host when User is empty (CLI form)
+	Port     int
+	Identity string
+	ExtraSSH []string // optional raw ssh argv inserted after "ssh"
+}
+
+func (t PushTarget) destination() string {
+	if t.User != "" {
+		return t.User + "@" + t.Host
+	}
+	return t.Host
+}
+
+func (t PushTarget) sshArgv(remoteCmd string) []string {
+	argv := []string{"ssh"}
+	argv = append(argv, t.ExtraSSH...)
+	if t.Port > 0 {
+		argv = append(argv, "-p", strconv.Itoa(t.Port))
+	}
+	if t.Identity != "" {
+		argv = append(argv, "-i", t.Identity)
+	}
+	argv = append(argv, t.destination(), remoteCmd)
+	return argv
+}
+
+func remoteApplyCmd() string {
+	if resource.DryRun() {
+		return "gonf apply -n -"
+	}
+	return "gonf apply -"
+}
+
+// PushPayload streams an already-encoded GONF-PUSH/1 blob to one SSH target.
+func PushPayload(t PushTarget, payload []byte) error {
+	if t.Host == "" {
+		return fmt.Errorf("push: empty host")
+	}
+	return sshRunner(bytes.NewReader(payload), t.sshArgv(remoteApplyCmd()))
+}
+
+// PushTo records tasks into memory, encodes GONF-PUSH/1, and streams over SSH.
+func PushTo(t PushTarget, planID string, tasks ...string) error {
+	if len(tasks) == 0 {
+		return fmt.Errorf("push: no tasks")
+	}
+	if planID == "" {
+		planID = "push"
+	}
+	mem := plan.NewMemoryStore()
+	ops, err := RecordPlanTo(planID, mem, tasks...)
+	if err != nil {
+		return fmt.Errorf("record: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := plan.EncodePush(&buf, ops, mem); err != nil {
+		return fmt.Errorf("encode: %w", err)
+	}
+	if err := PushPayload(t, buf.Bytes()); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "pushed %s (%d ops) to %s\n", planID, len(ops), t.destination())
+	return nil
+}
+
 func cliPush(args []string) int {
 	fs := flag.NewFlagSet("push", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -38,7 +107,6 @@ func cliPush(args []string) int {
 		return 2
 	}
 	if len(fs.Args()) > 0 {
-		// Defensive: takePushFlags should leave no positionals in pushFlags.
 		rest = append(fs.Args(), rest...)
 	}
 
@@ -47,39 +115,16 @@ func cliPush(args []string) int {
 		fmt.Fprintln(os.Stderr, "usage: gonf push [-n|-dry-run] [-id name] [-- ssh-args...] user@host <task> [task...]")
 		return 2
 	}
-	host := pos[0]
-	tasks := pos[1:]
 
 	if *dryRun || *dryRunShort {
 		resource.SetDryRun(true)
 	}
 
-	mem := plan.NewMemoryStore()
-	ops, err := RecordPlanTo(*planID, mem, tasks...)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "push: record: %v\n", err)
-		return 1
-	}
-
-	var buf bytes.Buffer
-	if err := plan.EncodePush(&buf, ops, mem); err != nil {
-		fmt.Fprintf(os.Stderr, "push: encode: %v\n", err)
-		return 1
-	}
-
-	remote := "gonf apply -"
-	if resource.DryRun() {
-		remote = "gonf apply -n -"
-	}
-	argv := []string{"ssh"}
-	argv = append(argv, sshOpts...)
-	argv = append(argv, host, remote)
-
-	if err := sshRunner(&buf, argv); err != nil {
+	t := PushTarget{Host: pos[0], ExtraSSH: sshOpts}
+	if err := PushTo(t, *planID, pos[1:]...); err != nil {
 		fmt.Fprintf(os.Stderr, "push: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(os.Stderr, "pushed %s (%d ops) to %s\n", *planID, len(ops), host)
 	return 0
 }
 
@@ -112,7 +157,6 @@ func takePushFlags(args []string) (pushFlags, rest []string) {
 			pushFlags = append(pushFlags, a, args[i+1])
 			i += 2
 		default:
-			// Unknown dash arg → ssh opts / host (do not feed to FlagSet).
 			return pushFlags, args[i:]
 		}
 	}
@@ -128,8 +172,6 @@ func splitFlagToken(a string) (name string, hasVal bool, val string) {
 }
 
 // parsePushArgs splits optional ssh opts then host tasks.
-// Accepts either an explicit "--" separator or leading -opts (flag.Parse strips "--").
-// Example: -p 2222 user@host task → sshOpts=-p 2222, pos=user@host task
 func parsePushArgs(args []string) (sshOpts, pos []string) {
 	if i := indexOf(args, "--"); i >= 0 {
 		return splitSSHOptsAndPositional(args[i+1:])
