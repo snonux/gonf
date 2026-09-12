@@ -71,7 +71,7 @@ func TestCLIPushStreamsToSSH(t *testing.T) {
 	}
 }
 
-func TestCLIPushRequiresHostAndTask(t *testing.T) {
+func TestCLIPushUsage(t *testing.T) {
 	oldArgs := os.Args
 	t.Cleanup(func() { os.Args = oldArgs })
 	os.Args = []string{"gonf", "push", "onlyhost"}

@@ -20,13 +20,15 @@ This document compares the Rexfiles under [`~/git/conf`](https://codeberg.org/sn
 
 ```text
 Rex (conf):  rex task  →  SSH groups / sudo  →  remote file|pkg|service|run
-gonf today:  gonf plan →  JSONL (+blobs)    →  gonf apply on target
+gonf today:  gonf push →  GONF-PUSH/1 over ssh →  gonf apply - on target
+             gonf plan →  JSONL (+blobs)       →  gonf apply (manual ship)
              gonf task →  RecordPlan+Apply locally (same engine)
 ```
 
-gonf can produce a portable plan and apply it anywhere gonf runs. It still
-lacks Rex-style **SSH groups, sudo/auth, and parallel fleet targeting** — you
-bring your own transport (scp/rsync/ssh) to move `plan.jsonl` and `blobs/`.
+gonf can produce a portable plan and apply it anywhere gonf runs. **`gonf push`**
+streams an in-memory plan over `ssh` to remote `gonf apply -` (no local disk
+spill). It still lacks Rex-style **SSH groups, sudo/auth, and parallel fleet
+targeting** — inventory and privilege escalation remain bring-your-own.
 
 ## Critical gaps
 
@@ -34,8 +36,8 @@ These block a faithful port of conf:
 
 | Conf Rex capability | gonf today | Why it matters |
 |---------------------|------------|----------------|
-| SSH groups, `user` / `sudo` / `auth for`, `parallelism`, `connection->server` | None (bring your own `scp`/`ssh`) | Target frontends, garage, r-nodes |
-| `run_task … on => connection->server` | `gonf plan` + ship + `gonf apply` (manual transport) | Same |
+| SSH groups, `user` / `sudo` / `auth for`, `parallelism`, `connection->server` | **Partial:** `gonf push` over one SSH host; no groups/sudo/parallel | Target frontends, garage, r-nodes |
+| `run_task … on => connection->server` | `gonf push user@host <tasks…>` (or plan + manual ship) | Same |
 | `pkg` via OpenBSD `pkg_add`, FreeBSD `pkg`, custom `PKG_PATH` | **Done locally / in plans:** `Package` / `NoPackage`; custom `PKG_PATH` still manual | Fleet still needs transport |
 | `service` / restart (rcctl, systemd, FreeBSD/NetBSD `service`) | **Done locally / in plans:** `Service` / `NoService` | Fleet still needs transport |
 | `template(...)` with rich data (maps, arrays, closures, secrets) | `.tmpl` = env + `.Param` only | Most `frontends/*.tpl` |

@@ -20,6 +20,8 @@ gonf [-n] <task> [task…]           # RecordPlan + Apply locally
 gonf plan -o out -id demo <task>…  # write out/plan.jsonl (+ blobs/)
 gonf plan -stdout <task>…          # print plan JSONL to stdout
 gonf apply [-n] out/plan.jsonl     # apply on this or another host
+gonf apply -                       # apply GONF-PUSH/1 or JSONL from stdin
+gonf push [-n] user@host <task>…   # RecordPlan in memory → ssh → apply -
 ```
 
 ## Docs

@@ -7,6 +7,8 @@ interpreted by `plan.Apply`. Local and remote both use it.
 gonf <task>…              RecordPlan → Apply          (local one-shot)
 gonf plan -o dir …        RecordPlan → write plan.jsonl (+ blobs/)
 gonf apply plan.jsonl     DecodePlan → Apply          (any host with gonf)
+gonf apply -              DecodePush from stdin       (JSONL or GONF-PUSH/1)
+gonf push [-n] [-id] [-- ssh…] user@host <task>…  # stream over ssh
 ```
 
 ## Why
@@ -66,7 +68,26 @@ if err := ApplyPlan(ops, planDir); err != nil { /* … */ }
 |---------|--------|
 | `gonf <task> [task…]` | Record + apply locally |
 | `gonf plan [-o dir\|-stdout] [-id name] <task>…` | Write `dir/plan.jsonl` (+ `blobs/`), or print JSONL to stdout |
-| `gonf apply [-n\|-dry-run] <plan.jsonl>` | Apply a plan file (`-n` = dry-run) |
+| `gonf apply [-n\|-dry-run] <plan.jsonl\|->` | Apply a plan file, or read **GONF-PUSH/1** / bare JSONL from stdin |
+| `gonf push [-n] [-id name] [-- ssh-args…] user@host <task>…` | Record in memory, stream over `ssh` to remote `gonf apply -` |
+
+### Remote push (no local disk spill)
+
+`push` records into an in-memory blob store, then encodes **GONF-PUSH/1**:
+
+1. Optional gzip+tar of blobs (dirs `0700`, files `0600` on the remote staging tree)
+2. Gzip of the plan JSONL
+
+Remote `apply -` stages under `$TMPDIR/gonf-apply/<uid>/`, sweeps stale dirs on
+startup, applies, then wipes the run dir. Inline content threshold is **512 KiB**
+(`plan.MaxInlineContent`); larger files become blobs in the push stream.
+
+Example:
+
+```text
+gonf push -n user@host home_helix home_tmux
+gonf push -- -p 2222 user@host home_helix
+```
 
 Global flags (`-profile`, `-verbose`, `-quiet`, `-dry-run` / `-n`) still apply.
 `gonf -list` lists **activated** tasks (After `When*` filtering for display);

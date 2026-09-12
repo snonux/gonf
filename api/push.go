@@ -32,11 +32,17 @@ func cliPush(args []string) int {
 	dryRun := fs.Bool("dry-run", false, "Remote dry-run (-n on apply)")
 	dryRunShort := fs.Bool("n", false, "Alias for -dry-run")
 	planID := fs.String("id", "push", "plan id written into the header")
-	if err := fs.Parse(args); err != nil {
+
+	pushFlags, rest := takePushFlags(args)
+	if err := fs.Parse(pushFlags); err != nil {
 		return 2
 	}
+	if len(fs.Args()) > 0 {
+		// Defensive: takePushFlags should leave no positionals in pushFlags.
+		rest = append(fs.Args(), rest...)
+	}
 
-	sshOpts, pos := parsePushArgs(fs.Args())
+	sshOpts, pos := parsePushArgs(rest)
 	if len(pos) < 2 {
 		fmt.Fprintln(os.Stderr, "usage: gonf push [-n|-dry-run] [-id name] [-- ssh-args...] user@host <task> [task...]")
 		return 2
@@ -62,7 +68,7 @@ func cliPush(args []string) int {
 	}
 
 	remote := "gonf apply -"
-	if *dryRun || *dryRunShort {
+	if resource.DryRun() {
 		remote = "gonf apply -n -"
 	}
 	argv := []string{"ssh"}
@@ -75,6 +81,50 @@ func cliPush(args []string) int {
 	}
 	fmt.Fprintf(os.Stderr, "pushed %s (%d ops) to %s\n", *planID, len(ops), host)
 	return 0
+}
+
+// takePushFlags peels only gonf-push flags so ssh opts like -p are not
+// rejected by flag.Parse. Stops at "--", a non-flag, or an unknown -flag.
+func takePushFlags(args []string) (pushFlags, rest []string) {
+	i := 0
+	for i < len(args) {
+		a := args[i]
+		if a == "--" {
+			return args[:i], args[i+1:]
+		}
+		if a == "" || a[0] != '-' {
+			break
+		}
+		name, hasVal, _ := splitFlagToken(a)
+		switch name {
+		case "n", "dry-run":
+			pushFlags = append(pushFlags, a)
+			i++
+		case "id":
+			if hasVal {
+				pushFlags = append(pushFlags, a)
+				i++
+				break
+			}
+			if i+1 >= len(args) {
+				return append(pushFlags, a), nil
+			}
+			pushFlags = append(pushFlags, a, args[i+1])
+			i += 2
+		default:
+			// Unknown dash arg → ssh opts / host (do not feed to FlagSet).
+			return pushFlags, args[i:]
+		}
+	}
+	return pushFlags, args[i:]
+}
+
+func splitFlagToken(a string) (name string, hasVal bool, val string) {
+	a = strings.TrimLeft(a, "-")
+	if i := strings.IndexByte(a, '='); i >= 0 {
+		return a[:i], true, a[i+1:]
+	}
+	return a, false, ""
 }
 
 // parsePushArgs splits optional ssh opts then host tasks.
