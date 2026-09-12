@@ -23,7 +23,7 @@ NoLink("/tmp/stale-link")
 |--------|------------|---------|
 | `WithContent` | File | Inline body (templates: env + `.Param` via source `.tmpl`) |
 | `WithSource` | File / Dir | Copy from path or template |
-| `WithSourceGlob` | Dir | Glob sources into the directory |
+| `WithSourceGlob` | Dir | Install glob matches into the directory by basename |
 | `WithLine` / `WithoutLine` | File | Ensure / remove a line |
 | `WithOwner` / `WithGroup` / `WithMode` | File / Dir | Ownership and mode |
 | `WithFileMode` | Dir | Mode for files created from a source tree |

@@ -36,10 +36,13 @@ type Home struct{}
 func (Home) DescHelix() string { return "Install helix" }
 func (Home) Helix() { /* resources */ }
 
-RegisterMethods(Home{}, WithPrefix("home."), WithGroupWhen(WhenLinux()))
+RegisterMethods(Home{}, WithPrefix("home."), WithGroupWhen(
+    func(f Facts) bool { return f.GOOS == "linux" },
+))
 ```
 
-`WithPrefix` namespaces task names; `WithGroupWhen` applies to every method.
+`WithPrefix` namespaces task names; `WithGroupWhen` takes `func(Facts) bool`
+predicates (not `WhenLinux()` TaskOptions).
 
 ## Aggregate
 
@@ -86,9 +89,13 @@ final profile.
 
 ```go
 Activate(DetectFacts())
-// … Task bodies / RegisterMethods register resources …
+if err := Run("home.helix"); err != nil { /* … */ }
+// Run executes matching task bodies (which register resources), then Apply.
+
+// Or register resources yourself, then:
 if err := Apply(); err != nil { /* … */ }
 ```
 
 `Matching("home\\..*")` returns activated task names matching a regex
-(used by `Aggregate`).
+(used by `Aggregate`). `Activate` only filters candidates — it does not run
+task bodies or call `Apply`.

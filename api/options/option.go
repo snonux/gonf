@@ -240,8 +240,9 @@ var WithRestart = func(t any) {
 
 func WithRestartFunc() Option { return WithRestart }
 
-// WithReload reloads the service once during this apply when supported;
-// otherwise restarts. Takes precedence over WithRestart when both are set.
+// WithReload reloads the service once during this apply when the backend
+// supports a reload action. Takes precedence over WithRestart when both are set.
+// Timer resources do not support WithReload.
 var WithReload = func(t any) {
 	r, ok := t.(Reloadable)
 	if !ok {

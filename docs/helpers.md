@@ -25,7 +25,8 @@ EnsureDir(Home(".local/bin"), WithMode(0o755))
 ```
 
 `InstallFile` → `File(..., WithSource(...))`.  
-`SyncDir` → `Dir(..., WithSourceGlob(...))`.
+`SyncDir` → `Dir(..., WithSourceGlob(...))` — each glob match is installed
+under the destination by **basename only** (no relative subdirectory tree).
 
 ## Symlinks
 
