@@ -12,6 +12,7 @@ OS-agnostic service/daemon management. The backend is selected automatically:
 ```go
 Service("httpd")                    // started + enabled at boot
 Service("httpd", WithRestart)       // converge, then restart once
+Service("httpd", WithReload)        // converge, then reload once (no restart fallback)
 Service("foo", WithUser)            // systemd --user only
 NoService("olddaemon")              // stopped + disabled
 ```
@@ -19,6 +20,14 @@ NoService("olddaemon")              // stopped + disabled
 For dedicated systemd timer units, prefer [`Timer` / `NoTimer`](timer.md).
 
 Requires sufficient privileges (root / `doas`), same as `Package`.
+
+| Option | Meaning |
+|--------|---------|
+| `WithRestart` | Restart once when already running |
+| `WithReload` | Reload once when already running (backend `reload`; Service only) |
+| `WithUser` | `systemctl --user` (systemd only; rejected on BSD backends) |
+| `IsAbsent` / `NoService` | Stop + disable |
+| `DependsOn` | Ordering |
 
 See also: [timer.md](timer.md) (systemd timers), [package.md](package.md), [docs index](README.md).
 

@@ -25,10 +25,10 @@ NoLink("/tmp/stale-link")
 | `WithSource` | File / Dir | Copy from path or template |
 | `WithSourceGlob` | Dir | Glob sources into the directory |
 | `WithLine` / `WithoutLine` | File | Ensure / remove a line |
-| `WithOwner` / `WithGroup` / `WithMode` | File / Dir / Link | Ownership and mode |
+| `WithOwner` / `WithGroup` / `WithMode` | File / Dir | Ownership and mode |
 | `WithFileMode` | Dir | Mode for files created from a source tree |
 | `WithPrune` | Dir | Remove unexpected children when syncing / absent |
-| `WithSymlink` / `WithHardlink` | Link | Link target |
+| `WithSymlink` / `WithHardlink` | Link | Link target (Link does not take owner/mode options) |
 | `IsAbsent` / `No*` | all | Ensure missing |
 | `DependsOn` | all | Apply after other resources |
 

@@ -26,9 +26,9 @@ See [file-dir-link.md](file-dir-link.md): `WithContent`, `WithSource`,
 
 | Option | Meaning |
 |--------|---------|
-| `WithRestart` | Restart once when already active |
-| `WithReload` | Reload (Service; falls back to restart) |
-| `WithUser` | `systemctl --user` (systemd only) |
+| `WithRestart` | Restart once when already active (Service and Timer) |
+| `WithReload` | Reload once when already active (**Service only**; no restart fallback) |
+| `WithUser` | `systemctl --user` (systemd Service/Timer only) |
 
 ## Cron
 

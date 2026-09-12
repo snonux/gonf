@@ -15,8 +15,13 @@ List("a", "b", "c")        // []string{"a","b","c"}
 
 ```go
 InstallFile(Home(".gitconfig"), "assets/gitconfig")
+// default mode 0640; later WithMode wins
+
 SyncDir(Home(".config/app"), "assets/app/*", WithMode(0o755), WithFileMode(0o644))
+// defaults: dir 0700, files 0640 before extra opts
+
 EnsureDir(Home(".local/bin"), WithMode(0o755))
+// registers Dir only if path is missing or not a directory; else empty Multi
 ```
 
 `InstallFile` → `File(..., WithSource(...))`.  
@@ -25,28 +30,40 @@ EnsureDir(Home(".local/bin"), WithMode(0o755))
 ## Symlinks
 
 ```go
-LinkIfExists(Home("bin/foo"), "/opt/foo/bin/foo") // no-op if target missing
+LinkIfExists(Home("bin/foo"), "/opt/foo/bin/foo")
+// target exists → symlink; missing → NoLink (ensure path absent)
+
 SymlinkMap(Home("bin"),
     "foo", "/opt/foo/bin/foo",
     "bar", "/opt/bar/bin/bar",
 )
 ```
 
-`SymlinkMap` pairs are `name, target` via `List`/`EachKV`-style alternating strings.
+`SymlinkMap` takes alternating `name, target` strings under `parent`.
 
 ## Predicates
 
 ```go
-When(And(WhenLinux(), ProfileIs("fedora")))
+When(And(
+    func(f Facts) bool { return f.GOOS == "linux" },
+    ProfileIs("fedora"),
+))
 When(Or(ProfileIs("fedora"), ProfileIs("rocky")))
 ```
 
-## Key/value iteration
+`WhenLinux()` is a `TaskOption` (not a `func(Facts) bool`); use it as
+`Task(..., WhenLinux())` or pass `func(f Facts) bool { return f.GOOS == "linux" }`
+into `And` / `Or`.
+
+## Key/value
 
 ```go
+pairs, err := ParseKV(List("user.name", "Ada", "user.email", "ada@example.com"))
 EachKV(List("user.name", "Ada", "user.email", "ada@example.com"),
     func(k, v string) { /* … */ })
 ```
+
+`EachKV` fatals on odd-length lists; `ParseKV` returns an error.
 
 ## Git
 

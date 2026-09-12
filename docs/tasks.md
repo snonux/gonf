@@ -81,3 +81,14 @@ func main() { os.Exit(CLI()) }
 
 `Activate(DetectFacts())` runs inside `CLI` (and `Run`) so `When*` sees the
 final profile.
+
+## Programmatic apply
+
+```go
+Activate(DetectFacts())
+// … Task bodies / RegisterMethods register resources …
+if err := Apply(); err != nil { /* … */ }
+```
+
+`Matching("home\\..*")` returns activated task names matching a regex
+(used by `Aggregate`).
