@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 var (
@@ -45,6 +46,106 @@ func Run() error {
 func Test() error {
 	fmt.Println("testing...")
 	return run("go", "test", "-v", "-count=1", "./...")
+}
+
+// planFuzzTime is the CI budget per fuzz target (overridable via GONF_FUZZTIME).
+const defaultPlanFuzzTime = "30s"
+
+// planCodecCoverMin is the minimum statement coverage required for the plan
+// wire codec (codec.go + types.go), matching the remote-plan testing bar.
+const planCodecCoverMin = 90.0
+
+// TestPlanFuzz runs plan package fuzz targets for a fixed time budget.
+func TestPlanFuzz() error {
+	fuzzTime := os.Getenv("GONF_FUZZTIME")
+	if fuzzTime == "" {
+		fuzzTime = defaultPlanFuzzTime
+	}
+	fmt.Printf("fuzzing plan codec (%s each)...\n", fuzzTime)
+	targets := []string{"FuzzDecodeOp", "FuzzDecodePlan", "FuzzRoundTripOpJSON"}
+	for _, name := range targets {
+		fmt.Println(" ", name)
+		if err := run("go", "test", "./plan/", "-fuzz="+name, "-fuzztime="+fuzzTime); err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// CoverPlan runs ./plan coverage and fails if codec.go+types.go are below
+// planCodecCoverMin.
+func CoverPlan() error {
+	fmt.Printf("plan codec coverage (min %.1f%% on codec.go+types.go)...\n", planCodecCoverMin)
+	coverOut := filepath.Join(os.TempDir(), "gonf-plan.cov")
+	if err := run("go", "test", "./plan/", "-coverprofile="+coverOut, "-count=1"); err != nil {
+		return err
+	}
+	out, err := exec.Command("go", "tool", "cover", "-func="+coverOut).Output()
+	if err != nil {
+		return fmt.Errorf("cover -func: %w", err)
+	}
+	pct, err := parseCodecCoverage(string(out))
+	if err != nil {
+		return err
+	}
+	fmt.Printf("plan codec coverage: %.1f%%\n", pct)
+	if pct < planCodecCoverMin {
+		return fmt.Errorf("plan codec coverage %.1f%% is below required %.1f%%", pct, planCodecCoverMin)
+	}
+	return nil
+}
+
+// CheckPlan runs unit tests for ./plan, coverage gate, then fuzz budget.
+func CheckPlan() error {
+	if err := run("go", "test", "-count=1", "./plan/"); err != nil {
+		return err
+	}
+	if err := CoverPlan(); err != nil {
+		return err
+	}
+	return TestPlanFuzz()
+}
+
+func parseTotalCoverage(coverFunc string) (float64, error) {
+	lines := strings.Split(strings.TrimSpace(coverFunc), "\n")
+	if len(lines) == 0 {
+		return 0, fmt.Errorf("empty cover output")
+	}
+	last := strings.Fields(lines[len(lines)-1])
+	if len(last) < 3 || last[0] != "total:" {
+		return 0, fmt.Errorf("unexpected cover total line: %q", lines[len(lines)-1])
+	}
+	pctStr := strings.TrimSuffix(last[len(last)-1], "%")
+	var pct float64
+	if _, err := fmt.Sscanf(pctStr, "%f", &pct); err != nil {
+		return 0, fmt.Errorf("parse coverage %q: %w", pctStr, err)
+	}
+	return pct, nil
+}
+
+func parseCodecCoverage(coverFunc string) (float64, error) {
+	var sum float64
+	var n int
+	for _, line := range strings.Split(coverFunc, "\n") {
+		if !strings.Contains(line, "/plan/codec.go:") && !strings.Contains(line, "/plan/types.go:") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		pctStr := strings.TrimSuffix(fields[len(fields)-1], "%")
+		var pct float64
+		if _, err := fmt.Sscanf(pctStr, "%f", &pct); err != nil {
+			return 0, fmt.Errorf("parse %q: %w", pctStr, err)
+		}
+		sum += pct
+		n++
+	}
+	if n == 0 {
+		return 0, fmt.Errorf("no codec.go/types.go entries in cover output")
+	}
+	return sum / float64(n), nil
 }
 
 // TestDNF runs DNF-specific integration tests. This requires root privileges.

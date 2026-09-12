@@ -1,0 +1,37 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Unit tests
+        run: go test -count=1 ./...
+      - name: Plan codec coverage gate
+        run: |
+          go test ./plan/ -coverprofile=/tmp/plan.cov -count=1
+          # Average statement coverage of codec.go + types.go must be >= 90%.
+          avg=$(go tool cover -func=/tmp/plan.cov | awk '
+            /\/plan\/codec\.go:/ || /\/plan\/types\.go:/ {
+              gsub(/%/,"",$NF); sum+=$NF; n++
+            }
+            END { if (n==0) { print "0"; exit 1 } printf "%.1f", sum/n }
+          ')
+          echo "plan codec coverage=${avg}%"
+          awk -v t="$avg" 'BEGIN { exit !(t+0 >= 90) }'
+      - name: Plan fuzz (30s each)
+        env:
+          GONF_FUZZTIME: 30s
+        run: |
+          for t in FuzzDecodeOp FuzzDecodePlan FuzzRoundTripOpJSON; do
+            echo "fuzz $t"
+            go test ./plan/ -fuzz="$t" -fuzztime="${GONF_FUZZTIME}"
+          done
