@@ -97,7 +97,10 @@ func applyActive(op Op) error {
 }
 
 func applyEnsureDir(op Op) error {
-	path := expandPath(op.Path)
+	path, err := ExpandPath(op.Path)
+	if err != nil {
+		return err
+	}
 	if path == "" {
 		return fmt.Errorf("ensure_dir: missing path")
 	}
@@ -113,15 +116,21 @@ func applyEnsureDir(op Op) error {
 }
 
 func applyLinkIfExists(op Op) error {
-	path := expandPath(op.Path)
-	target := expandPath(op.Target)
+	path, err := ExpandPath(op.Path)
+	if err != nil {
+		return err
+	}
+	target, err := ExpandPath(op.Target)
+	if err != nil {
+		return err
+	}
 	if path == "" {
 		return fmt.Errorf("link_if_exists: missing path")
 	}
 	if target == "" {
 		return fmt.Errorf("link_if_exists: missing target")
 	}
-	_, err := os.Stat(target)
+	_, err = os.Stat(target)
 	switch {
 	case err == nil:
 		return link.Ensure(path, opt.WithSymlink(target))
@@ -148,7 +157,11 @@ func evalAll(preds []Predicate, facts Facts) (bool, error) {
 func evalPredicate(p Predicate, facts Facts) (bool, error) {
 	switch {
 	case p.PathExists != "":
-		return pathExists(expandPath(p.PathExists))
+		path, err := ExpandPath(p.PathExists)
+		if err != nil {
+			return false, err
+		}
+		return pathExists(path)
 	case p.Fact != "":
 		return evalFact(p.Fact, p.Eq, facts)
 	default:
@@ -191,19 +204,4 @@ func parseMode(s string) (os.FileMode, error) {
 		return 0, fmt.Errorf("invalid mode %q: %w", s, err)
 	}
 	return os.FileMode(v), nil
-}
-
-// expandPath expands ${HOME} for apply-time paths.
-// TODO(qc1): full path-token expansion; unknown ${…} tokens must hard-error.
-func expandPath(p string) string {
-	if !strings.Contains(p, "${HOME}") {
-		return p
-	}
-	home := os.Getenv("HOME")
-	if home == "" {
-		if h, err := os.UserHomeDir(); err == nil {
-			home = h
-		}
-	}
-	return strings.ReplaceAll(p, "${HOME}", home)
 }
