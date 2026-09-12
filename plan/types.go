@@ -5,11 +5,12 @@
 package plan
 
 // CurrentVersion is the plan wire schema version emitted by gonf plan.
-const CurrentVersion = 1
+const CurrentVersion = 2
 
 // supportedVersions is the set of plan schema versions this binary can apply.
 // Apply must refuse plans whose version is not in this set before any mutation.
 var supportedVersions = map[int]struct{}{
+	1: {},
 	CurrentVersion: {},
 }
 
@@ -34,6 +35,8 @@ const (
 	KindLinkIfExists Kind = "link_if_exists"
 	KindWhenBegin    Kind = "when_begin"
 	KindWhenEnd      Kind = "when_end"
+	KindTimer        Kind = "timer"
+	KindDaemonReload Kind = "daemon_reload"
 )
 
 // allKinds lists every Kind constant in stable declaration order.
@@ -49,6 +52,8 @@ var allKinds = []Kind{
 	KindLinkIfExists,
 	KindWhenBegin,
 	KindWhenEnd,
+	KindTimer,
+	KindDaemonReload,
 }
 
 // AllKinds returns a copy of every Kind constant in stable declaration order.
@@ -129,6 +134,15 @@ type Op struct {
 	Unless *Guard `json:"unless,omitempty"`
 	// OnlyIf runs KindCommand only when the guard probe succeeds.
 	OnlyIf *Guard `json:"only_if,omitempty"`
+
+	// User selects systemd --user for KindTimer / KindDaemonReload.
+	User bool `json:"user,omitempty"`
+	// EnableOnly skips start/stop for KindTimer present (enable/disable only).
+	EnableOnly bool `json:"enable_only,omitempty"`
+	// IfChanged gates KindDaemonReload on watched dependency outcomes.
+	IfChanged bool `json:"if_changed,omitempty"`
+	// Watch lists resource ids consulted when IfChanged is set.
+	Watch []string `json:"watch,omitempty"`
 
 	// All is the conjunctive predicate list for KindWhenBegin.
 	All []Predicate `json:"all,omitempty"`

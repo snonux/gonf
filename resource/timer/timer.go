@@ -20,35 +20,61 @@ import (
 type Timer struct {
 	embed.DependsOn
 	embed.Absence
-	name    string // unit name ending in .timer
-	restart bool
-	user    bool // systemctl --user
+	name       string // unit name ending in .timer
+	restart    bool
+	user       bool // systemctl --user
+	enableOnly bool // enable/disable only; skip start/stop
 }
 
-func (t *Timer) SetRestart() { t.restart = true }
-func (t *Timer) SetUser()    { t.user = true }
+func (t *Timer) SetRestart()    { t.restart = true }
+func (t *Timer) SetUser()       { t.user = true }
+func (t *Timer) SetEnableOnly() { t.enableOnly = true }
 
 var (
-	_ opt.Absentable  = (*Timer)(nil)
-	_ opt.Restartable = (*Timer)(nil)
-	_ opt.UserService = (*Timer)(nil)
-	_ opt.Dependable  = (*Timer)(nil)
+	_ opt.Absentable     = (*Timer)(nil)
+	_ opt.Restartable    = (*Timer)(nil)
+	_ opt.UserService    = (*Timer)(nil)
+	_ opt.EnableOnlyable = (*Timer)(nil)
+	_ opt.Dependable     = (*Timer)(nil)
 )
 
-// Present registers a timer that should be active and enabled.
+// Present registers a timer that should be active and enabled (or only
+// enabled when WithEnableOnly is set).
 func Present(name string, opts ...opt.Option) resource.Resource {
 	t := &Timer{name: normalizeUnit(name)}
 	for _, o := range opts {
 		o(t)
 	}
-	return resource.Register("Timer", t.name,
+	r := resource.Register("Timer", t.name,
 		resource.ApplierFunc(func() error { return t.apply() }), t.DependsOn.IDs...)
+	resource.RecordPlanDraft(t.planDraft(r.ID()))
+	return r
+}
+
+// Ensure builds and applies a timer without registering or recording a draft.
+func Ensure(name string, opts ...opt.Option) error {
+	t := &Timer{name: normalizeUnit(name)}
+	for _, o := range opts {
+		o(t)
+	}
+	return t.apply()
 }
 
 // Absent registers a timer that should be stopped and disabled.
 func Absent(name string, opts ...opt.Option) resource.Resource {
 	opts = append(opts, opt.IsAbsent)
 	return Present(name, opts...)
+}
+
+func (t *Timer) planDraft(id string) resource.PlanDraft {
+	return resource.PlanDraft{
+		Kind:       "timer",
+		ID:         id,
+		Name:       t.name,
+		Absent:     t.Absent,
+		User:       t.user,
+		EnableOnly: t.enableOnly,
+	}
 }
 
 func normalizeUnit(name string) string {
@@ -82,7 +108,7 @@ func (t *Timer) apply() error {
 
 	var actions [][]string
 	if t.Absent {
-		if active {
+		if !t.enableOnly && active {
 			actions = append(actions, ctlArgs(t.user, "stop", t.name))
 		}
 		if enabled {
@@ -92,10 +118,12 @@ func (t *Timer) apply() error {
 		if !enabled {
 			actions = append(actions, ctlArgs(t.user, "enable", t.name))
 		}
-		if !active {
-			actions = append(actions, ctlArgs(t.user, "start", t.name))
-		} else if t.restart {
-			actions = append(actions, ctlArgs(t.user, "restart", t.name))
+		if !t.enableOnly {
+			if !active {
+				actions = append(actions, ctlArgs(t.user, "start", t.name))
+			} else if t.restart {
+				actions = append(actions, ctlArgs(t.user, "restart", t.name))
+			}
 		}
 	}
 

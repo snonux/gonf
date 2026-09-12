@@ -217,6 +217,10 @@ func draftToOp(d resource.PlanDraft) plan.Op {
 		Creates:    d.Creates,
 		Unless:     draftGuard(d.Unless),
 		OnlyIf:     draftGuard(d.OnlyIf),
+		User:       d.User,
+		EnableOnly: d.EnableOnly,
+		IfChanged:  d.IfChanged,
+		Watch:      d.Watch,
 	}
 	switch d.Kind {
 	case "file":
@@ -235,6 +239,10 @@ func draftToOp(d resource.PlanDraft) plan.Op {
 		op.Op = plan.KindEnsureDir
 	case "link_if_exists":
 		op.Op = plan.KindLinkIfExists
+	case "timer":
+		op.Op = plan.KindTimer
+	case "daemon_reload":
+		op.Op = plan.KindDaemonReload
 	default:
 		op.Op = plan.Kind(d.Kind)
 	}

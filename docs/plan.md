@@ -72,6 +72,9 @@ Global flags (`-profile`, `-verbose`, `-quiet`, `-dry-run` / `-n`) still apply.
 `gonf -list` lists **activated** tasks (After `When*` filtering for display);
 plan recording still uses the full candidate set.
 
+Plan schema **version 2** adds `timer` and `daemon_reload` ops (this binary still
+applies version 1 plans).
+
 ## JSONL sketch
 
 ```jsonl

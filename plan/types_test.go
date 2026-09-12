@@ -11,6 +11,9 @@ func TestSupportsVersion(t *testing.T) {
 	if !SupportsVersion(CurrentVersion) {
 		t.Fatalf("SupportsVersion(%d) = false, want true", CurrentVersion)
 	}
+	if !SupportsVersion(1) {
+		t.Fatal("SupportsVersion(1) = false, want true")
+	}
 	if SupportsVersion(0) {
 		t.Fatal("SupportsVersion(0) = true, want false")
 	}
@@ -33,6 +36,8 @@ func TestAllKindsExhaustiveAndUnique(t *testing.T) {
 		KindLinkIfExists: "link_if_exists",
 		KindWhenBegin:    "when_begin",
 		KindWhenEnd:      "when_end",
+		KindTimer:        "timer",
+		KindDaemonReload: "daemon_reload",
 	}
 	kinds := AllKinds()
 	if len(kinds) != len(want) {

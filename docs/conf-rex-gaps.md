@@ -52,24 +52,25 @@ Conf already shells out for some of these; gonf can do the same with `Command` +
 - User creation (`adduser` / `usermod` + guards) for `_dserver`, `_gogios`
 - Custom package URL installs / non-default `PKG_PATH`
 - Local write + remote `doas install` (garage pattern)
-- “If any of these files changed, reload once” (r-nodes `$changed` + `daemon-reload`) — gonf notes change status but has no fan-in helper
+- “If any of these files changed, reload once” — **done:** `DaemonReload(..., DependsOn(units), IfChanged)` ([service.md](service.md), [timer.md](timer.md))
 
 Do **not** use `Command` for ordinary package install or service enable/start — use `Package` / `Service` instead.
 
-## Already covered for *local* apply
+## Already covered for *local* / plan apply
 
-Ignoring remotes, these map reasonably:
+Ignoring SSH orchestration, these map reasonably:
 
 - File / dir install, modes, owner/group
 - Line ensure / absent
 - Command guards
 - Task registration, aggregates, `-list` / dry-run
 - Symlinks (gonf is ahead of conf Rex here)
+- **Plan serialize + apply** — versioned JSONL, condition recipes, content blobs ([plan.md](plan.md))
 - **Package** — dnf / OpenBSD `pkg_add` / FreeBSD `pkg` / NetBSD `pkgin` ([package.md](package.md))
 - **Service** — systemd / `rcctl` / FreeBSD+NetBSD `service` ([service.md](service.md))
 - **Cron** — per-user and root crontab markers ([cron.md](cron.md))
 
-The **dotfiles** laptop port shows that local Linux home/pkg workflows are in good shape. Conf is a different problem (remote + templates).
+The **dotfiles** laptop port shows that local Linux home/pkg workflows are in good shape. Conf still needs fleet SSH + templates.
 
 ## Minimum feature set to replace conf Rex
 

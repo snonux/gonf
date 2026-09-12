@@ -3,6 +3,7 @@ package resource
 import (
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 )
 
@@ -68,6 +69,52 @@ func Note(id string, st Status) {
 	reportMu.Lock()
 	defer reportMu.Unlock()
 	notes = append(notes, note{id: id, st: st})
+}
+
+// AnyChanged reports whether any of ids was noted as StatusChanged or
+// StatusWouldChange. For a Directory[path] id, File notes under that path
+// also count (so SyncDir file updates gate daemon-reload).
+func AnyChanged(ids ...string) bool {
+	reportMu.Lock()
+	defer reportMu.Unlock()
+	for _, id := range ids {
+		if noteChangedLocked(id) {
+			return true
+		}
+		if dirPath, ok := directoryNotePath(id); ok {
+			prefix := "File[" + dirPath
+			for _, n := range notes {
+				if !isChangeStatus(n.st) {
+					continue
+				}
+				if n.id == prefix+"]" || strings.HasPrefix(n.id, prefix+"/") || strings.HasPrefix(n.id, prefix+"\\") {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func noteChangedLocked(id string) bool {
+	for _, n := range notes {
+		if n.id == id && isChangeStatus(n.st) {
+			return true
+		}
+	}
+	return false
+}
+
+func isChangeStatus(st Status) bool {
+	return st == StatusChanged || st == StatusWouldChange
+}
+
+func directoryNotePath(id string) (string, bool) {
+	const prefix = "Directory["
+	if !strings.HasPrefix(id, prefix) || !strings.HasSuffix(id, "]") {
+		return "", false
+	}
+	return id[len(prefix) : len(id)-1], true
 }
 
 // PrintSummary writes counts and non-OK resource ids to w.

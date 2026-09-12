@@ -313,7 +313,7 @@ func TestNormalizeEmptySlices(t *testing.T) {
 
 func TestFormatSupportedVersions(t *testing.T) {
 	got := FormatSupportedVersions()
-	if got != "1" {
+	if !strings.Contains(got, "1") || !strings.Contains(got, "2") {
 		t.Fatalf("got %q", got)
 	}
 	supportedVersions[99] = struct{}{}

@@ -8,6 +8,7 @@ automatically when omitted.
 Timer("fstrim")                      // enable + start fstrim.timer
 Timer("fstrim.timer", WithRestart)   // converge, then restart once
 Timer("backup", WithUser)            // systemctl --user
+Timer("backup", WithUser, WithEnableOnly) // enable only (no start)
 NoTimer("oldjob")                    // stop + disable
 ```
 
@@ -15,10 +16,15 @@ Requires sufficient privileges for system timers (root / `sudo`), same as
 `Service`. User timers (`WithUser`) use the calling user's systemd session.
 
 Unit files themselves are not written by this resource — install them with
-`File` / `Dir` (or packages) and depend on those resources if needed. After
-dropping new unit files, run `systemctl daemon-reload` (or
-`systemctl --user daemon-reload`) before `Timer`, e.g. via `Command` +
-`DependsOn`, or the unit will not be found.
+`File` / `Dir` / `SyncDir` and depend on those resources if needed. After
+dropping new unit files, run [`DaemonReload`](service.md) (with `IfChanged`)
+before `Timer`, or the unit will not be found:
+
+```go
+units := SyncDir(Home(".config/systemd/user"), ".../systemd-user/*")
+reload := DaemonReload(WithUser, DependsOn(units), IfChanged)
+Timer("random-wallpaper", WithUser, DependsOn(reload))
+```
 
 ## Options
 
@@ -26,7 +32,8 @@ dropping new unit files, run `systemctl daemon-reload` (or
 |--------|---------|
 | `WithUser` | Use `systemctl --user` |
 | `WithRestart` | Restart the timer once when already active |
-| `IsAbsent` / `NoTimer` | Stop and disable |
+| `WithEnableOnly` | Enable/disable only — skip start/stop |
+| `IsAbsent` / `NoTimer` | Stop and disable (stop skipped with `WithEnableOnly`) |
 | `DependsOn` | Apply after other resources |
 
 ## Live tests

@@ -48,6 +48,15 @@ type PlanDraft struct {
 	Creates string
 	Unless  *PlanGuardDraft
 	OnlyIf  *PlanGuardDraft
+
+	// User selects systemd --user for timer / daemon_reload drafts.
+	User bool
+	// EnableOnly skips start/stop for timer present (enable/disable only).
+	EnableOnly bool
+	// IfChanged gates daemon_reload on watched dependency outcomes.
+	IfChanged bool
+	// Watch lists resource ids for IfChanged (usually DependsOn targets).
+	Watch []string
 }
 
 var (

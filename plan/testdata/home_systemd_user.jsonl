@@ -1,4 +1,5 @@
-{"op":"plan","version":1,"id":"home_systemd_user"}
-{"op":"sync_dir","id":"SyncDir[systemd-user]","path":"${HOME}/.config/systemd/user","blob":"blobs/systemd-user","prune":true}
-{"op":"command","id":"Command[systemctl.daemon-reload]","name":"systemctl.daemon-reload","bin":"systemctl","args":["--user","daemon-reload"]}
-{"op":"command","id":"Command[systemctl.enable.random-wallpaper]","name":"systemctl.enable.random-wallpaper","bin":"systemctl","args":["--user","enable","random-wallpaper.timer"],"unless":{"bin":"systemctl","args":["--user","is-enabled","random-wallpaper.timer"]}}
+{"op":"plan","version":2,"id":"home_systemd_user"}
+{"op":"sync_dir","id":"Directory[${HOME}/.config/systemd/user]","path":"${HOME}/.config/systemd/user","blob":"blobs/systemd-user"}
+{"op":"daemon_reload","id":"DaemonReload[user]","user":true,"if_changed":true,"watch":["Directory[${HOME}/.config/systemd/user]"]}
+{"op":"timer","id":"Timer[random-wallpaper.timer]","name":"random-wallpaper.timer","user":true}
+{"op":"timer","id":"Timer[home-backup.timer]","name":"home-backup.timer","user":true}

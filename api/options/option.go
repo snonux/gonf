@@ -44,6 +44,9 @@ type (
 	Restartable  interface{ SetRestart() }
 	Reloadable   interface{ SetReload() }
 	UserService  interface{ SetUser() }
+	EnableOnlyable interface{ SetEnableOnly() }
+	ChangeGated  interface{ SetIfChanged() }
+	Watchable    interface{ SetWatch([]string) }
 	CronUserable interface{ SetCronUser(string) }
 	Commandable  interface{ SetCommand(string) }
 	Minuteable   interface{ SetMinute(string) }
@@ -263,6 +266,40 @@ var WithUser = func(t any) {
 }
 
 func WithUserFunc() Option { return WithUser }
+
+// WithEnableOnly makes Timer converge enable/disable without start/stop.
+var WithEnableOnly = func(t any) {
+	r, ok := t.(EnableOnlyable)
+	if !ok {
+		log.Fatalf("%T does not support WithEnableOnly", t)
+	}
+	r.SetEnableOnly()
+}
+
+func WithEnableOnlyFunc() Option { return WithEnableOnly }
+
+// IfChanged skips DaemonReload unless a DependsOn (or WithWatch) target was
+// noted StatusChanged / StatusWouldChange. Directory deps also see child File notes.
+var IfChanged = func(t any) {
+	r, ok := t.(ChangeGated)
+	if !ok {
+		log.Fatalf("%T does not support IfChanged", t)
+	}
+	r.SetIfChanged()
+}
+
+func IfChangedFunc() Option { return IfChanged }
+
+// WithWatch sets the resource ids IfChanged consults (plan apply / Ensure).
+func WithWatch(ids ...string) Option {
+	return func(t any) {
+		r, ok := t.(Watchable)
+		if !ok {
+			log.Fatalf("%T does not support WithWatch", t)
+		}
+		r.SetWatch(ids)
+	}
+}
 
 // WithCronUser sets the account whose crontab is managed (default "root").
 func WithCronUser(user string) Option {

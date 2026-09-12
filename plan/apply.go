@@ -7,11 +7,14 @@ import (
 	"strings"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/cmd"
 	"github.com/snonux/gonf/resource/dir"
 	"github.com/snonux/gonf/resource/file"
 	"github.com/snonux/gonf/resource/link"
 	"github.com/snonux/gonf/resource/pkg"
+	"github.com/snonux/gonf/resource/systemd"
+	"github.com/snonux/gonf/resource/timer"
 )
 
 // Facts are live host values used to evaluate when_begin fact predicates.
@@ -33,6 +36,8 @@ func Apply(ops []Op, facts Facts, planDir string) error {
 	if err := ValidateHeader(ops[0]); err != nil {
 		return err
 	}
+
+	resource.ResetReport()
 
 	var stack []bool
 	for i, op := range ops[1:] {
@@ -105,6 +110,10 @@ func applyActive(op Op, planDir string) error {
 		return applyPackage(op)
 	case KindCommand:
 		return applyCommand(op)
+	case KindTimer:
+		return applyTimer(op)
+	case KindDaemonReload:
+		return applyDaemonReload(op)
 	default:
 		return fmt.Errorf("unknown op %q", op.Op)
 	}
@@ -358,6 +367,37 @@ func applyCommand(op Op) error {
 		opts = append(opts, guardOption(op.OnlyIf, false)...)
 	}
 	return cmd.Ensure(op.Bin, append([]string(nil), op.Args...), opts...)
+}
+
+func applyTimer(op Op) error {
+	if op.Name == "" {
+		return fmt.Errorf("timer: missing name")
+	}
+	var opts []opt.Option
+	if op.Absent {
+		opts = append(opts, opt.IsAbsent)
+	}
+	if op.User {
+		opts = append(opts, opt.WithUser)
+	}
+	if op.EnableOnly {
+		opts = append(opts, opt.WithEnableOnly)
+	}
+	return timer.Ensure(op.Name, opts...)
+}
+
+func applyDaemonReload(op Op) error {
+	var opts []opt.Option
+	if op.User {
+		opts = append(opts, opt.WithUser)
+	}
+	if op.IfChanged {
+		opts = append(opts, opt.IfChanged)
+		if len(op.Watch) > 0 {
+			opts = append(opts, opt.WithWatch(op.Watch...))
+		}
+	}
+	return systemd.Ensure(opts...)
 }
 
 func guardOption(g *Guard, unless bool) []opt.Option {

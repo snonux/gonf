@@ -103,6 +103,42 @@ func TestPresentEnablesAndStartsWhenInactive(t *testing.T) {
 	}
 }
 
+func TestPresentEnableOnlySkipsStart(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Timer is Linux-only")
+	}
+	resource.ResetRepository()
+	old := runCmd
+	defer func() { runCmd = old }()
+
+	var saw []string
+	runCmd = func(name string, args ...string) (string, string, int, error) {
+		if name != "systemctl" {
+			return "", "", 1, nil
+		}
+		joined := join(args)
+		if contains(args, "is-active") || contains(args, "is-enabled") {
+			return "", "", 1, nil
+		}
+		if contains(args, "enable") || contains(args, "start") {
+			saw = append(saw, joined)
+			return "", "", 0, nil
+		}
+		return "", "unexpected " + joined, 1, nil
+	}
+
+	Present("fstrim.timer", opt.WithEnableOnly)
+	if err := resource.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	if !containsStr(saw, "enable") {
+		t.Fatalf("expected enable, got %v", saw)
+	}
+	if containsStr(saw, "start") {
+		t.Fatalf("enable-only must not start, got %v", saw)
+	}
+}
+
 func TestAbsentStopsAndDisables(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Timer is Linux-only")

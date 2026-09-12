@@ -22,13 +22,16 @@ See [file-dir-link.md](file-dir-link.md): `WithContent`, `WithSource`,
 |--------|---------|
 | `IsLatest` | Upgrade/install to latest where the backend supports it |
 
-## Service / Timer
+## Service / Timer / DaemonReload
 
 | Option | Meaning |
 |--------|---------|
 | `WithRestart` | Restart once when already active (Service and Timer) |
 | `WithReload` | Reload once when already active (**Service only**; no restart fallback) |
-| `WithUser` | `systemctl --user` (systemd Service/Timer only) |
+| `WithUser` | `systemctl --user` (systemd Service/Timer/DaemonReload) |
+| `WithEnableOnly` | Timer: enable/disable only (skip start/stop) |
+| `IfChanged` | DaemonReload: skip unless a DependsOn/WithWatch target changed |
+| `WithWatch(ids…)` | DaemonReload: explicit ids for IfChanged (plan/Ensure) |
 
 ## Cron
 

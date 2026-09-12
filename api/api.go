@@ -10,6 +10,7 @@ import (
 	"github.com/snonux/gonf/resource/link"
 	"github.com/snonux/gonf/resource/pkg"
 	svc "github.com/snonux/gonf/resource/service"
+	"github.com/snonux/gonf/resource/systemd"
 	"github.com/snonux/gonf/resource/timer"
 )
 
@@ -164,7 +165,7 @@ func NoCron(name string, opts ...options.Option) Resource {
 
 // Timer ensures one or more systemd .timer units are active and enabled.
 // Linux/systemd only. Names without a ".timer" suffix get one appended.
-// Use WithUser for the systemd user bus.
+// Use WithUser for the systemd user bus. WithEnableOnly skips start/stop.
 func Timer[T Path](name T, opts ...options.Option) Resource {
 	switch v := any(name).(type) {
 	case string:
@@ -187,6 +188,12 @@ func Timers(names []string, opts ...options.Option) Resource {
 // NoTimer ensures one or more systemd .timer units are stopped and disabled.
 func NoTimer[T Path](name T, opts ...options.Option) Resource {
 	return Timer(name, append(opts, options.IsAbsent)...)
+}
+
+// DaemonReload runs systemctl daemon-reload (or --user). Combine with
+// DependsOn(unitFiles) and IfChanged to reload only when unit files changed.
+func DaemonReload(opts ...options.Option) Resource {
+	return systemd.Present(opts...)
 }
 
 // Command registers a command resource that runs name with args on Apply.

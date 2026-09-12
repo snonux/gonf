@@ -19,6 +19,19 @@ NoService("olddaemon")              // stopped + disabled
 
 For dedicated systemd timer units, prefer [`Timer` / `NoTimer`](timer.md).
 
+## DaemonReload
+
+Linux systemd only. Reloads the unit manager after installing unit files:
+
+```go
+units := SyncDir(...)
+DaemonReload(WithUser, DependsOn(units), IfChanged) // skip when units unchanged
+DaemonReload(WithUser, DependsOn(units))            // always reload
+```
+
+`IfChanged` watches `DependsOn` targets; a `Directory[path]` dependency also
+sees `File[path/…]` notes from `SyncDir` / file installs.
+
 Requires sufficient privileges (root / `doas`), same as `Package`.
 
 | Option | Meaning |
