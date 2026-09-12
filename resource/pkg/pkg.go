@@ -65,6 +65,16 @@ func Present(name string, opts ...opt.Option) resource.Resource {
 	return r
 }
 
+// Ensure builds and applies a package resource without registering it or
+// recording a plan draft.
+func Ensure(name string, opts ...opt.Option) error {
+	p := &Package{name: name}
+	for _, o := range opts {
+		o(p)
+	}
+	return p.apply()
+}
+
 func Absent(name string, opts ...opt.Option) resource.Resource {
 	opts = append(opts, opt.IsAbsent)
 	return Present(name, opts...)

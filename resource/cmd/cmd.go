@@ -63,6 +63,22 @@ func Present(bin string, args []string, opts ...opt.Option) resource.Resource {
 	return r
 }
 
+// Ensure builds and applies a command resource without registering it or
+// recording a plan draft.
+func Ensure(bin string, args []string, opts ...opt.Option) error {
+	c := &Cmd{
+		bin:  bin,
+		args: append([]string(nil), args...),
+	}
+	for _, o := range opts {
+		o(c)
+	}
+	if c.name == "" {
+		c.name = defaultName(bin, c.args)
+	}
+	return c.apply()
+}
+
 func (c *Cmd) planDraft(id string) resource.PlanDraft {
 	d := resource.PlanDraft{
 		Kind:    "command",

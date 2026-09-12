@@ -5,8 +5,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/snonux/gonf/resource"
 )
 
+func resourceSetDryRun(t *testing.T) {
+	t.Helper()
+	resource.SetDryRun(true)
+	t.Cleanup(func() { resource.SetDryRun(false) })
+}
 func header() Op {
 	return Op{Op: KindPlan, Version: CurrentVersion, ID: "apply-test"}
 }
@@ -282,5 +289,113 @@ func TestApplyRejectsBadHeader(t *testing.T) {
 	err := Apply([]Op{{Op: KindEnsureDir, Path: "/tmp/x"}}, Facts{}, "")
 	if err == nil {
 		t.Fatal("expected header validation error")
+	}
+}
+
+func TestApplyLinkDirCommandFileLines(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	if err := os.WriteFile(target, []byte("t"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	linkPath := filepath.Join(root, "link")
+	dirPath := filepath.Join(root, "dir")
+	filePath := filepath.Join(root, "file.txt")
+	marker := filepath.Join(root, "ran")
+
+	ops := []Op{
+		header(),
+		{Op: KindLink, Path: linkPath, Symlink: target},
+		{Op: KindDir, Path: dirPath, Mode: "0700"},
+		{Op: KindFile, Path: filePath, AddLine: "hello"},
+		{
+			Op:   KindCommand,
+			Bin:  "touch",
+			Args: []string{marker},
+			Name: "touch-marker",
+		},
+	}
+	if err := Apply(ops, Facts{}, ""); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	got, err := os.Readlink(linkPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != target {
+		t.Fatalf("symlink = %q, want %q", got, target)
+	}
+	if st, err := os.Stat(dirPath); err != nil || !st.IsDir() {
+		t.Fatalf("dir: %v %#v", err, st)
+	}
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "hello") {
+		t.Fatalf("file content %q", data)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("command should create marker: %v", err)
+	}
+}
+
+func TestApplyCommandUnlessSkips(t *testing.T) {
+	root := t.TempDir()
+	marker := filepath.Join(root, "should-not-exist")
+	ops := []Op{
+		header(),
+		{
+			Op:   KindCommand,
+			Bin:  "touch",
+			Args: []string{marker},
+			Unless: &Guard{
+				Bin:  "true",
+				Args: nil,
+			},
+		},
+	}
+	if err := Apply(ops, Facts{}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("unless true should skip touch")
+	}
+}
+
+func TestApplyPackageDryRun(t *testing.T) {
+	resourceSetDryRun(t)
+	ops := []Op{
+		header(),
+		{Op: KindPackage, Name: "tig"},
+	}
+	if err := Apply(ops, Facts{}, ""); err != nil {
+		t.Fatalf("dry-run package: %v", err)
+	}
+}
+
+func TestApplyFileLineRemove(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "f")
+	if err := os.WriteFile(path, []byte("keep\ndrop\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ops := []Op{
+		header(),
+		{Op: KindFile, Path: path, RemoveLine: "drop"},
+	}
+	if err := Apply(ops, Facts{}, ""); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "drop") {
+		t.Fatalf("remove_line failed: %q", data)
+	}
+	if !strings.Contains(string(data), "keep") {
+		t.Fatalf("keep missing: %q", data)
 	}
 }

@@ -7,9 +7,11 @@ import (
 	"strings"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/resource/cmd"
 	"github.com/snonux/gonf/resource/dir"
 	"github.com/snonux/gonf/resource/file"
 	"github.com/snonux/gonf/resource/link"
+	"github.com/snonux/gonf/resource/pkg"
 )
 
 // Facts are live host values used to evaluate when_begin fact predicates.
@@ -95,8 +97,14 @@ func applyActive(op Op, planDir string) error {
 		return applyFile(op, planDir)
 	case KindSyncDir:
 		return applySyncDir(op, planDir)
-	case KindLink, KindDir, KindPackage, KindCommand:
-		return fmt.Errorf("op %q apply not implemented", op.Op)
+	case KindLink:
+		return applyLink(op)
+	case KindDir:
+		return applyDir(op)
+	case KindPackage:
+		return applyPackage(op)
+	case KindCommand:
+		return applyCommand(op)
 	default:
 		return fmt.Errorf("unknown op %q", op.Op)
 	}
@@ -113,8 +121,26 @@ func applyFile(op Op, planDir string) error {
 	if op.Absent {
 		return file.Ensure(path, opt.IsAbsent)
 	}
+
+	var opts []opt.Option
 	if op.AddLine != "" || op.RemoveLine != "" {
-		return fmt.Errorf("file: add_line/remove_line apply not implemented")
+		if op.ContentB64 != "" || op.Blob != "" {
+			return fmt.Errorf("file: add_line/remove_line cannot combine with content_b64/blob")
+		}
+		if op.RemoveLine != "" {
+			opts = append(opts, opt.WithoutLine(op.RemoveLine))
+		}
+		if op.AddLine != "" {
+			opts = append(opts, opt.WithLine(op.AddLine))
+		}
+		if op.Mode != "" {
+			mode, err := parseMode(op.Mode)
+			if err != nil {
+				return fmt.Errorf("file: %w", err)
+			}
+			opts = append(opts, opt.WithMode(mode))
+		}
+		return file.Ensure(path, opts...)
 	}
 
 	var content []byte
@@ -135,7 +161,7 @@ func applyFile(op Op, planDir string) error {
 		return fmt.Errorf("file: missing content_b64 and blob")
 	}
 
-	opts := []opt.Option{opt.WithContent(string(content))}
+	opts = []opt.Option{opt.WithContent(string(content))}
 	if op.Mode != "" {
 		mode, err := parseMode(op.Mode)
 		if err != nil {
@@ -209,6 +235,60 @@ func applyEnsureDir(op Op) error {
 	return dir.Ensure(path, opts...)
 }
 
+func applyDir(op Op) error {
+	path, err := ExpandPath(op.Path)
+	if err != nil {
+		return err
+	}
+	if path == "" {
+		return fmt.Errorf("dir: missing path")
+	}
+	var opts []opt.Option
+	if op.Absent {
+		opts = append(opts, opt.IsAbsent)
+	}
+	if op.Prune {
+		opts = append(opts, opt.WithPrune)
+	}
+	if op.Mode != "" {
+		mode, err := parseMode(op.Mode)
+		if err != nil {
+			return fmt.Errorf("dir: %w", err)
+		}
+		opts = append(opts, opt.WithMode(mode))
+	}
+	return dir.Ensure(path, opts...)
+}
+
+func applyLink(op Op) error {
+	path, err := ExpandPath(op.Path)
+	if err != nil {
+		return err
+	}
+	if path == "" {
+		return fmt.Errorf("link: missing path")
+	}
+	if op.Absent {
+		return link.Ensure(path, opt.IsAbsent)
+	}
+	switch {
+	case op.Symlink != "":
+		target, err := ExpandPath(op.Symlink)
+		if err != nil {
+			return err
+		}
+		return link.Ensure(path, opt.WithSymlink(target))
+	case op.Hardlink != "":
+		target, err := ExpandPath(op.Hardlink)
+		if err != nil {
+			return err
+		}
+		return link.Ensure(path, opt.WithHardlink(target))
+	default:
+		return fmt.Errorf("link: missing symlink or hardlink target")
+	}
+}
+
 func applyLinkIfExists(op Op) error {
 	path, err := ExpandPath(op.Path)
 	if err != nil {
@@ -233,6 +313,65 @@ func applyLinkIfExists(op Op) error {
 	default:
 		return fmt.Errorf("link_if_exists: stat target %s: %w", target, err)
 	}
+}
+
+func applyPackage(op Op) error {
+	if op.Name == "" {
+		return fmt.Errorf("package: missing name")
+	}
+	var opts []opt.Option
+	if op.Absent {
+		opts = append(opts, opt.IsAbsent)
+	}
+	return pkg.Ensure(op.Name, opts...)
+}
+
+func applyCommand(op Op) error {
+	if op.Bin == "" {
+		return fmt.Errorf("command: missing bin")
+	}
+	var opts []opt.Option
+	if op.Name != "" {
+		opts = append(opts, opt.WithName(op.Name))
+	}
+	if op.Dir != "" {
+		dirPath, err := ExpandPath(op.Dir)
+		if err != nil {
+			return err
+		}
+		opts = append(opts, opt.WithDir(dirPath))
+	}
+	if op.Creates != "" {
+		creates, err := ExpandPath(op.Creates)
+		if err != nil {
+			return err
+		}
+		opts = append(opts, opt.Creates(creates))
+	}
+	if len(op.Env) > 0 {
+		opts = append(opts, opt.WithEnv(op.Env))
+	}
+	if op.Unless != nil {
+		opts = append(opts, guardOption(op.Unless, true)...)
+	}
+	if op.OnlyIf != nil {
+		opts = append(opts, guardOption(op.OnlyIf, false)...)
+	}
+	return cmd.Ensure(op.Bin, append([]string(nil), op.Args...), opts...)
+}
+
+func guardOption(g *Guard, unless bool) []opt.Option {
+	var gopts []opt.GuardOption
+	if g.ExpectStdout != "" {
+		gopts = append(gopts, opt.ExpectStdout(g.ExpectStdout))
+	}
+	if g.ExpectExit != nil {
+		gopts = append(gopts, opt.ExpectExit(*g.ExpectExit))
+	}
+	if unless {
+		return []opt.Option{opt.Unless(g.Bin, append([]string(nil), g.Args...), gopts...)}
+	}
+	return []opt.Option{opt.OnlyIf(g.Bin, append([]string(nil), g.Args...), gopts...)}
 }
 
 func evalAll(preds []Predicate, facts Facts) (bool, error) {
