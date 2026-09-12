@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -28,6 +29,11 @@ type taskCandidate struct {
 	description string
 	fn          func()
 	when        []func(Facts) bool
+	// planWhen is the AND list of serializable predicates for RecordPlan.
+	planWhen []plan.Predicate
+	// opaqueWhen is true when a custom When(func) was used and cannot be
+	// lowered into plan recipes.
+	opaqueWhen bool
 }
 
 // TaskOption configures a deferred task candidate.
@@ -41,29 +47,50 @@ var (
 )
 
 // When skips activating the task unless pred(facts) is true.
+// Custom predicates are not serializable for remote plans; prefer WhenLinux,
+// WhenProfile, or WhenHostnameContains when recording plans.
 func When(pred func(Facts) bool) TaskOption {
 	return func(c *taskCandidate) {
 		if pred != nil {
 			c.when = append(c.when, pred)
+			c.opaqueWhen = true
 		}
 	}
 }
 
 // WhenLinux is When(func(f Facts) bool { return f.GOOS == "linux" }).
 func WhenLinux() TaskOption {
-	return When(func(f Facts) bool { return f.GOOS == "linux" })
+	return func(c *taskCandidate) {
+		c.when = append(c.when, func(f Facts) bool { return f.GOOS == "linux" })
+		c.planWhen = append(c.planWhen, plan.Predicate{Fact: "goos", Eq: "linux"})
+	}
 }
 
 // WhenProfile activates only when Facts.Profile is one of profiles.
+// A single profile lowers to a plan fact predicate; multiple profiles use OR
+// locally and are treated as opaque for plan serialization.
 func WhenProfile(profiles ...string) TaskOption {
-	return When(ProfileIs(profiles...))
+	return func(c *taskCandidate) {
+		c.when = append(c.when, ProfileIs(profiles...))
+		switch len(profiles) {
+		case 0:
+			return
+		case 1:
+			c.planWhen = append(c.planWhen, plan.Predicate{Fact: "profile", Eq: profiles[0]})
+		default:
+			c.opaqueWhen = true
+		}
+	}
 }
 
 // WhenHostnameContains activates when Facts.Hostname contains substr.
 func WhenHostnameContains(substr string) TaskOption {
-	return When(func(f Facts) bool {
-		return strings.Contains(strings.ToLower(f.Hostname), strings.ToLower(substr))
-	})
+	return func(c *taskCandidate) {
+		c.when = append(c.when, func(f Facts) bool {
+			return strings.Contains(strings.ToLower(f.Hostname), strings.ToLower(substr))
+		})
+		c.planWhen = append(c.planWhen, plan.Predicate{Fact: "hostname_contains", Eq: substr})
+	}
 }
 
 // Task queues a named unit of work for activation. Call from init() or
@@ -106,34 +133,6 @@ func Activate(facts Facts) {
 	tasksMu.Lock()
 	defer tasksMu.Unlock()
 	activateLocked(facts)
-}
-
-func activateLocked(facts Facts) {
-	tasks = map[string]task{}
-	for _, c := range candidates {
-		if !whenPasses(c.when, facts) {
-			continue
-		}
-		tasks[c.name] = task{name: c.name, description: c.description, fn: c.fn}
-	}
-	activated = true
-}
-
-func whenPasses(preds []func(Facts) bool, facts Facts) bool {
-	for _, p := range preds {
-		if !p(facts) {
-			return false
-		}
-	}
-	return true
-}
-
-func ensureActivated() {
-	tasksMu.Lock()
-	defer tasksMu.Unlock()
-	if !activated {
-		activateLocked(DetectFacts())
-	}
 }
 
 // Matching returns activated task names matching pattern (sorted).
@@ -189,6 +188,55 @@ func Run(names ...string) error {
 	return nil
 }
 
+// ResetTasks clears candidates and activated tasks. Intended for tests.
+func ResetTasks() {
+	tasksMu.Lock()
+	defer tasksMu.Unlock()
+	candidates = nil
+	tasks = map[string]task{}
+	activated = false
+	profileOverride = ""
+}
+
+func activateLocked(facts Facts) {
+	tasks = map[string]task{}
+	for _, c := range candidates {
+		if !whenPasses(c.when, facts) {
+			continue
+		}
+		tasks[c.name] = task{name: c.name, description: c.description, fn: c.fn}
+	}
+	activated = true
+}
+
+func whenPasses(preds []func(Facts) bool, facts Facts) bool {
+	for _, p := range preds {
+		if !p(facts) {
+			return false
+		}
+	}
+	return true
+}
+
+func ensureActivated() {
+	tasksMu.Lock()
+	defer tasksMu.Unlock()
+	if !activated {
+		activateLocked(DetectFacts())
+	}
+}
+
+func findCandidate(name string) (taskCandidate, bool) {
+	tasksMu.Lock()
+	defer tasksMu.Unlock()
+	for _, c := range candidates {
+		if c.name == name {
+			return c, true
+		}
+	}
+	return taskCandidate{}, false
+}
+
 func runOne(name string) error {
 	tasksMu.Lock()
 	t, ok := tasks[name]
@@ -203,14 +251,4 @@ func runOne(name string) error {
 		return fmt.Errorf("task %s: %w", name, err)
 	}
 	return nil
-}
-
-// ResetTasks clears candidates and activated tasks. Intended for tests.
-func ResetTasks() {
-	tasksMu.Lock()
-	defer tasksMu.Unlock()
-	candidates = nil
-	tasks = map[string]task{}
-	activated = false
-	profileOverride = ""
 }

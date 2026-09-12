@@ -36,13 +36,12 @@ type Home struct{}
 func (Home) DescHelix() string { return "Install helix" }
 func (Home) Helix() { /* resources */ }
 
-RegisterMethods(Home{}, WithPrefix("home."), WithGroupWhen(
-    func(f Facts) bool { return f.GOOS == "linux" },
-))
+RegisterMethods(Home{}, WithPrefix("home."), WithGroupWhen(WhenLinux()))
 ```
 
-`WithPrefix` namespaces task names; `WithGroupWhen` takes `func(Facts) bool`
-predicates (not `WhenLinux()` TaskOptions).
+`WithPrefix` namespaces task names; `WithGroupWhen` takes `TaskOption`s
+such as `WhenLinux()` / `WhenProfile(...)` (so plan recording can emit
+`when_begin` recipes).
 
 ## Aggregate
 

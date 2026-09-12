@@ -1,17 +1,30 @@
 package api
 
 import (
+	"log"
 	"os"
 
 	"github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/resource"
+	"github.com/snonux/gonf/resource/dir"
 )
 
 // EnsureDir registers a Dir resource only when path is missing or is not
 // already a directory (symlink-to-directory counts as present). When skipped,
 // returns an empty Multi so DependsOn remains safe.
+//
+// In plan-record mode, emits an ensure_dir recipe instead of probing the
+// controller filesystem (destination apply interprets the recipe).
 func EnsureDir(path string, opts ...options.Option) Resource {
 	p := Expand(path)
+	if resource.PlanDraftRecording() {
+		draft, err := dir.EnsurePlanDraft(p, opts...)
+		if err != nil {
+			log.Fatalf("EnsureDir: %v", err)
+		}
+		resource.RecordPlanDraft(draft)
+		return resource.Multi(nil)
+	}
 	info, err := os.Stat(p)
 	if err == nil && info.IsDir() {
 		return resource.Multi(nil)

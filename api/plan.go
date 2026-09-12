@@ -10,14 +10,14 @@ import (
 	"github.com/snonux/gonf/resource"
 )
 
-// RecordPlan runs the named activated tasks in plan-record mode: resource
-// registration emits plan.Op lines instead of applying. InstallFile sources
-// are packaged as content_b64 (or blob sidecars when large); SyncDir trees
-// are copied under planDir/blobs/. planDir may be empty when no SyncDir or
-// large-file packaging is needed.
+// RecordPlan runs the named tasks in plan-record mode: resource registration
+// emits plan.Op lines instead of applying. Tasks are looked up as candidates
+// (not Activate-filtered) so When* recipes become when_begin/when_end rather
+// than being resolved on the controller. InstallFile sources are packaged as
+// content_b64 (or blob sidecars when large); SyncDir trees are copied under
+// planDir/blobs/. planDir may be empty when no SyncDir or large-file packaging
+// is needed.
 func RecordPlan(planID, planDir string, taskNames ...string) ([]plan.Op, error) {
-	ensureActivated()
-
 	if planID == "" {
 		return nil, fmt.Errorf("RecordPlan: plan id must not be empty")
 	}
@@ -53,24 +53,55 @@ func RecordPlan(planID, planDir string, taskNames ...string) ([]plan.Op, error) 
 	}()
 
 	for _, name := range taskNames {
-		tasksMu.Lock()
-		t, ok := tasks[name]
-		tasksMu.Unlock()
+		c, ok := findCandidate(name)
 		if !ok {
 			return nil, fmt.Errorf("unknown task %q", name)
 		}
 
+		wrapWhen, err := planWhenForCandidate(c)
+		if err != nil {
+			return nil, err
+		}
+		if len(wrapWhen) > 0 {
+			plan.Record(plan.Op{
+				Op:  plan.KindWhenBegin,
+				ID:  "when." + name,
+				All: wrapWhen,
+			})
+		}
+
 		resource.ResetRepository()
-		t.fn()
+		c.fn()
 		// Intentionally skip resource.Apply — plan-record mode only.
 		if packErr != nil {
 			return nil, packErr
+		}
+
+		if len(wrapWhen) > 0 {
+			plan.Record(plan.Op{Op: plan.KindWhenEnd})
 		}
 	}
 
 	ops := plan.FinishRecord(planID)
 	plan.ResetRecord()
 	return ops, nil
+}
+
+// planWhenForCandidate returns serializable when predicates, or nil when the
+// task has no When. Opaque When predicates must still pass on the controller.
+func planWhenForCandidate(c taskCandidate) ([]plan.Predicate, error) {
+	if len(c.when) == 0 {
+		return nil, nil
+	}
+	if !c.opaqueWhen && len(c.planWhen) > 0 {
+		out := make([]plan.Predicate, len(c.planWhen))
+		copy(out, c.planWhen)
+		return out, nil
+	}
+	if !whenPasses(c.when, DetectFacts()) {
+		return nil, fmt.Errorf("RecordPlan: task %q When predicates fail on controller and are not serializable", c.name)
+	}
+	return nil, nil
 }
 
 func packageDraft(d resource.PlanDraft, store *plan.Store) (plan.Op, error) {
@@ -146,6 +177,7 @@ func draftToOp(d resource.PlanDraft) plan.Op {
 		Path:       d.Path,
 		Symlink:    d.Symlink,
 		Hardlink:   d.Hardlink,
+		Target:     d.Target,
 		Mode:       d.Mode,
 		FileMode:   d.FileMode,
 		ContentB64: d.ContentB64,
@@ -176,6 +208,10 @@ func draftToOp(d resource.PlanDraft) plan.Op {
 		op.Op = plan.KindPackage
 	case "command":
 		op.Op = plan.KindCommand
+	case "ensure_dir":
+		op.Op = plan.KindEnsureDir
+	case "link_if_exists":
+		op.Op = plan.KindLinkIfExists
 	default:
 		op.Op = plan.Kind(d.Kind)
 	}

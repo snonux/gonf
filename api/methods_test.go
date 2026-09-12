@@ -71,16 +71,16 @@ func TestRegisterMethods(t *testing.T) {
 
 type reflectHome struct{}
 
-func (reflectHome) Helix() {}
+func (reflectHome) Helix()            {}
 func (reflectHome) DescHelix() string { return "Install helix" }
 
-func (reflectHome) Hexai() {}
-func (reflectHome) DescHexai() string { return "Install hexai" }
+func (reflectHome) Hexai()                 {}
+func (reflectHome) DescHexai() string      { return "Install hexai" }
 func (reflectHome) WhenHexai(f Facts) bool { return f.GOOS == "linux" }
 
 func TestRegisterMethodsGroupWhen(t *testing.T) {
 	ResetTasks()
-	RegisterMethods(reflectPkg{}, WithPrefix("pkg_"), WithGroupWhen(ProfileIs("fedora")))
+	RegisterMethods(reflectPkg{}, WithPrefix("pkg_"), WithGroupWhen(WhenProfile("fedora")))
 
 	Activate(Facts{Profile: "fedora"})
 	if got := Matching("^pkg_"); !reflect.DeepEqual(got, []string{"pkg_fedora"}) {
@@ -95,7 +95,7 @@ func TestRegisterMethodsGroupWhen(t *testing.T) {
 
 type reflectPkg struct{}
 
-func (reflectPkg) Fedora() {}
+func (reflectPkg) Fedora()            {}
 func (reflectPkg) DescFedora() string { return "Fedora packages" }
 
 func TestCamelToSnake(t *testing.T) {

@@ -1,18 +1,32 @@
 package api
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 
 	"github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/resource"
 )
 
 // LinkIfExists creates a symlink at path → target when target exists;
 // otherwise ensures path is absent (NoLink).
+//
+// In plan-record mode, emits a link_if_exists recipe instead of probing the
+// controller filesystem (destination apply interprets the recipe).
 func LinkIfExists(path, target string, opts ...options.Option) Resource {
 	p := Expand(path)
 	t := Expand(target)
+	if resource.PlanDraftRecording() {
+		resource.RecordPlanDraft(resource.PlanDraft{
+			Kind:   "link_if_exists",
+			Path:   p,
+			Target: t,
+			ID:     fmt.Sprintf("LinkIfExists[%s]", p),
+		})
+		return resource.Multi(nil)
+	}
 	if _, err := os.Stat(filepath.Clean(t)); err != nil {
 		return NoLink(p, opts...)
 	}

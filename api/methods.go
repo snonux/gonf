@@ -11,7 +11,7 @@ type RegisterOption func(*registerConfig)
 
 type registerConfig struct {
 	prefix    string
-	groupWhen []func(Facts) bool
+	groupWhen []TaskOption
 }
 
 // WithPrefix prepends prefix to each CamelCase→snake_case method name.
@@ -19,10 +19,12 @@ func WithPrefix(prefix string) RegisterOption {
 	return func(c *registerConfig) { c.prefix = prefix }
 }
 
-// WithGroupWhen applies When predicates to every method registered in the call.
-func WithGroupWhen(preds ...func(Facts) bool) RegisterOption {
+// WithGroupWhen applies TaskOptions (typically When*) to every method
+// registered in the call. Prefer WhenProfile / WhenLinux so plan recording
+// can emit when_begin recipes.
+func WithGroupWhen(opts ...TaskOption) RegisterOption {
 	return func(c *registerConfig) {
-		c.groupWhen = append(c.groupWhen, preds...)
+		c.groupWhen = append(c.groupWhen, opts...)
 	}
 }
 
@@ -94,10 +96,7 @@ func RegisterMethods(v any, opts ...RegisterOption) {
 		fn := method.Interface().(func())
 
 		var taskOpts []TaskOption
-		for _, p := range cfg.groupWhen {
-			pred := p
-			taskOpts = append(taskOpts, When(pred))
-		}
+		taskOpts = append(taskOpts, cfg.groupWhen...)
 		if w := rv.MethodByName("When" + name); w.IsValid() {
 			wt := w.Type()
 			if wt.NumIn() == 1 && wt.In(0) == reflect.TypeOf(Facts{}) &&
