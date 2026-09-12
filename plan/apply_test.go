@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/snonux/gonf/resource"
+	"github.com/snonux/gonf/resource/pkg"
 )
 
 func resourceSetDryRun(t *testing.T) {
@@ -366,6 +367,9 @@ func TestApplyCommandUnlessSkips(t *testing.T) {
 
 func TestApplyPackageDryRun(t *testing.T) {
 	resourceSetDryRun(t)
+	pkg.SetDetectPackageManagerForTest(func() (string, error) { return "dnf", nil })
+	t.Cleanup(pkg.ResetDetectPackageManagerForTest)
+
 	ops := []Op{
 		header(),
 		{Op: KindPackage, Name: "tig"},

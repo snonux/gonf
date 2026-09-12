@@ -25,8 +25,11 @@ func (p *Package) SetLatest() { p.latest = true }
 // runCmd is swapped in unit tests.
 var runCmd = exec.Run
 
+// detectPkgManager is swapped in unit tests (CI runners are often Ubuntu).
+var detectPkgManager = detectPackageManager
+
 func (p *Package) apply() error {
-	pkgMan, err := detectPackageManager()
+	pkgMan, err := detectPkgManager()
 	if err != nil {
 		return err
 	}
@@ -132,4 +135,14 @@ func runOrErr(bin string, args ...string) error {
 		return fmt.Errorf("%s %v failed (exit %d): %s%s", bin, args, code, stdout, stderr)
 	}
 	return nil
+}
+
+// SetDetectPackageManagerForTest stubs OS package-manager detection (tests only).
+func SetDetectPackageManagerForTest(fn func() (string, error)) {
+	detectPkgManager = fn
+}
+
+// ResetDetectPackageManagerForTest restores the real detector after a test stub.
+func ResetDetectPackageManagerForTest() {
+	detectPkgManager = detectPackageManager
 }
