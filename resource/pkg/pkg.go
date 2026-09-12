@@ -54,8 +54,15 @@ func Present(name string, opts ...opt.Option) resource.Resource {
 		o(p)
 	}
 
-	return resource.Register("Package", p.name,
+	r := resource.Register("Package", p.name,
 		resource.ApplierFunc(func() error { return p.apply() }), p.DependsOn.IDs...)
+	resource.RecordPlanDraft(resource.PlanDraft{
+		Kind:   "package",
+		ID:     r.ID(),
+		Name:   p.name,
+		Absent: p.Absent,
+	})
+	return r
 }
 
 func Absent(name string, opts ...opt.Option) resource.Resource {

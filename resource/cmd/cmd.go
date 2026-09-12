@@ -57,8 +57,47 @@ func Present(bin string, args []string, opts ...opt.Option) resource.Resource {
 		c.name = defaultName(bin, c.args)
 	}
 
-	return resource.Register("Command", c.name,
+	r := resource.Register("Command", c.name,
 		resource.ApplierFunc(func() error { return c.apply() }), c.DependsOn.IDs...)
+	resource.RecordPlanDraft(c.planDraft(r.ID()))
+	return r
+}
+
+func (c *Cmd) planDraft(id string) resource.PlanDraft {
+	d := resource.PlanDraft{
+		Kind:    "command",
+		ID:      id,
+		Name:    c.name,
+		Bin:     c.bin,
+		Args:    append([]string(nil), c.args...),
+		Dir:     c.dir,
+		Creates: c.creates,
+	}
+	if c.env != nil {
+		d.Env = make(map[string]string, len(c.env))
+		for k, v := range c.env {
+			d.Env[k] = v
+		}
+	}
+	d.Unless = planGuardDraft(c.unless)
+	d.OnlyIf = planGuardDraft(c.onlyIf)
+	return d
+}
+
+func planGuardDraft(g *opt.Guard) *resource.PlanGuardDraft {
+	if g == nil {
+		return nil
+	}
+	out := &resource.PlanGuardDraft{
+		Bin:          g.Name,
+		Args:         append([]string(nil), g.Args...),
+		ExpectStdout: g.ExpectStdout,
+	}
+	if g.ExpectExit != 0 {
+		e := g.ExpectExit
+		out.ExpectExit = &e
+	}
+	return out
 }
 
 func defaultName(bin string, args []string) string {

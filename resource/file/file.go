@@ -5,8 +5,8 @@ package file
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"fmt"
-	"github.com/snonux/gonf/internal/logger"
 	"os"
 	"os/user"
 	"strconv"
@@ -14,6 +14,7 @@ import (
 	"text/template"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
 )
@@ -328,8 +329,28 @@ func Present(path string, opts ...opt.Option) resource.Resource {
 
 	f.resource = resource.Register("File", f.targetPath(),
 		resource.ApplierFunc(func() error { return f.apply() }), f.DependsOn.IDs...)
-
+	resource.RecordPlanDraft(f.planDraft())
 	return f.resource
+}
+
+func (f *File) planDraft() resource.PlanDraft {
+	d := resource.PlanDraft{
+		Kind:       "file",
+		ID:         f.resource.ID(),
+		Path:       f.targetPath(),
+		Mode:       fmt.Sprintf("%#o", f.mode&os.ModePerm),
+		Absent:     f.Absent,
+		AddLine:    f.addLine,
+		RemoveLine: f.removeLine,
+	}
+	switch {
+	case f.content != "":
+		d.ContentB64 = base64.StdEncoding.EncodeToString([]byte(f.content))
+	case f.source != "":
+		// Blob packaging is a later task; path ref is enough for record mode.
+		d.Blob = f.source
+	}
+	return d
 }
 
 func Absent(path string, opts ...opt.Option) resource.Resource {

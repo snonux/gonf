@@ -82,8 +82,24 @@ func Present(path string, opts ...opt.Option) resource.Resource {
 	l := build(path, opts...)
 	l.resource = resource.Register(l.resourceType(), l.path,
 		resource.ApplierFunc(func() error { return l.apply() }), l.DependsOn.IDs...)
-
+	resource.RecordPlanDraft(l.planDraft())
 	return l.resource
+}
+
+func (l *Link) planDraft() resource.PlanDraft {
+	d := resource.PlanDraft{
+		Kind:   "link",
+		ID:     l.resource.ID(),
+		Path:   l.path,
+		Absent: l.Absent,
+	}
+	switch l.kind {
+	case symlinkKind:
+		d.Symlink = l.target
+	case hardlinkKind:
+		d.Hardlink = l.target
+	}
+	return d
 }
 
 func Absent(path string, opts ...opt.Option) resource.Resource {

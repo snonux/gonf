@@ -240,8 +240,31 @@ func Present(path string, opts ...opt.Option) resource.Resource {
 
 	d.resource = resource.Register("Directory", d.path,
 		resource.ApplierFunc(func() error { return d.apply() }), d.DependsOn.IDs...)
-
+	resource.RecordPlanDraft(d.planDraft())
 	return d.resource
+}
+
+func (d *Dir) planDraft() resource.PlanDraft {
+	draft := resource.PlanDraft{
+		ID:     d.resource.ID(),
+		Path:   d.path,
+		Mode:   fmt.Sprintf("%#o", d.mode&os.ModePerm),
+		Absent: d.Absent,
+		Prune:  d.prune,
+	}
+	switch {
+	case d.sourceGlob != "":
+		draft.Kind = "sync_dir"
+		draft.Blob = d.sourceGlob
+		draft.FileMode = fmt.Sprintf("%#o", d.fileMode&os.ModePerm)
+	case d.source != "":
+		draft.Kind = "sync_dir"
+		draft.Blob = d.source
+		draft.FileMode = fmt.Sprintf("%#o", d.fileMode&os.ModePerm)
+	default:
+		draft.Kind = "dir"
+	}
+	return draft
 }
 
 func Absent(path string, opts ...opt.Option) resource.Resource {
