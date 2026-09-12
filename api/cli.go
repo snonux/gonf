@@ -78,6 +78,8 @@ func CLI() int {
 		return cliPlan(names[1:])
 	case "apply":
 		return cliApply(names[1:])
+	case "push":
+		return cliPush(names[1:])
 	}
 
 	if err := Run(names...); err != nil {
@@ -237,4 +239,5 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "usage: gonf [-list] [-version] [-profile=...] [-verbose|-quiet] [-dry-run|-n] <task> [task...]")
 	fmt.Fprintln(os.Stderr, "       gonf plan [-o dir|-stdout] [-id name] <task> [task...]")
 	fmt.Fprintln(os.Stderr, "       gonf apply [-n|-dry-run] <plan.jsonl|->")
+	fmt.Fprintln(os.Stderr, "       gonf push [-n] [-id name] [-- ssh-args...] user@host <task> [task...]")
 }
