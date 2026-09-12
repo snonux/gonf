@@ -4,9 +4,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/snonux/gonf/internal"
 	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -17,6 +19,8 @@ import (
 //	gonf -profile=fedora
 //	gonf -verbose | -quiet
 //	gonf -dry-run | -n
+//	gonf plan [-o dir] [-id name] <task> [task...]
+//	gonf apply [-n] <plan.jsonl>
 //	gonf <task> [task...]
 func CLI() int {
 	fs := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
@@ -60,25 +64,20 @@ func CLI() int {
 	}
 
 	if *list {
-		infos := Tasks()
-		if len(infos) == 0 {
-			fmt.Fprintln(os.Stderr, "no tasks registered")
-			return 1
-		}
-		for _, t := range infos {
-			if t.Description != "" {
-				fmt.Printf("%s\t%s\n", t.Name, t.Description)
-			} else {
-				fmt.Println(t.Name)
-			}
-		}
-		return 0
+		return cliList()
 	}
 
 	names := fs.Args()
 	if len(names) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: gonf [-list] [-version] [-profile=...] [-verbose|-quiet] [-dry-run|-n] <task> [task...]")
+		printUsage()
 		return 2
+	}
+
+	switch names[0] {
+	case "plan":
+		return cliPlan(names[1:])
+	case "apply":
+		return cliApply(names[1:])
 	}
 
 	if err := Run(names...); err != nil {
@@ -86,4 +85,104 @@ func CLI() int {
 		return 1
 	}
 	return 0
+}
+
+func cliList() int {
+	infos := Tasks()
+	if len(infos) == 0 {
+		fmt.Fprintln(os.Stderr, "no tasks registered")
+		return 1
+	}
+	for _, t := range infos {
+		if t.Description != "" {
+			fmt.Printf("%s\t%s\n", t.Name, t.Description)
+		} else {
+			fmt.Println(t.Name)
+		}
+	}
+	return 0
+}
+
+func cliPlan(args []string) int {
+	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	outDir := fs.String("o", ".", "output directory for plan.jsonl and blobs/")
+	planID := fs.String("id", "plan", "plan id written into the header")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	tasks := fs.Args()
+	if len(tasks) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: gonf plan [-o dir] [-id name] <task> [task...]")
+		return 2
+	}
+
+	ops, err := RecordPlan(*planID, *outDir, tasks...)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "plan: %v\n", err)
+		return 1
+	}
+	raw, err := plan.EncodePlan(ops)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "plan: encode: %v\n", err)
+		return 1
+	}
+	if err := os.MkdirAll(*outDir, 0o750); err != nil {
+		fmt.Fprintf(os.Stderr, "plan: %v\n", err)
+		return 1
+	}
+	outPath := filepath.Join(*outDir, "plan.jsonl")
+	if err := os.WriteFile(outPath, raw, 0o640); err != nil {
+		fmt.Fprintf(os.Stderr, "plan: write %s: %v\n", outPath, err)
+		return 1
+	}
+	fmt.Printf("wrote %s (%d ops)\n", outPath, len(ops))
+	return 0
+}
+
+func cliApply(args []string) int {
+	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	dryRun := fs.Bool("dry-run", false, "Preview changes without applying them")
+	dryRunShort := fs.Bool("n", false, "Alias for -dry-run")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *dryRun || *dryRunShort {
+		resource.SetDryRun(true)
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fmt.Fprintln(os.Stderr, "usage: gonf apply [-n|-dry-run] <plan.jsonl>")
+		return 2
+	}
+	planPath := rest[0]
+	raw, err := os.ReadFile(planPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "apply: read %s: %v\n", planPath, err)
+		return 1
+	}
+	ops, err := plan.DecodePlanBytes(raw)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "apply: %v\n", err)
+		return 1
+	}
+	f := DetectFacts()
+	planDir := filepath.Dir(planPath)
+	if err := plan.Apply(ops, plan.Facts{
+		GOOS:     f.GOOS,
+		Profile:  f.Profile,
+		Hostname: f.Hostname,
+	}, planDir); err != nil {
+		fmt.Fprintf(os.Stderr, "apply: %v\n", err)
+		return 1
+	}
+	fmt.Printf("applied %s (%d ops)\n", planPath, len(ops))
+	return 0
+}
+
+func printUsage() {
+	fmt.Fprintln(os.Stderr, "usage: gonf [-list] [-version] [-profile=...] [-verbose|-quiet] [-dry-run|-n] <task> [task...]")
+	fmt.Fprintln(os.Stderr, "       gonf plan [-o dir] [-id name] <task> [task...]")
+	fmt.Fprintln(os.Stderr, "       gonf apply [-n|-dry-run] <plan.jsonl>")
 }
