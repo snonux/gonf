@@ -1,0 +1,5 @@
+{"op":"plan","version":1,"id":"pkg_fedora"}
+{"op":"when_begin","id":"when.pkg_fedora","all":[{"fact":"profile","eq":"fedora"}]}
+{"op":"package","id":"Package[helix]","name":"helix"}
+{"op":"package","id":"Package[fish]","name":"fish"}
+{"op":"when_end"}

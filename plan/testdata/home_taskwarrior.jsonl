@@ -1,0 +1,4 @@
+{"op":"plan","version":1,"id":"home_taskwarrior"}
+{"op":"when_begin","id":"when.home_taskwarrior","all":[{"fact":"goos","eq":"linux"}]}
+{"op":"file","id":"File[${HOME}/.taskrc]","path":"${HOME}/.taskrc","mode":"0640","content_b64":"Li4u"}
+{"op":"when_end"}

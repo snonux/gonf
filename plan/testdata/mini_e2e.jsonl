@@ -1,0 +1,7 @@
+{"op":"plan","version":1,"id":"demo"}
+{"op":"link","id":"Symlink[.bash_profile]","path":"${HOME}/.bash_profile","symlink":"/home/paul/git/dotfiles/bash/bash_profile"}
+{"op":"link","id":"Symlink[.bashrc]","path":"${HOME}/.bashrc","symlink":"/home/paul/git/dotfiles/bash/bashrc"}
+{"op":"link","id":"Symlink[.vale.ini]","path":"${HOME}/.vale.ini","symlink":"/home/paul/git/dotfiles/vale.ini"}
+{"op":"when_begin","id":"when.home_taskwarrior","all":[{"fact":"goos","eq":"linux"}]}
+{"op":"file","id":"File[.taskrc]","path":"${HOME}/.taskrc","mode":"0640","content_b64":"Li4u"}
+{"op":"when_end"}

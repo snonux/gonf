@@ -1,0 +1,4 @@
+{"op":"plan","version":1,"id":"quickedit"}
+{"op":"ensure_dir","id":"EnsureDir[QuickEdit]","path":"${HOME}/QuickEdit","mode":"0700"}
+{"op":"link_if_exists","id":"LinkIfExists[QuickEdit/Notes]","path":"${HOME}/QuickEdit/Notes","target":"${HOME}/Notes"}
+{"op":"link_if_exists","id":"LinkIfExists[QuickEdit/dotfiles]","path":"${HOME}/QuickEdit/dotfiles","target":"${HOME}/git/dotfiles"}

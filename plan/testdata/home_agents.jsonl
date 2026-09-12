@@ -1,0 +1,6 @@
+{"op":"plan","version":1,"id":"home_agents"}
+{"op":"when_begin","id":"when.home_agents","all":[{"path_exists":"${HOME}/Notes/prompts/commands"}]}
+{"op":"ensure_dir","id":"EnsureDir[${HOME}/.cursor]","path":"${HOME}/.cursor","mode":"0750"}
+{"op":"link","id":"Symlink[.cursor/commands]","path":"${HOME}/.cursor/commands","symlink":"${HOME}/Notes/prompts/commands"}
+{"op":"link","id":"Symlink[.cursor/skills]","path":"${HOME}/.cursor/skills","symlink":"${HOME}/Notes/prompts/skills"}
+{"op":"when_end"}

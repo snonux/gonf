@@ -1,0 +1,4 @@
+{"op":"plan","version":1,"id":"home_systemd_user"}
+{"op":"sync_dir","id":"SyncDir[systemd-user]","path":"${HOME}/.config/systemd/user","blob":"blobs/systemd-user","prune":true}
+{"op":"command","id":"Command[systemctl.daemon-reload]","name":"systemctl.daemon-reload","bin":"systemctl","args":["--user","daemon-reload"]}
+{"op":"command","id":"Command[systemctl.enable.random-wallpaper]","name":"systemctl.enable.random-wallpaper","bin":"systemctl","args":["--user","enable","random-wallpaper.timer"],"unless":{"bin":"systemctl","args":["--user","is-enabled","random-wallpaper.timer"]}}
