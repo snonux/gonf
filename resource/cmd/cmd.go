@@ -26,6 +26,7 @@ type Cmd struct {
 	creates string
 	unless  *opt.Guard
 	onlyIf  *opt.Guard
+	elevate bool
 }
 
 func (c *Cmd) SetName(name string)          { c.name = name }
@@ -34,6 +35,7 @@ func (c *Cmd) SetEnv(env map[string]string) { c.env = env }
 func (c *Cmd) SetCreates(path string)       { c.creates = path }
 func (c *Cmd) SetUnless(g *opt.Guard)       { c.unless = g }
 func (c *Cmd) SetOnlyIf(g *opt.Guard)       { c.onlyIf = g }
+func (c *Cmd) SetElevate()                  { c.elevate = true }
 
 var (
 	_ opt.Named      = (*Cmd)(nil)
@@ -42,6 +44,7 @@ var (
 	_ opt.Creatable  = (*Cmd)(nil)
 	_ opt.Guardable  = (*Cmd)(nil)
 	_ opt.Dependable = (*Cmd)(nil)
+	_ opt.Elevatable = (*Cmd)(nil)
 )
 
 // Present registers a command resource that runs bin with args on Apply.
@@ -97,6 +100,7 @@ func (c *Cmd) planDraft(id string) resource.PlanDraft {
 	}
 	d.Unless = planGuardDraft(c.unless)
 	d.OnlyIf = planGuardDraft(c.onlyIf)
+	d.Elevate = c.elevate
 	return d
 }
 

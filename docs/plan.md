@@ -13,6 +13,9 @@ gonf fleet [-n] [-j N] <fleet> <task>…            # parallel push to inventory
 gonf hosts | fleets                               # list inventory
 ```
 
+Tasks marked `Privileged()` are applied via a separate `sudo -n` / `doas` `gonf apply`
+invocation (see Host `WithPrivilege`). Unprivileged tasks use plain `gonf apply`.
+
 ## Why
 
 Tasks are Go code. Shipping whole Go task trees to every host is awkward.
@@ -92,8 +95,27 @@ _ = PushFleet("frontends", "base", "commons")
 `Host` / `Fleet` auto-register. Look up with `LookupHost` / `MustHost` /
 `LookupFleet` / `MustFleet`. `Fleet` takes **`HostRef` handles** (not name
 strings); a host may appear **at most once** per fleet. Parallelism:
-`.Parallel(n)` on the fleet handle (`n < 1` → all hosts at once). Sudo/doas is
-out of scope.
+`.Parallel(n)` on the fleet handle (`n < 1` → all hosts at once).
+
+### Privilege (Task mark + Host helper)
+
+| Knob | API | Meaning |
+|------|-----|---------|
+| Whether root is needed | `Task(..., Privileged())` | Ops from that task get `elevate:true` |
+| How to get root | `Host(..., WithPrivilege(PrivilegeDoas\|Sudo\|None))` or `-privilege=` | Wrap privileged apply as `doas gonf apply` / `sudo -n gonf apply` |
+
+Default tasks are unprivileged. No auto-inference from `Package` vs `File`.
+`options.WithElevate` on a `Command` elevates a single op inside an unprivileged task.
+
+A `Run` / `push` / `fleet` that mixes both kinds **splits** the plan into ordered
+chunks and runs one `gonf apply` per chunk (plain vs wrapped).
+
+```go
+Task("home_tmux", "", func() { /* … */ })
+Task("pkg_openbsd", "", func() { Package("git") }, Privileged())
+Host("blowfish", WithSSHUser("rex"), WithSSHHost("blowfish.buetow.org"),
+    WithSSHPort(2), WithPrivilege(PrivilegeDoas))
+```
 
 ### Remote push (no local disk spill)
 

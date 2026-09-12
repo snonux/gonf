@@ -47,6 +47,7 @@ type (
 	EnableOnlyable interface{ SetEnableOnly() }
 	ChangeGated  interface{ SetIfChanged() }
 	Watchable    interface{ SetWatch([]string) }
+	Elevatable   interface{ SetElevate() }
 	CronUserable interface{ SetCronUser(string) }
 	Commandable  interface{ SetCommand(string) }
 	Minuteable   interface{ SetMinute(string) }
@@ -266,6 +267,18 @@ var WithUser = func(t any) {
 }
 
 func WithUserFunc() Option { return WithUser }
+
+// WithElevate marks a command (or other Elevatable) so its plan op has
+// elevate=true even inside an unprivileged task.
+var WithElevate = func(t any) {
+	r, ok := t.(Elevatable)
+	if !ok {
+		log.Fatalf("%T does not support WithElevate", t)
+	}
+	r.SetElevate()
+}
+
+func WithElevateFunc() Option { return WithElevate }
 
 // WithEnableOnly makes Timer converge enable/disable without start/stop.
 var WithEnableOnly = func(t any) {

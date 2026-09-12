@@ -1,0 +1,64 @@
+package api
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"os/exec"
+
+	"github.com/snonux/gonf/internal/privilege"
+	"github.com/snonux/gonf/plan"
+)
+
+// elevatedApplyRunner runs a privileged local apply chunk. Overridable in tests.
+var elevatedApplyRunner = defaultElevatedApply
+
+func defaultElevatedApply(mode privilege.Mode, ops []plan.Op, planDir string) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("elevated apply: executable: %w", err)
+	}
+	raw, err := plan.EncodePlan(ops)
+	if err != nil {
+		return err
+	}
+	// Write temp plan next to blobs so apply can resolve blob paths.
+	path := planDir + "/chunk-elevated.jsonl"
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		return err
+	}
+	argv := []string{exe, "apply", path}
+	argv, err = privilege.WrapArgv(mode, true, argv)
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = bytes.NewReader(nil)
+	return cmd.Run()
+}
+
+// ApplyChunks splits ops by elevate and applies each chunk: user chunks
+// in-process, privileged chunks via sudo/doas re-exec (or in-process if root).
+func ApplyChunks(ops []plan.Op, planDir string, mode privilege.Mode) error {
+	chunks := plan.SplitPrivilegeChunks(ops)
+	for i, ch := range chunks {
+		if !ch.Elevate {
+			if err := ApplyPlan(ch.Ops, planDir); err != nil {
+				return fmt.Errorf("chunk %d: %w", i, err)
+			}
+			continue
+		}
+		if mode == privilege.None && os.Geteuid() == 0 {
+			if err := ApplyPlan(ch.Ops, planDir); err != nil {
+				return fmt.Errorf("chunk %d: %w", i, err)
+			}
+			continue
+		}
+		if err := elevatedApplyRunner(mode, ch.Ops, planDir); err != nil {
+			return fmt.Errorf("chunk %d (elevated): %w", i, err)
+		}
+	}
+	return nil
+}

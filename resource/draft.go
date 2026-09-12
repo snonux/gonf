@@ -57,6 +57,9 @@ type PlanDraft struct {
 	IfChanged bool
 	// Watch lists resource ids for IfChanged (usually DependsOn targets).
 	Watch []string
+
+	// Elevate forces elevate=true on this draft (e.g. options.WithElevate).
+	Elevate bool
 }
 
 var (

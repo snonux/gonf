@@ -10,6 +10,9 @@ import (
 	"github.com/snonux/gonf/resource"
 )
 
+// recordingElevate is set while recording a Privileged() task body.
+var recordingElevate bool
+
 // RecordPlan runs the named tasks in plan-record mode: resource registration
 // emits plan.Op lines instead of applying. Tasks are looked up as candidates
 // (not Activate-filtered) so When* recipes become when_begin/when_end rather
@@ -84,23 +87,29 @@ func recordTaskBodies(taskNames []string, packErr *error) error {
 		if err != nil {
 			return err
 		}
+
+		prevElevate := recordingElevate
+		recordingElevate = c.privileged
 		if len(wrapWhen) > 0 {
 			plan.Record(plan.Op{
-				Op:  plan.KindWhenBegin,
-				ID:  "when." + name,
-				All: wrapWhen,
+				Op:      plan.KindWhenBegin,
+				ID:      "when." + name,
+				All:     wrapWhen,
+				Elevate: recordingElevate,
 			})
 		}
 
 		resource.ResetRepository()
 		c.fn()
 		if packErr != nil && *packErr != nil {
+			recordingElevate = prevElevate
 			return *packErr
 		}
 
 		if len(wrapWhen) > 0 {
-			plan.Record(plan.Op{Op: plan.KindWhenEnd})
+			plan.Record(plan.Op{Op: plan.KindWhenEnd, Elevate: recordingElevate})
 		}
+		recordingElevate = prevElevate
 	}
 	return nil
 }
@@ -226,6 +235,7 @@ func draftToOp(d resource.PlanDraft) plan.Op {
 		EnableOnly: d.EnableOnly,
 		IfChanged:  d.IfChanged,
 		Watch:      d.Watch,
+		Elevate:    d.Elevate || recordingElevate,
 	}
 	switch d.Kind {
 	case "file":

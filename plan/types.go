@@ -10,7 +10,7 @@ const CurrentVersion = 2
 // supportedVersions is the set of plan schema versions this binary can apply.
 // Apply must refuse plans whose version is not in this set before any mutation.
 var supportedVersions = map[int]struct{}{
-	1: {},
+	1:              {},
 	CurrentVersion: {},
 }
 
@@ -143,6 +143,10 @@ type Op struct {
 	IfChanged bool `json:"if_changed,omitempty"`
 	// Watch lists resource ids consulted when IfChanged is set.
 	Watch []string `json:"watch,omitempty"`
+
+	// Elevate marks ops from a Privileged() task (or WithElevate command).
+	// Controllers use this to split apply into user vs sudo/doas gonf invocations.
+	Elevate bool `json:"elevate,omitempty"`
 
 	// All is the conjunctive predicate list for KindWhenBegin.
 	All []Predicate `json:"all,omitempty"`

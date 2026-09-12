@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"fmt"
 	"log"
 	"os"
@@ -11,6 +10,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/plan"
 )
 
@@ -26,11 +26,12 @@ type HostRef struct {
 type HostOption func(*hostRecord)
 
 type hostRecord struct {
-	name     string
-	user     string
-	sshHost  string
-	port     int
-	identity string
+	name      string
+	user      string
+	sshHost   string
+	port      int
+	identity  string
+	privilege privilege.Mode
 }
 
 // FleetRef is an opaque handle for a named set of hosts.
@@ -47,11 +48,12 @@ type fleetRecord struct {
 
 // HostInfo is a listing row for registered hosts.
 type HostInfo struct {
-	Name     string
-	User     string
-	SSHHost  string
-	Port     int
-	Identity string
+	Name      string
+	User      string
+	SSHHost   string
+	Port      int
+	Identity  string
+	Privilege string
 }
 
 // FleetInfo is a listing row for registered fleets.
@@ -86,6 +88,18 @@ func WithSSHPort(port int) HostOption {
 // WithSSHIdentity sets ssh -i path.
 func WithSSHIdentity(path string) HostOption {
 	return func(h *hostRecord) { h.identity = path }
+}
+
+// Privilege mode aliases for Host WithPrivilege.
+const (
+	PrivilegeNone = privilege.None
+	PrivilegeSudo = privilege.Sudo
+	PrivilegeDoas = privilege.Doas
+)
+
+// WithPrivilege sets how privileged apply chunks are wrapped on this host.
+func WithPrivilege(mode privilege.Mode) HostOption {
+	return func(h *hostRecord) { h.privilege = mode }
 }
 
 // Host registers a connection in the host registry and returns a handle.
@@ -216,11 +230,12 @@ func Hosts() []HostInfo {
 	out := make([]HostInfo, 0, len(hostsByName))
 	for _, rec := range hostsByName {
 		out = append(out, HostInfo{
-			Name:     rec.name,
-			User:     rec.user,
-			SSHHost:  rec.sshHost,
-			Port:     rec.port,
-			Identity: rec.identity,
+			Name:      rec.name,
+			User:      rec.user,
+			SSHHost:   rec.sshHost,
+			Port:      rec.port,
+			Identity:  rec.identity,
+			Privilege: rec.privilege.String(),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -260,10 +275,11 @@ func (h HostRef) pushTarget() (PushTarget, error) {
 		return PushTarget{}, fmt.Errorf("host %q is not registered", h.name)
 	}
 	return PushTarget{
-		User:     rec.user,
-		Host:     rec.sshHost,
-		Port:     rec.port,
-		Identity: rec.identity,
+		User:      rec.user,
+		Host:      rec.sshHost,
+		Port:      rec.port,
+		Identity:  rec.identity,
+		Privilege: rec.privilege,
 	}, nil
 }
 
@@ -332,11 +348,6 @@ func pushFleet(name, planID string, parallelOverride int, tasks ...string) error
 	if err != nil {
 		return fmt.Errorf("record: %w", err)
 	}
-	var buf bytes.Buffer
-	if err := plan.EncodePush(&buf, ops, mem); err != nil {
-		return fmt.Errorf("encode: %w", err)
-	}
-	payload := buf.Bytes()
 
 	var (
 		eg     errgroup.Group
@@ -347,7 +358,7 @@ func pushFleet(name, planID string, parallelOverride int, tasks ...string) error
 	for i := range targets {
 		i := i
 		eg.Go(func() error {
-			if err := PushPayload(targets[i], payload); err != nil {
+			if err := pushChunks(targets[i], planID+"-"+labels[i], ops, mem); err != nil {
 				errMu.Lock()
 				failed = append(failed, fmt.Sprintf("%s: %v", labels[i], err))
 				errMu.Unlock()

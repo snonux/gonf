@@ -7,9 +7,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
@@ -27,13 +29,23 @@ var sshRunner = func(stdin io.Reader, argv []string) error {
 	return cmd.Run()
 }
 
+// processPrivilege is the CLI/local default for wrapping privileged chunks.
+var processPrivilege = privilege.None
+
+// SetPrivilege sets the process-wide privilege helper (CLI -privilege).
+func SetPrivilege(mode privilege.Mode) { processPrivilege = mode }
+
+// Privilege returns the process-wide privilege helper.
+func Privilege() privilege.Mode { return processPrivilege }
+
 // PushTarget is one SSH destination (inventory optional).
 type PushTarget struct {
-	User     string
-	Host     string // SSH hostname or user@host when User is empty (CLI form)
-	Port     int
-	Identity string
-	ExtraSSH []string // optional raw ssh argv inserted after "ssh"
+	User      string
+	Host      string // SSH hostname or user@host when User is empty (CLI form)
+	Port      int
+	Identity  string
+	ExtraSSH  []string // optional raw ssh argv inserted after "ssh"
+	Privilege privilege.Mode
 }
 
 func (t PushTarget) destination() string {
@@ -41,6 +53,10 @@ func (t PushTarget) destination() string {
 		return t.User + "@" + t.Host
 	}
 	return t.Host
+}
+
+func (t PushTarget) privilegeMode() privilege.Mode {
+	return t.Privilege
 }
 
 func (t PushTarget) sshArgv(remoteCmd string) []string {
@@ -56,22 +72,36 @@ func (t PushTarget) sshArgv(remoteCmd string) []string {
 	return argv
 }
 
-func remoteApplyCmd() string {
+func remoteApplyCmd(elevate bool, mode privilege.Mode, applyDir string) (string, error) {
+	args := "apply -"
 	if resource.DryRun() {
-		return "gonf apply -n -"
+		args = "apply -n -"
 	}
-	return "gonf apply -"
+	if applyDir != "" {
+		args = "apply -apply-dir " + applyDir + " " + strings.TrimPrefix(args, "apply ")
+		// produce: apply -apply-dir DIR -   or apply -apply-dir DIR -n -
+		if resource.DryRun() {
+			args = "apply -apply-dir " + applyDir + " -n -"
+		} else {
+			args = "apply -apply-dir " + applyDir + " -"
+		}
+	}
+	return privilege.WrapApplyCmd(mode, elevate, args)
 }
 
 // PushPayload streams an already-encoded GONF-PUSH/1 blob to one SSH target.
-func PushPayload(t PushTarget, payload []byte) error {
+func PushPayload(t PushTarget, payload []byte, elevate bool, applyDir string) error {
 	if t.Host == "" {
 		return fmt.Errorf("push: empty host")
 	}
-	return sshRunner(bytes.NewReader(payload), t.sshArgv(remoteApplyCmd()))
+	remote, err := remoteApplyCmd(elevate, t.privilegeMode(), applyDir)
+	if err != nil {
+		return err
+	}
+	return sshRunner(bytes.NewReader(payload), t.sshArgv(remote))
 }
 
-// PushTo records tasks into memory, encodes GONF-PUSH/1, and streams over SSH.
+// PushTo records tasks, splits privilege chunks, and streams each chunk over SSH.
 func PushTo(t PushTarget, planID string, tasks ...string) error {
 	if len(tasks) == 0 {
 		return fmt.Errorf("push: no tasks")
@@ -84,15 +114,69 @@ func PushTo(t PushTarget, planID string, tasks ...string) error {
 	if err != nil {
 		return fmt.Errorf("record: %w", err)
 	}
-	var buf bytes.Buffer
-	if err := plan.EncodePush(&buf, ops, mem); err != nil {
-		return fmt.Errorf("encode: %w", err)
-	}
-	if err := PushPayload(t, buf.Bytes()); err != nil {
+	if err := pushChunks(t, planID, ops, mem); err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "pushed %s (%d ops) to %s\n", planID, len(ops), t.destination())
 	return nil
+}
+
+func pushChunks(t PushTarget, planID string, ops []plan.Op, mem *plan.MemoryStore) error {
+	chunks := plan.SplitPrivilegeChunks(ops)
+	hasBlobs := mem != nil && mem.HasBlobs()
+	sticky := ""
+	if hasBlobs && len(chunks) > 1 {
+		sticky = filepath.Join("${TMPDIR:-/tmp}", "gonf-apply-sticky", planID)
+		// Use a concrete remote path; expand TMPDIR on remote via shell.
+		sticky = "/tmp/gonf-apply-sticky-" + sanitizeID(planID)
+	}
+
+	for i, ch := range chunks {
+		chunkMem := mem
+		applyDir := ""
+		keep := false
+		if hasBlobs {
+			if i == 0 {
+				applyDir = sticky
+				keep = len(chunks) > 1 && sticky != ""
+			} else {
+				chunkMem = nil // plan-only; blobs already on remote
+				applyDir = sticky
+			}
+		}
+		var buf bytes.Buffer
+		if err := plan.EncodePush(&buf, ch.Ops, chunkMem); err != nil {
+			return fmt.Errorf("encode chunk %d: %w", i, err)
+		}
+		remote, err := remoteApplyCmd(ch.Elevate, t.privilegeMode(), applyDir)
+		if err != nil {
+			return err
+		}
+		if keep && applyDir != "" {
+			// First chunk: ensure dir exists and ask apply not to wipe it.
+			remote = "mkdir -p " + applyDir + " && " + remote
+		}
+		_ = keep
+		if err := sshRunner(bytes.NewReader(buf.Bytes()), t.sshArgv(remote)); err != nil {
+			return fmt.Errorf("chunk %d (elevate=%v): %w", i, ch.Elevate, err)
+		}
+	}
+	return nil
+}
+
+func sanitizeID(id string) string {
+	var b strings.Builder
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	if b.Len() == 0 {
+		return "plan"
+	}
+	return b.String()
 }
 
 func cliPush(args []string) int {
@@ -101,6 +185,7 @@ func cliPush(args []string) int {
 	dryRun := fs.Bool("dry-run", false, "Remote dry-run (-n on apply)")
 	dryRunShort := fs.Bool("n", false, "Alias for -dry-run")
 	planID := fs.String("id", "push", "plan id written into the header")
+	privFlag := fs.String("privilege", "", "none|sudo|doas for privileged chunks")
 
 	pushFlags, rest := takePushFlags(args)
 	if err := fs.Parse(pushFlags); err != nil {
@@ -112,15 +197,24 @@ func cliPush(args []string) int {
 
 	sshOpts, pos := parsePushArgs(rest)
 	if len(pos) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: gonf push [-n|-dry-run] [-id name] [-- ssh-args...] user@host <task> [task...]")
+		fmt.Fprintln(os.Stderr, "usage: gonf push [-n|-dry-run] [-id name] [-privilege=sudo|doas|none] [-- ssh-args...] user@host <task> [task...]")
 		return 2
 	}
 
 	if *dryRun || *dryRunShort {
 		resource.SetDryRun(true)
 	}
+	mode := processPrivilege
+	if *privFlag != "" {
+		m, err := privilege.ParseMode(*privFlag)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "push: %v\n", err)
+			return 2
+		}
+		mode = m
+	}
 
-	t := PushTarget{Host: pos[0], ExtraSSH: sshOpts}
+	t := PushTarget{Host: pos[0], ExtraSSH: sshOpts, Privilege: mode}
 	if err := PushTo(t, *planID, pos[1:]...); err != nil {
 		fmt.Fprintf(os.Stderr, "push: %v\n", err)
 		return 1
@@ -145,7 +239,7 @@ func takePushFlags(args []string) (pushFlags, rest []string) {
 		case "n", "dry-run":
 			pushFlags = append(pushFlags, a)
 			i++
-		case "id":
+		case "id", "privilege":
 			if hasVal {
 				pushFlags = append(pushFlags, a)
 				i++

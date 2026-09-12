@@ -8,6 +8,7 @@ import (
 
 	"github.com/snonux/gonf/internal"
 	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
@@ -33,6 +34,7 @@ func CLI() int {
 	quiet := fs.Bool("quiet", false, "Only warnings and errors (summary still printed)")
 	dryRun := fs.Bool("dry-run", false, "Preview changes without applying them")
 	dryRunShort := fs.Bool("n", false, "Alias for -dry-run")
+	privFlag := fs.String("privilege", "none", "Privilege helper for Privileged() tasks: none|sudo|doas")
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return 2
@@ -49,6 +51,12 @@ func CLI() int {
 
 	if *dryRun || *dryRunShort {
 		resource.SetDryRun(true)
+	}
+	if m, err := privilege.ParseMode(*privFlag); err != nil {
+		fmt.Fprintf(os.Stderr, "privilege: %v\n", err)
+		return 2
+	} else {
+		SetPrivilege(m)
 	}
 
 	if *profile != "" {
@@ -181,6 +189,7 @@ func cliApply(args []string) int {
 	fs.SetOutput(os.Stderr)
 	dryRun := fs.Bool("dry-run", false, "Preview changes without applying them")
 	dryRunShort := fs.Bool("n", false, "Alias for -dry-run")
+	applyDir := fs.String("apply-dir", "", "sticky staging dir for multi-chunk push (skip wipe)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -189,12 +198,12 @@ func cliApply(args []string) int {
 	}
 	rest := fs.Args()
 	if len(rest) != 1 {
-		fmt.Fprintln(os.Stderr, "usage: gonf apply [-n|-dry-run] <plan.jsonl|->")
+		fmt.Fprintln(os.Stderr, "usage: gonf apply [-n|-dry-run] [-apply-dir dir] <plan.jsonl|->")
 		return 2
 	}
 	planPath := rest[0]
 	if planPath == "-" {
-		return cliApplyStdin()
+		return cliApplyStdin(*applyDir)
 	}
 	raw, err := os.ReadFile(planPath)
 	if err != nil {
@@ -215,11 +224,26 @@ func cliApply(args []string) int {
 	return 0
 }
 
-func cliApplyStdin() int {
-	runDir, cleanup, err := plan.NewApplyRunDir()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "apply: run dir: %v\n", err)
-		return 1
+func cliApplyStdin(applyDir string) int {
+	var (
+		runDir  string
+		cleanup func()
+		err     error
+	)
+	if applyDir != "" {
+		if err := os.MkdirAll(applyDir, 0o700); err != nil {
+			fmt.Fprintf(os.Stderr, "apply: apply-dir: %v\n", err)
+			return 1
+		}
+		_ = os.Chmod(applyDir, 0o700)
+		runDir = applyDir
+		cleanup = func() {} // sticky — caller owns lifecycle
+	} else {
+		runDir, cleanup, err = plan.NewApplyRunDir()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "apply: run dir: %v\n", err)
+			return 1
+		}
 	}
 	defer cleanup()
 
@@ -229,6 +253,9 @@ func cliApplyStdin() int {
 		return 1
 	}
 	planDir := payload.PlanDir
+	if planDir == "" && applyDir != "" {
+		planDir = applyDir
+	}
 	if err := ApplyPlan(payload.Ops, planDir); err != nil {
 		fmt.Fprintf(os.Stderr, "apply: %v\n", err)
 		return 1
@@ -242,10 +269,10 @@ func cliApplyStdin() int {
 }
 
 func printUsage() {
-	fmt.Fprintln(os.Stderr, "usage: gonf [-list] [-version] [-profile=...] [-verbose|-quiet] [-dry-run|-n] <task> [task...]")
+	fmt.Fprintln(os.Stderr, "usage: gonf [-list] [-version] [-profile=...] [-verbose|-quiet] [-dry-run|-n] [-privilege=none|sudo|doas] <task> [task...]")
 	fmt.Fprintln(os.Stderr, "       gonf plan [-o dir|-stdout] [-id name] <task> [task...]")
-	fmt.Fprintln(os.Stderr, "       gonf apply [-n|-dry-run] <plan.jsonl|->")
-	fmt.Fprintln(os.Stderr, "       gonf push [-n] [-id name] [-- ssh-args...] user@host <task> [task...]")
+	fmt.Fprintln(os.Stderr, "       gonf apply [-n|-dry-run] [-apply-dir dir] <plan.jsonl|->")
+	fmt.Fprintln(os.Stderr, "       gonf push [-n] [-id name] [-privilege=...] [-- ssh-args...] user@host <task> [task...]")
 	fmt.Fprintln(os.Stderr, "       gonf fleet [-n] [-j N] [-id name] <fleet> <task> [task...]")
 	fmt.Fprintln(os.Stderr, "       gonf hosts | fleets")
 }

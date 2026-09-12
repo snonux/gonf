@@ -35,6 +35,8 @@ type taskCandidate struct {
 	// opaqueWhen is true when a custom When(func) was used and cannot be
 	// lowered into plan recipes.
 	opaqueWhen bool
+	// privileged tags recorded ops with elevate=true for split apply.
+	privileged bool
 }
 
 // TaskOption configures a deferred task candidate.
@@ -46,6 +48,12 @@ var (
 	tasks      = map[string]task{}
 	activated  bool
 )
+
+// Privileged marks the task so recorded plan ops get elevate=true.
+// Controllers split apply into a sudo/doas gonf invocation for those ops.
+func Privileged() TaskOption {
+	return func(c *taskCandidate) { c.privileged = true }
+}
 
 // When skips activating the task unless pred(facts) is true.
 // Custom predicates are not serializable for remote plans; prefer WhenLinux,
@@ -198,7 +206,7 @@ func Run(names ...string) error {
 	if err != nil {
 		return err
 	}
-	return ApplyPlan(ops, planDir)
+	return ApplyChunks(ops, planDir, processPrivilege)
 }
 
 // ResetTasks clears candidates and activated tasks. Intended for tests.
