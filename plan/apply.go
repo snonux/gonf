@@ -8,6 +8,7 @@ import (
 
 	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/resource/dir"
+	"github.com/snonux/gonf/resource/file"
 	"github.com/snonux/gonf/resource/link"
 )
 
@@ -21,8 +22,9 @@ type Facts struct {
 // Apply interprets ops against live host facts and the local filesystem.
 // ops[0] must be a plan header that passes ValidateHeader. Stackable
 // when_begin/when_end blocks skip inactive bodies without mutation.
-// Resource ops other than ensure_dir and link_if_exists are not wired yet.
-func Apply(ops []Op, facts Facts) error {
+// planDir is the directory containing blobs/ sidecars (usually next to the
+// plan JSONL). Pass "" when the plan only uses content_b64 and no blobs.
+func Apply(ops []Op, facts Facts, planDir string) error {
 	if len(ops) == 0 {
 		return fmt.Errorf("plan: apply: empty plan")
 	}
@@ -33,7 +35,7 @@ func Apply(ops []Op, facts Facts) error {
 	var stack []bool
 	for i, op := range ops[1:] {
 		lineNo := i + 2
-		if err := applyLine(op, facts, &stack); err != nil {
+		if err := applyLine(op, facts, planDir, &stack); err != nil {
 			return fmt.Errorf("plan: apply line %d: %w", lineNo, err)
 		}
 	}
@@ -43,7 +45,7 @@ func Apply(ops []Op, facts Facts) error {
 	return nil
 }
 
-func applyLine(op Op, facts Facts, stack *[]bool) error {
+func applyLine(op Op, facts Facts, planDir string, stack *[]bool) error {
 	active := whenActive(*stack)
 
 	switch op.Op {
@@ -73,7 +75,7 @@ func applyLine(op Op, facts Facts, stack *[]bool) error {
 	if !active {
 		return nil
 	}
-	return applyActive(op)
+	return applyActive(op, planDir)
 }
 
 func whenActive(stack []bool) bool {
@@ -83,17 +85,109 @@ func whenActive(stack []bool) bool {
 	return stack[len(stack)-1]
 }
 
-func applyActive(op Op) error {
+func applyActive(op Op, planDir string) error {
 	switch op.Op {
 	case KindEnsureDir:
 		return applyEnsureDir(op)
 	case KindLinkIfExists:
 		return applyLinkIfExists(op)
-	case KindLink, KindFile, KindDir, KindPackage, KindCommand, KindSyncDir:
+	case KindFile:
+		return applyFile(op, planDir)
+	case KindSyncDir:
+		return applySyncDir(op, planDir)
+	case KindLink, KindDir, KindPackage, KindCommand:
 		return fmt.Errorf("op %q apply not implemented", op.Op)
 	default:
 		return fmt.Errorf("unknown op %q", op.Op)
 	}
+}
+
+func applyFile(op Op, planDir string) error {
+	path, err := ExpandPath(op.Path)
+	if err != nil {
+		return err
+	}
+	if path == "" {
+		return fmt.Errorf("file: missing path")
+	}
+	if op.Absent {
+		return file.Ensure(path, opt.IsAbsent)
+	}
+	if op.AddLine != "" || op.RemoveLine != "" {
+		return fmt.Errorf("file: add_line/remove_line apply not implemented")
+	}
+
+	var content []byte
+	switch {
+	case op.ContentB64 != "":
+		data, err := DecodeContentB64(op.ContentB64)
+		if err != nil {
+			return err
+		}
+		content = data
+	case op.Blob != "":
+		data, err := ReadFile(planDir, op.Blob)
+		if err != nil {
+			return err
+		}
+		content = data
+	default:
+		return fmt.Errorf("file: missing content_b64 and blob")
+	}
+
+	opts := []opt.Option{opt.WithContent(string(content))}
+	if op.Mode != "" {
+		mode, err := parseMode(op.Mode)
+		if err != nil {
+			return fmt.Errorf("file: %w", err)
+		}
+		opts = append(opts, opt.WithMode(mode))
+	}
+	return file.Ensure(path, opts...)
+}
+
+func applySyncDir(op Op, planDir string) error {
+	path, err := ExpandPath(op.Path)
+	if err != nil {
+		return err
+	}
+	if path == "" {
+		return fmt.Errorf("sync_dir: missing path")
+	}
+	if op.Blob == "" {
+		return fmt.Errorf("sync_dir: missing blob id")
+	}
+	src, err := Resolve(planDir, op.Blob)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(src)
+	if err != nil {
+		return fmt.Errorf("sync_dir: blob %q: %w", op.Blob, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("sync_dir: blob %q is not a directory", op.Blob)
+	}
+
+	opts := []opt.Option{opt.WithSource(src)}
+	if op.Mode != "" {
+		mode, err := parseMode(op.Mode)
+		if err != nil {
+			return fmt.Errorf("sync_dir: %w", err)
+		}
+		opts = append(opts, opt.WithMode(mode))
+	}
+	if op.FileMode != "" {
+		mode, err := parseMode(op.FileMode)
+		if err != nil {
+			return fmt.Errorf("sync_dir: file_mode: %w", err)
+		}
+		opts = append(opts, opt.WithFileMode(mode))
+	}
+	if op.Prune {
+		opts = append(opts, opt.WithPrune)
+	}
+	return dir.Ensure(path, opts...)
 }
 
 func applyEnsureDir(op Op) error {

@@ -255,11 +255,11 @@ func (d *Dir) planDraft() resource.PlanDraft {
 	switch {
 	case d.sourceGlob != "":
 		draft.Kind = "sync_dir"
-		draft.Blob = d.sourceGlob
+		draft.SourceGlob = d.sourceGlob
 		draft.FileMode = fmt.Sprintf("%#o", d.fileMode&os.ModePerm)
 	case d.source != "":
 		draft.Kind = "sync_dir"
-		draft.Blob = d.source
+		draft.SourceDir = d.source
 		draft.FileMode = fmt.Sprintf("%#o", d.fileMode&os.ModePerm)
 	default:
 		draft.Kind = "dir"
@@ -270,4 +270,19 @@ func (d *Dir) planDraft() resource.PlanDraft {
 func Absent(path string, opts ...opt.Option) resource.Resource {
 	opts = append(opts, opt.IsAbsent)
 	return Present(path, opts...)
+}
+
+// EnsurePlanDraft builds an ensure_dir PlanDraft without registering or applying.
+// Used by api.EnsureDir in plan-record mode.
+func EnsurePlanDraft(path string, opts ...opt.Option) (resource.PlanDraft, error) {
+	d, err := build(path, opts...)
+	if err != nil {
+		return resource.PlanDraft{}, err
+	}
+	return resource.PlanDraft{
+		Kind: "ensure_dir",
+		Path: d.path,
+		Mode: fmt.Sprintf("%#o", d.mode&os.ModePerm),
+		ID:   fmt.Sprintf("EnsureDir[%s]", d.path),
+	}, nil
 }

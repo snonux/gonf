@@ -22,7 +22,7 @@ func TestApplyWhenFactBranches(t *testing.T) {
 		{Op: KindEnsureDir, Path: created, Mode: "0750"},
 		{Op: KindWhenEnd},
 	}
-	if err := Apply(opsTrue, Facts{GOOS: "linux"}); err != nil {
+	if err := Apply(opsTrue, Facts{GOOS: "linux"}, ""); err != nil {
 		t.Fatalf("true branch: %v", err)
 	}
 	if _, err := os.Stat(created); err != nil {
@@ -35,7 +35,7 @@ func TestApplyWhenFactBranches(t *testing.T) {
 		{Op: KindEnsureDir, Path: skipped, Mode: "0750"},
 		{Op: KindWhenEnd},
 	}
-	if err := Apply(opsFalse, Facts{GOOS: "darwin"}); err != nil {
+	if err := Apply(opsFalse, Facts{GOOS: "darwin"}, ""); err != nil {
 		t.Fatalf("false branch: %v", err)
 	}
 	if _, err := os.Stat(skipped); !os.IsNotExist(err) {
@@ -59,7 +59,7 @@ func TestApplyWhenPathExistsBranches(t *testing.T) {
 		{Op: KindEnsureDir, Path: whenPresent, Mode: "0750"},
 		{Op: KindWhenEnd},
 	}
-	if err := Apply(opsPresent, Facts{}); err != nil {
+	if err := Apply(opsPresent, Facts{}, ""); err != nil {
 		t.Fatalf("path present: %v", err)
 	}
 	if _, err := os.Stat(whenPresent); err != nil {
@@ -72,7 +72,7 @@ func TestApplyWhenPathExistsBranches(t *testing.T) {
 		{Op: KindEnsureDir, Path: whenAbsent, Mode: "0750"},
 		{Op: KindWhenEnd},
 	}
-	if err := Apply(opsAbsent, Facts{}); err != nil {
+	if err := Apply(opsAbsent, Facts{}, ""); err != nil {
 		t.Fatalf("path absent: %v", err)
 	}
 	if _, err := os.Stat(whenAbsent); !os.IsNotExist(err) {
@@ -100,7 +100,7 @@ func TestApplyNestedWhen(t *testing.T) {
 		{Op: KindEnsureDir, Path: outerSkip, Mode: "0700"},
 		{Op: KindWhenEnd},
 	}
-	if err := Apply(ops, Facts{GOOS: "linux", Profile: "fedora"}); err != nil {
+	if err := Apply(ops, Facts{GOOS: "linux", Profile: "fedora"}, ""); err != nil {
 		t.Fatalf("nested: %v", err)
 	}
 	if _, err := os.Stat(innerOK); err != nil {
@@ -136,7 +136,7 @@ func TestApplySkipDoesNotMutate(t *testing.T) {
 		{Op: KindLinkIfExists, Path: stale, Target: filepath.Join(root, "missing")},
 		{Op: KindWhenEnd},
 	}
-	if err := Apply(ops, Facts{GOOS: "linux"}); err != nil {
+	if err := Apply(ops, Facts{GOOS: "linux"}, ""); err != nil {
 		t.Fatalf("skip apply: %v", err)
 	}
 	if _, err := os.Stat(dirPath); !os.IsNotExist(err) {
@@ -155,7 +155,7 @@ func TestApplyMismatchedWhenEnd(t *testing.T) {
 		header(),
 		{Op: KindWhenEnd},
 	}
-	err := Apply(ops, Facts{})
+	err := Apply(ops, Facts{}, "")
 	if err == nil || !strings.Contains(err.Error(), "when_end without matching") {
 		t.Fatalf("want mismatched end error, got %v", err)
 	}
@@ -166,7 +166,7 @@ func TestApplyUnclosedWhenBegin(t *testing.T) {
 		header(),
 		{Op: KindWhenBegin, All: []Predicate{{Fact: "goos", Eq: "linux"}}},
 	}
-	err := Apply(ops, Facts{GOOS: "linux"})
+	err := Apply(ops, Facts{GOOS: "linux"}, "")
 	if err == nil || !strings.Contains(err.Error(), "unclosed when_begin") {
 		t.Fatalf("want unclosed error, got %v", err)
 	}
@@ -189,7 +189,7 @@ func TestApplyLinkIfExistsBranches(t *testing.T) {
 		header(),
 		{Op: KindLinkIfExists, Path: linkOK, Target: target},
 	}
-	if err := Apply(opsPresent, Facts{}); err != nil {
+	if err := Apply(opsPresent, Facts{}, ""); err != nil {
 		t.Fatalf("target present: %v", err)
 	}
 	got, err := os.Readlink(linkOK)
@@ -204,7 +204,7 @@ func TestApplyLinkIfExistsBranches(t *testing.T) {
 		header(),
 		{Op: KindLinkIfExists, Path: linkGone, Target: filepath.Join(root, "nope")},
 	}
-	if err := Apply(opsAbsent, Facts{}); err != nil {
+	if err := Apply(opsAbsent, Facts{}, ""); err != nil {
 		t.Fatalf("target absent: %v", err)
 	}
 	if _, err := os.Lstat(linkGone); !os.IsNotExist(err) {
@@ -219,7 +219,7 @@ func TestApplyEnsureDir(t *testing.T) {
 		header(),
 		{Op: KindEnsureDir, Path: path, Mode: "0700"},
 	}
-	if err := Apply(ops, Facts{}); err != nil {
+	if err := Apply(ops, Facts{}, ""); err != nil {
 		t.Fatalf("ensure_dir: %v", err)
 	}
 	info, err := os.Stat(path)
@@ -251,7 +251,7 @@ func TestApplyHostnameContainsAndConjunctive(t *testing.T) {
 		{Op: KindEnsureDir, Path: okPath, Mode: "0750"},
 		{Op: KindWhenEnd},
 	}
-	if err := Apply(opsOK, Facts{GOOS: "linux", Hostname: "my-rocky-box"}); err != nil {
+	if err := Apply(opsOK, Facts{GOOS: "linux", Hostname: "my-rocky-box"}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(okPath); err != nil {
@@ -270,7 +270,7 @@ func TestApplyHostnameContainsAndConjunctive(t *testing.T) {
 		{Op: KindEnsureDir, Path: failPath, Mode: "0750"},
 		{Op: KindWhenEnd},
 	}
-	if err := Apply(opsFail, Facts{GOOS: "linux", Hostname: "fedora-laptop"}); err != nil {
+	if err := Apply(opsFail, Facts{GOOS: "linux", Hostname: "fedora-laptop"}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(failPath); !os.IsNotExist(err) {
@@ -279,7 +279,7 @@ func TestApplyHostnameContainsAndConjunctive(t *testing.T) {
 }
 
 func TestApplyRejectsBadHeader(t *testing.T) {
-	err := Apply([]Op{{Op: KindEnsureDir, Path: "/tmp/x"}}, Facts{})
+	err := Apply([]Op{{Op: KindEnsureDir, Path: "/tmp/x"}}, Facts{}, "")
 	if err == nil {
 		t.Fatal("expected header validation error")
 	}

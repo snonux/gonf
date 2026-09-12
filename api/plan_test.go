@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
@@ -21,15 +22,30 @@ func TestRecordPlanEmitsOrderedOpsWithGuards(t *testing.T) {
 	})
 
 	dir := t.TempDir()
+	planDir := filepath.Join(dir, "plan-out")
+	srcDir := filepath.Join(dir, "src")
+	if err := os.MkdirAll(srcDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "unit.service"), []byte("[Unit]\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
 	linkPath := filepath.Join(dir, "bashrc")
 	filePath := filepath.Join(dir, "taskrc")
+	installSrc := filepath.Join(dir, "gitconfig")
+	if err := os.WriteFile(installSrc, []byte("user.name=test\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	installDst := filepath.Join(dir, "out-gitconfig")
 	syncPath := filepath.Join(dir, "systemd")
 
 	Task("demo_home", "record demo", func() {
 		Link(linkPath, options.WithSymlink("/dotfiles/bashrc"))
 		File(filePath, options.WithContent("set x=1\n"), options.WithMode(0o640))
+		InstallFile(installDst, installSrc)
 		Dir(filepath.Join(dir, "empty"), options.WithMode(0o700))
-		SyncDir(syncPath, filepath.Join(dir, "src", "*"), options.WithPrune)
+		SyncDir(syncPath, filepath.Join(srcDir, "*"), options.WithPrune)
 		Package("fish")
 		Command("systemctl", []string{"--user", "enable", "x.timer"},
 			options.WithName("enable.x"),
@@ -38,7 +54,7 @@ func TestRecordPlanEmitsOrderedOpsWithGuards(t *testing.T) {
 		)
 	})
 
-	ops, err := RecordPlan("demo-plan", "demo_home")
+	ops, err := RecordPlan("demo-plan", planDir, "demo_home")
 	if err != nil {
 		t.Fatalf("RecordPlan: %v", err)
 	}
@@ -53,6 +69,7 @@ func TestRecordPlanEmitsOrderedOpsWithGuards(t *testing.T) {
 	}
 	wantKinds := []plan.Kind{
 		plan.KindLink,
+		plan.KindFile,
 		plan.KindFile,
 		plan.KindDir,
 		plan.KindSyncDir,
@@ -74,12 +91,22 @@ func TestRecordPlanEmitsOrderedOpsWithGuards(t *testing.T) {
 		t.Fatalf("file op = %#v", fileOp)
 	}
 
-	syncOp := ops[4]
-	if syncOp.Blob == "" || !syncOp.Prune {
-		t.Fatalf("sync_dir op = %#v", syncOp)
+	installOp := ops[3]
+	wantInstall := base64.StdEncoding.EncodeToString([]byte("user.name=test\n"))
+	if installOp.ContentB64 != wantInstall || installOp.Blob != "" {
+		t.Fatalf("InstallFile op = %#v", installOp)
 	}
 
-	cmdOp := ops[6]
+	syncOp := ops[5]
+	if syncOp.Blob != "blobs/systemd" || !syncOp.Prune {
+		t.Fatalf("sync_dir op = %#v", syncOp)
+	}
+	blobFile := filepath.Join(planDir, "blobs", "systemd", "unit.service")
+	if _, err := os.Stat(blobFile); err != nil {
+		t.Fatalf("expected packaged blob file: %v", err)
+	}
+
+	cmdOp := ops[7]
 	if cmdOp.Name != "enable.x" || cmdOp.Bin != "systemctl" {
 		t.Fatalf("command op = %#v", cmdOp)
 	}
@@ -111,13 +138,13 @@ func TestRecordPlanNegative(t *testing.T) {
 	ResetTasks()
 	Task("x", "", func() {})
 
-	if _, err := RecordPlan("", "x"); err == nil {
+	if _, err := RecordPlan("", "", "x"); err == nil {
 		t.Fatal("expected error for empty plan id")
 	}
-	if _, err := RecordPlan("id"); err == nil {
+	if _, err := RecordPlan("id", ""); err == nil {
 		t.Fatal("expected error for no tasks")
 	}
-	if _, err := RecordPlan("id", "missing"); err == nil {
+	if _, err := RecordPlan("id", "", "missing"); err == nil {
 		t.Fatal("expected error for unknown task")
 	}
 }
@@ -127,10 +154,26 @@ func TestRecordPlanDoesNotLeaveRecorderEnabled(t *testing.T) {
 	Task("noop", "", func() {
 		Package("helix")
 	})
-	if _, err := RecordPlan("p", "noop"); err != nil {
+	if _, err := RecordPlan("p", "", "noop"); err != nil {
 		t.Fatal(err)
 	}
 	if resource.PlanDraftRecording() {
 		t.Fatal("recorder should be cleared after RecordPlan")
+	}
+}
+
+func TestRecordPlanSyncDirRequiresPlanDir(t *testing.T) {
+	ResetTasks()
+	dir := t.TempDir()
+	src := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(src, []byte("x"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	Task("sync", "", func() {
+		SyncDir(filepath.Join(dir, "dst"), filepath.Join(dir, "*"))
+	})
+	_, err := RecordPlan("p", "", "sync")
+	if err == nil || !strings.Contains(err.Error(), "plan dir required") {
+		t.Fatalf("want plan dir required error, got %v", err)
 	}
 }

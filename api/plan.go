@@ -1,16 +1,21 @@
 package api
 
 import (
+	"encoding/base64"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
 
 // RecordPlan runs the named activated tasks in plan-record mode: resource
-// registration emits plan.Op lines instead of applying. Content/blob packaging
-// may be stubbed (empty content_b64 or a path ref in blob).
-func RecordPlan(planID string, taskNames ...string) ([]plan.Op, error) {
+// registration emits plan.Op lines instead of applying. InstallFile sources
+// are packaged as content_b64 (or blob sidecars when large); SyncDir trees
+// are copied under planDir/blobs/. planDir may be empty when no SyncDir or
+// large-file packaging is needed.
+func RecordPlan(planID, planDir string, taskNames ...string) ([]plan.Op, error) {
 	ensureActivated()
 
 	if planID == "" {
@@ -20,10 +25,27 @@ func RecordPlan(planID string, taskNames ...string) ([]plan.Op, error) {
 		return nil, fmt.Errorf("RecordPlan: no tasks specified")
 	}
 
+	var store *plan.Store
+	if planDir != "" {
+		if err := os.MkdirAll(planDir, 0o750); err != nil {
+			return nil, fmt.Errorf("RecordPlan: plan dir: %w", err)
+		}
+		store = plan.NewStore(planDir)
+	}
+
 	plan.ResetRecord()
 	plan.SetRecording(true)
+	var packErr error
 	resource.SetPlanDraftRecorder(func(d resource.PlanDraft) {
-		plan.Record(draftToOp(d))
+		if packErr != nil {
+			return
+		}
+		op, err := packageDraft(d, store)
+		if err != nil {
+			packErr = err
+			return
+		}
+		plan.Record(op)
 	})
 	defer func() {
 		resource.SetPlanDraftRecorder(nil)
@@ -41,11 +63,81 @@ func RecordPlan(planID string, taskNames ...string) ([]plan.Op, error) {
 		resource.ResetRepository()
 		t.fn()
 		// Intentionally skip resource.Apply — plan-record mode only.
+		if packErr != nil {
+			return nil, packErr
+		}
 	}
 
 	ops := plan.FinishRecord(planID)
 	plan.ResetRecord()
 	return ops, nil
+}
+
+func packageDraft(d resource.PlanDraft, store *plan.Store) (plan.Op, error) {
+	op := draftToOp(d)
+	switch {
+	case d.SourcePath != "":
+		data, err := os.ReadFile(d.SourcePath)
+		if err != nil {
+			return op, fmt.Errorf("package file %s: %w", d.SourcePath, err)
+		}
+		if len(data) > plan.MaxInlineContent {
+			if store == nil {
+				return op, fmt.Errorf("package file %s: exceeds inline limit and no plan dir for blobs", d.SourcePath)
+			}
+			ref, err := store.WriteFile(blobName(d), data)
+			if err != nil {
+				return op, err
+			}
+			op.Blob = ref
+			op.ContentB64 = ""
+		} else {
+			op.ContentB64 = base64.StdEncoding.EncodeToString(data)
+			op.Blob = ""
+		}
+	case d.SourceGlob != "":
+		if store == nil {
+			return op, fmt.Errorf("package sync_dir %s: plan dir required for blob packaging", d.SourceGlob)
+		}
+		ref, err := store.WriteGlob(blobName(d), d.SourceGlob)
+		if err != nil {
+			return op, err
+		}
+		op.Blob = ref
+	case d.SourceDir != "":
+		if store == nil {
+			return op, fmt.Errorf("package sync_dir %s: plan dir required for blob packaging", d.SourceDir)
+		}
+		ref, err := store.WriteTree(blobName(d), d.SourceDir)
+		if err != nil {
+			return op, err
+		}
+		op.Blob = ref
+	}
+	return op, nil
+}
+
+func blobName(d resource.PlanDraft) string {
+	if base := filepath.Base(d.Path); base != "" && base != "." && base != string(filepath.Separator) {
+		return base
+	}
+	if d.ID != "" {
+		return d.ID
+	}
+	if d.SourcePath != "" {
+		return filepath.Base(d.SourcePath)
+	}
+	if d.SourceDir != "" {
+		return filepath.Base(d.SourceDir)
+	}
+	if d.SourceGlob != "" {
+		dir := filepath.Dir(d.SourceGlob)
+		if base := filepath.Base(dir); base != "" && base != "." {
+			return base
+		}
+		return "glob"
+	}
+	return "blob"
 }
 
 func draftToOp(d resource.PlanDraft) plan.Op {

@@ -57,7 +57,7 @@ func TestApplyExpandsHomeToken(t *testing.T) {
 		header(),
 		{Op: KindEnsureDir, Path: "${HOME}/nested/dir", Mode: "0750"},
 	}
-	if err := Apply(ops, Facts{}); err != nil {
+	if err := Apply(ops, Facts{}, ""); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	want := filepath.Join(root, "nested", "dir")
@@ -73,7 +73,7 @@ func TestApplyUnknownPathTokenHardError(t *testing.T) {
 		header(),
 		{Op: KindEnsureDir, Path: "${UNKNOWN}/dir", Mode: "0750"},
 	}
-	err := Apply(ops, Facts{})
+	err := Apply(ops, Facts{}, "")
 	if err == nil {
 		t.Fatal("expected unknown token error")
 	}
@@ -97,7 +97,7 @@ func TestApplyPathExistsExpandsHome(t *testing.T) {
 		{Op: KindEnsureDir, Path: created, Mode: "0750"},
 		{Op: KindWhenEnd},
 	}
-	if err := Apply(ops, Facts{}); err != nil {
+	if err := Apply(ops, Facts{}, ""); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if _, err := os.Stat(created); err != nil {
@@ -117,7 +117,7 @@ func TestApplyLinkIfExistsExpandsTokens(t *testing.T) {
 		header(),
 		{Op: KindLinkIfExists, Path: "${HOME}/link", Target: "${HOME}/notes"},
 	}
-	if err := Apply(ops, Facts{}); err != nil {
+	if err := Apply(ops, Facts{}, ""); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	got, err := os.Readlink(filepath.Join(root, "link"))

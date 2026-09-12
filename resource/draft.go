@@ -21,11 +21,19 @@ type PlanDraft struct {
 
 	Symlink  string
 	Hardlink string
+	// Target is the existence-checked path for link_if_exists drafts.
+	Target string
 
 	Mode       string
 	FileMode   string
 	ContentB64 string
 	Blob       string
+	// SourcePath is a controller-local file to package as content_b64 or a blob.
+	SourcePath string
+	// SourceDir is a controller-local directory to package as a blob tree.
+	SourceDir string
+	// SourceGlob is a controller-local glob to package as a flat blob dir.
+	SourceGlob string
 	Prune      bool
 	Absent     bool
 

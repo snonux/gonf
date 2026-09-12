@@ -347,8 +347,7 @@ func (f *File) planDraft() resource.PlanDraft {
 	case f.content != "":
 		d.ContentB64 = base64.StdEncoding.EncodeToString([]byte(f.content))
 	case f.source != "":
-		// Blob packaging is a later task; path ref is enough for record mode.
-		d.Blob = f.source
+		d.SourcePath = f.source
 	}
 	return d
 }
