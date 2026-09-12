@@ -1,8 +1,7 @@
-// Package plan defines the versioned JSONL wire types for remote gonf plan/apply.
+// Package plan defines the versioned JSONL wire types and codec for remote
+// gonf plan/apply (encode/decode, version gate).
 //
 // See the overall design plan (Remote gonf — plan/apply with serialized JSONL).
-// Encode/decode and apply interpreters live in follow-up work; this package owns
-// the schema constants and Go structs that serialize to each JSONL line.
 package plan
 
 // CurrentVersion is the plan wire schema version emitted by gonf plan.
