@@ -20,6 +20,8 @@ For dedicated systemd timer units, prefer [`Timer` / `NoTimer`](timer.md).
 
 Requires sufficient privileges (root / `doas`), same as `Package`.
 
+See also: [timer.md](timer.md) (systemd timers), [package.md](package.md), [docs index](README.md).
+
 ## Live BSD checks
 
 Cross-compile tests on the laptop; do **not** install Go on the hosts:

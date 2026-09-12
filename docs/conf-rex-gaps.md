@@ -89,4 +89,4 @@ Without item 1 (and 4 for most frontend templates), `frontends/Rexfile` cannot b
 
 - Consumer that *does* fit gonf today: `~/git/dotfiles/gonf` (Fedora laptop)
 - Conf Justfile wrappers (e.g. garage) call `rex` today; they would call `gonf` only after remote support exists
-- Docs: [package.md](package.md), [service.md](service.md), [cron.md](cron.md)
+- Full feature docs: [README.md](README.md) (index), [package.md](package.md), [service.md](service.md), [cron.md](cron.md), [timer.md](timer.md)

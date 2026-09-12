@@ -17,6 +17,4 @@ NoPackage("oldpkg")
 
 Requires root / `doas`, same as `Service`.
 
-## Service resource
-
-See [service.md](service.md). NetBSD uses `service(8)` and enables via `/etc/rc.conf.d/NAME`.
+See also: [service.md](service.md), [docs index](README.md).
