@@ -155,12 +155,12 @@ func cliPlan(args []string) int {
 		fmt.Fprintf(os.Stderr, "wrote stdout (%d ops)\n", len(ops))
 		return 0
 	}
-	if err := os.MkdirAll(*outDir, 0o750); err != nil {
+	if err := os.MkdirAll(*outDir, 0o700); err != nil {
 		fmt.Fprintf(os.Stderr, "plan: %v\n", err)
 		return 1
 	}
 	outPath := filepath.Join(*outDir, "plan.jsonl")
-	if err := os.WriteFile(outPath, raw, 0o640); err != nil {
+	if err := os.WriteFile(outPath, raw, 0o600); err != nil {
 		fmt.Fprintf(os.Stderr, "plan: write %s: %v\n", outPath, err)
 		return 1
 	}

@@ -72,10 +72,10 @@ func (s *Store) WriteFile(name string, data []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(abs), 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {
 		return "", fmt.Errorf("plan: mkdir blobs: %w", err)
 	}
-	if err := os.WriteFile(abs, data, 0o640); err != nil {
+	if err := os.WriteFile(abs, data, 0o600); err != nil {
 		return "", fmt.Errorf("plan: write blob %q: %w", ref, err)
 	}
 	return ref, nil
@@ -100,7 +100,7 @@ func (s *Store) WriteTree(name, srcDir string) (string, error) {
 	if err := os.RemoveAll(abs); err != nil {
 		return "", fmt.Errorf("plan: clear blob %q: %w", ref, err)
 	}
-	if err := os.MkdirAll(abs, 0o750); err != nil {
+	if err := os.MkdirAll(abs, 0o700); err != nil {
 		return "", fmt.Errorf("plan: mkdir blob %q: %w", ref, err)
 	}
 	err = filepath.WalkDir(srcDir, func(path string, entry fs.DirEntry, walkErr error) error {
@@ -123,7 +123,7 @@ func (s *Store) WriteTree(name, srcDir string) (string, error) {
 			}
 			return os.Symlink(target, dst)
 		case entry.IsDir():
-			return os.MkdirAll(dst, 0o750)
+			return os.MkdirAll(dst, 0o700)
 		default:
 			return copyFile(path, dst)
 		}
@@ -150,7 +150,7 @@ func (s *Store) WriteGlob(name, pattern string) (string, error) {
 	if err := os.RemoveAll(abs); err != nil {
 		return "", fmt.Errorf("plan: clear blob %q: %w", ref, err)
 	}
-	if err := os.MkdirAll(abs, 0o750); err != nil {
+	if err := os.MkdirAll(abs, 0o700); err != nil {
 		return "", fmt.Errorf("plan: mkdir blob %q: %w", ref, err)
 	}
 	for _, match := range matches {
@@ -228,10 +228,10 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	defer in.Close()
-	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return err
 	}
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o640)
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}

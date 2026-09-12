@@ -22,7 +22,7 @@ import (
 func RecordPlan(planID, planDir string, taskNames ...string) ([]plan.Op, error) {
 	var store plan.BlobStore
 	if planDir != "" {
-		if err := os.MkdirAll(planDir, 0o750); err != nil {
+		if err := os.MkdirAll(planDir, 0o700); err != nil {
 			return nil, fmt.Errorf("RecordPlan: plan dir: %w", err)
 		}
 		store = plan.NewStore(planDir)
