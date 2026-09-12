@@ -19,9 +19,9 @@ import (
 //	gonf -profile=fedora
 //	gonf -verbose | -quiet
 //	gonf -dry-run | -n
-//	gonf plan [-o dir] [-id name] <task> [task...]
-//	gonf apply [-n] <plan.jsonl>
-//	gonf <task> [task...]
+//	gonf plan [-o dir] [-id name] <task> [task...]   # emit plan.jsonl only
+//	gonf apply [-n] <plan.jsonl>                     # apply a plan file
+//	gonf <task> [task...]                            # RecordPlan + Apply locally
 func CLI() int {
 	fs := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -167,13 +167,8 @@ func cliApply(args []string) int {
 		fmt.Fprintf(os.Stderr, "apply: %v\n", err)
 		return 1
 	}
-	f := DetectFacts()
 	planDir := filepath.Dir(planPath)
-	if err := plan.Apply(ops, plan.Facts{
-		GOOS:     f.GOOS,
-		Profile:  f.Profile,
-		Hostname: f.Hostname,
-	}, planDir); err != nil {
+	if err := ApplyPlan(ops, planDir); err != nil {
 		fmt.Fprintf(os.Stderr, "apply: %v\n", err)
 		return 1
 	}

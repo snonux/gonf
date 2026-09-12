@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"log"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -172,20 +173,32 @@ func Tasks() []TaskInfo {
 	return out
 }
 
-// Run runs each named activated task sequentially.
+// Run records the named tasks into a plan and applies it locally in one shot.
+// This is the same engine as remote plan→JSONL→apply; local just skips shipping.
+//
+// Nested Run while a RecordPlan session is active (e.g. Aggregate) only appends
+// child task ops into the current plan — it does not apply mid-flight.
 func Run(names ...string) error {
-	ensureActivated()
-
 	if len(names) == 0 {
 		return fmt.Errorf("Run: no tasks specified")
 	}
 
-	for _, name := range names {
-		if err := runOne(name); err != nil {
-			return err
-		}
+	if plan.Recording() || resource.PlanDraftRecording() {
+		var packErr error
+		return recordTaskBodies(names, &packErr)
 	}
-	return nil
+
+	planDir, err := os.MkdirTemp("", "gonf-plan-*")
+	if err != nil {
+		return fmt.Errorf("Run: temp plan dir: %w", err)
+	}
+	defer os.RemoveAll(planDir)
+
+	ops, err := RecordPlan("local", planDir, names...)
+	if err != nil {
+		return err
+	}
+	return ApplyPlan(ops, planDir)
 }
 
 // ResetTasks clears candidates and activated tasks. Intended for tests.
@@ -235,20 +248,4 @@ func findCandidate(name string) (taskCandidate, bool) {
 		}
 	}
 	return taskCandidate{}, false
-}
-
-func runOne(name string) error {
-	tasksMu.Lock()
-	t, ok := tasks[name]
-	tasksMu.Unlock()
-	if !ok {
-		return fmt.Errorf("unknown task %q", name)
-	}
-
-	resource.ResetRepository()
-	t.fn()
-	if err := resource.Apply(); err != nil {
-		return fmt.Errorf("task %s: %w", name, err)
-	}
-	return nil
 }

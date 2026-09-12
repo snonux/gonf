@@ -39,7 +39,7 @@ func Run() error {
 	if err := Build(); err != nil {
 		return err
 	}
-	return run("./"+binName, "version")
+	return run("./"+binName, "-version")
 }
 
 // Test runs all unit tests.

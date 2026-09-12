@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
@@ -121,6 +122,33 @@ func TestCLIList(t *testing.T) {
 	code := CLI()
 	if code != 0 {
 		t.Fatalf("CLI exit = %d, want 0", code)
+	}
+}
+
+func TestRunUsesPlanApplyEngine(t *testing.T) {
+	ResetTasks()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "via-plan.txt")
+
+	Task("via_plan", "", func() {
+		File(path, options.WithContent("from-plan-engine"))
+	}, WhenLinux())
+
+	if err := Run("via_plan"); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "linux" {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatal("non-linux should skip WhenLinux task body via when_begin")
+		}
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "from-plan-engine" {
+		t.Fatalf("got %q", data)
 	}
 }
 

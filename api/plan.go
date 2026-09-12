@@ -17,6 +17,8 @@ import (
 // content_b64 (or blob sidecars when large); SyncDir trees are copied under
 // planDir/blobs/. planDir may be empty when no SyncDir or large-file packaging
 // is needed.
+//
+// Nested Run calls while recording append into the same plan (used by Aggregate).
 func RecordPlan(planID, planDir string, taskNames ...string) ([]plan.Op, error) {
 	if planID == "" {
 		return nil, fmt.Errorf("RecordPlan: plan id must not be empty")
@@ -52,15 +54,30 @@ func RecordPlan(planID, planDir string, taskNames ...string) ([]plan.Op, error) 
 		plan.SetRecording(false)
 	}()
 
+	if err := recordTaskBodies(taskNames, &packErr); err != nil {
+		return nil, err
+	}
+	if packErr != nil {
+		return nil, packErr
+	}
+
+	ops := plan.FinishRecord(planID)
+	plan.ResetRecord()
+	return ops, nil
+}
+
+// recordTaskBodies appends ops for taskNames into the current plan session.
+// packErr is shared with the draft recorder callback.
+func recordTaskBodies(taskNames []string, packErr *error) error {
 	for _, name := range taskNames {
 		c, ok := findCandidate(name)
 		if !ok {
-			return nil, fmt.Errorf("unknown task %q", name)
+			return fmt.Errorf("unknown task %q", name)
 		}
 
 		wrapWhen, err := planWhenForCandidate(c)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if len(wrapWhen) > 0 {
 			plan.Record(plan.Op{
@@ -72,19 +89,25 @@ func RecordPlan(planID, planDir string, taskNames ...string) ([]plan.Op, error) 
 
 		resource.ResetRepository()
 		c.fn()
-		// Intentionally skip resource.Apply — plan-record mode only.
-		if packErr != nil {
-			return nil, packErr
+		if packErr != nil && *packErr != nil {
+			return *packErr
 		}
 
 		if len(wrapWhen) > 0 {
 			plan.Record(plan.Op{Op: plan.KindWhenEnd})
 		}
 	}
+	return nil
+}
 
-	ops := plan.FinishRecord(planID)
-	plan.ResetRecord()
-	return ops, nil
+// ApplyPlan applies ops using DetectFacts(). planDir is the blob sidecar root.
+func ApplyPlan(ops []plan.Op, planDir string) error {
+	f := DetectFacts()
+	return plan.Apply(ops, plan.Facts{
+		GOOS:     f.GOOS,
+		Profile:  f.Profile,
+		Hostname: f.Hostname,
+	}, planDir)
 }
 
 // planWhenForCandidate returns serializable when predicates, or nil when the
