@@ -66,8 +66,9 @@ func TestRemoteSmokePush(t *testing.T) {
 	sshRunner = func(stdin io.Reader, argv []string) error {
 		if len(argv) >= 3 {
 			remote := argv[len(argv)-1]
+			// Portable across sh/bash/csh: no `export` (csh on FreeBSD).
 			argv = append(append([]string{}, argv[:len(argv)-1]...),
-				"export PATH=$HOME/bin:$HOME/go/bin:$PATH; "+remote)
+				"env PATH=$HOME/bin:$HOME/go/bin:$PATH "+remote)
 		}
 		cmd := exec.Command(argv[0], argv[1:]...)
 		cmd.Stdin = stdin
@@ -98,7 +99,7 @@ func TestRemoteSmokePush(t *testing.T) {
 			remote := argv[len(argv)-1]
 			saw = append(saw, remote)
 			argv = append(append([]string{}, argv[:len(argv)-1]...),
-				"export PATH=$HOME/bin:$HOME/go/bin:$PATH; "+remote)
+				"env PATH=$HOME/bin:$HOME/go/bin:$PATH "+remote)
 		}
 		cmd := exec.Command(argv[0], argv[1:]...)
 		cmd.Stdin = stdin
