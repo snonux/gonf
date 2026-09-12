@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"path/filepath"
@@ -96,7 +97,49 @@ func TestCLIPlanStdout(t *testing.T) {
 	}
 }
 
-func TestCLIPlanRequiresTasks(t *testing.T) {
+func TestCLIApplyStdinFramedNoBlobs(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	root := t.TempDir()
+	dst := filepath.Join(root, "out.txt")
+	ops := []plan.Op{
+		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "stdin"},
+		{Op: plan.KindFile, Path: dst, Mode: "0600", ContentB64: "aGVsbG8K"}, // hello\n
+	}
+	var buf bytes.Buffer
+	if err := plan.EncodePush(&buf, ops, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	oldStdin := os.Stdin
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdin = r
+	t.Cleanup(func() {
+		os.Stdin = oldStdin
+		_ = r.Close()
+	})
+	go func() {
+		_, _ = w.Write(buf.Bytes())
+		_ = w.Close()
+	}()
+
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+	os.Args = []string{"gonf", "apply", "-"}
+	if code := CLI(); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "hello\n" {
+		t.Fatalf("got %q", got)
+	}
+}
 	oldArgs := os.Args
 	t.Cleanup(func() { os.Args = oldArgs })
 	os.Args = []string{"gonf", "plan", "-o", t.TempDir()}

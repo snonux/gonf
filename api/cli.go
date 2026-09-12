@@ -20,7 +20,7 @@ import (
 //	gonf -verbose | -quiet
 //	gonf -dry-run | -n
 //	gonf plan [-o dir|-stdout] [-id name] <task>...  # emit plan.jsonl (or stdout)
-//	gonf apply [-n] <plan.jsonl>                     # apply a plan file
+//	gonf apply [-n] <plan.jsonl|->               # apply file or GONF-PUSH/1 stdin
 //	gonf <task> [task...]                            # RecordPlan + Apply locally
 func CLI() int {
 	fs := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
@@ -181,10 +181,13 @@ func cliApply(args []string) int {
 	}
 	rest := fs.Args()
 	if len(rest) != 1 {
-		fmt.Fprintln(os.Stderr, "usage: gonf apply [-n|-dry-run] <plan.jsonl>")
+		fmt.Fprintln(os.Stderr, "usage: gonf apply [-n|-dry-run] <plan.jsonl|->")
 		return 2
 	}
 	planPath := rest[0]
+	if planPath == "-" {
+		return cliApplyStdin()
+	}
 	raw, err := os.ReadFile(planPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "apply: read %s: %v\n", planPath, err)
@@ -204,8 +207,34 @@ func cliApply(args []string) int {
 	return 0
 }
 
+func cliApplyStdin() int {
+	runDir, cleanup, err := plan.NewApplyRunDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "apply: run dir: %v\n", err)
+		return 1
+	}
+	defer cleanup()
+
+	payload, err := plan.DecodePush(os.Stdin, runDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "apply: %v\n", err)
+		return 1
+	}
+	planDir := payload.PlanDir
+	if err := ApplyPlan(payload.Ops, planDir); err != nil {
+		fmt.Fprintf(os.Stderr, "apply: %v\n", err)
+		return 1
+	}
+	src := "stdin"
+	if planDir != "" {
+		src = "stdin+blobs"
+	}
+	fmt.Fprintf(os.Stderr, "applied %s (%d ops)\n", src, len(payload.Ops))
+	return 0
+}
+
 func printUsage() {
 	fmt.Fprintln(os.Stderr, "usage: gonf [-list] [-version] [-profile=...] [-verbose|-quiet] [-dry-run|-n] <task> [task...]")
 	fmt.Fprintln(os.Stderr, "       gonf plan [-o dir|-stdout] [-id name] <task> [task...]")
-	fmt.Fprintln(os.Stderr, "       gonf apply [-n|-dry-run] <plan.jsonl>")
+	fmt.Fprintln(os.Stderr, "       gonf apply [-n|-dry-run] <plan.jsonl|->")
 }
