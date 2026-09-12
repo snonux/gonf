@@ -149,6 +149,58 @@ func TestRecordPlanNegative(t *testing.T) {
 	}
 }
 
+func TestRecordPlanToMemoryStoreNoDiskArtifacts(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	probe := t.TempDir()
+	srcDir := filepath.Join(probe, "src")
+	if err := os.MkdirAll(srcDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "unit.service"), []byte("[Unit]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	Task("mem_sync", "", func() {
+		SyncDir(filepath.Join(probe, "dst"), filepath.Join(srcDir, "*"), options.WithPrune)
+	})
+
+	store := plan.NewMemoryStore()
+	ops, err := RecordPlanTo("mem", store, "mem_sync")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !store.HasBlobs() {
+		t.Fatal("expected in-memory blobs")
+	}
+	var found bool
+	for _, op := range ops {
+		if op.Op == plan.KindSyncDir && op.Blob != "" {
+			found = true
+			if _, ok := store.TreeBlob(op.Blob); !ok {
+				t.Fatalf("missing tree for %s", op.Blob)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected sync_dir with blob ref")
+	}
+
+	// No plan.jsonl or blobs/ under the probe dir (or cwd).
+	if _, err := os.Stat(filepath.Join(probe, "plan.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("plan.jsonl must not exist: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(probe, "blobs")); !os.IsNotExist(err) {
+		t.Fatalf("blobs/ must not exist on disk: %v", err)
+	}
+}
+
 func TestRecordPlanInlineVsBlobThreshold(t *testing.T) {
 	ResetTasks()
 	resource.ResetRepository()

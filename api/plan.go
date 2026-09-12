@@ -20,19 +20,24 @@ import (
 //
 // Nested Run calls while recording append into the same plan (used by Aggregate).
 func RecordPlan(planID, planDir string, taskNames ...string) ([]plan.Op, error) {
-	if planID == "" {
-		return nil, fmt.Errorf("RecordPlan: plan id must not be empty")
-	}
-	if len(taskNames) == 0 {
-		return nil, fmt.Errorf("RecordPlan: no tasks specified")
-	}
-
-	var store *plan.Store
+	var store plan.BlobStore
 	if planDir != "" {
 		if err := os.MkdirAll(planDir, 0o750); err != nil {
 			return nil, fmt.Errorf("RecordPlan: plan dir: %w", err)
 		}
 		store = plan.NewStore(planDir)
+	}
+	return RecordPlanTo(planID, store, taskNames...)
+}
+
+// RecordPlanTo is like RecordPlan but packages blobs into store (disk or memory).
+// Pass a nil store only when tasks need no blob packaging.
+func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]plan.Op, error) {
+	if planID == "" {
+		return nil, fmt.Errorf("RecordPlan: plan id must not be empty")
+	}
+	if len(taskNames) == 0 {
+		return nil, fmt.Errorf("RecordPlan: no tasks specified")
 	}
 
 	plan.ResetRecord()
@@ -127,7 +132,7 @@ func planWhenForCandidate(c taskCandidate) ([]plan.Predicate, error) {
 	return nil, nil
 }
 
-func packageDraft(d resource.PlanDraft, store *plan.Store) (plan.Op, error) {
+func packageDraft(d resource.PlanDraft, store plan.BlobStore) (plan.Op, error) {
 	op := draftToOp(d)
 	switch {
 	case d.SourcePath != "":
