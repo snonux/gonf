@@ -186,6 +186,30 @@ func TestWithUserPassesUserFlag(t *testing.T) {
 	}
 }
 
+func TestPresentFailsWhenSystemctlMutateErrors(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Timer is Linux-only")
+	}
+	resource.ResetRepository()
+	old := runCmd
+	defer func() { runCmd = old }()
+
+	runCmd = func(name string, args ...string) (string, string, int, error) {
+		if contains(args, "is-active") || contains(args, "is-enabled") {
+			return "", "", 1, nil
+		}
+		if contains(args, "enable") {
+			return "", "Permission denied", 1, nil
+		}
+		return "", "unexpected", 1, nil
+	}
+
+	Present("fstrim")
+	if err := resource.Apply(); err == nil {
+		t.Fatal("expected apply error when enable fails")
+	}
+}
+
 func TestDryRunSkipsMutations(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Timer is Linux-only")

@@ -15,7 +15,10 @@ Requires sufficient privileges for system timers (root / `sudo`), same as
 `Service`. User timers (`WithUser`) use the calling user's systemd session.
 
 Unit files themselves are not written by this resource — install them with
-`File` / `Dir` (or packages) and depend on those resources if needed.
+`File` / `Dir` (or packages) and depend on those resources if needed. After
+dropping new unit files, run `systemctl daemon-reload` (or
+`systemctl --user daemon-reload`) before `Timer`, e.g. via `Command` +
+`DependsOn`, or the unit will not be found.
 
 ## Options
 

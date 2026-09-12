@@ -228,8 +228,8 @@ var IsLatest = func(t any) {
 
 func IsLatestFunc() Option { return IsLatest }
 
-// WithRestart restarts the service once during this apply after converging
-// to the desired running state.
+// WithRestart restarts the service or timer once during this apply after
+// converging to the desired running/active state.
 var WithRestart = func(t any) {
 	r, ok := t.(Restartable)
 	if !ok {
