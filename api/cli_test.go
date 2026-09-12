@@ -140,6 +140,8 @@ func TestCLIApplyStdinFramedNoBlobs(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestCLIPlanRequiresTasks(t *testing.T) {
 	oldArgs := os.Args
 	t.Cleanup(func() { os.Args = oldArgs })
 	os.Args = []string{"gonf", "plan", "-o", t.TempDir()}
