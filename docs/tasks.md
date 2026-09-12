@@ -1,7 +1,8 @@
 # Tasks, Facts, and CLI
 
 gonf configs are Go programs: register **tasks**, then run them via `CLI()` or
-`Run(...)`.
+`Run(...)`. Execution always goes through the **plan → apply** engine — see
+[plan.md](plan.md).
 
 ## Task
 
@@ -11,24 +12,29 @@ Task("hello", "Say hello", func() {
 }, WhenLinux())
 ```
 
-`Task` queues a candidate. Activation filters `When*` predicates against
-[Facts](#facts), then the task body registers resources for `Apply`.
+`Task` queues a candidate. Serializable `When*` options become `when_begin`
+recipes in the plan and are evaluated on the **destination** at apply time
+(local or remote). Opaque `When(func(Facts) bool)` cannot travel in a plan;
+recording requires them to pass on the controller.
 
 | Helper | Meaning |
 |--------|---------|
-| `When(pred)` | Custom `func(Facts) bool` |
-| `WhenLinux()` | `GOOS == "linux"` |
-| `WhenProfile("fedora", "rocky")` | Match `Facts.Profile` |
-| `WhenHostnameContains("laptop")` | Substring on hostname |
+| `When(pred)` | Custom `func(Facts) bool` (not serializable) |
+| `WhenLinux()` | Plan recipe: `goos == linux` |
+| `WhenProfile("fedora", "rocky")` | Plan recipe: match `Facts.Profile` |
+| `WhenHostnameContains("laptop")` | Plan recipe: hostname substring |
+| `WhenPathExists(path, fn)` | Plan recipe: `path_exists` around `fn` |
 
-Combine predicates with `And` / `Or` from [helpers.md](helpers.md).
+Combine fact predicates with `And` / `Or` from [helpers.md](helpers.md) for
+custom `When` only — prefer the named helpers when you need remote plans.
 
 ## RegisterMethods
 
 Reflect over exported methods on a struct. Companion methods:
 
 - `DescFoo() string` — description for `-list`
-- `WhenFoo(Facts) bool` — per-method filter
+- `WhenFoo(Facts) bool` — per-method filter (opaque unless you also use
+  serializable `TaskOption`s via `WithGroupWhen`)
 
 ```go
 type Home struct{}
@@ -40,8 +46,8 @@ RegisterMethods(Home{}, WithPrefix("home."), WithGroupWhen(WhenLinux()))
 ```
 
 `WithPrefix` namespaces task names; `WithGroupWhen` takes `TaskOption`s
-such as `WhenLinux()` / `WhenProfile(...)` (so plan recording can emit
-`when_begin` recipes).
+such as `WhenLinux()` / `WhenProfile(...)` so plan recording can emit
+`when_begin` recipes.
 
 ## Aggregate
 
@@ -49,7 +55,8 @@ such as `WhenLinux()` / `WhenProfile(...)` (so plan recording can emit
 Aggregate("all", "Everything matching home.*", "home\\..*")
 ```
 
-Registers a task that runs every activated task whose name matches the regex.
+Registers a task that `Run`s every activated task whose name matches the regex.
+Nested `Run` while recording merges child ops into the same plan.
 
 ## Facts
 
@@ -62,9 +69,10 @@ type Facts struct {
 ```
 
 Built by `DetectFacts()`. Profile comes from hostname heuristics / `/etc/os-release`,
-or `-profile=...` / `SetProfileOverride`.
+or `-profile=...` / `SetProfileOverride`. Used by `-list` activation and by
+`ApplyPlan` when interpreting `when_begin` fact predicates.
 
-`ProfileIs("fedora")` is a ready-made predicate.
+`ProfileIs("fedora")` is a ready-made predicate for custom `When` / `And` / `Or`.
 
 ## CLI
 
@@ -72,29 +80,35 @@ or `-profile=...` / `SetProfileOverride`.
 func main() { os.Exit(CLI()) }
 ```
 
-| Flag | Meaning |
-|------|---------|
-| `-list` | Print activated tasks |
+| Invocation | Meaning |
+|------------|---------|
+| `-list` | Print activated tasks (display filter via Facts) |
 | `-version` | Print library version |
-| `-profile=` | Override Facts.Profile before activation |
+| `-profile=` | Override Facts.Profile |
 | `-dry-run` / `-n` | Preview without mutating |
 | `-verbose` / `-quiet` | Log level |
-| `<task>…` | Run named tasks |
+| `<task>…` | **RecordPlan + Apply** locally |
+| `plan [-o dir] [-id name] <task>…` | Write `plan.jsonl` (+ blobs) only |
+| `apply [-n] <plan.jsonl>` | Apply a plan file |
 
-`Activate(DetectFacts())` runs inside `CLI` (and `Run`) so `When*` sees the
-final profile.
+`Activate(DetectFacts())` runs inside `CLI` so `-list` and profile overrides
+see the final Facts. Task **execution** still records candidates with their
+`When*` recipes rather than dropping tasks at activation time.
 
-## Programmatic apply
+## Programmatic run
 
 ```go
-Activate(DetectFacts())
+// Preferred: same engine as the CLI (plan → apply).
 if err := Run("home.helix"); err != nil { /* … */ }
-// Run executes matching task bodies (which register resources), then Apply.
 
-// Or register resources yourself, then:
-if err := Apply(); err != nil { /* … */ }
+ops, err := RecordPlan("id", planDir, "home.helix")
+if err != nil { /* … */ }
+if err := ApplyPlan(ops, planDir); err != nil { /* … */ }
 ```
 
 `Matching("home\\..*")` returns activated task names matching a regex
-(used by `Aggregate`). `Activate` only filters candidates — it does not run
-task bodies or call `Apply`.
+(used by `Aggregate`). `Activate` only filters the list for display /
+matching — it does not apply configuration by itself.
+
+Low-level `Apply()` (register resources, then `resource.Apply`) remains for
+tests and ad-hoc use; see [plan.md](plan.md).

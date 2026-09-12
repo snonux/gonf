@@ -11,17 +11,23 @@ Expand("~/bin/tool")       // expand leading ~
 List("a", "b", "c")        // []string{"a","b","c"}
 ```
 
+At **apply** time, plan paths may also use `${HOME}` (expanded on the
+destination). See [plan.md](plan.md).
+
 ## Install / sync
 
 ```go
 InstallFile(Home(".gitconfig"), "assets/gitconfig")
 // default mode 0640; later WithMode wins
+// plan-record packages file bytes as content_b64 (or a blob if large)
 
 SyncDir(Home(".config/app"), "assets/app/*", WithMode(0o755), WithFileMode(0o644))
 // defaults: dir 0700, files 0640 before extra opts
+// plan-record copies the tree under planDir/blobs/
 
 EnsureDir(Home(".local/bin"), WithMode(0o755))
-// registers Dir only if path is missing or not a directory; else empty Multi
+// plan-record → ensure_dir recipe (destination decides)
+// outside plan-record → Dir only if path missing / not a directory
 ```
 
 `InstallFile` → `File(..., WithSource(...))`.  
@@ -32,7 +38,8 @@ under the destination by **basename only** (no relative subdirectory tree).
 
 ```go
 LinkIfExists(Home("bin/foo"), "/opt/foo/bin/foo")
-// target exists → symlink; missing → NoLink (ensure path absent)
+// plan-record → link_if_exists recipe
+// outside plan-record → target exists ? symlink : NoLink
 
 SymlinkMap(Home("bin"),
     "foo", "/opt/foo/bin/foo",
@@ -41,6 +48,19 @@ SymlinkMap(Home("bin"),
 ```
 
 `SymlinkMap` takes alternating `name, target` strings under `parent`.
+
+## Path gates
+
+```go
+WhenPathExists(Home("Notes/prompts/commands"), func() {
+    EnsureDir(Home(".cursor"), WithMode(0o750))
+    Link(Home(".cursor/commands"), WithSymlink(Home("Notes/prompts/commands")))
+})
+```
+
+In plan-record mode this emits `when_begin` / `path_exists` / `when_end`
+around the body so the destination can decide. Outside plan-record it
+probes the local filesystem immediately.
 
 ## Predicates
 
@@ -51,6 +71,10 @@ When(And(
 ))
 When(Or(ProfileIs("fedora"), ProfileIs("rocky")))
 ```
+
+Prefer serializable helpers (`WhenLinux`, `WhenProfile`,
+`WhenHostnameContains`) when configs must round-trip through a plan.
+Opaque `When(func…)` cannot be encoded in JSONL.
 
 `WhenLinux()` is a `TaskOption` (not a `func(Facts) bool`); use it as
 `Task(..., WhenLinux())` or pass `func(f Facts) bool { return f.GOOS == "linux" }`
