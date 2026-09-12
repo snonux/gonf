@@ -7,7 +7,7 @@ import (
 
 // MaxInlineContent is the largest file packaged as content_b64 during plan
 // record. Larger InstallFile sources become blob sidecars under blobs/.
-const MaxInlineContent = 32 << 10 // 32 KiB
+const MaxInlineContent = 512 << 10 // 512 KiB
 
 // DecodeContentB64 decodes a plan file's content_b64 field.
 func DecodeContentB64(s string) ([]byte, error) {

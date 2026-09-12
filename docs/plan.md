@@ -28,7 +28,7 @@ ops, err := RecordPlan("my-plan", planDir, "home_helix", "home_tmux")
   become `when_begin` / `when_end` recipes evaluated on the destination.
 - Task bodies run with a draft recorder: `File` / `Dir` / `Link` / `Command` /
   … emit ops instead of applying.
-- `InstallFile` content → `content_b64` (or a blob if large).
+- `InstallFile` content → `content_b64` when ≤ 512 KiB, else a blob sidecar.
 - `SyncDir` trees → `planDir/blobs/<name>/`.
 - Nested `Run` while recording (e.g. `Aggregate`) appends into the **same**
   plan; apply happens once at the top level.

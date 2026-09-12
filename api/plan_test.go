@@ -149,6 +149,60 @@ func TestRecordPlanNegative(t *testing.T) {
 	}
 }
 
+func TestRecordPlanInlineVsBlobThreshold(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	root := t.TempDir()
+	planDir := filepath.Join(root, "plan")
+	smallSrc := filepath.Join(root, "small")
+	largeSrc := filepath.Join(root, "large")
+	if err := os.WriteFile(smallSrc, make([]byte, 100<<10), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(largeSrc, make([]byte, 600<<10), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	Task("thresh", "", func() {
+		InstallFile(filepath.Join(root, "dst-small"), smallSrc)
+		InstallFile(filepath.Join(root, "dst-large"), largeSrc)
+	})
+	ops, err := RecordPlan("thresh", planDir, "thresh")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var smallOp, largeOp *plan.Op
+	for i := range ops {
+		op := &ops[i]
+		if op.Op != plan.KindFile {
+			continue
+		}
+		switch {
+		case op.ContentB64 != "" && op.Blob == "":
+			smallOp = op
+		case op.Blob != "" && op.ContentB64 == "":
+			largeOp = op
+		}
+	}
+	if smallOp == nil {
+		t.Fatal("expected 100KiB file as content_b64")
+	}
+	if largeOp == nil {
+		t.Fatal("expected 600KiB file as blob")
+	}
+	raw, err := base64.StdEncoding.DecodeString(smallOp.ContentB64)
+	if err != nil || len(raw) != 100<<10 {
+		t.Fatalf("small content len=%d err=%v", len(raw), err)
+	}
+}
+
 func TestRecordPlanDoesNotLeaveRecorderEnabled(t *testing.T) {
 	ResetTasks()
 	Task("noop", "", func() {
