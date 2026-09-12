@@ -65,7 +65,7 @@ if err := ApplyPlan(ops, planDir); err != nil { /* … */ }
 | Command | Effect |
 |---------|--------|
 | `gonf <task> [task…]` | Record + apply locally |
-| `gonf plan [-o dir] [-id name] <task>…` | Write `dir/plan.jsonl` (+ `blobs/`) |
+| `gonf plan [-o dir\|-stdout] [-id name] <task>…` | Write `dir/plan.jsonl` (+ `blobs/`), or print JSONL to stdout |
 | `gonf apply [-n\|-dry-run] <plan.jsonl>` | Apply a plan file (`-n` = dry-run) |
 
 Global flags (`-profile`, `-verbose`, `-quiet`, `-dry-run` / `-n`) still apply.

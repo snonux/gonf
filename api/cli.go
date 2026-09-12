@@ -19,7 +19,7 @@ import (
 //	gonf -profile=fedora
 //	gonf -verbose | -quiet
 //	gonf -dry-run | -n
-//	gonf plan [-o dir] [-id name] <task> [task...]   # emit plan.jsonl only
+//	gonf plan [-o dir|-stdout] [-id name] <task>...  # emit plan.jsonl (or stdout)
 //	gonf apply [-n] <plan.jsonl>                     # apply a plan file
 //	gonf <task> [task...]                            # RecordPlan + Apply locally
 func CLI() int {
@@ -107,25 +107,53 @@ func cliPlan(args []string) int {
 	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	outDir := fs.String("o", ".", "output directory for plan.jsonl and blobs/")
+	stdout := fs.Bool("stdout", false, "print plan JSONL to stdout instead of writing plan.jsonl")
 	planID := fs.String("id", "plan", "plan id written into the header")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	tasks := fs.Args()
 	if len(tasks) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: gonf plan [-o dir] [-id name] <task> [task...]")
+		fmt.Fprintln(os.Stderr, "usage: gonf plan [-o dir|-stdout] [-id name] <task> [task...]")
 		return 2
 	}
 
-	ops, err := RecordPlan(*planID, *outDir, tasks...)
+	planDir := *outDir
+	if *stdout {
+		dir, err := os.MkdirTemp("", "gonf-plan-*")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "plan: temp dir: %v\n", err)
+			return 1
+		}
+		defer os.RemoveAll(dir)
+		planDir = dir
+	}
+
+	ops, err := RecordPlan(*planID, planDir, tasks...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "plan: %v\n", err)
 		return 1
+	}
+	if *stdout {
+		for _, op := range ops {
+			if op.Blob != "" {
+				fmt.Fprintln(os.Stderr, "plan: -stdout cannot emit plans that need blobs/; use -o <dir>")
+				return 1
+			}
+		}
 	}
 	raw, err := plan.EncodePlan(ops)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "plan: encode: %v\n", err)
 		return 1
+	}
+	if *stdout {
+		if _, err := os.Stdout.Write(raw); err != nil {
+			fmt.Fprintf(os.Stderr, "plan: write stdout: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "wrote stdout (%d ops)\n", len(ops))
+		return 0
 	}
 	if err := os.MkdirAll(*outDir, 0o750); err != nil {
 		fmt.Fprintf(os.Stderr, "plan: %v\n", err)
@@ -178,6 +206,6 @@ func cliApply(args []string) int {
 
 func printUsage() {
 	fmt.Fprintln(os.Stderr, "usage: gonf [-list] [-version] [-profile=...] [-verbose|-quiet] [-dry-run|-n] <task> [task...]")
-	fmt.Fprintln(os.Stderr, "       gonf plan [-o dir] [-id name] <task> [task...]")
+	fmt.Fprintln(os.Stderr, "       gonf plan [-o dir|-stdout] [-id name] <task> [task...]")
 	fmt.Fprintln(os.Stderr, "       gonf apply [-n|-dry-run] <plan.jsonl>")
 }

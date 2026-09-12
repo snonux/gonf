@@ -1,6 +1,7 @@
 package api
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,6 +55,44 @@ func TestCLIPlanAndApply(t *testing.T) {
 	}
 	if string(data) != "hello from plan" {
 		t.Fatalf("got %q", data)
+	}
+}
+
+func TestCLIPlanStdout(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	Task("cli_stdout", "", func() {
+		File(filepath.Join(t.TempDir(), "x"), options.WithContent("via-stdout"))
+	})
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldOut := os.Stdout
+	os.Stdout = w
+	t.Cleanup(func() { os.Stdout = oldOut })
+
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+	os.Args = []string{"gonf", "plan", "-stdout", "-id", "stdout-test", "cli_stdout"}
+	code := CLI()
+	_ = w.Close()
+	os.Stdout = oldOut
+	raw, err := io.ReadAll(r)
+	_ = r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 {
+		t.Fatalf("plan -stdout exit %d", code)
+	}
+	ops, err := plan.DecodePlanBytes(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ops) < 2 || ops[0].Op != plan.KindPlan || ops[0].ID != "stdout-test" {
+		t.Fatalf("unexpected ops: %#v", ops)
 	}
 }
 

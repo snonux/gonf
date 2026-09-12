@@ -18,6 +18,7 @@ gonf -list
 gonf -version
 gonf [-n] <task> [task…]           # RecordPlan + Apply locally
 gonf plan -o out -id demo <task>…  # write out/plan.jsonl (+ blobs/)
+gonf plan -stdout <task>…          # print plan JSONL to stdout
 gonf apply [-n] out/plan.jsonl     # apply on this or another host
 ```
 
