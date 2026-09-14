@@ -81,7 +81,6 @@ func SplitPrivilegeChunks(ops []Op) []Chunk {
 		}
 		part := make([]Op, 0, 1+(i-start))
 		h := header
-		h.ID = header.ID
 		if h.ID == "" {
 			h.ID = "chunk"
 		}

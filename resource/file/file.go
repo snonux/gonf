@@ -239,7 +239,11 @@ func (f *File) resolveFromSourceOrContent() (string, []byte, error) {
 		content = rendered
 	}
 
-	return f.targetPath(), content, nil // TODO: Why do we need targetPath()? cant we just return f.path?
+	// targetPath, not f.path: it strips a ".tmpl" suffix from the
+	// caller-given path when the source triggered templating (dir's
+	// copySourceTree passes the source's ".tmpl" suffix through); see
+	// targetPath.
+	return f.targetPath(), content, nil
 }
 
 func (f *File) applyTemplateToContent(content []byte, param string) ([]byte, error) {

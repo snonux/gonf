@@ -22,7 +22,6 @@ func TestEncodeDecodePushNoBlobs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer got.Close()
 	if len(got.Ops) != 2 || got.Ops[0].ID != "p" || got.PlanDir != "" {
 		t.Fatalf("%#v", got)
 	}
@@ -50,7 +49,6 @@ func TestEncodeDecodePushWithMemoryBlobs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer got.Close()
 	if got.PlanDir != dir {
 		t.Fatalf("planDir=%q", got.PlanDir)
 	}

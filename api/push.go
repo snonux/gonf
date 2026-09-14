@@ -73,18 +73,13 @@ func (t PushTarget) sshArgv(remoteCmd string) []string {
 }
 
 func remoteApplyCmd(elevate bool, mode privilege.Mode, applyDir string) (string, error) {
-	args := "apply -"
+	stdinArg := "-"
 	if resource.DryRun() {
-		args = "apply -n -"
+		stdinArg = "-n -"
 	}
+	args := "apply " + stdinArg
 	if applyDir != "" {
-		args = "apply -apply-dir " + applyDir + " " + strings.TrimPrefix(args, "apply ")
-		// produce: apply -apply-dir DIR -   or apply -apply-dir DIR -n -
-		if resource.DryRun() {
-			args = "apply -apply-dir " + applyDir + " -n -"
-		} else {
-			args = "apply -apply-dir " + applyDir + " -"
-		}
+		args = "apply -apply-dir " + applyDir + " " + stdinArg
 	}
 	return privilege.WrapApplyCmd(mode, elevate, args)
 }

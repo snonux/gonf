@@ -70,7 +70,6 @@ func assertChunkBlobRefs(t *testing.T, name string, stdin []byte, planDir string
 	if err != nil {
 		t.Fatalf("%s: decode: %v", name, err)
 	}
-	defer payload.Close()
 	for _, op := range payload.Ops {
 		if op.Blob == "" {
 			continue
@@ -260,7 +259,6 @@ func TestPushUploadsBlobsBeforeElevatedChunks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer uploaded.Close()
 	if uploaded.PlanDir == "" {
 		t.Fatal("blob upload carried no blobs")
 	}
@@ -279,7 +277,6 @@ func TestPushUploadsBlobsBeforeElevatedChunks(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer payload.Close()
 		if len(payload.Ops) < 2 || payload.Ops[0].Op != plan.KindPlan {
 			t.Fatalf("chunk %d ops=%#v", i, payload.Ops)
 		}
@@ -361,7 +358,6 @@ func TestPushSingleChunkKeepsEmbeddedBlobs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer payload.Close()
 	if len(payload.Ops) != 2 {
 		t.Fatalf("ops=%#v", payload.Ops)
 	}

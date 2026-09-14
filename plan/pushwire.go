@@ -18,15 +18,6 @@ const pushMagic = "GONF-PUSH/1"
 type PushPayload struct {
 	Ops     []Op
 	PlanDir string // non-empty when blobs were unpacked into Dir
-	cleanup func()
-}
-
-// Close removes the temporary plan dir when present.
-func (p *PushPayload) Close() {
-	if p != nil && p.cleanup != nil {
-		p.cleanup()
-		p.cleanup = nil
-	}
 }
 
 // EncodePush writes a GONF-PUSH/1 frame to w: optional gzip+tar blobs from
@@ -65,9 +56,9 @@ func EncodePush(w io.Writer, ops []Op, mem *MemoryStore) error {
 
 // DecodePush reads either a GONF-PUSH/1 frame or bare JSONL from r.
 // When blobs are present they are unpacked under planDir (must be an existing
-// empty owner-only directory). Caller must Close the payload to remove planDir
-// contents if cleanup was registered — prefer SweepApplyRoot helpers in apply
-// CLI for lifecycle; here cleanup is optional via returned Close.
+// empty owner-only directory) and the payload reports that path in PlanDir.
+// The plan dir's lifecycle belongs to the caller: the apply CLI owns it via
+// NewApplyRunDir or the sticky -apply-dir (see staging.go).
 func DecodePush(r io.Reader, planDir string) (*PushPayload, error) {
 	br := bufio.NewReader(r)
 	peek, err := br.Peek(1)
@@ -132,18 +123,6 @@ func DecodePush(r io.Reader, planDir string) (*PushPayload, error) {
 	}
 	out.Ops = ops
 	return &out, nil
-}
-
-func decodeMaybeGzipPlan(raw []byte) (*PushPayload, error) {
-	data, err := maybeGunzip(raw)
-	if err != nil {
-		return nil, err
-	}
-	ops, err := DecodePlanBytes(data)
-	if err != nil {
-		return nil, err
-	}
-	return &PushPayload{Ops: ops}, nil
 }
 
 func readGzipOrRaw(r io.Reader) ([]byte, error) {

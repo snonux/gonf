@@ -51,13 +51,12 @@ func RegisterMethods(v any, opts ...RegisterOption) {
 		panic(fmt.Sprintf("RegisterMethods: want struct or *struct, got %T", v))
 	}
 
-	// Prefer pointer methods if value is addressable / we have a pointer.
+	// reflect.ValueOf always yields a non-addressable value (CanAddr is
+	// false unless the value came from a pointer deref), so a struct
+	// argument is wrapped in a fresh pointer to reach pointer-receiver
+	// methods; pointer arguments stay as-is.
 	rt := rv.Type()
-	if rv.Kind() == reflect.Struct && rv.CanAddr() {
-		rv = rv.Addr()
-		rt = rv.Type()
-	} else if rv.Kind() == reflect.Struct {
-		// Non-addressable value: use value methods only; wrap in pointer via New+Set if needed.
+	if rv.Kind() == reflect.Struct {
 		ptr := reflect.New(rv.Type())
 		ptr.Elem().Set(rv)
 		rv = ptr
