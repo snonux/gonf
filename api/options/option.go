@@ -4,9 +4,9 @@
 package options
 
 import (
-	"log"
 	"os"
 
+	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -41,21 +41,21 @@ type (
 		SetSymlink(target string)
 		SetHardlink(target string)
 	}
-	Restartable  interface{ SetRestart() }
-	Reloadable   interface{ SetReload() }
-	UserService  interface{ SetUser() }
+	Restartable    interface{ SetRestart() }
+	Reloadable     interface{ SetReload() }
+	UserService    interface{ SetUser() }
 	EnableOnlyable interface{ SetEnableOnly() }
-	ChangeGated  interface{ SetIfChanged() }
-	Watchable    interface{ SetWatch([]string) }
-	Elevatable   interface{ SetElevate() }
-	CronUserable interface{ SetCronUser(string) }
-	Commandable  interface{ SetCommand(string) }
-	Minuteable   interface{ SetMinute(string) }
-	Hourable     interface{ SetHour(string) }
-	Monthdayable interface{ SetMonthday(string) }
-	Monthable    interface{ SetMonth(string) }
-	Weekdayable  interface{ SetWeekday(string) }
-	CronEnvable  interface{ AddCronEnv(string) }
+	ChangeGated    interface{ SetIfChanged() }
+	Watchable      interface{ SetWatch([]string) }
+	Elevatable     interface{ SetElevate() }
+	CronUserable   interface{ SetCronUser(string) }
+	Commandable    interface{ SetCommand(string) }
+	Minuteable     interface{ SetMinute(string) }
+	Hourable       interface{ SetHour(string) }
+	Monthdayable   interface{ SetMonthday(string) }
+	Monthable      interface{ SetMonth(string) }
+	Weekdayable    interface{ SetWeekday(string) }
+	CronEnvable    interface{ AddCronEnv(string) }
 )
 
 // Guard describes an Unless/OnlyIf probe: run Name with Args and treat the
@@ -87,59 +87,41 @@ func ExpectStdout(want string) GuardOption {
 // each of its members individually.
 func DependsOn(deps ...resource.Dependency) Option {
 	return func(t any) {
-		r, ok := t.(Dependable)
-		if !ok {
-			log.Fatalf("%T does not support DependsOn", t)
-		}
-		for _, dep := range deps {
-			for _, id := range dep.Dependencies() {
-				r.AddDependency(id)
+		requires(t, "DependsOn", func(r Dependable) {
+			for _, dep := range deps {
+				for _, id := range dep.Dependencies() {
+					r.AddDependency(id)
+				}
 			}
-		}
+		})
 	}
 }
 
 // WithOwner sets the owning user of the resource.
 func WithOwner(owner string) Option {
 	return func(t any) {
-		r, ok := t.(Owner)
-		if !ok {
-			log.Fatalf("%T does not support WithOwner", t)
-		}
-		r.SetOwner(owner)
+		requires(t, "WithOwner", func(r Owner) { r.SetOwner(owner) })
 	}
 }
 
 // WithGroup sets the owning group of the resource.
 func WithGroup(group string) Option {
 	return func(t any) {
-		r, ok := t.(Grouped)
-		if !ok {
-			log.Fatalf("%T does not support WithGroup", t)
-		}
-		r.SetGroup(group)
+		requires(t, "WithGroup", func(r Grouped) { r.SetGroup(group) })
 	}
 }
 
 // WithMode sets the resource's own file mode.
 func WithMode(mode os.FileMode) Option {
 	return func(t any) {
-		r, ok := t.(Moded)
-		if !ok {
-			log.Fatalf("%T does not support WithMode", t)
-		}
-		r.SetMode(mode)
+		requires(t, "WithMode", func(r Moded) { r.SetMode(mode) })
 	}
 }
 
 // WithSource sets the source path the resource is populated from.
 func WithSource(source string) Option {
 	return func(t any) {
-		r, ok := t.(Sourced)
-		if !ok {
-			log.Fatalf("%T does not support WithSource", t)
-		}
-		r.SetSource(source)
+		requires(t, "WithSource", func(r Sourced) { r.SetSource(source) })
 	}
 }
 
@@ -147,42 +129,28 @@ func WithSource(source string) Option {
 // basename entries (flat install). Mutually exclusive with WithSource.
 func WithSourceGlob(pattern string) Option {
 	return func(t any) {
-		r, ok := t.(SourceGlobable)
-		if !ok {
-			log.Fatalf("%T does not support WithSourceGlob", t)
-		}
-		r.SetSourceGlob(pattern)
+		requires(t, "WithSourceGlob", func(r SourceGlobable) { r.SetSourceGlob(pattern) })
 	}
 }
 
 // WithContent sets literal content for the resource.
 func WithContent(content string) Option {
 	return func(t any) {
-		r, ok := t.(Contented)
-		if !ok {
-			log.Fatalf("%T does not support WithContent", t)
-		}
-		r.SetContent(content)
+		requires(t, "WithContent", func(r Contented) { r.SetContent(content) })
 	}
 }
 
+// WithLine appends a line of content to the resource.
 func WithLine(content string) Option {
 	return func(t any) {
-		r, ok := t.(LineAddable)
-		if !ok {
-			log.Fatalf("%T does not support WithLine", t)
-		}
-		r.SetAddLine(content)
+		requires(t, "WithLine", func(r LineAddable) { r.SetAddLine(content) })
 	}
 }
 
+// WithoutLine removes a line of content from the resource.
 func WithoutLine(content string) Option {
 	return func(t any) {
-		r, ok := t.(LineRemovable)
-		if !ok {
-			log.Fatalf("%T does not support WithoutLine", t)
-		}
-		r.SetRemoveLine(content)
+		requires(t, "WithoutLine", func(r LineRemovable) { r.SetRemoveLine(content) })
 	}
 }
 
@@ -190,304 +158,189 @@ func WithoutLine(content string) Option {
 // tree (distinct from the resource's own mode).
 func WithFileMode(mode os.FileMode) Option {
 	return func(t any) {
-		r, ok := t.(FileModed)
-		if !ok {
-			log.Fatalf("%T does not support WithFileMode", t)
-		}
-		r.SetFileMode(mode)
+		requires(t, "WithFileMode", func(r FileModed) { r.SetFileMode(mode) })
 	}
 }
 
 // WithPrune enables reconciliation of extra destination entries during a
 // source copy, and recursive removal during IsAbsent().
-var WithPrune = func(t any) {
-	r, ok := t.(Prunable)
-	if !ok {
-		log.Fatalf("%T does not support WithPrune", t)
-	}
-	r.SetPrune()
+var WithPrune Option = func(t any) {
+	requires(t, "WithPrune", func(r Prunable) { r.SetPrune() })
 }
-
-func WithPruneFunc() Option { return WithPrune }
 
 // IsAbsent marks the resource for removal.
-var IsAbsent = func(t any) {
-	r, ok := t.(Absentable)
-	if !ok {
-		log.Fatalf("%T does not support IsAbsent", t)
-	}
-	r.SetAbsent()
+var IsAbsent Option = func(t any) {
+	requires(t, "IsAbsent", func(r Absentable) { r.SetAbsent() })
 }
-
-func IsAbsentFunc() Option { return IsAbsent }
 
 // IsLatest marks the package resource to be updated to the latest version.
-var IsLatest = func(t any) {
-	r, ok := t.(Latestable)
-	if !ok {
-		log.Fatalf("%T does not support IsLatest", t)
-	}
-	r.SetLatest()
+var IsLatest Option = func(t any) {
+	requires(t, "IsLatest", func(r Latestable) { r.SetLatest() })
 }
-
-func IsLatestFunc() Option { return IsLatest }
 
 // WithRestart restarts the service or timer once during this apply after
 // converging to the desired running/active state.
-var WithRestart = func(t any) {
-	r, ok := t.(Restartable)
-	if !ok {
-		log.Fatalf("%T does not support WithRestart", t)
-	}
-	r.SetRestart()
+var WithRestart Option = func(t any) {
+	requires(t, "WithRestart", func(r Restartable) { r.SetRestart() })
 }
-
-func WithRestartFunc() Option { return WithRestart }
 
 // WithReload reloads the service once during this apply when the backend
 // supports a reload action. Takes precedence over WithRestart when both are set.
 // Timer resources do not support WithReload.
-var WithReload = func(t any) {
-	r, ok := t.(Reloadable)
-	if !ok {
-		log.Fatalf("%T does not support WithReload", t)
-	}
-	r.SetReload()
+var WithReload Option = func(t any) {
+	requires(t, "WithReload", func(r Reloadable) { r.SetReload() })
 }
-
-func WithReloadFunc() Option { return WithReload }
 
 // WithUser selects the systemd user bus (--user). Only valid on systemd.
-var WithUser = func(t any) {
-	r, ok := t.(UserService)
-	if !ok {
-		log.Fatalf("%T does not support WithUser", t)
-	}
-	r.SetUser()
+var WithUser Option = func(t any) {
+	requires(t, "WithUser", func(r UserService) { r.SetUser() })
 }
-
-func WithUserFunc() Option { return WithUser }
 
 // WithElevate marks a command (or other Elevatable) so its plan op has
 // elevate=true even inside an unprivileged task.
-var WithElevate = func(t any) {
-	r, ok := t.(Elevatable)
-	if !ok {
-		log.Fatalf("%T does not support WithElevate", t)
-	}
-	r.SetElevate()
+var WithElevate Option = func(t any) {
+	requires(t, "WithElevate", func(r Elevatable) { r.SetElevate() })
 }
-
-func WithElevateFunc() Option { return WithElevate }
 
 // WithEnableOnly makes Timer converge enable/disable without start/stop.
-var WithEnableOnly = func(t any) {
-	r, ok := t.(EnableOnlyable)
-	if !ok {
-		log.Fatalf("%T does not support WithEnableOnly", t)
-	}
-	r.SetEnableOnly()
+var WithEnableOnly Option = func(t any) {
+	requires(t, "WithEnableOnly", func(r EnableOnlyable) { r.SetEnableOnly() })
 }
-
-func WithEnableOnlyFunc() Option { return WithEnableOnly }
 
 // IfChanged skips DaemonReload unless a DependsOn (or WithWatch) target was
 // noted StatusChanged / StatusWouldChange. Directory deps also see child File notes.
-var IfChanged = func(t any) {
-	r, ok := t.(ChangeGated)
-	if !ok {
-		log.Fatalf("%T does not support IfChanged", t)
-	}
-	r.SetIfChanged()
+var IfChanged Option = func(t any) {
+	requires(t, "IfChanged", func(r ChangeGated) { r.SetIfChanged() })
 }
-
-func IfChangedFunc() Option { return IfChanged }
 
 // WithWatch sets the resource ids IfChanged consults (plan apply / Ensure).
 func WithWatch(ids ...string) Option {
 	return func(t any) {
-		r, ok := t.(Watchable)
-		if !ok {
-			log.Fatalf("%T does not support WithWatch", t)
-		}
-		r.SetWatch(ids)
+		requires(t, "WithWatch", func(r Watchable) { r.SetWatch(ids) })
 	}
 }
 
 // WithCronUser sets the account whose crontab is managed (default "root").
 func WithCronUser(user string) Option {
 	return func(t any) {
-		r, ok := t.(CronUserable)
-		if !ok {
-			log.Fatalf("%T does not support WithCronUser", t)
-		}
-		r.SetCronUser(user)
+		requires(t, "WithCronUser", func(r CronUserable) { r.SetCronUser(user) })
 	}
 }
 
 // WithCommand sets the command line for a Cron resource (Puppet-inspired).
 func WithCommand(cmd string) Option {
 	return func(t any) {
-		r, ok := t.(Commandable)
-		if !ok {
-			log.Fatalf("%T does not support WithCommand", t)
-		}
-		r.SetCommand(cmd)
+		requires(t, "WithCommand", func(r Commandable) { r.SetCommand(cmd) })
 	}
 }
 
 // WithMinute sets the cron minute field (default "*").
 func WithMinute(v string) Option {
 	return func(t any) {
-		r, ok := t.(Minuteable)
-		if !ok {
-			log.Fatalf("%T does not support WithMinute", t)
-		}
-		r.SetMinute(v)
+		requires(t, "WithMinute", func(r Minuteable) { r.SetMinute(v) })
 	}
 }
 
 // WithHour sets the cron hour field (default "*").
 func WithHour(v string) Option {
 	return func(t any) {
-		r, ok := t.(Hourable)
-		if !ok {
-			log.Fatalf("%T does not support WithHour", t)
-		}
-		r.SetHour(v)
+		requires(t, "WithHour", func(r Hourable) { r.SetHour(v) })
 	}
 }
 
 // WithMonthday sets the cron day-of-month field (default "*").
 func WithMonthday(v string) Option {
 	return func(t any) {
-		r, ok := t.(Monthdayable)
-		if !ok {
-			log.Fatalf("%T does not support WithMonthday", t)
-		}
-		r.SetMonthday(v)
+		requires(t, "WithMonthday", func(r Monthdayable) { r.SetMonthday(v) })
 	}
 }
 
 // WithMonth sets the cron month field (default "*").
 func WithMonth(v string) Option {
 	return func(t any) {
-		r, ok := t.(Monthable)
-		if !ok {
-			log.Fatalf("%T does not support WithMonth", t)
-		}
-		r.SetMonth(v)
+		requires(t, "WithMonth", func(r Monthable) { r.SetMonth(v) })
 	}
 }
 
 // WithWeekday sets the cron day-of-week field (default "*").
 func WithWeekday(v string) Option {
 	return func(t any) {
-		r, ok := t.(Weekdayable)
-		if !ok {
-			log.Fatalf("%T does not support WithWeekday", t)
-		}
-		r.SetWeekday(v)
+		requires(t, "WithWeekday", func(r Weekdayable) { r.SetWeekday(v) })
 	}
 }
 
 // WithCronEnv appends an environment assignment (KEY=VAL) above the cron line.
 func WithCronEnv(kv string) Option {
 	return func(t any) {
-		r, ok := t.(CronEnvable)
-		if !ok {
-			log.Fatalf("%T does not support WithCronEnv", t)
-		}
-		r.AddCronEnv(kv)
+		requires(t, "WithCronEnv", func(r CronEnvable) { r.AddCronEnv(kv) })
 	}
 }
 
 // WithSymlink makes the resource a symbolic link pointing at target.
 func WithSymlink(target string) Option {
 	return func(t any) {
-		r, ok := t.(Linkable)
-		if !ok {
-			log.Fatalf("%T does not support WithSymlink", t)
-		}
-		r.SetSymlink(target)
+		requires(t, "WithSymlink", func(r Linkable) { r.SetSymlink(target) })
 	}
 }
 
 // WithHardlink makes the resource a hard link pointing at target.
 func WithHardlink(target string) Option {
 	return func(t any) {
-		r, ok := t.(Linkable)
-		if !ok {
-			log.Fatalf("%T does not support WithHardlink", t)
-		}
-		r.SetHardlink(target)
+		requires(t, "WithHardlink", func(r Linkable) { r.SetHardlink(target) })
 	}
 }
 
 // WithName overrides the resource's registry name (used in its ID).
 func WithName(name string) Option {
 	return func(t any) {
-		r, ok := t.(Named)
-		if !ok {
-			log.Fatalf("%T does not support WithName", t)
-		}
-		r.SetName(name)
+		requires(t, "WithName", func(r Named) { r.SetName(name) })
 	}
 }
 
 // WithDir sets the working directory for a command resource.
 func WithDir(dir string) Option {
 	return func(t any) {
-		r, ok := t.(Dirable)
-		if !ok {
-			log.Fatalf("%T does not support WithDir", t)
-		}
-		r.SetDir(dir)
+		requires(t, "WithDir", func(r Dirable) { r.SetDir(dir) })
 	}
 }
 
 // WithEnv merges extra environment variables into the command's environment.
 func WithEnv(env map[string]string) Option {
 	return func(t any) {
-		r, ok := t.(Envable)
-		if !ok {
-			log.Fatalf("%T does not support WithEnv", t)
-		}
-		r.SetEnv(env)
+		requires(t, "WithEnv", func(r Envable) { r.SetEnv(env) })
 	}
 }
 
 // Creates skips applying the command when path already exists.
 func Creates(path string) Option {
 	return func(t any) {
-		r, ok := t.(Creatable)
-		if !ok {
-			log.Fatalf("%T does not support Creates", t)
-		}
-		r.SetCreates(path)
+		requires(t, "Creates", func(r Creatable) { r.SetCreates(path) })
 	}
 }
 
 // Unless skips the command when the guard probe succeeds.
 func Unless(name string, args []string, opts ...GuardOption) Option {
 	return func(t any) {
-		r, ok := t.(Guardable)
-		if !ok {
-			log.Fatalf("%T does not support Unless", t)
-		}
-		r.SetUnless(newGuard(name, args, opts...))
+		requires(t, "Unless", func(r Guardable) { r.SetUnless(newGuard(name, args, opts...)) })
 	}
 }
 
 // OnlyIf runs the command only when the guard probe succeeds.
 func OnlyIf(name string, args []string, opts ...GuardOption) Option {
 	return func(t any) {
-		r, ok := t.(Guardable)
-		if !ok {
-			log.Fatalf("%T does not support OnlyIf", t)
-		}
-		r.SetOnlyIf(newGuard(name, args, opts...))
+		requires(t, "OnlyIf", func(r Guardable) { r.SetOnlyIf(newGuard(name, args, opts...)) })
 	}
+}
+
+// requires asserts that the option target t implements the T capability and
+// hands the typed value to use. A mismatch is a programmer error and aborts
+// the run via logger.Fatal, e.g. "file.File does not support WithContent".
+func requires[T any](t any, label string, use func(T)) {
+	r, ok := t.(T)
+	if !ok {
+		logger.Fatal("%T does not support %s", t, label)
+	}
+	use(r)
 }
 
 func newGuard(name string, args []string, opts ...GuardOption) *Guard {

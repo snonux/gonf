@@ -113,7 +113,7 @@ func TestWithElevateOnCommand(t *testing.T) {
 	ResetTasks()
 	resource.ResetRepository()
 	Task("mixed", "", func() {
-		Command("true", nil, options.WithElevateFunc())
+		Command("true", nil, options.WithElevate)
 	})
 	ops, err := RecordPlan("t", t.TempDir(), "mixed")
 	if err != nil {
