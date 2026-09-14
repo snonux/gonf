@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -48,7 +49,26 @@ func RunWith(opts Opts, name string, args ...string) (stdout, stderr string, exi
 	if opts.Env != nil {
 		cmd.Env = opts.Env
 	}
+	return runCollecting(ctx, opts.Timeout, cmd)
+}
 
+// RunWithStdin is like Run but feeds stdin (from a strings.Reader) to the
+// process. It has no Dir, Env, or Timeout support; if a caller ever needs
+// stdin combined with those, add an Opts.Stdin field then. The
+// error/exit-code handling is identical to RunWith's: a non-zero exit is
+// surfaced via exitCode rather than err.
+func RunWithStdin(stdin string, name string, args ...string) (stdout, stderr string, exitCode int, err error) {
+	cmd := exec.Command(name, args...)
+	cmd.Stdin = strings.NewReader(stdin)
+	return runCollecting(context.Background(), 0, cmd)
+}
+
+// runCollecting runs cmd, collects stdout and stderr, and maps errors to the
+// shared contract: a deadline kill (ctx.Err() != nil after cmd.Run) surfaces
+// as an error with exit code -1, a completed non-zero exit is reported via
+// exitCode with a nil error, and any other failure returns exit code -1 with
+// the error.
+func runCollecting(ctx context.Context, timeout time.Duration, cmd *exec.Cmd) (stdout, stderr string, exitCode int, err error) {
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
@@ -58,28 +78,23 @@ func RunWith(opts Opts, name string, args ...string) (stdout, stderr string, exi
 	stdout = stdoutBuf.String()
 	stderr = stderrBuf.String()
 
-	if err != nil {
-		// A deadline kill surfaces as *exec.ExitError ("signal: killed"), which
-		// would otherwise be mistaken for a completed non-zero run: the command
-		// never finished, so report the timeout as an error instead. With
-		// Timeout == 0 the context is Background and ctx.Err() is always nil.
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return stdout, stderr, -1, fmt.Errorf("timed out after %v: %w", opts.Timeout, ctxErr)
-		}
-		if exitError, ok := err.(*exec.ExitError); ok {
-			exitCode = exitError.ExitCode()
-			// The command ran and exited non-zero; surface that via exitCode
-			// rather than err so callers can treat start failures separately.
-			err = nil
-		} else {
-			exitCode = -1
-			return stdout, stderr, exitCode, err
-		}
-	} else {
-		exitCode = 0
+	if err == nil {
+		return stdout, stderr, 0, nil
 	}
 
-	return stdout, stderr, exitCode, nil
+	// A deadline kill surfaces as *exec.ExitError ("signal: killed"), which
+	// would otherwise be mistaken for a completed non-zero run: the command
+	// never finished, so report the timeout as an error instead. With
+	// Timeout == 0 the context is Background and ctx.Err() is always nil.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return stdout, stderr, -1, fmt.Errorf("timed out after %v: %w", timeout, ctxErr)
+	}
+	if exitError, ok := err.(*exec.ExitError); ok {
+		// The command ran and exited non-zero; surface that via exitCode
+		// rather than err so callers can treat start failures separately.
+		return stdout, stderr, exitError.ExitCode(), nil
+	}
+	return stdout, stderr, -1, err
 }
 
 // MergeEnv returns a full environment slice: the current process environment

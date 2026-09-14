@@ -53,8 +53,12 @@ var (
 	_ opt.CronEnvable  = (*Cron)(nil)
 )
 
-// runCmd is swapped in tests.
-var runCmd = exec.Run
+// runCmd reads a crontab (crontab -l) and runCmdWithStdin writes one (crontab
+// -, fed via stdin); both are swapped in unit tests.
+var (
+	runCmd          = exec.Run
+	runCmdWithStdin = exec.RunWithStdin
+)
 
 // newCron builds a Cron with defaults applied, then applies opts.
 func newCron(name string, opts []opt.Option) *Cron {
@@ -108,7 +112,7 @@ func SetRunnersForTest(run func(name string, args ...string) (string, string, in
 // ResetRunnersForTest restores the real crontab command runners.
 func ResetRunnersForTest() {
 	runCmd = exec.Run
-	runCmdWithStdin = runWithStdin
+	runCmdWithStdin = exec.RunWithStdin
 }
 
 func (c *Cron) planDraft(id string) resource.PlanDraft {

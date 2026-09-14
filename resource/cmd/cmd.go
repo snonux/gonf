@@ -14,6 +14,13 @@ import (
 	"github.com/snonux/gonf/resource/embed"
 )
 
+// runWith runs the main command (it carries Dir/Env opts) and runProbe runs
+// guard probes (Unless/OnlyIf). Both are swapped in unit tests.
+var (
+	runWith  = exec.RunWith
+	runProbe = exec.Run
+)
+
 // Cmd is a command resource. It embeds DependsOn but not Absence: there is no
 // meaningful "absent" state for a one-shot command.
 type Cmd struct {
@@ -80,6 +87,23 @@ func Ensure(bin string, args []string, opts ...opt.Option) error {
 		c.name = defaultName(bin, c.args)
 	}
 	return c.apply()
+}
+
+// SetRunnersForTest swaps the command runners (tests only). A nil argument
+// keeps the current runner for that slot.
+func SetRunnersForTest(run func(opts exec.Opts, name string, args ...string) (string, string, int, error), probe func(name string, args ...string) (string, string, int, error)) {
+	if run != nil {
+		runWith = run
+	}
+	if probe != nil {
+		runProbe = probe
+	}
+}
+
+// ResetRunnersForTest restores the real command runners.
+func ResetRunnersForTest() {
+	runWith = exec.RunWith
+	runProbe = exec.Run
 }
 
 func (c *Cmd) planDraft(id string) resource.PlanDraft {
@@ -183,7 +207,7 @@ func (c *Cmd) run() error {
 	}
 
 	logger.Info("running %s: %s %s", c.id(), c.bin, strings.Join(c.args, " "))
-	stdout, stderr, exitCode, err := exec.RunWith(opts, c.bin, c.args...)
+	stdout, stderr, exitCode, err := runWith(opts, c.bin, c.args...)
 	if err != nil {
 		return fmt.Errorf("failed to execute %s: %w", c.bin, err)
 	}
@@ -199,7 +223,7 @@ func (c *Cmd) run() error {
 }
 
 func guardPasses(g *opt.Guard) (bool, error) {
-	stdout, _, exitCode, err := exec.Run(g.Name, g.Args...)
+	stdout, _, exitCode, err := runProbe(g.Name, g.Args...)
 	if err != nil {
 		return false, err
 	}

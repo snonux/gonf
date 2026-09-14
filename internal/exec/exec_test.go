@@ -128,6 +128,74 @@ func TestRunWithDir(t *testing.T) {
 	}
 }
 
+func TestRunWithStdin(t *testing.T) {
+	tests := []struct {
+		name         string
+		stdin        string
+		cmd          string
+		args         []string
+		wantStdout   string
+		wantExitCode int
+		wantErr      bool
+	}{
+		{
+			name:         "stdin-plumbed",
+			stdin:        "hello stdin\n",
+			cmd:          "cat",
+			wantStdout:   "hello stdin\n",
+			wantExitCode: 0,
+			wantErr:      false,
+		},
+		{
+			name:         "non-zero-exit-is-not-an-error",
+			stdin:        "ignored",
+			cmd:          "sh",
+			args:         []string{"-c", "cat > /dev/null; exit 3"},
+			wantExitCode: 3,
+			wantErr:      false,
+		},
+		{
+			name:         "fail-binary-not-found",
+			stdin:        "ignored",
+			cmd:          "non-existent-command-12345",
+			wantExitCode: -1,
+			wantErr:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stdout, _, exitCode, err := RunWithStdin(tt.stdin, tt.cmd, tt.args...)
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("RunWithStdin() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if exitCode != tt.wantExitCode {
+				t.Errorf("RunWithStdin() exitCode = %v, want %v", exitCode, tt.wantExitCode)
+			}
+			if tt.name == "stdin-plumbed" && stdout != tt.wantStdout {
+				t.Errorf("RunWithStdin() stdout = %q, want %q", stdout, tt.wantStdout)
+			}
+		})
+	}
+}
+
+// Stdout and stderr must be collected separately even for failing commands.
+func TestRunWithStdinCollectsStreams(t *testing.T) {
+	stdout, stderr, exitCode, err := RunWithStdin("",
+		"sh", "-c", "printf toout; printf toerr >&2; exit 5")
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if exitCode != 5 {
+		t.Fatalf("exitCode = %d, want 5", exitCode)
+	}
+	if stdout != "toout" || stderr != "toerr" {
+		t.Fatalf("stdout = %q, stderr = %q", stdout, stderr)
+	}
+}
+
 func TestMergeEnv(t *testing.T) {
 	t.Setenv("GONF_MERGE_BASE", "base")
 	merged := MergeEnv(map[string]string{
