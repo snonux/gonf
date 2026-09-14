@@ -6,7 +6,9 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/user"
 	"slices"
@@ -292,25 +294,22 @@ func (f *File) applyTemplateToContent(content []byte, param string) ([]byte, err
 func (f *File) applyAttributesTo(path string) error {
 	fd, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
+		// POSIX denies the owner O_RDONLY on a file whose mode lacks
+		// owner-read (e.g. WithMode(0o000)), so a non-root run cannot open
+		// its own unreadable file for the fd-based application above.
+		// That is the one case where the old path-based os.Chmod worked and
+		// this open does not, so fall back to the path (still refusing
+		// symlinks; see applyAttributesViaPath).
+		if errors.Is(err, fs.ErrPermission) {
+			return f.applyAttributesViaPath(path, err)
+		}
 		return fmt.Errorf("failed to open %s for attribute changes: %w", path, err)
 	}
 	defer func() { _ = fd.Close() }()
 
-	uid, gid := -1, -1
-
-	if f.user != "" {
-		u, err := user.Lookup(f.user)
-		if err != nil {
-			return fmt.Errorf("failed to lookup user %s: %w", f.user, err)
-		}
-		uid, _ = strconv.Atoi(u.Uid)
-	}
-
-	if f.group != "" {
-		gid, err = resolveGroupID(f.group)
-		if err != nil {
-			return err
-		}
+	uid, gid, err := f.ownerIDs()
+	if err != nil {
+		return err
 	}
 
 	if err := fd.Chown(uid, gid); err != nil {
@@ -325,6 +324,79 @@ func (f *File) applyAttributesTo(path string) error {
 		return fmt.Errorf("failed to chmod %s to %v: %w", path, f.mode, err)
 	}
 	logger.Debug("set mode %v for %s", f.mode, path)
+
+	return nil
+}
+
+// ownerIDs resolves f's configured user/group into the numeric ids for the
+// chown calls: -1 for unset values leaves the respective owner unchanged.
+// Shared by the fd-based applyAttributesTo and its path-based fallback.
+func (f *File) ownerIDs() (uid, gid int, err error) {
+	uid, gid = -1, -1
+
+	if f.user != "" {
+		u, err := user.Lookup(f.user)
+		if err != nil {
+			return -1, -1, fmt.Errorf("failed to lookup user %s: %w", f.user, err)
+		}
+		uid, _ = strconv.Atoi(u.Uid)
+	}
+
+	if f.group != "" {
+		if gid, err = resolveGroupID(f.group); err != nil {
+			return -1, -1, err
+		}
+	}
+
+	return uid, gid, nil
+}
+
+// applyAttributesViaPath applies f's ownership and mode to the regular file
+// at path with path-based os.Chown/os.Chmod calls. It is the fallback for
+// the permission-denied case of applyAttributesTo's O_NOFOLLOW open, which
+// POSIX restricts to callers with owner-read access on the target mode
+// (non-root cannot open its own 0o000 file, root's CAP_DAC_OVERRIDE makes
+// the open succeed — so the fallback is reachable only by non-root runs).
+//
+// The fallback cannot widen the symlink guarantee: an Lstat first refuses
+// (by returning the original open error) when a symlink sits at path, so
+// the path-based calls — which would follow a final symlink — never run on
+// one, and a non-regular entry is refused the same way. The residual race
+// between Lstat and chmod is bounded for a non-root caller: unprivileged
+// chown/chmod only succeed on entries the caller already owns, so a swap
+// into that window cannot touch anything the caller does not own (the same
+// exposure the pre-O_NOFOLLOW path-based implementation had on every apply).
+//
+// Chown runs before chmod, mirroring the fd-based path: the special bits
+// must survive the chown, and the chmod is the final state.
+func (f *File) applyAttributesViaPath(path string, openErr error) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		// The entry is gone or unstatable since the open failed: surface
+		// the original open error.
+		return fmt.Errorf("failed to open %s for attribute changes: %w", path, openErr)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		// A symlink at the target is never followed, and a non-regular
+		// entry is not what the caller verified either: surface the
+		// original open error instead of path-based chown/chmod.
+		return fmt.Errorf("failed to open %s for attribute changes: %w", path, openErr)
+	}
+
+	uid, gid, err := f.ownerIDs()
+	if err != nil {
+		return err
+	}
+
+	if err := os.Chown(path, uid, gid); err != nil {
+		return fmt.Errorf("failed to chown %s to %s:%s: %w", path, f.user, f.group, err)
+	}
+	logger.Debug("set owner %s:%s for %s (path fallback)", f.user, f.group, path)
+
+	if err := os.Chmod(path, f.mode); err != nil {
+		return fmt.Errorf("failed to chmod %s to %v: %w", path, f.mode, err)
+	}
+	logger.Debug("set mode %v for %s (path fallback)", f.mode, path)
 
 	return nil
 }

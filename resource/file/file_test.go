@@ -276,6 +276,53 @@ func TestApplyAttributesToRefusesSymlinkAtTarget(t *testing.T) {
 	}
 }
 
+// TestApplyAttributesToFallbackOnOwnerUnreadable pins the path-based
+// fallback for owner-unreadable modes: POSIX denies the owner O_RDONLY on a
+// file whose mode lacks owner-read (e.g. 0o000), so a non-root run cannot
+// open its own file for the fd-based attribute application; applyAttributesTo
+// must fall back to path-based chown/chmod (which do not need open access)
+// instead of erroring with a spurious EACCES. Skipped as root:
+// CAP_DAC_OVERRIDE lets root's O_RDONLY open succeed, so the fallback never
+// triggers there (and cannot be exercised).
+func TestApplyAttributesToFallbackOnOwnerUnreadable(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("fallback only triggers for non-root: root's CAP_DAC_OVERRIDE lets the O_NOFOLLOW open succeed")
+	}
+	resource.ResetRepository()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "unreadable.conf")
+	if err := os.WriteFile(path, []byte("managed content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatal(err)
+	}
+
+	// Empty user/group on the literal File: uid/gid stay -1 (no-op chown).
+	if err := (&File{mode: 0o600}).applyAttributesTo(path); err != nil {
+		t.Fatalf("applyAttributesTo failed on an owner-unreadable file: %v", err)
+	}
+
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Errorf("target changed type: got %v", info.Mode())
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("mode not applied via fallback: got %v, want 0o600", got)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "managed content" {
+		t.Errorf("content changed: got %q", content)
+	}
+}
+
 func TestConcurrentEnsureWritersDoNotInterfere(t *testing.T) {
 	resource.ResetRepository()
 	dir := t.TempDir()

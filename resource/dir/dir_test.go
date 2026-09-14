@@ -1365,6 +1365,49 @@ func TestDirApplyAttributesToRefusesNonDirectory(t *testing.T) {
 	}
 }
 
+// TestApplyAttributesToFallbackOnOwnerUnreadable pins the path-based
+// fallback for owner-unreadable modes, mirroring the file package's test of
+// the same name: POSIX denies the owner O_RDONLY on a directory whose mode
+// lacks owner-read (e.g. 0o300, write+execute only), so a non-root run
+// cannot open its own directory for the fd-based attribute application;
+// applyAttributesTo must fall back to path-based chown/chmod (which do not
+// need open access) instead of erroring with a spurious EACCES. Skipped as
+// root: CAP_DAC_OVERRIDE lets root's O_RDONLY|O_DIRECTORY open succeed, so
+// the fallback never triggers there (and cannot be exercised).
+func TestApplyAttributesToFallbackOnOwnerUnreadable(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("fallback only triggers for non-root: root's CAP_DAC_OVERRIDE lets the O_NOFOLLOW open succeed")
+	}
+	resource.ResetRepository()
+	base := t.TempDir()
+	path := filepath.Join(base, "unreadable")
+	if err := os.Mkdir(path, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	// 0o300 keeps owner-write+execute but strips owner-read, so the
+	// O_RDONLY|O_DIRECTORY open fails for non-root while chown/chmod as the
+	// owner still work.
+	if err := os.Chmod(path, 0o300); err != nil {
+		t.Fatal(err)
+	}
+
+	// Empty user/group: uid/gid stay -1 (no-op chown), mirroring file's test.
+	if err := applyAttributesTo(path, 0o750, "", ""); err != nil {
+		t.Fatalf("applyAttributesTo failed on an owner-unreadable directory: %v", err)
+	}
+
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.IsDir() {
+		t.Errorf("target changed type: got %v", info.Mode())
+	}
+	if got := info.Mode().Perm(); got != 0o750 {
+		t.Errorf("mode not applied via fallback: got %v, want 0o750", got)
+	}
+}
+
 // TestDirEnsureGroupByNameResolvesViaLookupGroup mirrors the file package's
 // TestEnsureGroupByNameResolvesViaLookupGroup for directories: both
 // WithGroup by name (exercising the os/user.LookupGroup fallback) and by
