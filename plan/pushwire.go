@@ -322,6 +322,17 @@ func extractTarHeader(planDir string, hdr *tar.Header, r io.Reader) error {
 		// non-blocking open fails immediately (ENXIO with no reader) or lets
 		// the write fail with EPIPE instead of hanging the extraction. On
 		// regular files O_NONBLOCK has no effect.
+		//
+		// No O_EXCL create: a pre-planted entry at the target requires write
+		// access to planDir, which is owner-only 0700 and — for the sticky
+		// -apply-dir flow — ownership-verified by the CLI before any blob is
+		// extracted (internal/cli verifyStickyDirOwned; the fresh-run-dir flow
+		// uses an unpredictable MkdirTemp name). writeTreeTar emits each
+		// entry exactly once per stream, so an EEXIST could only mean a
+		// pre-planted entry — impossible here for a non-root attacker. O_TRUNC
+		// therefore only ever overwrites the current user's own stale
+		// leftovers, never attacker data; a root attacker is out of scope
+		// (game over on the host anyway).
 		f, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY|syscall.O_NONBLOCK, 0o600)
 		if err != nil {
 			return err

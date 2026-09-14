@@ -245,7 +245,19 @@ func cliApplyStdin(applyDir string) int {
 			fmt.Fprintf(os.Stderr, "apply: apply-dir: %v\n", err)
 			return 1
 		}
-		_ = os.Chmod(applyDir, 0o700)
+		// Loud: the sticky path under /tmp is predictable, so a local
+		// attacker on the remote host can pre-create it foreign-owned
+		// (0777). That Chmod fails EPERM — discarding the error (as this
+		// path once did) would let the pushed blobs land in an
+		// attacker-writable dir, ready for substitution or theft.
+		if err := os.Chmod(applyDir, 0o700); err != nil {
+			fmt.Fprintf(os.Stderr, "apply: apply-dir %s: %v\n", applyDir, err)
+			return 1
+		}
+		if err := verifyStickyDirOwned(applyDir); err != nil {
+			fmt.Fprintf(os.Stderr, "apply: %v\n", err)
+			return 1
+		}
 		runDir = applyDir
 		cleanup = func() {} // sticky — caller owns lifecycle
 	} else {
@@ -276,6 +288,45 @@ func cliApplyStdin(applyDir string) int {
 	}
 	fmt.Fprintf(os.Stderr, "applied %s (%d ops)\n", src, len(payload.Ops))
 	return 0
+}
+
+// verifyStickyDirOwned refuses to stage into a sticky -apply-dir that a third
+// party could have planted: the controller derives the path as
+// /tmp/gonf-apply-sticky-<sanitized plan id> (internal/remote), so a local
+// attacker on the remote host can pre-create it before the push arrives.
+// After MkdirAll + Chmod the path must be a real directory owned by the
+// current user. A pre-planted foreign-owned dir already fails the Chmod above
+// (EPERM, now loud); a planted symlink survives the Chmod (chmod follows the
+// link) and is refused by the IsDir check here.
+//
+// Root sessions skip the uid check: an elevated apply chunk (sudo -n / doas)
+// legitimately reads a sticky dir owned by the SSH login user, and there is no
+// in-process way for root to tell that login user apart from another local
+// account. This is safe because the blob-upload session always runs first and
+// is never privilege-wrapped (internal/remote pushBlobs): as the unprivileged
+// login user it either owns the dir (verified below) or fails the Chmod
+// loudly — a non-root pre-plant is therefore refused before any chunk runs,
+// and only a root attacker could plant or chown a dir past it. Platforms
+// without syscall.Stat_t (none of gonf's targets) cannot verify and pass.
+func verifyStickyDirOwned(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("apply-dir %s: %w", path, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("apply-dir %s is not a directory (pre-planted?)", path)
+	}
+	if os.Geteuid() == 0 {
+		return nil
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil
+	}
+	if st.Uid != uint32(os.Getuid()) {
+		return fmt.Errorf("apply-dir %s is not owned by the current user (pre-planted?)", path)
+	}
+	return nil
 }
 
 func printUsage() {
