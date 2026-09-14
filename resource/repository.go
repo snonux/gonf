@@ -10,21 +10,37 @@ import (
 	"github.com/snonux/gonf/internal/logger"
 )
 
+// The DSL registries are deliberately single-goroutine: recipe construction
+// happens before fleet fan-out (PushFleet records centrally, then streams
+// the same bytes over SSH), so nothing in this file is safe for concurrent
+// registration or reset. repoMu guards only the repo pointer itself
+// (getRepository reads, ResetRepository swaps); repository.mu guards the
+// contents of one repository instance.
 var (
-	repo repository
-	once sync.Once
+	repo   *repository
+	repoMu sync.Mutex
 )
 
 func getRepository() *repository {
-	once.Do(func() {
+	repoMu.Lock()
+	defer repoMu.Unlock()
+	if repo == nil {
 		repo = newRepository()
-	})
-	return &repo
+	}
+	return repo
 }
 
 // ResetRepository swaps in a fresh empty repository. Tests use it to
-// isolate registrations between runs.
+// isolate registrations between runs; resource.ResetForTest is the
+// canonical single entry point for resetting all resource state.
+//
+// The swap takes repoMu so it cannot race a concurrent getRepository read
+// handing out the previous pointer. Callers keep their snapshot (the old
+// repository stays valid) until they re-read getRepository; registration
+// and apply remain single-goroutine by DSL invariant.
 func ResetRepository() {
+	repoMu.Lock()
+	defer repoMu.Unlock()
 	repo = newRepository()
 }
 
@@ -33,8 +49,8 @@ type repository struct {
 	mu         sync.Mutex
 }
 
-func newRepository() repository {
-	return repository{
+func newRepository() *repository {
+	return &repository{
 		registered: make(map[string]Resource),
 	}
 }

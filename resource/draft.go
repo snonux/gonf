@@ -122,6 +122,13 @@ var (
 	draftRecorder func(PlanDraft)
 )
 
+// The draft recorder, plan recording (plan.SetRecording), and the api
+// recording session form the record-mode trio: RecordPlanTo (api/plan.go)
+// always installs and uninstalls all three together for one recording
+// session. It lives here because resource cannot import api or plan
+// without a cycle; the trio relationship is documented here and in
+// plan/record.go.
+
 // SetPlanDraftRecorder installs the sink used by RecordPlanDraft.
 // Pass nil to disable recording.
 func SetPlanDraftRecorder(fn func(PlanDraft)) {

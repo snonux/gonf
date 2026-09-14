@@ -44,6 +44,10 @@ type Resource struct {
 // idempotent work, and deps the IDs of resources that must be applied first.
 // It exits via logger.Fatal on a duplicate ID: registering the same
 // Type[Name] twice is always a task bug.
+//
+// Registration is deliberately single-goroutine: recipe construction happens
+// before fleet fan-out, so the repository is not safe for concurrent
+// registration (see resource/repository.go).
 func Register(type_, name string, apply Applier, deps ...string) Resource {
 	dependsOn := make(map[string]struct{}, len(deps))
 	for _, id := range deps {

@@ -50,6 +50,12 @@ var (
 	notes    []note
 )
 
+// Like the resource repository, the dry-run flag and report notes are
+// process-wide DSL state and deliberately single-goroutine (recipe
+// construction happens before fleet fan-out); reportMu only serializes
+// individual reads and writes, nothing here is safe for concurrent
+// registration/apply sessions.
+
 // SetDryRun enables or disables dry-run mode (no mutating syscalls).
 func SetDryRun(v bool) {
 	reportMu.Lock()

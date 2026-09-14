@@ -212,14 +212,16 @@ func Run(names ...string) error {
 	return ApplyChunks(ops, planDir, processPrivilege)
 }
 
-// ResetTasks clears candidates and activated tasks. Intended for tests.
+// ResetTasks clears candidates and activated tasks. It is part of the
+// canonical api.ResetForTest seam, which also resets the profile override
+// (SetProfileOverride), the plan recording session, and the resource
+// package state; ResetTasks itself only owns the task registry.
 func ResetTasks() {
 	tasksMu.Lock()
 	defer tasksMu.Unlock()
 	candidates = nil
 	tasks = map[string]task{}
 	activated = false
-	profileOverride = ""
 }
 
 func activateLocked(facts Facts) {

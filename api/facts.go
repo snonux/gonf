@@ -17,7 +17,7 @@ type Facts struct {
 var profileOverride string
 
 // SetProfileOverride forces Facts.Profile (e.g. from CLI -profile).
-// Pass empty to clear.
+// Pass empty to clear. api.ResetForTest resets it for tests.
 func SetProfileOverride(profile string) {
 	profileOverride = profile
 }

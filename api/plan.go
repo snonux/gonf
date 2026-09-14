@@ -11,46 +11,74 @@ import (
 	"github.com/snonux/gonf/resource"
 )
 
-// recordingElevate is set while recording a Privileged() task body.
-var recordingElevate bool
+// recordingSession carries the mutable state of one plan recording session.
+// It deliberately replaces six loose package globals with one struct so the
+// fields stay together and reset in a single place (reset). Recording is
+// single-goroutine (fleet records centrally before fan-out), so no mutex
+// guards it. The other two members of the record-mode trio — plan
+// recording and the resource draft recorder — are set together with this
+// session by RecordPlanTo; see plan/record.go and resource/draft.go.
+type recordingSession struct {
+	// recordingElevate is set while recording a Privileged() task body.
+	recordingElevate bool
 
-// recordedDraftIDs holds the plan draft IDs emitted during the current task
-// body. The recorder fills it; recordTaskBodies resets it per task and fails
-// the record when a registered resource produced no draft (such resources
-// would be silently skipped by plan apply).
-var recordedDraftIDs = map[string]bool{}
+	// recordedDraftIDs holds the plan draft IDs emitted during the current
+	// task body. The recorder fills it; recordTaskBodies resets it per task
+	// and fails the record when a registered resource produced no draft
+	// (such resources would be silently skipped by plan apply).
+	recordedDraftIDs map[string]bool
 
-// recordingStack lists the task bodies currently being recorded, outermost
-// first. Re-entering a task whose body is still on the stack is a recursion
-// cycle (a task that Runs itself, directly or through other tasks). The same
-// task appearing again in a later, disjoint branch (diamond includes) is not
-// a cycle: by then its earlier body has left the stack, so repeats across
-// branches stay legal and only true cycles fail the record.
-var recordingStack []string
+	// recordingStack lists the task bodies currently being recorded,
+	// outermost first. Re-entering a task whose body is still on the stack
+	// is a recursion cycle (a task that Runs itself, directly or through
+	// other tasks). The same task appearing again in a later, disjoint
+	// branch (diamond includes) is not a cycle: by then its earlier body
+	// has left the stack, so repeats across branches stay legal and only
+	// true cycles fail the record.
+	recordingStack []string
 
-// recordingCycleErr holds a detected task recursion cycle. Task bodies cannot
-// return errors, so the nested recordTaskBodies that detected the cycle
-// stashes it here; every enclosing body fails its record after its fn
-// returns. It is cleared at the start of each RecordPlanTo session.
-var recordingCycleErr error
+	// recordingCycleErr holds a detected task recursion cycle. Task bodies
+	// cannot return errors, so the nested recordTaskBodies that detected
+	// the cycle stashes it here; every enclosing body fails its record
+	// after its fn returns. It is cleared at the start of each
+	// RecordPlanTo session.
+	recordingCycleErr error
 
-// recordingPackErr holds the current recording session's packaging error
-// (draft-lowering or blob-pack failure). The recorder callback sets it; every
-// task body — including bodies recorded through nested Run calls — checks it
-// after running, so an outer session's pack failure fails enclosing nested
-// bodies with the REAL error instead of a misleading secondary
-// checkUnrecordedDrafts one. Recording is single-goroutine (fleet records
-// centrally before fan-out), so a plain package-level value is safe.
-var recordingPackErr error
+	// recordingPackErr holds the current recording session's packaging
+	// error (draft-lowering or blob-pack failure). The recorder callback
+	// sets it; every task body — including bodies recorded through nested
+	// Run calls — checks it after running, so an outer session's pack
+	// failure fails enclosing nested bodies with the REAL error instead of
+	// a misleading secondary checkUnrecordedDrafts one. Recording is
+	// single-goroutine (fleet records centrally before fan-out), so a plain
+	// package-level value is safe.
+	recordingPackErr error
 
-// recordingBodyErr holds a task-body failure stashed by Aggregate (whose
-// Task fn cannot return errors): a child Run error, or a pattern that
-// matched no tasks. Like the cycle stash, every enclosing body fails its
-// record after its fn returns, and the top-level RecordPlanTo returns it —
-// so Run's deferred temp-dir cleanup runs and embedded callers get an error
-// instead of a process exit. Cleared at the start of each RecordPlanTo
-// session.
-var recordingBodyErr error
+	// recordingBodyErr holds a task-body failure stashed by Aggregate
+	// (whose Task fn cannot return errors): a child Run error, or a pattern
+	// that matched no tasks. Like the cycle stash, every enclosing body
+	// fails its record after its fn returns, and the top-level
+	// RecordPlanTo returns it — so Run's deferred temp-dir cleanup runs and
+	// embedded callers get an error instead of a process exit. Cleared at
+	// the start of each RecordPlanTo session.
+	recordingBodyErr error
+}
+
+// recSession is the process-wide plan recording session. Single-goroutine
+// by the DSL invariant above.
+var recSession recordingSession
+
+// reset clears all session state — errors, stack, draft IDs, elevate — so
+// nothing stale leaks between recording sessions or into tests
+// (api.ResetForTest uses it the same way).
+func (s *recordingSession) reset() {
+	s.recordingElevate = false
+	s.recordedDraftIDs = map[string]bool{}
+	s.recordingStack = nil
+	s.recordingCycleErr = nil
+	s.recordingPackErr = nil
+	s.recordingBodyErr = nil
+}
 
 // RecordPlan runs the named tasks in plan-record mode: resource registration
 // emits plan.Op lines instead of applying. Tasks are looked up as candidates
@@ -84,23 +112,20 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 
 	plan.ResetRecord()
 	plan.SetRecording(true)
-	recordingCycleErr = nil
-	recordingBodyErr = nil
 	// Defensive: a task body panicking during recording would leak a stale
 	// stack entry (pop is skipped); go test recovers per-test panics and
 	// keeps running, so reset here to keep later sessions truthful.
-	recordingStack = nil
-	recordingPackErr = nil
+	recSession.reset()
 	resource.SetPlanDraftRecorder(func(d resource.PlanDraft) {
-		if recordingPackErr != nil {
+		if recSession.recordingPackErr != nil {
 			return
 		}
 		if d.ID != "" {
-			recordedDraftIDs[d.ID] = true
+			recSession.recordedDraftIDs[d.ID] = true
 		}
 		op, err := packageDraft(d, store)
 		if err != nil {
-			recordingPackErr = err
+			recSession.recordingPackErr = err
 			return
 		}
 		plan.Record(op)
@@ -113,8 +138,8 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 	if err := recordTaskBodies(taskNames); err != nil {
 		return nil, err
 	}
-	if recordingPackErr != nil {
-		return nil, recordingPackErr
+	if recSession.recordingPackErr != nil {
+		return nil, recSession.recordingPackErr
 	}
 
 	ops := plan.FinishRecord(planID)
@@ -130,12 +155,12 @@ func recordTaskBodies(taskNames []string) error {
 		if err := checkRecordingCycle(name); err != nil {
 			// Task bodies cannot return errors; stash the cycle so every
 			// enclosing body fails its record too.
-			recordingCycleErr = err
+			recSession.recordingCycleErr = err
 			return err
 		}
-		recordingStack = append(recordingStack, name)
+		recSession.recordingStack = append(recSession.recordingStack, name)
 		err := recordSingleTaskBody(name)
-		recordingStack = recordingStack[:len(recordingStack)-1]
+		recSession.recordingStack = recSession.recordingStack[:len(recSession.recordingStack)-1]
 		if err != nil {
 			return err
 		}
@@ -155,44 +180,44 @@ func recordSingleTaskBody(name string) error {
 		return err
 	}
 
-	prevElevate := recordingElevate
-	recordingElevate = c.privileged
+	prevElevate := recSession.recordingElevate
+	recSession.recordingElevate = c.privileged
 	if len(wrapWhen) > 0 {
 		plan.Record(plan.Op{
 			Op:      plan.KindWhenBegin,
 			ID:      "when." + name,
 			All:     wrapWhen,
-			Elevate: recordingElevate,
+			Elevate: recSession.recordingElevate,
 		})
 	}
 
 	resource.ResetRepository()
 	resetRecordedDrafts()
 	c.fn()
-	if recordingCycleErr != nil {
-		recordingElevate = prevElevate
+	if recSession.recordingCycleErr != nil {
+		recSession.recordingElevate = prevElevate
 		// Keep the stash set: enclosing bodies fail with the same cycle.
-		return recordingCycleErr
+		return recSession.recordingCycleErr
 	}
-	if recordingBodyErr != nil {
-		recordingElevate = prevElevate
+	if recSession.recordingBodyErr != nil {
+		recSession.recordingElevate = prevElevate
 		// Keep the stash set: enclosing bodies fail with the same error.
-		return recordingBodyErr
+		return recSession.recordingBodyErr
 	}
-	if recordingPackErr != nil {
-		recordingElevate = prevElevate
+	if recSession.recordingPackErr != nil {
+		recSession.recordingElevate = prevElevate
 		// Keep the stash set: enclosing bodies fail with the same error.
-		return recordingPackErr
+		return recSession.recordingPackErr
 	}
 	if err := checkUnrecordedDrafts(c.name); err != nil {
-		recordingElevate = prevElevate
+		recSession.recordingElevate = prevElevate
 		return err
 	}
 
 	if len(wrapWhen) > 0 {
-		plan.Record(plan.Op{Op: plan.KindWhenEnd, Elevate: recordingElevate})
+		plan.Record(plan.Op{Op: plan.KindWhenEnd, Elevate: recSession.recordingElevate})
 	}
-	recordingElevate = prevElevate
+	recSession.recordingElevate = prevElevate
 	return nil
 }
 
@@ -200,11 +225,11 @@ func recordSingleTaskBody(name string) error {
 // stack: the task's body re-entered itself, directly or through other task
 // bodies. The error names the cycle chain, e.g. a -> b -> c -> a.
 func checkRecordingCycle(name string) error {
-	for i, onStack := range recordingStack {
+	for i, onStack := range recSession.recordingStack {
 		if onStack != name {
 			continue
 		}
-		chain := append([]string{}, recordingStack[i:]...)
+		chain := append([]string{}, recSession.recordingStack[i:]...)
 		chain = append(chain, name)
 		return fmt.Errorf("task recursion cycle detected: %s",
 			strings.Join(chain, " -> "))
@@ -214,8 +239,8 @@ func checkRecordingCycle(name string) error {
 
 // resetRecordedDrafts clears the per-task-body draft ID set.
 func resetRecordedDrafts() {
-	for id := range recordedDraftIDs {
-		delete(recordedDraftIDs, id)
+	for id := range recSession.recordedDraftIDs {
+		delete(recSession.recordedDraftIDs, id)
 	}
 }
 
@@ -225,20 +250,20 @@ func resetRecordedDrafts() {
 // its record after its fn returns. The first error wins, and later stashes
 // wrap it so the aggregate include chain stays visible to the operator.
 func stashBodyError(err error) {
-	if recordingBodyErr == nil {
-		recordingBodyErr = err
+	if recSession.recordingBodyErr == nil {
+		recSession.recordingBodyErr = err
 		return
 	}
-	recordingBodyErr = fmt.Errorf("aggregate %s: %w", currentRecordingName(), recordingBodyErr)
+	recSession.recordingBodyErr = fmt.Errorf("aggregate %s: %w", currentRecordingName(), recSession.recordingBodyErr)
 }
 
 // currentRecordingName returns the innermost task body being recorded, for
 // error context when multiple bodies stash failures.
 func currentRecordingName() string {
-	if len(recordingStack) == 0 {
+	if len(recSession.recordingStack) == 0 {
 		return "?"
 	}
-	return recordingStack[len(recordingStack)-1]
+	return recSession.recordingStack[len(recSession.recordingStack)-1]
 }
 
 // checkUnrecordedDrafts returns an error when a registered resource did not
@@ -248,7 +273,7 @@ func currentRecordingName() string {
 func checkUnrecordedDrafts(taskName string) error {
 	var missing []string
 	for _, id := range resource.RegisteredIDs() {
-		if !recordedDraftIDs[id] {
+		if !recSession.recordedDraftIDs[id] {
 			missing = append(missing, id)
 		}
 	}
@@ -398,7 +423,7 @@ func draftToOp(d resource.PlanDraft) (plan.Op, error) {
 		IfChanged:  d.IfChanged,
 		Watch:      d.Watch,
 		Deps:       d.Deps,
-		Elevate:    d.Elevate || recordingElevate,
+		Elevate:    d.Elevate || recSession.recordingElevate,
 	}
 	switch d.Kind {
 	case "file":

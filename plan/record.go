@@ -12,6 +12,12 @@ var (
 	recorded  []Op
 )
 
+// Recording, the draft recorder (resource.SetPlanDraftRecorder), and the api
+// recording session form the record-mode trio: RecordPlanTo (api/plan.go)
+// always sets and clears all three together for one recording session. They
+// live in separate packages because importing api from here would be a
+// cycle; the trio relationship is documented here and in resource/draft.go.
+
 // SetRecording enables or disables plan-record mode. When enabled, resource
 // Present paths append Op lines via Record instead of relying on Apply.
 func SetRecording(v bool) {
@@ -32,6 +38,14 @@ func ResetRecord() {
 	recordMu.Lock()
 	defer recordMu.Unlock()
 	recorded = nil
+}
+
+// ResetForTest is the single canonical test seam for plan record state: it
+// disables recording and clears recorded ops. SetRecording/ResetRecord stay
+// available individually so existing tests keep working.
+func ResetForTest() {
+	SetRecording(false)
+	ResetRecord()
 }
 
 // Record appends op when recording is enabled; otherwise it is a no-op.
