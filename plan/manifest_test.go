@@ -219,8 +219,7 @@ func TestScanGlob(t *testing.T) {
 	want := []BlobEntry{
 		{Rel: "a.conf", Kind: BlobFile, Data: []byte("a\n")},
 		{Rel: "b.conf", Kind: BlobFile, Data: []byte("b\n")},
-		{Rel: "dangling", Kind: BlobSymlink, Target: "nowhere"},
-		{Rel: "link", Kind: BlobSymlink, Target: "a.conf"},
+		{Rel: "link", Kind: BlobFile, Data: []byte("a\n")},
 	}
 	if len(entries) != len(want) {
 		t.Fatalf("glob manifest = %#v, want %#v", entries, want)

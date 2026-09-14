@@ -23,7 +23,7 @@ func TestStoreWriteTreePreservesSymlinksAndEmptyDirs(t *testing.T) {
 	assertOwnerOnlyDir(t, filepath.Join(root, "blobs"))
 }
 
-func TestStoreWriteGlobPreservesSymlinks(t *testing.T) {
+func TestStoreWriteGlobFlatFilePolicy(t *testing.T) {
 	root := t.TempDir()
 	store := NewStore(root)
 	src := t.TempDir()
@@ -96,13 +96,13 @@ func writeGlobFixture(src string) error {
 	return os.Symlink("adir", filepath.Join(src, "todir"))
 }
 
-// globFixtureWant returns the manifest writeGlobFixture must produce.
+// globFixtureWant returns the manifest writeGlobFixture must produce under
+// the flat regular-file policy: symlink-to-file reads through, dirs and
+// dangling links are skipped.
 func globFixtureWant() []BlobEntry {
 	return []BlobEntry{
-		{Rel: "dangling", Kind: BlobSymlink, Target: "nowhere"},
 		{Rel: "real", Kind: BlobFile, Data: []byte("real\n")},
-		{Rel: "todir", Kind: BlobSymlink, Target: "adir"},
-		{Rel: "tofile", Kind: BlobSymlink, Target: "real"},
+		{Rel: "tofile", Kind: BlobFile, Data: []byte("real\n")},
 	}
 }
 

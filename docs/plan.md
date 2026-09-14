@@ -75,10 +75,13 @@ ops, err := RecordPlan("my-plan", planDir, "home_helix", "home_tmux")
   stores: directories (empty ones included) and symlinks (raw target string,
   dangling included — never read through) are preserved as themselves,
   regular files by content; FIFOs/sockets/devices fail loudly. Glob packaging
-  is the flat subset: files by content, symlinks preserved raw, directories
-  skipped. Local (`plan -o dir` / `Run`) and remote (`push` / `fleet`)
-  therefore package identically, and the destination reproduces the source
-  tree 1:1 — a symlink in the source is a symlink at the destination.
+  is the flat regular-file subset: files by content (symlinks to regular
+  files read through), everything else skipped — matching the direct
+  `WithSourceGlob` semantics, so glob-sourced sync_dir ops behave identically
+  local and remote. Local (`plan -o dir` / `Run`) and remote (`push` /
+  `fleet`) therefore package trees identically, and the destination
+  reproduces the source tree 1:1 — a symlink in a source TREE is a symlink
+  at the destination.
 - Nested `Run` while recording (e.g. `Aggregate`) appends into the **same**
   plan; apply happens once at the top level.
 

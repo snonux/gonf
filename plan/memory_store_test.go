@@ -108,7 +108,7 @@ func TestMemoryStoreWriteGlob(t *testing.T) {
 	}
 }
 
-func TestMemoryStoreWriteGlobPreservesSymlinks(t *testing.T) {
+func TestMemoryStoreWriteGlobFlatPolicy(t *testing.T) {
 	m := NewMemoryStore()
 	dir := t.TempDir()
 	if err := writeGlobFixture(dir); err != nil {

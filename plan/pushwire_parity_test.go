@@ -307,3 +307,61 @@ func parityOps(ref, dst string) []Op {
 		{Op: KindSyncDir, Path: dst, Mode: "0700", Blob: ref, Prune: true},
 	}
 }
+
+// TestGlobParityDiskStoreVsPush pins glob-blob parity: a glob source with a
+// symlink-to-file must yield the same REGULAR file (read-through content) at
+// the destination whether packaged via the disk store or the push wire —
+// the flat glob policy (dangling links are skipped by packaging).
+func TestGlobParityDiskStoreVsPush(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "real.conf"), []byte("cfg\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("real.conf", filepath.Join(src, "tofile.conf")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("nowhere", filepath.Join(src, "dangling.conf")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Transport A: disk store.
+	planDirA := t.TempDir()
+	store := NewStore(planDirA)
+	refA, err := store.WriteGlob("units", filepath.Join(src, "*.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Transport B: memory store + gzip tar + extraction.
+	planDirB := t.TempDir()
+	mem, refB := memGlob(t, src)
+	_ = mem
+	var buf bytes.Buffer
+	if err := writeBlobsGzipTar(&buf, mem); err != nil {
+		t.Fatal(err)
+	}
+	if err := readBlobsGzipTar(bufio.NewReader(bytes.NewReader(buf.Bytes())), planDirB); err != nil {
+		t.Fatal(err)
+	}
+
+	// Both destinations must contain exactly the read-through regular files
+	// (the dangling link is skipped by packaging; nothing dangles).
+	want := []BlobEntry{
+		{Rel: "real.conf", Kind: BlobFile, Data: []byte("cfg\n")},
+		{Rel: "tofile.conf", Kind: BlobFile, Data: []byte("cfg\n")},
+	}
+	assertDiskTree(t, filepath.Join(planDirA, refA), want)
+	assertDiskTree(t, filepath.Join(planDirB, refB), want)
+}
+
+// memGlob packages glob matches into a memory store and returns the store
+// plus the blob ref.
+func memGlob(t *testing.T, src string) (*MemoryStore, string) {
+	t.Helper()
+	m := NewMemoryStore()
+	ref, err := m.WriteGlob("units", filepath.Join(src, "*.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m, ref
+}

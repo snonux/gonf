@@ -298,6 +298,16 @@ func extractTarHeader(planDir string, hdr *tar.Header, r io.Reader) error {
 	if err != nil || strings.HasPrefix(rel, "..") {
 		return fmt.Errorf("plan push: zip-slip path %q", hdr.Name)
 	}
+	// Defense-in-depth against planted ancestor symlinks (e.g. a crafted
+	// TypeSymlink "blobs" -> /etc followed by a regular "blobs/x"): no path
+	// component between planDir and the target may be a symlink, or the
+	// MkdirAll/OpenFile below would write through it and escape planDir.
+	// The push stream originates from the trusted controller, and the disk
+	// Store packages admin source trees as-is — this only closes an
+	// extraction-time tampering window.
+	if err := ensureNoAncestorSymlink(planDir, target); err != nil {
+		return err
+	}
 
 	switch {
 	case hdr.Typeflag == tar.TypeDir || strings.HasSuffix(hdr.Name, "/"):
@@ -313,6 +323,9 @@ func extractTarHeader(planDir string, hdr *tar.Header, r io.Reader) error {
 			return err
 		}
 		if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+			// Note: a non-empty pre-existing directory at the target also fails
+			// here (os.Remove does not remove non-empty dirs) and aborts the
+			// stream; planDir is fresh in practice.
 			return fmt.Errorf("plan push: clear %s for symlink: %w", target, err)
 		}
 		if err := os.Symlink(hdr.Linkname, target); err != nil {
@@ -334,4 +347,31 @@ func extractTarHeader(planDir string, hdr *tar.Header, r io.Reader) error {
 		}
 		return closeErr
 	}
+}
+
+// ensureNoAncestorSymlink refuses extraction when any existing path component
+// between planDir and target is a symlink: MkdirAll and OpenFile would follow
+// it and write outside planDir. planDir is freshly created by the push flow,
+// so an ancestor symlink there means a crafted stream, not the admin's tree.
+func ensureNoAncestorSymlink(planDir, target string) error {
+	rel, err := filepath.Rel(planDir, target)
+	if err != nil {
+		return err
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	cur := planDir
+	for _, part := range parts[:len(parts)-1] {
+		cur = filepath.Join(cur, part)
+		info, err := os.Lstat(cur)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("plan push: stat %s: %w", cur, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("plan push: refusing extraction under symlink %s", cur)
+		}
+	}
+	return nil
 }

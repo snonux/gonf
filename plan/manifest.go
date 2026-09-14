@@ -108,15 +108,25 @@ func scanGlob(pattern string) ([]BlobEntry, error) {
 		if err != nil {
 			return nil, fmt.Errorf("plan: package glob match %s: %w", match, err)
 		}
+		// Glob blobs are flat regular-file pickers (their destination apply
+		// runs with tree semantics, so preserved symlinks would either dangle
+		// or change the entry from the direct WithSourceGlob behavior).
+		// Symlinks to regular files are read through into content; dirs,
+		// dangling links and other non-regular entries are skipped, exactly
+		// like the direct copySourceGlob path.
 		switch {
 		case info.IsDir():
 			continue
 		case info.Mode()&os.ModeSymlink != 0:
-			target, err := os.Readlink(match)
+			targetInfo, err := os.Stat(match)
+			if err != nil || !targetInfo.Mode().IsRegular() {
+				continue
+			}
+			data, err := os.ReadFile(match)
 			if err != nil {
 				return nil, fmt.Errorf("plan: package glob match %s: %w", match, err)
 			}
-			out = append(out, BlobEntry{Rel: filepath.Base(match), Kind: BlobSymlink, Target: target})
+			out = append(out, BlobEntry{Rel: filepath.Base(match), Kind: BlobFile, Data: data})
 		case info.Mode().IsRegular():
 			data, err := os.ReadFile(match)
 			if err != nil {
