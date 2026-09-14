@@ -10,6 +10,13 @@ import (
 	"github.com/snonux/gonf/resource"
 )
 
+// getChecksum returns the sha256 of the file at path, or the zero checksum
+// when path is missing or unreadable (the caller compares against the new
+// content and typically rewrites). It must only be called on regular files
+// or known-missing paths: its read-open carries no O_NONBLOCK, so it would
+// block indefinitely on a non-regular entry such as a planted FIFO —
+// ensureFile classifies the target with os.Lstat first and never routes a
+// non-regular entry here.
 func getChecksum(path string) [32]byte {
 	var checksum [32]byte
 	data, err := os.ReadFile(path)
@@ -24,15 +31,31 @@ func getChecksum(path string) [32]byte {
 
 func (f *File) ensureFile(path string, content []byte) error {
 	id := fmt.Sprintf("File[%s]", path)
-	existingChecksum := getChecksum(path)
 	newChecksum := sha256.Sum256(content)
 	logger.Debug("computed checksum for new content: %x", newChecksum)
-	// Security rule: a file resource never follows or chmods through a
-	// symlink at its target path. A symlink sitting at the target counts as
-	// changed even when its content matches, so the symlink is replaced by
-	// the managed regular file via the atomic write path's rename instead
-	// of leaving it in place for attribute application to follow.
-	changed := existingChecksum != newChecksum || isSymlink(path)
+
+	// Classify the target via Lstat BEFORE any open: os.ReadFile opens
+	// without O_NONBLOCK, so a checksum read through a planted FIFO would
+	// block the apply indefinitely (until a writer appears). Anything that
+	// is not a regular file is counted as changed below and replaced by the
+	// managed regular file via the atomic write path's rename, which swaps
+	// the directory entry without opening the planted entry.
+	needsReplace, entryType := nonRegularEntryAt(path)
+	var existingChecksum [32]byte
+	if !needsReplace {
+		// Regular files open and read safely, and a missing path yields the
+		// zero checksum (getChecksum tolerates the failed read).
+		existingChecksum = getChecksum(path)
+	} else {
+		logger.Debug("%s holds a non-regular entry (%v), not a managed file", path, entryType)
+	}
+	// Security rule: a file resource never follows, reads, or chmods
+	// through a non-regular entry at its target path. Any such entry —
+	// symlink, FIFO, socket, or device node — counts as changed even when a
+	// content comparison might match, so it is replaced by the managed
+	// regular file via the atomic write path's rename instead of being left
+	// in place for the checksum read or attribute application to touch.
+	changed := existingChecksum != newChecksum || needsReplace
 
 	if !changed {
 		resource.Note(id, resource.StatusOK)
@@ -57,12 +80,20 @@ func (f *File) ensureFile(path string, content []byte) error {
 	return f.applyAttributesTo(path)
 }
 
-// isSymlink reports whether a symlink sits at path itself. Used to treat a
-// planted symlink at a file resource's target path as "needs replacement":
-// the symlink is replaced by the managed regular file, never followed.
-func isSymlink(path string) bool {
+// nonRegularEntryAt reports whether an entry that is not a managed regular
+// file — a symlink, FIFO, socket, device node, or directory — sits at path
+// itself, alongside its entry type for logging. Generalizes the former
+// isSymlink rule (symlinks count as needing replacement) to every
+// non-regular entry type: the atomic write's rename replaces the directory
+// entry wholesale, without opening or following the planted entry.
+func nonRegularEntryAt(path string) (needsReplace bool, entryType os.FileMode) {
 	info, err := os.Lstat(path)
-	return err == nil && info.Mode()&os.ModeSymlink != 0
+	if err != nil {
+		// Missing (or unstatable): no entry to replace; the checksum read
+		// below fails the same way it always did, yielding the zero checksum.
+		return false, 0
+	}
+	return !info.Mode().IsRegular(), info.Mode().Type()
 }
 
 // tmpNamePattern builds the os.CreateTemp pattern for path: the target's
@@ -90,7 +121,10 @@ func tmpNamePattern(path string) string {
 // nor a competing writer can redirect the write: the name cannot be guessed
 // in advance and an existing file can never be opened through the create.
 // The rename replaces path as a directory entry and never follows a symlink
-// that might sit at path. The temporary file carries the final mode before
+// that might sit at path; it replaces ANY entry type atomically and safely
+// (regular file, symlink, FIFO, socket, device node — no open of the planted
+// entry involved), except a directory, which rename cannot replace and
+// reports as an error. The temporary file carries the final mode before
 // the rename, so path never briefly exists with a wrong mode; ownership is
 // applied afterwards by applyAttributesTo on the final path.
 func atomicWrite(path string, content []byte, mode os.FileMode) error {

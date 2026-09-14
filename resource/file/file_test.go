@@ -1,7 +1,9 @@
 package file
 
 import (
+	"bytes"
 	"fmt"
+	"net"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -11,6 +13,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	. "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/resource"
@@ -240,6 +243,129 @@ func TestEnsureUnchangedContentDoesNotChmodThroughSymlink(t *testing.T) {
 	if info.Mode().Perm() != 0o640 {
 		t.Errorf("target mode: got %v, want 0o640", info.Mode().Perm())
 	}
+}
+
+// ensureWithTimeout runs Ensure in a goroutine and fails the test when it
+// does not return within 5s: a planted FIFO at the target must never block
+// the apply (the old getChecksum read-open had no O_NONBLOCK and hung until
+// a writer appeared), and a hung goroutine would otherwise only surface via
+// go test's 10-minute package timeout.
+func ensureWithTimeout(t *testing.T, target string, opts ...Option) error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- Ensure(target, opts...) }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatal("Ensure hung on the planted FIFO at the target (read-open without O_NONBLOCK)")
+		return nil // unreachable: t.Fatal ends the test goroutine
+	}
+}
+
+// TestEnsureReplacesFifoAtTarget pins the FIFO hang fix: the checksum read
+// used to os.ReadFile the target, whose read-open (no O_NONBLOCK) blocks
+// indefinitely on a planted FIFO, hanging a root-run apply until a writer
+// appears. ensureFile now classifies the target with Lstat first and counts
+// a non-regular entry as needing replacement, so Ensure must return
+// promptly and leave a regular managed file in the FIFO's place.
+func TestEnsureReplacesFifoAtTarget(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.conf")
+	if err := syscall.Mkfifo(target, 0o600); err != nil {
+		t.Skipf("cannot create a FIFO on this filesystem: %v", err)
+	}
+	const content = "managed content"
+
+	if err := ensureWithTimeout(t, target, WithContent(content)); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+
+	info, err := os.Lstat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Errorf("target is %v, want a regular file (FIFO must be replaced)", info.Mode())
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("reading target: %v", err)
+	}
+	if string(got) != content {
+		t.Errorf("target content: got %q, want %q", got, content)
+	}
+	assertNoLeftoverTempFiles(t, dir)
+}
+
+// TestEnsureDryRunWithFifoAtTargetPreviewsWouldChange pins the dry-run
+// behavior for a planted FIFO: the Lstat-first classification happens
+// before any dry-run branch, so the run must preview a would-change note
+// WITHOUT ever opening the FIFO (no hang), and the dry-run must mutate
+// nothing — the FIFO still sits at the target afterwards.
+func TestEnsureDryRunWithFifoAtTargetPreviewsWouldChange(t *testing.T) {
+	resource.ResetRepository()
+	resource.SetDryRun(true)
+	t.Cleanup(func() { resource.SetDryRun(false) })
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.conf")
+	if err := syscall.Mkfifo(target, 0o600); err != nil {
+		t.Skipf("cannot create a FIFO on this filesystem: %v", err)
+	}
+
+	if err := ensureWithTimeout(t, target, WithContent("managed content")); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+
+	var buf bytes.Buffer
+	resource.PrintSummary(&buf)
+	if !strings.Contains(buf.String(), "would-change File["+target+"]") {
+		t.Errorf("expected a would-change note for %s, summary:\n%s", target, buf.String())
+	}
+	info, err := os.Lstat(target)
+	if err != nil {
+		t.Fatalf("the FIFO must still exist after a dry-run: %v", err)
+	}
+	if info.Mode()&os.ModeNamedPipe == 0 {
+		t.Errorf("dry-run must not touch the FIFO; target is now %v", info.Mode())
+	}
+}
+
+// TestEnsureReplacesUnixSocketAtTarget covers a second entry type of the
+// same classification rule: a unix socket at the target is not a managed
+// regular file either and must be replaced wholesale by the managed regular
+// file (the classification is uniform for every non-regular entry type; the
+// planted entry is never opened).
+func TestEnsureReplacesUnixSocketAtTarget(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.sock")
+	ln, err := net.Listen("unix", target)
+	if err != nil {
+		t.Skipf("cannot create a unix socket here: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	if err := Ensure(target, WithContent("managed content")); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+
+	info, err := os.Lstat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Errorf("target is %v, want a regular file (socket must be replaced)", info.Mode())
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "managed content" {
+		t.Errorf("target content: got %q", got)
+	}
+	assertNoLeftoverTempFiles(t, dir)
 }
 
 // TestApplyAttributesToRefusesSymlinkAtTarget pins the kernel-level guard
