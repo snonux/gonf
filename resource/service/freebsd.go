@@ -51,7 +51,7 @@ func applyFreeBSD(s *Service) error {
 	}
 
 	if len(actions) == 0 {
-		noteResult(id, false)
+		resource.NoteResult(id, false)
 		return nil
 	}
 
@@ -59,7 +59,7 @@ func applyFreeBSD(s *Service) error {
 		for _, a := range actions {
 			logger.Info("dry-run: would run %s %v", a.bin, a.args)
 		}
-		noteResult(id, true)
+		resource.NoteResult(id, true)
 		return nil
 	}
 
@@ -69,7 +69,7 @@ func applyFreeBSD(s *Service) error {
 		}
 		logger.Info("%s %v", a.bin, a.args)
 	}
-	noteResult(id, true)
+	resource.NoteResult(id, true)
 	return nil
 }
 

@@ -10,6 +10,7 @@ import (
 
 	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/resource"
+	"github.com/snonux/gonf/resource/systemd"
 )
 
 func TestNormalizeUnit(t *testing.T) {
@@ -60,9 +61,8 @@ func TestPresentIdempotentWithFakeRunner(t *testing.T) {
 		t.Skip("Timer is Linux-only")
 	}
 	resource.ResetRepository()
-	old := runCmd
-	defer func() { runCmd = old }()
-	runCmd = fakeSystemdAlreadyOK
+	defer systemd.ResetRunCmdForTest()
+	systemd.SetRunCmdForTest(fakeSystemdAlreadyOK)
 
 	Present("fstrim")
 	if err := resource.Apply(); err != nil {
@@ -75,11 +75,10 @@ func TestPresentEnablesAndStartsWhenInactive(t *testing.T) {
 		t.Skip("Timer is Linux-only")
 	}
 	resource.ResetRepository()
-	old := runCmd
-	defer func() { runCmd = old }()
+	defer systemd.ResetRunCmdForTest()
 
 	var saw []string
-	runCmd = func(name string, args ...string) (string, string, int, error) {
+	systemd.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
 		if name != "systemctl" {
 			return "", "", 1, nil
 		}
@@ -92,7 +91,7 @@ func TestPresentEnablesAndStartsWhenInactive(t *testing.T) {
 			return "", "", 0, nil
 		}
 		return "", "unexpected " + joined, 1, nil
-	}
+	})
 
 	Present("fstrim.timer")
 	if err := resource.Apply(); err != nil {
@@ -108,11 +107,10 @@ func TestPresentEnableOnlySkipsStart(t *testing.T) {
 		t.Skip("Timer is Linux-only")
 	}
 	resource.ResetRepository()
-	old := runCmd
-	defer func() { runCmd = old }()
+	defer systemd.ResetRunCmdForTest()
 
 	var saw []string
-	runCmd = func(name string, args ...string) (string, string, int, error) {
+	systemd.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
 		if name != "systemctl" {
 			return "", "", 1, nil
 		}
@@ -125,7 +123,7 @@ func TestPresentEnableOnlySkipsStart(t *testing.T) {
 			return "", "", 0, nil
 		}
 		return "", "unexpected " + joined, 1, nil
-	}
+	})
 
 	Present("fstrim.timer", opt.WithEnableOnly)
 	if err := resource.Apply(); err != nil {
@@ -144,11 +142,10 @@ func TestAbsentStopsAndDisables(t *testing.T) {
 		t.Skip("Timer is Linux-only")
 	}
 	resource.ResetRepository()
-	old := runCmd
-	defer func() { runCmd = old }()
+	defer systemd.ResetRunCmdForTest()
 
 	var saw []string
-	runCmd = func(name string, args ...string) (string, string, int, error) {
+	systemd.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
 		if name != "systemctl" {
 			return "", "", 1, nil
 		}
@@ -161,7 +158,7 @@ func TestAbsentStopsAndDisables(t *testing.T) {
 			return "", "", 0, nil
 		}
 		return "", "unexpected " + joined, 1, nil
-	}
+	})
 
 	Absent("fstrim")
 	if err := resource.Apply(); err != nil {
@@ -177,16 +174,15 @@ func TestWithRestartIssuesRestart(t *testing.T) {
 		t.Skip("Timer is Linux-only")
 	}
 	resource.ResetRepository()
-	old := runCmd
-	defer func() { runCmd = old }()
+	defer systemd.ResetRunCmdForTest()
 
 	var sawRestart bool
-	runCmd = func(name string, args ...string) (string, string, int, error) {
+	systemd.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
 		if contains(args, "restart") {
 			sawRestart = true
 		}
 		return fakeSystemdAlreadyOK(name, args...)
-	}
+	})
 
 	Present("fstrim", opt.WithRestart)
 	if err := resource.Apply(); err != nil {
@@ -202,16 +198,15 @@ func TestWithUserPassesUserFlag(t *testing.T) {
 		t.Skip("Timer is Linux-only")
 	}
 	resource.ResetRepository()
-	old := runCmd
-	defer func() { runCmd = old }()
+	defer systemd.ResetRunCmdForTest()
 
 	var sawUser bool
-	runCmd = func(name string, args ...string) (string, string, int, error) {
+	systemd.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
 		if contains(args, "--user") {
 			sawUser = true
 		}
 		return fakeSystemdAlreadyOK(name, args...)
-	}
+	})
 
 	Present("myjob", opt.WithUser)
 	if err := resource.Apply(); err != nil {
@@ -227,10 +222,9 @@ func TestPresentFailsWhenSystemctlMutateErrors(t *testing.T) {
 		t.Skip("Timer is Linux-only")
 	}
 	resource.ResetRepository()
-	old := runCmd
-	defer func() { runCmd = old }()
+	defer systemd.ResetRunCmdForTest()
 
-	runCmd = func(name string, args ...string) (string, string, int, error) {
+	systemd.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
 		if contains(args, "is-active") || contains(args, "is-enabled") {
 			return "", "", 1, nil
 		}
@@ -238,7 +232,7 @@ func TestPresentFailsWhenSystemctlMutateErrors(t *testing.T) {
 			return "", "Permission denied", 1, nil
 		}
 		return "", "unexpected", 1, nil
-	}
+	})
 
 	Present("fstrim")
 	if err := resource.Apply(); err == nil {
@@ -254,11 +248,10 @@ func TestDryRunSkipsMutations(t *testing.T) {
 	resource.SetDryRun(true)
 	defer resource.SetDryRun(false)
 
-	old := runCmd
-	defer func() { runCmd = old }()
+	defer systemd.ResetRunCmdForTest()
 
 	var mutated bool
-	runCmd = func(name string, args ...string) (string, string, int, error) {
+	systemd.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
 		if contains(args, "enable") || contains(args, "start") {
 			mutated = true
 		}
@@ -266,7 +259,7 @@ func TestDryRunSkipsMutations(t *testing.T) {
 			return "", "", 1, nil
 		}
 		return "", "", 0, nil
-	}
+	})
 
 	Present("fstrim")
 	if err := resource.Apply(); err != nil {
@@ -281,7 +274,7 @@ func TestRequireSystemdRejectsNonLinux(t *testing.T) {
 	if runtime.GOOS == "linux" {
 		t.Skip("only meaningful off Linux")
 	}
-	if err := requireSystemd(); err == nil {
+	if err := systemd.Require("Timer"); err == nil {
 		t.Fatal("expected non-Linux error")
 	}
 }
@@ -448,22 +441,18 @@ func ctlLive(t *testing.T, userBus bool, args ...string) {
 	if userBus {
 		full = append([]string{"--user"}, args...)
 	}
-	stdout, stderr, code, err := runCmd("systemctl", full...)
-	if err != nil {
-		t.Fatalf("systemctl %v: %v", full, err)
-	}
-	if code != 0 {
-		t.Fatalf("systemctl %v exit %d: %s%s", full, code, stdout, stderr)
+	if err := systemd.Run(full...); err != nil {
+		t.Fatalf("ctlLive %v: %v", full, err)
 	}
 }
 
 func assertLiveState(t *testing.T, userBus bool, unit string, wantActive, wantEnabled bool) {
 	t.Helper()
-	active, err := isActive(unit, userBus)
+	active, err := systemd.IsActive(unit, userBus)
 	if err != nil {
 		t.Fatal(err)
 	}
-	enabled, err := isEnabled(unit, userBus)
+	enabled, err := systemd.IsEnabled(unit, userBus)
 	if err != nil {
 		t.Fatal(err)
 	}

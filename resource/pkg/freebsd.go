@@ -18,14 +18,14 @@ func applyFreeBSDPkg(p *Package) error {
 	switch {
 	case p.Absent:
 		if !installed {
-			notePkg(id, false)
+			resource.NoteResult(id, false)
 			return nil
 		}
 		args = []string{"remove", "-y", p.name}
 	case p.latest:
 		args = []string{"upgrade", "-y", p.name}
 	case installed:
-		notePkg(id, false)
+		resource.NoteResult(id, false)
 		return nil
 	default:
 		args = []string{"install", "-y", p.name}
@@ -33,14 +33,14 @@ func applyFreeBSDPkg(p *Package) error {
 
 	if resource.DryRun() {
 		logger.Info("dry-run: would run pkg %v", args)
-		notePkg(id, true)
+		resource.NoteResult(id, true)
 		return nil
 	}
 	if err := runOrErr("pkg", args...); err != nil {
 		return err
 	}
 	logger.Info("pkg %v", args)
-	notePkg(id, true)
+	resource.NoteResult(id, true)
 	return nil
 }
 

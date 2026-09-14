@@ -36,21 +36,20 @@ func TestDetectServiceManager(t *testing.T) {
 
 func TestPresentIdempotentWithFakeRunner(t *testing.T) {
 	resource.ResetRepository()
-	old := runCmd
-	defer func() { runCmd = old }()
 
 	switch runtime.GOOS {
 	case "linux":
-		runCmd = fakeSystemdAlreadyOK
+		SetRunCmdForTest(fakeSystemdAlreadyOK)
 	case "openbsd":
-		runCmd = fakeRcctlAlreadyOK
+		SetRunCmdForTest(fakeRcctlAlreadyOK)
 	case "freebsd":
-		runCmd = fakeFreeBSDAlreadyOK
+		SetRunCmdForTest(fakeFreeBSDAlreadyOK)
 	case "netbsd":
-		runCmd = fakeNetBSDAlreadyOK
+		SetRunCmdForTest(fakeNetBSDAlreadyOK)
 	default:
 		t.Skip("unsupported GOOS")
 	}
+	defer ResetRunCmdForTest()
 
 	Present("uptimed")
 	if err := resource.Apply(); err != nil {
@@ -60,42 +59,41 @@ func TestPresentIdempotentWithFakeRunner(t *testing.T) {
 
 func TestWithRestartIssuesRestart(t *testing.T) {
 	resource.ResetRepository()
-	old := runCmd
-	defer func() { runCmd = old }()
 
 	var sawRestart bool
 	switch runtime.GOOS {
 	case "linux":
-		runCmd = func(name string, args ...string) (string, string, int, error) {
+		SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
 			if name == "systemctl" && contains(args, "restart") {
 				sawRestart = true
 			}
 			return fakeSystemdAlreadyOK(name, args...)
-		}
+		})
 	case "openbsd":
-		runCmd = func(name string, args ...string) (string, string, int, error) {
+		SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
 			if name == "rcctl" && len(args) > 0 && args[0] == "restart" {
 				sawRestart = true
 			}
 			return fakeRcctlAlreadyOK(name, args...)
-		}
+		})
 	case "freebsd":
-		runCmd = func(name string, args ...string) (string, string, int, error) {
+		SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
 			if name == "service" && contains(args, "restart") {
 				sawRestart = true
 			}
 			return fakeFreeBSDAlreadyOK(name, args...)
-		}
+		})
 	case "netbsd":
-		runCmd = func(name string, args ...string) (string, string, int, error) {
+		SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
 			if name == netbsdService && contains(args, "restart") {
 				sawRestart = true
 			}
 			return fakeNetBSDAlreadyOK(name, args...)
-		}
+		})
 	default:
 		t.Skip("unsupported GOOS")
 	}
+	defer ResetRunCmdForTest()
 
 	Present("uptimed", opt.WithRestart)
 	if err := resource.Apply(); err != nil {

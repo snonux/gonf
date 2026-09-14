@@ -18,25 +18,25 @@ func applyOpenBSD(p *Package) error {
 	switch {
 	case p.Absent:
 		if !installed {
-			notePkg(id, false)
+			resource.NoteResult(id, false)
 			return nil
 		}
 		args = []string{p.name}
 		if resource.DryRun() {
 			logger.Info("dry-run: would run pkg_delete %v", args)
-			notePkg(id, true)
+			resource.NoteResult(id, true)
 			return nil
 		}
 		if err := runOrErr("pkg_delete", args...); err != nil {
 			return err
 		}
 		logger.Info("pkg_delete %v", args)
-		notePkg(id, true)
+		resource.NoteResult(id, true)
 		return nil
 	case p.latest:
 		args = []string{"-u", p.name}
 	case installed:
-		notePkg(id, false)
+		resource.NoteResult(id, false)
 		return nil
 	default:
 		args = []string{p.name}
@@ -44,14 +44,14 @@ func applyOpenBSD(p *Package) error {
 
 	if resource.DryRun() {
 		logger.Info("dry-run: would run pkg_add %v", args)
-		notePkg(id, true)
+		resource.NoteResult(id, true)
 		return nil
 	}
 	if err := runOrErr("pkg_add", args...); err != nil {
 		return err
 	}
 	logger.Info("pkg_add %v", args)
-	notePkg(id, true)
+	resource.NoteResult(id, true)
 	return nil
 }
 

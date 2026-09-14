@@ -6,8 +6,6 @@ package timer
 import (
 	"errors"
 	"fmt"
-	"os"
-	"runtime"
 	"slices"
 	"strings"
 
@@ -15,6 +13,7 @@ import (
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
+	"github.com/snonux/gonf/resource/systemd"
 )
 
 // Timer manages a named systemd .timer unit.
@@ -94,15 +93,15 @@ func (t *Timer) apply() error {
 	if err := t.validate(); err != nil {
 		return fmt.Errorf("%s: %w", id, err)
 	}
-	if err := requireSystemd(); err != nil {
+	if err := systemd.Require("Timer"); err != nil {
 		return fmt.Errorf("%s: %w", id, err)
 	}
 
-	active, err := isActive(t.name, t.user)
+	active, err := systemd.IsActive(t.name, t.user)
 	if err != nil {
 		return err
 	}
-	enabled, err := isEnabled(t.name, t.user)
+	enabled, err := systemd.IsEnabled(t.name, t.user)
 	if err != nil {
 		return err
 	}
@@ -110,26 +109,26 @@ func (t *Timer) apply() error {
 	var actions [][]string
 	if t.Absent {
 		if !t.enableOnly && active {
-			actions = append(actions, ctlArgs(t.user, "stop", t.name))
+			actions = append(actions, systemd.Args(t.user, "stop", t.name))
 		}
 		if enabled {
-			actions = append(actions, ctlArgs(t.user, "disable", t.name))
+			actions = append(actions, systemd.Args(t.user, "disable", t.name))
 		}
 	} else {
 		if !enabled {
-			actions = append(actions, ctlArgs(t.user, "enable", t.name))
+			actions = append(actions, systemd.Args(t.user, "enable", t.name))
 		}
 		if !t.enableOnly {
 			if !active {
-				actions = append(actions, ctlArgs(t.user, "start", t.name))
+				actions = append(actions, systemd.Args(t.user, "start", t.name))
 			} else if t.restart {
-				actions = append(actions, ctlArgs(t.user, "restart", t.name))
+				actions = append(actions, systemd.Args(t.user, "restart", t.name))
 			}
 		}
 	}
 
 	if len(actions) == 0 {
-		noteResult(id, false)
+		resource.NoteResult(id, false)
 		return nil
 	}
 
@@ -137,20 +136,24 @@ func (t *Timer) apply() error {
 		for _, a := range actions {
 			logger.Info("dry-run: would run systemctl %v", a)
 		}
-		noteResult(id, true)
+		resource.NoteResult(id, true)
 		return nil
 	}
 
 	for _, a := range actions {
-		if err := ctlRun(a...); err != nil {
+		if err := systemd.Run(a...); err != nil {
 			return err
 		}
 		logger.Info("systemctl %v", a)
 	}
-	noteResult(id, true)
+	resource.NoteResult(id, true)
 	return nil
 }
 
+// validate is Timer-specific: unlike Service, timer unit names are checked
+// before they reach systemctl (non-empty, no whitespace/path separators,
+// .timer suffix). Service does not validate; that drift is deliberate for
+// now and lives entirely at the callers, not in the shared client.
 func (t *Timer) validate() error {
 	if t.name == "" || t.name == ".timer" {
 		return errors.New("name must not be empty")
@@ -162,84 +165,4 @@ func (t *Timer) validate() error {
 		return errors.New("name must end with .timer")
 	}
 	return nil
-}
-
-func requireSystemd() error {
-	if runtime.GOOS != "linux" {
-		return fmt.Errorf("Timer is only supported on Linux systemd (GOOS=%s)", runtime.GOOS)
-	}
-	if !systemdPresent() {
-		return errors.New("Timer requires systemd (systemctl not found)")
-	}
-	return nil
-}
-
-func systemdPresent() bool {
-	if exists("/run/systemd/system") {
-		return true
-	}
-	if _, err := os.Stat("/usr/bin/systemctl"); err == nil {
-		return true
-	}
-	if _, err := os.Stat("/bin/systemctl"); err == nil {
-		return true
-	}
-	return false
-}
-
-func exists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
-func ctlArgs(user bool, args ...string) []string {
-	if user {
-		return append([]string{"--user"}, args...)
-	}
-	return args
-}
-
-func isActive(name string, user bool) (bool, error) {
-	args := ctlArgs(user, "is-active", "--quiet", name)
-	_, _, code, err := runCmd("systemctl", args...)
-	if err != nil {
-		return false, fmt.Errorf("systemctl is-active %s: %w", name, err)
-	}
-	return code == 0, nil
-}
-
-func isEnabled(name string, user bool) (bool, error) {
-	args := ctlArgs(user, "is-enabled", "--quiet", name)
-	_, _, code, err := runCmd("systemctl", args...)
-	if err != nil {
-		return false, fmt.Errorf("systemctl is-enabled %s: %w", name, err)
-	}
-	return code == 0, nil
-}
-
-func ctlRun(args ...string) error {
-	stdout, stderr, code, err := runCmd("systemctl", args...)
-	if err != nil {
-		return fmt.Errorf("systemctl %v: %w", args, err)
-	}
-	if code != 0 {
-		return fmt.Errorf("systemctl %v failed (exit %d): %s%s", args, code, stdout, stderr)
-	}
-	return nil
-}
-
-func noteResult(id string, changed bool) {
-	if resource.DryRun() {
-		if changed {
-			resource.Note(id, resource.StatusWouldChange)
-		} else {
-			resource.Note(id, resource.StatusOK)
-		}
-		return
-	}
-	if changed {
-		resource.Note(id, resource.StatusChanged)
-	} else {
-		resource.Note(id, resource.StatusOK)
-	}
 }

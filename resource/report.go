@@ -71,6 +71,20 @@ func Note(id string, st Status) {
 	notes = append(notes, note{id: id, st: st})
 }
 
+// NoteResult records the apply outcome for a resource id: changed maps to
+// StatusChanged, or StatusWouldChange in dry-run mode; otherwise StatusOK.
+// It is safe for concurrent use like Note.
+func NoteResult(id string, changed bool) {
+	st := StatusOK
+	if changed {
+		st = StatusChanged
+		if DryRun() {
+			st = StatusWouldChange
+		}
+	}
+	Note(id, st)
+}
+
 // AnyChanged reports whether any of ids was noted as StatusChanged or
 // StatusWouldChange. For a Directory[path] id, File notes under that path
 // also count (so SyncDir file updates gate daemon-reload).

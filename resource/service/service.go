@@ -5,13 +5,13 @@ package service
 import (
 	"errors"
 	"fmt"
-	"os"
 	"runtime"
 	"slices"
 
 	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
+	"github.com/snonux/gonf/resource/systemd"
 )
 
 // Service manages a named OS service/daemon.
@@ -109,38 +109,11 @@ func detectServiceManager() (string, error) {
 	case "netbsd":
 		return "netbsd", nil
 	case "linux":
-		if exists("/run/systemd/system") {
-			return "systemd", nil
-		}
-		if _, err := os.Stat("/usr/bin/systemctl"); err == nil {
-			return "systemd", nil
-		}
-		if _, err := os.Stat("/bin/systemctl"); err == nil {
+		if systemd.Detected() {
 			return "systemd", nil
 		}
 		return "", errors.New("unable to detect service manager on linux")
 	default:
 		return "", fmt.Errorf("unable to detect service manager on %s", runtime.GOOS)
-	}
-}
-
-func exists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
-func noteResult(id string, changed bool) {
-	if resource.DryRun() {
-		if changed {
-			resource.Note(id, resource.StatusWouldChange)
-		} else {
-			resource.Note(id, resource.StatusOK)
-		}
-		return
-	}
-	if changed {
-		resource.Note(id, resource.StatusChanged)
-	} else {
-		resource.Note(id, resource.StatusOK)
 	}
 }

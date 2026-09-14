@@ -23,14 +23,14 @@ func applyNetBSD(p *Package) error {
 	switch {
 	case p.Absent:
 		if !installed {
-			notePkg(id, false)
+			resource.NoteResult(id, false)
 			return nil
 		}
 		args = []string{"-y", "remove", p.name}
 	case p.latest:
 		args = []string{"-y", "install", p.name} // pkgin install upgrades when newer available
 	case installed:
-		notePkg(id, false)
+		resource.NoteResult(id, false)
 		return nil
 	default:
 		args = []string{"-y", "install", p.name}
@@ -38,14 +38,14 @@ func applyNetBSD(p *Package) error {
 
 	if resource.DryRun() {
 		logger.Info("dry-run: would run pkgin %v", args)
-		notePkg(id, true)
+		resource.NoteResult(id, true)
 		return nil
 	}
 	if err := runOrErr(netbsdPkgin, args...); err != nil {
 		return err
 	}
 	logger.Info("pkgin %v", args)
-	notePkg(id, true)
+	resource.NoteResult(id, true)
 	return nil
 }
 

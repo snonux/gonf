@@ -62,7 +62,7 @@ func applyNetBSD(s *Service) error {
 	}
 
 	if len(actions) == 0 {
-		noteResult(id, false)
+		resource.NoteResult(id, false)
 		return nil
 	}
 
@@ -70,7 +70,7 @@ func applyNetBSD(s *Service) error {
 		for _, a := range actions {
 			logger.Info("dry-run: would %s", a.desc)
 		}
-		noteResult(id, true)
+		resource.NoteResult(id, true)
 		return nil
 	}
 
@@ -80,7 +80,7 @@ func applyNetBSD(s *Service) error {
 		}
 		logger.Info("%s", a.desc)
 	}
-	noteResult(id, true)
+	resource.NoteResult(id, true)
 	return nil
 }
 

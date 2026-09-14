@@ -41,7 +41,7 @@ func applyRcctl(s *Service) error {
 	}
 
 	if len(actions) == 0 {
-		noteResult(id, false)
+		resource.NoteResult(id, false)
 		return nil
 	}
 
@@ -49,7 +49,7 @@ func applyRcctl(s *Service) error {
 		for _, a := range actions {
 			logger.Info("dry-run: would run rcctl %v", a)
 		}
-		noteResult(id, true)
+		resource.NoteResult(id, true)
 		return nil
 	}
 
@@ -59,7 +59,7 @@ func applyRcctl(s *Service) error {
 		}
 		logger.Info("rcctl %v", a)
 	}
-	noteResult(id, true)
+	resource.NoteResult(id, true)
 	return nil
 }
 

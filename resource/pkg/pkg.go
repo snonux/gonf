@@ -4,7 +4,6 @@ package pkg
 import (
 	"errors"
 	"fmt"
-	"os"
 	"runtime"
 	"slices"
 
@@ -94,36 +93,15 @@ func detectPackageManager() (string, error) {
 		return "netbsd", nil
 	case "linux":
 		switch {
-		case exists("/etc/fedora-release"),
-			exists("/etc/centos-release"),
-			exists("/etc/redhat-release"),
-			exists("/etc/rocky-release"):
+		case resource.Exists("/etc/fedora-release"),
+			resource.Exists("/etc/centos-release"),
+			resource.Exists("/etc/redhat-release"),
+			resource.Exists("/etc/rocky-release"):
 			return "dnf", nil
 		}
 		return "", errors.New("unable to detect package manager on linux")
 	default:
 		return "", fmt.Errorf("unable to detect package manager on %s", runtime.GOOS)
-	}
-}
-
-func exists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
-func notePkg(id string, changed bool) {
-	if resource.DryRun() {
-		if changed {
-			resource.Note(id, resource.StatusWouldChange)
-		} else {
-			resource.Note(id, resource.StatusOK)
-		}
-		return
-	}
-	if changed {
-		resource.Note(id, resource.StatusChanged)
-	} else {
-		resource.Note(id, resource.StatusOK)
 	}
 }
 
