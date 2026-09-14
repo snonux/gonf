@@ -1,6 +1,6 @@
 # Tasks, Facts, and CLI
 
-gonf configs are Go programs: register **tasks**, then run them via `CLI()` or
+gonf configs are Go programs: register **tasks**, then run them via `cli.CLI()` or
 `Run(...)`. Execution always goes through the **plan → apply** engine — see
 [plan.md](plan.md).
 
@@ -77,7 +77,7 @@ or `-profile=...` / `SetProfileOverride`. Used by `-list` activation and by
 ## CLI
 
 ```go
-func main() { os.Exit(CLI()) }
+func main() { os.Exit(cli.CLI()) }
 ```
 
 | Invocation | Meaning |

@@ -19,7 +19,8 @@ type Chunk struct {
 // registered" the same way). chunks holds one op body per privilege chunk in
 // apply order (SplitPrivilegeChunks output, headers included); for a
 // single-chunk plan it reduces to "every dep is recorded in the chunk".
-// Wiring: ApplyChunks and pushChunks run this pre-flight before applying or
+// Wiring: ApplyChunks (api, local apply) and remote.PushChunks (SSH push) run
+// this pre-flight before applying or
 // uploading anything, so a rejected plan mutates no destination and, on
 // push, sends zero SSH traffic.
 func ValidateChunkDeps(chunks [][]Op) error {

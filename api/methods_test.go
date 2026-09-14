@@ -1,7 +1,6 @@
 package api
 
 import (
-	"os"
 	"reflect"
 	"testing"
 )
@@ -110,24 +109,5 @@ func TestCamelToSnake(t *testing.T) {
 		if got := camelToSnake(in); got != want {
 			t.Errorf("camelToSnake(%q) = %q, want %q", in, got, want)
 		}
-	}
-}
-
-func TestCLIProfileActivates(t *testing.T) {
-	ResetTasks()
-	Task("pkg_fedora", "", func() {}, WhenProfile("fedora"))
-	Task("pkg_rocky", "", func() {}, WhenProfile("rocky"))
-
-	oldArgs := os.Args
-	defer func() { os.Args = oldArgs }()
-	os.Args = []string{"gonf", "-profile=rocky", "-list"}
-
-	code := CLI()
-	if code != 0 {
-		t.Fatalf("exit %d", code)
-	}
-	got := Matching("^pkg_")
-	if !reflect.DeepEqual(got, []string{"pkg_rocky"}) {
-		t.Fatalf("got %v", got)
 	}
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/privilege"
+	"github.com/snonux/gonf/internal/remote"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
@@ -67,10 +68,10 @@ func TestPushSplitsPrivilegeChunks(t *testing.T) {
 		File(filepath.Join(t.TempDir(), "p"), options.WithContent("p"))
 	}, Privileged())
 
-	old := sshRunner
-	t.Cleanup(func() { sshRunner = old })
+	old := remote.SSHRunner
+	t.Cleanup(func() { remote.SSHRunner = old })
 	var remotes []string
-	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
+	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		remotes = append(remotes, argv[len(argv)-1])
 		_, _ = io.Copy(io.Discard, stdin)
 		return nil
@@ -98,9 +99,9 @@ func TestPushPrivilegeNoneRejectsElevated(t *testing.T) {
 		File(filepath.Join(t.TempDir(), "p"), options.WithContent("p"))
 	}, Privileged())
 
-	old := sshRunner
-	t.Cleanup(func() { sshRunner = old })
-	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
+	old := remote.SSHRunner
+	t.Cleanup(func() { remote.SSHRunner = old })
+	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		_, _ = io.Copy(io.Discard, stdin)
 		return nil
 	}
@@ -162,7 +163,7 @@ func TestApplyChunksRefusesForwardCrossChunkDep(t *testing.T) {
 }
 
 // TestPushRefusesForwardCrossChunkDepsWithZeroSSH pins the push-side
-// pre-flight: the same forward cross-chunk dep fails pushChunks before any
+// pre-flight: the same forward cross-chunk dep fails remote.PushChunks before any
 // SSH traffic (no chunk upload, no blob upload).
 func TestPushRefusesForwardCrossChunkDepsWithZeroSSH(t *testing.T) {
 	ops := []plan.Op{
@@ -170,13 +171,13 @@ func TestPushRefusesForwardCrossChunkDepsWithZeroSSH(t *testing.T) {
 		{Op: plan.KindCommand, Bin: "true", ID: "Command[b]", Deps: []string{"Command[a]"}},
 		{Op: plan.KindCommand, Bin: "true", ID: "Command[a]", Elevate: true},
 	}
-	old := sshRunner
-	t.Cleanup(func() { sshRunner = old })
-	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
+	old := remote.SSHRunner
+	t.Cleanup(func() { remote.SSHRunner = old })
+	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		t.Error("ssh must not be invoked for a plan that fails the dep pre-flight")
 		return nil
 	}
-	err := pushChunks(context.Background(), PushTarget{Host: "h.example", Privilege: privilege.Doas}, "demo", ops, nil)
+	err := remote.PushChunks(context.Background(), PushTarget{Host: "h.example", Privilege: privilege.Doas}, "demo", ops, nil)
 	if err == nil || !strings.Contains(err.Error(), "later chunk 1") {
 		t.Fatalf("want forward cross-chunk dep refusal, got %v", err)
 	}

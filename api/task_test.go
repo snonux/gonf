@@ -281,21 +281,6 @@ func TestRunAggregateSelfExclusionSugar(t *testing.T) {
 	}
 }
 
-func TestCLIList(t *testing.T) {
-	ResetTasks()
-	Task("alpha", "first", func() {})
-	Task("beta", "second", func() {})
-
-	oldArgs := os.Args
-	defer func() { os.Args = oldArgs }()
-	os.Args = []string{"gonf", "-list"}
-
-	code := CLI()
-	if code != 0 {
-		t.Fatalf("CLI exit = %d, want 0", code)
-	}
-}
-
 func TestRunUsesPlanApplyEngine(t *testing.T) {
 	ResetTasks()
 	dir := t.TempDir()
@@ -320,18 +305,6 @@ func TestRunUsesPlanApplyEngine(t *testing.T) {
 	}
 	if string(data) != "from-plan-engine" {
 		t.Fatalf("got %q", data)
-	}
-}
-
-func TestCLIRequiresTask(t *testing.T) {
-	ResetTasks()
-	oldArgs := os.Args
-	defer func() { os.Args = oldArgs }()
-	os.Args = []string{"gonf"}
-
-	code := CLI()
-	if code != 2 {
-		t.Fatalf("CLI exit = %d, want 2", code)
 	}
 }
 

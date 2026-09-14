@@ -1,6 +1,6 @@
 //go:build remote_smoke
 
-package api
+package remote_test
 
 import (
 	"context"
@@ -11,17 +11,19 @@ import (
 	"strings"
 	"testing"
 
+	. "github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/privilege"
+	"github.com/snonux/gonf/internal/remote"
 	"github.com/snonux/gonf/resource"
 )
 
 // Example:
 //
 //	GONF_REMOTE_HOST=rex@fishfinger.buetow.org GONF_REMOTE_PORT=2 GONF_REMOTE_PRIVILEGE=doas \
-//	  go test -tags remote_smoke ./api/ -run RemoteSmoke -v
+//	  go test -tags remote_smoke ./internal/remote/ -run RemoteSmoke -v
 //	GONF_REMOTE_HOST=paul@pi0.lan GONF_REMOTE_PRIVILEGE=doas \
-//	  go test -tags remote_smoke ./api/ -run RemoteSmoke -v
+//	  go test -tags remote_smoke ./internal/remote/ -run RemoteSmoke -v
 func TestRemoteSmokePush(t *testing.T) {
 	host := os.Getenv("GONF_REMOTE_HOST")
 	if host == "" {
@@ -62,9 +64,9 @@ func TestRemoteSmokePush(t *testing.T) {
 		File(privPath, options.WithContent("priv-ok\n"))
 	}, Privileged())
 
-	old := sshRunner
-	t.Cleanup(func() { sshRunner = old })
-	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
+	old := remote.SSHRunner
+	t.Cleanup(func() { remote.SSHRunner = old })
+	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		if len(argv) >= 3 {
 			remote := argv[len(argv)-1]
 			// Portable across sh/bash/csh: no `export` (csh on FreeBSD).
@@ -95,7 +97,7 @@ func TestRemoteSmokePush(t *testing.T) {
 	}
 
 	var saw []string
-	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
+	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		if len(argv) >= 3 {
 			remote := argv[len(argv)-1]
 			saw = append(saw, remote)

@@ -14,8 +14,10 @@ import (
 //
 // Like the DSL itself this is deliberately single-goroutine: call it only
 // while no registration, recording, or apply is in flight. It does not touch
-// the CLI-only knobs processPrivilege, elevatedApplyRunner and sshRunner; tests that override
-// those restore them with t.Cleanup.
+// the CLI-only knobs processPrivilege and elevatedApplyRunner (both api-side,
+// the latter also the local apply engine), nor the SSH transport hook
+// (internal/remote.SSHRunner); tests that override those restore them with
+// t.Cleanup.
 func ResetForTest() {
 	ResetTasks()           // task registry (see ResetTasks)
 	SetProfileOverride("") // CLI -profile must not leak between tests

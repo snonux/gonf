@@ -1,4 +1,4 @@
-package api
+package cli
 
 import (
 	"bytes"
@@ -8,17 +8,18 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
 
 func TestCLIPlanAndApply(t *testing.T) {
-	ResetTasks()
+	api.ResetTasks()
 	resource.ResetRepository()
-	Task("cli_touch", "touch a file via plan", func() {
+	api.Task("cli_touch", "touch a file via plan", func() {
 		dir := os.Getenv("GONF_CLI_TEST_DIR")
-		File(filepath.Join(dir, "out.txt"), options.WithContent("hello from plan"))
+		api.File(filepath.Join(dir, "out.txt"), options.WithContent("hello from plan"))
 	})
 
 	root := t.TempDir()
@@ -60,10 +61,10 @@ func TestCLIPlanAndApply(t *testing.T) {
 }
 
 func TestCLIPlanStdout(t *testing.T) {
-	ResetTasks()
+	api.ResetTasks()
 	resource.ResetRepository()
-	Task("cli_stdout", "", func() {
-		File(filepath.Join(t.TempDir(), "x"), options.WithContent("via-stdout"))
+	api.Task("cli_stdout", "", func() {
+		api.File(filepath.Join(t.TempDir(), "x"), options.WithContent("via-stdout"))
 	})
 
 	r, w, err := os.Pipe()
@@ -98,7 +99,7 @@ func TestCLIPlanStdout(t *testing.T) {
 }
 
 func TestCLIApplyStdinFramedNoBlobs(t *testing.T) {
-	ResetTasks()
+	api.ResetTasks()
 	resource.ResetRepository()
 	root := t.TempDir()
 	dst := filepath.Join(root, "out.txt")

@@ -75,7 +75,8 @@ func ApplyChunks(ops []plan.Op, planDir string, mode privilege.Mode) error {
 // validateChunkDeps runs the plan-level cross-chunk dependency pre-flight
 // (plan.ValidateChunkDeps) over the split privilege chunks: forward
 // cross-chunk and dangling deps fail before any chunk is applied or
-// uploaded. Shared by ApplyChunks and pushChunks.
+// uploaded. Shared by ApplyChunks (api, local apply) and remote.PushChunks
+// (internal/remote, SSH push).
 func validateChunkDeps(chunks []plan.Chunk) error {
 	bodies := make([][]plan.Op, len(chunks))
 	for i, ch := range chunks {

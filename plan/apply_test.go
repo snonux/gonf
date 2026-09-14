@@ -487,7 +487,7 @@ func TestApplyDependencyCycle(t *testing.T) {
 // as satisfied (an earlier privilege chunk or invocation applied it — chunk
 // boundaries are invisible to chunk-level Apply). Truly dangling deps are
 // refused controller-side, before anything is applied, by the
-// plan.ValidateChunkDeps pre-flight wired into ApplyChunks and pushChunks.
+// plan.ValidateChunkDeps pre-flight wired into ApplyChunks and remote.PushChunks.
 func TestApplyDependencyDanglingSatisfiedAtChunkLevel(t *testing.T) {
 	root := t.TempDir()
 	log := filepath.Join(root, "order.log")

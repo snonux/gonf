@@ -1,4 +1,4 @@
-package api
+package cli
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/internal"
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/internal/privilege"
@@ -65,15 +66,15 @@ func CLI() int {
 		fmt.Fprintf(os.Stderr, "privilege: %v\n", err)
 		return 2
 	} else {
-		SetPrivilege(m)
+		api.SetPrivilege(m)
 	}
 
 	if *profile != "" {
-		SetProfileOverride(*profile)
+		api.SetProfileOverride(*profile)
 	}
 
 	// Resolve When guards after -profile so init()-queued tasks see CLI facts.
-	Activate(DetectFacts())
+	api.Activate(api.DetectFacts())
 
 	if *version {
 		fmt.Println(internal.Version)
@@ -105,7 +106,7 @@ func CLI() int {
 		return cliFleets()
 	}
 
-	if err := Run(names...); err != nil {
+	if err := api.Run(names...); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
@@ -113,7 +114,7 @@ func CLI() int {
 }
 
 func cliList() int {
-	infos := Tasks()
+	infos := api.Tasks()
 	if len(infos) == 0 {
 		fmt.Fprintln(os.Stderr, "no tasks registered")
 		return 1
@@ -154,7 +155,7 @@ func cliPlan(args []string) int {
 		planDir = dir
 	}
 
-	ops, err := RecordPlan(*planID, planDir, tasks...)
+	ops, err := api.RecordPlan(*planID, planDir, tasks...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "plan: %v\n", err)
 		return 1
@@ -225,7 +226,7 @@ func cliApply(args []string) int {
 		return 1
 	}
 	planDir := filepath.Dir(planPath)
-	if err := ApplyPlan(ops, planDir); err != nil {
+	if err := api.ApplyPlan(ops, planDir); err != nil {
 		fmt.Fprintf(os.Stderr, "apply: %v\n", err)
 		return 1
 	}
@@ -265,7 +266,7 @@ func cliApplyStdin(applyDir string) int {
 	if planDir == "" && applyDir != "" {
 		planDir = applyDir
 	}
-	if err := ApplyPlan(payload.Ops, planDir); err != nil {
+	if err := api.ApplyPlan(payload.Ops, planDir); err != nil {
 		fmt.Fprintf(os.Stderr, "apply: %v\n", err)
 		return 1
 	}

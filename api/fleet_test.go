@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snonux/gonf/internal/remote"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -69,12 +70,12 @@ func TestPushFleetParallel(t *testing.T) {
 	h2 := Host("h2", WithSSHUser("rex"), WithSSHHost("h2.example"), WithSSHPort(2))
 	Fleet("frontends", h1, h2).Parallel(2)
 
-	old := sshRunner
-	t.Cleanup(func() { sshRunner = old })
+	old := remote.SSHRunner
+	t.Cleanup(func() { remote.SSHRunner = old })
 
 	var inFlight, maxFlight atomic.Int32
 	var saw int32
-	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
+	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		n := inFlight.Add(1)
 		for {
 			cur := maxFlight.Load()
@@ -113,11 +114,11 @@ func TestPushFleetSerialLimit(t *testing.T) {
 		Host("s2", WithSSHHost("s2.example")),
 	).Parallel(1)
 
-	old := sshRunner
-	t.Cleanup(func() { sshRunner = old })
+	old := remote.SSHRunner
+	t.Cleanup(func() { remote.SSHRunner = old })
 
 	var inFlight, maxFlight atomic.Int32
-	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
+	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		n := inFlight.Add(1)
 		for {
 			cur := maxFlight.Load()
@@ -150,9 +151,9 @@ func TestPushFleetAggregatesErrors(t *testing.T) {
 		Host("e2", WithSSHHost("e2.example")),
 	).Parallel(2)
 
-	old := sshRunner
-	t.Cleanup(func() { sshRunner = old })
-	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
+	old := remote.SSHRunner
+	t.Cleanup(func() { remote.SSHRunner = old })
+	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		_, _ = io.Copy(io.Discard, stdin)
 		return io.ErrUnexpectedEOF
 	}
@@ -173,11 +174,11 @@ func TestPushHostAndPayloadMagic(t *testing.T) {
 	Task("host_push", "", func() {})
 
 	Host("solo", WithSSHUser("paul"), WithSSHHost("solo.example"), WithSSHIdentity("/tmp/id"))
-	old := sshRunner
-	t.Cleanup(func() { sshRunner = old })
+	old := remote.SSHRunner
+	t.Cleanup(func() { remote.SSHRunner = old })
 	var stdin []byte
 	var argv []string
-	sshRunner = func(ctx context.Context, r io.Reader, a []string) error {
+	remote.SSHRunner = func(ctx context.Context, r io.Reader, a []string) error {
 		argv = append([]string(nil), a...)
 		var buf bytes.Buffer
 		_, _ = io.Copy(&buf, r)
@@ -211,10 +212,10 @@ func TestPushFleetCancelsInFlightOnFailure(t *testing.T) {
 		Host("e2", WithSSHHost("e2.example")),
 	).Parallel(2)
 
-	old := sshRunner
-	t.Cleanup(func() { sshRunner = old })
+	old := remote.SSHRunner
+	t.Cleanup(func() { remote.SSHRunner = old })
 	var e2Canceled atomic.Bool
-	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
+	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		_, _ = io.Copy(io.Discard, stdin)
 		if strings.Contains(argv[len(argv)-2], "e1.example") {
 			return errors.New("boom")
@@ -250,15 +251,15 @@ func TestPushFleetHostTimeout(t *testing.T) {
 
 	Fleet("slowf", Host("s1", WithSSHHost("s1.example")))
 
-	old := sshRunner
-	t.Cleanup(func() { sshRunner = old })
-	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
+	old := remote.SSHRunner
+	t.Cleanup(func() { remote.SSHRunner = old })
+	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		_, _ = io.Copy(io.Discard, stdin)
 		<-ctx.Done()
 		return ctx.Err()
 	}
 
-	err := pushFleet(context.Background(), "slowf", "", 1, 50*time.Millisecond, "fleet_slow")
+	err := PushFleetRun(context.Background(), "slowf", "", 1, 50*time.Millisecond, "fleet_slow")
 	if err == nil {
 		t.Fatal("expected the host timeout to fail the push")
 	}
@@ -278,9 +279,9 @@ func TestPushFleetAbortsOnCanceledContext(t *testing.T) {
 
 	Fleet("abortf", Host("a1", WithSSHHost("a1.example")))
 
-	old := sshRunner
-	t.Cleanup(func() { sshRunner = old })
-	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
+	old := remote.SSHRunner
+	t.Cleanup(func() { remote.SSHRunner = old })
+	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		_, _ = io.Copy(io.Discard, stdin)
 		<-ctx.Done()
 		return ctx.Err()
@@ -288,7 +289,7 @@ func TestPushFleetAbortsOnCanceledContext(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := pushFleet(ctx, "abortf", "", 1, defaultHostTimeout, "fleet_abort")
+	err := PushFleetRun(ctx, "abortf", "", 1, remote.DefaultHostTimeout, "fleet_abort")
 	if err == nil {
 		t.Fatal("expected an abort error")
 	}
@@ -310,18 +311,18 @@ func TestPushFleetDryRun(t *testing.T) {
 
 	Fleet("dryf", Host("d1", WithSSHHost("d1.example")))
 
-	old := sshRunner
-	t.Cleanup(func() { sshRunner = old })
-	var remote string
-	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
-		remote = argv[len(argv)-1]
+	old := remote.SSHRunner
+	t.Cleanup(func() { remote.SSHRunner = old })
+	var sawRemote string
+	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
+		sawRemote = argv[len(argv)-1]
 		_, _ = io.Copy(io.Discard, stdin)
 		return nil
 	}
 	if err := PushFleet("dryf", "dry"); err != nil {
 		t.Fatal(err)
 	}
-	if remote != "gonf apply -n -" {
-		t.Fatalf("remote=%q", remote)
+	if sawRemote != "gonf apply -n -" {
+		t.Fatalf("remote=%q", sawRemote)
 	}
 }

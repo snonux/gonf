@@ -1,4 +1,4 @@
-package api
+package cli
 
 import (
 	"context"
@@ -7,11 +7,13 @@ import (
 	"os"
 	"strings"
 
+	"github.com/snonux/gonf/api"
+	"github.com/snonux/gonf/internal/remote"
 	"github.com/snonux/gonf/resource"
 )
 
 func cliHosts() int {
-	infos := Hosts()
+	infos := api.Hosts()
 	if len(infos) == 0 {
 		fmt.Fprintln(os.Stderr, "no hosts registered")
 		return 1
@@ -34,7 +36,7 @@ func cliHosts() int {
 }
 
 func cliFleets() int {
-	infos := Fleets()
+	infos := api.Fleets()
 	if len(infos) == 0 {
 		fmt.Fprintln(os.Stderr, "no fleets registered")
 		return 1
@@ -52,7 +54,7 @@ func cliFleet(ctx context.Context, args []string) int {
 	dryRunShort := fs.Bool("n", false, "Alias for -dry-run")
 	planID := fs.String("id", "", "plan id written into the header (default fleet-<name>)")
 	jobs := fs.Int("j", 0, "override fleet parallelism for this run")
-	hostTimeout := fs.Duration("host-timeout", defaultHostTimeout, "per-host push timeout (all chunks; 0 = unlimited)")
+	hostTimeout := fs.Duration("host-timeout", remote.DefaultHostTimeout, "per-host push timeout (all chunks; 0 = unlimited)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -70,7 +72,7 @@ func cliFleet(ctx context.Context, args []string) int {
 	if id == "" {
 		id = "fleet-" + name
 	}
-	if err := pushFleet(ctx, name, id, *jobs, *hostTimeout, tasks...); err != nil {
+	if err := api.PushFleetRun(ctx, name, id, *jobs, *hostTimeout, tasks...); err != nil {
 		fmt.Fprintf(os.Stderr, "fleet: %v\n", err)
 		return 1
 	}

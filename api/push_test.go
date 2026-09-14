@@ -3,35 +3,33 @@ package api
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/privilege"
+	"github.com/snonux/gonf/internal/remote"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
 
-// sshCall captures one fake sshRunner invocation.
+// sshCall captures one fake remote.SSHRunner invocation.
 type sshCall struct {
 	argv   []string
 	remote string // last argv element: the remote shell command
 	stdin  []byte // payload streamed to ssh
 }
 
-// captureSSH installs a fake sshRunner recording every invocation.
+// captureSSH installs a fake remote.SSHRunner recording every invocation.
 func captureSSH(t *testing.T) *[]sshCall {
 	t.Helper()
-	old := sshRunner
-	t.Cleanup(func() { sshRunner = old })
+	old := remote.SSHRunner
+	t.Cleanup(func() { remote.SSHRunner = old })
 	calls := &[]sshCall{}
-	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
+	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		var buf bytes.Buffer
 		_, _ = io.Copy(&buf, stdin)
 		*calls = append(*calls, sshCall{
@@ -83,39 +81,6 @@ func assertChunkBlobRefs(t *testing.T, name string, stdin []byte, planDir string
 	}
 }
 
-// The remote wrapping decision must not depend on the controller's euid:
-// -privilege=none with an elevated chunk is an error even when gonf itself
-// runs as root. Previously the root controller silently sent a plain
-// `gonf apply -` to the remote, under-applying on non-root SSH logins.
-func TestRemoteApplyCmdPrivilegeNoneElevateErrors(t *testing.T) {
-	tests := []struct {
-		name    string
-		mode    privilege.Mode
-		elevate bool
-		want    string
-		wantErr bool
-	}{
-		{"none_plain", privilege.None, false, "gonf apply -", false},
-		{"none_elevate", privilege.None, true, "", true},
-		{"sudo_elevate", privilege.Sudo, true, "sudo -n gonf apply -", false},
-		{"doas_elevate", privilege.Doas, true, "doas gonf apply -", false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := remoteApplyCmd(tc.elevate, tc.mode, "")
-			if tc.wantErr {
-				if err == nil || !strings.Contains(err.Error(), "-privilege=none") {
-					t.Fatalf("want privilege error, got %q, %v", got, err)
-				}
-				return
-			}
-			if err != nil || got != tc.want {
-				t.Fatalf("got %q, %v; want %q", got, err, tc.want)
-			}
-		})
-	}
-}
-
 // Pushing a plan with Privileged() tasks and -privilege=none must fail
 // before any SSH traffic: no chunk, and no blob upload either, in both
 // chunk orderings (pre-flight of the remote commands).
@@ -147,73 +112,6 @@ func TestPushPayloadPrivilegeNoneElevateFailsBeforeSSH(t *testing.T) {
 	}
 	if len(*calls) != 0 {
 		t.Fatalf("ssh calls on error: %v", remotes(*calls))
-	}
-}
-
-func TestParsePushArgs(t *testing.T) {
-	opts, pos := parsePushArgs([]string{"--", "-p", "2222", "rex@host", "home_bash"})
-	if len(opts) != 2 || opts[0] != "-p" || opts[1] != "2222" {
-		t.Fatalf("opts=%v", opts)
-	}
-	if len(pos) != 2 || pos[0] != "rex@host" || pos[1] != "home_bash" {
-		t.Fatalf("pos=%v", pos)
-	}
-	_, pos = parsePushArgs([]string{"host", "t1", "t2"})
-	if len(pos) != 3 {
-		t.Fatalf("pos=%v", pos)
-	}
-}
-
-func TestCLIPushStreamsToSSH(t *testing.T) {
-	ResetTasks()
-	resource.ResetRepository()
-	Task("push_demo", "", func() {
-		File(filepath.Join(t.TempDir(), "x"), options.WithContent("via-push"))
-	})
-
-	oldRunner := sshRunner
-	t.Cleanup(func() { sshRunner = oldRunner })
-
-	var sawArgv []string
-	var sawStdin []byte
-	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
-		sawArgv = append([]string(nil), argv...)
-		var buf bytes.Buffer
-		_, _ = io.Copy(&buf, stdin)
-		sawStdin = buf.Bytes()
-		return nil
-	}
-
-	oldArgs := os.Args
-	t.Cleanup(func() { os.Args = oldArgs })
-	os.Args = []string{"gonf", "push", "-id", "demo", "user@host", "push_demo"}
-	if code := CLI(); code != 0 {
-		t.Fatalf("exit %d", code)
-	}
-	if len(sawArgv) < 3 || sawArgv[0] != "ssh" || sawArgv[len(sawArgv)-2] != "user@host" {
-		t.Fatalf("argv=%v", sawArgv)
-	}
-	if !strings.Contains(sawArgv[len(sawArgv)-1], "gonf apply") {
-		t.Fatalf("remote cmd %q", sawArgv[len(sawArgv)-1])
-	}
-	if !bytes.Contains(sawStdin, []byte("GONF-PUSH/1")) {
-		t.Fatalf("stdin missing magic: %q", sawStdin[:min(40, len(sawStdin))])
-	}
-	payload, err := plan.DecodePush(bytes.NewReader(sawStdin), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(payload.Ops) < 2 || payload.Ops[0].ID != "demo" {
-		t.Fatalf("ops=%#v", payload.Ops)
-	}
-}
-
-func TestCLIPushUsage(t *testing.T) {
-	oldArgs := os.Args
-	t.Cleanup(func() { os.Args = oldArgs })
-	os.Args = []string{"gonf", "push", "onlyhost"}
-	if code := CLI(); code != 2 {
-		t.Fatalf("exit %d want 2", code)
 	}
 }
 
@@ -374,60 +272,6 @@ func remotes(calls []sshCall) []string {
 	return out
 }
 
-// firstConnectTimeout returns the first ConnectTimeout option in an ssh argv:
-// ssh uses the first occurrence on the command line, so this is the value in
-// effect.
-func firstConnectTimeout(argv []string) string {
-	for _, a := range argv {
-		if strings.HasPrefix(a, "ConnectTimeout=") {
-			return a
-		}
-	}
-	return ""
-}
-
-// Every generated ssh argv must bound the handshake with -o ConnectTimeout:
-// a half-open connection (dropped firewall state, wedged host) would
-// otherwise hang the push forever. The remote apply itself is deliberately
-// not bounded by it — applies are long by nature.
-func TestSSHArgvConnectTimeout(t *testing.T) {
-	argv := PushTarget{Host: "h.example"}.sshArgv("gonf apply -")
-	if got := firstConnectTimeout(argv); got != "ConnectTimeout=15" {
-		t.Fatalf("argv=%v: first ConnectTimeout=%q, want ConnectTimeout=15", argv, got)
-	}
-}
-
-// An explicit ConnectTimeout from ExtraSSH (or -- ssh-args) must win over the
-// default: ssh uses the first option on the command line, and ExtraSSH comes
-// first.
-func TestSSHArgvConnectTimeoutOverride(t *testing.T) {
-	targ := PushTarget{Host: "h.example", ExtraSSH: []string{"-o", "ConnectTimeout=5"}}
-	argv := targ.sshArgv("gonf apply -")
-	if got := firstConnectTimeout(argv); got != "ConnectTimeout=5" {
-		t.Fatalf("argv=%v: first ConnectTimeout=%q, want the explicit 5s", argv, got)
-	}
-}
-
-// The real sshRunner must run its command under the given context: an
-// expired context kills the process instead of hanging the push, and the
-// error carries the context error so callers can distinguish an aborted push
-// from the command's own failure.
-func TestSSHRunnerKillsOnContextDeadline(t *testing.T) {
-	start := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-	err := sshRunner(ctx, nil, []string{"sleep", "5"})
-	if err == nil {
-		t.Fatal("expected a context-deadline error")
-	}
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("err = %v, want it to wrap context.DeadlineExceeded", err)
-	}
-	if elapsed := time.Since(start); elapsed > 3*time.Second {
-		t.Fatalf("sshRunner ignored the context deadline: took %v", elapsed)
-	}
-}
-
 // TestPushRemovesStickyDirAfterLastChunk pins task 412: after the last apply
 // chunk succeeds, the controller removes the remote sticky apply dir (one
 // unprivileged rm -rf), so blob staging does not accumulate under /tmp.
@@ -478,8 +322,8 @@ func TestPushRemovesStickyDirOnChunkFailure(t *testing.T) {
 	calls := captureSSH(t)
 	// Fail the LAST chunk (the unprivileged apply session): chunk 2 fails
 	// after earlier chunks already applied, which must be reported.
-	old := sshRunner
-	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
+	old := remote.SSHRunner
+	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		var buf bytes.Buffer
 		_, _ = io.Copy(&buf, stdin)
 		payload := buf.Bytes()
@@ -494,7 +338,7 @@ func TestPushRemovesStickyDirOnChunkFailure(t *testing.T) {
 		*calls = append(*calls, sshCall{argv: append([]string(nil), argv...), remote: argv[len(argv)-1], stdin: payload})
 		return nil
 	}
-	t.Cleanup(func() { sshRunner = old })
+	t.Cleanup(func() { remote.SSHRunner = old })
 
 	err := PushTo(PushTarget{Host: "h.example", Privilege: privilege.Doas}, "demo", "root_sync", "user_sync")
 	if err == nil {

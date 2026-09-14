@@ -116,7 +116,7 @@ if err := ApplyPlan(ops, planDir); err != nil { /* … */ }
   (a later when-block) → refused before any mutation; nowhere in this body →
   satisfied at chunk level (an earlier chunk or invocation applied it).
   Controller-side pre-flight (`plan.ValidateChunkDeps`, wired into
-  `ApplyChunks` and `pushChunks`) refuses forward cross-chunk and dangling
+  `ApplyChunks` and `remote.PushChunks`) refuses forward cross-chunk and dangling
   deps before any chunk is applied.
 - Stackable `when_begin` / `when_end`: failed predicates skip the body
   without touching the filesystem.
@@ -311,7 +311,7 @@ satisfied (the earlier chunk applied it first). A dependency recorded AFTER
 its dependent crosses the privilege boundary — apply cannot reorder across
 chunks — and is rejected before anything is applied by a controller-side
 pre-flight (`plan.ValidateChunkDeps`, wired into `ApplyChunks` and
-`pushChunks`); on push the refusal happens before any SSH traffic. The same
+`remote.PushChunks`); on push the refusal happens before any SSH traffic. The same
 pre-flight refuses dangling deps (recorded in no chunk). Elevation ordering
 stays fixed by recorded order; reordering across chunks would defeat the
 privilege split.
