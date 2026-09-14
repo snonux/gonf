@@ -2,8 +2,6 @@ package plan
 
 import (
 	"fmt"
-	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -81,17 +79,19 @@ func (s *Store) WriteFile(name string, data []byte) (string, error) {
 	return ref, nil
 }
 
-// WriteTree copies srcDir into blobs/<name>/ and returns the ref.
+// WriteTree copies srcDir into blobs/<name>/ and returns the ref. The
+// tree is packaged through scanTree: directories (empty ones included)
+// and symlinks (raw target, dangling included — never read through) are
+// preserved as themselves, regular files by content; other file types
+// fail loudly. This is the same manifest MemoryStore packages, so a tree
+// applied locally matches the same tree pushed to a remote host.
 func (s *Store) WriteTree(name, srcDir string) (string, error) {
 	if s == nil || s.Root == "" {
 		return "", fmt.Errorf("plan: blob store: no plan directory")
 	}
-	info, err := os.Stat(srcDir)
+	entries, err := scanTree(srcDir)
 	if err != nil {
-		return "", fmt.Errorf("plan: package tree %s: %w", srcDir, err)
-	}
-	if !info.IsDir() {
-		return "", fmt.Errorf("plan: package tree %s: not a directory", srcDir)
+		return "", err
 	}
 	ref, abs, err := s.prepareRef(name)
 	if err != nil {
@@ -103,45 +103,25 @@ func (s *Store) WriteTree(name, srcDir string) (string, error) {
 	if err := os.MkdirAll(abs, 0o700); err != nil {
 		return "", fmt.Errorf("plan: mkdir blob %q: %w", ref, err)
 	}
-	err = filepath.WalkDir(srcDir, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		rel, err := filepath.Rel(srcDir, path)
-		if err != nil {
-			return err
-		}
-		if rel == "." {
-			return nil
-		}
-		dst := filepath.Join(abs, rel)
-		switch {
-		case entry.Type()&fs.ModeSymlink != 0:
-			target, err := os.Readlink(path)
-			if err != nil {
-				return err
-			}
-			return os.Symlink(target, dst)
-		case entry.IsDir():
-			return os.MkdirAll(dst, 0o700)
-		default:
-			return copyFile(path, dst)
-		}
-	})
-	if err != nil {
+	if err := materializeEntries(abs, entries); err != nil {
 		return "", fmt.Errorf("plan: package tree into %q: %w", ref, err)
 	}
 	return ref, nil
 }
 
 // WriteGlob copies basename matches of pattern into blobs/<name>/ (flat).
+// Regular files are packaged by content, symlinks are preserved with their
+// raw target (dangling included), directories and other file types are
+// skipped — the same file+symlink policy WriteGlob applies in memory, and
+// the same symlink policy WriteTree packages, so glob-sourced sync_dir ops
+// stay identical across local and remote apply.
 func (s *Store) WriteGlob(name, pattern string) (string, error) {
 	if s == nil || s.Root == "" {
 		return "", fmt.Errorf("plan: blob store: no plan directory")
 	}
-	matches, err := filepath.Glob(pattern)
+	entries, err := scanGlob(pattern)
 	if err != nil {
-		return "", fmt.Errorf("plan: package glob %q: %w", pattern, err)
+		return "", err
 	}
 	ref, abs, err := s.prepareRef(name)
 	if err != nil {
@@ -153,26 +133,8 @@ func (s *Store) WriteGlob(name, pattern string) (string, error) {
 	if err := os.MkdirAll(abs, 0o700); err != nil {
 		return "", fmt.Errorf("plan: mkdir blob %q: %w", ref, err)
 	}
-	for _, match := range matches {
-		info, err := os.Lstat(match)
-		if err != nil {
-			return "", fmt.Errorf("plan: package glob match %s: %w", match, err)
-		}
-		if info.IsDir() {
-			continue
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			targetInfo, err := os.Stat(match)
-			if err != nil || targetInfo.IsDir() || !targetInfo.Mode().IsRegular() {
-				continue
-			}
-		} else if !info.Mode().IsRegular() {
-			continue
-		}
-		dst := filepath.Join(abs, filepath.Base(match))
-		if err := copyFile(match, dst); err != nil {
-			return "", fmt.Errorf("plan: package glob into %q: %w", ref, err)
-		}
+	if err := materializeEntries(abs, entries); err != nil {
+		return "", fmt.Errorf("plan: package glob into %q: %w", ref, err)
 	}
 	return ref, nil
 }
@@ -220,25 +182,4 @@ func sanitizeBlobName(name string) string {
 		return "blob"
 	}
 	return out
-}
-
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-		return err
-	}
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	_, copyErr := io.Copy(out, in)
-	closeErr := out.Close()
-	if copyErr != nil {
-		return copyErr
-	}
-	return closeErr
 }

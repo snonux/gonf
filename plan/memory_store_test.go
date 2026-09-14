@@ -6,6 +6,19 @@ import (
 	"testing"
 )
 
+// findTreeEntry returns the manifest entry with the given slash-separated
+// Rel, failing when absent.
+func findTreeEntry(t *testing.T, entries []BlobEntry, rel string) BlobEntry {
+	t.Helper()
+	for _, e := range entries {
+		if e.Rel == rel {
+			return e
+		}
+	}
+	t.Fatalf("entry %q not found in %#v", rel, entries)
+	return BlobEntry{}
+}
+
 func TestMemoryStoreWriteFileAndTree(t *testing.T) {
 	m := NewMemoryStore()
 	ref, err := m.WriteFile("secret", []byte("top-secret\n"))
@@ -39,12 +52,33 @@ func TestMemoryStoreWriteFileAndTree(t *testing.T) {
 	if !ok {
 		t.Fatal("missing tree")
 	}
-	if string(tree["a.conf"]) != "a\n" || string(tree["sub/b.conf"]) != "b\n" {
-		t.Fatalf("tree = %#v", tree)
+	if e := findTreeEntry(t, tree, "a.conf"); e.Kind != BlobFile || string(e.Data) != "a\n" {
+		t.Fatalf("a.conf = %#v", e)
+	}
+	if e := findTreeEntry(t, tree, "sub/b.conf"); e.Kind != BlobFile || string(e.Data) != "b\n" {
+		t.Fatalf("sub/b.conf = %#v", e)
+	}
+	if e := findTreeEntry(t, tree, "sub"); e.Kind != BlobDir {
+		t.Fatalf("sub = %#v", e)
 	}
 	if !m.HasBlobs() {
 		t.Fatal("HasBlobs")
 	}
+}
+
+func TestMemoryStoreWriteTreePreservesSymlinksAndEmptyDirs(t *testing.T) {
+	m := NewMemoryStore()
+	src := buildManifestSourceTree(t)
+
+	treeRef, err := m.WriteTree("app", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, ok := m.TreeBlob(treeRef)
+	if !ok {
+		t.Fatal("missing tree")
+	}
+	assertManifestEntries(t, tree)
 }
 
 func TestMemoryStoreWriteGlob(t *testing.T) {
@@ -61,11 +95,42 @@ func TestMemoryStoreWriteGlob(t *testing.T) {
 		t.Fatal(err)
 	}
 	tree, ok := m.TreeBlob(ref)
-	if !ok || string(tree["x.service"]) != "[Unit]\n" {
-		t.Fatalf("tree = %#v", tree)
+	if !ok {
+		t.Fatal("missing tree")
 	}
-	if _, exists := tree["skip"]; exists {
-		t.Fatal("dirs must not be packaged by WriteGlob")
+	if e := findTreeEntry(t, tree, "x.service"); e.Kind != BlobFile || string(e.Data) != "[Unit]\n" {
+		t.Fatalf("x.service = %#v", e)
+	}
+	for _, e := range tree {
+		if e.Rel == "skip" {
+			t.Fatal("dirs must not be packaged by WriteGlob")
+		}
+	}
+}
+
+func TestMemoryStoreWriteGlobPreservesSymlinks(t *testing.T) {
+	m := NewMemoryStore()
+	dir := t.TempDir()
+	if err := writeGlobFixture(dir); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := m.WriteGlob("units", filepath.Join(dir, "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, ok := m.TreeBlob(ref)
+	if !ok {
+		t.Fatal("missing tree")
+	}
+	want := globFixtureWant()
+	if len(tree) != len(want) {
+		t.Fatalf("glob manifest = %#v, want %#v", tree, want)
+	}
+	for i, e := range tree {
+		if e.Rel != want[i].Rel || e.Kind != want[i].Kind || e.Target != want[i].Target ||
+			string(e.Data) != string(want[i].Data) {
+			t.Fatalf("glob manifest[%d] = %#v, want %#v", i, e, want[i])
+		}
 	}
 }
 

@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 )
 
@@ -193,53 +192,10 @@ func writeBlobsGzipTar(w io.Writer, mem *MemoryStore) error {
 		if !ok {
 			continue
 		}
-		dirHdr := &tar.Header{
-			Name:     ref + "/",
-			Mode:     0o700,
-			Typeflag: tar.TypeDir,
-		}
-		if err := tw.WriteHeader(dirHdr); err != nil {
+		if err := writeTreeTar(tw, ref, tree); err != nil {
 			_ = tw.Close()
 			_ = gz.Close()
 			return err
-		}
-		paths := make([]string, 0, len(tree))
-		for p := range tree {
-			paths = append(paths, p)
-		}
-		sort.Strings(paths)
-		for _, rel := range paths {
-			data := tree[rel]
-			name := ref + "/" + rel
-			// ensure parent dir headers
-			dir := filepath.ToSlash(filepath.Dir(rel))
-			if dir != "." {
-				parts := strings.Split(dir, "/")
-				cur := ref
-				for _, p := range parts {
-					cur += "/" + p
-					_ = tw.WriteHeader(&tar.Header{
-						Name:     cur + "/",
-						Mode:     0o700,
-						Typeflag: tar.TypeDir,
-					})
-				}
-			}
-			hdr := &tar.Header{
-				Name: name,
-				Mode: 0o600,
-				Size: int64(len(data)),
-			}
-			if err := tw.WriteHeader(hdr); err != nil {
-				_ = tw.Close()
-				_ = gz.Close()
-				return err
-			}
-			if _, err := tw.Write(data); err != nil {
-				_ = tw.Close()
-				_ = gz.Close()
-				return err
-			}
 		}
 	}
 	if err := tw.Close(); err != nil {
@@ -247,6 +203,61 @@ func writeBlobsGzipTar(w io.Writer, mem *MemoryStore) error {
 		return err
 	}
 	return gz.Close()
+}
+
+// writeTreeTar emits one tree blob as tar entries: the tree root dir, then
+// every manifest entry — BlobDir as tar.TypeDir headers, BlobSymlink as
+// tar.TypeSymlink headers carrying the raw target (Linkname; the tar just
+// transports the link, the destination recreates it), BlobFile by content
+// (0600). Entries are sorted by Rel, so parent directories precede their
+// children; ensureDirHeaders still synthesizes any missing ancestor header
+// and dedupes against explicit dir entries, so no directory header is
+// emitted twice.
+func writeTreeTar(tw *tar.Writer, ref string, tree []BlobEntry) error {
+	if err := tw.WriteHeader(&tar.Header{
+		Name:     ref + "/",
+		Mode:     0o700,
+		Typeflag: tar.TypeDir,
+	}); err != nil {
+		return err
+	}
+	emitted := map[string]bool{ref + "/": true}
+	ensureDirs := func(rel string) error { return ensureDirHeaders(tw, ref, slashParent(rel), emitted) }
+	for _, e := range tree {
+		switch e.Kind {
+		case BlobDir:
+			if err := ensureDirHeaders(tw, ref, e.Rel, emitted); err != nil {
+				return err
+			}
+		case BlobSymlink:
+			if err := ensureDirs(e.Rel); err != nil {
+				return err
+			}
+			if err := tw.WriteHeader(&tar.Header{
+				Name:     ref + "/" + e.Rel,
+				Mode:     0o777,
+				Typeflag: tar.TypeSymlink,
+				Linkname: e.Target,
+			}); err != nil {
+				return err
+			}
+		default:
+			if err := ensureDirs(e.Rel); err != nil {
+				return err
+			}
+			if err := tw.WriteHeader(&tar.Header{
+				Name: ref + "/" + e.Rel,
+				Mode: 0o600,
+				Size: int64(len(e.Data)),
+			}); err != nil {
+				return err
+			}
+			if _, err := tw.Write(e.Data); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func readBlobsGzipTar(r *bufio.Reader, planDir string) error {
@@ -288,21 +299,39 @@ func extractTarHeader(planDir string, hdr *tar.Header, r io.Reader) error {
 		return fmt.Errorf("plan push: zip-slip path %q", hdr.Name)
 	}
 
-	isDir := hdr.Typeflag == tar.TypeDir || strings.HasSuffix(hdr.Name, "/")
-	if isDir {
+	switch {
+	case hdr.Typeflag == tar.TypeDir || strings.HasSuffix(hdr.Name, "/"):
 		return os.MkdirAll(target, 0o700)
+	case hdr.Typeflag == tar.TypeSymlink:
+		// Recreate the symlink with its raw link target — the exact string
+		// the admin's source tree carries (dangling included), matching the
+		// disk Store's planDir tree. A pre-existing entry of ANY type at the
+		// target is removed first: os.Symlink refuses to replace an existing
+		// name, and a stale directory would otherwise block extraction. The
+		// header's mode is ignored — symlinks carry no meaningful mode.
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			return err
+		}
+		if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("plan push: clear %s for symlink: %w", target, err)
+		}
+		if err := os.Symlink(hdr.Linkname, target); err != nil {
+			return fmt.Errorf("plan push: symlink %s -> %s: %w", target, hdr.Linkname, err)
+		}
+		return nil
+	default:
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			return err
+		}
+		f, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+		if err != nil {
+			return err
+		}
+		_, copyErr := io.Copy(f, r)
+		closeErr := f.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		return closeErr
 	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-		return err
-	}
-	f, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	_, copyErr := io.Copy(f, r)
-	closeErr := f.Close()
-	if copyErr != nil {
-		return copyErr
-	}
-	return closeErr
 }

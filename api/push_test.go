@@ -232,7 +232,8 @@ func TestPushUploadsBlobsBeforeElevatedChunks(t *testing.T) {
 	}
 
 	sticky := "/tmp/gonf-apply-sticky-demo"
-	if len(*calls) != 3 {
+	// 4 sessions: blob upload, two apply chunks, then the sticky-dir removal.
+	if len(*calls) != 4 {
 		t.Fatalf("calls=%d remotes=%v", len(*calls), remotes(*calls))
 	}
 	// Session 0: blob upload, plain apply, never wrapped.
@@ -306,7 +307,8 @@ func TestPushUploadsBlobsBeforeUnprivilegedFirstChunks(t *testing.T) {
 	}
 
 	sticky := "/tmp/gonf-apply-sticky-demo"
-	if len(*calls) != 3 {
+	// 4 sessions: blob upload, two apply chunks, then the sticky-dir removal.
+	if len(*calls) != 4 {
 		t.Fatalf("calls=%d remotes=%v", len(*calls), remotes(*calls))
 	}
 	if got := (*calls)[0].remote; got != "gonf apply -apply-dir "+sticky+" -" {

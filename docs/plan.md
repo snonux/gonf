@@ -71,6 +71,14 @@ ops, err := RecordPlan("my-plan", planDir, "home_helix", "home_tmux")
   controller-side record error instead of a remote apply-time `unknown op`.
 - `InstallFile` content → `content_b64` when ≤ 512 KiB, else a blob sidecar.
 - `SyncDir` trees → `planDir/blobs/<name>/`.
+- `SyncDir` packaging is one shared function (`plan.scanTree`) for both blob
+  stores: directories (empty ones included) and symlinks (raw target string,
+  dangling included — never read through) are preserved as themselves,
+  regular files by content; FIFOs/sockets/devices fail loudly. Glob packaging
+  is the flat subset: files by content, symlinks preserved raw, directories
+  skipped. Local (`plan -o dir` / `Run`) and remote (`push` / `fleet`)
+  therefore package identically, and the destination reproduces the source
+  tree 1:1 — a symlink in the source is a symlink at the destination.
 - Nested `Run` while recording (e.g. `Aggregate`) appends into the **same**
   plan; apply happens once at the top level.
 
@@ -222,7 +230,9 @@ Host("blowfish", WithSSHUser("rex"), WithSSHHost("blowfish.buetow.org"),
 
 `push` / `fleet` record into an in-memory blob store, then encode **GONF-PUSH/1**:
 
-1. Optional gzip+tar of blobs (dirs `0700`, files `0600` on the remote staging tree)
+1. Optional gzip+tar of blobs (dirs `0700`, files `0600`, symlinks as
+   `tar.TypeSymlink` headers carrying the raw link target — the same
+   manifest the local planDir blob tree materializes; empty dirs included)
 2. Gzip of the plan JSONL
 
 Remote `apply -` stages under `$TMPDIR/gonf-apply/<uid>/`, sweeps stale dirs on

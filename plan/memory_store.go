@@ -2,9 +2,6 @@ package plan
 
 import (
 	"fmt"
-	"io/fs"
-	"os"
-	"path/filepath"
 	"sort"
 )
 
@@ -20,15 +17,18 @@ type BlobStore interface {
 type MemoryStore struct {
 	// files maps blob ref (blobs/name) to single-file content.
 	files map[string][]byte
-	// trees maps blob ref to relative path → file content (dirs implied).
-	trees map[string]map[string][]byte
+	// trees maps blob ref to the neutral tree manifest (entries sorted
+	// by Rel; see BlobEntry). Trees carry files by content, directories
+	// (empty ones included), and symlinks raw — the same manifest the
+	// disk Store packages, so local and remote transports cannot diverge.
+	trees map[string][]BlobEntry
 }
 
 // NewMemoryStore returns an empty in-memory blob store.
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
 		files: make(map[string][]byte),
-		trees: make(map[string]map[string][]byte),
+		trees: make(map[string][]BlobEntry),
 	}
 }
 
@@ -51,106 +51,46 @@ func (m *MemoryStore) WriteFile(name string, data []byte) (string, error) {
 	return ref, nil
 }
 
-// WriteTree copies srcDir into an in-memory tree at blobs/<name>/.
+// WriteTree packages srcDir into an in-memory tree at blobs/<name>/. The
+// tree is packaged through scanTree: directories (empty ones included) and
+// symlinks (raw target, dangling included — never read through) are
+// preserved as themselves, regular files by content; other file types fail
+// loudly. This is the same manifest the disk Store packages.
 func (m *MemoryStore) WriteTree(name, srcDir string) (string, error) {
 	if m == nil {
 		return "", fmt.Errorf("plan: blob store: nil memory store")
 	}
-	info, err := os.Stat(srcDir)
+	entries, err := scanTree(srcDir)
 	if err != nil {
-		return "", fmt.Errorf("plan: package tree %s: %w", srcDir, err)
-	}
-	if !info.IsDir() {
-		return "", fmt.Errorf("plan: package tree %s: not a directory", srcDir)
+		return "", err
 	}
 	ref, err := memoryRef(name)
 	if err != nil {
 		return "", err
 	}
-	tree := make(map[string][]byte)
-	err = filepath.WalkDir(srcDir, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		rel, err := filepath.Rel(srcDir, path)
-		if err != nil {
-			return err
-		}
-		if rel == "." {
-			return nil
-		}
-		relSlash := filepath.ToSlash(rel)
-		switch {
-		case entry.Type()&fs.ModeSymlink != 0:
-			// Symlink targets are not preserved in memory trees; skip like a no-op
-			// would lose data — read through to regular file when possible.
-			targetInfo, err := os.Stat(path)
-			if err != nil || !targetInfo.Mode().IsRegular() {
-				return nil
-			}
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			tree[relSlash] = data
-			return nil
-		case entry.IsDir():
-			return nil
-		default:
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			tree[relSlash] = data
-			return nil
-		}
-	})
-	if err != nil {
-		return "", fmt.Errorf("plan: package tree into %q: %w", ref, err)
-	}
 	delete(m.files, ref)
-	m.trees[ref] = tree
+	m.trees[ref] = entries
 	return ref, nil
 }
 
-// WriteGlob copies basename matches of pattern into an in-memory tree.
+// WriteGlob packages basename matches of pattern into an in-memory flat
+// tree: regular files by content, symlinks preserved raw, directories and
+// other file types skipped — the same file+symlink policy the disk Store
+// applies.
 func (m *MemoryStore) WriteGlob(name, pattern string) (string, error) {
 	if m == nil {
 		return "", fmt.Errorf("plan: blob store: nil memory store")
 	}
-	matches, err := filepath.Glob(pattern)
+	entries, err := scanGlob(pattern)
 	if err != nil {
-		return "", fmt.Errorf("plan: package glob %q: %w", pattern, err)
+		return "", err
 	}
 	ref, err := memoryRef(name)
 	if err != nil {
 		return "", err
 	}
-	tree := make(map[string][]byte)
-	for _, match := range matches {
-		info, err := os.Lstat(match)
-		if err != nil {
-			return "", fmt.Errorf("plan: package glob match %s: %w", match, err)
-		}
-		if info.IsDir() {
-			continue
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			targetInfo, err := os.Stat(match)
-			if err != nil || targetInfo.IsDir() || !targetInfo.Mode().IsRegular() {
-				continue
-			}
-		} else if !info.Mode().IsRegular() {
-			continue
-		}
-		data, err := os.ReadFile(match)
-		if err != nil {
-			return "", err
-		}
-		tree[filepath.Base(match)] = data
-	}
 	delete(m.files, ref)
-	m.trees[ref] = tree
+	m.trees[ref] = entries
 	return ref, nil
 }
 
@@ -191,8 +131,10 @@ func (m *MemoryStore) FileBlob(ref string) ([]byte, bool) {
 	return data, ok
 }
 
-// TreeBlob returns the relative-path map for a tree blob ref.
-func (m *MemoryStore) TreeBlob(ref string) (map[string][]byte, bool) {
+// TreeBlob returns the neutral manifest entries (sorted by Rel) for a tree
+// blob ref: BlobFile entries carry Data, BlobDir entries mark directories,
+// and BlobSymlink entries carry the raw Target.
+func (m *MemoryStore) TreeBlob(ref string) ([]BlobEntry, bool) {
 	if m == nil {
 		return nil, false
 	}
