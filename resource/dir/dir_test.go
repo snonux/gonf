@@ -1,9 +1,11 @@
 package dir
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	. "github.com/snonux/gonf/api/options"
@@ -434,6 +436,64 @@ func TestSourceGlobPrune(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dst, "subdir")); err != nil {
 		t.Fatal("subdir should not be pruned")
+	}
+}
+
+// TestSourceTreePruneDryRunKeepsStaleFiles guards against data loss: a
+// dry-run apply (gonf -n) of a Dir with WithSource+WithPrune must only
+// preview the prune (StatusWouldChange note), never delete stale destination
+// files.
+func TestSourceTreePruneDryRunKeepsStaleFiles(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+
+	if err := os.Mkdir(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "keep.txt"), []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dst, "keep.txt"), []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(dst, "stale.txt")
+	staleContent := "precious stale content"
+	if err := os.WriteFile(stale, []byte(staleContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	resource.SetDryRun(true)
+	t.Cleanup(func() { resource.SetDryRun(false) })
+
+	Present(dst, WithSource(src), WithPrune)
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+
+	got, err := os.ReadFile(stale)
+	if err != nil {
+		t.Fatalf("dry-run prune deleted %s: %v", stale, err)
+	}
+	if string(got) != staleContent {
+		t.Errorf("stale.txt content = %q, want %q", got, staleContent)
+	}
+	gotKeep, err := os.ReadFile(filepath.Join(dst, "keep.txt"))
+	if err != nil {
+		t.Fatalf("keep.txt should remain after dry-run prune: %v", err)
+	}
+	if string(gotKeep) != "keep" {
+		t.Errorf("keep.txt content = %q, want %q", gotKeep, "keep")
+	}
+
+	var buf bytes.Buffer
+	resource.PrintSummary(&buf)
+	if !strings.Contains(buf.String(), "would-change File["+stale+"]") {
+		t.Errorf("expected a would-change note for %s, summary:\n%s", stale, buf.String())
 	}
 }
 

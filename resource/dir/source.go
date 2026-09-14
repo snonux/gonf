@@ -87,7 +87,9 @@ func copySourceFile(d *Dir, sourcePath, target string) error {
 // d.source has the same relative path with a ".tmpl" suffix appended, since
 // copySourceFile (via file.Ensure) strips that suffix when writing —
 // otherwise every templated file would be pruned immediately after being
-// copied.
+// copied. In dry-run mode nothing is removed; every would-be-pruned path is
+// only noted as StatusWouldChange (the walk still descends into stale
+// directories so their contents are previewed too).
 func pruneTree(d *Dir) error {
 	logger.Debug("pruning destination directory %s", d.path)
 
@@ -106,6 +108,12 @@ func pruneTree(d *Dir) error {
 
 		if sourceEntryExists(d.source, rel) {
 			return nil
+		}
+
+		if resource.DryRun() {
+			resource.Note(fmt.Sprintf("File[%s]", path), resource.StatusWouldChange)
+			logger.Info("dry-run: would prune %s", path)
+			return nil // keep walking: nothing may be removed
 		}
 
 		logger.Debug("pruning %s", path)
