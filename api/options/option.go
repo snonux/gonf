@@ -21,6 +21,8 @@ type (
 	Moded          interface{ SetMode(os.FileMode) }
 	Sourced        interface{ SetSource(string) }
 	SourceGlobable interface{ SetSourceGlob(string) }
+	SourceBaseable interface{ SetSourceBase(string) }
+	Paramable      interface{ SetParam(string) }
 	Contented      interface{ SetContent(string) }
 	LineAddable    interface{ SetAddLine(string) }
 	LineRemovable  interface{ SetRemoveLine(string) }
@@ -134,6 +136,29 @@ func WithSource(source string) Option {
 func WithSourceGlob(pattern string) Option {
 	return func(t any) {
 		requires(t, "WithSourceGlob", func(r SourceGlobable) { r.SetSourceGlob(pattern) })
+	}
+}
+
+// WithParam overrides the {{.Param}} value rendered into template content.
+// The default stays the resource's derived value (the bare source path, or
+// the literal content); plan apply uses the override to give source-tree
+// template copies a stable identity (the recipe's declared source directory
+// plus the entry's relative path) instead of the ephemeral blob-extraction
+// path, which changes every plan run.
+func WithParam(value string) Option {
+	return func(t any) {
+		requires(t, "WithParam", func(r Paramable) { r.SetParam(value) })
+	}
+}
+
+// WithSourceBase sets the declared source directory for a dir resource that
+// syncs a packaged blob tree: .tmpl entries inside the tree render
+// {{.Param}} as sourceBase plus the entry's path relative to the tree root.
+// Recipe code does not use it; it is the plan engine's plumbing so synced
+// templates do not embed the per-run blob-extraction path.
+func WithSourceBase(value string) Option {
+	return func(t any) {
+		requires(t, "WithSourceBase", func(r SourceBaseable) { r.SetSourceBase(value) })
 	}
 }
 

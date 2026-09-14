@@ -564,6 +564,95 @@ func TestE2ESyncDirOwnershipPlanApply(t *testing.T) {
 	}
 }
 
+// TestE2ESyncDirTemplateParamStableAcrossPlanDirs pins the sync_dir template
+// flap fix (schema v6): a .tmpl entry inside a synced tree must render
+// {{.Param}} from the recipe's DECLARED source identity (source_dir +
+// relative entry path), never from the ephemeral blob-extraction dir of the
+// run. The same task is recorded and applied twice with DIFFERENT plan dirs;
+// a blob-path Param would change the rendered content every run (the
+// demo_files re-run flap), so the second run must converge: no changed note
+// for the rendered files, and the declared param embedded in the content.
+// Both sync_dir flavors are covered: the WithSource tree and the
+// WithSourceGlob flat install.
+func TestE2ESyncDirTemplateParamStableAcrossPlanDirs(t *testing.T) {
+	api.ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	work := t.TempDir()
+	t.Chdir(work)
+
+	if err := os.Mkdir(filepath.Join(work, "src"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(work, "src", "app.conf.tmpl"),
+		[]byte("param is {{.Param}}\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(work, "src", "plain.conf"),
+		[]byte("plain\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	api.Task("tmpl_sync_e2e", "sync_dir template param e2e", func() {
+		api.Dir("tree-dst", options.WithSource("src"))
+		api.SyncDir("glob-dst", "src/*.conf.tmpl")
+	})
+
+	apply := func(planDir string) {
+		t.Helper()
+		ops, err := api.RecordPlan("tmpl-sync", planDir, "tmpl_sync_e2e")
+		if err != nil {
+			t.Fatalf("RecordPlan: %v", err)
+		}
+		raw, err := plan.EncodePlan(ops)
+		if err != nil {
+			t.Fatalf("EncodePlan: %v", err)
+		}
+		decoded, err := plan.DecodePlanBytes(raw)
+		if err != nil {
+			t.Fatalf("DecodePlanBytes: %v", err)
+		}
+		facts := plan.Facts{GOOS: runtime.GOOS, Profile: "test", Hostname: "localhost"}
+		if err := plan.Apply(decoded, facts, planDir); err != nil {
+			t.Fatalf("plan.Apply: %v", err)
+		}
+	}
+
+	// Record and apply with DIFFERENT plan dirs: the blob-extraction root
+	// (planDir/blobs/…) differs per run, so the pre-fix Param — derived from
+	// the mechanical source path — was a per-run random path.
+	planDir1 := filepath.Join(t.TempDir(), "one")
+	planDir2 := filepath.Join(t.TempDir(), "two")
+	apply(planDir1)
+	apply(planDir2)
+
+	want := "param is src/app.conf.tmpl\n"
+	rendered := []string{"tree-dst/app.conf", "glob-dst/app.conf"}
+	for _, name := range rendered {
+		data, err := os.ReadFile(filepath.Join(work, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatalf("synced %s: %v", name, err)
+		}
+		if string(data) != want {
+			t.Fatalf("%s rendered content = %q, want %q", name, data, want)
+		}
+	}
+	// The rendered files must NOT have been rewritten by the second apply:
+	// their content no longer depends on the per-run blob path. (The first
+	// apply created them, so a missing-note outcome would only mask a
+	// regression that skips the copy entirely.)
+	for _, name := range rendered {
+		if resource.AnyChanged("File[" + name + "]") {
+			t.Fatalf("%s was rewritten by the second apply (blob-path Param flap)", name)
+		}
+	}
+}
+
 // TestE2ESpecialBitsModePlanApply pins the setuid/setgid mode wiring end to
 // end: a raw 0o4755-style WithMode value and its Go flag-form equivalent
 // (0o750|os.ModeSetuid) must lower to four-digit plan wire modes ("04755",

@@ -400,6 +400,7 @@ func draftToOp(d resource.PlanDraft) (plan.Op, error) {
 		Group:      d.Group,
 		ContentB64: d.ContentB64,
 		Blob:       d.Blob,
+		SourceDir:  d.SourceDir,
 		Prune:      d.Prune,
 		Absent:     d.Absent,
 		AddLine:    d.AddLine,

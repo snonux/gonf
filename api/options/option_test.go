@@ -40,6 +40,8 @@ func (c *capTarget) SetGroup(v string)          { c.record("SetGroup", v) }
 func (c *capTarget) SetMode(v os.FileMode)      { c.record("SetMode", v) }
 func (c *capTarget) SetSource(v string)         { c.record("SetSource", v) }
 func (c *capTarget) SetSourceGlob(v string)     { c.record("SetSourceGlob", v) }
+func (c *capTarget) SetSourceBase(v string)     { c.record("SetSourceBase", v) }
+func (c *capTarget) SetParam(v string)          { c.record("SetParam", v) }
 func (c *capTarget) SetContent(v string)        { c.record("SetContent", v) }
 func (c *capTarget) SetAddLine(v string)        { c.record("SetAddLine", v) }
 func (c *capTarget) SetRemoveLine(v string)     { c.record("SetRemoveLine", v) }
@@ -134,6 +136,8 @@ func TestOptionsReachTheirSetters(t *testing.T) {
 		{"WithMode", WithMode(0o644), "SetMode", os.FileMode(0o644)},
 		{"WithSource", WithSource("/srv/src"), "SetSource", "/srv/src"},
 		{"WithSourceGlob", WithSourceGlob("*.conf"), "SetSourceGlob", "*.conf"},
+		{"WithSourceBase", WithSourceBase("assets/testfiles"), "SetSourceBase", "assets/testfiles"},
+		{"WithParam", WithParam("stable"), "SetParam", "stable"},
 		{"WithContent", WithContent("hello"), "SetContent", "hello"},
 		{"WithLine", WithLine("line"), "SetAddLine", "line"},
 		{"WithoutLine", WithoutLine("gone"), "SetRemoveLine", "gone"},

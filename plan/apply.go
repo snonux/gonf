@@ -411,6 +411,15 @@ func applySyncDir(op Op, planDir string) error {
 	}
 
 	opts := []opt.Option{opt.WithSource(src)}
+	// source_dir is the recipe's declared source directory (the glob
+	// pattern's directory for the glob flavor): .tmpl files inside the
+	// synced tree render {{.Param}} from it instead of the ephemeral blob
+	// path, which would change every run and flap the rendered checksums.
+	// Plans recorded before schema v6 carry no source_dir and keep the
+	// blob-path Param.
+	if op.SourceDir != "" {
+		opts = append(opts, opt.WithSourceBase(op.SourceDir))
+	}
 	if op.Mode != "" {
 		mode, err := parseMode(op.Mode)
 		if err != nil {

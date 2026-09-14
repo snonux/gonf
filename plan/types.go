@@ -8,8 +8,10 @@ package plan
 // Version 2 added timer and daemon_reload ops; version 3 added cron and
 // service ops; version 4 added owner/group fields to the filesystem ops
 // (file, dir, sync_dir, ensure_dir); version 5 added the deps field
-// (recorded DependsOn ordering) to resource ops.
-const CurrentVersion = 5
+// (recorded DependsOn ordering) to resource ops; version 6 added the
+// source_dir field to sync_dir ops (the recipe's declared source directory,
+// the stable {{.Param}} base for .tmpl files inside the synced tree).
+const CurrentVersion = 6
 
 // supportedVersions is the set of plan schema versions this binary can apply.
 // Apply must refuse plans whose version is not in this set before any mutation.
@@ -18,6 +20,7 @@ var supportedVersions = map[int]struct{}{
 	2:              {},
 	3:              {},
 	4:              {},
+	5:              {},
 	CurrentVersion: {},
 }
 
@@ -157,6 +160,14 @@ type Op struct {
 	ContentB64 string `json:"content_b64,omitempty"`
 	// Blob is a sidecar blob id/path for KindSyncDir (or large KindFile content).
 	Blob string `json:"blob,omitempty"`
+	// SourceDir is the recipe's declared source directory for KindSyncDir
+	// (for the glob flavor, the declared glob pattern's directory). Apply
+	// passes it to the synced tree so .tmpl files inside render {{.Param}}
+	// from the stable declared identity ("source_dir/relative entry path")
+	// instead of the ephemeral blob-extraction path, which changes every
+	// plan run. Empty on plans recorded before schema v6: apply then keeps
+	// the blob-path Param (pre-v6 behavior).
+	SourceDir string `json:"source_dir,omitempty"`
 	// Prune removes destination entries not present in the sync source.
 	Prune bool `json:"prune,omitempty"`
 	// Absent marks NoFile / NoDir / NoLink / NoPackage style removal.

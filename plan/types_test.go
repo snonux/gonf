@@ -113,6 +113,16 @@ func TestOpJSONTagsMatchPlanExamples(t *testing.T) {
 			want: `{"op":"file","id":"File[${HOME}/.taskrc]","path":"${HOME}/.taskrc","mode":"0640","content_b64":"Li4u"}`,
 		},
 		{
+			name: "sync_dir source_dir",
+			op: Op{
+				Op:        KindSyncDir,
+				Path:      "${HOME}/.config/app",
+				Blob:      "blobs/app",
+				SourceDir: "assets/testfiles",
+			},
+			want: `{"op":"sync_dir","path":"${HOME}/.config/app","blob":"blobs/app","source_dir":"assets/testfiles"}`,
+		},
+		{
 			name: "path_exists predicate",
 			op: Op{
 				Op: KindWhenBegin,

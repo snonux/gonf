@@ -568,3 +568,88 @@ func TestRecordPlanLowersDaemonReloadDeps(t *testing.T) {
 		t.Fatalf("daemon_reload watch = %#v, want [%s]", ops[2].Watch, wantID)
 	}
 }
+
+// TestRecordPlanLowersSyncDirSourceDir pins the sync_dir source_dir wire
+// field (schema v6): the recipe's declared source directory must travel on
+// the op so destination apply renders tree .tmpl files' {{.Param}} from a
+// stable identity instead of the ephemeral blob-extraction path (which
+// changes every plan run and flaps the rendered checksums). For the glob
+// flavor the declared source directory is the glob pattern's directory.
+// A plain dir op and file ops must carry no source_dir.
+func TestRecordPlanLowersSyncDirSourceDir(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	base := t.TempDir()
+	treeSrc := filepath.Join(base, "tree")
+	globSrc := filepath.Join(base, "src")
+	// Record-time packaging walks the sources: both must exist with content.
+	for _, dir := range []string{treeSrc, globSrc} {
+		if err := os.Mkdir(dir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "app.conf"), []byte("x\n"), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	Task("syncdir_source", "sync_dir source_dir lowering", func() {
+		Dir(filepath.Join(base, "plain"))
+		Dir(filepath.Join(base, "tree-dst"), options.WithSource(treeSrc))
+		SyncDir(filepath.Join(base, "glob-dst"), filepath.Join(globSrc, "*.conf"))
+		File(filepath.Join(base, "f.conf"), options.WithContent("x"))
+	})
+
+	ops, err := RecordPlan("syncdir_src", t.TempDir(), "syncdir_source")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+	wantKinds := []plan.Kind{
+		plan.KindPlan,
+		plan.KindDir,
+		plan.KindSyncDir,
+		plan.KindSyncDir,
+		plan.KindFile,
+	}
+	if !reflect.DeepEqual(opsKinds(ops), wantKinds) {
+		t.Fatalf("ops kinds = %v, want %v", opsKinds(ops), wantKinds)
+	}
+
+	// A plain dir op carries no source_dir.
+	if ops[1].SourceDir != "" {
+		t.Fatalf("dir op source_dir = %q, want empty", ops[1].SourceDir)
+	}
+	// The tree flavor carries the declared source directory verbatim.
+	if got, want := ops[2].SourceDir, treeSrc; got != want {
+		t.Fatalf("tree sync_dir source_dir = %q, want %q", got, want)
+	}
+	// The glob flavor carries the glob pattern's directory.
+	if got, want := ops[3].SourceDir, globSrc; got != want {
+		t.Fatalf("glob sync_dir source_dir = %q, want %q", got, want)
+	}
+	// File ops carry no source_dir.
+	if ops[4].SourceDir != "" {
+		t.Fatalf("file op source_dir = %q, want empty", ops[4].SourceDir)
+	}
+
+	// The field must survive the wire round-trip under its json tag.
+	raw, err := plan.EncodePlan(ops)
+	if err != nil {
+		t.Fatalf("EncodePlan: %v", err)
+	}
+	if !strings.Contains(string(raw), `"source_dir":"`+treeSrc+`"`) {
+		t.Fatalf("encoded plan lost source_dir field:\n%s", raw)
+	}
+	decoded, err := plan.DecodePlanBytes(raw)
+	if err != nil {
+		t.Fatalf("DecodePlanBytes: %v", err)
+	}
+	if !reflect.DeepEqual(decoded, ops) {
+		t.Fatalf("round-trip mismatch\ngot  %#v\nwant %#v", decoded, ops)
+	}
+}

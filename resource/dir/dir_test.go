@@ -1807,3 +1807,87 @@ func TestSourceGlobPruneTemplatedMatchDoesNotFlap(t *testing.T) {
 		}
 	}
 }
+
+// TestSourceCopyParamOverrideStableAcrossBlobRoots pins the plan-path
+// template param plumbing (task 622): copySourceFile must render tree .tmpl
+// files with {{.Param}} = WithSourceBase + "/" + the entry's path relative
+// to the synced root — the recipe's declared identity — and never the
+// ephemeral blob root the tree is restored from. Two applies with DIFFERENT
+// blob roots (as two plan runs produce) must converge instead of flapping
+// the rendered checksum every run.
+func TestSourceCopyParamOverrideStableAcrossBlobRoots(t *testing.T) {
+	resource.ResetRepository()
+	base := t.TempDir()
+	tmplContent := []byte("param is {{.Param}}\n")
+
+	// Two blob roots, as two plan runs with different plan dirs would
+	// extract the same source tree into.
+	blob1 := filepath.Join(base, "plan-one", "blobs", "tree")
+	blob2 := filepath.Join(base, "plan-two", "blobs", "tree")
+	for _, blob := range []string{blob1, blob2} {
+		if err := os.MkdirAll(blob, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(blob, "app.conf.tmpl"), tmplContent, 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	dst := filepath.Join(base, "dst")
+	if err := Ensure(dst, WithSource(blob1), WithSourceBase("assets/testfiles"), WithFileMode(0o640)); err != nil {
+		t.Fatalf("first Ensure: %v", err)
+	}
+	out := filepath.Join(dst, "app.conf")
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "param is assets/testfiles/app.conf.tmpl\n"; string(got) != want {
+		t.Fatalf("rendered content = %q, want %q", got, want)
+	}
+
+	// Second apply from the OTHER blob root: the rendered content must be
+	// identical (stable Param), so the file is converged, not rewritten.
+	resource.ResetReport()
+	if err := Ensure(dst, WithSource(blob2), WithSourceBase("assets/testfiles"), WithFileMode(0o640)); err != nil {
+		t.Fatalf("second Ensure: %v", err)
+	}
+	if resource.AnyChanged("File[" + out + "]") {
+		t.Fatalf("%s was rewritten by the second apply (blob-path Param flap)", out)
+	}
+	got2, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got2) != string(got) {
+		t.Fatalf("content changed across blob roots: %q vs %q", got2, got)
+	}
+}
+
+// TestSourceCopyParamWithoutSourceBaseKeepsBlobPath pins the back-compat
+// behavior: without WithSourceBase (direct resource use, or plans recorded
+// before schema v6) a tree .tmpl file keeps deriving {{.Param}} from its
+// mechanical source path.
+func TestSourceCopyParamWithoutSourceBaseKeepsBlobPath(t *testing.T) {
+	resource.ResetRepository()
+	base := t.TempDir()
+	blob := filepath.Join(base, "blobs", "tree")
+	if err := os.MkdirAll(blob, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(blob, "app.conf.tmpl"), []byte("param is {{.Param}}\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := filepath.Join(base, "dst")
+	if err := Ensure(dst, WithSource(blob), WithFileMode(0o640)); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dst, "app.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "param is " + filepath.Join(blob, "app.conf.tmpl") + "\n"; string(got) != want {
+		t.Fatalf("rendered content = %q, want %q", got, want)
+	}
+}

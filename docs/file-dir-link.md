@@ -34,6 +34,21 @@ NoLink("/tmp/stale-link")
 
 Helpers that wrap these: [helpers.md](helpers.md) (`InstallFile`, `SyncDir`, `EnsureDir`, `LinkIfExists`, `SymlinkMap`).
 
+### Template `{{.Param}}` in synced trees
+
+A file rendered from a `.tmpl` source may reference `{{.Param}}`: the source
+identity the file was configured from. For a single file that is the recipe's
+declared source path; for a `.tmpl` entry inside a `SyncDir` tree it is the
+declared source directory + "/" + the entry's path relative to the tree root
+(for the glob flavor: the declared glob pattern's directory + "/" + the
+basename). On the plan path the identity travels on the `sync_dir` op as
+`source_dir` (schema v6): plan apply passes it to the synced tree, so the
+rendered content never embeds the ephemeral `planDir/blobs/…` extraction
+path — which changes every plan run and would flap the file's checksum.
+Direct (non-plan) use derives the same stable value from the real source
+tree; plans recorded before schema v6 keep the old blob-path Param.
+`opt.WithParam` overrides the value explicitly (plan-engine plumbing).
+
 ### Replacing real entries with links (the `.old` aside)
 
 When `Link` must replace an existing real file, directory, or non-matching

@@ -29,10 +29,16 @@ import (
 type File struct {
 	embed.DependsOn
 	embed.Absence
-	resource   resource.Resource
-	path       string
-	content    string
-	source     string // bare path, no "source://" prefix
+	resource resource.Resource
+	path     string
+	content  string
+	source   string // bare path, no "source://" prefix
+	// param, when set, overrides the {{.Param}} value rendered into
+	// template content (opt.WithParam). Callers that know a more stable
+	// identity than this resource's mechanical source path — dir's tree
+	// copies on the plan path, which would otherwise derive the ephemeral
+	// blob-extraction path — use it; unset, Param stays the derived default.
+	param      string
 	user       string
 	group      string
 	userSet    bool // WithOwner was called explicitly (build()'s default does not count)
@@ -55,6 +61,11 @@ func (f *File) SetSource(source string) {
 	f.source = source
 	f.content = ""
 }
+
+// SetParam implements opt.Paramable. It overrides the {{.Param}} value used
+// when rendering template content; the default remains the derived source
+// path (or literal content).
+func (f *File) SetParam(param string) { f.param = param }
 
 // SetAddLine implements opt.LineAddable.
 func (f *File) SetAddLine(line string) {
@@ -87,6 +98,7 @@ func (f *File) SetMode(mode os.FileMode) { f.mode = mode }
 var (
 	_ opt.LineAddable   = (*File)(nil)
 	_ opt.LineRemovable = (*File)(nil)
+	_ opt.Paramable     = (*File)(nil)
 )
 
 func build(path string, opts ...opt.Option) (*File, error) {
@@ -325,24 +337,34 @@ func readForSource(path string) ([]byte, error) {
 	return readFollowNonBlocking(path)
 }
 
-// resolveFromSourceOrContent reads f's content (from source or literal content), renders it as
-// a template if applicable, and returns the final on-disk path alongside the
-// resulting bytes. Param is always the bare source path when source-based
-// (never a "source://"-prefixed string), or the literal content when
-// content-based — one definition used by both the single-file path and by
-// dir's per-file delegation.
+// resolveFromSourceOrContent reads f's content (from source or literal
+// content), renders it as a template if applicable, and returns the final
+// on-disk path alongside the resulting bytes. Param — the {{.Param}}
+// template value — is the explicit WithParam override when set, else the
+// bare source path when source-based (never a "source://"-prefixed string),
+// or the literal content when content-based. One definition used by both
+// the single-file path and by dir's per-file delegation: dir's plan-path
+// tree copies pass the override so synced .tmpl files do not embed the
+// ephemeral blob-extraction path.
 func (f *File) resolveFromSourceOrContent() (string, []byte, error) {
 	var content []byte
-	param := f.content
-
 	if f.source != "" {
-		var readErr error
-		if content, readErr = readForSource(f.source); readErr != nil {
-			return "", nil, readErr
+		read, err := readForSource(f.source)
+		if err != nil {
+			return "", nil, err
 		}
-		param = f.source
+		content = read
 	} else {
 		content = []byte(f.content)
+	}
+
+	param := f.param
+	if param == "" {
+		if f.source != "" {
+			param = f.source
+		} else {
+			param = f.content
+		}
 	}
 
 	if f.shouldRenderTemplate() {

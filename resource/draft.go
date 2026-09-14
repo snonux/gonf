@@ -55,7 +55,12 @@ type PlanDraft struct {
 	Blob string
 	// SourcePath is a controller-local file to package as content_b64 or a blob.
 	SourcePath string
-	// SourceDir is a controller-local directory to package as a blob tree.
+	// SourceDir is a controller-local directory to package as a blob tree;
+	// for sync_dir drafts it also carries the recipe's DECLARED source
+	// directory onto the op's source_dir field (the glob pattern's
+	// directory for the glob flavor, where packaging stays driven by
+	// SourceGlob): destination apply renders tree .tmpl files' {{.Param}}
+	// from it instead of the ephemeral blob path.
 	SourceDir string
 	// SourceGlob is a controller-local glob to package as a flat blob dir.
 	SourceGlob string

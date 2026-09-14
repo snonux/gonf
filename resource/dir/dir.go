@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"os/user"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"syscall"
@@ -28,6 +29,11 @@ type Dir struct {
 	path       string
 	source     string
 	sourceGlob string
+	// sourceBase is the recipe's declared source directory passed by plan
+	// apply (opt.WithSourceBase): the stable {{.Param}} base for .tmpl
+	// entries copied from a synced tree. Empty on the direct path, which
+	// derives Param from the real source paths as before.
+	sourceBase string
 	user       string
 	group      string
 	userSet    bool        // WithOwner was called explicitly (build()'s default does not count)
@@ -42,6 +48,12 @@ func (d *Dir) SetSource(source string) { d.source = source }
 
 // SetSourceGlob implements opt.SourceGlobable.
 func (d *Dir) SetSourceGlob(pattern string) { d.sourceGlob = pattern }
+
+// SetSourceBase implements opt.SourceBaseable. Plan apply passes the
+// recipe's declared source directory so .tmpl entries inside a synced tree
+// render {{.Param}} with a stable identity (declared dir plus the entry's
+// relative path) instead of the ephemeral blob-extraction path.
+func (d *Dir) SetSourceBase(base string) { d.sourceBase = base }
 
 // SetOwner implements opt.Owner. It marks ownership as explicitly configured
 // so plan recording carries it to the destination (build()'s user.Current()
@@ -70,6 +82,7 @@ func (d *Dir) SetPrune() { d.prune = true }
 var (
 	_ opt.Sourced        = (*Dir)(nil)
 	_ opt.SourceGlobable = (*Dir)(nil)
+	_ opt.SourceBaseable = (*Dir)(nil)
 )
 
 func build(path string, opts ...opt.Option) (*Dir, error) {
@@ -445,10 +458,18 @@ func (d *Dir) planDraft() resource.PlanDraft {
 	case d.sourceGlob != "":
 		draft.Kind = "sync_dir"
 		draft.SourceGlob = d.sourceGlob
+		// The declared source directory (the glob pattern's directory)
+		// travels on the sync_dir op as source_dir: destination apply
+		// renders tree .tmpl files' {{.Param}} from it — stable across plan
+		// runs instead of the ephemeral blob path. Blob packaging stays
+		// driven by SourceGlob (packageDraft checks it before SourceDir);
+		// the flat glob blob restores as a plain tree whose entries sit at
+		// the root, so the per-file param is dir(glob) + "/" + basename.
+		draft.SourceDir = filepath.ToSlash(filepath.Dir(d.sourceGlob))
 		draft.FileMode = opt.ModeToWire(d.fileMode)
 	case d.source != "":
 		draft.Kind = "sync_dir"
-		draft.SourceDir = d.source
+		draft.SourceDir = filepath.ToSlash(d.source)
 		draft.FileMode = opt.ModeToWire(d.fileMode)
 	default:
 		draft.Kind = "dir"

@@ -1265,3 +1265,32 @@ func TestEnsureRejectsNegativeGroup(t *testing.T) {
 		t.Fatalf("expected the negative-gid error, got %v", err)
 	}
 }
+
+// TestWithParamOverridesTemplateParam pins the WithParam override (task 622):
+// a caller that knows a more stable identity than the mechanical source path
+// (dir's plan-path tree copies) can override the {{.Param}} value rendered
+// into template content; without it the derived default stays in place.
+func TestWithParamOverridesTemplateParam(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "app.conf.tmpl")
+	if err := os.WriteFile(sourcePath, []byte("param is {{.Param}}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	targetPath := filepath.Join(dir, "app.conf")
+
+	if err := Ensure(targetPath, WithSource(sourcePath), WithParam("assets/testfiles/app.conf.tmpl")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, err := os.ReadFile(targetPath)
+	if err != nil {
+		t.Fatalf("reading file: %v", err)
+	}
+	if want := "param is assets/testfiles/app.conf.tmpl\n"; string(got) != want {
+		t.Errorf("expected Param override to render %q, got %q", want, got)
+	}
+	if strings.Contains(string(got), dir) {
+		t.Errorf("rendered content must not embed the mechanical source path %q: %q", sourcePath, got)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/logger"
@@ -234,13 +235,31 @@ func noteSourceSymlinkDryRun(target, rawTarget string) error {
 // mode) and passing the mechanically-derived target path verbatim — file's
 // own resolve() strips a ".tmpl" suffix and computes .Param consistently, so
 // dir needs no special-casing of its own.
+//
+// The one special case is the template Param: a .tmpl entry inside a synced
+// tree renders {{.Param}} at apply time (destination env). By default file
+// derives Param from the mechanical source path — on the plan path the
+// ephemeral blob-extraction dir, which changes every run and would embed a
+// random path into the rendered content (flapping the checksum). When plan
+// apply passed the recipe's declared source dir (opt.WithSourceBase),
+// override Param with declared-dir + "/" + the entry's path relative to the
+// synced root — exactly what the direct (non-plan) path derives from its
+// real source tree. Non-template entries are left untouched.
 func copySourceFile(d *Dir, sourcePath, target string) error {
-	return file.Ensure(target,
+	opts := []opt.Option{
 		opt.WithSource(sourcePath),
 		opt.WithMode(d.fileMode),
 		opt.WithOwner(d.user),
 		opt.WithGroup(d.group),
-	)
+	}
+	if d.sourceBase != "" && d.source != "" && strings.HasSuffix(sourcePath, ".tmpl") {
+		rel, err := filepath.Rel(d.source, sourcePath)
+		if err != nil {
+			return fmt.Errorf("cannot derive template param for %s: %w", sourcePath, err)
+		}
+		opts = append(opts, opt.WithParam(filepath.Join(d.sourceBase, rel)))
+	}
+	return file.Ensure(target, opts...)
 }
 
 // pruneTree removes anything under d.path that has no counterpart in

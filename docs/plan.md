@@ -71,6 +71,14 @@ ops, err := RecordPlan("my-plan", planDir, "home_helix", "home_tmux")
   controller-side record error instead of a remote apply-time `unknown op`.
 - `InstallFile` content → `content_b64` when ≤ 512 KiB, else a blob sidecar.
 - `SyncDir` trees → `planDir/blobs/<name>/`.
+- The recipe's declared source directory travels on the `sync_dir` op
+  (`source_dir`, schema v6): destination apply renders `.tmpl` files inside
+  the tree with `{{.Param}}` = declared source dir + "/" + the entry's path
+  relative to the tree root (for the glob flavor: the declared glob pattern's
+  directory + "/" + basename). Without it — direct resource use aside, which
+  derives the same value from its real source tree — the Param would be the
+  ephemeral blob-extraction path, which changes every plan run and would flap
+  the rendered checksums (see [file-dir-link.md](file-dir-link.md)).
 - `SyncDir` packaging is one shared function (`plan.scanTree`) for both blob
   stores: directories (empty ones included) and symlinks (raw target string,
   dangling included — never read through) are preserved as themselves,
@@ -290,14 +298,22 @@ Design decisions:
   `exec.Opts.Timeout` field exists for opt-in callers; wiring it globally was
   deliberately deferred (it would change apply semantics).
 
-Plan schema **version 5** adds the `deps` field to resource ops: the sorted
+Plan schema **version 6** adds the `source_dir` field to `sync_dir` ops: the
+recipe's declared source directory (the glob pattern's directory for the glob
+flavor) so destination apply renders tree `.tmpl` files' `{{.Param}}` from the
+stable declared identity instead of the per-run blob path. The bump follows
+the deps-field rationale: an old binary that ignored the field would render
+`{{.Param}}` from the ephemeral blob-extraction path — user-visible, changing
+every run (the same intent-loss class) — so v5 binaries refuse v6 plans
+up-front at the header gate instead, while this binary keeps applying v1–5
+plans. Version 5 added the `deps` field to resource ops: the sorted
 resource IDs a resource depends on (its `DependsOn` targets, e.g.
 `File[/etc/foo]`). With deps present, remote apply order matches the
 repository's topological order; ops are never reordered across `when_*`
 boundaries. The bump follows the owner/group bump rationale: an old binary
 that understood a dep-free schema would silently DROP dep ordering — the same
 intent-loss bug class — so v4 binaries refuse v5 plans up-front at the header
-gate instead, while this binary keeps applying v1–4 plans. Version 4 added
+gate instead, while this binary keeps applying v1–5 plans. Version 4 added
 `owner` / `group` fields to the filesystem ops (`file`, `dir`, `sync_dir`,
 `ensure_dir`): ownership explicitly set via `WithOwner` / `WithGroup` is
 enforced on destination apply (only explicitly configured ownership is

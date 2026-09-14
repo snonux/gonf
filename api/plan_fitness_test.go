@@ -60,10 +60,11 @@ func kindFitnessTable() map[plan.Kind]kindFixture {
 			Mode: "0750",
 		}},
 		plan.KindSyncDir: {draft: &resource.PlanDraft{
-			Kind:     "sync_dir",
-			Path:     "/tmp/fitsync",
-			Blob:     "blobs/fit",
-			FileMode: "0640",
+			Kind:      "sync_dir",
+			Path:      "/tmp/fitsync",
+			Blob:      "blobs/fit",
+			FileMode:  "0640",
+			SourceDir: "assets/fit",
 		}},
 		plan.KindLink: {draft: &resource.PlanDraft{
 			Kind:    "link",
