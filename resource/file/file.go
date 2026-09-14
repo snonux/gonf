@@ -282,17 +282,19 @@ func (f *File) applyTemplateToContent(content []byte, param string) ([]byte, err
 // The owner is resolved via user.Lookup (name) and the group via a numeric
 // parse first and user.LookupGroup (name) second, so both WithGroup("1")
 // and WithGroup("daemon") work; an unresolvable group is an error.
+//
+// Chown runs BEFORE chmod deliberately: Linux clears the setuid/setgid bits
+// on every unprivileged chown of a non-directory (even when the owner/group
+// values are unchanged, which is the common case because build() defaults to
+// the current user), so a chmod followed by chown would silently strip the
+// special bits it had just set. Ending on the chmod means the requested
+// ModeSetuid/ModeSetgid/ModeSticky flags are the final state on disk.
 func (f *File) applyAttributesTo(path string) error {
 	fd, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return fmt.Errorf("failed to open %s for attribute changes: %w", path, err)
 	}
 	defer func() { _ = fd.Close() }()
-
-	if err := fd.Chmod(f.mode); err != nil {
-		return fmt.Errorf("failed to chmod %s to %v: %w", path, f.mode, err)
-	}
-	logger.Debug("set mode %v for %s", f.mode, path)
 
 	uid, gid := -1, -1
 
@@ -315,6 +317,14 @@ func (f *File) applyAttributesTo(path string) error {
 		return fmt.Errorf("failed to chown %s to %s:%s: %w", path, f.user, f.group, err)
 	}
 	logger.Debug("set owner %s:%s for %s", f.user, f.group, path)
+
+	// Chmod last: Go maps ModeSetuid/ModeSetgid/ModeSticky to the raw
+	// S_ISUID/S_ISGID/S_ISVTX syscall bits, so the full mode (including any
+	// special bits normalized into f.mode) lands as the final state.
+	if err := fd.Chmod(f.mode); err != nil {
+		return fmt.Errorf("failed to chmod %s to %v: %w", path, f.mode, err)
+	}
+	logger.Debug("set mode %v for %s", f.mode, path)
 
 	return nil
 }
@@ -401,7 +411,7 @@ func (f *File) planDraft() resource.PlanDraft {
 		Kind:       "file",
 		ID:         f.resource.ID(),
 		Path:       f.targetPath(),
-		Mode:       fmt.Sprintf("%#o", f.mode&os.ModePerm),
+		Mode:       opt.ModeToWire(f.mode),
 		Absent:     f.Absent,
 		AddLine:    f.addLine,
 		RemoveLine: f.removeLine,

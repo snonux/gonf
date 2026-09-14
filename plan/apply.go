@@ -739,10 +739,20 @@ func pathExists(path string) (bool, error) {
 	return false, err
 }
 
+// parseMode parses an octal plan-wire mode string such as "0640" or "04755"
+// into a Go FileMode. The special bits 0o4000/0o2000/0o1000 (setuid, setgid,
+// sticky) are converted to the os.ModeSetuid/ModeSetgid/ModeSticky flag bits,
+// because Go only honors them through those flags: a raw os.FileMode(0o4755)
+// would have its high bits truncated by os.Chmod and lower to 0755. Bits
+// above 0o7777 have no meaning in the plan wire format and are rejected
+// loudly instead of being silently dropped.
 func parseMode(s string) (os.FileMode, error) {
 	v, err := strconv.ParseUint(s, 8, 32)
 	if err != nil {
 		return 0, fmt.Errorf("invalid mode %q: %w", s, err)
 	}
-	return os.FileMode(v), nil
+	if v > 0o7777 {
+		return 0, fmt.Errorf("invalid mode %q: only setuid/setgid/sticky (0o4000/0o2000/0o1000) plus the nine permission bits (up to 0o7777) are supported", s)
+	}
+	return opt.ModeToFlags(os.FileMode(v)), nil
 }

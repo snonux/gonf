@@ -240,17 +240,19 @@ func ensureAbsent(d *Dir) error {
 // The owner is resolved via user.Lookup (name) and the group via a numeric
 // parse first and user.LookupGroup (name) second, so both WithGroup("1")
 // and WithGroup("daemon") work; an unresolvable group is an error.
+//
+// Chown runs BEFORE chmod deliberately, mirroring file's applyAttributesTo:
+// ending on the chmod means a requested setgid/setuid bit (Go
+// ModeSetgid/ModeSetuid flags inside mode) is the final state on disk and
+// cannot be cleared by the chown that follows. For directories Linux leaves
+// the group-inheritance setgid bit alone on chown, but the chmod-last order
+// keeps both packages correct regardless.
 func applyAttributesTo(path string, mode os.FileMode, usr, group string) error {
 	fd, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_DIRECTORY, 0)
 	if err != nil {
 		return fmt.Errorf("failed to open %s for attribute changes: %w", path, err)
 	}
 	defer func() { _ = fd.Close() }()
-
-	if err := fd.Chmod(mode); err != nil {
-		return fmt.Errorf("failed to chmod %s to %v: %w", path, mode, err)
-	}
-	logger.Debug("set mode %v for %s", mode, path)
 
 	uid, gid := -1, -1
 
@@ -274,6 +276,14 @@ func applyAttributesTo(path string, mode os.FileMode, usr, group string) error {
 		return fmt.Errorf("failed to chown %s to %s:%s: %w", path, usr, group, err)
 	}
 	logger.Debug("set owner %s:%s for %s", usr, group, path)
+
+	// Chmod last: Go maps ModeSetuid/ModeSetgid/ModeSticky to the raw
+	// S_ISUID/S_ISGID/S_ISVTX syscall bits, so the full mode (including any
+	// special bits normalized into mode) lands as the final state.
+	if err := fd.Chmod(mode); err != nil {
+		return fmt.Errorf("failed to chmod %s to %v: %w", path, mode, err)
+	}
+	logger.Debug("set mode %v for %s", mode, path)
 
 	return nil
 }
@@ -330,7 +340,7 @@ func (d *Dir) planDraft() resource.PlanDraft {
 	draft := resource.PlanDraft{
 		ID:     d.resource.ID(),
 		Path:   d.path,
-		Mode:   fmt.Sprintf("%#o", d.mode&os.ModePerm),
+		Mode:   opt.ModeToWire(d.mode),
 		Absent: d.Absent,
 		Prune:  d.prune,
 		Deps:   d.DependsOn.SortedIDs(),
@@ -352,11 +362,11 @@ func (d *Dir) planDraft() resource.PlanDraft {
 	case d.sourceGlob != "":
 		draft.Kind = "sync_dir"
 		draft.SourceGlob = d.sourceGlob
-		draft.FileMode = fmt.Sprintf("%#o", d.fileMode&os.ModePerm)
+		draft.FileMode = opt.ModeToWire(d.fileMode)
 	case d.source != "":
 		draft.Kind = "sync_dir"
 		draft.SourceDir = d.source
-		draft.FileMode = fmt.Sprintf("%#o", d.fileMode&os.ModePerm)
+		draft.FileMode = opt.ModeToWire(d.fileMode)
 	default:
 		draft.Kind = "dir"
 	}
@@ -380,7 +390,7 @@ func EnsurePlanDraft(path string, opts ...opt.Option) (resource.PlanDraft, error
 	draft := resource.PlanDraft{
 		Kind: "ensure_dir",
 		Path: d.path,
-		Mode: fmt.Sprintf("%#o", d.mode&os.ModePerm),
+		Mode: opt.ModeToWire(d.mode),
 		ID:   fmt.Sprintf("EnsureDir[%s]", d.path),
 		Deps: d.DependsOn.SortedIDs(),
 	}

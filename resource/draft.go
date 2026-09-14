@@ -33,10 +33,11 @@ type PlanDraft struct {
 	// Target is the existence-checked path for link_if_exists drafts.
 	Target string
 
-	// Mode is an octal permission string such as "0640" for Path.
+	// Mode is an octal permission string such as "0640" for Path; four digits
+	// (e.g. "04755") when setuid/setgid/sticky are set.
 	Mode string
 	// FileMode is an octal permission string for files copied from
-	// SourceDir or SourceGlob.
+	// SourceDir or SourceGlob (same format as Mode).
 	FileMode string
 	// Owner is the explicitly configured owning user (WithOwner) for the
 	// file/dir/sync_dir/ensure_dir kinds. Empty means not configured, so

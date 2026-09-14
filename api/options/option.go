@@ -111,10 +111,14 @@ func WithGroup(group string) Option {
 	}
 }
 
-// WithMode sets the resource's own file mode.
+// WithMode sets the resource's own file mode. Both raw octal literals with
+// special bits (0o4755-style setuid/setgid/sticky) and Go flag-style FileModes
+// (0o755|os.ModeSetuid) are accepted; normalizeMode converts both to the same
+// flag-form FileMode. Bits above 0o7777 are a programmer error and abort via
+// logger.Fatal.
 func WithMode(mode os.FileMode) Option {
 	return func(t any) {
-		requires(t, "WithMode", func(r Moded) { r.SetMode(mode) })
+		requires(t, "WithMode", func(r Moded) { r.SetMode(normalizeMode(mode)) })
 	}
 }
 
@@ -155,10 +159,11 @@ func WithoutLine(content string) Option {
 }
 
 // WithFileMode sets the mode applied to regular files copied from a source
-// tree (distinct from the resource's own mode).
+// tree (distinct from the resource's own mode). Accepts the same dual form as
+// WithMode: raw octal special bits or Go flag-style FileModes.
 func WithFileMode(mode os.FileMode) Option {
 	return func(t any) {
-		requires(t, "WithFileMode", func(r FileModed) { r.SetFileMode(mode) })
+		requires(t, "WithFileMode", func(r FileModed) { r.SetFileMode(normalizeMode(mode)) })
 	}
 }
 

@@ -136,9 +136,12 @@ type Op struct {
 	// Hardlink is the hardlink target when set instead of Symlink.
 	Hardlink string `json:"hardlink,omitempty"`
 
-	// Mode is an octal permission string such as "0640" or "0750" for path metadata.
+	// Mode is an octal permission string such as "0640", "0750", or — when
+	// setuid/setgid/sticky are set — four digits like "04755", for path
+	// metadata.
 	Mode string `json:"mode,omitempty"`
-	// FileMode is an octal permission string applied to files copied by KindSyncDir.
+	// FileMode is an octal permission string applied to files copied by KindSyncDir
+	// (same format as Mode, including the four-digit special-bit form).
 	FileMode string `json:"file_mode,omitempty"`
 	// Owner is the owning user (name or numeric uid) recorded for the
 	// filesystem ops KindFile, KindDir, KindSyncDir, and KindEnsureDir. It is

@@ -563,3 +563,116 @@ func TestE2ESyncDirOwnershipPlanApply(t *testing.T) {
 		t.Errorf("synced file gid = %d, want %d (group %s: dropped apply-side owner/group wiring?)", st.Gid, sgid, supplementary.Name)
 	}
 }
+
+// TestE2ESpecialBitsModePlanApply pins the setuid/setgid mode wiring end to
+// end: a raw 0o4755-style WithMode value and its Go flag-form equivalent
+// (0o750|os.ModeSetuid) must lower to four-digit plan wire modes ("04755",
+// "04750"), survive Encode → Decode → parseMode, and land as the setuid bit
+// on the applied file (setgid for the directory case, the legit special bit
+// for dirs). Unprivileged apply-side chown clears the special bits on
+// non-directories, so the assertion only passes when the apply-side chmod
+// runs after the chown — exactly the order applyAttributesTo must keep.
+func TestE2ESpecialBitsModePlanApply(t *testing.T) {
+	api.ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	setuidFile := filepath.Join(home, "helper.sh")
+	setuidFlagFile := filepath.Join(home, "flag-helper.sh")
+	setgidDir := filepath.Join(home, "groupdir")
+
+	api.Task("special_bits_e2e", "setuid/setgid e2e", func() {
+		api.File(setuidFile,
+			options.WithContent("#!/bin/sh\n"),
+			options.WithMode(0o4755),
+		)
+		api.File(setuidFlagFile,
+			options.WithContent("#!/bin/sh\n"),
+			options.WithMode(0o750|os.ModeSetuid),
+		)
+		api.EnsureDir(setgidDir,
+			options.WithMode(0o2755),
+		)
+	})
+
+	planDir := t.TempDir()
+	ops, err := api.RecordPlan("specialbits", planDir, "special_bits_e2e")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+
+	// The recorded ops must carry the four-digit wire modes.
+	wireModes := map[string]string{
+		setuidFile:     "04755",
+		setuidFlagFile: "04750",
+		setgidDir:      "02755",
+	}
+	saw := map[string]bool{}
+	for _, op := range ops {
+		want, ok := wireModes[op.Path]
+		if !ok {
+			continue
+		}
+		if op.Mode != want {
+			t.Fatalf("%s op for %s mode = %q, want %q (setuid/setgid masked away on the wire?)", op.Op, op.Path, op.Mode, want)
+		}
+		saw[op.Path] = true
+	}
+	for path := range wireModes {
+		if !saw[path] {
+			t.Fatalf("no recorded op with mode for %s", path)
+		}
+	}
+
+	raw, err := plan.EncodePlan(ops)
+	if err != nil {
+		t.Fatalf("EncodePlan: %v", err)
+	}
+	decoded, err := plan.DecodePlanBytes(raw)
+	if err != nil {
+		t.Fatalf("DecodePlanBytes: %v", err)
+	}
+	facts := plan.Facts{GOOS: runtime.GOOS, Profile: "test", Hostname: "localhost"}
+	if err := plan.Apply(decoded, facts, planDir); err != nil {
+		t.Fatalf("plan.Apply: %v", err)
+	}
+
+	fileInfo, err := os.Stat(setuidFile)
+	if err != nil {
+		t.Fatalf("applied file missing: %v", err)
+	}
+	if got := fileInfo.Mode().Perm(); got != 0o755 {
+		t.Errorf("applied file perm = %#o, want 0755", got)
+	}
+	if fileInfo.Mode()&os.ModeSetuid == 0 {
+		t.Errorf("applied file mode %v has no setuid bit (dropped by chmod/chown ordering?)", fileInfo.Mode())
+	}
+
+	dirInfo, err := os.Stat(setgidDir)
+	if err != nil {
+		t.Fatalf("applied dir missing: %v", err)
+	}
+	if got := dirInfo.Mode().Perm(); got != 0o755 {
+		t.Errorf("applied dir perm = %#o, want 0755", got)
+	}
+	if dirInfo.Mode()&os.ModeSetgid == 0 {
+		t.Errorf("applied dir mode %v has no setgid bit", dirInfo.Mode())
+	}
+
+	flagFileInfo, err := os.Stat(setuidFlagFile)
+	if err != nil {
+		t.Fatalf("flag-form applied file missing: %v", err)
+	}
+	if got := flagFileInfo.Mode().Perm(); got != 0o750 {
+		t.Errorf("flag-form applied file perm = %#o, want 0750", got)
+	}
+	if flagFileInfo.Mode()&os.ModeSetuid == 0 {
+		t.Errorf("flag-form applied file mode %v has no setuid bit", flagFileInfo.Mode())
+	}
+}

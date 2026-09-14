@@ -1,9 +1,10 @@
 package plan
 
 import (
-	"fmt"
 	"os"
 	"sync"
+
+	opt "github.com/snonux/gonf/api/options"
 )
 
 var (
@@ -76,7 +77,11 @@ func FinishRecord(id string) []Op {
 	return out
 }
 
-// FormatMode formats a permission mask as an octal string (e.g. "0640").
+// FormatMode formats a permission mask in the canonical plan-wire octal form
+// (e.g. "0640"; four digits when setuid/setgid/sticky are set, e.g. "04755").
+// It delegates to opt.ModeToWire, the single mode-serialization helper shared
+// with the resource PlanDraft sites, so both directions of the mode
+// representation agree.
 func FormatMode(mode os.FileMode) string {
-	return fmt.Sprintf("%#o", mode&os.ModePerm)
+	return opt.ModeToWire(mode)
 }
