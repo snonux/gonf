@@ -203,7 +203,7 @@ func Run(names ...string) error {
 	if err != nil {
 		return fmt.Errorf("Run: temp plan dir: %w", err)
 	}
-	defer os.RemoveAll(planDir)
+	defer func() { _ = os.RemoveAll(planDir) }()
 
 	ops, err := RecordPlan("local", planDir, names...)
 	if err != nil {

@@ -151,7 +151,7 @@ func cliPlan(args []string) int {
 			fmt.Fprintf(os.Stderr, "plan: temp dir: %v\n", err)
 			return 1
 		}
-		defer os.RemoveAll(dir)
+		defer func() { _ = os.RemoveAll(dir) }()
 		planDir = dir
 	}
 

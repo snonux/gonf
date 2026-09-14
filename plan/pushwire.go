@@ -140,7 +140,7 @@ func maybeGunzip(raw []byte) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("plan push: gzip: %w", err)
 		}
-		defer gr.Close()
+		defer func() { _ = gr.Close() }()
 		return io.ReadAll(gr)
 	}
 	return raw, nil
@@ -248,7 +248,7 @@ func readBlobsGzipTar(r *bufio.Reader, planDir string) error {
 		return fmt.Errorf("plan push: blobs gzip: %w", err)
 	}
 	gr.Multistream(false)
-	defer gr.Close()
+	defer func() { _ = gr.Close() }()
 	tr := tar.NewReader(gr)
 	for {
 		hdr, err := tr.Next()

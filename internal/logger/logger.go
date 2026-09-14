@@ -50,7 +50,7 @@ func logf(msgLevel Level, format string, args ...any) {
 	if msgLevel > cur {
 		return
 	}
-	std.Output(3, fmt.Sprintf(format, args...))
+	_ = std.Output(3, fmt.Sprintf(format, args...))
 }
 
 // Error logs a formatted message at LevelError.

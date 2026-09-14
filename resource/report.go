@@ -166,9 +166,9 @@ func PrintSummary(w io.Writer) {
 		}
 	}
 
-	fmt.Fprintf(w, "summary: %d ok, %d changed, %d skipped, %d would-change\n",
+	_, _ = fmt.Fprintf(w, "summary: %d ok, %d changed, %d skipped, %d would-change\n",
 		ok, changed, skipped, would)
 	for _, n := range interesting {
-		fmt.Fprintf(w, "  %s %s\n", n.st, n.id)
+		_, _ = fmt.Fprintf(w, "  %s %s\n", n.st, n.id)
 	}
 }

@@ -858,7 +858,7 @@ func TestApplyPrintsSummary(t *testing.T) {
 		done <- string(out)
 	}()
 	t.Cleanup(func() {
-		w.Close()
+		_ = w.Close()
 		os.Stderr = oldStderr
 	})
 
@@ -869,7 +869,7 @@ func TestApplyPrintsSummary(t *testing.T) {
 	if err := Apply(ops, Facts{GOOS: "linux"}, ""); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	w.Close()
+	_ = w.Close()
 
 	out := <-done
 	if !strings.Contains(out, "summary: 0 ok, 1 changed") {

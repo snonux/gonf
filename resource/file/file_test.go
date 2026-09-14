@@ -708,8 +708,8 @@ func TestAtomicWriteLongBaseName(t *testing.T) {
 		}
 		t.Fatalf("probing NAME_MAX: %v", err)
 	}
-	probe.Close()
-	os.Remove(target)
+	_ = probe.Close()
+	_ = os.Remove(target)
 
 	if err := atomicWrite(target, []byte("long name content"), 0o640); err != nil {
 		t.Fatalf("atomicWrite with 250-char base name: %v", err)
