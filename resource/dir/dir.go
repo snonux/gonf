@@ -299,7 +299,11 @@ func ownerIDs(usr, group string) (uid, gid int, err error) {
 		if err != nil {
 			return -1, -1, fmt.Errorf("failed to lookup user %s: %w", usr, err)
 		}
-		uid, _ = strconv.Atoi(u.Uid)
+		parsedUID, err := strconv.Atoi(u.Uid)
+		if err != nil {
+			return -1, -1, fmt.Errorf("failed to parse uid %s for user %s: %w", u.Uid, usr, err)
+		}
+		uid = parsedUID
 	}
 
 	if group != "" {
@@ -370,6 +374,11 @@ func applyAttributesViaPath(path string, mode os.FileMode, usr, group string, op
 func resolveGroupID(group string) (int, error) {
 	gidInt, err := strconv.Atoi(group)
 	if err == nil {
+		if gidInt < 0 {
+			// chown(uid, -1) would silently leave the group unchanged —
+			// surprising for an explicitly configured group.
+			return 0, fmt.Errorf("invalid gid %d for group %s", gidInt, group)
+		}
 		return gidInt, nil
 	}
 	g, lookupErr := user.LookupGroup(group)

@@ -1065,3 +1065,26 @@ func TestEnsureLineEditConflictsWithContent(t *testing.T) {
 		t.Errorf("error should name the conflicting options, got: %v", err)
 	}
 }
+
+// TestResolveGroupIDRejectsNegativeGid pins the loud rejection of a negative
+// gid (task 022): chown(uid, -1) would silently leave the group unchanged.
+func TestResolveGroupIDRejectsNegativeGid(t *testing.T) {
+	if _, err := resolveGroupID("-1"); err == nil || !strings.Contains(err.Error(), "invalid gid -1") {
+		t.Fatalf("expected an invalid-gid error, got %v", err)
+	}
+}
+
+// TestApplyAttributesToRejectsNegativeGroupGid runs the full attribute path
+// with WithGroup("-1") and asserts a loud error instead of a silent no-op.
+func TestEnsureRejectsNegativeGroup(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	target := filepath.Join(dir, "conf")
+	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Ensure(target, WithContent("x"), WithGroup("-1")); err == nil ||
+		!strings.Contains(err.Error(), "invalid gid -1") {
+		t.Fatalf("expected the negative-gid error, got %v", err)
+	}
+}

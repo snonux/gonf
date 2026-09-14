@@ -1513,3 +1513,23 @@ func TestSourceGlobCopiesExactlyCountingMatches(t *testing.T) {
 		t.Errorf("tofile.rb content = %q, want read-through %q", got, "file\n")
 	}
 }
+
+// TestResolveGroupIDRejectsNegativeGid pins the negative-gid refusal (task
+// 022), mirroring the file package's test.
+func TestResolveGroupIDRejectsNegativeGid(t *testing.T) {
+	if _, err := resolveGroupID("-1"); err == nil || !strings.Contains(err.Error(), "invalid gid -1") {
+		t.Fatalf("expected an invalid-gid error, got %v", err)
+	}
+}
+
+// TestEnsureRejectsNegativeGroup applies a directory with WithGroup("-1")
+// and asserts a loud error instead of a silent no-op chown.
+func TestEnsureRejectsNegativeGroup(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	target := filepath.Join(dir, "dir")
+	if err := Ensure(target, WithGroup("-1")); err == nil ||
+		!strings.Contains(err.Error(), "invalid gid -1") {
+		t.Fatalf("expected the negative-gid error, got %v", err)
+	}
+}
