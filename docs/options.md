@@ -11,7 +11,7 @@ failures return errors.
 
 | Option | Meaning |
 |--------|---------|
-| `DependsOn(res…)` | Topological apply order |
+| `DependsOn(res…)` | Topological apply order (in-process via `Apply`, and on the plan path — deps are carried on the wire since plan schema 5) |
 | `IsAbsent` | Ensure resource is gone (`NoFile` / `NoService` / …) |
 
 ## Filesystem

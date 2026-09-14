@@ -16,7 +16,10 @@ type Resource interface {
 
 // Apply applies every resource registered so far, in dependency order.
 // Task methods call the DSL constructors to register resources, and one
-// Apply call reconciles the system against all of them.
+// Apply call reconciles the system against all of them. This is the
+// in-process apply path; the plan-based flows (Run, push, fleet) reach the
+// same ordering through the dependency edges carried on the plan wire
+// (docs/plan.md, "Applying").
 func Apply() error {
 	return resource.Apply()
 }
