@@ -45,6 +45,35 @@ func currentOwnerForTest(t *testing.T) (uname, gidStr, gname string) {
 	return curr.Username, curr.Gid, g.Name
 }
 
+// supplementaryGroupForTest returns a group the current user belongs to whose
+// gid differs from the primary gid, so chown assertions cannot be satisfied
+// by MkdirAll/process defaults (the fresh dir already carries the primary
+// gid). Skips the test when the user has no supplementary group.
+func supplementaryGroupForTest(t *testing.T) (gidStr, gname string) {
+	t.Helper()
+	curr, err := user.Current()
+	if err != nil {
+		t.Skipf("cannot resolve current user: %v", err)
+	}
+	gids, err := curr.GroupIds()
+	if err != nil {
+		t.Skipf("cannot list group memberships: %v", err)
+	}
+	for _, gid := range gids {
+		if gid == curr.Gid {
+			continue
+		}
+		g, err := user.LookupGroupId(gid)
+		if err != nil {
+			continue
+		}
+		return gid, g.Name
+	}
+	t.Skip("current user has no supplementary group for a strong chown assertion")
+	return "", ""
+}
+
+// TestPresentDirectoryOwnerGroupApplied pins that WithOwner and WithGroup
 // TestPresentDirectoryOwnerGroupApplied pins that WithOwner and WithGroup
 // (group by name, exercising the os/user.LookupGroup fallback) are applied to
 // the managed directory. Chowning to the current user's own uid/gid works
@@ -622,5 +651,178 @@ func TestAbsentDoesNotMutateCallerOptionSlice(t *testing.T) {
 	}
 	if _, err := os.Stat(gone); !os.IsNotExist(err) {
 		t.Errorf("expected %s to be removed", gone)
+	}
+}
+
+// TestDirEnsureRefusesSymlinkAtTarget pins the dir resource's symlink rule:
+// a symlink at the final target path component is never followed. A planted
+// symlink-to-dir (or symlink-to-file) must fail loudly with the victim —
+// the symlink's destination outside the managed tree — left untouched and
+// the symlink itself surviving at the target path.
+func TestDirEnsureRefusesSymlinkAtTarget(t *testing.T) {
+	tests := map[string]struct {
+		makeVictim     func(t *testing.T, path string)
+		wantVictimPerm os.FileMode
+	}{
+		// The victim's mode deliberately differs from the requested mode
+		// (0o700 below): a chmod followed through the link would be visible,
+		// so the victim-perm assertion is not tautological (same pattern as
+		// the file package's b12 tests).
+		"symlink to dir": {
+			makeVictim: func(t *testing.T, path string) {
+				if err := os.Mkdir(path, 0o750); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantVictimPerm: 0o750,
+		},
+		"symlink to file": {
+			makeVictim: func(t *testing.T, path string) {
+				if err := os.WriteFile(path, []byte("victim data"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantVictimPerm: 0o600,
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			resource.ResetRepository()
+			base := t.TempDir()
+			victim := filepath.Join(base, "victim")
+			tt.makeVictim(t, victim)
+			target := filepath.Join(base, "managed")
+			if err := os.Symlink(victim, target); err != nil {
+				t.Fatal(err)
+			}
+
+			uname, _, gname := currentOwnerForTest(t)
+			err := Ensure(target, WithMode(0o700), WithOwner(uname), WithGroup(gname))
+			if err == nil {
+				t.Fatal("expected Ensure to refuse a symlink at the target path")
+			}
+			if !strings.Contains(err.Error(), target) {
+				t.Errorf("error should name the target path: %v", err)
+			}
+			// Pin the DEDICATED symlink refusal, not the generic non-dir error:
+			// the ensure-level Lstat check must fire, not just IsDir logic.
+			if !strings.Contains(err.Error(), "is a symlink") {
+				t.Errorf("error should be the explicit symlink refusal: %v", err)
+			}
+
+			// The victim outside the managed tree stays untouched.
+			info, err := os.Stat(victim)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Mode().Perm() != tt.wantVictimPerm {
+				t.Errorf("victim perms changed: got %v, want %v", info.Mode().Perm(), tt.wantVictimPerm)
+			}
+
+			// The planted symlink itself survives.
+			linkInfo, err := os.Lstat(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if linkInfo.Mode()&os.ModeSymlink == 0 {
+				t.Errorf("expected %s to still be a symlink", target)
+			}
+		})
+	}
+}
+
+// TestDirApplyAttributesToRefusesSymlinkAtTarget is the direct unit-level
+// pin, mirroring the file package's test of the same name: applyAttributesTo
+// must open the target with O_NOFOLLOW|O_DIRECTORY so the kernel refuses a
+// symlink planted at the path instead of following it.
+func TestDirApplyAttributesToRefusesSymlinkAtTarget(t *testing.T) {
+	base := t.TempDir()
+	victim := filepath.Join(base, "victim-dir")
+	if err := os.Mkdir(victim, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(base, "planted")
+	if err := os.Symlink(victim, target); err != nil {
+		t.Fatal(err)
+	}
+
+	// Empty user/group: uid/gid stay -1 (no-op chown), mirroring file's test.
+	err := applyAttributesTo(target, 0o750, "", "")
+	if err == nil {
+		t.Fatal("expected applyAttributesTo to refuse a symlink at the target")
+	}
+	if !strings.Contains(err.Error(), target) {
+		t.Errorf("error should mention the target path: %v", err)
+	}
+
+	info, err := os.Stat(victim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Errorf("victim perms changed: got %v, want 0o700", info.Mode().Perm())
+	}
+}
+
+// TestDirApplyAttributesToRefusesNonDirectory pins the O_DIRECTORY half of
+// the guard: a plain file at the target path is refused too (ENOTDIR), not
+// chmodded as if it were a directory.
+func TestDirApplyAttributesToRefusesNonDirectory(t *testing.T) {
+	base := t.TempDir()
+	target := filepath.Join(base, "plainfile")
+	if err := os.WriteFile(target, []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := applyAttributesTo(target, 0o750, "", "")
+	if err == nil {
+		t.Fatal("expected applyAttributesTo to refuse a non-directory at the target")
+	}
+	if !strings.Contains(err.Error(), target) {
+		t.Errorf("error should mention the target path: %v", err)
+	}
+
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("file perms changed: got %v, want 0o600", info.Mode().Perm())
+	}
+}
+
+// TestDirEnsureGroupByNameResolvesViaLookupGroup mirrors the file package's
+// TestEnsureGroupByNameResolvesViaLookupGroup for directories: both
+// WithGroup by name (exercising the os/user.LookupGroup fallback) and by
+// numeric gid are applied to the managed directory. Chowning to the current
+// user's own gid works without privileges.
+func TestDirEnsureGroupByNameResolvesViaLookupGroup(t *testing.T) {
+	resource.ResetRepository()
+	// Assert against a SUPPLEMENTARY group (gid differing from the primary
+	// gid): a freshly created dir already carries the primary gid, so a
+	// silently skipped chown would be indistinguishable with the primary
+	// group. A supplementary group requires an actual gid change to pass.
+	gidStr, gname := supplementaryGroupForTest(t)
+	wantGid, err := strconv.Atoi(gidStr)
+	if err != nil {
+		t.Fatalf("parse gid %s: %v", gidStr, err)
+	}
+
+	base := t.TempDir()
+	byName := filepath.Join(base, "byname")
+	if err := Ensure(byName, WithGroup(gname)); err != nil {
+		t.Fatalf("Ensure with group name %s: %v", gname, err)
+	}
+	if _, got := dirUIDGid(t, byName); got != wantGid {
+		t.Errorf("group name %s resolved to gid %d, want %d", gname, got, wantGid)
+	}
+
+	byNum := filepath.Join(base, "bynum")
+	if err := Ensure(byNum, WithGroup(gidStr)); err != nil {
+		t.Fatalf("Ensure with numeric gid %s: %v", gidStr, err)
+	}
+	if _, got := dirUIDGid(t, byNum); got != wantGid {
+		t.Errorf("numeric gid %s applied as %d, want %d", gidStr, got, wantGid)
 	}
 }

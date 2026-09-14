@@ -9,6 +9,7 @@ import (
 	"os/user"
 	"slices"
 	"strconv"
+	"syscall"
 
 	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/resource"
@@ -125,6 +126,14 @@ func (d *Dir) apply() error {
 // ensureDirectorySelf ensures d.path exists as a directory with the desired
 // mode and ownership. It is idempotent: an existing directory only has its
 // attributes re-enforced, and an existing non-directory is an error.
+//
+// Like the file resource, the dir resource never follows a symlink at its
+// target path. A directory cannot be replaced atomically the way a file can
+// (rename-over would lose the managed children), so a symlink at the final
+// path component is refused with a loud error instead of being replaced; a
+// legit symlinked directory must be managed by renaming it out of the way
+// in the configuration itself. The kernel-side backstop for the Lstat →
+// attribute window is applyAttributesTo's O_NOFOLLOW|O_DIRECTORY open.
 func ensureDirectorySelf(d *Dir) error {
 	id := fmt.Sprintf("Directory[%s]", d.path)
 	logger.Debug("processing directory: %s", d.path)
@@ -132,6 +141,9 @@ func ensureDirectorySelf(d *Dir) error {
 	info, err := os.Lstat(d.path)
 	switch {
 	case err == nil:
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%s is a symlink; dir resources never follow or manage a symlinked directory", d.path)
+		}
 		if !info.IsDir() {
 			return fmt.Errorf("%s exists and is not a directory", d.path)
 		}
@@ -147,6 +159,12 @@ func ensureDirectorySelf(d *Dir) error {
 			logger.Info("dry-run: would create directory %s", d.path)
 			return nil
 		}
+		// os.MkdirAll resolves intermediate path components through the
+		// kernel like any other path lookup, so an intermediate symlinked
+		// directory is the admin's configured path. The FINAL component is
+		// what applyAttributesTo's O_NOFOLLOW|O_DIRECTORY open protects: a
+		// symlink planted there between MkdirAll and the open is refused
+		// (ELOOP) instead of followed.
 		logger.Debug("creating directory %s with mode %v", d.path, d.mode)
 		if err := os.MkdirAll(d.path, d.mode); err != nil {
 			return fmt.Errorf("failed to create directory %s: %w", d.path, err)
@@ -203,11 +221,30 @@ func ensureAbsent(d *Dir) error {
 // shared with the file package so the two packages' attribute-application
 // behavior can evolve independently.
 //
+// It opens the path with O_NOFOLLOW|O_DIRECTORY and applies the changes to
+// the opened file descriptor, so the kernel refuses — ELOOP for a symlink,
+// ENOTDIR for any other non-directory — to open a symlink planted at path
+// instead of following it: a planted symlink is never followed, and a swap
+// into the window between the caller's Lstat/MkdirAll check and this open
+// cannot escalate either (the swapped-in entry is simply refused). A symlink
+// at the target path is never replaced by the dir resource (a rename-over
+// would lose the managed children); it is refused loudly by the caller's
+// Lstat check and by this open.
+//
+// O_NONBLOCK is not needed here: unlike FIFOs, directories cannot block
+// indefinitely on open.
+//
 // The owner is resolved via user.Lookup (name) and the group via a numeric
 // parse first and user.LookupGroup (name) second, so both WithGroup("1")
 // and WithGroup("daemon") work; an unresolvable group is an error.
 func applyAttributesTo(path string, mode os.FileMode, usr, group string) error {
-	if err := os.Chmod(path, mode); err != nil {
+	fd, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_DIRECTORY, 0)
+	if err != nil {
+		return fmt.Errorf("failed to open %s for attribute changes: %w", path, err)
+	}
+	defer func() { _ = fd.Close() }()
+
+	if err := fd.Chmod(mode); err != nil {
 		return fmt.Errorf("failed to chmod %s to %v: %w", path, mode, err)
 	}
 	logger.Debug("set mode %v for %s", mode, path)
@@ -230,7 +267,7 @@ func applyAttributesTo(path string, mode os.FileMode, usr, group string) error {
 		}
 	}
 
-	if err := os.Chown(path, uid, gid); err != nil {
+	if err := fd.Chown(uid, gid); err != nil {
 		return fmt.Errorf("failed to chown %s to %s:%s: %w", path, usr, group, err)
 	}
 	logger.Debug("set owner %s:%s for %s", usr, group, path)

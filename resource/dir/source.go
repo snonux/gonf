@@ -48,6 +48,11 @@ func copySourceTree(d *Dir) error {
 }
 
 func copySourceDir(d *Dir, target string) error {
+	// MkdirAll resolves intermediate path components through the kernel like
+	// any other path lookup (an intermediate symlinked directory is the
+	// admin's configured path); the FINAL component is what
+	// applyAttributesTo's O_NOFOLLOW|O_DIRECTORY open protects, so a
+	// symlink planted at target is refused (ELOOP) instead of followed.
 	if err := os.MkdirAll(target, d.mode); err != nil {
 		return fmt.Errorf("failed to create directory %s: %w", target, err)
 	}
