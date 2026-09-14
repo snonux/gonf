@@ -258,7 +258,7 @@ func ensureWithTimeout(t *testing.T, target string, opts ...Option) error {
 	case err := <-done:
 		return err
 	case <-time.After(5 * time.Second):
-		t.Fatal("Ensure hung on the planted FIFO at the target (read-open without O_NONBLOCK)")
+		t.Fatal("Ensure hung on the planted FIFO (blocking open or read)")
 		return nil // unreachable: t.Fatal ends the test goroutine
 	}
 }
@@ -329,6 +329,183 @@ func TestEnsureDryRunWithFifoAtTargetPreviewsWouldChange(t *testing.T) {
 	}
 	if info.Mode()&os.ModeNamedPipe == 0 {
 		t.Errorf("dry-run must not touch the FIFO; target is now %v", info.Mode())
+	}
+}
+
+// TestWithLineEditOnFifoTargetFailsLoudly pins the line-edit half of the
+// FIFO hang fix: resolveLine used to os.ReadFile the target BEFORE
+// ensureFile could classify it, so a planted FIFO at the target blocked a
+// WithLine/WithoutLine apply indefinitely (until a writer appears) — the
+// same DoS class the content path's Lstat-first fix closed. A line edit
+// manages regular files and has no "replace with content" semantics, so a
+// non-regular entry at the target is a loud user error naming the path and
+// the entry type — and the planted FIFO must still be there afterwards.
+func TestWithLineEditOnFifoTargetFailsLoudly(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	target := filepath.Join(dir, "tmux.conf")
+	if err := syscall.Mkfifo(target, 0o600); err != nil {
+		t.Skipf("cannot create a FIFO on this filesystem: %v", err)
+	}
+
+	err := ensureWithTimeout(t, target, WithLine("source-file rocky.conf"))
+	if err == nil {
+		t.Fatal("expected a loud error for a line edit on a FIFO target")
+	}
+	if !strings.Contains(err.Error(), target) || !strings.Contains(err.Error(), "FIFO") {
+		t.Errorf("error should name the path and the FIFO, got: %v", err)
+	}
+	info, err := os.Lstat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeNamedPipe == 0 {
+		t.Errorf("the planted FIFO must be untouched; target is now %v", info.Mode())
+	}
+}
+
+// TestWithLineEditOnFifoTargetDryRunFailsLoudly pins the dry-run behavior:
+// resolveLine runs before ensureFile's dry-run gating, so the line-edit
+// policy error surfaces in a dry-run too — a loud preview failure instead
+// of the old hang (the former plain os.ReadFile blocked identically in a
+// dry-run). The dry-run must mutate nothing: the FIFO still sits at the
+// target afterwards.
+func TestWithLineEditOnFifoTargetDryRunFailsLoudly(t *testing.T) {
+	resource.ResetRepository()
+	resource.SetDryRun(true)
+	t.Cleanup(func() { resource.SetDryRun(false) })
+	dir := t.TempDir()
+	target := filepath.Join(dir, "tmux.conf")
+	if err := syscall.Mkfifo(target, 0o600); err != nil {
+		t.Skipf("cannot create a FIFO on this filesystem: %v", err)
+	}
+
+	err := ensureWithTimeout(t, target, WithLine("source-file rocky.conf"))
+	if err == nil {
+		t.Fatal("expected the dry-run preview to fail loudly on a FIFO target")
+	}
+	if !strings.Contains(err.Error(), target) || !strings.Contains(err.Error(), "FIFO") {
+		t.Errorf("error should name the path and the FIFO, got: %v", err)
+	}
+	info, err := os.Lstat(target)
+	if err != nil {
+		t.Fatalf("the FIFO must still exist after the dry-run: %v", err)
+	}
+	if info.Mode()&os.ModeNamedPipe == 0 {
+		t.Errorf("dry-run must not touch the FIFO; target is now %v", info.Mode())
+	}
+}
+
+// TestWithLineEditOnSymlinkToFifoFailsLoudly covers the backstop behind the
+// Lstat policy's symlink exemption: the non-blocking open follows the
+// symlink onto the FIFO without hanging, and the fstat of the OPENED entry
+// refuses the non-regular target before a single byte is read (a plain
+// EAGAIN check alone would misread a writer-less FIFO as an empty file).
+func TestWithLineEditOnSymlinkToFifoFailsLoudly(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skipf("cannot create a FIFO on this filesystem: %v", err)
+	}
+	target := filepath.Join(dir, "tmux.conf")
+	if err := os.Symlink(fifo, target); err != nil {
+		t.Fatal(err)
+	}
+
+	err := ensureWithTimeout(t, target, WithLine("source-file rocky.conf"))
+	if err == nil {
+		t.Fatal("expected a loud error for a line edit following a symlink onto a FIFO")
+	}
+	if !strings.Contains(err.Error(), target) || !strings.Contains(err.Error(), "FIFO") {
+		t.Errorf("error should name the path and the FIFO, got: %v", err)
+	}
+	info, err := os.Lstat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the refused read must not replace the symlink; target is now %v", info.Mode())
+	}
+}
+
+// TestWithLineEditFollowsSymlinkTargetThenReplacesIt pins the PRESERVED
+// symlink semantics of line edits: the read follows a symlink at the target
+// exactly like the former os.ReadFile did (regular targets read
+// identically through the O_NONBLOCK open), the line edit applies to the
+// TARGET's content, and ensureFile then replaces the symlink with the
+// regular managed file, matching its replace rule. The victim behind the
+// link keeps its original content.
+func TestWithLineEditFollowsSymlinkTargetThenReplacesIt(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "data.conf")
+	if err := os.WriteFile(victim, []byte("keep\nold-line\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "tmux.conf")
+	if err := os.Symlink(victim, target); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Ensure(target, WithoutLine("old-line"), WithLine("new-line")); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+
+	info, err := os.Lstat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		t.Errorf("target should have been replaced by a regular file, got %v", info.Mode())
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "keep\nnew-line\n" {
+		t.Errorf("line edit must apply to the symlink target's content, got %q", got)
+	}
+	kept, err := os.ReadFile(victim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(kept) != "keep\nold-line\n" {
+		t.Errorf("victim content must stay untouched, got %q", kept)
+	}
+}
+
+// TestWithSourceFifoFailsLoudly pins the source-path half of the FIFO fix
+// (resolveFromSourceOrContent): the source is a recipe-declared path read
+// with the Lstat/non-blocking-open guard, so a planted FIFO at the source
+// must produce a loud error naming the path instead of hanging the apply.
+// The same read guards dir's source-tree copies, which delegate every file
+// to file.Ensure with WithSource.
+func TestWithSourceFifoFailsLoudly(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "source.fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skipf("cannot create a FIFO on this filesystem: %v", err)
+	}
+	target := filepath.Join(dir, "target.conf")
+
+	err := ensureWithTimeout(t, target, WithSource(fifo))
+	if err == nil {
+		t.Fatal("expected a loud error for a FIFO at the source path")
+	}
+	if !strings.Contains(err.Error(), fifo) || !strings.Contains(err.Error(), "FIFO") {
+		t.Errorf("error should name the source path and the FIFO, got: %v", err)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Errorf("target must not be created from a FIFO source: %v", err)
+	}
+	info, err := os.Lstat(fifo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeNamedPipe == 0 {
+		t.Errorf("the planted FIFO must be untouched; source is now %v", info.Mode())
 	}
 }
 

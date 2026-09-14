@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 const pushMagic = "GONF-PUSH/1"
@@ -315,7 +316,13 @@ func extractTarHeader(planDir string, hdr *tar.Header, r io.Reader) error {
 		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 			return err
 		}
-		f, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+		// O_NONBLOCK turns a planted FIFO at the target (a leftover in a
+		// reused sticky -apply-dir planDir, for instance) into a loud error:
+		// a plain O_WRONLY open would block until a reader appears, while a
+		// non-blocking open fails immediately (ENXIO with no reader) or lets
+		// the write fail with EPIPE instead of hanging the extraction. On
+		// regular files O_NONBLOCK has no effect.
+		f, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY|syscall.O_NONBLOCK, 0o600)
 		if err != nil {
 			return err
 		}
