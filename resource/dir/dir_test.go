@@ -2,10 +2,12 @@ package dir
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/user"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -577,6 +579,12 @@ func TestSourceTreePruneDryRunKeepsStaleFiles(t *testing.T) {
 	if err := os.WriteFile(stale, []byte(staleContent), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// A stale directory too, so the dry-run's note id for stale DIRECTORIES
+	// (deliberately File[<path>], same as the real run) stays pinned.
+	staleDir := filepath.Join(dst, "staleDir")
+	if err := os.Mkdir(staleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	resource.SetDryRun(true)
 	t.Cleanup(func() { resource.SetDryRun(false) })
@@ -605,6 +613,11 @@ func TestSourceTreePruneDryRunKeepsStaleFiles(t *testing.T) {
 	resource.PrintSummary(&buf)
 	if !strings.Contains(buf.String(), "would-change File["+stale+"]") {
 		t.Errorf("expected a would-change note for %s, summary:\n%s", stale, buf.String())
+	}
+	// Pin the dry-run id for stale directories: it must stay File[<path>]
+	// (not Directory[<path>]) so it matches the real-run note id.
+	if !strings.Contains(buf.String(), "would-change File["+staleDir+"]") {
+		t.Errorf("expected a would-change note with the File[...] id for the stale directory %s, summary:\n%s", staleDir, buf.String())
 	}
 }
 
@@ -767,6 +780,322 @@ func TestSourceDryRunPruneWithNonexistentDestIsClean(t *testing.T) {
 		}
 		if _, err := os.Lstat(dst); !os.IsNotExist(err) {
 			t.Errorf("dry-run created destination %s: %v", dst, err)
+		}
+	})
+}
+
+// noteLinesOf turns PrintSummary's output into a comparable form: the
+// summary header becomes a single "counts ..." pseudo-line (would-change
+// folded into changed) and each per-note line keeps its "status id" shape
+// with would-change folded to changed, sorted. dryPath is rewritten to
+// realPath (no-op when equal), so the same scenario run in both modes
+// yields identical output despite the two runs' differing destination paths
+// and status vocabulary. The folded counts make the comparison sensitive to
+// ok notes too, which PrintSummary never lists as lines.
+func noteLinesOf(t *testing.T, summary, dryPath, realPath string) []string {
+	t.Helper()
+	var lines []string
+	for _, line := range strings.Split(summary, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "summary:") {
+			var ok, changed, skipped, would int
+			if _, err := fmt.Sscanf(line, "summary: %d ok, %d changed, %d skipped, %d would-change", &ok, &changed, &skipped, &would); err != nil {
+				t.Fatalf("unparsable summary header %q: %v", line, err)
+			}
+			lines = append(lines, fmt.Sprintf("counts ok=%d changed=%d skipped=%d", ok, changed+would, skipped))
+			continue
+		}
+		if dryPath != realPath {
+			line = strings.ReplaceAll(line, dryPath, realPath)
+		}
+		line = strings.ReplaceAll(line, "would-change ", "changed ")
+		lines = append(lines, line)
+	}
+	sort.Strings(lines)
+	return lines
+}
+
+// summaryOf applies and returns the raw PrintSummary output.
+func summaryOf(t *testing.T, apply func() error) string {
+	t.Helper()
+	if err := apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+	var buf bytes.Buffer
+	resource.PrintSummary(&buf)
+	return buf.String()
+}
+
+// TestSourceTreePruneNotesChanged pins the real-run visibility of tree
+// prunes (u12): every removed path — a stale FILE and a stale DIRECTORY
+// alike — must be noted as File[<path>] StatusChanged after its removal
+// (mirroring pruneGlob), so the summary counts them and so that
+// AnyChanged("Directory[<dst>]") — the daemon-reload watch id — gates on
+// tree prunes through the File[<dirpath>/...] note convention. The stale
+// directory deliberately keeps the File[<path>] id the dry-run uses for the
+// same path, keeping the dry-run and real-run note sets identical.
+func TestSourceTreePruneNotesChanged(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+
+	if err := os.Mkdir(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "keep.txt"), []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dst, "keep.txt"), []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	staleFile := filepath.Join(dst, "stale.txt")
+	if err := os.WriteFile(staleFile, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	staleDir := filepath.Join(dst, "staleDir")
+	if err := os.Mkdir(staleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staleDir, "inner.txt"), []byte("inner"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	Present(dst, WithSource(src), WithPrune)
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+
+	// Both pruned paths are really gone (RemoveAll covers the stale
+	// directory's contents).
+	if _, err := os.Lstat(staleFile); !os.IsNotExist(err) {
+		t.Errorf("expected %s to be pruned", staleFile)
+	}
+	if _, err := os.Lstat(staleDir); !os.IsNotExist(err) {
+		t.Errorf("expected %s to be pruned recursively", staleDir)
+	}
+
+	var buf bytes.Buffer
+	resource.PrintSummary(&buf)
+	summary := buf.String()
+	for _, want := range []string{
+		"changed File[" + staleFile + "]",
+		"changed File[" + staleDir + "]",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Errorf("expected %q in summary, summary:\n%s", want, summary)
+		}
+	}
+	kept := filepath.Join(dst, "keep.txt")
+	if strings.Contains(summary, "changed File["+kept+"]") {
+		t.Errorf("kept file %s must not be noted changed, summary:\n%s", kept, summary)
+	}
+
+	// Daemon-reload gating: the Directory[<dst>] watch id must see the tree
+	// prunes via the File[<dst>/...] note convention.
+	if !resource.AnyChanged("Directory[" + dst + "]") {
+		t.Errorf("AnyChanged(Directory[%s]) must be true after tree prunes, summary:\n%s", dst, summary)
+	}
+}
+
+// TestSourceTreeSubdirNotesReal pins copySourceDir's note flow in the real
+// run (mirroring ensureDirectorySelf's root-dir flow): a fresh destination
+// notes Directory[<dst/sub>] changed alongside the copied file notes, and a
+// second run notes Directory[<dst/sub>] ok — attributes are only
+// re-enforced (converged) — with no changed notes left for the subdirs.
+func TestSourceTreeSubdirNotesReal(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+	sub := filepath.Join(dst, "sub")
+
+	if err := os.Mkdir(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(src, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "f1"), []byte("one"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "sub", "f2"), []byte("two"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("Fresh", func(t *testing.T) {
+		resource.ResetRepository()
+		summary := summaryOf(t, func() error {
+			Present(dst, WithSource(src))
+			return resource.Apply()
+		})
+		for _, want := range []string{
+			"changed Directory[" + dst + "]",
+			"changed Directory[" + sub + "]",
+			"changed File[" + filepath.Join(dst, "f1") + "]",
+			"changed File[" + filepath.Join(sub, "f2") + "]",
+		} {
+			if !strings.Contains(summary, want) {
+				t.Errorf("expected %q in summary, summary:\n%s", want, summary)
+			}
+		}
+	})
+
+	t.Run("Idempotent", func(t *testing.T) {
+		resource.ResetRepository()
+		summary := summaryOf(t, func() error {
+			Present(dst, WithSource(src))
+			return resource.Apply()
+		})
+		// PrintSummary lists only non-ok notes, so the Directory[<sub>] ok
+		// note (and the files') is pinned via the count: root dir, f1, sub
+		// and f2 are exactly 4 ok — without the subdir ok note only 3 would
+		// be counted. The absence assertions below pin no-changed for the
+		// subdirs.
+		const wantHeader = "summary: 4 ok, 0 changed, 0 skipped, 0 would-change"
+		if !strings.Contains(summary, wantHeader) {
+			t.Errorf("expected %q in summary, summary:\n%s", wantHeader, summary)
+		}
+		for _, unwanted := range []string{
+			"changed Directory[" + sub + "]",
+			"changed File[" + filepath.Join(sub, "f2") + "]",
+		} {
+			if strings.Contains(summary, unwanted) {
+				t.Errorf("second run must not contain %q, summary:\n%s", unwanted, summary)
+			}
+		}
+	})
+}
+
+// TestSourceTreeDryRunParity pins that dry-run and real-run note sets are
+// identical for source-tree flows: for the same scenario the dry-run's note
+// set must equal the real run's once "would-change" statuses are folded to
+// "changed" and the dry destination path is rewritten to the real one (note
+// ids carry full paths, which differ between the two runs otherwise).
+// Fresh covers creation (would-change ↔ changed, including the new
+// copySourceDir subdir note); Existing covers converged destinations
+// (ok ↔ ok, including the new existing-dir ok note) plus prune
+// (would-change ↔ changed).
+func TestSourceTreeDryRunParity(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	if err := os.Mkdir(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(src, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "f1"), []byte("one"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "sub", "f2"), []byte("two"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	runReal := func(t *testing.T, dst string, opts ...Option) string {
+		t.Helper()
+		resource.ResetRepository()
+		Present(dst, append([]Option{WithSource(src)}, opts...)...)
+		var applyErr error
+		summary := summaryOf(t, func() error {
+			applyErr = resource.Apply()
+			return applyErr
+		})
+		if applyErr != nil {
+			t.Fatalf("real Apply failed: %v", applyErr)
+		}
+		return summary
+	}
+
+	runDry := func(t *testing.T, dst string, opts ...Option) string {
+		t.Helper()
+		resource.ResetRepository()
+		resource.SetDryRun(true)
+		t.Cleanup(func() { resource.SetDryRun(false) })
+		Present(dst, append([]Option{WithSource(src)}, opts...)...)
+		var applyErr error
+		summary := summaryOf(t, func() error {
+			applyErr = resource.Apply()
+			return applyErr
+		})
+		resource.SetDryRun(false)
+		if applyErr != nil {
+			t.Fatalf("dry-run Apply failed: %v", applyErr)
+		}
+		return summary
+	}
+
+	assertParity := func(t *testing.T, realSummary, drySummary, realDst, dryDst string) {
+		t.Helper()
+		want := noteLinesOf(t, realSummary, realDst, realDst)
+		got := noteLinesOf(t, drySummary, dryDst, realDst)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("dry-run note set differs from real run:\nreal: %v\ndry:  %v", want, got)
+		}
+	}
+
+	t.Run("Fresh", func(t *testing.T) {
+		realDst := filepath.Join(dir, "parity-real-fresh")
+		dryDst := filepath.Join(dir, "parity-dry-fresh")
+		realSummary := runReal(t, realDst)
+		drySummary := runDry(t, dryDst)
+		assertParity(t, realSummary, drySummary, realDst, dryDst)
+
+		// Spot-check the ids the parity comparison hinges on: the subdir
+		// creation is noted in both modes (would-change vs changed).
+		for _, want := range []string{
+			"changed Directory[" + filepath.Join(realDst, "sub") + "]",
+			"changed File[" + filepath.Join(realDst, "sub", "f2") + "]",
+		} {
+			if !strings.Contains(realSummary, want) {
+				t.Errorf("expected %q in real summary, summary:\n%s", want, realSummary)
+			}
+		}
+	})
+
+	t.Run("Existing", func(t *testing.T) {
+		realDst := filepath.Join(dir, "parity-real-existing")
+		dryDst := filepath.Join(dir, "parity-dry-existing")
+
+		// Build the real destination with an unobserved first apply, then
+		// add a stale file so the observed run has something to prune.
+		runReal(t, realDst)
+		if err := os.WriteFile(filepath.Join(realDst, "stale.txt"), []byte("stale"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		realSummary := runReal(t, realDst, WithPrune)
+
+		// The dry run must not create anything, so its destination is
+		// populated by hand to the same starting state (same file contents,
+		// same stale file).
+		if err := os.MkdirAll(filepath.Join(dryDst, "sub"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dryDst, "f1"), []byte("one"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dryDst, "sub", "f2"), []byte("two"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dryDst, "stale.txt"), []byte("stale"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		drySummary := runDry(t, dryDst, WithPrune)
+
+		assertParity(t, realSummary, drySummary, realDst, dryDst)
+
+		// Spot-check the new converged subdir note in the real run:
+		// PrintSummary lists only non-ok notes, so the ok note is proven via
+		// the count — root dir, f1, sub and f2 are 4 ok, the pruned stale
+		// file is the single changed note.
+		const wantHeader = "summary: 4 ok, 1 changed, 0 skipped, 0 would-change"
+		if !strings.Contains(realSummary, wantHeader) {
+			t.Errorf("expected %q in real summary, summary:\n%s", wantHeader, realSummary)
 		}
 	})
 }

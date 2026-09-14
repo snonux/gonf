@@ -48,15 +48,19 @@ func copySourceTree(d *Dir) error {
 }
 
 func copySourceDir(d *Dir, target string) error {
+	id := fmt.Sprintf("Directory[%s]", target)
+
 	if resource.DryRun() {
 		// Dry-run must not mutate the filesystem: skip both the MkdirAll and
 		// the attribute application (which would chmod/chown the destination
 		// tree for real). Mirror ensureDirectorySelf's structure so a real
 		// run's loud failure is previewed too: symlink and non-directory
-		// targets are refused with the same dedicated messages, a missing
-		// target is noted as would-change, and an already-existing directory
-		// stays silent (the real path only re-enforces attributes and notes
-		// nothing for it either).
+		// targets are refused with the same dedicated messages
+		// ensureDirectorySelf uses for the root, a missing target is noted as
+		// would-change, and an already-existing directory is noted as ok —
+		// the same status the real path notes for it, since the real path
+		// only re-enforces its attributes (converged). Dry-run and real-run
+		// note sets for source-tree subdirectories are identical.
 		info, err := os.Lstat(target)
 		switch {
 		case err == nil:
@@ -66,13 +70,34 @@ func copySourceDir(d *Dir, target string) error {
 			if !info.IsDir() {
 				return fmt.Errorf("%s exists and is not a directory", target)
 			}
+			resource.Note(id, resource.StatusOK)
 		case os.IsNotExist(err):
-			resource.Note(fmt.Sprintf("Directory[%s]", target), resource.StatusWouldChange)
+			resource.Note(id, resource.StatusWouldChange)
 			logger.Info("dry-run: would create directory %s", target)
 		default:
 			return fmt.Errorf("failed to stat %s: %w", target, err)
 		}
 		return nil
+	}
+
+	// Lstat before MkdirAll so the notes below can tell creating the
+	// directory from re-enforcing an existing one, mirroring
+	// ensureDirectorySelf's note flow for the root. No new refusals live
+	// here: a non-directory is refused by MkdirAll and a planted symlink by
+	// applyAttributesTo's O_NOFOLLOW|O_DIRECTORY open, exactly as before
+	// this note bookkeeping existed; nothing is noted when either fails.
+	_, statErr := os.Lstat(target)
+	existed := statErr == nil
+	switch {
+	case existed:
+		// Directory already exists: MkdirAll below is a no-op for it and
+		// applyAttributesTo re-enforces its attributes; it is noted as ok
+		// after both succeed.
+	case os.IsNotExist(statErr):
+		// Missing: MkdirAll creates it and it is noted as changed after
+		// applyAttributesTo succeeded.
+	default:
+		return fmt.Errorf("failed to stat %s: %w", target, statErr)
 	}
 
 	// MkdirAll resolves intermediate path components through the kernel like
@@ -83,7 +108,19 @@ func copySourceDir(d *Dir, target string) error {
 	if err := os.MkdirAll(target, d.mode); err != nil {
 		return fmt.Errorf("failed to create directory %s: %w", target, err)
 	}
-	return applyAttributesTo(target, d.mode, d.user, d.group)
+	if err := applyAttributesTo(target, d.mode, d.user, d.group); err != nil {
+		return err
+	}
+	if existed {
+		// Attributes were re-enforced (converged): report ok like
+		// ensureDirectorySelf's existing-directory case, which accepts the
+		// same without an attribute diff for the root.
+		resource.Note(id, resource.StatusOK)
+		return nil
+	}
+	resource.Note(id, resource.StatusChanged)
+	logger.Info("created directory %s", target)
+	return nil
 }
 
 // copySourceSymlink recreates the symlink found at sourcePath as a symlink
@@ -121,7 +158,11 @@ func copySourceFile(d *Dir, sourcePath, target string) error {
 // otherwise every templated file would be pruned immediately after being
 // copied. In dry-run mode nothing is removed; every would-be-pruned path is
 // only noted as StatusWouldChange (the walk still descends into stale
-// directories so their contents are previewed too). A fresh dry-run never
+// directories so their contents are previewed too). The real run notes each
+// removed path as File[<path>] StatusChanged after its successful removal
+// (mirroring pruneGlob), so tree prunes show up in the summary and gate
+// daemon-reload via AnyChanged, whose Directory[<root>] matching works
+// through the File[<root>/...] note convention. A fresh dry-run never
 // created the destination in the first place (ensureDirectorySelf and
 // copySourceDir skip their MkdirAll under dry-run), so a missing destination
 // means there is nothing to prune and the walk is skipped instead of
@@ -163,6 +204,16 @@ func pruneTree(d *Dir) error {
 		if err := os.RemoveAll(path); err != nil {
 			return fmt.Errorf("failed to prune %s: %w", path, err)
 		}
+		// Mirror pruneGlob's post-removal note (same id scheme, same log
+		// wording) so real-run tree prunes are visible in the summary and
+		// gate daemon-reload via AnyChanged. Stale directories deliberately
+		// keep the File[<path>] id instead of Directory[...]: for the top
+		// directory it is the same id the dry-run notes for that path (the
+		// dry-run additionally previews inner entries, which RemoveAll
+		// removes in one operation); AnyChanged's Directory[<root>]
+		// matching works through the File[<root>/...] convention regardless.
+		resource.Note(fmt.Sprintf("File[%s]", path), resource.StatusChanged)
+		logger.Info("pruned %s", path)
 		if entry.IsDir() {
 			return filepath.SkipDir // already removed
 		}
