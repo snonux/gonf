@@ -9,19 +9,36 @@ import (
 
 func applyDNF(p *Package) error {
 	id := fmt.Sprintf("Package[%s]", p.name)
-	var args []string
+	installed, err := dnfInstalled(p.name)
+	if err != nil {
+		return err
+	}
 
-	if p.Absent {
+	var args []string
+	switch {
+	case p.Absent:
+		if !installed {
+			resource.NoteResult(id, false)
+			return nil
+		}
 		args = []string{"remove", "-y", p.name}
-	} else if p.latest {
+	case p.latest:
+		// Mirror the BSD backends: "latest" always acts, because probing
+		// whether a package is up to date would need a slow, parse-heavy
+		// dnf check-update. dnf update of an up-to-date package is a
+		// no-op but is still reported as a change, like pkg upgrade on
+		// FreeBSD.
 		args = []string{"update", "-y", p.name}
-	} else {
+	case installed:
+		resource.NoteResult(id, false)
+		return nil
+	default:
 		args = []string{"install", "-y", p.name}
 	}
 
 	if resource.DryRun() {
-		resource.Note(id, resource.StatusWouldChange)
 		logger.Info("dry-run: would run dnf %v", args)
+		resource.NoteResult(id, true)
 		return nil
 	}
 
@@ -34,7 +51,19 @@ func applyDNF(p *Package) error {
 		return fmt.Errorf("dnf failed with exit code %d: %s\n%s", exitCode, stdout, stderr)
 	}
 
-	resource.Note(id, resource.StatusChanged)
 	logger.Info("dnf %v completed", args)
+	resource.NoteResult(id, true)
 	return nil
+}
+
+func dnfInstalled(name string) (bool, error) {
+	// rpm -q only consults the local rpm database: unlike
+	// `dnf list installed` it never triggers a repository metadata
+	// refresh, so the probe stays cheap. A non-zero exit code means
+	// the package is not installed; a start failure is an error.
+	_, _, code, err := runCmd("rpm", "-q", name)
+	if err != nil {
+		return false, fmt.Errorf("rpm -q %s: %w", name, err)
+	}
+	return code == 0, nil
 }
