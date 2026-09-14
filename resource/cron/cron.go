@@ -36,7 +36,9 @@ func (c *Cron) SetHour(v string)      { c.hour = v }
 func (c *Cron) SetMonthday(v string)  { c.monthday = v }
 func (c *Cron) SetMonth(v string)     { c.month = v }
 func (c *Cron) SetWeekday(v string)   { c.weekday = v }
-func (c *Cron) AddCronEnv(kv string)  { c.env = append(c.env, kv) }
+
+// AddCronEnv appends a KEY=VAL environment line above the cron job.
+func (c *Cron) AddCronEnv(kv string) { c.env = append(c.env, kv) }
 
 var (
 	_ opt.Absentable   = (*Cron)(nil)

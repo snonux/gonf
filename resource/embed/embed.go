@@ -5,6 +5,8 @@ package embed
 // DependsOn is embedded into concrete resource types to give them the ability
 // to accumulate dependency IDs supplied via the DependsOn option.
 type DependsOn struct {
+	// IDs lists the resource IDs this resource depends on; Present forwards
+	// them into resource.Register so apply orders them first.
 	IDs []string
 }
 
@@ -18,6 +20,7 @@ func (d *DependsOn) AddDependency(id string) {
 // removal via the IsAbsent option. It promotes an Absent field and a
 // SetAbsent method to the embedding type.
 type Absence struct {
+	// Absent is set by the IsAbsent option to mark the resource for removal.
 	Absent bool
 }
 

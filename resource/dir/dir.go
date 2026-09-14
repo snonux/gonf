@@ -16,6 +16,9 @@ import (
 	"github.com/snonux/gonf/resource/embed"
 )
 
+// Dir reconciles a directory's existence, mode, and ownership, and
+// optionally mirrors a controller-local WithSource tree or WithSourceGlob
+// pattern into it.
 type Dir struct {
 	embed.DependsOn
 	embed.Absence
@@ -306,6 +309,9 @@ func Ensure(path string, opts ...opt.Option) error {
 	return d.apply()
 }
 
+// Present registers a directory resource that ensures path exists with the
+// configured mode, ownership, and source content, and records a plan draft
+// for remote apply.
 func Present(path string, opts ...opt.Option) resource.Resource {
 	d, err := build(path, opts...)
 	if err != nil {
@@ -354,6 +360,8 @@ func (d *Dir) planDraft() resource.PlanDraft {
 	return draft
 }
 
+// Absent registers a directory resource that ensures path does not exist;
+// WithPrune makes the removal recursive.
 func Absent(path string, opts ...opt.Option) resource.Resource {
 	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(path, opts...)

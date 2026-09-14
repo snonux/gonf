@@ -22,6 +22,9 @@ type DaemonReloadResource struct {
 
 func (d *DaemonReloadResource) SetUser()      { d.user = true }
 func (d *DaemonReloadResource) SetIfChanged() { d.ifChanged = true }
+
+// SetWatch overrides the watched resource ids for IfChanged; when unset the
+// DependsOn ids are watched.
 func (d *DaemonReloadResource) SetWatch(ids []string) {
 	d.watch = append([]string(nil), ids...)
 }

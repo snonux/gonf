@@ -10,7 +10,11 @@ import (
 // Demo holds example task methods registered via RegisterMethods.
 type Demo struct{}
 
+// DescFiles returns the description shown for the Files demo task.
 func (Demo) DescFiles() string { return "Demo file and directory resources" }
+
+// Files demonstrates file and directory resources: content, modes, source
+// copies, absence with pruning, and line edits.
 func (Demo) Files() {
 	File("/tmp/gonf_hello.txt", WithContent("Hello World!"))
 	InstallFile("/tmp/gonf_example.conf", "assets/testfiles/test.tmpl")
@@ -57,7 +61,10 @@ func (Demo) Files() {
 	SyncDir("/tmp/gonf_glob_dst", "assets/testfiles/*", WithMode(0o755), WithFileMode(0o644))
 }
 
+// DescLinks returns the description shown for the Links demo task.
 func (Demo) DescLinks() string { return "Demo symlink and hardlink resources" }
+
+// Links demonstrates symlink, hardlink, and LinkIfExists resources.
 func (Demo) Links() {
 	File("/tmp/gonf_hello.txt", WithContent("Hello World!"))
 
@@ -74,7 +81,10 @@ func (Demo) Links() {
 	Link("/tmp/gonf_stale_hardlink", IsAbsent)
 }
 
+// DescDeps returns the description shown for the Deps demo task.
 func (Demo) DescDeps() string { return "Demo DependsOn ordering" }
+
+// Deps demonstrates DependsOn ordering between single resources and Multi.
 func (Demo) Deps() {
 	fooRes := File("/tmp/gonf_foo.txt", WithContent("foo"))
 	File("/tmp/gonf_bar.txt", WithContent("bar"), DependsOn(fooRes))
@@ -87,7 +97,10 @@ func (Demo) Deps() {
 	Dir("/tmp/gonf_after_dir", DependsOn(fooRes, multiRes))
 }
 
+// DescCommands returns the description shown for the Commands demo task.
 func (Demo) DescCommands() string { return "Demo Command resource with guards" }
+
+// Commands demonstrates Command resources with Creates and Unless guards.
 func (Demo) Commands() {
 	Command("touch", List("/tmp/gonf_cmd_marker"),
 		Creates("/tmp/gonf_cmd_marker"),

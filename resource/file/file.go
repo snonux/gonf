@@ -21,6 +21,8 @@ import (
 	"github.com/snonux/gonf/resource/embed"
 )
 
+// File reconciles a regular file's existence, content (literal, source
+// file, or rendered template), mode, ownership, and optional line edits.
 type File struct {
 	embed.DependsOn
 	embed.Absence
@@ -373,6 +375,9 @@ func Ensure(path string, opts ...opt.Option) error {
 	return f.apply()
 }
 
+// Present registers a file resource that ensures path exists with the
+// configured content, mode, and ownership, and records a plan draft for
+// remote apply.
 func Present(path string, opts ...opt.Option) resource.Resource {
 	f, err := build(path, opts...)
 	if err != nil {
@@ -415,6 +420,7 @@ func (f *File) planDraft() resource.PlanDraft {
 	return d
 }
 
+// Absent registers a file resource that ensures path does not exist.
 func Absent(path string, opts ...opt.Option) resource.Resource {
 	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(path, opts...)

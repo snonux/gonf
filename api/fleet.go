@@ -90,7 +90,9 @@ func WithSSHIdentity(path string) HostOption {
 	return func(h *hostRecord) { h.identity = path }
 }
 
-// Privilege mode aliases for Host WithPrivilege.
+// PrivilegeNone, PrivilegeSudo, and PrivilegeDoas re-export the
+// privilege.Mode constants so tasks can pass them to WithPrivilege without
+// importing an internal package.
 const (
 	PrivilegeNone = privilege.None
 	PrivilegeSudo = privilege.Sudo

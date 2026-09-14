@@ -33,6 +33,8 @@ func File[T Path](path T, opts ...options.Option) Resource {
 	}
 }
 
+// Files is File for a list of paths: it returns one Multi resource
+// containing a file resource per path.
 func Files(paths []string, opts ...options.Option) Resource {
 	var resources []resource.Resource
 	for _, path := range paths {
@@ -58,6 +60,8 @@ func Dir[T Path](path T, opts ...options.Option) Resource {
 	}
 }
 
+// Dirs is Dir for a list of paths: it returns one Multi resource
+// containing a directory resource per path.
 func Dirs(paths []string, opts ...options.Option) Resource {
 	var resources []resource.Resource
 	for _, path := range paths {
@@ -83,6 +87,8 @@ func Link[T Path](path T, opts ...options.Option) Resource {
 	}
 }
 
+// Links is Link for a list of paths: it returns one Multi resource
+// containing a link resource per path.
 func Links(paths []string, opts ...options.Option) Resource {
 	var resources []resource.Resource
 	for _, path := range paths {
@@ -113,6 +119,8 @@ func Package[T Path](name T, opts ...options.Option) Resource {
 	}
 }
 
+// Packages is Package for a list of names: it returns one Multi resource
+// containing a package resource per name.
 func Packages(names []string, opts ...options.Option) Resource {
 	var resources []resource.Resource
 	for _, name := range names {
@@ -140,6 +148,8 @@ func Service[T Path](name T, opts ...options.Option) Resource {
 	}
 }
 
+// Services is Service for a list of names: it returns one Multi resource
+// containing a service resource per name.
 func Services(names []string, opts ...options.Option) Resource {
 	var resources []resource.Resource
 	for _, name := range names {
@@ -179,6 +189,8 @@ func Timer[T Path](name T, opts ...options.Option) Resource {
 	}
 }
 
+// Timers is Timer for a list of names: it returns one Multi resource
+// containing a timer resource per name.
 func Timers(names []string, opts ...options.Option) Resource {
 	var resources []resource.Resource
 	for _, name := range names {

@@ -22,6 +22,8 @@ func getRepository() *repository {
 	return &repo
 }
 
+// ResetRepository swaps in a fresh empty repository. Tests use it to
+// isolate registrations between runs.
 func ResetRepository() {
 	repo = newRepository()
 }
@@ -122,6 +124,10 @@ func (r *repository) apply() error {
 	return nil
 }
 
+// Apply applies every registered resource in dependency order: it
+// topologically sorts the registration graph (rejecting cycles and dangling
+// dependency IDs), applies each resource, and prints the outcome summary to
+// stderr.
 func Apply() error {
 	return getRepository().apply()
 }

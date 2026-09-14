@@ -20,6 +20,8 @@ const (
 	hardlinkKind
 )
 
+// Link reconciles a symbolic or hard link (IsSymlink/IsHardlink) or removes
+// an existing link entry (IsAbsent).
 type Link struct {
 	embed.DependsOn
 	embed.Absence
@@ -79,6 +81,8 @@ func Ensure(path string, opts ...opt.Option) error {
 	return build(path, opts...).apply()
 }
 
+// Present registers a link resource that ensures path is the configured
+// symlink or hardlink, and records a plan draft for remote apply.
 func Present(path string, opts ...opt.Option) resource.Resource {
 	l := build(path, opts...)
 	l.resource = resource.Register(l.resourceType(), l.path,
@@ -103,6 +107,8 @@ func (l *Link) planDraft() resource.PlanDraft {
 	return d
 }
 
+// Absent registers a link resource that ensures path does not exist (the
+// entry is removed regardless of its type).
 func Absent(path string, opts ...opt.Option) resource.Resource {
 	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(path, opts...)

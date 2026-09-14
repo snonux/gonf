@@ -13,9 +13,13 @@ import (
 type Level int
 
 const (
+	// LevelError emits only errors.
 	LevelError Level = iota
+	// LevelWarn emits warnings and errors.
 	LevelWarn
+	// LevelInfo emits informational messages and above (default).
 	LevelInfo
+	// LevelDebug emits everything, including debug output.
 	LevelDebug
 )
 
@@ -49,9 +53,16 @@ func logf(msgLevel Level, format string, args ...any) {
 	std.Output(3, fmt.Sprintf(format, args...))
 }
 
+// Error logs a formatted message at LevelError.
 func Error(format string, args ...any) { logf(LevelError, format, args...) }
-func Warn(format string, args ...any)  { logf(LevelWarn, format, args...) }
-func Info(format string, args ...any)  { logf(LevelInfo, format, args...) }
+
+// Warn logs a formatted message at LevelWarn.
+func Warn(format string, args ...any) { logf(LevelWarn, format, args...) }
+
+// Info logs a formatted message at LevelInfo.
+func Info(format string, args ...any) { logf(LevelInfo, format, args...) }
+
+// Debug logs a formatted message at LevelDebug.
 func Debug(format string, args ...any) { logf(LevelDebug, format, args...) }
 
 // Fatal logs at Error level and exits the process.

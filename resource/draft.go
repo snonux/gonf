@@ -4,27 +4,39 @@ import "sync"
 
 // PlanGuardDraft is a package-neutral command probe for plan recording.
 type PlanGuardDraft struct {
-	Bin          string
-	Args         []string
+	// Bin is the probe executable.
+	Bin string
+	// Args is argv after Bin.
+	Args []string
+	// ExpectStdout, when non-empty, is the trimmed stdout the probe must print.
 	ExpectStdout string
-	ExpectExit   *int
+	// ExpectExit is the exit code that makes the probe succeed. Nil means 0.
+	ExpectExit *int
 }
 
 // PlanDraft is a package-neutral snapshot of a registered resource for plan
 // recording. The api package converts drafts to plan.Op so resource packages
 // do not import plan (avoids cycles with plan apply helpers).
 type PlanDraft struct {
+	// Kind selects the op kind the recorder emits, e.g. "file" or "cron".
 	Kind string
 
-	ID   string
+	// ID is the registered resource ID this draft came from.
+	ID string
+	// Path is the destination path for the file/dir/link/sync/ensure kinds.
 	Path string
 
-	Symlink  string
+	// Symlink is the symlink target for the "link" kind.
+	Symlink string
+	// Hardlink is the hardlink target when set instead of Symlink.
 	Hardlink string
 	// Target is the existence-checked path for link_if_exists drafts.
 	Target string
 
-	Mode     string
+	// Mode is an octal permission string such as "0640" for Path.
+	Mode string
+	// FileMode is an octal permission string for files copied from
+	// SourceDir or SourceGlob.
 	FileMode string
 	// Owner is the explicitly configured owning user (WithOwner) for the
 	// file/dir/sync_dir/ensure_dir kinds. Empty means not configured, so
@@ -34,29 +46,44 @@ type PlanDraft struct {
 	// Group is the explicitly configured owning group (WithGroup) for the
 	// file/dir/sync_dir/ensure_dir kinds (name or numeric id). Empty means
 	// not configured.
-	Group      string
+	Group string
+	// ContentB64 is base64 file content for the "file" kind.
 	ContentB64 string
-	Blob       string
+	// Blob is a sidecar blob reference for the sync_dir kind (or large
+	// "file" content).
+	Blob string
 	// SourcePath is a controller-local file to package as content_b64 or a blob.
 	SourcePath string
 	// SourceDir is a controller-local directory to package as a blob tree.
 	SourceDir string
 	// SourceGlob is a controller-local glob to package as a flat blob dir.
 	SourceGlob string
-	Prune      bool
-	Absent     bool
+	// Prune removes destination entries not present in the source.
+	Prune bool
+	// Absent marks NoFile/NoDir/NoLink/NoPackage style removal.
+	Absent bool
 
-	AddLine    string
+	// AddLine appends a line to a file when missing (line-in-file).
+	AddLine string
+	// RemoveLine removes matching lines from a file.
 	RemoveLine string
 
-	Name    string
-	Bin     string
-	Args    []string
-	Dir     string
-	Env     map[string]string
+	// Name is a package name, command registry name, or similar label.
+	Name string
+	// Bin is the executable for the "command" kind.
+	Bin string
+	// Args is argv after Bin for the "command" kind.
+	Args []string
+	// Dir is the working directory for the "command" kind.
+	Dir string
+	// Env is extra environment for the "command" kind.
+	Env map[string]string
+	// Creates skips the command when this path already exists.
 	Creates string
-	Unless  *PlanGuardDraft
-	OnlyIf  *PlanGuardDraft
+	// Unless skips the command when the guard probe succeeds.
+	Unless *PlanGuardDraft
+	// OnlyIf runs the command only when the guard probe succeeds.
+	OnlyIf *PlanGuardDraft
 
 	// User selects systemd --user for timer / daemon_reload / service drafts.
 	User bool

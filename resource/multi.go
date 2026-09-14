@@ -15,6 +15,7 @@ type Dependency interface {
 // Multi is a collection of resources that satisfies the api.Resource interface.
 type Multi []Resource
 
+// String returns the comma-joined member IDs.
 func (m Multi) String() string {
 	strs := make([]string, 0, len(m))
 
@@ -25,6 +26,7 @@ func (m Multi) String() string {
 	return strings.Join(strs, ", ")
 }
 
+// ID returns the member IDs joined by "+"; a Multi has no single identity.
 func (m Multi) ID() string {
 	ids := make([]string, 0, len(m))
 
@@ -48,6 +50,8 @@ func (m Multi) Dependencies() []string {
 	return ids
 }
 
+// Apply applies every member in order, joining any errors so one failure
+// does not mask the rest.
 func (m Multi) Apply() error {
 	var errs []error
 

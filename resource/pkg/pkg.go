@@ -13,6 +13,9 @@ import (
 	"github.com/snonux/gonf/resource/embed"
 )
 
+// Package reconciles an OS package's presence or absence using the
+// platform package manager (dnf on Linux, pkg on FreeBSD, pkgin on
+// NetBSD, pkg_add on OpenBSD).
 type Package struct {
 	embed.DependsOn
 	embed.Absence
@@ -48,6 +51,8 @@ func (p *Package) apply() error {
 	return errors.New("unsupported package manager")
 }
 
+// Present registers a package resource ensuring name is installed; IsLatest
+// upgrades it to the newest available version.
 func Present(name string, opts ...opt.Option) resource.Resource {
 	p := &Package{
 		name: name,
@@ -78,6 +83,7 @@ func Ensure(name string, opts ...opt.Option) error {
 	return p.apply()
 }
 
+// Absent registers a package resource ensuring name is removed.
 func Absent(name string, opts ...opt.Option) resource.Resource {
 	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(name, opts...)

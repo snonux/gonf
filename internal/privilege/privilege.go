@@ -14,7 +14,9 @@ const (
 	// process is root; remote push rejects elevated ops with None entirely
 	// (see WrapApplyCmd): the remote login's privilege is not knowable here.
 	None Mode = iota
+	// Sudo wraps privileged invocations with "sudo -n".
 	Sudo
+	// Doas wraps privileged invocations with "doas".
 	Doas
 )
 
@@ -32,6 +34,7 @@ func ParseMode(s string) (Mode, error) {
 	}
 }
 
+// String returns the flag spelling of m ("none", "sudo", or "doas").
 func (m Mode) String() string {
 	switch m {
 	case Sudo:

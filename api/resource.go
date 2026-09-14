@@ -14,6 +14,9 @@ type Resource interface {
 	Dependencies() []string
 }
 
+// Apply applies every resource registered so far, in dependency order.
+// Task methods call the DSL constructors to register resources, and one
+// Apply call reconciles the system against all of them.
 func Apply() error {
 	return resource.Apply()
 }

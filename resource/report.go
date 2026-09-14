@@ -11,12 +11,19 @@ import (
 type Status int
 
 const (
+	// StatusOK means the resource was already in the desired state.
 	StatusOK Status = iota
+	// StatusChanged means the resource was mutated this apply.
 	StatusChanged
+	// StatusSkipped means nothing ran (guard passed, target missing, ...).
 	StatusSkipped
+	// StatusWouldChange is StatusChanged under dry-run: apply would have
+	// mutated but made no changes.
 	StatusWouldChange
 )
 
+// String returns the lowercase report label of s ("ok", "changed",
+// "skipped", "would-change").
 func (s Status) String() string {
 	switch s {
 	case StatusOK:
