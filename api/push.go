@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -121,28 +120,37 @@ func PushTo(t PushTarget, planID string, tasks ...string) error {
 	return nil
 }
 
+// pushChunks splits ops into privilege chunks and streams each chunk to one
+// SSH target. Multi-chunk plans with blobs first upload all blobs to a sticky
+// dir in a dedicated always-unprivileged session (pushBlobs); every chunk then
+// applies plan-only with -apply-dir and no embedded blobs. This keeps blob
+// extraction owned by the SSH login user even when the first chunk is
+// elevated: root could read the blobs anyway, but the login user could not.
 func pushChunks(t PushTarget, planID string, ops []plan.Op, mem *plan.MemoryStore) error {
 	chunks := plan.SplitPrivilegeChunks(ops)
 	hasBlobs := mem != nil && mem.HasBlobs()
+	// Sticky dir for multi-chunk plans with blobs: uploaded once, referenced
+	// read-only by every chunk. A concrete remote path; the ID is sanitized.
 	sticky := ""
 	if hasBlobs && len(chunks) > 1 {
-		sticky = filepath.Join("${TMPDIR:-/tmp}", "gonf-apply-sticky", planID)
-		// Use a concrete remote path; expand TMPDIR on remote via shell.
 		sticky = "/tmp/gonf-apply-sticky-" + sanitizeID(planID)
+	}
+
+	if sticky != "" {
+		if chunks[0].Ops[0].Op != plan.KindPlan {
+			return fmt.Errorf("push: chunk 0 missing plan header")
+		}
+		if err := pushBlobs(t, chunks[0].Ops[0], mem, sticky); err != nil {
+			return err
+		}
 	}
 
 	for i, ch := range chunks {
 		chunkMem := mem
 		applyDir := ""
-		keep := false
-		if hasBlobs {
-			if i == 0 {
-				applyDir = sticky
-				keep = len(chunks) > 1 && sticky != ""
-			} else {
-				chunkMem = nil // plan-only; blobs already on remote
-				applyDir = sticky
-			}
+		if sticky != "" {
+			chunkMem = nil // plan-only; blobs already in the sticky dir
+			applyDir = sticky
 		}
 		var buf bytes.Buffer
 		if err := plan.EncodePush(&buf, ch.Ops, chunkMem); err != nil {
@@ -152,14 +160,29 @@ func pushChunks(t PushTarget, planID string, ops []plan.Op, mem *plan.MemoryStor
 		if err != nil {
 			return err
 		}
-		if keep && applyDir != "" {
-			// First chunk: ensure dir exists and ask apply not to wipe it.
-			remote = "mkdir -p " + applyDir + " && " + remote
-		}
-		_ = keep
 		if err := sshRunner(bytes.NewReader(buf.Bytes()), t.sshArgv(remote)); err != nil {
 			return fmt.Errorf("chunk %d (elevate=%v): %w", i, ch.Elevate, err)
 		}
+	}
+	return nil
+}
+
+// pushBlobs uploads all plan blobs to the sticky apply dir over SSH before any
+// apply chunk runs. The frame is a regular GONF-PUSH/1 stream with the blobs
+// tar attached and a header-only plan, so the remote extracts the blobs as the
+// SSH login user and then applies an empty plan (no-op). Never privilege-
+// wrapped: elevated apply chunks read the blobs as root later on.
+func pushBlobs(t PushTarget, header plan.Op, mem *plan.MemoryStore, applyDir string) error {
+	var buf bytes.Buffer
+	if err := plan.EncodePush(&buf, []plan.Op{header}, mem); err != nil {
+		return fmt.Errorf("encode blobs: %w", err)
+	}
+	remote, err := remoteApplyCmd(false, t.privilegeMode(), applyDir)
+	if err != nil {
+		return err
+	}
+	if err := sshRunner(bytes.NewReader(buf.Bytes()), t.sshArgv(remote)); err != nil {
+		return fmt.Errorf("blob upload to %s: %w", applyDir, err)
 	}
 	return nil
 }
