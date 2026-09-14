@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -370,4 +371,92 @@ func remotes(calls []sshCall) []string {
 		out = append(out, c.remote)
 	}
 	return out
+}
+
+// TestPushRemovesStickyDirAfterLastChunk pins task 412: after the last apply
+// chunk succeeds, the controller removes the remote sticky apply dir (one
+// unprivileged rm -rf), so blob staging does not accumulate under /tmp.
+func TestPushRemovesStickyDirAfterLastChunk(t *testing.T) {
+	ResetTasks()
+	ResetInventory()
+	resource.ResetRepository()
+	recordSyncDirTasks(t)
+
+	calls := captureSSH(t)
+	if err := PushTo(PushTarget{Host: "h.example", Privilege: privilege.Doas}, "demo", "root_sync", "user_sync"); err != nil {
+		t.Fatal(err)
+	}
+
+	sticky := "/tmp/gonf-apply-sticky-demo"
+	// 3 apply sessions + exactly one final rm -rf.
+	if len(*calls) != 4 {
+		t.Fatalf("calls=%d remotes=%v", len(*calls), remotes(*calls))
+	}
+	removals := 0
+	for _, c := range *calls {
+		if c.remote == "rm -rf "+sticky {
+			removals++
+		}
+	}
+	if removals != 1 {
+		t.Errorf("expected exactly one sticky-dir removal, got %d: %v", removals, remotes(*calls))
+	}
+	// The removal must be the LAST session (after all applies).
+	if got := (*calls)[3].remote; got != "rm -rf "+sticky {
+		t.Fatalf("last remote=%q, want the sticky-dir removal", got)
+	}
+	// The removal must not be privilege-wrapped (login user owns the dir).
+	if strings.Contains((*calls)[3].remote, "doas") || strings.Contains((*calls)[3].remote, "sudo") {
+		t.Fatalf("sticky removal must not be privilege-wrapped: %q", (*calls)[3].remote)
+	}
+}
+
+// TestPushRemovesStickyDirOnChunkFailure pins the best-effort cleanup on the
+// failure path: a failing chunk must not leak the sticky dir, and the error
+// must report how much of the plan already applied.
+func TestPushRemovesStickyDirOnChunkFailure(t *testing.T) {
+	ResetTasks()
+	ResetInventory()
+	resource.ResetRepository()
+	recordSyncDirTasks(t)
+
+	calls := captureSSH(t)
+	// Fail the LAST chunk (the unprivileged apply session): chunk 2 fails
+	// after earlier chunks already applied, which must be reported.
+	old := sshRunner
+	sshRunner = func(stdin io.Reader, argv []string) error {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, stdin)
+		payload := buf.Bytes()
+		// Fail only the LAST chunk: the unprivileged apply session whose
+		// frame carries no blobs (the blob upload session has "blobs 1", the
+		// elevated chunk is doas-wrapped).
+		isLastChunk := !strings.Contains(argv[len(argv)-1], "doas") &&
+			strings.HasPrefix(string(payload), "GONF-PUSH/1\nblobs 0\n")
+		if isLastChunk {
+			return fmt.Errorf("remote refused")
+		}
+		*calls = append(*calls, sshCall{argv: append([]string(nil), argv...), remote: argv[len(argv)-1], stdin: payload})
+		return nil
+	}
+	t.Cleanup(func() { sshRunner = old })
+
+	err := PushTo(PushTarget{Host: "h.example", Privilege: privilege.Doas}, "demo", "root_sync", "user_sync")
+	if err == nil {
+		t.Fatal("expected the push to fail when the elevated chunk fails")
+	}
+	if !strings.Contains(err.Error(), "host left partially applied") {
+		t.Errorf("error should report the partial apply: %v", err)
+	}
+	// The sticky dir removal must still have been attempted (recorded as the
+	// final rm session).
+	removals := 0
+	for _, c := range *calls {
+		if c.remote == "rm -rf /tmp/gonf-apply-sticky-demo" {
+			removals++
+		}
+	}
+	if removals != 1 {
+		t.Errorf("expected exactly one sticky-dir removal attempt, got %d: %v", removals, remotes(*calls))
+	}
 }

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -177,10 +178,41 @@ func pushChunks(t PushTarget, planID string, ops []plan.Op, mem *plan.MemoryStor
 			return fmt.Errorf("encode chunk %d: %w", i, err)
 		}
 		if err := sshRunner(bytes.NewReader(buf.Bytes()), t.sshArgv(remotes[i])); err != nil {
-			return fmt.Errorf("chunk %d (elevate=%v): %w", i, ch.Elevate, err)
+			err = fmt.Errorf("chunk %d (elevate=%v): %w", i, ch.Elevate, err)
+			if len(chunks) > 1 && i > 0 {
+				// Any chunk failure after the first leaves the host partially
+				// applied: earlier chunks already ran.
+				applied := 0
+				for _, prev := range chunks[:i] {
+					applied += len(prev.Ops) - 1 // minus the header
+				}
+				err = fmt.Errorf("%w (host left partially applied: %d ops from %d earlier chunks)", err, applied, i)
+			}
+			if sticky != "" {
+				// The sticky dir is no longer needed: its blobs were consumed
+				// or are now unusable. Best-effort removal, never masking the
+				// chunk failure.
+				pushRemoveSticky(t, sticky)
+			}
+			return err
 		}
 	}
+	if sticky != "" {
+		pushRemoveSticky(t, sticky)
+	}
 	return nil
+}
+
+// pushRemoveSticky best-effort removes the remote sticky apply dir after the
+// last apply chunk (or on failure): leftover blob staging would accumulate
+// forever under /tmp. The dir is owned by the SSH login user, so the removal
+// runs unprivileged; a failure (e.g. a stale root-owned dir from older gonf
+// versions) is logged and never fails the push.
+func pushRemoveSticky(t PushTarget, sticky string) {
+	remote := "rm -rf " + sticky
+	if err := sshRunner(bytes.NewReader(nil), t.sshArgv(remote)); err != nil {
+		logger.Warn("push: failed to remove remote sticky dir %s: %v", sticky, err)
+	}
 }
 
 // pushBlobs uploads all plan blobs to the sticky apply dir over SSH before any
