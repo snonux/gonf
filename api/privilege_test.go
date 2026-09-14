@@ -133,6 +133,54 @@ func TestWithElevateOnCommand(t *testing.T) {
 	}
 }
 
+// TestApplyChunksRefusesForwardCrossChunkDep pins the controller-side
+// pre-flight: a dep recorded in a LATER privilege chunk fails ApplyChunks
+// before ANY chunk is applied — no in-process chunk-0 apply, no elevated
+// runner call, no marker mutation.
+func TestApplyChunksRefusesForwardCrossChunkDep(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "marker")
+	ops := []plan.Op{
+		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "chunks"},
+		{Op: plan.KindCommand, Bin: "touch", Args: []string{marker}, ID: "Command[b]", Deps: []string{"Command[a]"}},
+		{Op: plan.KindCommand, Bin: "true", ID: "Command[a]", Elevate: true},
+	}
+	old := elevatedApplyRunner
+	t.Cleanup(func() { elevatedApplyRunner = old })
+	elevatedApplyRunner = func(mode privilege.Mode, chunk []plan.Op, planDir string) error {
+		t.Error("elevated runner must not be invoked before the dep pre-flight")
+		return nil
+	}
+	err := ApplyChunks(ops, dir, privilege.Sudo)
+	if err == nil || !strings.Contains(err.Error(), "later chunk 1") {
+		t.Fatalf("want forward cross-chunk dep refusal, got %v", err)
+	}
+	if _, serr := os.Stat(marker); !os.IsNotExist(serr) {
+		t.Fatal("no chunk may apply before the dep pre-flight refusal")
+	}
+}
+
+// TestPushRefusesForwardCrossChunkDepsWithZeroSSH pins the push-side
+// pre-flight: the same forward cross-chunk dep fails pushChunks before any
+// SSH traffic (no chunk upload, no blob upload).
+func TestPushRefusesForwardCrossChunkDepsWithZeroSSH(t *testing.T) {
+	ops := []plan.Op{
+		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "chunks"},
+		{Op: plan.KindCommand, Bin: "true", ID: "Command[b]", Deps: []string{"Command[a]"}},
+		{Op: plan.KindCommand, Bin: "true", ID: "Command[a]", Elevate: true},
+	}
+	old := sshRunner
+	t.Cleanup(func() { sshRunner = old })
+	sshRunner = func(stdin io.Reader, argv []string) error {
+		t.Error("ssh must not be invoked for a plan that fails the dep pre-flight")
+		return nil
+	}
+	err := pushChunks(PushTarget{Host: "h.example", Privilege: privilege.Doas}, "demo", ops, nil)
+	if err == nil || !strings.Contains(err.Error(), "later chunk 1") {
+		t.Fatalf("want forward cross-chunk dep refusal, got %v", err)
+	}
+}
+
 func TestApplyChunksElevatedRunner(t *testing.T) {
 	ResetTasks()
 	resource.ResetRepository()

@@ -3,6 +3,7 @@ package plan
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -29,6 +30,16 @@ type Facts struct {
 // Apply interprets ops against live host facts and the local filesystem.
 // ops[0] must be a plan header that passes ValidateHeader. Stackable
 // when_begin/when_end blocks skip inactive bodies without mutation.
+// Resource ops are topologically sorted by their deps within each contiguous
+// run between control ops (plan header, when_begin, when_end), mirroring the
+// repository path's dependency order; dep-free plans keep recorded order.
+// Deps recorded in this body earlier, or applied by an earlier privilege
+// chunk or invocation, count as satisfied; a dep recorded later in this body
+// (later when-block) is refused before any mutation. A dep recorded nowhere
+// in this body is satisfied at chunk level too — chunk boundaries are
+// invisible to a chunk-level Apply; the controller-side pre-flight
+// ValidateChunkDeps refuses forward cross-chunk and dangling deps before any
+// chunk is applied.
 // planDir is the directory containing blobs/ sidecars (usually next to the
 // plan JSONL). Pass "" when the plan only uses content_b64 and no blobs.
 func Apply(ops []Op, facts Facts, planDir string) error {
@@ -41,17 +52,178 @@ func Apply(ops []Op, facts Facts, planDir string) error {
 
 	resource.ResetReport()
 
+	// Sorting (and its dangling/cycle checks) runs before any mutation so a
+	// refused plan leaves the destination untouched.
+	body, err := sortedApplyOrder(ops[1:])
+	if err != nil {
+		return err
+	}
+
 	var stack []bool
-	for i, op := range ops[1:] {
-		lineNo := i + 2
-		if err := applyLine(op, facts, planDir, &stack); err != nil {
-			return fmt.Errorf("plan: apply line %d: %w", lineNo, err)
+	for _, l := range body {
+		if err := applyLine(l.op, facts, planDir, &stack); err != nil {
+			return fmt.Errorf("plan: apply line %d: %w", l.line, err)
 		}
 	}
 	if len(stack) != 0 {
 		return fmt.Errorf("plan: apply: %d unclosed when_begin", len(stack))
 	}
 	return nil
+}
+
+// planLine pairs an op with its original 1-based JSONL line number so
+// apply-time errors name the recorded line even after dependency reordering.
+type planLine struct {
+	op   Op
+	line int
+}
+
+// sortedApplyOrder returns the plan body in apply order: contiguous runs of
+// resource ops between control ops (plan header, when_begin, when_end) are
+// topologically sorted by their dep lists, mirroring the repository path.
+// Control ops keep their recorded position, so resource ops are never
+// reordered across when_* boundaries. A dep outside the current run is
+// classified: recorded earlier in this body → satisfied (placed); recorded
+// later in this body (first occurrence after the run) → refused, apply
+// cannot reorder across the when_* boundary in between; recorded nowhere in
+// this body → satisfied (an earlier privilege chunk or invocation applied
+// it, and chunk boundaries are invisible to a chunk-level Apply). The
+// controller-side ValidateChunkDeps pre-flight refuses forward cross-chunk
+// and dangling deps before any chunk is applied.
+func sortedApplyOrder(body []Op) ([]planLine, error) {
+	// bodyIDs maps an op ID to its first recorded index in the body, so an
+	// unmatched dep can be classified as later-in-body or absent entirely.
+	bodyIDs := map[string]int{}
+	for i, op := range body {
+		if op.ID != "" {
+			if _, seen := bodyIDs[op.ID]; !seen {
+				bodyIDs[op.ID] = i
+			}
+		}
+	}
+
+	out := make([]planLine, 0, len(body))
+	var run []planLine
+	runEnd := 0 // body index just past the current run's last op
+	// placed holds the op IDs of runs already emitted: their deps are
+	// satisfied, because earlier segments and chunks always apply first.
+	placed := map[string]bool{}
+	flush := func() error {
+		if len(run) == 0 {
+			return nil
+		}
+		sorted, err := sortRunByDeps(run, placed, bodyIDs, runEnd)
+		if err != nil {
+			return err
+		}
+		out = append(out, sorted...)
+		for _, l := range sorted {
+			if l.op.ID != "" {
+				placed[l.op.ID] = true
+			}
+		}
+		run = run[:0]
+		return nil
+	}
+
+	for i, op := range body {
+		if IsControlKind(op.Op) {
+			if err := flush(); err != nil {
+				return nil, err
+			}
+			out = append(out, planLine{op: op, line: i + 2})
+			continue
+		}
+		run = append(run, planLine{op: op, line: i + 2})
+		runEnd = i + 1
+	}
+	if err := flush(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// sortRunByDeps topologically orders one contiguous resource-op run by the
+// ops' dep lists (Kahn's algorithm, stable: among ready ops the earliest
+// recorded one is emitted first). Deps are matched against op IDs. A dep on
+// an op applied by an earlier run is satisfied. A dep whose first body
+// occurrence is after this run (bodyIDs first index >= runEnd) is refused —
+// apply cannot reorder it across the when_* boundary in between. A dep
+// recorded nowhere in this body is satisfied: an earlier privilege chunk or
+// invocation applied it, and chunk boundaries are invisible to a chunk-level
+// Apply (ValidateChunkDeps refuses dangling deps controller-side before any
+// chunk is applied).
+func sortRunByDeps(run []planLine, placed map[string]bool, bodyIDs map[string]int, runEnd int) ([]planLine, error) {
+	// inRun maps an op ID to every run position carrying it (IDs repeat when
+	// a diamond include records the same resource twice).
+	inRun := map[string][]int{}
+	for pos, l := range run {
+		if l.op.ID != "" {
+			inRun[l.op.ID] = append(inRun[l.op.ID], pos)
+		}
+	}
+
+	indeg := make([]int, len(run))
+	waiters := make([][]int, len(run)) // dep position → dependent positions
+	for pos, l := range run {
+		for _, dep := range l.op.Deps {
+			at, inCurrent := inRun[dep]
+			if !inCurrent {
+				if placed[dep] {
+					continue // satisfied by an earlier run
+				}
+				if first, inBody := bodyIDs[dep]; inBody && first >= runEnd {
+					return nil, fmt.Errorf(
+						"plan: op %s depends on %s which is not ordered before it; later when-block dependencies cannot be reordered before it",
+						l.op.ID, dep)
+				}
+				// Recorded nowhere in this body: satisfied by an earlier
+				// privilege chunk or invocation (chunks never reorder).
+				continue
+			}
+			for _, p := range at {
+				indeg[pos]++
+				waiters[p] = append(waiters[p], pos)
+			}
+		}
+	}
+	return kahnStable(run, indeg, waiters)
+}
+
+// kahnStable emits the run's ops in dependency order, breaking ties by
+// recorded position: among the currently ready ops, the earliest recorded one
+// always goes first. A leftover indegree at the end means the run has a
+// dependency cycle, mirroring the repository path's cycle error.
+func kahnStable(run []planLine, indeg []int, waiters [][]int) ([]planLine, error) {
+	ready := make([]int, 0, len(run))
+	for pos, n := range indeg {
+		if n == 0 {
+			ready = append(ready, pos) // ascending: pos is appended in order
+		}
+	}
+
+	sorted := make([]planLine, 0, len(run))
+	for len(ready) > 0 {
+		pos := ready[0]
+		ready = ready[1:]
+		sorted = append(sorted, run[pos])
+		for _, w := range waiters[pos] {
+			indeg[w]--
+			if indeg[w] == 0 {
+				// Keep ready ascending by recorded position (stable Kahn).
+				at := sort.SearchInts(ready, w)
+				ready = append(ready, 0)
+				copy(ready[at+1:], ready[at:])
+				ready[at] = w
+			}
+		}
+	}
+	for pos, n := range indeg {
+		if n > 0 {
+			return nil, fmt.Errorf("plan: circular dependency involving %s", run[pos].op.ID)
+		}
+	}
+	return sorted, nil
 }
 
 func applyLine(op Op, facts Facts, planDir string, stack *[]bool) error {

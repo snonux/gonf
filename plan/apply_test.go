@@ -3,6 +3,7 @@ package plan
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -381,6 +382,180 @@ func TestApplyPackageDryRun(t *testing.T) {
 	}
 }
 
+// TestApplySortsDepsBeforeDependents pins the plan-path dependency contract:
+// an op recorded before its DependsOn target must apply after it, mirroring
+// the repository path's topological order. Both commands append to one log,
+// so the file content is the apply-order assertion.
+func TestApplySortsDepsBeforeDependents(t *testing.T) {
+	root := t.TempDir()
+	log := filepath.Join(root, "order.log")
+
+	ops := []Op{
+		header(),
+		{
+			Op:   KindCommand,
+			Bin:  "sh",
+			Args: []string{"-c", "echo B >> " + log},
+			ID:   "Command[b]",
+			Deps: []string{"Command[a]"},
+		},
+		{
+			Op:   KindCommand,
+			Bin:  "sh",
+			Args: []string{"-c", "echo A >> " + log},
+			ID:   "Command[a]",
+		},
+	}
+	if err := Apply(ops, Facts{}, ""); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	data, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(data), "A\nB\n"; got != want {
+		t.Fatalf("apply order = %q, want %q (dependency Command[a] must run first)", got, want)
+	}
+}
+
+// TestApplyDepFreeOrderPreserved pins that dep-free plans keep recorded
+// order: recorded order is the contract whenever no deps are present, so
+// existing plans apply exactly as before the deps field existed.
+func TestApplyDepFreeOrderPreserved(t *testing.T) {
+	root := t.TempDir()
+	log := filepath.Join(root, "order.log")
+
+	ops := []Op{
+		header(),
+		{Op: KindCommand, Bin: "sh", Args: []string{"-c", "echo one >> " + log}, ID: "Command[one]"},
+		{Op: KindCommand, Bin: "sh", Args: []string{"-c", "echo two >> " + log}, ID: "Command[two]"},
+	}
+	if err := Apply(ops, Facts{}, ""); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	data, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(data), "one\ntwo\n"; got != want {
+		t.Fatalf("dep-free plan reordered: %q, want %q", got, want)
+	}
+}
+
+// TestApplyLineNumbersFollowRecordedOrder pins that apply-time errors name
+// the RECORDED line even when dependency sorting moved the op later in the
+// execution order.
+func TestApplyLineNumbersFollowRecordedOrder(t *testing.T) {
+	ops := []Op{
+		header(),
+		{Op: KindFile, Path: "/tmp/dep-line-num", Deps: []string{"Command[a]"}}, // line 2: missing content
+		{Op: KindCommand, Bin: "true", ID: "Command[a]"},
+	}
+	err := Apply(ops, Facts{}, "")
+	if err == nil {
+		t.Fatal("expected file validation error")
+	}
+	if !strings.Contains(err.Error(), "plan: apply line 2:") {
+		t.Fatalf("error must name the recorded line 2, got: %v", err)
+	}
+}
+
+// TestApplyDependencyCycle pins the repository-path behaviour for cycles on
+// the plan path: a circular dependency fails the apply before any mutation.
+func TestApplyDependencyCycle(t *testing.T) {
+	root := t.TempDir()
+	marker := filepath.Join(root, "marker")
+
+	ops := []Op{
+		header(),
+		{Op: KindCommand, Bin: "touch", Args: []string{marker}, ID: "Command[a]", Deps: []string{"Command[b]"}},
+		{Op: KindCommand, Bin: "true", ID: "Command[b]", Deps: []string{"Command[a]"}},
+	}
+	err := Apply(ops, Facts{}, "")
+	if err == nil || !strings.Contains(err.Error(), "circular dependency involving") {
+		t.Fatalf("want circular dependency error, got %v", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("cycle must be refused before any mutation")
+	}
+}
+
+// TestApplyDependencyDanglingSatisfiedAtChunkLevel pins the chunk-level
+// view of dangling deps: a dep that matches no op in the applied body counts
+// as satisfied (an earlier privilege chunk or invocation applied it — chunk
+// boundaries are invisible to chunk-level Apply). Truly dangling deps are
+// refused controller-side, before anything is applied, by the
+// plan.ValidateChunkDeps pre-flight wired into ApplyChunks and pushChunks.
+func TestApplyDependencyDanglingSatisfiedAtChunkLevel(t *testing.T) {
+	root := t.TempDir()
+	log := filepath.Join(root, "order.log")
+
+	ops := []Op{
+		header(),
+		{Op: KindCommand, Bin: "sh", Args: []string{"-c", "echo A >> " + log}, ID: "Command[a]", Deps: []string{"File[missing]"}},
+	}
+	if err := Apply(ops, Facts{}, ""); err != nil {
+		t.Fatalf("dangling dep must be satisfied at chunk level: %v", err)
+	}
+	data, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(data), "A\n"; got != want {
+		t.Fatalf("command must have applied after the satisfied dep: %q, want %q", got, want)
+	}
+}
+
+// TestApplyDepInLaterWhenBlockRejected pins the cross-guard rule: an op may
+// not depend on a resource recorded inside a LATER when-block (or any later
+// segment); apply cannot reorder ops across when_* boundaries.
+func TestApplyDepInLaterWhenBlockRejected(t *testing.T) {
+	root := t.TempDir()
+	marker := filepath.Join(root, "marker")
+
+	ops := []Op{
+		header(),
+		{Op: KindCommand, Bin: "touch", Args: []string{marker}, ID: "Command[b]", Deps: []string{"Command[a]"}},
+		{Op: KindWhenBegin, All: []Predicate{{Fact: "goos", Eq: "linux"}}},
+		{Op: KindCommand, Bin: "true", ID: "Command[a]"},
+		{Op: KindWhenEnd},
+	}
+	err := Apply(ops, Facts{GOOS: "linux"}, "")
+	if err == nil || !strings.Contains(err.Error(), "not ordered before it") {
+		t.Fatalf("want cross-when-block dep error, got %v", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("refused plan must not mutate")
+	}
+}
+
+// TestApplyDepOnEarlierWhenBodySatisfied pins the satisfied side of the
+// cross-guard rule: a dep on a resource inside an EARLIER when-block counts
+// as ordered before (it applies first), so the dependent outside the block
+// runs after it.
+func TestApplyDepOnEarlierWhenBodySatisfied(t *testing.T) {
+	root := t.TempDir()
+	log := filepath.Join(root, "order.log")
+
+	ops := []Op{
+		header(),
+		{Op: KindWhenBegin, All: []Predicate{{Fact: "goos", Eq: "linux"}}},
+		{Op: KindCommand, Bin: "sh", Args: []string{"-c", "echo A >> " + log}, ID: "Command[a]"},
+		{Op: KindWhenEnd},
+		{Op: KindCommand, Bin: "sh", Args: []string{"-c", "echo B >> " + log}, ID: "Command[b]", Deps: []string{"Command[a]"}},
+	}
+	if err := Apply(ops, Facts{GOOS: "linux"}, ""); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	data, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(data), "A\nB\n"; got != want {
+		t.Fatalf("apply order = %q, want %q", got, want)
+	}
+}
+
 func TestApplyFileLineRemove(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "f")
@@ -439,5 +614,222 @@ func TestApplyTimerRestartLowering(t *testing.T) {
 	}
 	if !sawRestart {
 		t.Errorf("expected a systemctl --user restart invocation, got: %v", invoked)
+	}
+}
+
+// sortedApplyOrderCase is one sortedApplyOrder table fixture: a recorded body
+// (without header) plus the expected sequence of op IDs, or an expected error
+// substring. IDs double as both the dep targets and the order assertion.
+type sortedApplyOrderCase struct {
+	name    string
+	body    []Op
+	wantIDs []string
+	wantErr string
+}
+
+func sortedApplyOrderFixture() []sortedApplyOrderCase {
+	beginLinux := Op{Op: KindWhenBegin, All: []Predicate{{Fact: "goos", Eq: "linux"}}}
+	end := Op{Op: KindWhenEnd}
+	cmd := func(id string, deps ...string) Op {
+		return Op{Op: KindCommand, Bin: "true", ID: id, Deps: deps}
+	}
+	return []sortedApplyOrderCase{
+		{
+			name:    "dep free keeps recorded order",
+			body:    []Op{cmd("c"), cmd("b"), cmd("a")},
+			wantIDs: []string{"c", "b", "a"},
+		},
+		{
+			name:    "dependent reordered after dependency",
+			body:    []Op{cmd("b", "a"), cmd("a")},
+			wantIDs: []string{"a", "b"},
+		},
+		{
+			name: "stable: ready ops emitted in recorded order",
+			// Ready set starts at {a, c}; c must not overtake a, and d
+			// (depending on nothing) stays ahead of b whose dep unblocks last.
+			body:    []Op{cmd("c"), cmd("d"), cmd("b", "a"), cmd("a")},
+			wantIDs: []string{"c", "d", "a", "b"},
+		},
+		{
+			name: "diamond collapses to dependency order",
+			body: []Op{
+				cmd("root", "left", "right"),
+				cmd("left", "base"),
+				cmd("right", "base"),
+				cmd("base"),
+			},
+			wantIDs: []string{"base", "left", "right", "root"},
+		},
+		{
+			name:    "control ops keep recorded positions",
+			body:    []Op{beginLinux, cmd("b", "a"), cmd("a"), end, cmd("c")},
+			wantIDs: []string{"when-begin", "a", "b", "when-end", "c"},
+		},
+		{
+			name:    "dep on op in earlier when-block satisfied",
+			body:    []Op{beginLinux, cmd("a"), end, cmd("b", "a")},
+			wantIDs: []string{"when-begin", "a", "when-end", "b"},
+		},
+		{
+			name:    "self dependency is a cycle",
+			body:    []Op{cmd("a", "a")},
+			wantErr: "circular dependency involving a",
+		},
+		{
+			name:    "two op cycle",
+			body:    []Op{cmd("a", "b"), cmd("b", "a")},
+			wantErr: "circular dependency involving",
+		},
+		{
+			name:    "dep recorded nowhere satisfied (earlier chunk)",
+			body:    []Op{cmd("a", "File[missing]")},
+			wantIDs: []string{"a"},
+		},
+		{
+			name:    "dep on later when-block refused",
+			body:    []Op{cmd("b", "a"), beginLinux, cmd("a"), end},
+			wantErr: "not ordered before it",
+		},
+		{
+			name:    "duplicate dep occurrences stay ordered",
+			body:    []Op{cmd("x", "File[same]"), cmd("y"), Op{Op: KindCommand, Bin: "true", ID: "File[same]"}},
+			wantIDs: []string{"y", "File[same]", "x"},
+		},
+	}
+}
+
+// TestSortedApplyOrder pins the apply-order algorithm directly: segment
+// partitioning, stable Kahn ordering, and the dangling/cycle refusals.
+func TestSortedApplyOrder(t *testing.T) {
+	for _, tc := range sortedApplyOrderFixture() {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := sortedApplyOrder(tc.body)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("want error containing %q, got %v", tc.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("sortedApplyOrder: %v", err)
+			}
+			var ids []string
+			for _, l := range got {
+				if l.op.Op == KindWhenBegin {
+					ids = append(ids, "when-begin")
+					continue
+				}
+				if l.op.Op == KindWhenEnd {
+					ids = append(ids, "when-end")
+					continue
+				}
+				ids = append(ids, l.op.ID)
+			}
+			if !reflect.DeepEqual(ids, tc.wantIDs) {
+				t.Fatalf("order = %v, want %v", ids, tc.wantIDs)
+			}
+
+			// Line numbers must track the recorded position, not the sorted one.
+			wantLine := map[string]int{}
+			for i, op := range tc.body {
+				key := op.ID
+				if IsControlKind(op.Op) {
+					if op.Op == KindWhenBegin {
+						key = "when-begin"
+					} else {
+						key = "when-end"
+					}
+				}
+				wantLine[key] = i + 2
+			}
+			for _, l := range got {
+				key := l.op.ID
+				if IsControlKind(l.op.Op) {
+					if l.op.Op == KindWhenBegin {
+						key = "when-begin"
+					} else {
+						key = "when-end"
+					}
+				}
+				if wantLine[key] != l.line {
+					t.Fatalf("op %s line = %d, want %d (recorded position)", key, l.line, wantLine[key])
+				}
+			}
+		})
+	}
+}
+
+// chunkBodies flattens SplitPrivilegeChunks output for ValidateChunkDeps.
+func chunkBodies(chunks []Chunk) [][]Op {
+	bodies := make([][]Op, len(chunks))
+	for i, ch := range chunks {
+		bodies[i] = ch.Ops
+	}
+	return bodies
+}
+
+// TestApplyDepInLaterChunkRefusedBeforeApply pins the forward cross-chunk
+// rule: a dep recorded in a LATER privilege chunk crosses the elevation
+// boundary (apply never reorders chunks), so the controller-side pre-flight
+// ValidateChunkDeps must refuse it before any chunk is applied.
+func TestApplyDepInLaterChunkRefusedBeforeApply(t *testing.T) {
+	root := t.TempDir()
+	marker := filepath.Join(root, "marker")
+
+	ops := []Op{
+		{Op: KindPlan, Version: CurrentVersion, ID: "chunks"},
+		{Op: KindCommand, Bin: "touch", Args: []string{marker}, ID: "Command[b]", Deps: []string{"Command[a]"}},
+		{Op: KindCommand, Bin: "true", ID: "Command[a]", Elevate: true},
+	}
+	chunks := SplitPrivilegeChunks(ops)
+	if len(chunks) != 2 {
+		t.Fatalf("chunks = %d, want 2", len(chunks))
+	}
+	err := ValidateChunkDeps(chunkBodies(chunks))
+	if err == nil {
+		t.Fatal("want forward cross-chunk dep refusal")
+	}
+	for _, want := range []string{"chunk 0", "Command[b]", "Command[a]", "later chunk 1"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q must name %q", err.Error(), want)
+		}
+	}
+	if _, serr := os.Stat(marker); !os.IsNotExist(serr) {
+		t.Fatal("refused plan must not mutate before any chunk applies")
+	}
+}
+
+// TestApplyDepOnEarlierChunkSatisfied pins the backward cross-chunk rule:
+// chunks apply in recorded order and never reorder, so a dep on an op from
+// an EARLIER privilege chunk is genuinely satisfied. The dependent op must
+// apply after its dependency's effect (sh-append order proves it).
+func TestApplyDepOnEarlierChunkSatisfied(t *testing.T) {
+	root := t.TempDir()
+	log := filepath.Join(root, "order.log")
+
+	ops := []Op{
+		{Op: KindPlan, Version: CurrentVersion, ID: "chunks"},
+		{Op: KindCommand, Bin: "sh", Args: []string{"-c", "echo A >> " + log}, ID: "Command[a]"},
+		{Op: KindCommand, Bin: "sh", Args: []string{"-c", "echo B >> " + log}, ID: "Command[b]", Elevate: true, Deps: []string{"Command[a]"}},
+	}
+	chunks := SplitPrivilegeChunks(ops)
+	if len(chunks) != 2 {
+		t.Fatalf("chunks = %d, want 2", len(chunks))
+	}
+	if err := ValidateChunkDeps(chunkBodies(chunks)); err != nil {
+		t.Fatalf("backward cross-chunk dep must validate: %v", err)
+	}
+	for i, ch := range chunks {
+		if err := Apply(ch.Ops, Facts{}, ""); err != nil {
+			t.Fatalf("chunk %d: %v", i, err)
+		}
+	}
+	data, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(data), "A\nB\n"; got != want {
+		t.Fatalf("apply order = %q, want %q (dependency Command[a] in chunk 0 must precede dependent Command[b] in chunk 1)", got, want)
 	}
 }

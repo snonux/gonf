@@ -69,6 +69,7 @@ func Present(name string, opts ...opt.Option) resource.Resource {
 		ID:     r.ID(),
 		Name:   p.name,
 		Absent: p.Absent,
+		Deps:   p.DependsOn.SortedIDs(),
 	})
 	return r
 }

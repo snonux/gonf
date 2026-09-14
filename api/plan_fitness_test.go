@@ -48,9 +48,11 @@ func kindFitnessTable() map[plan.Kind]kindFixture {
 		// Resource kinds, one per draft kind string draftToOp accepts.
 		plan.KindFile: {draft: &resource.PlanDraft{
 			Kind:       "file",
+			ID:         "File[/tmp/fit.conf]",
 			Path:       "/tmp/fit.conf",
 			Mode:       "0640",
 			ContentB64: b64,
+			Deps:       []string{"Package[fit-dep]"},
 		}},
 		plan.KindDir: {draft: &resource.PlanDraft{
 			Kind: "dir",
@@ -82,6 +84,7 @@ func kindFitnessTable() map[plan.Kind]kindFixture {
 			Kind: "package",
 			ID:   "Package[fit-pkg]",
 			Name: "fit-pkg",
+			Deps: []string{"Package[fit-base]"},
 		}},
 		plan.KindCommand: {draft: &resource.PlanDraft{
 			Kind: "command",
@@ -96,9 +99,11 @@ func kindFitnessTable() map[plan.Kind]kindFixture {
 		}},
 		plan.KindDaemonReload: {draft: &resource.PlanDraft{
 			Kind:      "daemon_reload",
+			ID:        "DaemonReload[user]",
 			User:      true,
 			IfChanged: true,
 			Watch:     []string{"File[/tmp/fit]"},
+			Deps:      []string{"File[/tmp/fit]"},
 		}},
 		plan.KindCron: {draft: &resource.PlanDraft{
 			Kind:     "cron",

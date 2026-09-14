@@ -401,6 +401,7 @@ func (f *File) planDraft() resource.PlanDraft {
 		Absent:     f.Absent,
 		AddLine:    f.addLine,
 		RemoveLine: f.removeLine,
+		Deps:       f.DependsOn.SortedIDs(),
 	}
 	// Only explicitly configured ownership is recorded: build()'s
 	// user.Current() default must not be pushed to remote hosts. Absent files

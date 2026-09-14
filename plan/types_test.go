@@ -270,6 +270,17 @@ func TestOpJSONTagsMatchPlanExamples(t *testing.T) {
 			want: `{"op":"file","path":"${HOME}/.config/tmux/tmux.conf","add_line":"source-file ~/.config/tmux/tmux.rocky.conf","remove_line":"old-line"}`,
 		},
 		{
+			name: "command with deps",
+			op: Op{
+				Op:   KindCommand,
+				Bin:  "systemctl",
+				Args: []string{"--user", "restart", "x.service"},
+				ID:   "Command[restart.x]",
+				Deps: []string{"File[/etc/x]", "Package[x]"},
+			},
+			want: `{"op":"command","id":"Command[restart.x]","bin":"systemctl","args":["--user","restart","x.service"],"deps":["File[/etc/x]","Package[x]"]}`,
+		},
+		{
 			name: "link hardlink absent",
 			op: Op{
 				Op:       KindLink,
@@ -321,7 +332,7 @@ func TestOpJSONTagsMatchPlanExamples(t *testing.T) {
 func TestOpZeroValueOmitemptyReady(t *testing.T) {
 	t.Parallel()
 	var op Op
-	if op.Unless != nil || op.OnlyIf != nil || op.All != nil || op.Args != nil || op.Env != nil {
+	if op.Unless != nil || op.OnlyIf != nil || op.All != nil || op.Args != nil || op.Env != nil || op.Deps != nil {
 		t.Fatalf("zero Op has non-nil omitempty fields: %+v", op)
 	}
 }

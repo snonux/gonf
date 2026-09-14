@@ -91,6 +91,7 @@ func (c *Cmd) planDraft(id string) resource.PlanDraft {
 		Args:    append([]string(nil), c.args...),
 		Dir:     c.dir,
 		Creates: c.creates,
+		Deps:    c.DependsOn.SortedIDs(),
 	}
 	if c.env != nil {
 		d.Env = make(map[string]string, len(c.env))

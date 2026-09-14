@@ -333,6 +333,7 @@ func (d *Dir) planDraft() resource.PlanDraft {
 		Mode:   fmt.Sprintf("%#o", d.mode&os.ModePerm),
 		Absent: d.Absent,
 		Prune:  d.prune,
+		Deps:   d.DependsOn.SortedIDs(),
 	}
 	// Only explicitly configured ownership is recorded: build()'s
 	// user.Current() default must not be pushed to remote hosts. Absent
@@ -381,6 +382,7 @@ func EnsurePlanDraft(path string, opts ...opt.Option) (resource.PlanDraft, error
 		Path: d.path,
 		Mode: fmt.Sprintf("%#o", d.mode&os.ModePerm),
 		ID:   fmt.Sprintf("EnsureDir[%s]", d.path),
+		Deps: d.DependsOn.SortedIDs(),
 	}
 	// Same rule as planDraft: only explicitly configured ownership is
 	// recorded, never build()'s user.Current() default.

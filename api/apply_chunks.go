@@ -41,8 +41,14 @@ func defaultElevatedApply(mode privilege.Mode, ops []plan.Op, planDir string) er
 
 // ApplyChunks splits ops by elevate and applies each chunk: user chunks
 // in-process, privileged chunks via sudo/doas re-exec (or in-process if root).
+// A ValidateChunkDeps pre-flight runs first: a dep recorded in a later chunk
+// (or dangling) fails before any chunk is applied, so a rejected plan
+// mutates nothing.
 func ApplyChunks(ops []plan.Op, planDir string, mode privilege.Mode) error {
 	chunks := plan.SplitPrivilegeChunks(ops)
+	if err := validateChunkDeps(chunks); err != nil {
+		return err
+	}
 	for i, ch := range chunks {
 		if !ch.Elevate {
 			if err := ApplyPlan(ch.Ops, planDir); err != nil {
@@ -64,4 +70,16 @@ func ApplyChunks(ops []plan.Op, planDir string, mode privilege.Mode) error {
 		}
 	}
 	return nil
+}
+
+// validateChunkDeps runs the plan-level cross-chunk dependency pre-flight
+// (plan.ValidateChunkDeps) over the split privilege chunks: forward
+// cross-chunk and dangling deps fail before any chunk is applied or
+// uploaded. Shared by ApplyChunks and pushChunks.
+func validateChunkDeps(chunks []plan.Chunk) error {
+	bodies := make([][]plan.Op, len(chunks))
+	for i, ch := range chunks {
+		bodies[i] = ch.Ops
+	}
+	return plan.ValidateChunkDeps(bodies)
 }

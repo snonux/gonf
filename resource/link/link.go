@@ -97,6 +97,7 @@ func (l *Link) planDraft() resource.PlanDraft {
 		ID:     l.resource.ID(),
 		Path:   l.path,
 		Absent: l.Absent,
+		Deps:   l.DependsOn.SortedIDs(),
 	}
 	switch l.kind {
 	case symlinkKind:

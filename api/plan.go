@@ -397,6 +397,7 @@ func draftToOp(d resource.PlanDraft) (plan.Op, error) {
 		EnableOnly: d.EnableOnly,
 		IfChanged:  d.IfChanged,
 		Watch:      d.Watch,
+		Deps:       d.Deps,
 		Elevate:    d.Elevate || recordingElevate,
 	}
 	switch d.Kind {

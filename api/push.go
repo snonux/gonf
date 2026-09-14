@@ -121,13 +121,19 @@ func PushTo(t PushTarget, planID string, tasks ...string) error {
 }
 
 // pushChunks splits ops into privilege chunks and streams each chunk to one
-// SSH target. Multi-chunk plans with blobs first upload all blobs to a sticky
-// dir in a dedicated always-unprivileged session (pushBlobs); every chunk then
-// applies plan-only with -apply-dir and no embedded blobs. This keeps blob
+// SSH target. A ValidateChunkDeps pre-flight runs before any SSH traffic: a
+// dep recorded in a later privilege chunk (or dangling) fails the push
+// without sending anything, mirroring the privilege pre-flight. Multi-chunk
+// plans with blobs first upload all blobs to a sticky dir in a dedicated
+// always-unprivileged session (pushBlobs); every chunk then applies
+// plan-only with -apply-dir and no embedded blobs. This keeps blob
 // extraction owned by the SSH login user even when the first chunk is
 // elevated: root could read the blobs anyway, but the login user could not.
 func pushChunks(t PushTarget, planID string, ops []plan.Op, mem *plan.MemoryStore) error {
 	chunks := plan.SplitPrivilegeChunks(ops)
+	if err := validateChunkDeps(chunks); err != nil {
+		return err
+	}
 	hasBlobs := mem != nil && mem.HasBlobs()
 	// Sticky dir for multi-chunk plans with blobs: uploaded once, referenced
 	// read-only by every chunk. A concrete remote path; the ID is sanitized.

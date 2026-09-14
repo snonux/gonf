@@ -53,6 +53,9 @@ func normalizeOp(op *Op) {
 	if len(op.CronEnv) == 0 {
 		op.CronEnv = nil
 	}
+	if len(op.Deps) == 0 {
+		op.Deps = nil
+	}
 	if op.Unless != nil {
 		normalizeGuard(op.Unless)
 	}

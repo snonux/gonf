@@ -123,6 +123,7 @@ func (c *Cron) planDraft(id string) resource.PlanDraft {
 		}, " "),
 		CronEnv: append([]string(nil), c.env...),
 		Absent:  c.Absent,
+		Deps:    c.DependsOn.SortedIDs(),
 	}
 }
 

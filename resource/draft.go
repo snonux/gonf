@@ -108,6 +108,10 @@ type PlanDraft struct {
 	IfChanged bool
 	// Watch lists resource ids for IfChanged (usually DependsOn targets).
 	Watch []string
+	// Deps lists the sorted resource IDs this draft's resource depends on
+	// (the DependsOn targets). draftToOp copies them into plan.Op.Deps so
+	// plan apply orders ops like the repository path does.
+	Deps []string
 
 	// Elevate forces elevate=true on this draft (e.g. options.WithElevate).
 	Elevate bool

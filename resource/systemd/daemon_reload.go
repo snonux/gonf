@@ -72,6 +72,7 @@ func (d *DaemonReloadResource) planDraft(id string) resource.PlanDraft {
 		User:      d.user,
 		IfChanged: d.ifChanged,
 		Watch:     watch,
+		Deps:      d.DependsOn.SortedIDs(),
 	}
 }
 

@@ -19,6 +19,8 @@ func LinkIfExists(path, target string, opts ...options.Option) Resource {
 	p := Expand(path)
 	t := Expand(target)
 	if resource.PlanDraftRecording() {
+		// No DependsOn state exists here: record mode ignores opts (the recipe
+		// is evaluated on the destination), so the draft carries no deps.
 		resource.RecordPlanDraft(resource.PlanDraft{
 			Kind:   "link_if_exists",
 			Path:   p,

@@ -97,6 +97,7 @@ func (s *Service) planDraft(id string) resource.PlanDraft {
 		Restart: s.restart,
 		Reload:  s.reload,
 		User:    s.user,
+		Deps:    s.DependsOn.SortedIDs(),
 	}
 }
 

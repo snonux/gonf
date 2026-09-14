@@ -75,6 +75,7 @@ func (t *Timer) planDraft(id string) resource.PlanDraft {
 		User:       t.user,
 		Restart:    t.restart,
 		EnableOnly: t.enableOnly,
+		Deps:       t.DependsOn.SortedIDs(),
 	}
 }
 

@@ -95,8 +95,20 @@ if err := ApplyPlan(ops, planDir); err != nil { /* … */ }
 
 - First line must be `{"op":"plan","version":1,…}`. Unsupported versions are
   refused **before** any mutation.
-- Streams ops top → bottom. Stackable `when_begin` / `when_end`: failed
-  predicates skip the body without touching the filesystem.
+- Applies resource ops in dependency order: each contiguous run between the
+  header and `when_begin` / `when_end` boundaries is topologically sorted by
+  the recorded `deps` (stable: among ready ops, recorded order wins), so a
+  resource always applies after its `DependsOn` targets. Dep-free plans keep
+  recorded order; ops are never reordered across `when_*` boundaries. A dep
+  outside the current run is classified by where it is recorded: in this body
+  earlier, or in an earlier privilege chunk → satisfied; later in this body
+  (a later when-block) → refused before any mutation; nowhere in this body →
+  satisfied at chunk level (an earlier chunk or invocation applied it).
+  Controller-side pre-flight (`plan.ValidateChunkDeps`, wired into
+  `ApplyChunks` and `pushChunks`) refuses forward cross-chunk and dangling
+  deps before any chunk is applied.
+- Stackable `when_begin` / `when_end`: failed predicates skip the body
+  without touching the filesystem.
 - Expands `${HOME}` on the destination; unknown `${…}` is a hard error.
 - Maps ops to existing resource `Ensure` helpers (`file`, `dir`, `link`,
   `cmd`, `pkg`, …) — same semantics as direct resource APIs.
@@ -120,6 +132,8 @@ test (`plan/types_test.go`).
    in its `planDraft()` and call `resource.RecordPlanDraft` from `Present`
    (the register-without-draft guard fails the record otherwise). Map absent
    resources onto the same kind with `Absent: true` (see `NoCron`/`NoService`).
+   Include `Deps: x.DependsOn.SortedIDs()` so `DependsOn` ordering survives
+   the wire.
 4. **Draft payload** — `resource/draft.go`: add any new `PlanDraft` fields the
    kind needs (package-neutral, no `plan` import — resource packages must not
    depend on the wire codec).
@@ -231,12 +245,31 @@ Global flags (`-profile`, `-verbose`, `-quiet`, `-dry-run` / `-n`) still apply.
 `gonf -list` lists **activated** tasks (After `When*` filtering for display);
 plan recording still uses the full candidate set.
 
-Plan schema **version 4** adds `owner` / `group` fields to the filesystem ops
-(`file`, `dir`, `sync_dir`, `ensure_dir`): ownership explicitly set via
-`WithOwner` / `WithGroup` is enforced on destination apply (only explicitly
-configured ownership is recorded; empty fields leave ownership to the apply
-side). Version 3 added `cron` and `service` ops; version 2 added `timer` and
-`daemon_reload` ops (this binary still applies versions 1, 2, and 3).
+Plan schema **version 5** adds the `deps` field to resource ops: the sorted
+resource IDs a resource depends on (its `DependsOn` targets, e.g.
+`File[/etc/foo]`). With deps present, remote apply order matches the
+repository's topological order; ops are never reordered across `when_*`
+boundaries. The bump follows the owner/group bump rationale: an old binary
+that understood a dep-free schema would silently DROP dep ordering — the same
+intent-loss bug class — so v4 binaries refuse v5 plans up-front at the header
+gate instead, while this binary keeps applying v1–4 plans. Version 4 added
+`owner` / `group` fields to the filesystem ops (`file`, `dir`, `sync_dir`,
+`ensure_dir`): ownership explicitly set via `WithOwner` / `WithGroup` is
+enforced on destination apply (only explicitly configured ownership is
+recorded; empty fields leave ownership to the apply side). Version 3 added
+`cron` and `service` ops; version 2 added `timer` and `daemon_reload` ops.
+
+Privilege-chunked plans (mixed privileged/unprivileged ops) carry deps
+across the chunk boundary in dependency order: chunks apply in recorded
+order and never reorder, so a dep naming an op from an EARLIER chunk is
+satisfied (the earlier chunk applied it first). A dependency recorded AFTER
+its dependent crosses the privilege boundary — apply cannot reorder across
+chunks — and is rejected before anything is applied by a controller-side
+pre-flight (`plan.ValidateChunkDeps`, wired into `ApplyChunks` and
+`pushChunks`); on push the refusal happens before any SSH traffic. The same
+pre-flight refuses dangling deps (recorded in no chunk). Elevation ordering
+stays fixed by recorded order; reordering across chunks would defeat the
+privilege split.
 
 ## JSONL sketch
 
@@ -247,7 +280,7 @@ side). Version 3 added `cron` and `service` ops; version 2 added `timer` and
 {"op":"file","path":"${HOME}/.taskrc","mode":"0640","content_b64":"Li4u"}
 {"op":"file","path":"${HOME}/secret.conf","mode":"0640","owner":"paul","group":"1000","content_b64":"Li4u"}
 {"op":"when_end"}
-{"op":"command","bin":"systemctl","args":["--user","daemon-reload"],"unless":{"bin":"true"}}
+{"op":"command","bin":"systemctl","args":["--user","daemon-reload"],"unless":{"bin":"true"},"deps":["File[/etc/foo]"]}
 ```
 
 Schema version is the wire format version (not the gonf app version). Bump it

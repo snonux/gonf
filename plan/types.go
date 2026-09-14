@@ -7,8 +7,9 @@ package plan
 // CurrentVersion is the plan wire schema version emitted by gonf plan.
 // Version 2 added timer and daemon_reload ops; version 3 added cron and
 // service ops; version 4 added owner/group fields to the filesystem ops
-// (file, dir, sync_dir, ensure_dir).
-const CurrentVersion = 4
+// (file, dir, sync_dir, ensure_dir); version 5 added the deps field
+// (recorded DependsOn ordering) to resource ops.
+const CurrentVersion = 5
 
 // supportedVersions is the set of plan schema versions this binary can apply.
 // Apply must refuse plans whose version is not in this set before any mutation.
@@ -16,6 +17,7 @@ var supportedVersions = map[int]struct{}{
 	1:              {},
 	2:              {},
 	3:              {},
+	4:              {},
 	CurrentVersion: {},
 }
 
@@ -83,6 +85,19 @@ func IsKnownKind(k Kind) bool {
 		}
 	}
 	return false
+}
+
+// IsControlKind reports whether k is a plan-engine control op — the plan
+// header or a when-block boundary — rather than a resource op. Apply sorts
+// resource ops by their deps only within contiguous runs between control
+// ops, so when-block bodies are never reordered across their boundaries.
+func IsControlKind(k Kind) bool {
+	switch k {
+	case KindPlan, KindWhenBegin, KindWhenEnd:
+		return true
+	default:
+		return false
+	}
 }
 
 // Predicate is one conjunct in a when_begin "all" list.
@@ -194,6 +209,13 @@ type Op struct {
 	// Elevate marks ops from a Privileged() task (or WithElevate command).
 	// Controllers use this to split apply into user vs sudo/doas gonf invocations.
 	Elevate bool `json:"elevate,omitempty"`
+
+	// Deps lists the resource IDs (op IDs such as "File[/etc/foo]") this op
+	// depends on, recorded from the resource DependsOn option. Plan apply
+	// topologically sorts resource ops by deps within each contiguous run
+	// between control ops, mirroring the repository path; ops are never
+	// reordered across when_* boundaries.
+	Deps []string `json:"deps,omitempty"`
 
 	// All is the conjunctive predicate list for KindWhenBegin.
 	All []Predicate `json:"all,omitempty"`

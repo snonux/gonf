@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -467,5 +468,103 @@ func TestRecordPlanLowersTimerRestart(t *testing.T) {
 	}
 	if !reflect.DeepEqual(decoded, ops) {
 		t.Fatalf("round-trip mismatch:\n got %#v\nwant %#v", decoded[1], ops[1])
+	}
+}
+
+// TestRecordPlanLowersDependsOn pins the wire round-trip of dependency
+// intent: DependsOn targets must reach plan.Op.Deps with their stable
+// resource IDs so plan apply can order ops like the repository path does
+// (task y12). A dep-free op must keep Deps nil so the field stays omitted.
+func TestRecordPlanLowersDependsOn(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	base := t.TempDir()
+	first := filepath.Join(base, "first.conf")
+	second := filepath.Join(base, "second.conf")
+
+	Task("deps", "DependsOn lowering", func() {
+		firstRes := File(first, options.WithContent("a"))
+		File(second, options.WithContent("b"), options.DependsOn(firstRes))
+	})
+
+	ops, err := RecordPlan("deps", "", "deps")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+	wantKinds := []plan.Kind{plan.KindPlan, plan.KindFile, plan.KindFile}
+	if !reflect.DeepEqual(opsKinds(ops), wantKinds) {
+		t.Fatalf("ops kinds = %v, want %v", opsKinds(ops), wantKinds)
+	}
+
+	wantID := "File[" + first + "]"
+	if ops[1].ID != wantID {
+		t.Fatalf("dependency id = %q, want %q (IDs must stay stable for DependsOn)", ops[1].ID, wantID)
+	}
+	if got := ops[2].Deps; !reflect.DeepEqual(got, []string{wantID}) {
+		t.Fatalf("dependent op deps = %#v, want [%s]", got, wantID)
+	}
+	// The dependency itself has none: the field must be omitted on the wire.
+	if ops[1].Deps != nil {
+		t.Fatalf("dep-free op deps = %#v, want nil", ops[1].Deps)
+	}
+
+	// Wire round-trip must preserve the dep list.
+	raw, err := plan.EncodePlan(ops)
+	if err != nil {
+		t.Fatalf("EncodePlan: %v", err)
+	}
+	if !strings.Contains(string(raw), `"deps":["`+wantID+`"]`) {
+		t.Fatalf("encoded plan lost deps field:\n%s", raw)
+	}
+	decoded, err := plan.DecodePlanBytes(raw)
+	if err != nil {
+		t.Fatalf("DecodePlanBytes: %v", err)
+	}
+	if !reflect.DeepEqual(decoded, ops) {
+		t.Fatalf("round-trip mismatch\ngot  %#v\nwant %#v", decoded, ops)
+	}
+}
+
+// TestRecordPlanLowersDaemonReloadDeps pins that the daemon_reload draft
+// records its DependsOn targets: a gated daemon-reload must apply after the
+// resources it watches, not just consult them.
+func TestRecordPlanLowersDaemonReloadDeps(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("systemd resource is Linux-specific")
+	}
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	conf := filepath.Join(t.TempDir(), "unit.conf")
+
+	Task("reload_deps", "", func() {
+		unit := File(conf, options.WithContent("x"))
+		DaemonReload(options.WithUser, options.IfChanged, options.DependsOn(unit))
+	})
+
+	ops, err := RecordPlan("reload", "", "reload_deps")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+	if !reflect.DeepEqual(opsKinds(ops), []plan.Kind{plan.KindPlan, plan.KindFile, plan.KindDaemonReload}) {
+		t.Fatalf("ops kinds = %v", opsKinds(ops))
+	}
+	wantID := "File[" + conf + "]"
+	if got := ops[2].Deps; !reflect.DeepEqual(got, []string{wantID}) {
+		t.Fatalf("daemon_reload deps = %#v, want [%s]", got, wantID)
+	}
+	if !reflect.DeepEqual(ops[2].Watch, []string{wantID}) {
+		t.Fatalf("daemon_reload watch = %#v, want [%s]", ops[2].Watch, wantID)
 	}
 }
