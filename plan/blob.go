@@ -110,12 +110,12 @@ func (s *Store) WriteTree(name, srcDir string) (string, error) {
 }
 
 // WriteGlob copies basename matches of pattern into blobs/<name>/ (flat).
-// Glob blobs are flat regular-file pickers: symlinks to regular files are
-// read through into content, directories, dangling links and other
-// non-regular entries are skipped — the same policy the direct
-// WithSourceGlob path applies, so glob-sourced sync_dir ops stay identical
-// across local and remote apply. (Tree packaging via WriteTree preserves
-// symlinks instead.)
+// Glob blobs are flat regular-file pickers classified by dir.GlobMatchCounts:
+// symlinks to regular files are read through into content; directories,
+// dangling links and other non-regular entries are skipped — the same
+// policy the direct WithSourceGlob path applies, so glob-sourced sync_dir
+// ops stay identical across local and remote apply. (Tree packaging via
+// WriteTree preserves symlinks instead.)
 func (s *Store) WriteGlob(name, pattern string) (string, error) {
 	if s == nil || s.Root == "" {
 		return "", fmt.Errorf("plan: blob store: no plan directory")

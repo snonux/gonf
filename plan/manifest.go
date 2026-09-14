@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/snonux/gonf/resource/dir"
 )
 
 // BlobEntryKind classifies one entry of a packaged source tree.
@@ -94,9 +96,13 @@ func scanTree(srcDir string) ([]BlobEntry, error) {
 }
 
 // scanGlob classifies the basename matches of pattern into flat manifest
-// entries (Rel = basename): regular files by content, symlinks preserved
-// raw, directories and other file types skipped — glob mode packages a
-// flat file set, so an empty tree is a valid outcome.
+// entries (Rel = basename) through dir.GlobMatchCounts — the one
+// definition of the glob-match rule, shared with the direct WithSourceGlob
+// copy path and dir's prune keep-set: counting matches (regular files and
+// symlinks resolving to regular files, read through into content) are
+// packaged by content; directories, dangling links and other non-regular
+// entries are skipped, exactly like the direct copySourceGlob path, so an
+// empty tree is a valid outcome.
 func scanGlob(pattern string) ([]BlobEntry, error) {
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
@@ -108,34 +114,18 @@ func scanGlob(pattern string) ([]BlobEntry, error) {
 		if err != nil {
 			return nil, fmt.Errorf("plan: package glob match %s: %w", match, err)
 		}
-		// Glob blobs are flat regular-file pickers (their destination apply
-		// runs with tree semantics, so preserved symlinks would either dangle
-		// or change the entry from the direct WithSourceGlob behavior).
-		// Symlinks to regular files are read through into content; dirs,
-		// dangling links and other non-regular entries are skipped, exactly
-		// like the direct copySourceGlob path.
-		switch {
-		case info.IsDir():
-			continue
-		case info.Mode()&os.ModeSymlink != 0:
-			targetInfo, err := os.Stat(match)
-			if err != nil || !targetInfo.Mode().IsRegular() {
-				continue
-			}
-			data, err := os.ReadFile(match)
-			if err != nil {
-				return nil, fmt.Errorf("plan: package glob match %s: %w", match, err)
-			}
-			out = append(out, BlobEntry{Rel: filepath.Base(match), Kind: BlobFile, Data: data})
-		case info.Mode().IsRegular():
-			data, err := os.ReadFile(match)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, BlobEntry{Rel: filepath.Base(match), Kind: BlobFile, Data: data})
-		default:
+		if !dir.GlobMatchCounts(match, info) {
 			continue
 		}
+		// Glob blobs are flat regular-file pickers (their destination apply
+		// runs with tree semantics, so preserved symlinks would either dangle
+		// or change the entry from the direct WithSourceGlob behavior):
+		// counting matches are read through into content.
+		data, err := os.ReadFile(match)
+		if err != nil {
+			return nil, fmt.Errorf("plan: package glob match %s: %w", match, err)
+		}
+		out = append(out, BlobEntry{Rel: filepath.Base(match), Kind: BlobFile, Data: data})
 	}
 	sortEntries(out)
 	return out, nil

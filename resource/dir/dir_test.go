@@ -552,6 +552,87 @@ func TestSourceGlobPrune(t *testing.T) {
 	}
 }
 
+// TestSourceGlobPruneKeepSetMatchesCountingMatches pins the lockstep
+// between copySourceGlob and pruneGlob: both classify matches through the
+// one shared predicate (GlobMatchCounts), so the prune keep-set is exactly
+// the basenames copySourceGlob would copy. A destination regular file whose
+// name matches only a non-counting source entry (here: the dangling
+// symlink "ghost" and the unmatched "stale.rb") is converged away instead
+// of being kept forever, while a counting symlink-to-file match keeps its
+// basename.
+func TestSourceGlobPruneKeepSetMatchesCountingMatches(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "keep.rb"), []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("keep.rb", filepath.Join(src, "tofile")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("nowhere", filepath.Join(src, "ghost")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(src, "adir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"keep.rb", "tofile", "ghost", "stale.rb"} {
+		if err := os.WriteFile(filepath.Join(dst, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(dst, "subdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Cross-consistency (via the shared predicate, not the fs): the
+	// counting-match set is the same set copySourceGlob copies and
+	// pruneGlob keeps.
+	matches, err := filepath.Glob(filepath.Join(src, "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantKeep := map[string]bool{}
+	for _, match := range matches {
+		info, err := os.Lstat(match)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if GlobMatchCounts(match, info) {
+			wantKeep[filepath.Base(match)] = true
+		}
+	}
+	if !wantKeep["keep.rb"] || !wantKeep["tofile"] || len(wantKeep) != 2 {
+		t.Fatalf("counting matches = %v, want exactly {keep.rb, tofile}", wantKeep)
+	}
+
+	Present(dst, WithSourceGlob(filepath.Join(src, "*")), WithPrune)
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	for _, name := range []string{"keep.rb", "tofile"} {
+		if _, err := os.Stat(filepath.Join(dst, name)); err != nil {
+			t.Fatalf("%s should remain (counting match): %v", name, err)
+		}
+	}
+	for _, name := range []string{"ghost", "stale.rb"} {
+		if _, err := os.Stat(filepath.Join(dst, name)); !os.IsNotExist(err) {
+			t.Fatalf("%s should have been pruned (non-counting match)", name)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dst, "subdir")); err != nil {
+		t.Fatal("subdir should not be pruned")
+	}
+}
+
 // TestSourceTreePruneDryRunKeepsStaleFiles guards against data loss: a
 // dry-run apply (gonf -n) of a Dir with WithSource+WithPrune must only
 // preview the prune (StatusWouldChange note), never delete stale destination
@@ -1337,5 +1418,55 @@ func TestEnsureSourceAndSourceGlobConflict(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Errorf("error should name the conflicting options, got: %v", err)
+	}
+}
+
+// TestSourceGlobCopiesExactlyCountingMatches pins that copySourceGlob's
+// copied set equals the shared predicate's counting set on a FRESH
+// destination: a symlink-to-file is copied read-through, dangling links and
+// dirs are skipped — so the copy side cannot diverge from GlobMatchCounts
+// (task r12 review finding F1).
+func TestSourceGlobCopiesExactlyCountingMatches(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "file.rb"), []byte("file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("file.rb", filepath.Join(dir, "tofile.rb")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("nowhere", filepath.Join(dir, "dangling.rb")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "adir"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := filepath.Join(t.TempDir(), "dst")
+	if err := Ensure(dst, WithSourceGlob(filepath.Join(dir, "*"))); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+
+	for _, name := range []string{"file.rb", "tofile.rb"} {
+		info, err := os.Lstat(filepath.Join(dst, name))
+		if err != nil {
+			t.Fatalf("expected %s copied: %v", name, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			t.Errorf("%s must be a regular file (read-through), got a symlink", name)
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "dangling.rb")); !os.IsNotExist(err) {
+		t.Errorf("dangling.rb must be skipped, got %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "adir")); !os.IsNotExist(err) {
+		t.Errorf("directory matches must be skipped, got %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dst, "tofile.rb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "file\n" {
+		t.Errorf("tofile.rb content = %q, want read-through %q", got, "file\n")
 	}
 }

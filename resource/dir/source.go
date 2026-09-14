@@ -18,6 +18,15 @@ import (
 // reports a symlink's own type via Lstat semantics (never following it), so
 // a symlink in the source tree is recreated as a symlink rather than read as
 // file content.
+//
+// This is the apply-side twin of plan's tree packaging (plan.scanTree):
+// both walk a source tree and include directories, symlinks (raw target,
+// never read through), and regular files — but they deliberately differ in
+// reconcile depth: copySourceTree applies attributes, notes, dry-run
+// guards, and .tmpl rendering via the file/link Ensures, while scanTree
+// packages raw bytes for transport and fails loudly on non-regular
+// entries. Keep the entry-kind dispatch aligned between the two by hand;
+// only the GLOB match rule is shared as code (GlobMatchCounts).
 func copySourceTree(d *Dir) error {
 	logger.Debug("installing files from source %s to %s", d.source, d.path)
 
@@ -230,7 +239,11 @@ func sourceEntryExists(source, rel string) bool {
 }
 
 // copySourceGlob installs regular files matching d.sourceGlob into d.path as
-// basename entries (flat, Rex ensure_dir style).
+// basename entries (flat, Rex ensure_dir style). A match counts exactly
+// when GlobMatchCounts says so — the one glob-match rule also used by the
+// prune keep-set below and by plan's glob blob packaging — so what is
+// installed here can never diverge from what prune keeps or what a remote
+// push packages.
 func copySourceGlob(d *Dir) error {
 	matches, err := filepath.Glob(d.sourceGlob)
 	if err != nil {
@@ -243,16 +256,7 @@ func copySourceGlob(d *Dir) error {
 		if err != nil {
 			return fmt.Errorf("stat glob match %s: %w", match, err)
 		}
-		if info.IsDir() {
-			continue
-		}
-		// Follow symlink-to-file; skip symlink-to-dir and other non-regular.
-		if info.Mode()&os.ModeSymlink != 0 {
-			targetInfo, err := os.Stat(match)
-			if err != nil || targetInfo.IsDir() || !targetInfo.Mode().IsRegular() {
-				continue
-			}
-		} else if !info.Mode().IsRegular() {
+		if !GlobMatchCounts(match, info) {
 			continue
 		}
 
@@ -264,12 +268,17 @@ func copySourceGlob(d *Dir) error {
 	return nil
 }
 
-// pruneGlob removes regular files directly under d.path whose basename is not
-// among the current glob matches. Subdirectories and unmatched names that are
-// not plain files are left alone (Rex prune_dir). In dry-run mode nothing is
-// removed and would-be-pruned paths are only noted as StatusWouldChange; a
-// missing destination means there is nothing to prune (same reasoning as
-// pruneTree).
+// pruneGlob removes regular files directly under d.path whose basename is
+// not the basename of a COUNTING glob match (dir.GlobMatchCounts) — the
+// same predicate copySourceGlob installs through, so the keep-set stays in
+// lockstep with the copy: nothing copied is ever pruned, and stale
+// destination files whose name matches only a non-counting entry (a
+// directory, dangling link, or other non-regular source entry) are
+// converged away instead of being kept forever. Subdirectories and
+// unmatched names that are not plain files are left alone (Rex prune_dir).
+// In dry-run mode nothing is removed and would-be-pruned paths are only
+// noted as StatusWouldChange; a missing destination means there is nothing
+// to prune (same reasoning as pruneTree).
 func pruneGlob(d *Dir) error {
 	if resource.DryRun() {
 		if _, err := os.Lstat(d.path); os.IsNotExist(err) {
@@ -285,9 +294,9 @@ func pruneGlob(d *Dir) error {
 	for _, match := range matches {
 		info, err := os.Lstat(match)
 		if err != nil {
-			continue
+			continue // an unreadable match cannot count; its basename may be pruned
 		}
-		if info.IsDir() {
+		if !GlobMatchCounts(match, info) {
 			continue
 		}
 		keep[filepath.Base(match)] = struct{}{}
