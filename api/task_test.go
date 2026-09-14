@@ -5,9 +5,11 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -107,6 +109,175 @@ func TestRunAggregateMatching(t *testing.T) {
 		if _, err := os.Stat(p); err != nil {
 			t.Fatalf("%s missing: %v", p, err)
 		}
+	}
+}
+
+// TestRunAggregateSelfMatchingPattern covers an Aggregate whose pattern
+// matches its own name (e.g. ".*"): the own-name exclusion must keep Run from
+// recursing into itself, and the child must be recorded and applied once.
+func TestRunAggregateSelfMatchingPattern(t *testing.T) {
+	ResetTasks()
+	dir := t.TempDir()
+	childPath := filepath.Join(dir, "child.txt")
+
+	Task("all_child", "", func() {
+		File(childPath, options.WithContent("child"))
+	})
+	Aggregate("all", "", ".*")
+
+	if err := Run("all"); err != nil {
+		t.Fatalf("Run all: %v", err)
+	}
+	data, err := os.ReadFile(childPath)
+	if err != nil {
+		t.Fatalf("child file missing: %v", err)
+	}
+	if string(data) != "child" {
+		t.Fatalf("child content = %q", data)
+	}
+
+	// The aggregate must expand to its child exactly once: exactly one file
+	// op for the child path and none for the aggregate itself.
+	ops, err := RecordPlan("count", t.TempDir(), "all")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+	count := 0
+	for _, op := range ops {
+		if op.Op == plan.KindFile && op.Path == childPath {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("child file ops = %d, want 1", count)
+	}
+}
+
+// TestRunTaskSelfRecursionCycle covers a plain task whose body Runs itself:
+// the recorder must fail the record with a cycle error instead of crashing.
+func TestRunTaskSelfRecursionCycle(t *testing.T) {
+	ResetTasks()
+	Task("self", "runs itself", func() {
+		_ = Run("self") // cycle error cannot be returned from a task body
+	})
+
+	err := Run("self")
+	if err == nil {
+		t.Fatal("expected recursion cycle error, got nil")
+	}
+	if !strings.Contains(err.Error(), "self -> self") {
+		t.Fatalf("error %v does not name the cycle", err)
+	}
+}
+
+// TestRunMutualRecursionCycle covers a -> b -> a: the error must name both
+// tasks and the cycle chain.
+func TestRunMutualRecursionCycle(t *testing.T) {
+	ResetTasks()
+	Task("cyc_a", "", func() {
+		_ = Run("cyc_b")
+	})
+	Task("cyc_b", "", func() {
+		_ = Run("cyc_a")
+	})
+
+	err := Run("cyc_a")
+	if err == nil {
+		t.Fatal("expected recursion cycle error, got nil")
+	}
+	if !strings.Contains(err.Error(), "cyc_a -> cyc_b -> cyc_a") {
+		t.Fatalf("error %v does not name the cycle", err)
+	}
+}
+
+// TestRunDeepRecursionCycle covers a -> b -> c -> a.
+func TestRunDeepRecursionCycle(t *testing.T) {
+	ResetTasks()
+	Task("deep_a", "", func() { _ = Run("deep_b") })
+	Task("deep_b", "", func() { _ = Run("deep_c") })
+	Task("deep_c", "", func() { _ = Run("deep_a") })
+
+	err := Run("deep_a")
+	if err == nil {
+		t.Fatal("expected recursion cycle error, got nil")
+	}
+	if !strings.Contains(err.Error(), "deep_a -> deep_b -> deep_c -> deep_a") {
+		t.Fatalf("error %v does not name the cycle", err)
+	}
+}
+
+// TestRunDiamondIncludesNoCycle covers legal repeats: the same shared task
+// included by two sibling branches must not be flagged as a cycle. Current
+// behavior records the shared task once per including branch (the duplicate
+// ops apply idempotently); only true cycles are errors.
+func TestRunDiamondIncludesNoCycle(t *testing.T) {
+	ResetTasks()
+	dir := t.TempDir()
+	sharedPath := filepath.Join(dir, "shared.txt")
+
+	Task("dia_c", "", func() {
+		File(sharedPath, options.WithContent("shared"))
+	})
+	Task("dia_a", "", func() {
+		_ = Run("dia_c")
+	})
+	Task("dia_b", "", func() {
+		_ = Run("dia_c")
+	})
+	Task("dia_root", "", func() {
+		_ = Run("dia_a", "dia_b")
+	})
+
+	if err := Run("dia_root"); err != nil {
+		t.Fatalf("Run dia_root: %v", err)
+	}
+	data, err := os.ReadFile(sharedPath)
+	if err != nil {
+		t.Fatalf("shared file missing: %v", err)
+	}
+	if string(data) != "shared" {
+		t.Fatalf("shared content = %q", data)
+	}
+
+	// Preserve current behavior: the shared task is recorded once per
+	// including branch, so two identical file ops reach the plan.
+	ops, err := RecordPlan("count", t.TempDir(), "dia_root")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+	count := 0
+	for _, op := range ops {
+		if op.Op == plan.KindFile && op.Path == sharedPath {
+			count++
+		}
+	}
+	if count != 2 {
+		t.Fatalf("shared file ops = %d, want 2 (diamond repeats stay legal)", count)
+	}
+}
+
+// TestRunAggregateSelfExclusionSugar covers the aggregate own-name exclusion:
+// a self-matching pattern must not reach the cycle detector at all, and the
+// child must still run.
+func TestRunAggregateSelfExclusionSugar(t *testing.T) {
+	ResetTasks()
+	dir := t.TempDir()
+	childPath := filepath.Join(dir, "demo_child.txt")
+
+	Task("demo_child", "", func() {
+		File(childPath, options.WithContent("demo-child"))
+	})
+	Aggregate("demo", "", "^demo")
+
+	if err := Run("demo"); err != nil {
+		t.Fatalf("Run demo: %v", err)
+	}
+	data, err := os.ReadFile(childPath)
+	if err != nil {
+		t.Fatalf("demo_child file missing: %v", err)
+	}
+	if string(data) != "demo-child" {
+		t.Fatalf("demo_child content = %q", data)
 	}
 }
 

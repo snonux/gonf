@@ -20,6 +20,20 @@ var recordingElevate bool
 // would be silently skipped by plan apply).
 var recordedDraftIDs = map[string]bool{}
 
+// recordingStack lists the task bodies currently being recorded, outermost
+// first. Re-entering a task whose body is still on the stack is a recursion
+// cycle (a task that Runs itself, directly or through other tasks). The same
+// task appearing again in a later, disjoint branch (diamond includes) is not
+// a cycle: by then its earlier body has left the stack, so repeats across
+// branches stay legal and only true cycles fail the record.
+var recordingStack []string
+
+// recordingCycleErr holds a detected task recursion cycle. Task bodies cannot
+// return errors, so the nested recordTaskBodies that detected the cycle
+// stashes it here; every enclosing body fails its record after its fn
+// returns. It is cleared at the start of each RecordPlanTo session.
+var recordingCycleErr error
+
 // RecordPlan runs the named tasks in plan-record mode: resource registration
 // emits plan.Op lines instead of applying. Tasks are looked up as candidates
 // (not Activate-filtered) so When* recipes become when_begin/when_end rather
@@ -52,6 +66,11 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 
 	plan.ResetRecord()
 	plan.SetRecording(true)
+	recordingCycleErr = nil
+	// Defensive: a task body panicking during recording would leak a stale
+	// stack entry (pop is skipped); go test recovers per-test panics and
+	// keeps running, so reset here to keep later sessions truthful.
+	recordingStack = nil
 	var packErr error
 	resource.SetPlanDraftRecorder(func(d resource.PlanDraft) {
 		if packErr != nil {
@@ -88,43 +107,81 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 // packErr is shared with the draft recorder callback.
 func recordTaskBodies(taskNames []string, packErr *error) error {
 	for _, name := range taskNames {
-		c, ok := findCandidate(name)
-		if !ok {
-			return fmt.Errorf("unknown task %q", name)
+		if err := checkRecordingCycle(name); err != nil {
+			// Task bodies cannot return errors; stash the cycle so every
+			// enclosing body fails its record too.
+			recordingCycleErr = err
+			return err
 		}
-
-		wrapWhen, err := planWhenForCandidate(c)
+		recordingStack = append(recordingStack, name)
+		err := recordSingleTaskBody(name, packErr)
+		recordingStack = recordingStack[:len(recordingStack)-1]
 		if err != nil {
 			return err
 		}
+	}
+	return nil
+}
 
-		prevElevate := recordingElevate
-		recordingElevate = c.privileged
-		if len(wrapWhen) > 0 {
-			plan.Record(plan.Op{
-				Op:      plan.KindWhenBegin,
-				ID:      "when." + name,
-				All:     wrapWhen,
-				Elevate: recordingElevate,
-			})
-		}
+// recordSingleTaskBody records one task body into the current plan session.
+func recordSingleTaskBody(name string, packErr *error) error {
+	c, ok := findCandidate(name)
+	if !ok {
+		return fmt.Errorf("unknown task %q", name)
+	}
 
-		resource.ResetRepository()
-		resetRecordedDrafts()
-		c.fn()
-		if packErr != nil && *packErr != nil {
-			recordingElevate = prevElevate
-			return *packErr
-		}
-		if err := checkUnrecordedDrafts(c.name); err != nil {
-			recordingElevate = prevElevate
-			return err
-		}
+	wrapWhen, err := planWhenForCandidate(c)
+	if err != nil {
+		return err
+	}
 
-		if len(wrapWhen) > 0 {
-			plan.Record(plan.Op{Op: plan.KindWhenEnd, Elevate: recordingElevate})
-		}
+	prevElevate := recordingElevate
+	recordingElevate = c.privileged
+	if len(wrapWhen) > 0 {
+		plan.Record(plan.Op{
+			Op:      plan.KindWhenBegin,
+			ID:      "when." + name,
+			All:     wrapWhen,
+			Elevate: recordingElevate,
+		})
+	}
+
+	resource.ResetRepository()
+	resetRecordedDrafts()
+	c.fn()
+	if recordingCycleErr != nil {
 		recordingElevate = prevElevate
+		// Keep the stash set: enclosing bodies fail with the same cycle.
+		return recordingCycleErr
+	}
+	if packErr != nil && *packErr != nil {
+		recordingElevate = prevElevate
+		return *packErr
+	}
+	if err := checkUnrecordedDrafts(c.name); err != nil {
+		recordingElevate = prevElevate
+		return err
+	}
+
+	if len(wrapWhen) > 0 {
+		plan.Record(plan.Op{Op: plan.KindWhenEnd, Elevate: recordingElevate})
+	}
+	recordingElevate = prevElevate
+	return nil
+}
+
+// checkRecordingCycle fails when name is already on the active recording
+// stack: the task's body re-entered itself, directly or through other task
+// bodies. The error names the cycle chain, e.g. a -> b -> c -> a.
+func checkRecordingCycle(name string) error {
+	for i, onStack := range recordingStack {
+		if onStack != name {
+			continue
+		}
+		chain := append([]string{}, recordingStack[i:]...)
+		chain = append(chain, name)
+		return fmt.Errorf("task recursion cycle detected: %s",
+			strings.Join(chain, " -> "))
 	}
 	return nil
 }
