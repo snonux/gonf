@@ -1181,6 +1181,233 @@ func TestSourceTreeDryRunParity(t *testing.T) {
 	})
 }
 
+// TestSourceTreeRelativeSymlinkDryRunParity pins dry-run/real-run parity
+// for source-tree symlinks with RELATIVE targets pointing at other
+// source-tree entries (task 122). A real run succeeds because the walk
+// materializes the destination-side target (a sibling) before link.Ensure's
+// target-exists assert runs on the later-sorted link; the dry run does not
+// materialize the destination (y02), so copySourceSymlink validates the
+// relative target against the SOURCE tree instead and mirrors link.Ensure's
+// note flow — both modes must end up with identical (folded) note sets, on
+// a fresh and on a converged destination, and the raw target string must
+// survive on disk. A relative link dangling in the SOURCE tree too keeps
+// link.Ensure's documented refusal in BOTH modes.
+func TestSourceTreeRelativeSymlinkDryRunParity(t *testing.T) {
+	buildSrc := func(t *testing.T) string {
+		t.Helper()
+		src := filepath.Join(t.TempDir(), "src")
+		if err := os.MkdirAll(filepath.Join(src, "sub"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(src, "sub", "f2"), []byte("two"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(src, "f1"), []byte("one"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(src, "realfile"), []byte("hi"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		// Relative in-tree targets; both sort BEFORE their links, so a real
+		// run has materialized the destination-side target by the time the
+		// link is validated (the pre-existing walk-order limitation for
+		// targets sorting later is out of scope here).
+		if err := os.Symlink("sub", filepath.Join(src, "zdirlink")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("realfile", filepath.Join(src, "zfilelink")); err != nil {
+			t.Fatal(err)
+		}
+		return src
+	}
+
+	assertOnDiskRawTargets := func(t *testing.T, dst string) {
+		t.Helper()
+		for name, want := range map[string]string{
+			"zdirlink":  "sub",
+			"zfilelink": "realfile",
+		} {
+			linkPath := filepath.Join(dst, name)
+			info, err := os.Lstat(linkPath)
+			if err != nil {
+				t.Fatalf("missing symlink %s: %v", linkPath, err)
+			}
+			if info.Mode()&os.ModeSymlink == 0 {
+				t.Errorf("%s is not a symlink", linkPath)
+				continue
+			}
+			got, err := os.Readlink(linkPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != want {
+				t.Errorf("symlink %s target = %q, want the preserved raw target %q", linkPath, got, want)
+			}
+		}
+	}
+
+	t.Run("Real", func(t *testing.T) {
+		resource.ResetRepository()
+		src := buildSrc(t)
+		dst := filepath.Join(t.TempDir(), "dst")
+		summary := summaryOf(t, func() error {
+			Present(dst, WithSource(src))
+			return resource.Apply()
+		})
+		if _, err := os.Stat(filepath.Join(dst, "sub", "f2")); err != nil {
+			t.Errorf("missing copied file: %v", err)
+		}
+		assertOnDiskRawTargets(t, dst)
+		for _, want := range []string{
+			"changed Symlink[" + filepath.Join(dst, "zdirlink") + "]",
+			"changed Symlink[" + filepath.Join(dst, "zfilelink") + "]",
+		} {
+			if !strings.Contains(summary, want) {
+				t.Errorf("expected %q in summary, summary:\n%s", want, summary)
+			}
+		}
+	})
+
+	t.Run("DryRunFresh", func(t *testing.T) {
+		resource.ResetRepository()
+		src := buildSrc(t)
+		dst := filepath.Join(t.TempDir(), "dst")
+		resource.SetDryRun(true)
+		t.Cleanup(func() { resource.SetDryRun(false) })
+		summary := summaryOf(t, func() error {
+			Present(dst, WithSource(src))
+			return resource.Apply()
+		})
+		// Nothing on disk, and NO loud refusal: pre-fix, the relative
+		// in-tree targets failed here with 'refusing broken link to'.
+		if _, err := os.Lstat(dst); !os.IsNotExist(err) {
+			t.Errorf("dry-run created destination %s: %v", dst, err)
+		}
+		for _, want := range []string{
+			"would-change Symlink[" + filepath.Join(dst, "zdirlink") + "]",
+			"would-change Symlink[" + filepath.Join(dst, "zfilelink") + "]",
+		} {
+			if !strings.Contains(summary, want) {
+				t.Errorf("expected %q in dry-run summary, summary:\n%s", want, summary)
+			}
+		}
+	})
+
+	// The same scenario run in both modes must produce identical folded
+	// note sets, fresh and converged (would-change folded to changed, dry
+	// path rewritten to the real one by noteLinesOf).
+	t.Run("Parity", func(t *testing.T) {
+		src := buildSrc(t)
+		realDst := filepath.Join(t.TempDir(), "real")
+		dryDst := filepath.Join(t.TempDir(), "dry")
+
+		realApply := func(t *testing.T) string {
+			t.Helper()
+			resource.ResetRepository()
+			return summaryOf(t, func() error {
+				Present(realDst, WithSource(src))
+				return resource.Apply()
+			})
+		}
+		dryApply := func(t *testing.T) string {
+			t.Helper()
+			resource.ResetRepository()
+			resource.SetDryRun(true)
+			defer resource.SetDryRun(false)
+			return summaryOf(t, func() error {
+				Present(dryDst, WithSource(src))
+				return resource.Apply()
+			})
+		}
+		assertParity := func(t *testing.T, realSummary, drySummary string) {
+			t.Helper()
+			want := noteLinesOf(t, realSummary, realDst, realDst)
+			got := noteLinesOf(t, drySummary, dryDst, realDst)
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("dry-run note set differs from real run:\nreal: %v\ndry:  %v", want, got)
+			}
+		}
+
+		realSummary := realApply(t)
+		drySummary := dryApply(t)
+		assertParity(t, realSummary, drySummary)
+		assertOnDiskRawTargets(t, realDst)
+
+		// Converged: the destination trees are already in place (the dry
+		// destination built by hand — dry-run materializes nothing), so both
+		// modes must note everything ok, symlinks included.
+		realSummary = realApply(t)
+		if err := os.MkdirAll(filepath.Join(dryDst, "sub"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for name, content := range map[string]string{
+			"f1":       "one",
+			"realfile": "hi",
+			"sub/f2":   "two",
+		} {
+			if err := os.WriteFile(filepath.Join(dryDst, name), []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Symlink("sub", filepath.Join(dryDst, "zdirlink")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("realfile", filepath.Join(dryDst, "zfilelink")); err != nil {
+			t.Fatal(err)
+		}
+		realSummary = realApply(t)
+		drySummary = dryApply(t)
+		assertParity(t, realSummary, drySummary)
+		const wantHeader = "summary: 7 ok, 0 changed, 0 skipped, 0 would-change"
+		if !strings.Contains(realSummary, wantHeader) {
+			t.Errorf("expected %q in converged real summary, summary:\n%s", wantHeader, realSummary)
+		}
+	})
+
+	// A relative link dangling in the SOURCE tree too has no source-side
+	// counterpart, so both modes keep link.Ensure's documented broken-link
+	// refusal: the destination-side target is never materialized in either
+	// mode (nothing copies a target with no source entry).
+	t.Run("DanglingRefusesInBothModes", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			dry  bool
+		}{
+			{"Real", false},
+			{"DryRun", true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				resource.ResetRepository()
+				if tc.dry {
+					resource.SetDryRun(true)
+					t.Cleanup(func() { resource.SetDryRun(false) })
+				}
+				src := filepath.Join(t.TempDir(), "src")
+				if err := os.Mkdir(src, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(src, "good"), []byte("good"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink("missing", filepath.Join(src, "dangling")); err != nil {
+					t.Fatal(err)
+				}
+				dst := filepath.Join(t.TempDir(), "dst")
+				Present(dst, WithSource(src))
+				err := resource.Apply()
+				if err == nil || !strings.Contains(err.Error(), "refusing broken link to") {
+					t.Fatalf("expected the broken-link refusal in %s mode, got: %v", tc.name, err)
+				}
+				if tc.dry {
+					if _, err := os.Lstat(dst); !os.IsNotExist(err) {
+						t.Errorf("dry-run created destination %s: %v", dst, err)
+					}
+				}
+			})
+		}
+	})
+}
+
 // TestAbsentDoesNotMutateCallerOptionSlice guards against 100 Go Mistakes
 // #25: Absent used to append IsAbsent onto the caller-owned variadic slice,
 // writing into the spare capacity of a reusable option list and silently

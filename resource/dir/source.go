@@ -138,12 +138,95 @@ func copySourceDir(d *Dir, target string) error {
 // absolute link target pointing back into the source tree itself is not
 // remapped into the destination — a pre-existing conceptual limitation of
 // copying a tree of symlinks.
+//
+// For a RELATIVE raw target the source tree is the validity authority: the
+// link points at a sibling of itself, and the destination mirrors the source
+// layout, so the same raw target string is correct at the destination. The
+// real run therefore always delegates to link.Ensure (creation, repointing,
+// .old-aside replacement and idempotency included): by the time its
+// target-exists assert runs, the walk has usually materialized the
+// destination-side sibling already. The dry run cannot delegate blindly —
+// it does not materialize the destination (see copySourceDir), so the
+// assert would refuse a valid link whose destination-side target does not
+// exist YET, diverging from the real run. Instead the dry run validates the
+// raw target against the SOURCE tree (sourceSymlinkTargetExists) and, when
+// it resolves there, mirrors link.Ensure's note flow itself
+// (noteSourceSymlinkDryRun). When the raw target is missing in the source
+// tree too, the link is dangling by construction and the delegation keeps
+// link.Ensure's documented refusal — identical in both modes, since nothing
+// ever materializes a target that has no source counterpart.
+//
+// Pre-existing walk-order limitation, unchanged here: the walk applies in
+// lexical order, so in a real run a link whose target is still created
+// LATER in the walk (e.g. aLink -> zdir, or a relative target reaching out
+// of its subtree with "..") fails link.Ensure's assert even though the
+// finished tree would be valid; the dry run previews the would-be outcome
+// instead of that order-dependent refusal.
 func copySourceSymlink(sourcePath, target string) error {
 	rawTarget, err := os.Readlink(sourcePath)
 	if err != nil {
 		return fmt.Errorf("failed to read symlink %s: %w", sourcePath, err)
 	}
+
+	// Absolute raw targets are out of scope: link.Ensure's assert stats the
+	// raw path directly on the host, identically in both modes.
+	if resource.DryRun() && !filepath.IsAbs(rawTarget) &&
+		sourceSymlinkTargetExists(sourcePath, rawTarget) {
+		return noteSourceSymlinkDryRun(target, rawTarget)
+	}
+
 	return link.Ensure(target, opt.WithSymlink(rawTarget))
+}
+
+// sourceSymlinkTargetExists reports whether the relative raw target of the
+// symlink at sourcePath resolves to an existing entry in the SOURCE tree.
+// Lstat (not Stat) is deliberate: each symlink entry of the tree is
+// recreated as a symlink judged independently, so a sibling that is itself
+// a symlink counts by its own entry, never by what it resolves to.
+func sourceSymlinkTargetExists(sourcePath, rawTarget string) bool {
+	_, err := os.Lstat(filepath.Join(filepath.Dir(sourcePath), rawTarget))
+	return err == nil
+}
+
+// noteSourceSymlinkDryRun mirrors link.Ensure's note flow for a source-tree
+// symlink whose relative target is already proven to exist in the source
+// tree — the validity authority for relative targets, since dry-run does
+// not materialize the destination and link.Ensure's destination-side
+// target-exists assert would refuse the link prematurely. The mirrored
+// branches (converged ok, repoint, replace, create) are exactly
+// link.Ensure's, minus that assert; the real run still goes through
+// link.Ensure, so repointing and .old-aside replacement keep their
+// contract. One deliberate imprecision: the replace branch skips the
+// stale-.old-backup refusal of the real run (link's unexported aside
+// guard), previewing would-change where the real run would refuse — the
+// pre-fix dry run mis-reported that scenario too (as a broken-link
+// refusal), and the real run's refusal stays authoritative.
+func noteSourceSymlinkDryRun(target, rawTarget string) error {
+	id := fmt.Sprintf("Symlink[%s]", target)
+	info, err := os.Lstat(target)
+	switch {
+	case err == nil && info.Mode()&os.ModeSymlink != 0:
+		current, err := os.Readlink(target)
+		if err != nil {
+			return fmt.Errorf("failed to read symlink %s: %w", target, err)
+		}
+		if current == rawTarget {
+			logger.Debug("symlink %s already points at %s", target, rawTarget)
+			resource.Note(id, resource.StatusOK)
+			return nil
+		}
+		resource.Note(id, resource.StatusWouldChange)
+		logger.Info("dry-run: would repoint symlink %s", target)
+	case err == nil:
+		resource.Note(id, resource.StatusWouldChange)
+		logger.Info("dry-run: would replace %s with symlink", target)
+	case os.IsNotExist(err):
+		resource.Note(id, resource.StatusWouldChange)
+		logger.Info("dry-run: would create symlink %s -> %s", target, rawTarget)
+	default:
+		return fmt.Errorf("failed to stat %s: %w", target, err)
+	}
+	return nil
 }
 
 // copySourceFile delegates writing a single copied file to the file
