@@ -1,8 +1,10 @@
 package link
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	. "github.com/snonux/gonf/api/options"
@@ -71,7 +73,7 @@ func TestPresentSymlinkRepoints(t *testing.T) {
 	}
 }
 
-func TestPresentSymlinkMovesRealFileAside(t *testing.T) {
+func TestPresentSymlinkReplacesRealFile(t *testing.T) {
 	resource.ResetRepository()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "link")
@@ -88,15 +90,15 @@ func TestPresentSymlinkMovesRealFileAside(t *testing.T) {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
-	if _, err := os.Stat(path + ".old"); os.IsNotExist(err) {
-		t.Errorf("expected real file to be moved to %s.old", path)
-	}
 	got, err := os.Readlink(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != target {
 		t.Errorf("expected link to point to %s, got %s", target, got)
+	}
+	if _, err := os.Lstat(path + ".old"); !os.IsNotExist(err) {
+		t.Errorf("expected no .old residue after successful conversion, got %v", err)
 	}
 }
 
@@ -137,7 +139,7 @@ func TestPresentHardlinkCreateAndIdempotent(t *testing.T) {
 	}
 }
 
-func TestPresentHardlinkMovesRealFileAside(t *testing.T) {
+func TestPresentHardlinkReplacesRealFile(t *testing.T) {
 	resource.ResetRepository()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "link")
@@ -154,8 +156,15 @@ func TestPresentHardlinkMovesRealFileAside(t *testing.T) {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
-	if _, err := os.Stat(path + ".old"); os.IsNotExist(err) {
-		t.Errorf("expected real file to be moved to %s.old", path)
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "target content" {
+		t.Errorf("expected hardlink content %q, got %q", "target content", string(got))
+	}
+	if _, err := os.Lstat(path + ".old"); !os.IsNotExist(err) {
+		t.Errorf("expected no .old residue after successful conversion, got %v", err)
 	}
 }
 
@@ -275,5 +284,338 @@ func TestSymlinkAllowsRelativeTarget(t *testing.T) {
 	}
 	if got != "target" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestLinkReplacePreservesExistingOldBackup(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conf")
+	if err := os.WriteFile(path, []byte("real file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := path + ".old"
+	if err := os.WriteFile(old, []byte("USERS BACKUP"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("target content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	Present(path, WithSymlink(target))
+	if err := resource.Apply(); err == nil {
+		t.Fatal("expected Apply to refuse converting a real file while a backup exists")
+	} else if !strings.Contains(err.Error(), old) {
+		t.Errorf("expected the error to name the conflicting backup %s, got %v", old, err)
+	}
+
+	// The user's backup must be untouched.
+	got, err := os.ReadFile(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "USERS BACKUP" {
+		t.Errorf("pre-existing backup was modified: %q", string(got))
+	}
+	// Nothing was replaced: the original entry is still a real file.
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Error("expected the original file to be left in place")
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "real file" {
+		t.Errorf("original file was modified: %q", string(content))
+	}
+}
+
+func TestHardlinkReplacePreservesExistingOldBackup(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conf")
+	if err := os.WriteFile(path, []byte("real file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := path + ".old"
+	if err := os.WriteFile(old, []byte("USERS BACKUP"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("target content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	Present(path, WithHardlink(target))
+	if err := resource.Apply(); err == nil {
+		t.Fatal("expected Apply to refuse converting a real file while a backup exists")
+	} else if !strings.Contains(err.Error(), old) {
+		t.Errorf("expected the error to name the conflicting backup %s, got %v", old, err)
+	}
+
+	got, err := os.ReadFile(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "USERS BACKUP" {
+		t.Errorf("pre-existing backup was modified: %q", string(got))
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Error("expected the original file to be left in place")
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "real file" {
+		t.Errorf("original file was modified: %q", string(content))
+	}
+}
+
+func TestPresentHardlinkRollsBackWhenLinkCreationFails(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conf")
+	if err := os.WriteFile(path, []byte("user data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A directory cannot be hard-linked, so link creation fails after the
+	// original entry has been moved aside.
+	target := filepath.Join(dir, "subdir")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	Present(path, WithHardlink(target))
+	if err := resource.Apply(); err == nil {
+		t.Fatal("expected Apply to fail when the hardlink cannot be created")
+	}
+
+	// The original file must have been moved back from the aside.
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "user data" {
+		t.Errorf("expected the original file to be restored, got %q", string(got))
+	}
+	if _, err := os.Lstat(path + ".old"); !os.IsNotExist(err) {
+		t.Errorf("expected the aside to be gone after rollback, got %v", err)
+	}
+}
+
+func TestReplaceWithLinkRollsBackOnCreateFailure(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conf")
+	if err := os.WriteFile(path, []byte("user data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	wantErr := errors.New("boom")
+	err := replaceWithLink(path, func() error { return wantErr })
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("expected the creation error, got %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "user data" {
+		t.Errorf("expected the original file to be restored, got %q", string(got))
+	}
+	if _, err := os.Lstat(path + ".old"); !os.IsNotExist(err) {
+		t.Errorf("expected the aside to be renamed back, got %v", err)
+	}
+}
+
+func TestReplaceWithLinkRemovesAsideOnSuccess(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conf")
+	if err := os.WriteFile(path, []byte("user data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := replaceWithLink(path, func() error { return nil }); err != nil {
+		t.Fatalf("replaceWithLink failed: %v", err)
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Errorf("expected the entry at path to be gone (create moved it), got %v", err)
+	}
+	if _, err := os.Lstat(path + ".old"); !os.IsNotExist(err) {
+		t.Errorf("expected the aside to be removed on success, got %v", err)
+	}
+}
+
+func TestPresentSymlinkReplacesEmptyDir(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "link")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("target content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	Present(path, WithSymlink(target))
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+
+	got, err := os.Readlink(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != target {
+		t.Errorf("expected link to point to %s, got %s", target, got)
+	}
+	if _, err := os.Lstat(path + ".old"); !os.IsNotExist(err) {
+		t.Errorf("expected no .old residue after successful conversion, got %v", err)
+	}
+}
+
+func TestPresentSymlinkReplacesNonEmptyDirKeepsBackup(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "link")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	inside := filepath.Join(path, "data")
+	if err := os.WriteFile(inside, []byte("precious"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("target content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	Present(path, WithSymlink(target))
+	// The link is created, but the non-empty directory aside cannot be
+	// removed, so the conversion reports an error instead of rm -rf'ing
+	// the user's data.
+	old := path + ".old"
+	applyErr := resource.Apply()
+	if applyErr == nil {
+		t.Fatal("expected Apply to fail when the aside cannot be removed")
+	}
+	// The error must name the backup path so the user can resolve it.
+	if !strings.Contains(applyErr.Error(), old) {
+		t.Errorf("error should name the backup path %s: %v", old, applyErr)
+	}
+	if _, err := os.Readlink(path); err != nil {
+		t.Fatalf("expected the symlink to have been created: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(old, "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "precious" {
+		t.Errorf("the user's directory data must be preserved under %s, got %q", old, string(got))
+	}
+
+	// A retry converges: the idempotency check recognizes the created link
+	// before the aside assert runs, so the run succeeds with the residue
+	// still present (documented in docs/file-dir-link.md).
+	resource.ResetRepository()
+	resource.ResetReport()
+	Present(path, WithSymlink(target))
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("retry after the aside-removal failure must converge: %v", err)
+	}
+	if _, err := os.Lstat(old); err != nil {
+		t.Errorf("expected the backup to still be present after the converged retry: %v", err)
+	}
+}
+
+func TestPresentSymlinkRepointKeepsOldBackup(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "link")
+	t1 := filepath.Join(dir, "target1")
+	t2 := filepath.Join(dir, "target2")
+	if err := os.WriteFile(t1, []byte("1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(t2, []byte("2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t1, path); err != nil {
+		t.Fatal(err)
+	}
+	old := path + ".old"
+	if err := os.WriteFile(old, []byte("USERS BACKUP"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Repointing an existing symlink never uses the .old aside, so the
+	// pre-existing backup is untouched.
+	Present(path, WithSymlink(t2))
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+
+	got, err := os.Readlink(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != t2 {
+		t.Errorf("expected link to repoint to %s, got %s", t2, got)
+	}
+	data, err := os.ReadFile(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "USERS BACKUP" {
+		t.Errorf("repoint must not touch the backup: %q", string(data))
+	}
+}
+
+// TestDryRunRefusesConversionWithExistingOldBackup pins that the dry-run
+// preview surfaces the same refusal a real apply would: a pre-existing
+// path+".old" must fail the dry-run before any change (the assert runs
+// before the DryRun branch in both replace flows).
+func TestDryRunRefusesConversionWithExistingOldBackup(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conf")
+	if err := os.WriteFile(path, []byte("real"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := path + ".old"
+	if err := os.WriteFile(old, []byte("USERS BACKUP"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("target"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	resource.SetDryRun(true)
+	t.Cleanup(func() { resource.SetDryRun(false) })
+
+	Present(path, WithSymlink(target))
+	if err := resource.Apply(); err == nil {
+		t.Fatal("expected the dry-run to refuse the conversion")
+	}
+	got, err := os.ReadFile(old)
+	if err != nil || string(got) != "USERS BACKUP" {
+		t.Errorf("the user's backup must be untouched: %v %q", err, got)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("the dry-run must not convert the file: %v", err)
 	}
 }

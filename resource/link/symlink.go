@@ -47,16 +47,27 @@ func ensureSymlink(l *Link) error {
 		}
 
 	case err == nil:
-		old := l.path + ".old"
+		// The assert also runs on dry-runs (like assertSymlinkTargetExists):
+		// the real apply would refuse, so the preview must show it.
+		if err := assertNoAsideBackup(l.path); err != nil {
+			return err
+		}
 		if resource.DryRun() {
 			resource.Note(id, resource.StatusWouldChange)
 			logger.Info("dry-run: would replace %s with symlink", l.path)
 			return nil
 		}
-		logger.Debug("%s is a real file/dir, renaming to %s", l.path, old)
-		if err := os.Rename(l.path, old); err != nil {
-			return fmt.Errorf("failed to move existing %s aside: %w", l.path, err)
+		if err := replaceWithLink(l.path, func() error {
+			if err := os.Symlink(l.target, l.path); err != nil {
+				return fmt.Errorf("failed to create symlink %s -> %s: %w", l.path, l.target, err)
+			}
+			return nil
+		}); err != nil {
+			return err
 		}
+		resource.Note(id, resource.StatusChanged)
+		logger.Info("replaced %s with symlink -> %s", l.path, l.target)
+		return nil
 
 	case !os.IsNotExist(err):
 		return fmt.Errorf("failed to stat %s: %w", l.path, err)

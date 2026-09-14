@@ -29,16 +29,27 @@ func ensureHardlink(l *Link) error {
 			resource.Note(id, resource.StatusOK)
 			return nil
 		}
+		// The assert also runs on dry-runs: the real apply would refuse,
+		// so the preview must show it.
+		if err := assertNoAsideBackup(l.path); err != nil {
+			return err
+		}
 		if resource.DryRun() {
 			resource.Note(id, resource.StatusWouldChange)
 			logger.Info("dry-run: would replace %s with hardlink", l.path)
 			return nil
 		}
-		old := l.path + ".old"
-		logger.Debug("%s already exists, renaming to %s", l.path, old)
-		if err := os.Rename(l.path, old); err != nil {
-			return fmt.Errorf("failed to move existing %s aside: %w", l.path, err)
+		if err := replaceWithLink(l.path, func() error {
+			if err := os.Link(l.target, l.path); err != nil {
+				return fmt.Errorf("failed to create hardlink %s -> %s: %w", l.path, l.target, err)
+			}
+			return nil
+		}); err != nil {
+			return err
 		}
+		resource.Note(id, resource.StatusChanged)
+		logger.Info("replaced %s with hardlink -> %s", l.path, l.target)
+		return nil
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("failed to stat %s: %w", l.path, err)
 	} else if resource.DryRun() {

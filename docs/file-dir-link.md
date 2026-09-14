@@ -34,4 +34,25 @@ NoLink("/tmp/stale-link")
 
 Helpers that wrap these: [helpers.md](helpers.md) (`InstallFile`, `SyncDir`, `EnsureDir`, `LinkIfExists`, `SymlinkMap`).
 
+### Replacing real entries with links (the `.old` aside)
+
+When `Link` must replace an existing real file, directory, or non-matching
+entry with a symlink or hardlink, the existing entry is first moved aside to
+`path.old` while the link is created. The aside is removed as soon as the link
+exists, so a completed conversion leaves no residue. If the link cannot be
+created, the original entry is moved back from `path.old` to `path` and the
+apply fails with the original error. If even the restore fails, the error
+says so and the user's entry remains available under `path.old`. If the
+aside cannot be removed after a successful create (the old entry was a
+non-empty directory), the link is in place but the apply reports an error
+naming the backup path instead of deleting the user's data; a later apply
+then recognizes the already-created link and succeeds without touching the
+backup.
+
+If `path.old` already exists before the conversion — file, directory, or
+symlink, even a dangling one — the operation refuses with an error and changes
+nothing; remove or rename the stale backup manually first. Dry-runs surface
+the same refusal. Repointing an existing symlink to a new target never uses
+the `.old` aside.
+
 See also [examples/examples.go](../examples/examples.go).
