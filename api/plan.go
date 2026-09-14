@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -12,6 +13,12 @@ import (
 
 // recordingElevate is set while recording a Privileged() task body.
 var recordingElevate bool
+
+// recordedDraftIDs holds the plan draft IDs emitted during the current task
+// body. The recorder fills it; recordTaskBodies resets it per task and fails
+// the record when a registered resource produced no draft (such resources
+// would be silently skipped by plan apply).
+var recordedDraftIDs = map[string]bool{}
 
 // RecordPlan runs the named tasks in plan-record mode: resource registration
 // emits plan.Op lines instead of applying. Tasks are looked up as candidates
@@ -49,6 +56,9 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 	resource.SetPlanDraftRecorder(func(d resource.PlanDraft) {
 		if packErr != nil {
 			return
+		}
+		if d.ID != "" {
+			recordedDraftIDs[d.ID] = true
 		}
 		op, err := packageDraft(d, store)
 		if err != nil {
@@ -100,10 +110,15 @@ func recordTaskBodies(taskNames []string, packErr *error) error {
 		}
 
 		resource.ResetRepository()
+		resetRecordedDrafts()
 		c.fn()
 		if packErr != nil && *packErr != nil {
 			recordingElevate = prevElevate
 			return *packErr
+		}
+		if err := checkUnrecordedDrafts(c.name); err != nil {
+			recordingElevate = prevElevate
+			return err
 		}
 
 		if len(wrapWhen) > 0 {
@@ -112,6 +127,31 @@ func recordTaskBodies(taskNames []string, packErr *error) error {
 		recordingElevate = prevElevate
 	}
 	return nil
+}
+
+// resetRecordedDrafts clears the per-task-body draft ID set.
+func resetRecordedDrafts() {
+	for id := range recordedDraftIDs {
+		delete(recordedDraftIDs, id)
+	}
+}
+
+// checkUnrecordedDrafts returns an error when a registered resource did not
+// produce a plan draft: plan apply only interprets recorded ops, so such a
+// resource would be silently skipped. Failing the record keeps future resource
+// kinds from regressing the same way cron and service once did.
+func checkUnrecordedDrafts(taskName string) error {
+	var missing []string
+	for _, id := range resource.RegisteredIDs() {
+		if !recordedDraftIDs[id] {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("RecordPlan: task %q: registered resources without plan draft (they would be silently skipped by apply): %s",
+		taskName, strings.Join(missing, ", "))
 }
 
 // ApplyPlan applies ops using DetectFacts(). planDir is the blob sidecar root.
@@ -232,6 +272,12 @@ func draftToOp(d resource.PlanDraft) plan.Op {
 		Unless:     draftGuard(d.Unless),
 		OnlyIf:     draftGuard(d.OnlyIf),
 		User:       d.User,
+		CronUser:   d.CronUser,
+		Command:    d.Command,
+		Schedule:   d.Schedule,
+		CronEnv:    d.CronEnv,
+		Restart:    d.Restart,
+		Reload:     d.Reload,
 		EnableOnly: d.EnableOnly,
 		IfChanged:  d.IfChanged,
 		Watch:      d.Watch,
@@ -258,6 +304,10 @@ func draftToOp(d resource.PlanDraft) plan.Op {
 		op.Op = plan.KindTimer
 	case "daemon_reload":
 		op.Op = plan.KindDaemonReload
+	case "cron":
+		op.Op = plan.KindCron
+	case "service":
+		op.Op = plan.KindService
 	default:
 		op.Op = plan.Kind(d.Kind)
 	}

@@ -5,12 +5,15 @@
 package plan
 
 // CurrentVersion is the plan wire schema version emitted by gonf plan.
-const CurrentVersion = 2
+// Version 2 added timer and daemon_reload ops; version 3 added cron and
+// service ops.
+const CurrentVersion = 3
 
 // supportedVersions is the set of plan schema versions this binary can apply.
 // Apply must refuse plans whose version is not in this set before any mutation.
 var supportedVersions = map[int]struct{}{
 	1:              {},
+	2:              {},
 	CurrentVersion: {},
 }
 
@@ -37,6 +40,8 @@ const (
 	KindWhenEnd      Kind = "when_end"
 	KindTimer        Kind = "timer"
 	KindDaemonReload Kind = "daemon_reload"
+	KindCron         Kind = "cron"
+	KindService      Kind = "service"
 )
 
 // allKinds lists every Kind constant in stable declaration order.
@@ -54,6 +59,8 @@ var allKinds = []Kind{
 	KindWhenEnd,
 	KindTimer,
 	KindDaemonReload,
+	KindCron,
+	KindService,
 }
 
 // AllKinds returns a copy of every Kind constant in stable declaration order.
@@ -135,8 +142,23 @@ type Op struct {
 	// OnlyIf runs KindCommand only when the guard probe succeeds.
 	OnlyIf *Guard `json:"only_if,omitempty"`
 
-	// User selects systemd --user for KindTimer / KindDaemonReload.
+	// CronUser is the crontab owner for KindCron (default root).
+	CronUser string `json:"cron_user,omitempty"`
+	// Command is the crontab command for KindCron.
+	Command string `json:"command,omitempty"`
+	// Schedule holds the five space-separated cron time fields
+	// (minute hour monthday month weekday) for KindCron.
+	Schedule string `json:"schedule,omitempty"`
+	// CronEnv lists KEY=VAL environment lines above the KindCron job.
+	CronEnv []string `json:"cron_env,omitempty"`
+
+	// User selects systemd --user for KindTimer / KindDaemonReload / KindService.
 	User bool `json:"user,omitempty"`
+	// Restart restarts KindService once when it is already running.
+	Restart bool `json:"restart,omitempty"`
+	// Reload reloads KindService once when it is already running
+	// (no restart fallback).
+	Reload bool `json:"reload,omitempty"`
 	// EnableOnly skips start/stop for KindTimer present (enable/disable only).
 	EnableOnly bool `json:"enable_only,omitempty"`
 	// IfChanged gates KindDaemonReload on watched dependency outcomes.

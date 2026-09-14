@@ -49,8 +49,22 @@ type PlanDraft struct {
 	Unless  *PlanGuardDraft
 	OnlyIf  *PlanGuardDraft
 
-	// User selects systemd --user for timer / daemon_reload drafts.
+	// User selects systemd --user for timer / daemon_reload / service drafts.
 	User bool
+	// CronUser is the crontab owner for cron drafts (default root).
+	CronUser string
+	// Command is the crontab command for cron drafts.
+	Command string
+	// Schedule holds the five space-separated cron time fields
+	// (minute hour monthday month weekday) for cron drafts.
+	Schedule string
+	// CronEnv lists KEY=VAL environment lines above the cron job.
+	CronEnv []string
+	// Restart restarts a service once when it is already running.
+	Restart bool
+	// Reload reloads a service once when it is already running
+	// (no restart fallback).
+	Reload bool
 	// EnableOnly skips start/stop for timer present (enable/disable only).
 	EnableOnly bool
 	// IfChanged gates daemon_reload on watched dependency outcomes.

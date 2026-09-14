@@ -22,6 +22,10 @@ PATH=/usr/bin:/bin
 # END GONF Cron[backup]
 ```
 
+`Run`, `push`, `apply`, and `fleet` all go through the one apply engine: Cron
+records a `cron` plan op (name, user, command, schedule, env) that is applied
+like any other resource (see [plan.md](plan.md)).
+
 When `WithCronUser` matches the process user, gonf omits `crontab -u` (Linux
 rejects `-u` for your own account without privileges). Other users still use
 `crontab -u USER` and typically need root/`doas`/`sudo`.

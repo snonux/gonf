@@ -38,6 +38,8 @@ func TestAllKindsExhaustiveAndUnique(t *testing.T) {
 		KindWhenEnd:      "when_end",
 		KindTimer:        "timer",
 		KindDaemonReload: "daemon_reload",
+		KindCron:         "cron",
+		KindService:      "service",
 	}
 	kinds := AllKinds()
 	if len(kinds) != len(want) {
@@ -168,6 +170,34 @@ func TestOpJSONTagsMatchPlanExamples(t *testing.T) {
 				FileMode: "0750",
 			},
 			want: `{"op":"sync_dir","path":"${HOME}/.config/systemd/user","file_mode":"0750","blob":"blobs/systemd-user","prune":true}`,
+		},
+		{
+			name: "cron with env",
+			op: Op{
+				Op:       KindCron,
+				Name:     "backup",
+				CronUser: "root",
+				Command:  "/usr/local/bin/backup.sh",
+				Schedule: "0 2 * * *",
+				CronEnv:  []string{"PATH=/usr/bin:/bin"},
+				ID:       "Cron[root/backup]",
+			},
+			want: `{"op":"cron","id":"Cron[root/backup]","name":"backup","cron_user":"root","command":"/usr/local/bin/backup.sh","schedule":"0 2 * * *","cron_env":["PATH=/usr/bin:/bin"]}`,
+		},
+		{
+			name: "cron absent",
+			op:   Op{Op: KindCron, Name: "old", CronUser: "paul", Absent: true},
+			want: `{"op":"cron","absent":true,"name":"old","cron_user":"paul"}`,
+		},
+		{
+			name: "service restart",
+			op:   Op{Op: KindService, Name: "httpd", Restart: true, ID: "Service[httpd]"},
+			want: `{"op":"service","id":"Service[httpd]","name":"httpd","restart":true}`,
+		},
+		{
+			name: "service absent user",
+			op:   Op{Op: KindService, Name: "foo", User: true, Reload: true, Absent: true},
+			want: `{"op":"service","absent":true,"name":"foo","user":true,"reload":true}`,
 		},
 		{
 			name: "when_end",

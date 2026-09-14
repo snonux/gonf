@@ -9,10 +9,12 @@ import (
 	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/cmd"
+	"github.com/snonux/gonf/resource/cron"
 	"github.com/snonux/gonf/resource/dir"
 	"github.com/snonux/gonf/resource/file"
 	"github.com/snonux/gonf/resource/link"
 	"github.com/snonux/gonf/resource/pkg"
+	"github.com/snonux/gonf/resource/service"
 	"github.com/snonux/gonf/resource/systemd"
 	"github.com/snonux/gonf/resource/timer"
 )
@@ -114,6 +116,10 @@ func applyActive(op Op, planDir string) error {
 		return applyTimer(op)
 	case KindDaemonReload:
 		return applyDaemonReload(op)
+	case KindCron:
+		return applyCron(op)
+	case KindService:
+		return applyService(op)
 	default:
 		return fmt.Errorf("unknown op %q", op.Op)
 	}
@@ -398,6 +404,62 @@ func applyDaemonReload(op Op) error {
 		}
 	}
 	return systemd.Ensure(opts...)
+}
+
+func applyCron(op Op) error {
+	if op.Name == "" {
+		return fmt.Errorf("cron: missing name")
+	}
+	var opts []opt.Option
+	if op.Absent {
+		opts = append(opts, opt.IsAbsent)
+	}
+	if op.CronUser != "" {
+		opts = append(opts, opt.WithCronUser(op.CronUser))
+	}
+	if op.Command != "" {
+		opts = append(opts, opt.WithCommand(op.Command))
+	}
+	// A present cron job needs a schedule: silently falling back to the
+	// resource default (* * * * *, every minute) would run the command far
+	// more often than the plan author intended.
+	fields := strings.Fields(op.Schedule)
+	if !op.Absent && len(fields) != 5 {
+		return fmt.Errorf("cron: schedule %q must contain 5 whitespace-separated fields", op.Schedule)
+	}
+	if len(fields) == 5 {
+		opts = append(opts,
+			opt.WithMinute(fields[0]),
+			opt.WithHour(fields[1]),
+			opt.WithMonthday(fields[2]),
+			opt.WithMonth(fields[3]),
+			opt.WithWeekday(fields[4]),
+		)
+	}
+	for _, kv := range op.CronEnv {
+		opts = append(opts, opt.WithCronEnv(kv))
+	}
+	return cron.Ensure(op.Name, opts...)
+}
+
+func applyService(op Op) error {
+	if op.Name == "" {
+		return fmt.Errorf("service: missing name")
+	}
+	var opts []opt.Option
+	if op.Absent {
+		opts = append(opts, opt.IsAbsent)
+	}
+	if op.Restart {
+		opts = append(opts, opt.WithRestart)
+	}
+	if op.Reload {
+		opts = append(opts, opt.WithReload)
+	}
+	if op.User {
+		opts = append(opts, opt.WithUser)
+	}
+	return service.Ensure(op.Name, opts...)
 }
 
 func guardOption(g *Guard, unless bool) []opt.Option {

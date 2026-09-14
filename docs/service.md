@@ -19,6 +19,10 @@ NoService("olddaemon")              // stopped + disabled
 
 For dedicated systemd timer units, prefer [`Timer` / `NoTimer`](timer.md).
 
+`Run`, `push`, `apply`, and `fleet` all go through the one apply engine:
+Service records a `service` plan op (name, absent, restart/reload, user) that
+is applied like any other resource (see [plan.md](plan.md)).
+
 ## DaemonReload
 
 Linux systemd only. Reloads the unit manager after installing unit files:

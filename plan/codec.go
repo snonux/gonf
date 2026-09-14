@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 )
 
@@ -48,6 +49,9 @@ func normalizeOp(op *Op) {
 	}
 	if len(op.All) == 0 {
 		op.All = nil
+	}
+	if len(op.CronEnv) == 0 {
+		op.CronEnv = nil
 	}
 	if op.Unless != nil {
 		normalizeGuard(op.Unless)
@@ -164,13 +168,14 @@ func readNonEmptyLine(br *bufio.Reader) ([]byte, error) {
 
 // FormatSupportedVersions returns a human-readable list of supported versions.
 func FormatSupportedVersions() string {
-	kinds := make([]string, 0, len(supportedVersions))
+	versions := make([]int, 0, len(supportedVersions))
 	for v := range supportedVersions {
-		kinds = append(kinds, fmt.Sprintf("%d", v))
+		versions = append(versions, v)
 	}
-	// Only one version today; keep deterministic.
-	if len(kinds) == 1 {
-		return kinds[0]
+	sort.Ints(versions)
+	ids := make([]string, 0, len(versions))
+	for _, v := range versions {
+		ids = append(ids, fmt.Sprintf("%d", v))
 	}
-	return strings.Join(kinds, ", ")
+	return strings.Join(ids, ", ")
 }

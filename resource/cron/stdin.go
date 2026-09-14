@@ -7,7 +7,10 @@ import (
 )
 
 // runCmdWithStdin runs name with args, feeding stdin, returning stdout/stderr/code.
-var runCmdWithStdin = func(stdin string, name string, args ...string) (string, string, int, error) {
+var runCmdWithStdin = runWithStdin
+
+// runWithStdin is the default stdin-aware command runner.
+func runWithStdin(stdin string, name string, args ...string) (string, string, int, error) {
 	cmd := exec.Command(name, args...)
 	cmd.Stdin = strings.NewReader(stdin)
 	var stdoutBuf, stderrBuf bytes.Buffer

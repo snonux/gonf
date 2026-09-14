@@ -54,8 +54,8 @@ var (
 // runCmd is swapped in tests.
 var runCmd = exec.Run
 
-// Present registers a cron job that should exist in the user's crontab.
-func Present(name string, opts ...opt.Option) resource.Resource {
+// newCron builds a Cron with defaults applied, then applies opts.
+func newCron(name string, opts []opt.Option) *Cron {
 	c := &Cron{
 		name:     name,
 		user:     "root",
@@ -68,15 +68,60 @@ func Present(name string, opts ...opt.Option) resource.Resource {
 	for _, o := range opts {
 		o(c)
 	}
+	return c
+}
+
+// Present registers a cron job that should exist in the user's crontab.
+func Present(name string, opts ...opt.Option) resource.Resource {
+	c := newCron(name, opts)
 	regName := c.user + "/" + c.name
-	return resource.Register("Cron", regName,
+	r := resource.Register("Cron", regName,
 		resource.ApplierFunc(func() error { return c.apply() }), c.DependsOn.IDs...)
+	resource.RecordPlanDraft(c.planDraft(r.ID()))
+	return r
+}
+
+// Ensure applies a cron job without registering it or recording a plan draft.
+func Ensure(name string, opts ...opt.Option) error {
+	return newCron(name, opts).apply()
 }
 
 // Absent removes a named cron job from the user's crontab.
 func Absent(name string, opts ...opt.Option) resource.Resource {
 	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(name, opts...)
+}
+
+// SetRunnersForTest swaps the crontab command runners (tests only). A nil
+// argument keeps the current runner for that slot.
+func SetRunnersForTest(run func(name string, args ...string) (string, string, int, error), runWithStdin func(stdin string, name string, args ...string) (string, string, int, error)) {
+	if run != nil {
+		runCmd = run
+	}
+	if runWithStdin != nil {
+		runCmdWithStdin = runWithStdin
+	}
+}
+
+// ResetRunnersForTest restores the real crontab command runners.
+func ResetRunnersForTest() {
+	runCmd = exec.Run
+	runCmdWithStdin = runWithStdin
+}
+
+func (c *Cron) planDraft(id string) resource.PlanDraft {
+	return resource.PlanDraft{
+		Kind:     "cron",
+		ID:       id,
+		Name:     c.name,
+		CronUser: c.user,
+		Command:  c.command,
+		Schedule: strings.Join([]string{
+			c.minute, c.hour, c.monthday, c.month, c.weekday,
+		}, " "),
+		CronEnv: append([]string(nil), c.env...),
+		Absent:  c.Absent,
+	}
 }
 
 func (c *Cron) apply() error {

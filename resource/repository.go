@@ -125,3 +125,22 @@ func (r *repository) apply() error {
 func Apply() error {
 	return getRepository().apply()
 }
+
+// RegisteredIDs returns the sorted IDs of all currently registered resources.
+// The plan recorder uses it to fail loudly when a registered resource kind
+// produced no plan draft (it would otherwise be silently skipped by apply).
+func RegisteredIDs() []string {
+	return getRepository().registeredIDs()
+}
+
+func (r *repository) registeredIDs() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	ids := make([]string, 0, len(r.registered))
+	for id := range r.registered {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}

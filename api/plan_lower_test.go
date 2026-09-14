@@ -3,6 +3,8 @@ package api
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
@@ -189,6 +191,131 @@ func TestLinkIfExistsDoesNotProbeDuringRecord(t *testing.T) {
 	}
 	if _, err := os.Lstat(path); !os.IsNotExist(err) {
 		t.Fatalf("must not create NoLink on controller: %v", err)
+	}
+}
+
+func TestRecordPlanLowersCronAndService(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	filePath := filepath.Join(t.TempDir(), "marker")
+
+	Task("cron_svc", "cron and service lowering", func() {
+		Cron("zzjob",
+			options.WithCommand("true"),
+			options.WithMinute("7"),
+			options.WithHour("3"),
+			options.WithCronEnv("FOO=1"),
+		)
+		Service("zzsvc", options.WithRestart)
+		File(filePath, options.WithContent("x"))
+	})
+
+	ops, err := RecordPlan("cronsvc", "", "cron_svc")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+
+	wantKinds := []plan.Kind{
+		plan.KindPlan,
+		plan.KindCron,
+		plan.KindService,
+		plan.KindFile,
+	}
+	if !reflect.DeepEqual(opsKinds(ops), wantKinds) {
+		t.Fatalf("ops kinds = %v, want %v", opsKinds(ops), wantKinds)
+	}
+
+	cronOp := ops[1]
+	wantID := "Cron[root/zzjob]"
+	if cronOp.ID != wantID {
+		t.Fatalf("cron id = %q, want %q (IDs must stay stable for DependsOn)", cronOp.ID, wantID)
+	}
+	if cronOp.Name != "zzjob" || cronOp.CronUser != "root" || cronOp.Command != "true" {
+		t.Fatalf("cron payload = %#v", cronOp)
+	}
+	if cronOp.Schedule != "7 3 * * *" {
+		t.Fatalf("cron schedule = %q, want %q", cronOp.Schedule, "7 3 * * *")
+	}
+	if !reflect.DeepEqual(cronOp.CronEnv, []string{"FOO=1"}) {
+		t.Fatalf("cron env = %#v", cronOp.CronEnv)
+	}
+
+	svcOp := ops[2]
+	if svcOp.ID != "Service[zzsvc]" || svcOp.Name != "zzsvc" || !svcOp.Restart {
+		t.Fatalf("service payload = %#v", svcOp)
+	}
+
+	// Wire round-trip must preserve the new kinds and payloads.
+	raw, err := plan.EncodePlan(ops)
+	if err != nil {
+		t.Fatalf("EncodePlan: %v", err)
+	}
+	decoded, err := plan.DecodePlanBytes(raw)
+	if err != nil {
+		t.Fatalf("DecodePlanBytes: %v", err)
+	}
+	if !reflect.DeepEqual(decoded, ops) {
+		t.Fatalf("round-trip mismatch\ngot  %#v\nwant %#v", decoded, ops)
+	}
+}
+
+func TestRecordPlanLowersNoCronAndNoService(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	Task("absent_kinds", "", func() {
+		NoCron("gone", options.WithCronUser("paul"))
+		NoService("olddaemon")
+	})
+
+	ops, err := RecordPlan("absent", "", "absent_kinds")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+	if !reflect.DeepEqual(opsKinds(ops), []plan.Kind{plan.KindPlan, plan.KindCron, plan.KindService}) {
+		t.Fatalf("ops kinds = %v", opsKinds(ops))
+	}
+	cronOp := ops[1]
+	if cronOp.ID != "Cron[paul/gone]" || !cronOp.Absent || cronOp.CronUser != "paul" || cronOp.Command != "" {
+		t.Fatalf("absent cron = %#v", cronOp)
+	}
+	svcOp := ops[2]
+	if svcOp.Name != "olddaemon" || !svcOp.Absent {
+		t.Fatalf("absent service = %#v", svcOp)
+	}
+}
+
+func TestRecordPlanFailsOnUnrecordedResource(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	Task("custom_kind", "", func() {
+		_ = resource.Register("Widget", "gadget",
+			resource.ApplierFunc(func() error { return nil }))
+	})
+
+	ops, err := RecordPlan("p", "", "custom_kind")
+	if err == nil {
+		t.Fatalf("expected loud error for registered resource without plan draft, got ops %v", opsKinds(ops))
+	}
+	if !strings.Contains(err.Error(), "Widget[gadget]") {
+		t.Fatalf("error must name the unrecorded resource: %v", err)
 	}
 }
 

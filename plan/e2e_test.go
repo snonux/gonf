@@ -11,6 +11,8 @@ import (
 	"github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
+	"github.com/snonux/gonf/resource/cron"
+	"github.com/snonux/gonf/resource/service"
 )
 
 // End-to-end: RecordPlan → Encode/Decode → Apply with a temp HOME, covering
@@ -120,6 +122,132 @@ func TestE2ERecordApplyConditionalsAndContent(t *testing.T) {
 	}
 }
 
+// End-to-end for the cron and service plan kinds: RecordPlan → Encode →
+// Decode → plan.Apply, with the crontab and systemctl exec layers faked so no
+// real crontab or service manager is touched.
+func TestE2ECronAndServicePlanApply(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("service backend fake is systemd-specific")
+	}
+	api.ResetTasks()
+	resource.ResetRepository()
+	cron.ResetRunnersForTest()
+	service.ResetRunCmdForTest()
+	t.Cleanup(func() {
+		cron.ResetRunnersForTest()
+		service.ResetRunCmdForTest()
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	// Fake crontab: starts empty, stores what gonf writes.
+	tab := ""
+	cron.SetRunnersForTest(
+		func(name string, args ...string) (string, string, int, error) {
+			if name != "crontab" {
+				return "", "unexpected bin " + name, 1, nil
+			}
+			if tab == "" {
+				return "", "no crontab for root", 1, nil
+			}
+			return tab, "", 0, nil
+		},
+		func(stdin string, name string, args ...string) (string, string, int, error) {
+			if name != "crontab" {
+				return "", "unexpected bin " + name, 1, nil
+			}
+			tab = stdin
+			return "", "", 0, nil
+		},
+	)
+
+	// Fake systemctl: service already running + enabled; record mutation calls.
+	var ctlCalls [][]string
+	service.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+		if name != "systemctl" {
+			return "", "unexpected bin " + name, 1, nil
+		}
+		ctlCalls = append(ctlCalls, append([]string(nil), args...))
+		if argsContain(args, "is-active") || argsContain(args, "is-enabled") {
+			return "", "", 0, nil
+		}
+		return "", "", 0, nil
+	})
+
+	api.Task("cron_svc", "cron and service e2e", func() {
+		api.Cron("zzjob",
+			options.WithCommand("/bin/true"),
+			options.WithMinute("7"),
+			options.WithHour("3"),
+			options.WithCronEnv("FOO=1"),
+		)
+		api.Service("zzsvc", options.WithRestart)
+	})
+
+	planDir := t.TempDir()
+	ops, err := api.RecordPlan("cronsvc", planDir, "cron_svc")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+	wantKinds := []plan.Kind{plan.KindPlan, plan.KindCron, plan.KindService}
+	if len(ops) != len(wantKinds) {
+		t.Fatalf("ops kinds = %v", ops)
+	}
+	for i, k := range wantKinds {
+		if ops[i].Op != k {
+			t.Fatalf("ops[%d] = %s, want %s", i, ops[i].Op, k)
+		}
+	}
+
+	raw, err := plan.EncodePlan(ops)
+	if err != nil {
+		t.Fatalf("EncodePlan: %v", err)
+	}
+	decoded, err := plan.DecodePlanBytes(raw)
+	if err != nil {
+		t.Fatalf("DecodePlanBytes: %v", err)
+	}
+
+	facts := plan.Facts{GOOS: runtime.GOOS, Profile: "test", Hostname: "localhost"}
+	if err := plan.Apply(decoded, facts, planDir); err != nil {
+		t.Fatalf("plan.Apply: %v", err)
+	}
+
+	// The cron op must have installed the job block in the (fake) crontab.
+	for _, needle := range []string{
+		"# BEGIN GONF Cron[zzjob]",
+		"FOO=1",
+		"7 3 * * * /bin/true",
+		"# END GONF Cron[zzjob]",
+	} {
+		if !strings.Contains(tab, needle) {
+			t.Fatalf("crontab missing %q; got:\n%s", needle, tab)
+		}
+	}
+
+	// The service op must have gone through Ensure; zzsvc was already active
+	// and enabled, so WithRestart must surface as a restart action.
+	var sawRestart bool
+	for _, args := range ctlCalls {
+		if argsContain(args, "restart") && argsContain(args, "zzsvc") {
+			sawRestart = true
+		}
+	}
+	if !sawRestart {
+		t.Fatalf("expected systemctl restart for zzsvc, calls: %v", ctlCalls)
+	}
+}
+
+func argsContain(args []string, want string) bool {
+	for _, a := range args {
+		if a == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestE2EFactWhenBothBranches(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -180,5 +308,42 @@ func TestE2EGoldenMiniApplyWithTempTargets(t *testing.T) {
 	}
 	if got, err := os.Readlink(filepath.Join(home, ".bashrc")); err != nil || got != target {
 		t.Fatalf("link %q %v", got, err)
+	}
+}
+
+// TestApplyCronRejectsMissingSchedule pins the corrupt-plan guard: a present
+// cron op without a 5-field schedule must fail loudly instead of silently
+// falling back to the every-minute default schedule. Nothing reaches the
+// crontab backend because the check fires before cron.Ensure.
+func TestApplyCronRejectsMissingSchedule(t *testing.T) {
+	ops := []plan.Op{
+		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "cron"},
+		{Op: plan.KindCron, Name: "zzjob", Command: "/bin/true"},
+	}
+	err := plan.Apply(ops, plan.Facts{GOOS: "linux"}, "")
+	if err == nil || !strings.Contains(err.Error(), "5 whitespace-separated fields") {
+		t.Fatalf("expected missing-schedule error, got %v", err)
+	}
+	// Absent ops legitimately carry no schedule.
+	absent := []plan.Op{
+		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "cron"},
+		{Op: plan.KindCron, Name: "zzjob", Absent: true},
+	}
+	cron.ResetRunnersForTest()
+	service.ResetRunCmdForTest()
+	t.Cleanup(func() {
+		cron.ResetRunnersForTest()
+		service.ResetRunCmdForTest()
+	})
+	cron.SetRunnersForTest(
+		func(name string, args ...string) (string, string, int, error) {
+			return "", "", 0, nil
+		},
+		func(stdin string, name string, args ...string) (string, string, int, error) {
+			return "", "", 0, nil
+		},
+	)
+	if err := plan.Apply(absent, plan.Facts{GOOS: "linux"}, ""); err != nil {
+		t.Fatalf("absent cron without schedule must apply: %v", err)
 	}
 }

@@ -59,20 +59,45 @@ func (s *Service) apply() error {
 	}
 }
 
-// Present registers a service that should be running and enabled at boot.
-func Present(name string, opts ...opt.Option) resource.Resource {
+// newService builds a Service with opts applied.
+func newService(name string, opts []opt.Option) *Service {
 	s := &Service{name: name}
 	for _, o := range opts {
 		o(s)
 	}
-	return resource.Register("Service", s.name,
+	return s
+}
+
+// Present registers a service that should be running and enabled at boot.
+func Present(name string, opts ...opt.Option) resource.Resource {
+	s := newService(name, opts)
+	r := resource.Register("Service", s.name,
 		resource.ApplierFunc(func() error { return s.apply() }), s.DependsOn.IDs...)
+	resource.RecordPlanDraft(s.planDraft(r.ID()))
+	return r
+}
+
+// Ensure applies a service without registering it or recording a plan draft.
+func Ensure(name string, opts ...opt.Option) error {
+	return newService(name, opts).apply()
 }
 
 // Absent registers a service that should be stopped and disabled.
 func Absent(name string, opts ...opt.Option) resource.Resource {
 	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(name, opts...)
+}
+
+func (s *Service) planDraft(id string) resource.PlanDraft {
+	return resource.PlanDraft{
+		Kind:    "service",
+		ID:      id,
+		Name:    s.name,
+		Absent:  s.Absent,
+		Restart: s.restart,
+		Reload:  s.reload,
+		User:    s.user,
+	}
 }
 
 func detectServiceManager() (string, error) {

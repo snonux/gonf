@@ -3,6 +3,7 @@ package plan
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"strings"
@@ -59,6 +60,27 @@ func sampleOps() []Op {
 		{Op: KindPackage, Name: "fish"},
 		{Op: KindEnsureDir, Path: "${HOME}/.cursor", Mode: "0750"},
 		{Op: KindDir, Path: "${HOME}/data", Mode: "0700"},
+		{
+			Op:       KindCron,
+			Name:     "backup",
+			CronUser: "root",
+			Command:  "/usr/local/bin/backup.sh",
+			Schedule: "0 2 * * *",
+			CronEnv:  []string{"PATH=/usr/bin:/bin", "MAILTO=root"},
+			ID:       "Cron[root/backup]",
+		},
+		{
+			Op:      KindService,
+			Name:    "uptimed",
+			Restart: true,
+			User:    true,
+			ID:      "Service[uptimed]",
+		},
+		{
+			Op:     KindService,
+			Name:   "olddaemon",
+			Absent: true,
+		},
 	}
 }
 
@@ -171,6 +193,20 @@ func TestDecodePlanVersionGate(t *testing.T) {
 				t.Fatalf("error %q does not contain %q", err.Error(), tc.wantErr)
 			}
 		})
+	}
+}
+
+// TestDecodePlanAcceptsOlderVersions pins backward compatibility: plans
+// recorded by older binaries (v1, v2) must still decode after a schema
+// bump. The cron/service kinds bumped CurrentVersion to 3; older binaries
+// refuse v3 up-front, and newer binaries must keep applying v1/v2 plans.
+func TestDecodePlanAcceptsOlderVersions(t *testing.T) {
+	t.Parallel()
+	for _, version := range []int{1, 2, CurrentVersion} {
+		input := fmt.Sprintf(`{"op":"plan","version":%d}`+"\n", version)
+		if _, err := DecodePlan(strings.NewReader(input)); err != nil {
+			t.Errorf("version %d header should decode: %v", version, err)
+		}
 	}
 }
 
