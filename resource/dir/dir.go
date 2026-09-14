@@ -24,6 +24,8 @@ type Dir struct {
 	sourceGlob string
 	user       string
 	group      string
+	userSet    bool        // WithOwner was called explicitly (build()'s default does not count)
+	groupSet   bool        // WithGroup was called explicitly (build()'s default does not count)
 	mode       os.FileMode // this directory's own mode, default 0o750
 	fileMode   os.FileMode // mode for regular files copied from source, default 0o640
 	prune      bool        // reconciles extra dest files during a source copy, and recursive-remove during IsAbsent()
@@ -35,11 +37,20 @@ func (d *Dir) SetSource(source string) { d.source = source }
 // SetSourceGlob implements opt.SourceGlobable.
 func (d *Dir) SetSourceGlob(pattern string) { d.sourceGlob = pattern }
 
-// SetOwner implements opt.Owner.
-func (d *Dir) SetOwner(user string) { d.user = user }
+// SetOwner implements opt.Owner. It marks ownership as explicitly configured
+// so plan recording carries it to the destination (build()'s user.Current()
+// default stays unrecorded to avoid churning remote hosts to the ssh user).
+func (d *Dir) SetOwner(user string) {
+	d.user = user
+	d.userSet = true
+}
 
-// SetGroup implements opt.Grouped.
-func (d *Dir) SetGroup(group string) { d.group = group }
+// SetGroup implements opt.Grouped. It marks group ownership as explicitly
+// configured so plan recording carries it to the destination.
+func (d *Dir) SetGroup(group string) {
+	d.group = group
+	d.groupSet = true
+}
 
 // SetMode implements opt.Moded (the directory's own mode).
 func (d *Dir) SetMode(mode os.FileMode) { d.mode = mode }
@@ -191,6 +202,10 @@ func ensureAbsent(d *Dir) error {
 // applyAttributesTo is dir's own small chmod/chown helper, deliberately not
 // shared with the file package so the two packages' attribute-application
 // behavior can evolve independently.
+//
+// The owner is resolved via user.Lookup (name) and the group via a numeric
+// parse first and user.LookupGroup (name) second, so both WithGroup("1")
+// and WithGroup("daemon") work; an unresolvable group is an error.
 func applyAttributesTo(path string, mode os.FileMode, usr, group string) error {
 	if err := os.Chmod(path, mode); err != nil {
 		return fmt.Errorf("failed to chmod %s to %v: %w", path, mode, err)
@@ -208,11 +223,11 @@ func applyAttributesTo(path string, mode os.FileMode, usr, group string) error {
 	}
 
 	if group != "" {
-		gidInt, err := strconv.Atoi(group)
+		var err error
+		gid, err = resolveGroupID(group)
 		if err != nil {
-			return fmt.Errorf("group must be numeric for now: %s", group)
+			return err
 		}
-		gid = gidInt
 	}
 
 	if err := os.Chown(path, uid, gid); err != nil {
@@ -221,6 +236,27 @@ func applyAttributesTo(path string, mode os.FileMode, usr, group string) error {
 	logger.Debug("set owner %s:%s for %s", usr, group, path)
 
 	return nil
+}
+
+// resolveGroupID resolves a configured group to a numeric gid: numeric
+// strings pass through strconv.Atoi, anything else is looked up by name via
+// os/user (works with and without cgo on the supported unix targets). Both
+// paths wrap failures with the offending group name. Mirrors file's helper;
+// the two stay independent so the packages can evolve separately.
+func resolveGroupID(group string) (int, error) {
+	gidInt, err := strconv.Atoi(group)
+	if err == nil {
+		return gidInt, nil
+	}
+	g, lookupErr := user.LookupGroup(group)
+	if lookupErr != nil {
+		return 0, fmt.Errorf("failed to resolve group %s: %w", group, lookupErr)
+	}
+	gidInt, err = strconv.Atoi(g.Gid)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse gid %s for group %s: %w", g.Gid, group, err)
+	}
+	return gidInt, nil
 }
 
 // Ensure builds and applies the directory resource described by opts,
@@ -253,6 +289,19 @@ func (d *Dir) planDraft() resource.PlanDraft {
 		Absent: d.Absent,
 		Prune:  d.prune,
 	}
+	// Only explicitly configured ownership is recorded: build()'s
+	// user.Current() default must not be pushed to remote hosts. Absent
+	// directories are removed, so ownership would be dead wire data. The
+	// sync_dir kinds carry the dir's owner/group at the op level; destination
+	// apply forwards them to every copied file via dir's per-file delegation.
+	if !d.Absent {
+		if d.userSet {
+			draft.Owner = d.user
+		}
+		if d.groupSet {
+			draft.Group = d.group
+		}
+	}
 	switch {
 	case d.sourceGlob != "":
 		draft.Kind = "sync_dir"
@@ -280,10 +329,19 @@ func EnsurePlanDraft(path string, opts ...opt.Option) (resource.PlanDraft, error
 	if err != nil {
 		return resource.PlanDraft{}, err
 	}
-	return resource.PlanDraft{
+	draft := resource.PlanDraft{
 		Kind: "ensure_dir",
 		Path: d.path,
 		Mode: fmt.Sprintf("%#o", d.mode&os.ModePerm),
 		ID:   fmt.Sprintf("EnsureDir[%s]", d.path),
-	}, nil
+	}
+	// Same rule as planDraft: only explicitly configured ownership is
+	// recorded, never build()'s user.Current() default.
+	if d.userSet {
+		draft.Owner = d.user
+	}
+	if d.groupSet {
+		draft.Group = d.group
+	}
+	return draft, nil
 }

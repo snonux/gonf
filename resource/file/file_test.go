@@ -3,10 +3,13 @@ package file
 import (
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	. "github.com/snonux/gonf/api/options"
@@ -381,6 +384,105 @@ func assertNoLeftoverTempFiles(t *testing.T, dir string) {
 		if strings.Contains(e.Name(), ".gonftmp") {
 			t.Errorf("leftover temporary file %s", e.Name())
 		}
+	}
+}
+
+// fileUIDGid returns the file's owning uid/gid via syscall.Stat_t. Skips the
+// test when the platform does not expose Stat_t (repo targets unix only).
+func fileUIDGid(t *testing.T, path string) (int, int) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Skipf("no syscall.Stat_t on this platform")
+	}
+	return int(st.Uid), int(st.Gid)
+}
+
+// currentOwnerForTest resolves the current user and its group name so tests
+// can chown to self unprivileged. Skips when either lookup fails.
+func currentOwnerForTest(t *testing.T) (uname, gidStr, gname string) {
+	t.Helper()
+	curr, err := user.Current()
+	if err != nil {
+		t.Skipf("cannot resolve current user: %v", err)
+	}
+	g, err := user.LookupGroupId(curr.Gid)
+	if err != nil {
+		t.Skipf("current gid %s has no group name: %v", curr.Gid, err)
+	}
+	return curr.Username, curr.Gid, g.Name
+}
+
+// TestEnsureGroupByNameResolvesViaLookupGroup pins the group-name resolution
+// upgrade: WithGroup accepts a group name (resolved via os/user when the
+// value is not numeric) as well as a numeric gid, and chowns to the same gid
+// either way.
+func TestEnsureGroupByNameResolvesViaLookupGroup(t *testing.T) {
+	resource.ResetRepository()
+	_, gidStr, gname := currentOwnerForTest(t)
+	wantGid, err := strconv.Atoi(gidStr)
+	if err != nil {
+		t.Fatalf("parse gid %s: %v", gidStr, err)
+	}
+
+	dir := t.TempDir()
+	byName := filepath.Join(dir, "byname.txt")
+	if err := Ensure(byName, WithContent("x"), WithGroup(gname)); err != nil {
+		t.Fatalf("Ensure with group name %s: %v", gname, err)
+	}
+	if _, got := fileUIDGid(t, byName); got != wantGid {
+		t.Errorf("group name %s resolved to gid %d, want %d", gname, got, wantGid)
+	}
+
+	byNum := filepath.Join(dir, "bynum.txt")
+	if err := Ensure(byNum, WithContent("x"), WithGroup(gidStr)); err != nil {
+		t.Fatalf("Ensure with numeric gid %s: %v", gidStr, err)
+	}
+	if _, got := fileUIDGid(t, byNum); got != wantGid {
+		t.Errorf("numeric gid %s applied as %d, want %d", gidStr, got, wantGid)
+	}
+}
+
+// TestEnsureOwnerApplied pins that WithOwner (explicit user name) is applied
+// to the managed file. Chowning to the current user's own uid works without
+// privileges.
+func TestEnsureOwnerApplied(t *testing.T) {
+	resource.ResetRepository()
+	uname, _, _ := currentOwnerForTest(t)
+	u, err := user.Lookup(uname)
+	if err != nil {
+		t.Fatalf("lookup %s: %v", uname, err)
+	}
+	wantUID, err := strconv.Atoi(u.Uid)
+	if err != nil {
+		t.Fatalf("parse uid %s: %v", u.Uid, err)
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "owned.txt")
+	if err := Ensure(path, WithContent("x"), WithOwner(uname)); err != nil {
+		t.Fatalf("Ensure with owner %s: %v", uname, err)
+	}
+	gotUID, _ := fileUIDGid(t, path)
+	if gotUID != wantUID {
+		t.Errorf("owner %s applied uid %d, want %d", uname, gotUID, wantUID)
+	}
+}
+
+// TestEnsureUnknownGroupFails pins the error path of the group resolution:
+// an unresolvable group name must fail the apply loudly (it used to fail
+// with a numeric-only error).
+func TestEnsureUnknownGroupFails(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "badgroup.txt")
+	err := Ensure(path, WithContent("x"), WithGroup("gonf-no-such-group-8f3a"))
+	if err == nil || !strings.Contains(err.Error(), "failed to resolve group") {
+		t.Fatalf("expected group resolution error, got %v", err)
 	}
 }
 

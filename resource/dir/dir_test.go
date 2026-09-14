@@ -3,14 +3,96 @@ package dir
 import (
 	"bytes"
 	"os"
+	"os/user"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	. "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/resource"
 )
+
+// dirUIDGid returns the directory's owning uid/gid via syscall.Stat_t. Skips
+// the test when the platform does not expose Stat_t (repo targets unix only).
+func dirUIDGid(t *testing.T, path string) (int, int) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Skipf("no syscall.Stat_t on this platform")
+	}
+	return int(st.Uid), int(st.Gid)
+}
+
+// currentOwnerForTest resolves the current user and its group name so tests
+// can chown to self unprivileged. Skips when either lookup fails.
+func currentOwnerForTest(t *testing.T) (uname, gidStr, gname string) {
+	t.Helper()
+	curr, err := user.Current()
+	if err != nil {
+		t.Skipf("cannot resolve current user: %v", err)
+	}
+	g, err := user.LookupGroupId(curr.Gid)
+	if err != nil {
+		t.Skipf("current gid %s has no group name: %v", curr.Gid, err)
+	}
+	return curr.Username, curr.Gid, g.Name
+}
+
+// TestPresentDirectoryOwnerGroupApplied pins that WithOwner and WithGroup
+// (group by name, exercising the os/user.LookupGroup fallback) are applied to
+// the managed directory. Chowning to the current user's own uid/gid works
+// without privileges.
+func TestPresentDirectoryOwnerGroupApplied(t *testing.T) {
+	resource.ResetRepository()
+	uname, gidStr, gname := currentOwnerForTest(t)
+	u, err := user.Lookup(uname)
+	if err != nil {
+		t.Fatalf("lookup %s: %v", uname, err)
+	}
+	wantUID, err := strconv.Atoi(u.Uid)
+	if err != nil {
+		t.Fatalf("parse uid %s: %v", u.Uid, err)
+	}
+	wantGID, err := strconv.Atoi(gidStr)
+	if err != nil {
+		t.Fatalf("parse gid %s: %v", gidStr, err)
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "owneddir")
+
+	Present(path, WithOwner(uname), WithGroup(gname))
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+
+	gotUID, gotGID := dirUIDGid(t, path)
+	if gotUID != wantUID {
+		t.Errorf("owner %s applied uid %d, want %d", uname, gotUID, wantUID)
+	}
+	if gotGID != wantGID {
+		t.Errorf("group %s applied gid %d, want %d", gname, gotGID, wantGID)
+	}
+}
+
+// TestDirUnknownGroupFails pins the error path of dir's group resolution: an
+// unresolvable group name must fail the apply loudly.
+func TestDirUnknownGroupFails(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "badgroupdir")
+	err := Ensure(path, WithGroup("gonf-no-such-group-8f3a"))
+	if err == nil || !strings.Contains(err.Error(), "failed to resolve group") {
+		t.Fatalf("expected group resolution error, got %v", err)
+	}
+}
 
 func TestPresentDirectoryCreate(t *testing.T) {
 	resource.ResetRepository()

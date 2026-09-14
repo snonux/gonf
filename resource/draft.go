@@ -24,8 +24,17 @@ type PlanDraft struct {
 	// Target is the existence-checked path for link_if_exists drafts.
 	Target string
 
-	Mode       string
-	FileMode   string
+	Mode     string
+	FileMode string
+	// Owner is the explicitly configured owning user (WithOwner) for the
+	// file/dir/sync_dir/ensure_dir kinds. Empty means not configured, so
+	// destination apply leaves ownership as-is instead of chowning to the
+	// build-time default user.
+	Owner string
+	// Group is the explicitly configured owning group (WithGroup) for the
+	// file/dir/sync_dir/ensure_dir kinds (name or numeric id). Empty means
+	// not configured.
+	Group      string
 	ContentB64 string
 	Blob       string
 	// SourcePath is a controller-local file to package as content_b64 or a blob.

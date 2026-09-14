@@ -197,12 +197,13 @@ func TestDecodePlanVersionGate(t *testing.T) {
 }
 
 // TestDecodePlanAcceptsOlderVersions pins backward compatibility: plans
-// recorded by older binaries (v1, v2) must still decode after a schema
-// bump. The cron/service kinds bumped CurrentVersion to 3; older binaries
-// refuse v3 up-front, and newer binaries must keep applying v1/v2 plans.
+// recorded by older binaries (v1, v2, v3) must still decode after a schema
+// bump. The cron/service kinds bumped CurrentVersion to 3; the file/dir
+// owner/group fields bumped it to 4; older binaries refuse v4 up-front, and
+// newer binaries must keep applying v1/v2/v3 plans.
 func TestDecodePlanAcceptsOlderVersions(t *testing.T) {
 	t.Parallel()
-	for _, version := range []int{1, 2, CurrentVersion} {
+	for _, version := range []int{1, 2, 3, CurrentVersion} {
 		input := fmt.Sprintf(`{"op":"plan","version":%d}`+"\n", version)
 		if _, err := DecodePlan(strings.NewReader(input)); err != nil {
 			t.Errorf("version %d header should decode: %v", version, err)

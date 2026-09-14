@@ -144,8 +144,12 @@ Global flags (`-profile`, `-verbose`, `-quiet`, `-dry-run` / `-n`) still apply.
 `gonf -list` lists **activated** tasks (After `When*` filtering for display);
 plan recording still uses the full candidate set.
 
-Plan schema **version 3** adds `cron` and `service` ops; version 2 added
-`timer` and `daemon_reload` ops (this binary still applies versions 1 and 2).
+Plan schema **version 4** adds `owner` / `group` fields to the filesystem ops
+(`file`, `dir`, `sync_dir`, `ensure_dir`): ownership explicitly set via
+`WithOwner` / `WithGroup` is enforced on destination apply (only explicitly
+configured ownership is recorded; empty fields leave ownership to the apply
+side). Version 3 added `cron` and `service` ops; version 2 added `timer` and
+`daemon_reload` ops (this binary still applies versions 1, 2, and 3).
 
 ## JSONL sketch
 
@@ -154,6 +158,7 @@ Plan schema **version 3** adds `cron` and `service` ops; version 2 added
 {"op":"link","path":"${HOME}/.bashrc","symlink":"/path/to/bashrc"}
 {"op":"when_begin","all":[{"fact":"goos","eq":"linux"}]}
 {"op":"file","path":"${HOME}/.taskrc","mode":"0640","content_b64":"Li4u"}
+{"op":"file","path":"${HOME}/secret.conf","mode":"0640","owner":"paul","group":"1000","content_b64":"Li4u"}
 {"op":"when_end"}
 {"op":"command","bin":"systemctl","args":["--user","daemon-reload"],"unless":{"bin":"true"}}
 ```

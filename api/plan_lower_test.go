@@ -265,6 +265,106 @@ func TestRecordPlanLowersCronAndService(t *testing.T) {
 	}
 }
 
+func TestRecordPlanLowersFileAndDirOwnership(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	base := t.TempDir()
+	ownedFile := filepath.Join(base, "owned.conf")
+	unsetFile := filepath.Join(base, "unset.conf")
+	absentFile := filepath.Join(base, "absent.conf")
+	ownedDir := filepath.Join(base, "owneddir")
+	syncDst := filepath.Join(base, "syncdst")
+	ensurePath := filepath.Join(base, "ensuredir")
+
+	Task("ownership", "file/dir owner/group lowering", func() {
+		File(ownedFile,
+			options.WithContent("x"),
+			options.WithOwner("daemon"),
+			options.WithGroup("1"),
+		)
+		File(unsetFile, options.WithContent("y"))
+		NoFile(absentFile)
+		Dir(ownedDir, options.WithOwner("svc"), options.WithGroup("12"))
+		SyncDir(syncDst, filepath.Join(base, "src", "*.conf"),
+			options.WithOwner("syncer"), options.WithGroup("13"))
+		EnsureDir(ensurePath,
+			options.WithMode(0o750),
+			options.WithOwner("creator"),
+			options.WithGroup("14"),
+		)
+	})
+
+	ops, err := RecordPlan("ownership", t.TempDir(), "ownership")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+
+	wantKinds := []plan.Kind{
+		plan.KindPlan,
+		plan.KindFile,
+		plan.KindFile,
+		plan.KindFile,
+		plan.KindDir,
+		plan.KindSyncDir,
+		plan.KindEnsureDir,
+	}
+	if !reflect.DeepEqual(opsKinds(ops), wantKinds) {
+		t.Fatalf("ops kinds = %v, want %v", opsKinds(ops), wantKinds)
+	}
+
+	// WithOwner/WithGroup must survive lowering...
+	owned := ops[1]
+	if owned.Owner != "daemon" || owned.Group != "1" {
+		t.Fatalf("owned file op = %#v, want owner=daemon group=1", owned)
+	}
+	// ...while the unset file must stay free of ownership fields (build()'s
+	// user.Current() default must never be pushed to remote hosts).
+	unset := ops[2]
+	if unset.Owner != "" || unset.Group != "" {
+		t.Fatalf("unset file op = %#v, want no owner/group", unset)
+	}
+	// ...and an absent file carries no ownership (it is removed anyway).
+	absent := ops[3]
+	if !absent.Absent || absent.Owner != "" || absent.Group != "" {
+		t.Fatalf("absent file op = %#v, want absent with no owner/group", absent)
+	}
+	dirOp := ops[4]
+	if dirOp.Op != plan.KindDir || dirOp.Owner != "svc" || dirOp.Group != "12" {
+		t.Fatalf("dir op = %#v, want owner=svc group=12", dirOp)
+	}
+	syncOp := ops[5]
+	if syncOp.Owner != "syncer" || syncOp.Group != "13" {
+		t.Fatalf("sync_dir op = %#v, want owner=syncer group=13", syncOp)
+	}
+	ensureOp := ops[6]
+	if ensureOp.Owner != "creator" || ensureOp.Group != "14" || ensureOp.Mode != "0750" {
+		t.Fatalf("ensure_dir op = %#v, want owner=creator group=14", ensureOp)
+	}
+
+	// Wire round-trip must preserve the ownership fields.
+	raw, err := plan.EncodePlan(ops)
+	if err != nil {
+		t.Fatalf("EncodePlan: %v", err)
+	}
+	decoded, err := plan.DecodePlanBytes(raw)
+	if err != nil {
+		t.Fatalf("DecodePlanBytes: %v", err)
+	}
+	if !reflect.DeepEqual(decoded, ops) {
+		t.Fatalf("round-trip mismatch\ngot  %#v\nwant %#v", decoded, ops)
+	}
+	if !strings.Contains(string(raw), `"owner":"daemon"`) ||
+		!strings.Contains(string(raw), `"group":"1"`) {
+		t.Fatalf("encoded plan lost ownership fields:\n%s", raw)
+	}
+}
+
 func TestRecordPlanLowersNoCronAndNoService(t *testing.T) {
 	ResetTasks()
 	resource.ResetRepository()

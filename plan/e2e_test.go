@@ -2,9 +2,12 @@ package plan_test
 
 import (
 	"os"
+	"os/user"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/snonux/gonf/api"
@@ -239,6 +242,135 @@ func TestE2ECronAndServicePlanApply(t *testing.T) {
 	}
 }
 
+// TestE2EFileOwnershipPlanApply pins the owner/group wiring end to end:
+// RecordPlan → Encode → Decode → plan.Apply must enforce ownership explicitly
+// set via WithOwner/WithGroup (owner by name, group by name here, so the
+// os/user resolution paths are exercised too) and must carry ownership for
+// ensure_dir as well. Chowning to the current user's own uid works
+// unprivileged, so the test runs without privileges.
+//
+// The group is deliberately a SUPPLEMENTARY group of the current user (not
+// the primary gid): build()'s apply-side default is user.Current(), so a
+// chown-to-primary-gid assertion would be satisfied even if the apply-side
+// owner/group wiring were dropped entirely (tautological). A supplementary
+// group differs from the default gid, so the assertion only passes when the
+// recorded op really reaches the chown call. Skips when the user has no
+// supplementary group.
+func TestE2EFileOwnershipPlanApply(t *testing.T) {
+	curr, err := user.Current()
+	if err != nil {
+		t.Skipf("cannot resolve current user: %v", err)
+	}
+	supplementary := supplementaryGroupName(t, curr)
+	if supplementary.Name == "" {
+		t.Skip("current user has no supplementary group to assert chown wiring with")
+	}
+	uid, err := strconv.Atoi(curr.Uid)
+	if err != nil {
+		t.Fatalf("parse current uid %s: %v", curr.Uid, err)
+	}
+	sgid, err := strconv.Atoi(supplementary.Gid)
+	if err != nil {
+		t.Fatalf("parse supplementary gid %s: %v", supplementary.Gid, err)
+	}
+
+	api.ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	ownedFile := filepath.Join(home, "owned.conf")
+	ownedDir := filepath.Join(home, "owndir")
+
+	api.Task("ownership_e2e", "owner/group e2e", func() {
+		api.File(ownedFile,
+			options.WithContent("owned"),
+			options.WithOwner(curr.Username),
+			options.WithGroup(supplementary.Name),
+		)
+		api.EnsureDir(ownedDir,
+			options.WithMode(0o750),
+			options.WithOwner(curr.Username),
+			options.WithGroup(supplementary.Name),
+		)
+	})
+
+	planDir := t.TempDir()
+	ops, err := api.RecordPlan("ownership", planDir, "ownership_e2e")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+	raw, err := plan.EncodePlan(ops)
+	if err != nil {
+		t.Fatalf("EncodePlan: %v", err)
+	}
+	decoded, err := plan.DecodePlanBytes(raw)
+	if err != nil {
+		t.Fatalf("DecodePlanBytes: %v", err)
+	}
+	facts := plan.Facts{GOOS: runtime.GOOS, Profile: "test", Hostname: "localhost"}
+	if err := plan.Apply(decoded, facts, planDir); err != nil {
+		t.Fatalf("plan.Apply: %v", err)
+	}
+
+	fileInfo, err := os.Stat(ownedFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fst, ok := fileInfo.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Skipf("no syscall.Stat_t on %s", runtime.GOOS)
+	}
+	if int(fst.Uid) != uid {
+		t.Errorf("owned file uid = %d, want %d (user %s)", fst.Uid, uid, curr.Username)
+	}
+	if int(fst.Gid) != sgid {
+		t.Errorf("owned file gid = %d, want %d (group %s: dropped apply-side owner/group wiring?)", fst.Gid, sgid, supplementary.Name)
+	}
+
+	dirInfo, err := os.Stat(ownedDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst, ok := dirInfo.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Skipf("no syscall.Stat_t on %s", runtime.GOOS)
+	}
+	if int(dst.Uid) != uid {
+		t.Errorf("ensure_dir uid = %d, want %d (user %s)", dst.Uid, uid, curr.Username)
+	}
+	if int(dst.Gid) != sgid {
+		t.Errorf("ensure_dir gid = %d, want %d (group %s)", dst.Gid, sgid, supplementary.Name)
+	}
+}
+
+// supplementaryGroupName returns a group the user belongs to whose gid
+// differs from the primary gid, for chown assertions that cannot be satisfied
+// by apply-side defaults. Returns an empty-name group when none exists.
+func supplementaryGroupName(t *testing.T, curr *user.User) *user.Group {
+	t.Helper()
+	gids, err := curr.GroupIds()
+	if err != nil {
+		return &user.Group{}
+	}
+	for _, gidStr := range gids {
+		if gidStr == curr.Gid {
+			continue
+		}
+		g, err := user.LookupGroupId(gidStr)
+		if err != nil {
+			continue
+		}
+		return g
+	}
+	return &user.Group{}
+}
+
 func argsContain(args []string, want string) bool {
 	for _, a := range args {
 		if a == want {
@@ -345,5 +477,89 @@ func TestApplyCronRejectsMissingSchedule(t *testing.T) {
 	)
 	if err := plan.Apply(absent, plan.Facts{GOOS: "linux"}, ""); err != nil {
 		t.Fatalf("absent cron without schedule must apply: %v", err)
+	}
+}
+
+// TestE2ESyncDirOwnershipPlanApply pins the sync_dir ownership wiring end to
+// end: the recorded dir owner/group must reach every copied file through
+// applySyncDir → dir.Ensure → copySourceFile → file.Ensure. The group is a
+// supplementary group of the current user so the assertion cannot be
+// satisfied by apply-side defaults (see TestE2EFileOwnershipPlanApply).
+func TestE2ESyncDirOwnershipPlanApply(t *testing.T) {
+	curr, err := user.Current()
+	if err != nil {
+		t.Skipf("cannot resolve current user: %v", err)
+	}
+	supplementary := supplementaryGroupName(t, curr)
+	if supplementary.Name == "" {
+		t.Skip("current user has no supplementary group to assert chown wiring with")
+	}
+	uid, err := strconv.Atoi(curr.Uid)
+	if err != nil {
+		t.Fatalf("parse current uid %s: %v", curr.Uid, err)
+	}
+	sgid, err := strconv.Atoi(supplementary.Gid)
+	if err != nil {
+		t.Fatalf("parse supplementary gid %s: %v", supplementary.Gid, err)
+	}
+
+	api.ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	base := t.TempDir()
+	t.Setenv("HOME", base)
+	if err := os.Mkdir(filepath.Join(base, "src"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(base, "src", "app.conf")
+	if err := os.WriteFile(src, []byte("key=value"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(base, "dst")
+
+	api.Task("syncdir_ownership_e2e", "sync_dir owner/group e2e", func() {
+		api.SyncDir(dst, filepath.Join(base, "src", "*.conf"),
+			options.WithOwner(curr.Username),
+			options.WithGroup(supplementary.Name),
+		)
+	})
+
+	planDir := t.TempDir()
+	ops, err := api.RecordPlan("syncdir_ownership", planDir, "syncdir_ownership_e2e")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+	raw, err := plan.EncodePlan(ops)
+	if err != nil {
+		t.Fatalf("EncodePlan: %v", err)
+	}
+	decoded, err := plan.DecodePlanBytes(raw)
+	if err != nil {
+		t.Fatalf("DecodePlanBytes: %v", err)
+	}
+	facts := plan.Facts{GOOS: runtime.GOOS, Profile: "test", Hostname: "localhost"}
+	if err := plan.Apply(decoded, facts, planDir); err != nil {
+		t.Fatalf("plan.Apply: %v", err)
+	}
+
+	copied := filepath.Join(dst, "app.conf")
+	info, err := os.Stat(copied)
+	if err != nil {
+		t.Fatalf("sync_dir did not copy %s: %v", copied, err)
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Skipf("no syscall.Stat_t on %s", runtime.GOOS)
+	}
+	if int(st.Uid) != uid {
+		t.Errorf("synced file uid = %d, want %d (user %s)", st.Uid, uid, curr.Username)
+	}
+	if int(st.Gid) != sgid {
+		t.Errorf("synced file gid = %d, want %d (group %s: dropped apply-side owner/group wiring?)", st.Gid, sgid, supplementary.Name)
 	}
 }

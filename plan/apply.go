@@ -137,6 +137,10 @@ func applyFile(op Op, planDir string) error {
 		return file.Ensure(path, opt.IsAbsent)
 	}
 
+	// Empty owner/group means "not recorded": leaving them unset keeps the
+	// build() defaults (apply-side user) identical to direct resource use.
+	ownership := ownerGroupOptions(op)
+
 	var opts []opt.Option
 	if op.AddLine != "" || op.RemoveLine != "" {
 		if op.ContentB64 != "" || op.Blob != "" {
@@ -155,6 +159,7 @@ func applyFile(op Op, planDir string) error {
 			}
 			opts = append(opts, opt.WithMode(mode))
 		}
+		opts = append(opts, ownership...)
 		return file.Ensure(path, opts...)
 	}
 
@@ -184,7 +189,22 @@ func applyFile(op Op, planDir string) error {
 		}
 		opts = append(opts, opt.WithMode(mode))
 	}
+	opts = append(opts, ownership...)
 	return file.Ensure(path, opts...)
+}
+
+// ownerGroupOptions converts an op's recorded owner/group into options. Both
+// are only appended when non-empty: an omitted field must leave ownership to
+// the apply-side defaults instead of forcing WithOwner("").
+func ownerGroupOptions(op Op) []opt.Option {
+	var opts []opt.Option
+	if op.Owner != "" {
+		opts = append(opts, opt.WithOwner(op.Owner))
+	}
+	if op.Group != "" {
+		opts = append(opts, opt.WithGroup(op.Group))
+	}
+	return opts
 }
 
 func applySyncDir(op Op, planDir string) error {
@@ -225,6 +245,7 @@ func applySyncDir(op Op, planDir string) error {
 		}
 		opts = append(opts, opt.WithFileMode(mode))
 	}
+	opts = append(opts, ownerGroupOptions(op)...)
 	if op.Prune {
 		opts = append(opts, opt.WithPrune)
 	}
@@ -247,6 +268,7 @@ func applyEnsureDir(op Op) error {
 		}
 		opts = append(opts, opt.WithMode(mode))
 	}
+	opts = append(opts, ownerGroupOptions(op)...)
 	return dir.Ensure(path, opts...)
 }
 
@@ -272,6 +294,7 @@ func applyDir(op Op) error {
 		}
 		opts = append(opts, opt.WithMode(mode))
 	}
+	opts = append(opts, ownerGroupOptions(op)...)
 	return dir.Ensure(path, opts...)
 }
 

@@ -205,6 +205,30 @@ func TestOpJSONTagsMatchPlanExamples(t *testing.T) {
 			want: `{"op":"when_end"}`,
 		},
 		{
+			name: "file content with owner group",
+			op: Op{
+				Op:         KindFile,
+				Path:       "${HOME}/secret.conf",
+				Mode:       "0640",
+				Owner:      "daemon",
+				Group:      "wheel",
+				ContentB64: "Li4u",
+			},
+			want: `{"op":"file","path":"${HOME}/secret.conf","mode":"0640","owner":"daemon","group":"wheel","content_b64":"Li4u"}`,
+		},
+		{
+			name: "sync_dir with owner group",
+			op: Op{
+				Op:       KindSyncDir,
+				Path:     "${HOME}/.config/systemd/user",
+				Blob:     "blobs/systemd-user",
+				FileMode: "0640",
+				Owner:    "paul",
+				Group:    "1000",
+			},
+			want: `{"op":"sync_dir","path":"${HOME}/.config/systemd/user","file_mode":"0640","owner":"paul","group":"1000","blob":"blobs/systemd-user"}`,
+		},
+		{
 			name: "ensure_dir",
 			op: Op{
 				Op:   KindEnsureDir,
@@ -213,6 +237,17 @@ func TestOpJSONTagsMatchPlanExamples(t *testing.T) {
 				ID:   "EnsureDir[${HOME}/.cursor]",
 			},
 			want: `{"op":"ensure_dir","id":"EnsureDir[${HOME}/.cursor]","path":"${HOME}/.cursor","mode":"0750"}`,
+		},
+		{
+			name: "ensure_dir with owner group",
+			op: Op{
+				Op:    KindEnsureDir,
+				Path:  "${HOME}/owned",
+				Mode:  "0750",
+				Owner: "paul",
+				Group: "wheel",
+			},
+			want: `{"op":"ensure_dir","path":"${HOME}/owned","mode":"0750","owner":"paul","group":"wheel"}`,
 		},
 		{
 			name: "package",

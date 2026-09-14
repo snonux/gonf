@@ -6,14 +6,16 @@ package plan
 
 // CurrentVersion is the plan wire schema version emitted by gonf plan.
 // Version 2 added timer and daemon_reload ops; version 3 added cron and
-// service ops.
-const CurrentVersion = 3
+// service ops; version 4 added owner/group fields to the filesystem ops
+// (file, dir, sync_dir, ensure_dir).
+const CurrentVersion = 4
 
 // supportedVersions is the set of plan schema versions this binary can apply.
 // Apply must refuse plans whose version is not in this set before any mutation.
 var supportedVersions = map[int]struct{}{
 	1:              {},
 	2:              {},
+	3:              {},
 	CurrentVersion: {},
 }
 
@@ -111,6 +113,16 @@ type Op struct {
 	Mode string `json:"mode,omitempty"`
 	// FileMode is an octal permission string applied to files copied by KindSyncDir.
 	FileMode string `json:"file_mode,omitempty"`
+	// Owner is the owning user (name or numeric uid) recorded for the
+	// filesystem ops KindFile, KindDir, KindSyncDir, and KindEnsureDir. It is
+	// only set when the task explicitly configured ownership via WithOwner;
+	// empty means the destination apply leaves the owner as-is.
+	Owner string `json:"owner,omitempty"`
+	// Group is the owning group (name or numeric gid) recorded for the
+	// filesystem ops KindFile, KindDir, KindSyncDir, and KindEnsureDir. It is
+	// only set when the task explicitly configured ownership via WithGroup;
+	// empty means the destination apply leaves the group as-is.
+	Group string `json:"group,omitempty"`
 	// ContentB64 is base64 file content for KindFile (InstallFile-style).
 	ContentB64 string `json:"content_b64,omitempty"`
 	// Blob is a sidecar blob id/path for KindSyncDir (or large KindFile content).

@@ -257,6 +257,8 @@ func draftToOp(d resource.PlanDraft) plan.Op {
 		Target:     d.Target,
 		Mode:       d.Mode,
 		FileMode:   d.FileMode,
+		Owner:      d.Owner,
+		Group:      d.Group,
 		ContentB64: d.ContentB64,
 		Blob:       d.Blob,
 		Prune:      d.Prune,

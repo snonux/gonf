@@ -30,6 +30,8 @@ type File struct {
 	source     string // bare path, no "source://" prefix
 	user       string
 	group      string
+	userSet    bool // WithOwner was called explicitly (build()'s default does not count)
+	groupSet   bool // WithGroup was called explicitly (build()'s default does not count)
 	addLine    string
 	removeLine string
 	mode       os.FileMode
@@ -59,11 +61,20 @@ func (f *File) SetRemoveLine(line string) {
 	f.removeLine = line
 }
 
-// SetOwner implements opt.Owner.
-func (f *File) SetOwner(user string) { f.user = user }
+// SetOwner implements opt.Owner. It marks ownership as explicitly configured
+// so plan recording carries it to the destination (build()'s user.Current()
+// default stays unrecorded to avoid churning remote hosts to the ssh user).
+func (f *File) SetOwner(user string) {
+	f.user = user
+	f.userSet = true
+}
 
-// SetGroup implements opt.Grouped.
-func (f *File) SetGroup(group string) { f.group = group }
+// SetGroup implements opt.Grouped. It marks group ownership as explicitly
+// configured so plan recording carries it to the destination.
+func (f *File) SetGroup(group string) {
+	f.group = group
+	f.groupSet = true
+}
 
 // SetMode implements opt.Moded.
 func (f *File) SetMode(mode os.FileMode) { f.mode = mode }
@@ -261,6 +272,10 @@ func (f *File) applyTemplateToContent(content []byte, param string) ([]byte, err
 // attacker-controlled directory). A symlink at the target path is expected
 // to have been replaced by the managed regular file via the atomic write
 // path.
+//
+// The owner is resolved via user.Lookup (name) and the group via a numeric
+// parse first and user.LookupGroup (name) second, so both WithGroup("1")
+// and WithGroup("daemon") work; an unresolvable group is an error.
 func (f *File) applyAttributesTo(path string) error {
 	fd, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
@@ -284,11 +299,10 @@ func (f *File) applyAttributesTo(path string) error {
 	}
 
 	if f.group != "" {
-		gidInt, err := strconv.Atoi(f.group)
+		gid, err = resolveGroupID(f.group)
 		if err != nil {
-			return fmt.Errorf("group must be numeric for now: %s", f.group)
+			return err
 		}
-		gid = gidInt
 	}
 
 	if err := fd.Chown(uid, gid); err != nil {
@@ -297,6 +311,26 @@ func (f *File) applyAttributesTo(path string) error {
 	logger.Debug("set owner %s:%s for %s", f.user, f.group, path)
 
 	return nil
+}
+
+// resolveGroupID resolves a configured group to a numeric gid: numeric
+// strings pass through strconv.Atoi, anything else is looked up by name via
+// os/user (works with and without cgo on the supported unix targets). Both
+// paths wrap failures with the offending group name.
+func resolveGroupID(group string) (int, error) {
+	gidInt, err := strconv.Atoi(group)
+	if err == nil {
+		return gidInt, nil
+	}
+	g, lookupErr := user.LookupGroup(group)
+	if lookupErr != nil {
+		return 0, fmt.Errorf("failed to resolve group %s: %w", group, lookupErr)
+	}
+	gidInt, err = strconv.Atoi(g.Gid)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse gid %s for group %s: %w", g.Gid, group, err)
+	}
+	return gidInt, nil
 }
 
 func ensureAbsent(path string) error {
@@ -360,6 +394,17 @@ func (f *File) planDraft() resource.PlanDraft {
 		Absent:     f.Absent,
 		AddLine:    f.addLine,
 		RemoveLine: f.removeLine,
+	}
+	// Only explicitly configured ownership is recorded: build()'s
+	// user.Current() default must not be pushed to remote hosts. Absent files
+	// are removed, so ownership would be dead wire data.
+	if !f.Absent {
+		if f.userSet {
+			d.Owner = f.user
+		}
+		if f.groupSet {
+			d.Group = f.group
+		}
 	}
 	switch {
 	case f.content != "":

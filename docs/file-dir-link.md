@@ -25,7 +25,7 @@ NoLink("/tmp/stale-link")
 | `WithSource` | File / Dir | Copy from path or template |
 | `WithSourceGlob` | Dir | Install glob matches into the directory by basename |
 | `WithLine` / `WithoutLine` | File | Ensure / remove a line |
-| `WithOwner` / `WithGroup` / `WithMode` | File / Dir | Ownership and mode |
+| `WithOwner` / `WithGroup` / `WithMode` | File / Dir | Ownership and mode. Recorded in plan ops (`owner`/`group`, schema v4) and enforced on apply; owner is a user name, group is a numeric gid or group name (resolved via `os/user`). Only explicitly set ownership is recorded — the build-time default (current user) is not pushed to remote hosts, and absent files carry no ownership. |
 | `WithFileMode` | Dir | Mode for files created from a source tree |
 | `WithPrune` | Dir | Remove unexpected children when syncing / absent |
 | `WithSymlink` / `WithHardlink` | Link | Link target (Link does not take owner/mode options) |
