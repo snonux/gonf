@@ -1,6 +1,8 @@
 package api
 
 import (
+	"slices"
+
 	"github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/cmd"
@@ -41,7 +43,7 @@ func Files(paths []string, opts ...options.Option) Resource {
 
 // NoFile creates one or more file resources that are ensured to be absent.
 func NoFile[T Path](path T, opts ...options.Option) Resource {
-	return File(path, append(opts, options.IsAbsent)...)
+	return File(path, append(slices.Clone(opts), options.IsAbsent)...)
 }
 
 // Dir creates one or more directory resources.
@@ -66,7 +68,7 @@ func Dirs(paths []string, opts ...options.Option) Resource {
 
 // NoDir creates one or more directory resources that are ensured to be absent.
 func NoDir[T Path](path T, opts ...options.Option) Resource {
-	return Dir(path, append(opts, options.IsAbsent)...)
+	return Dir(path, append(slices.Clone(opts), options.IsAbsent)...)
 }
 
 // Link creates one or more link resources (symbolic or hard).
@@ -91,7 +93,7 @@ func Links(paths []string, opts ...options.Option) Resource {
 
 // NoLink creates one or more link resources that are ensured to be absent.
 func NoLink[T Path](path T, opts ...options.Option) Resource {
-	return Link(path, append(opts, options.IsAbsent)...)
+	return Link(path, append(slices.Clone(opts), options.IsAbsent)...)
 }
 
 // List is a helper to create a slice of strings from variadic arguments.
@@ -121,7 +123,7 @@ func Packages(names []string, opts ...options.Option) Resource {
 
 // NoPackage creates one or more package resources that are ensured to be absent.
 func NoPackage[T Path](name T, opts ...options.Option) Resource {
-	return Package(name, append(opts, options.IsAbsent)...)
+	return Package(name, append(slices.Clone(opts), options.IsAbsent)...)
 }
 
 // Service ensures one or more OS services are running and enabled at boot.
@@ -148,7 +150,7 @@ func Services(names []string, opts ...options.Option) Resource {
 
 // NoService ensures one or more OS services are stopped and disabled.
 func NoService[T Path](name T, opts ...options.Option) Resource {
-	return Service(name, append(opts, options.IsAbsent)...)
+	return Service(name, append(slices.Clone(opts), options.IsAbsent)...)
 }
 
 // Cron ensures a named crontab entry for a user (default root).
@@ -187,7 +189,7 @@ func Timers(names []string, opts ...options.Option) Resource {
 
 // NoTimer ensures one or more systemd .timer units are stopped and disabled.
 func NoTimer[T Path](name T, opts ...options.Option) Resource {
-	return Timer(name, append(opts, options.IsAbsent)...)
+	return Timer(name, append(slices.Clone(opts), options.IsAbsent)...)
 }
 
 // DaemonReload runs systemctl daemon-reload (or --user). Combine with

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 
 	opt "github.com/snonux/gonf/api/options"
@@ -62,7 +63,7 @@ func Ensure(name string, opts ...opt.Option) error {
 
 // Absent registers a timer that should be stopped and disabled.
 func Absent(name string, opts ...opt.Option) resource.Resource {
-	opts = append(opts, opt.IsAbsent)
+	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(name, opts...)
 }
 

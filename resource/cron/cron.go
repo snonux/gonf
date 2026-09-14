@@ -4,6 +4,7 @@ package cron
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	opt "github.com/snonux/gonf/api/options"
@@ -74,7 +75,7 @@ func Present(name string, opts ...opt.Option) resource.Resource {
 
 // Absent removes a named cron job from the user's crontab.
 func Absent(name string, opts ...opt.Option) resource.Resource {
-	opts = append(opts, opt.IsAbsent)
+	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(name, opts...)
 }
 

@@ -4,6 +4,7 @@ package link
 import (
 	"fmt"
 	"os"
+	"slices"
 
 	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/logger"
@@ -103,7 +104,7 @@ func (l *Link) planDraft() resource.PlanDraft {
 }
 
 func Absent(path string, opts ...opt.Option) resource.Resource {
-	opts = append(opts, opt.IsAbsent)
+	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(path, opts...)
 }
 

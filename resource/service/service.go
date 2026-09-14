@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"slices"
 
 	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/resource"
@@ -70,7 +71,7 @@ func Present(name string, opts ...opt.Option) resource.Resource {
 
 // Absent registers a service that should be stopped and disabled.
 func Absent(name string, opts ...opt.Option) resource.Resource {
-	opts = append(opts, opt.IsAbsent)
+	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(name, opts...)
 }
 

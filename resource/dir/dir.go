@@ -7,6 +7,7 @@ import (
 	"github.com/snonux/gonf/internal/logger"
 	"os"
 	"os/user"
+	"slices"
 	"strconv"
 
 	opt "github.com/snonux/gonf/api/options"
@@ -268,7 +269,7 @@ func (d *Dir) planDraft() resource.PlanDraft {
 }
 
 func Absent(path string, opts ...opt.Option) resource.Resource {
-	opts = append(opts, opt.IsAbsent)
+	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(path, opts...)
 }
 

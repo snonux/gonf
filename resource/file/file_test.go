@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -586,5 +587,57 @@ func TestWithLineAndWithoutLineReplace(t *testing.T) {
 	}
 	if string(got) != "keep\nnew-line\n" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// TestAbsentDoesNotMutateCallerOptionSlice guards against 100 Go Mistakes
+// #25: Absent used to append IsAbsent onto the caller-owned variadic slice,
+// writing into the spare capacity of a reusable option list and silently
+// turning later Present calls built from the same backing array into
+// deletions.
+func TestAbsentDoesNotMutateCallerOptionSlice(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	gone := filepath.Join(dir, "gone.txt")
+	keep := filepath.Join(dir, "keep.txt")
+	if err := os.WriteFile(gone, []byte("bye"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keep, []byte("stay"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reusable option list with spare capacity (len 2, cap 8). Sub-slices
+	// share its backing array.
+	base := make([]Option, 2, 8)
+	base[0] = WithContent("stay")
+	base[1] = WithMode(0o644)
+	before := make([]Option, len(base))
+	copy(before, base)
+
+	Absent(gone, base[:1]...)
+	Present(keep, base[:2]...)
+
+	// (a) The caller-owned backing array must be unchanged.
+	for i := range base {
+		if reflect.ValueOf(base[i]).Pointer() != reflect.ValueOf(before[i]).Pointer() {
+			t.Fatalf("caller option slice mutated at index %d: IsAbsent was injected into the caller's backing array", i)
+		}
+	}
+
+	// (b) The Present resource built from the same backing array must not
+	// have become absent.
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+	data, err := os.ReadFile(keep)
+	if err != nil {
+		t.Fatalf("expected %s to still exist: %v", keep, err)
+	}
+	if string(data) != "stay" {
+		t.Errorf("keep.txt content = %q, want %q", data, "stay")
+	}
+	if _, err := os.Stat(gone); !os.IsNotExist(err) {
+		t.Errorf("expected %s to be removed", gone)
 	}
 }

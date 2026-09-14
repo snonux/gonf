@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/user"
+	"slices"
 	"strconv"
 	"strings"
 	"text/template"
@@ -353,6 +354,6 @@ func (f *File) planDraft() resource.PlanDraft {
 }
 
 func Absent(path string, opts ...opt.Option) resource.Resource {
-	opts = append(opts, opt.IsAbsent)
+	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(path, opts...)
 }
