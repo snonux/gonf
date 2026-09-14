@@ -27,7 +27,12 @@ func (f *File) ensureFile(path string, content []byte) error {
 	existingChecksum := getChecksum(path)
 	newChecksum := sha256.Sum256(content)
 	logger.Debug("computed checksum for new content: %x", newChecksum)
-	changed := existingChecksum != newChecksum
+	// Security rule: a file resource never follows or chmods through a
+	// symlink at its target path. A symlink sitting at the target counts as
+	// changed even when its content matches, so the symlink is replaced by
+	// the managed regular file via the atomic write path's rename instead
+	// of leaving it in place for attribute application to follow.
+	changed := existingChecksum != newChecksum || isSymlink(path)
 
 	if !changed {
 		resource.Note(id, resource.StatusOK)
@@ -50,6 +55,14 @@ func (f *File) ensureFile(path string, content []byte) error {
 	resource.Note(id, resource.StatusChanged)
 	logger.Info("updated %s", path)
 	return f.applyAttributesTo(path)
+}
+
+// isSymlink reports whether a symlink sits at path itself. Used to treat a
+// planted symlink at a file resource's target path as "needs replacement":
+// the symlink is replaced by the managed regular file, never followed.
+func isSymlink(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode()&os.ModeSymlink != 0
 }
 
 // tmpNamePattern builds the os.CreateTemp pattern for path: the target's

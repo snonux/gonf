@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"text/template"
 
 	opt "github.com/snonux/gonf/api/options"
@@ -250,8 +251,24 @@ func (f *File) applyTemplateToContent(content []byte, param string) ([]byte, err
 	return buf.Bytes(), nil
 }
 
+// applyAttributesTo sets f's mode and ownership on the regular file at
+// path. It opens the path with O_NOFOLLOW (plus O_NONBLOCK so a planted
+// FIFO cannot hang the open) and applies the changes to the opened file
+// descriptor, so the kernel refuses — ELOOP — to open a symlink planted at
+// path instead of following it: a planted symlink is never followed, and a
+// swap into the window between the caller's atomic rename and this open
+// cannot escalate either (ELOOP, or chmod of an inode inside the already
+// attacker-controlled directory). A symlink at the target path is expected
+// to have been replaced by the managed regular file via the atomic write
+// path.
 func (f *File) applyAttributesTo(path string) error {
-	if err := os.Chmod(path, f.mode); err != nil {
+	fd, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return fmt.Errorf("failed to open %s for attribute changes: %w", path, err)
+	}
+	defer func() { _ = fd.Close() }()
+
+	if err := fd.Chmod(f.mode); err != nil {
 		return fmt.Errorf("failed to chmod %s to %v: %w", path, f.mode, err)
 	}
 	logger.Debug("set mode %v for %s", f.mode, path)
@@ -274,7 +291,7 @@ func (f *File) applyAttributesTo(path string) error {
 		gid = gidInt
 	}
 
-	if err := os.Chown(path, uid, gid); err != nil {
+	if err := fd.Chown(uid, gid); err != nil {
 		return fmt.Errorf("failed to chown %s to %s:%s: %w", path, f.user, f.group, err)
 	}
 	logger.Debug("set owner %s:%s for %s", f.user, f.group, path)

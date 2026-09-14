@@ -172,6 +172,107 @@ func TestEnsureWithExistingSymlinkTargetDoesNotFollowIt(t *testing.T) {
 	}
 }
 
+// TestEnsureUnchangedContentDoesNotChmodThroughSymlink is the regression
+// test for the symlink-following vulnerability in attribute application:
+// with unchanged content the target is never rewritten, and the old
+// applyAttributesTo chmod'ed/chown'ed through the target PATH, following a
+// planted symlink. An attacker able to write the target's directory could
+// thus make a root-run apply re-permission an arbitrary victim file outside
+// the managed directory (verified empirically: 0600 -> 0640 through the
+// link). The fix treats a symlink at the target as "needs replacement" and
+// applies attributes through an O_NOFOLLOW descriptor, so the victim must
+// remain untouched and the target must become a regular managed file.
+func TestEnsureUnchangedContentDoesNotChmodThroughSymlink(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	const content = "managed content"
+	victim := filepath.Join(dir, "victim")
+	if err := os.WriteFile(victim, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "target.conf")
+	if err := os.Symlink(victim, target); err != nil {
+		t.Fatal(err)
+	}
+
+	// Content matches exactly; only the planted symlink makes it "changed".
+	if err := Ensure(target, WithContent(content)); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+
+	// (i) The victim's permissions must be untouched: no chmod through the
+	// symlink (the old code changed them 0o600 -> 0o640).
+	victimInfo, err := os.Stat(victim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if victimInfo.Mode().Perm() != 0o600 {
+		t.Errorf("victim perms changed through symlink: got %v, want 0o600", victimInfo.Mode().Perm())
+	}
+	// (ii) Victim content unchanged.
+	got, err := os.ReadFile(victim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != content {
+		t.Errorf("victim content changed: got %q, want %q", got, content)
+	}
+	// (iii) The symlink must have been replaced by a regular file.
+	info, err := os.Lstat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Error("target is still a symlink; expected it replaced by a regular file")
+	}
+	// (iv) The target carries the managed content.
+	got, err = os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("reading target: %v", err)
+	}
+	if string(got) != content {
+		t.Errorf("target content: got %q, want %q", got, content)
+	}
+	// (v) The target carries the default managed mode.
+	if info.Mode().Perm() != 0o640 {
+		t.Errorf("target mode: got %v, want 0o640", info.Mode().Perm())
+	}
+}
+
+// TestApplyAttributesToRefusesSymlinkAtTarget pins the kernel-level guard
+// in applyAttributesTo: the target must be opened with O_NOFOLLOW so the
+// kernel refuses (ELOOP) to open through a symlink planted at the path,
+// leaving the victim behind it untouched.
+func TestApplyAttributesToRefusesSymlinkAtTarget(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "victim")
+	if err := os.WriteFile(victim, []byte("victim data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "target.conf")
+	if err := os.Symlink(victim, target); err != nil {
+		t.Fatal(err)
+	}
+
+	// Empty user/group on the literal File: uid/gid stay -1 (no-op chown).
+	err := (&File{mode: 0o640}).applyAttributesTo(target)
+	if err == nil {
+		t.Fatal("expected applyAttributesTo to refuse a symlink at the target")
+	}
+	if !strings.Contains(err.Error(), target) {
+		t.Errorf("error should mention the target path: %v", err)
+	}
+
+	info, err := os.Stat(victim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("victim perms changed: got %v, want 0o600", info.Mode().Perm())
+	}
+}
+
 func TestConcurrentEnsureWritersDoNotInterfere(t *testing.T) {
 	resource.ResetRepository()
 	dir := t.TempDir()
@@ -319,6 +420,37 @@ func TestPresentMode(t *testing.T) {
 	}
 	if info.Mode().Perm() != mode {
 		t.Errorf("expected mode %v, got %v", mode, info.Mode().Perm())
+	}
+}
+
+// TestEnsureUnchangedContentStillAppliesModeChange checks the fd-based
+// attribute path on a plain regular file: content already matches, but a
+// different WithMode must still be applied to the existing inode.
+func TestEnsureUnchangedContentStillAppliesModeChange(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mode-change.conf")
+	if err := os.WriteFile(path, []byte("stable content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Ensure(path, WithContent("stable content"), WithMode(0o600)); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("expected mode 0o600 on unchanged content, got %v", info.Mode().Perm())
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "stable content" {
+		t.Errorf("content changed: got %q", got)
 	}
 }
 
