@@ -1,6 +1,10 @@
 package dir
 
-import "os"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+)
 
 // GlobMatchCounts is the single definition of the WithSourceGlob match
 // rule, consumed by dir's copy path (copySourceGlob), dir's prune keep-set
@@ -29,4 +33,16 @@ func GlobMatchCounts(match string, info os.FileInfo) bool {
 	default:
 		return false
 	}
+}
+
+// KeepBasename returns the basename the copy path writes a counting glob
+// match under: copySourceFile delegates to file.Ensure, whose targetPath
+// strips a trailing ".tmpl" from the caller-given path when the source
+// triggers templating, so a match foo.tmpl installs as foo (rendered) while
+// every other match keeps its own basename. The prune keep-set must use the
+// same name mapping, or a templated match is pruned and re-copied on every
+// run (task 422).
+func KeepBasename(match string) string {
+	base := filepath.Base(match)
+	return strings.TrimSuffix(base, ".tmpl")
 }

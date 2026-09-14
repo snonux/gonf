@@ -1760,3 +1760,50 @@ func TestEnsureRejectsNegativeGroup(t *testing.T) {
 		t.Fatalf("expected the negative-gid error, got %v", err)
 	}
 }
+
+// TestSourceGlobPruneTemplatedMatchDoesNotFlap pins task 422: a glob match
+// foo.tmpl installs as dst/foo (rendered, .tmpl stripped by the copy path);
+// the prune keep-set must use the same written name, or dst/foo is pruned
+// and re-copied on every apply. Applying twice must converge to ok.
+func TestSourceGlobPruneTemplatedMatchDoesNotFlap(t *testing.T) {
+	resource.ResetRepository()
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "foo.tmpl"), []byte("value={{.USER}}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := filepath.Join(t.TempDir(), "dst")
+	if err := Ensure(dst, WithSourceGlob(filepath.Join(src, "*")), WithPrune); err != nil {
+		t.Fatalf("first Ensure: %v", err)
+	}
+	written := filepath.Join(dst, "foo")
+	if _, err := os.Lstat(written); err != nil {
+		t.Fatalf("expected the rendered file at %s: %v", written, err)
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "foo.tmpl")); !os.IsNotExist(err) {
+		t.Errorf("the templated source must not land as foo.tmpl, got %v", err)
+	}
+
+	resource.ResetRepository()
+	resource.ResetReport()
+	if err := Ensure(dst, WithSourceGlob(filepath.Join(src, "*")), WithPrune); err != nil {
+		t.Fatalf("second Ensure: %v", err)
+	}
+	// dst/foo survived the prune: no flapping.
+	if _, err := os.Lstat(written); err != nil {
+		t.Fatalf("rendered file was pruned: %v", err)
+	}
+	var buf bytes.Buffer
+	resource.PrintSummary(&buf)
+	// The count header legitimately contains the word "changed"; the
+	// convergence assertion is that no per-note changed line appears.
+	summary := buf.String()
+	if !strings.Contains(summary, "summary: 2 ok, 0 changed") {
+		t.Errorf("second run must be converged, summary:\n%s", summary)
+	}
+	for _, line := range strings.Split(summary, "\n") {
+		if strings.HasPrefix(line, "  changed ") {
+			t.Errorf("second run must have no changed notes, summary:\n%s", summary)
+		}
+	}
+}

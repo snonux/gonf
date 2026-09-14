@@ -382,7 +382,11 @@ func pruneGlob(d *Dir) error {
 		if !GlobMatchCounts(match, info) {
 			continue
 		}
-		keep[filepath.Base(match)] = struct{}{}
+		// The keep-set must use the WRITTEN basename: copySourceFile strips a
+		// trailing ".tmpl" when the source triggers templating, so a match
+		// foo.tmpl installs as foo (rendered) — pinning the raw name would
+		// prune and re-copy the rendered file on every run (task 422).
+		keep[KeepBasename(match)] = struct{}{}
 	}
 
 	entries, err := os.ReadDir(d.path)
