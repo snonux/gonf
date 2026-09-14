@@ -178,7 +178,8 @@ type Op struct {
 
 	// User selects systemd --user for KindTimer / KindDaemonReload / KindService.
 	User bool `json:"user,omitempty"`
-	// Restart restarts KindService once when it is already running.
+	// Restart restarts KindService / KindTimer once when it is already
+	// running.
 	Restart bool `json:"restart,omitempty"`
 	// Reload reloads KindService once when it is already running
 	// (no restart fallback).

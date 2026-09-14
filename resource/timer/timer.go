@@ -73,6 +73,7 @@ func (t *Timer) planDraft(id string) resource.PlanDraft {
 		Name:       t.name,
 		Absent:     t.Absent,
 		User:       t.user,
+		Restart:    t.restart,
 		EnableOnly: t.enableOnly,
 	}
 }

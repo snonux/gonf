@@ -200,6 +200,11 @@ func TestOpJSONTagsMatchPlanExamples(t *testing.T) {
 			want: `{"op":"service","absent":true,"name":"foo","user":true,"reload":true}`,
 		},
 		{
+			name: "timer restart",
+			op:   Op{Op: KindTimer, Name: "fit.timer", User: true, Restart: true, ID: "Timer[fit.timer]"},
+			want: `{"op":"timer","id":"Timer[fit.timer]","name":"fit.timer","user":true,"restart":true}`,
+		},
+		{
 			name: "when_end",
 			op:   Op{Op: KindWhenEnd},
 			want: `{"op":"when_end"}`,

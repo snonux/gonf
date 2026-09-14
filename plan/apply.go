@@ -409,6 +409,9 @@ func applyTimer(op Op) error {
 	if op.User {
 		opts = append(opts, opt.WithUser)
 	}
+	if op.Restart {
+		opts = append(opts, opt.WithRestart)
+	}
 	if op.EnableOnly {
 		opts = append(opts, opt.WithEnableOnly)
 	}

@@ -96,7 +96,8 @@ type PlanDraft struct {
 	Schedule string
 	// CronEnv lists KEY=VAL environment lines above the cron job.
 	CronEnv []string
-	// Restart restarts a service once when it is already running.
+	// Restart restarts the unit once when it is already running
+	// (service or timer drafts).
 	Restart bool
 	// Reload reloads a service once when it is already running
 	// (no restart fallback).

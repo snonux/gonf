@@ -426,3 +426,46 @@ func opsKinds(ops []plan.Op) []plan.Kind {
 	}
 	return out
 }
+
+// TestRecordPlanLowersTimerRestart pins the timer restart intent on the wire
+// (task z12): WithRestart must survive record → wire → decode instead of
+// being silently dropped from the recorded timer plan.
+func TestRecordPlanLowersTimerRestart(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	Task("timer_restart", "timer restart lowering", func() {
+		Timer("fit.timer", options.WithUser, options.WithRestart)
+	})
+
+	ops, err := RecordPlan("timer_restart", t.TempDir(), "timer_restart")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+	wantKinds := []plan.Kind{plan.KindPlan, plan.KindTimer}
+	if !reflect.DeepEqual(opsKinds(ops), wantKinds) {
+		t.Fatalf("ops kinds = %v, want %v", opsKinds(ops), wantKinds)
+	}
+	op := ops[1]
+	if !op.Restart || !op.User {
+		t.Fatalf("timer op = %#v, want restart+user preserved", op)
+	}
+
+	// Wire round-trip.
+	raw, err := plan.EncodePlan(ops)
+	if err != nil {
+		t.Fatalf("EncodePlan: %v", err)
+	}
+	decoded, err := plan.DecodePlanBytes(raw)
+	if err != nil {
+		t.Fatalf("DecodePlanBytes: %v", err)
+	}
+	if !reflect.DeepEqual(decoded, ops) {
+		t.Fatalf("round-trip mismatch:\n got %#v\nwant %#v", decoded[1], ops[1])
+	}
+}

@@ -89,8 +89,10 @@ func kindFitnessTable() map[plan.Kind]kindFixture {
 			Args: []string{"fit"},
 		}},
 		plan.KindTimer: {draft: &resource.PlanDraft{
-			Kind: "timer",
-			Name: "fit.timer",
+			Kind:    "timer",
+			Name:    "fit.timer",
+			User:    true,
+			Restart: true,
 		}},
 		plan.KindDaemonReload: {draft: &resource.PlanDraft{
 			Kind:      "daemon_reload",
