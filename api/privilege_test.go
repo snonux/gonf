@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -69,7 +70,7 @@ func TestPushSplitsPrivilegeChunks(t *testing.T) {
 	old := sshRunner
 	t.Cleanup(func() { sshRunner = old })
 	var remotes []string
-	sshRunner = func(stdin io.Reader, argv []string) error {
+	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		remotes = append(remotes, argv[len(argv)-1])
 		_, _ = io.Copy(io.Discard, stdin)
 		return nil
@@ -99,7 +100,7 @@ func TestPushPrivilegeNoneRejectsElevated(t *testing.T) {
 
 	old := sshRunner
 	t.Cleanup(func() { sshRunner = old })
-	sshRunner = func(stdin io.Reader, argv []string) error {
+	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		_, _ = io.Copy(io.Discard, stdin)
 		return nil
 	}
@@ -171,11 +172,11 @@ func TestPushRefusesForwardCrossChunkDepsWithZeroSSH(t *testing.T) {
 	}
 	old := sshRunner
 	t.Cleanup(func() { sshRunner = old })
-	sshRunner = func(stdin io.Reader, argv []string) error {
+	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		t.Error("ssh must not be invoked for a plan that fails the dep pre-flight")
 		return nil
 	}
-	err := pushChunks(PushTarget{Host: "h.example", Privilege: privilege.Doas}, "demo", ops, nil)
+	err := pushChunks(context.Background(), PushTarget{Host: "h.example", Privilege: privilege.Doas}, "demo", ops, nil)
 	if err == nil || !strings.Contains(err.Error(), "later chunk 1") {
 		t.Fatalf("want forward cross-chunk dep refusal, got %v", err)
 	}

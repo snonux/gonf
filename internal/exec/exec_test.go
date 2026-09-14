@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRun(t *testing.T) {
@@ -67,6 +68,40 @@ func TestRun(t *testing.T) {
 				t.Errorf("Run() stderr = %q, want non-empty", stderr)
 			}
 		})
+	}
+}
+
+// A positive Timeout must kill a hung command and surface the deadline as an
+// error (not as an exit code, which a killed process would look like).
+func TestRunWithTimeout(t *testing.T) {
+	start := time.Now()
+	stdout, stderr, exitCode, err := RunWith(Opts{Timeout: 50 * time.Millisecond}, "sleep", "5")
+	if err == nil {
+		t.Fatal("expected a timeout error")
+	}
+	if !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("err = %v, want a context deadline", err)
+	}
+	if exitCode != -1 {
+		t.Fatalf("exitCode = %d, want -1", exitCode)
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("RunWith ignored the timeout: took %v", elapsed)
+	}
+	if stdout != "" || stderr != "" {
+		t.Fatalf("stdout=%q stderr=%q, want empty", stdout, stderr)
+	}
+}
+
+// A command that finishes inside the timeout must behave exactly like the
+// no-timeout path (success is not mistaken for a deadline).
+func TestRunWithTimeoutSucceeds(t *testing.T) {
+	stdout, _, exitCode, err := RunWith(Opts{Timeout: 5 * time.Second}, "echo", "in-time")
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if exitCode != 0 || stdout != "in-time\n" {
+		t.Fatalf("exit=%d stdout=%q", exitCode, stdout)
 	}
 }
 

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"io"
 	"reflect"
 	"testing"
@@ -73,17 +74,19 @@ func TestCLIPushWithSSHOpts(t *testing.T) {
 	oldRunner := sshRunner
 	t.Cleanup(func() { sshRunner = oldRunner })
 	var saw []string
-	sshRunner = func(stdin io.Reader, argv []string) error {
+	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		saw = append([]string(nil), argv...)
 		_, _ = io.Copy(io.Discard, stdin)
 		return nil
 	}
 
 	// Leading ssh opts are not push FlagSet flags (takePushFlags peels them).
+	// The generated ConnectTimeout option sits between the ssh opts and the
+	// destination, so match position-independently.
 	if code := cliPush([]string{"-id", "x", "-p", "2222", "rex@host", "push_opts"}); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
-	if len(saw) < 5 || saw[1] != "-p" || saw[2] != "2222" || saw[3] != "rex@host" {
+	if len(saw) < 5 || !hasPortPair(saw, "2222") || saw[len(saw)-2] != "rex@host" {
 		t.Fatalf("argv=%v", saw)
 	}
 }
@@ -98,7 +101,7 @@ func TestCLIPushGlobalDryRun(t *testing.T) {
 	oldRunner := sshRunner
 	t.Cleanup(func() { sshRunner = oldRunner })
 	var saw []string
-	sshRunner = func(stdin io.Reader, argv []string) error {
+	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		saw = append([]string(nil), argv...)
 		_, _ = io.Copy(io.Discard, stdin)
 		return nil

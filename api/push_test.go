@@ -2,12 +2,15 @@ package api
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/privilege"
@@ -28,7 +31,7 @@ func captureSSH(t *testing.T) *[]sshCall {
 	old := sshRunner
 	t.Cleanup(func() { sshRunner = old })
 	calls := &[]sshCall{}
-	sshRunner = func(stdin io.Reader, argv []string) error {
+	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		var buf bytes.Buffer
 		_, _ = io.Copy(&buf, stdin)
 		*calls = append(*calls, sshCall{
@@ -173,7 +176,7 @@ func TestCLIPushStreamsToSSH(t *testing.T) {
 
 	var sawArgv []string
 	var sawStdin []byte
-	sshRunner = func(stdin io.Reader, argv []string) error {
+	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		sawArgv = append([]string(nil), argv...)
 		var buf bytes.Buffer
 		_, _ = io.Copy(&buf, stdin)
@@ -187,7 +190,7 @@ func TestCLIPushStreamsToSSH(t *testing.T) {
 	if code := CLI(); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
-	if len(sawArgv) < 3 || sawArgv[0] != "ssh" || sawArgv[1] != "user@host" {
+	if len(sawArgv) < 3 || sawArgv[0] != "ssh" || sawArgv[len(sawArgv)-2] != "user@host" {
 		t.Fatalf("argv=%v", sawArgv)
 	}
 	if !strings.Contains(sawArgv[len(sawArgv)-1], "gonf apply") {
@@ -371,6 +374,60 @@ func remotes(calls []sshCall) []string {
 	return out
 }
 
+// firstConnectTimeout returns the first ConnectTimeout option in an ssh argv:
+// ssh uses the first occurrence on the command line, so this is the value in
+// effect.
+func firstConnectTimeout(argv []string) string {
+	for _, a := range argv {
+		if strings.HasPrefix(a, "ConnectTimeout=") {
+			return a
+		}
+	}
+	return ""
+}
+
+// Every generated ssh argv must bound the handshake with -o ConnectTimeout:
+// a half-open connection (dropped firewall state, wedged host) would
+// otherwise hang the push forever. The remote apply itself is deliberately
+// not bounded by it — applies are long by nature.
+func TestSSHArgvConnectTimeout(t *testing.T) {
+	argv := PushTarget{Host: "h.example"}.sshArgv("gonf apply -")
+	if got := firstConnectTimeout(argv); got != "ConnectTimeout=15" {
+		t.Fatalf("argv=%v: first ConnectTimeout=%q, want ConnectTimeout=15", argv, got)
+	}
+}
+
+// An explicit ConnectTimeout from ExtraSSH (or -- ssh-args) must win over the
+// default: ssh uses the first option on the command line, and ExtraSSH comes
+// first.
+func TestSSHArgvConnectTimeoutOverride(t *testing.T) {
+	targ := PushTarget{Host: "h.example", ExtraSSH: []string{"-o", "ConnectTimeout=5"}}
+	argv := targ.sshArgv("gonf apply -")
+	if got := firstConnectTimeout(argv); got != "ConnectTimeout=5" {
+		t.Fatalf("argv=%v: first ConnectTimeout=%q, want the explicit 5s", argv, got)
+	}
+}
+
+// The real sshRunner must run its command under the given context: an
+// expired context kills the process instead of hanging the push, and the
+// error carries the context error so callers can distinguish an aborted push
+// from the command's own failure.
+func TestSSHRunnerKillsOnContextDeadline(t *testing.T) {
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	err := sshRunner(ctx, nil, []string{"sleep", "5"})
+	if err == nil {
+		t.Fatal("expected a context-deadline error")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want it to wrap context.DeadlineExceeded", err)
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("sshRunner ignored the context deadline: took %v", elapsed)
+	}
+}
+
 // TestPushRemovesStickyDirAfterLastChunk pins task 412: after the last apply
 // chunk succeeds, the controller removes the remote sticky apply dir (one
 // unprivileged rm -rf), so blob staging does not accumulate under /tmp.
@@ -422,7 +479,7 @@ func TestPushRemovesStickyDirOnChunkFailure(t *testing.T) {
 	// Fail the LAST chunk (the unprivileged apply session): chunk 2 fails
 	// after earlier chunks already applied, which must be reported.
 	old := sshRunner
-	sshRunner = func(stdin io.Reader, argv []string) error {
+	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		var buf bytes.Buffer
 		_, _ = io.Copy(&buf, stdin)
 		payload := buf.Bytes()

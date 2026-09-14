@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -16,17 +17,39 @@ import (
 	"github.com/snonux/gonf/resource"
 )
 
-// sshRunner runs ssh with argv (typically ssh [opts...] host remote-cmd).
-// Overridable in tests.
-var sshRunner = func(stdin io.Reader, argv []string) error {
+// sshConnectTimeout is the ConnectTimeout option appended to every generated
+// ssh argv. It bounds only the TCP/SSH handshake: a half-open connection
+// (dropped firewall state, wedged host) would otherwise hang the push
+// forever. A long remote apply is deliberately NOT bounded by it — applies
+// are long by nature; the fleet path adds a per-host timeout on top instead.
+// A target needing a different value passes its own ConnectTimeout via
+// ExtraSSH or -- ssh-args: ssh uses the first option on the command line, so
+// an explicit one wins.
+const sshConnectTimeout = "15"
+
+// sshRunner runs ssh with argv (typically ssh [opts...] host remote-cmd)
+// under ctx: canceling ctx (e.g. a fleet abort or per-host timeout) kills the
+// in-flight ssh process. A nil ctx is treated as context.Background. A
+// context kill is wrapped with the context error so callers can distinguish
+// an aborted push (errors.Is(err, context.Canceled / DeadlineExceeded)) from
+// the ssh command's own failure. Overridable in tests.
+var sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 	if len(argv) == 0 {
 		return fmt.Errorf("ssh: empty argv")
 	}
-	cmd := exec.Command(argv[0], argv[1:]...)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Stdin = stdin
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	err := cmd.Run()
+	if err != nil && ctx.Err() != nil {
+		// Killed by the push context (abort or deadline), not an ssh failure.
+		return fmt.Errorf("%w (ssh killed by context: %v)", ctx.Err(), err)
+	}
+	return err
 }
 
 // processPrivilege is the CLI/local default for wrapping privileged chunks.
@@ -62,6 +85,7 @@ func (t PushTarget) privilegeMode() privilege.Mode {
 func (t PushTarget) sshArgv(remoteCmd string) []string {
 	argv := []string{"ssh"}
 	argv = append(argv, t.ExtraSSH...)
+	argv = append(argv, "-o", "ConnectTimeout="+sshConnectTimeout)
 	if t.Port > 0 {
 		argv = append(argv, "-p", strconv.Itoa(t.Port))
 	}
@@ -93,10 +117,13 @@ func PushPayload(t PushTarget, payload []byte, elevate bool, applyDir string) er
 	if err != nil {
 		return err
 	}
-	return sshRunner(bytes.NewReader(payload), t.sshArgv(remote))
+	return sshRunner(context.Background(), bytes.NewReader(payload), t.sshArgv(remote))
 }
 
-// PushTo records tasks, splits privilege chunks, and streams each chunk over SSH.
+// PushTo records tasks, splits privilege chunks, and streams each chunk over
+// SSH. Single-target pushes run without a controller-managed context (only
+// the fleet fan-out is signal-cancellable); the ssh handshake is still
+// bounded by the generated ConnectTimeout.
 func PushTo(t PushTarget, planID string, tasks ...string) error {
 	if len(tasks) == 0 {
 		return fmt.Errorf("push: no tasks")
@@ -109,7 +136,7 @@ func PushTo(t PushTarget, planID string, tasks ...string) error {
 	if err != nil {
 		return fmt.Errorf("record: %w", err)
 	}
-	if err := pushChunks(t, planID, ops, mem); err != nil {
+	if err := pushChunks(context.Background(), t, planID, ops, mem); err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "pushed %s (%d ops) to %s\n", planID, len(ops), t.destination())
@@ -117,7 +144,9 @@ func PushTo(t PushTarget, planID string, tasks ...string) error {
 }
 
 // pushChunks splits ops into privilege chunks and streams each chunk to one
-// SSH target. A ValidateChunkDeps pre-flight runs before any SSH traffic: a
+// SSH target. The ctx (Background for direct PushTo calls; the per-host
+// timeout context in the fleet fan-out) kills the in-flight ssh when
+// canceled. A ValidateChunkDeps pre-flight runs before any SSH traffic: a
 // dep recorded in a later privilege chunk (or dangling) fails the push
 // without sending anything, mirroring the privilege pre-flight. Multi-chunk
 // plans with blobs first upload all blobs to a sticky dir in a dedicated
@@ -125,7 +154,7 @@ func PushTo(t PushTarget, planID string, tasks ...string) error {
 // plan-only with -apply-dir and no embedded blobs. This keeps blob
 // extraction owned by the SSH login user even when the first chunk is
 // elevated: root could read the blobs anyway, but the login user could not.
-func pushChunks(t PushTarget, planID string, ops []plan.Op, mem *plan.MemoryStore) error {
+func pushChunks(ctx context.Context, t PushTarget, planID string, ops []plan.Op, mem *plan.MemoryStore) error {
 	chunks := plan.SplitPrivilegeChunks(ops)
 	if err := validateChunkDeps(chunks); err != nil {
 		return err
@@ -158,7 +187,7 @@ func pushChunks(t PushTarget, planID string, ops []plan.Op, mem *plan.MemoryStor
 		if chunks[0].Ops[0].Op != plan.KindPlan {
 			return fmt.Errorf("push: chunk 0 missing plan header")
 		}
-		if err := pushBlobs(t, chunks[0].Ops[0], mem, sticky); err != nil {
+		if err := pushBlobs(ctx, t, chunks[0].Ops[0], mem, sticky); err != nil {
 			return err
 		}
 	}
@@ -172,7 +201,7 @@ func pushChunks(t PushTarget, planID string, ops []plan.Op, mem *plan.MemoryStor
 		if err := plan.EncodePush(&buf, ch.Ops, chunkMem); err != nil {
 			return fmt.Errorf("encode chunk %d: %w", i, err)
 		}
-		if err := sshRunner(bytes.NewReader(buf.Bytes()), t.sshArgv(remotes[i])); err != nil {
+		if err := sshRunner(ctx, bytes.NewReader(buf.Bytes()), t.sshArgv(remotes[i])); err != nil {
 			err = fmt.Errorf("chunk %d (elevate=%v): %w", i, ch.Elevate, err)
 			if len(chunks) > 1 && i > 0 {
 				// Any chunk failure after the first leaves the host partially
@@ -187,13 +216,13 @@ func pushChunks(t PushTarget, planID string, ops []plan.Op, mem *plan.MemoryStor
 				// The sticky dir is no longer needed: its blobs were consumed
 				// or are now unusable. Best-effort removal, never masking the
 				// chunk failure.
-				pushRemoveSticky(t, sticky)
+				pushRemoveSticky(ctx, t, sticky)
 			}
 			return err
 		}
 	}
 	if sticky != "" {
-		pushRemoveSticky(t, sticky)
+		pushRemoveSticky(ctx, t, sticky)
 	}
 	return nil
 }
@@ -203,9 +232,9 @@ func pushChunks(t PushTarget, planID string, ops []plan.Op, mem *plan.MemoryStor
 // forever under /tmp. The dir is owned by the SSH login user, so the removal
 // runs unprivileged; a failure (e.g. a stale root-owned dir from older gonf
 // versions) is logged and never fails the push.
-func pushRemoveSticky(t PushTarget, sticky string) {
+func pushRemoveSticky(ctx context.Context, t PushTarget, sticky string) {
 	remote := "rm -rf " + sticky
-	if err := sshRunner(bytes.NewReader(nil), t.sshArgv(remote)); err != nil {
+	if err := sshRunner(ctx, bytes.NewReader(nil), t.sshArgv(remote)); err != nil {
 		logger.Warn("push: failed to remove remote sticky dir %s: %v", sticky, err)
 	}
 }
@@ -215,7 +244,7 @@ func pushRemoveSticky(t PushTarget, sticky string) {
 // tar attached and a header-only plan, so the remote extracts the blobs as the
 // SSH login user and then applies an empty plan (no-op). Never privilege-
 // wrapped: elevated apply chunks read the blobs as root later on.
-func pushBlobs(t PushTarget, header plan.Op, mem *plan.MemoryStore, applyDir string) error {
+func pushBlobs(ctx context.Context, t PushTarget, header plan.Op, mem *plan.MemoryStore, applyDir string) error {
 	var buf bytes.Buffer
 	if err := plan.EncodePush(&buf, []plan.Op{header}, mem); err != nil {
 		return fmt.Errorf("encode blobs: %w", err)
@@ -224,7 +253,7 @@ func pushBlobs(t PushTarget, header plan.Op, mem *plan.MemoryStore, applyDir str
 	if err != nil {
 		return err
 	}
-	if err := sshRunner(bytes.NewReader(buf.Bytes()), t.sshArgv(remote)); err != nil {
+	if err := sshRunner(ctx, bytes.NewReader(buf.Bytes()), t.sshArgv(remote)); err != nil {
 		return fmt.Errorf("blob upload to %s: %w", applyDir, err)
 	}
 	return nil

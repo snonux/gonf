@@ -2,16 +2,27 @@ package exec
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"os"
 	"os/exec"
+	"time"
 )
 
-// Opts configures an optional working directory and environment for RunWith.
-// A nil Env means the process inherits the current environment. A non-nil Env
-// (including an empty slice) replaces it entirely.
+// Opts configures an optional working directory, environment, and timeout for
+// RunWith. A nil Env means the process inherits the current environment. A
+// non-nil Env (including an empty slice) replaces it entirely.
+//
+// Timeout is opt-in: 0 (the default) keeps the historical no-timeout behavior
+// for existing callers. With Timeout > 0 the process is killed when the
+// deadline expires and the timeout is surfaced as an error (partial
+// stdout/stderr is still returned). Caveat: Wait also waits for the internal
+// stdout/stderr pipes to close, so a killed command that leaks pipe-holding
+// grandchildren (e.g. `sh -c 'cmd &'`) can still block past the deadline.
 type Opts struct {
-	Dir string
-	Env []string
+	Dir     string
+	Env     []string
+	Timeout time.Duration
 }
 
 // Run executes a command with the given arguments and returns stdout, stderr,
@@ -20,9 +31,17 @@ func Run(name string, args ...string) (stdout, stderr string, exitCode int, err 
 	return RunWith(Opts{}, name, args...)
 }
 
-// RunWith is like Run but applies Dir and Env from opts.
+// RunWith is like Run but applies Dir, Env, and Timeout from opts.
 func RunWith(opts Opts, name string, args ...string) (stdout, stderr string, exitCode int, err error) {
-	cmd := exec.Command(name, args...)
+	var cancel context.CancelFunc
+	ctx := context.Background()
+	if opts.Timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, opts.Timeout)
+		defer cancel()
+	}
+	// With a plain Background context CommandContext behaves like Command, so
+	// the no-timeout path is unchanged.
+	cmd := exec.CommandContext(ctx, name, args...)
 	if opts.Dir != "" {
 		cmd.Dir = opts.Dir
 	}
@@ -40,6 +59,13 @@ func RunWith(opts Opts, name string, args ...string) (stdout, stderr string, exi
 	stderr = stderrBuf.String()
 
 	if err != nil {
+		// A deadline kill surfaces as *exec.ExitError ("signal: killed"), which
+		// would otherwise be mistaken for a completed non-zero run: the command
+		// never finished, so report the timeout as an error instead. With
+		// Timeout == 0 the context is Background and ctx.Err() is always nil.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return stdout, stderr, -1, fmt.Errorf("timed out after %v: %w", opts.Timeout, ctxErr)
+		}
 		if exitError, ok := err.(*exec.ExitError); ok {
 			exitCode = exitError.ExitCode()
 			// The command ran and exited non-zero; surface that via exitCode

@@ -2,6 +2,8 @@ package api
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"io"
 	"strings"
 	"sync/atomic"
@@ -47,6 +49,16 @@ func TestFleetDuplicateHostNames(t *testing.T) {
 	}
 }
 
+// hasPortPair reports whether argv contains an adjacent "-p port" pair.
+func hasPortPair(argv []string, port string) bool {
+	for i, a := range argv {
+		if a == "-p" && i+1 < len(argv) && argv[i+1] == port {
+			return true
+		}
+	}
+	return false
+}
+
 func TestPushFleetParallel(t *testing.T) {
 	ResetInventory()
 	ResetTasks()
@@ -62,7 +74,7 @@ func TestPushFleetParallel(t *testing.T) {
 
 	var inFlight, maxFlight atomic.Int32
 	var saw int32
-	sshRunner = func(stdin io.Reader, argv []string) error {
+	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		n := inFlight.Add(1)
 		for {
 			cur := maxFlight.Load()
@@ -74,7 +86,9 @@ func TestPushFleetParallel(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 		atomic.AddInt32(&saw, 1)
 		_, _ = io.Copy(io.Discard, stdin)
-		if len(argv) < 5 || argv[1] != "-p" || argv[2] != "2" {
+		// Position-independent: the ssh argv carries the -p 2 pair (the
+		// generated ConnectTimeout option sits before it).
+		if len(argv) < 5 || !hasPortPair(argv, "2") {
 			t.Errorf("argv=%v", argv)
 		}
 		return nil
@@ -103,7 +117,7 @@ func TestPushFleetSerialLimit(t *testing.T) {
 	t.Cleanup(func() { sshRunner = old })
 
 	var inFlight, maxFlight atomic.Int32
-	sshRunner = func(stdin io.Reader, argv []string) error {
+	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		n := inFlight.Add(1)
 		for {
 			cur := maxFlight.Load()
@@ -138,7 +152,7 @@ func TestPushFleetAggregatesErrors(t *testing.T) {
 
 	old := sshRunner
 	t.Cleanup(func() { sshRunner = old })
-	sshRunner = func(stdin io.Reader, argv []string) error {
+	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		_, _ = io.Copy(io.Discard, stdin)
 		return io.ErrUnexpectedEOF
 	}
@@ -163,7 +177,7 @@ func TestPushHostAndPayloadMagic(t *testing.T) {
 	t.Cleanup(func() { sshRunner = old })
 	var stdin []byte
 	var argv []string
-	sshRunner = func(r io.Reader, a []string) error {
+	sshRunner = func(ctx context.Context, r io.Reader, a []string) error {
 		argv = append([]string(nil), a...)
 		var buf bytes.Buffer
 		_, _ = io.Copy(&buf, r)
@@ -183,6 +197,109 @@ func TestPushHostAndPayloadMagic(t *testing.T) {
 	}
 }
 
+// A failing host must cancel its in-flight siblings: e1 fails immediately,
+// e2 blocks until its per-host context is canceled by the errgroup. e2 is
+// then reported as aborted, not as an independent host failure.
+func TestPushFleetCancelsInFlightOnFailure(t *testing.T) {
+	ResetInventory()
+	ResetTasks()
+	resource.ResetRepository()
+	Task("fleet_cancel", "", func() {})
+
+	Fleet("cancels",
+		Host("e1", WithSSHHost("e1.example")),
+		Host("e2", WithSSHHost("e2.example")),
+	).Parallel(2)
+
+	old := sshRunner
+	t.Cleanup(func() { sshRunner = old })
+	var e2Canceled atomic.Bool
+	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
+		_, _ = io.Copy(io.Discard, stdin)
+		if strings.Contains(argv[len(argv)-2], "e1.example") {
+			return errors.New("boom")
+		}
+		// e2 blocks until the fleet abort kills it.
+		<-ctx.Done()
+		e2Canceled.Store(true)
+		return ctx.Err()
+	}
+
+	err := PushFleet("cancels", "fleet_cancel")
+	if err == nil {
+		t.Fatal("expected the fleet to fail")
+	}
+	if !strings.Contains(err.Error(), "e1") || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("err=%v, want e1's failure", err)
+	}
+	if strings.Contains(err.Error(), "e2") {
+		t.Fatalf("canceled sibling must not be reported as failed: %v", err)
+	}
+	if !e2Canceled.Load() {
+		t.Fatal("e2's ssh was not canceled by e1's failure")
+	}
+}
+
+// A host stuck in ssh must not hold its errgroup slot forever: the per-host
+// timeout kills the push to that host and reports it as a fleet failure.
+func TestPushFleetHostTimeout(t *testing.T) {
+	ResetInventory()
+	ResetTasks()
+	resource.ResetRepository()
+	Task("fleet_slow", "", func() {})
+
+	Fleet("slowf", Host("s1", WithSSHHost("s1.example")))
+
+	old := sshRunner
+	t.Cleanup(func() { sshRunner = old })
+	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
+		_, _ = io.Copy(io.Discard, stdin)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	err := pushFleet(context.Background(), "slowf", "", 1, 50*time.Millisecond, "fleet_slow")
+	if err == nil {
+		t.Fatal("expected the host timeout to fail the push")
+	}
+	if !strings.Contains(err.Error(), "host timeout") {
+		t.Fatalf("err=%v, want a host timeout report", err)
+	}
+}
+
+// A SIGINT-style cancellation (CLI context) aborts the whole fan-out: no
+// host is blamed and the fleet reports an abort instead of pretending a
+// partial run succeeded.
+func TestPushFleetAbortsOnCanceledContext(t *testing.T) {
+	ResetInventory()
+	ResetTasks()
+	resource.ResetRepository()
+	Task("fleet_abort", "", func() {})
+
+	Fleet("abortf", Host("a1", WithSSHHost("a1.example")))
+
+	old := sshRunner
+	t.Cleanup(func() { sshRunner = old })
+	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
+		_, _ = io.Copy(io.Discard, stdin)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := pushFleet(ctx, "abortf", "", 1, defaultHostTimeout, "fleet_abort")
+	if err == nil {
+		t.Fatal("expected an abort error")
+	}
+	if !strings.Contains(err.Error(), "aborted") {
+		t.Fatalf("err=%v, want an abort report", err)
+	}
+	if strings.Contains(err.Error(), "a1:") {
+		t.Fatalf("abort must not blame the killed host: %v", err)
+	}
+}
+
 func TestPushFleetDryRun(t *testing.T) {
 	ResetInventory()
 	ResetTasks()
@@ -196,7 +313,7 @@ func TestPushFleetDryRun(t *testing.T) {
 	old := sshRunner
 	t.Cleanup(func() { sshRunner = old })
 	var remote string
-	sshRunner = func(stdin io.Reader, argv []string) error {
+	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		remote = argv[len(argv)-1]
 		_, _ = io.Copy(io.Discard, stdin)
 		return nil

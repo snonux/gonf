@@ -1,10 +1,13 @@
 package api
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	"github.com/snonux/gonf/internal"
 	"github.com/snonux/gonf/internal/logger"
@@ -24,6 +27,12 @@ import (
 //	gonf apply [-n] <plan.jsonl|->               # apply file or GONF-PUSH/1 stdin
 //	gonf <task> [task...]                            # RecordPlan + Apply locally
 func CLI() int {
+	// Signal-derived context for the fleet fan-out: SIGINT/SIGTERM cancel
+	// in-flight ssh pushes. Only the fleet path is context-aware (bounded
+	// decision); local apply and single-host push are not.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	fs := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 
@@ -89,7 +98,7 @@ func CLI() int {
 	case "push":
 		return cliPush(names[1:])
 	case "fleet":
-		return cliFleet(names[1:])
+		return cliFleet(ctx, names[1:])
 	case "hosts":
 		return cliHosts()
 	case "fleets":
@@ -273,6 +282,6 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "       gonf plan [-o dir|-stdout] [-id name] <task> [task...]")
 	fmt.Fprintln(os.Stderr, "       gonf apply [-n|-dry-run] [-apply-dir dir] <plan.jsonl|->")
 	fmt.Fprintln(os.Stderr, "       gonf push [-n] [-id name] [-privilege=...] [-- ssh-args...] user@host <task> [task...]")
-	fmt.Fprintln(os.Stderr, "       gonf fleet [-n] [-j N] [-id name] <fleet> <task> [task...]")
+	fmt.Fprintln(os.Stderr, "       gonf fleet [-n] [-j N] [-id name] [-host-timeout 10m] <fleet> <task> [task...]")
 	fmt.Fprintln(os.Stderr, "       gonf hosts | fleets")
 }

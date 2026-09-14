@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"io"
 	"os"
 	"testing"
@@ -18,7 +19,7 @@ func TestCLIFleet(t *testing.T) {
 	old := sshRunner
 	t.Cleanup(func() { sshRunner = old })
 	var saw int
-	sshRunner = func(stdin io.Reader, argv []string) error {
+	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		saw++
 		_, _ = io.Copy(io.Discard, stdin)
 		return nil

@@ -175,7 +175,7 @@ revisit only if the kind count makes the checklist unmanageable.
 | `gonf plan [-o dir\|-stdout] [-id name] <task>…` | Write `dir/plan.jsonl` (+ `blobs/`), or print JSONL to stdout |
 | `gonf apply [-n\|-dry-run] <plan.jsonl\|->` | Apply a plan file, or read **GONF-PUSH/1** / bare JSONL from stdin |
 | `gonf push [-n] [-id name] [-- ssh-args…] user@host <task>…` | Record in memory, stream over `ssh` to remote `gonf apply -` |
-| `gonf fleet [-n] [-j N] [-id name] <fleet> <task>…` | Resolve inventory fleet; record once; parallel push to each host |
+| `gonf fleet [-n] [-j N] [-id name] [-host-timeout 10m] <fleet> <task>…` | Resolve inventory fleet; record once; parallel push to each host (signal-cancellable, per-host timeout) |
 | `gonf hosts` / `gonf fleets` | List registered inventory |
 
 ### Inventory DSL (`Host` / `Fleet`)
@@ -243,7 +243,12 @@ startup, applies, then wipes the run dir. Inline content threshold is **512 KiB*
 (`plan.MaxInlineContent`); larger files become blobs in the push stream.
 
 `PushFleet` records and encodes **once**, then fans the same bytes out over SSH
-in parallel (errgroup limit from the fleet or `-j`).
+in parallel (errgroup limit from the fleet or `-j`). The fan-out runs under a
+context: a failing host **cancels its in-flight siblings** (their ssh
+processes are killed, and they are reported as aborted, not as independent
+failures), and `gonf fleet` threads its signal-derived context so
+SIGINT/SIGTERM abort the whole push. See [Timeouts and
+Cancellation](#timeouts-and-cancellation).
 
 Example:
 
@@ -257,6 +262,33 @@ gonf fleet -j 2 garage garage_deploy
 Global flags (`-profile`, `-verbose`, `-quiet`, `-dry-run` / `-n`) still apply.
 `gonf -list` lists **activated** tasks (After `When*` filtering for display);
 plan recording still uses the full candidate set.
+
+### Timeouts and cancellation
+
+Three resilience knobs bound the push/fleet path; each has a narrow scope:
+
+| Knob | Where | Bounds | Default |
+|------|-------|--------|---------|
+| `-host-timeout` (fleet) | per-host context | one host's **whole push** (all chunks: blob upload, applies, sticky removal) | `10m`, `0` = unlimited |
+| `-o ConnectTimeout=15` (generated argv) | every `ssh` invocation | only the **TCP/SSH handshake** | 15s; an explicit `ConnectTimeout` in `ExtraSSH` / `-- ssh-args` wins (ssh uses the first option) |
+| `exec.Opts.Timeout` | `internal/exec` `RunWith` | one external command (opt-in per call) | `0` = no timeout (historical behavior) |
+
+Design decisions:
+
+- **No overall timeout on remote applies.** An apply is long by nature; the
+  controller never bounds it (only the handshake via `ConnectTimeout`). The
+  fleet path instead bounds the *whole push to one host* with the per-host
+  timeout above, so a wedged host cannot hold an errgroup slot forever.
+- **Cancellation semantics.** A failing host cancels its in-flight siblings
+  (`errgroup.WithContext`); their ssh processes are killed by the context and
+  the fleet error reports the abort reason once (`fleet "x": aborted: …`) —
+  canceled hosts are not listed as independent failures. A host killed by its
+  own per-host deadline is reported with `(host timeout after 10m0s)`.
+- **What is not context-aware (yet).** Local apply and single-host `push` run
+  without a signal context, and `exec.Run` / the resource packages have no
+  timeouts: a wedged local `dnf`/`systemctl` still blocks. The
+  `exec.Opts.Timeout` field exists for opt-in callers; wiring it globally was
+  deliberately deferred (it would change apply semantics).
 
 Plan schema **version 5** adds the `deps` field to resource ops: the sorted
 resource IDs a resource depends on (its `DependsOn` targets, e.g.

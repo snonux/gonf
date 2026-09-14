@@ -3,6 +3,7 @@
 package api
 
 import (
+	"context"
 	"io"
 	"os"
 	"os/exec"
@@ -63,14 +64,14 @@ func TestRemoteSmokePush(t *testing.T) {
 
 	old := sshRunner
 	t.Cleanup(func() { sshRunner = old })
-	sshRunner = func(stdin io.Reader, argv []string) error {
+	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		if len(argv) >= 3 {
 			remote := argv[len(argv)-1]
 			// Portable across sh/bash/csh: no `export` (csh on FreeBSD).
 			argv = append(append([]string{}, argv[:len(argv)-1]...),
 				"env PATH=$HOME/bin:$HOME/go/bin:$PATH "+remote)
 		}
-		cmd := exec.Command(argv[0], argv[1:]...)
+		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 		cmd.Stdin = stdin
 		cmd.Stdout = os.Stderr
 		cmd.Stderr = os.Stderr
@@ -94,14 +95,14 @@ func TestRemoteSmokePush(t *testing.T) {
 	}
 
 	var saw []string
-	sshRunner = func(stdin io.Reader, argv []string) error {
+	sshRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		if len(argv) >= 3 {
 			remote := argv[len(argv)-1]
 			saw = append(saw, remote)
 			argv = append(append([]string{}, argv[:len(argv)-1]...),
 				"env PATH=$HOME/bin:$HOME/go/bin:$PATH "+remote)
 		}
-		cmd := exec.Command(argv[0], argv[1:]...)
+		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 		cmd.Stdin = stdin
 		cmd.Stdout = os.Stderr
 		cmd.Stderr = os.Stderr

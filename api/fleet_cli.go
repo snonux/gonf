@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -44,19 +45,20 @@ func cliFleets() int {
 	return 0
 }
 
-func cliFleet(args []string) int {
+func cliFleet(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("fleet", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	dryRun := fs.Bool("dry-run", false, "Remote dry-run (-n on apply)")
 	dryRunShort := fs.Bool("n", false, "Alias for -dry-run")
 	planID := fs.String("id", "", "plan id written into the header (default fleet-<name>)")
 	jobs := fs.Int("j", 0, "override fleet parallelism for this run")
+	hostTimeout := fs.Duration("host-timeout", defaultHostTimeout, "per-host push timeout (all chunks; 0 = unlimited)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	pos := fs.Args()
 	if len(pos) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: gonf fleet [-n|-dry-run] [-j N] [-id name] <fleet> <task> [task...]")
+		fmt.Fprintln(os.Stderr, "usage: gonf fleet [-n|-dry-run] [-j N] [-id name] [-host-timeout 10m] <fleet> <task> [task...]")
 		return 2
 	}
 	if *dryRun || *dryRunShort {
@@ -68,7 +70,7 @@ func cliFleet(args []string) int {
 	if id == "" {
 		id = "fleet-" + name
 	}
-	if err := pushFleet(name, id, *jobs, tasks...); err != nil {
+	if err := pushFleet(ctx, name, id, *jobs, *hostTimeout, tasks...); err != nil {
 		fmt.Fprintf(os.Stderr, "fleet: %v\n", err)
 		return 1
 	}
