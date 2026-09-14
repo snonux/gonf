@@ -1,6 +1,7 @@
 package privilege
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -92,6 +93,94 @@ func TestParseMode(t *testing.T) {
 	m, err := ParseMode("Doas")
 	if err != nil || m != Doas {
 		t.Fatal(m, err)
+	}
+}
+
+// TestParseModeTable pins the accepted spellings (case-insensitive, trimmed)
+// and the error for anything else.
+func TestParseModeTable(t *testing.T) {
+	tests := []struct {
+		in      string
+		want    Mode
+		wantErr bool
+	}{
+		{"", None, false},
+		{"none", None, false},
+		{"  SUDO ", Sudo, false},
+		{"sudo", Sudo, false},
+		{"Doas", Doas, false},
+		{"doas", Doas, false},
+		{"bogus", None, true},
+		{"sudoo", None, true},
+	}
+
+	for _, tc := range tests {
+		t.Run("'"+tc.in+"'", func(t *testing.T) {
+			m, err := ParseMode(tc.in)
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "unknown mode") {
+					t.Fatalf("ParseMode(%q) err = %v, want unknown mode", tc.in, err)
+				}
+				return
+			}
+			if err != nil || m != tc.want {
+				t.Fatalf("ParseMode(%q) = %v, %v; want %v", tc.in, m, err, tc.want)
+			}
+		})
+	}
+}
+
+// TestModeString pins the flag spelling of every Mode value, including the
+// unknown-mode default.
+func TestModeString(t *testing.T) {
+	tests := []struct {
+		mode Mode
+		want string
+	}{
+		{None, "none"},
+		{Sudo, "sudo"},
+		{Doas, "doas"},
+		{Mode(99), "none"},
+	}
+
+	for _, tc := range tests {
+		if got := tc.mode.String(); got != tc.want {
+			t.Errorf("Mode(%d).String() = %q, want %q", tc.mode, got, tc.want)
+		}
+	}
+}
+
+// TestWrapApplyCmdInvalidMode pins the defensive default for an out-of-range
+// Mode on the remote path.
+func TestWrapApplyCmdInvalidMode(t *testing.T) {
+	got, err := WrapApplyCmd(Mode(99), true, "apply -")
+	if err == nil || !strings.Contains(err.Error(), "invalid mode") {
+		t.Fatalf("WrapApplyCmd(Mode(99), true, …) err = %v, want invalid mode", err)
+	}
+	if got != "" {
+		t.Errorf("got %q, want empty command on error", got)
+	}
+}
+
+// TestWrapArgvModes pins the remaining WrapArgv branches: doas wrapping, the
+// defensive invalid-mode default, and the plain non-elevated pass-through.
+func TestWrapArgvModes(t *testing.T) {
+	argv, err := WrapArgv(Doas, true, []string{"gonf", "apply", "-"})
+	if err != nil || !slices.Equal(argv, []string{"doas", "gonf", "apply", "-"}) {
+		t.Fatalf("doas wrap = %q, %v", argv, err)
+	}
+
+	argv, err = WrapArgv(Mode(99), true, []string{"gonf"})
+	if err == nil || !strings.Contains(err.Error(), "invalid mode") {
+		t.Fatalf("invalid mode err = %v, want invalid mode", err)
+	}
+	if argv != nil {
+		t.Errorf("got %v, want nil argv on error", argv)
+	}
+
+	argv, err = WrapArgv(Sudo, false, []string{"gonf"})
+	if err != nil || !slices.Equal(argv, []string{"gonf"}) {
+		t.Fatalf("plain pass-through = %v, %v", argv, err)
 	}
 }
 

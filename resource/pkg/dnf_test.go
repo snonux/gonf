@@ -231,15 +231,15 @@ func TestApplyDNFFake(t *testing.T) {
 				}
 			}
 
-			assertDNFNote(t, tt.pkg.name, tt.wantNote)
+			assertPkgNote(t, tt.pkg.name, tt.wantNote)
 		})
 	}
 }
 
-// assertDNFNote checks the note recorded for Package[name]: PrintSummary
+// assertPkgNote checks the note recorded for Package[name]: PrintSummary
 // lists only non-ok notes, so ok means the id must be absent from the
 // summary, changed/would-change mean the id must appear with that status.
-func assertDNFNote(t *testing.T, name string, want resource.Status) {
+func assertPkgNote(t *testing.T, name string, want resource.Status) {
 	t.Helper()
 	var buf bytes.Buffer
 	resource.PrintSummary(&buf)
@@ -258,6 +258,27 @@ func assertDNFNote(t *testing.T, name string, want resource.Status) {
 		}
 	default:
 		t.Fatalf("unexpected want status %v", want)
+	}
+}
+
+// TestApplyDNFActionStartError pins the dnf-specific wrapper for an action
+// that fails to start (e.g. dnf missing), as opposed to a non-zero exit.
+func TestApplyDNFActionStartError(t *testing.T) {
+	old := runCmd
+	defer func() { runCmd = old }()
+
+	runCmd = func(name string, args ...string) (string, string, int, error) {
+		if name == "rpm" {
+			return "", "", 1, nil // not installed
+		}
+		return "", "", -1, errors.New("exec: dnf not found")
+	}
+
+	resource.ResetReport()
+	p := Package{name: "rsync"}
+	err := applyDNF(&p)
+	if err == nil || !strings.Contains(err.Error(), "failed to execute dnf") {
+		t.Errorf("applyDNF should wrap the dnf start failure, got: %v", err)
 	}
 }
 

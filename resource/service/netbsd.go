@@ -11,6 +11,11 @@ import (
 
 const netbsdService = "/usr/sbin/service"
 
+// netbsdRcConfD is the rc.conf.d override directory written by
+// netbsdSetEnabled. A variable so tests can redirect it to a temporary
+// directory instead of touching /etc.
+var netbsdRcConfD = "/etc/rc.conf.d"
+
 func applyNetBSD(s *Service) error {
 	id := fmt.Sprintf("Service[%s]", s.name)
 
@@ -111,9 +116,9 @@ func netbsdSvcRun(name, action string) error {
 	return nil
 }
 
-// netbsdSetEnabled writes /etc/rc.conf.d/NAME with NAME=YES|NO (overrides rc.conf).
+// netbsdSetEnabled writes $netbsdRcConfD/NAME with NAME=YES|NO (overrides rc.conf).
 func netbsdSetEnabled(name string, enabled bool) error {
-	dir := "/etc/rc.conf.d"
+	dir := netbsdRcConfD
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dir, err)
 	}
