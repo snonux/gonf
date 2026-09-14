@@ -192,8 +192,10 @@ func Run(names ...string) error {
 	}
 
 	if plan.Recording() || resource.PlanDraftRecording() {
-		var packErr error
-		return recordTaskBodies(names, &packErr)
+		// Nested session: bodies append into the current plan. Packaging
+		// failures are shared through recordingPackErr, so the nested Run
+		// surfaces the real error (not a misleading secondary one).
+		return recordTaskBodies(names)
 	}
 
 	planDir, err := os.MkdirTemp("", "gonf-plan-*")

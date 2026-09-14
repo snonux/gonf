@@ -73,6 +73,18 @@ func AllKinds() []Kind {
 	return out
 }
 
+// IsKnownKind reports whether k is one of the declared Kind constants.
+// Record-time validation and fitness tests use this to reject unknown ops
+// before they reach the wire instead of failing at remote apply time.
+func IsKnownKind(k Kind) bool {
+	for _, known := range allKinds {
+		if known == k {
+			return true
+		}
+	}
+	return false
+}
+
 // Predicate is one conjunct in a when_begin "all" list.
 // Exactly one of the path/fact forms should be set per predicate.
 type Predicate struct {

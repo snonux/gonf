@@ -34,6 +34,15 @@ var recordingStack []string
 // returns. It is cleared at the start of each RecordPlanTo session.
 var recordingCycleErr error
 
+// recordingPackErr holds the current recording session's packaging error
+// (draft-lowering or blob-pack failure). The recorder callback sets it; every
+// task body — including bodies recorded through nested Run calls — checks it
+// after running, so an outer session's pack failure fails enclosing nested
+// bodies with the REAL error instead of a misleading secondary
+// checkUnrecordedDrafts one. Recording is single-goroutine (fleet records
+// centrally before fan-out), so a plain package-level value is safe.
+var recordingPackErr error
+
 // RecordPlan runs the named tasks in plan-record mode: resource registration
 // emits plan.Op lines instead of applying. Tasks are looked up as candidates
 // (not Activate-filtered) so When* recipes become when_begin/when_end rather
@@ -71,9 +80,9 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 	// stack entry (pop is skipped); go test recovers per-test panics and
 	// keeps running, so reset here to keep later sessions truthful.
 	recordingStack = nil
-	var packErr error
+	recordingPackErr = nil
 	resource.SetPlanDraftRecorder(func(d resource.PlanDraft) {
-		if packErr != nil {
+		if recordingPackErr != nil {
 			return
 		}
 		if d.ID != "" {
@@ -81,7 +90,7 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 		}
 		op, err := packageDraft(d, store)
 		if err != nil {
-			packErr = err
+			recordingPackErr = err
 			return
 		}
 		plan.Record(op)
@@ -91,11 +100,11 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 		plan.SetRecording(false)
 	}()
 
-	if err := recordTaskBodies(taskNames, &packErr); err != nil {
+	if err := recordTaskBodies(taskNames); err != nil {
 		return nil, err
 	}
-	if packErr != nil {
-		return nil, packErr
+	if recordingPackErr != nil {
+		return nil, recordingPackErr
 	}
 
 	ops := plan.FinishRecord(planID)
@@ -104,8 +113,9 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 }
 
 // recordTaskBodies appends ops for taskNames into the current plan session.
-// packErr is shared with the draft recorder callback.
-func recordTaskBodies(taskNames []string, packErr *error) error {
+// Packaging failures from the session's draft recorder are shared through
+// recordingPackErr, so nested Run bodies see the real error too.
+func recordTaskBodies(taskNames []string) error {
 	for _, name := range taskNames {
 		if err := checkRecordingCycle(name); err != nil {
 			// Task bodies cannot return errors; stash the cycle so every
@@ -114,7 +124,7 @@ func recordTaskBodies(taskNames []string, packErr *error) error {
 			return err
 		}
 		recordingStack = append(recordingStack, name)
-		err := recordSingleTaskBody(name, packErr)
+		err := recordSingleTaskBody(name)
 		recordingStack = recordingStack[:len(recordingStack)-1]
 		if err != nil {
 			return err
@@ -124,7 +134,7 @@ func recordTaskBodies(taskNames []string, packErr *error) error {
 }
 
 // recordSingleTaskBody records one task body into the current plan session.
-func recordSingleTaskBody(name string, packErr *error) error {
+func recordSingleTaskBody(name string) error {
 	c, ok := findCandidate(name)
 	if !ok {
 		return fmt.Errorf("unknown task %q", name)
@@ -154,9 +164,10 @@ func recordSingleTaskBody(name string, packErr *error) error {
 		// Keep the stash set: enclosing bodies fail with the same cycle.
 		return recordingCycleErr
 	}
-	if packErr != nil && *packErr != nil {
+	if recordingPackErr != nil {
 		recordingElevate = prevElevate
-		return *packErr
+		// Keep the stash set: enclosing bodies fail with the same error.
+		return recordingPackErr
 	}
 	if err := checkUnrecordedDrafts(c.name); err != nil {
 		recordingElevate = prevElevate
@@ -239,7 +250,10 @@ func planWhenForCandidate(c taskCandidate) ([]plan.Predicate, error) {
 }
 
 func packageDraft(d resource.PlanDraft, store plan.BlobStore) (plan.Op, error) {
-	op := draftToOp(d)
+	op, err := draftToOp(d)
+	if err != nil {
+		return plan.Op{}, err
+	}
 	switch {
 	case d.SourcePath != "":
 		data, err := os.ReadFile(d.SourcePath)
@@ -305,7 +319,13 @@ func blobName(d resource.PlanDraft) string {
 	return "blob"
 }
 
-func draftToOp(d resource.PlanDraft) plan.Op {
+// draftToOp lowers a resource draft to a plan op line. Every draft Kind must
+// map through an explicit switch case: an unmapped kind is a programming
+// error (typo, or a new resource kind missing its draftToOp case) and fails
+// the record loudly instead of silently forwarding an unknown op to the wire,
+// where it would only blow up at remote apply time. See docs/plan.md,
+// "Adding a resource kind" for the full checklist.
+func draftToOp(d resource.PlanDraft) (plan.Op, error) {
 	op := plan.Op{
 		ID:         d.ID,
 		Path:       d.Path,
@@ -368,9 +388,14 @@ func draftToOp(d resource.PlanDraft) plan.Op {
 	case "service":
 		op.Op = plan.KindService
 	default:
-		op.Op = plan.Kind(d.Kind)
+		return op, fmt.Errorf("RecordPlan: draft %q: unknown draft kind %q (no draftToOp case; see docs/plan.md kind checklist)",
+			d.ID, d.Kind)
 	}
-	return op
+	if !plan.IsKnownKind(op.Op) {
+		return op, fmt.Errorf("RecordPlan: draft %q: kind %q lowers to undeclared plan kind %q (missing from plan.AllKinds)",
+			d.ID, d.Kind, op.Op)
+	}
+	return op, nil
 }
 
 func draftGuard(g *resource.PlanGuardDraft) *plan.Guard {

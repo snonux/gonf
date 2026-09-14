@@ -334,3 +334,40 @@ func TestCLIRequiresTask(t *testing.T) {
 		t.Fatalf("CLI exit = %d, want 2", code)
 	}
 }
+
+// TestNestedRunSurfacesRealPackError pins that a packaging failure (here: a
+// source file that cannot be read) inside a nested Run fails the OUTER body
+// with the REAL error, not a misleading "registered resources without plan
+// draft" secondary one. Before the recordingPackErr sharing, nested Run kept
+// its own packErr that the active session's recorder never wrote to, so
+// aggregates died with the wrong message (task n12 review).
+func TestNestedRunSurfacesRealPackError(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	dir := t.TempDir()
+	out := filepath.Join(dir, "out.conf")
+
+	Task("child_bad_source", "child with unreadable source", func() {
+		File(out, options.WithSource(filepath.Join(dir, "does-not-exist.src")))
+	})
+	Task("outer_nested", "nested Run over the bad child", func() {
+		_ = Run("child_bad_source")
+	})
+
+	_, err := RecordPlan("nested_pack_err", t.TempDir(), "outer_nested")
+	if err == nil {
+		t.Fatal("expected the record to fail on the unreadable source")
+	}
+	if !strings.Contains(err.Error(), "does-not-exist") {
+		t.Errorf("error should surface the REAL packaging failure, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "without plan draft") {
+		t.Errorf("the misleading secondary error leaked: %v", err)
+	}
+}

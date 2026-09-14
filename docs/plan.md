@@ -35,6 +35,10 @@ ops, err := RecordPlan("my-plan", planDir, "home_helix", "home_tmux")
   become `when_begin` / `when_end` recipes evaluated on the destination.
 - Task bodies run with a draft recorder: `File` / `Dir` / `Link` / `Command` /
   … emit ops instead of applying.
+- Every draft must map through an explicit `draftToOp` case in `api/plan.go`:
+  an unknown draft kind fails `RecordPlan` loudly at record time (there is no
+  `default:` passthrough to the wire), so a typo or a forgotten case is a
+  controller-side record error instead of a remote apply-time `unknown op`.
 - `InstallFile` content → `content_b64` when ≤ 512 KiB, else a blob sidecar.
 - `SyncDir` trees → `planDir/blobs/<name>/`.
 - Nested `Run` while recording (e.g. `Aggregate`) appends into the **same**
@@ -66,6 +70,47 @@ if err := ApplyPlan(ops, planDir); err != nil { /* … */ }
 - Expands `${HOME}` on the destination; unknown `${…}` is a hard error.
 - Maps ops to existing resource `Ensure` helpers (`file`, `dir`, `link`,
   `cmd`, `pkg`, …) — same semantics as direct resource APIs.
+
+## Adding a resource kind (checklist)
+
+A new plan-pushable resource kind touches ~8 places across 6 files. The
+fitness tests make every step discoverable: adding a `plan.Kind` without the
+record-side mapping or fixtures fails `TestPlanKindFitness` (api),
+`TestApplyActiveKnowsEveryResourceKind` (plan), and the AllKinds inventory
+test (`plan/types_test.go`).
+
+1. **Wire type** — `plan/types.go`: add the `KindX` const and its `allKinds`
+   entry (this is the exhaustiveness inventory); add any new `Op` payload
+   fields with `omitempty`. If fields change meaning (not just grow), bump
+   `CurrentVersion` and add golden fixtures under `plan/testdata/`.
+2. **Apply handler** — `plan/apply.go`: add the `applyActive` case plus an
+   `applyX` handler that validates required fields (e.g. `name`, `path`,
+   `schedule`) before any mutation, then delegates to the resource `Ensure`.
+3. **Resource draft** — the resource package: set the new draft `Kind` string
+   in its `planDraft()` and call `resource.RecordPlanDraft` from `Present`
+   (the register-without-draft guard fails the record otherwise). Map absent
+   resources onto the same kind with `Absent: true` (see `NoCron`/`NoService`).
+4. **Draft payload** — `resource/draft.go`: add any new `PlanDraft` fields the
+   kind needs (package-neutral, no `plan` import — resource packages must not
+   depend on the wire codec).
+5. **Lowering** — `api/plan.go` `draftToOp`: add the `case "<draft_kind>"`
+   mapping to `plan.KindX`. Unmapped kinds now error at record time; there is
+   deliberately no silent default.
+6. **Options capability** — `api/options`: add the task-level knobs
+   (`With*` options + the interface the resource implements), following the
+   existing small-interface pattern.
+7. **Fitness fixtures** — `api/plan_fitness_test.go`: add a `kindFitnessTable`
+   entry (draft fixture + round-trip) for the new kind. The apply-side
+   dispatch is pinned by `TestApplyActiveKnowsEveryResourceKind`
+   (`plan/apply_fitness_test.go`) via `AllKinds()` automatically.
+8. **Behaviour tests** — record-side lowering in `api/plan_lower_test.go`
+   (kind, payload, IDs stable for `DependsOn`) and apply-side behaviour in
+   `plan/apply_test.go` / `plan/e2e_test.go`; update `docs/plan.md` tables
+   (recipe table above, schema version notes).
+
+Do not add self-registered kind codecs (a map consulted by
+`draftToOp`/`applyActive`): the explicit switch cases are the current design;
+revisit only if the kind count makes the checklist unmanageable.
 
 ## CLI
 
