@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -455,6 +456,150 @@ func TestReplaceWithLinkRemovesAsideOnSuccess(t *testing.T) {
 	}
 	if _, err := os.Lstat(path + ".old"); !os.IsNotExist(err) {
 		t.Errorf("expected the aside to be removed on success, got %v", err)
+	}
+}
+
+// TestMoveAsideNoReplaceRefusesExisting pins the atomic no-replace property
+// of moveAsideNoReplace for non-directory entries: when an entry already
+// sits at the aside path, the move must fail without touching either the
+// aside or the original entry (no clobbering of a backup planted between
+// the caller's pre-check and the move). On darwin the move falls back to
+// rename, which does overwrite — the documented residual race there.
+func TestMoveAsideNoReplaceRefusesExisting(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("darwin moves asides via rename and would clobber the planted backup")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conf")
+	if err := os.WriteFile(path, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(dir, "conf.old")
+	if err := os.WriteFile(old, []byte("PLANTED"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := moveAsideNoReplace(path, old)
+	if err == nil {
+		t.Fatal("expected the move to refuse an entry at the aside path")
+	}
+	if !errors.Is(err, os.ErrExist) {
+		t.Errorf("expected an EEXIST-style error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), old) {
+		t.Errorf("expected the error to name the aside %s, got %v", old, err)
+	}
+
+	// The planted backup must be untouched.
+	got, err := os.ReadFile(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "PLANTED" {
+		t.Errorf("the planted backup was clobbered: %q", string(got))
+	}
+	// The original entry must still be a real file at path.
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || info.IsDir() {
+		t.Errorf("expected the original file to be untouched, got mode %v", info.Mode())
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "original" {
+		t.Errorf("the original file was modified: %q", string(content))
+	}
+}
+
+func TestMoveAsideNoReplaceFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conf")
+	if err := os.WriteFile(path, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(dir, "conf.old")
+
+	if err := moveAsideNoReplace(path, old); err != nil {
+		t.Fatalf("moveAsideNoReplace failed: %v", err)
+	}
+
+	// The aside carries the original content (hardlink to the same inode),
+	// and the original name is gone.
+	got, err := os.ReadFile(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "original" {
+		t.Errorf("expected the aside to hold the original content, got %q", string(got))
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Errorf("expected the original name to be gone, got %v", err)
+	}
+}
+
+func TestMoveAsideNoReplaceSymlinkEntry(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "conf")
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(dir, "conf.old")
+
+	if err := moveAsideNoReplace(path, old); err != nil {
+		t.Fatalf("moveAsideNoReplace failed: %v", err)
+	}
+
+	// The aside must be the symlink ENTRY itself (never its target's data):
+	// Lstat sees a symlink and Readlink preserves the raw target.
+	info, err := os.Lstat(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("expected the aside to be a symlink, got mode %v", info.Mode())
+	}
+	got, err := os.Readlink(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != target {
+		t.Errorf("expected the aside symlink to point to %s, got %s", target, got)
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Errorf("expected the original name to be gone, got %v", err)
+	}
+}
+
+func TestMoveAsideNoReplaceDir(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conf")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(dir, "conf.old")
+
+	if err := moveAsideNoReplace(path, old); err != nil {
+		t.Fatalf("moveAsideNoReplace failed: %v", err)
+	}
+
+	// Directories are moved by rename (link(2) cannot hardlink them).
+	info, err := os.Lstat(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.IsDir() {
+		t.Errorf("expected the aside to be a directory, got mode %v", info.Mode())
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Errorf("expected the original name to be gone, got %v", err)
 	}
 }
 

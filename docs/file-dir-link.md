@@ -55,4 +55,17 @@ nothing; remove or rename the stale backup manually first. Dry-runs surface
 the same refusal. Repointing an existing symlink to a new target never uses
 the `.old` aside.
 
+The move itself is kernel-enforced to be non-destructive for everything but
+directories: for files, symlinks, and other non-directories (on non-darwin
+platforms) the aside is created with link(2) as a hard link to the entry,
+which fails atomically with EEXIST instead of overwriting when an entry
+appears at `path.old` between the pre-check and the move — a backup planted
+there can never be clobbered. For a brief moment the entry is reachable
+under both names, and an interrupted move leaves both; the next apply then
+refuses on the leftover backup instead of destroying data. link(2) cannot
+hardlink directories, and on macOS it follows symlinks, so directories —
+and every entry on darwin — fall back to a plain rename: a non-empty
+directory planted at `path.old` then fails the conversion loudly, while a
+planted empty one is lost (the accepted residual race).
+
 See also [examples/examples.go](../examples/examples.go).
