@@ -608,6 +608,169 @@ func TestSourceTreePruneDryRunKeepsStaleFiles(t *testing.T) {
 	}
 }
 
+// TestSourceTreeDryRunCreatesNothing guards the dry-run contract for a Dir
+// with WithSource: gonf -n must not mutate the filesystem — no destination
+// directories are created (no MkdirAll), no files are copied, no symlinks
+// are written, no attributes are applied. The preview only records
+// StatusWouldChange notes, per entry, mirroring the real run's per-file and
+// per-symlink note flow (copySourceFile → file.Ensure and
+// copySourceSymlink → link.Ensure already self-guard; copySourceDir is
+// gated here).
+func TestSourceTreeDryRunCreatesNothing(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+
+	if err := os.Mkdir(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(src, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "f1"), []byte("content1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "sub", "f2"), []byte("content2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// An absolute link target: relative targets inside a source tree are not
+	// remapped into the destination (see copySourceSymlink's docstring), so
+	// the dangling-link refusal would reject a relative target here.
+	realfile := filepath.Join(src, "realfile")
+	if err := os.WriteFile(realfile, []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realfile, filepath.Join(src, "link")); err != nil {
+		t.Fatal(err)
+	}
+
+	resource.SetDryRun(true)
+	t.Cleanup(func() { resource.SetDryRun(false) })
+
+	Present(dst, WithSource(src))
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("dry-run Apply failed: %v", err)
+	}
+
+	// Nothing may exist on disk: no MkdirAll happened anywhere in the tree.
+	if _, err := os.Lstat(dst); !os.IsNotExist(err) {
+		t.Errorf("dry-run created destination %s: %v", dst, err)
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "sub")); !os.IsNotExist(err) {
+		t.Errorf("dry-run created destination subdir: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "f1")); !os.IsNotExist(err) {
+		t.Errorf("dry-run copied file f1: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "link")); !os.IsNotExist(err) {
+		t.Errorf("dry-run created symlink link: %v", err)
+	}
+
+	var buf bytes.Buffer
+	resource.PrintSummary(&buf)
+	summary := buf.String()
+	for _, want := range []string{
+		"would-change Directory[" + dst + "]",
+		"would-change Directory[" + filepath.Join(dst, "sub") + "]",
+		"would-change File[" + filepath.Join(dst, "f1") + "]",
+		"would-change File[" + filepath.Join(dst, "sub", "f2") + "]",
+		"would-change Symlink[" + filepath.Join(dst, "link") + "]",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Errorf("expected %q in dry-run summary, summary:\n%s", want, summary)
+		}
+	}
+}
+
+// TestSourceGlobDryRunCopiesNothing pins the glob half of the dry-run
+// contract: a dry-run apply of a Dir with WithSourceGlob copies no files and
+// creates no destination directory; it only records would-change notes.
+func TestSourceGlobDryRunCopiesNothing(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+	if err := os.Mkdir(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a.rb", "b.rb"} {
+		if err := os.WriteFile(filepath.Join(src, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	resource.SetDryRun(true)
+	t.Cleanup(func() { resource.SetDryRun(false) })
+
+	Present(dst, WithSourceGlob(filepath.Join(src, "*.rb")))
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("dry-run Apply failed: %v", err)
+	}
+
+	if _, err := os.Lstat(dst); !os.IsNotExist(err) {
+		t.Errorf("dry-run created destination %s: %v", dst, err)
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "a.rb")); !os.IsNotExist(err) {
+		t.Errorf("dry-run copied a.rb: %v", err)
+	}
+
+	var buf bytes.Buffer
+	resource.PrintSummary(&buf)
+	summary := buf.String()
+	for _, want := range []string{
+		"would-change File[" + filepath.Join(dst, "a.rb") + "]",
+		"would-change File[" + filepath.Join(dst, "b.rb") + "]",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Errorf("expected %q in dry-run summary, summary:\n%s", want, summary)
+		}
+	}
+}
+
+// TestSourceDryRunPruneWithNonexistentDestIsClean keeps a fresh dry-run of a
+// sync+prune working end to end: the destination is never created under -n,
+// so the prune walk/read must preview nothing (not fail on the missing
+// root) and must not mutate anything. The real path cannot reach this state
+// — ensureDirectorySelf creates the destination before pruning runs — so the
+// guard is dry-run-only and the non-dry-run behavior is untouched.
+func TestSourceDryRunPruneWithNonexistentDestIsClean(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	if err := os.Mkdir(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "f1"), []byte("f1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	resource.SetDryRun(true)
+	t.Cleanup(func() { resource.SetDryRun(false) })
+
+	t.Run("Tree", func(t *testing.T) {
+		resource.ResetRepository()
+		dst := filepath.Join(dir, "dst-tree")
+		if err := Ensure(dst, WithSource(src), WithPrune); err != nil {
+			t.Fatalf("dry-run tree Apply failed: %v", err)
+		}
+		if _, err := os.Lstat(dst); !os.IsNotExist(err) {
+			t.Errorf("dry-run created destination %s: %v", dst, err)
+		}
+	})
+
+	t.Run("Glob", func(t *testing.T) {
+		resource.ResetRepository()
+		dst := filepath.Join(dir, "dst-glob")
+		if err := Ensure(dst, WithSourceGlob(filepath.Join(src, "*.rb")), WithPrune); err != nil {
+			t.Fatalf("dry-run glob Apply failed: %v", err)
+		}
+		if _, err := os.Lstat(dst); !os.IsNotExist(err) {
+			t.Errorf("dry-run created destination %s: %v", dst, err)
+		}
+	})
+}
+
 // TestAbsentDoesNotMutateCallerOptionSlice guards against 100 Go Mistakes
 // #25: Absent used to append IsAbsent onto the caller-owned variadic slice,
 // writing into the spare capacity of a reusable option list and silently

@@ -48,6 +48,33 @@ func copySourceTree(d *Dir) error {
 }
 
 func copySourceDir(d *Dir, target string) error {
+	if resource.DryRun() {
+		// Dry-run must not mutate the filesystem: skip both the MkdirAll and
+		// the attribute application (which would chmod/chown the destination
+		// tree for real). Mirror ensureDirectorySelf's structure so a real
+		// run's loud failure is previewed too: symlink and non-directory
+		// targets are refused with the same dedicated messages, a missing
+		// target is noted as would-change, and an already-existing directory
+		// stays silent (the real path only re-enforces attributes and notes
+		// nothing for it either).
+		info, err := os.Lstat(target)
+		switch {
+		case err == nil:
+			if info.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("%s is a symlink; dir resources never follow or manage a symlinked directory", target)
+			}
+			if !info.IsDir() {
+				return fmt.Errorf("%s exists and is not a directory", target)
+			}
+		case os.IsNotExist(err):
+			resource.Note(fmt.Sprintf("Directory[%s]", target), resource.StatusWouldChange)
+			logger.Info("dry-run: would create directory %s", target)
+		default:
+			return fmt.Errorf("failed to stat %s: %w", target, err)
+		}
+		return nil
+	}
+
 	// MkdirAll resolves intermediate path components through the kernel like
 	// any other path lookup (an intermediate symlinked directory is the
 	// admin's configured path); the FINAL component is what
@@ -94,9 +121,20 @@ func copySourceFile(d *Dir, sourcePath, target string) error {
 // otherwise every templated file would be pruned immediately after being
 // copied. In dry-run mode nothing is removed; every would-be-pruned path is
 // only noted as StatusWouldChange (the walk still descends into stale
-// directories so their contents are previewed too).
+// directories so their contents are previewed too). A fresh dry-run never
+// created the destination in the first place (ensureDirectorySelf and
+// copySourceDir skip their MkdirAll under dry-run), so a missing destination
+// means there is nothing to prune and the walk is skipped instead of
+// failing; the real path always finds the destination here because
+// ensureDirectorySelf created it before this runs.
 func pruneTree(d *Dir) error {
 	logger.Debug("pruning destination directory %s", d.path)
+
+	if resource.DryRun() {
+		if _, err := os.Lstat(d.path); os.IsNotExist(err) {
+			return nil // nothing exists to prune
+		}
+	}
 
 	return filepath.WalkDir(d.path, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -177,8 +215,17 @@ func copySourceGlob(d *Dir) error {
 
 // pruneGlob removes regular files directly under d.path whose basename is not
 // among the current glob matches. Subdirectories and unmatched names that are
-// not plain files are left alone (Rex prune_dir).
+// not plain files are left alone (Rex prune_dir). In dry-run mode nothing is
+// removed and would-be-pruned paths are only noted as StatusWouldChange; a
+// missing destination means there is nothing to prune (same reasoning as
+// pruneTree).
 func pruneGlob(d *Dir) error {
+	if resource.DryRun() {
+		if _, err := os.Lstat(d.path); os.IsNotExist(err) {
+			return nil // nothing exists to prune
+		}
+	}
+
 	matches, err := filepath.Glob(d.sourceGlob)
 	if err != nil {
 		return fmt.Errorf("invalid source glob %q: %w", d.sourceGlob, err)
