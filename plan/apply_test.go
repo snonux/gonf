@@ -1,6 +1,8 @@
 package plan
 
 import (
+	"encoding/base64"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -831,5 +833,49 @@ func TestApplyDepOnEarlierChunkSatisfied(t *testing.T) {
 	}
 	if got, want := string(data), "A\nB\n"; got != want {
 		t.Fatalf("apply order = %q, want %q (dependency Command[a] in chunk 0 must precede dependent Command[b] in chunk 1)", got, want)
+	}
+}
+
+// TestApplyPrintsSummary pins that plan.Apply ends with the collected
+// resource summary on stderr (task 712): the report machinery is what the
+// summary printing exists for, and dry-run especially needs the
+// would-change report.
+func TestApplyPrintsSummary(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("file fixtures with shell-independent content are Linux-tested")
+	}
+
+	// Capture os.Stderr via a pipe (Apply prints to os.Stderr).
+	oldStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	done := make(chan string, 1)
+	go func() {
+		out, _ := io.ReadAll(r)
+		done <- string(out)
+	}()
+	t.Cleanup(func() {
+		w.Close()
+		os.Stderr = oldStderr
+	})
+
+	ops := []Op{
+		{Op: KindPlan, Version: CurrentVersion, ID: "summary"},
+		{Op: KindFile, Path: filepath.Join(t.TempDir(), "out"), ContentB64: base64.StdEncoding.EncodeToString([]byte("x"))},
+	}
+	if err := Apply(ops, Facts{GOOS: "linux"}, ""); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	w.Close()
+
+	out := <-done
+	if !strings.Contains(out, "summary: 0 ok, 1 changed") {
+		t.Errorf("expected a changed summary on stderr, got %q", out)
+	}
+	if !strings.Contains(out, "changed File[") {
+		t.Errorf("expected the changed file id in the summary, got %q", out)
 	}
 }

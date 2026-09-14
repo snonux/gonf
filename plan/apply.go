@@ -42,6 +42,9 @@ type Facts struct {
 // chunk is applied.
 // planDir is the directory containing blobs/ sidecars (usually next to the
 // plan JSONL). Pass "" when the plan only uses content_b64 and no blobs.
+// After applying (or refusing) the ops, the collected resource summary is
+// printed to stderr — one summary per Apply invocation, mirroring the legacy
+// repository path; chunked applies therefore print one summary per chunk.
 func Apply(ops []Op, facts Facts, planDir string) error {
 	if len(ops) == 0 {
 		return fmt.Errorf("plan: apply: empty plan")
@@ -51,6 +54,11 @@ func Apply(ops []Op, facts Facts, planDir string) error {
 	}
 
 	resource.ResetReport()
+	// The summary is what the report machinery exists for: every apply ends
+	// with the collected outcomes, and a refused plan (sort errors) prints an
+	// empty summary making clear nothing was applied. Deferred so partial
+	// results are reported on error paths too.
+	defer resource.PrintSummary(os.Stderr)
 
 	// Sorting (and its dangling/cycle checks) runs before any mutation so a
 	// refused plan leaves the destination untouched.
