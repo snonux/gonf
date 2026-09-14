@@ -25,6 +25,36 @@ destination only needs a gonf binary that understands the plan schema.
 Local `Run` / `gonf <task>` uses the same path automatically (temp dir for
 blobs, then apply, then cleanup) so local and remote cannot diverge.
 
+## Error handling contract
+
+gonf separates **registration-time** misuse from **runtime** failures:
+
+- **Registration-time DSL misuse fails fast** via `internal/logger.Fatal`
+  (process exit 1): duplicate `Task` / `Host` / `Fleet` registration, an
+  option applied to a resource that does not support it (`options.requires`,
+  e.g. `*file.File does not support WithRestart`), invalid option combinations
+  (`WithLine` + `WithContent`, `WithSource` + `WithSourceGlob`), an invalid
+  `Matching` pattern, or `MustHost` / `MustFleet` lookups of unknown names.
+  These are programmer errors in the recipe; nothing has been recorded or
+  applied yet, so aborting immediately is the honest outcome.
+- **Record-time failures return errors**: unknown tasks, recursion cycles,
+  packaging failures, registered resources without plan drafts, and a failing
+  child task inside an `Aggregate` all fail `RecordPlan` / `Run` with a
+  returned error. Task bodies cannot return errors, so Aggregate stashes the
+  failure (`stashBodyError` in `api/plan.go`, same mechanism as the cycle
+  stash) and the enclosing record fails with `aggregate <name>: <cause>`.
+  Nothing is applied in that case: the abort happens during recording, before
+  plan apply runs.
+- **Apply-time failures return errors**: `plan.Apply`, the resource `Ensure`
+  helpers, and `ApplyChunks` never exit the process. The error travels up to
+  the CLI (or the embedding caller), which prints it and exits 1 — so deferred
+  cleanup (temp plan dirs, apply run dirs) always runs, and `gonf` stays
+  usable as an embedded library.
+
+Residual: a registration-time Fatal fired from *inside* a task body still
+skips `Run`'s deferred temp-plan-dir cleanup (the directory lives under
+`$TMPDIR`). That is the accepted cost of the fail-fast DSL contract.
+
 ## Recording (`RecordPlan`)
 
 ```go

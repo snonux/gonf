@@ -2,7 +2,6 @@ package api
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"sort"
 	"strings"
@@ -10,6 +9,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/plan"
 )
@@ -105,9 +105,11 @@ func WithPrivilege(mode privilege.Mode) HostOption {
 }
 
 // Host registers a connection in the host registry and returns a handle.
+// Registration-time misuse (empty name, duplicate) fails fast via
+// logger.Fatal.
 func Host(name string, opts ...HostOption) HostRef {
 	if name == "" {
-		log.Fatal("Host: name must not be empty")
+		logger.Fatal("Host: name must not be empty")
 	}
 	rec := hostRecord{name: name, sshHost: name}
 	for _, o := range opts {
@@ -120,32 +122,33 @@ func Host(name string, opts ...HostOption) HostRef {
 	inventoryMu.Lock()
 	defer inventoryMu.Unlock()
 	if _, ok := hostsByName[name]; ok {
-		log.Fatalf("Host %q already registered", name)
+		logger.Fatal("Host %q already registered", name)
 	}
 	hostsByName[name] = rec
 	return HostRef{name: name}
 }
 
-// Fleet registers a named set of HostRef handles. Each host may appear at most once.
+// Fleet registers a named set of HostRef handles. Each host may appear at most
+// once. Registration-time misuse fails fast via logger.Fatal.
 func Fleet(name string, hosts ...HostRef) FleetRef {
 	if name == "" {
-		log.Fatal("Fleet: name must not be empty")
+		logger.Fatal("Fleet: name must not be empty")
 	}
 	if len(hosts) == 0 {
-		log.Fatalf("Fleet %q: must include at least one Host", name)
+		logger.Fatal("Fleet %q: must include at least one Host", name)
 	}
 	if err := checkFleetHostsUnique(hosts); err != nil {
-		log.Fatalf("Fleet %q: %v", name, err)
+		logger.Fatal("Fleet %q: %v", name, err)
 	}
 
 	inventoryMu.Lock()
 	defer inventoryMu.Unlock()
 	if _, ok := fleetsByName[name]; ok {
-		log.Fatalf("Fleet %q already registered", name)
+		logger.Fatal("Fleet %q already registered", name)
 	}
 	for _, h := range hosts {
 		if _, ok := hostsByName[h.name]; !ok {
-			log.Fatalf("Fleet %q: Host %q is not registered", name, h.name)
+			logger.Fatal("Fleet %q: Host %q is not registered", name, h.name)
 		}
 	}
 	fleetsByName[name] = fleetRecord{
@@ -176,7 +179,7 @@ func (f FleetRef) Parallel(n int) FleetRef {
 	defer inventoryMu.Unlock()
 	rec, ok := fleetsByName[f.name]
 	if !ok {
-		log.Fatalf("Fleet %q is not registered", f.name)
+		logger.Fatal("Fleet %q is not registered", f.name)
 	}
 	if n < 1 {
 		rec.parallelism = -1
@@ -207,20 +210,20 @@ func LookupFleet(name string) (FleetRef, bool) {
 	return FleetRef{name: name}, true
 }
 
-// MustHost returns LookupHost or log.Fatal.
+// MustHost returns LookupHost or logger.Fatal (Go Must* convention).
 func MustHost(name string) HostRef {
 	h, ok := LookupHost(name)
 	if !ok {
-		log.Fatalf("Host %q is not registered", name)
+		logger.Fatal("Host %q is not registered", name)
 	}
 	return h
 }
 
-// MustFleet returns LookupFleet or log.Fatal.
+// MustFleet returns LookupFleet or logger.Fatal (Go Must* convention).
 func MustFleet(name string) FleetRef {
 	f, ok := LookupFleet(name)
 	if !ok {
-		log.Fatalf("Fleet %q is not registered", name)
+		logger.Fatal("Fleet %q is not registered", name)
 	}
 	return f
 }

@@ -104,7 +104,7 @@ func build(path string, opts ...opt.Option) (*File, error) {
 	}
 
 	if f.lineEdit() && (f.content != "" || f.source != "") {
-		logger.Fatal("file %s: WithLine/WithoutLine cannot be combined with WithContent/WithSource", path)
+		return nil, fmt.Errorf("file %s: WithLine/WithoutLine cannot be combined with WithContent/WithSource", path)
 	}
 
 	return f, nil
@@ -377,11 +377,13 @@ func Ensure(path string, opts ...opt.Option) error {
 
 // Present registers a file resource that ensures path exists with the
 // configured content, mode, and ownership, and records a plan draft for
-// remote apply.
+// remote apply. A build failure (invalid option combination) is recipe
+// misuse and fails fast via logger.Fatal at record time.
 func Present(path string, opts ...opt.Option) resource.Resource {
 	f, err := build(path, opts...)
 	if err != nil {
-		logger.Fatal("failed to apply file resource %s: %v", path, err)
+		// build's error already names the path.
+		logger.Fatal("%v", err)
 	}
 
 	f.resource = resource.Register("File", f.targetPath(),

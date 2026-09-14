@@ -2,13 +2,13 @@ package api
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"regexp"
 	"sort"
 	"strings"
 	"sync"
 
+	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
@@ -103,14 +103,15 @@ func WhenHostnameContains(substr string) TaskOption {
 }
 
 // Task queues a named unit of work for activation. Call from init() or
-// RegisterMethods. Duplicate candidate names are a fatal error.
-// Activation (When filtering) happens in Activate / CLI / Run.
+// RegisterMethods. Duplicate candidate names fail fast (logger.Fatal):
+// registration-time misuse is always a recipe bug. Activation (When
+// filtering) happens in Activate / CLI / Run.
 func Task(name, description string, fn func(), opts ...TaskOption) {
 	if name == "" {
-		log.Fatal("Task: name must not be empty")
+		logger.Fatal("Task: name must not be empty")
 	}
 	if fn == nil {
-		log.Fatalf("Task %q: fn must not be nil", name)
+		logger.Fatal("Task %q: fn must not be nil", name)
 	}
 
 	c := taskCandidate{name: name, description: description, fn: fn}
@@ -123,12 +124,12 @@ func Task(name, description string, fn func(), opts ...TaskOption) {
 
 	for _, existing := range candidates {
 		if existing.name == name {
-			log.Fatalf("Task %q already queued", name)
+			logger.Fatal("Task %q already queued", name)
 		}
 	}
 	if activated {
 		if _, exists := tasks[name]; exists {
-			log.Fatalf("Task %q already registered", name)
+			logger.Fatal("Task %q already registered", name)
 		}
 	}
 	candidates = append(candidates, c)
@@ -150,7 +151,7 @@ func Matching(pattern string) []string {
 
 	re, err := regexp.Compile(pattern)
 	if err != nil {
-		log.Fatalf("Matching: invalid pattern %q: %v", pattern, err)
+		logger.Fatal("Matching: invalid pattern %q: %v", pattern, err)
 	}
 
 	tasksMu.Lock()

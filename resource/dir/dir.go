@@ -89,7 +89,7 @@ func build(path string, opts ...opt.Option) (*Dir, error) {
 	}
 
 	if d.source != "" && d.sourceGlob != "" {
-		logger.Fatal("directory %s: WithSource and WithSourceGlob are mutually exclusive", path)
+		return nil, fmt.Errorf("directory %s: WithSource and WithSourceGlob are mutually exclusive", path)
 	}
 
 	return d, nil
@@ -311,11 +311,13 @@ func Ensure(path string, opts ...opt.Option) error {
 
 // Present registers a directory resource that ensures path exists with the
 // configured mode, ownership, and source content, and records a plan draft
-// for remote apply.
+// for remote apply. A build failure (invalid option combination) is recipe
+// misuse and fails fast via logger.Fatal at record time.
 func Present(path string, opts ...opt.Option) resource.Resource {
 	d, err := build(path, opts...)
 	if err != nil {
-		logger.Fatal("failed to apply directory resource %s: %v", path, err)
+		// build's error already names the path.
+		logger.Fatal("%v", err)
 	}
 
 	d.resource = resource.Register("Directory", d.path,

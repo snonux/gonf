@@ -1,7 +1,11 @@
 # Options cheat-sheet
 
-Options live in `github.com/snonux/gonf/api/options`. Unsupported options
-`log.Fatalf` at registration time.
+Options live in `github.com/snonux/gonf/api/options`. Applying an option the
+target resource does not support, or an invalid option combination (e.g.
+`WithLine` with `WithContent`), aborts via `logger.Fatal` at registration
+time — the fail-fast DSL contract. See [plan.md](plan.md), "Error handling
+contract": registration-time misuse fails fast, record- and apply-time
+failures return errors.
 
 ## Universal
 

@@ -371,3 +371,114 @@ func TestNestedRunSurfacesRealPackError(t *testing.T) {
 		t.Errorf("the misleading secondary error leaked: %v", err)
 	}
 }
+
+// TestAggregateNoMatchFailsRecord covers a misconfigured Aggregate whose
+// pattern matches no tasks: the body cannot return errors, so the failure is
+// stashed and fails the record with a returned error naming the aggregate —
+// no process exit, so Run's deferred temp-dir cleanup still runs.
+func TestAggregateNoMatchFailsRecord(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	Task("unrelated", "", func() {})
+	Aggregate("agg", "", "^no_such_task_")
+
+	err := Run("agg")
+	if err == nil {
+		t.Fatal("expected the record to fail when the pattern matches no tasks")
+	}
+	if !strings.Contains(err.Error(), "aggregate agg: pattern") {
+		t.Errorf("error should name the aggregate, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "matched no tasks") {
+		t.Errorf("error should name the empty match, got: %v", err)
+	}
+}
+
+// TestAggregateChildFailureFailsRecord covers a child task failing to record
+// inside an Aggregate: the body stashes the error (it cannot return it), the
+// enclosing record fails with a returned error naming the aggregate, and
+// nothing is applied (the abort happens before plan apply runs).
+func TestAggregateChildFailureFailsRecord(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	// The child's record fails: it registers a resource but no plan draft,
+	// which checkUnrecordedDrafts rejects at record time.
+	Task("child_no_draft", "", func() {
+		resource.Register("Test", "no-draft",
+			resource.ApplierFunc(func() error { return nil }))
+	})
+	Aggregate("agg", "runs the child", "^child_")
+
+	err := Run("agg")
+	if err == nil {
+		t.Fatal("expected the aggregate's record to fail with the child's error")
+	}
+	if !strings.Contains(err.Error(), `aggregate agg: RecordPlan: task "child_no_draft": registered resources without plan draft`) {
+		t.Errorf("error should name the aggregate and the child cause, got: %v", err)
+	}
+}
+
+// TestNestedAggregateChainVisibleInError pins that nested aggregate failures
+// keep the include chain in the error: A includes B, B's child fails, and the
+// top-level error must mention both aggregates (wrap-the-existing-stash in
+// stashBodyError), not only the innermost one.
+func TestNestedAggregateChainVisibleInBodyError(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	dir := t.TempDir()
+	Task("leaf_fail", "leaf whose record fails", func() {
+		File(filepath.Join(dir, "out"), options.WithSource(filepath.Join(dir, "does-not-exist.src")))
+	})
+	Aggregate("innerB", "inner aggregate", "^leaf_fail$")
+	Aggregate("outerA", "outer aggregate", "^innerB$")
+
+	_, err := RecordPlan("body_err_chain", t.TempDir(), "outerA")
+	if err == nil {
+		t.Fatal("expected the record to fail on the nested aggregate failure")
+	}
+	if !strings.Contains(err.Error(), "outerA") || !strings.Contains(err.Error(), "innerB") {
+		t.Errorf("error should carry the aggregate chain outerA -> innerB, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "does-not-exist") {
+		t.Errorf("the real cause must remain in the error: %v", err)
+	}
+}
+
+// TestBodyErrNotLeakedToNextSession pins the per-session reset of
+// recordingBodyErr: a failed aggregate record must not poison a subsequent
+// healthy Run in the same process.
+func TestBodyErrNotLeakedToNextSession(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	Aggregate("bad_agg", "matches nothing", "^nonexistent$")
+	Task("healthy", "healthy task", func() {})
+
+	if _, err := RecordPlan("first", t.TempDir(), "bad_agg"); err == nil {
+		t.Fatal("expected the first record to fail")
+	}
+	if _, err := RecordPlan("healthy_session", t.TempDir(), "healthy"); err != nil {
+		t.Fatalf("a later healthy session must not inherit the stashed body error: %v", err)
+	}
+}

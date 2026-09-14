@@ -1,10 +1,10 @@
 package api
 
 import (
-	"log"
 	"os"
 
 	"github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/dir"
 )
@@ -14,13 +14,14 @@ import (
 // returns an empty Multi so DependsOn remains safe.
 //
 // In plan-record mode, emits an ensure_dir recipe instead of probing the
-// controller filesystem (destination apply interprets the recipe).
+// controller filesystem (destination apply interprets the recipe). A draft
+// build failure (invalid options) fails fast via logger.Fatal at record time.
 func EnsureDir(path string, opts ...options.Option) Resource {
 	p := Expand(path)
 	if resource.PlanDraftRecording() {
 		draft, err := dir.EnsurePlanDraft(p, opts...)
 		if err != nil {
-			log.Fatalf("EnsureDir: %v", err)
+			logger.Fatal("EnsureDir %s: %v", p, err)
 		}
 		resource.RecordPlanDraft(draft)
 		return resource.Multi(nil)

@@ -43,6 +43,15 @@ var recordingCycleErr error
 // centrally before fan-out), so a plain package-level value is safe.
 var recordingPackErr error
 
+// recordingBodyErr holds a task-body failure stashed by Aggregate (whose
+// Task fn cannot return errors): a child Run error, or a pattern that
+// matched no tasks. Like the cycle stash, every enclosing body fails its
+// record after its fn returns, and the top-level RecordPlanTo returns it —
+// so Run's deferred temp-dir cleanup runs and embedded callers get an error
+// instead of a process exit. Cleared at the start of each RecordPlanTo
+// session.
+var recordingBodyErr error
+
 // RecordPlan runs the named tasks in plan-record mode: resource registration
 // emits plan.Op lines instead of applying. Tasks are looked up as candidates
 // (not Activate-filtered) so When* recipes become when_begin/when_end rather
@@ -76,6 +85,7 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 	plan.ResetRecord()
 	plan.SetRecording(true)
 	recordingCycleErr = nil
+	recordingBodyErr = nil
 	// Defensive: a task body panicking during recording would leak a stale
 	// stack entry (pop is skipped); go test recovers per-test panics and
 	// keeps running, so reset here to keep later sessions truthful.
@@ -164,6 +174,11 @@ func recordSingleTaskBody(name string) error {
 		// Keep the stash set: enclosing bodies fail with the same cycle.
 		return recordingCycleErr
 	}
+	if recordingBodyErr != nil {
+		recordingElevate = prevElevate
+		// Keep the stash set: enclosing bodies fail with the same error.
+		return recordingBodyErr
+	}
 	if recordingPackErr != nil {
 		recordingElevate = prevElevate
 		// Keep the stash set: enclosing bodies fail with the same error.
@@ -202,6 +217,28 @@ func resetRecordedDrafts() {
 	for id := range recordedDraftIDs {
 		delete(recordedDraftIDs, id)
 	}
+}
+
+// stashBodyError records a task-body failure for the current recording
+// session. Task bodies cannot return errors, so bodies that fail (Aggregate
+// stashes its child Run error there) record it; every enclosing body fails
+// its record after its fn returns. The first error wins, and later stashes
+// wrap it so the aggregate include chain stays visible to the operator.
+func stashBodyError(err error) {
+	if recordingBodyErr == nil {
+		recordingBodyErr = err
+		return
+	}
+	recordingBodyErr = fmt.Errorf("aggregate %s: %w", currentRecordingName(), recordingBodyErr)
+}
+
+// currentRecordingName returns the innermost task body being recorded, for
+// error context when multiple bodies stash failures.
+func currentRecordingName() string {
+	if len(recordingStack) == 0 {
+		return "?"
+	}
+	return recordingStack[len(recordingStack)-1]
 }
 
 // checkUnrecordedDrafts returns an error when a registered resource did not

@@ -989,3 +989,24 @@ func TestDirEnsureGroupByNameResolvesViaLookupGroup(t *testing.T) {
 		t.Errorf("numeric gid %s applied as %d, want %d", gidStr, got, wantGid)
 	}
 }
+
+// TestEnsureSourceAndSourceGlobConflict pins the build()-side validation:
+// the conflicting option combination must surface as a RETURNED error (apply
+// time, e.g. from plan apply) instead of exiting the process; Present keeps
+// the fail-fast Fatal for record-time recipe misuse.
+func TestEnsureSourceAndSourceGlobConflict(t *testing.T) {
+	resource.ResetRepository()
+	probe := t.TempDir()
+	src := filepath.Join(probe, "src.txt")
+	if err := os.WriteFile(src, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Ensure(filepath.Join(probe, "dst"), WithSource(src), WithSourceGlob(probe+"/*"))
+	if err == nil {
+		t.Fatal("expected WithSource + WithSourceGlob to be rejected with an error")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("error should name the conflicting options, got: %v", err)
+	}
+}

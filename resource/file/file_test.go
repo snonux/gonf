@@ -875,3 +875,20 @@ func TestAbsentDoesNotMutateCallerOptionSlice(t *testing.T) {
 		t.Errorf("expected %s to be removed", gone)
 	}
 }
+
+// TestEnsureLineEditConflictsWithContent pins the build()-side validation:
+// the conflicting option combination must surface as a RETURNED error (apply
+// time, e.g. from plan apply) instead of exiting the process; Present keeps
+// the fail-fast Fatal for record-time recipe misuse.
+func TestEnsureLineEditConflictsWithContent(t *testing.T) {
+	resource.ResetRepository()
+	path := filepath.Join(t.TempDir(), "conflict.txt")
+
+	err := Ensure(path, WithLine("one"), WithContent("two"))
+	if err == nil {
+		t.Fatal("expected WithLine + WithContent to be rejected with an error")
+	}
+	if !strings.Contains(err.Error(), "cannot be combined") {
+		t.Errorf("error should name the conflicting options, got: %v", err)
+	}
+}

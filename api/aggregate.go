@@ -1,9 +1,17 @@
 package api
 
-import "log"
+import "fmt"
 
 // Aggregate registers a task that runs every activated task whose name matches
-// pattern (via Matching). A Run error is fatal.
+// pattern (via Matching).
+//
+// Error handling: a Task fn cannot return errors, so a failure inside the
+// body — the pattern matching no tasks, or a child task failing to record —
+// is stashed (stashBodyError) and fails the surrounding RecordPlan session
+// with a returned error naming the aggregate and the underlying child error.
+// Nothing is applied in that case: the abort happens during recording, before
+// plan apply runs. This mirrors the plan recorder's cycle-stash mechanism and
+// keeps Run's deferred temp-dir cleanup intact (no process exit).
 func Aggregate(name, description, pattern string) {
 	Task(name, description, func() {
 		// Exclude the aggregate's own name: a pattern that matches it (e.g.
@@ -16,10 +24,13 @@ func Aggregate(name, description, pattern string) {
 			}
 		}
 		if len(names) == 0 {
-			log.Fatalf("aggregate %s: pattern %q matched no tasks (after excluding itself)", name, pattern)
+			stashBodyError(fmt.Errorf(
+				"aggregate %s: pattern %q matched no tasks (after excluding itself)",
+				name, pattern))
+			return
 		}
 		if err := Run(names...); err != nil {
-			log.Fatal(err)
+			stashBodyError(fmt.Errorf("aggregate %s: %w", name, err))
 		}
 	})
 }

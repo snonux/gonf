@@ -65,7 +65,14 @@ func Info(format string, args ...any) { logf(LevelInfo, format, args...) }
 // Debug logs a formatted message at LevelDebug.
 func Debug(format string, args ...any) { logf(LevelDebug, format, args...) }
 
-// Fatal logs at Error level and exits the process.
+// Fatal logs at Error level and exits the process. It is reserved for
+// registration-time DSL misuse (duplicate Task/Host/Fleet registration,
+// unsupported or conflicting options, invalid patterns) and Must* lookups:
+// programmer errors that abort the recipe before anything is applied. The
+// fail-fast contract is documented in docs/plan.md, "Error handling
+// contract". Apply-time code must return errors instead, so deferred cleanup
+// (temp plan and apply run dirs) always runs and gonf stays embeddable as a
+// library.
 func Fatal(format string, args ...any) {
 	logf(LevelError, format, args...)
 	os.Exit(1)
