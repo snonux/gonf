@@ -102,10 +102,22 @@ strings); a host may appear **at most once** per fleet. Parallelism:
 | Knob | API | Meaning |
 |------|-----|---------|
 | Whether root is needed | `Task(..., Privileged())` | Ops from that task get `elevate:true` |
-| How to get root | `Host(..., WithPrivilege(PrivilegeDoas\|Sudo\|None))` or `-privilege=` | Wrap privileged apply as `doas gonf apply` / `sudo -n gonf apply` |
+| How to get root | `Host(..., WithPrivilege(PrivilegeDoas\|Sudo))` or `-privilege=sudo\|doas` | Wrap privileged apply as `doas gonf apply` / `sudo -n gonf apply` |
 
 Default tasks are unprivileged. No auto-inference from `Package` vs `File`.
+On REMOTE pushes, `-privilege=none` cannot elevate at all: elevated chunks
+error out (the controller cannot know the remote login's privilege) — use
+sudo/doas, or drop `Privileged()` when the SSH login is already root. Local
+apply keeps the root-controller in-process path.
 `options.WithElevate` on a `Command` elevates a single op inside an unprivileged task.
+
+**Remote push (`push` / `fleet`):** `-privilege=none` combined with a
+`Privileged()` task (or `options.WithElevate`) is an **error** — the remote
+login's privilege is not knowable from the controller, and it must not depend
+on whether gonf itself runs as root. Set `-privilege=sudo|doas`, or drop
+`Privileged()` from the recipe when the SSH login is already root. Local
+apply is unaffected: as root, `-privilege=none` applies elevated chunks
+in-process unwrapped.
 
 A `Run` / `push` / `fleet` that mixes both kinds **splits** the plan into ordered
 chunks and runs one `gonf apply` per chunk (plain vs wrapped).

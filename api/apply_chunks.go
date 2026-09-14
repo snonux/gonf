@@ -50,6 +50,9 @@ func ApplyChunks(ops []plan.Op, planDir string, mode privilege.Mode) error {
 			}
 			continue
 		}
+		// LOCAL apply re-exec: this process's euid is the correct authority
+		// here. Remote pushes must NEVER make this decision from the
+		// controller's euid — see privilege.WrapApplyCmd's doc comment.
 		if mode == privilege.None && os.Geteuid() == 0 {
 			if err := ApplyPlan(ch.Ops, planDir); err != nil {
 				return fmt.Errorf("chunk %d: %w", i, err)

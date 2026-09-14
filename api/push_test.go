@@ -80,6 +80,73 @@ func assertChunkBlobRefs(t *testing.T, name string, stdin []byte, planDir string
 	}
 }
 
+// The remote wrapping decision must not depend on the controller's euid:
+// -privilege=none with an elevated chunk is an error even when gonf itself
+// runs as root. Previously the root controller silently sent a plain
+// `gonf apply -` to the remote, under-applying on non-root SSH logins.
+func TestRemoteApplyCmdPrivilegeNoneElevateErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		mode    privilege.Mode
+		elevate bool
+		want    string
+		wantErr bool
+	}{
+		{"none_plain", privilege.None, false, "gonf apply -", false},
+		{"none_elevate", privilege.None, true, "", true},
+		{"sudo_elevate", privilege.Sudo, true, "sudo -n gonf apply -", false},
+		{"doas_elevate", privilege.Doas, true, "doas gonf apply -", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := remoteApplyCmd(tc.elevate, tc.mode, "")
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "-privilege=none") {
+					t.Fatalf("want privilege error, got %q, %v", got, err)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Fatalf("got %q, %v; want %q", got, err, tc.want)
+			}
+		})
+	}
+}
+
+// Pushing a plan with Privileged() tasks and -privilege=none must fail
+// before any SSH traffic: no chunk, and no blob upload either, in both
+// chunk orderings (pre-flight of the remote commands).
+func TestPushPrivilegeNoneFailsBeforeAnySSH(t *testing.T) {
+	for _, tasks := range [][]string{{"root_sync", "user_sync"}, {"user_sync", "root_sync"}} {
+		ResetTasks()
+		ResetInventory()
+		resource.ResetRepository()
+		recordSyncDirTasks(t)
+
+		calls := captureSSH(t)
+		err := PushTo(PushTarget{Host: "h.example", Privilege: privilege.None}, "demo", tasks...)
+		if err == nil || !strings.Contains(err.Error(), "-privilege=none") {
+			t.Fatalf("tasks=%v: want privilege error, got %v", tasks, err)
+		}
+		if len(*calls) != 0 {
+			t.Fatalf("tasks=%v: ssh calls on error: %v", tasks, remotes(*calls))
+		}
+	}
+}
+
+// PushPayload rejects elevated payloads with -privilege=none before any
+// SSH call as well.
+func TestPushPayloadPrivilegeNoneElevateFailsBeforeSSH(t *testing.T) {
+	calls := captureSSH(t)
+	err := PushPayload(PushTarget{Host: "h.example", Privilege: privilege.None}, []byte("GONF-PUSH/1"), true, "")
+	if err == nil || !strings.Contains(err.Error(), "-privilege=none") {
+		t.Fatalf("want privilege error, got %v", err)
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("ssh calls on error: %v", remotes(*calls))
+	}
+}
+
 func TestParsePushArgs(t *testing.T) {
 	opts, pos := parsePushArgs([]string{"--", "-p", "2222", "rex@host", "home_bash"})
 	if len(opts) != 2 || opts[0] != "-p" || opts[1] != "2222" {

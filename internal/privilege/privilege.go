@@ -10,7 +10,9 @@ import (
 type Mode int
 
 const (
-	// None never wraps gonf (SSH as root / already privileged).
+	// None never wraps gonf. Local apply runs unwrapped only when this
+	// process is root; remote push rejects elevated ops with None entirely
+	// (see WrapApplyCmd): the remote login's privilege is not knowable here.
 	None Mode = iota
 	Sudo
 	Doas
@@ -41,9 +43,19 @@ func (m Mode) String() string {
 	}
 }
 
-// WrapApplyCmd returns a remote/local shell command that runs gonf apply.
-// applyArgs is typically "apply -" or "apply -n -" (no leading gonf).
-// When elevate is false, returns "gonf "+applyArgs.
+// geteuid is swappable in tests so the euid-dependent LOCAL branch and the
+// euid-free REMOTE doctrine can be asserted on any machine.
+var geteuid = os.Geteuid
+
+// WrapApplyCmd returns the remote shell command that runs gonf apply on an
+// SSH target (built by push/fleet). applyArgs is typically "apply -" or
+// "apply -n -" (no leading gonf). When elevate is false, returns
+// "gonf "+applyArgs.
+//
+// Unlike WrapArgv (local re-exec), this decision must not depend on the
+// controller's euid: mode None plus an elevated chunk is always an error,
+// whether or not gonf itself runs as root. Point users at sudo/doas, or at
+// dropping Privileged() when the SSH login is already root.
 func WrapApplyCmd(mode Mode, elevate bool, applyArgs string) (string, error) {
 	cmd := "gonf " + strings.TrimSpace(applyArgs)
 	if !elevate {
@@ -51,10 +63,7 @@ func WrapApplyCmd(mode Mode, elevate bool, applyArgs string) (string, error) {
 	}
 	switch mode {
 	case None:
-		if os.Geteuid() == 0 {
-			return cmd, nil
-		}
-		return "", fmt.Errorf("privilege: privileged apply requires sudo or doas (host WithPrivilege), or run as root")
+		return "", fmt.Errorf("privilege: privileged chunk with -privilege=none: set -privilege sudo|doas (host WithPrivilege), or drop Privileged() when the SSH login is root")
 	case Sudo:
 		return "sudo -n " + cmd, nil
 	case Doas:
@@ -71,7 +80,8 @@ func WrapArgv(mode Mode, elevate bool, argv []string) ([]string, error) {
 	}
 	switch mode {
 	case None:
-		if os.Geteuid() == 0 {
+		// Local re-exec: this process's own euid is the correct authority.
+		if geteuid() == 0 {
 			return argv, nil
 		}
 		return nil, fmt.Errorf("privilege: privileged apply requires sudo or doas (host WithPrivilege), or run as root")

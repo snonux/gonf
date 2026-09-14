@@ -25,6 +25,8 @@ gonf push [-n] user@host <task>…   # RecordPlan in memory → ssh → apply -
 gonf hosts / fleets                # list Host/Fleet inventory
 gonf fleet [-n] [-j N] <fleet> <task>…  # parallel push to a fleet
 gonf -privilege=doas <tasks…>      # Privileged() tasks via doas gonf apply
+gonf push -privilege=sudo user@host <task>…  # Privileged() tasks over ssh
+                                   # (push: -privilege=none + Privileged() is an error)
 ```
 
 ## Docs

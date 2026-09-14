@@ -136,6 +136,22 @@ func pushChunks(t PushTarget, planID string, ops []plan.Op, mem *plan.MemoryStor
 		sticky = "/tmp/gonf-apply-sticky-" + sanitizeID(planID)
 	}
 
+	// Pre-flight: build every remote apply command before any SSH traffic so
+	// a privilege misconfiguration (e.g. -privilege=none with an elevated
+	// chunk) fails the push before sending any chunk or blob upload.
+	remotes := make([]string, len(chunks))
+	for i, ch := range chunks {
+		applyDir := ""
+		if sticky != "" {
+			applyDir = sticky
+		}
+		remote, err := remoteApplyCmd(ch.Elevate, t.privilegeMode(), applyDir)
+		if err != nil {
+			return fmt.Errorf("chunk %d: %w", i, err)
+		}
+		remotes[i] = remote
+	}
+
 	if sticky != "" {
 		if chunks[0].Ops[0].Op != plan.KindPlan {
 			return fmt.Errorf("push: chunk 0 missing plan header")
@@ -147,20 +163,14 @@ func pushChunks(t PushTarget, planID string, ops []plan.Op, mem *plan.MemoryStor
 
 	for i, ch := range chunks {
 		chunkMem := mem
-		applyDir := ""
 		if sticky != "" {
 			chunkMem = nil // plan-only; blobs already in the sticky dir
-			applyDir = sticky
 		}
 		var buf bytes.Buffer
 		if err := plan.EncodePush(&buf, ch.Ops, chunkMem); err != nil {
 			return fmt.Errorf("encode chunk %d: %w", i, err)
 		}
-		remote, err := remoteApplyCmd(ch.Elevate, t.privilegeMode(), applyDir)
-		if err != nil {
-			return err
-		}
-		if err := sshRunner(bytes.NewReader(buf.Bytes()), t.sshArgv(remote)); err != nil {
+		if err := sshRunner(bytes.NewReader(buf.Bytes()), t.sshArgv(remotes[i])); err != nil {
 			return fmt.Errorf("chunk %d (elevate=%v): %w", i, ch.Elevate, err)
 		}
 	}
