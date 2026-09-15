@@ -99,6 +99,7 @@ ops, err := RecordPlan("my-plan", planDir, "home_helix", "home_tmux")
 |-----|---------|
 | `WhenLinux` / `WhenProfile` / `WhenHostnameContains` | `when_begin` with fact predicates |
 | `WhenPathExists(path, fn)` | `when_begin` with `path_exists` around `fn` |
+| `WhenHostname(substr, fn)` | `when_begin` with `hostname_contains` around `fn` |
 | `EnsureDir` | `ensure_dir` |
 | `LinkIfExists` / `SymlinkMap` | `link_if_exists` |
 

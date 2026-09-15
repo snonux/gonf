@@ -24,6 +24,7 @@ recording requires them to pass on the controller.
 | `WhenProfile("fedora", "rocky")` | Plan recipe: match `Facts.Profile` |
 | `WhenHostnameContains("laptop")` | Plan recipe: hostname substring |
 | `WhenPathExists(path, fn)` | Plan recipe: `path_exists` around `fn` |
+| `WhenHostname(substr, fn)` | Plan recipe: `hostname_contains` around `fn` (body-level counterpart of the `WhenHostnameContains` option — lets one task carry several hosts' schedules) |
 
 Combine fact predicates with `And` / `Or` from [helpers.md](helpers.md) for
 custom `When` only — prefer the named helpers when you need remote plans.
@@ -63,8 +64,12 @@ Two consequences:
    all. Use the serializable `When*` options; they are evaluated on the
    destination at apply time.
 
-See [plan.md](plan.md) for the recording/apply lifecycle, and its
-*Privilege (Task mark + Host helper)* section for the chunk-split mechanics.
+Body-level recipe helpers (`WhenPathExists`, `WhenHostname`) make one task
+carry several host- or path-gated fragments — the DRY fleet pattern: record
+once, evaluate per destination. See [plan.md](plan.md) for the
+recording/apply lifecycle, and its *Privilege (Task mark + Host helper)*
+section for the chunk-split mechanics (when-blocks containing elevated ops
+are promoted as a whole, so body-level gates compose with `Privileged()`).
 
 ## RegisterMethods
 
