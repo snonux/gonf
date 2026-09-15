@@ -24,6 +24,11 @@ func WhenHostname(substr string, fn func()) {
 			ID:  fmt.Sprintf("when.hostname:%s", substr),
 			All: []plan.Predicate{{Fact: "hostname_contains", Eq: substr}},
 		})
+		// Each when-fragment is its own recipe scope: the same resource IDs
+		// may legitimately be re-declared per host fragment (e.g. one cron
+		// task carrying every host's schedule), mirroring the per-task-body
+		// reset in RecordPlan.
+		resource.ResetRepository()
 		fn()
 		plan.Record(plan.Op{Op: plan.KindWhenEnd})
 		return
@@ -31,5 +36,6 @@ func WhenHostname(substr string, fn func()) {
 	if !strings.Contains(strings.ToLower(DetectFacts().Hostname), strings.ToLower(substr)) {
 		return
 	}
+	resource.ResetRepository()
 	fn()
 }

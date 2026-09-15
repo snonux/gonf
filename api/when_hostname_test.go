@@ -99,3 +99,43 @@ func TestWhenHostnameLocal(t *testing.T) {
 		t.Fatal("empty substr must always match")
 	}
 }
+
+// Regression test for the fleet pattern: one task carrying several host
+// fragments that re-declare the SAME resource IDs (e.g. the same cron job
+// names per host). Each when-fragment is its own recipe scope, so this must
+// record cleanly instead of failing with "already registered".
+func TestRecordPlanWhenHostnameFragmentScopes(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	Task("demo_fleet_cron", "", func() {
+		WhenHostname("blowfish", func() {
+			Cron("demo-job", options.WithCommand("/bin/true"), options.WithHour("6"))
+		})
+		WhenHostname("fishfinger", func() {
+			Cron("demo-job", options.WithCommand("/bin/true"), options.WithHour("22"))
+		})
+	})
+
+	ops, err := RecordPlan("fleet", "", "demo_fleet_cron")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v (fragment-scoped redeclaration must record)", err)
+	}
+	if len(ops) != 7 {
+		t.Fatalf("ops = %v", opsKinds(ops))
+	}
+	for i, want := range []string{"blowfish", "fishfinger"} {
+		begin := ops[1+i*3]
+		if begin.All[0] != (plan.Predicate{Fact: "hostname_contains", Eq: want}) {
+			t.Fatalf("when_begin[%d] = %#v", i, begin.All)
+		}
+		if got := ops[2+i*3].ID; got != "Cron[root/demo-job]" {
+			t.Fatalf("cron op[%d] ID = %q", i, got)
+		}
+	}
+}

@@ -22,6 +22,8 @@ func WhenPathExists(path string, fn func()) {
 			ID:  fmt.Sprintf("when.path_exists:%s", p),
 			All: []plan.Predicate{{PathExists: p}},
 		})
+		// Each when-fragment is its own recipe scope (see WhenHostname).
+		resource.ResetRepository()
 		fn()
 		plan.Record(plan.Op{Op: plan.KindWhenEnd})
 		return
@@ -29,5 +31,6 @@ func WhenPathExists(path string, fn func()) {
 	if _, err := os.Stat(p); err != nil {
 		return
 	}
+	resource.ResetRepository()
 	fn()
 }
