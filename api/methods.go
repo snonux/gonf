@@ -11,7 +11,7 @@ type RegisterOption func(*registerConfig)
 
 type registerConfig struct {
 	prefix    string
-	groupWhen []TaskOption
+	groupWhen TaskOptions
 }
 
 // WithPrefix prepends prefix to each CamelCase→snake_case method name.
@@ -34,7 +34,7 @@ func WithGroupWhen(opts ...TaskOption) RegisterOption {
 // Companions (optional):
 //   - DescHelix() string — description (else empty)
 //   - WhenHelix(Facts) bool — per-task When predicate
-//   - OptsHelix() []TaskOption — per-task TaskOptions, e.g. Privileged() or
+//   - OptsHelix() TaskOptions — per-task TaskOptions, e.g. Privileged() or
 //     the serializable WhenHostnameContains()/WhenProfile() predicates;
 //     appended after any WithGroupWhen options of the same call. A wrong
 //     signature is registration-time misuse and panics (a silently ignored
@@ -99,12 +99,12 @@ func RegisterMethods(v any, opts ...RegisterOption) {
 
 		fn := method.Interface().(func())
 
-		var taskOpts []TaskOption
+		var taskOpts TaskOptions
 		taskOpts = append(taskOpts, cfg.groupWhen...)
 		if o := rv.MethodByName("Opts" + name); o.IsValid() {
 			ot := o.Type()
-			if ot.NumIn() != 0 || ot.NumOut() != 1 || ot.Out(0) != reflect.TypeOf([]TaskOption(nil)) {
-				panic(fmt.Sprintf("RegisterMethods: Opts%s must be func() []TaskOption", name))
+			if ot.NumIn() != 0 || ot.NumOut() != 1 || ot.Out(0) != reflect.TypeOf(TaskOptions(nil)) {
+				panic(fmt.Sprintf("RegisterMethods: Opts%s must be func() TaskOptions", name))
 			}
 			taskOpts = append(taskOpts, o.Call(nil)[0].Interface().([]TaskOption)...)
 		}

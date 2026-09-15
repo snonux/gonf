@@ -42,6 +42,12 @@ type taskCandidate struct {
 // TaskOption configures a deferred task candidate.
 type TaskOption func(*taskCandidate)
 
+// TaskOptions is a list of task options; an alias for []TaskOption so
+// signatures read concisely (e.g. OptsHelix() TaskOptions in the
+// RegisterMethods companion convention). Being an alias, it is the
+// identical type — []TaskOption remains fully interchangeable everywhere.
+type TaskOptions = []TaskOption
+
 var (
 	tasksMu    sync.Mutex
 	candidates []taskCandidate

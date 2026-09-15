@@ -124,7 +124,7 @@ type optsCompanion struct{ dir string }
 
 func (o optsCompanion) DescPing() string { return "demo privileged ping" }
 
-func (o optsCompanion) OptsPing() []TaskOption { return []TaskOption{Privileged()} }
+func (o optsCompanion) OptsPing() TaskOptions { return TaskOptions{Privileged()} }
 
 func (o optsCompanion) Ping() {
 	File(filepath.Join(o.dir, "ping.txt"), options.WithContent("x"))
@@ -240,7 +240,7 @@ func TestRegisterMethodsOptsBadSignaturePanics(t *testing.T) {
 			t.Fatal("expected panic for OptsX companion with wrong signature")
 		}
 		msg, ok := r.(string)
-		if !ok || !strings.Contains(msg, "OptsBroken must be func() []TaskOption") {
+		if !ok || !strings.Contains(msg, "OptsBroken must be func() TaskOptions") {
 			t.Fatalf("unexpected panic value: %v", r)
 		}
 	}()
@@ -250,15 +250,15 @@ func TestRegisterMethodsOptsBadSignaturePanics(t *testing.T) {
 // OptsPing is valid; OptsBroken has a wrong signature for its Broken task.
 type badOpts struct{}
 
-func (badOpts) OptsPing() []TaskOption { return nil }
-func (badOpts) Ping()                  {}
-func (badOpts) OptsBroken() string     { return "wrong return type" }
-func (badOpts) Broken()                {}
+func (badOpts) OptsPing() TaskOptions { return nil }
+func (badOpts) Ping()                 {}
+func (badOpts) OptsBroken() string    { return "wrong return type" }
+func (badOpts) Broken()               {}
 
 // OptsDemo composes with a group-wide When option.
 type optsComposed struct{ dir string }
 
-func (o optsComposed) OptsDemo() []TaskOption { return []TaskOption{Privileged()} }
+func (o optsComposed) OptsDemo() TaskOptions { return TaskOptions{Privileged()} }
 
 func (o optsComposed) Demo() {
 	File(filepath.Join(o.dir, "composed.txt"), options.WithContent("x"))
