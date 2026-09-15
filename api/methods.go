@@ -34,8 +34,13 @@ func WithGroupWhen(opts ...TaskOption) RegisterOption {
 // Companions (optional):
 //   - DescHelix() string — description (else empty)
 //   - WhenHelix(Facts) bool — per-task When predicate
+//   - OptsHelix() []TaskOption — per-task TaskOptions, e.g. Privileged() or
+//     the serializable WhenHostnameContains()/WhenProfile() predicates;
+//     appended after any WithGroupWhen options of the same call. A wrong
+//     signature is registration-time misuse and panics (a silently ignored
+//     companion could drop Privileged() and lower a task's privileges).
 //
-// Methods named Desc* or When* are not registered as tasks.
+// Methods named Desc*, When*, or Opts* are not registered as tasks.
 func RegisterMethods(v any, opts ...RegisterOption) {
 	cfg := registerConfig{}
 	for _, o := range opts {
@@ -96,6 +101,13 @@ func RegisterMethods(v any, opts ...RegisterOption) {
 
 		var taskOpts []TaskOption
 		taskOpts = append(taskOpts, cfg.groupWhen...)
+		if o := rv.MethodByName("Opts" + name); o.IsValid() {
+			ot := o.Type()
+			if ot.NumIn() != 0 || ot.NumOut() != 1 || ot.Out(0) != reflect.TypeOf([]TaskOption(nil)) {
+				panic(fmt.Sprintf("RegisterMethods: Opts%s must be func() []TaskOption", name))
+			}
+			taskOpts = append(taskOpts, o.Call(nil)[0].Interface().([]TaskOption)...)
+		}
 		if w := rv.MethodByName("When" + name); w.IsValid() {
 			wt := w.Type()
 			if wt.NumIn() == 1 && wt.In(0) == reflect.TypeOf(Facts{}) &&
@@ -113,7 +125,8 @@ func RegisterMethods(v any, opts ...RegisterOption) {
 
 func isCompanionName(name string) bool {
 	return (len(name) > 4 && name[:4] == "Desc") ||
-		(len(name) > 4 && name[:4] == "When")
+		(len(name) > 4 && name[:4] == "When") ||
+		(len(name) > 4 && name[:4] == "Opts")
 }
 
 // camelToSnake converts Helix → helix, TmuxRocky → tmux_rocky.

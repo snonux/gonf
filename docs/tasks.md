@@ -35,6 +35,12 @@ Reflect over exported methods on a struct. Companion methods:
 - `DescFoo() string` — description for `-list`
 - `WhenFoo(Facts) bool` — per-method filter (opaque unless you also use
   serializable `TaskOption`s via `WithGroupWhen`)
+- `OptsFoo() []TaskOption` — per-method `TaskOption`s such as `Privileged()`
+  or the serializable `WhenHostnameContains()` / `WhenProfile()`
+  predicates; appended after any `WithGroupWhen` options of the same call.
+  A wrong signature is registration-time misuse and panics (a silently
+  ignored companion could drop `Privileged()` and lower a task's
+  privileges).
 
 ```go
 type Home struct{}
@@ -42,12 +48,22 @@ type Home struct{}
 func (Home) DescHelix() string { return "Install helix" }
 func (Home) Helix() { /* resources */ }
 
+// Per-task options that RegisterMethods could not otherwise express:
+func (Home) OptsPkgOpenBSD() []TaskOption { return []TaskOption{Privileged()} }
+func (Home) PkgOpenBSD() { Package("git") }
+// Hostname-gated and privileged, plan-serializable (when_begin recipe):
+func (Home) OptsCronBlowfish() []TaskOption {
+    return []TaskOption{Privileged(), WhenHostnameContains("blowfish")}
+}
+func (Home) CronBlowfish() { Cron(..., WithCommand(...)) }
+
 RegisterMethods(Home{}, WithPrefix("home."), WithGroupWhen(WhenLinux()))
 ```
 
 `WithPrefix` namespaces task names; `WithGroupWhen` takes `TaskOption`s
 such as `WhenLinux()` / `WhenProfile(...)` so plan recording can emit
-`when_begin` recipes.
+`when_begin` recipes; `OptsFoo` companions add per-method `TaskOption`s
+without falling back to explicit `Task(...)` registration.
 
 ## Aggregate
 
