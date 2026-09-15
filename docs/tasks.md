@@ -28,6 +28,44 @@ recording requires them to pass on the controller.
 Combine fact predicates with `And` / `Or` from [helpers.md](helpers.md) for
 custom `When` only — prefer the named helpers when you need remote plans.
 
+## Body vs task options: WHAT vs the execution contract
+
+A task has two distinct parts, answered at different moments:
+
+| | Task body (`func()`) | Task options (`TaskOption`s) |
+|---|---|---|
+| Answers | **WHAT** the desired state is | **WHEN / WHERE / AS WHOM** it may be enforced |
+| Holds | resources: `File`, `Cron`, `Package`, … | `When*` gates (where), `Privileged()` (as whom) |
+| Analogy | the payload / manifest | the envelope / serving contract |
+
+The engine — not the recipe — derives the *mechanics* from the contract:
+
+```text
+ body (WHAT)            options (contract)                engine (HOW, derived)
+─────────────────       ──────────────────────────        ─────────────────────────────
+File/Cron/...    +     WhenHostnameContains("x")   →    when_begin recipe evaluated
+                                                              per destination host
+                    +   Privileged()                →    split apply: plain chunk +
+                                                              doas/sudo gonf apply chunk
+```
+
+Two consequences:
+
+1. **Options must attach at registration time.** `Privileged()` stamps every op
+   the body will record with `elevate`, and `When*` predicates wrap the body's
+   ops in a recipe — both must be known *before* the body runs. That is why
+   `Task(..., opts...)` takes them beside the body, and why `RegisterMethods`
+   needs the `OptsFoo()` companion to express them per method.
+2. **Go control flow inside the body does not travel in the plan.** Only
+   resource ops and `when_*` recipes are serialized. A gate written as Go
+   (`if facts.Hostname ... { ... }`) executes on the *controller* during
+   recording — the wrong host — so gated resources may never be recorded at
+   all. Use the serializable `When*` options; they are evaluated on the
+   destination at apply time.
+
+See [plan.md](plan.md) for the recording/apply lifecycle, and its
+*Privilege (Task mark + Host helper)* section for the chunk-split mechanics.
+
 ## RegisterMethods
 
 Reflect over exported methods on a struct. Companion methods:
