@@ -16,8 +16,17 @@ import (
 
 func TestHostFleetRegistry(t *testing.T) {
 	ResetInventory()
-	h1 := Host("a", WithSSHUser("u"), WithSSHHost("a.example"), WithSSHPort(22))
-	h2 := Host("b", WithSSHHost("b.example"))
+	h1 := Host("a",
+		WithSSHUser("u"),
+		WithSSHHost("a.example"),
+		WithSSHPort(22),
+		WithPrivilege(PrivilegeDoas),
+	)
+	h2 := Host("b",
+		WithSSHHost("b.example"),
+		WithSSHPort(22),
+		WithPrivilege(PrivilegeSudo),
+	)
 	Fleet("grp", h1, h2).Parallel(2)
 
 	got, ok := LookupHost("a")
@@ -32,8 +41,30 @@ func TestHostFleetRegistry(t *testing.T) {
 		t.Fatalf("LookupFleet: %#v %v", fg, ok)
 	}
 	infos := Hosts()
-	if len(infos) != 2 || infos[0].Name != "a" || infos[0].User != "u" {
+	if len(infos) != 2 {
 		t.Fatalf("Hosts=%#v", infos)
+	}
+	byName := map[string]HostInfo{}
+	for _, h := range infos {
+		byName[h.Name] = h
+	}
+	a := byName["a"]
+	if a.User != "u" || a.SSHHost != "a.example" || a.Port != 22 || a.Privilege != "doas" {
+		t.Fatalf("host a = %+v, want user/u host/a.example port/22 privilege/doas", a)
+	}
+	b := byName["b"]
+	if b.SSHHost != "b.example" || b.Port != 22 || b.Privilege != "sudo" {
+		t.Fatalf("host b = %+v, want host/b.example port/22 privilege/sudo", b)
+	}
+	// Port 0 must stay distinguishable from an explicit port: ssh omits -p
+	// when Port is 0, so a missing WithSSHPort is a silent ~/.ssh/config
+	// footgun — Hosts() must surface the zero so callers can catch it.
+	zero := Host("z", WithSSHHost("z.example"))
+	_ = zero
+	for _, h := range Hosts() {
+		if h.Name == "z" && h.Port != 0 {
+			t.Fatalf("host z Port = %d, want 0 when WithSSHPort omitted", h.Port)
+		}
 	}
 	finfos := Fleets()
 	if len(finfos) != 1 || finfos[0].Parallelism != 2 || len(finfos[0].Hosts) != 2 {
