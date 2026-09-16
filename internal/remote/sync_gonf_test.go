@@ -61,6 +61,24 @@ func TestRemoteInstallCmdPrivilege(t *testing.T) {
 	}
 }
 
+func TestSCPArgvTranslatesSSHPort(t *testing.T) {
+	t.Parallel()
+	argv := scpArgv(PushTarget{
+		Host: "r0.lan.buetow.org", User: "root",
+		ExtraSSH: []string{"-p", "22", "-o", "StrictHostKeyChecking=yes"},
+	}, "/tmp/gonf", "/tmp/gonf.new")
+	joined := strings.Join(argv, " ")
+	if strings.Contains(joined, "scp -p ") || strings.Contains(joined, " -p 22") {
+		t.Fatalf("scp must not get ssh -p: %v", argv)
+	}
+	if !strings.Contains(joined, "-P 22") {
+		t.Fatalf("want -P 22 in %v", argv)
+	}
+	if argv[len(argv)-2] != "/tmp/gonf" || !strings.HasSuffix(argv[len(argv)-1], ":/tmp/gonf.new") {
+		t.Fatalf("paths: %v", argv)
+	}
+}
+
 func TestBuildGonfCache(t *testing.T) {
 	old := GoBuildRunner
 	t.Cleanup(func() {

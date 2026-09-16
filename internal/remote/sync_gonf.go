@@ -29,16 +29,7 @@ var SCPRunner = func(ctx context.Context, localPath string, t PushTarget, remote
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	argv := []string{"scp"}
-	argv = append(argv, t.ExtraSSH...)
-	argv = append(argv, "-o", "ConnectTimeout="+sshConnectTimeout)
-	if t.Port > 0 {
-		argv = append(argv, "-P", strconv.Itoa(t.Port))
-	}
-	if t.Identity != "" {
-		argv = append(argv, "-i", t.Identity)
-	}
-	argv = append(argv, localPath, t.Destination()+":"+remotePath)
+	argv := scpArgv(t, localPath, remotePath)
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
@@ -47,6 +38,34 @@ var SCPRunner = func(ctx context.Context, localPath string, t PushTarget, remote
 		return fmt.Errorf("%w (scp killed by context: %v)", ctx.Err(), err)
 	}
 	return err
+}
+
+// scpArgv builds an scp command line. ExtraSSH is translated: ssh's "-p PORT"
+// becomes scp's "-P PORT" (scp's "-p" means preserve mtime).
+func scpArgv(t PushTarget, localPath, remotePath string) []string {
+	argv := []string{"scp"}
+	port := t.Port
+	for i := 0; i < len(t.ExtraSSH); i++ {
+		a := t.ExtraSSH[i]
+		if (a == "-p" || a == "-P") && i+1 < len(t.ExtraSSH) {
+			if p, err := strconv.Atoi(t.ExtraSSH[i+1]); err == nil {
+				if port == 0 {
+					port = p
+				}
+				i++
+				continue
+			}
+		}
+		argv = append(argv, a)
+	}
+	argv = append(argv, "-o", "ConnectTimeout="+sshConnectTimeout)
+	if port > 0 {
+		argv = append(argv, "-P", strconv.Itoa(port))
+	}
+	if t.Identity != "" {
+		argv = append(argv, "-i", t.Identity)
+	}
+	return append(argv, localPath, t.Destination()+":"+remotePath)
 }
 
 // GoBuildRunner cross-compiles a package. Overridable in tests.
