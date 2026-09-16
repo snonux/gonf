@@ -14,7 +14,7 @@ List("a", "b", "c")        // DSL []string alias — prefer over []string{"a","b
 At **apply** time, plan paths may also use `${HOME}` (expanded on the
 destination). See [plan.md](plan.md).
 
-## Fleet hosts and per-host values
+## Cluster hosts and per-host values
 
 ```go
 Host("web", WithSSHHost("web.example"),

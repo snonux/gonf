@@ -20,9 +20,9 @@ func WithPrefix(prefix string) RegisterOption {
 	return func(c *registerConfig) { c.prefix = prefix }
 }
 
-// WithCluster associates an inventory fleet with every method registered in
+// WithCluster associates an inventory cluster with every method registered in
 // this call so recipes can use ClusterHosts() / MustHostValue without naming
-// the fleet again. The fleet must already be registered (fleet.Register).
+// the cluster again. The cluster must already be registered.
 func WithCluster(name string) RegisterOption {
 	return func(c *registerConfig) { c.cluster = name }
 }

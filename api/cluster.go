@@ -59,7 +59,7 @@ type HostInfo struct {
 	Privilege string
 }
 
-// ClusterInfo is a listing row for registered fleets.
+// ClusterInfo is a listing row for registered clusters.
 type ClusterInfo struct {
 	Name        string
 	Hosts       []string

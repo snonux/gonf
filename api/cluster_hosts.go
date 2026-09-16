@@ -8,7 +8,7 @@ import (
 
 // taskClusterStack holds the cluster name associated with the currently running
 // task body (RegisterMethods WithCluster). Nested Aggregate → child task pushes
-// another frame so ClusterHosts always sees the innermost task's fleet.
+// another frame so ClusterHosts always sees the innermost task's cluster.
 var (
 	taskClusterMu    sync.Mutex
 	taskClusterStack []string
@@ -38,13 +38,13 @@ func currentTaskCluster() string {
 	return taskClusterStack[len(taskClusterStack)-1]
 }
 
-// ClusterHosts returns List(MustCluster(fleet).HostNames()...) for the cluster
+// ClusterHosts returns List(MustCluster(name).HostNames()...) for the cluster
 // associated with the current task via RegisterMethods(..., WithCluster(name)).
 // Outside a WithCluster task body it fails fast via logger.Fatal.
 func ClusterHosts() []string {
 	name := currentTaskCluster()
 	if name == "" {
-		logger.Fatal("ClusterHosts: no fleet on the current task (RegisterMethods(..., WithCluster(...)))")
+		logger.Fatal("ClusterHosts: no cluster on the current task (RegisterMethods(..., WithCluster(...)))")
 	}
 	return List(MustCluster(name).HostNames()...)
 }
