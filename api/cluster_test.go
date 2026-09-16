@@ -138,6 +138,7 @@ func TestFleetOfClusters(t *testing.T) {
 	}
 }
 
+func TestClusterDuplicateHostNames(t *testing.T) {
 	ResetInventory()
 	h := Host("dup", WithSSHHost("dup.example"))
 	err := checkClusterHostsUnique([]HostRef{h, {name: "dup"}})
