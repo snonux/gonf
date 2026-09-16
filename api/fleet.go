@@ -31,6 +31,7 @@ type hostRecord struct {
 	port      int
 	identity  string
 	privilege privilege.Mode
+	values    map[string]any // arbitrary per-host recipe values (WithValue / SetValue)
 }
 
 // FleetRef is an opaque handle for a named set of hosts.
@@ -102,6 +103,50 @@ const (
 func WithPrivilege(mode privilege.Mode) HostOption {
 	return func(h *hostRecord) { h.privilege = mode }
 }
+
+// WithValue stores an arbitrary recipe value under key on this host (e.g. a
+// cron window or OnCalendar expression). Duplicate keys on the same host fail
+// fast. Read with MustHostValue[T] from task bodies.
+func WithValue(key string, value any) HostOption {
+	return func(h *hostRecord) {
+		if key == "" {
+			logger.Fatal("WithValue: key must not be empty")
+		}
+		if h.values == nil {
+			h.values = map[string]any{}
+		}
+		if _, exists := h.values[key]; exists {
+			logger.Fatal("WithValue: key %q already set", key)
+		}
+		h.values[key] = value
+	}
+}
+
+// SetValue stores an arbitrary recipe value under key on an already-registered
+// host (same rules as WithValue). Returns h for chaining.
+func (h HostRef) SetValue(key string, value any) HostRef {
+	if key == "" {
+		logger.Fatal("SetValue: key must not be empty")
+	}
+	inventoryMu.Lock()
+	defer inventoryMu.Unlock()
+	rec, ok := hostsByName[h.name]
+	if !ok {
+		logger.Fatal("SetValue: Host %q is not registered", h.name)
+	}
+	if rec.values == nil {
+		rec.values = map[string]any{}
+	}
+	if _, exists := rec.values[key]; exists {
+		logger.Fatal("Host %q: value key %q already set", h.name, key)
+	}
+	rec.values[key] = value
+	hostsByName[h.name] = rec
+	return h
+}
+
+// Name returns the inventory name of this host handle.
+func (h HostRef) Name() string { return h.name }
 
 // Host registers a connection in the host registry and returns a handle.
 // Registration-time misuse (empty name, duplicate) fails fast via

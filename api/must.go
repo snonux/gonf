@@ -2,14 +2,28 @@ package api
 
 import "github.com/snonux/gonf/internal/logger"
 
-// MustMapValue returns m[key], or fails fast via logger.Fatal when the key
-// is missing. Use it when iterating FleetRef.HostNames() against a per-host
-// schedule/config map so a host added to the fleet without a map entry aborts
-// the recipe before apply (same contract as MustHost / MustFleet).
-func MustMapValue[K comparable, V any](m map[K]V, key K, what string) V {
-	v, ok := m[key]
+// MustHostValue returns the value stored under key on the named host, typed as
+// T. Missing key or wrong type fails fast via logger.Fatal (exit 1) — the same
+// contract as MustHost / MustFleet. Prefer WithValue / SetValue at inventory
+// time over a parallel map + MustMapValue in the recipe.
+func MustHostValue[T any](host, key string) T {
+	inventoryMu.Lock()
+	defer inventoryMu.Unlock()
+	rec, ok := hostsByName[host]
 	if !ok {
-		logger.Fatal("%s: no entry for %v", what, key)
+		logger.Fatal("MustHostValue: Host %q is not registered", host)
+	}
+	if key == "" {
+		logger.Fatal("MustHostValue: key must not be empty")
+	}
+	raw, ok := rec.values[key]
+	if !ok {
+		logger.Fatal("Host %q: no value %q", host, key)
+	}
+	v, ok := raw.(T)
+	if !ok {
+		var zero T
+		logger.Fatal("Host %q value %q: want %T, got %T", host, key, zero, raw)
 	}
 	return v
 }

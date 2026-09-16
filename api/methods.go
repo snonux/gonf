@@ -12,11 +12,19 @@ type RegisterOption func(*registerConfig)
 type registerConfig struct {
 	prefix    string
 	groupWhen TaskOptions
+	fleet     string
 }
 
 // WithPrefix prepends prefix to each CamelCase→snake_case method name.
 func WithPrefix(prefix string) RegisterOption {
 	return func(c *registerConfig) { c.prefix = prefix }
+}
+
+// WithFleet associates an inventory fleet with every method registered in
+// this call so recipes can use FleetHosts() / MustHostValue without naming
+// the fleet again. The fleet must already be registered (fleet.Register).
+func WithFleet(name string) RegisterOption {
+	return func(c *registerConfig) { c.fleet = name }
 }
 
 // WithGroupWhen applies TaskOptions (typically When*) to every method
@@ -112,6 +120,9 @@ func RegisterMethods(v any, opts ...RegisterOption) {
 
 		var taskOpts TaskOptions
 		taskOpts = append(taskOpts, cfg.groupWhen...)
+		if cfg.fleet != "" {
+			taskOpts = append(taskOpts, WithTaskFleet(cfg.fleet))
+		}
 		if o := rv.MethodByName("Opts" + name); o.IsValid() {
 			ot := o.Type()
 			if ot.NumIn() != 0 || ot.NumOut() != 1 || ot.Out(0) != reflect.TypeOf(TaskOptions(nil)) {

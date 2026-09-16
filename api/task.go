@@ -37,6 +37,8 @@ type taskCandidate struct {
 	opaqueWhen bool
 	// privileged tags recorded ops with elevate=true for split apply.
 	privileged bool
+	// fleet is the inventory fleet name for FleetHosts() (WithFleet).
+	fleet string
 }
 
 // TaskOption configures a deferred task candidate.
@@ -59,6 +61,13 @@ var (
 // Controllers split apply into a sudo/doas gonf invocation for those ops.
 func Privileged() TaskOption {
 	return func(c *taskCandidate) { c.privileged = true }
+}
+
+// WithTaskFleet associates an inventory fleet with this task so FleetHosts()
+// returns that fleet's hosts while the body runs. Prefer RegisterMethods'
+// WithFleet so every method on a struct shares one fleet.
+func WithTaskFleet(name string) TaskOption {
+	return func(c *taskCandidate) { c.fleet = name }
 }
 
 // When skips activating the task unless pred(facts) is true.
@@ -123,6 +132,15 @@ func Task(name, description string, fn func(), opts ...TaskOption) {
 	c := taskCandidate{name: name, description: description, fn: fn}
 	for _, o := range opts {
 		o(&c)
+	}
+	if c.fleet != "" {
+		fleetName := c.fleet
+		inner := c.fn
+		c.fn = func() {
+			pushTaskFleet(fleetName)
+			defer popTaskFleet()
+			inner()
+		}
 	}
 
 	tasksMu.Lock()
@@ -228,6 +246,7 @@ func ResetTasks() {
 	candidates = nil
 	tasks = map[string]task{}
 	activated = false
+	resetTaskFleet()
 }
 
 func activateLocked(facts Facts) {

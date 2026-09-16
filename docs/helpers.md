@@ -14,6 +14,27 @@ List("a", "b", "c")        // DSL []string alias — prefer over []string{"a","b
 At **apply** time, plan paths may also use `${HOME}` (expanded on the
 destination). See [plan.md](plan.md).
 
+## Fleet hosts and per-host values
+
+```go
+Host("web", WithSSHHost("web.example"),
+    WithValue("cron", [2]string{"6", "7"}))
+Fleet("edge", web, …)
+
+RegisterMethods(MyTasks{}, WithPrefix("edge_"), WithFleet("edge"))
+
+func (MyTasks) Cron() {
+    for _, host := range FleetHosts() {           // hosts of WithFleet
+        w := MustHostValue[[2]string](host, "cron") // Fatal if missing/wrong type
+        WhenHostname(host, func() { /* … */ })
+    }
+}
+```
+
+`FleetHosts` only works inside a task registered with `WithFleet` /
+`WithTaskFleet`. Prefer `WithValue` / `SetValue` on the host over a parallel
+hostname→value map in the recipe.
+
 ## Install / sync
 
 ```go

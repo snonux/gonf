@@ -76,10 +76,40 @@ func TestHostFleetRegistry(t *testing.T) {
 	}
 }
 
-func TestMustMapValue(t *testing.T) {
-	m := map[string]string{"a": "1"}
-	if got := MustMapValue(m, "a", "cron window"); got != "1" {
-		t.Fatalf("got %q", got)
+func TestHostValueAndFleetHosts(t *testing.T) {
+	ResetInventory()
+	ResetTasks()
+	t.Cleanup(func() {
+		ResetInventory()
+		ResetTasks()
+	})
+
+	h1 := Host("a",
+		WithSSHHost("a.example"),
+		WithValue("cron", [2]string{"6", "7"}),
+	)
+	h2 := Host("b", WithSSHHost("b.example"))
+	h2.SetValue("cron", [2]string{"22", "23"})
+	Fleet("grp", h1, h2)
+
+	if got := MustHostValue[[2]string]("a", "cron"); got != [2]string{"6", "7"} {
+		t.Fatalf("host a cron = %v", got)
+	}
+	if got := MustHostValue[[2]string]("b", "cron"); got != [2]string{"22", "23"} {
+		t.Fatalf("host b cron = %v", got)
+	}
+
+	var seen []string
+	Task("demo_body", "", func() {
+		seen = append(seen, FleetHosts()...)
+		_ = MustHostValue[[2]string](FleetHosts()[0], "cron")
+	}, WithTaskFleet("grp"))
+
+	if _, err := RecordPlan("fleet-hosts", t.TempDir(), "demo_body"); err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+	if len(seen) != 2 || seen[0] != "a" || seen[1] != "b" {
+		t.Fatalf("FleetHosts during task = %v, want [a b]", seen)
 	}
 }
 
