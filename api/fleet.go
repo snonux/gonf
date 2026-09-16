@@ -227,6 +227,22 @@ func MustFleet(name string) FleetRef {
 	return f
 }
 
+// HostNames returns the inventory names of hosts in this fleet, in
+// registration order. An unknown fleet handle fails fast via logger.Fatal.
+func (f FleetRef) HostNames() []string {
+	inventoryMu.Lock()
+	defer inventoryMu.Unlock()
+	rec, ok := fleetsByName[f.name]
+	if !ok {
+		logger.Fatal("Fleet %q is not registered", f.name)
+	}
+	names := make([]string, len(rec.hosts))
+	for i, h := range rec.hosts {
+		names[i] = h.name
+	}
+	return names
+}
+
 // Hosts lists registered hosts sorted by name.
 func Hosts() []HostInfo {
 	inventoryMu.Lock()

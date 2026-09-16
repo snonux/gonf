@@ -70,6 +70,17 @@ func TestHostFleetRegistry(t *testing.T) {
 	if len(finfos) != 1 || finfos[0].Parallelism != 2 || len(finfos[0].Hosts) != 2 {
 		t.Fatalf("Fleets=%#v", finfos)
 	}
+	gotNames := MustFleet("grp").HostNames()
+	if len(gotNames) != 2 || gotNames[0] != "a" || gotNames[1] != "b" {
+		t.Fatalf("HostNames = %v, want [a b] in registration order", gotNames)
+	}
+}
+
+func TestMustMapValue(t *testing.T) {
+	m := map[string]string{"a": "1"}
+	if got := MustMapValue(m, "a", "cron window"); got != "1" {
+		t.Fatalf("got %q", got)
+	}
 }
 
 func TestFleetDuplicateHostNames(t *testing.T) {
