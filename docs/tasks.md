@@ -84,6 +84,20 @@ Reflect over exported methods on a struct. Companion methods:
   default (or the method's replacement). The exact name `Opts` is
   reserved as this companion (a method named `Opts` is no longer
   registered as a task).
+- **Embedded `StructOption` markers** — the declaration-site form of the
+  same contract: embed a type implementing `StructOption` (method
+  `StructTaskOptions() TaskOptions`) and its options become the struct
+  default. gonf ships `RequiresRoot` for the common case:
+
+  ```go
+  type Unattended struct {
+      RequiresRoot   // every task of this struct applies as root
+  }
+  ```
+
+  Markers compose with `Opts()` and are replaced by a method's own
+  `OptsFoo()`. Embed exported marker types; custom markers: define any
+  type implementing `StructOption` and embed it.
 - `DescFoo() string` — description for `-list`
 - `WhenFoo(Facts) bool` — per-method filter (opaque unless you also use
   serializable `TaskOption`s via `WithGroupWhen`)

@@ -72,19 +72,12 @@ func RegisterMethods(v any, opts ...RegisterOption) {
 		rt = rv.Type()
 	}
 
-	// Struct-level Opts() companion: DEFAULT TaskOptions for every method
-	// registered from this struct. A method's own OptsX companion replaces
-	// the default for that method (an empty TaskOptions opts out — e.g. an
-	// unprivileged smoke-test task on an otherwise-privileged struct). A
-	// wrong signature is registration-time misuse and panics.
-	var structOpts TaskOptions
-	if o := rv.MethodByName("Opts"); o.IsValid() {
-		ot := o.Type()
-		if ot.NumIn() != 0 || ot.NumOut() != 1 || ot.Out(0) != reflect.TypeOf(TaskOptions(nil)) {
-			panic("RegisterMethods: Opts must be func() TaskOptions (the struct-level default companion)")
-		}
-		structOpts = o.Call(nil)[0].Interface().([]TaskOption)
-	}
+	// Struct-level default TaskOptions: embedded StructOption markers
+	// (e.g. RequiresRoot) and/or the Opts() companion. A method's own
+	// OptsX companion replaces the combined default for that method (an
+	// empty TaskOptions opts out — e.g. an unprivileged smoke-test task on
+	// an otherwise-privileged struct).
+	structOpts := collectStructOptions(rv, rt)
 
 	typeNames := map[string]struct{}{}
 	for i := 0; i < rt.NumMethod(); i++ {
