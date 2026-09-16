@@ -80,6 +80,10 @@ Reflect over exported methods on a struct. Companion methods:
   all-privileged struct). A method's own `OptsFoo()` companion **replaces**
   the default for that method — an empty `TaskOptions` opts out (e.g. an
   unprivileged smoke-test task on an otherwise-privileged struct).
+  Composition order: `WithGroupWhen` options first, then the struct
+  default (or the method's replacement). The exact name `Opts` is
+  reserved as this companion (a method named `Opts` is no longer
+  registered as a task).
 - `DescFoo() string` — description for `-list`
 - `WhenFoo(Facts) bool` — per-method filter (opaque unless you also use
   serializable `TaskOption`s via `WithGroupWhen`)

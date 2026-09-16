@@ -391,3 +391,40 @@ func (gated) OptsRocky() TaskOptions {
 func (g gated) Rocky() {
 	File(filepath.Join(g.dir, "rocky.txt"), options.WithContent("x"))
 }
+
+// WithGroupWhen composes with the struct-level Opts() default: both apply.
+type groupAndStructOpts struct{ dir string }
+
+func (g groupAndStructOpts) Opts() TaskOptions { return TaskOptions{Privileged()} }
+
+func (g groupAndStructOpts) Demo() {
+	File(filepath.Join(g.dir, "demo.txt"), options.WithContent("x"))
+}
+
+func TestRegisterMethodsGroupWhenComposesWithStructOpts(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	RegisterMethods(groupAndStructOpts{dir: t.TempDir()},
+		WithPrefix("demo_"), WithGroupWhen(WhenLinux()))
+
+	ops, err := RecordPlan("group-struct", "", "demo_demo")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+	// header + when_begin(goos=linux, elevate) + file(elevate) + when_end
+	if len(ops) != 4 || ops[1].Op != plan.KindWhenBegin || ops[2].Op != plan.KindFile {
+		t.Fatalf("ops = %v", opsKinds(ops))
+	}
+	if len(ops[1].All) != 1 || ops[1].All[0] != (plan.Predicate{Fact: "goos", Eq: "linux"}) {
+		t.Fatalf("group when lowered = %#v", ops[1].All)
+	}
+	if !ops[1].Elevate || !ops[2].Elevate {
+		t.Fatalf("WithGroupWhen + struct Opts must compose: %#v", ops)
+	}
+}
