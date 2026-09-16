@@ -170,9 +170,11 @@ func EnsureRemoteGonf(ctx context.Context, t PushTarget) (installedPath string, 
 
 func probePlanVersion(ctx context.Context, t PushTarget) (int, error) {
 	bin := remoteGonfBin(t)
-	// Prefer -plan-version; fall back to 0 when gonf is missing or too old to
-	// know the flag (stdout empty / non-zero exit → treat as needs upgrade).
-	out, err := sshCapture(ctx, t, bin+" -plan-version 2>/dev/null || true")
+	// No "2>/dev/null || true": FreeBSD login shells are often tcsh, which
+	// mishandles that idiom and yields empty stdout even when gonf works.
+	// sshCapture already treats a remote non-zero exit (missing binary) as
+	// empty stdout without failing the SSH session.
+	out, err := sshCapture(ctx, t, bin+" -plan-version")
 	if err != nil {
 		return 0, err
 	}
