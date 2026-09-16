@@ -15,10 +15,10 @@ import (
 // the controller — so one recorded plan can carry several host-gated
 // fragments, each evaluated on the destination at apply time.
 //
-// Pass a []string to expand into one fragment per entry (same as looping
+// Pass List(...) to expand into one fragment per entry (same as looping
 // WhenHostname yourself), so identical per-host bodies stay DRY:
 //
-//	WhenHostname([]string{"pi2", "pi3"}, func() { Package("ksh") })
+//	WhenHostname(List("pi2", "pi3"), func() { Package("ksh") })
 func WhenHostname[T Path](hosts T, fn func()) {
 	if fn == nil {
 		return

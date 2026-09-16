@@ -103,7 +103,9 @@ func NoLink[T Path](path T, opts ...options.Option) Resource {
 	return Link(path, append(slices.Clone(opts), options.IsAbsent)...)
 }
 
-// List is a helper to create a slice of strings from variadic arguments.
+// List is the DSL alias for a []string: prefer List("a", "b") over
+// []string{"a", "b"} in recipes (multi-path resources, Command args,
+// WhenHostname hosts, EachKV pairs, and similar).
 func List(paths ...string) []string {
 	return paths
 }

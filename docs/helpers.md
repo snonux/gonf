@@ -8,7 +8,7 @@ Convenience wrappers used heavily by laptop/dotfiles configs. Import
 ```go
 Home(".config", "app")     // $HOME/.config/app
 Expand("~/bin/tool")       // expand leading ~
-List("a", "b", "c")        // []string{"a","b","c"}
+List("a", "b", "c")        // DSL []string alias — prefer over []string{"a","b","c"}
 ```
 
 At **apply** time, plan paths may also use `${HOME}` (expanded on the

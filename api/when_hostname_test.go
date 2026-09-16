@@ -111,7 +111,7 @@ func TestRecordPlanWhenHostnameSlice(t *testing.T) {
 
 	dir := t.TempDir()
 	Task("demo_slice", "", func() {
-		WhenHostname([]string{"blowfish", "fishfinger"}, func() {
+		WhenHostname(List("blowfish", "fishfinger"), func() {
 			File(filepath.Join(dir, "shared.txt"), options.WithContent("x"))
 		})
 	})
