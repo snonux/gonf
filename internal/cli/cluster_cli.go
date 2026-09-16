@@ -35,6 +35,18 @@ func cliHosts() int {
 	return 0
 }
 
+func cliClusters() int {
+	infos := api.Clusters()
+	if len(infos) == 0 {
+		fmt.Fprintln(os.Stderr, "no clusters registered")
+		return 1
+	}
+	for _, f := range infos {
+		fmt.Printf("%s\tj=%d\t%s\n", f.Name, f.Parallelism, strings.Join(f.Hosts, ","))
+	}
+	return 0
+}
+
 func cliFleets() int {
 	infos := api.Fleets()
 	if len(infos) == 0 {
@@ -42,7 +54,7 @@ func cliFleets() int {
 		return 1
 	}
 	for _, f := range infos {
-		fmt.Printf("%s\tj=%d\t%s\n", f.Name, f.Parallelism, strings.Join(f.Hosts, ","))
+		fmt.Printf("%s\tclusters=%s\thosts=%s\n", f.Name, strings.Join(f.Clusters, ","), strings.Join(f.Hosts, ","))
 	}
 	return 0
 }
@@ -53,7 +65,7 @@ func cliFleet(ctx context.Context, args []string) int {
 	dryRun := fs.Bool("dry-run", false, "Remote dry-run (-n on apply)")
 	dryRunShort := fs.Bool("n", false, "Alias for -dry-run")
 	planID := fs.String("id", "", "plan id written into the header (default fleet-<name>)")
-	jobs := fs.Int("j", 0, "override fleet parallelism for this run")
+	jobs := fs.Int("j", 0, "override fleet fan-out parallelism for this run")
 	hostTimeout := fs.Duration("host-timeout", remote.DefaultHostTimeout, "per-host push timeout (all chunks; 0 = unlimited)")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -74,6 +86,39 @@ func cliFleet(ctx context.Context, args []string) int {
 	}
 	if err := api.PushFleetRun(ctx, name, id, *jobs, *hostTimeout, tasks...); err != nil {
 		fmt.Fprintf(os.Stderr, "fleet: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+
+func cliCluster(ctx context.Context, args []string) int {
+	fs := flag.NewFlagSet("cluster", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	dryRun := fs.Bool("dry-run", false, "Remote dry-run (-n on apply)")
+	dryRunShort := fs.Bool("n", false, "Alias for -dry-run")
+	planID := fs.String("id", "", "plan id written into the header (default cluster-<name>)")
+	jobs := fs.Int("j", 0, "override cluster parallelism for this run")
+	hostTimeout := fs.Duration("host-timeout", remote.DefaultHostTimeout, "per-host push timeout (all chunks; 0 = unlimited)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	pos := fs.Args()
+	if len(pos) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: gonf cluster [-n|-dry-run] [-j N] [-id name] [-host-timeout 10m] <cluster> <task> [task...]")
+		return 2
+	}
+	if *dryRun || *dryRunShort {
+		resource.SetDryRun(true)
+	}
+	name := pos[0]
+	tasks := pos[1:]
+	id := *planID
+	if id == "" {
+		id = "cluster-" + name
+	}
+	if err := api.PushClusterRun(ctx, name, id, *jobs, *hostTimeout, tasks...); err != nil {
+		fmt.Fprintf(os.Stderr, "cluster: %v\n", err)
 		return 1
 	}
 	return 0

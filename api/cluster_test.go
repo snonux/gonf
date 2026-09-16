@@ -14,7 +14,7 @@ import (
 	"github.com/snonux/gonf/resource"
 )
 
-func TestHostFleetRegistry(t *testing.T) {
+func TestHostClusterRegistry(t *testing.T) {
 	ResetInventory()
 	h1 := Host("a",
 		WithSSHUser("u"),
@@ -27,7 +27,7 @@ func TestHostFleetRegistry(t *testing.T) {
 		WithSSHPort(22),
 		WithPrivilege(PrivilegeSudo),
 	)
-	Fleet("grp", h1, h2).Parallel(2)
+	Cluster("grp", h1, h2).Parallel(2)
 
 	got, ok := LookupHost("a")
 	if !ok || got.name != "a" {
@@ -36,9 +36,9 @@ func TestHostFleetRegistry(t *testing.T) {
 	if MustHost("a").name != "a" {
 		t.Fatal("MustHost")
 	}
-	fg, ok := LookupFleet("grp")
+	fg, ok := LookupCluster("grp")
 	if !ok || fg.name != "grp" {
-		t.Fatalf("LookupFleet: %#v %v", fg, ok)
+		t.Fatalf("LookupCluster: %#v %v", fg, ok)
 	}
 	infos := Hosts()
 	if len(infos) != 2 {
@@ -66,17 +66,17 @@ func TestHostFleetRegistry(t *testing.T) {
 			t.Fatalf("host z Port = %d, want 0 when WithSSHPort omitted", h.Port)
 		}
 	}
-	finfos := Fleets()
+	finfos := Clusters()
 	if len(finfos) != 1 || finfos[0].Parallelism != 2 || len(finfos[0].Hosts) != 2 {
 		t.Fatalf("Fleets=%#v", finfos)
 	}
-	gotNames := MustFleet("grp").HostNames()
+	gotNames := MustCluster("grp").HostNames()
 	if len(gotNames) != 2 || gotNames[0] != "a" || gotNames[1] != "b" {
 		t.Fatalf("HostNames = %v, want [a b] in registration order", gotNames)
 	}
 }
 
-func TestHostValueAndFleetHosts(t *testing.T) {
+func TestHostValueAndClusterHosts(t *testing.T) {
 	ResetInventory()
 	ResetTasks()
 	t.Cleanup(func() {
@@ -90,7 +90,7 @@ func TestHostValueAndFleetHosts(t *testing.T) {
 	)
 	h2 := Host("b", WithSSHHost("b.example"))
 	h2.SetValue("cron", [2]string{"22", "23"})
-	Fleet("grp", h1, h2)
+	Cluster("grp", h1, h2)
 
 	if got := MustHostValue[[2]string]("a", "cron"); got != [2]string{"6", "7"} {
 		t.Fatalf("host a cron = %v", got)
@@ -101,22 +101,46 @@ func TestHostValueAndFleetHosts(t *testing.T) {
 
 	var seen []string
 	Task("demo_body", "", func() {
-		seen = append(seen, FleetHosts()...)
-		_ = MustHostValue[[2]string](FleetHosts()[0], "cron")
-	}, WithTaskFleet("grp"))
+		seen = append(seen, ClusterHosts()...)
+		_ = MustHostValue[[2]string](ClusterHosts()[0], "cron")
+	}, WithTaskCluster("grp"))
 
 	if _, err := RecordPlan("fleet-hosts", t.TempDir(), "demo_body"); err != nil {
 		t.Fatalf("RecordPlan: %v", err)
 	}
 	if len(seen) != 2 || seen[0] != "a" || seen[1] != "b" {
-		t.Fatalf("FleetHosts during task = %v, want [a b]", seen)
+		t.Fatalf("ClusterHosts during task = %v, want [a b]", seen)
 	}
 }
 
-func TestFleetDuplicateHostNames(t *testing.T) {
+func TestFleetOfClusters(t *testing.T) {
+	ResetInventory()
+	h1 := Host("a", WithSSHHost("a.example"))
+	h2 := Host("b", WithSSHHost("b.example"))
+	h3 := Host("c", WithSSHHost("c.example"))
+	c1 := Cluster("edge", h1, h2)
+	c2 := Cluster("core", h2, h3) // overlap on b
+	Fleet("homelab", c1, c2)
+
+	got := MustFleet("homelab").HostNames()
+	want := []string{"a", "b", "c"}
+	if len(got) != len(want) {
+		t.Fatalf("HostNames=%v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("HostNames=%v, want %v", got, want)
+		}
+	}
+	cinfo := Fleets()
+	if len(cinfo) != 1 || cinfo[0].Name != "homelab" {
+		t.Fatalf("Fleets=%#v", cinfo)
+	}
+}
+
 	ResetInventory()
 	h := Host("dup", WithSSHHost("dup.example"))
-	err := checkFleetHostsUnique([]HostRef{h, {name: "dup"}})
+	err := checkClusterHostsUnique([]HostRef{h, {name: "dup"}})
 	if err == nil {
 		t.Fatal("expected duplicate error")
 	}
@@ -132,7 +156,7 @@ func hasPortPair(argv []string, port string) bool {
 	return false
 }
 
-func TestPushFleetParallel(t *testing.T) {
+func TestPushClusterParallel(t *testing.T) {
 	ResetInventory()
 	ResetTasks()
 	resource.ResetRepository()
@@ -140,7 +164,7 @@ func TestPushFleetParallel(t *testing.T) {
 
 	h1 := Host("h1", WithSSHUser("rex"), WithSSHHost("h1.example"), WithSSHPort(2))
 	h2 := Host("h2", WithSSHUser("rex"), WithSSHHost("h2.example"), WithSSHPort(2))
-	Fleet("frontends", h1, h2).Parallel(2)
+	Cluster("frontends", h1, h2).Parallel(2)
 
 	old := remote.SSHRunner
 	restoreProbe := remote.AssumeRemotePlanCurrent()
@@ -171,7 +195,7 @@ func TestPushFleetParallel(t *testing.T) {
 		return nil
 	}
 
-	if err := PushFleet("frontends", "fleet_demo"); err != nil {
+	if err := PushCluster("frontends", "fleet_demo"); err != nil {
 		t.Fatal(err)
 	}
 	if saw != 2 {
@@ -179,13 +203,13 @@ func TestPushFleetParallel(t *testing.T) {
 	}
 }
 
-func TestPushFleetSerialLimit(t *testing.T) {
+func TestPushClusterSerialLimit(t *testing.T) {
 	ResetInventory()
 	ResetTasks()
 	resource.ResetRepository()
 	Task("fleet_serial", "", func() {})
 
-	Fleet("serial",
+	Cluster("serial",
 		Host("s1", WithSSHHost("s1.example")),
 		Host("s2", WithSSHHost("s2.example")),
 	).Parallel(1)
@@ -212,7 +236,7 @@ func TestPushFleetSerialLimit(t *testing.T) {
 		return nil
 	}
 
-	if err := PushFleet("serial", "fleet_serial"); err != nil {
+	if err := PushCluster("serial", "fleet_serial"); err != nil {
 		t.Fatal(err)
 	}
 	if maxFlight.Load() != 1 {
@@ -220,13 +244,13 @@ func TestPushFleetSerialLimit(t *testing.T) {
 	}
 }
 
-func TestPushFleetAggregatesErrors(t *testing.T) {
+func TestPushClusterAggregatesErrors(t *testing.T) {
 	ResetInventory()
 	ResetTasks()
 	resource.ResetRepository()
 	Task("fleet_err", "", func() {})
 
-	Fleet("errs",
+	Cluster("errs",
 		Host("e1", WithSSHHost("e1.example")),
 		Host("e2", WithSSHHost("e2.example")),
 	).Parallel(2)
@@ -242,7 +266,7 @@ func TestPushFleetAggregatesErrors(t *testing.T) {
 		return io.ErrUnexpectedEOF
 	}
 
-	err := PushFleet("errs", "fleet_err")
+	err := PushCluster("errs", "fleet_err")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -289,13 +313,13 @@ func TestPushHostAndPayloadMagic(t *testing.T) {
 // A failing host must cancel its in-flight siblings: e1 fails immediately,
 // e2 blocks until its per-host context is canceled by the errgroup. e2 is
 // then reported as aborted, not as an independent host failure.
-func TestPushFleetCancelsInFlightOnFailure(t *testing.T) {
+func TestPushClusterCancelsInFlightOnFailure(t *testing.T) {
 	ResetInventory()
 	ResetTasks()
 	resource.ResetRepository()
 	Task("fleet_cancel", "", func() {})
 
-	Fleet("cancels",
+	Cluster("cancels",
 		Host("e1", WithSSHHost("e1.example")),
 		Host("e2", WithSSHHost("e2.example")),
 	).Parallel(2)
@@ -312,15 +336,15 @@ func TestPushFleetCancelsInFlightOnFailure(t *testing.T) {
 		if strings.Contains(argv[len(argv)-2], "e1.example") {
 			return errors.New("boom")
 		}
-		// e2 blocks until the fleet abort kills it.
+		// e2 blocks until the cluster abort kills it.
 		<-ctx.Done()
 		e2Canceled.Store(true)
 		return ctx.Err()
 	}
 
-	err := PushFleet("cancels", "fleet_cancel")
+	err := PushCluster("cancels", "fleet_cancel")
 	if err == nil {
-		t.Fatal("expected the fleet to fail")
+		t.Fatal("expected the cluster to fail")
 	}
 	if !strings.Contains(err.Error(), "e1") || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("err=%v, want e1's failure", err)
@@ -335,13 +359,13 @@ func TestPushFleetCancelsInFlightOnFailure(t *testing.T) {
 
 // A host stuck in ssh must not hold its errgroup slot forever: the per-host
 // timeout kills the push to that host and reports it as a fleet failure.
-func TestPushFleetHostTimeout(t *testing.T) {
+func TestPushClusterHostTimeout(t *testing.T) {
 	ResetInventory()
 	ResetTasks()
 	resource.ResetRepository()
 	Task("fleet_slow", "", func() {})
 
-	Fleet("slowf", Host("s1", WithSSHHost("s1.example")))
+	Cluster("slowf", Host("s1", WithSSHHost("s1.example")))
 
 	old := remote.SSHRunner
 	restoreProbe := remote.AssumeRemotePlanCurrent()
@@ -355,7 +379,7 @@ func TestPushFleetHostTimeout(t *testing.T) {
 		return ctx.Err()
 	}
 
-	err := PushFleetRun(context.Background(), "slowf", "", 1, 50*time.Millisecond, "fleet_slow")
+	err := PushClusterRun(context.Background(), "slowf", "", 1, 50*time.Millisecond, "fleet_slow")
 	if err == nil {
 		t.Fatal("expected the host timeout to fail the push")
 	}
@@ -365,15 +389,15 @@ func TestPushFleetHostTimeout(t *testing.T) {
 }
 
 // A SIGINT-style cancellation (CLI context) aborts the whole fan-out: no
-// host is blamed and the fleet reports an abort instead of pretending a
+// host is blamed and the cluster reports an abort instead of pretending a
 // partial run succeeded.
-func TestPushFleetAbortsOnCanceledContext(t *testing.T) {
+func TestPushClusterAbortsOnCanceledContext(t *testing.T) {
 	ResetInventory()
 	ResetTasks()
 	resource.ResetRepository()
 	Task("fleet_abort", "", func() {})
 
-	Fleet("abortf", Host("a1", WithSSHHost("a1.example")))
+	Cluster("abortf", Host("a1", WithSSHHost("a1.example")))
 
 	old := remote.SSHRunner
 	restoreProbe := remote.AssumeRemotePlanCurrent()
@@ -389,7 +413,7 @@ func TestPushFleetAbortsOnCanceledContext(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := PushFleetRun(ctx, "abortf", "", 1, remote.DefaultHostTimeout, "fleet_abort")
+	err := PushClusterRun(ctx, "abortf", "", 1, remote.DefaultHostTimeout, "fleet_abort")
 	if err == nil {
 		t.Fatal("expected an abort error")
 	}
@@ -401,7 +425,7 @@ func TestPushFleetAbortsOnCanceledContext(t *testing.T) {
 	}
 }
 
-func TestPushFleetDryRun(t *testing.T) {
+func TestPushClusterDryRun(t *testing.T) {
 	ResetInventory()
 	ResetTasks()
 	resource.ResetRepository()
@@ -409,7 +433,7 @@ func TestPushFleetDryRun(t *testing.T) {
 	t.Cleanup(func() { resource.SetDryRun(false) })
 	Task("dry", "", func() {})
 
-	Fleet("dryf", Host("d1", WithSSHHost("d1.example")))
+	Cluster("dryf", Host("d1", WithSSHHost("d1.example")))
 
 	old := remote.SSHRunner
 	restoreProbe := remote.AssumeRemotePlanCurrent()
@@ -423,7 +447,7 @@ func TestPushFleetDryRun(t *testing.T) {
 		_, _ = io.Copy(io.Discard, stdin)
 		return nil
 	}
-	if err := PushFleet("dryf", "dry"); err != nil {
+	if err := PushCluster("dryf", "dry"); err != nil {
 		t.Fatal(err)
 	}
 	if sawRemote != "gonf apply -n -" {

@@ -104,10 +104,14 @@ func CLI() int {
 		return cliApply(names[1:])
 	case "push":
 		return cliPush(names[1:])
+	case "cluster":
+		return cliCluster(ctx, names[1:])
 	case "fleet":
 		return cliFleet(ctx, names[1:])
 	case "hosts":
 		return cliHosts()
+	case "clusters":
+		return cliClusters()
 	case "fleets":
 		return cliFleets()
 	}
@@ -340,6 +344,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "       gonf plan [-o dir|-stdout] [-id name] <task> [task...]")
 	fmt.Fprintln(os.Stderr, "       gonf apply [-n|-dry-run] [-apply-dir dir] <plan.jsonl|->")
 	fmt.Fprintln(os.Stderr, "       gonf push [-n] [-id name] [-privilege=...] [-- ssh-args...] user@host <task> [task...]")
+	fmt.Fprintln(os.Stderr, "       gonf cluster [-n] [-j N] [-id name] [-host-timeout 10m] <cluster> <task> [task...]")
 	fmt.Fprintln(os.Stderr, "       gonf fleet [-n] [-j N] [-id name] [-host-timeout 10m] <fleet> <task> [task...]")
-	fmt.Fprintln(os.Stderr, "       gonf hosts | fleets")
+	fmt.Fprintln(os.Stderr, "       gonf hosts | clusters | fleets")
 }

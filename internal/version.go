@@ -2,4 +2,4 @@
 package internal
 
 // Version is the gonf release version, reported by `gonf -version`.
-const Version = "0.11.2"
+const Version = "0.12.0"

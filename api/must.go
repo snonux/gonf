@@ -4,7 +4,7 @@ import "github.com/snonux/gonf/internal/logger"
 
 // MustHostValue returns the value stored under key on the named host, typed as
 // T. Missing key or wrong type fails fast via logger.Fatal (exit 1) — the same
-// contract as MustHost / MustFleet. Prefer WithValue / SetValue at inventory
+// contract as MustHost / MustCluster. Prefer WithValue / SetValue at inventory
 // time over a parallel map + MustMapValue in the recipe.
 func MustHostValue[T any](host, key string) T {
 	inventoryMu.Lock()

@@ -27,7 +27,7 @@ gonf today:  gonf fleet →  Host/Fleet inventory → parallel GONF-PUSH/1 over 
 ```
 
 gonf can produce a portable plan and apply it anywhere gonf runs. **`Host` /
-`Fleet`** register SSH inventory in Go; **`gonf fleet`** / `PushFleet` fan out
+`Fleet`** register SSH inventory in Go; **`gonf fleet`** / `PushCluster` fan out
 in parallel. It still lacks Rex-style **sudo/doas** — the SSH user must already
 be able to apply as themselves.
 

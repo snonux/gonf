@@ -19,20 +19,20 @@ destination). See [plan.md](plan.md).
 ```go
 Host("web", WithSSHHost("web.example"),
     WithValue("cron", [2]string{"6", "7"}))
-Fleet("edge", web, …)
+Cluster("edge", web, …)
 
-RegisterMethods(MyTasks{}, WithPrefix("edge_"), WithFleet("edge"))
+RegisterMethods(MyTasks{}, WithPrefix("edge_"), WithCluster("edge"))
 
 func (MyTasks) Cron() {
-    for _, host := range FleetHosts() {           // hosts of WithFleet
+    for _, host := range ClusterHosts() {           // hosts of WithCluster
         w := MustHostValue[[2]string](host, "cron") // Fatal if missing/wrong type
         WhenHostname(host, func() { /* … */ })
     }
 }
 ```
 
-`FleetHosts` only works inside a task registered with `WithFleet` /
-`WithTaskFleet`. Prefer `WithValue` / `SetValue` on the host over a parallel
+`ClusterHosts` only works inside a task registered with `WithCluster` /
+`WithTaskCluster`. Prefer `WithValue` / `SetValue` on the host over a parallel
 hostname→value map in the recipe.
 
 ## Install / sync

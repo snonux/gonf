@@ -34,7 +34,7 @@ gonf separates **registration-time** misuse from **runtime** failures:
   option applied to a resource that does not support it (`options.requires`,
   e.g. `*file.File does not support WithRestart`), invalid option combinations
   (`WithLine` + `WithContent`, `WithSource` + `WithSourceGlob`), an invalid
-  `Matching` pattern, or `MustHost` / `MustFleet` lookups of unknown names.
+  `Matching` pattern, or `MustHost` / `MustCluster` lookups of unknown names.
   These are programmer errors in the recipe; nothing has been recorded or
   applied yet, so aborting immediately is the honest outcome.
 - **Record-time failures return errors**: unknown tasks, recursion cycles,
@@ -184,27 +184,33 @@ revisit only if the kind count makes the checklist unmanageable.
 | `gonf plan [-o dir\|-stdout] [-id name] <task>…` | Write `dir/plan.jsonl` (+ `blobs/`), or print JSONL to stdout |
 | `gonf apply [-n\|-dry-run] <plan.jsonl\|->` | Apply a plan file, or read **GONF-PUSH/1** / bare JSONL from stdin |
 | `gonf push [-n] [-id name] [-- ssh-args…] user@host <task>…` | Record in memory, stream over `ssh` to remote `gonf apply -` |
-| `gonf fleet [-n] [-j N] [-id name] [-host-timeout 10m] <fleet> <task>…` | Resolve inventory fleet; record once; parallel push to each host (signal-cancellable, per-host timeout) |
-| `gonf hosts` / `gonf fleets` | List registered inventory |
+| `gonf cluster [-n] [-j N] [-id name] [-host-timeout 10m] <cluster> <task>…` | Resolve inventory cluster; record once; parallel push to each host |
+| `gonf fleet [-n] [-j N] [-id name] [-host-timeout 10m] <fleet> <task>…` | Resolve fleet (list of clusters); push to unique hosts across all members |
+| `gonf hosts` / `gonf clusters` / `gonf fleets` | List registered inventory |
 
-### Inventory DSL (`Host` / `Fleet`)
+### Inventory DSL (`Host` / `Cluster` / `Fleet`)
 
 ```go
 blowfish := Host("blowfish",
     WithSSHUser("rex"), WithSSHHost("blowfish.buetow.org"), WithSSHPort(2))
 fishfinger := Host("fishfinger",
     WithSSHUser("rex"), WithSSHHost("fishfinger.buetow.org"), WithSSHPort(2))
-Fleet("frontends", blowfish, fishfinger) // default parallelism 5
+frontends := Cluster("frontends", blowfish, fishfinger) // default parallelism 5
 
 // Later / other packages:
 _ = PushHost(MustHost("blowfish"), "id")
-_ = PushFleet("frontends", "base", "commons")
+_ = PushCluster("frontends", "base", "commons")
+
+// Optional: Fleet is a named list of Clusters (hosts deduped on push).
+Fleet("homelab", frontends /*, other clusters… */)
+_ = PushFleet("homelab", "base")
 ```
 
-`Host` / `Fleet` auto-register. Look up with `LookupHost` / `MustHost` /
-`LookupFleet` / `MustFleet`. `Fleet` takes **`HostRef` handles** (not name
-strings); a host may appear **at most once** per fleet. Parallelism:
-`.Parallel(n)` on the fleet handle (`n < 1` → all hosts at once).
+`Host` / `Cluster` / `Fleet` auto-register. Look up with `LookupHost` /
+`MustHost` / `LookupCluster` / `MustCluster` / `LookupFleet` / `MustFleet`.
+`Cluster` takes **`HostRef` handles** (not name strings); a host may appear
+**at most once** per cluster. Parallelism: `.Parallel(n)` on the cluster
+handle (`n < 1` → all hosts at once). `Fleet` takes **`ClusterRef` handles**.
 
 ### Privilege (Task mark + Host helper)
 
@@ -251,7 +257,7 @@ Remote `apply -` stages under `$TMPDIR/gonf-apply/<uid>/`, sweeps stale dirs on
 startup, applies, then wipes the run dir. Inline content threshold is **512 KiB**
 (`plan.MaxInlineContent`); larger files become blobs in the push stream.
 
-`PushFleet` records and encodes **once**, then fans the same bytes out over SSH
+`PushCluster` records and encodes **once**, then fans the same bytes out over SSH
 in parallel (errgroup limit from the fleet or `-j`). The fan-out runs under a
 context: a failing host **cancels its in-flight siblings** (their ssh
 processes are killed, and they are reported as aborted, not as independent

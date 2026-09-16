@@ -4,206 +4,52 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"sync"
 	"time"
 
 	"github.com/snonux/gonf/internal/logger"
-	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/internal/remote"
 	"github.com/snonux/gonf/plan"
 )
 
-const defaultFleetParallelism = 5
-
-// HostRef is an opaque inventory handle for one SSH destination.
-// Construct with Host(...); look up later with LookupHost / MustHost.
-type HostRef struct {
-	name string
-}
-
-// HostOption configures a Host at registration.
-type HostOption func(*hostRecord)
-
-type hostRecord struct {
-	name      string
-	user      string
-	sshHost   string
-	port      int
-	identity  string
-	privilege privilege.Mode
-	values    map[string]any // arbitrary per-host recipe values (WithValue / SetValue)
-	goos      string
-	goarch    string
-	gonfPath  string
-}
-
-// FleetRef is an opaque handle for a named set of hosts.
-// Construct with Fleet(...HostRef); look up with LookupFleet / MustFleet.
+// FleetRef is an opaque handle for a named set of clusters.
+// Construct with Fleet(...ClusterRef); look up with LookupFleet / MustFleet.
 type FleetRef struct {
 	name string
 }
 
-type fleetRecord struct {
-	name        string
-	hosts       []HostRef
-	parallelism int // 0 → defaultFleetParallelism; <0 → all at once
+type fleetOfClustersRecord struct {
+	name     string
+	clusters []ClusterRef
 }
 
-// HostInfo is a listing row for registered hosts.
-type HostInfo struct {
-	Name      string
-	User      string
-	SSHHost   string
-	Port      int
-	Identity  string
-	Privilege string
-}
-
-// FleetInfo is a listing row for registered fleets.
+// FleetInfo is a listing row for registered fleets (lists of clusters).
 type FleetInfo struct {
-	Name        string
-	Hosts       []string
-	Parallelism int
+	Name     string
+	Clusters []string
+	Hosts    []string // flattened unique hosts across member clusters
 }
 
-var (
-	inventoryMu  sync.Mutex
-	hostsByName  = map[string]hostRecord{}
-	fleetsByName = map[string]fleetRecord{}
-)
+var fleetsByName = map[string]fleetOfClustersRecord{}
 
-// WithSSHUser sets the SSH username (empty → ssh default).
-// Named WithSSHUser so it does not clash with options.WithUser (systemd).
-func WithSSHUser(user string) HostOption {
-	return func(h *hostRecord) { h.user = user }
-}
-
-// WithSSHHost sets the SSH hostname (default: inventory name).
-func WithSSHHost(host string) HostOption {
-	return func(h *hostRecord) { h.sshHost = host }
-}
-
-// WithSSHPort sets the SSH port (0 → omit -p).
-func WithSSHPort(port int) HostOption {
-	return func(h *hostRecord) { h.port = port }
-}
-
-// WithSSHIdentity sets ssh -i path.
-func WithSSHIdentity(path string) HostOption {
-	return func(h *hostRecord) { h.identity = path }
-}
-
-// PrivilegeNone, PrivilegeSudo, and PrivilegeDoas re-export the
-// privilege.Mode constants so tasks can pass them to WithPrivilege without
-// importing an internal package.
-const (
-	PrivilegeNone = privilege.None
-	PrivilegeSudo = privilege.Sudo
-	PrivilegeDoas = privilege.Doas
-)
-
-// WithPrivilege sets how privileged apply chunks are wrapped on this host.
-func WithPrivilege(mode privilege.Mode) HostOption {
-	return func(h *hostRecord) { h.privilege = mode }
-}
-
-// WithGOOS sets the GOOS used when push syncs a newer gonf binary to this host.
-// Empty (default) probes via remote uname -s.
-func WithGOOS(goos string) HostOption {
-	return func(h *hostRecord) { h.goos = goos }
-}
-
-// WithGOARCH sets the GOARCH used when push syncs a newer gonf binary.
-// Empty (default) probes via remote uname -m.
-func WithGOARCH(goarch string) HostOption {
-	return func(h *hostRecord) { h.goarch = goarch }
-}
-
-// WithGonfPath sets the remote path for a synced gonf binary (default
-// /usr/local/bin/gonf).
-func WithGonfPath(path string) HostOption {
-	return func(h *hostRecord) { h.gonfPath = path }
-}
-
-// WithValue stores an arbitrary recipe value under key on this host (e.g. a
-// cron window or OnCalendar expression). Duplicate keys on the same host fail
-// fast. Read with MustHostValue[T] from task bodies.
-func WithValue(key string, value any) HostOption {
-	return func(h *hostRecord) {
-		if key == "" {
-			logger.Fatal("WithValue: key must not be empty")
-		}
-		if h.values == nil {
-			h.values = map[string]any{}
-		}
-		if _, exists := h.values[key]; exists {
-			logger.Fatal("WithValue: key %q already set", key)
-		}
-		h.values[key] = value
-	}
-}
-
-// SetValue stores an arbitrary recipe value under key on an already-registered
-// host (same rules as WithValue). Returns h for chaining.
-func (h HostRef) SetValue(key string, value any) HostRef {
-	if key == "" {
-		logger.Fatal("SetValue: key must not be empty")
-	}
-	inventoryMu.Lock()
-	defer inventoryMu.Unlock()
-	rec, ok := hostsByName[h.name]
-	if !ok {
-		logger.Fatal("SetValue: Host %q is not registered", h.name)
-	}
-	if rec.values == nil {
-		rec.values = map[string]any{}
-	}
-	if _, exists := rec.values[key]; exists {
-		logger.Fatal("Host %q: value key %q already set", h.name, key)
-	}
-	rec.values[key] = value
-	hostsByName[h.name] = rec
-	return h
-}
-
-// Name returns the inventory name of this host handle.
-func (h HostRef) Name() string { return h.name }
-
-// Host registers a connection in the host registry and returns a handle.
-// Registration-time misuse (empty name, duplicate) fails fast via
-// logger.Fatal.
-func Host(name string, opts ...HostOption) HostRef {
-	if name == "" {
-		logger.Fatal("Host: name must not be empty")
-	}
-	rec := hostRecord{name: name, sshHost: name}
-	for _, o := range opts {
-		o(&rec)
-	}
-	if rec.sshHost == "" {
-		rec.sshHost = name
-	}
-
-	inventoryMu.Lock()
-	defer inventoryMu.Unlock()
-	if _, ok := hostsByName[name]; ok {
-		logger.Fatal("Host %q already registered", name)
-	}
-	hostsByName[name] = rec
-	return HostRef{name: name}
-}
-
-// Fleet registers a named set of HostRef handles. Each host may appear at most
-// once. Registration-time misuse fails fast via logger.Fatal.
-func Fleet(name string, hosts ...HostRef) FleetRef {
+// Fleet registers a named set of ClusterRef handles. Each cluster may appear
+// at most once. Hosts may overlap across clusters; PushFleet deduplicates.
+// Registration-time misuse fails fast via logger.Fatal.
+func Fleet(name string, clusters ...ClusterRef) FleetRef {
 	if name == "" {
 		logger.Fatal("Fleet: name must not be empty")
 	}
-	if len(hosts) == 0 {
-		logger.Fatal("Fleet %q: must include at least one Host", name)
+	if len(clusters) == 0 {
+		logger.Fatal("Fleet %q: must include at least one Cluster", name)
 	}
-	if err := checkFleetHostsUnique(hosts); err != nil {
-		logger.Fatal("Fleet %q: %v", name, err)
+	seen := map[string]struct{}{}
+	for _, c := range clusters {
+		if c.name == "" {
+			logger.Fatal("Fleet %q: invalid empty Cluster handle", name)
+		}
+		if _, ok := seen[c.name]; ok {
+			logger.Fatal("Fleet %q: duplicate Cluster %q", name, c.name)
+		}
+		seen[c.name] = struct{}{}
 	}
 
 	inventoryMu.Lock()
@@ -211,58 +57,16 @@ func Fleet(name string, hosts ...HostRef) FleetRef {
 	if _, ok := fleetsByName[name]; ok {
 		logger.Fatal("Fleet %q already registered", name)
 	}
-	for _, h := range hosts {
-		if _, ok := hostsByName[h.name]; !ok {
-			logger.Fatal("Fleet %q: Host %q is not registered", name, h.name)
+	for _, c := range clusters {
+		if _, ok := clustersByName[c.name]; !ok {
+			logger.Fatal("Fleet %q: Cluster %q is not registered", name, c.name)
 		}
 	}
-	fleetsByName[name] = fleetRecord{
-		name:        name,
-		hosts:       append([]HostRef(nil), hosts...),
-		parallelism: 0,
+	fleetsByName[name] = fleetOfClustersRecord{
+		name:     name,
+		clusters: append([]ClusterRef(nil), clusters...),
 	}
 	return FleetRef{name: name}
-}
-
-func checkFleetHostsUnique(hosts []HostRef) error {
-	seen := make(map[string]struct{}, len(hosts))
-	for _, h := range hosts {
-		if h.name == "" {
-			return fmt.Errorf("invalid empty Host handle")
-		}
-		if _, ok := seen[h.name]; ok {
-			return fmt.Errorf("duplicate Host %q", h.name)
-		}
-		seen[h.name] = struct{}{}
-	}
-	return nil
-}
-
-// Parallel sets concurrency for this fleet (default 5). n < 1 means all hosts at once.
-func (f FleetRef) Parallel(n int) FleetRef {
-	inventoryMu.Lock()
-	defer inventoryMu.Unlock()
-	rec, ok := fleetsByName[f.name]
-	if !ok {
-		logger.Fatal("Fleet %q is not registered", f.name)
-	}
-	if n < 1 {
-		rec.parallelism = -1
-	} else {
-		rec.parallelism = n
-	}
-	fleetsByName[f.name] = rec
-	return f
-}
-
-// LookupHost returns a registered HostRef.
-func LookupHost(name string) (HostRef, bool) {
-	inventoryMu.Lock()
-	defer inventoryMu.Unlock()
-	if _, ok := hostsByName[name]; !ok {
-		return HostRef{}, false
-	}
-	return HostRef{name: name}, true
 }
 
 // LookupFleet returns a registered FleetRef.
@@ -275,16 +79,7 @@ func LookupFleet(name string) (FleetRef, bool) {
 	return FleetRef{name: name}, true
 }
 
-// MustHost returns LookupHost or logger.Fatal (Go Must* convention).
-func MustHost(name string) HostRef {
-	h, ok := LookupHost(name)
-	if !ok {
-		logger.Fatal("Host %q is not registered", name)
-	}
-	return h
-}
-
-// MustFleet returns LookupFleet or logger.Fatal (Go Must* convention).
+// MustFleet returns LookupFleet or logger.Fatal.
 func MustFleet(name string) FleetRef {
 	f, ok := LookupFleet(name)
 	if !ok {
@@ -293,8 +88,23 @@ func MustFleet(name string) FleetRef {
 	return f
 }
 
-// HostNames returns the inventory names of hosts in this fleet, in
-// registration order. An unknown fleet handle fails fast via logger.Fatal.
+// ClusterNames returns member cluster names in registration order.
+func (f FleetRef) ClusterNames() []string {
+	inventoryMu.Lock()
+	defer inventoryMu.Unlock()
+	rec, ok := fleetsByName[f.name]
+	if !ok {
+		logger.Fatal("Fleet %q is not registered", f.name)
+	}
+	names := make([]string, len(rec.clusters))
+	for i, c := range rec.clusters {
+		names[i] = c.name
+	}
+	return names
+}
+
+// HostNames returns unique host inventory names across all member clusters,
+// in first-seen registration order.
 func (f FleetRef) HostNames() []string {
 	inventoryMu.Lock()
 	defer inventoryMu.Unlock()
@@ -302,30 +112,22 @@ func (f FleetRef) HostNames() []string {
 	if !ok {
 		logger.Fatal("Fleet %q is not registered", f.name)
 	}
-	names := make([]string, len(rec.hosts))
-	for i, h := range rec.hosts {
-		names[i] = h.name
+	seen := map[string]struct{}{}
+	var names []string
+	for _, c := range rec.clusters {
+		crec, ok := clustersByName[c.name]
+		if !ok {
+			logger.Fatal("Fleet %q: Cluster %q is not registered", f.name, c.name)
+		}
+		for _, h := range crec.hosts {
+			if _, ok := seen[h.name]; ok {
+				continue
+			}
+			seen[h.name] = struct{}{}
+			names = append(names, h.name)
+		}
 	}
 	return names
-}
-
-// Hosts lists registered hosts sorted by name.
-func Hosts() []HostInfo {
-	inventoryMu.Lock()
-	defer inventoryMu.Unlock()
-	out := make([]HostInfo, 0, len(hostsByName))
-	for _, rec := range hostsByName {
-		out = append(out, HostInfo{
-			Name:      rec.name,
-			User:      rec.user,
-			SSHHost:   rec.sshHost,
-			Port:      rec.port,
-			Identity:  rec.identity,
-			Privilege: rec.privilege.String(),
-		})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out
 }
 
 // Fleets lists registered fleets sorted by name.
@@ -334,82 +136,35 @@ func Fleets() []FleetInfo {
 	defer inventoryMu.Unlock()
 	out := make([]FleetInfo, 0, len(fleetsByName))
 	for _, rec := range fleetsByName {
-		names := make([]string, len(rec.hosts))
-		for i, h := range rec.hosts {
-			names[i] = h.name
+		cnames := make([]string, len(rec.clusters))
+		seen := map[string]struct{}{}
+		var hnames []string
+		for i, c := range rec.clusters {
+			cnames[i] = c.name
+			crec := clustersByName[c.name]
+			for _, h := range crec.hosts {
+				if _, ok := seen[h.name]; ok {
+					continue
+				}
+				seen[h.name] = struct{}{}
+				hnames = append(hnames, h.name)
+			}
 		}
-		p := fleetParallelism(rec)
-		out = append(out, FleetInfo{Name: rec.name, Hosts: names, Parallelism: p})
+		out = append(out, FleetInfo{Name: rec.name, Clusters: cnames, Hosts: hnames})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
-// ResetInventory clears host and fleet registries (tests).
-func ResetInventory() {
-	inventoryMu.Lock()
-	defer inventoryMu.Unlock()
-	hostsByName = map[string]hostRecord{}
-	fleetsByName = map[string]fleetRecord{}
-}
-
-func (h HostRef) pushTarget() (PushTarget, error) {
-	inventoryMu.Lock()
-	defer inventoryMu.Unlock()
-	rec, ok := hostsByName[h.name]
-	if !ok {
-		return PushTarget{}, fmt.Errorf("host %q is not registered", h.name)
-	}
-	return PushTarget{
-		User:      rec.user,
-		Host:      rec.sshHost,
-		Port:      rec.port,
-		Identity:  rec.identity,
-		Privilege: rec.privilege,
-		GOOS:      rec.goos,
-		GOARCH:    rec.goarch,
-		GonfPath:  rec.gonfPath,
-	}, nil
-}
-
-func fleetParallelism(rec fleetRecord) int {
-	switch {
-	case rec.parallelism < 0:
-		if n := len(rec.hosts); n > 0 {
-			return n
-		}
-		return 1
-	case rec.parallelism == 0:
-		return defaultFleetParallelism
-	default:
-		return rec.parallelism
-	}
-}
-
-// PushHost records and pushes tasks to one HostRef. Thin wrapper: the
-// transport half lives in internal/remote (PushTo → remote.PushChunks).
-func PushHost(h HostRef, tasks ...string) error {
-	t, err := h.pushTarget()
-	if err != nil {
-		return err
-	}
-	return PushTo(t, "push-"+h.name, tasks...)
-}
-
-// PushFleet records once and fans out the same push payload to every host in
-// the fleet. Thin wrapper: it runs the full-parameter PushFleetRun with the
-// library defaults (no context, no per-run overrides).
+// PushFleet records once and fans out to every unique host across the fleet's
+// clusters (default parallelism 5).
 func PushFleet(name string, tasks ...string) error {
 	return PushFleetRun(context.Background(), name, "", 0, remote.DefaultHostTimeout, tasks...)
 }
 
-// PushFleetRun records tasks once and fans the same push out to every host in
-// the named fleet. It is the full-parameter form of PushFleet: the CLI
-// (gonf fleet) uses it to thread its signal-derived context and per-run
-// overrides through — planID ("" → fleet-<name>), parallelOverride (> 0
-// overrides the fleet's parallelism), and hostTimeout (per-host push bound;
-// <= 0 means unlimited). The per-host transport fan-out itself lives in
-// internal/remote (remote.Fanout).
+// PushFleetRun is the full-parameter form of PushFleet (CLI threads context,
+// planID, -j, and -host-timeout). parallelOverride > 0 overrides the default
+// fan-out limit; planID "" → fleet-<name>.
 func PushFleetRun(ctx context.Context, name, planID string, parallelOverride int, hostTimeout time.Duration, tasks ...string) error {
 	if len(tasks) == 0 {
 		return fmt.Errorf("fleet %q: no tasks", name)
@@ -420,10 +175,25 @@ func PushFleetRun(ctx context.Context, name, planID string, parallelOverride int
 		inventoryMu.Unlock()
 		return fmt.Errorf("fleet %q is not registered", name)
 	}
-	hosts := append([]HostRef(nil), rec.hosts...)
-	limit := fleetParallelism(rec)
+	seen := map[string]struct{}{}
+	var hosts []HostRef
+	for _, c := range rec.clusters {
+		crec, ok := clustersByName[c.name]
+		if !ok {
+			inventoryMu.Unlock()
+			return fmt.Errorf("fleet %q: cluster %q is not registered", name, c.name)
+		}
+		for _, h := range crec.hosts {
+			if _, ok := seen[h.name]; ok {
+				continue
+			}
+			seen[h.name] = struct{}{}
+			hosts = append(hosts, h)
+		}
+	}
 	inventoryMu.Unlock()
 
+	limit := defaultClusterParallelism
 	if parallelOverride > 0 {
 		limit = parallelOverride
 	}

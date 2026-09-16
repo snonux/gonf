@@ -32,7 +32,7 @@ func hostTimeoutCtx(fleetCtx context.Context, hostTimeout time.Duration) (contex
 }
 
 // Fanout pushes one already-recorded plan to every target in parallel. It is
-// the per-host transport half of the fleet push: the caller (api.PushFleetRun)
+// the per-host transport half of the fleet push: the caller (api.PushClusterRun)
 // resolves the fleet inventory and records the plan once, then hands the
 // resolved targets here. name labels the summary line and error messages;
 // labels[i] names targets[i]. The ctx (the CLI signal context for the fleet
@@ -91,10 +91,10 @@ func Fanout(ctx context.Context, name, planID string, ops []plan.Op, mem *plan.M
 		planID, len(ops), name, okCount, len(targets))
 	if len(failed) > 0 {
 		sort.Strings(failed)
-		return fmt.Errorf("fleet %q: %s", name, strings.Join(failed, "; "))
+		return fmt.Errorf("cluster %q: %s", name, strings.Join(failed, "; "))
 	}
 	if firstErr != nil {
-		return fmt.Errorf("fleet %q: aborted: %w", name, firstErr)
+		return fmt.Errorf("cluster %q: aborted: %w", name, firstErr)
 	}
 	return nil
 }

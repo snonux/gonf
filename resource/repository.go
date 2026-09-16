@@ -11,7 +11,7 @@ import (
 )
 
 // The DSL registries are deliberately single-goroutine: recipe construction
-// happens before fleet fan-out (PushFleet records centrally, then streams
+// happens before fleet fan-out (PushCluster records centrally, then streams
 // the same bytes over SSH), so nothing in this file is safe for concurrent
 // registration or reset. repoMu guards only the repo pointer itself
 // (getRepository reads, ResetRepository swaps); repository.mu guards the
