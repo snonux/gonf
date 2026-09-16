@@ -33,32 +33,37 @@ func (RequiresRoot) StructTaskOptions() TaskOptions { return TaskOptions{Privile
 // registered struct: embedded StructOption markers first (declaration
 // order), then the Opts() companion if the struct defines one. A method's
 // own OptsX companion replaces the whole combined struct-level set.
+//
+// Markers must be embedded (or added as) EXPORTED types: unexported
+// embedded markers are skipped here and fall through to their promoted
+// method on the outer type (single marker only; multiple same-depth
+// markers are an ambiguous selector and are not in the method set).
 func collectStructOptions(rv reflect.Value, rt reflect.Type) TaskOptions {
 	var opts TaskOptions
+	foundMarkerField := false
 	st := rt
 	if st.Kind() == reflect.Pointer {
 		st = st.Elem()
 	}
 	if st.Kind() == reflect.Struct {
 		for i := 0; i < st.NumField(); i++ {
-			ft := st.Field(i).Type
+			f := st.Field(i)
+			if !f.IsExported() {
+				continue
+			}
+			ft := f.Type
 			if ft.Kind() == reflect.Pointer {
 				ft = ft.Elem()
 			}
 			if !ft.Implements(structOptionType) {
 				continue
 			}
+			foundMarkerField = true
 			// Exported embedded marker: the field value is accessible.
 			if m := rv.Elem().Field(i).MethodByName("StructTaskOptions"); m.IsValid() {
 				opts = append(opts, m.Call(nil)[0].Interface().([]TaskOption)...)
 			}
 		}
-	}
-	// Unexported embedded markers are reachable through their promoted
-	// method on the outer type (single marker only; multiple same-depth
-	// markers are an ambiguous selector and are not in the method set).
-	if m := rv.MethodByName("StructTaskOptions"); m.IsValid() && len(opts) == 0 {
-		opts = append(opts, m.Call(nil)[0].Interface().([]TaskOption)...)
 	}
 	if o := rv.MethodByName("Opts"); o.IsValid() {
 		ot := o.Type()
@@ -66,6 +71,19 @@ func collectStructOptions(rv reflect.Value, rt reflect.Type) TaskOptions {
 			panic("RegisterMethods: Opts must be func() TaskOptions (the struct-level default companion)")
 		}
 		opts = append(opts, o.Call(nil)[0].Interface().([]TaskOption)...)
+	}
+	// Direct StructTaskOptions methods (no marker field): reachable for
+	// structs defining it directly or via unexported embedded markers with
+	// a pointer receiver. Same signature contract as Opts(). The Opts()
+	// companion composes last, so it is collected before this fallback.
+	if !foundMarkerField {
+		if m := rv.MethodByName("StructTaskOptions"); m.IsValid() {
+			mt := m.Type()
+			if mt.NumIn() != 0 || mt.NumOut() != 1 || mt.Out(0) != reflect.TypeOf(TaskOptions(nil)) {
+				panic("RegisterMethods: StructTaskOptions must be func() TaskOptions")
+			}
+			opts = append(opts, m.Call(nil)[0].Interface().([]TaskOption)...)
+		}
 	}
 	return opts
 }
