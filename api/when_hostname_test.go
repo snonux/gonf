@@ -100,6 +100,51 @@ func TestWhenHostnameLocal(t *testing.T) {
 	}
 }
 
+func TestRecordPlanWhenHostnameSlice(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	dir := t.TempDir()
+	Task("demo_slice", "", func() {
+		WhenHostname([]string{"blowfish", "fishfinger"}, func() {
+			File(filepath.Join(dir, "shared.txt"), options.WithContent("x"))
+		})
+	})
+
+	ops, err := RecordPlan("when-hostname-slice", "", "demo_slice")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+	wantKinds := []plan.Kind{
+		plan.KindPlan,
+		plan.KindWhenBegin,
+		plan.KindFile,
+		plan.KindWhenEnd,
+		plan.KindWhenBegin,
+		plan.KindFile,
+		plan.KindWhenEnd,
+	}
+	if len(ops) != len(wantKinds) {
+		t.Fatalf("ops kinds = %v", opsKinds(ops))
+	}
+	for i, k := range wantKinds {
+		if ops[i].Op != k {
+			t.Fatalf("ops[%d]=%s want %s", i, ops[i].Op, k)
+		}
+	}
+	for i, want := range []string{"blowfish", "fishfinger"} {
+		begin := ops[1+i*3]
+		if begin.All[0] != (plan.Predicate{Fact: "hostname_contains", Eq: want}) {
+			t.Fatalf("when_begin[%d] = %#v", i, begin.All)
+		}
+	}
+}
+
 // Regression test for the fleet pattern: one task carrying several host
 // fragments that re-declare the SAME resource IDs (e.g. the same cron job
 // names per host). Each when-fragment is its own recipe scope, so this must

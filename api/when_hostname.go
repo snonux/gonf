@@ -14,10 +14,28 @@ import (
 // emits when_begin(hostname_contains)/when_end around fn instead of probing
 // the controller — so one recorded plan can carry several host-gated
 // fragments, each evaluated on the destination at apply time.
-func WhenHostname(substr string, fn func()) {
+//
+// Pass a []string to expand into one fragment per entry (same as looping
+// WhenHostname yourself), so identical per-host bodies stay DRY:
+//
+//	WhenHostname([]string{"pi2", "pi3"}, func() { Package("ksh") })
+func WhenHostname[T Path](hosts T, fn func()) {
 	if fn == nil {
 		return
 	}
+	switch v := any(hosts).(type) {
+	case string:
+		whenHostnameOne(v, fn)
+	case []string:
+		for _, substr := range v {
+			whenHostnameOne(substr, fn)
+		}
+	default:
+		panic("WhenHostname: hosts must be string or []string")
+	}
+}
+
+func whenHostnameOne(substr string, fn func()) {
 	if resource.PlanDraftRecording() {
 		plan.Record(plan.Op{
 			Op:  plan.KindWhenBegin,

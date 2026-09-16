@@ -24,7 +24,7 @@ recording requires them to pass on the controller.
 | `WhenProfile("fedora", "rocky")` | Plan recipe: match `Facts.Profile` |
 | `WhenHostnameContains("laptop")` | Plan recipe: hostname substring |
 | `WhenPathExists(path, fn)` | Plan recipe: `path_exists` around `fn` |
-| `WhenHostname(substr, fn)` | Plan recipe: `hostname_contains` around `fn` (body-level counterpart of the `WhenHostnameContains` option — lets one task carry several hosts' schedules) |
+| `WhenHostname(substr\|[]string, fn)` | Plan recipe: `hostname_contains` around `fn` (body-level counterpart of `WhenHostnameContains`). A `[]string` expands to one fragment per entry — same as looping — so identical per-host bodies stay DRY |
 
 Combine fact predicates with `And` / `Or` from [helpers.md](helpers.md) for
 custom `When` only — prefer the named helpers when you need remote plans.
