@@ -263,3 +263,131 @@ func (o optsComposed) OptsDemo() TaskOptions { return TaskOptions{Privileged()} 
 func (o optsComposed) Demo() {
 	File(filepath.Join(o.dir, "composed.txt"), options.WithContent("x"))
 }
+
+// Struct-level Opts() default companion: one Privileged() for the whole
+// struct, with a method-level opt-out for the unprivileged smoke test.
+type structOpts struct{ dir string }
+
+func (o structOpts) Opts() TaskOptions { return TaskOptions{Privileged()} }
+
+func (o structOpts) DescEverything() string { return "everything privileged" }
+
+func (o structOpts) Everything() {
+	File(filepath.Join(o.dir, "everything.txt"), options.WithContent("x"))
+}
+
+func (o structOpts) DescSmoke() string { return "unprivileged smoke test" }
+
+// OptsSmoke opts OUT of the struct-level default: empty TaskOptions.
+func (o structOpts) OptsSmoke() TaskOptions { return TaskOptions{} }
+
+func (o structOpts) Smoke() {
+	File(filepath.Join(o.dir, "smoke.txt"), options.WithContent("x"))
+}
+
+func TestRegisterMethodsStructOptsDefault(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	dir := t.TempDir()
+	RegisterMethods(structOpts{dir: dir}, WithPrefix("demo_"))
+
+	// The exact "Opts" companion must not register as a task.
+	for _, info := range Tasks() {
+		if info.Name == "opts" {
+			t.Fatal("struct-level Opts companion leaked as task")
+		}
+	}
+
+	ops, err := RecordPlan("struct-opts", "", "demo_everything")
+	if err != nil {
+		t.Fatalf("RecordPlan demo_everything: %v", err)
+	}
+	if len(ops) != 2 || ops[0].Op != plan.KindPlan || ops[1].Op != plan.KindFile {
+		t.Fatalf("demo_everything ops = %#v", ops)
+	}
+	if !ops[1].Elevate {
+		t.Fatalf("struct-level default not applied: %#v", ops[1])
+	}
+
+	// The opt-out method records WITHOUT elevation.
+	ops, err = RecordPlan("struct-opts-smoke", "", "demo_smoke")
+	if err != nil {
+		t.Fatalf("RecordPlan demo_smoke: %v", err)
+	}
+	if len(ops) != 2 || ops[1].Op != plan.KindFile {
+		t.Fatalf("demo_smoke ops = %v", opsKinds(ops))
+	}
+	if ops[1].Elevate {
+		t.Fatalf("OptsX empty must replace (not compose) the struct default: %#v", ops[1])
+	}
+}
+
+func TestRegisterMethodsStructOptsReplacedByOptsX(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	// OptsRocky REPLACES the struct default: the recorded op is gated by the
+	// hostname recipe and NOT elevated.
+	Activate(Facts{Hostname: "earth"})
+	RegisterMethods(gated{dir: t.TempDir()}, WithPrefix("demo_"))
+
+	ops, err := RecordPlan("replaced", "", "demo_rocky")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+	if len(ops) != 4 || ops[1].Op != plan.KindWhenBegin || ops[2].Op != plan.KindFile {
+		t.Fatalf("ops = %v", opsKinds(ops))
+	}
+	if ops[1].All[0] != (plan.Predicate{Fact: "hostname_contains", Eq: "rocky"}) {
+		t.Fatalf("when predicates = %#v", ops[1].All)
+	}
+	if ops[2].Elevate {
+		t.Fatalf("method OptsX must REPLACE (not compose) the struct default: %#v", ops[2])
+	}
+}
+
+func TestRegisterMethodsStructOptsBadSignaturePanics(t *testing.T) {
+	ResetTasks()
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic for struct-level Opts with wrong signature")
+		}
+		msg, ok := r.(string)
+		if !ok || !strings.Contains(msg, "Opts must be func() TaskOptions") {
+			t.Fatalf("unexpected panic value: %v", r)
+		}
+	}()
+
+	RegisterMethods(badStruct{}, WithPrefix("demo_"))
+}
+
+// Opts with a wrong signature is the struct-level default companion.
+type badStruct struct{}
+
+func (badStruct) Opts() string { return "wrong" }
+func (badStruct) Ping()        {}
+
+// OptsRocky REPLACES the struct default: gated by the hostname recipe and
+// NOT privileged.
+type gated struct{ dir string }
+
+func (gated) Opts() TaskOptions { return TaskOptions{Privileged()} }
+func (gated) OptsRocky() TaskOptions {
+	return TaskOptions{WhenHostnameContains("rocky")}
+}
+func (g gated) Rocky() {
+	File(filepath.Join(g.dir, "rocky.txt"), options.WithContent("x"))
+}

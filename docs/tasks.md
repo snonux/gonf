@@ -75,6 +75,11 @@ are promoted as a whole, so body-level gates compose with `Privileged()`).
 
 Reflect over exported methods on a struct. Companion methods:
 
+- `Opts() TaskOptions` — struct-level **default** `TaskOption`s for every
+  method registered from this struct (e.g. a single `Privileged()` for an
+  all-privileged struct). A method's own `OptsFoo()` companion **replaces**
+  the default for that method — an empty `TaskOptions` opts out (e.g. an
+  unprivileged smoke-test task on an otherwise-privileged struct).
 - `DescFoo() string` — description for `-list`
 - `WhenFoo(Facts) bool` — per-method filter (opaque unless you also use
   serializable `TaskOption`s via `WithGroupWhen`)

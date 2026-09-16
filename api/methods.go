@@ -32,6 +32,10 @@ func WithGroupWhen(opts ...TaskOption) RegisterOption {
 //
 // Naming: method Helix → "helix", with WithPrefix("home_") → "home_helix".
 // Companions (optional):
+//   - Opts() TaskOptions — struct-level DEFAULT TaskOptions for every
+//     method registered from this struct (e.g. a single Privileged() for
+//     an all-privileged struct); a method's own OptsX companion replaces
+//     the default for that method, so an empty TaskOptions opts out.
 //   - DescHelix() string — description (else empty)
 //   - WhenHelix(Facts) bool — per-task When predicate
 //   - OptsHelix() TaskOptions — per-task TaskOptions, e.g. Privileged() or
@@ -66,6 +70,20 @@ func RegisterMethods(v any, opts ...RegisterOption) {
 		ptr.Elem().Set(rv)
 		rv = ptr
 		rt = rv.Type()
+	}
+
+	// Struct-level Opts() companion: DEFAULT TaskOptions for every method
+	// registered from this struct. A method's own OptsX companion replaces
+	// the default for that method (an empty TaskOptions opts out — e.g. an
+	// unprivileged smoke-test task on an otherwise-privileged struct). A
+	// wrong signature is registration-time misuse and panics.
+	var structOpts TaskOptions
+	if o := rv.MethodByName("Opts"); o.IsValid() {
+		ot := o.Type()
+		if ot.NumIn() != 0 || ot.NumOut() != 1 || ot.Out(0) != reflect.TypeOf(TaskOptions(nil)) {
+			panic("RegisterMethods: Opts must be func() TaskOptions (the struct-level default companion)")
+		}
+		structOpts = o.Call(nil)[0].Interface().([]TaskOption)
 	}
 
 	typeNames := map[string]struct{}{}
@@ -106,7 +124,11 @@ func RegisterMethods(v any, opts ...RegisterOption) {
 			if ot.NumIn() != 0 || ot.NumOut() != 1 || ot.Out(0) != reflect.TypeOf(TaskOptions(nil)) {
 				panic(fmt.Sprintf("RegisterMethods: Opts%s must be func() TaskOptions", name))
 			}
+			// A method's own OptsX companion REPLACES the struct-level
+			// default: an empty TaskOptions is an explicit opt-out.
 			taskOpts = append(taskOpts, o.Call(nil)[0].Interface().([]TaskOption)...)
+		} else {
+			taskOpts = append(taskOpts, structOpts...)
 		}
 		if w := rv.MethodByName("When" + name); w.IsValid() {
 			wt := w.Type()
@@ -124,7 +146,10 @@ func RegisterMethods(v any, opts ...RegisterOption) {
 }
 
 func isCompanionName(name string) bool {
-	return (len(name) > 4 && name[:4] == "Desc") ||
+	// "Opts" (exactly) is the struct-level default companion; the prefixed
+	// forms are per-method companions.
+	return name == "Opts" ||
+		(len(name) > 4 && name[:4] == "Desc") ||
 		(len(name) > 4 && name[:4] == "When") ||
 		(len(name) > 4 && name[:4] == "Opts")
 }
