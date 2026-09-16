@@ -23,7 +23,12 @@ var applyRunTTL = 24 * time.Hour
 // runDirPrefix matches the run directories created by NewApplyRunDir.
 const runDirPrefix = "run-"
 
-// ApplyStagingRoot returns $TMPDIR/gonf-apply/<uid> (owner-only).
+// ApplyStagingRoot returns $TMPDIR/gonf-apply/<uid> (owner-only) under a
+// shared, world-writable + sticky root. The shared root may be created by
+// different users — pushes run as the SSH login user while elevated chunks
+// apply via doas/sudo as root — so it is created (and, when owned, chmod'd)
+// like /tmp itself: without this, a root-created root would lock out later
+// unprivileged applies on mixed-privilege hosts.
 func ApplyStagingRoot() (string, error) {
 	uid := "nouser"
 	if u, err := user.Current(); err == nil && u.Uid != "" {
@@ -38,6 +43,11 @@ func ApplyStagingRoot() (string, error) {
 	if err := os.Chmod(root, 0o700); err != nil {
 		return "", fmt.Errorf("plan apply staging chmod: %w", err)
 	}
+	// Best effort: the shared parent must stay writable for every uid that
+	// may apply here. Failures are expected on pre-existing dirs the current
+	// user does not own; the one-time cleanup is a host-side root action.
+	shared := filepath.Dir(root)
+	_ = os.Chmod(shared, 0o1777)
 	return root, nil
 }
 
