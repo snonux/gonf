@@ -10,8 +10,10 @@ package plan
 // (file, dir, sync_dir, ensure_dir); version 5 added the deps field
 // (recorded DependsOn ordering) to resource ops; version 6 added the
 // source_dir field to sync_dir ops (the recipe's declared source directory,
-// the stable {{.Param}} base for .tmpl files inside the synced tree).
-const CurrentVersion = 6
+// the stable {{.Param}} base for .tmpl files inside the synced tree);
+// version 7 added the systemd_timer op (declarative timer + oneshot service
+// unit install).
+const CurrentVersion = 7
 
 // supportedVersions is the set of plan schema versions this binary can apply.
 // Apply must refuse plans whose version is not in this set before any mutation.
@@ -21,6 +23,7 @@ var supportedVersions = map[int]struct{}{
 	3:              {},
 	4:              {},
 	5:              {},
+	6:              {},
 	CurrentVersion: {},
 }
 
@@ -45,10 +48,11 @@ const (
 	KindLinkIfExists Kind = "link_if_exists"
 	KindWhenBegin    Kind = "when_begin"
 	KindWhenEnd      Kind = "when_end"
-	KindTimer        Kind = "timer"
-	KindDaemonReload Kind = "daemon_reload"
-	KindCron         Kind = "cron"
-	KindService      Kind = "service"
+	KindTimer         Kind = "timer"
+	KindDaemonReload  Kind = "daemon_reload"
+	KindCron          Kind = "cron"
+	KindService       Kind = "service"
+	KindSystemdTimer  Kind = "systemd_timer"
 )
 
 // allKinds lists every Kind constant in stable declaration order.
@@ -68,6 +72,7 @@ var allKinds = []Kind{
 	KindDaemonReload,
 	KindCron,
 	KindService,
+	KindSystemdTimer,
 }
 
 // AllKinds returns a copy of every Kind constant in stable declaration order.
@@ -205,15 +210,31 @@ type Op struct {
 	// CronEnv lists KEY=VAL environment lines above the KindCron job.
 	CronEnv []string `json:"cron_env,omitempty"`
 
-	// User selects systemd --user for KindTimer / KindDaemonReload / KindService.
+	// OnCalendar is the systemd OnCalendar= expression for KindSystemdTimer.
+	OnCalendar string `json:"on_calendar,omitempty"`
+	// OnBootSec is the systemd OnBootSec= delay for KindSystemdTimer.
+	OnBootSec string `json:"on_boot_sec,omitempty"`
+	// Persistent sets Persistent=true on KindSystemdTimer units.
+	Persistent bool `json:"persistent,omitempty"`
+	// Description is the [Unit] Description for KindSystemdTimer.
+	Description string `json:"description,omitempty"`
+	// ServiceDescription is the companion oneshot .service Description.
+	ServiceDescription string `json:"service_description,omitempty"`
+	// After lists After= dependencies on the companion oneshot .service.
+	After []string `json:"after,omitempty"`
+	// Wants lists Wants= dependencies on the companion oneshot .service.
+	Wants []string `json:"wants,omitempty"`
+
+	// User selects systemd --user for KindTimer / KindDaemonReload / KindService / KindSystemdTimer.
 	User bool `json:"user,omitempty"`
-	// Restart restarts KindService / KindTimer once when it is already
-	// running.
+	// Restart restarts KindService / KindTimer / KindSystemdTimer once when
+	// it is already running.
 	Restart bool `json:"restart,omitempty"`
 	// Reload reloads KindService once when it is already running
 	// (no restart fallback).
 	Reload bool `json:"reload,omitempty"`
-	// EnableOnly skips start/stop for KindTimer present (enable/disable only).
+	// EnableOnly skips start/stop for KindTimer / KindSystemdTimer present
+	// (enable/disable only).
 	EnableOnly bool `json:"enable_only,omitempty"`
 	// IfChanged gates KindDaemonReload on watched dependency outcomes.
 	IfChanged bool `json:"if_changed,omitempty"`

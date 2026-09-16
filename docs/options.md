@@ -26,16 +26,20 @@ See [file-dir-link.md](file-dir-link.md): `WithContent`, `WithSource`,
 |--------|---------|
 | `IsLatest` | Upgrade/install to latest where the backend supports it |
 
-## Service / Timer / DaemonReload
+## Service / Timer / DaemonReload / SystemdTimer
 
 | Option | Meaning |
 |--------|---------|
-| `WithRestart` | Restart once when already active (Service and Timer) |
+| `WithRestart` | Restart once when already active (Service, Timer, SystemdTimer) |
 | `WithReload` | Reload once when already active (**Service only**; no restart fallback) |
-| `WithUser` | `systemctl --user` (systemd Service/Timer/DaemonReload) |
-| `WithEnableOnly` | Timer: enable/disable only (skip start/stop) |
+| `WithUser` | `systemctl --user` (systemd Service/Timer/DaemonReload/SystemdTimer) |
+| `WithEnableOnly` | Timer/SystemdTimer: enable/disable only (skip start/stop) |
 | `IfChanged` | DaemonReload: skip unless a DependsOn/WithWatch target changed |
 | `WithWatch(ids…)` | DaemonReload: explicit ids for IfChanged (plan/Ensure) |
+| `WithCommand` | SystemdTimer: oneshot `ExecStart=` (also Cron) |
+| `WithOnCalendar` / `WithOnBootSec` / `WithPersistent` | SystemdTimer schedule |
+| `WithDescription` / `WithServiceDescription` | SystemdTimer unit descriptions |
+| `WithAfter` / `WithWants` | SystemdTimer service dependencies |
 
 ## Cron
 

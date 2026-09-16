@@ -619,6 +619,18 @@ func TestApplyTimerRestartLowering(t *testing.T) {
 	}
 }
 
+func TestApplySystemdTimerRequiresFields(t *testing.T) {
+	t.Parallel()
+	ops := []Op{
+		{Op: KindPlan, Version: CurrentVersion, ID: "st"},
+		{Op: KindSystemdTimer, Name: "fit-job"},
+	}
+	err := Apply(ops, Facts{GOOS: "linux"}, "")
+	if err == nil || !strings.Contains(err.Error(), "command") {
+		t.Fatalf("want missing command error, got %v", err)
+	}
+}
+
 // sortedApplyOrderCase is one sortedApplyOrder table fixture: a recorded body
 // (without header) plus the expected sequence of op IDs, or an expected error
 // substring. IDs double as both the dep targets and the order assertion.

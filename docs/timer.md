@@ -16,9 +16,10 @@ Requires sufficient privileges for system timers (root / `sudo`), same as
 `Service`. User timers (`WithUser`) use the calling user's systemd session.
 
 Unit files themselves are not written by this resource — install them with
-`File` / `Dir` / `SyncDir` and depend on those resources if needed. After
-dropping new unit files, run [`DaemonReload`](service.md) (with `IfChanged`)
-before `Timer`, or the unit will not be found:
+`File` / `Dir` / `SyncDir` and depend on those resources if needed, or use
+[`SystemdTimer`](systemdtimer.md) when gonf should own the unit content.
+After dropping new unit files, run [`DaemonReload`](service.md) (with
+`IfChanged`) before `Timer`, or the unit will not be found:
 
 ```go
 units := SyncDir(Home(".config/systemd/user"), ".../systemd-user/*")

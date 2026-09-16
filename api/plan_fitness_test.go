@@ -120,6 +120,19 @@ func kindFitnessTable() map[plan.Kind]kindFixture {
 			Name:    "fitsvc",
 			Restart: true,
 		}},
+		plan.KindSystemdTimer: {draft: &resource.PlanDraft{
+			Kind:               "systemd_timer",
+			ID:                 "SystemdTimer[fit-job]",
+			Name:               "fit-job",
+			Command:            "/bin/true",
+			OnCalendar:         "*-*-* *:05:00",
+			OnBootSec:          "10min",
+			Persistent:         true,
+			Description:        "fit timer",
+			ServiceDescription: "fit oneshot",
+			After:              []string{"network-online.target"},
+			Wants:              []string{"network-online.target"},
+		}},
 	}
 }
 

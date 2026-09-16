@@ -471,6 +471,68 @@ func TestRecordPlanLowersTimerRestart(t *testing.T) {
 	}
 }
 
+// TestRecordPlanLowersSystemdTimer pins declarative timer install fields on
+// the wire (schema v7): command, calendar, and unit metadata must survive
+// record → encode → decode.
+func TestRecordPlanLowersSystemdTimer(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	Task("systemd_timer_lower", "systemd timer lowering", func() {
+		SystemdTimer("fit-job",
+			options.WithCommand("/bin/true"),
+			options.WithOnCalendar("*-*-* *:05:00"),
+			options.WithOnBootSec("10min"),
+			options.WithPersistent,
+			options.WithDescription("fit timer"),
+			options.WithServiceDescription("fit oneshot"),
+			options.WithAfter("network-online.target"),
+			options.WithWants("network-online.target"),
+		)
+	})
+
+	ops, err := RecordPlan("systemd_timer_lower", t.TempDir(), "systemd_timer_lower")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+	wantKinds := []plan.Kind{plan.KindPlan, plan.KindSystemdTimer}
+	if !reflect.DeepEqual(opsKinds(ops), wantKinds) {
+		t.Fatalf("ops kinds = %v, want %v", opsKinds(ops), wantKinds)
+	}
+	op := ops[1]
+	if op.Name != "fit-job" ||
+		op.Command != "/bin/true" ||
+		op.OnCalendar != "*-*-* *:05:00" ||
+		op.OnBootSec != "10min" ||
+		!op.Persistent ||
+		op.Description != "fit timer" ||
+		op.ServiceDescription != "fit oneshot" ||
+		!reflect.DeepEqual(op.After, []string{"network-online.target"}) ||
+		!reflect.DeepEqual(op.Wants, []string{"network-online.target"}) {
+		t.Fatalf("systemd_timer op = %#v", op)
+	}
+	if op.ID != "SystemdTimer[fit-job]" {
+		t.Fatalf("id = %q, want SystemdTimer[fit-job]", op.ID)
+	}
+
+	raw, err := plan.EncodePlan(ops)
+	if err != nil {
+		t.Fatalf("EncodePlan: %v", err)
+	}
+	decoded, err := plan.DecodePlanBytes(raw)
+	if err != nil {
+		t.Fatalf("DecodePlanBytes: %v", err)
+	}
+	if !reflect.DeepEqual(decoded, ops) {
+		t.Fatalf("round-trip mismatch:\n got %#v\nwant %#v", decoded[1], ops[1])
+	}
+}
+
 // TestRecordPlanLowersDependsOn pins the wire round-trip of dependency
 // intent: DependsOn targets must reach plan.Op.Deps with their stable
 // resource IDs so plan apply can order ops like the repository path does

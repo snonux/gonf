@@ -413,18 +413,25 @@ func draftToOp(d resource.PlanDraft) (plan.Op, error) {
 		Creates:    d.Creates,
 		Unless:     draftGuard(d.Unless),
 		OnlyIf:     draftGuard(d.OnlyIf),
-		User:       d.User,
-		CronUser:   d.CronUser,
-		Command:    d.Command,
-		Schedule:   d.Schedule,
-		CronEnv:    d.CronEnv,
-		Restart:    d.Restart,
-		Reload:     d.Reload,
-		EnableOnly: d.EnableOnly,
-		IfChanged:  d.IfChanged,
-		Watch:      d.Watch,
-		Deps:       d.Deps,
-		Elevate:    d.Elevate || recSession.recordingElevate,
+		User:               d.User,
+		CronUser:           d.CronUser,
+		Command:            d.Command,
+		Schedule:           d.Schedule,
+		CronEnv:            d.CronEnv,
+		OnCalendar:         d.OnCalendar,
+		OnBootSec:          d.OnBootSec,
+		Persistent:         d.Persistent,
+		Description:        d.Description,
+		ServiceDescription: d.ServiceDescription,
+		After:              d.After,
+		Wants:              d.Wants,
+		Restart:            d.Restart,
+		Reload:             d.Reload,
+		EnableOnly:         d.EnableOnly,
+		IfChanged:          d.IfChanged,
+		Watch:              d.Watch,
+		Deps:               d.Deps,
+		Elevate:            d.Elevate || recSession.recordingElevate,
 	}
 	switch d.Kind {
 	case "file":
@@ -451,6 +458,8 @@ func draftToOp(d resource.PlanDraft) (plan.Op, error) {
 		op.Op = plan.KindCron
 	case "service":
 		op.Op = plan.KindService
+	case "systemd_timer":
+		op.Op = plan.KindSystemdTimer
 	default:
 		return op, fmt.Errorf("RecordPlan: draft %q: unknown draft kind %q (no draftToOp case; see docs/plan.md kind checklist)",
 			d.ID, d.Kind)

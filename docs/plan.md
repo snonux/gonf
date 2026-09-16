@@ -299,7 +299,12 @@ Design decisions:
   `exec.Opts.Timeout` field exists for opt-in callers; wiring it globally was
   deliberately deferred (it would change apply semantics).
 
-Plan schema **version 6** adds the `source_dir` field to `sync_dir` ops: the
+Plan schema **version 7** adds the `systemd_timer` op: declarative install of
+a `.timer` + companion oneshot `.service` (command, OnCalendar, optional
+OnBootSec/Persistent/descriptions/After/Wants). An older binary that lacked
+the kind would fail at apply with `unknown op`; the version gate refuses v7
+plans up-front instead, while this binary keeps applying v1–6 plans. Plan
+schema **version 6** adds the `source_dir` field to `sync_dir` ops: the
 recipe's declared source directory (the glob pattern's directory for the glob
 flavor) so destination apply renders tree `.tmpl` files' `{{.Param}}` from the
 stable declared identity instead of the per-run blob path. The bump follows

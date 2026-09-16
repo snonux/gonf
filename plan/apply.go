@@ -17,6 +17,7 @@ import (
 	"github.com/snonux/gonf/resource/pkg"
 	"github.com/snonux/gonf/resource/service"
 	"github.com/snonux/gonf/resource/systemd"
+	"github.com/snonux/gonf/resource/systemdtimer"
 	"github.com/snonux/gonf/resource/timer"
 )
 
@@ -300,6 +301,8 @@ func applyActive(op Op, planDir string) error {
 		return applyCron(op)
 	case KindService:
 		return applyService(op)
+	case KindSystemdTimer:
+		return applySystemdTimer(op)
 	default:
 		return fmt.Errorf("unknown op %q", op.Op)
 	}
@@ -675,6 +678,52 @@ func applyService(op Op) error {
 		opts = append(opts, opt.WithUser)
 	}
 	return service.Ensure(op.Name, opts...)
+}
+
+func applySystemdTimer(op Op) error {
+	if op.Name == "" {
+		return fmt.Errorf("systemd_timer: missing name")
+	}
+	var opts []opt.Option
+	if op.Absent {
+		opts = append(opts, opt.IsAbsent)
+	} else {
+		if op.Command == "" {
+			return fmt.Errorf("systemd_timer: missing command")
+		}
+		if op.OnCalendar == "" {
+			return fmt.Errorf("systemd_timer: missing on_calendar")
+		}
+		opts = append(opts, opt.WithCommand(op.Command), opt.WithOnCalendar(op.OnCalendar))
+		if op.OnBootSec != "" {
+			opts = append(opts, opt.WithOnBootSec(op.OnBootSec))
+		}
+		if op.Persistent {
+			opts = append(opts, opt.WithPersistent)
+		}
+		if op.Description != "" {
+			opts = append(opts, opt.WithDescription(op.Description))
+		}
+		if op.ServiceDescription != "" {
+			opts = append(opts, opt.WithServiceDescription(op.ServiceDescription))
+		}
+		if len(op.After) > 0 {
+			opts = append(opts, opt.WithAfter(op.After...))
+		}
+		if len(op.Wants) > 0 {
+			opts = append(opts, opt.WithWants(op.Wants...))
+		}
+	}
+	if op.User {
+		opts = append(opts, opt.WithUser)
+	}
+	if op.Restart {
+		opts = append(opts, opt.WithRestart)
+	}
+	if op.EnableOnly {
+		opts = append(opts, opt.WithEnableOnly)
+	}
+	return systemdtimer.Ensure(op.Name, opts...)
 }
 
 func guardOption(g *Guard, unless bool) []opt.Option {

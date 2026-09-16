@@ -13,6 +13,7 @@ import (
 	"github.com/snonux/gonf/resource/pkg"
 	svc "github.com/snonux/gonf/resource/service"
 	"github.com/snonux/gonf/resource/systemd"
+	"github.com/snonux/gonf/resource/systemdtimer"
 	"github.com/snonux/gonf/resource/timer"
 )
 
@@ -208,6 +209,19 @@ func NoTimer[T Path](name T, opts ...options.Option) Resource {
 // DependsOn(unitFiles) and IfChanged to reload only when unit files changed.
 func DaemonReload(opts ...options.Option) Resource {
 	return systemd.Present(opts...)
+}
+
+// SystemdTimer installs a .timer + companion oneshot .service under
+// /etc/systemd/system (or ~/.config/systemd/user with WithUser), daemon-reloads
+// when the units change, and enables/starts the timer. Requires WithCommand and
+// WithOnCalendar unless absent.
+func SystemdTimer(name string, opts ...options.Option) Resource {
+	return systemdtimer.Present(name, opts...)
+}
+
+// NoSystemdTimer stops/disables a timer and removes its unit files.
+func NoSystemdTimer(name string, opts ...options.Option) Resource {
+	return systemdtimer.Absent(name, opts...)
 }
 
 // Command registers a command resource that runs name with args on Apply.

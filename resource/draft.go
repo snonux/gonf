@@ -102,6 +102,20 @@ type PlanDraft struct {
 	Schedule string
 	// CronEnv lists KEY=VAL environment lines above the cron job.
 	CronEnv []string
+	// OnCalendar is the systemd OnCalendar= expression for systemd_timer drafts.
+	OnCalendar string
+	// OnBootSec is the systemd OnBootSec= delay for systemd_timer drafts.
+	OnBootSec string
+	// Persistent sets Persistent=true on systemd_timer drafts.
+	Persistent bool
+	// Description is the [Unit] Description for systemd_timer drafts.
+	Description string
+	// ServiceDescription is the companion oneshot .service Description.
+	ServiceDescription string
+	// After lists After= dependencies on the companion oneshot .service.
+	After []string
+	// Wants lists Wants= dependencies on the companion oneshot .service.
+	Wants []string
 	// Restart restarts the unit once when it is already running
 	// (service or timer drafts).
 	Restart bool

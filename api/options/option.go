@@ -58,6 +58,14 @@ type (
 	Monthable      interface{ SetMonth(string) }
 	Weekdayable    interface{ SetWeekday(string) }
 	CronEnvable    interface{ AddCronEnv(string) }
+
+	OnCalendarable         interface{ SetOnCalendar(string) }
+	OnBootSecable          interface{ SetOnBootSec(string) }
+	Persistentable         interface{ SetPersistent() }
+	Descriptionable        interface{ SetDescription(string) }
+	ServiceDescriptionable interface{ SetServiceDescription(string) }
+	Afterable              interface{ AddAfter(...string) }
+	Wantsable              interface{ AddWants(...string) }
 )
 
 // Guard describes an Unless/OnlyIf probe: run Name with Args and treat the
@@ -303,6 +311,55 @@ func WithWeekday(v string) Option {
 func WithCronEnv(kv string) Option {
 	return func(t any) {
 		requires(t, "WithCronEnv", func(r CronEnvable) { r.AddCronEnv(kv) })
+	}
+}
+
+// WithOnCalendar sets the systemd timer OnCalendar= expression (required for
+// a present SystemdTimer).
+func WithOnCalendar(v string) Option {
+	return func(t any) {
+		requires(t, "WithOnCalendar", func(r OnCalendarable) { r.SetOnCalendar(v) })
+	}
+}
+
+// WithOnBootSec sets the systemd timer OnBootSec= delay (optional).
+func WithOnBootSec(v string) Option {
+	return func(t any) {
+		requires(t, "WithOnBootSec", func(r OnBootSecable) { r.SetOnBootSec(v) })
+	}
+}
+
+// WithPersistent sets Persistent=true on a SystemdTimer unit.
+var WithPersistent Option = func(t any) {
+	requires(t, "WithPersistent", func(r Persistentable) { r.SetPersistent() })
+}
+
+// WithDescription sets the [Unit] Description for a SystemdTimer (.timer;
+// also used as the .service Description when WithServiceDescription is unset).
+func WithDescription(v string) Option {
+	return func(t any) {
+		requires(t, "WithDescription", func(r Descriptionable) { r.SetDescription(v) })
+	}
+}
+
+// WithServiceDescription sets the companion oneshot .service [Unit] Description.
+func WithServiceDescription(v string) Option {
+	return func(t any) {
+		requires(t, "WithServiceDescription", func(r ServiceDescriptionable) { r.SetServiceDescription(v) })
+	}
+}
+
+// WithAfter appends After= dependencies on the companion oneshot .service.
+func WithAfter(units ...string) Option {
+	return func(t any) {
+		requires(t, "WithAfter", func(r Afterable) { r.AddAfter(units...) })
+	}
+}
+
+// WithWants appends Wants= dependencies on the companion oneshot .service.
+func WithWants(units ...string) Option {
+	return func(t any) {
+		requires(t, "WithWants", func(r Wantsable) { r.AddWants(units...) })
 	}
 }
 

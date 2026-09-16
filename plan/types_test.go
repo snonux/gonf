@@ -40,6 +40,7 @@ func TestAllKindsExhaustiveAndUnique(t *testing.T) {
 		KindDaemonReload: "daemon_reload",
 		KindCron:         "cron",
 		KindService:      "service",
+		KindSystemdTimer: "systemd_timer",
 	}
 	kinds := AllKinds()
 	if len(kinds) != len(want) {
@@ -213,6 +214,23 @@ func TestOpJSONTagsMatchPlanExamples(t *testing.T) {
 			name: "timer restart",
 			op:   Op{Op: KindTimer, Name: "fit.timer", User: true, Restart: true, ID: "Timer[fit.timer]"},
 			want: `{"op":"timer","id":"Timer[fit.timer]","name":"fit.timer","user":true,"restart":true}`,
+		},
+		{
+			name: "systemd_timer",
+			op: Op{
+				Op:                 KindSystemdTimer,
+				Name:               "fit-job",
+				Command:            "/bin/true",
+				OnCalendar:         "*-*-* *:05:00",
+				OnBootSec:          "10min",
+				Persistent:         true,
+				Description:        "fit timer",
+				ServiceDescription: "fit oneshot",
+				After:              []string{"network-online.target"},
+				Wants:              []string{"network-online.target"},
+				ID:                 "SystemdTimer[fit-job]",
+			},
+			want: `{"op":"systemd_timer","id":"SystemdTimer[fit-job]","name":"fit-job","command":"/bin/true","on_calendar":"*-*-* *:05:00","on_boot_sec":"10min","persistent":true,"description":"fit timer","service_description":"fit oneshot","after":["network-online.target"],"wants":["network-online.target"]}`,
 		},
 		{
 			name: "when_end",

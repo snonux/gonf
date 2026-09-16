@@ -9,6 +9,7 @@
 | [package.md](package.md) | `Package` / `NoPackage` (dnf, pkg_add, pkg, pkgin) |
 | [service.md](service.md) | `Service` / `NoService` (systemd, rcctl, FreeBSD/NetBSD) |
 | [timer.md](timer.md) | `Timer` / `NoTimer` (systemd `.timer`, Linux) |
+| [systemdtimer.md](systemdtimer.md) | `SystemdTimer` / `NoSystemdTimer` (install + enable) |
 | [cron.md](cron.md) | `Cron` / `NoCron` (per-user + root crontab) |
 | [helpers.md](helpers.md) | Paths, sync, symlinks, predicates, `GitGlobal`, `List` |
 | [options.md](options.md) | Shared options cheat-sheet |
