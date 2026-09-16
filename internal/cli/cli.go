@@ -20,6 +20,7 @@ import (
 // CLI parses flags and runs or lists tasks. Returns a process exit code.
 //
 //	gonf -version
+//	gonf -plan-version
 //	gonf -list
 //	gonf -profile=fedora
 //	gonf -verbose | -quiet
@@ -38,6 +39,7 @@ func CLI() int {
 	fs.SetOutput(os.Stderr)
 
 	version := fs.Bool("version", false, "Print version")
+	planVersion := fs.Bool("plan-version", false, "Print plan schema version this binary can emit/apply")
 	list := fs.Bool("list", false, "List registered tasks")
 	profile := fs.String("profile", "", "Override detected profile (fedora, rocky, ...)")
 	verbose := fs.Bool("verbose", false, "Debug logging")
@@ -78,6 +80,10 @@ func CLI() int {
 
 	if *version {
 		fmt.Println(internal.Version)
+		return 0
+	}
+	if *planVersion {
+		fmt.Println(plan.CurrentVersion)
 		return 0
 	}
 
@@ -330,7 +336,7 @@ func verifyStickyDirOwned(path string) error {
 }
 
 func printUsage() {
-	fmt.Fprintln(os.Stderr, "usage: gonf [-list] [-version] [-profile=...] [-verbose|-quiet] [-dry-run|-n] [-privilege=none|sudo|doas] <task> [task...]")
+	fmt.Fprintln(os.Stderr, "usage: gonf [-list] [-version] [-plan-version] [-profile=...] [-verbose|-quiet] [-dry-run|-n] [-privilege=none|sudo|doas] <task> [task...]")
 	fmt.Fprintln(os.Stderr, "       gonf plan [-o dir|-stdout] [-id name] <task> [task...]")
 	fmt.Fprintln(os.Stderr, "       gonf apply [-n|-dry-run] [-apply-dir dir] <plan.jsonl|->")
 	fmt.Fprintln(os.Stderr, "       gonf push [-n] [-id name] [-privilege=...] [-- ssh-args...] user@host <task> [task...]")

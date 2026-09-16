@@ -69,7 +69,11 @@ func TestPushSplitsPrivilegeChunks(t *testing.T) {
 	}, Privileged())
 
 	old := remote.SSHRunner
-	t.Cleanup(func() { remote.SSHRunner = old })
+	restoreProbe := remote.AssumeRemotePlanCurrent()
+	t.Cleanup(func() {
+		remote.SSHRunner = old
+		restoreProbe()
+	})
 	var remotes []string
 	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		remotes = append(remotes, argv[len(argv)-1])
@@ -100,7 +104,11 @@ func TestPushPrivilegeNoneRejectsElevated(t *testing.T) {
 	}, Privileged())
 
 	old := remote.SSHRunner
-	t.Cleanup(func() { remote.SSHRunner = old })
+	restoreProbe := remote.AssumeRemotePlanCurrent()
+	t.Cleanup(func() {
+		remote.SSHRunner = old
+		restoreProbe()
+	})
 	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		_, _ = io.Copy(io.Discard, stdin)
 		return nil
@@ -172,7 +180,11 @@ func TestPushRefusesForwardCrossChunkDepsWithZeroSSH(t *testing.T) {
 		{Op: plan.KindCommand, Bin: "true", ID: "Command[a]", Elevate: true},
 	}
 	old := remote.SSHRunner
-	t.Cleanup(func() { remote.SSHRunner = old })
+	restoreProbe := remote.AssumeRemotePlanCurrent()
+	t.Cleanup(func() {
+		remote.SSHRunner = old
+		restoreProbe()
+	})
 	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		t.Error("ssh must not be invoked for a plan that fails the dep pre-flight")
 		return nil

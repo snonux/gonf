@@ -27,7 +27,11 @@ type sshCall struct {
 func captureSSH(t *testing.T) *[]sshCall {
 	t.Helper()
 	old := remote.SSHRunner
-	t.Cleanup(func() { remote.SSHRunner = old })
+	restoreProbe := remote.AssumeRemotePlanCurrent()
+	t.Cleanup(func() {
+		remote.SSHRunner = old
+		restoreProbe()
+	})
 	calls := &[]sshCall{}
 	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		var buf bytes.Buffer

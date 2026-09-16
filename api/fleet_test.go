@@ -143,7 +143,11 @@ func TestPushFleetParallel(t *testing.T) {
 	Fleet("frontends", h1, h2).Parallel(2)
 
 	old := remote.SSHRunner
-	t.Cleanup(func() { remote.SSHRunner = old })
+	restoreProbe := remote.AssumeRemotePlanCurrent()
+	t.Cleanup(func() {
+		remote.SSHRunner = old
+		restoreProbe()
+	})
 
 	var inFlight, maxFlight atomic.Int32
 	var saw int32
@@ -187,7 +191,11 @@ func TestPushFleetSerialLimit(t *testing.T) {
 	).Parallel(1)
 
 	old := remote.SSHRunner
-	t.Cleanup(func() { remote.SSHRunner = old })
+	restoreProbe := remote.AssumeRemotePlanCurrent()
+	t.Cleanup(func() {
+		remote.SSHRunner = old
+		restoreProbe()
+	})
 
 	var inFlight, maxFlight atomic.Int32
 	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
@@ -224,7 +232,11 @@ func TestPushFleetAggregatesErrors(t *testing.T) {
 	).Parallel(2)
 
 	old := remote.SSHRunner
-	t.Cleanup(func() { remote.SSHRunner = old })
+	restoreProbe := remote.AssumeRemotePlanCurrent()
+	t.Cleanup(func() {
+		remote.SSHRunner = old
+		restoreProbe()
+	})
 	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		_, _ = io.Copy(io.Discard, stdin)
 		return io.ErrUnexpectedEOF
@@ -247,7 +259,11 @@ func TestPushHostAndPayloadMagic(t *testing.T) {
 
 	Host("solo", WithSSHUser("paul"), WithSSHHost("solo.example"), WithSSHIdentity("/tmp/id"))
 	old := remote.SSHRunner
-	t.Cleanup(func() { remote.SSHRunner = old })
+	restoreProbe := remote.AssumeRemotePlanCurrent()
+	t.Cleanup(func() {
+		remote.SSHRunner = old
+		restoreProbe()
+	})
 	var stdin []byte
 	var argv []string
 	remote.SSHRunner = func(ctx context.Context, r io.Reader, a []string) error {
@@ -285,7 +301,11 @@ func TestPushFleetCancelsInFlightOnFailure(t *testing.T) {
 	).Parallel(2)
 
 	old := remote.SSHRunner
-	t.Cleanup(func() { remote.SSHRunner = old })
+	restoreProbe := remote.AssumeRemotePlanCurrent()
+	t.Cleanup(func() {
+		remote.SSHRunner = old
+		restoreProbe()
+	})
 	var e2Canceled atomic.Bool
 	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		_, _ = io.Copy(io.Discard, stdin)
@@ -324,7 +344,11 @@ func TestPushFleetHostTimeout(t *testing.T) {
 	Fleet("slowf", Host("s1", WithSSHHost("s1.example")))
 
 	old := remote.SSHRunner
-	t.Cleanup(func() { remote.SSHRunner = old })
+	restoreProbe := remote.AssumeRemotePlanCurrent()
+	t.Cleanup(func() {
+		remote.SSHRunner = old
+		restoreProbe()
+	})
 	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		_, _ = io.Copy(io.Discard, stdin)
 		<-ctx.Done()
@@ -352,7 +376,11 @@ func TestPushFleetAbortsOnCanceledContext(t *testing.T) {
 	Fleet("abortf", Host("a1", WithSSHHost("a1.example")))
 
 	old := remote.SSHRunner
-	t.Cleanup(func() { remote.SSHRunner = old })
+	restoreProbe := remote.AssumeRemotePlanCurrent()
+	t.Cleanup(func() {
+		remote.SSHRunner = old
+		restoreProbe()
+	})
 	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		_, _ = io.Copy(io.Discard, stdin)
 		<-ctx.Done()
@@ -384,7 +412,11 @@ func TestPushFleetDryRun(t *testing.T) {
 	Fleet("dryf", Host("d1", WithSSHHost("d1.example")))
 
 	old := remote.SSHRunner
-	t.Cleanup(func() { remote.SSHRunner = old })
+	restoreProbe := remote.AssumeRemotePlanCurrent()
+	t.Cleanup(func() {
+		remote.SSHRunner = old
+		restoreProbe()
+	})
 	var sawRemote string
 	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		sawRemote = argv[len(argv)-1]

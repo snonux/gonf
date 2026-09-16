@@ -32,6 +32,9 @@ type hostRecord struct {
 	identity  string
 	privilege privilege.Mode
 	values    map[string]any // arbitrary per-host recipe values (WithValue / SetValue)
+	goos      string
+	goarch    string
+	gonfPath  string
 }
 
 // FleetRef is an opaque handle for a named set of hosts.
@@ -102,6 +105,24 @@ const (
 // WithPrivilege sets how privileged apply chunks are wrapped on this host.
 func WithPrivilege(mode privilege.Mode) HostOption {
 	return func(h *hostRecord) { h.privilege = mode }
+}
+
+// WithGOOS sets the GOOS used when push syncs a newer gonf binary to this host.
+// Empty (default) probes via remote uname -s.
+func WithGOOS(goos string) HostOption {
+	return func(h *hostRecord) { h.goos = goos }
+}
+
+// WithGOARCH sets the GOARCH used when push syncs a newer gonf binary.
+// Empty (default) probes via remote uname -m.
+func WithGOARCH(goarch string) HostOption {
+	return func(h *hostRecord) { h.goarch = goarch }
+}
+
+// WithGonfPath sets the remote path for a synced gonf binary (default
+// /usr/local/bin/gonf).
+func WithGonfPath(path string) HostOption {
+	return func(h *hostRecord) { h.gonfPath = path }
 }
 
 // WithValue stores an arbitrary recipe value under key on this host (e.g. a
@@ -345,6 +366,9 @@ func (h HostRef) pushTarget() (PushTarget, error) {
 		Port:      rec.port,
 		Identity:  rec.identity,
 		Privilege: rec.privilege,
+		GOOS:      rec.goos,
+		GOARCH:    rec.goarch,
+		GonfPath:  rec.gonfPath,
 	}, nil
 }
 

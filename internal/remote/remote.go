@@ -60,6 +60,13 @@ type PushTarget struct {
 	Identity  string
 	ExtraSSH  []string // optional raw ssh argv inserted after "ssh"
 	Privilege privilege.Mode
+	// GOOS / GOARCH select the cross-compile target when EnsureRemoteGonf
+	// upgrades the remote binary. Empty → probe via uname on the host.
+	GOOS   string
+	GOARCH string
+	// GonfPath is the remote install path for synced binaries (default
+	// /usr/local/bin/gonf).
+	GonfPath string
 }
 
 // Destination returns the user@host (or bare host) this target connects to.
@@ -94,7 +101,7 @@ func PushPayload(t PushTarget, payload []byte, elevate bool, applyDir string) er
 	if t.Host == "" {
 		return fmt.Errorf("push: empty host")
 	}
-	remote, err := remoteApplyCmd(elevate, t.privilegeMode(), applyDir)
+	remote, err := remoteApplyCmd(elevate, t, applyDir)
 	if err != nil {
 		return err
 	}
@@ -127,18 +134,38 @@ func PushChunks(ctx context.Context, t PushTarget, planID string, ops []plan.Op,
 
 	// Pre-flight: build every remote apply command before any SSH traffic so
 	// a privilege misconfiguration (e.g. -privilege=none with an elevated
-	// chunk) fails the push before sending any chunk or blob upload.
+	// chunk) fails the push before syncing gonf or sending any chunk.
 	remotes := make([]string, len(chunks))
 	for i, ch := range chunks {
 		applyDir := ""
 		if sticky != "" {
 			applyDir = sticky
 		}
-		remote, err := remoteApplyCmd(ch.Elevate, t.privilegeMode(), applyDir)
+		remote, err := remoteApplyCmd(ch.Elevate, t, applyDir)
 		if err != nil {
 			return fmt.Errorf("chunk %d: %w", i, err)
 		}
 		remotes[i] = remote
+	}
+
+	installed, err := EnsureRemoteGonf(ctx, t)
+	if err != nil {
+		return err
+	}
+	if installed != "" && t.GonfPath == "" {
+		t.GonfPath = installed
+		// Rebuild remotes so apply uses the freshly installed binary path.
+		for i, ch := range chunks {
+			applyDir := ""
+			if sticky != "" {
+				applyDir = sticky
+			}
+			remote, err := remoteApplyCmd(ch.Elevate, t, applyDir)
+			if err != nil {
+				return fmt.Errorf("chunk %d: %w", i, err)
+			}
+			remotes[i] = remote
+		}
 	}
 
 	if sticky != "" {
@@ -186,7 +213,7 @@ func PushChunks(ctx context.Context, t PushTarget, planID string, ops []plan.Op,
 }
 
 // remoteApplyCmd builds the remote shell command for one apply session.
-func remoteApplyCmd(elevate bool, mode privilege.Mode, applyDir string) (string, error) {
+func remoteApplyCmd(elevate bool, t PushTarget, applyDir string) (string, error) {
 	stdinArg := "-"
 	if resource.DryRun() {
 		stdinArg = "-n -"
@@ -195,7 +222,7 @@ func remoteApplyCmd(elevate bool, mode privilege.Mode, applyDir string) (string,
 	if applyDir != "" {
 		args = "apply -apply-dir " + applyDir + " " + stdinArg
 	}
-	return privilege.WrapApplyCmd(mode, elevate, args)
+	return privilege.WrapApplyBinCmd(t.privilegeMode(), elevate, remoteGonfBin(t), args)
 }
 
 // pushRemoveSticky best-effort removes the remote sticky apply dir after the
@@ -220,7 +247,7 @@ func pushBlobs(ctx context.Context, t PushTarget, header plan.Op, mem *plan.Memo
 	if err := plan.EncodePush(&buf, []plan.Op{header}, mem); err != nil {
 		return fmt.Errorf("encode blobs: %w", err)
 	}
-	remote, err := remoteApplyCmd(false, t.privilegeMode(), applyDir)
+	remote, err := remoteApplyCmd(false, t, applyDir)
 	if err != nil {
 		return err
 	}

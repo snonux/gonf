@@ -65,7 +65,11 @@ func TestRemoteSmokePush(t *testing.T) {
 	}, Privileged())
 
 	old := remote.SSHRunner
-	t.Cleanup(func() { remote.SSHRunner = old })
+	restoreProbe := remote.AssumeRemotePlanCurrent()
+	t.Cleanup(func() {
+		remote.SSHRunner = old
+		restoreProbe()
+	})
 	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		if len(argv) >= 3 {
 			remote := argv[len(argv)-1]

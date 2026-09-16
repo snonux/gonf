@@ -31,7 +31,11 @@ func hasPortPair(argv []string, port string) bool {
 func captureSSH(t *testing.T) *[]sshCall {
 	t.Helper()
 	old := remote.SSHRunner
-	t.Cleanup(func() { remote.SSHRunner = old })
+	restoreProbe := remote.AssumeRemotePlanCurrent()
+	t.Cleanup(func() {
+		remote.SSHRunner = old
+		restoreProbe()
+	})
 	calls := &[]sshCall{}
 	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		var buf bytes.Buffer
@@ -132,7 +136,11 @@ func TestCLIPushStreamsToSSH(t *testing.T) {
 	})
 
 	oldRunner := remote.SSHRunner
-	t.Cleanup(func() { remote.SSHRunner = oldRunner })
+	restoreProbe := remote.AssumeRemotePlanCurrent()
+	t.Cleanup(func() {
+		remote.SSHRunner = oldRunner
+		restoreProbe()
+	})
 
 	var sawArgv []string
 	var sawStdin []byte
@@ -183,7 +191,11 @@ func TestCLIPushWithSSHOpts(t *testing.T) {
 	api.Task("push_opts", "", func() {})
 
 	oldRunner := remote.SSHRunner
-	t.Cleanup(func() { remote.SSHRunner = oldRunner })
+	restoreProbe := remote.AssumeRemotePlanCurrent()
+	t.Cleanup(func() {
+		remote.SSHRunner = oldRunner
+		restoreProbe()
+	})
 	var saw []string
 	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		saw = append([]string(nil), argv...)
@@ -210,7 +222,11 @@ func TestCLIPushGlobalDryRun(t *testing.T) {
 	t.Cleanup(func() { resource.SetDryRun(false) })
 
 	oldRunner := remote.SSHRunner
-	t.Cleanup(func() { remote.SSHRunner = oldRunner })
+	restoreProbe := remote.AssumeRemotePlanCurrent()
+	t.Cleanup(func() {
+		remote.SSHRunner = oldRunner
+		restoreProbe()
+	})
 	var saw []string
 	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		saw = append([]string(nil), argv...)

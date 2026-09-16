@@ -259,6 +259,21 @@ failures), and `gonf fleet` threads its signal-derived context so
 SIGINT/SIGTERM abort the whole push. See [Timeouts and
 Cancellation](#timeouts-and-cancellation).
 
+### Remote gonf binary sync
+
+Before the first SSH apply chunk, `PushChunks` probes `gonf -plan-version` on
+the target. If the remote binary is missing or reports a plan schema older
+than this controller's `CurrentVersion`, gonf cross-compiles
+`github.com/snonux/gonf/cmd/gonf` for the host (via `WithGOOS` / `WithGOARCH`,
+or `uname` when unset), `scp`s it, and installs to `/usr/local/bin/gonf`
+(override with `WithGonfPath`). Privilege for the install follows the host's
+`WithPrivilege` (root logins install without sudo/doas). Subsequent apply
+commands on that push use the installed path so PATH cannot hide an older
+binary.
+
+`gonf -plan-version` prints the plan schema integer (distinct from
+`gonf -version`, which prints the release string).
+
 Example:
 
 ```text

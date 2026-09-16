@@ -60,7 +60,16 @@ var geteuid = os.Geteuid
 // whether or not gonf itself runs as root. Point users at sudo/doas, or at
 // dropping Privileged() when the SSH login is already root.
 func WrapApplyCmd(mode Mode, elevate bool, applyArgs string) (string, error) {
-	cmd := "gonf " + strings.TrimSpace(applyArgs)
+	return WrapApplyBinCmd(mode, elevate, "gonf", applyArgs)
+}
+
+// WrapApplyBinCmd is WrapApplyCmd with an explicit binary path (e.g.
+// /usr/local/bin/gonf after a push-side sync).
+func WrapApplyBinCmd(mode Mode, elevate bool, bin, applyArgs string) (string, error) {
+	if bin == "" {
+		bin = "gonf"
+	}
+	cmd := bin + " " + strings.TrimSpace(applyArgs)
 	if !elevate {
 		return cmd, nil
 	}

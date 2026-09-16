@@ -19,7 +19,11 @@ func TestCLIFleet(t *testing.T) {
 	api.Fleet("cli_fleet", api.Host("cli_h", api.WithSSHHost("cli.example")))
 
 	old := remote.SSHRunner
-	t.Cleanup(func() { remote.SSHRunner = old })
+	restoreProbe := remote.AssumeRemotePlanCurrent()
+	t.Cleanup(func() {
+		remote.SSHRunner = old
+		restoreProbe()
+	})
 	var saw int
 	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		saw++
