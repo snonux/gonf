@@ -127,6 +127,40 @@ func TestApplyNestedWhen(t *testing.T) {
 	}
 }
 
+// A profile predicate lowered from WhenProfile(a, b) (multiple profiles)
+// carries In instead of Eq — it must match either profile and reject a
+// third, exactly like an OR of two single-profile guards would.
+func TestApplyWhenProfileInMatchesEitherValue(t *testing.T) {
+	newOps := func(target string) []Op {
+		return []Op{
+			header(),
+			{Op: KindWhenBegin, All: []Predicate{{Fact: "profile", In: []string{"fedora", "rocky"}}}},
+			{Op: KindEnsureDir, Path: target, Mode: "0700"},
+			{Op: KindWhenEnd},
+		}
+	}
+
+	for _, tc := range []struct {
+		profile string
+		want    bool
+	}{
+		{"fedora", true},
+		{"rocky", true},
+		{"debian", false},
+	} {
+		root := t.TempDir()
+		target := filepath.Join(root, "target")
+		if err := Apply(newOps(target), Facts{GOOS: "linux", Profile: tc.profile}, ""); err != nil {
+			t.Fatalf("profile=%s: %v", tc.profile, err)
+		}
+		_, err := os.Stat(target)
+		got := err == nil
+		if got != tc.want {
+			t.Fatalf("profile=%s: created=%v want=%v (stat err=%v)", tc.profile, got, tc.want, err)
+		}
+	}
+}
+
 func TestApplySkipDoesNotMutate(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "target")

@@ -448,5 +448,8 @@ func PushClusterRun(ctx context.Context, name, planID string, parallelOverride i
 	if err != nil {
 		return fmt.Errorf("record: %w", err)
 	}
+	if err := RefuseOpaqueOnlyPush(fmt.Sprintf("cluster %q", name)); err != nil {
+		return err
+	}
 	return remote.Fanout(ctx, name, planID, ops, mem, targets, labels, limit, hostTimeout)
 }

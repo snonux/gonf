@@ -3,6 +3,7 @@ package api
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
@@ -58,7 +59,7 @@ func TestRecordPlanWhenHostnameHelper(t *testing.T) {
 	for i, want := range []string{"blowfish", "fishfinger"} {
 		begin := ops[1+i*3]
 		if begin.All == nil || len(begin.All) != 1 ||
-			begin.All[0] != (plan.Predicate{Fact: "hostname_contains", Eq: want}) {
+			!reflect.DeepEqual(begin.All[0], plan.Predicate{Fact: "hostname_contains", Eq: want}) {
 			t.Fatalf("when_begin[%d] predicates = %#v", i, begin.All)
 		}
 		if begin.ID != "when.hostname:"+want {
@@ -139,7 +140,7 @@ func TestRecordPlanWhenHostnameSlice(t *testing.T) {
 	}
 	for i, want := range []string{"blowfish", "fishfinger"} {
 		begin := ops[1+i*3]
-		if begin.All[0] != (plan.Predicate{Fact: "hostname_contains", Eq: want}) {
+		if !reflect.DeepEqual(begin.All[0], plan.Predicate{Fact: "hostname_contains", Eq: want}) {
 			t.Fatalf("when_begin[%d] = %#v", i, begin.All)
 		}
 	}
@@ -176,7 +177,7 @@ func TestRecordPlanWhenHostnameFragmentScopes(t *testing.T) {
 	}
 	for i, want := range []string{"blowfish", "fishfinger"} {
 		begin := ops[1+i*3]
-		if begin.All[0] != (plan.Predicate{Fact: "hostname_contains", Eq: want}) {
+		if !reflect.DeepEqual(begin.All[0], plan.Predicate{Fact: "hostname_contains", Eq: want}) {
 			t.Fatalf("when_begin[%d] = %#v", i, begin.All)
 		}
 		if got := ops[2+i*3].ID; got != "Cron[root/demo-job]" {

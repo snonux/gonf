@@ -72,7 +72,14 @@ func WithTaskCluster(name string) TaskOption {
 
 // When skips activating the task unless pred(facts) is true.
 // Custom predicates are not serializable for remote plans; prefer WhenLinux,
-// WhenProfile, or WhenHostnameContains when recording plans.
+// WhenProfile, or WhenHostnameContains when recording plans. A When(func)
+// combined with a serializable guard (WhenLinux etc.) still ships that
+// guard — the opaque predicate is only an extra controller-side filter, it
+// never suppresses the serializable one. A task whose When is opaque ONLY
+// (no serializable guard at all) records fine for local Run/gonf plan, but
+// PushTo/PushClusterRun/PushFleetRun refuse it: shipping such a plan would
+// silently drop the guard and apply the task unconditionally on the
+// destination.
 func When(pred func(Facts) bool) TaskOption {
 	return func(c *taskCandidate) {
 		if pred != nil {
@@ -91,8 +98,9 @@ func WhenLinux() TaskOption {
 }
 
 // WhenProfile activates only when Facts.Profile is one of profiles.
-// A single profile lowers to a plan fact predicate; multiple profiles use OR
-// locally and are treated as opaque for plan serialization.
+// A single profile lowers to a plan fact predicate with Eq; multiple
+// profiles lower to the same predicate with In (OR-of-values) — both forms
+// are fully serializable, so WhenProfile never marks a task opaque.
 func WhenProfile(profiles ...string) TaskOption {
 	return func(c *taskCandidate) {
 		c.when = append(c.when, ProfileIs(profiles...))
@@ -102,7 +110,10 @@ func WhenProfile(profiles ...string) TaskOption {
 		case 1:
 			c.planWhen = append(c.planWhen, plan.Predicate{Fact: "profile", Eq: profiles[0]})
 		default:
-			c.opaqueWhen = true
+			c.planWhen = append(c.planWhen, plan.Predicate{
+				Fact: "profile",
+				In:   append([]string(nil), profiles...),
+			})
 		}
 	}
 }

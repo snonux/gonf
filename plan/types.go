@@ -12,8 +12,10 @@ package plan
 // source_dir field to sync_dir ops (the recipe's declared source directory,
 // the stable {{.Param}} base for .tmpl files inside the synced tree);
 // version 7 added the systemd_timer op (declarative timer + oneshot service
-// unit install).
-const CurrentVersion = 7
+// unit install); version 8 added the "in" field to when_begin predicates
+// (an OR-list of acceptable fact values, e.g. WhenProfile(a, b) lowering to
+// a single serializable predicate instead of being marked opaque).
+const CurrentVersion = 8
 
 // supportedVersions is the set of plan schema versions this binary can apply.
 // Apply must refuse plans whose version is not in this set before any mutation.
@@ -24,6 +26,7 @@ var supportedVersions = map[int]struct{}{
 	4:              {},
 	5:              {},
 	6:              {},
+	7:              {},
 	CurrentVersion: {},
 }
 
@@ -109,12 +112,20 @@ func IsControlKind(k Kind) bool {
 }
 
 // Predicate is one conjunct in a when_begin "all" list.
-// Exactly one of the path/fact forms should be set per predicate.
+// Exactly one of the path/fact forms should be set per predicate, and Eq/In
+// are mutually exclusive alternatives for the fact form (In wins if both are
+// somehow set).
 type Predicate struct {
 	// Fact names a host fact: "goos", "profile", or "hostname_contains".
 	Fact string `json:"fact,omitempty"`
 	// Eq is the expected value for Fact (equality, or substring for hostname_contains).
 	Eq string `json:"eq,omitempty"`
+	// In is an OR-list of acceptable values for Fact — the fact matches if
+	// it equals (or, for hostname_contains, contains) any entry. Used
+	// instead of Eq when a task's guard admits more than one value, e.g.
+	// WhenProfile(a, b) lowers to {Fact: "profile", In: []string{a, b}}
+	// rather than being treated as opaque.
+	In []string `json:"in,omitempty"`
 	// PathExists succeeds when the expanded path exists on the destination.
 	PathExists string `json:"path_exists,omitempty"`
 }

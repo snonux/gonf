@@ -217,5 +217,8 @@ func PushFleetRun(ctx context.Context, name, planID string, parallelOverride int
 	if err != nil {
 		return fmt.Errorf("record: %w", err)
 	}
+	if err := RefuseOpaqueOnlyPush(fmt.Sprintf("fleet %q", name)); err != nil {
+		return err
+	}
 	return remote.Fanout(ctx, name, planID, ops, mem, targets, labels, limit, hostTimeout)
 }

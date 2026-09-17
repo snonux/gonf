@@ -62,10 +62,10 @@ func TestRecordPlanLowersWhenEnsureDirLinkIfExists(t *testing.T) {
 	if begin.ID != "when.home_gated" || len(begin.All) != 2 {
 		t.Fatalf("when_begin = %#v", begin)
 	}
-	if begin.All[0] != (plan.Predicate{Fact: "goos", Eq: "linux"}) {
+	if !reflect.DeepEqual(begin.All[0], plan.Predicate{Fact: "goos", Eq: "linux"}) {
 		t.Fatalf("pred0 = %#v", begin.All[0])
 	}
-	if begin.All[1] != (plan.Predicate{Fact: "profile", Eq: "fedora"}) {
+	if !reflect.DeepEqual(begin.All[1], plan.Predicate{Fact: "profile", Eq: "fedora"}) {
 		t.Fatalf("pred1 = %#v", begin.All[1])
 	}
 
@@ -713,5 +713,108 @@ func TestRecordPlanLowersSyncDirSourceDir(t *testing.T) {
 	}
 	if !reflect.DeepEqual(decoded, ops) {
 		t.Fatalf("round-trip mismatch\ngot  %#v\nwant %#v", decoded, ops)
+	}
+}
+
+// WhenProfile with more than one profile must lower to a single serializable
+// OR predicate (Fact: "profile", In: profiles) instead of being marked
+// opaque — h5 regression: it used to fall back to c.opaqueWhen, which
+// planWhenForCandidate then dropped from the recorded plan entirely.
+func TestRecordPlanWhenProfileMultiLowersToInPredicate(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	Activate(Facts{GOOS: "linux", Profile: "fedora"})
+
+	Task("multi_profile", "", func() {
+		Package("fish")
+	}, WhenProfile("fedora", "rocky"))
+
+	ops, err := RecordPlan("multi-profile", "", "multi_profile")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+	if len(ops) != 4 || ops[1].Op != plan.KindWhenBegin {
+		t.Fatalf("ops = %#v", ops)
+	}
+	begin := ops[1]
+	if len(begin.All) != 1 {
+		t.Fatalf("when_begin predicates = %#v, want exactly 1", begin.All)
+	}
+	want := plan.Predicate{Fact: "profile", In: []string{"fedora", "rocky"}}
+	if !reflect.DeepEqual(begin.All[0], want) {
+		t.Fatalf("predicate = %#v, want %#v (WhenProfile must not fall back to opaque)", begin.All[0], want)
+	}
+}
+
+// A task built with WhenLinux() (serializable) AND a custom When(fn)
+// (opaque) must still ship the goos guard in the recorded plan: the opaque
+// predicate is only an extra controller-side filter, never a reason to drop
+// the serializable one. This is the exact h5 regression scenario — before
+// the fix, planWhenForCandidate returned nil here because c.opaqueWhen was
+// true, silently dropping the OS guard.
+func TestRecordPlanOpaqueWhenKeepsSerializableGuard(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		// WhenLinux's own injected controller-side check needs a real
+		// linux host to pass; see the opaque-filter comment below.
+		t.Skip("WhenLinux's controller-side check requires a linux host")
+	}
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	// The opaque predicate below is evaluated against the REAL controller
+	// facts (DetectFacts), not any Activate override, so it must be
+	// trivially true here — the point of this test is the serializable
+	// goos guard surviving, not the opaque controller-side check itself
+	// (that is covered by TestRecordPlanOpaqueWhenRequiresLocalPass /
+	// TestRecordPlanOpaqueWhenFailingControllerFilterErrors).
+	Task("linux_plus_custom", "", func() {
+		Package("fish")
+	}, WhenLinux(), When(func(f Facts) bool { return true }))
+
+	ops, err := RecordPlan("linux-plus-custom", "", "linux_plus_custom")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+	if len(ops) != 4 || ops[1].Op != plan.KindWhenBegin {
+		t.Fatalf("ops = %#v; want a when_begin carrying the goos guard", ops)
+	}
+	begin := ops[1]
+	if len(begin.All) != 1 || !reflect.DeepEqual(begin.All[0], plan.Predicate{Fact: "goos", Eq: "linux"}) {
+		t.Fatalf("when_begin predicates = %#v, want [{goos linux}]", begin.All)
+	}
+}
+
+// When the opaque controller-side filter itself fails, recording must still
+// error out (no guard to ship, and the task should not have activated here
+// at all) — this is unchanged behavior, kept as a guard against a future
+// regression while fixing the drop-the-guard bug above.
+func TestRecordPlanOpaqueWhenFailingControllerFilterErrors(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	Activate(Facts{GOOS: "linux", Profile: "fedora"})
+
+	Task("linux_plus_failing_custom", "", func() {
+		Package("fish")
+	}, WhenLinux(), When(func(f Facts) bool { return false }))
+
+	if _, err := RecordPlan("linux-plus-failing-custom", "", "linux_plus_failing_custom"); err == nil {
+		t.Fatal("RecordPlan: want error when the opaque predicate fails on the controller")
 	}
 }

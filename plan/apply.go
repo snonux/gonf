@@ -768,25 +768,53 @@ func evalPredicate(p Predicate, facts Facts) (bool, error) {
 		}
 		return pathExists(path)
 	case p.Fact != "":
-		return evalFact(p.Fact, p.Eq, facts)
+		return evalFact(p.Fact, p.Eq, p.In, facts)
 	default:
 		return false, fmt.Errorf("empty predicate")
 	}
 }
 
-func evalFact(name, eq string, facts Facts) (bool, error) {
+func evalFact(name, eq string, in []string, facts Facts) (bool, error) {
 	switch name {
 	case "goos":
-		return facts.GOOS == eq, nil
+		return matchesEqOrIn(facts.GOOS, eq, in), nil
 	case "profile":
-		return facts.Profile == eq, nil
+		return matchesEqOrIn(facts.Profile, eq, in), nil
 	case "hostname_contains":
-		host := strings.ToLower(facts.Hostname)
-		want := strings.ToLower(eq)
-		return strings.Contains(host, want), nil
+		return matchesContainsOrIn(facts.Hostname, eq, in), nil
 	default:
 		return false, fmt.Errorf("unknown fact %q", name)
 	}
+}
+
+// matchesEqOrIn reports whether value equals eq, or — when in is non-empty —
+// equals any entry of in. In takes precedence over Eq (WhenProfile's
+// multi-profile OR lowers to In only, leaving Eq empty).
+func matchesEqOrIn(value, eq string, in []string) bool {
+	if len(in) > 0 {
+		for _, want := range in {
+			if value == want {
+				return true
+			}
+		}
+		return false
+	}
+	return value == eq
+}
+
+// matchesContainsOrIn reports whether hostname contains eq (case
+// insensitive), or — when in is non-empty — contains any entry of in.
+func matchesContainsOrIn(hostname, eq string, in []string) bool {
+	host := strings.ToLower(hostname)
+	if len(in) > 0 {
+		for _, want := range in {
+			if strings.Contains(host, strings.ToLower(want)) {
+				return true
+			}
+		}
+		return false
+	}
+	return strings.Contains(host, strings.ToLower(eq))
 }
 
 func pathExists(path string) (bool, error) {

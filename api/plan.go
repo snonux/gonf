@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/snonux/gonf/plan"
@@ -80,6 +81,17 @@ type recordingSession struct {
 	// body running twice) legitimately reuses its own ref, so only a ref
 	// reused by a *different* identity is an error.
 	recordedBlobRefs map[string]string
+
+	// recordedOpaqueOnlyTasks lists task names recorded during the current
+	// session whose When is opaque with NO serializable guard at all (a bare
+	// When(func), or When(func) with no WhenLinux/WhenProfile/
+	// WhenHostnameContains alongside it). For such a task, planWhenForCandidate
+	// emits no when_begin: the condition only ever ran on the controller.
+	// That is fine for local Run/gonf-plan (apply happens on the same host
+	// that just evaluated it), but PushTo/PushClusterRun/PushFleetRun check
+	// this list and refuse to ship the plan — shipping it would silently
+	// drop the guard and apply the task unconditionally on the destination.
+	recordedOpaqueOnlyTasks []string
 }
 
 // recSession is the process-wide plan recording session. Single-goroutine
@@ -97,6 +109,7 @@ func (s *recordingSession) reset() {
 	s.recordingPackErr = nil
 	s.recordingBodyErr = nil
 	s.recordedBlobRefs = map[string]string{}
+	s.recordedOpaqueOnlyTasks = nil
 }
 
 // RecordPlan runs the named tasks in plan-record mode: resource registration
@@ -166,6 +179,38 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 	return ops, nil
 }
 
+// RefuseOpaqueOnlyPush errors when the RecordPlanTo call that just returned
+// ops recorded one or more tasks whose When is opaque with no serializable
+// guard at all (see recordedOpaqueOnlyTasks). PushTo, PushClusterRun, and
+// PushFleetRun call this right after RecordPlanTo and before streaming
+// anything over SSH, so an unsafe plan is refused before any destination is
+// touched — consistent with the rest of RecordPlan's record-before-mutate
+// error contract (docs/plan.md "Error handling contract"). action names the
+// caller for the error message (e.g. "push", "cluster \"web\"").
+//
+// Local Run / gonf plan do not call this: they apply (or hand the plan to
+// something that applies) on the very host that just evaluated the opaque
+// predicate, so there is no guard to lose in transit.
+func RefuseOpaqueOnlyPush(action string) error {
+	if len(recSession.recordedOpaqueOnlyTasks) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(recSession.recordedOpaqueOnlyTasks))
+	names := make([]string, 0, len(recSession.recordedOpaqueOnlyTasks))
+	for _, n := range recSession.recordedOpaqueOnlyTasks {
+		if _, ok := seen[n]; ok {
+			continue
+		}
+		seen[n] = struct{}{}
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return fmt.Errorf(
+		"%s: task(s) %s use When(func) with no serializable guard (WhenLinux/WhenProfile/WhenHostnameContains); "+
+			"shipping this plan would drop the guard entirely and apply the task unconditionally on the destination — refusing to push",
+		action, strings.Join(names, ", "))
+}
+
 // recordTaskBodies appends ops for taskNames into the current plan session.
 // Packaging failures from the session's draft recorder are shared through
 // recordingPackErr, so nested Run bodies see the real error too.
@@ -197,6 +242,12 @@ func recordSingleTaskBody(name string) error {
 	wrapWhen, err := planWhenForCandidate(c)
 	if err != nil {
 		return err
+	}
+	if c.opaqueWhen && len(wrapWhen) == 0 {
+		// Passed the controller-side opaque filter (planWhenForCandidate
+		// would have errored otherwise) but has no serializable guard to
+		// ship: see recordedOpaqueOnlyTasks.
+		recSession.recordedOpaqueOnlyTasks = append(recSession.recordedOpaqueOnlyTasks, c.name)
 	}
 
 	prevElevate := recSession.recordingElevate
@@ -313,21 +364,30 @@ func ApplyPlan(ops []plan.Op, planDir string) error {
 	}, planDir)
 }
 
-// planWhenForCandidate returns serializable when predicates, or nil when the
-// task has no When. Opaque When predicates must still pass on the controller.
+// planWhenForCandidate returns the serializable when predicates to record as
+// a when_begin guard, or nil when the task has no When predicates at all
+// (or none of them are serializable).
+//
+// Any opaque (non-serializable, e.g. a custom When(func)) predicate in
+// c.when is evaluated here as an extra controller-side filter: it gates
+// whether recording proceeds at all (an error when it fails), but it never
+// takes the place of the serializable guards — those are always emitted
+// when present, even alongside an opaque predicate. This matters because
+// c.when accumulates every When call regardless of serializability, so a
+// task built with WhenLinux() + When(fn) must still ship its goos guard.
 func planWhenForCandidate(c taskCandidate) ([]plan.Predicate, error) {
 	if len(c.when) == 0 {
 		return nil, nil
 	}
-	if !c.opaqueWhen && len(c.planWhen) > 0 {
-		out := make([]plan.Predicate, len(c.planWhen))
-		copy(out, c.planWhen)
-		return out, nil
-	}
-	if !whenPasses(c.when, DetectFacts()) {
+	if c.opaqueWhen && !whenPasses(c.when, DetectFacts()) {
 		return nil, fmt.Errorf("RecordPlan: task %q When predicates fail on controller and are not serializable", c.name)
 	}
-	return nil, nil
+	if len(c.planWhen) == 0 {
+		return nil, nil
+	}
+	out := make([]plan.Predicate, len(c.planWhen))
+	copy(out, c.planWhen)
+	return out, nil
 }
 
 func packageDraft(d resource.PlanDraft, store plan.BlobStore) (plan.Op, error) {

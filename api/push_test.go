@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -361,5 +363,73 @@ func TestPushRemovesStickyDirOnChunkFailure(t *testing.T) {
 	}
 	if removals != 1 {
 		t.Errorf("expected exactly one sticky-dir removal attempt, got %d: %v", removals, remotes(*calls))
+	}
+}
+
+// h5 regression: a task with WhenLinux() (serializable) plus a custom
+// When(fn) (opaque) must still carry the goos guard in the plan that
+// actually goes over the wire to a push destination — not just in the
+// in-process RecordPlan result (api/plan_lower_test.go already covers
+// that). Before the fix, the opaque predicate made planWhenForCandidate
+// return nil, so the pushed plan applied unconditionally on every OS.
+func TestPushKeepsSerializableGuardAlongsideOpaqueWhen(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("WhenLinux's controller-side check requires a linux host")
+	}
+	ResetTasks()
+	ResetInventory()
+	resource.ResetRepository()
+
+	Task("push_linux_plus_custom", "", func() {
+		Package("fish")
+	}, WhenLinux(), When(func(f Facts) bool { return true }))
+
+	calls := captureSSH(t)
+	if err := PushTo(PushTarget{Host: "h.example"}, "demo", "push_linux_plus_custom"); err != nil {
+		t.Fatal(err)
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("calls=%d remotes=%v", len(*calls), remotes(*calls))
+	}
+
+	payload, err := plan.DecodePush(bytes.NewReader((*calls)[0].stdin), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Ops) < 2 || payload.Ops[1].Op != plan.KindWhenBegin {
+		t.Fatalf("pushed ops = %#v; want a when_begin carrying the goos guard", payload.Ops)
+	}
+	want := []plan.Predicate{{Fact: "goos", Eq: "linux"}}
+	if !reflect.DeepEqual(payload.Ops[1].All, want) {
+		t.Fatalf("pushed when_begin predicates = %#v, want %#v (opaque When must not drop the serializable guard on the wire)",
+			payload.Ops[1].All, want)
+	}
+}
+
+// h5: a task whose When is opaque ONLY — no WhenLinux/WhenProfile/
+// WhenHostnameContains alongside the custom When(fn) — has no guard at all
+// to ship. Recording it for push would silently apply the task
+// unconditionally on the destination, so PushTo must refuse before any SSH
+// traffic (same "refuse before mutation" contract as the privilege-none and
+// forward-cross-chunk-deps checks above).
+func TestPushRefusesOpaqueOnlyWhen(t *testing.T) {
+	ResetTasks()
+	ResetInventory()
+	resource.ResetRepository()
+
+	Task("push_opaque_only", "", func() {
+		Package("fish")
+	}, When(func(f Facts) bool { return true }))
+
+	calls := captureSSH(t)
+	err := PushTo(PushTarget{Host: "h.example"}, "demo", "push_opaque_only")
+	if err == nil {
+		t.Fatal("expected refusal for an opaque-only When on push")
+	}
+	if !strings.Contains(err.Error(), "push_opaque_only") {
+		t.Fatalf("error should name the offending task: %v", err)
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("refusal must happen before any SSH traffic, got: %v", remotes(*calls))
 	}
 }

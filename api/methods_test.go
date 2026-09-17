@@ -196,7 +196,7 @@ func TestRegisterMethodsOptsCompanion(t *testing.T) {
 	}
 	begin := ops[1]
 	if begin.All == nil || len(begin.All) != 1 ||
-		begin.All[0] != (plan.Predicate{Fact: "hostname_contains", Eq: "rocky"}) {
+		!reflect.DeepEqual(begin.All[0], plan.Predicate{Fact: "hostname_contains", Eq: "rocky"}) {
 		t.Fatalf("when_begin predicates = %#v", begin.All)
 	}
 	if !begin.Elevate || !ops[2].Elevate {
@@ -223,7 +223,7 @@ func TestRegisterMethodsOptsComposesWithGroupWhen(t *testing.T) {
 	if len(ops) != 4 || ops[1].Op != plan.KindWhenBegin || ops[2].Op != plan.KindFile {
 		t.Fatalf("ops = %#v", ops)
 	}
-	if len(ops[1].All) != 1 || ops[1].All[0] != (plan.Predicate{Fact: "goos", Eq: "linux"}) {
+	if len(ops[1].All) != 1 || !reflect.DeepEqual(ops[1].All[0], plan.Predicate{Fact: "goos", Eq: "linux"}) {
 		t.Fatalf("group when lowered = %#v", ops[1].All)
 	}
 	if !ops[1].Elevate || !ops[2].Elevate {
@@ -349,7 +349,7 @@ func TestRegisterMethodsStructOptsReplacedByOptsX(t *testing.T) {
 	if len(ops) != 4 || ops[1].Op != plan.KindWhenBegin || ops[2].Op != plan.KindFile {
 		t.Fatalf("ops = %v", opsKinds(ops))
 	}
-	if ops[1].All[0] != (plan.Predicate{Fact: "hostname_contains", Eq: "rocky"}) {
+	if !reflect.DeepEqual(ops[1].All[0], plan.Predicate{Fact: "hostname_contains", Eq: "rocky"}) {
 		t.Fatalf("when predicates = %#v", ops[1].All)
 	}
 	if ops[2].Elevate {
@@ -421,7 +421,7 @@ func TestRegisterMethodsGroupWhenComposesWithStructOpts(t *testing.T) {
 	if len(ops) != 4 || ops[1].Op != plan.KindWhenBegin || ops[2].Op != plan.KindFile {
 		t.Fatalf("ops = %v", opsKinds(ops))
 	}
-	if len(ops[1].All) != 1 || ops[1].All[0] != (plan.Predicate{Fact: "goos", Eq: "linux"}) {
+	if len(ops[1].All) != 1 || !reflect.DeepEqual(ops[1].All[0], plan.Predicate{Fact: "goos", Eq: "linux"}) {
 		t.Fatalf("group when lowered = %#v", ops[1].All)
 	}
 	if !ops[1].Elevate || !ops[2].Elevate {

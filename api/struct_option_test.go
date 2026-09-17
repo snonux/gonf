@@ -2,6 +2,7 @@ package api
 
 import (
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
@@ -113,7 +114,7 @@ func TestRegisterMethodsMarkerComposesWithOpts(t *testing.T) {
 	if len(ops) != 4 || ops[1].Op != plan.KindWhenBegin || ops[2].Op != plan.KindFile {
 		t.Fatalf("ops = %v", opsKinds(ops))
 	}
-	if ops[1].All[0] != (plan.Predicate{Fact: "hostname_contains", Eq: "rocky"}) {
+	if !reflect.DeepEqual(ops[1].All[0], plan.Predicate{Fact: "hostname_contains", Eq: "rocky"}) {
 		t.Fatalf("when predicates = %#v", ops[1].All)
 	}
 	if !ops[2].Elevate {

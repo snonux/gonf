@@ -50,6 +50,13 @@ gonf separates **registration-time** misuse from **runtime** failures:
   the CLI (or the embedding caller), which prints it and exits 1 — so deferred
   cleanup (temp plan dirs, apply run dirs) always runs, and `gonf` stays
   usable as an embedded library.
+- **Push-time refusal returns an error, before any SSH traffic**: `PushTo` /
+  `PushClusterRun` / `PushFleetRun` call `RefuseOpaqueOnlyPush` right after
+  `RecordPlanTo` returns. If any recorded task's `When` is opaque with no
+  serializable guard at all (see "Recording" above), the push is refused —
+  naming the task(s) — before the blob upload or any apply chunk goes over
+  SSH. There is no opt-in to silence this; the same recording still succeeds
+  for local `Run` / `gonf plan`, where the refusal does not apply.
 
 Residual: a registration-time Fatal fired from *inside* a task body still
 skips `Run`'s deferred temp-plan-dir cleanup (the directory lives under
@@ -108,8 +115,39 @@ ops, err := RecordPlan("my-plan", planDir, "home_helix", "home_tmux")
 | `EnsureDir` | `ensure_dir` |
 | `LinkIfExists` / `SymlinkMap` | `link_if_exists` |
 
-Opaque `When(func(Facts) bool)` cannot be serialized. `RecordPlan` requires
-those predicates to pass on the controller, or it errors.
+`WhenProfile(a)` lowers to `{"fact":"profile","eq":"a"}`. `WhenProfile(a, b,
+…)` (more than one profile) lowers to the same predicate shape with an
+OR-list instead: `{"fact":"profile","in":["a","b"]}` — the destination
+matches if the fact equals *any* entry of `in` (schema v8; `hostname_contains`
+supports `in` the same way, as a substring-OR). Multiple profiles are just as
+serializable as one; `WhenProfile` never marks a task opaque.
+
+Opaque `When(func(Facts) bool)` cannot be serialized — it has no declarative
+equivalent. `RecordPlan` requires opaque predicates to pass on the
+controller (evaluated against the controller's own `DetectFacts()`), or it
+errors. Critically, an opaque predicate is only ever an *extra*
+controller-side filter: it never suppresses a task's serializable guards
+(`WhenLinux` / `WhenProfile` / `WhenHostnameContains`), which are always
+emitted into the recorded plan when present, alongside or without an opaque
+predicate. A task built as `WhenLinux()` + `When(fn)` still ships its `goos`
+guard — the opaque `fn` only gates whether recording happens at all.
+
+A task whose `When` is opaque **only** (a bare `When(fn)`, with no
+serializable guard alongside it) has nothing to ship: the condition only
+ever ran on the controller, so the recorded plan carries no guard for it at
+all. `RecordPlan` still succeeds — `Run` / `gonf <task>` applies the result
+immediately on the very host that evaluated the predicate, so there is
+nothing to lose in transit, and `gonf plan` records the same way (the
+caller's responsibility not to hand a plan recorded for this host to `gonf
+apply` on a different one). `PushTo` / `PushClusterRun` / `PushFleetRun`
+(`gonf push` / `gonf cluster` / `gonf fleet`) — which explicitly ship the
+plan to a different destination — refuse instead: the push call returns an
+error naming the offending task(s) before any SSH traffic, the same "refuse
+before mutation" contract as the privilege and cross-chunk-dep checks below.
+There is no opt-in flag to bypass this — replace the opaque predicate with
+`WhenLinux` / `WhenProfile` / `WhenHostnameContains`, or move the check out
+of `When` and into the task body (e.g. guard a `Command` with
+`options.OnlyIf`/`options.Unless`, which evaluates on the destination).
 
 ## Applying (`ApplyPlan` / `plan.Apply`)
 
@@ -325,8 +363,15 @@ Design decisions:
   `exec.Opts.Timeout` field exists for opt-in callers; wiring it globally was
   deliberately deferred (it would change apply semantics).
 
-Plan schema **version 7** adds the `systemd_timer` op: declarative install of
-a `.timer` + companion oneshot `.service` (command, OnCalendar, optional
+Plan schema **version 8** adds the `in` field to `when_begin` predicates: an
+OR-list of acceptable fact values (e.g. `WhenProfile(a, b)` now lowers to
+`{"fact":"profile","in":["a","b"]}` instead of being treated as opaque — see
+"Recording" above). An older binary that ignored `in` would evaluate the
+predicate against its empty `eq` and treat it as never matching — the same
+intent-loss bug class as previous bumps — so v7 binaries refuse v8 plans
+up-front at the header gate instead, while this binary keeps applying v1–7
+plans. Plan schema **version 7** adds the `systemd_timer` op: declarative
+install of a `.timer` + companion oneshot `.service` (command, OnCalendar, optional
 OnBootSec/Persistent/descriptions/After/Wants). An older binary that lacked
 the kind would fail at apply with `unknown op`; the version gate refuses v7
 plans up-front instead, while this binary keeps applying v1–6 plans. Plan

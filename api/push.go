@@ -48,6 +48,9 @@ func PushTo(t PushTarget, planID string, tasks ...string) error {
 	if err != nil {
 		return fmt.Errorf("record: %w", err)
 	}
+	if err := RefuseOpaqueOnlyPush("push"); err != nil {
+		return err
+	}
 	if err := remote.PushChunks(context.Background(), t, planID, ops, mem); err != nil {
 		return err
 	}
