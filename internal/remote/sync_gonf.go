@@ -137,7 +137,20 @@ func EnsureRemoteGonf(ctx context.Context, t PushTarget) (installedPath string, 
 		return "", fmt.Errorf("ensure gonf: build %s/%s: %w", goos, goarch, err)
 	}
 
-	remoteTmp := "/tmp/gonf.new." + strconv.Itoa(os.Getpid())
+	// Stage the binary under a remote directory that mktemp creates
+	// exclusively (mode 0700, owned by the SSH login user): unlike the old
+	// fixed "/tmp/gonf.new.<pid>" path, a local attacker on a shared host
+	// cannot pre-create it as a symlink or a world-writable file, and cannot
+	// read or swap its contents between the scp and the install step. The
+	// directory name's random suffix also means two concurrent pushes to the
+	// same host (even from the same controller PID) never collide.
+	remoteDir, err := createRemoteStagingDir(ctx, t)
+	if err != nil {
+		return "", fmt.Errorf("ensure gonf: mktemp: %w", err)
+	}
+	defer removeRemoteStagingDir(ctx, t, remoteDir)
+
+	remoteTmp := remoteDir + "/gonf"
 	if err := SCPRunner(ctx, localBin, t, remoteTmp); err != nil {
 		return "", fmt.Errorf("ensure gonf: scp: %w", err)
 	}
@@ -270,9 +283,53 @@ func buildGonf(ctx context.Context, goos, goarch string) (string, error) {
 	return out, nil
 }
 
+// remoteStagingPrefix names the mktemp template for the remote staging
+// directory used to sync the gonf binary. mktemp appends random
+// characters after the trailing dot, so the resulting path is unpredictable;
+// createRemoteStagingDir validates the result still has this prefix.
+const remoteStagingPrefix = "/tmp/gonf-sync."
+
+// createRemoteStagingDir creates an unpredictable, exclusively-created
+// staging directory on the remote host (mode 0700, owned by the SSH login
+// user) via `mktemp -d`. This is a plain command with no shell metacharacters
+// (no pipes, &&, subshells, or command substitution), so it runs identically
+// under sh, bash, and tcsh login shells (see probePlanVersion for the tcsh
+// constraint on FreeBSD).
+func createRemoteStagingDir(ctx context.Context, t PushTarget) (string, error) {
+	out, err := sshCapture(ctx, t, "mktemp -d "+remoteStagingPrefix+"XXXXXXXX")
+	if err != nil {
+		return "", err
+	}
+	dir := strings.TrimSpace(out)
+	// sshCapture deliberately does not fail on a non-zero remote exit (a
+	// missing binary is a normal probe outcome elsewhere), so an empty or
+	// unexpected result here must be treated as a hard failure rather than
+	// silently proceeding with a bogus staging path.
+	if dir == "" {
+		return "", fmt.Errorf("mktemp -d produced no output (remote command may have failed)")
+	}
+	if !strings.HasPrefix(dir, remoteStagingPrefix) {
+		return "", fmt.Errorf("mktemp -d returned unexpected path %q", dir)
+	}
+	return dir, nil
+}
+
+// removeRemoteStagingDir best-effort removes the remote staging directory
+// created by createRemoteStagingDir. It is called on every EnsureRemoteGonf
+// exit path (success or failure, via defer) so a staging dir is never leaked
+// under /tmp. The directory is owned by the SSH login user, so the removal
+// runs unprivileged; a failure is logged and never masks the caller's error.
+func removeRemoteStagingDir(ctx context.Context, t PushTarget, dir string) {
+	if err := SSHRunner(ctx, bytes.NewReader(nil), t.sshArgv("rm -rf "+dir)); err != nil {
+		logger.Warn("ensure gonf: failed to remove remote staging dir %s: %v", dir, err)
+	}
+}
+
 func remoteInstallCmd(t PushTarget, src, dst string) (string, error) {
-	// install(1) is portable enough on OpenBSD/NetBSD/Linux.
-	inner := fmt.Sprintf("install -m 755 %s %s && rm -f %s", src, dst, src)
+	// install(1) is portable enough on OpenBSD/NetBSD/Linux. Cleanup of src
+	// is handled by removeRemoteStagingDir (rm -rf on the whole staging
+	// dir), so this stays a single simple command with no "&&" chaining.
+	inner := fmt.Sprintf("install -m 755 %s %s", src, dst)
 	if t.User == "root" || t.User == "" && strings.HasPrefix(t.Host, "root@") {
 		return inner, nil
 	}
@@ -296,6 +353,20 @@ func remoteInstallCmd(t PushTarget, src, dst string) (string, error) {
 	}
 }
 
+// sshCaptureExec runs argv and returns its combined stdout, stderr, and exec
+// error. It is the only part of sshCapture that touches a real process, so
+// tests override it to exercise createRemoteStagingDir / probePlanVersion /
+// probeUname (and, transitively, EnsureRemoteGonf's generated argv) without a
+// real ssh connection.
+var sshCaptureExec = func(ctx context.Context, argv []string) (stdout, stderr string, err error) {
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	var so, se bytes.Buffer
+	cmd.Stdout = &so
+	cmd.Stderr = &se
+	err = cmd.Run()
+	return so.String(), se.String(), err
+}
+
 // sshCapture runs a remote command and returns combined stdout (stderr discarded
 // into the command string via redirects when callers want quiet probes).
 func sshCapture(ctx context.Context, t PushTarget, remoteCmd string) (string, error) {
@@ -303,19 +374,15 @@ func sshCapture(ctx context.Context, t PushTarget, remoteCmd string) (string, er
 		ctx = context.Background()
 	}
 	argv := t.sshArgv(remoteCmd)
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
+	stdout, stderr, err := sshCaptureExec(ctx, argv)
 	if err != nil && ctx.Err() != nil {
 		return "", fmt.Errorf("%w (ssh killed by context: %v)", ctx.Err(), err)
 	}
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 255 {
-			return "", fmt.Errorf("ssh to %s: %w (%s)", t.Destination(), err, strings.TrimSpace(stderr.String()))
+			return "", fmt.Errorf("ssh to %s: %w (%s)", t.Destination(), err, strings.TrimSpace(stderr))
 		}
 		// Remote command failed but the session worked (e.g. gonf missing).
 	}
-	return stdout.String(), nil
+	return stdout, nil
 }
