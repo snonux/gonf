@@ -48,7 +48,7 @@ func (s *Service) apply() error {
 		return err
 	}
 	if s.user && mgr != "systemd" {
-		return fmt.Errorf("Service[%s]: WithUser is only supported on systemd", s.name)
+		return fmt.Errorf("service[%s]: WithUser is only supported on systemd", s.name)
 	}
 
 	switch mgr {

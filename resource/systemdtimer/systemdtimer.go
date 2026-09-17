@@ -39,32 +39,32 @@ type SystemdTimer struct {
 	enableOnly         bool
 }
 
-func (t *SystemdTimer) SetCommand(cmd string)            { t.command = cmd }
-func (t *SystemdTimer) SetOnCalendar(v string)           { t.onCalendar = v }
-func (t *SystemdTimer) SetOnBootSec(v string)            { t.onBootSec = v }
-func (t *SystemdTimer) SetPersistent()                   { t.persistent = true }
-func (t *SystemdTimer) SetDescription(v string)          { t.description = v }
-func (t *SystemdTimer) SetServiceDescription(v string)   { t.serviceDescription = v }
-func (t *SystemdTimer) AddAfter(units ...string)         { t.after = append(t.after, units...) }
-func (t *SystemdTimer) AddWants(units ...string)         { t.wants = append(t.wants, units...) }
-func (t *SystemdTimer) SetUser()                         { t.user = true }
-func (t *SystemdTimer) SetRestart()                      { t.restart = true }
-func (t *SystemdTimer) SetEnableOnly()                   { t.enableOnly = true }
+func (t *SystemdTimer) SetCommand(cmd string)          { t.command = cmd }
+func (t *SystemdTimer) SetOnCalendar(v string)         { t.onCalendar = v }
+func (t *SystemdTimer) SetOnBootSec(v string)          { t.onBootSec = v }
+func (t *SystemdTimer) SetPersistent()                 { t.persistent = true }
+func (t *SystemdTimer) SetDescription(v string)        { t.description = v }
+func (t *SystemdTimer) SetServiceDescription(v string) { t.serviceDescription = v }
+func (t *SystemdTimer) AddAfter(units ...string)       { t.after = append(t.after, units...) }
+func (t *SystemdTimer) AddWants(units ...string)       { t.wants = append(t.wants, units...) }
+func (t *SystemdTimer) SetUser()                       { t.user = true }
+func (t *SystemdTimer) SetRestart()                    { t.restart = true }
+func (t *SystemdTimer) SetEnableOnly()                 { t.enableOnly = true }
 
 var (
-	_ opt.Absentable            = (*SystemdTimer)(nil)
-	_ opt.Dependable            = (*SystemdTimer)(nil)
-	_ opt.Commandable           = (*SystemdTimer)(nil)
-	_ opt.OnCalendarable        = (*SystemdTimer)(nil)
-	_ opt.OnBootSecable         = (*SystemdTimer)(nil)
-	_ opt.Persistentable        = (*SystemdTimer)(nil)
-	_ opt.Descriptionable       = (*SystemdTimer)(nil)
+	_ opt.Absentable             = (*SystemdTimer)(nil)
+	_ opt.Dependable             = (*SystemdTimer)(nil)
+	_ opt.Commandable            = (*SystemdTimer)(nil)
+	_ opt.OnCalendarable         = (*SystemdTimer)(nil)
+	_ opt.OnBootSecable          = (*SystemdTimer)(nil)
+	_ opt.Persistentable         = (*SystemdTimer)(nil)
+	_ opt.Descriptionable        = (*SystemdTimer)(nil)
 	_ opt.ServiceDescriptionable = (*SystemdTimer)(nil)
-	_ opt.Afterable             = (*SystemdTimer)(nil)
-	_ opt.Wantsable             = (*SystemdTimer)(nil)
-	_ opt.UserService           = (*SystemdTimer)(nil)
-	_ opt.Restartable           = (*SystemdTimer)(nil)
-	_ opt.EnableOnlyable        = (*SystemdTimer)(nil)
+	_ opt.Afterable              = (*SystemdTimer)(nil)
+	_ opt.Wantsable              = (*SystemdTimer)(nil)
+	_ opt.UserService            = (*SystemdTimer)(nil)
+	_ opt.Restartable            = (*SystemdTimer)(nil)
+	_ opt.EnableOnlyable         = (*SystemdTimer)(nil)
 )
 
 // Present registers a systemd timer that should be installed, enabled, and

@@ -1336,7 +1336,7 @@ func TestSourceTreeRelativeSymlinkDryRunParity(t *testing.T) {
 		// Converged: the destination trees are already in place (the dry
 		// destination built by hand — dry-run materializes nothing), so both
 		// modes must note everything ok, symlinks included.
-		realSummary = realApply(t)
+		_ = realApply(t)
 		if err := os.MkdirAll(filepath.Join(dryDst, "sub"), 0o755); err != nil {
 			t.Fatal(err)
 		}

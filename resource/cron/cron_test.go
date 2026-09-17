@@ -186,9 +186,7 @@ func TestAbsentWithoutCommand(t *testing.T) {
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("absent without command: %v", err)
 	}
-	if wrote != "MAILTO=root\n" && wrote != "" {
-		// no block present → may be unchanged write skip; ensure no panic path
-	}
+	// no block present → may be unchanged write skip; ensure no panic path
 	_ = wrote
 }
 

@@ -13,6 +13,19 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Lint
+        run: |
+          # Mirrors Magefile.go's Lint target: gofmt formatting check, go
+          # vet, then staticcheck (pinned via the "tool" line in go.mod, so
+          # "go tool staticcheck" resolves the same version as local runs).
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt -l found unformatted files (run 'gofmt -w'):"
+            echo "$unformatted"
+            exit 1
+          fi
+          go vet ./...
+          go tool staticcheck ./...
       - name: Unit tests
         run: go test -race -shuffle=on -count=1 ./...
       - name: Plan codec coverage gate

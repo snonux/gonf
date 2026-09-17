@@ -9,15 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-
-	"github.com/snonux/gonf/resource"
 )
 
-func resourceSetDryRun(t *testing.T) {
-	t.Helper()
-	resource.SetDryRun(true)
-	t.Cleanup(func() { resource.SetDryRun(false) })
-}
 func header() Op {
 	return Op{Op: KindPlan, Version: CurrentVersion, ID: "apply-test"}
 }

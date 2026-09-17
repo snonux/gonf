@@ -30,11 +30,9 @@ const runDirPrefix = "run-"
 // like /tmp itself: without this, a root-created root would lock out later
 // unprivileged applies on mixed-privilege hosts.
 func ApplyStagingRoot() (string, error) {
-	uid := "nouser"
+	uid := strconv.Itoa(os.Getuid())
 	if u, err := user.Current(); err == nil && u.Uid != "" {
 		uid = u.Uid
-	} else {
-		uid = strconv.Itoa(os.Getuid())
 	}
 	root := filepath.Join(os.TempDir(), "gonf-apply", uid)
 	if err := os.MkdirAll(root, 0o700); err != nil {

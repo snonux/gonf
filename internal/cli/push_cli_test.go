@@ -27,36 +27,6 @@ func hasPortPair(argv []string, port string) bool {
 	return false
 }
 
-// captureSSH installs a fake remote.SSHRunner recording every invocation.
-func captureSSH(t *testing.T) *[]sshCall {
-	t.Helper()
-	old := remote.SSHRunner
-	restoreProbe := remote.AssumeRemotePlanCurrent()
-	t.Cleanup(func() {
-		remote.SSHRunner = old
-		restoreProbe()
-	})
-	calls := &[]sshCall{}
-	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
-		var buf bytes.Buffer
-		_, _ = io.Copy(&buf, stdin)
-		*calls = append(*calls, sshCall{
-			argv:   append([]string(nil), argv...),
-			remote: argv[len(argv)-1],
-			stdin:  buf.Bytes(),
-		})
-		return nil
-	}
-	return calls
-}
-
-// sshCall captures one fake remote.SSHRunner invocation.
-type sshCall struct {
-	argv   []string
-	remote string // last argv element: the remote shell command
-	stdin  []byte // payload streamed to ssh
-}
-
 func TestTakePushFlags(t *testing.T) {
 	tests := []struct {
 		name string

@@ -10,10 +10,7 @@ import (
 	"strings"
 )
 
-var (
-	binName = "gonf"
-	mod     = "github.com/snonux/gonf"
-)
+var binName = "gonf"
 
 func run(cmd string, args ...string) error {
 	c := exec.Command(cmd, args...)
@@ -110,23 +107,6 @@ func CheckPlan() error {
 	return TestPlanFuzz()
 }
 
-func parseTotalCoverage(coverFunc string) (float64, error) {
-	lines := strings.Split(strings.TrimSpace(coverFunc), "\n")
-	if len(lines) == 0 {
-		return 0, fmt.Errorf("empty cover output")
-	}
-	last := strings.Fields(lines[len(lines)-1])
-	if len(last) < 3 || last[0] != "total:" {
-		return 0, fmt.Errorf("unexpected cover total line: %q", lines[len(lines)-1])
-	}
-	pctStr := strings.TrimSuffix(last[len(last)-1], "%")
-	var pct float64
-	if _, err := fmt.Sscanf(pctStr, "%f", &pct); err != nil {
-		return 0, fmt.Errorf("parse coverage %q: %w", pctStr, err)
-	}
-	return pct, nil
-}
-
 func parseCodecCoverage(coverFunc string) (float64, error) {
 	var sum float64
 	var n int
@@ -159,10 +139,36 @@ func TestDNF() error {
 	return run("env", "GONF_RUN_DNF_TESTS=1", "go", "test", "-v", "-count=1", "./resource/pkg/...")
 }
 
-// Lint runs go vet.
+// Lint runs gofmt's formatting check, go vet, and staticcheck.
 func Lint() error {
 	fmt.Println("linting...")
-	return run("go", "vet", "./...")
+	if err := lintGofmt(); err != nil {
+		return err
+	}
+	if err := run("go", "vet", "./..."); err != nil {
+		return err
+	}
+	// staticcheck is pinned as a Go tool dependency (see the "tool" line in
+	// go.mod), so "go tool staticcheck" always resolves the same version
+	// without requiring a separate global install, locally or in CI.
+	return run("go", "tool", "staticcheck", "./...")
+}
+
+// lintGofmt fails with the list of offending files if any .go file (outside
+// vendored/generated paths, of which this repo currently has none) is not
+// gofmt-formatted. "gofmt -l" only lists file names and exits 0 even when it
+// finds unformatted files, so unlike go vet/staticcheck its failure has to be
+// derived from its output rather than its exit code.
+func lintGofmt() error {
+	out, err := exec.Command("gofmt", "-l", ".").Output()
+	if err != nil {
+		return fmt.Errorf("gofmt -l: %w", err)
+	}
+	files := strings.TrimSpace(string(out))
+	if files == "" {
+		return nil
+	}
+	return fmt.Errorf("gofmt -l found unformatted files (run 'gofmt -w'):\n%s", files)
 }
 
 // Install builds and installs the binary to $GOPATH/bin.
