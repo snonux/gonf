@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/api/options"
@@ -192,6 +193,37 @@ func TestCLIApplyDryRun(t *testing.T) {
 	}
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
 		t.Fatal("dry-run must not create file")
+	}
+}
+
+// TestCLICmdTimeoutFlag pins the "-cmd-timeout" wiring added for task x5: the
+// CLI's global flag must reach api.SetCommandTimeout (and, through it,
+// internal/exec's process-wide default), so an operator can override the
+// default per-command timeout without touching resource-package code. The
+// flag is additive (a new optional top-level flag with a sensible default
+// equal to the prior process-wide default), so this test does not need to
+// exercise every existing CLI flag combination for regressions.
+func TestCLICmdTimeoutFlag(t *testing.T) {
+	orig := api.CommandTimeout()
+	t.Cleanup(func() { api.SetCommandTimeout(orig) })
+
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+
+	api.ResetTasks()
+	resource.ResetRepository()
+	root := t.TempDir()
+	target := filepath.Join(root, "x")
+	api.Task("cli_cmd_timeout", "", func() {
+		api.File(target, options.WithContent("ok"))
+	})
+
+	os.Args = []string{"gonf", "-cmd-timeout", "50ms", "cli_cmd_timeout"}
+	if code := CLI(); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if got := api.CommandTimeout(); got != 50*time.Millisecond {
+		t.Fatalf("CommandTimeout() = %v, want 50ms", got)
 	}
 }
 

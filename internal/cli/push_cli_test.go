@@ -206,7 +206,7 @@ func TestCLIPushWithSSHOpts(t *testing.T) {
 	// Leading ssh opts are not push FlagSet flags (takePushFlags peels them).
 	// The generated ConnectTimeout option sits between the ssh opts and the
 	// destination, so match position-independently.
-	if code := cliPush([]string{"-id", "x", "-p", "2222", "rex@host", "push_opts"}); code != 0 {
+	if code := cliPush(context.Background(), []string{"-id", "x", "-p", "2222", "rex@host", "push_opts"}); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
 	if len(saw) < 5 || !hasPortPair(saw, "2222") || saw[len(saw)-2] != "rex@host" {
@@ -234,7 +234,7 @@ func TestCLIPushGlobalDryRun(t *testing.T) {
 		return nil
 	}
 
-	if code := cliPush([]string{"host", "push_dry"}); code != 0 {
+	if code := cliPush(context.Background(), []string{"host", "push_dry"}); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
 	if len(saw) < 3 || saw[len(saw)-1] != "gonf apply -n -" {
@@ -243,7 +243,7 @@ func TestCLIPushGlobalDryRun(t *testing.T) {
 }
 
 func TestCLIPushLoneID(t *testing.T) {
-	if code := cliPush([]string{"-id"}); code != 2 {
+	if code := cliPush(context.Background(), []string{"-id"}); code != 2 {
 		t.Fatalf("exit %d want 2", code)
 	}
 }

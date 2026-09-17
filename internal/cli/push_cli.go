@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -11,7 +12,7 @@ import (
 	"github.com/snonux/gonf/resource"
 )
 
-func cliPush(args []string) int {
+func cliPush(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("push", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	dryRun := fs.Bool("dry-run", false, "Remote dry-run (-n on apply)")
@@ -51,7 +52,10 @@ func cliPush(args []string) int {
 	}
 
 	t := api.PushTarget{Host: pos[0], ExtraSSH: sshOpts, Privilege: mode}
-	if err := api.PushTo(t, *planID, pos[1:]...); err != nil {
+	// PushToContext (not PushTo): "gonf push" is a CLI entry point with a
+	// signal-derived context, so SIGINT/SIGTERM should tear down an in-flight
+	// single-host push exactly like the fleet fan-out already does.
+	if err := api.PushToContext(ctx, t, *planID, pos[1:]...); err != nil {
 		fmt.Fprintf(os.Stderr, "push: %v\n", err)
 		return 1
 	}

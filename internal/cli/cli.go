@@ -11,6 +11,7 @@ import (
 
 	"github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/internal"
+	"github.com/snonux/gonf/internal/exec"
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/plan"
@@ -47,9 +48,14 @@ func CLI() int {
 	dryRun := fs.Bool("dry-run", false, "Preview changes without applying them")
 	dryRunShort := fs.Bool("n", false, "Alias for -dry-run")
 	privFlag := fs.String("privilege", "none", "Privilege helper for Privileged() tasks: none|sudo|doas")
+	cmdTimeout := fs.Duration("cmd-timeout", exec.DefaultTimeout(), "default per-command timeout for backend execs (package manager, systemctl, crontab, ...; 0 or negative keeps the current default)")
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return 2
+	}
+
+	if *cmdTimeout > 0 {
+		api.SetCommandTimeout(*cmdTimeout)
 	}
 
 	switch {
@@ -110,7 +116,7 @@ func CLI() int {
 	case "apply":
 		return cliApply(names[1:])
 	case "push":
-		return cliPush(names[1:])
+		return cliPush(ctx, names[1:])
 	case "cluster":
 		return cliCluster(ctx, names[1:])
 	case "fleet":
@@ -123,7 +129,11 @@ func CLI() int {
 		return cliFleets()
 	}
 
-	if err := api.Run(names...); err != nil {
+	// RunContext (not Run): this is the CLI process entry point, so a local
+	// apply's elevated sudo/doas re-exec should be killed by SIGINT/SIGTERM
+	// like the fleet fan-out already is, instead of only ever timing out via
+	// ApplyChunksContext's DefaultChunkTimeout.
+	if err := api.RunContext(ctx, names...); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
@@ -387,7 +397,7 @@ func verifyStickyDirOwned(path string) error {
 }
 
 func printUsage() {
-	fmt.Fprintln(os.Stderr, "usage: gonf [-list] [-version] [-plan-version] [-profile=...] [-verbose|-quiet] [-dry-run|-n] [-privilege=none|sudo|doas] <task> [task...]")
+	fmt.Fprintln(os.Stderr, "usage: gonf [-list] [-version] [-plan-version] [-profile=...] [-verbose|-quiet] [-dry-run|-n] [-privilege=none|sudo|doas] [-cmd-timeout 5m] <task> [task...]")
 	fmt.Fprintln(os.Stderr, "       gonf plan [-o dir|-stdout] [-id name] <task> [task...]")
 	fmt.Fprintln(os.Stderr, "       gonf apply [-n|-dry-run] [-apply-dir dir] <plan.jsonl|->")
 	fmt.Fprintln(os.Stderr, "       gonf push [-n] [-id name] [-privilege=...] [-- ssh-args...] user@host <task> [task...]")
