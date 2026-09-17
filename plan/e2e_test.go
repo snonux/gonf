@@ -662,6 +662,21 @@ func TestE2ESyncDirTemplateParamStableAcrossPlanDirs(t *testing.T) {
 // packageDraft read the raw template bytes into content_b64 with no
 // template signal on the op, so plan.Apply's applyFile wrote the literal
 // "{{.Param}}" text to the destination instead of rendering it.
+//
+// {{.Param}} alone is not enough to distinguish "rendered at record time"
+// from "rendered at apply time on the destination": it is bound to the
+// source path, a value that is identical during RecordPlan and plan.Apply
+// in this test (same process). So this test also templates
+// {{.GONF_G5_TOKEN}}, an arbitrary env var (applyTemplateToContent seeds
+// the template data map from os.Environ(), see resource/file/file.go), and
+// sets it to a DIFFERENT value between RecordPlan and plan.Apply — mirroring
+// the t.Setenv("HOME", home) / t.Setenv("HOME", home2) pattern used above in
+// TestE2EFactWhenBothBranches. The rendered destination must reflect the
+// apply-time value, proving rendering genuinely happens on plan.Apply and
+// not inside RecordPlan/packageDraft. A regression that pre-rendered the
+// ".tmpl" source during packageDraft would bake in the record-time value
+// and this assertion would catch it (TestE2EFileTemplateSourceRendersThroughPlan's
+// {{.Param}} assertion alone would not, since .Param never changes here).
 func TestE2EFileTemplateSourceRendersThroughPlan(t *testing.T) {
 	api.ResetTasks()
 	resource.ResetRepository()
@@ -673,10 +688,12 @@ func TestE2EFileTemplateSourceRendersThroughPlan(t *testing.T) {
 
 	work := t.TempDir()
 	src := filepath.Join(work, "app.conf.tmpl")
-	if err := os.WriteFile(src, []byte("value={{.Param}}\n"), 0o640); err != nil {
+	if err := os.WriteFile(src, []byte("value={{.Param}}\ntoken={{.GONF_G5_TOKEN}}\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	dst := filepath.Join(work, "app.conf")
+
+	t.Setenv("GONF_G5_TOKEN", "record-time-value")
 
 	api.Task("tmpl_file_e2e", "file template e2e", func() {
 		api.File(dst, options.WithSource(src))
@@ -697,6 +714,10 @@ func TestE2EFileTemplateSourceRendersThroughPlan(t *testing.T) {
 		t.Fatalf("DecodePlanBytes: %v", err)
 	}
 
+	// Change the env var AFTER recording but BEFORE applying: only
+	// destination-time rendering can pick this up.
+	t.Setenv("GONF_G5_TOKEN", "apply-time-value")
+
 	facts := plan.Facts{GOOS: runtime.GOOS, Profile: "test", Hostname: "localhost"}
 	if err := plan.Apply(decoded, facts, planDir); err != nil {
 		t.Fatalf("plan.Apply: %v", err)
@@ -706,9 +727,9 @@ func TestE2EFileTemplateSourceRendersThroughPlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read rendered file: %v", err)
 	}
-	want := "value=" + src + "\n"
+	want := "value=" + src + "\ntoken=apply-time-value\n"
 	if string(data) != want {
-		t.Fatalf("rendered content = %q, want %q (raw template text means plan.Apply never rendered it)", data, want)
+		t.Fatalf("rendered content = %q, want %q (raw template text, or a record-time token, means plan.Apply did not render on the destination at apply time)", data, want)
 	}
 }
 
