@@ -59,6 +59,17 @@ var SCPRunner = func(ctx context.Context, localPath string, t PushTarget, remote
 // meaning — see scpRejectedOptLetters.
 const scpPassThroughOptLetters = "oiFJcA"
 
+// scpPassThroughTakesValueLetters is the subset of scpPassThroughOptLetters
+// that carries an argument in SEPARATE form (e.g. "-o value", not the joined
+// "-ovalue"). -A (agent forwarding) is excluded: it is boolean in both ssh
+// and scp and never has a following value of its own.
+//
+// scpArgv's token-classification loop uses this list to decide, purely from
+// the CURRENT token, whether the NEXT token is unconditionally that flag's
+// value — see the loop's doc comment for why this replaces guessing a
+// token's role from its own shape.
+const scpPassThroughTakesValueLetters = "oiFJc"
+
 // scpRejectedOptLetters are ssh(1) option letters that scpArgv refuses to
 // forward to scp. Three different hazards land here, and none of them is
 // "scp will just print usage and exit" — that clean-rejection case would be
@@ -140,92 +151,127 @@ const scpRejectedOptLetters = "LRDWetTxSf"
 // only caller (EnsureRemoteGonf) already adds that tag once when it wraps
 // the error, and a second "scp:" here used to produce a double-prefixed
 // "ensure gonf: scp: scp: ExtraSSH option ..." message.
+//
+// # Classification is by explicit state, never by a value token's own shape
+//
+// This is the third fix to the same defect class in this function (see the
+// git history for 97e0524/058cea1's two earlier patches). Both prior fixes
+// tried to guess, from a token's own shape (does it start with "-l"? does
+// its second character look like 'p'/'P'/'l'? does it start with '-' at
+// all?), whether the token was itself a flag or the value that belongs to a
+// PRECEDING separate-form flag. Each fix closed one shape collision and left
+// another: a value could coincidentally match the joined-flag shape, and if
+// that value itself started with '-' (e.g. ExtraSSH == []string{"-i",
+// "-lweird"}, where "-lweird" is meant literally as -i's value, not a
+// flag), the a[0]=='-' guard added in the second fix stopped protecting it.
+//
+// The loop below eliminates the whole class structurally instead of adding
+// a fourth shape check: it walks ExtraSSH by INDEX, and the moment a token
+// is identified as a flag that takes a value in separate form (-l, -p, -P,
+// or a bare -o/-i/-F/-J/-c), it unconditionally consumes t.ExtraSSH[i+1] as
+// that flag's value and advances i past it — with NO further classification
+// of that value token. A token only ever reaches the flag-shape checks
+// (joined-form detection, pass-through/reject/default-deny) when it was NOT
+// already consumed as a preceding flag's value. This makes "is this token a
+// flag or a value" a property of the LOOP'S STATE (was the previous token a
+// value-taking flag?) rather than a guess re-derived from the token's own
+// characters on every iteration, so no value's shape — however flag-like —
+// can ever cause it to be misclassified.
 func scpArgv(t PushTarget, localPath, remotePath string) ([]string, error) {
 	argv := []string{"scp"}
 	port := t.Port
-	for i := 0; i < len(t.ExtraSSH); i++ {
+	n := len(t.ExtraSSH)
+	for i := 0; i < n; i++ {
 		a := t.ExtraSSH[i]
 
-		// Separate "-p PORT" / "-P PORT" -> scp's "-P PORT".
-		if (a == "-p" || a == "-P") && i+1 < len(t.ExtraSSH) {
-			if p, err := strconv.Atoi(t.ExtraSSH[i+1]); err == nil {
-				if port == 0 {
-					port = p
-				}
-				i++
-				continue
+		// Separate-form "-p PORT" / "-P PORT" -> scp's "-P PORT". Because
+		// this branch matches on the CURRENT token being exactly "-p"/"-P",
+		// the following token is unconditionally consumed as the port value
+		// below — it is never itself run through any flag-shape check, no
+		// matter what it looks like.
+		if a == "-p" || a == "-P" {
+			if i+1 >= n {
+				return nil, fmt.Errorf(`ExtraSSH option %q is missing a value; want "-p PORT" or "-P PORT"`, a)
 			}
-		}
-		// Joined "-pPORT" / "-PPORT" -> scp's "-P PORT". The a[0] == '-'
-		// guard is required: without it, this also matched a plain VALUE
-		// token that happens to parse as 'p'/'P' followed by digits (e.g.
-		// the separate-form value that follows some other flag), silently
-		// reinterpreting it as a joined port flag instead of forwarding it
-		// verbatim.
-		if len(a) > 2 && a[0] == '-' && (a[1] == 'p' || a[1] == 'P') {
-			if p, err := strconv.Atoi(a[2:]); err == nil {
-				if port == 0 {
-					port = p
-				}
-				continue
+			val := t.ExtraSSH[i+1]
+			i++
+			p, err := strconv.Atoi(val)
+			if err != nil {
+				return nil, fmt.Errorf(`ExtraSSH option %q has a non-numeric port %q; want "-p PORT" or "-P PORT"`, a, val)
 			}
+			if port == 0 {
+				port = p
+			}
+			continue
 		}
-
-		// Separate "-l USER" -> scp's "-o User=USER".
-		if a == "-l" && i+1 < len(t.ExtraSSH) {
+		// Separate-form "-l USER" -> scp's "-o User=USER". Same unconditional
+		// lookahead-consumption as above.
+		if a == "-l" {
+			if i+1 >= n {
+				return nil, fmt.Errorf(`ExtraSSH option %q is missing a login-user value; want "-l USER"`, a)
+			}
 			argv = append(argv, "-o", "User="+t.ExtraSSH[i+1])
 			i++
 			continue
 		}
-		// Joined "-lUSER" -> scp's "-o User=USER". The a[0] == '-' guard is
-		// required: without it, this also matched a plain VALUE token whose
-		// second character happens to be 'l' — e.g. the "/local/id_rsa"
-		// half of a separate-form ["-i", "/local/id_rsa"], or the
-		// "ClearAllForwardings=yes" half of a separate-form ["-o",
-		// "ClearAllForwardings=yes"] — silently corrupting it into a bogus
-		// "-o User=..." and leaving the preceding flag dangling with no
-		// value.
+
+		// Joined "-pPORT" / "-PPORT" -> scp's "-P PORT". This only matches a
+		// token that is COMPLETE in itself (len(a) > 2, starts with '-'), so
+		// there is no following value to consume or misclassify.
+		if len(a) > 2 && a[0] == '-' && (a[1] == 'p' || a[1] == 'P') {
+			p, err := strconv.Atoi(a[2:])
+			if err != nil {
+				return nil, fmt.Errorf(`ExtraSSH option %q has a non-numeric port; want "-pPORT" or "-PPORT"`, a)
+			}
+			if port == 0 {
+				port = p
+			}
+			continue
+		}
+		// Joined "-lUSER" -> scp's "-o User=USER". Likewise complete in
+		// itself: nothing follows it to consume.
 		if len(a) > 2 && a[0] == '-' && a[1] == 'l' {
 			argv = append(argv, "-o", "User="+a[2:])
 			continue
 		}
 
-		// Any "-p"/"-P"/"-l" token that reaches this point started with one
-		// of those letters but did not match a complete pattern above: a
-		// bare trailing "-p"/"-P"/"-l" with no following value, or a
-		// "-p"/"-P" (joined or separate) whose value is not a valid port
-		// number. Falling through to raw pass-through here would reproduce
-		// the exact bug this function exists to fix, just for malformed
-		// rather than well-formed input, so these are rejected explicitly
-		// with a message that names the expected shape.
-		if len(a) >= 2 && a[0] == '-' && (a[1] == 'p' || a[1] == 'P') {
-			return nil, fmt.Errorf(`ExtraSSH option %q is missing a value or has a non-numeric port; want "-p PORT", "-P PORT", "-pPORT", or "-PPORT"`, a)
-		}
-		if len(a) >= 2 && a[0] == '-' && a[1] == 'l' {
-			return nil, fmt.Errorf(`ExtraSSH option %q is missing a login-user value; want "-l USER" or "-lUSER"`, a)
-		}
-
 		if len(a) >= 2 && a[0] == '-' {
-			if strings.ContainsRune(scpPassThroughOptLetters, rune(a[1])) {
+			letter := a[1]
+			switch {
+			case strings.ContainsRune(scpPassThroughOptLetters, rune(letter)):
 				argv = append(argv, a)
+				// Bare separate-form flag (e.g. "-o", not the joined
+				// "-oFoo=Bar") whose letter takes a value: the very next
+				// ExtraSSH token is unconditionally that value and is
+				// appended as-is, with no flag-shape check of its own —
+				// this is what stops a value like "-lweird" or
+				// "-p2222lookalike" from ever being reinterpreted as a
+				// flag, regardless of what it starts with or looks like.
+				if len(a) == 2 && strings.ContainsRune(scpPassThroughTakesValueLetters, rune(letter)) {
+					if i+1 >= n {
+						return nil, fmt.Errorf("ExtraSSH option %q is missing a value", a)
+					}
+					argv = append(argv, t.ExtraSSH[i+1])
+					i++
+				}
 				continue
-			}
-			if strings.ContainsRune(scpRejectedOptLetters, rune(a[1])) {
+			case strings.ContainsRune(scpRejectedOptLetters, rune(letter)):
 				return nil, fmt.Errorf("ExtraSSH option %q is ssh-only, means something different under scp, or would hang the scp subprocess, and cannot be used for the gonf binary sync step; remove it from ExtraSSH", a)
+			default:
+				// Default-deny: a flag letter that is neither an explicit
+				// pass-through nor an explicit rejection is not known to be
+				// safe to forward (see the scpPassThroughOptLetters doc
+				// comment for why "unrecognized" cannot be assumed to mean
+				// "harmless").
+				return nil, fmt.Errorf("ExtraSSH option %q is not a recognized scp option for the gonf binary sync step; add it to scpArgv's allow/deny list if it is genuinely safe, or remove it from ExtraSSH", a)
 			}
-			// Default-deny: a flag letter that is neither an explicit
-			// pass-through nor an explicit rejection is not known to be
-			// safe to forward (see the scpPassThroughOptLetters doc comment
-			// for why "unrecognized" cannot be assumed to mean "harmless").
-			return nil, fmt.Errorf("ExtraSSH option %q is not a recognized scp option for the gonf binary sync step; add it to scpArgv's allow/deny list if it is genuinely safe, or remove it from ExtraSSH", a)
 		}
 
-		// Not a flag token at all: this is the plain value that follows a
-		// pass-through option given in separate form (e.g. the
-		// "StrictHostKeyChecking=yes" half of ["-o",
-		// "StrictHostKeyChecking=yes"]) — the pass-through branch above
-		// appends only the flag itself and lets the loop reach this token
-		// next, so it must still be forwarded verbatim.
+		// A token that both (a) does not start with '-' and (b) was not
+		// already consumed above as a preceding flag's value should not
+		// normally occur in well-formed ExtraSSH, but there is nothing else
+		// it could be — forward it verbatim rather than silently dropping
+		// it.
 		argv = append(argv, a)
 	}
 	argv = append(argv, "-o", "ConnectTimeout="+sshConnectTimeout)

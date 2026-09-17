@@ -222,6 +222,27 @@ func TestSCPArgvExtraSSHTranslation(t *testing.T) {
 			wantContains: []string{"-c xP80"},
 			wantAbsent:   []string{"-P 80"},
 		},
+		// Round-3 regression coverage: the a[0]=='-' guard added for the
+		// round-2 fix only protects against a value that does NOT itself
+		// start with '-'. A value that itself starts with '-' and happens to
+		// match the joined -l/-p/-P shape (e.g. "-lweird" as the literal
+		// value of a preceding "-i") was still misclassified as a flag,
+		// corrupting the argv. The index-based rewrite fixes this
+		// structurally: once "-i"/"-o" is seen in separate form, the very
+		// next token is unconditionally consumed as its value and never
+		// re-examined for its own flag-ness, no matter what it starts with.
+		{
+			name:         "separate -i value that itself looks like a joined -l flag is forwarded literally, not corrupted into -o User=",
+			extraSSH:     []string{"-i", "-lweird"},
+			wantContains: []string{"-i -lweird"},
+			wantAbsent:   []string{"-o User=weird", "-o User="},
+		},
+		{
+			name:         "separate -o value that itself looks like a joined -p flag is forwarded literally, not reinterpreted as a port",
+			extraSSH:     []string{"-o", "-p2222lookalike"},
+			wantContains: []string{"-o -p2222lookalike"},
+			wantAbsent:   []string{"-P 2222"},
+		},
 		{name: "-L local port-forward rejected", extraSSH: []string{"-L", "8080:localhost:80"}, wantErr: true},
 		{name: "-R remote port-forward rejected", extraSSH: []string{"-R", "8080:localhost:80"}, wantErr: true},
 		{name: "-D dynamic port-forward rejected (scp -D means sftp-server path)", extraSSH: []string{"-D", "1080"}, wantErr: true},
@@ -250,6 +271,12 @@ func TestSCPArgvExtraSSHTranslation(t *testing.T) {
 		{name: "bare trailing -l with no value is rejected", extraSSH: []string{"-l"}, wantErr: true},
 		{name: "bare trailing -p with no value is rejected", extraSSH: []string{"-p"}, wantErr: true},
 		{name: "bare trailing -P with no value is rejected", extraSSH: []string{"-P"}, wantErr: true},
+		// The index-based rewrite consumes t.ExtraSSH[i+1] unconditionally
+		// once a separate-form value-taking flag is seen; this must be a
+		// clear "missing a value" error, not an index-out-of-range panic,
+		// when that flag is the very last ExtraSSH token.
+		{name: "bare trailing -i (pass-through, separate form) with no value is rejected, not a panic", extraSSH: []string{"-i"}, wantErr: true},
+		{name: "bare trailing -o (pass-through, separate form) with no value is rejected, not a panic", extraSSH: []string{"-o"}, wantErr: true},
 		{name: "separate -p with non-numeric value is rejected", extraSSH: []string{"-p", "notaport"}, wantErr: true},
 		{name: "separate -P with non-numeric value is rejected", extraSSH: []string{"-P", "notaport"}, wantErr: true},
 		{name: "joined -pPORT with non-numeric value is rejected", extraSSH: []string{"-pnotaport"}, wantErr: true},
