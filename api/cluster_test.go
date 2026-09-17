@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/snonux/gonf/internal/remote"
+	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -453,5 +454,111 @@ func TestPushClusterDryRun(t *testing.T) {
 	}
 	if sawRemote != "gonf apply -n -" {
 		t.Fatalf("remote=%q", sawRemote)
+	}
+}
+
+// TestPushHostsSharedByClusterAndFleet confirms PushClusterRun and
+// PushFleetRun bottom out in the exact same pushHosts helper: calling it
+// directly, once per "path", must push to every host exactly once either
+// way. This is the (a) requirement from task n5 — proving the two entry
+// points share one push pipeline instead of each carrying its own copy of
+// the targets/labels/Fanout loop.
+func TestPushHostsSharedByClusterAndFleet(t *testing.T) {
+	ResetInventory()
+	ResetTasks()
+	resource.ResetRepository()
+	Task("shared_push", "", func() {})
+
+	h1 := Host("sh1", WithSSHHost("sh1.example"))
+	h2 := Host("sh2", WithSSHHost("sh2.example"))
+
+	old := remote.SSHRunner
+	restoreProbe := remote.AssumeRemotePlanCurrent()
+	t.Cleanup(func() {
+		remote.SSHRunner = old
+		restoreProbe()
+	})
+	var calls atomic.Int32
+	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
+		calls.Add(1)
+		_, _ = io.Copy(io.Discard, stdin)
+		return nil
+	}
+
+	mem := plan.NewMemoryStore()
+	ops, err := RecordPlanTo("shared-test", mem, "shared_push")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// "cluster-shaped" call.
+	if err := pushHosts(context.Background(), "cluster-label", "shared-test", []HostRef{h1, h2}, 2, remote.DefaultHostTimeout, ops, mem); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("cluster-shaped pushHosts calls=%d, want 2", calls.Load())
+	}
+
+	// "fleet-group-shaped" call: same helper, same hosts, different label —
+	// exactly how PushFleetRun invokes it once per member cluster group.
+	calls.Store(0)
+	if err := pushHosts(context.Background(), "fleet-group-label", "shared-test", []HostRef{h1, h2}, 2, remote.DefaultHostTimeout, ops, mem); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("fleet-group-shaped pushHosts calls=%d, want 2", calls.Load())
+	}
+}
+
+// TestPushFleetHonorsClusterParallel is the regression test for the fleet
+// parallelism bug: a cluster with a distinctive Parallel(n) (here 1, fully
+// serial) must still be pushed at that concurrency when reached through a
+// fleet, not at defaultClusterParallelism (5). Before the n5 fix,
+// PushFleetRun always used defaultClusterParallelism for the whole fleet
+// fan-out regardless of each member cluster's own Parallel(n) setting; with
+// 3 hosts and a default limit of 5, that bug would let all 3 hosts push
+// concurrently (maxFlight would land at 3, not 1). Reverting the
+// PushFleetRun fix (restoring the flat defaultClusterParallelism fan-out)
+// makes this test fail, confirming it actually catches the original bug.
+func TestPushFleetHonorsClusterParallel(t *testing.T) {
+	ResetInventory()
+	ResetTasks()
+	resource.ResetRepository()
+	Task("fleet_serial_via_fleet", "", func() {})
+
+	Cluster("fragile",
+		Host("fr1", WithSSHHost("fr1.example")),
+		Host("fr2", WithSSHHost("fr2.example")),
+		Host("fr3", WithSSHHost("fr3.example")),
+	).Parallel(1) // fragile/rate-limited hosts: one push at a time, by design.
+	Fleet("homelab", MustCluster("fragile"))
+
+	old := remote.SSHRunner
+	restoreProbe := remote.AssumeRemotePlanCurrent()
+	t.Cleanup(func() {
+		remote.SSHRunner = old
+		restoreProbe()
+	})
+
+	var inFlight, maxFlight atomic.Int32
+	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
+		n := inFlight.Add(1)
+		for {
+			cur := maxFlight.Load()
+			if n <= cur || maxFlight.CompareAndSwap(cur, n) {
+				break
+			}
+		}
+		defer inFlight.Add(-1)
+		time.Sleep(30 * time.Millisecond)
+		_, _ = io.Copy(io.Discard, stdin)
+		return nil
+	}
+
+	if err := PushFleet("homelab", "fleet_serial_via_fleet"); err != nil {
+		t.Fatal(err)
+	}
+	if maxFlight.Load() != 1 {
+		t.Fatalf("maxFlight=%d, want 1: fleet push must honor cluster %q's own Parallel(1), not defaultClusterParallelism", maxFlight.Load(), "fragile")
 	}
 }

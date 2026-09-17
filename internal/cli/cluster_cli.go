@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/internal/remote"
@@ -59,71 +60,85 @@ func cliFleets() int {
 	return 0
 }
 
-func cliFleet(ctx context.Context, args []string) int {
-	fs := flag.NewFlagSet("fleet", flag.ContinueOnError)
+// pushFlags holds the flags shared by `gonf cluster` and `gonf fleet` — the
+// two subcommands take an identical flag set (-n/-dry-run, -id, -j,
+// -host-timeout) followed by <name> <task> [task...], and only differ in
+// which api.Push*Run function they call and in the "cluster"/"fleet" word
+// used for their usage text and default plan id. parsePushFlags is the one
+// shared parser; cliCluster/cliFleet used to each carry their own
+// near-identical copy of it, including the plan-ID-default calculation.
+type pushFlags struct {
+	dryRun      bool
+	planID      string
+	jobs        int
+	hostTimeout time.Duration
+	name        string
+	tasks       []string
+}
+
+// parsePushFlags parses the `gonf cluster`/`gonf fleet` flag set. kind is
+// "cluster" or "fleet" (used for the flagset name, -id default, and usage
+// text). ok is false when parsing failed or usage was printed; the caller
+// should return exitCode immediately in that case.
+func parsePushFlags(kind string, args []string) (pf pushFlags, exitCode int, ok bool) {
+	fs := flag.NewFlagSet(kind, flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	dryRun := fs.Bool("dry-run", false, "Remote dry-run (-n on apply)")
 	dryRunShort := fs.Bool("n", false, "Alias for -dry-run")
-	planID := fs.String("id", "", "plan id written into the header (default fleet-<name>)")
-	jobs := fs.Int("j", 0, "override fleet fan-out parallelism for this run")
+	planID := fs.String("id", "", fmt.Sprintf("plan id written into the header (default %s-<name>)", kind))
+	jobs := fs.Int("j", 0, fmt.Sprintf("override %s fan-out parallelism for this run", kind))
 	hostTimeout := fs.Duration("host-timeout", remote.DefaultHostTimeout, "per-host push timeout (all chunks; 0 = unlimited)")
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return pushFlags{}, 2, false
 	}
 	pos := fs.Args()
 	if len(pos) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: gonf fleet [-n|-dry-run] [-j N] [-id name] [-host-timeout 10m] <fleet> <task> [task...]")
-		return 2
+		fmt.Fprintf(os.Stderr, "usage: gonf %s [-n|-dry-run] [-j N] [-id name] [-host-timeout 10m] <%s> <task> [task...]\n", kind, kind)
+		return pushFlags{}, 2, false
+	}
+	name := pos[0]
+	id := *planID
+	if id == "" {
+		id = kind + "-" + name
+	}
+	return pushFlags{
+		dryRun:      *dryRun || *dryRunShort,
+		planID:      id,
+		jobs:        *jobs,
+		hostTimeout: *hostTimeout,
+		name:        name,
+		tasks:       pos[1:],
+	}, 0, true
+}
+
+func cliFleet(ctx context.Context, args []string) int {
+	pf, exitCode, ok := parsePushFlags("fleet", args)
+	if !ok {
+		return exitCode
 	}
 	// Escalate-only: a top-level "gonf -n fleet ..." already set this via
 	// CLI()'s unconditional call before dispatch; don't stomp it back to
 	// false just because this subcommand's own flags didn't repeat -n.
-	if *dryRun || *dryRunShort {
+	if pf.dryRun {
 		resource.SetDryRun(true)
 	}
-	name := pos[0]
-	tasks := pos[1:]
-	id := *planID
-	if id == "" {
-		id = "fleet-" + name
-	}
-	if err := api.PushFleetRun(ctx, name, id, *jobs, *hostTimeout, tasks...); err != nil {
+	if err := api.PushFleetRun(ctx, pf.name, pf.planID, pf.jobs, pf.hostTimeout, pf.tasks...); err != nil {
 		fmt.Fprintf(os.Stderr, "fleet: %v\n", err)
 		return 1
 	}
 	return 0
 }
 
-
 func cliCluster(ctx context.Context, args []string) int {
-	fs := flag.NewFlagSet("cluster", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	dryRun := fs.Bool("dry-run", false, "Remote dry-run (-n on apply)")
-	dryRunShort := fs.Bool("n", false, "Alias for -dry-run")
-	planID := fs.String("id", "", "plan id written into the header (default cluster-<name>)")
-	jobs := fs.Int("j", 0, "override cluster parallelism for this run")
-	hostTimeout := fs.Duration("host-timeout", remote.DefaultHostTimeout, "per-host push timeout (all chunks; 0 = unlimited)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	pf, exitCode, ok := parsePushFlags("cluster", args)
+	if !ok {
+		return exitCode
 	}
-	pos := fs.Args()
-	if len(pos) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: gonf cluster [-n|-dry-run] [-j N] [-id name] [-host-timeout 10m] <cluster> <task> [task...]")
-		return 2
-	}
-	// Escalate-only: a top-level "gonf -n cluster ..." already set this via
-	// CLI()'s unconditional call before dispatch; don't stomp it back to
-	// false just because this subcommand's own flags didn't repeat -n.
-	if *dryRun || *dryRunShort {
+	// Escalate-only: see cliFleet.
+	if pf.dryRun {
 		resource.SetDryRun(true)
 	}
-	name := pos[0]
-	tasks := pos[1:]
-	id := *planID
-	if id == "" {
-		id = "cluster-" + name
-	}
-	if err := api.PushClusterRun(ctx, name, id, *jobs, *hostTimeout, tasks...); err != nil {
+	if err := api.PushClusterRun(ctx, pf.name, pf.planID, pf.jobs, pf.hostTimeout, pf.tasks...); err != nil {
 		fmt.Fprintf(os.Stderr, "cluster: %v\n", err)
 		return 1
 	}

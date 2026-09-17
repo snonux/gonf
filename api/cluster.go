@@ -410,7 +410,8 @@ func PushCluster(name string, tasks ...string) error {
 // overrides through — planID ("" → cluster-<name>), parallelOverride (> 0
 // overrides the cluster's parallelism), and hostTimeout (per-host push bound;
 // <= 0 means unlimited). The per-host transport fan-out itself lives in
-// internal/remote (remote.Fanout).
+// internal/remote (remote.Fanout); the record-once-then-fan-out plumbing is
+// shared with PushFleetRun via pushHosts.
 func PushClusterRun(ctx context.Context, name, planID string, parallelOverride int, hostTimeout time.Duration, tasks ...string) error {
 	if len(tasks) == 0 {
 		return fmt.Errorf("cluster %q: no tasks", name)
@@ -432,6 +433,32 @@ func PushClusterRun(ctx context.Context, name, planID string, parallelOverride i
 		planID = "cluster-" + name
 	}
 
+	mem := plan.NewMemoryStore()
+	ops, err := RecordPlanTo(planID, mem, tasks...)
+	if err != nil {
+		return fmt.Errorf("record: %w", err)
+	}
+	if err := RefuseOpaqueOnlyPush(fmt.Sprintf("cluster %q", name)); err != nil {
+		return err
+	}
+	return pushHosts(ctx, name, planID, hosts, limit, hostTimeout, ops, mem)
+}
+
+// pushHosts fans an already-recorded plan (ops/mem, produced by exactly one
+// RecordPlanTo call — recording uses package-level global state in the plan
+// and resource packages and is not safe to run concurrently or repeatedly
+// for one push) out to hosts via remote.Fanout, bounded by limit concurrent
+// per-host pushes. name labels the Fanout summary line and error messages
+// (a cluster name for both PushClusterRun and each of PushFleetRun's
+// per-cluster groups).
+//
+// This is the single push pipeline shared by PushClusterRun (one call, the
+// whole cluster) and PushFleetRun (one call per member cluster's host
+// group — see PushFleetRun's doc comment for why parallelism is applied per
+// group instead of once for the whole fleet). Before this helper existed,
+// PushClusterRun and PushFleetRun each built targets/labels and called
+// remote.Fanout with their own near-identical copy of this loop.
+func pushHosts(ctx context.Context, name, planID string, hosts []HostRef, limit int, hostTimeout time.Duration, ops []plan.Op, mem plan.BlobReader) error {
 	targets := make([]PushTarget, 0, len(hosts))
 	labels := make([]string, 0, len(hosts))
 	for _, h := range hosts {
@@ -441,15 +468,6 @@ func PushClusterRun(ctx context.Context, name, planID string, parallelOverride i
 		}
 		targets = append(targets, t)
 		labels = append(labels, h.name)
-	}
-
-	mem := plan.NewMemoryStore()
-	ops, err := RecordPlanTo(planID, mem, tasks...)
-	if err != nil {
-		return fmt.Errorf("record: %w", err)
-	}
-	if err := RefuseOpaqueOnlyPush(fmt.Sprintf("cluster %q", name)); err != nil {
-		return err
 	}
 	return remote.Fanout(ctx, name, planID, ops, mem, targets, labels, limit, hostTimeout)
 }

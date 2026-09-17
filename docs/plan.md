@@ -366,12 +366,51 @@ startup, applies, then wipes the run dir. Inline content threshold is **512 KiB*
 (`plan.MaxInlineContent`); larger files become blobs in the push stream.
 
 `PushCluster` records and encodes **once**, then fans the same bytes out over SSH
-in parallel (errgroup limit from the fleet or `-j`). The fan-out runs under a
+in parallel (errgroup limit from the cluster or `-j`). The fan-out runs under a
 context: a failing host **cancels its in-flight siblings** (their ssh
 processes are killed, and they are reported as aborted, not as independent
-failures), and `gonf fleet` threads its signal-derived context so
-SIGINT/SIGTERM abort the whole push. See [Timeouts and
+failures), and `gonf fleet` / `gonf cluster` thread their signal-derived
+context so SIGINT/SIGTERM abort the whole push. See [Timeouts and
 Cancellation](#timeouts-and-cancellation).
+
+### Fleet parallelism semantics
+
+`Fleet` is a named list of `Cluster`s; `PushFleet` / `PushFleetRun` push to
+every **unique** host across the fleet's member clusters (a host that
+belongs to two member clusters is pushed once, not twice). The question
+this section answers: when a fleet push reaches a host, at what concurrency
+does it push to that host's cluster-mates?
+
+**Decision: each member cluster's own `.Parallel(n)` applies, not a
+fleet-wide default.** `PushFleetRun` groups the fleet's deduplicated hosts
+by the cluster that first claims them, and pushes each group at *that
+cluster's* configured parallelism (falling back to
+`defaultClusterParallelism` only if the cluster itself never called
+`.Parallel(n)` — exactly like a direct `gonf cluster` push). Different
+clusters' groups run concurrently with each other; only the fan-out *within*
+one cluster's hosts is bounded by that cluster's own limit. `-j` (the CLI
+flag / `parallelOverride` parameter) is an explicit per-run override and, when
+given, applies uniformly to every group, winning over both the per-cluster
+setting and the default.
+
+This matters because `.Parallel(n)` exists to protect specific hosts (a
+cluster of fragile or rate-limited hosts might set `Parallel(2)` on purpose).
+Before this was fixed, `PushFleetRun` ignored every member cluster's
+`.Parallel(n)` entirely and always fanned the whole fleet out at
+`defaultClusterParallelism` (5) — so a cluster explicitly throttled to
+`Parallel(2)` via `gonf cluster` would silently get hit with up to 5x the
+concurrency the moment it was reached via `gonf fleet` instead. See
+`api/cluster_test.go`'s `TestPushFleetHonorsClusterParallel` for the
+regression test (it fails against the old flat-default behavior).
+
+One visible consequence: because each member cluster's hosts are pushed via
+their own `remote.Fanout` call, a failing host aborts its own cluster's
+in-flight siblings (as before) but no longer aborts an unrelated member
+cluster's in-flight hosts — cross-cluster abort-on-failure narrowed from
+"whole fleet" to "one cluster", which follows naturally from giving each
+cluster its own bounded, independent fan-out. The push summary line
+(`pushed <plan> (<ops>) to <name> (<ok>/<total> hosts)`) is now printed once
+per contributing member cluster rather than once for the whole fleet.
 
 ### Remote gonf binary sync
 
