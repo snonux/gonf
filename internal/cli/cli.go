@@ -268,6 +268,24 @@ func cliApplyStdin(applyDir string) int {
 			fmt.Fprintf(os.Stderr, "apply: %v\n", err)
 			return 1
 		}
+		// The sticky dir's PATH is deterministic and reused across pushes to
+		// the same host (internal/remote derives it from the plan id) so the
+		// directory slot itself is a caching benefit — but its CONTENTS must
+		// not be reused. A prior run that never reached the controller's
+		// pushRemoveSticky cleanup (SIGINT, -host-timeout, a sibling host's
+		// failure aborting the fleet fan-out) leaves old blobs behind, and
+		// plan.DecodePush only overlays the new stream on top of whatever is
+		// already there (it truncates files the new stream also writes but
+		// never removes ones absent from it). Left alone, that would silently
+		// resurrect files the admin deleted from the source tree on the next
+		// push. Wiping just the contents (not the dir) after the ownership
+		// check above keeps that check's guarantee intact — we only ever wipe
+		// a dir already proven to be owned by us — while guaranteeing
+		// DecodePush extracts into a clean directory every time.
+		if err := wipeDirContents(applyDir); err != nil {
+			fmt.Fprintf(os.Stderr, "apply: apply-dir %s: wipe stale contents: %v\n", applyDir, err)
+			return 1
+		}
 		runDir = applyDir
 		cleanup = func() {} // sticky — caller owns lifecycle
 	} else {
@@ -298,6 +316,25 @@ func cliApplyStdin(applyDir string) int {
 	}
 	fmt.Fprintf(os.Stderr, "applied %s (%d ops)\n", src, len(payload.Ops))
 	return 0
+}
+
+// wipeDirContents removes every entry directly inside dir, leaving dir itself
+// (and its already-verified ownership and 0700 mode) untouched. Called on the
+// reused sticky -apply-dir, after verifyStickyDirOwned and before extraction,
+// so a prior run's leftovers (from a push that never reached
+// remote.pushRemoveSticky) cannot leak into the new extraction — see the
+// wipe-before-extract comment in cliApplyStdin.
+func wipeDirContents(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", dir, err)
+	}
+	for _, e := range entries {
+		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+			return fmt.Errorf("remove %s: %w", filepath.Join(dir, e.Name()), err)
+		}
+	}
+	return nil
 }
 
 // verifyStickyDirOwned refuses to stage into a sticky -apply-dir that a third

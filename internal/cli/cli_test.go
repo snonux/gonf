@@ -339,6 +339,93 @@ func TestCLIApplyStickyRefusesPlantedSymlink(t *testing.T) {
 	}
 }
 
+// TestCLIApplyStickyWipesStaleEntriesBeforeExtraction pins root cause 1: a
+// sticky -apply-dir reused across pushes to the same host must start every
+// extraction from empty, not overlay the new stream on top of whatever a
+// prior (possibly interrupted) run left behind. Before the fix, a file
+// present in an earlier push's blobs/ but absent from the new one survived
+// (plan/pushwire.go's extraction only O_TRUNCs entries the new stream
+// carries; it never removes ones it doesn't), which would let a deleted
+// source-tree file get silently redeployed and then kept by dir sync's
+// WithPrune (which only prunes destination files absent from the extracted
+// tree, not stale files still present in it).
+func TestCLIApplyStickyWipesStaleEntriesBeforeExtraction(t *testing.T) {
+	api.ResetTasks()
+	resource.ResetRepository()
+	root := t.TempDir()
+	sticky := filepath.Join(root, "sticky")
+	dst := filepath.Join(root, "out.txt")
+
+	// First push: uploads blobs/old.conf into the sticky dir and applies a
+	// file from it. This is the "prior run" that, in the real bug, would
+	// leak old.conf behind if pushRemoveSticky never ran (SIGINT, timeout,
+	// sibling-host failure) — simulated here by simply not cleaning up.
+	mem1 := plan.NewMemoryStore()
+	ref1, err := mem1.WriteFile("old.conf", []byte("stale-leftover-content"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ops1 := []plan.Op{
+		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "sticky"},
+		{Op: plan.KindFile, Path: dst, Mode: "0600", Blob: ref1},
+	}
+	var buf1 bytes.Buffer
+	if err := plan.EncodePush(&buf1, ops1, mem1); err != nil {
+		t.Fatal(err)
+	}
+	if code := runApplyStdin(t, buf1.Bytes(), sticky); code != 0 {
+		t.Fatalf("first apply exit %d", code)
+	}
+	staleBlob := filepath.Join(sticky, "blobs", "old.conf")
+	if _, err := os.Stat(staleBlob); err != nil {
+		t.Fatalf("setup: first push must have staged blobs/old.conf: %v", err)
+	}
+
+	// Second push to the SAME sticky dir: the admin deleted old.conf from the
+	// source tree, so this stream carries only new.conf.
+	mem2 := plan.NewMemoryStore()
+	ref2, err := mem2.WriteFile("new.conf", []byte("fresh-content"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ops2 := []plan.Op{
+		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "sticky"},
+		{Op: plan.KindFile, Path: dst, Mode: "0600", Blob: ref2},
+	}
+	var buf2 bytes.Buffer
+	if err := plan.EncodePush(&buf2, ops2, mem2); err != nil {
+		t.Fatal(err)
+	}
+	if code := runApplyStdin(t, buf2.Bytes(), sticky); code != 0 {
+		t.Fatalf("second apply exit %d", code)
+	}
+
+	// The stale entry must be gone, not merely superseded: extraction must
+	// start from an empty dir, not overlay onto the leftover.
+	if _, err := os.Stat(staleBlob); !os.IsNotExist(err) {
+		t.Fatalf("blobs/old.conf must not survive a second push that no longer sends it: err=%v", err)
+	}
+	freshBlob := filepath.Join(sticky, "blobs", "new.conf")
+	if _, err := os.Stat(freshBlob); err != nil {
+		t.Fatalf("blobs/new.conf must be present after the second push: %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(sticky, "blobs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "new.conf" {
+		t.Fatalf("blobs/ must contain exactly the new stream's files, got %v (union of old+new would be a bug)", entries)
+	}
+	// And the resource that was actually applied reflects the new content.
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "fresh-content" {
+		t.Fatalf("applied content = %q, want the new stream's content", got)
+	}
+}
+
 // TestVerifyStickyDirOwned pins the ownership verifier directly.
 func TestVerifyStickyDirOwned(t *testing.T) {
 	root := t.TempDir()

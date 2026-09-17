@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/internal/privilege"
@@ -119,6 +120,14 @@ func PushPayload(t PushTarget, payload []byte, elevate bool, applyDir string) er
 // plan-only with -apply-dir and no embedded blobs. This keeps blob
 // extraction owned by the SSH login user even when the first chunk is
 // elevated: root could read the blobs anyway, but the login user could not.
+//
+// The sticky dir's path is deterministic and reused across pushes to the
+// same host (a caching benefit: no fresh mkdir/ownership dance every run).
+// Reuse only stays safe because cliApplyStdin (internal/cli) wipes the dir's
+// CONTENTS before extracting into it — PushChunks itself does not need to
+// know or care whether the dir was empty, freshly created, or left over from
+// an interrupted prior run; the remote side guarantees a clean extraction
+// target either way.
 func PushChunks(ctx context.Context, t PushTarget, planID string, ops []plan.Op, mem *plan.MemoryStore) error {
 	chunks := plan.SplitPrivilegeChunks(ops)
 	if err := validateChunkDeps(chunks); err != nil {
@@ -173,6 +182,13 @@ func PushChunks(ctx context.Context, t PushTarget, planID string, ops []plan.Op,
 			return fmt.Errorf("push: chunk 0 missing plan header")
 		}
 		if err := pushBlobs(ctx, t, chunks[0].Ops[0], mem, sticky); err != nil {
+			// Nothing was applied yet, but the blob upload may have partly
+			// landed in the sticky dir before failing. Best-effort removal:
+			// even without this, the next push to the same host would still
+			// be correct (cliApplyStdin wipes the dir's contents before
+			// extracting), but cleaning up now avoids leaking a part-filled
+			// dir under /tmp until that next push happens.
+			pushRemoveSticky(ctx, t, sticky)
 			return err
 		}
 	}
@@ -225,14 +241,38 @@ func remoteApplyCmd(elevate bool, t PushTarget, applyDir string) (string, error)
 	return privilege.WrapApplyBinCmd(t.privilegeMode(), elevate, remoteGonfBin(t), args)
 }
 
+// pushRemoveStickyTimeout bounds the best-effort sticky-dir removal below.
+// It runs on a context that has deliberately been detached from the push's
+// own cancellation (see pushRemoveSticky), so it needs its own short bound
+// instead of being able to hang forever against an unreachable host.
+const pushRemoveStickyTimeout = 15 * time.Second
+
 // pushRemoveSticky best-effort removes the remote sticky apply dir after the
 // last apply chunk (or on failure): leftover blob staging would accumulate
-// forever under /tmp. The dir is owned by the SSH login user, so the removal
-// runs unprivileged; a failure (e.g. a stale root-owned dir from older gonf
-// versions) is logged and never fails the push.
+// forever under /tmp — nothing else sweeps it (unlike the non-sticky
+// NewApplyRunDir staging root, which plan.SweepApplyStaging ages out).
+// The dir is owned by the SSH login user, so the removal runs unprivileged;
+// a failure (e.g. a stale root-owned dir from older gonf versions) is logged
+// and never fails the push.
+//
+// It deliberately does NOT run on ctx (the push's own context) directly: by
+// the time cleanup runs, ctx may already be canceled or expired — SIGINT,
+// -host-timeout, or a sibling host's failure in Fanout triggering
+// errgroup-wide cancellation all cancel it before this point. An already-
+// canceled/expired context makes exec.CommandContext refuse to even start
+// the process (see SSHRunner), so cleanup would silently never happen,
+// leaking the sticky dir and setting up the NEXT push to this host for the
+// staleness this fix closes (cliApplyStdin's wipe-before-extract in
+// internal/cli is the other half: it tolerates a leaked dir, but cleanup
+// here still runs whenever it can). context.WithoutCancel detaches from
+// ctx's cancellation/deadline while keeping its values, and the fresh
+// timeout keeps this best-effort call from hanging forever on an
+// unreachable host.
 func pushRemoveSticky(ctx context.Context, t PushTarget, sticky string) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), pushRemoveStickyTimeout)
+	defer cancel()
 	remote := "rm -rf " + sticky
-	if err := SSHRunner(ctx, bytes.NewReader(nil), t.sshArgv(remote)); err != nil {
+	if err := SSHRunner(cleanupCtx, bytes.NewReader(nil), t.sshArgv(remote)); err != nil {
 		logger.Warn("push: failed to remove remote sticky dir %s: %v", sticky, err)
 	}
 }
