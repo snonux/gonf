@@ -540,13 +540,32 @@ func guardBlobRef(name string, d resource.PlanDraft) error {
 	return nil
 }
 
-// draftToOp lowers a resource draft to a plan op line. Every draft Kind must
-// map through an explicit switch case: an unmapped kind is a programming
-// error (typo, or a new resource kind missing its draftToOp case) and fails
-// the record loudly instead of silently forwarding an unknown op to the wire,
-// where it would only blow up at remote apply time. See docs/plan.md,
-// "Adding a resource kind" for the full checklist.
+// draftToOp lowers a resource draft to a plan op line.
+//
+// A kind whose resource package has registered a plan.Handler (see
+// plan/handler.go) delegates entirely to that handler's ToOp: the resource
+// package owns its own wire form and this function only folds in the
+// recording session's Elevate flag. Every other draft Kind still goes
+// through the explicit switch case below: an unmapped kind is a programming
+// error (typo, or a new resource kind missing both a Handler registration
+// and a draftToOp case) and fails the record loudly instead of silently
+// forwarding an unknown op to the wire, where it would only blow up at
+// remote apply time. See docs/plan.md, "Adding a resource kind" for the full
+// checklist.
 func draftToOp(d resource.PlanDraft) (plan.Op, error) {
+	if h, ok := plan.HandlerFor(plan.Kind(d.Kind)); ok {
+		op, err := h.ToOp(d)
+		if err != nil {
+			return plan.Op{}, err
+		}
+		op.Elevate = d.Elevate || recSession.recordingElevate
+		if !plan.IsKnownKind(op.Op) {
+			return op, fmt.Errorf("RecordPlan: draft %q: kind %q lowers to undeclared plan kind %q (missing from plan.AllKinds)",
+				d.ID, d.Kind, op.Op)
+		}
+		return op, nil
+	}
+
 	op := plan.Op{
 		ID:                 d.ID,
 		Path:               d.Path,
@@ -605,8 +624,6 @@ func draftToOp(d resource.PlanDraft) (plan.Op, error) {
 		op.Op = plan.KindSyncDir
 	case "link":
 		op.Op = plan.KindLink
-	case "package":
-		op.Op = plan.KindPackage
 	case "command":
 		op.Op = plan.KindCommand
 	case "ensure_dir":
@@ -617,10 +634,6 @@ func draftToOp(d resource.PlanDraft) (plan.Op, error) {
 		op.Op = plan.KindTimer
 	case "daemon_reload":
 		op.Op = plan.KindDaemonReload
-	case "cron":
-		op.Op = plan.KindCron
-	case "service":
-		op.Op = plan.KindService
 	case "systemd_timer":
 		op.Op = plan.KindSystemdTimer
 	default:

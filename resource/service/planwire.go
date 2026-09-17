@@ -1,0 +1,55 @@
+package service
+
+import (
+	"fmt"
+
+	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/plan"
+	"github.com/snonux/gonf/resource"
+)
+
+// planHandler is the service kind's plan.Handler: see
+// resource/pkg/planwire.go for why record-time ToOp and apply-time Apply
+// live together in the resource package instead of api/plan.go's
+// draftToOp and plan/apply.go's applyService.
+type planHandler struct{}
+
+func init() {
+	plan.RegisterHandler(plan.KindService, planHandler{})
+}
+
+// ToOp lowers a "service" resource draft to a plan.Op.
+func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
+	return plan.Op{
+		Op:      plan.KindService,
+		ID:      d.ID,
+		Name:    d.Name,
+		Absent:  d.Absent,
+		Restart: d.Restart,
+		Reload:  d.Reload,
+		User:    d.User,
+		Deps:    d.Deps,
+	}, nil
+}
+
+// Apply starts/stops/enables/disables the named service, mirroring
+// resource/service's own Present/Absent option handling.
+func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
+	if op.Name == "" {
+		return fmt.Errorf("service: missing name")
+	}
+	var opts []opt.Option
+	if op.Absent {
+		opts = append(opts, opt.IsAbsent)
+	}
+	if op.Restart {
+		opts = append(opts, opt.WithRestart)
+	}
+	if op.Reload {
+		opts = append(opts, opt.WithReload)
+	}
+	if op.User {
+		opts = append(opts, opt.WithUser)
+	}
+	return Ensure(op.Name, opts...)
+}

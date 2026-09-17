@@ -1,0 +1,63 @@
+package plan
+
+import "github.com/snonux/gonf/resource"
+
+// ApplyContext carries the apply-time inputs a Handler needs beyond the Op
+// itself. It exists so Handler.Apply signatures do not have to grow a new
+// parameter every time a future kind needs more context (mirroring why Op
+// and PlanDraft are structs rather than positional arguments).
+type ApplyContext struct {
+	// PlanDir is the directory containing blobs/ sidecars (usually next to
+	// the plan JSONL). Empty when the plan only uses content_b64 and no
+	// blobs.
+	PlanDir string
+}
+
+// Handler is a resource kind's ownership of its plan wire form: converting a
+// package-neutral resource.PlanDraft into a plan.Op (record time) and
+// applying a decoded plan.Op (apply time). A resource package that migrates
+// to this pattern implements Handler once and registers it for its Kind via
+// RegisterHandler (usually from an init() in the resource package), instead
+// of api/plan.go's draftToOp and plan/apply.go's applyActive each carrying a
+// hand-written case for that kind.
+//
+// This does not change the wire format: Op and resource.PlanDraft stay the
+// same flat structs (same JSON tags, same CurrentVersion) — only which Go
+// code owns filling and reading them moves into the resource package that
+// actually knows what its fields mean.
+type Handler interface {
+	// ToOp lowers a resource draft to a plan Op line. The returned Op's Op
+	// field (the Kind discriminator) must be set by the implementation.
+	ToOp(d resource.PlanDraft) (Op, error)
+	// Apply performs this op's kind-specific side effect. It must validate
+	// required fields itself (mirroring the hand-written applyX handlers)
+	// before any mutation.
+	Apply(op Op, ctx ApplyContext) error
+}
+
+// handlers maps a migrated Kind to the resource package's Handler. Kinds not
+// present here still go through the explicit switch cases in
+// api/plan.go's draftToOp and plan/apply.go's applyActive — this registry is
+// populated incrementally, one resource kind at a time (see docs/plan.md,
+// "Adding a resource kind").
+var handlers = map[Kind]Handler{}
+
+// RegisterHandler installs h as the plan wire-form owner for k. Intended to
+// be called from a resource package's init(), so importing that package for
+// its normal DSL entry points (e.g. api importing resource/pkg for
+// api.Package) is what wires the handler in — no separate registration step
+// to forget. Panics on a duplicate registration for the same Kind: that is a
+// programming error (two packages claiming the same wire kind), not a
+// runtime condition to recover from.
+func RegisterHandler(k Kind, h Handler) {
+	if _, dup := handlers[k]; dup {
+		panic("plan: duplicate Handler registration for kind " + string(k))
+	}
+	handlers[k] = h
+}
+
+// HandlerFor returns the registered Handler for k, if any.
+func HandlerFor(k Kind) (Handler, bool) {
+	h, ok := handlers[k]
+	return h, ok
+}

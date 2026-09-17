@@ -77,15 +77,19 @@ func Present(name string, opts ...opt.Option) resource.Resource {
 
 	r := resource.Register("Package", p.name,
 		resource.ApplierFunc(func() error { return p.apply() }), p.DependsOn.IDs...)
-	resource.RecordPlanDraft(resource.PlanDraft{
+	resource.RecordPlanDraft(p.planDraft(r.ID()))
+	return r
+}
+
+func (p *Package) planDraft(id string) resource.PlanDraft {
+	return resource.PlanDraft{
 		Kind:   "package",
-		ID:     r.ID(),
+		ID:     id,
 		Name:   p.name,
 		Absent: p.Absent,
 		Latest: p.latest,
 		Deps:   p.DependsOn.SortedIDs(),
-	})
-	return r
+	}
 }
 
 // Ensure builds and applies a package resource without registering it or
