@@ -32,7 +32,7 @@ func ensureHardlink(l *Link) error {
 
 	targetInfo, err := os.Stat(target)
 	if err != nil {
-		return fmt.Errorf("failed to stat hardlink target %s: %w", target, err)
+		return fmt.Errorf("failed to stat hardlink target %s: %w", l.target, err)
 	}
 
 	if info, err := os.Lstat(l.path); err == nil {
