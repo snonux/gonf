@@ -87,6 +87,10 @@ type PlanDraft struct {
 	Prune bool
 	// Absent marks NoFile/NoDir/NoLink/NoPackage style removal.
 	Absent bool
+	// Latest marks a "package" draft configured with IsLatest: destination
+	// apply must run the backend's upgrade-check path (dnf update / pkg
+	// upgrade / pkg_add -u / pkgin install) instead of a plain install.
+	Latest bool
 
 	// AddLine appends a line to a file when missing (line-in-file).
 	AddLine string

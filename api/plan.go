@@ -565,6 +565,7 @@ func draftToOp(d resource.PlanDraft) (plan.Op, error) {
 		SourceDir:          d.SourceDir,
 		Prune:              d.Prune,
 		Absent:             d.Absent,
+		Latest:             d.Latest,
 		AddLine:            d.AddLine,
 		RemoveLine:         d.RemoveLine,
 		Name:               d.Name,

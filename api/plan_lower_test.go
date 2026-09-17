@@ -818,3 +818,60 @@ func TestRecordPlanOpaqueWhenFailingControllerFilterErrors(t *testing.T) {
 		t.Fatal("RecordPlan: want error when the opaque predicate fails on the controller")
 	}
 }
+
+// TestRecordPlanLowersPackageIsLatest pins the m5 regression fix: a Package
+// configured with IsLatest must carry that intent onto the wire as
+// Op.Latest, or destination apply silently drops the upgrade-check path
+// (dnf update / pkg upgrade / pkg_add -u / pkgin install) and reports an
+// already-installed package as OK without ever upgrading it.
+func TestRecordPlanLowersPackageIsLatest(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	Task("pkg_latest", "", func() {
+		Package("rsync", options.IsLatest)
+		Package("fish")
+	})
+
+	ops, err := RecordPlan("pkg-latest", "", "pkg_latest")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+
+	wantKinds := []plan.Kind{
+		plan.KindPlan,
+		plan.KindPackage,
+		plan.KindPackage,
+	}
+	if !reflect.DeepEqual(opsKinds(ops), wantKinds) {
+		t.Fatalf("ops kinds = %v, want %v", opsKinds(ops), wantKinds)
+	}
+
+	latestOp := ops[1]
+	if latestOp.Name != "rsync" || !latestOp.Latest {
+		t.Fatalf("rsync package op = %#v, want name=rsync latest=true", latestOp)
+	}
+
+	plainOp := ops[2]
+	if plainOp.Name != "fish" || plainOp.Latest {
+		t.Fatalf("fish package op = %#v, want name=fish latest=false", plainOp)
+	}
+
+	// Wire round-trip must preserve the latest field.
+	raw, err := plan.EncodePlan(ops)
+	if err != nil {
+		t.Fatalf("EncodePlan: %v", err)
+	}
+	decoded, err := plan.DecodePlanBytes(raw)
+	if err != nil {
+		t.Fatalf("DecodePlanBytes: %v", err)
+	}
+	if !reflect.DeepEqual(decoded, ops) {
+		t.Fatalf("round-trip mismatch\ngot  %#v\nwant %#v", decoded, ops)
+	}
+}

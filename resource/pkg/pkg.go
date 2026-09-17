@@ -28,6 +28,19 @@ func (p *Package) SetLatest() { p.latest = true }
 // runCmd is swapped in unit tests.
 var runCmd = exec.Run
 
+// SetRunCmdForTest swaps the package-manager command runner (tests only).
+// Cross-package apply tests (e.g. plan.Apply on a package op) reach the
+// backend's dnf/pkg/pkg_add/pkgin invocations through this seam, mirroring
+// resource/systemd's SetRunCmdForTest.
+func SetRunCmdForTest(run func(name string, args ...string) (string, string, int, error)) {
+	runCmd = run
+}
+
+// ResetRunCmdForTest restores the real command runner after a test stub.
+func ResetRunCmdForTest() {
+	runCmd = exec.Run
+}
+
 // detectPkgManager is swapped in unit tests (CI runners are often Ubuntu).
 var detectPkgManager = detectPackageManager
 
@@ -69,6 +82,7 @@ func Present(name string, opts ...opt.Option) resource.Resource {
 		ID:     r.ID(),
 		Name:   p.name,
 		Absent: p.Absent,
+		Latest: p.latest,
 		Deps:   p.DependsOn.SortedIDs(),
 	})
 	return r

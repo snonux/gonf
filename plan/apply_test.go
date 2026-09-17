@@ -418,6 +418,51 @@ func TestApplyPackageDryRun(t *testing.T) {
 	}
 }
 
+// TestApplyPackageLatestRunsUpgradePath pins the m5 regression fix: a
+// package op recorded with Latest:true must reach the backend's
+// upgrade-check path (dnf update, here) even when the package already shows
+// as installed — not the plain install/no-op path a bare "package" op would
+// take. Before the fix, plan/apply.go's applyPackage never looked at
+// op.Latest at all, so IsLatest was silently dropped on every plan/push run.
+func TestApplyPackageLatestRunsUpgradePath(t *testing.T) {
+	pkg.SetDetectPackageManagerForTest(func() (string, error) { return "dnf", nil })
+	t.Cleanup(pkg.ResetDetectPackageManagerForTest)
+
+	var dnfCalls [][]string
+	pkg.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+		switch name {
+		case "rpm":
+			// Report the package as already installed: a plain "package"
+			// op would then be a no-op, but Latest must still act.
+			return "rsync-1.0-1\n", "", 0, nil
+		case "dnf":
+			dnfCalls = append(dnfCalls, args)
+			return "", "", 0, nil
+		default:
+			return "", "unexpected " + name, 1, nil
+		}
+	})
+	t.Cleanup(pkg.ResetRunCmdForTest)
+
+	ops := []Op{
+		header(),
+		{Op: KindPackage, Name: "rsync", Latest: true},
+	}
+	if err := Apply(ops, Facts{}, ""); err != nil {
+		t.Fatalf("apply package latest: %v", err)
+	}
+
+	var sawUpdate bool
+	for _, args := range dnfCalls {
+		if len(args) >= 1 && args[0] == "update" {
+			sawUpdate = true
+		}
+	}
+	if !sawUpdate {
+		t.Errorf("expected a dnf update invocation for the already-installed package, got dnf calls: %v", dnfCalls)
+	}
+}
+
 // TestApplySortsDepsBeforeDependents pins the plan-path dependency contract:
 // an op recorded before its DependsOn target must apply after it, mirroring
 // the repository path's topological order. Both commands append to one log,

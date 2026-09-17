@@ -373,7 +373,15 @@ Design decisions:
   `exec.Opts.Timeout` field exists for opt-in callers; wiring it globally was
   deliberately deferred (it would change apply semantics).
 
-Plan schema **version 9** adds the `template` / `template_param` fields to
+Plan schema **version 10** adds the `latest` field to `package` ops: a
+`Package` recorded with `IsLatest` now carries that intent explicitly, so
+destination apply runs the backend's upgrade-check path (`dnf update` / `pkg
+upgrade` / `pkg_add -u` / `pkgin install`) instead of a plain install, even
+when the package already shows as installed. An older binary that ignored
+`latest` would silently drop the upgrade — the package would be reported OK
+and never upgraded — so v9 binaries refuse v10 plans up-front at the header
+gate instead, while this binary keeps applying v1–9 plans. Plan schema
+**version 9** adds the `template` / `template_param` fields to
 `file` ops: a `File` recorded from a `.tmpl`-suffixed source or path now
 carries that intent explicitly, so destination apply renders it instead of
 writing the raw template text (the `path`/`content_b64` on the wire no

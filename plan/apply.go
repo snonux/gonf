@@ -572,6 +572,9 @@ func applyPackage(op Op) error {
 	if op.Absent {
 		opts = append(opts, opt.IsAbsent)
 	}
+	if op.Latest {
+		opts = append(opts, opt.IsLatest)
+	}
 	return pkg.Ensure(op.Name, opts...)
 }
 

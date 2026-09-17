@@ -18,8 +18,12 @@ package plan
 // added the template/template_param fields to file ops (a File whose
 // WithSource/path declared a ".tmpl" suffix now carries that intent onto the
 // wire, so plan apply renders it on the destination instead of writing the
-// raw template text — see docs/file-dir-link.md).
-const CurrentVersion = 9
+// raw template text — see docs/file-dir-link.md); version 10 added the
+// latest field to package ops (a Package configured with IsLatest now
+// carries that intent onto the wire, so plan apply runs the backend's
+// upgrade-check path — dnf update / pkg upgrade / pkg_add -u / pkgin
+// install — instead of a plain install).
+const CurrentVersion = 10
 
 // supportedVersions is the set of plan schema versions this binary can apply.
 // Apply must refuse plans whose version is not in this set before any mutation.
@@ -32,6 +36,7 @@ var supportedVersions = map[int]struct{}{
 	6:              {},
 	7:              {},
 	8:              {},
+	9:              {},
 	CurrentVersion: {},
 }
 
@@ -216,6 +221,11 @@ type Op struct {
 	Prune bool `json:"prune,omitempty"`
 	// Absent marks NoFile / NoDir / NoLink / NoPackage style removal.
 	Absent bool `json:"absent,omitempty"`
+	// Latest marks KindPackage as configured with IsLatest (schema v10):
+	// destination apply must run the backend's upgrade-check path (dnf
+	// update / pkg upgrade / pkg_add -u / pkgin install) instead of a plain
+	// install, even when the package is already present.
+	Latest bool `json:"latest,omitempty"`
 
 	// AddLine appends a line to a file when missing (line-in-file).
 	AddLine string `json:"add_line,omitempty"`
