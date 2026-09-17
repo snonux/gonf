@@ -67,10 +67,13 @@ func TestRemoteInstallCmdPrivilege(t *testing.T) {
 
 func TestSCPArgvTranslatesSSHPort(t *testing.T) {
 	t.Parallel()
-	argv := scpArgv(PushTarget{
+	argv, err := scpArgv(PushTarget{
 		Host: "r0.lan.buetow.org", User: "root",
 		ExtraSSH: []string{"-p", "22", "-o", "StrictHostKeyChecking=yes"},
 	}, "/tmp/gonf", "/tmp/gonf.new")
+	if err != nil {
+		t.Fatalf("scpArgv: %v", err)
+	}
 	joined := strings.Join(argv, " ")
 	if strings.Contains(joined, "scp -p ") || strings.Contains(joined, " -p 22") {
 		t.Fatalf("scp must not get ssh -p: %v", argv)
@@ -80,6 +83,154 @@ func TestSCPArgvTranslatesSSHPort(t *testing.T) {
 	}
 	if argv[len(argv)-2] != "/tmp/gonf" || !strings.HasSuffix(argv[len(argv)-1], ":/tmp/gonf.new") {
 		t.Fatalf("paths: %v", argv)
+	}
+}
+
+// TestSCPArgvExtraSSHTranslation is the table-driven coverage the task asks
+// for: ssh and scp assign different meanings to several of the same option
+// letters (most notably -l and -p), so scpArgv must translate, pass through,
+// or reject each ExtraSSH token rather than forwarding it verbatim.
+func TestSCPArgvExtraSSHTranslation(t *testing.T) {
+	t.Parallel()
+	base := PushTarget{Host: "r0.lan.buetow.org"}
+
+	cases := []struct {
+		name     string
+		extraSSH []string
+		// wantContains: substrings that must all appear in the joined argv
+		// (order-insensitive checks for the translated/passed-through form).
+		wantContains []string
+		// wantAbsent: substrings that must NOT appear (the untranslated ssh
+		// form, or a token that should have been dropped/rejected).
+		wantAbsent []string
+		wantErr    bool
+	}{
+		{
+			name:         "separate login user translated to -o User=",
+			extraSSH:     []string{"-l", "paul"},
+			wantContains: []string{"-o User=paul"},
+			wantAbsent:   []string{"-l paul", "-l"},
+		},
+		{
+			name:         "joined login user translated to -o User=",
+			extraSSH:     []string{"-lpaul"},
+			wantContains: []string{"-o User=paul"},
+			wantAbsent:   []string{"-lpaul"},
+		},
+		{
+			name:         "joined port translated to -P",
+			extraSSH:     []string{"-p2222"},
+			wantContains: []string{"-P 2222"},
+			wantAbsent:   []string{"-p2222", "-p 2222"},
+		},
+		{
+			name:         "separate port translated to -P",
+			extraSSH:     []string{"-p", "2222"},
+			wantContains: []string{"-P 2222"},
+			wantAbsent:   []string{"-p 2222", "-p2222"},
+		},
+		{
+			name:         "-o pass through separate",
+			extraSSH:     []string{"-o", "StrictHostKeyChecking=yes"},
+			wantContains: []string{"-o StrictHostKeyChecking=yes"},
+		},
+		{
+			name:         "-o pass through joined",
+			extraSSH:     []string{"-oStrictHostKeyChecking=yes"},
+			wantContains: []string{"-oStrictHostKeyChecking=yes"},
+		},
+		{
+			name:         "-i pass through separate",
+			extraSSH:     []string{"-i", "/home/paul/.ssh/id_ed25519"},
+			wantContains: []string{"-i /home/paul/.ssh/id_ed25519"},
+		},
+		{
+			name:         "-i pass through joined",
+			extraSSH:     []string{"-i/home/paul/.ssh/id_ed25519"},
+			wantContains: []string{"-i/home/paul/.ssh/id_ed25519"},
+		},
+		{
+			name:         "-F pass through separate",
+			extraSSH:     []string{"-F", "/home/paul/.ssh/config"},
+			wantContains: []string{"-F /home/paul/.ssh/config"},
+		},
+		{
+			name:         "-F pass through joined",
+			extraSSH:     []string{"-F/home/paul/.ssh/config"},
+			wantContains: []string{"-F/home/paul/.ssh/config"},
+		},
+		{
+			name:         "-J pass through separate",
+			extraSSH:     []string{"-J", "jump.example.org"},
+			wantContains: []string{"-J jump.example.org"},
+		},
+		{
+			name:         "-J pass through joined",
+			extraSSH:     []string{"-Jjump.example.org"},
+			wantContains: []string{"-Jjump.example.org"},
+		},
+		{
+			name:         "-c pass through separate",
+			extraSSH:     []string{"-c", "aes256-gcm@openssh.com"},
+			wantContains: []string{"-c aes256-gcm@openssh.com"},
+		},
+		{
+			name:         "-c pass through joined",
+			extraSSH:     []string{"-caes256-gcm@openssh.com"},
+			wantContains: []string{"-caes256-gcm@openssh.com"},
+		},
+		{
+			name:         "-S pass through separate",
+			extraSSH:     []string{"-S", "/usr/bin/ssh"},
+			wantContains: []string{"-S /usr/bin/ssh"},
+		},
+		{
+			name:         "-S pass through joined",
+			extraSSH:     []string{"-S/usr/bin/ssh"},
+			wantContains: []string{"-S/usr/bin/ssh"},
+		},
+		{
+			name:         "-A pass through (agent forwarding, same meaning under scp)",
+			extraSSH:     []string{"-A"},
+			wantContains: []string{"-A"},
+		},
+		{name: "-L local port-forward rejected", extraSSH: []string{"-L", "8080:localhost:80"}, wantErr: true},
+		{name: "-R remote port-forward rejected", extraSSH: []string{"-R", "8080:localhost:80"}, wantErr: true},
+		{name: "-D dynamic port-forward rejected (scp -D means sftp-server path)", extraSSH: []string{"-D", "1080"}, wantErr: true},
+		{name: "-W stdio-forward rejected", extraSSH: []string{"-W", "host:22"}, wantErr: true},
+		{name: "-e escape-char rejected", extraSSH: []string{"-e", "none"}, wantErr: true},
+		{name: "-t force-tty rejected", extraSSH: []string{"-t"}, wantErr: true},
+		{name: "-T disable-pty rejected (scp -T means disable filename checks)", extraSSH: []string{"-T"}, wantErr: true},
+		{name: "-x disable-X11 rejected", extraSSH: []string{"-x"}, wantErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			target := base
+			target.ExtraSSH = tc.extraSSH
+			argv, err := scpArgv(target, "/tmp/gonf", "/tmp/gonf.new")
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("scpArgv(%v) = %v, want error", tc.extraSSH, argv)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("scpArgv(%v): unexpected error: %v", tc.extraSSH, err)
+			}
+			joined := strings.Join(argv, " ")
+			for _, want := range tc.wantContains {
+				if !strings.Contains(joined, want) {
+					t.Fatalf("scpArgv(%v) = %q, want substring %q", tc.extraSSH, joined, want)
+				}
+			}
+			for _, absent := range tc.wantAbsent {
+				if strings.Contains(joined, absent) {
+					t.Fatalf("scpArgv(%v) = %q, must not contain %q", tc.extraSSH, joined, absent)
+				}
+			}
+		})
 	}
 }
 

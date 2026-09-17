@@ -30,24 +30,82 @@ var SCPRunner = func(ctx context.Context, localPath string, t PushTarget, remote
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	argv := scpArgv(t, localPath, remotePath)
+	argv, err := scpArgv(t, localPath, remotePath)
+	if err != nil {
+		return err
+	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
-	err := cmd.Run()
-	if err != nil && ctx.Err() != nil {
-		return fmt.Errorf("%w (scp killed by context: %v)", ctx.Err(), err)
+	runErr := cmd.Run()
+	if runErr != nil && ctx.Err() != nil {
+		return fmt.Errorf("%w (scp killed by context: %v)", ctx.Err(), runErr)
 	}
-	return err
+	return runErr
 }
 
-// scpArgv builds an scp command line. ExtraSSH is translated: ssh's "-p PORT"
-// becomes scp's "-P PORT" (scp's "-p" means preserve mtime).
-func scpArgv(t PushTarget, localPath, remotePath string) []string {
+// scpPassThroughOptLetters are ssh(1) option letters that carry the exact
+// same meaning under scp(1) (verified against both man pages), so their
+// ExtraSSH tokens are forwarded to scp unchanged, joined or separate form:
+//
+//	-o ssh_option   (ssh_config option, e.g. StrictHostKeyChecking)
+//	-i identity_file
+//	-F configfile
+//	-J destination  (ProxyJump)
+//	-c cipher_spec
+//	-S program      (scp's "alternate encrypted-connection program"; scp(1)
+//	                 documents this letter explicitly, unlike -S's ssh(1)
+//	                 meaning of "control socket path" — but both accept a
+//	                 single opaque string argument, and gonf's ExtraSSH
+//	                 callers use it for the former, so it is safe to forward)
+//	-A              (forward ssh-agent — identical meaning in both man pages)
+const scpPassThroughOptLetters = "oiFJcSA"
+
+// scpRejectedOptLetters are ssh(1) option letters that scpArgv refuses to
+// forward to scp: either scp has no such flag at all (-L/-W local/stdio
+// forwarding, -e escape character, -t force-tty, -x disable X11 forwarding),
+// or scp defines the SAME letter with a DIFFERENT, unrelated meaning that
+// silently forwarding would trigger instead of the ssh meaning the user
+// intended:
+//
+//	-D  ssh: local dynamic port-forward "[bind:]port"
+//	    scp: connect to a local sftp-server program at the given path
+//	-R  ssh: remote port-forward "remote_port:host:hostport"
+//	    scp: copy between two remote hosts by running scp on the origin host
+//	         (a boolean flag, no argument — so scp would then choke on ssh's
+//	         forward spec as a bogus extra file argument)
+//	-T  ssh: disable pseudo-terminal allocation (no argument)
+//	    scp: disable strict server-filename checking (no argument) — a
+//	         security-relevant behavior change scp would apply silently
+//
+// Per gonf's task guidance, failing loudly here (reject) beats silently
+// dropping or silently reinterpreting a flag the user explicitly asked for.
+const scpRejectedOptLetters = "LRDWetTx"
+
+// scpArgv builds an scp command line for staging the gonf binary. ssh and
+// scp share very few flag letters with identical meaning, so ExtraSSH tokens
+// are translated or explicitly allow/deny-listed rather than forwarded
+// verbatim (see scpPassThroughOptLetters and scpRejectedOptLetters):
+//
+//   - "-l USER" / "-lUSER" (ssh: login user) has no matching scp letter —
+//     scp's own "-l" means bandwidth limit in Kbit/s — so it becomes scp's
+//     "-o User=USER" (an ssh_config option scp forwards to the underlying
+//     ssh connection).
+//   - "-p PORT" / "-pPORT" / "-P PORT" / "-PPORT" (ssh's port option) becomes
+//     scp's own "-P PORT" (scp's own "-p" means preserve-mtime, a different
+//     flag; scp does not accept ssh's joined "-pPORT" form as a port at all).
+//
+// An error is returned instead of an argv when ExtraSSH carries one of
+// scpRejectedOptLetters, since EnsureRemoteGonf only needs scp for the rare
+// binary-sync path and callers already propagate scp errors up as a plain
+// "ensure gonf: scp: ..." wrapped error.
+func scpArgv(t PushTarget, localPath, remotePath string) ([]string, error) {
 	argv := []string{"scp"}
 	port := t.Port
 	for i := 0; i < len(t.ExtraSSH); i++ {
 		a := t.ExtraSSH[i]
+
+		// Separate "-p PORT" / "-P PORT" -> scp's "-P PORT".
 		if (a == "-p" || a == "-P") && i+1 < len(t.ExtraSSH) {
 			if p, err := strconv.Atoi(t.ExtraSSH[i+1]); err == nil {
 				if port == 0 {
@@ -57,6 +115,38 @@ func scpArgv(t PushTarget, localPath, remotePath string) []string {
 				continue
 			}
 		}
+		// Joined "-pPORT" / "-PPORT" -> scp's "-P PORT".
+		if len(a) > 2 && (a[1] == 'p' || a[1] == 'P') {
+			if p, err := strconv.Atoi(a[2:]); err == nil {
+				if port == 0 {
+					port = p
+				}
+				continue
+			}
+		}
+
+		// Separate "-l USER" -> scp's "-o User=USER".
+		if a == "-l" && i+1 < len(t.ExtraSSH) {
+			argv = append(argv, "-o", "User="+t.ExtraSSH[i+1])
+			i++
+			continue
+		}
+		// Joined "-lUSER" -> scp's "-o User=USER".
+		if len(a) > 2 && a[1] == 'l' {
+			argv = append(argv, "-o", "User="+a[2:])
+			continue
+		}
+
+		if len(a) >= 2 && a[0] == '-' {
+			if strings.ContainsRune(scpPassThroughOptLetters, rune(a[1])) {
+				argv = append(argv, a)
+				continue
+			}
+			if strings.ContainsRune(scpRejectedOptLetters, rune(a[1])) {
+				return nil, fmt.Errorf("scp: ExtraSSH option %q is ssh-only (or means something different under scp) and cannot be used for the gonf binary sync step; remove it from ExtraSSH", a)
+			}
+		}
+
 		argv = append(argv, a)
 	}
 	argv = append(argv, "-o", "ConnectTimeout="+sshConnectTimeout)
@@ -66,7 +156,7 @@ func scpArgv(t PushTarget, localPath, remotePath string) []string {
 	if t.Identity != "" {
 		argv = append(argv, "-i", t.Identity)
 	}
-	return append(argv, localPath, t.Destination()+":"+remotePath)
+	return append(argv, localPath, t.Destination()+":"+remotePath), nil
 }
 
 // GoBuildRunner cross-compiles a package. Overridable in tests.
