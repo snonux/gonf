@@ -16,7 +16,7 @@ import (
 // sudo/doas WITHOUT "-n": the elevated child then applied for real. dry-run
 // must add "-n" right after "apply"; non-dry-run must not add it at all.
 func TestElevatedApplyArgvDryRun(t *testing.T) {
-	got := elevatedApplyArgv("/usr/local/bin/gonf", "/tmp/plan/chunk-elevated.jsonl", true)
+	got := elevatedApplyArgv("/usr/local/bin/gonf", "/tmp/plan/chunk-elevated.jsonl", true, "")
 	want := []string{"/usr/local/bin/gonf", "apply", "-n", "/tmp/plan/chunk-elevated.jsonl"}
 	if len(got) != len(want) {
 		t.Fatalf("dry-run argv = %v, want %v", got, want)
@@ -27,7 +27,7 @@ func TestElevatedApplyArgvDryRun(t *testing.T) {
 		}
 	}
 
-	got = elevatedApplyArgv("/usr/local/bin/gonf", "/tmp/plan/chunk-elevated.jsonl", false)
+	got = elevatedApplyArgv("/usr/local/bin/gonf", "/tmp/plan/chunk-elevated.jsonl", false, "")
 	want = []string{"/usr/local/bin/gonf", "apply", "/tmp/plan/chunk-elevated.jsonl"}
 	if len(got) != len(want) {
 		t.Fatalf("non-dry-run argv = %v, want %v", got, want)
@@ -40,6 +40,49 @@ func TestElevatedApplyArgvDryRun(t *testing.T) {
 	for _, arg := range got {
 		if arg == "-n" {
 			t.Fatalf("non-dry-run argv must not contain -n: %v", got)
+		}
+	}
+}
+
+// TestElevatedApplyArgvProfileOverride pins the argv-level fix for the bug
+// where a local "gonf -profile=<override> -privilege=sudo/doas" run
+// re-exec'd a Privileged() chunk WITHOUT the override: the elevated child
+// then called DetectFacts() fresh and re-derived the profile from the actual
+// host, so when_begin{fact:profile,...} guards evaluated inconsistently
+// between the unprivileged (in-process, with override) and privileged
+// (re-exec'd, without override) chunks of the same plan. An active override
+// must add "-profile=<value>" as a GLOBAL flag ahead of "apply" (per
+// internal/cli/cli.go: "-profile" is parsed by the top-level flag set, not
+// by cliApply's "apply" subcommand flag set); no override must add nothing,
+// preserving auto-detect. Both dry-run and profile-override must be able to
+// combine, with "-profile" before "apply" and "-n" right after it.
+func TestElevatedApplyArgvProfileOverride(t *testing.T) {
+	got := elevatedApplyArgv("/usr/local/bin/gonf", "/tmp/plan/chunk-elevated.jsonl", false, "rocky")
+	want := []string{"/usr/local/bin/gonf", "-profile=rocky", "apply", "/tmp/plan/chunk-elevated.jsonl"}
+	if len(got) != len(want) {
+		t.Fatalf("profile-override argv = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("profile-override argv = %v, want %v", got, want)
+		}
+	}
+
+	got = elevatedApplyArgv("/usr/local/bin/gonf", "/tmp/plan/chunk-elevated.jsonl", false, "")
+	for _, arg := range got {
+		if strings.HasPrefix(arg, "-profile=") {
+			t.Fatalf("no-override argv must not contain -profile: %v", got)
+		}
+	}
+
+	got = elevatedApplyArgv("/usr/local/bin/gonf", "/tmp/plan/chunk-elevated.jsonl", true, "rocky")
+	want = []string{"/usr/local/bin/gonf", "-profile=rocky", "apply", "-n", "/tmp/plan/chunk-elevated.jsonl"}
+	if len(got) != len(want) {
+		t.Fatalf("dry-run+profile-override argv = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("dry-run+profile-override argv = %v, want %v", got, want)
 		}
 	}
 }
@@ -94,5 +137,63 @@ func TestDefaultElevatedApplyDryRunAddsN(t *testing.T) {
 	}
 	if count != 2 {
 		t.Fatalf("sudo argv = %v, want exactly two \"-n\" occurrences (sudo -n, apply -n)", args)
+	}
+}
+
+// TestDefaultElevatedApplyPropagatesProfileOverride is an integration-style
+// test of the real (unstubbed) defaultElevatedApply mirroring
+// TestDefaultElevatedApplyDryRunAddsN: it fakes "sudo" on PATH to record its
+// argv instead of re-execing gonf. With an active SetProfileOverride, the
+// recorded argv must carry "-profile=<value>" ahead of "apply" — otherwise
+// the elevated child would call DetectFacts() fresh and evaluate
+// when_begin{fact:profile,...} guards against the real host instead of the
+// override, diverging from the unprivileged chunks applied in-process by the
+// same run.
+func TestDefaultElevatedApplyPropagatesProfileOverride(t *testing.T) {
+	ResetForTest()
+	t.Cleanup(ResetForTest)
+
+	binDir := t.TempDir()
+	captured := filepath.Join(binDir, "sudo.args")
+	fakeSudo := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + captured + "\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(binDir, "sudo"), []byte(fakeSudo), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	SetProfileOverride("rocky")
+
+	planDir := t.TempDir()
+	ops := []plan.Op{
+		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "chunks"},
+		{Op: plan.KindCommand, Bin: "true", ID: "Command[elevated]", Elevate: true},
+	}
+	if err := defaultElevatedApply(privilege.Sudo, ops, planDir); err != nil {
+		t.Fatalf("defaultElevatedApply: %v", err)
+	}
+
+	raw, err := os.ReadFile(captured)
+	if err != nil {
+		t.Fatalf("fake sudo was not invoked: %v", err)
+	}
+	args := strings.Fields(string(raw))
+
+	profileIdx, applyIdx := -1, -1
+	for i, a := range args {
+		if a == "-profile=rocky" {
+			profileIdx = i
+		}
+		if a == "apply" {
+			applyIdx = i
+		}
+	}
+	if profileIdx == -1 {
+		t.Fatalf("sudo argv = %v, want \"-profile=rocky\"", args)
+	}
+	if applyIdx == -1 {
+		t.Fatalf("sudo argv = %v, want \"apply\"", args)
+	}
+	if profileIdx >= applyIdx {
+		t.Fatalf("sudo argv = %v, want \"-profile=rocky\" before \"apply\" (global flag must precede subcommand)", args)
 	}
 }

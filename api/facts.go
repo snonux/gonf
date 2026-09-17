@@ -22,6 +22,15 @@ func SetProfileOverride(profile string) {
 	profileOverride = profile
 }
 
+// ProfileOverride returns the currently active CLI -profile override, or ""
+// if none is set. Used to re-propagate the override into locally re-exec'd
+// elevated apply chunks (see elevatedApplyArgv in apply_chunks.go), since the
+// sudo/doas child otherwise starts fresh and DetectFacts() re-derives the
+// profile from the host instead of inheriting the parent's override.
+func ProfileOverride() string {
+	return profileOverride
+}
+
 // DetectFacts builds Facts from the running system and any profile override.
 func DetectFacts() Facts {
 	f := Facts{

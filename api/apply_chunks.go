@@ -15,17 +15,33 @@ import (
 var elevatedApplyRunner = defaultElevatedApply
 
 // elevatedApplyArgv builds the un-wrapped re-exec argv for the elevated
-// child ("gonf apply [-n] <path>"). Split out from defaultElevatedApply so
-// the dry-run propagation can be asserted by a unit test without spawning
-// sudo/doas: dryRun must mirror resource.DryRun() at the call site (see
-// remoteApplyCmd in internal/remote/remote.go for the equivalent remote-push
-// argument), or the elevated child applies for real during a local
-// "gonf -n" / "-dry-run" run.
-func elevatedApplyArgv(exe, path string, dryRun bool) []string {
-	if dryRun {
-		return []string{exe, "apply", "-n", path}
+// child ("gonf [-profile=<override>] apply [-n] <path>"). Split out from
+// defaultElevatedApply so the dry-run and profile-override propagation can be
+// asserted by a unit test without spawning sudo/doas: dryRun must mirror
+// resource.DryRun() at the call site (see remoteApplyCmd in
+// internal/remote/remote.go for the equivalent remote-push argument), or the
+// elevated child applies for real during a local "gonf -n" / "-dry-run" run.
+//
+// profileOverride must mirror api.ProfileOverride() at the call site, or the
+// elevated child re-derives its profile from the host (DetectFacts) instead
+// of inheriting the parent's "-profile" override — causing when_begin
+// profile predicates to evaluate inconsistently between the unprivileged
+// chunks (evaluated in-process, with the override) and the privileged chunk
+// (re-exec'd child, without it). "-profile" is a GLOBAL flag parsed by the
+// top-level flag.FlagSet in internal/cli/cli.go's CLI(), not by cliApply's
+// "apply" subcommand flag set, so it must precede "apply" in argv. A CLI flag
+// is used rather than an environment variable because sudo's env_reset (the
+// default) strips inherited env vars before the child even starts.
+func elevatedApplyArgv(exe, path string, dryRun bool, profileOverride string) []string {
+	argv := []string{exe}
+	if profileOverride != "" {
+		argv = append(argv, "-profile="+profileOverride)
 	}
-	return []string{exe, "apply", path}
+	argv = append(argv, "apply")
+	if dryRun {
+		argv = append(argv, "-n")
+	}
+	return append(argv, path)
 }
 
 func defaultElevatedApply(mode privilege.Mode, ops []plan.Op, planDir string) error {
@@ -42,7 +58,7 @@ func defaultElevatedApply(mode privilege.Mode, ops []plan.Op, planDir string) er
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		return err
 	}
-	argv := elevatedApplyArgv(exe, path, resource.DryRun())
+	argv := elevatedApplyArgv(exe, path, resource.DryRun(), ProfileOverride())
 	argv, err = privilege.WrapArgv(mode, true, argv)
 	if err != nil {
 		return err
@@ -59,9 +75,14 @@ func defaultElevatedApply(mode privilege.Mode, ops []plan.Op, planDir string) er
 // root). Under resource.DryRun(), the elevated re-exec (built by
 // defaultElevatedApply/elevatedApplyArgv) carries "-n" through to the child
 // so a local "gonf -n"/"-dry-run" run previews the privileged chunk instead
-// of actually mutating the host as root. A ValidateChunkDeps pre-flight runs
-// first: a dep recorded in a later chunk (or dangling) fails before any
-// chunk is applied, so a rejected plan mutates nothing.
+// of actually mutating the host as root. Likewise, an active CLI
+// "-profile=<override>" is re-propagated to the elevated child so
+// when_begin{fact:profile,...} guards evaluate identically in the
+// unprivileged (in-process) and privileged (re-exec'd) chunks of the same
+// plan, instead of the child re-detecting the profile from the actual host.
+// A ValidateChunkDeps pre-flight runs first: a dep recorded in a later chunk
+// (or dangling) fails before any chunk is applied, so a rejected plan
+// mutates nothing.
 func ApplyChunks(ops []plan.Op, planDir string, mode privilege.Mode) error {
 	chunks := plan.SplitPrivilegeChunks(ops)
 	if err := validateChunkDeps(chunks); err != nil {
