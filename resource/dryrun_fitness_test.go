@@ -48,6 +48,54 @@ import (
 // catch a bug specific to a real BSD binary's behavior that only that OS
 // would exhibit.
 //
+// A THIRD round found 7 more structurally-unreachable "if resource.DryRun()"
+// guards, all sharing the same root cause as the first two rounds: no
+// subtest ever drove the specific branch the guard sits in. Fixed here:
+//  1. pkg/openbsd.go's Absent-branch guard (line ~25): openbsd.go, alone
+//     among the pkg backends, has TWO independent guards (its p.Absent case
+//     returns early before reaching the shared install/upgrade guard other
+//     backends fall through to) — dryRunPkgOpenBSD only ever built a
+//     present package. dryRunPkgOpenBSDAbsent answers the pkg_info probe as
+//     "installed" so pkg.Absent's removal path is the one taken.
+//  2. link/hardlink.go's two guards (create ~line 67, replace ~line 49): no
+//     prior subtest ever called opt.WithHardlink at all. dryRunHardlinkCreate
+//     and dryRunHardlinkReplace cover both.
+//  3. dir/dir.go's ensureAbsent guard (~line 214), reachable only via
+//     dir.Absent, which no prior subtest called. dryRunDirAbsent.
+//  4. link/link.go's ensureAbsent guard (~line 128), reachable only via
+//     link.Absent. dryRunLinkAbsent.
+//  5. file/file.go's ensureAbsent guard (~line 608), reachable only via
+//     file.Absent. dryRunFileAbsent.
+//  6. link/symlink.go's repoint (~line 40) and replace-non-symlink (~line 55)
+//     branches: dryRunLink only ever hit the "create" branch (~line 76).
+//     dryRunSymlinkRepoint and dryRunSymlinkReplace cover the other two.
+//  7. All 6 resource.DryRun() sites in dir/source.go (the WithSource/
+//     WithSourceGlob tree-copy paths), never exercised since no subtest
+//     configured a source-based sync: copySourceDir's not-exist and
+//     already-exists branches (line 63, two sub-cases of the same guard),
+//     copySourceSymlink's dry-run shortcut (line 174), and pruneTree/
+//     pruneGlob's early-exit and per-entry would-prune branches (lines 285,
+//     308, 385, 433). dryRunDirSourceFresh and dryRunDirSourceExisting
+//     together cover the four copySourceDir/copySourceSymlink/pruneTree
+//     sites (fresh = destination absent, hitting the not-exist and
+//     early-exit halves; existing = destination pre-built, hitting the
+//     already-exists and in-loop halves). dryRunDirSourceGlobFresh and
+//     dryRunDirSourceGlobExisting do the same for pruneGlob's pair.
+//
+// Every one of these 12 new/extended subtests was independently verified by
+// temporarily changing its target guard's "if resource.DryRun()" to
+// "if false && resource.DryRun()", confirming ONLY that guard's subtest
+// failed (siblings stayed green), and reverting before moving to the next.
+//
+// Some resource/*.go files share ONE "if resource.DryRun()" line between
+// their Absent and Present code paths (pkg's dnf/freebsd/netbsd backends,
+// all four service backends, and timer.go) rather than openbsd.go's two
+// independent guards; for those, exercising the line via the existing
+// Present-path subtest already proves that exact guard holds, so no
+// separate Absent-path subtest was added for them. See the exhaustive
+// call-site inventory in this task's final `ask annotate t5` note for the
+// full call-site-to-subtest mapping.
+//
 // Each kind is its own subtest so a regression names exactly which kind (or
 // which branch/backend of a kind) broke, and so kinds that require systemd
 // (service/timer/daemon_reload/systemdtimer) can skip cleanly on a host
@@ -59,15 +107,27 @@ func TestDryRunFitness(t *testing.T) {
 	}{
 		{"dir", dryRunDir},
 		{"dir-reapply-attrs", dryRunDirReapplyAttrs},
+		{"dir-absent", dryRunDirAbsent},
+		{"dir-source-fresh", dryRunDirSourceFresh},
+		{"dir-source-existing", dryRunDirSourceExisting},
+		{"dir-sourceglob-fresh", dryRunDirSourceGlobFresh},
+		{"dir-sourceglob-existing", dryRunDirSourceGlobExisting},
 		{"file", dryRunFile},
 		{"file-reapply-attrs", dryRunFileReapplyAttrs},
+		{"file-absent", dryRunFileAbsent},
 		{"link", dryRunLink},
+		{"link-absent", dryRunLinkAbsent},
+		{"symlink-repoint", dryRunSymlinkRepoint},
+		{"symlink-replace", dryRunSymlinkReplace},
+		{"hardlink-create", dryRunHardlinkCreate},
+		{"hardlink-replace", dryRunHardlinkReplace},
 		{"cmd", dryRunCmd},
 		{"cron", dryRunCron},
 		{"pkg", dryRunPkg},
 		{"pkg-freebsd", dryRunPkgFreeBSD},
 		{"pkg-netbsd", dryRunPkgNetBSD},
 		{"pkg-openbsd", dryRunPkgOpenBSD},
+		{"pkg-openbsd-absent", dryRunPkgOpenBSDAbsent},
 		{"service", dryRunService},
 		{"service-freebsd", dryRunServiceFreeBSD},
 		{"service-netbsd", dryRunServiceNetBSD},
@@ -168,6 +228,167 @@ func dryRunDirReapplyAttrs(t *testing.T, tmp string) {
 	}
 }
 
+// dryRunDirAbsent exercises dir.go's ensureAbsent guard (~line 214): neither
+// dryRunDir nor dryRunDirReapplyAttrs above ever calls dir.Absent, so
+// ensureAbsent's own "if resource.DryRun()" check (distinct from
+// ensureDirectorySelf's) was never reached. This fixture pre-creates a real
+// directory and targets it with dir.Absent, so a broken guard is observable
+// as a real os.Remove.
+func dryRunDirAbsent(t *testing.T, tmp string) {
+	path := filepath.Join(tmp, "existingdir-absent")
+	if err := os.Mkdir(path, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	dir.Absent(path)
+	if err := resource.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatalf("dry-run must not remove %s (Lstat err=%v)", path, err)
+	}
+}
+
+// dryRunDirSourceFresh exercises three of dir/source.go's six independent
+// "if resource.DryRun()" guards in one pass, all against a destination tree
+// that does not exist yet (ensureDirectorySelf's own dry-run guard skips
+// creating d.path, mirroring dryRunDir): copySourceDir's "target does not
+// exist" branch (source.go:63, the os.IsNotExist sub-case), copySourceSymlink's
+// dry-run shortcut (source.go:174, which delegates to noteSourceSymlinkDryRun
+// instead of link.Ensure so a not-yet-materialized destination sibling is
+// previewed instead of refused), and pruneTree's early "destination does not
+// exist yet, nothing to walk" exit (source.go:285). dryRunDirSourceExisting
+// below exercises the other half of the first and third of these.
+func dryRunDirSourceFresh(t *testing.T, tmp string) {
+	src := filepath.Join(tmp, "src-fresh")
+	if err := os.MkdirAll(filepath.Join(src, "subdir"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "subdir", "file.txt"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "linktarget.txt"), []byte("t"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("linktarget.txt", filepath.Join(src, "rel-link")); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := filepath.Join(tmp, "dest-fresh")
+	dir.Present(dest, opt.WithSource(src), opt.WithPrune)
+	if err := resource.Apply(); err != nil {
+		t.Fatal(err)
+	}
+
+	assertAbsent(t, dest)
+	assertAbsent(t, filepath.Join(dest, "subdir"))
+	assertAbsent(t, filepath.Join(dest, "subdir", "file.txt"))
+	assertAbsent(t, filepath.Join(dest, "linktarget.txt"))
+	assertAbsent(t, filepath.Join(dest, "rel-link"))
+}
+
+// dryRunDirSourceExisting exercises the OTHER halves of copySourceDir's and
+// pruneTree's guards exercised above: the destination tree is pre-created in
+// full, so copySourceDir's "already exists" branch (source.go:74-89, whose
+// non-dry-run twin unconditionally chmods/chowns via applyAttributesTo) and
+// pruneTree's per-entry would-prune branch (source.go:308, guarding a real
+// os.RemoveAll) are the ones exercised instead.
+func dryRunDirSourceExisting(t *testing.T, tmp string) {
+	src := filepath.Join(tmp, "src-existing")
+	if err := os.MkdirAll(filepath.Join(src, "subdir"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := filepath.Join(tmp, "dest-existing")
+	const destMode = os.FileMode(0o700)
+	if err := os.MkdirAll(dest, destMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dest, destMode); err != nil {
+		t.Fatal(err)
+	}
+	subdir := filepath.Join(dest, "subdir")
+	if err := os.Mkdir(subdir, destMode); err != nil {
+		t.Fatal(err)
+	}
+	// Pin the mode explicitly (umask): see dryRunDirReapplyAttrs.
+	if err := os.Chmod(subdir, destMode); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(dest, "stale.txt")
+	if err := os.WriteFile(stale, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dir.Present(dest, opt.WithSource(src), opt.WithPrune, opt.WithMode(0o750))
+	if err := resource.Apply(); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := os.Stat(subdir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != destMode {
+		t.Fatalf("dry-run must not chmod existing source-tree subdirectory %s: got mode %v, want unchanged %v", subdir, got, destMode)
+	}
+	if _, err := os.Lstat(stale); err != nil {
+		t.Fatalf("dry-run must not prune %s: %v", stale, err)
+	}
+}
+
+// dryRunDirSourceGlobFresh exercises pruneGlob's early "destination does not
+// exist yet" exit (source.go:385), the WithSourceGlob twin of
+// dryRunDirSourceFresh's pruneTree coverage above.
+func dryRunDirSourceGlobFresh(t *testing.T, tmp string) {
+	src := filepath.Join(tmp, "srcglob-fresh")
+	if err := os.MkdirAll(src, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "match.txt"), []byte("m"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := filepath.Join(tmp, "destglob-fresh")
+	dir.Present(dest, opt.WithSourceGlob(filepath.Join(src, "*.txt")), opt.WithPrune)
+	if err := resource.Apply(); err != nil {
+		t.Fatal(err)
+	}
+
+	assertAbsent(t, dest)
+	assertAbsent(t, filepath.Join(dest, "match.txt"))
+}
+
+// dryRunDirSourceGlobExisting exercises pruneGlob's per-entry would-prune
+// branch (source.go:433), guarding a real os.Remove of a stale destination
+// file whose basename does not match the configured glob's keep-set.
+func dryRunDirSourceGlobExisting(t *testing.T, tmp string) {
+	src := filepath.Join(tmp, "srcglob-existing")
+	if err := os.MkdirAll(src, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "match.txt"), []byte("m"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := filepath.Join(tmp, "destglob-existing")
+	if err := os.MkdirAll(dest, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(dest, "stale.txt")
+	if err := os.WriteFile(stale, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dir.Present(dest, opt.WithSourceGlob(filepath.Join(src, "*.txt")), opt.WithPrune)
+	if err := resource.Apply(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Lstat(stale); err != nil {
+		t.Fatalf("dry-run must not prune %s: %v", stale, err)
+	}
+}
+
 func dryRunFile(t *testing.T, tmp string) {
 	path := filepath.Join(tmp, "newfile.txt")
 	file.Present(path, opt.WithContent("hello"))
@@ -213,6 +434,25 @@ func dryRunFileReapplyAttrs(t *testing.T, tmp string) {
 	}
 }
 
+// dryRunFileAbsent exercises file.go's ensureAbsent guard (~line 608): the
+// only path that reaches it is file.Absent, which neither dryRunFile nor
+// dryRunFileReapplyAttrs above ever calls. This fixture pre-creates a real
+// file and targets it with file.Absent, so a broken guard is observable as a
+// real os.Remove.
+func dryRunFileAbsent(t *testing.T, tmp string) {
+	path := filepath.Join(tmp, "existing-file-absent.txt")
+	if err := os.WriteFile(path, []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	file.Absent(path)
+	if err := resource.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatalf("dry-run must not remove %s (Lstat err=%v)", path, err)
+	}
+}
+
 func dryRunLink(t *testing.T, tmp string) {
 	target := filepath.Join(tmp, "target")
 	if err := os.WriteFile(target, []byte("t"), 0o644); err != nil {
@@ -224,6 +464,161 @@ func dryRunLink(t *testing.T, tmp string) {
 		t.Fatal(err)
 	}
 	assertAbsent(t, path)
+}
+
+// dryRunLinkAbsent exercises link.go's ensureAbsent guard (~line 128): the
+// only path that reaches it is link.Absent, which dryRunLink above never
+// calls (it builds a fresh symlink via link.Present). This fixture
+// pre-creates a real symlink and targets it with link.Absent, so a broken
+// guard is observable as a real os.Remove.
+func dryRunLinkAbsent(t *testing.T, tmp string) {
+	target := filepath.Join(tmp, "absent-target")
+	if err := os.WriteFile(target, []byte("t"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(tmp, "existing-link-absent")
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	link.Absent(path)
+	if err := resource.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatalf("dry-run must not remove %s (Lstat err=%v)", path, err)
+	}
+}
+
+// dryRunSymlinkRepoint exercises symlink.go's "repoint an existing symlink"
+// guard (~line 40): dryRunLink above always targets a path with nothing at
+// it yet, so it only ever reaches the "create" branch at the bottom of
+// ensureSymlink. This fixture pre-creates a symlink pointing at one target
+// and reconfigures it to point at a different (also real, so the target-exists
+// assert passes) one, so a broken guard is observable as a real os.Remove
+// followed by a real os.Symlink.
+func dryRunSymlinkRepoint(t *testing.T, tmp string) {
+	oldTarget := filepath.Join(tmp, "repoint-old-target")
+	if err := os.WriteFile(oldTarget, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	newTarget := filepath.Join(tmp, "repoint-new-target")
+	if err := os.WriteFile(newTarget, []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(tmp, "repoint-link")
+	if err := os.Symlink(oldTarget, path); err != nil {
+		t.Fatal(err)
+	}
+	link.Present(path, opt.WithSymlink(newTarget))
+	if err := resource.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.Readlink(path)
+	if err != nil {
+		t.Fatalf("dry-run must not remove symlink %s: %v", path, err)
+	}
+	if got != oldTarget {
+		t.Fatalf("dry-run must not repoint %s: got target %q, want unchanged %q", path, got, oldTarget)
+	}
+}
+
+// dryRunSymlinkReplace exercises symlink.go's "replace an existing non-symlink
+// entry" guard (~line 55): a plain file (not a symlink) sits at path, so
+// ensureSymlink's err==nil-but-not-a-symlink branch is the one exercised
+// instead of either the repoint branch above or the create branch dryRunLink
+// covers. A broken guard is observable as the regular file being moved aside
+// (replaceWithLink's path.old) and replaced by a real symlink.
+func dryRunSymlinkReplace(t *testing.T, tmp string) {
+	target := filepath.Join(tmp, "replace-target")
+	if err := os.WriteFile(target, []byte("t"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(tmp, "replace-existing")
+	const original = "not-a-symlink"
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link.Present(path, opt.WithSymlink(target))
+	if err := resource.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("dry-run must not remove %s: %v", path, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("dry-run must not convert %s into a symlink", path)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != original {
+		t.Fatalf("dry-run must not replace %s content: got %q, want %q", path, got, original)
+	}
+	if _, err := os.Lstat(path + ".old"); !os.IsNotExist(err) {
+		t.Fatalf("dry-run must not create aside backup %s.old", path)
+	}
+}
+
+// dryRunHardlinkCreate exercises hardlink.go's "create a new hardlink" guard
+// (~line 67): no prior subtest ever calls opt.WithHardlink at all (dryRunLink
+// only ever builds a symlink), so neither of hardlink.go's two independently
+// guarded branches were reachable before this and dryRunHardlinkReplace below.
+func dryRunHardlinkCreate(t *testing.T, tmp string) {
+	target := filepath.Join(tmp, "hardlink-target")
+	if err := os.WriteFile(target, []byte("t"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(tmp, "hardlink-new")
+	link.Present(path, opt.WithHardlink(target))
+	if err := resource.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	assertAbsent(t, path)
+}
+
+// dryRunHardlinkReplace exercises hardlink.go's "replace an existing entry"
+// guard (~line 49): a plain file (not already hardlinked to target) sits at
+// path, so ensureHardlink's "info, err := os.Lstat(l.path); err == nil,
+// !sameInode" branch is the one exercised instead of the create branch above.
+// A broken guard is observable as the regular file being moved aside
+// (replaceWithLink's path.old) and replaced by a real hardlink to target.
+func dryRunHardlinkReplace(t *testing.T, tmp string) {
+	target := filepath.Join(tmp, "hardlink-replace-target")
+	if err := os.WriteFile(target, []byte("target"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	targetInfo, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(tmp, "hardlink-replace-existing")
+	const original = "original-content"
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link.Present(path, opt.WithHardlink(target))
+	if err := resource.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("dry-run must not remove %s: %v", path, err)
+	}
+	if os.SameFile(info, targetInfo) {
+		t.Fatalf("dry-run must not actually hardlink %s to %s", path, target)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != original {
+		t.Fatalf("dry-run must not replace %s content: got %q, want %q", path, got, original)
+	}
+	if _, err := os.Lstat(path + ".old"); !os.IsNotExist(err) {
+		t.Fatalf("dry-run must not create aside backup %s.old", path)
+	}
 }
 
 func dryRunCmd(t *testing.T, tmp string) {
@@ -358,6 +753,36 @@ func dryRunPkgOpenBSD(t *testing.T, tmp string) {
 		// -- distinct binaries, so the probe is identified by name alone.
 		return name == "pkg_info"
 	})
+}
+
+// dryRunPkgOpenBSDAbsent exercises openbsd.go's Absent-branch guard
+// (~line 25): dryRunPkgOpenBSD above only ever calls pkg.Present (install
+// path), which takes the SEPARATE dry-run guard further down applyOpenBSD
+// (the one shared by the p.latest/default install branches). This fixture
+// answers the pkg_info probe as "installed" so pkg.Absent's removal path
+// decides a real pkg_delete is needed, and asserts it never runs.
+func dryRunPkgOpenBSDAbsent(t *testing.T, tmp string) {
+	t.Cleanup(func() {
+		pkg.ResetRunCmdForTest()
+		pkg.ResetDetectPackageManagerForTest()
+	})
+	pkg.SetDetectPackageManagerForTest(func() (string, error) { return "openbsd", nil })
+	var mutated bool
+	pkg.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+		if name == "pkg_info" {
+			// installed: exit 0.
+			return "", "", 0, nil
+		}
+		mutated = true
+		return "", "", 0, nil
+	})
+	pkg.Absent("fit-pkg")
+	if err := resource.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	if mutated {
+		t.Fatal("dry-run must not run pkg_delete for the openbsd backend")
+	}
 }
 
 func dryRunService(t *testing.T, tmp string) {
