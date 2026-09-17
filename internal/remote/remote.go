@@ -27,6 +27,26 @@ import (
 // an explicit one wins.
 const sshConnectTimeout = "15"
 
+// sshServerAliveInterval/sshServerAliveCountMax make ssh itself detect a
+// NETWORK-level hang, not just a hung remote process: ConnectTimeout only
+// bounds the initial handshake, and the controller-side per-host timeout
+// (DefaultHostTimeout, hostTimeoutCtx in fleet.go) only kills the LOCAL ssh
+// client process via its context — a network path that has gone silent
+// without tearing down the TCP session (a dropped route, a wedged NAT/
+// firewall state) can otherwise leave that local ssh process blocked in a
+// read syscall past its own deadline, since exec.CommandContext's kill
+// signal still has to be scheduled and delivered by the OS. With
+// ServerAlive* set, ssh itself sends periodic keepalives over the already
+// encrypted channel and disconnects on its own once sshServerAliveCountMax
+// of them go unanswered — an independent, ssh-native detector for exactly
+// the failure mode the controller-side timeout cannot always catch quickly.
+// 15s * 4 gives a ~60s worst-case detection window, well under
+// DefaultHostTimeout.
+const (
+	sshServerAliveInterval = "15"
+	sshServerAliveCountMax = "4"
+)
+
 // SSHRunner runs ssh with argv (typically ssh [opts...] host remote-cmd)
 // under ctx: canceling ctx (e.g. a fleet abort or per-host timeout) kills the
 // in-flight ssh process. A nil ctx is treated as context.Background. A
@@ -87,6 +107,8 @@ func (t PushTarget) sshArgv(remoteCmd string) []string {
 	argv := []string{"ssh"}
 	argv = append(argv, t.ExtraSSH...)
 	argv = append(argv, "-o", "ConnectTimeout="+sshConnectTimeout)
+	argv = append(argv, "-o", "ServerAliveInterval="+sshServerAliveInterval)
+	argv = append(argv, "-o", "ServerAliveCountMax="+sshServerAliveCountMax)
 	if t.Port > 0 {
 		argv = append(argv, "-p", strconv.Itoa(t.Port))
 	}
@@ -98,7 +120,17 @@ func (t PushTarget) sshArgv(remoteCmd string) []string {
 }
 
 // PushPayload streams an already-encoded GONF-PUSH/1 blob to one SSH target.
+// Equivalent to PushPayloadContext(context.Background(), ...); kept as its
+// own entry point for existing (context.Background()-rooted) callers.
 func PushPayload(t PushTarget, payload []byte, elevate bool, applyDir string) error {
+	return PushPayloadContext(context.Background(), t, payload, elevate, applyDir)
+}
+
+// PushPayloadContext is PushPayload bounded/cancelable by ctx: canceling ctx
+// kills the in-flight ssh process. When ctx has no deadline of its own,
+// DefaultHostTimeout is applied so a wedged remote command cannot hang this
+// one-shot push forever.
+func PushPayloadContext(ctx context.Context, t PushTarget, payload []byte, elevate bool, applyDir string) error {
 	if t.Host == "" {
 		return fmt.Errorf("push: empty host")
 	}
@@ -106,7 +138,15 @@ func PushPayload(t PushTarget, payload []byte, elevate bool, applyDir string) er
 	if err != nil {
 		return err
 	}
-	return SSHRunner(context.Background(), bytes.NewReader(payload), t.sshArgv(remote))
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, DefaultHostTimeout)
+		defer cancel()
+	}
+	return SSHRunner(ctx, bytes.NewReader(payload), t.sshArgv(remote))
 }
 
 // PushChunks splits ops into privilege chunks and streams each chunk to one

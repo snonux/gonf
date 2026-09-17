@@ -80,6 +80,46 @@ func TestSSHArgvConnectTimeoutOverride(t *testing.T) {
 	}
 }
 
+// firstOption returns the first "-o Key=Value" option in argv whose Key
+// matches prefix (e.g. "ServerAliveInterval="), mirroring
+// firstConnectTimeout's "ssh uses the first occurrence" semantics.
+func firstOption(argv []string, prefix string) string {
+	for _, a := range argv {
+		if strings.HasPrefix(a, prefix) {
+			return a
+		}
+	}
+	return ""
+}
+
+// Every generated ssh argv must set ServerAliveInterval/ServerAliveCountMax:
+// ConnectTimeout only bounds the initial handshake, and a per-host/fleet
+// timeout only kills the local ssh client's process — it does not by itself
+// guarantee prompt detection of a network path that has gone silent without
+// tearing down the TCP session. ssh's own keepalive detects and tears down
+// that case independently (task x5: "generated ssh has no
+// ServerAliveInterval, so a network-level hang ... isn't detected").
+func TestSSHArgvServerAliveKeepalive(t *testing.T) {
+	argv := PushTarget{Host: "h.example"}.sshArgv("gonf apply -")
+	if got := firstOption(argv, "ServerAliveInterval="); got != "ServerAliveInterval=15" {
+		t.Fatalf("argv=%v: ServerAliveInterval=%q, want ServerAliveInterval=15", argv, got)
+	}
+	if got := firstOption(argv, "ServerAliveCountMax="); got != "ServerAliveCountMax=4" {
+		t.Fatalf("argv=%v: ServerAliveCountMax=%q, want ServerAliveCountMax=4", argv, got)
+	}
+}
+
+// An explicit ServerAliveInterval from ExtraSSH (or -- ssh-args) must win
+// over the default, exactly like ConnectTimeout: ssh uses the first
+// occurrence on the command line, and ExtraSSH comes first.
+func TestSSHArgvServerAliveOverride(t *testing.T) {
+	targ := PushTarget{Host: "h.example", ExtraSSH: []string{"-o", "ServerAliveInterval=5"}}
+	argv := targ.sshArgv("gonf apply -")
+	if got := firstOption(argv, "ServerAliveInterval="); got != "ServerAliveInterval=5" {
+		t.Fatalf("argv=%v: ServerAliveInterval=%q, want the explicit 5s", argv, got)
+	}
+}
+
 // TestPushRemoveStickyRunsAfterContextCanceled pins root cause 2: cleanup of
 // the remote sticky apply dir must not be skipped just because the push ctx
 // that triggered it (SIGINT, -host-timeout, or a sibling host's failure
