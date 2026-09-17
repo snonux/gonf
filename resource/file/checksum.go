@@ -65,19 +65,13 @@ func (f *File) ensureFile(path string, content []byte) error {
 		return f.applyAttributesTo(path)
 	}
 
-	if resource.DryRun() {
-		resource.Note(id, resource.StatusWouldChange)
-		logger.Info("dry-run: would update %s", path)
-		return nil
-	}
-
-	if err := atomicWrite(path, content, f.mode); err != nil {
-		return err
-	}
-
-	resource.Note(id, resource.StatusChanged)
-	logger.Info("updated %s", path)
-	return f.applyAttributesTo(path)
+	return resource.Mutate(id, fmt.Sprintf("update %s", path), func() error {
+		if err := atomicWrite(path, content, f.mode); err != nil {
+			return err
+		}
+		logger.Info("updated %s", path)
+		return f.applyAttributesTo(path)
+	})
 }
 
 // nonRegularEntryAt reports whether an entry that is not a managed regular

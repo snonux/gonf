@@ -195,31 +195,27 @@ func (c *Cmd) id() string {
 }
 
 func (c *Cmd) run() error {
-	if resource.DryRun() {
-		resource.Note(c.id(), resource.StatusWouldChange)
-		logger.Info("dry-run: would run %s %s", c.bin, strings.Join(c.args, " "))
+	desc := fmt.Sprintf("run %s %s", c.bin, strings.Join(c.args, " "))
+	return resource.Mutate(c.id(), desc, func() error {
+		opts := exec.Opts{Dir: c.dir}
+		if c.env != nil {
+			opts.Env = exec.MergeEnv(c.env)
+		}
+
+		logger.Info("running %s: %s %s", c.id(), c.bin, strings.Join(c.args, " "))
+		stdout, stderr, exitCode, err := runWith(opts, c.bin, c.args...)
+		if err != nil {
+			return fmt.Errorf("failed to execute %s: %w", c.bin, err)
+		}
+		if exitCode != 0 {
+			return fmt.Errorf("%s exited %d\nstdout: %s\nstderr: %s",
+				c.bin, exitCode, stdout, stderr)
+		}
+		if stdout != "" {
+			logger.Debug("%s stdout: %s", c.id(), strings.TrimSpace(stdout))
+		}
 		return nil
-	}
-
-	opts := exec.Opts{Dir: c.dir}
-	if c.env != nil {
-		opts.Env = exec.MergeEnv(c.env)
-	}
-
-	logger.Info("running %s: %s %s", c.id(), c.bin, strings.Join(c.args, " "))
-	stdout, stderr, exitCode, err := runWith(opts, c.bin, c.args...)
-	if err != nil {
-		return fmt.Errorf("failed to execute %s: %w", c.bin, err)
-	}
-	if exitCode != 0 {
-		return fmt.Errorf("%s exited %d\nstdout: %s\nstderr: %s",
-			c.bin, exitCode, stdout, stderr)
-	}
-	if stdout != "" {
-		logger.Debug("%s stdout: %s", c.id(), strings.TrimSpace(stdout))
-	}
-	resource.Note(c.id(), resource.StatusChanged)
-	return nil
+	})
 }
 
 func guardPasses(g *opt.Guard) (bool, error) {

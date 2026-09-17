@@ -96,18 +96,13 @@ func (d *DaemonReloadResource) apply() error {
 
 	args := Args(d.user, "daemon-reload")
 
-	if resource.DryRun() {
-		logger.Info("dry-run: would run systemctl %v", args)
-		resource.Note(id, resource.StatusWouldChange)
+	return resource.Mutate(id, fmt.Sprintf("run systemctl %v", args), func() error {
+		if err := Run(args...); err != nil {
+			return fmt.Errorf("%s: %w", id, err)
+		}
+		logger.Info("systemctl %v", args)
 		return nil
-	}
-
-	if err := Run(args...); err != nil {
-		return fmt.Errorf("%s: %w", id, err)
-	}
-	logger.Info("systemctl %v", args)
-	resource.Note(id, resource.StatusChanged)
-	return nil
+	})
 }
 
 func (d *DaemonReloadResource) id() string {

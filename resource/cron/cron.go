@@ -153,18 +153,14 @@ func (c *Cron) apply() error {
 		return nil
 	}
 
-	if resource.DryRun() {
-		logger.Info("dry-run: would update crontab for %s (job %s)", c.user, c.name)
-		resource.Note(id, resource.StatusWouldChange)
+	desc := fmt.Sprintf("update crontab for %s (job %s)", c.user, c.name)
+	return resource.Mutate(id, desc, func() error {
+		if err := writeCrontab(c.user, newTab); err != nil {
+			return err
+		}
+		logger.Info("updated crontab for %s (job %s)", c.user, c.name)
 		return nil
-	}
-
-	if err := writeCrontab(c.user, newTab); err != nil {
-		return err
-	}
-	logger.Info("updated crontab for %s (job %s)", c.user, c.name)
-	resource.Note(id, resource.StatusChanged)
-	return nil
+	})
 }
 
 func (c *Cron) validate() error {
