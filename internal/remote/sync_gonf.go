@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -289,6 +290,16 @@ func buildGonf(ctx context.Context, goos, goarch string) (string, error) {
 // createRemoteStagingDir validates the result still has this prefix.
 const remoteStagingPrefix = "/tmp/gonf-sync."
 
+// remoteStagingDirRE matches exactly what a well-behaved `mktemp -d
+// /tmp/gonf-sync.XXXXXXXX` can produce: the fixed prefix followed by exactly
+// as many characters as there are "X"s in the template, each drawn from
+// mktemp's portable substitution alphabet (letters and digits), and nothing
+// else (anchored at both ends, so embedded whitespace, newlines, or shell
+// metacharacters after a valid-looking prefix are rejected rather than
+// silently accepted and later concatenated, unescaped, into further remote
+// command strings sent over ssh).
+var remoteStagingDirRE = regexp.MustCompile(`^` + regexp.QuoteMeta(remoteStagingPrefix) + `[A-Za-z0-9]{8}$`)
+
 // createRemoteStagingDir creates an unpredictable, exclusively-created
 // staging directory on the remote host (mode 0700, owned by the SSH login
 // user) via `mktemp -d`. This is a plain command with no shell metacharacters
@@ -310,6 +321,15 @@ func createRemoteStagingDir(ctx context.Context, t PushTarget) (string, error) {
 	}
 	if !strings.HasPrefix(dir, remoteStagingPrefix) {
 		return "", fmt.Errorf("mktemp -d returned unexpected path %q", dir)
+	}
+	// dir is concatenated, unescaped, into further remote command strings
+	// (install's src, rm -rf's target) that are sent as a single literal
+	// string over ssh for the remote login shell to parse. A prefix check
+	// alone would accept a suffix containing whitespace, a newline, or shell
+	// metacharacters; require an exact match against mktemp's known output
+	// shape instead.
+	if !remoteStagingDirRE.MatchString(dir) {
+		return "", fmt.Errorf("mktemp -d returned a path with an unexpected format %q", dir)
 	}
 	return dir, nil
 }

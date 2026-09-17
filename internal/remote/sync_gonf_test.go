@@ -343,7 +343,7 @@ func TestEnsureRemoteGonfCleansUpStagingDirOnSCPFailure(t *testing.T) {
 // failed.
 func TestEnsureRemoteGonfCleansUpStagingDirOnInstallFailure(t *testing.T) {
 	s := &gonfSyncStub{
-		mktempDir: "/tmp/gonf-sync.installfail1",
+		mktempDir: "/tmp/gonf-sync.instfl01",
 		sshErrFn: func(remoteCmd string) error {
 			if strings.HasPrefix(remoteCmd, "sudo -n install ") {
 				return fmt.Errorf("install: permission denied")
@@ -358,7 +358,7 @@ func TestEnsureRemoteGonfCleansUpStagingDirOnInstallFailure(t *testing.T) {
 		t.Fatal("expected an install error")
 	}
 
-	wantRm := "rm -rf /tmp/gonf-sync.installfail1"
+	wantRm := "rm -rf /tmp/gonf-sync.instfl01"
 	found := false
 	for _, cmd := range s.sshCmds {
 		if cmd == wantRm {
@@ -395,7 +395,7 @@ func TestEnsureRemoteGonfMktempFailureIsHardError(t *testing.T) {
 // substitution, since a FreeBSD login shell may be tcsh (see the constraint
 // documented on probePlanVersion).
 func TestEnsureRemoteGonfCommandsAreTcshSafe(t *testing.T) {
-	s := &gonfSyncStub{mktempDir: "/tmp/gonf-sync.tcshcheck1"}
+	s := &gonfSyncStub{mktempDir: "/tmp/gonf-sync.tcshchk1"}
 	s.install(t)
 
 	if _, err := EnsureRemoteGonf(context.Background(), gonfSyncTarget()); err != nil {
@@ -449,6 +449,30 @@ func TestCreateRemoteStagingDir(t *testing.T) {
 	}
 	if _, err := createRemoteStagingDir(context.Background(), PushTarget{Host: "h.example"}); err == nil {
 		t.Fatal("want an error when mktemp output has an unexpected prefix")
+	}
+
+	// A correct prefix followed by garbage must still be rejected: dir is
+	// later concatenated, unescaped, into further remote command strings
+	// (install's src, rm -rf's target) parsed by the remote login shell, so
+	// a prefix-only check would let embedded shell metacharacters or
+	// whitespace through.
+	garbageSuffixes := []string{
+		"/tmp/gonf-sync.abc123\nrm -rf /\ndone", // embedded newline + injected command
+		"/tmp/gonf-sync.abc123; rm -rf /",       // embedded semicolon
+		"/tmp/gonf-sync.abc123`rm -rf /`",       // embedded backtick command substitution
+		"/tmp/gonf-sync.ab",                     // too short
+		"/tmp/gonf-sync.abc123456",              // too long
+		"/tmp/gonf-sync.abc 123",                // embedded space
+		"/tmp/gonf-sync./../../etc",             // path traversal, still prefixed
+	}
+	for _, s := range garbageSuffixes {
+		out := s
+		sshCaptureExec = func(ctx context.Context, argv []string) (string, string, error) {
+			return out + "\n", "", nil
+		}
+		if _, err := createRemoteStagingDir(context.Background(), PushTarget{Host: "h.example"}); err == nil {
+			t.Fatalf("want an error for right-prefix-plus-garbage output %q", s)
+		}
 	}
 }
 
