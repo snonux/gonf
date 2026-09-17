@@ -128,7 +128,7 @@ func PushPayload(t PushTarget, payload []byte, elevate bool, applyDir string) er
 // know or care whether the dir was empty, freshly created, or left over from
 // an interrupted prior run; the remote side guarantees a clean extraction
 // target either way.
-func PushChunks(ctx context.Context, t PushTarget, planID string, ops []plan.Op, mem *plan.MemoryStore) error {
+func PushChunks(ctx context.Context, t PushTarget, planID string, ops []plan.Op, mem plan.BlobReader) error {
 	chunks := plan.SplitPrivilegeChunks(ops)
 	if err := validateChunkDeps(chunks); err != nil {
 		return err
@@ -144,17 +144,9 @@ func PushChunks(ctx context.Context, t PushTarget, planID string, ops []plan.Op,
 	// Pre-flight: build every remote apply command before any SSH traffic so
 	// a privilege misconfiguration (e.g. -privilege=none with an elevated
 	// chunk) fails the push before syncing gonf or sending any chunk.
-	remotes := make([]string, len(chunks))
-	for i, ch := range chunks {
-		applyDir := ""
-		if sticky != "" {
-			applyDir = sticky
-		}
-		remote, err := remoteApplyCmd(ch.Elevate, t, applyDir)
-		if err != nil {
-			return fmt.Errorf("chunk %d: %w", i, err)
-		}
-		remotes[i] = remote
+	remotes, err := buildRemoteCmds(chunks, t, sticky)
+	if err != nil {
+		return err
 	}
 
 	installed, err := EnsureRemoteGonf(ctx, t)
@@ -164,35 +156,71 @@ func PushChunks(ctx context.Context, t PushTarget, planID string, ops []plan.Op,
 	if installed != "" && t.GonfPath == "" {
 		t.GonfPath = installed
 		// Rebuild remotes so apply uses the freshly installed binary path.
-		for i, ch := range chunks {
-			applyDir := ""
-			if sticky != "" {
-				applyDir = sticky
-			}
-			remote, err := remoteApplyCmd(ch.Elevate, t, applyDir)
-			if err != nil {
-				return fmt.Errorf("chunk %d: %w", i, err)
-			}
-			remotes[i] = remote
-		}
-	}
-
-	if sticky != "" {
-		if chunks[0].Ops[0].Op != plan.KindPlan {
-			return fmt.Errorf("push: chunk 0 missing plan header")
-		}
-		if err := pushBlobs(ctx, t, chunks[0].Ops[0], mem, sticky); err != nil {
-			// Nothing was applied yet, but the blob upload may have partly
-			// landed in the sticky dir before failing. Best-effort removal:
-			// even without this, the next push to the same host would still
-			// be correct (cliApplyStdin wipes the dir's contents before
-			// extracting), but cleaning up now avoids leaking a part-filled
-			// dir under /tmp until that next push happens.
-			pushRemoveSticky(ctx, t, sticky)
+		remotes, err = buildRemoteCmds(chunks, t, sticky)
+		if err != nil {
 			return err
 		}
 	}
 
+	if sticky != "" {
+		if err := uploadSticky(ctx, t, chunks, mem, sticky); err != nil {
+			return err
+		}
+	}
+
+	if err := streamChunks(ctx, t, chunks, remotes, mem, sticky); err != nil {
+		return err
+	}
+	if sticky != "" {
+		pushRemoveSticky(ctx, t, sticky)
+	}
+	return nil
+}
+
+// buildRemoteCmds builds the remote apply command for every chunk, in order.
+// Called once up front (pre-flight, before any SSH traffic) and again after
+// EnsureRemoteGonf if it installed a fresh binary at a new path, so both
+// passes share one implementation instead of drifting apart.
+func buildRemoteCmds(chunks []plan.Chunk, t PushTarget, sticky string) ([]string, error) {
+	remotes := make([]string, len(chunks))
+	for i, ch := range chunks {
+		applyDir := ""
+		if sticky != "" {
+			applyDir = sticky
+		}
+		remote, err := remoteApplyCmd(ch.Elevate, t, applyDir)
+		if err != nil {
+			return nil, fmt.Errorf("chunk %d: %w", i, err)
+		}
+		remotes[i] = remote
+	}
+	return remotes, nil
+}
+
+// uploadSticky uploads every blob to the sticky apply dir before any chunk
+// applies (see pushBlobs). On failure it best-effort removes whatever
+// partly landed in the sticky dir: nothing was applied yet, but leaving a
+// part-filled dir under /tmp would linger until the next push to the same
+// host (cliApplyStdin wipes it before extracting, so this is cleanup, not
+// correctness).
+func uploadSticky(ctx context.Context, t PushTarget, chunks []plan.Chunk, mem plan.BlobReader, sticky string) error {
+	if chunks[0].Ops[0].Op != plan.KindPlan {
+		return fmt.Errorf("push: chunk 0 missing plan header")
+	}
+	if err := pushBlobs(ctx, t, chunks[0].Ops[0], mem, sticky); err != nil {
+		pushRemoveSticky(ctx, t, sticky)
+		return err
+	}
+	return nil
+}
+
+// streamChunks encodes and streams every chunk to t over SSH, in order.
+// When sticky is set, blobs were already uploaded by uploadSticky, so each
+// chunk is encoded plan-only (chunkMem nil). A mid-stream failure removes
+// the sticky dir (its blobs were consumed or are now unusable) and reports
+// how many ops from earlier chunks already landed on the host, without
+// masking the underlying error.
+func streamChunks(ctx context.Context, t PushTarget, chunks []plan.Chunk, remotes []string, mem plan.BlobReader, sticky string) error {
 	for i, ch := range chunks {
 		chunkMem := mem
 		if sticky != "" {
@@ -221,9 +249,6 @@ func PushChunks(ctx context.Context, t PushTarget, planID string, ops []plan.Op,
 			}
 			return err
 		}
-	}
-	if sticky != "" {
-		pushRemoveSticky(ctx, t, sticky)
 	}
 	return nil
 }
@@ -282,7 +307,7 @@ func pushRemoveSticky(ctx context.Context, t PushTarget, sticky string) {
 // tar attached and a header-only plan, so the remote extracts the blobs as the
 // SSH login user and then applies an empty plan (no-op). Never privilege-
 // wrapped: elevated apply chunks read the blobs as root later on.
-func pushBlobs(ctx context.Context, t PushTarget, header plan.Op, mem *plan.MemoryStore, applyDir string) error {
+func pushBlobs(ctx context.Context, t PushTarget, header plan.Op, mem plan.BlobReader, applyDir string) error {
 	var buf bytes.Buffer
 	if err := plan.EncodePush(&buf, []plan.Op{header}, mem); err != nil {
 		return fmt.Errorf("encode blobs: %w", err)

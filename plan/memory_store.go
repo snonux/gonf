@@ -12,6 +12,26 @@ type BlobStore interface {
 	WriteGlob(name, pattern string) (string, error)
 }
 
+// BlobReader is the read-back half of a blob store: everything EncodePush
+// (and the remote push path built on it — internal/remote's PushChunks and
+// Fanout) needs to stream a previously-recorded set of blobs back out,
+// without depending on how or where they are held. Recording writes
+// through the full BlobStore; push only ever reads, so it depends on this
+// narrower interface instead of the concrete MemoryStore — a disk-backed or
+// streaming store for very large sync trees could implement BlobReader
+// without internal/remote's signatures changing at all.
+type BlobReader interface {
+	// HasBlobs reports whether any blob was packaged.
+	HasBlobs() bool
+	// Refs returns every packaged blob ref (blobs/<name>), sorted.
+	Refs() []string
+	// FileBlob returns single-file blob bytes for ref.
+	FileBlob(ref string) ([]byte, bool)
+	// TreeBlob returns the neutral manifest entries (sorted by Rel) for a
+	// tree blob ref.
+	TreeBlob(ref string) ([]BlobEntry, bool)
+}
+
 // MemoryStore keeps blob bytes in RAM so push can avoid writing plan
 // artifacts to the controller disk.
 type MemoryStore struct {
@@ -34,6 +54,7 @@ func NewMemoryStore() *MemoryStore {
 
 var _ BlobStore = (*MemoryStore)(nil)
 var _ BlobStore = (*Store)(nil)
+var _ BlobReader = (*MemoryStore)(nil)
 
 // WriteFile stores data under blobs/<name>.
 func (m *MemoryStore) WriteFile(name string, data []byte) (string, error) {

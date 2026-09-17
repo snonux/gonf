@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -65,6 +66,63 @@ func TestEncodeDecodePushWithMemoryBlobs(t *testing.T) {
 	}
 	if info.Mode().Perm()&0o077 != 0 {
 		t.Fatalf("mode %#o", info.Mode().Perm())
+	}
+}
+
+// fakeBlobReader is a minimal BlobReader that is not *MemoryStore, proving
+// EncodePush depends only on the interface (DIP): the sole write path
+// (WriteFile/WriteTree/WriteGlob) stays MemoryStore/Store-specific, but the
+// push-time read-back works against any BlobReader implementation.
+type fakeBlobReader struct {
+	files map[string][]byte
+}
+
+func (f *fakeBlobReader) HasBlobs() bool { return len(f.files) > 0 }
+func (f *fakeBlobReader) Refs() []string {
+	refs := make([]string, 0, len(f.files))
+	for ref := range f.files {
+		refs = append(refs, ref)
+	}
+	sort.Strings(refs)
+	return refs
+}
+func (f *fakeBlobReader) FileBlob(ref string) ([]byte, bool) {
+	data, ok := f.files[ref]
+	return data, ok
+}
+func (f *fakeBlobReader) TreeBlob(ref string) ([]BlobEntry, bool) { return nil, false }
+
+var _ BlobReader = (*fakeBlobReader)(nil)
+
+func TestEncodeDecodePushWithFakeBlobReader(t *testing.T) {
+	mem := &fakeBlobReader{files: map[string][]byte{
+		"blobs/secret": []byte("sekrit\n"),
+	}}
+	ops := []Op{
+		{Op: KindPlan, Version: CurrentVersion, ID: "p"},
+		{Op: KindFile, Path: "/tmp/secret", Blob: "blobs/secret"},
+	}
+	var buf bytes.Buffer
+	if err := EncodePush(&buf, ops, mem); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecodePush(&buf, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PlanDir != dir {
+		t.Fatalf("planDir=%q", got.PlanDir)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "blobs", "secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "sekrit\n" {
+		t.Fatalf("blob data %q", data)
 	}
 }
 

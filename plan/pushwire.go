@@ -22,8 +22,10 @@ type PushPayload struct {
 }
 
 // EncodePush writes a GONF-PUSH/1 frame to w: optional gzip+tar blobs from
-// mem, then gzip-compressed plan JSONL.
-func EncodePush(w io.Writer, ops []Op, mem *MemoryStore) error {
+// mem, then gzip-compressed plan JSONL. mem only needs to satisfy
+// BlobReader (a nil BlobReader is treated as "no blobs"): callers pass
+// *MemoryStore today, but any read-back implementation works.
+func EncodePush(w io.Writer, ops []Op, mem BlobReader) error {
 	if _, err := io.WriteString(w, pushMagic+"\n"); err != nil {
 		return err
 	}
@@ -146,7 +148,7 @@ func maybeGunzip(raw []byte) ([]byte, error) {
 	return raw, nil
 }
 
-func writeBlobsGzipTar(w io.Writer, mem *MemoryStore) error {
+func writeBlobsGzipTar(w io.Writer, mem BlobReader) error {
 	gz := gzip.NewWriter(w)
 	tw := tar.NewWriter(gz)
 	for _, ref := range mem.Refs() {

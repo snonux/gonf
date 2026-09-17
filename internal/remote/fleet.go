@@ -40,7 +40,7 @@ func hostTimeoutCtx(fleetCtx context.Context, hostTimeout time.Duration) (contex
 // in-flight ssh pushes, and a failing host cancels its in-flight siblings.
 // Each host's push is bounded by hostTimeout (DefaultHostTimeout for library
 // callers, the CLI -host-timeout flag otherwise; <= 0 means unlimited).
-func Fanout(ctx context.Context, name, planID string, ops []plan.Op, mem *plan.MemoryStore, targets []PushTarget, labels []string, limit int, hostTimeout time.Duration) error {
+func Fanout(ctx context.Context, name, planID string, ops []plan.Op, mem plan.BlobReader, targets []PushTarget, labels []string, limit int, hostTimeout time.Duration) error {
 	var (
 		eg       *errgroup.Group
 		egCtx    context.Context
