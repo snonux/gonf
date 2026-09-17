@@ -39,6 +39,8 @@ func WithGroupWhen(opts ...TaskOption) RegisterOption {
 // RegisterMethods queues tasks from exported methods on v (struct or pointer).
 //
 // Naming: method Helix → "helix", with WithPrefix("home_") → "home_helix".
+// Do not repeat the type name in methods (Unattended.Newsyslog, not
+// Unattended.UnattendedNewsyslog) — the type and WithPrefix already namespace.
 // Companions (optional):
 //   - Opts() TaskOptions — struct-level DEFAULT TaskOptions for every
 //     method registered from this struct (e.g. a single Privileged() for

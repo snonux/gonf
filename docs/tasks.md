@@ -127,6 +127,10 @@ func (Home) CronBlowfish() { Cron(..., WithCommand(...)) }
 RegisterMethods(Home{}, WithPrefix("home."), WithGroupWhen(WhenLinux()))
 ```
 
+Name methods for the *action*, not the type: `Unattended.Script`, not
+`Unattended.UnattendedScript` — `WithPrefix` and the receiver type already
+provide the namespace.
+
 `WithPrefix` namespaces task names; `WithGroupWhen` takes `TaskOption`s
 such as `WhenLinux()` / `WhenProfile(...)` so plan recording can emit
 `when_begin` recipes; `OptsFoo` companions add per-method `TaskOption`s
