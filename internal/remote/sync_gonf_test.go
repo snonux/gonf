@@ -184,6 +184,44 @@ func TestSCPArgvExtraSSHTranslation(t *testing.T) {
 			extraSSH:     []string{"-A"},
 			wantContains: []string{"-A"},
 		},
+		// Regression coverage for the joined-form -l/-p/-P detectors
+		// misfiring on a SEPARATE-form option VALUE token instead of a flag
+		// token: the detectors originally checked only the token's second
+		// character (and, for -p/-P, that the remainder parsed as digits),
+		// never that the token itself starts with '-'. A value token that
+		// happens to share that shape was silently reinterpreted as if it
+		// were itself a joined flag, corrupting the preceding flag's value
+		// (and, for -l, leaving the preceding flag dangling with none).
+		{
+			name:         "separate -i value with 'l' as its second char is not corrupted into -o User=",
+			extraSSH:     []string{"-i", "/local/id_rsa"},
+			wantContains: []string{"-i /local/id_rsa"},
+			wantAbsent:   []string{"-o User=", "-o User=ocal/id_rsa"},
+		},
+		{
+			name:         "separate -o value with 'l' as its second char is not corrupted into -o User=",
+			extraSSH:     []string{"-o", "ClearAllForwardings=yes"},
+			wantContains: []string{"-o ClearAllForwardings=yes"},
+			wantAbsent:   []string{"-o User="},
+		},
+		{
+			name:         "separate -o value starting with 'Global' is not corrupted into -o User=",
+			extraSSH:     []string{"-o", "GlobalKnownHostsFile=/etc/ssh/ssh_known_hosts"},
+			wantContains: []string{"-o GlobalKnownHostsFile=/etc/ssh/ssh_known_hosts"},
+			wantAbsent:   []string{"-o User="},
+		},
+		{
+			name:         "separate -J value with 'p' as its second char and a numeric tail is not swallowed as a joined port",
+			extraSSH:     []string{"-J", "xp2222"},
+			wantContains: []string{"-J xp2222"},
+			wantAbsent:   []string{"-P 2222"},
+		},
+		{
+			name:         "separate -c value with 'P' as its second char and a numeric tail is not swallowed as a joined port",
+			extraSSH:     []string{"-c", "xP80"},
+			wantContains: []string{"-c xP80"},
+			wantAbsent:   []string{"-P 80"},
+		},
 		{name: "-L local port-forward rejected", extraSSH: []string{"-L", "8080:localhost:80"}, wantErr: true},
 		{name: "-R remote port-forward rejected", extraSSH: []string{"-R", "8080:localhost:80"}, wantErr: true},
 		{name: "-D dynamic port-forward rejected (scp -D means sftp-server path)", extraSSH: []string{"-D", "1080"}, wantErr: true},

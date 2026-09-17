@@ -156,8 +156,13 @@ func scpArgv(t PushTarget, localPath, remotePath string) ([]string, error) {
 				continue
 			}
 		}
-		// Joined "-pPORT" / "-PPORT" -> scp's "-P PORT".
-		if len(a) > 2 && (a[1] == 'p' || a[1] == 'P') {
+		// Joined "-pPORT" / "-PPORT" -> scp's "-P PORT". The a[0] == '-'
+		// guard is required: without it, this also matched a plain VALUE
+		// token that happens to parse as 'p'/'P' followed by digits (e.g.
+		// the separate-form value that follows some other flag), silently
+		// reinterpreting it as a joined port flag instead of forwarding it
+		// verbatim.
+		if len(a) > 2 && a[0] == '-' && (a[1] == 'p' || a[1] == 'P') {
 			if p, err := strconv.Atoi(a[2:]); err == nil {
 				if port == 0 {
 					port = p
@@ -172,8 +177,15 @@ func scpArgv(t PushTarget, localPath, remotePath string) ([]string, error) {
 			i++
 			continue
 		}
-		// Joined "-lUSER" -> scp's "-o User=USER".
-		if len(a) > 2 && a[1] == 'l' {
+		// Joined "-lUSER" -> scp's "-o User=USER". The a[0] == '-' guard is
+		// required: without it, this also matched a plain VALUE token whose
+		// second character happens to be 'l' — e.g. the "/local/id_rsa"
+		// half of a separate-form ["-i", "/local/id_rsa"], or the
+		// "ClearAllForwardings=yes" half of a separate-form ["-o",
+		// "ClearAllForwardings=yes"] — silently corrupting it into a bogus
+		// "-o User=..." and leaving the preceding flag dangling with no
+		// value.
+		if len(a) > 2 && a[0] == '-' && a[1] == 'l' {
 			argv = append(argv, "-o", "User="+a[2:])
 			continue
 		}
