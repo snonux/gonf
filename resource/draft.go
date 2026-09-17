@@ -55,6 +55,12 @@ type PlanDraft struct {
 	Blob string
 	// SourcePath is a controller-local file to package as content_b64 or a blob.
 	SourcePath string
+	// HasContent marks that the "file" kind's content was explicitly
+	// configured (WithContent or WithSource), even when the resulting bytes
+	// are empty. It lets apply tell a legitimately empty file apart from an
+	// op that is missing content data outright (a record-time bug): only
+	// the latter should fail loudly with "missing content_b64 and blob".
+	HasContent bool
 	// SourceDir is a controller-local directory to package as a blob tree;
 	// for sync_dir drafts it also carries the recipe's DECLARED source
 	// directory onto the op's source_dir field (the glob pattern's

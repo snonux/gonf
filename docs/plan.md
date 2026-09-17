@@ -70,6 +70,11 @@ ops, err := RecordPlan("my-plan", planDir, "home_helix", "home_tmux")
   `default:` passthrough to the wire), so a typo or a forgotten case is a
   controller-side record error instead of a remote apply-time `unknown op`.
 - `InstallFile` content → `content_b64` when ≤ 512 KiB, else a blob sidecar.
+  A legitimately empty file (`WithContent("")` or an empty `WithSource` file)
+  also encodes as `content_b64:""`, so the `file` op carries `has_content:true`
+  whenever content/source was configured at all; apply treats `content_b64`
+  and `blob` both empty **and** `has_content` false as a record-time bug
+  ("missing content_b64 and blob"), not as an empty file.
 - `SyncDir` trees → `planDir/blobs/<name>/`.
 - The recipe's declared source directory travels on the `sync_dir` op
   (`source_dir`, schema v6): destination apply renders `.tmpl` files inside

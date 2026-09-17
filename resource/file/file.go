@@ -33,6 +33,11 @@ type File struct {
 	path     string
 	content  string
 	source   string // bare path, no "source://" prefix
+	// contentSet marks that WithContent or WithSource was called explicitly,
+	// even with an empty value (WithContent("") or a source resolving to
+	// zero bytes). It distinguishes legitimately empty content from a File
+	// with neither configured, mirroring userSet/groupSet below.
+	contentSet bool
 	// param, when set, overrides the {{.Param}} value rendered into
 	// template content (opt.WithParam). Callers that know a more stable
 	// identity than this resource's mechanical source path — dir's tree
@@ -53,6 +58,7 @@ type File struct {
 func (f *File) SetContent(content string) {
 	f.content = content
 	f.source = ""
+	f.contentSet = true
 }
 
 // SetSource implements opt.Sourced. Setting a source clears any previously
@@ -60,6 +66,7 @@ func (f *File) SetContent(content string) {
 func (f *File) SetSource(source string) {
 	f.source = source
 	f.content = ""
+	f.contentSet = true
 }
 
 // SetParam implements opt.Paramable. It overrides the {{.Param}} value used
@@ -643,11 +650,17 @@ func (f *File) planDraft() resource.PlanDraft {
 			d.Group = f.group
 		}
 	}
+	// HasContent flags that WithContent/WithSource was configured at all, so
+	// packageDraft/applyFile can tell a legitimately empty file (content or
+	// source resolving to zero bytes, which base64-encodes as "") apart from
+	// an op with no content data recorded (a bug, not a valid empty file).
 	switch {
-	case f.content != "":
-		d.ContentB64 = base64.StdEncoding.EncodeToString([]byte(f.content))
 	case f.source != "":
 		d.SourcePath = f.source
+		d.HasContent = true
+	case f.contentSet:
+		d.ContentB64 = base64.StdEncoding.EncodeToString([]byte(f.content))
+		d.HasContent = true
 	}
 	return d
 }

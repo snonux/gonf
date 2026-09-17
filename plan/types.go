@@ -162,9 +162,18 @@ type Op struct {
 	// empty means the destination apply leaves the group as-is.
 	Group string `json:"group,omitempty"`
 	// ContentB64 is base64 file content for KindFile (InstallFile-style).
+	// A legitimately empty file (WithContent("") or an empty WithSource
+	// file) also base64-encodes to "", so this alone cannot tell "empty
+	// content" apart from "no content recorded"; see HasContent.
 	ContentB64 string `json:"content_b64,omitempty"`
 	// Blob is a sidecar blob id/path for KindSyncDir (or large KindFile content).
 	Blob string `json:"blob,omitempty"`
+	// HasContent marks that KindFile's content was explicitly configured
+	// (WithContent or WithSource), even when it resolves to zero bytes and
+	// ContentB64 is therefore "". Apply uses it to accept a legitimately
+	// empty file while still erroring loudly when both ContentB64 and Blob
+	// are unset AND HasContent is false (a record-time bug).
+	HasContent bool `json:"has_content,omitempty"`
 	// SourceDir is the recipe's declared source directory for KindSyncDir
 	// (for the glob flavor, the declared glob pattern's directory). Apply
 	// passes it to the synced tree so .tmpl files inside render {{.Param}}

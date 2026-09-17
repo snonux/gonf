@@ -360,6 +360,12 @@ func applyFile(op Op, planDir string) error {
 			return err
 		}
 		content = data
+	case op.HasContent:
+		// WithContent("") or a zero-byte WithSource file: content_b64
+		// legitimately encodes as "" for zero bytes. HasContent (recorded
+		// whenever WithContent/WithSource was configured at all) is what
+		// tells this apart from an op that never got content data.
+		content = nil
 	default:
 		return fmt.Errorf("file: missing content_b64 and blob")
 	}

@@ -112,6 +112,50 @@ func TestEncodeDecodeOpRoundTrip(t *testing.T) {
 	}
 }
 
+// TestEncodeDecodeOpEmptyContentRoundTrip pins the k5 fix on the wire: a
+// KindFile op recording legitimately empty content (has_content:true,
+// content_b64 omitted/empty) must round-trip losslessly, and the emitted
+// JSON must carry has_content so a destination apply can tell it apart from
+// an op with no content data at all.
+func TestEncodeDecodeOpEmptyContentRoundTrip(t *testing.T) {
+	t.Parallel()
+	op := Op{
+		Op:         KindFile,
+		Path:       "${HOME}/.empty-marker",
+		Mode:       "0640",
+		ContentB64: "",
+		HasContent: true,
+	}
+	b, err := EncodeOp(op)
+	if err != nil {
+		t.Fatalf("EncodeOp: %v", err)
+	}
+	if !strings.Contains(string(b), `"has_content":true`) {
+		t.Fatalf("encoded op missing has_content:true: %s", b)
+	}
+	if strings.Contains(string(b), `"content_b64"`) {
+		t.Fatalf("encoded op should omit empty content_b64: %s", b)
+	}
+	got, err := DecodeOp(b)
+	if err != nil {
+		t.Fatalf("DecodeOp: %v", err)
+	}
+	if !reflect.DeepEqual(got, op) {
+		t.Fatalf("round-trip\ngot  %#v\nwant %#v", got, op)
+	}
+
+	// A plain zero-value file op (no content, no has_content) must omit the
+	// field entirely, keeping old plans byte-identical.
+	plain := Op{Op: KindFile, Path: "${HOME}/.plain"}
+	pb, err := EncodeOp(plain)
+	if err != nil {
+		t.Fatalf("EncodeOp: %v", err)
+	}
+	if strings.Contains(string(pb), "has_content") {
+		t.Fatalf("encoded op should omit has_content when false: %s", pb)
+	}
+}
+
 func TestEncodeDecodePlanRoundTrip(t *testing.T) {
 	t.Parallel()
 	want := sampleOps()

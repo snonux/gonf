@@ -71,6 +71,51 @@ func TestApplyFileContentB64AndCorrupt(t *testing.T) {
 	}
 }
 
+// TestApplyFileHasContentAllowsEmpty pins the k5 fix: a KindFile op recording
+// legitimately empty content (content_b64 == "" but has_content == true, the
+// wire shape for WithContent("") or an empty WithSource file) must apply as
+// an empty file instead of failing "missing content_b64 and blob".
+func TestApplyFileHasContentAllowsEmpty(t *testing.T) {
+	root := t.TempDir()
+	dst := filepath.Join(root, "empty.conf")
+	ops := []Op{
+		header(),
+		{
+			Op:         KindFile,
+			Path:       dst,
+			Mode:       "0640",
+			ContentB64: "",
+			HasContent: true,
+		},
+	}
+	if err := Apply(ops, Facts{}, ""); err != nil {
+		t.Fatalf("empty content_b64 with has_content: %v", err)
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("content = %q, want empty", got)
+	}
+}
+
+// TestApplyFileMissingContentStillErrors pins the other half of the k5 fix:
+// an op with neither content_b64 nor blob AND has_content unset (the
+// record-time-bug case: content data never made it onto the wire) must still
+// fail loudly instead of silently writing an empty file.
+func TestApplyFileMissingContentStillErrors(t *testing.T) {
+	root := t.TempDir()
+	ops := []Op{
+		header(),
+		{Op: KindFile, Path: filepath.Join(root, "missing.conf"), Mode: "0640"},
+	}
+	err := Apply(ops, Facts{}, "")
+	if err == nil || !strings.Contains(err.Error(), "missing content_b64 and blob") {
+		t.Fatalf("want missing content_b64 and blob error, got %v", err)
+	}
+}
+
 func TestApplyFileAndSyncDirBlobs(t *testing.T) {
 	planDir := t.TempDir()
 	store := NewStore(planDir)

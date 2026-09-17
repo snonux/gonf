@@ -283,3 +283,105 @@ func TestRecordPlanSyncDirRequiresPlanDir(t *testing.T) {
 		t.Fatalf("want plan dir required error, got %v", err)
 	}
 }
+
+// TestRecordPlanEmptyFileContentSetsHasContent is the k5 regression: a File
+// with WithContent("") or a WithSource pointing at a zero-byte file must
+// still record content_b64:"" plus has_content:true (round-tripping through
+// draftToOp/packageDraft), not the empty-op shape that would make apply
+// mistake it for a record-time bug ("missing content_b64 and blob").
+func TestRecordPlanEmptyFileContentSetsHasContent(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	dir := t.TempDir()
+	contentPath := filepath.Join(dir, "empty-content.conf")
+	sourcePath := filepath.Join(dir, "empty-source.conf")
+	emptySrc := filepath.Join(dir, "empty.src")
+	if err := os.WriteFile(emptySrc, nil, 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	Task("empty_files", "", func() {
+		File(contentPath, options.WithContent(""))
+		File(sourcePath, options.WithSource(emptySrc))
+	})
+	ops, err := RecordPlan("empty-plan", dir, "empty_files")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var contentOp, sourceOp *plan.Op
+	for i := range ops {
+		op := &ops[i]
+		if op.Op != plan.KindFile {
+			continue
+		}
+		switch op.Path {
+		case contentPath:
+			contentOp = op
+		case sourcePath:
+			sourceOp = op
+		}
+	}
+	if contentOp == nil {
+		t.Fatal("missing op for WithContent(\"\") file")
+	}
+	if contentOp.ContentB64 != "" || !contentOp.HasContent {
+		t.Fatalf("WithContent(\"\") op = %+v, want content_b64=\"\" has_content=true", contentOp)
+	}
+	if sourceOp == nil {
+		t.Fatal("missing op for empty WithSource file")
+	}
+	if sourceOp.ContentB64 != "" || !sourceOp.HasContent {
+		t.Fatalf("empty WithSource op = %+v, want content_b64=\"\" has_content=true", sourceOp)
+	}
+}
+
+// TestApplyPlanEmptyFileResourceSucceeds is the k5 regression at the
+// apply boundary: recording and then applying a File with WithContent("") or
+// an empty WithSource file must produce an empty destination file instead of
+// failing with "missing content_b64 and blob".
+func TestApplyPlanEmptyFileResourceSucceeds(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	dir := t.TempDir()
+	contentPath := filepath.Join(dir, "empty-content.conf")
+	sourcePath := filepath.Join(dir, "empty-source.conf")
+	emptySrc := filepath.Join(dir, "empty.src")
+	if err := os.WriteFile(emptySrc, nil, 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	Task("empty_files_apply", "", func() {
+		File(contentPath, options.WithContent(""), options.WithMode(0o640))
+		File(sourcePath, options.WithSource(emptySrc), options.WithMode(0o640))
+	})
+	ops, err := RecordPlan("empty-apply-plan", dir, "empty_files_apply")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyPlan(ops, dir); err != nil {
+		t.Fatalf("ApplyPlan: %v", err)
+	}
+
+	for _, path := range []string{contentPath, sourcePath} {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", path, err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("content of %s = %q, want empty", path, got)
+		}
+	}
+}
