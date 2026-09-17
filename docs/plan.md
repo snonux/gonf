@@ -72,10 +72,11 @@ ops, err := RecordPlan("my-plan", planDir, "home_helix", "home_tmux")
   become `when_begin` / `when_end` recipes evaluated on the destination.
 - Task bodies run with a draft recorder: `File` / `Dir` / `Link` / `Command` /
   … emit ops instead of applying.
-- Every draft must map through an explicit `draftToOp` case in `api/plan.go`:
-  an unknown draft kind fails `RecordPlan` loudly at record time (there is no
-  `default:` passthrough to the wire), so a typo or a forgotten case is a
-  controller-side record error instead of a remote apply-time `unknown op`.
+- Every draft must map through a registered `plan.Handler` (`api/plan.go`'s
+  `draftToOp` looks one up by `d.Kind`): an unknown draft kind fails
+  `RecordPlan` loudly at record time (there is no `default:` passthrough to
+  the wire), so a typo or a forgotten registration is a controller-side
+  record error instead of a remote apply-time `unknown op`.
 - `InstallFile` content → `content_b64` when ≤ 512 KiB, else a blob sidecar.
   A legitimately empty file (`WithContent("")` or an empty `WithSource` file)
   also encodes as `content_b64:""`, so the `file` op carries `has_content:true`
@@ -205,12 +206,19 @@ explicit switch cases for kinds that have not migrated yet. The wire format
 (`Op`/`PlanDraft` JSON shape, `CurrentVersion`) is unchanged — this is a
 Go-internal ownership/dispatch change only.
 
-As of task j5, **package, cron, and service** use the `Handler` pattern;
-**file, dir, sync_dir, link, link_if_exists, ensure_dir, command, timer,
-daemon_reload, and systemd_timer** still use the explicit switch cases below
-(a documented follow-on, not started). When migrating one of the remaining
-kinds, steps 2 and 5 below collapse into "add a `<kind>/planwire.go` with a
-`Handler` and register it"; steps 1, 3, 4, 6, 7, 8 are unchanged.
+As of task i5, **every** resource kind uses the `Handler` pattern: `package`,
+`cron`, and `service` migrated in task j5; `file`, `dir`, `sync_dir`, `link`,
+`link_if_exists`, `ensure_dir`, `command`, `timer`, `daemon_reload`, and
+`systemd_timer` migrated in task i5 (see `resource/{file,dir,link,cmd,timer,
+systemd,systemdtimer}/planwire.go` — `dir` registers three Handlers for its
+three kinds, `link` registers two). `api/plan.go`'s `draftToOp` and
+`plan/apply.go`'s `applyActive` are now pure `HandlerFor` dispatch with no
+fallback switch cases and no resource-package imports of their own — this is
+also what lets `plan` be a pure types/codec/split/pushwire/blob-store
+package (`go list -deps ./plan/...` pulls in only the resource-neutral
+`resource` core package, never a `resource/<kind>` backend). Steps 2 and 5
+below are always "add a `<kind>/planwire.go` with a `Handler` and register
+it"; there is no more legacy switch path for a new kind to fall back to.
 
 A new plan-pushable resource kind touches ~8 places across 6 files. The
 fitness tests make every step discoverable: adding a `plan.Kind` without the
@@ -225,12 +233,14 @@ class of bug that motivated task j5.
    entry (this is the exhaustiveness inventory); add any new `Op` payload
    fields with `omitempty`. If fields change meaning (not just grow), bump
    `CurrentVersion` and add golden fixtures under `plan/testdata/`.
-2. **Apply handler** — either register a `plan.Handler` for the kind (a
-   `<pkg>/planwire.go` with `ToOp`/`Apply`, see above — preferred for new
-   kinds) or, for a kind kept on the legacy path, add the `applyActive` case
-   plus an `applyX` handler in `plan/apply.go` that validates required fields
+2. **Apply handler** — register a `plan.Handler` for the kind: a
+   `<pkg>/planwire.go` implementing `ToOp`/`Apply` (see
+   `resource/pkg/planwire.go` for the shape), registered via
+   `plan.RegisterHandler` from an `init()`. `Apply` validates required fields
    (e.g. `name`, `path`, `schedule`) before any mutation, then delegates to
-   the resource `Ensure`.
+   the resource `Ensure`; `plan.OwnerGroupOptions`/`plan.GuardOptions`/
+   `plan.ParseMode` are shared wire-decoding helpers worth reusing instead of
+   re-deriving `opt.Option`s from `Op` fields by hand.
 3. **Resource draft** — the resource package: set the new draft `Kind` string
    in its `planDraft()` and call `resource.RecordPlanDraft` from `Present`
    (the register-without-draft guard fails the record otherwise). Map absent
@@ -241,12 +251,13 @@ class of bug that motivated task j5.
    kind needs (package-neutral, no `plan` import — resource packages must not
    depend on the wire codec). A resource package that owns a `Handler` (step
    2) imports `plan` for `Op`/`Handler`/`RegisterHandler` itself, but
-   `resource.PlanDraft` still must not import `plan`, to keep `plan` free to
-   import unmigrated resource packages directly.
-5. **Lowering** — either the `Handler.ToOp` method (preferred, see above) or,
-   for a kind on the legacy path, `api/plan.go` `draftToOp`'s `case
-   "<draft_kind>"` mapping to `plan.KindX`. Unmapped kinds now error at
-   record time; there is deliberately no silent default.
+   `resource.PlanDraft` still must not import `plan`, since `plan` itself
+   must never import a `resource/<kind>` package back (see the cycle note
+   below).
+5. **Lowering** — implement `Handler.ToOp`, mapping the draft's fields onto
+   the new `plan.Op`. `api/plan.go`'s `draftToOp` only ever calls
+   `HandlerFor(d.Kind)`; an unmapped kind errors at record time — there is
+   deliberately no silent default and no per-kind case left to add there.
 6. **Options capability** — `api/options`: add the task-level knobs
    (`With*` options + the interface the resource implements), following the
    existing small-interface pattern.
@@ -260,13 +271,18 @@ class of bug that motivated task j5.
    `plan/apply_test.go` / `plan/e2e_test.go`; update `docs/plan.md` tables
    (recipe table above, schema version notes).
 
-A resource package that registers a `plan.Handler` must not be imported
-directly by the `plan` package (that would reintroduce the cycle the
-registry exists to break): `plan/apply.go` only imports resource packages
-still on the legacy switch path. Migrating a kind therefore also means
-removing its resource package from `plan/apply.go`'s import list and moving
-any internal-package (`package plan`) tests that stub that resource's
-runner into an external `plan_test` file (see `plan/apply_pkg_test.go`).
+A resource package that registers a `plan.Handler` must never be imported by
+the `plan` package itself (that would reintroduce the cycle the registry
+exists to break): as of task i5, `plan` imports no `resource/<kind>` package
+at all — only the resource-neutral `resource` core package, for
+`ResetReport`/`PrintSummary` and the `resource.PlanDraft` type `Handler.ToOp`
+takes. A resource package that adds a `planwire.go` also means any
+internal-package (`package plan`) test that stubs that resource's runner
+directly must move into an external `plan_test` file instead (see
+`plan/apply_pkg_test.go`, `plan/apply_systemd_test.go`) — importing the
+resource package from a `package plan` test file would be an import cycle
+(`plan [plan.test]` → `resource/<kind>` → `plan`), even though the same
+import from an external `plan_test` file is fine.
 
 ## CLI
 
