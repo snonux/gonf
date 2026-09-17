@@ -3,6 +3,7 @@ package link
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"syscall"
 
 	"github.com/snonux/gonf/internal/logger"
@@ -18,9 +19,20 @@ func ensureHardlink(l *Link) error {
 		return fmt.Errorf("hardlink %s has no target", l.path)
 	}
 
-	targetInfo, err := os.Stat(l.target)
+	// Resolve l.target to the real, symlink-free path before linking or
+	// comparing inodes. link(2) semantics for a symlink target differ by
+	// GOOS (Linux's linkat links the symlink entry itself; BSD follows
+	// it), so resolving up front makes both the idempotency check and the
+	// actual os.Link call agree on the same, non-symlink target on every
+	// platform.
+	target, err := filepath.EvalSymlinks(l.target)
 	if err != nil {
-		return fmt.Errorf("failed to stat hardlink target %s: %w", l.target, err)
+		return fmt.Errorf("failed to resolve hardlink target %s: %w", l.target, err)
+	}
+
+	targetInfo, err := os.Stat(target)
+	if err != nil {
+		return fmt.Errorf("failed to stat hardlink target %s: %w", target, err)
 	}
 
 	if info, err := os.Lstat(l.path); err == nil {
@@ -40,7 +52,7 @@ func ensureHardlink(l *Link) error {
 			return nil
 		}
 		if err := replaceWithLink(l.path, func() error {
-			if err := os.Link(l.target, l.path); err != nil {
+			if err := os.Link(target, l.path); err != nil {
 				return fmt.Errorf("failed to create hardlink %s -> %s: %w", l.path, l.target, err)
 			}
 			return nil
@@ -58,7 +70,7 @@ func ensureHardlink(l *Link) error {
 		return nil
 	}
 
-	if err := os.Link(l.target, l.path); err != nil {
+	if err := os.Link(target, l.path); err != nil {
 		return fmt.Errorf("failed to create hardlink %s -> %s: %w", l.path, l.target, err)
 	}
 

@@ -140,6 +140,66 @@ func TestPresentHardlinkCreateAndIdempotent(t *testing.T) {
 	}
 }
 
+// TestPresentHardlinkSymlinkTargetIdempotent guards against a regression
+// where hardlinking to a symlink target was never idempotent: os.Link on
+// Linux links the symlink entry itself (it does not follow it), but the
+// idempotency check used to compare against os.Stat(target), which follows
+// the symlink to the file it points at. That mismatch made every apply
+// report StatusChanged, even though nothing needed to change, which in turn
+// flapped downstream IfChanged/AnyChanged watchers.
+func TestPresentHardlinkSymlinkTargetIdempotent(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real")
+	if err := os.WriteFile(real, []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sl := filepath.Join(dir, "sl")
+	if err := os.Symlink(real, sl); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "link")
+
+	Present(path, WithHardlink(sl))
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+	id := "Hardlink[" + path + "]"
+	if !resource.AnyChanged(id) {
+		t.Fatalf("expected first apply to report changed for %s", id)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "hi" {
+		t.Errorf("expected content 'hi', got %q", string(got))
+	}
+
+	// Second apply must be a no-op: the hardlink already shares the real
+	// file's inode, so the resource must report "ok", not "changed" again.
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("second Apply failed: %v", err)
+	}
+	if resource.AnyChanged(id) {
+		t.Errorf("expected second apply to be idempotent (no change) for %s, but it was reported changed", id)
+	}
+
+	// A third apply guards against the original bug's replaceWithLink
+	// churn, which would have kept flipping the entry (and its .old
+	// backup) on every run.
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("third Apply failed: %v", err)
+	}
+	if resource.AnyChanged(id) {
+		t.Errorf("expected third apply to be idempotent (no change) for %s, but it was reported changed", id)
+	}
+	if _, err := os.Lstat(path + ".old"); !os.IsNotExist(err) {
+		t.Errorf("expected no .old residue after idempotent applies, got %v", err)
+	}
+}
+
 func TestPresentHardlinkReplacesRealFile(t *testing.T) {
 	resource.ResetRepository()
 	dir := t.TempDir()
