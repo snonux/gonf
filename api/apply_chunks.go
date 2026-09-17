@@ -2,14 +2,27 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"time"
 
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
+
+// DefaultChunkTimeout bounds one elevated (sudo/doas re-exec) local apply
+// chunk when the ctx passed to ApplyChunksContext carries no deadline of its
+// own. A privileged chunk can legitimately run for a while (package installs,
+// service restarts across many resources), so the default is generous;
+// mirrors remote.DefaultHostTimeout's role for the SSH push path. A chunk
+// that outlives it is killed and reported as an apply failure instead of
+// hanging the whole process forever (the resilience gap this constant
+// closes: previously the re-exec'd child had no timeout and no context at
+// all).
+const DefaultChunkTimeout = 10 * time.Minute
 
 // elevatedApplyRunner runs a privileged local apply chunk. Overridable in tests.
 var elevatedApplyRunner = defaultElevatedApply
@@ -44,7 +57,13 @@ func elevatedApplyArgv(exe, path string, dryRun bool, profileOverride string) []
 	return append(argv, path)
 }
 
-func defaultElevatedApply(mode privilege.Mode, ops []plan.Op, planDir string) error {
+// defaultElevatedApply runs the elevated re-exec under ctx: canceling ctx
+// (e.g. the CLI's SIGINT/SIGTERM context) kills the in-flight sudo/doas
+// child. When ctx carries no deadline of its own, DefaultChunkTimeout is
+// applied so a wedged privileged command (a hung package manager, a
+// systemctl call waiting on a broken unit) cannot block the whole apply
+// forever — previously this used plain exec.Command with no context at all.
+func defaultElevatedApply(ctx context.Context, mode privilege.Mode, ops []plan.Op, planDir string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("elevated apply: executable: %w", err)
@@ -63,11 +82,20 @@ func defaultElevatedApply(mode privilege.Mode, ops []plan.Op, planDir string) er
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command(argv[0], argv[1:]...)
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, DefaultChunkTimeout)
+		defer cancel()
+	}
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = bytes.NewReader(nil)
-	return cmd.Run()
+	err = cmd.Run()
+	if err != nil && ctx.Err() != nil {
+		return fmt.Errorf("%w (elevated apply killed by context: %v)", ctx.Err(), err)
+	}
+	return err
 }
 
 // ApplyChunks splits ops by elevate and applies each chunk: user chunks
@@ -83,7 +111,28 @@ func defaultElevatedApply(mode privilege.Mode, ops []plan.Op, planDir string) er
 // A ValidateChunkDeps pre-flight runs first: a dep recorded in a later chunk
 // (or dangling) fails before any chunk is applied, so a rejected plan
 // mutates nothing.
+//
+// ApplyChunks itself runs without a caller-supplied context (equivalent to
+// ApplyChunksContext(context.Background(), ...)): this is the signature
+// nested api.Run calls (task bodies invoking Run("othertask")) and any
+// existing caller already depend on, so it is kept exactly as-is for API
+// stability. New callers that can supply a cancelable/timeout-bound context
+// (the CLI entry point, in particular) should use ApplyChunksContext
+// instead — its elevated chunks still get DefaultChunkTimeout even when the
+// given ctx has no deadline, so an unprivileged in-process chunk is the only
+// part of a local apply this context does not currently reach (see
+// internal/exec's own process-wide default timeout for why that gap is
+// still safe: every resource backend's actual command execution is bounded
+// there regardless of ctx threading).
 func ApplyChunks(ops []plan.Op, planDir string, mode privilege.Mode) error {
+	return ApplyChunksContext(context.Background(), ops, planDir, mode)
+}
+
+// ApplyChunksContext is ApplyChunks bounded/cancelable by ctx: canceling ctx
+// (e.g. the CLI's SIGINT/SIGTERM context) kills an in-flight elevated
+// sudo/doas re-exec. See ApplyChunks's doc comment for why ApplyChunks itself
+// keeps the old context.Background() behavior instead of taking ctx directly.
+func ApplyChunksContext(ctx context.Context, ops []plan.Op, planDir string, mode privilege.Mode) error {
 	chunks := plan.SplitPrivilegeChunks(ops)
 	if err := validateChunkDeps(chunks); err != nil {
 		return err
@@ -104,7 +153,7 @@ func ApplyChunks(ops []plan.Op, planDir string, mode privilege.Mode) error {
 			}
 			continue
 		}
-		if err := elevatedApplyRunner(mode, ch.Ops, planDir); err != nil {
+		if err := elevatedApplyRunner(ctx, mode, ch.Ops, planDir); err != nil {
 			return fmt.Errorf("chunk %d (elevated): %w", i, err)
 		}
 	}

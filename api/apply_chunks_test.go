@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -114,7 +115,7 @@ func TestDefaultElevatedApplyDryRunAddsN(t *testing.T) {
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "chunks"},
 		{Op: plan.KindCommand, Bin: "true", ID: "Command[elevated]", Elevate: true},
 	}
-	if err := defaultElevatedApply(privilege.Sudo, ops, planDir); err != nil {
+	if err := defaultElevatedApply(context.Background(), privilege.Sudo, ops, planDir); err != nil {
 		t.Fatalf("defaultElevatedApply: %v", err)
 	}
 
@@ -168,7 +169,7 @@ func TestDefaultElevatedApplyPropagatesProfileOverride(t *testing.T) {
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "chunks"},
 		{Op: plan.KindCommand, Bin: "true", ID: "Command[elevated]", Elevate: true},
 	}
-	if err := defaultElevatedApply(privilege.Sudo, ops, planDir); err != nil {
+	if err := defaultElevatedApply(context.Background(), privilege.Sudo, ops, planDir); err != nil {
 		t.Fatalf("defaultElevatedApply: %v", err)
 	}
 

@@ -157,7 +157,7 @@ func TestApplyChunksRefusesForwardCrossChunkDep(t *testing.T) {
 	}
 	old := elevatedApplyRunner
 	t.Cleanup(func() { elevatedApplyRunner = old })
-	elevatedApplyRunner = func(mode privilege.Mode, chunk []plan.Op, planDir string) error {
+	elevatedApplyRunner = func(ctx context.Context, mode privilege.Mode, chunk []plan.Op, planDir string) error {
 		t.Error("elevated runner must not be invoked before the dep pre-flight")
 		return nil
 	}
@@ -214,7 +214,7 @@ func TestApplyChunksElevatedRunner(t *testing.T) {
 	var elevated int
 	old := elevatedApplyRunner
 	t.Cleanup(func() { elevatedApplyRunner = old })
-	elevatedApplyRunner = func(mode privilege.Mode, chunk []plan.Op, planDir string) error {
+	elevatedApplyRunner = func(ctx context.Context, mode privilege.Mode, chunk []plan.Op, planDir string) error {
 		elevated++
 		if mode != privilege.Sudo {
 			t.Fatalf("mode=%v", mode)

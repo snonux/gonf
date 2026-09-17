@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"regexp"
@@ -235,7 +236,19 @@ func Tasks() []TaskInfo {
 //
 // Nested Run while a RecordPlan session is active (e.g. Aggregate) only appends
 // child task ops into the current plan — it does not apply mid-flight.
+//
+// Run itself is not context-aware (equivalent to RunContext(context.Background(),
+// ...)): task bodies call Run directly (e.g. a task that fans out to other
+// tasks), so its signature is kept exactly as-is for API stability. The CLI
+// entry point uses RunContext instead so SIGINT/SIGTERM can cancel an
+// in-flight elevated re-exec; see ApplyChunks/ApplyChunksContext's doc
+// comment for the same tradeoff one layer down.
 func Run(names ...string) error {
+	return RunContext(context.Background(), names...)
+}
+
+// RunContext is Run bounded/cancelable by ctx.
+func RunContext(ctx context.Context, names ...string) error {
 	if len(names) == 0 {
 		return fmt.Errorf("Run: no tasks specified")
 	}
@@ -257,7 +270,7 @@ func Run(names ...string) error {
 	if err != nil {
 		return err
 	}
-	return ApplyChunks(ops, planDir, processPrivilege)
+	return ApplyChunksContext(ctx, ops, planDir, processPrivilege)
 }
 
 // ResetTasks clears candidates and activated tasks. It is part of the
