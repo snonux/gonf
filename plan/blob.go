@@ -141,15 +141,29 @@ func (s *Store) WriteGlob(name, pattern string) (string, error) {
 }
 
 func (s *Store) prepareRef(name string) (ref, abs string, err error) {
-	safe := sanitizeBlobName(name)
-	if safe == "" {
-		return "", "", fmt.Errorf("plan: empty blob name")
-	}
-	ref = "blobs/" + safe
-	if err := validateBlobRef(ref); err != nil {
+	ref, err = BlobRefFor(name)
+	if err != nil {
 		return "", "", err
 	}
 	return ref, filepath.Join(s.Root, filepath.FromSlash(ref)), nil
+}
+
+// BlobRefFor returns the blob ref that WriteFile/WriteTree/WriteGlob would
+// use for name, without writing anything. Callers that need to predict a ref
+// ahead of a write — such as api/plan.go's collision guard, which must catch
+// an unexpected ref clash before it silently overwrites a different
+// resource's blob — call this instead of duplicating the sanitize-and-prefix
+// logic.
+func BlobRefFor(name string) (string, error) {
+	safe := sanitizeBlobName(name)
+	if safe == "" {
+		return "", fmt.Errorf("plan: empty blob name")
+	}
+	ref := "blobs/" + safe
+	if err := validateBlobRef(ref); err != nil {
+		return "", err
+	}
+	return ref, nil
 }
 
 func validateBlobRef(ref string) error {

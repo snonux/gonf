@@ -1,7 +1,9 @@
 package api
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -62,6 +64,22 @@ type recordingSession struct {
 	// embedded callers get an error instead of a process exit. Cleared at
 	// the start of each RecordPlanTo session.
 	recordingBodyErr error
+
+	// recordedBlobRefs maps every blob ref written during the current
+	// recording session to the resource identity (blobIdentityKey) that
+	// produced it. blobName folds a hash of that same identity into the
+	// ref so two different resources can never generate the same ref (the
+	// bug this map guards against: two SyncDir/File drafts whose
+	// destinations merely share a basename used to collide on
+	// e.g. "blobs/conf.d", so the second write silently clobbered the
+	// first). This map is defense in depth on top of that: it catches an
+	// unexpected ref collision (a hash truncation clash, or a future
+	// blobName regression) loudly instead of letting a second write
+	// silently overwrite a first one in the blob store. A resource
+	// re-recorded with the *same* identity (e.g. a diamond-included task
+	// body running twice) legitimately reuses its own ref, so only a ref
+	// reused by a *different* identity is an error.
+	recordedBlobRefs map[string]string
 }
 
 // recSession is the process-wide plan recording session. Single-goroutine
@@ -78,6 +96,7 @@ func (s *recordingSession) reset() {
 	s.recordingCycleErr = nil
 	s.recordingPackErr = nil
 	s.recordingBodyErr = nil
+	s.recordedBlobRefs = map[string]string{}
 }
 
 // RecordPlan runs the named tasks in plan-record mode: resource registration
@@ -316,6 +335,7 @@ func packageDraft(d resource.PlanDraft, store plan.BlobStore) (plan.Op, error) {
 	if err != nil {
 		return plan.Op{}, err
 	}
+	name := blobName(d)
 	switch {
 	case d.SourcePath != "":
 		data, err := os.ReadFile(d.SourcePath)
@@ -326,7 +346,10 @@ func packageDraft(d resource.PlanDraft, store plan.BlobStore) (plan.Op, error) {
 			if store == nil {
 				return op, fmt.Errorf("package file %s: exceeds inline limit and no plan dir for blobs", d.SourcePath)
 			}
-			ref, err := store.WriteFile(blobName(d), data)
+			if err := guardBlobRef(name, d); err != nil {
+				return op, err
+			}
+			ref, err := store.WriteFile(name, data)
 			if err != nil {
 				return op, err
 			}
@@ -340,7 +363,10 @@ func packageDraft(d resource.PlanDraft, store plan.BlobStore) (plan.Op, error) {
 		if store == nil {
 			return op, fmt.Errorf("package sync_dir %s: plan dir required for blob packaging", d.SourceGlob)
 		}
-		ref, err := store.WriteGlob(blobName(d), d.SourceGlob)
+		if err := guardBlobRef(name, d); err != nil {
+			return op, err
+		}
+		ref, err := store.WriteGlob(name, d.SourceGlob)
 		if err != nil {
 			return op, err
 		}
@@ -349,7 +375,10 @@ func packageDraft(d resource.PlanDraft, store plan.BlobStore) (plan.Op, error) {
 		if store == nil {
 			return op, fmt.Errorf("package sync_dir %s: plan dir required for blob packaging", d.SourceDir)
 		}
-		ref, err := store.WriteTree(blobName(d), d.SourceDir)
+		if err := guardBlobRef(name, d); err != nil {
+			return op, err
+		}
+		ref, err := store.WriteTree(name, d.SourceDir)
 		if err != nil {
 			return op, err
 		}
@@ -358,7 +387,23 @@ func packageDraft(d resource.PlanDraft, store plan.BlobStore) (plan.Op, error) {
 	return op, nil
 }
 
+// blobName returns the blob ref name for d: a human-readable basename (the
+// destination's last path segment, when there is one) followed by a short
+// hash of blobIdentityKey(d). The hash is what actually guarantees
+// uniqueness — two drafts whose destinations merely share a basename (e.g.
+// Dir(/x/conf.d, WithSource(a)) and Dir(/y/conf.d, WithSource(b)), or two
+// >512KiB Files with equal basenames) previously both packaged to
+// "blobs/conf.d", so the second store.Write* call silently overwrote the
+// first one's content; guardBlobRef below is the defense-in-depth backstop
+// in case a future change reintroduces a real collision anyway.
 func blobName(d resource.PlanDraft) string {
+	return blobBaseName(d) + "-" + shortHash(blobIdentityKey(d))
+}
+
+// blobBaseName returns the human-readable part of blobName, unchanged from
+// the original (pre-hash) naming scheme so blob directory listings stay
+// legible.
+func blobBaseName(d resource.PlanDraft) string {
 	if base := filepath.Base(d.Path); base != "" && base != "." && base != string(filepath.Separator) {
 		return base
 	}
@@ -379,6 +424,59 @@ func blobName(d resource.PlanDraft) string {
 		return "glob"
 	}
 	return "blob"
+}
+
+// blobIdentityKey returns a string that uniquely identifies the resource
+// occurrence being packaged, so blobName's hash suffix cannot collide
+// between two different resources. d.ID (the registered "Type[Name]" id,
+// e.g. "Directory[/x/conf.d]") already carries the full destination path,
+// so it alone distinguishes any two drafts with different destinations.
+// The fallback (rare: only link_if_exists-style drafts built by hand
+// outside resource.Register skip ID, and none of those carry blob sources)
+// combines every source/destination field so two ID-less drafts still get
+// different keys whenever any of their paths differ.
+func blobIdentityKey(d resource.PlanDraft) string {
+	if d.ID != "" {
+		return d.ID
+	}
+	return strings.Join([]string{d.Path, d.SourcePath, d.SourceDir, d.SourceGlob}, "\x00")
+}
+
+// shortHash returns a short, fixed-width hex fingerprint of key, used to
+// disambiguate blob refs that would otherwise share a human-readable
+// basename. It is not required to be stable across gonf versions or plan
+// runs — docs/plan.md already treats blob paths as ephemeral, record-time
+// artifacts, e.g. the source_dir field exists precisely so destination apply
+// never depends on the blob path staying the same between runs.
+func shortHash(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:])[:8]
+}
+
+// guardBlobRef predicts the blob ref that store.Write{File,Tree,Glob} will
+// produce for name and fails loudly if a *different* resource already
+// claimed that exact ref earlier in this recording session. blobName's hash
+// suffix should already make that impossible; this is defense in depth so a
+// regression here fails RecordPlan instead of silently corrupting a blob
+// (the data-loss failure mode this whole fix exists to close). A resource
+// recorded twice with the same identity (e.g. a diamond-included task body
+// running again in a disjoint branch) legitimately reuses its own ref, so
+// that case is not an error.
+func guardBlobRef(name string, d resource.PlanDraft) error {
+	ref, err := plan.BlobRefFor(name)
+	if err != nil {
+		return err
+	}
+	identity := blobIdentityKey(d)
+	if prior, ok := recSession.recordedBlobRefs[ref]; ok {
+		if prior == identity {
+			return nil
+		}
+		return fmt.Errorf("RecordPlan: blob ref %q collision: already packaged for %q, now requested for %q (this should be impossible after blobName hashing; please report)",
+			ref, prior, identity)
+	}
+	recSession.recordedBlobRefs[ref] = identity
+	return nil
 }
 
 // draftToOp lowers a resource draft to a plan op line. Every draft Kind must

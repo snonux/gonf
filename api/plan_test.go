@@ -98,10 +98,13 @@ func TestRecordPlanEmitsOrderedOpsWithGuards(t *testing.T) {
 	}
 
 	syncOp := ops[5]
-	if syncOp.Blob != "blobs/systemd" || !syncOp.Prune {
+	// The blob ref carries a human-readable "systemd" basename plus a hash
+	// suffix (see api/plan.go blobName) so two SyncDirs whose destinations
+	// share a basename never collide on the same ref.
+	if !strings.HasPrefix(syncOp.Blob, "blobs/systemd-") || !syncOp.Prune {
 		t.Fatalf("sync_dir op = %#v", syncOp)
 	}
-	blobFile := filepath.Join(planDir, "blobs", "systemd", "unit.service")
+	blobFile := filepath.Join(planDir, filepath.FromSlash(syncOp.Blob), "unit.service")
 	if _, err := os.Stat(blobFile); err != nil {
 		t.Fatalf("expected packaged blob file: %v", err)
 	}
@@ -131,6 +134,183 @@ func TestRecordPlanEmitsOrderedOpsWithGuards(t *testing.T) {
 	}
 	if _, err := plan.DecodePlanBytes(encoded); err != nil {
 		t.Fatalf("encode/decode: %v", err)
+	}
+}
+
+// TestRecordPlanSameBasenameSyncDirsGetDistinctBlobs is the e5 regression:
+// two SyncDir resources whose destinations merely share a last path segment
+// ("conf.d") must not collide on the same blob ref. Before the fix,
+// blobName derived the ref from filepath.Base(d.Path) alone, so both
+// packaged to "blobs/conf.d"; the second store.WriteGlob call silently
+// overwrote the first one's content, so the first destination would apply
+// with the second's files (and WithPrune could delete the first's
+// legitimate files as "extra").
+func TestRecordPlanSameBasenameSyncDirsGetDistinctBlobs(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	dir := t.TempDir()
+	srcA := filepath.Join(dir, "a", "src")
+	srcB := filepath.Join(dir, "b", "src")
+	if err := os.MkdirAll(srcA, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(srcB, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcA, "app.conf"), []byte("from-a\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcB, "app.conf"), []byte("from-b\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	// Same basename ("conf.d") under different parents — this is exactly
+	// the shape that used to collide.
+	dst1 := filepath.Join(dir, "x", "conf.d")
+	dst2 := filepath.Join(dir, "y", "conf.d")
+
+	Task("e5_same_basename_syncdirs", "", func() {
+		SyncDir(dst1, filepath.Join(srcA, "*"), options.WithPrune)
+		SyncDir(dst2, filepath.Join(srcB, "*"), options.WithPrune)
+	})
+
+	planDir := filepath.Join(dir, "plan")
+	ops, err := RecordPlan("e5-plan", planDir, "e5_same_basename_syncdirs")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+
+	var syncOps []plan.Op
+	for _, op := range ops {
+		if op.Op == plan.KindSyncDir {
+			syncOps = append(syncOps, op)
+		}
+	}
+	if len(syncOps) != 2 {
+		t.Fatalf("got %d sync_dir ops, want 2: %#v", len(syncOps), syncOps)
+	}
+	if syncOps[0].Blob == "" || syncOps[1].Blob == "" {
+		t.Fatalf("expected non-empty blob refs: %#v", syncOps)
+	}
+	if syncOps[0].Blob == syncOps[1].Blob {
+		t.Fatalf("both SyncDirs packaged to the same blob ref %q: content of one destination would silently clobber the other",
+			syncOps[0].Blob)
+	}
+
+	// Packaging must not have let the second write clobber the first blob
+	// on disk either.
+	dataA, err := os.ReadFile(filepath.Join(planDir, filepath.FromSlash(syncOps[0].Blob), "app.conf"))
+	if err != nil {
+		t.Fatalf("read packaged blob for dst1: %v", err)
+	}
+	dataB, err := os.ReadFile(filepath.Join(planDir, filepath.FromSlash(syncOps[1].Blob), "app.conf"))
+	if err != nil {
+		t.Fatalf("read packaged blob for dst2: %v", err)
+	}
+	if string(dataA) != "from-a\n" || string(dataB) != "from-b\n" {
+		t.Fatalf("packaged blob content = %q / %q, want %q / %q", dataA, dataB, "from-a\n", "from-b\n")
+	}
+
+	if err := ApplyPlan(ops, planDir); err != nil {
+		t.Fatalf("ApplyPlan: %v", err)
+	}
+	got1, err := os.ReadFile(filepath.Join(dst1, "app.conf"))
+	if err != nil {
+		t.Fatalf("read %s: %v", dst1, err)
+	}
+	got2, err := os.ReadFile(filepath.Join(dst2, "app.conf"))
+	if err != nil {
+		t.Fatalf("read %s: %v", dst2, err)
+	}
+	if string(got1) != "from-a\n" {
+		t.Fatalf("dst1 app.conf = %q, want %q", got1, "from-a\n")
+	}
+	if string(got2) != "from-b\n" {
+		t.Fatalf("dst2 app.conf = %q, want %q", got2, "from-b\n")
+	}
+}
+
+// TestRecordPlanSameBasenameLargeFilesGetDistinctBlobs is the e5 regression
+// for the other blobName caller: two >512KiB Files (packaged via
+// store.WriteFile instead of WriteGlob/WriteTree) whose destinations share a
+// basename must not collide on the same blob ref either.
+func TestRecordPlanSameBasenameLargeFilesGetDistinctBlobs(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	dir := t.TempDir()
+	srcA := filepath.Join(dir, "a-app.conf")
+	srcB := filepath.Join(dir, "b-app.conf")
+	dataA := append([]byte("A-marker\n"), make([]byte, 600<<10)...)
+	dataB := append([]byte("B-marker\n"), make([]byte, 600<<10)...)
+	if err := os.WriteFile(srcA, dataA, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(srcB, dataB, 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	// Same basename ("app.conf") under different parents.
+	dst1 := filepath.Join(dir, "x", "app.conf")
+	dst2 := filepath.Join(dir, "y", "app.conf")
+	if err := os.MkdirAll(filepath.Dir(dst1), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst2), 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	Task("e5_same_basename_files", "", func() {
+		InstallFile(dst1, srcA)
+		InstallFile(dst2, srcB)
+	})
+
+	planDir := filepath.Join(dir, "plan")
+	ops, err := RecordPlan("e5-file-plan", planDir, "e5_same_basename_files")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+
+	var fileOps []plan.Op
+	for _, op := range ops {
+		if op.Op == plan.KindFile && op.Blob != "" {
+			fileOps = append(fileOps, op)
+		}
+	}
+	if len(fileOps) != 2 {
+		t.Fatalf("got %d blob-backed file ops, want 2: %#v", len(fileOps), ops)
+	}
+	if fileOps[0].Blob == fileOps[1].Blob {
+		t.Fatalf("both large Files packaged to the same blob ref %q", fileOps[0].Blob)
+	}
+
+	if err := ApplyPlan(ops, planDir); err != nil {
+		t.Fatalf("ApplyPlan: %v", err)
+	}
+	got1, err := os.ReadFile(dst1)
+	if err != nil {
+		t.Fatalf("read %s: %v", dst1, err)
+	}
+	got2, err := os.ReadFile(dst2)
+	if err != nil {
+		t.Fatalf("read %s: %v", dst2, err)
+	}
+	if !strings.HasPrefix(string(got1), "A-marker\n") {
+		t.Fatalf("dst1 content does not start with A-marker")
+	}
+	if !strings.HasPrefix(string(got2), "B-marker\n") {
+		t.Fatalf("dst2 content does not start with B-marker")
 	}
 }
 

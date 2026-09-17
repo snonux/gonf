@@ -143,14 +143,8 @@ func (m *MemoryStore) TreeBlob(ref string) ([]BlobEntry, bool) {
 	return tree, ok
 }
 
+// memoryRef delegates to BlobRefFor (plan/blob.go) so the disk Store and the
+// in-memory store sanitize and prefix names identically.
 func memoryRef(name string) (string, error) {
-	safe := sanitizeBlobName(name)
-	if safe == "" {
-		return "", fmt.Errorf("plan: empty blob name")
-	}
-	ref := "blobs/" + safe
-	if err := validateBlobRef(ref); err != nil {
-		return "", err
-	}
-	return ref, nil
+	return BlobRefFor(name)
 }
