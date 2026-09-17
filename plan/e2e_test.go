@@ -653,6 +653,65 @@ func TestE2ESyncDirTemplateParamStableAcrossPlanDirs(t *testing.T) {
 	}
 }
 
+// TestE2EFileTemplateSourceRendersThroughPlan pins the g5 fix at the
+// plan-apply level (schema v9's template/template_param fields): a single
+// File resource (not a SyncDir tree — see TestE2ESyncDirTemplateParamStableAcrossPlanDirs
+// for that already-working path) whose WithSource ends in ".tmpl" must
+// render {{.Param}} on the destination during plan.Apply, exactly like a
+// direct (non-plan) file.Ensure call would. Before the fix, RecordPlan's
+// packageDraft read the raw template bytes into content_b64 with no
+// template signal on the op, so plan.Apply's applyFile wrote the literal
+// "{{.Param}}" text to the destination instead of rendering it.
+func TestE2EFileTemplateSourceRendersThroughPlan(t *testing.T) {
+	api.ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	work := t.TempDir()
+	src := filepath.Join(work, "app.conf.tmpl")
+	if err := os.WriteFile(src, []byte("value={{.Param}}\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(work, "app.conf")
+
+	api.Task("tmpl_file_e2e", "file template e2e", func() {
+		api.File(dst, options.WithSource(src))
+	})
+
+	planDir := filepath.Join(work, "plan-out")
+	ops, err := api.RecordPlan("tmpl-file", planDir, "tmpl_file_e2e")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+
+	raw, err := plan.EncodePlan(ops)
+	if err != nil {
+		t.Fatalf("EncodePlan: %v", err)
+	}
+	decoded, err := plan.DecodePlanBytes(raw)
+	if err != nil {
+		t.Fatalf("DecodePlanBytes: %v", err)
+	}
+
+	facts := plan.Facts{GOOS: runtime.GOOS, Profile: "test", Hostname: "localhost"}
+	if err := plan.Apply(decoded, facts, planDir); err != nil {
+		t.Fatalf("plan.Apply: %v", err)
+	}
+
+	data, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("read rendered file: %v", err)
+	}
+	want := "value=" + src + "\n"
+	if string(data) != want {
+		t.Fatalf("rendered content = %q, want %q (raw template text means plan.Apply never rendered it)", data, want)
+	}
+}
+
 // TestE2ESpecialBitsModePlanApply pins the setuid/setgid mode wiring end to
 // end: a raw 0o4755-style WithMode value and its Go flag-form equivalent
 // (0o750|os.ModeSetuid) must lower to four-digit plan wire modes ("04755",

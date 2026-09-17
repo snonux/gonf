@@ -49,6 +49,23 @@ Direct (non-plan) use derives the same stable value from the real source
 tree; plans recorded before schema v6 keep the old blob-path Param.
 `opt.WithParam` overrides the value explicitly (plan-engine plumbing).
 
+### Template rendering for a single `File` on the plan path
+
+A single `File(dst, WithSource("app.conf.tmpl"))` (not part of a `SyncDir`
+tree) is rendered the same way whether applied directly or through
+`Run`/`push`/`cluster`/`fleet` — everything goes through `api.Run` ->
+`RecordPlan` + `plan.Apply`. The `.tmpl` suffix never reaches the
+destination as a suffix (`planDraft` records the already-stripped
+destination path, and `RecordPlan` packages the source's raw bytes into
+`content_b64`/`blob`), so the `file` op instead carries the intent
+explicitly: `template:true` plus `template_param` set to the recipe's
+declared source path (schema v9). Plan apply forces rendering
+(`opt.WithTemplate`) and reproduces the same `{{.Param}}` a direct run would
+(`opt.WithParam(template_param)`) before writing the destination file. A
+`SyncDir`/`Dir` source tree is unaffected by this — see the section above —
+because its per-file copies always carry a real, still-`.tmpl`-suffixed
+`WithSource` at apply time.
+
 ### Replacing real entries with links (the `.old` aside)
 
 When `Link` must replace an existing real file, directory, or non-matching

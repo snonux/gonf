@@ -82,6 +82,16 @@ ops, err := RecordPlan("my-plan", planDir, "home_helix", "home_tmux")
   whenever content/source was configured at all; apply treats `content_b64`
   and `blob` both empty **and** `has_content` false as a record-time bug
   ("missing content_b64 and blob"), not as an empty file.
+- A `File` whose declared source or path ends in `.tmpl` carries that intent
+  onto the `file` op explicitly (`template:true` plus `template_param` =
+  the declared source path, schema v9): by record time the op's `path` is
+  already stripped of `.tmpl` and its content is packaged as raw bytes into
+  `content_b64`/`blob`, so neither field still carries the suffix
+  destination apply would otherwise key rendering off. Apply forces
+  rendering (`opt.WithTemplate`) and reproduces the direct-run `{{.Param}}`
+  (`opt.WithParam(template_param)`) before writing the file. `SyncDir`/`Dir`
+  source-tree copies are unaffected — their per-file `WithSource` still
+  carries `.tmpl` at apply time (see [file-dir-link.md](file-dir-link.md)).
 - `SyncDir` trees → `planDir/blobs/<name>/`.
 - The recipe's declared source directory travels on the `sync_dir` op
   (`source_dir`, schema v6): destination apply renders `.tmpl` files inside
@@ -363,7 +373,16 @@ Design decisions:
   `exec.Opts.Timeout` field exists for opt-in callers; wiring it globally was
   deliberately deferred (it would change apply semantics).
 
-Plan schema **version 8** adds the `in` field to `when_begin` predicates: an
+Plan schema **version 9** adds the `template` / `template_param` fields to
+`file` ops: a `File` recorded from a `.tmpl`-suffixed source or path now
+carries that intent explicitly, so destination apply renders it instead of
+writing the raw template text (the `path`/`content_b64` on the wire no
+longer carry a usable `.tmpl` suffix by apply time — see "Recording" above).
+An older binary that ignored `template` would write the literal
+`{{...}}`-style content to disk — a silent, user-visible content-loss bug,
+the same intent-loss class as previous bumps — so v8 binaries refuse v9
+plans up-front at the header gate instead, while this binary keeps applying
+v1–8 plans. Plan schema **version 8** adds the `in` field to `when_begin` predicates: an
 OR-list of acceptable fact values (e.g. `WhenProfile(a, b)` now lowers to
 `{"fact":"profile","in":["a","b"]}` instead of being treated as opaque — see
 "Recording" above). An older binary that ignored `in` would evaluate the

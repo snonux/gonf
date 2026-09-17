@@ -23,6 +23,7 @@ type (
 	SourceGlobable interface{ SetSourceGlob(string) }
 	SourceBaseable interface{ SetSourceBase(string) }
 	Paramable      interface{ SetParam(string) }
+	Templateable   interface{ SetTemplate() }
 	Contented      interface{ SetContent(string) }
 	LineAddable    interface{ SetAddLine(string) }
 	LineRemovable  interface{ SetRemoveLine(string) }
@@ -157,6 +158,17 @@ func WithParam(value string) Option {
 	return func(t any) {
 		requires(t, "WithParam", func(r Paramable) { r.SetParam(value) })
 	}
+}
+
+// WithTemplate forces content to render as a text/template regardless of any
+// ".tmpl" suffix on the resource's path or source. Recipe code should prefer
+// a ".tmpl"-suffixed WithSource/path instead of calling this directly; it
+// exists as plan-engine plumbing (plan.Apply's applyFile) to carry template
+// intent recorded at RecordPlan time (the file op's "template" field, schema
+// v9) onto the destination-side File, whose wire content_b64/blob and empty
+// source no longer carry a ".tmpl" suffix for shouldRenderTemplate to detect.
+var WithTemplate Option = func(t any) {
+	requires(t, "WithTemplate", func(r Templateable) { r.SetTemplate() })
 }
 
 // WithSourceBase sets the declared source directory for a dir resource that

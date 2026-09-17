@@ -43,7 +43,15 @@ type File struct {
 	// identity than this resource's mechanical source path — dir's tree
 	// copies on the plan path, which would otherwise derive the ephemeral
 	// blob-extraction path — use it; unset, Param stays the derived default.
-	param      string
+	param string
+	// template forces shouldRenderTemplate to report true regardless of any
+	// ".tmpl" suffix on path/source (opt.WithTemplate). Plan apply sets it on
+	// the destination-side File built from a file op recorded with
+	// template:true: by then the wire content_b64/blob is raw template text
+	// with no source set and a path already stripped of ".tmpl" (planDraft
+	// records the stripped targetPath), so neither suffix check would fire
+	// on its own.
+	template   bool
 	user       string
 	group      string
 	userSet    bool // WithOwner was called explicitly (build()'s default does not count)
@@ -73,6 +81,11 @@ func (f *File) SetSource(source string) {
 // when rendering template content; the default remains the derived source
 // path (or literal content).
 func (f *File) SetParam(param string) { f.param = param }
+
+// SetTemplate implements opt.Templateable. It forces shouldRenderTemplate to
+// report true even when neither path nor source ends in ".tmpl" — see the
+// template field comment for why plan apply needs this.
+func (f *File) SetTemplate() { f.template = true }
 
 // SetAddLine implements opt.LineAddable.
 func (f *File) SetAddLine(line string) {
@@ -106,6 +119,7 @@ var (
 	_ opt.LineAddable   = (*File)(nil)
 	_ opt.LineRemovable = (*File)(nil)
 	_ opt.Paramable     = (*File)(nil)
+	_ opt.Templateable  = (*File)(nil)
 )
 
 func build(path string, opts ...opt.Option) (*File, error) {
@@ -179,9 +193,28 @@ func (f *File) targetPath() string {
 
 // shouldRenderTemplate reports whether content should be rendered through
 // text/template: either the destination path or the source path ends in
-// ".tmpl".
+// ".tmpl", or rendering was forced explicitly (opt.WithTemplate — plan
+// apply's way of carrying template intent recorded at RecordPlan time, since
+// by apply time neither suffix survives on the wire; see the template field).
 func (f *File) shouldRenderTemplate() bool {
-	return strings.HasSuffix(f.path, ".tmpl") || strings.HasSuffix(f.source, ".tmpl")
+	return f.template || strings.HasSuffix(f.path, ".tmpl") || strings.HasSuffix(f.source, ".tmpl")
+}
+
+// templateParam returns the {{.Param}} value used when rendering f as a
+// template: the explicit WithParam override when set, else the bare source
+// path when source-based, or the literal content otherwise. Shared by
+// resolveFromSourceOrContent (direct/local apply, and dir's delegated
+// per-file copies) and planDraft, which carries the same value onto the
+// wire's template_param field so plan apply renders the identical
+// {{.Param}} a direct run would.
+func (f *File) templateParam() string {
+	if f.param != "" {
+		return f.param
+	}
+	if f.source != "" {
+		return f.source
+	}
+	return f.content
 }
 
 // resolveLine applies WithoutLine then WithLine to the on-disk file.
@@ -365,17 +398,8 @@ func (f *File) resolveFromSourceOrContent() (string, []byte, error) {
 		content = []byte(f.content)
 	}
 
-	param := f.param
-	if param == "" {
-		if f.source != "" {
-			param = f.source
-		} else {
-			param = f.content
-		}
-	}
-
 	if f.shouldRenderTemplate() {
-		rendered, err := f.applyTemplateToContent(content, param)
+		rendered, err := f.applyTemplateToContent(content, f.templateParam())
 		if err != nil {
 			return "", nil, err
 		}
@@ -661,6 +685,17 @@ func (f *File) planDraft() resource.PlanDraft {
 	case f.contentSet:
 		d.ContentB64 = base64.StdEncoding.EncodeToString([]byte(f.content))
 		d.HasContent = true
+	}
+	// Template intent must travel on the wire explicitly: packageDraft
+	// reads f.source's RAW bytes into content_b64/blob (below), and
+	// targetPath above already stripped ".tmpl" from the recorded Path, so
+	// neither field plan apply sees still carries the suffix
+	// shouldRenderTemplate would otherwise key off. Without Template/
+	// TemplateParam, plan apply (Run/push/cluster/fleet) would write the
+	// literal unrendered template text to the destination.
+	if f.shouldRenderTemplate() {
+		d.Template = true
+		d.TemplateParam = f.templateParam()
 	}
 	return d
 }

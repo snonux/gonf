@@ -308,6 +308,50 @@ func TestRunUsesPlanApplyEngine(t *testing.T) {
 	}
 }
 
+// TestRunFileTemplateSourceRendersOnDestination pins the g5 fix: a File
+// resource whose WithSource carries a ".tmpl" suffix must be rendered as a
+// text/template by the plan-record/apply path Run always goes through
+// (api.Run -> RecordPlan -> plan.Apply, same engine push/cluster/fleet use),
+// not written as raw template text. Before the fix, planDraft recorded the
+// already-".tmpl"-stripped destination Path plus the raw source bytes with
+// no signal that templating was intended, so plan.Apply's applyFile built a
+// File with WithContent(rawBytes) and neither its path nor its (empty)
+// source ended in ".tmpl" — shouldRenderTemplate stayed false and the
+// literal "{{.Param}}" text landed on disk.
+func TestRunFileTemplateSourceRendersOnDestination(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "app.conf.tmpl")
+	if err := os.WriteFile(src, []byte("value={{.Param}}\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(dir, "app.conf")
+
+	Task("file_tmpl_via_run", "", func() {
+		File(dst, options.WithSource(src))
+	})
+
+	if err := Run("file_tmpl_via_run"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	data, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("read rendered file: %v", err)
+	}
+	want := "value=" + src + "\n"
+	if string(data) != want {
+		t.Fatalf("rendered content = %q, want %q (raw template text means the plan-record/apply path never rendered it)", data, want)
+	}
+}
+
 // TestNestedRunSurfacesRealPackError pins that a packaging failure (here: a
 // source file that cannot be read) inside a nested Run fails the OUTER body
 // with the REAL error, not a misleading "registered resources without plan

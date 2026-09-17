@@ -371,6 +371,19 @@ func applyFile(op Op, planDir string) error {
 	}
 
 	opts = []opt.Option{opt.WithContent(string(content))}
+	if op.Template {
+		// The wire content is raw template text (packageDraft/RecordPlan
+		// reads a .tmpl source's bytes verbatim), and by now neither path
+		// nor source still carries the ".tmpl" suffix File.shouldRenderTemplate
+		// would otherwise key off (Path was already stripped at record time,
+		// and there is no source here — content came from content_b64/blob).
+		// WithTemplate forces rendering; WithParam reproduces the {{.Param}}
+		// a direct (non-plan) run with the same declared source would use.
+		opts = append(opts, opt.WithTemplate)
+		if op.TemplateParam != "" {
+			opts = append(opts, opt.WithParam(op.TemplateParam))
+		}
+	}
 	if op.Mode != "" {
 		mode, err := parseMode(op.Mode)
 		if err != nil {

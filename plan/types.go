@@ -14,8 +14,12 @@ package plan
 // version 7 added the systemd_timer op (declarative timer + oneshot service
 // unit install); version 8 added the "in" field to when_begin predicates
 // (an OR-list of acceptable fact values, e.g. WhenProfile(a, b) lowering to
-// a single serializable predicate instead of being marked opaque).
-const CurrentVersion = 8
+// a single serializable predicate instead of being marked opaque); version 9
+// added the template/template_param fields to file ops (a File whose
+// WithSource/path declared a ".tmpl" suffix now carries that intent onto the
+// wire, so plan apply renders it on the destination instead of writing the
+// raw template text — see docs/file-dir-link.md).
+const CurrentVersion = 9
 
 // supportedVersions is the set of plan schema versions this binary can apply.
 // Apply must refuse plans whose version is not in this set before any mutation.
@@ -27,6 +31,7 @@ var supportedVersions = map[int]struct{}{
 	5:              {},
 	6:              {},
 	7:              {},
+	8:              {},
 	CurrentVersion: {},
 }
 
@@ -51,11 +56,11 @@ const (
 	KindLinkIfExists Kind = "link_if_exists"
 	KindWhenBegin    Kind = "when_begin"
 	KindWhenEnd      Kind = "when_end"
-	KindTimer         Kind = "timer"
-	KindDaemonReload  Kind = "daemon_reload"
-	KindCron          Kind = "cron"
-	KindService       Kind = "service"
-	KindSystemdTimer  Kind = "systemd_timer"
+	KindTimer        Kind = "timer"
+	KindDaemonReload Kind = "daemon_reload"
+	KindCron         Kind = "cron"
+	KindService      Kind = "service"
+	KindSystemdTimer Kind = "systemd_timer"
 )
 
 // allKinds lists every Kind constant in stable declaration order.
@@ -185,6 +190,20 @@ type Op struct {
 	// empty file while still erroring loudly when both ContentB64 and Blob
 	// are unset AND HasContent is false (a record-time bug).
 	HasContent bool `json:"has_content,omitempty"`
+	// Template marks that KindFile's content must be rendered as a
+	// text/template on the destination (schema v9): the recipe's source or
+	// destination path ended in ".tmpl" at record time. By apply time the
+	// content already travels as raw template text in ContentB64/Blob and
+	// neither Path nor an (empty, wire content is never re-sourced) source
+	// path still carries the ".tmpl" suffix that would otherwise trigger
+	// rendering, so this flag is what carries the intent across the wire.
+	Template bool `json:"template,omitempty"`
+	// TemplateParam is the recipe's declared source path, recorded alongside
+	// Template so the destination render uses the same {{.Param}} default a
+	// direct (non-plan) File with the same ".tmpl" source would use, instead
+	// of exposing the plan-apply implementation detail (there is no source
+	// file on the destination to derive it from).
+	TemplateParam string `json:"template_param,omitempty"`
 	// SourceDir is the recipe's declared source directory for KindSyncDir
 	// (for the glob flavor, the declared glob pattern's directory). Apply
 	// passes it to the synced tree so .tmpl files inside render {{.Param}}

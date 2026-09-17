@@ -61,6 +61,19 @@ type PlanDraft struct {
 	// op that is missing content data outright (a record-time bug): only
 	// the latter should fail loudly with "missing content_b64 and blob".
 	HasContent bool
+	// Template marks that the "file" kind's content must be rendered as a
+	// text/template on the destination: the recipe's source or path ended
+	// in ".tmpl". draftToOp copies it onto the file op's template field so
+	// plan apply renders it, since by apply time the wire content is raw
+	// template text with no ".tmpl"-suffixed path left to detect it from.
+	Template bool
+	// TemplateParam is the declared source path used as the template's
+	// {{.Param}} default when Template is set — the same value a direct
+	// (non-plan) File with the same ".tmpl" source would use, so plan apply
+	// renders the identical {{.Param}} a local run would instead of exposing
+	// a plan-apply implementation detail (there is no destination-side
+	// source file to derive it from).
+	TemplateParam string
 	// SourceDir is a controller-local directory to package as a blob tree;
 	// for sync_dir drafts it also carries the recipe's DECLARED source
 	// directory onto the op's source_dir field (the glob pattern's

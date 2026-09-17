@@ -42,6 +42,7 @@ func (c *capTarget) SetSource(v string)         { c.record("SetSource", v) }
 func (c *capTarget) SetSourceGlob(v string)     { c.record("SetSourceGlob", v) }
 func (c *capTarget) SetSourceBase(v string)     { c.record("SetSourceBase", v) }
 func (c *capTarget) SetParam(v string)          { c.record("SetParam", v) }
+func (c *capTarget) SetTemplate()               { c.record("SetTemplate", nil) }
 func (c *capTarget) SetContent(v string)        { c.record("SetContent", v) }
 func (c *capTarget) SetAddLine(v string)        { c.record("SetAddLine", v) }
 func (c *capTarget) SetRemoveLine(v string)     { c.record("SetRemoveLine", v) }
@@ -138,6 +139,7 @@ func TestOptionsReachTheirSetters(t *testing.T) {
 		{"WithSourceGlob", WithSourceGlob("*.conf"), "SetSourceGlob", "*.conf"},
 		{"WithSourceBase", WithSourceBase("assets/testfiles"), "SetSourceBase", "assets/testfiles"},
 		{"WithParam", WithParam("stable"), "SetParam", "stable"},
+		{"WithTemplate", WithTemplate, "SetTemplate", nil},
 		{"WithContent", WithContent("hello"), "SetContent", "hello"},
 		{"WithLine", WithLine("line"), "SetAddLine", "line"},
 		{"WithoutLine", WithoutLine("gone"), "SetRemoveLine", "gone"},
