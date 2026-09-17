@@ -10,15 +10,14 @@ import (
 // contract as MustHost / MustCluster. Prefer WithValue / SetValue at inventory
 // time over a parallel map + MustMapValue in the recipe.
 func MustHostValue[T any](host, key string) T {
-	rec, ok := inventory.LookupHost(host)
-	if !ok {
-		logger.Fatal("MustHostValue: Host %q is not registered", host)
-	}
 	if key == "" {
 		logger.Fatal("MustHostValue: key must not be empty")
 	}
-	raw, ok := rec.Values[key]
-	if !ok {
+	raw, hostFound, keyFound := inventory.HostValue(host, key)
+	if !hostFound {
+		logger.Fatal("MustHostValue: Host %q is not registered", host)
+	}
+	if !keyFound {
 		logger.Fatal("Host %q: no value %q", host, key)
 	}
 	v, ok := raw.(T)

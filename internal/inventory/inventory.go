@@ -109,11 +109,36 @@ func SetHostValue(name, key string, value any) {
 }
 
 // LookupHost returns the registered Host record for name.
+//
+// The returned Host is a shallow copy: its Values field is a map, and a
+// shallow copy of a struct still aliases the same underlying map as the one
+// stored in the registry. Reading rec.Values[key] AFTER this call returns is
+// therefore an unsynchronized read racing against SetHostValue, which
+// mutates that same aliased map under mu. Callers must not index into the
+// returned Host's Values map; use HostValue instead, which performs the
+// lookup-and-index atomically under mu.
 func LookupHost(name string) (Host, bool) {
 	mu.Lock()
 	defer mu.Unlock()
 	rec, ok := hosts[name]
 	return rec, ok
+}
+
+// HostValue returns the value stored under key on the registered host name,
+// looked up and indexed atomically under a single lock so it is race-free
+// against concurrent SetHostValue calls on the same host (unlike calling
+// LookupHost and then indexing its Values map after the lock is released).
+// hostFound is false when name is not registered at all; keyFound is false
+// when the host is registered but key was never set on it.
+func HostValue(name, key string) (value any, hostFound, keyFound bool) {
+	mu.Lock()
+	defer mu.Unlock()
+	rec, hostFound := hosts[name]
+	if !hostFound {
+		return nil, false, false
+	}
+	value, keyFound = rec.Values[key]
+	return value, true, keyFound
 }
 
 // AddCluster registers name with the given member host names. hostNames is

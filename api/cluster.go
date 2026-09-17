@@ -7,6 +7,7 @@ import (
 
 	"github.com/snonux/gonf/internal/inventory"
 	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/internal/orchestrate"
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/internal/remote"
 	"github.com/snonux/gonf/plan"
@@ -285,7 +286,7 @@ func PushCluster(name string, tasks ...string) error {
 // overrides the cluster's parallelism), and hostTimeout (per-host push bound;
 // <= 0 means unlimited). The per-host transport fan-out itself lives in
 // internal/remote (remote.Fanout); the record-once-then-fan-out plumbing is
-// shared with PushFleetRun via pushHosts.
+// shared with PushFleetRun via internal/orchestrate.Push.
 func PushClusterRun(ctx context.Context, name, planID string, parallelOverride int, hostTimeout time.Duration, tasks ...string) error {
 	if len(tasks) == 0 {
 		return fmt.Errorf("cluster %q: no tasks", name)
@@ -294,7 +295,6 @@ func PushClusterRun(ctx context.Context, name, planID string, parallelOverride i
 	if !ok {
 		return fmt.Errorf("cluster %q is not registered", name)
 	}
-	hosts := hostRefsFromNames(rec.Hosts)
 	limit := inventory.ClusterParallelism(rec)
 
 	if parallelOverride > 0 {
@@ -312,45 +312,5 @@ func PushClusterRun(ctx context.Context, name, planID string, parallelOverride i
 	if err := RefuseOpaqueOnlyPush(fmt.Sprintf("cluster %q", name)); err != nil {
 		return err
 	}
-	return pushHosts(ctx, name, planID, hosts, limit, hostTimeout, ops, mem)
-}
-
-// hostRefsFromNames wraps inventory host names back into the api package's
-// opaque HostRef handles, for callers (PushClusterRun, PushFleetRun) that
-// received plain names from internal/inventory but need to reuse pushHosts'
-// existing []HostRef-based fan-out.
-func hostRefsFromNames(names []string) []HostRef {
-	out := make([]HostRef, len(names))
-	for i, n := range names {
-		out[i] = HostRef{name: n}
-	}
-	return out
-}
-
-// pushHosts fans an already-recorded plan (ops/mem, produced by exactly one
-// RecordPlanTo call — recording uses package-level global state in the plan
-// and resource packages and is not safe to run concurrently or repeatedly
-// for one push) out to hosts via remote.Fanout, bounded by limit concurrent
-// per-host pushes. name labels the Fanout summary line and error messages
-// (a cluster name for both PushClusterRun and each of PushFleetRun's
-// per-cluster groups).
-//
-// This is the single push pipeline shared by PushClusterRun (one call, the
-// whole cluster) and PushFleetRun (one call per member cluster's host
-// group — see PushFleetRun's doc comment for why parallelism is applied per
-// group instead of once for the whole fleet). Before this helper existed,
-// PushClusterRun and PushFleetRun each built targets/labels and called
-// remote.Fanout with their own near-identical copy of this loop.
-func pushHosts(ctx context.Context, name, planID string, hosts []HostRef, limit int, hostTimeout time.Duration, ops []plan.Op, mem plan.BlobReader) error {
-	targets := make([]PushTarget, 0, len(hosts))
-	labels := make([]string, 0, len(hosts))
-	for _, h := range hosts {
-		t, err := h.pushTarget()
-		if err != nil {
-			return err
-		}
-		targets = append(targets, t)
-		labels = append(labels, h.name)
-	}
-	return remote.Fanout(ctx, name, planID, ops, mem, targets, labels, limit, hostTimeout)
+	return orchestrate.Push(ctx, name, planID, rec.Hosts, limit, hostTimeout, ops, mem)
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/snonux/gonf/internal/inventory"
 	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/internal/orchestrate"
 	"github.com/snonux/gonf/internal/remote"
 	"github.com/snonux/gonf/plan"
 )
@@ -143,7 +144,7 @@ func PushFleet(name string, tasks ...string) error {
 // Each cluster's group still gets its own remote.Fanout call (so its own
 // Parallel(n)/-j limit governs only that group's concurrency), but all
 // groups share one cancelable context derived from ctx: as soon as any
-// group's pushHosts call returns an error, PushFleetRun cancels that shared
+// group's orchestrate.Push call returns an error, PushFleetRun cancels that shared
 // context, which propagates into every other group's still-running
 // errgroup (each group's errgroup.WithContext derives from the shared
 // context, not from ctx directly) and aborts their in-flight — and
@@ -181,10 +182,11 @@ func PushFleetRun(ctx context.Context, name, planID string, parallelOverride int
 	// instant any group fails) propagates into every OTHER group's
 	// errgroup-derived context too, restoring the whole-fleet fail-fast
 	// contract. Each group still applies its own limit independently via its
-	// own errgroup.SetLimit inside pushHosts/remote.Fanout, so this does not
-	// undo the per-cluster parallelism fix. context.CancelFunc is safe to
-	// call concurrently and more than once (only the first call has effect),
-	// so no extra synchronization (e.g. sync.Once) is needed around cancel().
+	// own errgroup.SetLimit inside orchestrate.Push/remote.Fanout, so this
+	// does not undo the per-cluster parallelism fix. context.CancelFunc is
+	// safe to call concurrently and more than once (only the first call has
+	// effect), so no extra synchronization (e.g. sync.Once) is needed around
+	// cancel().
 	fleetCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -199,8 +201,7 @@ func PushFleetRun(ctx context.Context, name, planID string, parallelOverride int
 		wg.Add(1)
 		go func(g inventory.FleetHostGroup, limit int) {
 			defer wg.Done()
-			hosts := hostRefsFromNames(g.HostNames)
-			if err := pushHosts(fleetCtx, g.Cluster.Name, planID, hosts, limit, hostTimeout, ops, mem); err != nil {
+			if err := orchestrate.Push(fleetCtx, g.Cluster.Name, planID, g.HostNames, limit, hostTimeout, ops, mem); err != nil {
 				errMu.Lock()
 				errs = append(errs, err.Error())
 				errMu.Unlock()

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snonux/gonf/internal/orchestrate"
 	"github.com/snonux/gonf/internal/remote"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -458,8 +459,8 @@ func TestPushClusterDryRun(t *testing.T) {
 }
 
 // TestPushHostsSharedByClusterAndFleet confirms PushClusterRun and
-// PushFleetRun bottom out in the exact same pushHosts helper: calling it
-// directly, once per "path", must push to every host exactly once either
+// PushFleetRun bottom out in the exact same orchestrate.Push helper: calling
+// it directly, once per "path", must push to every host exactly once either
 // way. This is the (a) requirement from task n5 — proving the two entry
 // points share one push pipeline instead of each carrying its own copy of
 // the targets/labels/Fanout loop.
@@ -491,22 +492,24 @@ func TestPushHostsSharedByClusterAndFleet(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	hostNames := []string{h1.Name(), h2.Name()}
+
 	// "cluster-shaped" call.
-	if err := pushHosts(context.Background(), "cluster-label", "shared-test", []HostRef{h1, h2}, 2, remote.DefaultHostTimeout, ops, mem); err != nil {
+	if err := orchestrate.Push(context.Background(), "cluster-label", "shared-test", hostNames, 2, remote.DefaultHostTimeout, ops, mem); err != nil {
 		t.Fatal(err)
 	}
 	if calls.Load() != 2 {
-		t.Fatalf("cluster-shaped pushHosts calls=%d, want 2", calls.Load())
+		t.Fatalf("cluster-shaped orchestrate.Push calls=%d, want 2", calls.Load())
 	}
 
 	// "fleet-group-shaped" call: same helper, same hosts, different label —
 	// exactly how PushFleetRun invokes it once per member cluster group.
 	calls.Store(0)
-	if err := pushHosts(context.Background(), "fleet-group-label", "shared-test", []HostRef{h1, h2}, 2, remote.DefaultHostTimeout, ops, mem); err != nil {
+	if err := orchestrate.Push(context.Background(), "fleet-group-label", "shared-test", hostNames, 2, remote.DefaultHostTimeout, ops, mem); err != nil {
 		t.Fatal(err)
 	}
 	if calls.Load() != 2 {
-		t.Fatalf("fleet-group-shaped pushHosts calls=%d, want 2", calls.Load())
+		t.Fatalf("fleet-group-shaped orchestrate.Push calls=%d, want 2", calls.Load())
 	}
 }
 
