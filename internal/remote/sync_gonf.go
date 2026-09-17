@@ -21,9 +21,76 @@ import (
 const gonfCmdPackage = "github.com/snonux/gonf/cmd/gonf"
 
 var (
-	gonfBuildMu    sync.Mutex
-	gonfBuildCache = map[string]string{} // "goos/goarch" → local binary path
+	// gonfBuildMu protects only the two maps below (a quick map read/write),
+	// never the build itself — see gonfBuildKeyLock's doc comment for why a
+	// single global mutex used to serialize every cross-compile.
+	gonfBuildMu       sync.Mutex
+	gonfBuildCache    = map[string]string{}      // "goos/goarch" → local binary path
+	gonfBuildKeyLocks = map[string]*sync.Mutex{} // "goos/goarch" → that key's build lock
 )
+
+// gonfBuildKeyLock returns the build lock for key ("goos/goarch"), creating
+// it on first use. Fanout (fleet.go) pushes to every target concurrently, so
+// buildGonf can be entered by several goroutines at once for several
+// DIFFERENT platforms. A single global mutex held across the whole `go
+// build` invocation used to serialize all of them — an unrelated
+// openbsd/arm64 cross-compile would sit blocked behind an in-flight
+// linux/amd64 one for no reason. Locking per key instead lets unrelated
+// platforms build fully in parallel, while still serializing two goroutines
+// that race to build the SAME key (avoiding a duplicate, wasted
+// cross-compile and a racy cache write/read).
+func gonfBuildKeyLock(key string) *sync.Mutex {
+	gonfBuildMu.Lock()
+	defer gonfBuildMu.Unlock()
+	mu, ok := gonfBuildKeyLocks[key]
+	if !ok {
+		mu = &sync.Mutex{}
+		gonfBuildKeyLocks[key] = mu
+	}
+	return mu
+}
+
+func gonfBuildCacheGet(key string) (string, bool) {
+	gonfBuildMu.Lock()
+	defer gonfBuildMu.Unlock()
+	path, ok := gonfBuildCache[key]
+	return path, ok
+}
+
+func gonfBuildCacheSet(key, path string) {
+	gonfBuildMu.Lock()
+	defer gonfBuildMu.Unlock()
+	gonfBuildCache[key] = path
+}
+
+// gonfCrossBuildDir returns the one, bounded, reused local directory that
+// holds the cross-compiled gonf binary for a given goos/goarch pair.
+//
+// The previous implementation called os.MkdirTemp("", "gonf-cross-*") on
+// every cache miss: a fresh, uniquely-named directory every time. Because
+// gonfBuildCache only lives for one process's lifetime, every single `gonf`
+// invocation that needed a cross-compile left its directory behind under
+// os.TempDir() forever — nothing ever removed it, so a host running fleet
+// pushes regularly (e.g. from cron) would accumulate one leaked directory
+// per invocation indefinitely.
+//
+// Keying the directory name itself by goos/goarch bounds the total count to
+// the number of distinct platforms gonf has ever cross-built for on this
+// host (in practice a handful), and lets both this process and later `gonf`
+// invocations reuse the already-built binary instead of paying for another
+// full static cross-compile. If something outside gonf sweeps os.TempDir()
+// (systemd-tmpfiles, a reboot), the directory is simply recreated and the
+// binary rebuilt on next use — see the os.Stat cache-hit check in
+// buildGonf — so this is self-healing, not fragile.
+//
+// goos/goarch are sanitized (sanitizeID, from remote.go) before use in a
+// filesystem path: they usually come from a fixed, validated vocabulary
+// (mapUnameGOOS / mapUnameGOARCH), but PushTarget.GOOS/GOARCH can also be
+// set directly by a caller/config, so this must not assume the value is
+// already path-safe.
+func gonfCrossBuildDir(goos, goarch string) string {
+	return filepath.Join(os.TempDir(), "gonf-cross-"+sanitizeID(goos)+"-"+sanitizeID(goarch))
+}
 
 // SCPRunner copies a local file to a remote path via scp. Overridable in tests.
 var SCPRunner = func(ctx context.Context, localPath string, t PushTarget, remotePath string) error {
@@ -80,6 +147,7 @@ const scpPassThroughTakesValueLetters = "oiFJc"
 //     forwarding) — listed here anyway so scpArgv's own error message names
 //     the ssh meaning the user actually asked for, instead of scp's opaque
 //     "unknown option" diagnostic.
+//
 //   - scp defines the SAME letter with a DIFFERENT, unrelated meaning that
 //     silently forwarding would trigger instead of the ssh meaning the user
 //     intended:
@@ -483,23 +551,51 @@ func mapUnameGOARCH(s string) (string, error) {
 
 func buildGonf(ctx context.Context, goos, goarch string) (string, error) {
 	key := goos + "/" + goarch
-	gonfBuildMu.Lock()
-	defer gonfBuildMu.Unlock()
-	if path, ok := gonfBuildCache[key]; ok {
+
+	// Serialize only same-key builds (see gonfBuildKeyLock's doc comment):
+	// unrelated goos/goarch pairs never wait on each other here.
+	keyMu := gonfBuildKeyLock(key)
+	keyMu.Lock()
+	defer keyMu.Unlock()
+
+	if path, ok := gonfBuildCacheGet(key); ok {
 		if _, err := os.Stat(path); err == nil {
 			return path, nil
 		}
 	}
-	dir, err := os.MkdirTemp("", "gonf-cross-*")
+
+	baseDir := gonfCrossBuildDir(goos, goarch)
+	if err := os.MkdirAll(baseDir, 0o700); err != nil {
+		return "", err
+	}
+
+	// Build into a freshly created, uniquely-named scratch subdirectory of
+	// baseDir, then atomically publish it to the canonical "gonf" path with
+	// a single os.Rename. This scratch dir is ALWAYS removed before
+	// returning (success or failure, via defer) — it never lingers, which
+	// is the actual "temp directory" cleanup this fix owes. Only the one
+	// canonical, bounded, reused baseDir persists across calls (and across
+	// separate `gonf` process invocations) — that is deliberate caching,
+	// not a leak, and it also means a concurrent second `gonf` process
+	// racing to build the same key can never observe a half-written binary
+	// at the canonical path: readers only ever see the old complete binary
+	// or the new one, never a partial one.
+	scratch, err := os.MkdirTemp(baseDir, "build-*")
 	if err != nil {
 		return "", err
 	}
-	out := filepath.Join(dir, "gonf")
-	if err := GoBuildRunner(ctx, goos, goarch, out, gonfCmdPackage); err != nil {
-		_ = os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(scratch) }()
+
+	scratchOut := filepath.Join(scratch, "gonf")
+	if err := GoBuildRunner(ctx, goos, goarch, scratchOut, gonfCmdPackage); err != nil {
 		return "", err
 	}
-	gonfBuildCache[key] = out
+
+	out := filepath.Join(baseDir, "gonf")
+	if err := os.Rename(scratchOut, out); err != nil {
+		return "", err
+	}
+	gonfBuildCacheSet(key, out)
 	return out, nil
 }
 
