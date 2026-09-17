@@ -53,34 +53,65 @@ var SCPRunner = func(ctx context.Context, localPath string, t PushTarget, remote
 //	-F configfile
 //	-J destination  (ProxyJump)
 //	-c cipher_spec
-//	-S program      (scp's "alternate encrypted-connection program"; scp(1)
-//	                 documents this letter explicitly, unlike -S's ssh(1)
-//	                 meaning of "control socket path" — but both accept a
-//	                 single opaque string argument, and gonf's ExtraSSH
-//	                 callers use it for the former, so it is safe to forward)
 //	-A              (forward ssh-agent — identical meaning in both man pages)
-const scpPassThroughOptLetters = "oiFJcSA"
+//
+// -S used to be listed here too, but it is a letter collision, not a shared
+// meaning — see scpRejectedOptLetters.
+const scpPassThroughOptLetters = "oiFJcA"
 
 // scpRejectedOptLetters are ssh(1) option letters that scpArgv refuses to
-// forward to scp: either scp has no such flag at all (-L/-W local/stdio
-// forwarding, -e escape character, -t force-tty, -x disable X11 forwarding),
-// or scp defines the SAME letter with a DIFFERENT, unrelated meaning that
-// silently forwarding would trigger instead of the ssh meaning the user
-// intended:
+// forward to scp. Three different hazards land here, and none of them is
+// "scp will just print usage and exit" — that clean-rejection case would be
+// harmless to forward and does not need to live in this list:
 //
-//	-D  ssh: local dynamic port-forward "[bind:]port"
-//	    scp: connect to a local sftp-server program at the given path
-//	-R  ssh: remote port-forward "remote_port:host:hostport"
-//	    scp: copy between two remote hosts by running scp on the origin host
-//	         (a boolean flag, no argument — so scp would then choke on ssh's
-//	         forward spec as a bogus extra file argument)
-//	-T  ssh: disable pseudo-terminal allocation (no argument)
-//	    scp: disable strict server-filename checking (no argument) — a
-//	         security-relevant behavior change scp would apply silently
+//   - scp has no such flag at all, so it fails cleanly on an unknown option
+//     (-L/-W local/stdio forwarding, -e escape character, -x disable X11
+//     forwarding) — listed here anyway so scpArgv's own error message names
+//     the ssh meaning the user actually asked for, instead of scp's opaque
+//     "unknown option" diagnostic.
+//   - scp defines the SAME letter with a DIFFERENT, unrelated meaning that
+//     silently forwarding would trigger instead of the ssh meaning the user
+//     intended:
+//
+//     -D  ssh: local dynamic port-forward "[bind:]port"
+//     scp: connect to a local sftp-server program at the given path
+//     -R  ssh: remote port-forward "remote_port:host:hostport"
+//     scp: copy between two remote hosts by running scp on the origin host
+//     (a boolean flag, no argument — so scp would then choke on ssh's
+//     forward spec as a bogus extra file argument)
+//     -T  ssh: disable pseudo-terminal allocation (no argument)
+//     scp: disable strict server-filename checking (no argument) — a
+//     security-relevant behavior change scp would apply silently
+//     -S  ssh: ControlPath — path to a local control socket used for
+//     connection multiplexing (an opaque string argument)
+//     scp: "-S program" — an alternate PROGRAM TO EXECUTE in place of ssh
+//     for the underlying transport (also a single opaque string
+//     argument, so nothing about the syntax catches the mismatch).
+//     Empirically confirmed: "scp -S /nonexistent-program -o
+//     ConnectTimeout=1 ..." tries to exec that path as the transport
+//     program and fails with a confusing "No such file or directory"
+//     — not a clean rejection — exactly the silent-misinterpretation
+//     hazard this whole translation layer exists to prevent.
+//
+//   - scp recognizes the SAME letter as one of its own internal,
+//     undocumented legacy-protocol source/sink flags (not in scp's man page
+//     SYNOPSIS, but still accepted by the binary), which makes the scp
+//     subprocess block waiting for a protocol handshake that will never
+//     arrive — it HANGS rather than erroring, so relying on scp to reject it
+//     itself is not an option:
+//
+//     -t  ssh: force pseudo-terminal allocation (no argument)
+//     scp: internal "to" (sink) side of the scp protocol
+//     -f  ssh has no "-f" option at all
+//     scp: internal "from" (source) side of the scp protocol
+//
+//     Empirically confirmed: both "scp -t foo" and "scp -f foo" hang rather
+//     than exit with an error.
 //
 // Per gonf's task guidance, failing loudly here (reject) beats silently
-// dropping or silently reinterpreting a flag the user explicitly asked for.
-const scpRejectedOptLetters = "LRDWetTx"
+// dropping, silently reinterpreting, or silently hanging on a flag the user
+// explicitly asked for.
+const scpRejectedOptLetters = "LRDWetTxSf"
 
 // scpArgv builds an scp command line for staging the gonf binary. ssh and
 // scp share very few flag letters with identical meaning, so ExtraSSH tokens
@@ -96,9 +127,19 @@ const scpRejectedOptLetters = "LRDWetTx"
 //     flag; scp does not accept ssh's joined "-pPORT" form as a port at all).
 //
 // An error is returned instead of an argv when ExtraSSH carries one of
-// scpRejectedOptLetters, since EnsureRemoteGonf only needs scp for the rare
-// binary-sync path and callers already propagate scp errors up as a plain
-// "ensure gonf: scp: ..." wrapped error.
+// scpRejectedOptLetters, an -l/-p/-P token that doesn't match the expected
+// complete pattern (finding 3: a malformed token must not silently bypass
+// every check and reach scp verbatim — ExtraSSH is a public field on the
+// exported api.PushTarget, so a direct API caller, not just gonf's own CLI
+// parser, can hand scpArgv a bare trailing "-l" or a non-numeric "-p"), or
+// any other flag letter that is in neither scpPassThroughOptLetters nor
+// scpRejectedOptLetters (default-deny for unrecognized flags: finding 1
+// showed that an unlisted letter is not safe to assume is a harmless
+// pass-through, so an unknown letter is rejected rather than forwarded).
+// These error messages deliberately do not start with an "scp:" tag: the
+// only caller (EnsureRemoteGonf) already adds that tag once when it wraps
+// the error, and a second "scp:" here used to produce a double-prefixed
+// "ensure gonf: scp: scp: ExtraSSH option ..." message.
 func scpArgv(t PushTarget, localPath, remotePath string) ([]string, error) {
 	argv := []string{"scp"}
 	port := t.Port
@@ -137,16 +178,42 @@ func scpArgv(t PushTarget, localPath, remotePath string) ([]string, error) {
 			continue
 		}
 
+		// Any "-p"/"-P"/"-l" token that reaches this point started with one
+		// of those letters but did not match a complete pattern above: a
+		// bare trailing "-p"/"-P"/"-l" with no following value, or a
+		// "-p"/"-P" (joined or separate) whose value is not a valid port
+		// number. Falling through to raw pass-through here would reproduce
+		// the exact bug this function exists to fix, just for malformed
+		// rather than well-formed input, so these are rejected explicitly
+		// with a message that names the expected shape.
+		if len(a) >= 2 && a[0] == '-' && (a[1] == 'p' || a[1] == 'P') {
+			return nil, fmt.Errorf(`ExtraSSH option %q is missing a value or has a non-numeric port; want "-p PORT", "-P PORT", "-pPORT", or "-PPORT"`, a)
+		}
+		if len(a) >= 2 && a[0] == '-' && a[1] == 'l' {
+			return nil, fmt.Errorf(`ExtraSSH option %q is missing a login-user value; want "-l USER" or "-lUSER"`, a)
+		}
+
 		if len(a) >= 2 && a[0] == '-' {
 			if strings.ContainsRune(scpPassThroughOptLetters, rune(a[1])) {
 				argv = append(argv, a)
 				continue
 			}
 			if strings.ContainsRune(scpRejectedOptLetters, rune(a[1])) {
-				return nil, fmt.Errorf("scp: ExtraSSH option %q is ssh-only (or means something different under scp) and cannot be used for the gonf binary sync step; remove it from ExtraSSH", a)
+				return nil, fmt.Errorf("ExtraSSH option %q is ssh-only, means something different under scp, or would hang the scp subprocess, and cannot be used for the gonf binary sync step; remove it from ExtraSSH", a)
 			}
+			// Default-deny: a flag letter that is neither an explicit
+			// pass-through nor an explicit rejection is not known to be
+			// safe to forward (see the scpPassThroughOptLetters doc comment
+			// for why "unrecognized" cannot be assumed to mean "harmless").
+			return nil, fmt.Errorf("ExtraSSH option %q is not a recognized scp option for the gonf binary sync step; add it to scpArgv's allow/deny list if it is genuinely safe, or remove it from ExtraSSH", a)
 		}
 
+		// Not a flag token at all: this is the plain value that follows a
+		// pass-through option given in separate form (e.g. the
+		// "StrictHostKeyChecking=yes" half of ["-o",
+		// "StrictHostKeyChecking=yes"]) — the pass-through branch above
+		// appends only the flag itself and lets the loop reach this token
+		// next, so it must still be forwarded verbatim.
 		argv = append(argv, a)
 	}
 	argv = append(argv, "-o", "ConnectTimeout="+sshConnectTimeout)
@@ -243,6 +310,10 @@ func EnsureRemoteGonf(ctx context.Context, t PushTarget) (installedPath string, 
 
 	remoteTmp := remoteDir + "/gonf"
 	if err := SCPRunner(ctx, localBin, t, remoteTmp); err != nil {
+		// scpArgv's own errors do not repeat the "scp:" tag added here (it
+		// used to, producing a double-prefixed "ensure gonf: scp: scp:
+		// ExtraSSH option ..." message); a real scp(1) exec failure still
+		// gets tagged exactly once, here.
 		return "", fmt.Errorf("ensure gonf: scp: %w", err)
 	}
 

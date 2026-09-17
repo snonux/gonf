@@ -180,16 +180,6 @@ func TestSCPArgvExtraSSHTranslation(t *testing.T) {
 			wantContains: []string{"-caes256-gcm@openssh.com"},
 		},
 		{
-			name:         "-S pass through separate",
-			extraSSH:     []string{"-S", "/usr/bin/ssh"},
-			wantContains: []string{"-S /usr/bin/ssh"},
-		},
-		{
-			name:         "-S pass through joined",
-			extraSSH:     []string{"-S/usr/bin/ssh"},
-			wantContains: []string{"-S/usr/bin/ssh"},
-		},
-		{
 			name:         "-A pass through (agent forwarding, same meaning under scp)",
 			extraSSH:     []string{"-A"},
 			wantContains: []string{"-A"},
@@ -202,6 +192,35 @@ func TestSCPArgvExtraSSHTranslation(t *testing.T) {
 		{name: "-t force-tty rejected", extraSSH: []string{"-t"}, wantErr: true},
 		{name: "-T disable-pty rejected (scp -T means disable filename checks)", extraSSH: []string{"-T"}, wantErr: true},
 		{name: "-x disable-X11 rejected", extraSSH: []string{"-x"}, wantErr: true},
+		// -S is a letter collision, not a shared meaning: ssh's -S is the
+		// ControlPath (multiplexing socket), scp's -S is an alternate
+		// program to EXECUTE for the transport. Empirically, "scp -S
+		// /nonexistent-program ..." tries to exec that path and fails with
+		// a confusing "No such file or directory" rather than a clean
+		// rejection, so it must be rejected here rather than forwarded.
+		{name: "-S separate rejected (letter collision: ssh ControlPath vs scp -S program-to-exec)", extraSSH: []string{"-S", "/usr/bin/ssh"}, wantErr: true},
+		{name: "-S joined rejected (letter collision)", extraSSH: []string{"-S/usr/bin/ssh"}, wantErr: true},
+		// -f is scp's own undocumented internal "from" (source) protocol
+		// listener flag (not in scp's SYNOPSIS, but still recognized by the
+		// binary): forwarding it would make the scp subprocess hang waiting
+		// for a protocol handshake that never arrives, exactly like -t.
+		{name: "-f rejected (scp internal protocol-listener flag, would hang like -t)", extraSSH: []string{"-f", "foo"}, wantErr: true},
+		// Malformed/incomplete -l/-p/-P tokens must not fall through to raw
+		// pass-through: any direct API caller can construct these via the
+		// exported api.PushTarget.ExtraSSH field, not just gonf's own CLI
+		// parser (which happens to always grab a value when one exists).
+		{name: "bare trailing -l with no value is rejected", extraSSH: []string{"-l"}, wantErr: true},
+		{name: "bare trailing -p with no value is rejected", extraSSH: []string{"-p"}, wantErr: true},
+		{name: "bare trailing -P with no value is rejected", extraSSH: []string{"-P"}, wantErr: true},
+		{name: "separate -p with non-numeric value is rejected", extraSSH: []string{"-p", "notaport"}, wantErr: true},
+		{name: "separate -P with non-numeric value is rejected", extraSSH: []string{"-P", "notaport"}, wantErr: true},
+		{name: "joined -pPORT with non-numeric value is rejected", extraSSH: []string{"-pnotaport"}, wantErr: true},
+		{name: "joined -PPORT with non-numeric value is rejected", extraSSH: []string{"-Pnotaport"}, wantErr: true},
+		// Any flag letter that is in neither the pass-through nor the
+		// rejected list must now be rejected by default (finding 1 showed an
+		// unlisted letter cannot be assumed harmless), not silently
+		// forwarded to scp.
+		{name: "unknown flag -q rejected by default", extraSSH: []string{"-q"}, wantErr: true},
 	}
 
 	for _, tc := range cases {
@@ -231,6 +250,30 @@ func TestSCPArgvExtraSSHTranslation(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// scpArgv's own error strings must not start with an "scp:" tag themselves,
+// since EnsureRemoteGonf wraps whatever SCPRunner returns as "ensure gonf:
+// scp: %w". A redundant "scp:" prefix inside scpArgv's errors used to
+// produce a double-prefixed "ensure gonf: scp: scp: ExtraSSH option ..."
+// message.
+func TestSCPArgvErrorNotDoublePrefixed(t *testing.T) {
+	t.Parallel()
+	_, err := scpArgv(PushTarget{Host: "h.example", ExtraSSH: []string{"-t"}}, "/tmp/gonf", "/tmp/gonf.new")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if strings.HasPrefix(err.Error(), "scp:") {
+		t.Fatalf("scpArgv error must not itself start with %q: %q", "scp:", err.Error())
+	}
+	wrapped := fmt.Errorf("ensure gonf: scp: %w", err)
+	if strings.Contains(wrapped.Error(), "scp: scp:") {
+		t.Fatalf("error is double-prefixed: %q", wrapped.Error())
+	}
+	const want = "ensure gonf: scp: ExtraSSH option"
+	if !strings.HasPrefix(wrapped.Error(), want) {
+		t.Fatalf("wrapped error = %q, want prefix %q", wrapped.Error(), want)
 	}
 }
 
