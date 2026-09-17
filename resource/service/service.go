@@ -36,8 +36,14 @@ var (
 	_ opt.Dependable  = (*Service)(nil)
 )
 
+// detectSvcManager is swapped in unit tests (mirrors resource/pkg's
+// detectPkgManager), so the fitness test can force the BSD/rcctl backends
+// (freebsd/netbsd/rcctl) on any single host instead of only ever reaching
+// whichever backend runtime.GOOS happens to select.
+var detectSvcManager = detectServiceManager
+
 func (s *Service) apply() error {
-	mgr, err := detectServiceManager()
+	mgr, err := detectSvcManager()
 	if err != nil {
 		return err
 	}
@@ -99,6 +105,18 @@ func (s *Service) planDraft(id string) resource.PlanDraft {
 		User:    s.user,
 		Deps:    s.DependsOn.SortedIDs(),
 	}
+}
+
+// SetDetectServiceManagerForTest stubs OS service-manager detection (tests
+// only), mirroring resource/pkg's SetDetectPackageManagerForTest.
+func SetDetectServiceManagerForTest(fn func() (string, error)) {
+	detectSvcManager = fn
+}
+
+// ResetDetectServiceManagerForTest restores the real detector after a test
+// stub.
+func ResetDetectServiceManagerForTest() {
+	detectSvcManager = detectServiceManager
 }
 
 func detectServiceManager() (string, error) {
