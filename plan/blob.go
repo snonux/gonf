@@ -110,7 +110,7 @@ func (s *Store) WriteTree(name, srcDir string) (string, error) {
 }
 
 // WriteGlob copies basename matches of pattern into blobs/<name>/ (flat).
-// Glob blobs are flat regular-file pickers classified by dir.GlobMatchCounts:
+// Glob blobs are flat regular-file pickers classified by GlobMatchCounts:
 // symlinks to regular files are read through into content; directories,
 // dangling links and other non-regular entries are skipped — the same
 // policy the direct WithSourceGlob path applies, so glob-sourced sync_dir

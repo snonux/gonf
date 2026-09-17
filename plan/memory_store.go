@@ -74,7 +74,7 @@ func (m *MemoryStore) WriteTree(name, srcDir string) (string, error) {
 }
 
 // WriteGlob packages basename matches of pattern into an in-memory flat
-// tree through scanGlob (dir.GlobMatchCounts): regular files by content,
+// tree through scanGlob (GlobMatchCounts): regular files by content,
 // symlinks to regular files read through into content, directories,
 // dangling links and other file types skipped — the same flat regular-file
 // policy the disk Store applies.

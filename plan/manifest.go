@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-
-	"github.com/snonux/gonf/resource/dir"
 )
 
 // BlobEntryKind classifies one entry of a packaged source tree.
@@ -96,13 +94,13 @@ func scanTree(srcDir string) ([]BlobEntry, error) {
 }
 
 // scanGlob classifies the basename matches of pattern into flat manifest
-// entries (Rel = basename) through dir.GlobMatchCounts — the one
-// definition of the glob-match rule, shared with the direct WithSourceGlob
-// copy path and dir's prune keep-set: counting matches (regular files and
-// symlinks resolving to regular files, read through into content) are
-// packaged by content; directories, dangling links and other non-regular
-// entries are skipped, exactly like the direct copySourceGlob path, so an
-// empty tree is a valid outcome.
+// entries (Rel = basename) through GlobMatchCounts — the one definition of
+// the glob-match rule, shared with resource/dir's direct WithSourceGlob copy
+// path and prune keep-set (resource/dir.GlobMatchCounts delegates here):
+// counting matches (regular files and symlinks resolving to regular files,
+// read through into content) are packaged by content; directories, dangling
+// links and other non-regular entries are skipped, exactly like the direct
+// copySourceGlob path, so an empty tree is a valid outcome.
 func scanGlob(pattern string) ([]BlobEntry, error) {
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
@@ -114,7 +112,7 @@ func scanGlob(pattern string) ([]BlobEntry, error) {
 		if err != nil {
 			return nil, fmt.Errorf("plan: package glob match %s: %w", match, err)
 		}
-		if !dir.GlobMatchCounts(match, info) {
+		if !GlobMatchCounts(match, info) {
 			continue
 		}
 		// Glob blobs are flat regular-file pickers (their destination apply
@@ -129,6 +127,38 @@ func scanGlob(pattern string) ([]BlobEntry, error) {
 	}
 	sortEntries(out)
 	return out, nil
+}
+
+// GlobMatchCounts is the single definition of the WithSourceGlob match rule,
+// consumed by plan's own glob blob packaging (scanGlob above) and by
+// resource/dir's copy path (copySourceGlob) and prune keep-set (pruneGlob)
+// via resource/dir.GlobMatchCounts, a thin delegating wrapper — dir cannot
+// define the canonical rule itself without plan importing resource/dir back,
+// which is exactly the coupling this package no longer carries. A glob match
+// counts when it is a regular file or a symlink that resolves to a regular
+// file (read through into content); directories, dangling links, and other
+// non-regular entries are skipped.
+//
+// info must be the os.Lstat result for match (the entry's own type, never
+// following the link); resolving a symlink happens here via os.Stat. Every
+// consumer of a source glob must classify its matches through this
+// predicate so install, prune, and blob packaging cannot diverge — a
+// divergence would make destination files flap between install and prune on
+// each run.
+func GlobMatchCounts(match string, info os.FileInfo) bool {
+	switch {
+	case info.IsDir():
+		return false
+	case info.Mode()&os.ModeSymlink != 0:
+		// Follow a symlink to a regular file; skip symlink-to-dir, dangling
+		// links, and every other non-regular target.
+		target, err := os.Stat(match)
+		return err == nil && target.Mode().IsRegular()
+	case info.Mode().IsRegular():
+		return true
+	default:
+		return false
+	}
 }
 
 // sortEntries orders entries by Rel so packaging is deterministic.

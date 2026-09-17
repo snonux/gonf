@@ -31,18 +31,18 @@ func TestParseMode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseMode(tt.in)
+			got, err := ParseMode(tt.in)
 			if tt.wantErr {
 				if err == nil {
-					t.Fatalf("parseMode(%q) = %#o, want error", tt.in, got)
+					t.Fatalf("ParseMode(%q) = %#o, want error", tt.in, got)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("parseMode(%q): %v", tt.in, err)
+				t.Fatalf("ParseMode(%q): %v", tt.in, err)
 			}
 			if got != tt.want {
-				t.Errorf("parseMode(%q) = %#o, want %#o", tt.in, got, tt.want)
+				t.Errorf("ParseMode(%q) = %#o, want %#o", tt.in, got, tt.want)
 			}
 		})
 	}
@@ -77,7 +77,7 @@ func TestFormatMode(t *testing.T) {
 
 // TestModeWireRoundTrip walks every combination of the setuid/setgid/sticky
 // flag bits across a few permission masks and requires
-// parseMode(FormatMode(mode)) == mode: record-side serialization and
+// ParseMode(FormatMode(mode)) == mode: record-side serialization and
 // apply-side parsing are exact inverses, so a requested special bit survives
 // the plan wire format untouched.
 func TestModeWireRoundTrip(t *testing.T) {
@@ -97,9 +97,9 @@ func TestModeWireRoundTrip(t *testing.T) {
 		for _, sp := range specials {
 			mode := perm | sp.flags
 			wire := FormatMode(mode)
-			got, err := parseMode(wire)
+			got, err := ParseMode(wire)
 			if err != nil {
-				t.Fatalf("parseMode(FormatMode(%#o)=%q): %v", mode, wire, err)
+				t.Fatalf("ParseMode(FormatMode(%#o)=%q): %v", mode, wire, err)
 			}
 			if got != mode {
 				t.Errorf("round trip of %#o broke: %q -> %#o", mode, wire, got)
