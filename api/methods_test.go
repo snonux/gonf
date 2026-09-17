@@ -255,6 +255,57 @@ func (badOpts) Ping()                 {}
 func (badOpts) OptsBroken() string    { return "wrong return type" }
 func (badOpts) Broken()               {}
 
+func TestRegisterMethodsWhenBadSignaturePanics(t *testing.T) {
+	ResetTasks()
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic for WhenX companion with wrong signature")
+		}
+		msg, ok := r.(string)
+		if !ok || !strings.Contains(msg, "WhenBroken must be func(Facts) bool") {
+			t.Fatalf("unexpected panic value: %v", r)
+		}
+	}()
+	RegisterMethods(badWhen{}, WithPrefix("demo_"))
+}
+
+// WhenPing is valid; WhenBroken has a wrong signature for its Broken task
+// (wrong param type), which must panic rather than silently drop the guard
+// and let Broken run on every host.
+type badWhen struct{}
+
+func (badWhen) WhenPing(f Facts) bool { return f.GOOS == "linux" }
+func (badWhen) Ping()                 {}
+func (badWhen) WhenBroken(s string) bool {
+	return s == "linux"
+}
+func (badWhen) Broken() {}
+
+func TestRegisterMethodsWhenGoodSignatureGuards(t *testing.T) {
+	ResetTasks()
+	RegisterMethods(reflectWhenOK{}, WithPrefix("demo_"))
+
+	Activate(Facts{GOOS: "linux"})
+	got := taskNames(t)
+	want := []string{"demo_guarded"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("linux: %v, want %v", got, want)
+	}
+
+	Activate(Facts{GOOS: "darwin"})
+	got = taskNames(t)
+	if len(got) != 0 {
+		t.Fatalf("darwin should skip guarded task: %v", got)
+	}
+}
+
+type reflectWhenOK struct{}
+
+func (reflectWhenOK) WhenGuarded(f Facts) bool { return f.GOOS == "linux" }
+func (reflectWhenOK) Guarded()                 {}
+
 // OptsDemo composes with a group-wide When option.
 type optsComposed struct{ dir string }
 

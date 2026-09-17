@@ -47,7 +47,10 @@ func WithGroupWhen(opts ...TaskOption) RegisterOption {
 //     an all-privileged struct); a method's own OptsX companion replaces
 //     the default for that method, so an empty TaskOptions opts out.
 //   - DescHelix() string — description (else empty)
-//   - WhenHelix(Facts) bool — per-task When predicate
+//   - WhenHelix(Facts) bool — per-task When predicate; appended after any
+//     WithGroupWhen options of the same call. A wrong signature is
+//     registration-time misuse and panics (a silently ignored companion
+//     could drop the guard and run the task on every host).
 //   - OptsHelix() TaskOptions — per-task TaskOptions, e.g. Privileged() or
 //     the serializable WhenHostnameContains()/WhenProfile() predicates;
 //     appended after any WithGroupWhen options of the same call. A wrong
@@ -110,14 +113,6 @@ func RegisterMethods(v any, opts ...RegisterOption) {
 		}
 
 		taskName := cfg.prefix + camelToSnake(name)
-		desc := ""
-		if d := rv.MethodByName("Desc" + name); d.IsValid() {
-			dt := d.Type()
-			if dt.NumIn() == 0 && dt.NumOut() == 1 && dt.Out(0).Kind() == reflect.String {
-				desc = d.Call(nil)[0].String()
-			}
-		}
-
 		fn := method.Interface().(func())
 
 		var taskOpts TaskOptions
@@ -125,30 +120,67 @@ func RegisterMethods(v any, opts ...RegisterOption) {
 		if cfg.cluster != "" {
 			taskOpts = append(taskOpts, WithTaskCluster(cfg.cluster))
 		}
-		if o := rv.MethodByName("Opts" + name); o.IsValid() {
-			ot := o.Type()
-			if ot.NumIn() != 0 || ot.NumOut() != 1 || ot.Out(0) != reflect.TypeOf(TaskOptions(nil)) {
-				panic(fmt.Sprintf("RegisterMethods: Opts%s must be func() TaskOptions", name))
-			}
-			// A method's own OptsX companion REPLACES the struct-level
-			// default: an empty TaskOptions is an explicit opt-out.
-			taskOpts = append(taskOpts, o.Call(nil)[0].Interface().([]TaskOption)...)
-		} else {
-			taskOpts = append(taskOpts, structOpts...)
-		}
-		if w := rv.MethodByName("When" + name); w.IsValid() {
-			wt := w.Type()
-			if wt.NumIn() == 1 && wt.In(0) == reflect.TypeOf(Facts{}) &&
-				wt.NumOut() == 1 && wt.Out(0).Kind() == reflect.Bool {
-				wMethod := w
-				taskOpts = append(taskOpts, When(func(f Facts) bool {
-					return wMethod.Call([]reflect.Value{reflect.ValueOf(f)})[0].Bool()
-				}))
-			}
+		taskOpts = append(taskOpts, resolveOpts(rv, name, structOpts)...)
+		if whenOpt := resolveWhen(rv, name); whenOpt != nil {
+			taskOpts = append(taskOpts, whenOpt)
 		}
 
-		Task(taskName, desc, fn, taskOpts...)
+		Task(taskName, resolveDesc(rv, name), fn, taskOpts...)
 	}
+}
+
+// resolveDesc returns the DescX companion's description, or "" if the
+// companion is absent or has the wrong signature. Unlike OptsX/WhenX, a
+// missing description has no safety consequence, so a mismatched signature
+// degrades gracefully instead of panicking.
+func resolveDesc(rv reflect.Value, name string) string {
+	d := rv.MethodByName("Desc" + name)
+	if !d.IsValid() {
+		return ""
+	}
+	dt := d.Type()
+	if dt.NumIn() == 0 && dt.NumOut() == 1 && dt.Out(0).Kind() == reflect.String {
+		return d.Call(nil)[0].String()
+	}
+	return ""
+}
+
+// resolveOpts returns the OptsX companion's TaskOptions if present, which
+// REPLACES the struct-level default (an empty TaskOptions is an explicit
+// opt-out), or structOpts otherwise. A wrong OptsX signature panics: a
+// silently ignored companion could drop Privileged() and lower a task's
+// privileges.
+func resolveOpts(rv reflect.Value, name string, structOpts TaskOptions) TaskOptions {
+	o := rv.MethodByName("Opts" + name)
+	if !o.IsValid() {
+		return structOpts
+	}
+	ot := o.Type()
+	if ot.NumIn() != 0 || ot.NumOut() != 1 || ot.Out(0) != reflect.TypeOf(TaskOptions(nil)) {
+		panic(fmt.Sprintf("RegisterMethods: Opts%s must be func() TaskOptions", name))
+	}
+	return o.Call(nil)[0].Interface().(TaskOptions)
+}
+
+// resolveWhen returns the TaskOption wrapping the WhenX companion's guard
+// predicate, or nil if the companion is absent. A wrong WhenX signature
+// panics: a silently ignored companion would drop the guard predicate and
+// run the task unconditionally on every host instead of only the intended
+// ones.
+func resolveWhen(rv reflect.Value, name string) TaskOption {
+	w := rv.MethodByName("When" + name)
+	if !w.IsValid() {
+		return nil
+	}
+	wt := w.Type()
+	if wt.NumIn() != 1 || wt.In(0) != reflect.TypeOf(Facts{}) ||
+		wt.NumOut() != 1 || wt.Out(0).Kind() != reflect.Bool {
+		panic(fmt.Sprintf("RegisterMethods: When%s must be func(Facts) bool", name))
+	}
+	wMethod := w
+	return When(func(f Facts) bool {
+		return wMethod.Call([]reflect.Value{reflect.ValueOf(f)})[0].Bool()
+	})
 }
 
 func isCompanionName(name string) bool {
