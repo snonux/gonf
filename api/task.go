@@ -50,6 +50,19 @@ type TaskOption func(*taskCandidate)
 // identical type — []TaskOption remains fully interchangeable everywhere.
 type TaskOptions = []TaskOption
 
+// candidates/tasks/activated are deliberately package-level global state,
+// unlike the exec/network runner seams in internal/remote (SSHRunner,
+// SCPRunner, GoBuildRunner, Pusher's fields): this is the DSL task registry
+// a user's gonf config populates by calling api.Task(...) (and friends) at
+// plain top-level init-time, before any controller/CLI wiring exists to
+// inject a struct into. There is exactly one task registry per process, by
+// design — a gonf config IS the process's task set, the same way inventory's
+// hosts/clusters/fleets registry (internal/inventory) is process-wide — and
+// every read/write already goes through the tasksMu mutex below, so
+// concurrent registration/activation and lookup are safe. This is not an
+// oversight left over from the runner-seam refactor; it is the intentional
+// DSL/config half of the codebase, left alone on purpose (see task p5's
+// annotations).
 var (
 	tasksMu    sync.Mutex
 	candidates []taskCandidate

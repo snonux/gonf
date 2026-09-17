@@ -55,6 +55,18 @@ type Fleet struct {
 	Clusters []string // member cluster names, registration order
 }
 
+// hosts/clusters/fleets are deliberately package-level global state, unlike
+// the exec/network runner seams in internal/remote (SSHRunner, SCPRunner,
+// GoBuildRunner, Pusher's fields): this is the DSL registry a user's gonf
+// config populates by calling api.Host(...)/api.Cluster(...)/api.Fleet(...)
+// at plain top-level init-time, before any controller/CLI wiring exists to
+// inject a struct into. There is exactly one registry per process, by
+// design — a gonf config IS the process's inventory, the same way a Go
+// program's init()-registered flag set or sql driver registry is process-
+// wide — and every read/write already goes through the mu mutex below, so
+// concurrent registration and lookup are safe. This is not an oversight left
+// over from the runner-seam refactor; it is the intentional DSL/config half
+// of the codebase, left alone on purpose (see task p5's annotations).
 var (
 	mu       sync.Mutex
 	hosts    = map[string]Host{}

@@ -20,47 +20,93 @@ import (
 // gonfCmdPackage is built for remote hosts when their plan schema is too old.
 const gonfCmdPackage = "github.com/snonux/gonf/cmd/gonf"
 
-var (
-	// gonfBuildMu protects only the two maps below (a quick map read/write),
-	// never the build itself — see gonfBuildKeyLock's doc comment for why a
-	// single global mutex used to serialize every cross-compile.
-	gonfBuildMu       sync.Mutex
-	gonfBuildCache    = map[string]string{}      // "goos/goarch" → local binary path
-	gonfBuildKeyLocks = map[string]*sync.Mutex{} // "goos/goarch" → that key's build lock
-)
+// Pusher bundles the exec/network seams this file needs to build and stage a
+// fresh gonf binary on a remote host: cross-compiling it (GoBuildRunner),
+// probing the remote's installed plan-schema version (PlanVersionProber),
+// and copying the binary over (SCPRunner) — plus the build cache/lock state
+// those seams share (buildGonf). Bundling them in a struct instead of three
+// separate package-level vars means a test can construct its own *Pusher
+// with fake fields and call its methods directly: nothing is shared,
+// mutable package state to race on, so such a test is free to run with
+// t.Parallel() alongside any other test (see sync_gonf_test.go).
+//
+// defaultPusher (below) is wired to the real implementations and is what the
+// package-level EnsureRemoteGonf/AssumeRemotePlanCurrent functions (this
+// file's public API) operate on, so every existing external caller
+// (api.PushTo, Fanout, and every test that calls
+// remote.AssumeRemotePlanCurrent) keeps working completely unchanged.
+//
+// SSHRunner (remote.go) is deliberately NOT a Pusher field. Unlike the three
+// seams above — which, before this change, were read only from this file and
+// its own test — SSHRunner is stubbed from roughly a dozen other test files
+// across api/, internal/cli/ and internal/orchestrate/ (over a hundred
+// references in total) to fake an end-to-end push without a real ssh binary.
+// Folding it into Pusher would require updating every one of those call
+// sites in this same change: a materially larger, riskier refactor than this
+// one. Left as a documented, well-scoped follow-on (see task p5's
+// annotations for the reasoning).
+type Pusher struct {
+	SCPRunner         func(ctx context.Context, localPath string, t PushTarget, remotePath string) error
+	GoBuildRunner     func(ctx context.Context, goos, goarch, out, pkg string) error
+	PlanVersionProber func(ctx context.Context, t PushTarget) (int, error)
 
-// gonfBuildKeyLock returns the build lock for key ("goos/goarch"), creating
-// it on first use. Fanout (fleet.go) pushes to every target concurrently, so
+	// buildMu protects only the two maps below (a quick map read/write),
+	// never the build itself — see buildKeyLock's doc comment for why a
+	// single lock held across the whole struct/package used to serialize
+	// every cross-compile.
+	buildMu       sync.Mutex
+	buildCache    map[string]string      // "goos/goarch" → local binary path
+	buildKeyLocks map[string]*sync.Mutex // "goos/goarch" → that key's build lock
+}
+
+// NewPusher returns a Pusher wired to the real ssh/scp/go-build
+// implementations, with a fresh (empty) build cache.
+func NewPusher() *Pusher {
+	return &Pusher{
+		SCPRunner:         defaultSCPRunner,
+		GoBuildRunner:     defaultGoBuildRunner,
+		PlanVersionProber: probePlanVersion,
+		buildCache:        map[string]string{},
+		buildKeyLocks:     map[string]*sync.Mutex{},
+	}
+}
+
+// defaultPusher is the package's production Pusher. EnsureRemoteGonf and
+// AssumeRemotePlanCurrent, this file's public API, operate on it, so callers
+// outside this package never need to know Pusher exists.
+var defaultPusher = NewPusher()
+
+// buildKeyLock returns p's build lock for key ("goos/goarch"), creating it
+// on first use. Fanout (fleet.go) pushes to every target concurrently, so
 // buildGonf can be entered by several goroutines at once for several
-// DIFFERENT platforms. A single global mutex held across the whole `go
-// build` invocation used to serialize all of them — an unrelated
-// openbsd/arm64 cross-compile would sit blocked behind an in-flight
-// linux/amd64 one for no reason. Locking per key instead lets unrelated
-// platforms build fully in parallel, while still serializing two goroutines
-// that race to build the SAME key (avoiding a duplicate, wasted
-// cross-compile and a racy cache write/read).
-func gonfBuildKeyLock(key string) *sync.Mutex {
-	gonfBuildMu.Lock()
-	defer gonfBuildMu.Unlock()
-	mu, ok := gonfBuildKeyLocks[key]
+// DIFFERENT platforms. A single lock held across the whole build used to
+// serialize all of them — an unrelated openbsd/arm64 cross-compile would sit
+// blocked behind an in-flight linux/amd64 one for no reason. Locking per key
+// instead lets unrelated platforms build fully in parallel, while still
+// serializing two goroutines that race to build the SAME key (avoiding a
+// duplicate, wasted cross-compile and a racy cache write/read).
+func (p *Pusher) buildKeyLock(key string) *sync.Mutex {
+	p.buildMu.Lock()
+	defer p.buildMu.Unlock()
+	mu, ok := p.buildKeyLocks[key]
 	if !ok {
 		mu = &sync.Mutex{}
-		gonfBuildKeyLocks[key] = mu
+		p.buildKeyLocks[key] = mu
 	}
 	return mu
 }
 
-func gonfBuildCacheGet(key string) (string, bool) {
-	gonfBuildMu.Lock()
-	defer gonfBuildMu.Unlock()
-	path, ok := gonfBuildCache[key]
+func (p *Pusher) buildCacheGet(key string) (string, bool) {
+	p.buildMu.Lock()
+	defer p.buildMu.Unlock()
+	path, ok := p.buildCache[key]
 	return path, ok
 }
 
-func gonfBuildCacheSet(key, path string) {
-	gonfBuildMu.Lock()
-	defer gonfBuildMu.Unlock()
-	gonfBuildCache[key] = path
+func (p *Pusher) buildCacheSet(key, path string) {
+	p.buildMu.Lock()
+	defer p.buildMu.Unlock()
+	p.buildCache[key] = path
 }
 
 // gonfCrossBuildDir returns the one, bounded, reused local directory that
@@ -92,8 +138,10 @@ func gonfCrossBuildDir(goos, goarch string) string {
 	return filepath.Join(os.TempDir(), "gonf-cross-"+sanitizeID(goos)+"-"+sanitizeID(goarch))
 }
 
-// SCPRunner copies a local file to a remote path via scp. Overridable in tests.
-var SCPRunner = func(ctx context.Context, localPath string, t PushTarget, remotePath string) error {
+// defaultSCPRunner copies a local file to a remote path via scp. It is
+// Pusher's default SCPRunner implementation (see NewPusher); tests override
+// a Pusher's SCPRunner field directly instead of this function.
+func defaultSCPRunner(ctx context.Context, localPath string, t PushTarget, remotePath string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -352,8 +400,10 @@ func scpArgv(t PushTarget, localPath, remotePath string) ([]string, error) {
 	return append(argv, localPath, t.Destination()+":"+remotePath), nil
 }
 
-// GoBuildRunner cross-compiles a package. Overridable in tests.
-var GoBuildRunner = func(ctx context.Context, goos, goarch, out, pkg string) error {
+// defaultGoBuildRunner cross-compiles a package. It is Pusher's default
+// GoBuildRunner implementation (see NewPusher); tests override a Pusher's
+// GoBuildRunner field directly instead of this function.
+func defaultGoBuildRunner(ctx context.Context, goos, goarch, out, pkg string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -368,19 +418,15 @@ var GoBuildRunner = func(ctx context.Context, goos, goarch, out, pkg string) err
 	return cmd.Run()
 }
 
-// PlanVersionProber reads the remote plan schema version. Tests replace this
-// (see AssumeRemotePlanCurrent) so EnsureRemoteGonf does not open a real SSH
-// session when SSHRunner is stubbed.
-var PlanVersionProber = probePlanVersion
-
-// AssumeRemotePlanCurrent stubs PlanVersionProber so EnsureRemoteGonf skips
-// the upgrade path. Restore with the returned func (or t.Cleanup).
+// AssumeRemotePlanCurrent stubs defaultPusher's PlanVersionProber so
+// EnsureRemoteGonf skips the upgrade path. Restore with the returned func
+// (or t.Cleanup).
 func AssumeRemotePlanCurrent() func() {
-	old := PlanVersionProber
-	PlanVersionProber = func(context.Context, PushTarget) (int, error) {
+	old := defaultPusher.PlanVersionProber
+	defaultPusher.PlanVersionProber = func(context.Context, PushTarget) (int, error) {
 		return plan.CurrentVersion, nil
 	}
-	return func() { PlanVersionProber = old }
+	return func() { defaultPusher.PlanVersionProber = old }
 }
 
 // EnsureRemoteGonf upgrades the remote gonf binary when it cannot apply the
@@ -388,11 +434,27 @@ func AssumeRemotePlanCurrent() func() {
 // GOOS/GOARCH come from the target when set, otherwise from remote uname.
 // When an upgrade runs, installedPath is the remote binary path to use for
 // subsequent apply commands; otherwise it is empty (keep PATH "gonf").
+//
+// This is a thin wrapper over defaultPusher.EnsureRemoteGonf: every existing
+// caller (api.PushTo via remote.PushChunks, Fanout) and every test that
+// stubs SCPRunner/GoBuildRunner/PlanVersionProber via a Pusher, or calls
+// AssumeRemotePlanCurrent, keeps working against this same package-level
+// function.
 func EnsureRemoteGonf(ctx context.Context, t PushTarget) (installedPath string, err error) {
+	return defaultPusher.EnsureRemoteGonf(ctx, t)
+}
+
+// EnsureRemoteGonf is the Pusher-scoped implementation of the package-level
+// EnsureRemoteGonf above (see its doc comment for the full behavior). It
+// reads only p's own fields (SCPRunner, GoBuildRunner, PlanVersionProber,
+// build cache) — the sole exception is SSHRunner (remote.go), still a
+// package-level var; see Pusher's doc comment for why that one seam is not
+// yet folded in here.
+func (p *Pusher) EnsureRemoteGonf(ctx context.Context, t PushTarget) (installedPath string, err error) {
 	if t.Host == "" {
 		return "", fmt.Errorf("ensure gonf: empty host")
 	}
-	remoteVer, err := PlanVersionProber(ctx, t)
+	remoteVer, err := p.PlanVersionProber(ctx, t)
 	if err != nil {
 		return "", err
 	}
@@ -416,7 +478,7 @@ func EnsureRemoteGonf(ctx context.Context, t PushTarget) (installedPath string, 
 		}
 	}
 
-	localBin, err := buildGonf(ctx, goos, goarch)
+	localBin, err := p.buildGonf(ctx, goos, goarch)
 	if err != nil {
 		return "", fmt.Errorf("ensure gonf: build %s/%s: %w", goos, goarch, err)
 	}
@@ -435,7 +497,7 @@ func EnsureRemoteGonf(ctx context.Context, t PushTarget) (installedPath string, 
 	defer removeRemoteStagingDir(ctx, t, remoteDir)
 
 	remoteTmp := remoteDir + "/gonf"
-	if err := SCPRunner(ctx, localBin, t, remoteTmp); err != nil {
+	if err := p.SCPRunner(ctx, localBin, t, remoteTmp); err != nil {
 		// scpArgv's own errors do not repeat the "scp:" tag added here (it
 		// used to, producing a double-prefixed "ensure gonf: scp: scp:
 		// ExtraSSH option ..." message); a real scp(1) exec failure still
@@ -549,16 +611,16 @@ func mapUnameGOARCH(s string) (string, error) {
 	}
 }
 
-func buildGonf(ctx context.Context, goos, goarch string) (string, error) {
+func (p *Pusher) buildGonf(ctx context.Context, goos, goarch string) (string, error) {
 	key := goos + "/" + goarch
 
-	// Serialize only same-key builds (see gonfBuildKeyLock's doc comment):
+	// Serialize only same-key builds (see buildKeyLock's doc comment):
 	// unrelated goos/goarch pairs never wait on each other here.
-	keyMu := gonfBuildKeyLock(key)
+	keyMu := p.buildKeyLock(key)
 	keyMu.Lock()
 	defer keyMu.Unlock()
 
-	if path, ok := gonfBuildCacheGet(key); ok {
+	if path, ok := p.buildCacheGet(key); ok {
 		if _, err := os.Stat(path); err == nil {
 			return path, nil
 		}
@@ -587,7 +649,7 @@ func buildGonf(ctx context.Context, goos, goarch string) (string, error) {
 	defer func() { _ = os.RemoveAll(scratch) }()
 
 	scratchOut := filepath.Join(scratch, "gonf")
-	if err := GoBuildRunner(ctx, goos, goarch, scratchOut, gonfCmdPackage); err != nil {
+	if err := p.GoBuildRunner(ctx, goos, goarch, scratchOut, gonfCmdPackage); err != nil {
 		return "", err
 	}
 
@@ -595,7 +657,7 @@ func buildGonf(ctx context.Context, goos, goarch string) (string, error) {
 	if err := os.Rename(scratchOut, out); err != nil {
 		return "", err
 	}
-	gonfBuildCacheSet(key, out)
+	p.buildCacheSet(key, out)
 	return out, nil
 }
 

@@ -343,39 +343,44 @@ func TestSCPArgvErrorNotDoublePrefixed(t *testing.T) {
 	}
 }
 
-// resetGonfBuildState clears the package-level build cache/locks and removes
-// any real gonf-cross-* directories a test's fake GoBuildRunner created under
-// os.TempDir(), for every goos/goarch pair the test used. Registered via
-// t.Cleanup so a test never leaks its own scratch state into the next test
-// or the developer's real /tmp.
-func resetGonfBuildState(t *testing.T, keys ...[2]string) {
+// removeGonfCrossBuildDirs removes any real gonf-cross-* directories a
+// test's fake GoBuildRunner created under os.TempDir(), for every
+// goos/goarch pair the test used. Registered via t.Cleanup so a test never
+// leaks its own scratch state into the developer's real /tmp. Unlike the
+// pre-Pusher version of this helper, it never touches package-level state:
+// each test below constructs its own *Pusher (via NewPusher), so there is no
+// shared build cache/lock map left to reset.
+func removeGonfCrossBuildDirs(t *testing.T, keys ...[2]string) {
 	t.Helper()
-	gonfBuildMu.Lock()
-	gonfBuildCache = map[string]string{}
-	gonfBuildKeyLocks = map[string]*sync.Mutex{}
-	gonfBuildMu.Unlock()
 	for _, k := range keys {
 		_ = os.RemoveAll(gonfCrossBuildDir(k[0], k[1]))
 	}
 }
 
-func TestBuildGonfCache(t *testing.T) {
-	old := GoBuildRunner
-	t.Cleanup(func() {
-		GoBuildRunner = old
-		resetGonfBuildState(t, [2]string{"linux", "amd64"})
-	})
+// TestBuildGonfCache and the tests below construct their own *Pusher
+// (NewPusher) and call its buildGonf/GoBuildRunner directly, instead of
+// swapping a package-level GoBuildRunner var: this is the concrete
+// demonstration that Pusher's injected runners work with no global mutable
+// state to race on (mirroring how the l5 task's fake BlobReader proved the
+// same kind of decoupling for plan.BlobReader). Each test uses its own
+// goos/arch key(s) so their on-disk gonfCrossBuildDir never collides with a
+// sibling test's, which is what makes t.Parallel() safe here.
 
+func TestBuildGonfCache(t *testing.T) {
+	t.Parallel()
+	t.Cleanup(func() { removeGonfCrossBuildDirs(t, [2]string{"gonftest1", "amd64"}) })
+
+	p := NewPusher()
 	var builds int
-	GoBuildRunner = func(ctx context.Context, goos, goarch, out, pkg string) error {
+	p.GoBuildRunner = func(ctx context.Context, goos, goarch, out, pkg string) error {
 		builds++
 		return os.WriteFile(out, []byte("fake"), 0o755)
 	}
-	p1, err := buildGonf(context.Background(), "linux", "amd64")
+	p1, err := p.buildGonf(context.Background(), "gonftest1", "amd64")
 	if err != nil {
 		t.Fatal(err)
 	}
-	p2, err := buildGonf(context.Background(), "linux", "amd64")
+	p2, err := p.buildGonf(context.Background(), "gonftest1", "amd64")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,20 +402,19 @@ func TestBuildGonfCache(t *testing.T) {
 // baseDir (gonfCrossBuildDir) may exist — its "build-*" scratch subdirectory
 // (created fresh per build attempt) must always be gone.
 func TestBuildGonfNoLeakedScratchDir(t *testing.T) {
-	old := GoBuildRunner
-	t.Cleanup(func() {
-		GoBuildRunner = old
-		resetGonfBuildState(t, [2]string{"linux", "amd64"})
-	})
-	GoBuildRunner = func(ctx context.Context, goos, goarch, out, pkg string) error {
+	t.Parallel()
+	t.Cleanup(func() { removeGonfCrossBuildDirs(t, [2]string{"gonftest2", "amd64"}) })
+
+	p := NewPusher()
+	p.GoBuildRunner = func(ctx context.Context, goos, goarch, out, pkg string) error {
 		return os.WriteFile(out, []byte("fake"), 0o755)
 	}
 
-	if _, err := buildGonf(context.Background(), "linux", "amd64"); err != nil {
+	if _, err := p.buildGonf(context.Background(), "gonftest2", "amd64"); err != nil {
 		t.Fatal(err)
 	}
 
-	baseDir := gonfCrossBuildDir("linux", "amd64")
+	baseDir := gonfCrossBuildDir("gonftest2", "amd64")
 	entries, err := os.ReadDir(baseDir)
 	if err != nil {
 		t.Fatalf("ReadDir(%s): %v", baseDir, err)
@@ -432,21 +436,20 @@ func TestBuildGonfNoLeakedScratchDir(t *testing.T) {
 // removed even when GoBuildRunner fails, without touching the (possibly
 // still valid, from an earlier successful build) canonical baseDir.
 func TestBuildGonfFailedBuildLeavesNoScratchDir(t *testing.T) {
-	old := GoBuildRunner
-	t.Cleanup(func() {
-		GoBuildRunner = old
-		resetGonfBuildState(t, [2]string{"linux", "arm64"})
-	})
+	t.Parallel()
+	t.Cleanup(func() { removeGonfCrossBuildDirs(t, [2]string{"gonftest3", "arm64"}) })
+
+	p := NewPusher()
 	wantErr := fmt.Errorf("boom")
-	GoBuildRunner = func(ctx context.Context, goos, goarch, out, pkg string) error {
+	p.GoBuildRunner = func(ctx context.Context, goos, goarch, out, pkg string) error {
 		return wantErr
 	}
 
-	if _, err := buildGonf(context.Background(), "linux", "arm64"); err == nil {
+	if _, err := p.buildGonf(context.Background(), "gonftest3", "arm64"); err == nil {
 		t.Fatal("expected build error")
 	}
 
-	baseDir := gonfCrossBuildDir("linux", "arm64")
+	baseDir := gonfCrossBuildDir("gonftest3", "arm64")
 	entries, err := os.ReadDir(baseDir)
 	if err != nil && !os.IsNotExist(err) {
 		t.Fatalf("ReadDir(%s): %v", baseDir, err)
@@ -462,19 +465,21 @@ func TestBuildGonfFailedBuildLeavesNoScratchDir(t *testing.T) {
 // serialization half of the bug: buildGonf used to hold ONE global mutex
 // across the entire `go build` invocation, so an unrelated platform's build
 // sat blocked behind an in-flight one even though they share nothing. This
-// starts two builds for different goos/goarch keys whose fake GoBuildRunner
-// blocks until both are confirmed in-flight at once (via a WaitGroup/channel
-// handshake) — this can only succeed if the two builds actually overlap in
-// time; the old single-global-lock implementation would deadlock this test
-// (the second build could never start until the first, still-blocked one,
-// released the lock it's waiting inside of).
+// starts two builds for different goos/goarch keys on the SAME *Pusher
+// (proving the per-key lock, not just separate Pusher instances, is what
+// unblocks them) whose fake GoBuildRunner blocks until both are confirmed
+// in-flight at once (via a channel handshake) — this can only succeed if the
+// two builds actually overlap in time; the old single-global-lock
+// implementation would deadlock this test (the second build could never
+// start until the first, still-blocked one, released the lock it's waiting
+// inside of).
 func TestBuildGonfDifferentTargetsDoNotSerialize(t *testing.T) {
-	old := GoBuildRunner
+	t.Parallel()
 	t.Cleanup(func() {
-		GoBuildRunner = old
-		resetGonfBuildState(t, [2]string{"linux", "amd64"}, [2]string{"openbsd", "arm64"})
+		removeGonfCrossBuildDirs(t, [2]string{"gonftest4a", "amd64"}, [2]string{"gonftest4b", "arm64"})
 	})
 
+	p := NewPusher()
 	var (
 		mu       sync.Mutex
 		inFlight = map[string]bool{}
@@ -482,7 +487,7 @@ func TestBuildGonfDifferentTargetsDoNotSerialize(t *testing.T) {
 	bothInFlight := make(chan struct{})
 	closeOnce := sync.Once{}
 
-	GoBuildRunner = func(ctx context.Context, goos, goarch, out, pkg string) error {
+	p.GoBuildRunner = func(ctx context.Context, goos, goarch, out, pkg string) error {
 		key := goos + "/" + goarch
 		mu.Lock()
 		inFlight[key] = true
@@ -504,11 +509,11 @@ func TestBuildGonfDifferentTargetsDoNotSerialize(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_, errs[0] = buildGonf(context.Background(), "linux", "amd64")
+		_, errs[0] = p.buildGonf(context.Background(), "gonftest4a", "amd64")
 	}()
 	go func() {
 		defer wg.Done()
-		_, errs[1] = buildGonf(context.Background(), "openbsd", "arm64")
+		_, errs[1] = p.buildGonf(context.Background(), "gonftest4b", "arm64")
 	}()
 	wg.Wait()
 
@@ -556,21 +561,24 @@ type gonfSyncStub struct {
 	captureCmds []string // remote command strings passed through sshCapture, in order
 }
 
-// install wires the stub into the package-level overridable vars and
-// restores them (plus the build cache) on test cleanup.
+// install wires the stub into defaultPusher's overridable fields (this stub
+// exercises the package-level EnsureRemoteGonf function, i.e. production
+// code's real entry point, which always runs against defaultPusher) plus the
+// still-package-level SSHRunner/sshCaptureExec vars, and restores all of them
+// (plus the build cache) on test cleanup.
 func (s *gonfSyncStub) install(t *testing.T) {
 	t.Helper()
 
-	oldProber := PlanVersionProber
-	PlanVersionProber = func(context.Context, PushTarget) (int, error) { return 0, nil }
+	oldProber := defaultPusher.PlanVersionProber
+	defaultPusher.PlanVersionProber = func(context.Context, PushTarget) (int, error) { return 0, nil }
 
-	oldBuild := GoBuildRunner
-	GoBuildRunner = func(ctx context.Context, goos, goarch, out, pkg string) error {
+	oldBuild := defaultPusher.GoBuildRunner
+	defaultPusher.GoBuildRunner = func(ctx context.Context, goos, goarch, out, pkg string) error {
 		return os.WriteFile(out, []byte("fake"), 0o755)
 	}
 
-	oldSCP := SCPRunner
-	SCPRunner = func(ctx context.Context, localPath string, t PushTarget, remotePath string) error {
+	oldSCP := defaultPusher.SCPRunner
+	defaultPusher.SCPRunner = func(ctx context.Context, localPath string, t PushTarget, remotePath string) error {
 		s.mu.Lock()
 		s.scpCalls = append(s.scpCalls, remotePath)
 		s.mu.Unlock()
@@ -609,13 +617,21 @@ func (s *gonfSyncStub) install(t *testing.T) {
 	}
 
 	t.Cleanup(func() {
-		PlanVersionProber = oldProber
-		GoBuildRunner = oldBuild
-		SCPRunner = oldSCP
+		defaultPusher.PlanVersionProber = oldProber
+		defaultPusher.GoBuildRunner = oldBuild
+		defaultPusher.SCPRunner = oldSCP
 		SSHRunner = oldSSH
 		sshCaptureExec = oldCapture
-		// gonfSyncTarget always builds for linux/amd64.
-		resetGonfBuildState(t, [2]string{"linux", "amd64"})
+		// gonfSyncTarget always builds for linux/amd64; this stub is the only
+		// place still exercising defaultPusher's shared build cache (every
+		// other build-related test above uses its own private *Pusher), so
+		// clearing it here is enough to keep defaultPusher's cache from
+		// leaking into a later test.
+		defaultPusher.buildMu.Lock()
+		defaultPusher.buildCache = map[string]string{}
+		defaultPusher.buildKeyLocks = map[string]*sync.Mutex{}
+		defaultPusher.buildMu.Unlock()
+		removeGonfCrossBuildDirs(t, [2]string{"linux", "amd64"})
 	})
 }
 
