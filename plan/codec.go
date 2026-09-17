@@ -57,10 +57,21 @@ func normalizeOp(op *Op) {
 		op.Deps = nil
 	}
 	if op.Unless != nil {
-		normalizeGuard(op.Unless)
+		// Copy before normalizing: op.Unless is a pointer that may be shared
+		// with other Op values referencing the same underlying Guard (e.g.
+		// every per-host goroutine in a fleet/cluster push encodes its own
+		// copy of the same ops slice). Normalizing in place would mutate that
+		// shared Guard through the pointer — a data race under concurrent
+		// encoding (see internal/remote/fleet.go Fanout). Encoding must stay
+		// side-effect-free with respect to the caller's ops.
+		g := *op.Unless
+		normalizeGuard(&g)
+		op.Unless = &g
 	}
 	if op.OnlyIf != nil {
-		normalizeGuard(op.OnlyIf)
+		g := *op.OnlyIf
+		normalizeGuard(&g)
+		op.OnlyIf = &g
 	}
 }
 

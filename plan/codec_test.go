@@ -7,6 +7,7 @@ import (
 	"io"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -432,5 +433,90 @@ func TestDecodePlanTrailingReadError(t *testing.T) {
 	_, err := DecodePlan(r)
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+// TestEncodePlanConcurrentSharedGuardNoRace reproduces the fleet/cluster push
+// data race (agent task 16): internal/remote/fleet.go's Fanout hands the SAME
+// ops []Op slice — and therefore the same *Guard pointers reachable through
+// Op.Unless/Op.OnlyIf — to every per-host goroutine, and each host encodes it
+// independently via plan.EncodePush -> EncodePlan -> EncodeOp. Before the
+// fix, normalizeOp/normalizeGuard mutated the shared Guard in place
+// (g.Args = nil) through that shared pointer, a write/write race that
+// `go test -race` flags as WARNING: DATA RACE. Run with -race to verify;
+// without -race this test passes even against the old, racy code.
+func TestEncodePlanConcurrentSharedGuardNoRace(t *testing.T) {
+	t.Parallel()
+	ops := []Op{
+		{Op: KindPlan, Version: CurrentVersion},
+		{
+			Op:  KindCommand,
+			Bin: "true",
+			Unless: &Guard{
+				Bin:  "true",
+				Args: []string{},
+			},
+			OnlyIf: &Guard{
+				Bin:  "true",
+				Args: []string{},
+			},
+		},
+	}
+
+	const goroutines = 16
+	var wg sync.WaitGroup
+	errCh := make(chan error, goroutines)
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := EncodePlan(ops); err != nil {
+				errCh <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Fatal(err)
+	}
+
+	// Encoding must be side-effect free with respect to the caller's ops:
+	// the correctness property the concurrency fix relies on. If EncodePlan
+	// mutated the shared Guard, this would observe it having been nilled out
+	// (or, under the race, could observe a torn/inconsistent value).
+	if ops[1].Unless.Args == nil || len(ops[1].Unless.Args) != 0 {
+		t.Fatalf("EncodePlan mutated shared Unless.Args: %#v", ops[1].Unless.Args)
+	}
+	if ops[1].OnlyIf.Args == nil || len(ops[1].OnlyIf.Args) != 0 {
+		t.Fatalf("EncodePlan mutated shared OnlyIf.Args: %#v", ops[1].OnlyIf.Args)
+	}
+}
+
+// TestEncodeOpGuardNormalizationUnchanged pins the wire content produced for
+// a guard with an empty (non-nil) Args slice: this must stay identical to
+// pre-fix behavior (the "args" key omitted from the guard object) even
+// though normalization now runs on a copy of the Guard rather than the
+// original. The concurrency fix must not change single-host encoded output.
+func TestEncodeOpGuardNormalizationUnchanged(t *testing.T) {
+	t.Parallel()
+	op := Op{
+		Op:  KindCommand,
+		Bin: "true",
+		Unless: &Guard{
+			Bin:  "true",
+			Args: []string{},
+		},
+	}
+	b, err := EncodeOp(op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(b)
+	if strings.Contains(got, `"args"`) {
+		t.Fatalf("expected empty args to be omitted from wire output, got %s", got)
+	}
+	if !strings.Contains(got, `"unless":{"bin":"true"}`) {
+		t.Fatalf("unexpected unless encoding: %s", got)
 	}
 }
