@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -14,9 +15,12 @@ import (
 // RunWith. A nil Env means the process inherits the current environment. A
 // non-nil Env (including an empty slice) replaces it entirely.
 //
-// Timeout is opt-in: 0 (the default) keeps the historical no-timeout behavior
-// for existing callers. With Timeout > 0 the process is killed when the
-// deadline expires and the timeout is surfaced as an error (partial
+// Timeout selects the deadline applied to the process: 0 (the default) uses
+// the process-wide default timeout (see DefaultTimeout/SetDefaultTimeout), a
+// positive value overrides it for this call only, and a negative value opts
+// out of any deadline (the historical no-timeout behavior, for the rare
+// caller that genuinely needs it). With a deadline in effect the process is
+// killed when it expires and the timeout is surfaced as an error (partial
 // stdout/stderr is still returned). Caveat: Wait also waits for the internal
 // stdout/stderr pipes to close, so a killed command that leaks pipe-holding
 // grandchildren (e.g. `sh -c 'cmd &'`) can still block past the deadline.
@@ -26,22 +30,57 @@ type Opts struct {
 	Timeout time.Duration
 }
 
+// Like the resource package's dry-run flag, the default timeout is
+// process-wide DSL-style state: set once at startup (e.g. from the CLI's
+// -cmd-timeout flag) before any Run/RunWith/RunWithStdin call, not mutated
+// concurrently with an in-flight apply.
+var (
+	timeoutMu      sync.Mutex
+	defaultTimeout = 5 * time.Minute
+)
+
+// SetDefaultTimeout overrides the default timeout applied by Run,
+// RunWithStdin, and RunWith when Opts.Timeout is left at its zero value. It
+// bounds every resource backend's package-manager/systemctl/crontab/rcctl
+// invocation that goes through this package, so a hung local or remote
+// command cannot block gonf forever. d <= 0 is rejected (callers that want no
+// timeout at all use Opts.Timeout < 0 for that one call, not a process-wide
+// unlimited default).
+func SetDefaultTimeout(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	timeoutMu.Lock()
+	defer timeoutMu.Unlock()
+	defaultTimeout = d
+}
+
+// DefaultTimeout returns the current process-wide default timeout.
+func DefaultTimeout() time.Duration {
+	timeoutMu.Lock()
+	defer timeoutMu.Unlock()
+	return defaultTimeout
+}
+
 // Run executes a command with the given arguments and returns stdout, stderr,
-// exit code, and any error encountered starting the process.
+// exit code, and any error encountered starting the process. It is bounded by
+// the process-wide default timeout (DefaultTimeout/SetDefaultTimeout).
 func Run(name string, args ...string) (stdout, stderr string, exitCode int, err error) {
 	return RunWith(Opts{}, name, args...)
 }
 
 // RunWith is like Run but applies Dir, Env, and Timeout from opts.
 func RunWith(opts Opts, name string, args ...string) (stdout, stderr string, exitCode int, err error) {
+	timeout := effectiveTimeout(opts.Timeout)
+
 	var cancel context.CancelFunc
 	ctx := context.Background()
-	if opts.Timeout > 0 {
-		ctx, cancel = context.WithTimeout(ctx, opts.Timeout)
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
 	// With a plain Background context CommandContext behaves like Command, so
-	// the no-timeout path is unchanged.
+	// the (opt-in, Opts.Timeout < 0) no-timeout path is unchanged.
 	cmd := exec.CommandContext(ctx, name, args...)
 	if opts.Dir != "" {
 		cmd.Dir = opts.Dir
@@ -49,18 +88,36 @@ func RunWith(opts Opts, name string, args ...string) (stdout, stderr string, exi
 	if opts.Env != nil {
 		cmd.Env = opts.Env
 	}
-	return runCollecting(ctx, opts.Timeout, cmd)
+	return runCollecting(ctx, timeout, cmd)
+}
+
+// effectiveTimeout resolves an Opts.Timeout value against the process-wide
+// default: 0 means "use the default", negative means "no timeout at all",
+// and a positive value is returned unchanged.
+func effectiveTimeout(t time.Duration) time.Duration {
+	switch {
+	case t == 0:
+		return DefaultTimeout()
+	case t < 0:
+		return 0
+	default:
+		return t
+	}
 }
 
 // RunWithStdin is like Run but feeds stdin (from a strings.Reader) to the
-// process. It has no Dir, Env, or Timeout support; if a caller ever needs
-// stdin combined with those, add an Opts.Stdin field then. The
-// error/exit-code handling is identical to RunWith's: a non-zero exit is
-// surfaced via exitCode rather than err.
+// process. It always applies the process-wide default timeout (no per-call
+// override); if a caller ever needs a different timeout combined with stdin,
+// add an Opts.Stdin field to RunWith instead. The error/exit-code handling is
+// identical to RunWith's: a non-zero exit is surfaced via exitCode rather
+// than err.
 func RunWithStdin(stdin string, name string, args ...string) (stdout, stderr string, exitCode int, err error) {
-	cmd := exec.Command(name, args...)
+	timeout := DefaultTimeout()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdin = strings.NewReader(stdin)
-	return runCollecting(context.Background(), 0, cmd)
+	return runCollecting(ctx, timeout, cmd)
 }
 
 // runCollecting runs cmd, collects stdout and stderr, and maps errors to the
@@ -84,8 +141,9 @@ func runCollecting(ctx context.Context, timeout time.Duration, cmd *exec.Cmd) (s
 
 	// A deadline kill surfaces as *exec.ExitError ("signal: killed"), which
 	// would otherwise be mistaken for a completed non-zero run: the command
-	// never finished, so report the timeout as an error instead. With
-	// Timeout == 0 the context is Background and ctx.Err() is always nil.
+	// never finished, so report the timeout as an error instead. With no
+	// deadline in effect (timeout == 0, an explicit Opts.Timeout < 0) the
+	// context is Background and ctx.Err() is always nil.
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return stdout, stderr, -1, fmt.Errorf("timed out after %v: %w", timeout, ctxErr)
 	}

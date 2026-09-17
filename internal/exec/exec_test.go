@@ -105,6 +105,112 @@ func TestRunWithTimeoutSucceeds(t *testing.T) {
 	}
 }
 
+// withDefaultTimeout temporarily lowers the process-wide default timeout for
+// a single test and restores the original value afterwards, so tests can
+// prove the default kills a hung command without waiting 5 real minutes and
+// without leaking a short default into unrelated tests.
+func withDefaultTimeout(t *testing.T, d time.Duration) {
+	t.Helper()
+	orig := DefaultTimeout()
+	SetDefaultTimeout(d)
+	t.Cleanup(func() { SetDefaultTimeout(orig) })
+}
+
+// Run (the plain, no-Opts entry point every resource backend uses) must kill
+// a command that would otherwise hang forever, using the process-wide
+// default timeout rather than requiring every caller to opt in per call.
+// This is the concrete "a hanging command actually gets killed" proof for
+// gonf task x5: without a default, `sleep 5` here would block for 5 seconds
+// (or forever for a truly wedged remote command); with the lowered default it
+// is killed almost immediately and surfaces a clear timeout error.
+func TestRunUsesDefaultTimeout(t *testing.T) {
+	withDefaultTimeout(t, 50*time.Millisecond)
+
+	start := time.Now()
+	_, _, exitCode, err := Run("sleep", "5")
+	if err == nil {
+		t.Fatal("expected the default timeout to kill the command")
+	}
+	if !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("err = %v, want a context deadline", err)
+	}
+	if exitCode != -1 {
+		t.Fatalf("exitCode = %d, want -1", exitCode)
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("Run ignored the default timeout: took %v", elapsed)
+	}
+}
+
+// RunWithStdin has no per-call Timeout knob (see its doc comment), so it must
+// still be bounded by the process-wide default: a hung command fed from
+// stdin (e.g. a wedged `crontab -` write) must not block forever either.
+func TestRunWithStdinUsesDefaultTimeout(t *testing.T) {
+	withDefaultTimeout(t, 50*time.Millisecond)
+
+	start := time.Now()
+	_, _, exitCode, err := RunWithStdin("ignored", "sleep", "5")
+	if err == nil {
+		t.Fatal("expected the default timeout to kill the command")
+	}
+	if !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("err = %v, want a context deadline", err)
+	}
+	if exitCode != -1 {
+		t.Fatalf("exitCode = %d, want -1", exitCode)
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("RunWithStdin ignored the default timeout: took %v", elapsed)
+	}
+}
+
+// A normal, fast command must be completely unaffected by the default
+// timeout being in place (the resilience fix must not regress ordinary
+// apply runs).
+func TestRunFastCommandUnaffectedByDefaultTimeout(t *testing.T) {
+	withDefaultTimeout(t, 50*time.Millisecond)
+
+	stdout, _, exitCode, err := Run("echo", "still fast")
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if exitCode != 0 || stdout != "still fast\n" {
+		t.Fatalf("exit=%d stdout=%q", exitCode, stdout)
+	}
+}
+
+// Opts.Timeout < 0 is the explicit, per-call opt-out from any deadline
+// (including the process-wide default) for the rare caller that genuinely
+// needs it.
+func TestRunWithNegativeTimeoutDisablesDeadline(t *testing.T) {
+	withDefaultTimeout(t, 50*time.Millisecond)
+
+	stdout, _, exitCode, err := RunWith(Opts{Timeout: -1}, "echo", "unbounded")
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if exitCode != 0 || stdout != "unbounded\n" {
+		t.Fatalf("exit=%d stdout=%q", exitCode, stdout)
+	}
+}
+
+// SetDefaultTimeout must reject a non-positive value rather than silently
+// leaving Run with an effectively zero (instant-timeout) or unlimited
+// default.
+func TestSetDefaultTimeoutRejectsNonPositive(t *testing.T) {
+	orig := DefaultTimeout()
+	t.Cleanup(func() { SetDefaultTimeout(orig) })
+
+	SetDefaultTimeout(0)
+	if got := DefaultTimeout(); got != orig {
+		t.Fatalf("SetDefaultTimeout(0) changed the default to %v, want unchanged %v", got, orig)
+	}
+	SetDefaultTimeout(-1 * time.Second)
+	if got := DefaultTimeout(); got != orig {
+		t.Fatalf("SetDefaultTimeout(negative) changed the default to %v, want unchanged %v", got, orig)
+	}
+}
+
 func TestRunWithDir(t *testing.T) {
 	dir := t.TempDir()
 	stdout, _, exitCode, err := RunWith(Opts{Dir: dir}, "pwd")
