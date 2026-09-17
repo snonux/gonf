@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/snonux/gonf/internal"
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/plan"
@@ -50,6 +51,22 @@ type Pusher struct {
 	GoBuildRunner     func(ctx context.Context, goos, goarch, out, pkg string) error
 	PlanVersionProber func(ctx context.Context, t PushTarget) (int, error)
 
+	// ReleaseVersionProber probes the remote gonf binary's own release
+	// version (internal.Version, e.g. "0.12.1", as printed by `gonf
+	// -version`) — distinct from PlanVersionProber, which only reports the
+	// plan WIRE SCHEMA version. A behavior-only fix (one that changes how
+	// gonf applies a plan without changing what a plan encodes — e.g. a
+	// template-rendering bug fix) never bumps plan.CurrentVersion, so
+	// PlanVersionProber alone can never see it, and a host would keep
+	// running the old, buggy binary forever even once the controller has a
+	// newer one available to push. EnsureRemoteGonf additionally upgrades
+	// when this reports a release older than the controller's own
+	// internal.Version, even when the plan schema is unchanged. A nil value
+	// (as in a hand-built *Pusher a test doesn't care about this field)
+	// simply skips the extra check — the plan-schema check above remains
+	// authoritative either way.
+	ReleaseVersionProber func(ctx context.Context, t PushTarget) (string, error)
+
 	// buildMu protects only the two maps below (a quick map read/write),
 	// never the build itself — see buildKeyLock's doc comment for why a
 	// single lock held across the whole struct/package used to serialize
@@ -63,11 +80,12 @@ type Pusher struct {
 // implementations, with a fresh (empty) build cache.
 func NewPusher() *Pusher {
 	return &Pusher{
-		SCPRunner:         defaultSCPRunner,
-		GoBuildRunner:     defaultGoBuildRunner,
-		PlanVersionProber: probePlanVersion,
-		buildCache:        map[string]string{},
-		buildKeyLocks:     map[string]*sync.Mutex{},
+		SCPRunner:            defaultSCPRunner,
+		GoBuildRunner:        defaultGoBuildRunner,
+		PlanVersionProber:    probePlanVersion,
+		ReleaseVersionProber: probeReleaseVersion,
+		buildCache:           map[string]string{},
+		buildKeyLocks:        map[string]*sync.Mutex{},
 	}
 }
 
@@ -430,8 +448,11 @@ func AssumeRemotePlanCurrent() func() {
 }
 
 // EnsureRemoteGonf upgrades the remote gonf binary when it cannot apply the
-// controller's plan schema (missing gonf, or -plan-version < CurrentVersion).
-// GOOS/GOARCH come from the target when set, otherwise from remote uname.
+// controller's plan schema (missing gonf, or -plan-version < CurrentVersion),
+// OR when the plan schema is fine but the remote binary's own release
+// version (gonf -version) is older than the controller's — see
+// Pusher.ReleaseVersionProber's doc comment for why that second check
+// exists. GOOS/GOARCH come from the target when set, otherwise from remote uname.
 // When an upgrade runs, installedPath is the remote binary path to use for
 // subsequent apply commands; otherwise it is empty (keep PATH "gonf").
 //
@@ -456,13 +477,23 @@ func (p *Pusher) EnsureRemoteGonf(ctx context.Context, t PushTarget) (installedP
 	}
 	remoteVer, err := p.PlanVersionProber(ctx, t)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("ensure gonf: %w", err)
 	}
-	if remoteVer >= plan.CurrentVersion {
+
+	needUpgrade := remoteVer < plan.CurrentVersion
+	switch {
+	case needUpgrade:
+		logger.Info("push %s: remote plan schema %d < %d — syncing gonf binary",
+			t.Destination(), remoteVer, plan.CurrentVersion)
+	case p.ReleaseVersionProber != nil:
+		if stale, reason := p.remoteReleaseIsStale(ctx, t); stale {
+			needUpgrade = true
+			logger.Info("push %s: %s — syncing gonf binary", t.Destination(), reason)
+		}
+	}
+	if !needUpgrade {
 		return "", nil
 	}
-	logger.Info("push %s: remote plan schema %d < %d — syncing gonf binary",
-		t.Destination(), remoteVer, plan.CurrentVersion)
 
 	goos, goarch := t.GOOS, t.GOARCH
 	if goos == "" || goarch == "" {
@@ -531,6 +562,23 @@ func (p *Pusher) EnsureRemoteGonf(ctx context.Context, t PushTarget) (installedP
 	return installPath, nil
 }
 
+// probePlanVersion returns the remote binary's plan wire-schema version (as
+// reported by "gonf -plan-version"), or 0 with a nil error when the binary
+// is missing entirely (empty stdout — a normal, expected probe outcome that
+// EnsureRemoteGonf treats as "needs install").
+//
+// A NON-EMPTY line that fails to parse as an integer is a different
+// situation and must not be confused with the missing-binary case: it means
+// something is contaminating the ssh session's stdout — a login banner, an
+// MOTD, a shell rc file that prints on non-interactive sessions, etc. The
+// old behavior silently treated that as "schema 0", which (a) triggered an
+// unnecessary rebuild/upgrade cycle and (b) on the post-install verify probe
+// (see EnsureRemoteGonf) produced a "remote still reports plan schema 0"
+// error that never showed the actual contaminated output, making the real
+// cause ("my ssh banner is leaking into stdout") nearly impossible to
+// diagnose. Returning an error here instead — one that quotes the raw,
+// unparsed line — surfaces that cause directly instead of masking it behind
+// a misleading rebuild attempt.
 func probePlanVersion(ctx context.Context, t PushTarget) (int, error) {
 	bin := remoteGonfBin(t)
 	// No "2>/dev/null || true": FreeBSD login shells are often tcsh, which
@@ -547,9 +595,101 @@ func probePlanVersion(ctx context.Context, t PushTarget) (int, error) {
 	}
 	n, err := strconv.Atoi(line)
 	if err != nil {
-		return 0, nil // garbage → upgrade
+		return 0, fmt.Errorf("plan-version probe: %s -plan-version returned unparseable output %q instead of an integer plan schema version (a login banner, MOTD, or other ssh startup noise may be mixed into the probe output — check the remote login shell's startup files)", bin, line)
 	}
 	return n, nil
+}
+
+// probeReleaseVersion returns the remote gonf binary's own release version
+// string (as reported by "gonf -version", e.g. "0.12.1"), or "" with a nil
+// error when the binary is missing or too old to support -version. Unlike
+// probePlanVersion, an unparseable non-empty result is NOT turned into an
+// error here — see remoteReleaseIsStale, which treats it as "skip this
+// extra check" rather than failing the whole push, since the release-version
+// comparison is a best-effort safety net layered on top of the authoritative
+// plan-schema check.
+func probeReleaseVersion(ctx context.Context, t PushTarget) (string, error) {
+	bin := remoteGonfBin(t)
+	out, err := sshCapture(ctx, t, bin+" -version")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// remoteReleaseIsStale reports whether the remote's own release version
+// (probed via p.ReleaseVersionProber) is older than the controller's own
+// internal.Version, and if so, a human-readable reason string for the
+// caller's log message.
+//
+// Any probe or parse failure returns (false, "") — never an error: this
+// check exists to catch a fix that never bumped plan.CurrentVersion (see
+// Pusher.ReleaseVersionProber's doc comment), not to add a new way for a
+// push to fail outright. A probe/parse problem is still logged as a
+// warning, though, so genuine banner/MOTD contamination on "-version" (the
+// same hazard fixed for "-plan-version" in probePlanVersion) remains
+// diagnosable instead of being swallowed entirely.
+func (p *Pusher) remoteReleaseIsStale(ctx context.Context, t PushTarget) (bool, string) {
+	remoteRelease, err := p.ReleaseVersionProber(ctx, t)
+	if err != nil {
+		logger.Warn("push %s: could not probe remote gonf release version: %v", t.Destination(), err)
+		return false, ""
+	}
+	if remoteRelease == "" {
+		// Missing binary or one predating -version: the plan-schema check
+		// above is authoritative for that case (a missing binary always
+		// probes as plan schema 0, which already forces an upgrade).
+		return false, ""
+	}
+	remoteV, err := parseReleaseVersion(remoteRelease)
+	if err != nil {
+		logger.Warn("push %s: remote gonf -version output %q did not parse as a MAJOR.MINOR.PATCH release version (a login banner or MOTD may be contaminating ssh output); skipping the release-version staleness check", t.Destination(), remoteRelease)
+		return false, ""
+	}
+	ctrlV, err := parseReleaseVersion(internal.Version)
+	if err != nil {
+		logger.Warn("push %s: controller's own internal.Version %q did not parse; skipping the release-version staleness check", t.Destination(), internal.Version)
+		return false, ""
+	}
+	if !releaseVersionLess(remoteV, ctrlV) {
+		return false, ""
+	}
+	return true, fmt.Sprintf("remote gonf release %s is older than controller %s (plan schema unchanged)", remoteRelease, internal.Version)
+}
+
+// parseReleaseVersion parses a gonf release version string (the
+// internal.Version format printed by "gonf -version", e.g. "0.12.1") into up
+// to three numeric MAJOR.MINOR.PATCH components. An optional leading "v"
+// (as used by this repo's git tags, e.g. v0.12.1) is tolerated. Anything
+// else — empty, non-numeric segments, more than three dotted segments — is
+// reported as an error rather than guessed at, since a wrong guess here
+// would either mask a real upgrade need or trigger a needless one.
+func parseReleaseVersion(s string) ([3]int, error) {
+	var v [3]int
+	s = strings.TrimPrefix(strings.TrimPrefix(s, "v"), "V")
+	parts := strings.Split(s, ".")
+	if len(parts) == 0 || len(parts) > 3 {
+		return v, fmt.Errorf("release version %q is not in MAJOR.MINOR.PATCH form", s)
+	}
+	for i, part := range parts {
+		n, err := strconv.Atoi(part)
+		if err != nil {
+			return v, fmt.Errorf("release version %q has a non-numeric segment %q", s, part)
+		}
+		v[i] = n
+	}
+	return v, nil
+}
+
+// releaseVersionLess reports whether a < b, comparing MAJOR then MINOR then
+// PATCH.
+func releaseVersionLess(a, b [3]int) bool {
+	for i := 0; i < 3; i++ {
+		if a[i] != b[i] {
+			return a[i] < b[i]
+		}
+	}
+	return false
 }
 
 func remoteGonfBin(t PushTarget) string {

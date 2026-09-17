@@ -926,3 +926,241 @@ func TestRemoteInstallCmdHasNoShellChaining(t *testing.T) {
 		t.Fatalf("install cmd = %q should not itself remove src (staging dir cleanup owns that)", cmd)
 	}
 }
+
+func TestParseReleaseVersion(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in      string
+		want    [3]int
+		wantErr bool
+	}{
+		{"0.12.1", [3]int{0, 12, 1}, false},
+		{"v0.12.1", [3]int{0, 12, 1}, false},
+		{"V0.12.1", [3]int{0, 12, 1}, false},
+		{"1.2", [3]int{1, 2, 0}, false},
+		{"3", [3]int{3, 0, 0}, false},
+		{"", [3]int{}, true},
+		{"abc", [3]int{}, true},
+		{"1.2.3.4", [3]int{}, true},
+		{"1.x.3", [3]int{}, true},
+	}
+	for _, tc := range cases {
+		got, err := parseReleaseVersion(tc.in)
+		if tc.wantErr {
+			if err == nil {
+				t.Fatalf("parseReleaseVersion(%q) = %v, nil; want error", tc.in, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("parseReleaseVersion(%q): %v", tc.in, err)
+		}
+		if got != tc.want {
+			t.Fatalf("parseReleaseVersion(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestReleaseVersionLess(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		a, b [3]int
+		want bool
+	}{
+		{[3]int{0, 11, 0}, [3]int{0, 12, 1}, true},
+		{[3]int{0, 12, 1}, [3]int{0, 12, 1}, false},
+		{[3]int{0, 12, 2}, [3]int{0, 12, 1}, false},
+		{[3]int{1, 0, 0}, [3]int{0, 99, 99}, false},
+	}
+	for _, tc := range cases {
+		if got := releaseVersionLess(tc.a, tc.b); got != tc.want {
+			t.Fatalf("releaseVersionLess(%v, %v) = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
+// TestEnsureRemoteGonfUpgradesWhenReleaseVersionStale is the regression test
+// for this task's core fix (see Pusher.ReleaseVersionProber's doc comment):
+// a behavior-only bug fix that never bumps plan.CurrentVersion must still
+// reach hosts. The plan-schema probe reports "current" on both the
+// pre-check and the post-install verify, which alone would mean "nothing to
+// do" — but the remote's own release version (gonf -version) is far older
+// than the controller's, and that alone must still trigger a full
+// build+scp+install cycle.
+func TestEnsureRemoteGonfUpgradesWhenReleaseVersionStale(t *testing.T) {
+	oldSSH := SSHRunner
+	oldCapture := sshCaptureExec
+	t.Cleanup(func() {
+		SSHRunner = oldSSH
+		sshCaptureExec = oldCapture
+	})
+	t.Cleanup(func() { removeGonfCrossBuildDirs(t, [2]string{"linux", "amd64"}) })
+
+	SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
+		return nil
+	}
+	sshCaptureExec = func(ctx context.Context, argv []string) (string, string, error) {
+		remoteCmd := argv[len(argv)-1]
+		switch {
+		case strings.HasPrefix(remoteCmd, "mktemp -d "):
+			return "/tmp/gonf-sync.stale001\n", "", nil
+		case strings.Contains(remoteCmd, "-plan-version"):
+			// The post-install verify probe (real probePlanVersion, called
+			// directly by EnsureRemoteGonf) also reports the schema as
+			// current: this test's whole point is that the schema check
+			// alone would never trigger an upgrade here.
+			return strconv.Itoa(plan.CurrentVersion) + "\n", "", nil
+		default:
+			return "", "", fmt.Errorf("gonfSyncStub: unexpected remote command %q", remoteCmd)
+		}
+	}
+
+	p := NewPusher()
+	p.PlanVersionProber = func(context.Context, PushTarget) (int, error) {
+		return plan.CurrentVersion, nil
+	}
+	p.ReleaseVersionProber = func(context.Context, PushTarget) (string, error) {
+		return "0.0.1", nil // far older than any real internal.Version
+	}
+	p.GoBuildRunner = func(ctx context.Context, goos, goarch, out, pkg string) error {
+		return os.WriteFile(out, []byte("fake"), 0o755)
+	}
+	var scpCalls int
+	p.SCPRunner = func(ctx context.Context, localPath string, pt PushTarget, remotePath string) error {
+		scpCalls++
+		return nil
+	}
+
+	installed, err := p.EnsureRemoteGonf(context.Background(), gonfSyncTarget())
+	if err != nil {
+		t.Fatalf("EnsureRemoteGonf: %v", err)
+	}
+	if installed == "" {
+		t.Fatal("installed path is empty; want an upgrade to have run despite the current plan schema")
+	}
+	if scpCalls != 1 {
+		t.Fatalf("scpCalls = %d, want 1 (a stale release version must still trigger an upgrade)", scpCalls)
+	}
+}
+
+// TestEnsureRemoteGonfSkipsUpgradeWhenReleaseVersionCurrentAndSchemaCurrent
+// guards the other side of the same check: when neither the plan schema nor
+// the release version is stale, no build/scp should happen at all.
+func TestEnsureRemoteGonfSkipsUpgradeWhenReleaseVersionCurrentAndSchemaCurrent(t *testing.T) {
+	t.Parallel()
+	p := NewPusher()
+	p.PlanVersionProber = func(context.Context, PushTarget) (int, error) {
+		return plan.CurrentVersion, nil
+	}
+	p.ReleaseVersionProber = func(context.Context, PushTarget) (string, error) {
+		return "999.0.0", nil // never older than the controller
+	}
+	var built, scped bool
+	p.GoBuildRunner = func(ctx context.Context, goos, goarch, out, pkg string) error {
+		built = true
+		return nil
+	}
+	p.SCPRunner = func(ctx context.Context, localPath string, pt PushTarget, remotePath string) error {
+		scped = true
+		return nil
+	}
+
+	installed, err := p.EnsureRemoteGonf(context.Background(), gonfSyncTarget())
+	if err != nil {
+		t.Fatalf("EnsureRemoteGonf: %v", err)
+	}
+	if installed != "" {
+		t.Fatalf("installed = %q, want empty (no upgrade needed)", installed)
+	}
+	if built || scped {
+		t.Fatalf("built=%v scped=%v, want neither: schema and release version are both current", built, scped)
+	}
+}
+
+// TestEnsureRemoteGonfUnparseableReleaseVersionSkipsCheckWithoutFailing
+// guards the "additive, best-effort" property of the release-version check:
+// banner/MOTD noise on "gonf -version" must not fail the whole push (unlike
+// the same noise on "-plan-version", which IS a hard error — see
+// TestEnsureRemoteGonfUnparseablePlanVersionProbeFailsWithRawOutput — because
+// the plan-schema check is authoritative and cannot safely be skipped, while
+// the release-version check is a secondary safety net layered on top of it).
+func TestEnsureRemoteGonfUnparseableReleaseVersionSkipsCheckWithoutFailing(t *testing.T) {
+	t.Parallel()
+	p := NewPusher()
+	p.PlanVersionProber = func(context.Context, PushTarget) (int, error) {
+		return plan.CurrentVersion, nil
+	}
+	p.ReleaseVersionProber = func(context.Context, PushTarget) (string, error) {
+		return "Welcome to Ubuntu 22.04.1 LTS", nil // banner/MOTD noise, not a version
+	}
+	var built, scped bool
+	p.GoBuildRunner = func(ctx context.Context, goos, goarch, out, pkg string) error {
+		built = true
+		return nil
+	}
+	p.SCPRunner = func(ctx context.Context, localPath string, pt PushTarget, remotePath string) error {
+		scped = true
+		return nil
+	}
+
+	installed, err := p.EnsureRemoteGonf(context.Background(), gonfSyncTarget())
+	if err != nil {
+		t.Fatalf("EnsureRemoteGonf: %v, want nil (unparseable -version output must not fail the push)", err)
+	}
+	if installed != "" {
+		t.Fatalf("installed = %q, want empty", installed)
+	}
+	if built || scped {
+		t.Fatalf("built=%v scped=%v, want neither: unparseable release-version probe output must be skipped, not treated as stale", built, scped)
+	}
+}
+
+// TestProbePlanVersionUnparseableOutputReturnsRawTextError is the direct
+// unit-level regression test for the unparseable-probe-output bug: a
+// non-empty "-plan-version" line that isn't an integer (e.g. a login banner
+// or MOTD line mixed into ssh's stdout) must produce an error that quotes
+// the raw offending text, never a silent "schema 0".
+func TestProbePlanVersionUnparseableOutputReturnsRawTextError(t *testing.T) {
+	oldCapture := sshCaptureExec
+	t.Cleanup(func() { sshCaptureExec = oldCapture })
+	const banner = "*** WARNING: unauthorized access to this system is prohibited ***"
+	sshCaptureExec = func(ctx context.Context, argv []string) (string, string, error) {
+		return banner + "\n", "", nil
+	}
+
+	n, err := probePlanVersion(context.Background(), PushTarget{Host: "h.example"})
+	if err == nil {
+		t.Fatalf("probePlanVersion returned (%d, nil); want an error for unparseable output", n)
+	}
+	if !strings.Contains(err.Error(), banner) {
+		t.Fatalf("error %q does not include the raw unparsed probe output %q", err.Error(), banner)
+	}
+}
+
+// TestEnsureRemoteGonfUnparseablePlanVersionProbeFailsWithRawOutput is the
+// end-to-end version of the same regression: EnsureRemoteGonf itself (via
+// the real, default-wired probePlanVersion) must surface the raw banner
+// text in its returned error, and must NOT reinterpret the banner as
+// "schema 0" (which used to trigger a pointless rebuild/upgrade and then
+// fail with a misleading "still reports plan schema 0" message that hid the
+// actual cause).
+func TestEnsureRemoteGonfUnparseablePlanVersionProbeFailsWithRawOutput(t *testing.T) {
+	oldCapture := sshCaptureExec
+	t.Cleanup(func() { sshCaptureExec = oldCapture })
+	const banner = "*** WARNING: unauthorized use is prohibited ***"
+	sshCaptureExec = func(ctx context.Context, argv []string) (string, string, error) {
+		return banner + "\n", "", nil
+	}
+
+	p := NewPusher() // real probePlanVersion via the default-wired PlanVersionProber
+	_, err := p.EnsureRemoteGonf(context.Background(), gonfSyncTarget())
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), banner) {
+		t.Fatalf("error %q does not surface the raw banner text", err.Error())
+	}
+	if strings.Contains(err.Error(), "schema 0") {
+		t.Fatalf("error %q must not silently reinterpret banner noise as \"schema 0\"", err.Error())
+	}
+}
