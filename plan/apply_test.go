@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/snonux/gonf/resource"
-	"github.com/snonux/gonf/resource/systemd"
 )
 
 func resourceSetDryRun(t *testing.T) {
@@ -602,41 +601,12 @@ func TestApplyFileLineRemove(t *testing.T) {
 	}
 }
 
-// TestApplyTimerRestartLowering pins that a recorded timer op with restart
-// lowers into a WithRestart option: the fake runner must observe a systemctl
-// restart of the unit, not just enable/start (task z12 regression).
-func TestApplyTimerRestartLowering(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("systemd fake is Linux-specific")
-	}
-
-	var invoked [][]string
-	systemd.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
-		if name == "systemctl" {
-			invoked = append(invoked, args)
-		}
-		return "", "", 0, nil
-	})
-	t.Cleanup(systemd.ResetRunCmdForTest)
-
-	ops := []Op{
-		{Op: KindPlan, Version: CurrentVersion, ID: "timers"},
-		{Op: KindTimer, Name: "zzfit.timer", User: true, Restart: true},
-	}
-	if err := Apply(ops, Facts{GOOS: "linux"}, ""); err != nil {
-		t.Fatalf("plan.Apply: %v", err)
-	}
-
-	var sawRestart bool
-	for _, args := range invoked {
-		if len(args) >= 2 && args[0] == "--user" && args[1] == "restart" {
-			sawRestart = true
-		}
-	}
-	if !sawRestart {
-		t.Errorf("expected a systemctl --user restart invocation, got: %v", invoked)
-	}
-}
+// TestApplyTimerRestartLowering moved to apply_systemd_test.go (package
+// plan_test): it stubs resource/systemd's command runner directly, and
+// resource/systemd now registers a plan.Handler (see
+// resource/systemd/planwire.go) — importing resource/systemd from an
+// internal plan test would be an import cycle (plan -> resource/systemd ->
+// plan), mirroring why the package-kind apply tests live in apply_pkg_test.go.
 
 func TestApplySystemdTimerRequiresFields(t *testing.T) {
 	t.Parallel()

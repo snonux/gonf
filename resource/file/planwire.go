@@ -1,0 +1,130 @@
+package file
+
+import (
+	"fmt"
+
+	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/plan"
+	"github.com/snonux/gonf/resource"
+)
+
+// planHandler is the file kind's plan.Handler: see resource/pkg/planwire.go
+// for why record-time ToOp and apply-time Apply live together in the
+// resource package instead of api/plan.go's draftToOp and plan/apply.go's
+// applyFile.
+type planHandler struct{}
+
+func init() {
+	plan.RegisterHandler(plan.KindFile, planHandler{})
+}
+
+// ToOp lowers a "file" resource draft to a plan.Op.
+func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
+	return plan.Op{
+		Op:            plan.KindFile,
+		ID:            d.ID,
+		Path:          d.Path,
+		Mode:          d.Mode,
+		Owner:         d.Owner,
+		Group:         d.Group,
+		ContentB64:    d.ContentB64,
+		Blob:          d.Blob,
+		HasContent:    d.HasContent,
+		Template:      d.Template,
+		TemplateParam: d.TemplateParam,
+		AddLine:       d.AddLine,
+		RemoveLine:    d.RemoveLine,
+		Absent:        d.Absent,
+		Deps:          d.Deps,
+	}, nil
+}
+
+// Apply writes, edits, or removes the destination file, mirroring the
+// resource's own content/template/line-edit/mode/ownership handling exactly
+// (it calls the same Ensure entry point a direct, non-plan use would).
+func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
+	path, err := plan.ExpandPath(op.Path)
+	if err != nil {
+		return err
+	}
+	if path == "" {
+		return fmt.Errorf("file: missing path")
+	}
+	if op.Absent {
+		return Ensure(path, opt.IsAbsent)
+	}
+
+	// Empty owner/group means "not recorded": leaving them unset keeps the
+	// build() defaults (apply-side user) identical to direct resource use.
+	ownership := plan.OwnerGroupOptions(op)
+
+	var opts []opt.Option
+	if op.AddLine != "" || op.RemoveLine != "" {
+		if op.ContentB64 != "" || op.Blob != "" {
+			return fmt.Errorf("file: add_line/remove_line cannot combine with content_b64/blob")
+		}
+		if op.RemoveLine != "" {
+			opts = append(opts, opt.WithoutLine(op.RemoveLine))
+		}
+		if op.AddLine != "" {
+			opts = append(opts, opt.WithLine(op.AddLine))
+		}
+		if op.Mode != "" {
+			mode, err := plan.ParseMode(op.Mode)
+			if err != nil {
+				return fmt.Errorf("file: %w", err)
+			}
+			opts = append(opts, opt.WithMode(mode))
+		}
+		opts = append(opts, ownership...)
+		return Ensure(path, opts...)
+	}
+
+	var content []byte
+	switch {
+	case op.ContentB64 != "":
+		data, err := plan.DecodeContentB64(op.ContentB64)
+		if err != nil {
+			return err
+		}
+		content = data
+	case op.Blob != "":
+		data, err := plan.ReadFile(ctx.PlanDir, op.Blob)
+		if err != nil {
+			return err
+		}
+		content = data
+	case op.HasContent:
+		// WithContent("") or a zero-byte WithSource file: content_b64
+		// legitimately encodes as "" for zero bytes. HasContent (recorded
+		// whenever WithContent/WithSource was configured at all) is what
+		// tells this apart from an op that never got content data.
+		content = nil
+	default:
+		return fmt.Errorf("file: missing content_b64 and blob")
+	}
+
+	opts = []opt.Option{opt.WithContent(string(content))}
+	if op.Template {
+		// The wire content is raw template text (packageDraft/RecordPlan
+		// reads a .tmpl source's bytes verbatim), and by now neither path
+		// nor source still carries the ".tmpl" suffix File.shouldRenderTemplate
+		// would otherwise key off (Path was already stripped at record time,
+		// and there is no source here — content came from content_b64/blob).
+		// WithTemplate forces rendering; WithParam reproduces the {{.Param}}
+		// a direct (non-plan) run with the same declared source would use.
+		opts = append(opts, opt.WithTemplate)
+		if op.TemplateParam != "" {
+			opts = append(opts, opt.WithParam(op.TemplateParam))
+		}
+	}
+	if op.Mode != "" {
+		mode, err := plan.ParseMode(op.Mode)
+		if err != nil {
+			return fmt.Errorf("file: %w", err)
+		}
+		opts = append(opts, opt.WithMode(mode))
+	}
+	opts = append(opts, ownership...)
+	return Ensure(path, opts...)
+}

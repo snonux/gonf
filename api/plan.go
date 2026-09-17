@@ -540,121 +540,29 @@ func guardBlobRef(name string, d resource.PlanDraft) error {
 	return nil
 }
 
-// draftToOp lowers a resource draft to a plan op line.
-//
-// A kind whose resource package has registered a plan.Handler (see
-// plan/handler.go) delegates entirely to that handler's ToOp: the resource
+// draftToOp lowers a resource draft to a plan op line by delegating to the
+// draft kind's registered plan.Handler (see plan/handler.go): the resource
 // package owns its own wire form and this function only folds in the
-// recording session's Elevate flag. Every other draft Kind still goes
-// through the explicit switch case below: an unmapped kind is a programming
-// error (typo, or a new resource kind missing both a Handler registration
-// and a draftToOp case) and fails the record loudly instead of silently
-// forwarding an unknown op to the wire, where it would only blow up at
-// remote apply time. See docs/plan.md, "Adding a resource kind" for the full
-// checklist.
+// recording session's Elevate flag. Every resource kind registers a Handler
+// (see docs/plan.md, "Adding a resource kind"), so an unmapped kind is
+// always a programming error (typo, or a new resource kind that forgot to
+// register) and fails the record loudly here instead of silently forwarding
+// an unknown op to the wire, where it would only blow up at remote apply
+// time.
 func draftToOp(d resource.PlanDraft) (plan.Op, error) {
-	if h, ok := plan.HandlerFor(plan.Kind(d.Kind)); ok {
-		op, err := h.ToOp(d)
-		if err != nil {
-			return plan.Op{}, err
-		}
-		op.Elevate = d.Elevate || recSession.recordingElevate
-		if !plan.IsKnownKind(op.Op) {
-			return op, fmt.Errorf("RecordPlan: draft %q: kind %q lowers to undeclared plan kind %q (missing from plan.AllKinds)",
-				d.ID, d.Kind, op.Op)
-		}
-		return op, nil
-	}
-
-	op := plan.Op{
-		ID:                 d.ID,
-		Path:               d.Path,
-		Symlink:            d.Symlink,
-		Hardlink:           d.Hardlink,
-		Target:             d.Target,
-		Mode:               d.Mode,
-		FileMode:           d.FileMode,
-		Owner:              d.Owner,
-		Group:              d.Group,
-		ContentB64:         d.ContentB64,
-		Blob:               d.Blob,
-		HasContent:         d.HasContent,
-		Template:           d.Template,
-		TemplateParam:      d.TemplateParam,
-		SourceDir:          d.SourceDir,
-		Prune:              d.Prune,
-		Absent:             d.Absent,
-		Latest:             d.Latest,
-		AddLine:            d.AddLine,
-		RemoveLine:         d.RemoveLine,
-		Name:               d.Name,
-		Bin:                d.Bin,
-		Args:               d.Args,
-		Dir:                d.Dir,
-		Env:                d.Env,
-		Creates:            d.Creates,
-		Unless:             draftGuard(d.Unless),
-		OnlyIf:             draftGuard(d.OnlyIf),
-		User:               d.User,
-		CronUser:           d.CronUser,
-		Command:            d.Command,
-		Schedule:           d.Schedule,
-		CronEnv:            d.CronEnv,
-		OnCalendar:         d.OnCalendar,
-		OnBootSec:          d.OnBootSec,
-		Persistent:         d.Persistent,
-		Description:        d.Description,
-		ServiceDescription: d.ServiceDescription,
-		After:              d.After,
-		Wants:              d.Wants,
-		Restart:            d.Restart,
-		Reload:             d.Reload,
-		EnableOnly:         d.EnableOnly,
-		IfChanged:          d.IfChanged,
-		Watch:              d.Watch,
-		Deps:               d.Deps,
-		Elevate:            d.Elevate || recSession.recordingElevate,
-	}
-	switch d.Kind {
-	case "file":
-		op.Op = plan.KindFile
-	case "dir":
-		op.Op = plan.KindDir
-	case "sync_dir":
-		op.Op = plan.KindSyncDir
-	case "link":
-		op.Op = plan.KindLink
-	case "command":
-		op.Op = plan.KindCommand
-	case "ensure_dir":
-		op.Op = plan.KindEnsureDir
-	case "link_if_exists":
-		op.Op = plan.KindLinkIfExists
-	case "timer":
-		op.Op = plan.KindTimer
-	case "daemon_reload":
-		op.Op = plan.KindDaemonReload
-	case "systemd_timer":
-		op.Op = plan.KindSystemdTimer
-	default:
-		return op, fmt.Errorf("RecordPlan: draft %q: unknown draft kind %q (no draftToOp case; see docs/plan.md kind checklist)",
+	h, ok := plan.HandlerFor(plan.Kind(d.Kind))
+	if !ok {
+		return plan.Op{}, fmt.Errorf("RecordPlan: draft %q: unknown draft kind %q (no registered plan.Handler; see docs/plan.md kind checklist)",
 			d.ID, d.Kind)
 	}
+	op, err := h.ToOp(d)
+	if err != nil {
+		return plan.Op{}, err
+	}
+	op.Elevate = d.Elevate || recSession.recordingElevate
 	if !plan.IsKnownKind(op.Op) {
 		return op, fmt.Errorf("RecordPlan: draft %q: kind %q lowers to undeclared plan kind %q (missing from plan.AllKinds)",
 			d.ID, d.Kind, op.Op)
 	}
 	return op, nil
-}
-
-func draftGuard(g *resource.PlanGuardDraft) *plan.Guard {
-	if g == nil {
-		return nil
-	}
-	return &plan.Guard{
-		Bin:          g.Bin,
-		Args:         g.Args,
-		ExpectStdout: g.ExpectStdout,
-		ExpectExit:   g.ExpectExit,
-	}
 }

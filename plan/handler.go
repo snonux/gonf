@@ -15,11 +15,13 @@ type ApplyContext struct {
 
 // Handler is a resource kind's ownership of its plan wire form: converting a
 // package-neutral resource.PlanDraft into a plan.Op (record time) and
-// applying a decoded plan.Op (apply time). A resource package that migrates
-// to this pattern implements Handler once and registers it for its Kind via
-// RegisterHandler (usually from an init() in the resource package), instead
-// of api/plan.go's draftToOp and plan/apply.go's applyActive each carrying a
-// hand-written case for that kind.
+// applying a decoded plan.Op (apply time). Every resource kind implements
+// Handler once and registers it for its Kind via RegisterHandler (usually
+// from an init() in the resource package), instead of api/plan.go's
+// draftToOp and plan/apply.go's applyActive each carrying a hand-written
+// case for that kind. This is also what keeps this package free of
+// resource-package imports: applyActive only ever calls through this
+// interface, never a concrete resource kind.
 //
 // This does not change the wire format: Op and resource.PlanDraft stay the
 // same flat structs (same JSON tags, same CurrentVersion) — only which Go
@@ -35,11 +37,12 @@ type Handler interface {
 	Apply(op Op, ctx ApplyContext) error
 }
 
-// handlers maps a migrated Kind to the resource package's Handler. Kinds not
-// present here still go through the explicit switch cases in
-// api/plan.go's draftToOp and plan/apply.go's applyActive — this registry is
-// populated incrementally, one resource kind at a time (see docs/plan.md,
-// "Adding a resource kind").
+// handlers maps every Kind to the resource package's Handler. Every resource
+// kind registers itself here from its own package's init() (see
+// docs/plan.md, "Adding a resource kind"); api/plan.go's draftToOp and
+// plan/apply.go's applyActive both fail loudly on an unmapped Kind instead of
+// carrying a fallback case, so a new kind that forgets to register is caught
+// immediately instead of silently falling through to dead code.
 var handlers = map[Kind]Handler{}
 
 // RegisterHandler installs h as the plan wire-form owner for k. Intended to

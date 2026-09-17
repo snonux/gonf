@@ -2,10 +2,12 @@ package plan_test
 
 // These two package-kind apply tests live in the external plan_test package
 // (not plan) because they stub resource/pkg's command runner directly, and
-// resource/pkg now registers a plan.Handler (see resource/pkg/planwire.go)
-// — importing resource/pkg from an internal plan test would be an import
-// cycle (plan -> resource/pkg -> plan). Every other plan.Apply test in this
-// package (see apply_test.go) predates that registration and stays internal.
+// resource/pkg registers a plan.Handler (see resource/pkg/planwire.go) —
+// importing resource/pkg from an internal plan test would be an import
+// cycle (plan -> resource/pkg -> plan). Every resource kind now registers a
+// plan.Handler (task i5), so any plan test that stubs a resource kind's
+// runner directly lives out here instead — see also
+// apply_systemd_test.go's TestApplyTimerRestartLowering.
 
 import (
 	"testing"
