@@ -403,14 +403,32 @@ concurrency the moment it was reached via `gonf fleet` instead. See
 `api/cluster_test.go`'s `TestPushFleetHonorsClusterParallel` for the
 regression test (it fails against the old flat-default behavior).
 
-One visible consequence: because each member cluster's hosts are pushed via
-their own `remote.Fanout` call, a failing host aborts its own cluster's
-in-flight siblings (as before) but no longer aborts an unrelated member
-cluster's in-flight hosts — cross-cluster abort-on-failure narrowed from
-"whole fleet" to "one cluster", which follows naturally from giving each
-cluster its own bounded, independent fan-out. The push summary line
-(`pushed <plan> (<ops>) to <name> (<ok>/<total> hosts)`) is now printed once
-per contributing member cluster rather than once for the whole fleet.
+Parallelism is per-cluster, but failure cancellation is still whole-fleet,
+exactly as it was before this section's fix. Each member cluster's hosts are
+pushed via their own `remote.Fanout` call (so a failing host still aborts its
+own cluster's in-flight siblings first, same as always), but `PushFleetRun`
+also creates one shared `context.WithCancel(ctx)` up front and passes the
+derived context into every group's push call; the instant *any* group's call
+returns an error, `PushFleetRun` cancels that shared context, which
+propagates into every other group's still-running `errgroup` (each group's
+`errgroup.WithContext` derives from the shared context, not from `ctx`
+directly) and aborts their in-flight — and not-yet-started — hosts too. An
+earlier version of this fix shared each cluster's own bounded fan-out but
+left the groups' contexts fully independent, which silently narrowed
+cross-cluster abort-on-failure from "whole fleet" to "one cluster",
+contradicting the pre-existing contract in [Timeouts and
+Cancellation](#timeouts-and-cancellation) ("a failing host cancels its
+in-flight siblings ... the fleet error reports the abort reason once"); the
+shared-cancellation context restores that contract while keeping the
+parallelism fix, because canceling the shared context does not touch any
+group's own `errgroup.SetLimit(limit)` concurrency ceiling. `cancel()` may be
+called concurrently by more than one failing group; this is safe without
+extra locking because `context.CancelFunc` is idempotent and
+concurrency-safe (only the first call has effect). See
+`TestPushFleetFailureCancelsOtherClusters` (api/cluster_test.go) for the
+regression test. The push summary line (`pushed <plan> (<ops>) to <name>
+(<ok>/<total> hosts)`) is still printed once per contributing member cluster
+rather than once for the whole fleet.
 
 ### Remote gonf binary sync
 
@@ -460,7 +478,15 @@ Design decisions:
   (`errgroup.WithContext`); their ssh processes are killed by the context and
   the fleet error reports the abort reason once (`fleet "x": aborted: …`) —
   canceled hosts are not listed as independent failures. A host killed by its
-  own per-host deadline is reported with `(host timeout after 10m0s)`.
+  own per-host deadline is reported with `(host timeout after 10m0s)`. This
+  contract is whole-fleet, not per-cluster: `gonf fleet` pushes each member
+  cluster's hosts through its own `remote.Fanout` call (so each cluster's own
+  `Parallel(n)` still bounds only that cluster's concurrency — see "Fleet
+  parallelism semantics"), but `PushFleetRun` shares one
+  `context.WithCancel(ctx)` across every group and cancels it the instant any
+  group fails, so a failing host in one member cluster still cancels
+  in-flight (and not-yet-started) hosts in every *other* member cluster of
+  the same fleet push too.
 - **What is not context-aware (yet).** Local apply and single-host `push` run
   without a signal context, and `exec.Run` / the resource packages have no
   timeouts: a wedged local `dnf`/`systemctl` still blocks. The

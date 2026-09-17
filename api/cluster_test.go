@@ -562,3 +562,152 @@ func TestPushFleetHonorsClusterParallel(t *testing.T) {
 		t.Fatalf("maxFlight=%d, want 1: fleet push must honor cluster %q's own Parallel(1), not defaultClusterParallelism", maxFlight.Load(), "fragile")
 	}
 }
+
+// TestPushFleetFailureCancelsOtherClusters is the regression test for the n5
+// follow-up fix: giving each member cluster its own remote.Fanout call (so
+// its own Parallel(n) governs its own concurrency independently) must not
+// narrow the pre-existing whole-fleet fail-fast contract documented in
+// docs/plan.md "Timeouts and cancellation" ("a failing host cancels its
+// in-flight siblings ... the fleet error reports the abort reason once").
+// Cluster "bad" (Parallel(1)) and cluster "good" (Parallel(2), a distinct
+// value, so this also re-confirms each group still gets its OWN concurrency
+// ceiling) are pushed together via one fleet. "bad"'s only host fails after
+// a short delay, once "good"'s two hosts are already in flight (blocked on
+// ctx.Done()). Both of "good"'s hosts must be canceled — not left to run to
+// completion — even though the failure happened in a different member
+// cluster's group. Before the fix (independent, uncoupled contexts per
+// group), "good"'s hosts would run to completion instead.
+func TestPushFleetFailureCancelsOtherClusters(t *testing.T) {
+	ResetInventory()
+	ResetTasks()
+	resource.ResetRepository()
+	Task("fleet_cross_cancel", "", func() {})
+
+	Cluster("bad", Host("bad1", WithSSHHost("bad1.example"))).Parallel(1)
+	Cluster("good",
+		Host("g1", WithSSHHost("g1.example")),
+		Host("g2", WithSSHHost("g2.example")),
+	).Parallel(2) // distinct from "bad"'s Parallel(1): both g1 and g2 run at once.
+	Fleet("mixed", MustCluster("bad"), MustCluster("good"))
+
+	old := remote.SSHRunner
+	restoreProbe := remote.AssumeRemotePlanCurrent()
+	t.Cleanup(func() {
+		remote.SSHRunner = old
+		restoreProbe()
+	})
+
+	var g1Canceled, g2Canceled, g1Completed, g2Completed atomic.Bool
+	blockUntilCanceledOrTimeout := func(ctx context.Context, canceled, completed *atomic.Bool) error {
+		select {
+		case <-ctx.Done():
+			canceled.Store(true)
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+			completed.Store(true)
+			return nil
+		}
+	}
+	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
+		_, _ = io.Copy(io.Discard, stdin)
+		dest := argv[len(argv)-2]
+		switch {
+		case strings.Contains(dest, "bad1.example"):
+			// Give "good"'s hosts time to start and block on ctx.Done()
+			// before this cluster's host fails.
+			time.Sleep(30 * time.Millisecond)
+			return errors.New("boom")
+		case strings.Contains(dest, "g1.example"):
+			return blockUntilCanceledOrTimeout(ctx, &g1Canceled, &g1Completed)
+		default: // g2.example
+			return blockUntilCanceledOrTimeout(ctx, &g2Canceled, &g2Completed)
+		}
+	}
+
+	err := PushFleet("mixed", "fleet_cross_cancel")
+	if err == nil {
+		t.Fatal("expected the fleet push to fail")
+	}
+	if !strings.Contains(err.Error(), "bad1") || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("err=%v, want bad1's failure reported", err)
+	}
+	if !strings.Contains(err.Error(), "aborted") {
+		t.Fatalf("err=%v, want good cluster's abort reported", err)
+	}
+	if g1Completed.Load() || g2Completed.Load() {
+		t.Fatalf("good cluster's hosts ran to completion instead of being canceled by bad cluster's failure (g1Completed=%v g2Completed=%v)",
+			g1Completed.Load(), g2Completed.Load())
+	}
+	if !g1Canceled.Load() || !g2Canceled.Load() {
+		t.Fatalf("good cluster's in-flight hosts were not canceled by bad cluster's failure (g1Canceled=%v g2Canceled=%v)",
+			g1Canceled.Load(), g2Canceled.Load())
+	}
+}
+
+// TestPushFleetParallelOverrideAppliesToAllGroups confirms `-j`
+// (parallelOverride) uniformly overrides EVERY member cluster's group limit,
+// not just one — winning over both a cluster explicitly throttled below the
+// override ("one", Parallel(1)) and one explicitly opened up above it
+// ("five", Parallel(5)). Coverage for parallelOverride across 2+ fleet
+// groups was previously code-traced only (PushFleetRun's `if
+// parallelOverride > 0 { limit = parallelOverride }` inside the per-group
+// loop) with no direct regression test.
+func TestPushFleetParallelOverrideAppliesToAllGroups(t *testing.T) {
+	ResetInventory()
+	ResetTasks()
+	resource.ResetRepository()
+	Task("fleet_override", "", func() {})
+
+	Cluster("one",
+		Host("o1", WithSSHHost("o1.example")),
+		Host("o2", WithSSHHost("o2.example")),
+		Host("o3", WithSSHHost("o3.example")),
+	).Parallel(1)
+	Cluster("five",
+		Host("f1", WithSSHHost("f1.example")),
+		Host("f2", WithSSHHost("f2.example")),
+		Host("f3", WithSSHHost("f3.example")),
+	).Parallel(5)
+	Fleet("over", MustCluster("one"), MustCluster("five"))
+
+	old := remote.SSHRunner
+	restoreProbe := remote.AssumeRemotePlanCurrent()
+	t.Cleanup(func() {
+		remote.SSHRunner = old
+		restoreProbe()
+	})
+
+	var oneInFlight, oneMaxFlight, fiveInFlight, fiveMaxFlight atomic.Int32
+	track := func(dest string, inFlight, maxFlight *atomic.Int32) {
+		n := inFlight.Add(1)
+		for {
+			cur := maxFlight.Load()
+			if n <= cur || maxFlight.CompareAndSwap(cur, n) {
+				break
+			}
+		}
+		defer inFlight.Add(-1)
+		time.Sleep(30 * time.Millisecond)
+		_ = dest
+	}
+	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
+		_, _ = io.Copy(io.Discard, stdin)
+		dest := argv[len(argv)-2]
+		if strings.HasPrefix(dest, "o") {
+			track(dest, &oneInFlight, &oneMaxFlight)
+		} else {
+			track(dest, &fiveInFlight, &fiveMaxFlight)
+		}
+		return nil
+	}
+
+	if err := PushFleetRun(context.Background(), "over", "", 2, remote.DefaultHostTimeout, "fleet_override"); err != nil {
+		t.Fatal(err)
+	}
+	if oneMaxFlight.Load() != 2 {
+		t.Fatalf("cluster %q maxFlight=%d, want 2: -j must override its Parallel(1)", "one", oneMaxFlight.Load())
+	}
+	if fiveMaxFlight.Load() != 2 {
+		t.Fatalf("cluster %q maxFlight=%d, want 2: -j must override its Parallel(5)", "five", fiveMaxFlight.Load())
+	}
+}

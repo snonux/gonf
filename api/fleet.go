@@ -247,14 +247,20 @@ func groupFleetHostsByCluster(entries []fleetHostEntry) []fleetHostGroup {
 // overrides every group's limit uniformly — it wins over both the
 // per-cluster setting and the fleet-wide default.
 //
-// Each cluster's group is still pushed with remote.Fanout's own
-// fail-cancels-siblings behavior (a failing host aborts its in-flight
-// cluster-mates), but groups run as independent fan-outs: a failure in one
-// member cluster does not abort another member cluster's in-flight hosts.
-// Narrowing the abort blast radius from "whole fleet" to "one cluster" is a
-// direct consequence of giving each cluster its own bounded fan-out, and is
-// arguably more correct — an unrelated, healthy cluster should not be
-// killed because a different, possibly-fragile cluster failed.
+// Each cluster's group still gets its own remote.Fanout call (so its own
+// Parallel(n)/-j limit governs only that group's concurrency), but all
+// groups share one cancelable context derived from ctx: as soon as any
+// group's pushHosts call returns an error, PushFleetRun cancels that shared
+// context, which propagates into every other group's still-running
+// errgroup (each group's errgroup.WithContext derives from the shared
+// context, not from ctx directly) and aborts their in-flight — and
+// not-yet-started — hosts too. This restores the pre-existing whole-fleet
+// fail-fast contract ("a failing host cancels its in-flight siblings ... the
+// fleet error reports the abort reason once", docs/plan.md "Timeouts and
+// cancellation") on top of the per-cluster parallelism fix: parallelism is
+// per-cluster, but failure cancellation is whole-fleet. See docs/plan.md
+// "Fleet parallelism semantics" and TestPushFleetFailureCancelsOtherClusters
+// (api/cluster_test.go).
 func PushFleetRun(ctx context.Context, name, planID string, parallelOverride int, hostTimeout time.Duration, tasks ...string) error {
 	if len(tasks) == 0 {
 		return fmt.Errorf("fleet %q: no tasks", name)
@@ -285,6 +291,17 @@ func PushFleetRun(ctx context.Context, name, planID string, parallelOverride int
 		return err
 	}
 
+	// fleetCtx is shared by every group's push call: canceling it (below, the
+	// instant any group fails) propagates into every OTHER group's
+	// errgroup-derived context too, restoring the whole-fleet fail-fast
+	// contract. Each group still applies its own limit independently via its
+	// own errgroup.SetLimit inside pushHosts/remote.Fanout, so this does not
+	// undo the per-cluster parallelism fix. context.CancelFunc is safe to
+	// call concurrently and more than once (only the first call has effect),
+	// so no extra synchronization (e.g. sync.Once) is needed around cancel().
+	fleetCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	var wg sync.WaitGroup
 	var errMu sync.Mutex
 	var errs []string
@@ -296,10 +313,11 @@ func PushFleetRun(ctx context.Context, name, planID string, parallelOverride int
 		wg.Add(1)
 		go func(g fleetHostGroup, limit int) {
 			defer wg.Done()
-			if err := pushHosts(ctx, g.cluster.name, planID, g.hosts, limit, hostTimeout, ops, mem); err != nil {
+			if err := pushHosts(fleetCtx, g.cluster.name, planID, g.hosts, limit, hostTimeout, ops, mem); err != nil {
 				errMu.Lock()
 				errs = append(errs, err.Error())
 				errMu.Unlock()
+				cancel()
 			}
 		}(g, limit)
 	}
