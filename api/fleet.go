@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/snonux/gonf/internal/inventory"
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/internal/remote"
 	"github.com/snonux/gonf/plan"
@@ -19,19 +20,12 @@ type FleetRef struct {
 	name string
 }
 
-type fleetOfClustersRecord struct {
-	name     string
-	clusters []ClusterRef
-}
-
 // FleetInfo is a listing row for registered fleets (lists of clusters).
 type FleetInfo struct {
 	Name     string
 	Clusters []string
 	Hosts    []string // flattened unique hosts across member clusters
 }
-
-var fleetsByName = map[string]fleetOfClustersRecord{}
 
 // Fleet registers a named set of ClusterRef handles. Each cluster may appear
 // at most once. Hosts may overlap across clusters; PushFleet deduplicates.
@@ -54,28 +48,17 @@ func Fleet(name string, clusters ...ClusterRef) FleetRef {
 		seen[c.name] = struct{}{}
 	}
 
-	inventoryMu.Lock()
-	defer inventoryMu.Unlock()
-	if _, ok := fleetsByName[name]; ok {
-		logger.Fatal("Fleet %q already registered", name)
+	names := make([]string, len(clusters))
+	for i, c := range clusters {
+		names[i] = c.name
 	}
-	for _, c := range clusters {
-		if _, ok := clustersByName[c.name]; !ok {
-			logger.Fatal("Fleet %q: Cluster %q is not registered", name, c.name)
-		}
-	}
-	fleetsByName[name] = fleetOfClustersRecord{
-		name:     name,
-		clusters: append([]ClusterRef(nil), clusters...),
-	}
+	inventory.AddFleet(name, names)
 	return FleetRef{name: name}
 }
 
 // LookupFleet returns a registered FleetRef.
 func LookupFleet(name string) (FleetRef, bool) {
-	inventoryMu.Lock()
-	defer inventoryMu.Unlock()
-	if _, ok := fleetsByName[name]; !ok {
+	if _, ok := inventory.LookupFleet(name); !ok {
 		return FleetRef{}, false
 	}
 	return FleetRef{name: name}, true
@@ -92,98 +75,38 @@ func MustFleet(name string) FleetRef {
 
 // ClusterNames returns member cluster names in registration order.
 func (f FleetRef) ClusterNames() []string {
-	inventoryMu.Lock()
-	defer inventoryMu.Unlock()
-	rec, ok := fleetsByName[f.name]
+	rec, ok := inventory.LookupFleet(f.name)
 	if !ok {
 		logger.Fatal("Fleet %q is not registered", f.name)
 	}
-	names := make([]string, len(rec.clusters))
-	for i, c := range rec.clusters {
-		names[i] = c.name
-	}
-	return names
-}
-
-// fleetHostEntry pairs a HostRef with the clusterRecord that first claims it
-// within a fleet — when member clusters share a host, the first cluster to
-// list it (in Fleet(...) registration order) "owns" it for dedup purposes.
-// PushFleetRun groups entries by this owning cluster so each host group can
-// be pushed at THAT cluster's own configured Parallel(n) rather than a
-// blanket fleet-wide default — see PushFleetRun's doc comment and
-// docs/plan.md "Fleet parallelism semantics".
-type fleetHostEntry struct {
-	host    HostRef
-	cluster clusterRecord
-}
-
-// collectFleetHosts walks rec's member clusters and returns each unique
-// host exactly once, in first-seen registration order, paired with the
-// cluster that first claims it. It is the single unique-hosts-collection
-// implementation shared by FleetRef.HostNames(), Fleets(), and
-// PushFleetRun, which previously each carried their own copy of this loop.
-// Caller must hold inventoryMu.
-func collectFleetHosts(fleetName string, rec fleetOfClustersRecord) ([]fleetHostEntry, error) {
-	seen := map[string]struct{}{}
-	var out []fleetHostEntry
-	for _, c := range rec.clusters {
-		crec, ok := clustersByName[c.name]
-		if !ok {
-			return nil, fmt.Errorf("Fleet %q: Cluster %q is not registered", fleetName, c.name)
-		}
-		for _, h := range crec.hosts {
-			if _, dup := seen[h.name]; dup {
-				continue
-			}
-			seen[h.name] = struct{}{}
-			out = append(out, fleetHostEntry{host: h, cluster: crec})
-		}
-	}
-	return out, nil
+	return append([]string(nil), rec.Clusters...)
 }
 
 // HostNames returns unique host inventory names across all member clusters,
 // in first-seen registration order.
 func (f FleetRef) HostNames() []string {
-	inventoryMu.Lock()
-	defer inventoryMu.Unlock()
-	rec, ok := fleetsByName[f.name]
-	if !ok {
-		logger.Fatal("Fleet %q is not registered", f.name)
-	}
-	entries, err := collectFleetHosts(f.name, rec)
+	entries, err := inventory.CollectFleetHosts(f.name)
 	if err != nil {
 		logger.Fatal("%v", err)
 	}
 	names := make([]string, len(entries))
 	for i, e := range entries {
-		names[i] = e.host.name
+		names[i] = e.HostName
 	}
 	return names
 }
 
 // Fleets lists registered fleets sorted by name.
 func Fleets() []FleetInfo {
-	inventoryMu.Lock()
-	defer inventoryMu.Unlock()
-	out := make([]FleetInfo, 0, len(fleetsByName))
-	for _, rec := range fleetsByName {
-		cnames := make([]string, len(rec.clusters))
-		for i, c := range rec.clusters {
-			cnames[i] = c.name
-		}
-		// Membership is enforced at Fleet/Cluster registration time and the
-		// registry is only ever cleared wholesale (ResetInventory), so a
-		// missing member cluster here cannot happen in practice; ignore the
-		// error rather than panicking a listing call over it.
-		entries, _ := collectFleetHosts(rec.name, rec)
-		hnames := make([]string, len(entries))
-		for i, e := range entries {
-			hnames[i] = e.host.name
-		}
-		out = append(out, FleetInfo{Name: rec.name, Clusters: cnames, Hosts: hnames})
+	recs := inventory.FleetInfos()
+	out := make([]FleetInfo, 0, len(recs))
+	for _, rec := range recs {
+		out = append(out, FleetInfo{
+			Name:     rec.Name,
+			Clusters: append([]string(nil), rec.Clusters...),
+			Hosts:    rec.Hosts,
+		})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
@@ -193,36 +116,6 @@ func PushFleet(name string, tasks ...string) error {
 	return PushFleetRun(context.Background(), name, "", 0, remote.DefaultHostTimeout, tasks...)
 }
 
-// fleetHostGroup is one member cluster's contribution to a fleet push: the
-// (deduplicated) hosts owned by that cluster, to be pushed at the cluster's
-// own configured Parallel(n) — see PushFleetRun.
-type fleetHostGroup struct {
-	cluster clusterRecord
-	hosts   []HostRef
-}
-
-// groupFleetHostsByCluster buckets entries (already deduplicated by
-// collectFleetHosts, one entry per unique host) by owning cluster,
-// preserving first-seen cluster order.
-func groupFleetHostsByCluster(entries []fleetHostEntry) []fleetHostGroup {
-	order := make([]string, 0, len(entries))
-	byCluster := make(map[string]*fleetHostGroup, len(entries))
-	for _, e := range entries {
-		g, ok := byCluster[e.cluster.name]
-		if !ok {
-			g = &fleetHostGroup{cluster: e.cluster}
-			byCluster[e.cluster.name] = g
-			order = append(order, e.cluster.name)
-		}
-		g.hosts = append(g.hosts, e.host)
-	}
-	out := make([]fleetHostGroup, len(order))
-	for i, name := range order {
-		out[i] = *byCluster[name]
-	}
-	return out
-}
-
 // PushFleetRun is the full-parameter form of PushFleet (CLI threads context,
 // planID, -j, and -host-timeout). planID "" → fleet-<name>.
 //
@@ -230,7 +123,7 @@ func groupFleetHostsByCluster(entries []fleetHostEntry) []fleetHostGroup {
 // a fleet push groups the fleet's deduplicated hosts by the cluster that
 // first claims them (member clusters may share hosts; each host is still
 // pushed exactly once, via the cluster that first lists it — see
-// collectFleetHosts), then pushes each group at THAT CLUSTER's OWN
+// inventory.CollectFleetHosts), then pushes each group at THAT CLUSTER's OWN
 // configured Parallel(n), not a blanket fleet-wide default. This makes
 // Cluster.Parallel(n) mean the same thing everywhere it is honored, whether
 // the cluster is reached directly (`gonf cluster`) or indirectly through a
@@ -265,14 +158,7 @@ func PushFleetRun(ctx context.Context, name, planID string, parallelOverride int
 	if len(tasks) == 0 {
 		return fmt.Errorf("fleet %q: no tasks", name)
 	}
-	inventoryMu.Lock()
-	rec, ok := fleetsByName[name]
-	if !ok {
-		inventoryMu.Unlock()
-		return fmt.Errorf("fleet %q is not registered", name)
-	}
-	entries, err := collectFleetHosts(name, rec)
-	inventoryMu.Unlock()
+	entries, err := inventory.CollectFleetHosts(name)
 	if err != nil {
 		return err
 	}
@@ -280,7 +166,7 @@ func PushFleetRun(ctx context.Context, name, planID string, parallelOverride int
 	if planID == "" {
 		planID = "fleet-" + name
 	}
-	groups := groupFleetHostsByCluster(entries)
+	groups := inventory.GroupFleetHostsByCluster(entries)
 
 	mem := plan.NewMemoryStore()
 	ops, err := RecordPlanTo(planID, mem, tasks...)
@@ -306,14 +192,15 @@ func PushFleetRun(ctx context.Context, name, planID string, parallelOverride int
 	var errMu sync.Mutex
 	var errs []string
 	for _, g := range groups {
-		limit := clusterParallelism(g.cluster)
+		limit := inventory.ClusterParallelism(g.Cluster)
 		if parallelOverride > 0 {
 			limit = parallelOverride
 		}
 		wg.Add(1)
-		go func(g fleetHostGroup, limit int) {
+		go func(g inventory.FleetHostGroup, limit int) {
 			defer wg.Done()
-			if err := pushHosts(fleetCtx, g.cluster.name, planID, g.hosts, limit, hostTimeout, ops, mem); err != nil {
+			hosts := hostRefsFromNames(g.HostNames)
+			if err := pushHosts(fleetCtx, g.Cluster.Name, planID, hosts, limit, hostTimeout, ops, mem); err != nil {
 				errMu.Lock()
 				errs = append(errs, err.Error())
 				errMu.Unlock()

@@ -3,17 +3,14 @@ package api
 import (
 	"context"
 	"fmt"
-	"sort"
-	"sync"
 	"time"
 
+	"github.com/snonux/gonf/internal/inventory"
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/internal/remote"
 	"github.com/snonux/gonf/plan"
 )
-
-const defaultClusterParallelism = 5
 
 // HostRef is an opaque inventory handle for one SSH destination.
 // Construct with Host(...); look up later with LookupHost / MustHost.
@@ -22,31 +19,12 @@ type HostRef struct {
 }
 
 // HostOption configures a Host at registration.
-type HostOption func(*hostRecord)
-
-type hostRecord struct {
-	name      string
-	user      string
-	sshHost   string
-	port      int
-	identity  string
-	privilege privilege.Mode
-	values    map[string]any // arbitrary per-host recipe values (WithValue / SetValue)
-	goos      string
-	goarch    string
-	gonfPath  string
-}
+type HostOption = inventory.HostOption
 
 // ClusterRef is an opaque handle for a named set of hosts.
 // Construct with Cluster(...HostRef); look up with LookupCluster / MustCluster.
 type ClusterRef struct {
 	name string
-}
-
-type clusterRecord struct {
-	name        string
-	hosts       []HostRef
-	parallelism int // 0 → defaultClusterParallelism; <0 → all at once
 }
 
 // HostInfo is a listing row for registered hosts.
@@ -66,31 +44,25 @@ type ClusterInfo struct {
 	Parallelism int
 }
 
-var (
-	inventoryMu  sync.Mutex
-	hostsByName  = map[string]hostRecord{}
-	clustersByName = map[string]clusterRecord{}
-)
-
 // WithSSHUser sets the SSH username (empty → ssh default).
 // Named WithSSHUser so it does not clash with options.WithUser (systemd).
 func WithSSHUser(user string) HostOption {
-	return func(h *hostRecord) { h.user = user }
+	return func(h *inventory.Host) { h.User = user }
 }
 
 // WithSSHHost sets the SSH hostname (default: inventory name).
 func WithSSHHost(host string) HostOption {
-	return func(h *hostRecord) { h.sshHost = host }
+	return func(h *inventory.Host) { h.SSHHost = host }
 }
 
 // WithSSHPort sets the SSH port (0 → omit -p).
 func WithSSHPort(port int) HostOption {
-	return func(h *hostRecord) { h.port = port }
+	return func(h *inventory.Host) { h.Port = port }
 }
 
 // WithSSHIdentity sets ssh -i path.
 func WithSSHIdentity(path string) HostOption {
-	return func(h *hostRecord) { h.identity = path }
+	return func(h *inventory.Host) { h.Identity = path }
 }
 
 // PrivilegeNone, PrivilegeSudo, and PrivilegeDoas re-export the
@@ -104,42 +76,42 @@ const (
 
 // WithPrivilege sets how privileged apply chunks are wrapped on this host.
 func WithPrivilege(mode privilege.Mode) HostOption {
-	return func(h *hostRecord) { h.privilege = mode }
+	return func(h *inventory.Host) { h.Privilege = mode }
 }
 
 // WithGOOS sets the GOOS used when push syncs a newer gonf binary to this host.
 // Empty (default) probes via remote uname -s.
 func WithGOOS(goos string) HostOption {
-	return func(h *hostRecord) { h.goos = goos }
+	return func(h *inventory.Host) { h.GOOS = goos }
 }
 
 // WithGOARCH sets the GOARCH used when push syncs a newer gonf binary.
 // Empty (default) probes via remote uname -m.
 func WithGOARCH(goarch string) HostOption {
-	return func(h *hostRecord) { h.goarch = goarch }
+	return func(h *inventory.Host) { h.GOARCH = goarch }
 }
 
 // WithGonfPath sets the remote path for a synced gonf binary (default
 // /usr/local/bin/gonf).
 func WithGonfPath(path string) HostOption {
-	return func(h *hostRecord) { h.gonfPath = path }
+	return func(h *inventory.Host) { h.GonfPath = path }
 }
 
 // WithValue stores an arbitrary recipe value under key on this host (e.g. a
 // cron window or OnCalendar expression). Duplicate keys on the same host fail
 // fast. Read with MustHostValue[T] from task bodies.
 func WithValue(key string, value any) HostOption {
-	return func(h *hostRecord) {
+	return func(h *inventory.Host) {
 		if key == "" {
 			logger.Fatal("WithValue: key must not be empty")
 		}
-		if h.values == nil {
-			h.values = map[string]any{}
+		if h.Values == nil {
+			h.Values = map[string]any{}
 		}
-		if _, exists := h.values[key]; exists {
+		if _, exists := h.Values[key]; exists {
 			logger.Fatal("WithValue: key %q already set", key)
 		}
-		h.values[key] = value
+		h.Values[key] = value
 	}
 }
 
@@ -149,20 +121,7 @@ func (h HostRef) SetValue(key string, value any) HostRef {
 	if key == "" {
 		logger.Fatal("SetValue: key must not be empty")
 	}
-	inventoryMu.Lock()
-	defer inventoryMu.Unlock()
-	rec, ok := hostsByName[h.name]
-	if !ok {
-		logger.Fatal("SetValue: Host %q is not registered", h.name)
-	}
-	if rec.values == nil {
-		rec.values = map[string]any{}
-	}
-	if _, exists := rec.values[key]; exists {
-		logger.Fatal("Host %q: value key %q already set", h.name, key)
-	}
-	rec.values[key] = value
-	hostsByName[h.name] = rec
+	inventory.SetHostValue(h.name, key, value)
 	return h
 }
 
@@ -173,23 +132,7 @@ func (h HostRef) Name() string { return h.name }
 // Registration-time misuse (empty name, duplicate) fails fast via
 // logger.Fatal.
 func Host(name string, opts ...HostOption) HostRef {
-	if name == "" {
-		logger.Fatal("Host: name must not be empty")
-	}
-	rec := hostRecord{name: name, sshHost: name}
-	for _, o := range opts {
-		o(&rec)
-	}
-	if rec.sshHost == "" {
-		rec.sshHost = name
-	}
-
-	inventoryMu.Lock()
-	defer inventoryMu.Unlock()
-	if _, ok := hostsByName[name]; ok {
-		logger.Fatal("Host %q already registered", name)
-	}
-	hostsByName[name] = rec
+	inventory.AddHost(name, opts...)
 	return HostRef{name: name}
 }
 
@@ -206,21 +149,11 @@ func Cluster(name string, hosts ...HostRef) ClusterRef {
 		logger.Fatal("Cluster %q: %v", name, err)
 	}
 
-	inventoryMu.Lock()
-	defer inventoryMu.Unlock()
-	if _, ok := clustersByName[name]; ok {
-		logger.Fatal("Cluster %q already registered", name)
+	names := make([]string, len(hosts))
+	for i, h := range hosts {
+		names[i] = h.name
 	}
-	for _, h := range hosts {
-		if _, ok := hostsByName[h.name]; !ok {
-			logger.Fatal("Cluster %q: Host %q is not registered", name, h.name)
-		}
-	}
-	clustersByName[name] = clusterRecord{
-		name:        name,
-		hosts:       append([]HostRef(nil), hosts...),
-		parallelism: 0,
-	}
+	inventory.AddCluster(name, names)
 	return ClusterRef{name: name}
 }
 
@@ -240,26 +173,13 @@ func checkClusterHostsUnique(hosts []HostRef) error {
 
 // Parallel sets concurrency for this cluster (default 5). n < 1 means all hosts at once.
 func (f ClusterRef) Parallel(n int) ClusterRef {
-	inventoryMu.Lock()
-	defer inventoryMu.Unlock()
-	rec, ok := clustersByName[f.name]
-	if !ok {
-		logger.Fatal("Cluster %q is not registered", f.name)
-	}
-	if n < 1 {
-		rec.parallelism = -1
-	} else {
-		rec.parallelism = n
-	}
-	clustersByName[f.name] = rec
+	inventory.SetClusterParallel(f.name, n)
 	return f
 }
 
 // LookupHost returns a registered HostRef.
 func LookupHost(name string) (HostRef, bool) {
-	inventoryMu.Lock()
-	defer inventoryMu.Unlock()
-	if _, ok := hostsByName[name]; !ok {
+	if _, ok := inventory.LookupHost(name); !ok {
 		return HostRef{}, false
 	}
 	return HostRef{name: name}, true
@@ -267,9 +187,7 @@ func LookupHost(name string) (HostRef, bool) {
 
 // LookupCluster returns a registered ClusterRef.
 func LookupCluster(name string) (ClusterRef, bool) {
-	inventoryMu.Lock()
-	defer inventoryMu.Unlock()
-	if _, ok := clustersByName[name]; !ok {
+	if _, ok := inventory.LookupCluster(name); !ok {
 		return ClusterRef{}, false
 	}
 	return ClusterRef{name: name}, true
@@ -296,95 +214,51 @@ func MustCluster(name string) ClusterRef {
 // HostNames returns the inventory names of hosts in this cluster, in
 // registration order. An unknown cluster handle fails fast via logger.Fatal.
 func (f ClusterRef) HostNames() []string {
-	inventoryMu.Lock()
-	defer inventoryMu.Unlock()
-	rec, ok := clustersByName[f.name]
+	rec, ok := inventory.LookupCluster(f.name)
 	if !ok {
 		logger.Fatal("Cluster %q is not registered", f.name)
 	}
-	names := make([]string, len(rec.hosts))
-	for i, h := range rec.hosts {
-		names[i] = h.name
-	}
-	return names
+	return append([]string(nil), rec.Hosts...)
 }
 
 // Hosts lists registered hosts sorted by name.
 func Hosts() []HostInfo {
-	inventoryMu.Lock()
-	defer inventoryMu.Unlock()
-	out := make([]HostInfo, 0, len(hostsByName))
-	for _, rec := range hostsByName {
+	recs := inventory.HostInfos()
+	out := make([]HostInfo, 0, len(recs))
+	for _, rec := range recs {
 		out = append(out, HostInfo{
-			Name:      rec.name,
-			User:      rec.user,
-			SSHHost:   rec.sshHost,
-			Port:      rec.port,
-			Identity:  rec.identity,
-			Privilege: rec.privilege.String(),
+			Name:      rec.Name,
+			User:      rec.User,
+			SSHHost:   rec.SSHHost,
+			Port:      rec.Port,
+			Identity:  rec.Identity,
+			Privilege: rec.Privilege.String(),
 		})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
 // Clusters lists registered clusters sorted by name.
 func Clusters() []ClusterInfo {
-	inventoryMu.Lock()
-	defer inventoryMu.Unlock()
-	out := make([]ClusterInfo, 0, len(clustersByName))
-	for _, rec := range clustersByName {
-		names := make([]string, len(rec.hosts))
-		for i, h := range rec.hosts {
-			names[i] = h.name
-		}
-		p := clusterParallelism(rec)
-		out = append(out, ClusterInfo{Name: rec.name, Hosts: names, Parallelism: p})
+	recs := inventory.ClusterInfos()
+	out := make([]ClusterInfo, 0, len(recs))
+	for _, rec := range recs {
+		out = append(out, ClusterInfo{
+			Name:        rec.Name,
+			Hosts:       append([]string(nil), rec.Hosts...),
+			Parallelism: inventory.ClusterParallelism(rec),
+		})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
 // ResetInventory clears host, cluster, and fleet registries (tests).
 func ResetInventory() {
-	inventoryMu.Lock()
-	defer inventoryMu.Unlock()
-	hostsByName = map[string]hostRecord{}
-	clustersByName = map[string]clusterRecord{}
-	fleetsByName = map[string]fleetOfClustersRecord{}
+	inventory.Reset()
 }
 
 func (h HostRef) pushTarget() (PushTarget, error) {
-	inventoryMu.Lock()
-	defer inventoryMu.Unlock()
-	rec, ok := hostsByName[h.name]
-	if !ok {
-		return PushTarget{}, fmt.Errorf("host %q is not registered", h.name)
-	}
-	return PushTarget{
-		User:      rec.user,
-		Host:      rec.sshHost,
-		Port:      rec.port,
-		Identity:  rec.identity,
-		Privilege: rec.privilege,
-		GOOS:      rec.goos,
-		GOARCH:    rec.goarch,
-		GonfPath:  rec.gonfPath,
-	}, nil
-}
-
-func clusterParallelism(rec clusterRecord) int {
-	switch {
-	case rec.parallelism < 0:
-		if n := len(rec.hosts); n > 0 {
-			return n
-		}
-		return 1
-	case rec.parallelism == 0:
-		return defaultClusterParallelism
-	default:
-		return rec.parallelism
-	}
+	return inventory.PushTargetFor(h.name)
 }
 
 // PushHost records and pushes tasks to one HostRef. Thin wrapper: the
@@ -416,15 +290,12 @@ func PushClusterRun(ctx context.Context, name, planID string, parallelOverride i
 	if len(tasks) == 0 {
 		return fmt.Errorf("cluster %q: no tasks", name)
 	}
-	inventoryMu.Lock()
-	rec, ok := clustersByName[name]
+	rec, ok := inventory.LookupCluster(name)
 	if !ok {
-		inventoryMu.Unlock()
 		return fmt.Errorf("cluster %q is not registered", name)
 	}
-	hosts := append([]HostRef(nil), rec.hosts...)
-	limit := clusterParallelism(rec)
-	inventoryMu.Unlock()
+	hosts := hostRefsFromNames(rec.Hosts)
+	limit := inventory.ClusterParallelism(rec)
 
 	if parallelOverride > 0 {
 		limit = parallelOverride
@@ -442,6 +313,18 @@ func PushClusterRun(ctx context.Context, name, planID string, parallelOverride i
 		return err
 	}
 	return pushHosts(ctx, name, planID, hosts, limit, hostTimeout, ops, mem)
+}
+
+// hostRefsFromNames wraps inventory host names back into the api package's
+// opaque HostRef handles, for callers (PushClusterRun, PushFleetRun) that
+// received plain names from internal/inventory but need to reuse pushHosts'
+// existing []HostRef-based fan-out.
+func hostRefsFromNames(names []string) []HostRef {
+	out := make([]HostRef, len(names))
+	for i, n := range names {
+		out[i] = HostRef{name: n}
+	}
+	return out
 }
 
 // pushHosts fans an already-recorded plan (ops/mem, produced by exactly one
