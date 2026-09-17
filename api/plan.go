@@ -431,10 +431,11 @@ func blobBaseName(d resource.PlanDraft) string {
 // between two different resources. d.ID (the registered "Type[Name]" id,
 // e.g. "Directory[/x/conf.d]") already carries the full destination path,
 // so it alone distinguishes any two drafts with different destinations.
-// The fallback (rare: only link_if_exists-style drafts built by hand
-// outside resource.Register skip ID, and none of those carry blob sources)
-// combines every source/destination field so two ID-less drafts still get
-// different keys whenever any of their paths differ.
+// The fallback is defense-in-depth for a PlanDraft with no ID: every
+// real draft-construction site sets ID today, so this path is currently
+// unreachable, but if it ever fires it combines every source/destination
+// field so two ID-less drafts still get different keys whenever any of
+// their paths differ.
 func blobIdentityKey(d resource.PlanDraft) string {
 	if d.ID != "" {
 		return d.ID
