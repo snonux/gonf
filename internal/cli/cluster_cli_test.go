@@ -32,7 +32,10 @@ func TestCLICluster(t *testing.T) {
 	}
 
 	oldArgs := os.Args
-	t.Cleanup(func() { os.Args = oldArgs })
+	t.Cleanup(func() {
+		os.Args = oldArgs
+		resource.SetDryRun(false)
+	})
 	os.Args = []string{"gonf", "cluster", "-n", "cli_fleet", "cli_fleet_task"}
 	if code := CLI(); code != 0 {
 		t.Fatalf("exit %d", code)

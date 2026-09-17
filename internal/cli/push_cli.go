@@ -33,6 +33,10 @@ func cliPush(args []string) int {
 		return 2
 	}
 
+	// Escalate-only: a top-level "gonf -n push ..." already set this via
+	// CLI()'s unconditional call before dispatch (or a caller pre-set the
+	// global directly); don't stomp it back to false just because this
+	// subcommand's own flags didn't repeat -n.
 	if *dryRun || *dryRunShort {
 		resource.SetDryRun(true)
 	}

@@ -61,9 +61,16 @@ func CLI() int {
 		logger.SetLevel(logger.LevelInfo)
 	}
 
-	if *dryRun || *dryRunShort {
-		resource.SetDryRun(true)
-	}
+	// Unconditional: CLI() is the sole real process entry point (and the
+	// single point every test re-enters per invocation), so it must always
+	// reflect this invocation's own top-level flags exactly — including
+	// resetting to false — rather than only ever escalating to true. That
+	// makes dry-run deterministic per call instead of sticky across
+	// repeated CLI() calls in the same process (e.g. under `go test
+	// -shuffle`). Subcommand handlers (cliApply/cliPush/cliCluster/
+	// cliFleet) escalate-only, so a top-level "gonf -n <subcmd> ..." set
+	// here survives their own flag parsing.
+	resource.SetDryRun(*dryRun || *dryRunShort)
 	if m, err := privilege.ParseMode(*privFlag); err != nil {
 		fmt.Fprintf(os.Stderr, "privilege: %v\n", err)
 		return 2
@@ -213,6 +220,9 @@ func cliApply(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	// Escalate-only: a top-level "gonf -n apply ..." already set this via
+	// CLI()'s unconditional call before dispatch; don't stomp it back to
+	// false just because this subcommand's own flags didn't repeat -n.
 	if *dryRun || *dryRunShort {
 		resource.SetDryRun(true)
 	}

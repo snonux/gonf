@@ -14,7 +14,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Unit tests
-        run: go test -race -count=1 ./...
+        run: go test -race -shuffle=on -count=1 ./...
       - name: Plan codec coverage gate
         run: |
           go test ./plan/ -coverprofile=/tmp/plan.cov -count=1

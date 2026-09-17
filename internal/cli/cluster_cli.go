@@ -75,6 +75,9 @@ func cliFleet(ctx context.Context, args []string) int {
 		fmt.Fprintln(os.Stderr, "usage: gonf fleet [-n|-dry-run] [-j N] [-id name] [-host-timeout 10m] <fleet> <task> [task...]")
 		return 2
 	}
+	// Escalate-only: a top-level "gonf -n fleet ..." already set this via
+	// CLI()'s unconditional call before dispatch; don't stomp it back to
+	// false just because this subcommand's own flags didn't repeat -n.
 	if *dryRun || *dryRunShort {
 		resource.SetDryRun(true)
 	}
@@ -108,6 +111,9 @@ func cliCluster(ctx context.Context, args []string) int {
 		fmt.Fprintln(os.Stderr, "usage: gonf cluster [-n|-dry-run] [-j N] [-id name] [-host-timeout 10m] <cluster> <task> [task...]")
 		return 2
 	}
+	// Escalate-only: a top-level "gonf -n cluster ..." already set this via
+	// CLI()'s unconditional call before dispatch; don't stomp it back to
+	// false just because this subcommand's own flags didn't repeat -n.
 	if *dryRun || *dryRunShort {
 		resource.SetDryRun(true)
 	}

@@ -44,10 +44,12 @@ func Run() error {
 
 // Test runs all unit tests with the race detector enabled: the codebase has
 // real concurrency (fleet errgroup fan-out, mutex-guarded global registries,
-// swapped test seams) that only -race exercises.
+// swapped test seams) that only -race exercises. -shuffle=on randomizes test
+// (and top-level subtest) execution order within a package, catching
+// test-isolation bugs like leaked global state between tests.
 func Test() error {
 	fmt.Println("testing...")
-	return run("go", "test", "-race", "-v", "-count=1", "./...")
+	return run("go", "test", "-race", "-shuffle=on", "-v", "-count=1", "./...")
 }
 
 // planFuzzTime is the CI budget per fuzz target (overridable via GONF_FUZZTIME).
