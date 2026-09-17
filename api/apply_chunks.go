@@ -8,10 +8,25 @@ import (
 
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/plan"
+	"github.com/snonux/gonf/resource"
 )
 
 // elevatedApplyRunner runs a privileged local apply chunk. Overridable in tests.
 var elevatedApplyRunner = defaultElevatedApply
+
+// elevatedApplyArgv builds the un-wrapped re-exec argv for the elevated
+// child ("gonf apply [-n] <path>"). Split out from defaultElevatedApply so
+// the dry-run propagation can be asserted by a unit test without spawning
+// sudo/doas: dryRun must mirror resource.DryRun() at the call site (see
+// remoteApplyCmd in internal/remote/remote.go for the equivalent remote-push
+// argument), or the elevated child applies for real during a local
+// "gonf -n" / "-dry-run" run.
+func elevatedApplyArgv(exe, path string, dryRun bool) []string {
+	if dryRun {
+		return []string{exe, "apply", "-n", path}
+	}
+	return []string{exe, "apply", path}
+}
 
 func defaultElevatedApply(mode privilege.Mode, ops []plan.Op, planDir string) error {
 	exe, err := os.Executable()
@@ -27,7 +42,7 @@ func defaultElevatedApply(mode privilege.Mode, ops []plan.Op, planDir string) er
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		return err
 	}
-	argv := []string{exe, "apply", path}
+	argv := elevatedApplyArgv(exe, path, resource.DryRun())
 	argv, err = privilege.WrapArgv(mode, true, argv)
 	if err != nil {
 		return err
@@ -40,10 +55,13 @@ func defaultElevatedApply(mode privilege.Mode, ops []plan.Op, planDir string) er
 }
 
 // ApplyChunks splits ops by elevate and applies each chunk: user chunks
-// in-process, privileged chunks via sudo/doas re-exec (or in-process if root).
-// A ValidateChunkDeps pre-flight runs first: a dep recorded in a later chunk
-// (or dangling) fails before any chunk is applied, so a rejected plan
-// mutates nothing.
+// in-process, privileged chunks via sudo/doas re-exec (or in-process if
+// root). Under resource.DryRun(), the elevated re-exec (built by
+// defaultElevatedApply/elevatedApplyArgv) carries "-n" through to the child
+// so a local "gonf -n"/"-dry-run" run previews the privileged chunk instead
+// of actually mutating the host as root. A ValidateChunkDeps pre-flight runs
+// first: a dep recorded in a later chunk (or dangling) fails before any
+// chunk is applied, so a rejected plan mutates nothing.
 func ApplyChunks(ops []plan.Op, planDir string, mode privilege.Mode) error {
 	chunks := plan.SplitPrivilegeChunks(ops)
 	if err := validateChunkDeps(chunks); err != nil {

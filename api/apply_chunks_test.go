@@ -1,0 +1,98 @@
+package api
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/snonux/gonf/internal/privilege"
+	"github.com/snonux/gonf/plan"
+	"github.com/snonux/gonf/resource"
+)
+
+// TestElevatedApplyArgvDryRun pins the argv-level fix for the bug where a
+// local "gonf -n"/"-dry-run" run re-exec'd a Privileged() chunk via
+// sudo/doas WITHOUT "-n": the elevated child then applied for real. dry-run
+// must add "-n" right after "apply"; non-dry-run must not add it at all.
+func TestElevatedApplyArgvDryRun(t *testing.T) {
+	got := elevatedApplyArgv("/usr/local/bin/gonf", "/tmp/plan/chunk-elevated.jsonl", true)
+	want := []string{"/usr/local/bin/gonf", "apply", "-n", "/tmp/plan/chunk-elevated.jsonl"}
+	if len(got) != len(want) {
+		t.Fatalf("dry-run argv = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("dry-run argv = %v, want %v", got, want)
+		}
+	}
+
+	got = elevatedApplyArgv("/usr/local/bin/gonf", "/tmp/plan/chunk-elevated.jsonl", false)
+	want = []string{"/usr/local/bin/gonf", "apply", "/tmp/plan/chunk-elevated.jsonl"}
+	if len(got) != len(want) {
+		t.Fatalf("non-dry-run argv = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("non-dry-run argv = %v, want %v", got, want)
+		}
+	}
+	for _, arg := range got {
+		if arg == "-n" {
+			t.Fatalf("non-dry-run argv must not contain -n: %v", got)
+		}
+	}
+}
+
+// TestDefaultElevatedApplyDryRunAddsN is an integration-style test of the
+// real (unstubbed) defaultElevatedApply: it fakes the "sudo" binary on PATH
+// with a script that records its argv instead of ever re-execing gonf, so
+// the assertion covers the whole local elevated re-exec path — including
+// privilege.WrapArgv's sudo wrapping — without needing real sudo/doas and
+// without ever actually mutating anything. Under resource.DryRun(), the
+// recorded argv must contain "-n" ahead of the plan path; that is exactly
+// what makes the elevated child preview instead of apply for real.
+func TestDefaultElevatedApplyDryRunAddsN(t *testing.T) {
+	resource.ResetForTest()
+	t.Cleanup(resource.ResetForTest)
+
+	binDir := t.TempDir()
+	captured := filepath.Join(binDir, "sudo.args")
+	fakeSudo := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + captured + "\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(binDir, "sudo"), []byte(fakeSudo), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	resource.SetDryRun(true)
+
+	planDir := t.TempDir()
+	ops := []plan.Op{
+		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "chunks"},
+		{Op: plan.KindCommand, Bin: "true", ID: "Command[elevated]", Elevate: true},
+	}
+	if err := defaultElevatedApply(privilege.Sudo, ops, planDir); err != nil {
+		t.Fatalf("defaultElevatedApply: %v", err)
+	}
+
+	raw, err := os.ReadFile(captured)
+	if err != nil {
+		t.Fatalf("fake sudo was not invoked: %v", err)
+	}
+	args := strings.Fields(string(raw))
+	if len(args) < 2 || args[0] != "-n" {
+		t.Fatalf("sudo argv = %v, want leading \"-n\" (WrapArgv sudo prefix)", args)
+	}
+	// The two "-n" occurrences: one from WrapArgv's "sudo -n" (no-password
+	// sudo, unrelated to dry-run), one from elevatedApplyArgv's dry-run
+	// flag threaded to the child's "apply" subcommand.
+	count := 0
+	for _, a := range args {
+		if a == "-n" {
+			count++
+		}
+	}
+	if count != 2 {
+		t.Fatalf("sudo argv = %v, want exactly two \"-n\" occurrences (sudo -n, apply -n)", args)
+	}
+}
