@@ -6,10 +6,10 @@ package systemd
 import (
 	"fmt"
 
-	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
+	opt "github.com/snonux/gonf/resource/options"
 )
 
 // DaemonReloadResource runs systemctl daemon-reload (optionally --user).
@@ -37,10 +37,10 @@ var (
 )
 
 // Present registers a daemon-reload resource.
-func Present(opts ...opt.Option) resource.Resource {
+func Present(opts ...opt.DaemonReloadOption) resource.Resource {
 	d := &DaemonReloadResource{}
 	for _, o := range opts {
-		o(d)
+		o.Apply(d)
 	}
 	name := "system"
 	if d.user {
@@ -53,10 +53,10 @@ func Present(opts ...opt.Option) resource.Resource {
 }
 
 // Ensure applies daemon-reload without registering or recording a plan draft.
-func Ensure(opts ...opt.Option) error {
+func Ensure(opts ...opt.DaemonReloadOption) error {
 	d := &DaemonReloadResource{}
 	for _, o := range opts {
-		o(d)
+		o.Apply(d)
 	}
 	return d.apply()
 }

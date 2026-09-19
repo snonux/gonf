@@ -7,11 +7,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/file"
 	"github.com/snonux/gonf/resource/link"
+	opt "github.com/snonux/gonf/resource/options"
 )
 
 // copySourceTree mirrors d.source into d.path, dispatching each entry by
@@ -246,7 +246,7 @@ func noteSourceSymlinkDryRun(target, rawTarget string) error {
 // synced root — exactly what the direct (non-plan) path derives from its
 // real source tree. Non-template entries are left untouched.
 func copySourceFile(d *Dir, sourcePath, target string) error {
-	opts := []opt.Option{
+	opts := []opt.FileOption{
 		opt.WithSource(sourcePath),
 		opt.WithMode(d.fileMode),
 		opt.WithOwner(d.user),

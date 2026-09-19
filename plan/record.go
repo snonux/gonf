@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"sync"
 
-	opt "github.com/snonux/gonf/api/options"
+	opt "github.com/snonux/gonf/resource/options"
 )
 
 var (

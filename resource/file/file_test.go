@@ -250,7 +250,7 @@ func TestEnsureUnchangedContentDoesNotChmodThroughSymlink(t *testing.T) {
 // the apply (the old getChecksum read-open had no O_NONBLOCK and hung until
 // a writer appeared), and a hung goroutine would otherwise only surface via
 // go test's 10-minute package timeout.
-func ensureWithTimeout(t *testing.T, target string, opts ...Option) error {
+func ensureWithTimeout(t *testing.T, target string, opts ...FileOption) error {
 	t.Helper()
 	done := make(chan error, 1)
 	go func() { done <- Ensure(target, opts...) }()
@@ -1193,10 +1193,10 @@ func TestAbsentDoesNotMutateCallerOptionSlice(t *testing.T) {
 
 	// Reusable option list with spare capacity (len 2, cap 8). Sub-slices
 	// share its backing array.
-	base := make([]Option, 2, 8)
+	base := make([]FileOption, 2, 8)
 	base[0] = WithContent("stay")
 	base[1] = WithMode(0o644)
-	before := make([]Option, len(base))
+	before := make([]FileOption, len(base))
 	copy(before, base)
 
 	Absent(gone, base[:1]...)

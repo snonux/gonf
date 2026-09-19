@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/resource"
+	opt "github.com/snonux/gonf/resource/options"
 )
 
 // Facts are live host values used to evaluate when_begin fact predicates.
@@ -282,8 +282,8 @@ func applyActive(op Op, planDir string) error {
 // resource kind's plan.Handler.Apply that carries owner/group on the wire
 // (file, dir, sync_dir, ensure_dir), so the "empty means unset" rule cannot
 // drift between them.
-func OwnerGroupOptions(op Op) []opt.Option {
-	var opts []opt.Option
+func OwnerGroupOptions(op Op) []opt.FileDirOption {
+	var opts []opt.FileDirOption
 	if op.Owner != "" {
 		opts = append(opts, opt.WithOwner(op.Owner))
 	}
@@ -298,7 +298,7 @@ func OwnerGroupOptions(op Op) []opt.Option {
 // counterpart of resource/cmd's own guard option builders, exported so
 // resource/cmd's plan.Handler.Apply (the only current caller) does not
 // duplicate the field mapping.
-func GuardOptions(g *Guard, unless bool) []opt.Option {
+func GuardOptions(g *Guard, unless bool) []opt.CommandOption {
 	var gopts []opt.GuardOption
 	if g.ExpectStdout != "" {
 		gopts = append(gopts, opt.ExpectStdout(g.ExpectStdout))
@@ -307,9 +307,9 @@ func GuardOptions(g *Guard, unless bool) []opt.Option {
 		gopts = append(gopts, opt.ExpectExit(*g.ExpectExit))
 	}
 	if unless {
-		return []opt.Option{opt.Unless(g.Bin, append([]string(nil), g.Args...), gopts...)}
+		return []opt.CommandOption{opt.Unless(g.Bin, append([]string(nil), g.Args...), gopts...)}
 	}
-	return []opt.Option{opt.OnlyIf(g.Bin, append([]string(nil), g.Args...), gopts...)}
+	return []opt.CommandOption{opt.OnlyIf(g.Bin, append([]string(nil), g.Args...), gopts...)}
 }
 
 func evalAll(preds []Predicate, facts Facts) (bool, error) {

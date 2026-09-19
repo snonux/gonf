@@ -1,0 +1,256 @@
+package options
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"golang.org/x/tools/go/packages"
+)
+
+// These helpers intentionally accept the concrete family interfaces. The
+// table therefore fails to compile when an option is accidentally returned
+// with the wrong family marker, which is the contract resource constructors
+// rely on for compile-time mismatch detection.
+func acceptFile(FileOption)                 {}
+func acceptDir(DirOption)                   {}
+func acceptLink(LinkOption)                 {}
+func acceptPackage(PackageOption)           {}
+func acceptService(ServiceOption)           {}
+func acceptCron(CronOption)                 {}
+func acceptTimer(TimerOption)               {}
+func acceptSystemdTimer(SystemdTimerOption) {}
+func acceptDaemonReload(DaemonReloadOption) {}
+func acceptCommand(CommandOption)           {}
+
+func TestEveryExportedOptionHasAResourceFamily(t *testing.T) {
+	tests := []struct {
+		name   string
+		accept func()
+	}{
+		{"DependsOn", func() { acceptFile(DependsOn()) }},
+		{"WithOwner", func() { acceptFile(WithOwner("user")) }},
+		{"WithGroup", func() { acceptDir(WithGroup("group")) }},
+		{"WithMode", func() { acceptFile(WithMode(0o644)) }},
+		{"WithSource", func() { acceptDir(WithSource("source")) }},
+		{"WithSourceGlob", func() { acceptDir(WithSourceGlob("*.conf")) }},
+		{"WithParam", func() { acceptFile(WithParam("param")) }},
+		{"WithTemplate", func() { acceptFile(WithTemplate) }},
+		{"WithSourceBase", func() { acceptDir(WithSourceBase("source")) }},
+		{"WithContent", func() { acceptFile(WithContent("content")) }},
+		{"WithLine", func() { acceptFile(WithLine("line")) }},
+		{"WithoutLine", func() { acceptFile(WithoutLine("line")) }},
+		{"WithFileMode", func() { acceptDir(WithFileMode(0o640)) }},
+		{"WithPrune", func() { acceptDir(WithPrune) }},
+		{"IsAbsent", func() { acceptFile(IsAbsent) }},
+		{"IsLatest", func() { acceptPackage(IsLatest) }},
+		{"WithRestart", func() { acceptService(WithRestart) }},
+		{"WithReload", func() { acceptService(WithReload) }},
+		{"WithUser", func() { acceptDaemonReload(WithUser) }},
+		{"WithElevate", func() { acceptCommand(WithElevate) }},
+		{"WithEnableOnly", func() { acceptTimer(WithEnableOnly) }},
+		{"IfChanged", func() { acceptDaemonReload(IfChanged) }},
+		{"WithWatch", func() { acceptDaemonReload(WithWatch("id")) }},
+		{"WithCronUser", func() { acceptCron(WithCronUser("root")) }},
+		{"WithCommand", func() { acceptSystemdTimer(WithCommand("true")) }},
+		{"WithMinute", func() { acceptCron(WithMinute("*")) }},
+		{"WithHour", func() { acceptCron(WithHour("*")) }},
+		{"WithMonthday", func() { acceptCron(WithMonthday("*")) }},
+		{"WithMonth", func() { acceptCron(WithMonth("*")) }},
+		{"WithWeekday", func() { acceptCron(WithWeekday("*")) }},
+		{"WithCronEnv", func() { acceptCron(WithCronEnv("KEY=value")) }},
+		{"WithOnCalendar", func() { acceptSystemdTimer(WithOnCalendar("daily")) }},
+		{"WithOnBootSec", func() { acceptSystemdTimer(WithOnBootSec("1min")) }},
+		{"WithPersistent", func() { acceptSystemdTimer(WithPersistent) }},
+		{"WithDescription", func() { acceptSystemdTimer(WithDescription("description")) }},
+		{"WithServiceDescription", func() { acceptSystemdTimer(WithServiceDescription("description")) }},
+		{"WithAfter", func() { acceptSystemdTimer(WithAfter("network.target")) }},
+		{"WithWants", func() { acceptSystemdTimer(WithWants("network.target")) }},
+		{"WithSymlink", func() { acceptLink(WithSymlink("target")) }},
+		{"WithHardlink", func() { acceptLink(WithHardlink("target")) }},
+		{"WithName", func() { acceptCommand(WithName("name")) }},
+		{"WithDir", func() { acceptCommand(WithDir("/work")) }},
+		{"WithEnv", func() { acceptCommand(WithEnv(map[string]string{"KEY": "value"})) }},
+		{"Creates", func() { acceptCommand(Creates("/marker")) }},
+		{"Unless", func() { acceptCommand(Unless("test", nil)) }},
+		{"OnlyIf", func() { acceptCommand(OnlyIf("test", nil)) }},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) { test.accept() })
+	}
+}
+
+func TestSharedOptionsHaveCompleteFamilyMatrix(t *testing.T) {
+	acceptAll := func(option AllResourceOption) {
+		acceptFile(option)
+		acceptDir(option)
+		acceptLink(option)
+		acceptPackage(option)
+		acceptService(option)
+		acceptCron(option)
+		acceptTimer(option)
+		acceptSystemdTimer(option)
+		acceptDaemonReload(option)
+		acceptCommand(option)
+	}
+	acceptFileDir := func(option FileDirOption) {
+		acceptFile(option)
+		acceptDir(option)
+	}
+	acceptAbsent := func(option AbsentOption) {
+		acceptFile(option)
+		acceptDir(option)
+		acceptLink(option)
+		acceptPackage(option)
+		acceptService(option)
+		acceptCron(option)
+		acceptTimer(option)
+		acceptSystemdTimer(option)
+	}
+	acceptServiceTimer := func(option ServiceTimerOption) {
+		acceptService(option)
+		acceptTimer(option)
+		acceptSystemdTimer(option)
+	}
+	acceptUser := func(option UserOption) {
+		acceptService(option)
+		acceptTimer(option)
+		acceptSystemdTimer(option)
+		acceptDaemonReload(option)
+	}
+	acceptEnableOnly := func(option EnableOnlyOption) {
+		acceptTimer(option)
+		acceptSystemdTimer(option)
+	}
+	acceptCronSystemdTimer := func(option CronSystemdTimerOption) {
+		acceptCron(option)
+		acceptSystemdTimer(option)
+	}
+
+	acceptAll(DependsOn())
+	acceptFileDir(WithOwner("user"))
+	acceptFileDir(WithGroup("group"))
+	acceptFileDir(WithMode(0o644))
+	acceptFileDir(WithSource("source"))
+	acceptDir(WithSourceGlob("*.conf"))
+	acceptFile(WithParam("param"))
+	acceptFile(WithTemplate)
+	acceptDir(WithSourceBase("source"))
+	acceptFile(WithContent("content"))
+	acceptFile(WithLine("line"))
+	acceptFile(WithoutLine("line"))
+	acceptDir(WithFileMode(0o640))
+	acceptDir(WithPrune)
+	acceptAbsent(IsAbsent)
+	acceptPackage(IsLatest)
+	acceptServiceTimer(WithRestart)
+	acceptService(WithReload)
+	acceptUser(WithUser)
+	acceptCommand(WithElevate)
+	acceptEnableOnly(WithEnableOnly)
+	acceptDaemonReload(IfChanged)
+	acceptDaemonReload(WithWatch("id"))
+	acceptCron(WithCronUser("root"))
+	acceptCronSystemdTimer(WithCommand("true"))
+	acceptCron(WithMinute("*"))
+	acceptCron(WithHour("*"))
+	acceptCron(WithMonthday("*"))
+	acceptCron(WithMonth("*"))
+	acceptCron(WithWeekday("*"))
+	acceptCron(WithCronEnv("KEY=value"))
+	acceptSystemdTimer(WithOnCalendar("daily"))
+	acceptSystemdTimer(WithOnBootSec("1min"))
+	acceptSystemdTimer(WithPersistent)
+	acceptSystemdTimer(WithDescription("description"))
+	acceptSystemdTimer(WithServiceDescription("description"))
+	acceptSystemdTimer(WithAfter("network.target"))
+	acceptSystemdTimer(WithWants("network.target"))
+	acceptLink(WithSymlink("target"))
+	acceptLink(WithHardlink("target"))
+	acceptCommand(WithName("name"))
+	acceptCommand(WithDir("/work"))
+	acceptCommand(WithEnv(map[string]string{"KEY": "value"}))
+	acceptCommand(Creates("/marker"))
+	acceptCommand(Unless("test", nil))
+	acceptCommand(OnlyIf("test", nil))
+}
+
+func TestLegacyOptionAdapters(t *testing.T) {
+	tests := []struct {
+		name string
+		got  int
+		want int
+	}{
+		{"file", len(ToFileOptions(WithContent("x"))), 1},
+		{"directory", len(ToDirOptions(WithMode(0o755))), 1},
+		{"link", len(ToLinkOptions(WithSymlink("target"))), 1},
+		{"package", len(ToPackageOptions(IsLatest)), 1},
+		{"service", len(ToServiceOptions(WithReload)), 1},
+		{"cron", len(ToCronOptions(WithMinute("*"))), 1},
+		{"timer", len(ToTimerOptions(WithRestart)), 1},
+		{"systemd timer", len(ToSystemdTimerOptions(WithOnCalendar("daily"))), 1},
+		{"daemon reload", len(ToDaemonReloadOptions(IfChanged)), 1},
+		{"command", len(ToCommandOptions(WithName("name"))), 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if test.got != test.want {
+				t.Fatalf("adapter returned %d options, want %d", test.got, test.want)
+			}
+		})
+	}
+
+	called := false
+	legacy := Option(func(any) { called = true })
+	ToFileOptions(legacy)[0].Apply(nil)
+	if !called {
+		t.Fatal("legacy custom option was not applied by ToFileOptions")
+	}
+}
+
+func TestInvalidOptionResourcePairDoesNotCompile(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	root = filepath.Dir(filepath.Dir(root))
+	tmp := t.TempDir()
+	const source = `package invalid
+
+import (
+	"github.com/snonux/gonf/resource/file"
+	"github.com/snonux/gonf/resource/options"
+)
+
+func invalid() {
+	file.Present("/tmp/file", options.WithCommand("true"))
+}
+`
+	goMod := "module invalid\n\ngo 1.26.4\n\nrequire github.com/snonux/gonf v0.0.0\n\nreplace github.com/snonux/gonf => " + root + "\n"
+	if err := os.WriteFile(filepath.Join(tmp, "go.mod"), []byte(goMod), 0o600); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "invalid.go"), []byte(source), 0o600); err != nil {
+		t.Fatalf("write invalid.go: %v", err)
+	}
+	loaded, err := packages.Load(&packages.Config{
+		Mode: packages.NeedTypes | packages.NeedTypesInfo | packages.NeedDeps,
+		Dir:  tmp,
+	}, ".")
+	if err != nil {
+		t.Fatalf("packages.Load: %v", err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("loaded %d packages, want 1", len(loaded))
+	}
+	if len(loaded[0].Errors) == 0 {
+		t.Fatal("invalid file option was accepted by the compiler")
+	}
+	for _, loadErr := range loaded[0].Errors {
+		if loadErr.Pos != "" && loadErr.Msg != "" {
+			return
+		}
+	}
+	t.Fatalf("unexpected package errors: %v", loaded[0].Errors)
+}

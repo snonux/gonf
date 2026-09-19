@@ -5,9 +5,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource"
+	"github.com/snonux/gonf/resource/options"
 )
 
 // LinkIfExists creates a symlink at path → target when target exists;
@@ -15,7 +15,7 @@ import (
 //
 // In plan-record mode, emits a link_if_exists recipe instead of probing the
 // controller filesystem (destination apply interprets the recipe).
-func LinkIfExists(path, target string, opts ...options.Option) Resource {
+func LinkIfExists(path, target string, opts ...options.LinkOption) Resource {
 	p := Expand(path)
 	t := Expand(target)
 	if resource.PlanDraftRecording() {
@@ -32,7 +32,7 @@ func LinkIfExists(path, target string, opts ...options.Option) Resource {
 	if _, err := os.Stat(filepath.Clean(t)); err != nil {
 		return NoLink(p, opts...)
 	}
-	return Link(p, append([]options.Option{options.WithSymlink(t)}, opts...)...)
+	return Link(p, append([]options.LinkOption{options.WithSymlink(t)}, opts...)...)
 }
 
 // SymlinkMap registers LinkIfExists for each name/target pair under parent.

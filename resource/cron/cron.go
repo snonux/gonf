@@ -7,11 +7,11 @@ import (
 	"slices"
 	"strings"
 
-	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/exec"
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
+	opt "github.com/snonux/gonf/resource/options"
 )
 
 // Cron manages a named crontab entry for a user (default root).
@@ -61,7 +61,7 @@ var (
 )
 
 // newCron builds a Cron with defaults applied, then applies opts.
-func newCron(name string, opts []opt.Option) *Cron {
+func newCron(name string, opts []opt.CronOption) *Cron {
 	c := &Cron{
 		name:     name,
 		user:     "root",
@@ -72,13 +72,13 @@ func newCron(name string, opts []opt.Option) *Cron {
 		weekday:  "*",
 	}
 	for _, o := range opts {
-		o(c)
+		o.Apply(c)
 	}
 	return c
 }
 
 // Present registers a cron job that should exist in the user's crontab.
-func Present(name string, opts ...opt.Option) resource.Resource {
+func Present(name string, opts ...opt.CronOption) resource.Resource {
 	c := newCron(name, opts)
 	regName := c.user + "/" + c.name
 	r := resource.Register("Cron", regName,
@@ -88,12 +88,12 @@ func Present(name string, opts ...opt.Option) resource.Resource {
 }
 
 // Ensure applies a cron job without registering it or recording a plan draft.
-func Ensure(name string, opts ...opt.Option) error {
+func Ensure(name string, opts ...opt.CronOption) error {
 	return newCron(name, opts).apply()
 }
 
 // Absent removes a named cron job from the user's crontab.
-func Absent(name string, opts ...opt.Option) resource.Resource {
+func Absent(name string, opts ...opt.CronOption) resource.Resource {
 	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(name, opts...)
 }

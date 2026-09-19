@@ -9,10 +9,10 @@ import (
 	"slices"
 	"strings"
 
-	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
+	opt "github.com/snonux/gonf/resource/options"
 	"github.com/snonux/gonf/resource/systemd"
 )
 
@@ -40,10 +40,10 @@ var (
 
 // Present registers a timer that should be active and enabled (or only
 // enabled when WithEnableOnly is set).
-func Present(name string, opts ...opt.Option) resource.Resource {
+func Present(name string, opts ...opt.TimerOption) resource.Resource {
 	t := &Timer{name: normalizeUnit(name)}
 	for _, o := range opts {
-		o(t)
+		o.Apply(t)
 	}
 	r := resource.Register("Timer", t.name,
 		resource.ApplierFunc(func() error { return t.apply() }), t.DependsOn.IDs...)
@@ -52,16 +52,16 @@ func Present(name string, opts ...opt.Option) resource.Resource {
 }
 
 // Ensure builds and applies a timer without registering or recording a draft.
-func Ensure(name string, opts ...opt.Option) error {
+func Ensure(name string, opts ...opt.TimerOption) error {
 	t := &Timer{name: normalizeUnit(name)}
 	for _, o := range opts {
-		o(t)
+		o.Apply(t)
 	}
 	return t.apply()
 }
 
 // Absent registers a timer that should be stopped and disabled.
-func Absent(name string, opts ...opt.Option) resource.Resource {
+func Absent(name string, opts ...opt.TimerOption) resource.Resource {
 	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(name, opts...)
 }

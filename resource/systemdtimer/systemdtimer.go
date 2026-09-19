@@ -11,11 +11,11 @@ import (
 	"slices"
 	"strings"
 
-	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
 	"github.com/snonux/gonf/resource/file"
+	opt "github.com/snonux/gonf/resource/options"
 	"github.com/snonux/gonf/resource/systemd"
 	"github.com/snonux/gonf/resource/timer"
 )
@@ -69,7 +69,7 @@ var (
 
 // Present registers a systemd timer that should be installed, enabled, and
 // started (or only enabled when WithEnableOnly is set).
-func Present(name string, opts ...opt.Option) resource.Resource {
+func Present(name string, opts ...opt.SystemdTimerOption) resource.Resource {
 	t := newTimer(name, opts...)
 	r := resource.Register("SystemdTimer", t.base,
 		resource.ApplierFunc(func() error { return t.apply() }), t.DependsOn.IDs...)
@@ -78,21 +78,21 @@ func Present(name string, opts ...opt.Option) resource.Resource {
 }
 
 // Ensure builds and applies a systemd timer without registering or recording a draft.
-func Ensure(name string, opts ...opt.Option) error {
+func Ensure(name string, opts ...opt.SystemdTimerOption) error {
 	return newTimer(name, opts...).apply()
 }
 
 // Absent registers a systemd timer whose units should be stopped, disabled, and removed.
-func Absent(name string, opts ...opt.Option) resource.Resource {
+func Absent(name string, opts ...opt.SystemdTimerOption) resource.Resource {
 	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(name, opts...)
 }
 
-func newTimer(name string, opts ...opt.Option) *SystemdTimer {
+func newTimer(name string, opts ...opt.SystemdTimerOption) *SystemdTimer {
 	base, unit := normalizeName(name)
 	t := &SystemdTimer{name: unit, base: base}
 	for _, o := range opts {
-		o(t)
+		o.Apply(t)
 	}
 	return t
 }
@@ -183,7 +183,7 @@ func (t *SystemdTimer) applyPresent(dir, svcPath, timerPath, svcID, timerFileID 
 		return err
 	}
 
-	reloadOpts := []opt.Option{
+	reloadOpts := []opt.DaemonReloadOption{
 		opt.IfChanged,
 		opt.WithWatch(svcID, timerFileID),
 	}
@@ -194,7 +194,7 @@ func (t *SystemdTimer) applyPresent(dir, svcPath, timerPath, svcID, timerFileID 
 		return err
 	}
 
-	timerOpts := []opt.Option{}
+	timerOpts := []opt.TimerOption{}
 	if t.user {
 		timerOpts = append(timerOpts, opt.WithUser)
 	}
@@ -208,7 +208,7 @@ func (t *SystemdTimer) applyPresent(dir, svcPath, timerPath, svcID, timerFileID 
 }
 
 func (t *SystemdTimer) applyAbsent(svcPath, timerPath, svcID, timerFileID string) error {
-	timerOpts := []opt.Option{opt.IsAbsent}
+	timerOpts := []opt.TimerOption{opt.IsAbsent}
 	if t.user {
 		timerOpts = append(timerOpts, opt.WithUser)
 	}
@@ -227,7 +227,7 @@ func (t *SystemdTimer) applyAbsent(svcPath, timerPath, svcID, timerFileID string
 		return err
 	}
 
-	reloadOpts := []opt.Option{
+	reloadOpts := []opt.DaemonReloadOption{
 		opt.IfChanged,
 		opt.WithWatch(svcID, timerFileID),
 	}

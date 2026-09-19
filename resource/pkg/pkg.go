@@ -7,10 +7,10 @@ import (
 	"runtime"
 	"slices"
 
-	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/exec"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
+	opt "github.com/snonux/gonf/resource/options"
 )
 
 // Package reconciles an OS package's presence or absence using the
@@ -66,13 +66,13 @@ func (p *Package) apply() error {
 
 // Present registers a package resource ensuring name is installed; IsLatest
 // upgrades it to the newest available version.
-func Present(name string, opts ...opt.Option) resource.Resource {
+func Present(name string, opts ...opt.PackageOption) resource.Resource {
 	p := &Package{
 		name: name,
 	}
 
 	for _, o := range opts {
-		o(p)
+		o.Apply(p)
 	}
 
 	r := resource.Register("Package", p.name,
@@ -94,16 +94,16 @@ func (p *Package) planDraft(id string) resource.PlanDraft {
 
 // Ensure builds and applies a package resource without registering it or
 // recording a plan draft.
-func Ensure(name string, opts ...opt.Option) error {
+func Ensure(name string, opts ...opt.PackageOption) error {
 	p := &Package{name: name}
 	for _, o := range opts {
-		o(p)
+		o.Apply(p)
 	}
 	return p.apply()
 }
 
 // Absent registers a package resource ensuring name is removed.
-func Absent(name string, opts ...opt.Option) resource.Resource {
+func Absent(name string, opts ...opt.PackageOption) resource.Resource {
 	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(name, opts...)
 }

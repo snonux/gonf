@@ -124,10 +124,10 @@ func TestPlanOptionFitness_Package(t *testing.T) {
 
 	cases := []struct {
 		name string
-		opts []opt.Option
+		opts []opt.PackageOption
 	}{
-		{"Latest", []opt.Option{opt.IsLatest}},
-		{"Absent", []opt.Option{opt.IsAbsent}},
+		{"Latest", []opt.PackageOption{opt.IsLatest}},
+		{"Absent", []opt.PackageOption{opt.IsAbsent}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -188,9 +188,9 @@ func TestPlanOptionFitness_Cron(t *testing.T) {
 
 	cases := []struct {
 		name string
-		opts []opt.Option
+		opts []opt.CronOption
 	}{
-		{"KitchenSink", []opt.Option{
+		{"KitchenSink", []opt.CronOption{
 			opt.WithCronUser("root"),
 			opt.WithCommand("/usr/bin/backup"),
 			opt.WithMinute("15"),
@@ -288,11 +288,11 @@ func TestPlanOptionFitness_Service(t *testing.T) {
 
 	cases := []struct {
 		name            string
-		opts            []opt.Option
+		opts            []opt.ServiceOption
 		active, enabled bool
 	}{
-		{"RestartAndUser", []opt.Option{opt.WithRestart, opt.WithUser}, true, true},
-		{"Reload", []opt.Option{opt.WithReload}, true, true},
+		{"RestartAndUser", []opt.ServiceOption{opt.WithRestart, opt.WithUser}, true, true},
+		{"Reload", []opt.ServiceOption{opt.WithReload}, true, true},
 		{"EnableAndStart", nil, false, false},
 	}
 	for _, c := range cases {
@@ -359,11 +359,11 @@ func TestPlanOptionFitness_Timer(t *testing.T) {
 
 	cases := []struct {
 		name            string
-		opts            []opt.Option
+		opts            []opt.TimerOption
 		active, enabled bool
 	}{
-		{"RestartAndUser", []opt.Option{opt.WithRestart, opt.WithUser}, true, true},
-		{"EnableOnly", []opt.Option{opt.WithEnableOnly}, false, false},
+		{"RestartAndUser", []opt.TimerOption{opt.WithRestart, opt.WithUser}, true, true},
+		{"EnableOnly", []opt.TimerOption{opt.WithEnableOnly}, false, false},
 		{"EnableAndStart", nil, false, false},
 	}
 	for _, c := range cases {
@@ -461,7 +461,7 @@ func TestPlanOptionFitness_SystemdTimer(t *testing.T) {
 	}
 	t.Cleanup(systemd.ResetRunCmdForTest)
 
-	opts := []opt.Option{
+	opts := []opt.SystemdTimerOption{
 		opt.WithCommand("/usr/bin/backup"),
 		opt.WithOnCalendar("*-*-* *:05:00"),
 		opt.WithOnBootSec("10min"),
@@ -585,7 +585,7 @@ func TestPlanOptionFitness_File(t *testing.T) {
 		directPath := filepath.Join(homeDirect, "fit.conf")
 		planPath := filepath.Join(homePlan, "fit.conf")
 
-		opts := []opt.Option{opt.WithContent("fit content\n"), opt.WithMode(0o640), opt.WithOwner(curr.Username)}
+		opts := []opt.FileOption{opt.WithContent("fit content\n"), opt.WithMode(0o640), opt.WithOwner(curr.Username)}
 		if group != "" {
 			opts = append(opts, opt.WithGroup(group))
 		}
@@ -636,7 +636,7 @@ func TestPlanOptionFitness_File(t *testing.T) {
 			}
 		}
 
-		opts := []opt.Option{opt.WithoutLine("old=1"), opt.WithLine("new=1")}
+		opts := []opt.FileOption{opt.WithoutLine("old=1"), opt.WithLine("new=1")}
 		if err := file.Ensure(directPath, opts...); err != nil {
 			t.Fatalf("direct Ensure: %v", err)
 		}

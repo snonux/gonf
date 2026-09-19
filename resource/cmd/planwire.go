@@ -3,9 +3,9 @@ package cmd
 import (
 	"fmt"
 
-	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
+	opt "github.com/snonux/gonf/resource/options"
 )
 
 // planHandler is the command kind's plan.Handler: see
@@ -41,7 +41,7 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if op.Bin == "" {
 		return fmt.Errorf("command: missing bin")
 	}
-	var opts []opt.Option
+	var opts []opt.CommandOption
 	if op.Name != "" {
 		opts = append(opts, opt.WithName(op.Name))
 	}

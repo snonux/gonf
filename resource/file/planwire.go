@@ -3,9 +3,9 @@ package file
 import (
 	"fmt"
 
-	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
+	opt "github.com/snonux/gonf/resource/options"
 )
 
 // planHandler is the file kind's plan.Handler: see resource/pkg/planwire.go
@@ -58,7 +58,7 @@ func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	// build() defaults (apply-side user) identical to direct resource use.
 	ownership := plan.OwnerGroupOptions(op)
 
-	var opts []opt.Option
+	var opts []opt.FileOption
 	if op.AddLine != "" || op.RemoveLine != "" {
 		if op.ContentB64 != "" || op.Blob != "" {
 			return fmt.Errorf("file: add_line/remove_line cannot combine with content_b64/blob")
@@ -76,7 +76,9 @@ func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 			}
 			opts = append(opts, opt.WithMode(mode))
 		}
-		opts = append(opts, ownership...)
+		for _, ownerOpt := range ownership {
+			opts = append(opts, ownerOpt)
+		}
 		return Ensure(path, opts...)
 	}
 
@@ -104,7 +106,7 @@ func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 		return fmt.Errorf("file: missing content_b64 and blob")
 	}
 
-	opts = []opt.Option{opt.WithContent(string(content))}
+	opts = []opt.FileOption{opt.WithContent(string(content))}
 	if op.Template {
 		// The wire content is raw template text (packageDraft/RecordPlan
 		// reads a .tmpl source's bytes verbatim), and by now neither path
@@ -125,6 +127,8 @@ func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 		}
 		opts = append(opts, opt.WithMode(mode))
 	}
-	opts = append(opts, ownership...)
+	for _, ownerOpt := range ownership {
+		opts = append(opts, ownerOpt)
+	}
 	return Ensure(path, opts...)
 }

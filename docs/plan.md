@@ -258,7 +258,7 @@ class of bug that motivated task j5.
    the new `plan.Op`. `api/plan.go`'s `draftToOp` only ever calls
    `HandlerFor(d.Kind)`; an unmapped kind errors at record time — there is
    deliberately no silent default and no per-kind case left to add there.
-6. **Options capability** — `api/options`: add the task-level knobs
+6. **Options capability** — `resource/options`: add the task-level knobs
    (`With*` options + the interface the resource implements), following the
    existing small-interface pattern.
 7. **Fitness fixtures** — `api/plan_fitness_test.go`: add a `kindFitnessTable`

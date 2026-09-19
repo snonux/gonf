@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
+	opt "github.com/snonux/gonf/resource/options"
 )
 
 // dirHandler, syncDirHandler, and ensureDirHandler are the plan.Handlers for
@@ -51,7 +51,7 @@ func (dirHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if path == "" {
 		return fmt.Errorf("dir: missing path")
 	}
-	var opts []opt.Option
+	var opts []opt.DirOption
 	if op.Absent {
 		opts = append(opts, opt.IsAbsent)
 	}
@@ -65,7 +65,9 @@ func (dirHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 		}
 		opts = append(opts, opt.WithMode(mode))
 	}
-	opts = append(opts, plan.OwnerGroupOptions(op)...)
+	for _, ownerOpt := range plan.OwnerGroupOptions(op) {
+		opts = append(opts, ownerOpt)
+	}
 	return Ensure(path, opts...)
 }
 
@@ -113,7 +115,7 @@ func (syncDirHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 		return fmt.Errorf("sync_dir: blob %q is not a directory", op.Blob)
 	}
 
-	opts := []opt.Option{opt.WithSource(src)}
+	opts := []opt.DirOption{opt.WithSource(src)}
 	// source_dir is the recipe's declared source directory (the glob
 	// pattern's directory for the glob flavor): .tmpl files inside the
 	// synced tree render {{.Param}} from it instead of the ephemeral blob
@@ -137,7 +139,9 @@ func (syncDirHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 		}
 		opts = append(opts, opt.WithFileMode(mode))
 	}
-	opts = append(opts, plan.OwnerGroupOptions(op)...)
+	for _, ownerOpt := range plan.OwnerGroupOptions(op) {
+		opts = append(opts, ownerOpt)
+	}
 	if op.Prune {
 		opts = append(opts, opt.WithPrune)
 	}
@@ -167,7 +171,7 @@ func (ensureDirHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if path == "" {
 		return fmt.Errorf("ensure_dir: missing path")
 	}
-	var opts []opt.Option
+	var opts []opt.DirOption
 	if op.Mode != "" {
 		mode, err := plan.ParseMode(op.Mode)
 		if err != nil {
@@ -175,6 +179,8 @@ func (ensureDirHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 		}
 		opts = append(opts, opt.WithMode(mode))
 	}
-	opts = append(opts, plan.OwnerGroupOptions(op)...)
+	for _, ownerOpt := range plan.OwnerGroupOptions(op) {
+		opts = append(opts, ownerOpt)
+	}
 	return Ensure(path, opts...)
 }

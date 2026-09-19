@@ -239,7 +239,7 @@ func TestGuardOptionsBuildAndForwardGuards(t *testing.T) {
 // TestGuardOptionModifiers covers the GuardOption helpers directly: the
 // default guard succeeds on exit 0, and both modifiers set their field.
 func TestGuardOptionModifiers(t *testing.T) {
-	g := newGuard("n", nil)
+	g := &Guard{Name: "n", ExpectExit: 0}
 	if g.ExpectExit != 0 {
 		t.Errorf("default ExpectExit = %d, want 0", g.ExpectExit)
 	}

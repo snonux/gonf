@@ -1078,10 +1078,10 @@ func TestSourceTreeDryRunParity(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	runReal := func(t *testing.T, dst string, opts ...Option) string {
+	runReal := func(t *testing.T, dst string, opts ...DirOption) string {
 		t.Helper()
 		resource.ResetRepository()
-		Present(dst, append([]Option{WithSource(src)}, opts...)...)
+		Present(dst, append([]DirOption{WithSource(src)}, opts...)...)
 		var applyErr error
 		summary := summaryOf(t, func() error {
 			applyErr = resource.Apply()
@@ -1093,12 +1093,12 @@ func TestSourceTreeDryRunParity(t *testing.T) {
 		return summary
 	}
 
-	runDry := func(t *testing.T, dst string, opts ...Option) string {
+	runDry := func(t *testing.T, dst string, opts ...DirOption) string {
 		t.Helper()
 		resource.ResetRepository()
 		resource.SetDryRun(true)
 		t.Cleanup(func() { resource.SetDryRun(false) })
-		Present(dst, append([]Option{WithSource(src)}, opts...)...)
+		Present(dst, append([]DirOption{WithSource(src)}, opts...)...)
 		var applyErr error
 		summary := summaryOf(t, func() error {
 			applyErr = resource.Apply()
@@ -1424,10 +1424,10 @@ func TestAbsentDoesNotMutateCallerOptionSlice(t *testing.T) {
 
 	// Reusable option list with spare capacity (len 2, cap 8). Sub-slices
 	// share its backing array.
-	base := make([]Option, 2, 8)
+	base := make([]DirOption, 2, 8)
 	base[0] = WithMode(0o755)
 	base[1] = WithPrune
-	before := make([]Option, len(base))
+	before := make([]DirOption, len(base))
 	copy(before, base)
 
 	Absent(gone, base[:1]...)

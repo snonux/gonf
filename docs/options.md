@@ -1,18 +1,30 @@
 # Options cheat-sheet
 
-Options live in `github.com/snonux/gonf/api/options`. Applying an option the
-target resource does not support, or an invalid option combination (e.g.
-`WithLine` with `WithContent`), aborts via `logger.Fatal` at registration
+Options are implemented in `github.com/snonux/gonf/resource/options`; the
+older `github.com/snonux/gonf/api/options` import remains as a re-export.
+Resource constructors accept typed family options (`FileOption`, `DirOption`,
+`CommandOption`, and so on), so unsupported option/resource pairs fail at
+compile time. Shared options implement each family they support.
+
+`options.Option` remains a callable erased compatibility seam. It does not
+carry the family check; prefer typed options and constructors. If
+an older recipe stores options in `[]options.Option`, convert it explicitly
+with the matching `ToFileOptions`, `ToDirOptions`, or other `To*Options`
+adapter before passing the slice to a constructor. Because erasure loses the
+family marker, adapters cannot validate that a legacy value belongs to the
+selected family; use them only for known-compatible legacy slices. Applying an
+option the target resource does not support, or an invalid option combination (e.g.
+`WithLine` with `WithContent`), still aborts via `logger.Fatal` at registration
 time — the fail-fast DSL contract. See [plan.md](plan.md), "Error handling
 contract": registration-time misuse fails fast, record- and apply-time
 failures return errors.
 
-## Universal
+## Shared resource options
 
 | Option | Meaning |
 |--------|---------|
 | `DependsOn(res…)` | Topological apply order (in-process via `Apply`, and on the plan path — deps are carried on the wire since plan schema 5) |
-| `IsAbsent` | Ensure resource is gone (`NoFile` / `NoService` / …) |
+| `IsAbsent` | Ensure a resource family that supports absence is gone (`NoFile` / `NoService` / …) |
 
 ## Filesystem
 

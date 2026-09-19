@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
+	opt "github.com/snonux/gonf/resource/options"
 )
 
 // linkHandler and linkIfExistsHandler are the plan.Handlers for link's two

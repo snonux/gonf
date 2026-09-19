@@ -6,10 +6,10 @@ import (
 	"os"
 	"slices"
 
-	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
+	opt "github.com/snonux/gonf/resource/options"
 )
 
 type kind int
@@ -43,10 +43,10 @@ func (l *Link) SetHardlink(target string) {
 	l.target = target
 }
 
-func build(path string, opts ...opt.Option) *Link {
+func build(path string, opts ...opt.LinkOption) *Link {
 	l := &Link{path: path}
 	for _, o := range opts {
-		o(l)
+		o.Apply(l)
 	}
 	return l
 }
@@ -77,13 +77,13 @@ func (l *Link) resourceType() string {
 
 // Ensure builds and applies the link resource described by opts, without
 // registering it.
-func Ensure(path string, opts ...opt.Option) error {
+func Ensure(path string, opts ...opt.LinkOption) error {
 	return build(path, opts...).apply()
 }
 
 // Present registers a link resource that ensures path is the configured
 // symlink or hardlink, and records a plan draft for remote apply.
-func Present(path string, opts ...opt.Option) resource.Resource {
+func Present(path string, opts ...opt.LinkOption) resource.Resource {
 	l := build(path, opts...)
 	l.resource = resource.Register(l.resourceType(), l.path,
 		resource.ApplierFunc(func() error { return l.apply() }), l.DependsOn.IDs...)
@@ -110,7 +110,7 @@ func (l *Link) planDraft() resource.PlanDraft {
 
 // Absent registers a link resource that ensures path does not exist (the
 // entry is removed regardless of its type).
-func Absent(path string, opts ...opt.Option) resource.Resource {
+func Absent(path string, opts ...opt.LinkOption) resource.Resource {
 	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(path, opts...)
 }

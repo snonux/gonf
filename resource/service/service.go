@@ -8,9 +8,9 @@ import (
 	"runtime"
 	"slices"
 
-	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
+	opt "github.com/snonux/gonf/resource/options"
 	"github.com/snonux/gonf/resource/systemd"
 )
 
@@ -66,16 +66,16 @@ func (s *Service) apply() error {
 }
 
 // newService builds a Service with opts applied.
-func newService(name string, opts []opt.Option) *Service {
+func newService(name string, opts []opt.ServiceOption) *Service {
 	s := &Service{name: name}
 	for _, o := range opts {
-		o(s)
+		o.Apply(s)
 	}
 	return s
 }
 
 // Present registers a service that should be running and enabled at boot.
-func Present(name string, opts ...opt.Option) resource.Resource {
+func Present(name string, opts ...opt.ServiceOption) resource.Resource {
 	s := newService(name, opts)
 	r := resource.Register("Service", s.name,
 		resource.ApplierFunc(func() error { return s.apply() }), s.DependsOn.IDs...)
@@ -84,12 +84,12 @@ func Present(name string, opts ...opt.Option) resource.Resource {
 }
 
 // Ensure applies a service without registering it or recording a plan draft.
-func Ensure(name string, opts ...opt.Option) error {
+func Ensure(name string, opts ...opt.ServiceOption) error {
 	return newService(name, opts).apply()
 }
 
 // Absent registers a service that should be stopped and disabled.
-func Absent(name string, opts ...opt.Option) resource.Resource {
+func Absent(name string, opts ...opt.ServiceOption) resource.Resource {
 	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(name, opts...)
 }

@@ -30,10 +30,10 @@ func TestNoFileDoesNotMutateCallerOptionSlice(t *testing.T) {
 
 	// Reusable option list with spare capacity (len 2, cap 8). Sub-slices
 	// share its backing array.
-	base := make([]options.Option, 2, 8)
+	base := make([]options.FileOption, 2, 8)
 	base[0] = options.WithContent("stay")
 	base[1] = options.WithMode(0o644)
-	before := make([]options.Option, len(base))
+	before := make([]options.FileOption, len(base))
 	copy(before, base)
 
 	NoFile(gone, base[:1]...)

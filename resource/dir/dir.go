@@ -14,9 +14,9 @@ import (
 	"strconv"
 	"syscall"
 
-	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
+	opt "github.com/snonux/gonf/resource/options"
 )
 
 // Dir reconciles a directory's existence, mode, and ownership, and
@@ -85,7 +85,7 @@ var (
 	_ opt.SourceBaseable = (*Dir)(nil)
 )
 
-func build(path string, opts ...opt.Option) (*Dir, error) {
+func build(path string, opts ...opt.DirOption) (*Dir, error) {
 	curr, err := user.Current()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get current user for default: %w", err)
@@ -100,7 +100,7 @@ func build(path string, opts ...opt.Option) (*Dir, error) {
 	}
 
 	for _, o := range opts {
-		o(d)
+		o.Apply(d)
 	}
 
 	if d.source != "" && d.sourceGlob != "" {
@@ -407,7 +407,7 @@ func resolveGroupID(group string) (int, error) {
 
 // Ensure builds and applies the directory resource described by opts,
 // without registering it.
-func Ensure(path string, opts ...opt.Option) error {
+func Ensure(path string, opts ...opt.DirOption) error {
 	d, err := build(path, opts...)
 	if err != nil {
 		return err
@@ -419,7 +419,7 @@ func Ensure(path string, opts ...opt.Option) error {
 // configured mode, ownership, and source content, and records a plan draft
 // for remote apply. A build failure (invalid option combination) is recipe
 // misuse and fails fast via logger.Fatal at record time.
-func Present(path string, opts ...opt.Option) resource.Resource {
+func Present(path string, opts ...opt.DirOption) resource.Resource {
 	d, err := build(path, opts...)
 	if err != nil {
 		// build's error already names the path.
@@ -479,14 +479,14 @@ func (d *Dir) planDraft() resource.PlanDraft {
 
 // Absent registers a directory resource that ensures path does not exist;
 // WithPrune makes the removal recursive.
-func Absent(path string, opts ...opt.Option) resource.Resource {
+func Absent(path string, opts ...opt.DirOption) resource.Resource {
 	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(path, opts...)
 }
 
 // EnsurePlanDraft builds an ensure_dir PlanDraft without registering or applying.
 // Used by api.EnsureDir in plan-record mode.
-func EnsurePlanDraft(path string, opts ...opt.Option) (resource.PlanDraft, error) {
+func EnsurePlanDraft(path string, opts ...opt.DirOption) (resource.PlanDraft, error) {
 	d, err := build(path, opts...)
 	if err != nil {
 		return resource.PlanDraft{}, err

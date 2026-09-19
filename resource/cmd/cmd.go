@@ -7,11 +7,11 @@ import (
 	"os"
 	"strings"
 
-	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/exec"
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
+	opt "github.com/snonux/gonf/resource/options"
 )
 
 // runWith runs the main command (it carries Dir/Env opts) and runProbe runs
@@ -55,13 +55,13 @@ var (
 )
 
 // Present registers a command resource that runs bin with args on Apply.
-func Present(bin string, args []string, opts ...opt.Option) resource.Resource {
+func Present(bin string, args []string, opts ...opt.CommandOption) resource.Resource {
 	c := &Cmd{
 		bin:  bin,
 		args: append([]string(nil), args...),
 	}
 	for _, o := range opts {
-		o(c)
+		o.Apply(c)
 	}
 	if c.name == "" {
 		c.name = defaultName(bin, c.args)
@@ -75,13 +75,13 @@ func Present(bin string, args []string, opts ...opt.Option) resource.Resource {
 
 // Ensure builds and applies a command resource without registering it or
 // recording a plan draft.
-func Ensure(bin string, args []string, opts ...opt.Option) error {
+func Ensure(bin string, args []string, opts ...opt.CommandOption) error {
 	c := &Cmd{
 		bin:  bin,
 		args: append([]string(nil), args...),
 	}
 	for _, o := range opts {
-		o(c)
+		o.Apply(c)
 	}
 	if c.name == "" {
 		c.name = defaultName(bin, c.args)

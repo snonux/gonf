@@ -3,9 +3,9 @@ package systemdtimer
 import (
 	"fmt"
 
-	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
+	opt "github.com/snonux/gonf/resource/options"
 )
 
 // planHandler is the systemd_timer kind's plan.Handler: see
@@ -47,7 +47,7 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if op.Name == "" {
 		return fmt.Errorf("systemd_timer: missing name")
 	}
-	var opts []opt.Option
+	var opts []opt.SystemdTimerOption
 	if op.Absent {
 		opts = append(opts, opt.IsAbsent)
 	} else {

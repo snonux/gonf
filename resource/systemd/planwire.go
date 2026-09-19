@@ -1,9 +1,9 @@
 package systemd
 
 import (
-	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
+	opt "github.com/snonux/gonf/resource/options"
 )
 
 // planHandler is the daemon_reload kind's plan.Handler: see
@@ -32,7 +32,7 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 // watched resource changed, mirroring the resource's own option handling
 // exactly.
 func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
-	var opts []opt.Option
+	var opts []opt.DaemonReloadOption
 	if op.User {
 		opts = append(opts, opt.WithUser)
 	}

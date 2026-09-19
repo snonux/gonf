@@ -18,10 +18,10 @@ import (
 	"syscall"
 	"text/template"
 
-	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
+	opt "github.com/snonux/gonf/resource/options"
 )
 
 // File reconciles a regular file's existence, content (literal, source
@@ -122,7 +122,7 @@ var (
 	_ opt.Templateable  = (*File)(nil)
 )
 
-func build(path string, opts ...opt.Option) (*File, error) {
+func build(path string, opts ...opt.FileOption) (*File, error) {
 	curr, err := user.Current()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get current user for default: %w", err)
@@ -136,7 +136,7 @@ func build(path string, opts ...opt.Option) (*File, error) {
 	}
 
 	for _, o := range opts {
-		o(f)
+		o.Apply(f)
 	}
 
 	if f.lineEdit() && (f.content != "" || f.source != "") {
@@ -627,7 +627,7 @@ func ensureAbsent(path string) error {
 // Ensure builds and applies the file resource described by opts, without
 // registering it. Used by other resource packages (e.g. dir) to write an
 // individual file without it becoming its own top-level resource.
-func Ensure(path string, opts ...opt.Option) error {
+func Ensure(path string, opts ...opt.FileOption) error {
 	f, err := build(path, opts...)
 	if err != nil {
 		return err
@@ -639,7 +639,7 @@ func Ensure(path string, opts ...opt.Option) error {
 // configured content, mode, and ownership, and records a plan draft for
 // remote apply. A build failure (invalid option combination) is recipe
 // misuse and fails fast via logger.Fatal at record time.
-func Present(path string, opts ...opt.Option) resource.Resource {
+func Present(path string, opts ...opt.FileOption) resource.Resource {
 	f, err := build(path, opts...)
 	if err != nil {
 		// build's error already names the path.
@@ -701,7 +701,7 @@ func (f *File) planDraft() resource.PlanDraft {
 }
 
 // Absent registers a file resource that ensures path does not exist.
-func Absent(path string, opts ...opt.Option) resource.Resource {
+func Absent(path string, opts ...opt.FileOption) resource.Resource {
 	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(path, opts...)
 }

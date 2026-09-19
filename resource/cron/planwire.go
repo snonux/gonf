@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
+	opt "github.com/snonux/gonf/resource/options"
 )
 
 // planHandler is the cron kind's plan.Handler: see resource/pkg/planwire.go
@@ -40,7 +40,7 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if op.Name == "" {
 		return fmt.Errorf("cron: missing name")
 	}
-	var opts []opt.Option
+	var opts []opt.CronOption
 	if op.Absent {
 		opts = append(opts, opt.IsAbsent)
 	}
