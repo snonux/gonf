@@ -1,7 +1,7 @@
 # Replacing `~/git/conf` Rex with gonf — gap audit
 
-Refreshed 2026-09-19 against the **unreleased gonf trunk after v0.12.2**;
-current trunk uses plan schema 15. This document is the
+Refreshed 2026-09-19 against **gonf v0.13.0**; this release uses plan schema
+15. This document is the
 canonical plan for porting the [`~/git/conf`](https://codeberg.org/snonux/conf)
 Rexfiles to gonf. Earlier revisions claimed gonf "still lacks Rex-style sudo/doas"
 and that pkg/service/cron "fleet still needs transport" — both are **stale**:
@@ -14,7 +14,7 @@ unattended-upgrades migration already runs on top of them (see
 packages, services, cron, accounts, secrets, and file/line primitives. The
 former feature gaps — a **secrets convention** (Rex `$secrets`), **custom
 package repos** (Rex `PKG_PATH` env), and change-gated service restart (Rex
-`on_change`) — are implemented on trunk. Remaining work is consumer migration
+`on_change`) — are implemented in v0.13.0. Remaining work is consumer migration
 plus a deliberately narrow existing-account update gap; account creation is
 covered, while existing-account mutation remains explicit. Rich
 templates are an ergonomics gap, not a capability gap — record-time Go code can
@@ -28,8 +28,8 @@ compute any content Perl closures could (see
   `gonf/cluster/cluster.go` and deploys via `./gonf.sh cluster <cluster> <tasks…>`
   (wrapper = `cd ./gonf && go run ./cmd/gonf`).
 - **One consumer module per repository**, depending on `github.com/snonux/gonf`
-  (both consumers currently pin the v0.12.2 release; bump them after the next
-  release). Multi-Rexfile composition maps to Go packages +
+  (both consumers currently pin v0.12.2; the downstream migration updates them
+  to v0.13.0). Multi-Rexfile composition maps to Go packages +
   `RegisterMethods` + `Aggregate`, not to multiple Rexfiles.
 - **Inventory lives in the consumer** (`Host` / `Cluster` / `Fleet` with
   `WithSSHUser` / `WithSSHPort` / `WithPrivilege` / `WithGOOS` / `WithGOARCH` /
@@ -76,9 +76,9 @@ One plan engine serves local and remote runs, so a recipe cannot diverge between
 
 ## Current capability matrix
 
-Status against every conf Rex primitive on the unreleased trunk (plan schema 15):
+Status against every conf Rex primitive in v0.13.0 (plan schema 15):
 
-| Conf Rex capability | gonf trunk | Status |
+| Conf Rex capability | gonf v0.13.0 | Status |
 |---------------------|--------------|--------|
 | `group x => 'h:2', …`, `user`, `parallelism 5` | `Host(name, WithSSHUser, WithSSHHost, WithSSHPort, WithSSHIdentity)` + `Cluster(name, hosts…)`, `cluster.Parallel(n)`; `gonf hosts`/`clusters`/`fleets` | **Done** |
 | `sudo TRUE` / `auth for => group (user, sudo)` | `Task(…, Privileged())` (or `RequiresRoot`) + `Host(WithPrivilege(PrivilegeSudo|Doas|None))`; apply splits plain/elevated chunks; remote elevated chunk wraps `sudo -n gonf apply` / `doas gonf apply`; `-privilege=none` + elevated op refuses to push | **Done** |
@@ -373,7 +373,7 @@ lands in `/tmp` owned by the login user (plain chunk), only the two
 For this document:
 
 - Every capability row names the gonf API that exists today (verified against
-  unreleased trunk, plan schema 15) — no "fleet needs transport" or
+  v0.13.0, plan schema 15) — no "fleet needs transport" or
   missing-feature claims survive.
 - All five Rexfiles are inventoried and every task appears exactly once in the
   mapping with a status (consumer / to do / excluded) and feature codes.
@@ -389,8 +389,8 @@ consumer ports 4–6):
 - Compatibility gate: a temporary `go.work` referencing `~/git/gonf`,
   `~/git/dotfiles/gonf`, and `~/git/conf/gonf` (without editing client
   `go.mod` files) builds both consumers: `go test ./...`,
-  `go build ./cmd/gonf`, `go run ./cmd/gonf -list`, plus record-only
-  `plan -o <tmp>` runs for the dotfiles `home_tmux` / `home_systemd_user` and
+  `go build ./cmd/gonf`, `go run ./cmd/gonf -list`, plus non-applying `-n`
+  task runs for the dotfiles `home_tmux` / `home_systemd_user` and
   the conf `frontends_services`, `rocky_units`, `freebsd_services`,
   `pis_netbsd_services` tasks and every task the work touched.
 - Live proof per ported task: `./gonf.sh cluster <cluster> <task>` (or
