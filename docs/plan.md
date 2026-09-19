@@ -538,6 +538,14 @@ operations. `WithEnv` is applied to both the package manager's state probe
 and its mutation, so older binaries must reject v15 plans rather than silently
 using their inherited environment for package operations.
 
+Plan schema **version 16** makes `name` an explicit `file`-operation identity
+as well as a command/package label. `File(path, WithName(name), ...)` still
+manages `path`, but it registers and reports as `File[name]`, allowing several
+line-edit declarations for one path and precise `DependsOn` / `OnChange`
+wiring. An older binary would ignore `name` for a file, report its change as
+`File[path]`, and leave an `OnChange(File[name])` action permanently skipped;
+it must therefore reject v16 plans at the header gate before any mutation.
+
 ### Secret material
 
 `MustSecret(path)` reads a required non-empty file below the controller

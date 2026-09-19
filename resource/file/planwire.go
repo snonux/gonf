@@ -27,6 +27,7 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 	op := plan.Op{
 		Op:            plan.KindFile,
 		ID:            d.ID,
+		Name:          d.Name,
 		Path:          d.Path,
 		Mode:          d.Mode,
 		Owner:         d.Owner,
@@ -58,6 +59,7 @@ func (ensureFileHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 	return plan.Op{
 		Op:    plan.KindEnsureFile,
 		ID:    d.ID,
+		Name:  d.Name,
 		Path:  d.Path,
 		Mode:  d.Mode,
 		Owner: d.Owner,
@@ -78,7 +80,11 @@ func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 		return fmt.Errorf("file: missing path")
 	}
 	if op.Absent {
-		return Ensure(path, opt.IsAbsent)
+		opts := []opt.FileOption{opt.IsAbsent}
+		if op.Name != "" {
+			opts = append(opts, opt.WithName(op.Name))
+		}
+		return Ensure(path, opts...)
 	}
 
 	// Empty owner/group means "not recorded": leaving them unset keeps the
@@ -102,6 +108,9 @@ func (ensureFileHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 		return fmt.Errorf("ensure_file: missing path")
 	}
 	opts := make([]opt.FileOption, 0, 3)
+	if op.Name != "" {
+		opts = append(opts, opt.WithName(op.Name))
+	}
 	if op.Mode != "" {
 		mode, err := plan.ParseMode(op.Mode)
 		if err != nil {
@@ -120,6 +129,9 @@ func applyFileLines(path string, op plan.Op, ownership []opt.FileDirOption) erro
 		return fmt.Errorf("file: add_line/remove_line cannot combine with content_b64/blob")
 	}
 	var opts []opt.FileOption
+	if op.Name != "" {
+		opts = append(opts, opt.WithName(op.Name))
+	}
 	removeLines := append(slices.Clone(op.RemoveLines), op.RemoveLine)
 	addLines := append(slices.Clone(op.AddLines), op.AddLine)
 	if len(removeLines) != 0 {
@@ -180,6 +192,9 @@ func fileContent(op plan.Op, planDir string) ([]byte, error) {
 
 func fileContentOptions(op plan.Op, content []byte, ownership []opt.FileDirOption) ([]opt.FileOption, error) {
 	opts := []opt.FileOption{opt.WithContent(string(content))}
+	if op.Name != "" {
+		opts = append(opts, opt.WithName(op.Name))
+	}
 	if op.Template {
 		// The wire content is raw template text (packageDraft/RecordPlan
 		// reads a .tmpl source's bytes verbatim), and by now neither path

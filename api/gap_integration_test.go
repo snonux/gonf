@@ -149,6 +149,80 @@ func TestGapFeatureSetRecordsAndAppliesTogether(t *testing.T) {
 	}
 }
 
+func TestNamedFileLineEditsRemainDistinctAcrossTasksAndGateChanges(t *testing.T) {
+	ResetForTest()
+	t.Cleanup(ResetForTest)
+
+	base := t.TempDir()
+	rcLocal := filepath.Join(base, "rc.conf.local")
+	reloads := filepath.Join(base, "reloads")
+	var packageScripts Resource
+
+	Task("rc_package_scripts", "set package startup scripts", func() {
+		packageScripts = File(rcLocal,
+			options.WithName("rc-conf-package-scripts"),
+			options.WithLine(`pkg_scripts="dtail"`),
+		)
+	})
+	Task("rc_httpd_flags", "set httpd startup flags", func() {
+		httpdFlags := File(rcLocal,
+			options.WithName("rc-conf-httpd-flags"),
+			options.WithLine(`httpd_flags=""`),
+			options.DependsOn(packageScripts),
+		)
+		Command("sh", []string{"-c", `printf 'reload\n' >> "$1"`, "gonf", reloads},
+			options.WithName("reload-httpd-after-rc-flags"),
+			options.OnChange(httpdFlags),
+		)
+	})
+
+	ops, err := RecordPlan("named-rc-lines", base, "rc_package_scripts", "rc_httpd_flags")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+	raw, err := plan.EncodePlan(ops)
+	if err != nil {
+		t.Fatalf("EncodePlan: %v", err)
+	}
+	ops, err = plan.DecodePlanBytes(raw)
+	if err != nil {
+		t.Fatalf("DecodePlan: %v", err)
+	}
+	packageID := "File[rc-conf-package-scripts]"
+	httpdID := "File[rc-conf-httpd-flags]"
+	packageOp := findGapOp(t, ops, plan.KindFile, packageID)
+	if packageOp.Path != rcLocal || packageOp.Name != "rc-conf-package-scripts" {
+		t.Fatalf("package line op = %#v", packageOp)
+	}
+	httpdOp := findGapOp(t, ops, plan.KindFile, httpdID)
+	if httpdOp.Path != rcLocal || httpdOp.Name != "rc-conf-httpd-flags" ||
+		!reflect.DeepEqual(httpdOp.Deps, []string{packageID}) {
+		t.Fatalf("httpd line op = %#v", httpdOp)
+	}
+	commandOp := findGapOp(t, ops, plan.KindCommand)
+	if !commandOp.IfChanged ||
+		!reflect.DeepEqual(commandOp.Watch, []string{httpdID}) ||
+		!reflect.DeepEqual(commandOp.Deps, []string{httpdID}) {
+		t.Fatalf("change-gated command = %#v", commandOp)
+	}
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		if err := plan.Apply(ops, plan.Facts{}, base); err != nil {
+			t.Fatalf("Apply attempt %d: %v", attempt, err)
+		}
+	}
+	got, err := os.ReadFile(rcLocal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "pkg_scripts=\"dtail\"\nhttpd_flags=\"\"\n"; string(got) != want {
+		t.Fatalf("rc.conf.local = %q, want %q", got, want)
+	}
+	if got, err := os.ReadFile(reloads); err != nil || string(got) != "reload\n" {
+		t.Fatalf("change gate reloads = %q, %v; want exactly one run", got, err)
+	}
+}
+
 // findGapOp returns the unique operation of kind. With id supplied, it also
 // pins which of the two file operations the combined fixture is asserting.
 func findGapOp(t *testing.T, ops []plan.Op, kind plan.Kind, ids ...string) plan.Op {

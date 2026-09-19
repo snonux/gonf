@@ -193,6 +193,7 @@ type (
 	allResourceOption      func(any)
 	fileDirOption          func(any)
 	fileOption             func(any)
+	fileCommandOption      func(any)
 	dirOption              func(any)
 	linkOption             func(any)
 	packageOption          func(any)
@@ -215,6 +216,7 @@ type (
 func (o allResourceOption) Apply(target any)      { o(target) }
 func (o fileDirOption) Apply(target any)          { o(target) }
 func (o fileOption) Apply(target any)             { o(target) }
+func (o fileCommandOption) Apply(target any)      { o(target) }
 func (o dirOption) Apply(target any)              { o(target) }
 func (o linkOption) Apply(target any)             { o(target) }
 func (o packageOption) Apply(target any)          { o(target) }
@@ -247,6 +249,8 @@ func (allResourceOption) localUserOption()         {}
 func (fileDirOption) fileOption()                  {}
 func (fileDirOption) dirOption()                   {}
 func (fileOption) fileOption()                     {}
+func (fileCommandOption) fileOption()              {}
+func (fileCommandOption) commandOption()           {}
 func (dirOption) dirOption()                       {}
 func (linkOption) linkOption()                     {}
 func (packageOption) packageOption()               {}
@@ -770,9 +774,12 @@ func WithHardlink(target string) linkOption {
 	})
 }
 
-// WithName overrides a command resource's registry name.
-func WithName(name string) commandOption {
-	return commandOption(func(target any) {
+// WithName overrides a command's registry name or a file resource's
+// identity. A named File still manages its supplied path, but uses
+// File[name] for registration, dependencies, and change reports. This lets
+// separate declarations safely manage distinct line edits to one path.
+func WithName(name string) fileCommandOption {
+	return fileCommandOption(func(target any) {
 		requires(target, "WithName", func(r Named) { r.SetName(name) })
 	})
 }

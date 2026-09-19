@@ -83,7 +83,10 @@ func TestEveryExportedOptionHasAResourceFamily(t *testing.T) {
 		{"WithWants", func() { acceptSystemdTimer(WithWants("network.target")) }},
 		{"WithSymlink", func() { acceptLink(WithSymlink("target")) }},
 		{"WithHardlink", func() { acceptLink(WithHardlink("target")) }},
-		{"WithName", func() { acceptCommand(WithName("name")) }},
+		{"WithName", func() {
+			acceptFile(WithName("name"))
+			acceptCommand(WithName("name"))
+		}},
 		{"WithDir", func() { acceptCommand(WithDir("/work")) }},
 		{"WithEnv", func() {
 			acceptCommand(WithEnv(map[string]string{"KEY": "value"}))

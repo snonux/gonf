@@ -27,7 +27,7 @@ Command("true", nil,
 | `Creates` | Skip if path exists |
 | `Unless` | Skip if command exits 0 (optional `ExpectExit` / `ExpectStdout`) |
 | `OnlyIf` | Run only if command exits 0 |
-| `WithName` | Resource id / log label |
+| `WithName` | Resource id / log label (also assigns an explicit identity to File resources) |
 | `WithDir` | Working directory |
 | `WithEnv` | Extra environment (`map[string]string`) |
 | `DependsOn` | Ordering |

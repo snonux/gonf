@@ -33,6 +33,7 @@ type File struct {
 	embed.DependsOn
 	embed.Absence
 	resource resource.Resource
+	name     string
 	path     string
 	content  string
 	source   string // bare path, no "source://" prefix
@@ -68,6 +69,10 @@ type File struct {
 	modeSet         bool
 	preserveContent bool
 }
+
+// SetName implements opt.Named. It overrides this resource's identity but
+// never its on-disk target path.
+func (f *File) SetName(name string) { f.name = name }
 
 // SetContent implements opt.Contented. Setting literal content clears any
 // previously configured source, as the two are mutually exclusive.
@@ -147,6 +152,7 @@ var (
 	_ opt.LineRemovable    = (*File)(nil)
 	_ opt.LinesAddable     = (*File)(nil)
 	_ opt.LinesRemovable   = (*File)(nil)
+	_ opt.Named            = (*File)(nil)
 	_ opt.Paramable        = (*File)(nil)
 	_ opt.Templateable     = (*File)(nil)
 	_ opt.TemplateDataable = (*File)(nil)
@@ -182,10 +188,23 @@ func (f *File) lineEdit() bool {
 }
 
 func (f *File) reportID(path string) string {
+	if f.name != "" {
+		if f.preserveContent {
+			return fmt.Sprintf("EnsureFile[%s]", f.name)
+		}
+		return fmt.Sprintf("File[%s]", f.name)
+	}
 	if f.preserveContent {
 		return fmt.Sprintf("EnsureFile[%s]", path)
 	}
 	return fmt.Sprintf("File[%s]", path)
+}
+
+func (f *File) resourceName() string {
+	if f.name != "" {
+		return f.name
+	}
+	return f.targetPath()
 }
 
 func appendUniqueLines(dst []string, lines ...string) []string {
@@ -213,7 +232,7 @@ func (f *File) Apply() error { return f.apply() }
 
 func (f *File) apply() error {
 	if f.Absent {
-		return ensureAbsent(f.targetPath())
+		return ensureAbsentWithID(f.targetPath(), f.reportID(f.targetPath()))
 	}
 	if f.preserveContent {
 		return f.ensurePresent()
@@ -226,7 +245,7 @@ func (f *File) apply() error {
 		}
 		if noop {
 			logger.Debug("no line edits needed for missing file %s", finalPath)
-			resource.Note(fmt.Sprintf("File[%s]", finalPath), resource.StatusSkipped)
+			resource.Note(f.reportID(finalPath), resource.StatusSkipped)
 			return nil
 		}
 		return f.ensureFile(finalPath, content)
@@ -772,7 +791,10 @@ func resolveGroupID(group string) (int, error) {
 }
 
 func ensureAbsent(path string) error {
-	id := fmt.Sprintf("File[%s]", path)
+	return ensureAbsentWithID(path, fmt.Sprintf("File[%s]", path))
+}
+
+func ensureAbsentWithID(path, id string) error {
 	logger.Debug("ensuring absent: %s", path)
 
 	if _, err := os.Lstat(path); os.IsNotExist(err) {
@@ -931,7 +953,7 @@ func Present(path string, opts ...opt.FileOption) resource.Resource {
 		logger.Fatal("%v", err)
 	}
 
-	f.resource = resource.Register("File", f.targetPath(), f, f.DependsOn.IDs...)
+	f.resource = resource.Register("File", f.resourceName(), f, f.DependsOn.IDs...)
 	resource.RecordPlanDraft(f.planDraft())
 	return f.resource
 }
@@ -947,7 +969,7 @@ func PresentEnsure(path string, opts ...opt.FileOption) resource.Resource {
 		logger.Fatal("file %s: EnsureFile cannot combine WithContent/WithSource, WithLine(s)/WithoutLine(s), or IsAbsent", path)
 	}
 	f.preserveContent = true
-	f.resource = resource.Register("EnsureFile", f.targetPath(), f, f.DependsOn.IDs...)
+	f.resource = resource.Register("EnsureFile", f.resourceName(), f, f.DependsOn.IDs...)
 	resource.RecordPlanDraft(f.planDraft())
 	return f.resource
 }
@@ -956,6 +978,7 @@ func (f *File) planDraft() resource.PlanDraft {
 	d := resource.PlanDraft{
 		Kind:        "file",
 		ID:          f.resource.ID(),
+		Name:        f.name,
 		Path:        f.targetPath(),
 		Mode:        opt.ModeToWire(f.mode),
 		Absent:      f.Absent,

@@ -37,8 +37,12 @@ import "encoding/json"
 // additive-only user operations and their creation-time account attributes.
 // Version 14 adds ensure_file plus ordered batched file line edits. Version
 // 15 extends Env from command operations to package operations, so older
-// destination binaries reject rather than silently ignore WithEnv.
-const CurrentVersion = 15
+// destination binaries reject rather than silently ignore WithEnv. Version
+// 16 lets file operations carry an explicit Name identity distinct from Path:
+// an older destination would ignore that identity, report changes under
+// File[path], and make an OnChange target of File[name] silently never fire.
+// It must therefore refuse v16 before any mutation.
+const CurrentVersion = 16
 
 // supportedVersions is the set of plan schema versions this binary can apply.
 // Apply must refuse plans whose version is not in this set before any mutation.
@@ -57,6 +61,7 @@ var supportedVersions = map[int]struct{}{
 	12:             {},
 	13:             {},
 	14:             {},
+	15:             {},
 	CurrentVersion: {},
 }
 
@@ -274,7 +279,9 @@ type Op struct {
 	AddLine    string `json:"add_line,omitempty"`
 	RemoveLine string `json:"remove_line,omitempty"`
 
-	// Name is a package name, command registry name, or similar label.
+	// Name is a package name, command registry name, file resource identity,
+	// or similar label. For a named KindFile it keeps the resource ID stable
+	// independently of Path, which remains the destination to manage.
 	Name string `json:"name,omitempty"`
 	// Bin is the executable for KindCommand.
 	Bin string `json:"bin,omitempty"`

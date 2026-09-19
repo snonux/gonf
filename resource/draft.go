@@ -120,7 +120,8 @@ type PlanDraft struct {
 	AddLine    string
 	RemoveLine string
 
-	// Name is a package name, command registry name, or similar label.
+	// Name is a package name, command registry name, file resource identity,
+	// or similar label. A named file keeps its identity independently of Path.
 	Name string
 	// Bin is the executable for the "command" kind.
 	Bin string

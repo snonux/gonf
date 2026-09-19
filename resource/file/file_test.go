@@ -2,9 +2,11 @@ package file
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"reflect"
@@ -16,6 +18,7 @@ import (
 	"time"
 
 	. "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -1194,6 +1197,185 @@ func TestWithLinesBatchesInOrderAndDeduplicates(t *testing.T) {
 	}
 	if want := "keep\nsecond\nfirst\nthird\n"; string(got) != want {
 		t.Fatalf("content = %q, want %q", got, want)
+	}
+}
+
+func TestPresentDefaultIDStillUsesTargetPath(t *testing.T) {
+	resource.ResetRepository()
+	path := filepath.Join(t.TempDir(), "default-id.conf")
+	got := Present(path, WithLine("enabled=1"))
+	if want := "File[" + path + "]"; got.ID() != want {
+		t.Fatalf("default File ID = %q, want %q", got.ID(), want)
+	}
+}
+
+func TestNamedFileContentReportsNamedID(t *testing.T) {
+	resource.ResetRepository()
+	path := filepath.Join(t.TempDir(), "named-content.conf")
+	res := Present(path, WithName("named-content"), WithContent("managed\n"))
+	if got, want := res.ID(), "File[named-content]"; got != want {
+		t.Fatalf("ID = %q, want %q", got, want)
+	}
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != "managed\n" {
+		t.Fatalf("content = %q, %v", got, err)
+	}
+	if !resource.AnyChanged(res.ID()) {
+		t.Fatalf("named content file did not report change as %s", res.ID())
+	}
+}
+
+func TestNamedAbsentFileReportsNamedID(t *testing.T) {
+	resource.ResetRepository()
+	path := filepath.Join(t.TempDir(), "named-absent.conf")
+	if err := os.WriteFile(path, []byte("remove me\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res := Present(path, WithName("named-absent"), IsAbsent)
+	if got, want := res.ID(), "File[named-absent]"; got != want {
+		t.Fatalf("ID = %q, want %q", got, want)
+	}
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("removed file stat = %v, want not exist", err)
+	}
+	if !resource.AnyChanged(res.ID()) {
+		t.Fatalf("named absent file did not report change as %s", res.ID())
+	}
+}
+
+func TestNamedEnsureFileReportsNamedID(t *testing.T) {
+	resource.ResetRepository()
+	path := filepath.Join(t.TempDir(), "named-marker")
+	res := PresentEnsure(path, WithName("named-marker"))
+	if got, want := res.ID(), "EnsureFile[named-marker]"; got != want {
+		t.Fatalf("ID = %q, want %q", got, want)
+	}
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatalf("ensured file stat: %v", err)
+	}
+	if !resource.AnyChanged(res.ID()) {
+		t.Fatalf("named EnsureFile did not report change as %s", res.ID())
+	}
+}
+
+func TestPlanApplyForwardsNamedFileIdentity(t *testing.T) {
+	resource.ResetRepository()
+	base := t.TempDir()
+	contentPath := filepath.Join(base, "content.conf")
+	absentPath := filepath.Join(base, "absent.conf")
+	ensurePath := filepath.Join(base, "marker")
+	if err := os.WriteFile(absentPath, []byte("remove me\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	const (
+		contentID = "File[named-plan-content]"
+		absentID  = "File[named-plan-absent]"
+		ensureID  = "EnsureFile[named-plan-marker]"
+	)
+	ops := []plan.Op{
+		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "named-file-forwarding"},
+		{
+			Op:         plan.KindFile,
+			ID:         contentID,
+			Name:       "named-plan-content",
+			Path:       contentPath,
+			ContentB64: base64.StdEncoding.EncodeToString([]byte("managed\n")),
+			HasContent: true,
+		},
+		{
+			Op:     plan.KindFile,
+			ID:     absentID,
+			Name:   "named-plan-absent",
+			Path:   absentPath,
+			Absent: true,
+		},
+		{
+			Op:   plan.KindEnsureFile,
+			ID:   ensureID,
+			Name: "named-plan-marker",
+			Path: ensurePath,
+		},
+	}
+	if err := plan.Apply(ops, plan.Facts{}, base); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if got, err := os.ReadFile(contentPath); err != nil || string(got) != "managed\n" {
+		t.Fatalf("content = %q, %v", got, err)
+	}
+	if _, err := os.Lstat(absentPath); !os.IsNotExist(err) {
+		t.Fatalf("removed file stat = %v, want not exist", err)
+	}
+	if _, err := os.Lstat(ensurePath); err != nil {
+		t.Fatalf("ensured file stat: %v", err)
+	}
+	for _, id := range []string{contentID, absentID, ensureID} {
+		if !resource.AnyChanged(id) {
+			t.Errorf("named plan operation did not report change as %s", id)
+		}
+	}
+}
+
+func TestNamedFileDuplicateRegistrationFails(t *testing.T) {
+	if os.Getenv("GONF_FILE_DUPLICATE_HELPER") == "1" {
+		resource.ResetRepository()
+		Present("/tmp/gonf-named-duplicate", WithName("duplicate"), WithLine("one"))
+		Present("/tmp/gonf-named-duplicate", WithName("duplicate"), WithLine("two"))
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestNamedFileDuplicateRegistrationFails$")
+	cmd.Env = append(os.Environ(), "GONF_FILE_DUPLICATE_HELPER=1")
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatal("duplicate named file registration unexpectedly succeeded")
+	}
+	if !strings.Contains(string(output), "already registered") {
+		t.Fatalf("duplicate registration output = %q, want already registered", output)
+	}
+}
+
+func TestPresentWithNameAllowsOrderedLineEditsToOnePath(t *testing.T) {
+	resource.ResetRepository()
+	path := filepath.Join(t.TempDir(), "rc.conf.local")
+
+	packages := Present(path,
+		WithName("rc-conf-package-scripts"),
+		WithLine(`pkg_scripts="dtail"`),
+	)
+	services := Present(path,
+		WithName("rc-conf-httpd-flags"),
+		WithLine(`httpd_flags=""`),
+		DependsOn(packages),
+	)
+	if got, want := packages.ID(), "File[rc-conf-package-scripts]"; got != want {
+		t.Fatalf("package line ID = %q, want %q", got, want)
+	}
+	if got, want := services.ID(), "File[rc-conf-httpd-flags]"; got != want {
+		t.Fatalf("service line ID = %q, want %q", got, want)
+	}
+
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "pkg_scripts=\"dtail\"\nhttpd_flags=\"\"\n"; string(got) != want {
+		t.Fatalf("content = %q, want %q", got, want)
+	}
+	if !resource.AnyChanged(packages.ID()) || !resource.AnyChanged(services.ID()) {
+		t.Fatalf("named line edits must report their own IDs: packages=%t services=%t",
+			resource.AnyChanged(packages.ID()), resource.AnyChanged(services.ID()))
 	}
 }
 
