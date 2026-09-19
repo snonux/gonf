@@ -9,7 +9,7 @@ import (
 
 func applyDNF(p *Package) error {
 	id := fmt.Sprintf("Package[%s]", p.name)
-	installed, err := dnfInstalled(p.name)
+	installed, err := dnfInstalled(p)
 	if err != nil {
 		return err
 	}
@@ -42,7 +42,7 @@ func applyDNF(p *Package) error {
 		return nil
 	}
 
-	stdout, stderr, exitCode, err := runCmd("dnf", args...)
+	stdout, stderr, exitCode, err := p.run("dnf", args...)
 	if err != nil {
 		return fmt.Errorf("failed to execute dnf: %w", err)
 	}
@@ -56,14 +56,14 @@ func applyDNF(p *Package) error {
 	return nil
 }
 
-func dnfInstalled(name string) (bool, error) {
+func dnfInstalled(p *Package) (bool, error) {
 	// rpm -q only consults the local rpm database: unlike
 	// `dnf list installed` it never triggers a repository metadata
 	// refresh, so the probe stays cheap. A non-zero exit code means
 	// the package is not installed; a start failure is an error.
-	_, _, code, err := runCmd("rpm", "-q", name)
+	_, _, code, err := p.run("rpm", "-q", p.name)
 	if err != nil {
-		return false, fmt.Errorf("rpm -q %s: %w", name, err)
+		return false, fmt.Errorf("rpm -q %s: %w", p.name, err)
 	}
 	return code == 0, nil
 }

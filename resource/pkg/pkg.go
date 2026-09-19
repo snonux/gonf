@@ -4,6 +4,7 @@ package pkg
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"runtime"
 	"slices"
 
@@ -21,12 +22,27 @@ type Package struct {
 	embed.Absence
 	name   string
 	latest bool
+	env    map[string]string
 }
 
 func (p *Package) SetLatest() { p.latest = true }
 
-// runCmd is swapped in unit tests.
-var runCmd = exec.Run
+// SetEnv configures extra environment variables for package-manager probes
+// and mutations. Copy the caller's map so a recipe cannot alter a registered
+// resource after construction.
+func (p *Package) SetEnv(env map[string]string) {
+	p.env = maps.Clone(env)
+}
+
+// runCmd is swapped in unit tests for packages without an environment.
+// runCmdWithEnv receives a complete, inherited environment for packages with
+// WithEnv; keeping the seams separate preserves the legacy unset behavior.
+var (
+	runCmd        = exec.Run
+	runCmdWithEnv = func(env []string, name string, args ...string) (string, string, int, error) {
+		return exec.RunWith(exec.Opts{Env: env}, name, args...)
+	}
+)
 
 // SetRunCmdForTest swaps the package-manager command runner (tests only).
 // Cross-package apply tests (e.g. plan.Apply on a package op) reach the
@@ -39,6 +55,20 @@ func SetRunCmdForTest(run func(name string, args ...string) (string, string, int
 // ResetRunCmdForTest restores the real command runner after a test stub.
 func ResetRunCmdForTest() {
 	runCmd = exec.Run
+}
+
+// SetRunCmdWithEnvForTest swaps the runner used when WithEnv is configured.
+// The environment is complete: it includes the inherited process environment
+// with the resource's values overlaid.
+func SetRunCmdWithEnvForTest(run func(env []string, name string, args ...string) (string, string, int, error)) {
+	runCmdWithEnv = run
+}
+
+// ResetRunCmdWithEnvForTest restores the environment-aware runner.
+func ResetRunCmdWithEnvForTest() {
+	runCmdWithEnv = func(env []string, name string, args ...string) (string, string, int, error) {
+		return exec.RunWith(exec.Opts{Env: env}, name, args...)
+	}
 }
 
 // detectPkgManager is swapped in unit tests (CI runners are often Ubuntu).
@@ -84,7 +114,7 @@ func Present(name string, opts ...opt.PackageOption) resource.Resource {
 }
 
 func (p *Package) planDraft(id string) resource.PlanDraft {
-	return resource.PlanDraft{
+	d := resource.PlanDraft{
 		Kind:   "package",
 		ID:     id,
 		Name:   p.name,
@@ -92,6 +122,10 @@ func (p *Package) planDraft(id string) resource.PlanDraft {
 		Latest: p.latest,
 		Deps:   p.DependsOn.SortedIDs(),
 	}
+	if p.env != nil {
+		d.Env = maps.Clone(p.env)
+	}
+	return d
 }
 
 // Ensure builds and applies a package resource without registering it or
@@ -132,8 +166,15 @@ func detectPackageManager() (string, error) {
 	}
 }
 
-func runOrErr(bin string, args ...string) error {
-	stdout, stderr, code, err := runCmd(bin, args...)
+func (p *Package) run(bin string, args ...string) (string, string, int, error) {
+	if p.env == nil {
+		return runCmd(bin, args...)
+	}
+	return runCmdWithEnv(exec.MergeEnv(p.env), bin, args...)
+}
+
+func runOrErr(p *Package, bin string, args ...string) error {
+	stdout, stderr, code, err := p.run(bin, args...)
 	if err != nil {
 		return fmt.Errorf("%s %v: %w", bin, args, err)
 	}

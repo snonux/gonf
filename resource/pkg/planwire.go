@@ -2,6 +2,7 @@ package pkg
 
 import (
 	"fmt"
+	"maps"
 
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -27,6 +28,7 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		Name:   d.Name,
 		Absent: d.Absent,
 		Latest: d.Latest,
+		Env:    maps.Clone(d.Env),
 		Deps:   d.Deps,
 	}, nil
 }
@@ -44,6 +46,9 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	}
 	if op.Latest {
 		opts = append(opts, opt.IsLatest)
+	}
+	if op.Env != nil {
+		opts = append(opts, opt.WithEnv(op.Env))
 	}
 	return Ensure(op.Name, opts...)
 }

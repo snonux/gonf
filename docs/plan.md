@@ -533,6 +533,11 @@ metadata converges. The arrays preserve declaration order and allow one
 resource to apply a complete batch of line edits; older singular line fields
 remain accepted when applying older plans.
 
+Plan schema **version 15** extends `env` from `command` to `package`
+operations. `WithEnv` is applied to both the package manager's state probe
+and its mutation, so older binaries must reject v15 plans rather than silently
+using their inherited environment for package operations.
+
 ### Secret material
 
 `MustSecret(path)` reads a required non-empty file below the controller

@@ -523,7 +523,7 @@ func TestRunOrErr(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			runCmd = tt.run
-			err := runOrErr("pkg", "install", "rsync")
+			err := runOrErr(&Package{}, "pkg", "install", "rsync")
 			if tt.wantErr == "" {
 				if err != nil {
 					t.Fatalf("runOrErr err = %v, want nil", err)

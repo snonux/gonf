@@ -128,7 +128,7 @@ type PlanDraft struct {
 	Args []string
 	// Dir is the working directory for the "command" kind.
 	Dir string
-	// Env is extra environment for the "command" kind.
+	// Env is extra environment for the "command" and "package" kinds.
 	Env map[string]string
 	// Creates skips the command when this path already exists.
 	Creates string

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -149,6 +150,67 @@ func TestPlanOptionFitness_Package(t *testing.T) {
 			}
 			if len(planCalls) == 0 {
 				t.Fatalf("%s: expected at least one dnf call", c.name)
+			}
+		})
+	}
+}
+
+// TestPlanOptionFitness_PackageWithEnv proves that WithEnv is carried through
+// the package handler for every backend. Each backend receives the complete
+// overlaid environment for both its installed-state probe and mutation, just
+// as a direct Ensure does.
+func TestPlanOptionFitness_PackageWithEnv(t *testing.T) {
+	t.Cleanup(pkg.ResetDetectPackageManagerForTest)
+	t.Cleanup(pkg.ResetRunCmdForTest)
+	t.Cleanup(pkg.ResetRunCmdWithEnvForTest)
+
+	tests := []struct {
+		name string
+		mgr  string
+	}{
+		{"dnf", "dnf"},
+		{"openbsd", "openbsd"},
+		{"freebsd", "freebsd"},
+		{"netbsd", "netbsd"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pkg.SetDetectPackageManagerForTest(func() (string, error) { return tt.mgr, nil })
+			t.Cleanup(pkg.ResetDetectPackageManagerForTest)
+
+			fake := func(calls *[][]string) func([]string, string, ...string) (string, string, int, error) {
+				return func(env []string, name string, args ...string) (string, string, int, error) {
+					*calls = append(*calls, append([]string(nil), env...))
+					if argsContainOpt(args, "-e") || (name == "rpm" && argsContainOpt(args, "-q")) {
+						return "", "not installed", 1, nil
+					}
+					return "", "", 0, nil
+				}
+			}
+
+			opts := []opt.PackageOption{opt.WithEnv(map[string]string{"PKG_PATH": "https://pkgrepo.example/"})}
+			var directCalls [][]string
+			pkg.SetRunCmdWithEnvForTest(fake(&directCalls))
+			if err := pkg.Ensure("dtail", opts...); err != nil {
+				t.Fatalf("direct Ensure: %v", err)
+			}
+
+			var planCalls [][]string
+			pkg.SetRunCmdWithEnvForTest(fake(&planCalls))
+			recordApplyOption(t, "pkg_env_"+tt.name, func() {
+				Package("dtail", opts...)
+			})
+
+			if !reflect.DeepEqual(directCalls, planCalls) {
+				t.Fatalf("plan round-trip environment diverged from direct Ensure\n direct: %v\n plan:   %v", directCalls, planCalls)
+			}
+			if len(planCalls) != 2 {
+				t.Fatalf("environment calls = %v, want probe and action", planCalls)
+			}
+			for _, env := range planCalls {
+				if !slices.Contains(env, "PKG_PATH=https://pkgrepo.example/") {
+					t.Fatalf("environment missing PKG_PATH: %v", env)
+				}
 			}
 		})
 	}

@@ -85,7 +85,10 @@ func TestEveryExportedOptionHasAResourceFamily(t *testing.T) {
 		{"WithHardlink", func() { acceptLink(WithHardlink("target")) }},
 		{"WithName", func() { acceptCommand(WithName("name")) }},
 		{"WithDir", func() { acceptCommand(WithDir("/work")) }},
-		{"WithEnv", func() { acceptCommand(WithEnv(map[string]string{"KEY": "value"})) }},
+		{"WithEnv", func() {
+			acceptCommand(WithEnv(map[string]string{"KEY": "value"}))
+			acceptPackage(WithEnv(map[string]string{"KEY": "value"}))
+		}},
 		{"Creates", func() { acceptCommand(Creates("/marker")) }},
 		{"Unless", func() { acceptCommand(Unless("test", nil)) }},
 		{"OnlyIf", func() { acceptCommand(OnlyIf("test", nil)) }},
@@ -204,6 +207,7 @@ func TestSharedOptionsHaveCompleteFamilyMatrix(t *testing.T) {
 	acceptCommand(WithName("name"))
 	acceptCommand(WithDir("/work"))
 	acceptCommand(WithEnv(map[string]string{"KEY": "value"}))
+	acceptPackage(WithEnv(map[string]string{"KEY": "value"}))
 	acceptCommand(Creates("/marker"))
 	acceptCommand(Unless("test", nil))
 	acceptCommand(OnlyIf("test", nil))
@@ -218,7 +222,7 @@ func TestLegacyOptionAdapters(t *testing.T) {
 		{"file", len(ToFileOptions(WithContent("x"))), 1},
 		{"directory", len(ToDirOptions(WithMode(0o755))), 1},
 		{"link", len(ToLinkOptions(WithSymlink("target"))), 1},
-		{"package", len(ToPackageOptions(IsLatest)), 1},
+		{"package", len(ToPackageOptions(IsLatest, WithEnv(map[string]string{"PKG_PATH": "repo"}))), 2},
 		{"service", len(ToServiceOptions(WithReload)), 1},
 		{"cron", len(ToCronOptions(WithMinute("*"))), 1},
 		{"timer", len(ToTimerOptions(WithRestart)), 1},

@@ -14,7 +14,7 @@ const (
 
 func applyNetBSD(p *Package) error {
 	id := fmt.Sprintf("Package[%s]", p.name)
-	installed, err := netbsdInstalled(p.name)
+	installed, err := netbsdInstalled(p)
 	if err != nil {
 		return err
 	}
@@ -41,7 +41,7 @@ func applyNetBSD(p *Package) error {
 		resource.NoteResult(id, true)
 		return nil
 	}
-	if err := runOrErr(netbsdPkgin, args...); err != nil {
+	if err := runOrErr(p, netbsdPkgin, args...); err != nil {
 		return err
 	}
 	logger.Info("pkgin %v", args)
@@ -49,10 +49,10 @@ func applyNetBSD(p *Package) error {
 	return nil
 }
 
-func netbsdInstalled(name string) (bool, error) {
-	_, _, code, err := runCmd(netbsdPkgInfo, "-e", name)
+func netbsdInstalled(p *Package) (bool, error) {
+	_, _, code, err := p.run(netbsdPkgInfo, "-e", p.name)
 	if err != nil {
-		return false, fmt.Errorf("pkg_info -e %s: %w", name, err)
+		return false, fmt.Errorf("pkg_info -e %s: %w", p.name, err)
 	}
 	return code == 0, nil
 }

@@ -35,8 +35,10 @@ import "encoding/json"
 // applying v1–10 plans. Version 12 adds template_data to file ops for
 // structured destination-side template rendering. Version 13 adds
 // additive-only user operations and their creation-time account attributes.
-// Version 14 adds ensure_file plus ordered batched file line edits.
-const CurrentVersion = 14
+// Version 14 adds ensure_file plus ordered batched file line edits. Version
+// 15 extends Env from command operations to package operations, so older
+// destination binaries reject rather than silently ignore WithEnv.
+const CurrentVersion = 15
 
 // supportedVersions is the set of plan schema versions this binary can apply.
 // Apply must refuse plans whose version is not in this set before any mutation.
@@ -54,6 +56,7 @@ var supportedVersions = map[int]struct{}{
 	11:             {},
 	12:             {},
 	13:             {},
+	14:             {},
 	CurrentVersion: {},
 }
 
@@ -279,7 +282,7 @@ type Op struct {
 	Args []string `json:"args,omitempty"`
 	// Dir is the working directory for KindCommand.
 	Dir string `json:"dir,omitempty"`
-	// Env is extra environment for KindCommand.
+	// Env is extra environment for KindCommand and KindPackage.
 	Env map[string]string `json:"env,omitempty"`
 	// Creates skips KindCommand when this path already exists.
 	Creates string `json:"creates,omitempty"`

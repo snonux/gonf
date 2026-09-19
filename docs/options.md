@@ -37,6 +37,7 @@ See [file-dir-link.md](file-dir-link.md): `WithContent`, `WithSource`,
 | Option | Meaning |
 |--------|---------|
 | `IsLatest` | Upgrade/install to latest where the backend supports it |
+| `WithEnv` | Extra environment (`map[string]string`) for package-manager probes and mutations |
 
 ## User
 

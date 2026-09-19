@@ -9,7 +9,7 @@ import (
 
 func applyFreeBSDPkg(p *Package) error {
 	id := fmt.Sprintf("Package[%s]", p.name)
-	installed, err := freebsdPkgInstalled(p.name)
+	installed, err := freebsdPkgInstalled(p)
 	if err != nil {
 		return err
 	}
@@ -36,7 +36,7 @@ func applyFreeBSDPkg(p *Package) error {
 		resource.NoteResult(id, true)
 		return nil
 	}
-	if err := runOrErr("pkg", args...); err != nil {
+	if err := runOrErr(p, "pkg", args...); err != nil {
 		return err
 	}
 	logger.Info("pkg %v", args)
@@ -44,10 +44,10 @@ func applyFreeBSDPkg(p *Package) error {
 	return nil
 }
 
-func freebsdPkgInstalled(name string) (bool, error) {
-	_, _, code, err := runCmd("pkg", "info", "-e", name)
+func freebsdPkgInstalled(p *Package) (bool, error) {
+	_, _, code, err := p.run("pkg", "info", "-e", p.name)
 	if err != nil {
-		return false, fmt.Errorf("pkg info -e %s: %w", name, err)
+		return false, fmt.Errorf("pkg info -e %s: %w", p.name, err)
 	}
 	return code == 0, nil
 }

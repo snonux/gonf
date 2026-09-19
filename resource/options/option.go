@@ -196,6 +196,7 @@ type (
 	dirOption              func(any)
 	linkOption             func(any)
 	packageOption          func(any)
+	packageCommandOption   func(any)
 	serviceOption          func(any)
 	cronOption             func(any)
 	systemdTimerOption     func(any)
@@ -217,6 +218,7 @@ func (o fileOption) Apply(target any)             { o(target) }
 func (o dirOption) Apply(target any)              { o(target) }
 func (o linkOption) Apply(target any)             { o(target) }
 func (o packageOption) Apply(target any)          { o(target) }
+func (o packageCommandOption) Apply(target any)   { o(target) }
 func (o serviceOption) Apply(target any)          { o(target) }
 func (o cronOption) Apply(target any)             { o(target) }
 func (o systemdTimerOption) Apply(target any)     { o(target) }
@@ -248,6 +250,8 @@ func (fileOption) fileOption()                     {}
 func (dirOption) dirOption()                       {}
 func (linkOption) linkOption()                     {}
 func (packageOption) packageOption()               {}
+func (packageCommandOption) packageOption()        {}
+func (packageCommandOption) commandOption()        {}
 func (serviceOption) serviceOption()               {}
 func (cronOption) cronOption()                     {}
 func (systemdTimerOption) systemdTimerOption()     {}
@@ -780,9 +784,12 @@ func WithDir(dir string) commandOption {
 	})
 }
 
-// WithEnv merges extra environment variables into a command.
-func WithEnv(env map[string]string) commandOption {
-	return commandOption(func(target any) {
+// WithEnv merges extra environment variables into a command or package
+// operation. Package managers receive the variables for both state probes and
+// mutations, which allows declarative custom repository configuration such as
+// PKG_PATH for OpenBSD pkg_add.
+func WithEnv(env map[string]string) packageCommandOption {
+	return packageCommandOption(func(target any) {
 		requires(target, "WithEnv", func(r Envable) { r.SetEnv(env) })
 	})
 }

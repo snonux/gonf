@@ -83,7 +83,7 @@ Status against every conf Rex primitive, as of gonf v0.12.2:
 | Parallel push resilience | per-cluster `.Parallel(n)` honored through fleets, `-j` override, per-host `-host-timeout` (default 10m), failing host cancels in-flight siblings fleet-wide, SIGINT/SIGTERM abort the push | **Done** |
 | Remote binary lifecycle | push probes `gonf -plan-version`; missing/older gonf is cross-compiled (`WithGOOS`/`WithGOARCH`) and installed to `WithGonfPath` (default `/usr/local/bin/gonf`) with the host's privilege mode | **Done** |
 | `pkg … ensure => present/absent` (pkg_add, pkg, pkgin, dnf) | `Package` / `NoPackage` with OS-auto-detected backends; `IsLatest` upgrade path (plan v10 `latest`) | **Done** |
-| Custom repo / `PKG_PATH="https://pkgrepo…"` env on pkg_add | nothing on `Package`; recipe-side workaround is `Command` with `WithEnv` | **Gap** → `WithPkgPath` |
+| Custom repo / `PKG_PATH="https://pkgrepo…"` env on pkg_add | `Package(..., WithEnv(map[string]string{"PKG_PATH": …}), IsLatest)` passes the overlay to pkg probes and actions | **Done** (plan v15) |
 | `service x, ensure => started` (rcctl / systemd / FreeBSD+NetBSD `service`) | `Service` / `NoService` auto-detect, `WithRestart` (restart once when already active), `WithReload`, `WithUser` (systemd) | **Done** |
 | `on_change => sub { service 'x' => 'restart' }` (restart only when a file changed) | `OnChange(res…)`: Command runs only on a watched change; Service/Timer preserve state convergence but gate requested restart/reload; DaemonReload is gated too | **Done** (plan v11) |
 | `template(...)` with arrays/loops/closures/per-server data | `.tmpl` sources render at destination apply with environment, `.Param`, structured `WithTemplateData`, and `.Gonf` host facts; Go still computes closures | **Done** |
@@ -156,16 +156,18 @@ belongs in task names, descriptions, or host values (`WithValue` rows print in
 
 `dtail_install` / `gogios_install` install from `https://pkgrepo.f3s.buetow.org`
 with `PKG_PATH=… pkg_add -u X || pkg_add X`; `pkgrepo_setup` appends the
-`PKG_PATH` export to `/root/.profile`. Proposal:
+`PKG_PATH` export to `/root/.profile`. The declarative form is:
 
 ```go
-Package("dtail", WithPkgPath("https://pkgrepo.f3s.buetow.org/openbsd/7.8/packages/amd64/"), IsLatest)
+Package("dtail", WithEnv(map[string]string{
+    "PKG_PATH": "https://pkgrepo.f3s.buetow.org/openbsd/7.8/packages/amd64/",
+}), IsLatest)
 ```
 
-Backend mapping: OpenBSD → `PKG_PATH` env on `pkg_add`; NetBSD → `pkgin` repo
-conf; FreeBSD → repo config for `pkg install -r`; dnf → repo file. Backends that
-cannot honor it fail at apply time with a clear error. Until then the workaround
-is `Command("pkg_add", List("dtail"), WithEnv(map[string]string{"PKG_PATH": …}))`.
+`WithEnv` overlays the inherited environment for every package-manager probe
+and mutation, and it survives plan recording/application. It is deliberately
+general rather than a repository-specific abstraction: recipes can use the
+native environment configuration of dnf, pkg_add, pkg, or pkgin.
 
 ### 4. Cron `@reboot` (nice-to-have)
 
@@ -286,10 +288,10 @@ lands in `/tmp` owned by the login user (plain chunk), only the two
 | `smtpd` (aliases → `newaliases` on change; virtualdomains/users; 3 reject lists; smtpd.conf restart-on-change; service) | `InstallFile` ×7 + `Command("newaliases", …, IfChanged)` + `Service("smtpd", IfChanged, …)` | Needs [on-change]. **To do** |
 | `nsd` (flags append; key.conf from secret; nsd.conf.master; per-zone templates; zone removals; restart-if-changed; service) | `File(WithLine)` + `Secret()` + `File` + `for` loop over zones emitting one `File` per zone + `NoFile` ×removed + `Service("nsd", IfChanged, …)` | Needs [on-change] + [secrets] + [templates→Go]. **To do** |
 | `nsd_failover` (script + root crontab via run) | `InstallFile` + `Cron("nsd_failover", WithCommand("-ns /usr/local/bin/dns-failover.ksh"), WithMinute("*"))` | **To do** (no new features; Cron replaces the temp-file crontab race, `-ns` in the command field, root is the default user) |
-| `dtail_install` (remove stray binaries; `PKG_PATH=… pkg_add -u dtail ‖ pkg_add dtail`) | `Command` cleanup probes + `Package("dtail", WithPkgPath(…), IsLatest)` | Needs [pkg-path] (workaround `Command(WithEnv)` today). **To do** |
-| `dtail` (dtail_install + adduser `_dserver` + `usermod -d` + daily.local appends + service) | depends on dtail port + `User("_dserver", WithHome("/var/run/dserver"))` + `File(WithLine)` ×2 + `Service("dserver")` | Needs [pkg-path]. **To do** |
+| `dtail_install` (remove stray binaries; `PKG_PATH=… pkg_add -u dtail ‖ pkg_add dtail`) | `Command` cleanup probes + `Package("dtail", WithEnv(map[string]string{"PKG_PATH": …}), IsLatest)` | **To do** (no missing package feature) |
+| `dtail` (dtail_install + adduser `_dserver` + `usermod -d` + daily.local appends + service) | depends on dtail port + `User("_dserver", WithHome("/var/run/dserver"))` + `File(WithLine)` ×2 + `Service("dserver")` | **To do** |
 | `pkgrepo_setup` (`PKG_PATH` export appended to `/root/.profile`) | `File("/root/.profile", WithLine(export PKG_PATH=…))` | **To do** (no new features) |
-| `gogios_install` (uname branch: OpenBSD custom-repo `pkg_add -u ‖ install`; FreeBSD branch is dead code) | `Package("gogios", WithPkgPath(…), IsLatest)` (frontends are all OpenBSD; branch collapses) | Needs [pkg-path]. **To do** |
+| `gogios_install` (uname branch: OpenBSD custom-repo `pkg_add -u ‖ install`; FreeBSD branch is dead code) | `Package("gogios", WithEnv(map[string]string{"PKG_PATH": …}), IsLatest)` (frontends are all OpenBSD; branch collapses) | **To do** (no missing package feature) |
 | `gogios` (pkg ×2; adduser `_gogios`; dirs; gogios.json template over 3 arrays; `check_shuriken_age` sourced from `~/git/shuriken.sh`; `_gogios` crontab from template; rc.local appends) | `Package` ×2 + `User("_gogios")` + `EnsureDir` ×2 + Go-computed `gogios.json` + `InstallFile` (absolute source outside repo — supported) + `Cron("gogios_check", WithCronUser("_gogios"), …)` + `File(WithLine)` ×2 | Needs [templates→Go]. **To do** |
 | `cron_test` (Rex cron canary, `_gogios` user) | `Cron("frontends_cron_test", WithCronUser("_gogios"), …)` | **To do** (canary; low priority) |
 | `gorum_install` (source file; Rexfile has malformed owner/group attrs — fix at port) | `InstallFile("/usr/local/bin/gorum", …)` | **To do** (no new features; note the Rexfile attribute-syntax bug) |
