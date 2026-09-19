@@ -86,7 +86,7 @@ Status against every conf Rex primitive, as of gonf v0.12.2:
 | Custom repo / `PKG_PATH="https://pkgrepo…"` env on pkg_add | nothing on `Package`; recipe-side workaround is `Command` with `WithEnv` | **Gap** → `WithPkgPath` |
 | `service x, ensure => started` (rcctl / systemd / FreeBSD+NetBSD `service`) | `Service` / `NoService` auto-detect, `WithRestart` (restart once when already active), `WithReload`, `WithUser` (systemd) | **Done** |
 | `on_change => sub { service 'x' => 'restart' }` (restart only when a file changed) | `OnChange(res…)`: Command runs only on a watched change; Service/Timer preserve state convergence but gate requested restart/reload; DaemonReload is gated too | **Done** (plan v11) |
-| `template(...)` with arrays/loops/closures/per-server data | `.tmpl` sources render at apply time with process env + `{{.Param}}` only; **record-time Go can compute any content** (closures, arrays, per-host data via `WhenHostname` fragments) | **Partial** (ergonomics — see [Templates](#templates-rich-data--closures)) |
+| `template(...)` with arrays/loops/closures/per-server data | `.tmpl` sources render at destination apply with environment, `.Param`, structured `WithTemplateData`, and `.Gonf` host facts; Go still computes closures | **Done** |
 | `$secrets->('path')` (`read_file './secrets/…'`) | no helper; recipe code may `os.ReadFile` today | **Gap** → `Secret()` convention |
 | `append_if_no_such_line` | `WithLine` / `WithoutLine` (idempotent, mode-aware) | **Done** |
 | `file …, ensure => 'absent'` | `NoFile` | **Done** |
@@ -200,12 +200,10 @@ expression; zone-file loops become `EachKV`/`for` over the zone list emitting on
 `InstallFile` per zone. This costs more lines than Rex but lives in one language
 and is fully type-checked.
 
-An optional future feature — `WithTemplateData(map[string]any)` carried on the
-`file` op and rendered with `text/template` + helper funcs — would recover the
-template ergonomics for large configs (httpd/relayd/gogios). It requires a plan
-bump (serializable template data on the wire) and only pays off if the per-host
-Go fragments prove unwieldy in practice. **Not a blocker**: port can proceed with
-record-time computation.
+`WithTemplateData(any)` carries JSON-compatible maps, slices, and structs on
+the file op. Templates render at destination apply with stable string helpers,
+strict missing-key errors, and live destination facts under `.Gonf`. This covers
+large config loops and per-host values while keeping closures in Go.
 
 ## The conf/gonf consumer
 
@@ -244,8 +242,8 @@ match; LAN hosts pin `WithSSHPort(22)` because `~/.ssh/config` maps
    stopgap works today), r-nodes
    nfs_mount_monitor + persistent_journal (need step 1 for change-gated timer
    restart; `DaemonReload(IfChanged)` already exists).
-7. **Nice-to-haves** (only if consumers still feel the pain): cron `@reboot`,
-   `User` resource, `WithTemplateData`.
+7. **Nice-to-haves** (only if consumers still feel the pain): cron `@reboot`
+   and a `User` resource.
 
 Steps 1–3 are gonf-library work (tests + plan bump + docs); steps 4–6 are
 conf-consumer work tagged to a gonf release; each port flips task ownership from

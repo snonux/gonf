@@ -23,27 +23,28 @@ type Option = func(any)
 // They remain small so resource types only implement the capabilities they
 // actually support.
 type (
-	Owner          interface{ SetOwner(string) }
-	Grouped        interface{ SetGroup(string) }
-	Moded          interface{ SetMode(os.FileMode) }
-	Sourced        interface{ SetSource(string) }
-	SourceGlobable interface{ SetSourceGlob(string) }
-	SourceBaseable interface{ SetSourceBase(string) }
-	Paramable      interface{ SetParam(string) }
-	Templateable   interface{ SetTemplate() }
-	Contented      interface{ SetContent(string) }
-	LineAddable    interface{ SetAddLine(string) }
-	LineRemovable  interface{ SetRemoveLine(string) }
-	FileModed      interface{ SetFileMode(os.FileMode) }
-	Prunable       interface{ SetPrune() }
-	Absentable     interface{ SetAbsent() }
-	Latestable     interface{ SetLatest() }
-	Dependable     interface{ AddDependency(string) }
-	Named          interface{ SetName(string) }
-	Dirable        interface{ SetDir(string) }
-	Envable        interface{ SetEnv(map[string]string) }
-	Creatable      interface{ SetCreates(string) }
-	Guardable      interface {
+	Owner            interface{ SetOwner(string) }
+	Grouped          interface{ SetGroup(string) }
+	Moded            interface{ SetMode(os.FileMode) }
+	Sourced          interface{ SetSource(string) }
+	SourceGlobable   interface{ SetSourceGlob(string) }
+	SourceBaseable   interface{ SetSourceBase(string) }
+	Paramable        interface{ SetParam(string) }
+	Templateable     interface{ SetTemplate() }
+	TemplateDataable interface{ SetTemplateData(any) }
+	Contented        interface{ SetContent(string) }
+	LineAddable      interface{ SetAddLine(string) }
+	LineRemovable    interface{ SetRemoveLine(string) }
+	FileModed        interface{ SetFileMode(os.FileMode) }
+	Prunable         interface{ SetPrune() }
+	Absentable       interface{ SetAbsent() }
+	Latestable       interface{ SetLatest() }
+	Dependable       interface{ AddDependency(string) }
+	Named            interface{ SetName(string) }
+	Dirable          interface{ SetDir(string) }
+	Envable          interface{ SetEnv(map[string]string) }
+	Creatable        interface{ SetCreates(string) }
+	Guardable        interface {
 		SetUnless(*Guard)
 		SetOnlyIf(*Guard)
 	}
@@ -398,6 +399,16 @@ func WithParam(value string) fileOption {
 var WithTemplate = fileOption(func(target any) {
 	requires(target, "WithTemplate", func(r Templateable) { r.SetTemplate() })
 })
+
+// WithTemplateData supplies JSON-compatible data to a file template. It also
+// enables template rendering, so literal template content need not carry a
+// .tmpl suffix. The value is validated while recording the plan and rendered
+// only by the destination.
+func WithTemplateData(data any) fileOption {
+	return fileOption(func(target any) {
+		requires(target, "WithTemplateData", func(r TemplateDataable) { r.SetTemplateData(data) })
+	})
+}
 
 // WithSourceBase sets the declared source directory for a synced directory.
 func WithSourceBase(value string) dirOption {

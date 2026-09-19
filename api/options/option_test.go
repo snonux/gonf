@@ -43,6 +43,7 @@ func (c *capTarget) SetSourceGlob(v string)     { c.record("SetSourceGlob", v) }
 func (c *capTarget) SetSourceBase(v string)     { c.record("SetSourceBase", v) }
 func (c *capTarget) SetParam(v string)          { c.record("SetParam", v) }
 func (c *capTarget) SetTemplate()               { c.record("SetTemplate", nil) }
+func (c *capTarget) SetTemplateData(v any)      { c.record("SetTemplateData", v) }
 func (c *capTarget) SetContent(v string)        { c.record("SetContent", v) }
 func (c *capTarget) SetAddLine(v string)        { c.record("SetAddLine", v) }
 func (c *capTarget) SetRemoveLine(v string)     { c.record("SetRemoveLine", v) }
@@ -163,6 +164,7 @@ func TestOptionsReachTheirSetters(t *testing.T) {
 		{"WithSourceBase", WithSourceBase("assets/testfiles"), "SetSourceBase", "assets/testfiles"},
 		{"WithParam", WithParam("stable"), "SetParam", "stable"},
 		{"WithTemplate", WithTemplate, "SetTemplate", nil},
+		{"WithTemplateData", WithTemplateData(map[string]any{"name": "relay"}), "SetTemplateData", map[string]any{"name": "relay"}},
 		{"WithContent", WithContent("hello"), "SetContent", "hello"},
 		{"WithLine", WithLine("line"), "SetAddLine", "line"},
 		{"WithoutLine", WithoutLine("gone"), "SetRemoveLine", "gone"},

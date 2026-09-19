@@ -1,6 +1,7 @@
 package file
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/snonux/gonf/plan"
@@ -20,7 +21,7 @@ func init() {
 
 // ToOp lowers a "file" resource draft to a plan.Op.
 func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
-	return plan.Op{
+	op := plan.Op{
 		Op:            plan.KindFile,
 		ID:            d.ID,
 		Path:          d.Path,
@@ -36,7 +37,15 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		RemoveLine:    d.RemoveLine,
 		Absent:        d.Absent,
 		Deps:          d.Deps,
-	}, nil
+	}
+	if d.TemplateDataSet {
+		raw, err := json.Marshal(d.TemplateData)
+		if err != nil {
+			return plan.Op{}, fmt.Errorf("file: template data must be JSON-compatible: %w", err)
+		}
+		op.TemplateData = raw
+	}
+	return op, nil
 }
 
 // Apply writes, edits, or removes the destination file, mirroring the
@@ -61,7 +70,7 @@ func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	if op.AddLine != "" || op.RemoveLine != "" {
 		return applyFileLines(path, op, ownership)
 	}
-	return applyFileContent(path, op, ownership, ctx.PlanDir)
+	return applyFileContent(path, op, ownership, ctx)
 }
 
 func applyFileLines(path string, op plan.Op, ownership []opt.FileDirOption) error {
@@ -88,8 +97,8 @@ func applyFileLines(path string, op plan.Op, ownership []opt.FileDirOption) erro
 	return Ensure(path, opts...)
 }
 
-func applyFileContent(path string, op plan.Op, ownership []opt.FileDirOption, planDir string) error {
-	content, err := fileContent(op, planDir)
+func applyFileContent(path string, op plan.Op, ownership []opt.FileDirOption, ctx plan.ApplyContext) error {
+	content, err := fileContent(op, ctx.PlanDir)
 	if err != nil {
 		return err
 	}
@@ -97,7 +106,7 @@ func applyFileContent(path string, op plan.Op, ownership []opt.FileDirOption, pl
 	if err != nil {
 		return err
 	}
-	return Ensure(path, opts...)
+	return ensureWithFacts(path, templateFacts(ctx.Facts), opts...)
 }
 
 func fileContent(op plan.Op, planDir string) ([]byte, error) {
@@ -139,6 +148,13 @@ func fileContentOptions(op plan.Op, content []byte, ownership []opt.FileDirOptio
 		if op.TemplateParam != "" {
 			opts = append(opts, opt.WithParam(op.TemplateParam))
 		}
+	}
+	if len(op.TemplateData) != 0 {
+		data, err := decodeTemplateData(op.TemplateData)
+		if err != nil {
+			return nil, fmt.Errorf("file: decode template_data: %w", err)
+		}
+		opts = append(opts, opt.WithTemplateData(data))
 	}
 	if op.Mode != "" {
 		mode, err := plan.ParseMode(op.Mode)

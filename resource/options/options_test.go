@@ -37,6 +37,7 @@ func TestEveryExportedOptionHasAResourceFamily(t *testing.T) {
 		{"WithSourceGlob", func() { acceptDir(WithSourceGlob("*.conf")) }},
 		{"WithParam", func() { acceptFile(WithParam("param")) }},
 		{"WithTemplate", func() { acceptFile(WithTemplate) }},
+		{"WithTemplateData", func() { acceptFile(WithTemplateData(map[string]any{})) }},
 		{"WithSourceBase", func() { acceptDir(WithSourceBase("source")) }},
 		{"WithContent", func() { acceptFile(WithContent("content")) }},
 		{"WithLine", func() { acceptFile(WithLine("line")) }},
@@ -139,6 +140,7 @@ func TestSharedOptionsHaveCompleteFamilyMatrix(t *testing.T) {
 	acceptDir(WithSourceGlob("*.conf"))
 	acceptFile(WithParam("param"))
 	acceptFile(WithTemplate)
+	acceptFile(WithTemplateData(map[string]any{}))
 	acceptDir(WithSourceBase("source"))
 	acceptFile(WithContent("content"))
 	acceptFile(WithLine("line"))

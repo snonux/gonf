@@ -74,6 +74,10 @@ type PlanDraft struct {
 	// a plan-apply implementation detail (there is no destination-side
 	// source file to derive it from).
 	TemplateParam string
+	// TemplateData is the JSON-compatible data supplied by WithTemplateData.
+	// The file handler encodes it so invalid values fail during RecordPlan.
+	TemplateData    any
+	TemplateDataSet bool
 	// SourceDir is a controller-local directory to package as a blob tree;
 	// for sync_dir drafts it also carries the recipe's DECLARED source
 	// directory onto the op's source_dir field (the glob pattern's

@@ -264,7 +264,7 @@ func applyLine(op Op, facts Facts, planDir string, stack *[]bool) error {
 	if !active {
 		return nil
 	}
-	return applyActive(op, planDir)
+	return applyActiveWithFacts(op, planDir, facts)
 }
 
 func whenActive(stack []bool) bool {
@@ -280,8 +280,12 @@ func whenActive(stack []bool) bool {
 // kind" — so this package needs no resource-package imports of its own: it
 // only knows the Handler interface, never a concrete resource kind.
 func applyActive(op Op, planDir string) error {
+	return applyActiveWithFacts(op, planDir, Facts{})
+}
+
+func applyActiveWithFacts(op Op, planDir string, facts Facts) error {
 	if h, ok := HandlerFor(op.Op); ok {
-		return h.Apply(op, ApplyContext{PlanDir: planDir})
+		return h.Apply(op, ApplyContext{PlanDir: planDir, Facts: facts})
 	}
 	return fmt.Errorf("unknown op %q", op.Op)
 }

@@ -19,6 +19,7 @@ type (
 	SourceBaseable         = resourceoptions.SourceBaseable
 	Paramable              = resourceoptions.Paramable
 	Templateable           = resourceoptions.Templateable
+	TemplateDataable       = resourceoptions.TemplateDataable
 	Contented              = resourceoptions.Contented
 	LineAddable            = resourceoptions.LineAddable
 	LineRemovable          = resourceoptions.LineRemovable
@@ -88,6 +89,7 @@ var (
 	WithSourceGlob         = resourceoptions.WithSourceGlob
 	WithParam              = resourceoptions.WithParam
 	WithTemplate           = resourceoptions.WithTemplate
+	WithTemplateData       = resourceoptions.WithTemplateData
 	WithSourceBase         = resourceoptions.WithSourceBase
 	WithContent            = resourceoptions.WithContent
 	WithLine               = resourceoptions.WithLine

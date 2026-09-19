@@ -93,6 +93,9 @@ ops, err := RecordPlan("my-plan", planDir, "home_helix", "home_tmux")
   (`opt.WithParam(template_param)`) before writing the file. `SyncDir`/`Dir`
   source-tree copies are unaffected — their per-file `WithSource` still
   carries `.tmpl` at apply time (see [file-dir-link.md](file-dir-link.md)).
+- `WithTemplateData` is encoded as `template_data` on `file` ops (schema v12).
+  It remains JSON data until destination apply, where the file handler exposes
+  it to the template along with live destination facts under `.Gonf`.
 - `SyncDir` trees → `planDir/blobs/<name>/`.
 - The recipe's declared source directory travels on the `sync_dir` op
   (`source_dir`, schema v6): destination apply renders `.tmpl` files inside
@@ -502,6 +505,12 @@ would ignore these fields on the newly supported kinds and run the action on
 every apply, so v10 binaries refuse v11 plans at the header gate before any
 mutation. Change reports are privilege-chunk-local; controller-side plan
 validation rejects a watched op in another chunk or an empty/dangling watch.
+
+Plan schema **version 12** adds `template_data` to `file` ops. Older binaries
+must refuse these plans: otherwise they would render a template without its
+declared data and either fail or silently produce incorrect output. Version 12
+also makes destination facts available beneath the reserved `.Gonf` template
+context.
 
 Plan schema **version 10** adds the `latest` field to `package` ops: a
 `Package` recorded with `IsLatest` now carries that intent explicitly, so

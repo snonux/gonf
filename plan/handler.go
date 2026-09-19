@@ -11,6 +11,8 @@ type ApplyContext struct {
 	// the plan JSONL). Empty when the plan only uses content_b64 and no
 	// blobs.
 	PlanDir string
+	// Facts are detected on the destination and exposed to template handlers.
+	Facts Facts
 }
 
 // Handler is a resource kind's ownership of its plan wire form: converting a

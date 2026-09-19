@@ -4,6 +4,8 @@
 // See the overall design plan (Remote gonf — plan/apply with serialized JSONL).
 package plan
 
+import "encoding/json"
+
 // CurrentVersion is the plan wire schema version emitted by gonf plan.
 // Version 2 added timer and daemon_reload ops; version 3 added cron and
 // service ops; version 4 added owner/group fields to the filesystem ops
@@ -30,8 +32,9 @@ package plan
 // would run the command / restart the service unconditionally every apply —
 // the same intent-loss class as previous bumps, so v10 binaries refuse v11
 // plans up-front at the header gate instead, while this binary keeps
-// applying v1–10 plans.
-const CurrentVersion = 11
+// applying v1–10 plans. Version 12 adds template_data to file ops for
+// structured destination-side template rendering.
+const CurrentVersion = 12
 
 // supportedVersions is the set of plan schema versions this binary can apply.
 // Apply must refuse plans whose version is not in this set before any mutation.
@@ -46,6 +49,7 @@ var supportedVersions = map[int]struct{}{
 	8:              {},
 	9:              {},
 	10:             {},
+	11:             {},
 	CurrentVersion: {},
 }
 
@@ -218,6 +222,8 @@ type Op struct {
 	// of exposing the plan-apply implementation detail (there is no source
 	// file on the destination to derive it from).
 	TemplateParam string `json:"template_param,omitempty"`
+	// TemplateData is JSON-compatible data supplied by WithTemplateData.
+	TemplateData json.RawMessage `json:"template_data,omitempty"`
 	// SourceDir is the recipe's declared source directory for KindSyncDir
 	// (for the glob flavor, the declared glob pattern's directory). Apply
 	// passes it to the synced tree so .tmpl files inside render {{.Param}}

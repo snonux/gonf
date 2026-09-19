@@ -6,12 +6,15 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"os/user"
+	"reflect"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -51,14 +54,17 @@ type File struct {
 	// with no source set and a path already stripped of ".tmpl" (planDraft
 	// records the stripped targetPath), so neither suffix check would fire
 	// on its own.
-	template   bool
-	user       string
-	group      string
-	userSet    bool // WithOwner was called explicitly (build()'s default does not count)
-	groupSet   bool // WithGroup was called explicitly (build()'s default does not count)
-	addLine    string
-	removeLine string
-	mode       os.FileMode
+	template        bool
+	templateData    any
+	templateDataSet bool
+	templateFacts   templateFacts
+	user            string
+	group           string
+	userSet         bool // WithOwner was called explicitly (build()'s default does not count)
+	groupSet        bool // WithGroup was called explicitly (build()'s default does not count)
+	addLine         string
+	removeLine      string
+	mode            os.FileMode
 }
 
 // SetContent implements opt.Contented. Setting literal content clears any
@@ -86,6 +92,14 @@ func (f *File) SetParam(param string) { f.param = param }
 // report true even when neither path nor source ends in ".tmpl" — see the
 // template field comment for why plan apply needs this.
 func (f *File) SetTemplate() { f.template = true }
+
+// SetTemplateData implements opt.TemplateDataable. Template data always
+// implies template rendering, including for literal content without .tmpl.
+func (f *File) SetTemplateData(data any) {
+	f.templateData = data
+	f.templateDataSet = true
+	f.template = true
+}
 
 // SetAddLine implements opt.LineAddable.
 func (f *File) SetAddLine(line string) {
@@ -116,10 +130,11 @@ func (f *File) SetGroup(group string) {
 func (f *File) SetMode(mode os.FileMode) { f.mode = mode }
 
 var (
-	_ opt.LineAddable   = (*File)(nil)
-	_ opt.LineRemovable = (*File)(nil)
-	_ opt.Paramable     = (*File)(nil)
-	_ opt.Templateable  = (*File)(nil)
+	_ opt.LineAddable      = (*File)(nil)
+	_ opt.LineRemovable    = (*File)(nil)
+	_ opt.Paramable        = (*File)(nil)
+	_ opt.Templateable     = (*File)(nil)
+	_ opt.TemplateDataable = (*File)(nil)
 )
 
 func build(path string, opts ...opt.FileOption) (*File, error) {
@@ -129,10 +144,11 @@ func build(path string, opts ...opt.FileOption) (*File, error) {
 	}
 
 	f := &File{
-		path:  path,
-		mode:  0o640,
-		user:  curr.Username,
-		group: curr.Gid,
+		path:          path,
+		mode:          0o640,
+		user:          curr.Username,
+		group:         curr.Gid,
+		templateFacts: localTemplateFacts(),
 	}
 
 	for _, o := range opts {
@@ -416,17 +432,39 @@ func (f *File) resolveFromSourceOrContent() (string, []byte, error) {
 	return f.targetPath(), content, nil
 }
 
+type templateFacts struct {
+	GOOS     string
+	Profile  string
+	Hostname string
+}
+
+// templateContext is the stable destination template API. Gonf is reserved;
+// user data cannot replace live destination facts.
+type templateContext struct {
+	GOOS     string
+	Profile  string
+	Hostname string
+}
+
 func (f *File) applyTemplateToContent(content []byte, param string) ([]byte, error) {
-	data := make(map[string]string)
+	data := make(map[string]any)
 	for _, env := range os.Environ() {
 		pair := strings.SplitN(env, "=", 2)
 		if len(pair) == 2 {
 			data[pair[0]] = pair[1]
 		}
 	}
+	templateData, err := templateDataMap(f.templateData, f.templateDataSet)
+	if err != nil {
+		return nil, err
+	}
+	for key, value := range templateData {
+		data[key] = value
+	}
 	data["Param"] = param
+	data["Gonf"] = templateContext(f.templateFacts)
 
-	tmpl, err := template.New("resource").Parse(string(content))
+	tmpl, err := template.New("resource").Funcs(templateFuncMap()).Option("missingkey=error").Parse(string(content))
 	if err != nil {
 		return nil, fmt.Errorf("template parse error: %w", err)
 	}
@@ -436,6 +474,105 @@ func (f *File) applyTemplateToContent(content []byte, param string) ([]byte, err
 		return nil, fmt.Errorf("template execute error: %w", err)
 	}
 	return buf.Bytes(), nil
+}
+
+func templateDataMap(value any, set bool) (map[string]any, error) {
+	data := make(map[string]any)
+	if !set {
+		return data, nil
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("template data must be JSON-compatible: %w", err)
+	}
+	normalized, err := decodeTemplateData(raw)
+	if err != nil {
+		return nil, err
+	}
+	if values, ok := normalized.(map[string]any); ok {
+		for key, item := range values {
+			data[key] = item
+		}
+	}
+	// Data is the complete normalized value, even when a map input also has
+	// a user field named "Data". The root-level flattened map is convenient,
+	// but it must not replace the stable .Data escape hatch.
+	data["Data"] = normalized
+	return data, nil
+}
+
+// decodeTemplateData uses json.Number so JSON normalization does not round a
+// large integer through float64 before text/template renders it.
+func decodeTemplateData(raw []byte) (any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var data any
+	if err := decoder.Decode(&data); err != nil {
+		return nil, fmt.Errorf("template data must be JSON-compatible: %w", err)
+	}
+	return data, nil
+}
+
+func localTemplateFacts() templateFacts {
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = ""
+	}
+	return templateFacts{
+		GOOS:     runtime.GOOS,
+		Profile:  localTemplateProfile(hostname),
+		Hostname: hostname,
+	}
+}
+
+func localTemplateProfile(hostname string) string {
+	if strings.Contains(strings.ToLower(hostname), "rocky") {
+		return "rocky"
+	}
+	f, err := os.Open("/etc/os-release")
+	if err != nil {
+		return "unknown"
+	}
+	defer func() { _ = f.Close() }()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		if !strings.HasPrefix(scanner.Text(), "ID=") {
+			continue
+		}
+		id := strings.Trim(strings.TrimPrefix(scanner.Text(), "ID="), `"`)
+		switch id {
+		case "rocky", "centos", "rhel", "almalinux":
+			return "rocky"
+		case "":
+			return "unknown"
+		default:
+			return id
+		}
+	}
+	return "unknown"
+}
+
+func templateFuncMap() template.FuncMap {
+	return template.FuncMap{
+		"join":    templateJoin,
+		"lower":   strings.ToLower,
+		"replace": strings.ReplaceAll,
+		"trim":    strings.TrimSpace,
+		"upper":   strings.ToUpper,
+	}
+}
+
+func templateJoin(values any, separator string) string {
+	value := reflect.ValueOf(values)
+	if !value.IsValid() || (value.Kind() != reflect.Array && value.Kind() != reflect.Slice) {
+		return ""
+	}
+	parts := make([]string, value.Len())
+	for i := range value.Len() {
+		parts[i] = fmt.Sprint(value.Index(i).Interface())
+	}
+	return strings.Join(parts, separator)
 }
 
 // applyAttributesTo sets f's mode and ownership on the regular file at
@@ -638,6 +775,15 @@ func Ensure(path string, opts ...opt.FileOption) error {
 	return f.apply()
 }
 
+func ensureWithFacts(path string, facts templateFacts, opts ...opt.FileOption) error {
+	f, err := build(path, opts...)
+	if err != nil {
+		return err
+	}
+	f.templateFacts = facts
+	return f.apply()
+}
+
 // Present registers a file resource that ensures path exists with the
 // configured content, mode, and ownership, and records a plan draft for
 // remote apply. A build failure (invalid option combination) is recipe
@@ -698,6 +844,10 @@ func (f *File) planDraft() resource.PlanDraft {
 	if f.shouldRenderTemplate() {
 		d.Template = true
 		d.TemplateParam = f.templateParam()
+	}
+	if f.templateDataSet {
+		d.TemplateData = f.templateData
+		d.TemplateDataSet = true
 	}
 	return d
 }

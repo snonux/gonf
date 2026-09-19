@@ -22,6 +22,7 @@ NoLink("/tmp/stale-link")
 | Option | Applies to | Meaning |
 |--------|------------|---------|
 | `WithContent` | File | Inline body (templates: env + `.Param` via source `.tmpl`) |
+| `WithTemplateData` | File | JSON-compatible map, slice, or struct made available to destination-side templates; also enables rendering |
 | `WithSource` | File / Dir | Copy from path or template |
 | `WithSourceGlob` | Dir | Install glob matches into the directory by basename |
 | `WithLine` / `WithoutLine` | File | Ensure / remove a line |
@@ -48,6 +49,19 @@ path — which changes every plan run and would flap the file's checksum.
 Direct (non-plan) use derives the same stable value from the real source
 tree; plans recorded before schema v6 keep the old blob-path Param.
 `opt.WithParam` overrides the value explicitly (plan-engine plumbing).
+
+### Template data and destination facts
+
+`WithTemplateData` carries JSON-compatible maps, slices, and structs on the
+plan wire and renders them only on the destination. Map keys are available at
+the template root and every supplied value is also available as `.Data` (so
+non-map values use `.Data`). Existing environment variables and `.Param` stay
+available. `.Gonf` is reserved for live destination facts:
+`.Gonf.GOOS`, `.Gonf.Profile`, and `.Gonf.Hostname`.
+
+The stable string helpers are `join`, `lower`, `upper`, `trim`, and `replace`.
+Templates use `missingkey=error`; missing map keys fail the apply rather than
+silently rendering an empty value.
 
 ### Template rendering for a single `File` on the plan path
 
