@@ -35,6 +35,8 @@ type (
 	Contented        interface{ SetContent(string) }
 	LineAddable      interface{ SetAddLine(string) }
 	LineRemovable    interface{ SetRemoveLine(string) }
+	LinesAddable     interface{ AddLines(...string) }
+	LinesRemovable   interface{ RemoveLines(...string) }
 	FileModed        interface{ SetFileMode(os.FileMode) }
 	Prunable         interface{ SetPrune() }
 	Absentable       interface{ SetAbsent() }
@@ -514,14 +516,28 @@ func WithContent(content string) fileOption {
 	})
 }
 
-// WithLine appends a line of file content.
+// WithLines appends each line of file content when it is missing.
+func WithLines(lines ...string) fileOption {
+	return fileOption(func(target any) {
+		requires(target, "WithLines", func(r LinesAddable) { r.AddLines(lines...) })
+	})
+}
+
+// WithoutLines removes each matching line from file content.
+func WithoutLines(lines ...string) fileOption {
+	return fileOption(func(target any) {
+		requires(target, "WithoutLines", func(r LinesRemovable) { r.RemoveLines(lines...) })
+	})
+}
+
+// WithLine appends a line of file content. It is retained for compatibility.
 func WithLine(content string) fileOption {
 	return fileOption(func(target any) {
 		requires(target, "WithLine", func(r LineAddable) { r.SetAddLine(content) })
 	})
 }
 
-// WithoutLine removes a line from file content.
+// WithoutLine removes a line from file content. It is retained for compatibility.
 func WithoutLine(content string) fileOption {
 	return fileOption(func(target any) {
 		requires(target, "WithoutLine", func(r LineRemovable) { r.SetRemoveLine(content) })

@@ -30,7 +30,7 @@ func getChecksum(path string) [32]byte {
 }
 
 func (f *File) ensureFile(path string, content []byte) error {
-	id := fmt.Sprintf("File[%s]", path)
+	id := f.reportID(path)
 	newChecksum := sha256.Sum256(content)
 	logger.Debug("computed checksum for new content: %x", newChecksum)
 

@@ -294,7 +294,7 @@ func applyActiveWithFacts(op Op, planDir string, facts Facts) error {
 // are only appended when non-empty: an omitted field must leave ownership to
 // the apply-side defaults instead of forcing WithOwner(""). Shared by every
 // resource kind's plan.Handler.Apply that carries owner/group on the wire
-// (file, dir, sync_dir, ensure_dir), so the "empty means unset" rule cannot
+// (file, dir, sync_dir, ensure_dir, ensure_file), so the "empty means unset" rule cannot
 // drift between them.
 func OwnerGroupOptions(op Op) []opt.FileDirOption {
 	var opts []opt.FileDirOption

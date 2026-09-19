@@ -81,6 +81,11 @@ func kindFitnessTable() map[plan.Kind]kindFixture {
 			Path: "/tmp/fitensure",
 			Mode: "0750",
 		}},
+		plan.KindEnsureFile: {draft: &resource.PlanDraft{
+			Kind: "ensure_file",
+			Path: "/tmp/fitensurefile",
+			Mode: "0644",
+		}},
 		plan.KindPackage: {draft: &resource.PlanDraft{
 			Kind: "package",
 			ID:   "Package[fit-pkg]",

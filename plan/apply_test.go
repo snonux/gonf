@@ -626,6 +626,30 @@ func TestApplyFileLineRemove(t *testing.T) {
 	}
 }
 
+func TestApplyFileLineBatchesPreserveOrderAndAcceptLegacyFields(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "f")
+	if err := os.WriteFile(path, []byte("keep\nold\nold\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ops := []Op{
+		header(),
+		{Op: KindFile, Path: path,
+			RemoveLines: []string{"old", "old"}, RemoveLine: "stale",
+			AddLines: []string{"second", "first", "second"}, AddLine: "third"},
+	}
+	if err := Apply(ops, Facts{}, ""); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "keep\nsecond\nfirst\nthird\n"; string(got) != want {
+		t.Fatalf("content = %q, want %q", got, want)
+	}
+}
+
 // TestApplyTimerRestartLowering moved to apply_systemd_test.go (package
 // plan_test): it stubs resource/systemd's command runner directly, and
 // resource/systemd now registers a plan.Handler (see

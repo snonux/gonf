@@ -47,6 +47,8 @@ func (c *capTarget) SetTemplateData(v any)      { c.record("SetTemplateData", v)
 func (c *capTarget) SetContent(v string)        { c.record("SetContent", v) }
 func (c *capTarget) SetAddLine(v string)        { c.record("SetAddLine", v) }
 func (c *capTarget) SetRemoveLine(v string)     { c.record("SetRemoveLine", v) }
+func (c *capTarget) AddLines(v ...string)       { c.record("AddLines", v) }
+func (c *capTarget) RemoveLines(v ...string)    { c.record("RemoveLines", v) }
 func (c *capTarget) SetFileMode(v os.FileMode)  { c.record("SetFileMode", v) }
 func (c *capTarget) SetPrune()                  { c.record("SetPrune", nil) }
 func (c *capTarget) SetAbsent()                 { c.record("SetAbsent", nil) }
@@ -182,6 +184,8 @@ func TestOptionsReachTheirSetters(t *testing.T) {
 		{"WithTemplate", WithTemplate, "SetTemplate", nil},
 		{"WithTemplateData", WithTemplateData(map[string]any{"name": "relay"}), "SetTemplateData", map[string]any{"name": "relay"}},
 		{"WithContent", WithContent("hello"), "SetContent", "hello"},
+		{"WithLines", WithLines("one", "two"), "AddLines", []string{"one", "two"}},
+		{"WithoutLines", WithoutLines("old", "stale"), "RemoveLines", []string{"old", "stale"}},
 		{"WithLine", WithLine("line"), "SetAddLine", "line"},
 		{"WithoutLine", WithoutLine("gone"), "SetRemoveLine", "gone"},
 		{"WithFileMode", WithFileMode(0o600), "SetFileMode", os.FileMode(0o600)},

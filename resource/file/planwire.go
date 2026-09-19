@@ -3,6 +3,7 @@ package file
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -14,9 +15,11 @@ import (
 // resource package instead of api/plan.go's draftToOp and plan/apply.go's
 // applyFile.
 type planHandler struct{}
+type ensureFileHandler struct{}
 
 func init() {
 	plan.RegisterHandler(plan.KindFile, planHandler{})
+	plan.RegisterHandler(plan.KindEnsureFile, ensureFileHandler{})
 }
 
 // ToOp lowers a "file" resource draft to a plan.Op.
@@ -33,6 +36,8 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		HasContent:    d.HasContent,
 		Template:      d.Template,
 		TemplateParam: d.TemplateParam,
+		AddLines:      d.AddLines,
+		RemoveLines:   d.RemoveLines,
 		AddLine:       d.AddLine,
 		RemoveLine:    d.RemoveLine,
 		Absent:        d.Absent,
@@ -46,6 +51,19 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		op.TemplateData = raw
 	}
 	return op, nil
+}
+
+// ToOp lowers an ensure_file resource draft to a plan.Op.
+func (ensureFileHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
+	return plan.Op{
+		Op:    plan.KindEnsureFile,
+		ID:    d.ID,
+		Path:  d.Path,
+		Mode:  d.Mode,
+		Owner: d.Owner,
+		Group: d.Group,
+		Deps:  d.Deps,
+	}, nil
 }
 
 // Apply writes, edits, or removes the destination file, mirroring the
@@ -67,10 +85,34 @@ func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	// build() defaults (apply-side user) identical to direct resource use.
 	ownership := plan.OwnerGroupOptions(op)
 
-	if op.AddLine != "" || op.RemoveLine != "" {
+	if len(op.AddLines) != 0 || len(op.RemoveLines) != 0 || op.AddLine != "" || op.RemoveLine != "" {
 		return applyFileLines(path, op, ownership)
 	}
 	return applyFileContent(path, op, ownership, ctx)
+}
+
+// Apply creates an empty regular file only when it is absent. Existing files
+// retain their contents while explicitly recorded attributes converge.
+func (ensureFileHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
+	path, err := plan.ExpandPath(op.Path)
+	if err != nil {
+		return err
+	}
+	if path == "" {
+		return fmt.Errorf("ensure_file: missing path")
+	}
+	opts := make([]opt.FileOption, 0, 3)
+	if op.Mode != "" {
+		mode, err := plan.ParseMode(op.Mode)
+		if err != nil {
+			return fmt.Errorf("ensure_file: %w", err)
+		}
+		opts = append(opts, opt.WithMode(mode))
+	}
+	for _, ownerOpt := range plan.OwnerGroupOptions(op) {
+		opts = append(opts, ownerOpt)
+	}
+	return EnsurePresent(path, opts...)
 }
 
 func applyFileLines(path string, op plan.Op, ownership []opt.FileDirOption) error {
@@ -78,11 +120,13 @@ func applyFileLines(path string, op plan.Op, ownership []opt.FileDirOption) erro
 		return fmt.Errorf("file: add_line/remove_line cannot combine with content_b64/blob")
 	}
 	var opts []opt.FileOption
-	if op.RemoveLine != "" {
-		opts = append(opts, opt.WithoutLine(op.RemoveLine))
+	removeLines := append(slices.Clone(op.RemoveLines), op.RemoveLine)
+	addLines := append(slices.Clone(op.AddLines), op.AddLine)
+	if len(removeLines) != 0 {
+		opts = append(opts, opt.WithoutLines(removeLines...))
 	}
-	if op.AddLine != "" {
-		opts = append(opts, opt.WithLine(op.AddLine))
+	if len(addLines) != 0 {
+		opts = append(opts, opt.WithLines(addLines...))
 	}
 	if op.Mode != "" {
 		mode, err := plan.ParseMode(op.Mode)

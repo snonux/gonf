@@ -23,7 +23,8 @@ type PlanDraft struct {
 
 	// ID is the registered resource ID this draft came from.
 	ID string
-	// Path is the destination path for the file/dir/link/sync/ensure kinds.
+	// Path is the destination path for the file/dir/link/sync/ensure_dir/
+	// ensure_file kinds.
 	Path string
 
 	// Symlink is the symlink target for the "link" kind.
@@ -110,9 +111,13 @@ type PlanDraft struct {
 	LoginClass string
 	System     bool
 
-	// AddLine appends a line to a file when missing (line-in-file).
-	AddLine string
-	// RemoveLine removes matching lines from a file.
+	// AddLines appends lines to a file when missing (line-in-file).
+	AddLines []string
+	// RemoveLines removes matching lines from a file.
+	RemoveLines []string
+	// AddLine and RemoveLine are retained for compatibility with older draft
+	// producers. New file resources use AddLines and RemoveLines.
+	AddLine    string
 	RemoveLine string
 
 	// Name is a package name, command registry name, or similar label.

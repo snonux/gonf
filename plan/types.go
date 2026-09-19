@@ -35,7 +35,8 @@ import "encoding/json"
 // applying v1–10 plans. Version 12 adds template_data to file ops for
 // structured destination-side template rendering. Version 13 adds
 // additive-only user operations and their creation-time account attributes.
-const CurrentVersion = 13
+// Version 14 adds ensure_file plus ordered batched file line edits.
+const CurrentVersion = 14
 
 // supportedVersions is the set of plan schema versions this binary can apply.
 // Apply must refuse plans whose version is not in this set before any mutation.
@@ -52,6 +53,7 @@ var supportedVersions = map[int]struct{}{
 	10:             {},
 	11:             {},
 	12:             {},
+	13:             {},
 	CurrentVersion: {},
 }
 
@@ -73,6 +75,7 @@ const (
 	KindCommand      Kind = "command"
 	KindSyncDir      Kind = "sync_dir"
 	KindEnsureDir    Kind = "ensure_dir"
+	KindEnsureFile   Kind = "ensure_file"
 	KindLinkIfExists Kind = "link_if_exists"
 	KindWhenBegin    Kind = "when_begin"
 	KindWhenEnd      Kind = "when_end"
@@ -94,6 +97,7 @@ var allKinds = []Kind{
 	KindCommand,
 	KindSyncDir,
 	KindEnsureDir,
+	KindEnsureFile,
 	KindLinkIfExists,
 	KindWhenBegin,
 	KindWhenEnd,
@@ -259,9 +263,12 @@ type Op struct {
 	LoginClass string `json:"login_class,omitempty"`
 	System     bool   `json:"system,omitempty"`
 
-	// AddLine appends a line to a file when missing (line-in-file).
-	AddLine string `json:"add_line,omitempty"`
-	// RemoveLine removes matching lines from a file.
+	// AddLines appends lines to a file when missing (line-in-file), in order.
+	AddLines []string `json:"add_lines,omitempty"`
+	// RemoveLines removes matching lines from a file, in order.
+	RemoveLines []string `json:"remove_lines,omitempty"`
+	// AddLine and RemoveLine are accepted when applying pre-v14 plans.
+	AddLine    string `json:"add_line,omitempty"`
 	RemoveLine string `json:"remove_line,omitempty"`
 
 	// Name is a package name, command registry name, or similar label.

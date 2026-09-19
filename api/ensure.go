@@ -6,8 +6,18 @@ import (
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/dir"
+	"github.com/snonux/gonf/resource/file"
 	"github.com/snonux/gonf/resource/options"
 )
+
+// EnsureFile registers a preserve-content file resource. It creates an empty
+// regular file when path is absent; an existing regular file keeps its bytes
+// while explicitly configured mode, owner, and group converge. Unlike a
+// controller-side existence check, it records an ensure_file plan operation
+// so remote application makes the decision on the destination host.
+func EnsureFile(path string, opts ...options.FileOption) Resource {
+	return file.PresentEnsure(Expand(path), opts...)
+}
 
 // EnsureDir registers a Dir resource only when path is missing or is not
 // already a directory (symlink-to-directory counts as present). When skipped,

@@ -23,6 +23,8 @@ type (
 	Contented              = resourceoptions.Contented
 	LineAddable            = resourceoptions.LineAddable
 	LineRemovable          = resourceoptions.LineRemovable
+	LinesAddable           = resourceoptions.LinesAddable
+	LinesRemovable         = resourceoptions.LinesRemovable
 	FileModed              = resourceoptions.FileModed
 	Prunable               = resourceoptions.Prunable
 	Absentable             = resourceoptions.Absentable
@@ -108,6 +110,8 @@ var (
 	WithTemplateData        = resourceoptions.WithTemplateData
 	WithSourceBase          = resourceoptions.WithSourceBase
 	WithContent             = resourceoptions.WithContent
+	WithLines               = resourceoptions.WithLines
+	WithoutLines            = resourceoptions.WithoutLines
 	WithLine                = resourceoptions.WithLine
 	WithoutLine             = resourceoptions.WithoutLine
 	WithFileMode            = resourceoptions.WithFileMode

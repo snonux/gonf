@@ -62,9 +62,11 @@ type File struct {
 	group           string
 	userSet         bool // WithOwner was called explicitly (build()'s default does not count)
 	groupSet        bool // WithGroup was called explicitly (build()'s default does not count)
-	addLine         string
-	removeLine      string
+	addLines        []string
+	removeLines     []string
 	mode            os.FileMode
+	modeSet         bool
+	preserveContent bool
 }
 
 // SetContent implements opt.Contented. Setting literal content clears any
@@ -103,12 +105,20 @@ func (f *File) SetTemplateData(data any) {
 
 // SetAddLine implements opt.LineAddable.
 func (f *File) SetAddLine(line string) {
-	f.addLine = line
+	f.AddLines(line)
 }
 
 // SetRemoveLine implements opt.LineRemovable.
 func (f *File) SetRemoveLine(line string) {
-	f.removeLine = line
+	f.RemoveLines(line)
+}
+
+// AddLines implements opt.LinesAddable.
+func (f *File) AddLines(lines ...string) { f.addLines = appendUniqueLines(f.addLines, lines...) }
+
+// RemoveLines implements opt.LinesRemovable.
+func (f *File) RemoveLines(lines ...string) {
+	f.removeLines = appendUniqueLines(f.removeLines, lines...)
 }
 
 // SetOwner implements opt.Owner. It marks ownership as explicitly configured
@@ -127,11 +137,16 @@ func (f *File) SetGroup(group string) {
 }
 
 // SetMode implements opt.Moded.
-func (f *File) SetMode(mode os.FileMode) { f.mode = mode }
+func (f *File) SetMode(mode os.FileMode) {
+	f.mode = mode
+	f.modeSet = true
+}
 
 var (
 	_ opt.LineAddable      = (*File)(nil)
 	_ opt.LineRemovable    = (*File)(nil)
+	_ opt.LinesAddable     = (*File)(nil)
+	_ opt.LinesRemovable   = (*File)(nil)
 	_ opt.Paramable        = (*File)(nil)
 	_ opt.Templateable     = (*File)(nil)
 	_ opt.TemplateDataable = (*File)(nil)
@@ -155,15 +170,40 @@ func build(path string, opts ...opt.FileOption) (*File, error) {
 		o.Apply(f)
 	}
 
-	if f.lineEdit() && (f.content != "" || f.source != "") {
-		return nil, fmt.Errorf("file %s: WithLine/WithoutLine cannot be combined with WithContent/WithSource", path)
+	if f.lineEdit() && (f.contentSet || f.source != "") {
+		return nil, fmt.Errorf("file %s: WithLine(s)/WithoutLine(s) cannot be combined with WithContent/WithSource", path)
 	}
 
 	return f, nil
 }
 
 func (f *File) lineEdit() bool {
-	return f.addLine != "" || f.removeLine != ""
+	return len(f.addLines) != 0 || len(f.removeLines) != 0
+}
+
+func (f *File) reportID(path string) string {
+	if f.preserveContent {
+		return fmt.Sprintf("EnsureFile[%s]", path)
+	}
+	return fmt.Sprintf("File[%s]", path)
+}
+
+func appendUniqueLines(dst []string, lines ...string) []string {
+	seen := make(map[string]struct{}, len(dst)+len(lines))
+	for _, line := range dst {
+		seen[line] = struct{}{}
+	}
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		if _, ok := seen[line]; ok {
+			continue
+		}
+		seen[line] = struct{}{}
+		dst = append(dst, line)
+	}
+	return dst
 }
 
 // apply performs the idempotent OS work for f without registering a
@@ -174,6 +214,9 @@ func (f *File) Apply() error { return f.apply() }
 func (f *File) apply() error {
 	if f.Absent {
 		return ensureAbsent(f.targetPath())
+	}
+	if f.preserveContent {
+		return f.ensurePresent()
 	}
 
 	if f.lineEdit() {
@@ -253,17 +296,17 @@ func (f *File) resolveLine() (path string, content []byte, noop bool, err error)
 		if !errors.Is(readErr, os.ErrNotExist) {
 			return "", nil, false, readErr
 		}
-		if f.addLine == "" {
+		if len(f.addLines) == 0 {
 			return path, nil, true, nil
 		}
-		return path, []byte(f.addLine + "\n"), false, nil
+		return path, []byte(strings.Join(f.addLines, "\n") + "\n"), false, nil
 	}
 
 	var kept []string
 	scanner := bufio.NewScanner(bytes.NewReader(raw))
 	for scanner.Scan() {
 		line := scanner.Text()
-		if f.removeLine != "" && line == f.removeLine {
+		if slices.Contains(f.removeLines, line) {
 			continue
 		}
 		kept = append(kept, line)
@@ -272,16 +315,9 @@ func (f *File) resolveLine() (path string, content []byte, noop bool, err error)
 		return "", nil, false, fmt.Errorf("failed to scan file %s: %w", path, err)
 	}
 
-	if f.addLine != "" {
-		found := false
-		for _, line := range kept {
-			if line == f.addLine {
-				found = true
-				break
-			}
-		}
-		if !found {
-			kept = append(kept, f.addLine)
+	for _, add := range f.addLines {
+		if !slices.Contains(kept, add) {
+			kept = append(kept, add)
 		}
 	}
 
@@ -764,6 +800,92 @@ func ensureAbsent(path string) error {
 	return nil
 }
 
+// ensurePresent creates an empty regular file when path is absent. Existing
+// regular files retain their content; only explicitly requested attributes
+// are reconciled. This is the apply-side behavior of api.EnsureFile.
+func (f *File) ensurePresent() error {
+	path := f.targetPath()
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return f.ensureFile(path, []byte{})
+	}
+	if err != nil {
+		return fmt.Errorf("failed to stat %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("file %s: cannot ensure a %s while preserving content", path, entryTypeName(info.Mode()))
+	}
+
+	id := f.reportID(path)
+	changed, err := f.explicitMetadataChanged(info)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		resource.Note(id, resource.StatusOK)
+		return nil
+	}
+	if resource.DryRun() {
+		resource.Note(id, resource.StatusWouldChange)
+		return nil
+	}
+
+	attrs := *f
+	if !attrs.modeSet {
+		attrs.mode = info.Mode()
+	}
+	if !attrs.userSet {
+		attrs.user = ""
+	}
+	if !attrs.groupSet {
+		attrs.group = ""
+	}
+	if err := attrs.applyAttributesTo(path); err != nil {
+		return err
+	}
+	resource.Note(id, resource.StatusChanged)
+	return nil
+}
+
+// explicitMetadataChanged reports whether an explicitly configured mode,
+// owner, or group differs from the existing regular file. Defaults selected
+// by build() deliberately do not count: EnsureFile preserves pre-existing
+// metadata unless the recipe requested a value.
+func (f *File) explicitMetadataChanged(info fs.FileInfo) (bool, error) {
+	if f.modeSet {
+		const modeBits = os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky
+		if info.Mode()&modeBits != f.mode&modeBits {
+			return true, nil
+		}
+	}
+	if !f.userSet && !f.groupSet {
+		return false, nil
+	}
+
+	attrs := *f
+	if !attrs.userSet {
+		attrs.user = ""
+	}
+	if !attrs.groupSet {
+		attrs.group = ""
+	}
+	uid, gid, err := attrs.ownerIDs()
+	if err != nil {
+		return false, err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return false, fmt.Errorf("failed to inspect ownership of %s", f.targetPath())
+	}
+	if uid != -1 && int(stat.Uid) != uid {
+		return true, nil
+	}
+	if gid != -1 && int(stat.Gid) != gid {
+		return true, nil
+	}
+	return false, nil
+}
+
 // Ensure builds and applies the file resource described by opts, without
 // registering it. Used by other resource packages (e.g. dir) to write an
 // individual file without it becoming its own top-level resource.
@@ -772,6 +894,20 @@ func Ensure(path string, opts ...opt.FileOption) error {
 	if err != nil {
 		return err
 	}
+	return f.apply()
+}
+
+// EnsurePresent applies EnsureFile semantics without registering a resource.
+// It is used by the ensure_file plan handler.
+func EnsurePresent(path string, opts ...opt.FileOption) error {
+	f, err := build(path, opts...)
+	if err != nil {
+		return err
+	}
+	if f.contentSet || f.lineEdit() || f.Absent {
+		return fmt.Errorf("file %s: EnsureFile cannot combine WithContent/WithSource, WithLine(s)/WithoutLine(s), or IsAbsent", path)
+	}
+	f.preserveContent = true
 	return f.apply()
 }
 
@@ -800,16 +936,39 @@ func Present(path string, opts ...opt.FileOption) resource.Resource {
 	return f.resource
 }
 
+// PresentEnsure registers an EnsureFile resource. It creates an empty file
+// only when absent and otherwise preserves file content.
+func PresentEnsure(path string, opts ...opt.FileOption) resource.Resource {
+	f, err := build(path, opts...)
+	if err != nil {
+		logger.Fatal("%v", err)
+	}
+	if f.contentSet || f.lineEdit() || f.Absent {
+		logger.Fatal("file %s: EnsureFile cannot combine WithContent/WithSource, WithLine(s)/WithoutLine(s), or IsAbsent", path)
+	}
+	f.preserveContent = true
+	f.resource = resource.Register("EnsureFile", f.targetPath(), f, f.DependsOn.IDs...)
+	resource.RecordPlanDraft(f.planDraft())
+	return f.resource
+}
+
 func (f *File) planDraft() resource.PlanDraft {
 	d := resource.PlanDraft{
-		Kind:       "file",
-		ID:         f.resource.ID(),
-		Path:       f.targetPath(),
-		Mode:       opt.ModeToWire(f.mode),
-		Absent:     f.Absent,
-		AddLine:    f.addLine,
-		RemoveLine: f.removeLine,
-		Deps:       f.DependsOn.SortedIDs(),
+		Kind:        "file",
+		ID:          f.resource.ID(),
+		Path:        f.targetPath(),
+		Mode:        opt.ModeToWire(f.mode),
+		Absent:      f.Absent,
+		AddLines:    slices.Clone(f.addLines),
+		RemoveLines: slices.Clone(f.removeLines),
+		Deps:        f.DependsOn.SortedIDs(),
+	}
+	if f.preserveContent {
+		d.Kind = "ensure_file"
+		d.Absent = false
+		if !f.modeSet {
+			d.Mode = ""
+		}
 	}
 	// Only explicitly configured ownership is recorded: build()'s
 	// user.Current() default must not be pushed to remote hosts. Absent files

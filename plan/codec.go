@@ -59,6 +59,12 @@ func normalizeOp(op *Op) {
 	if len(op.Deps) == 0 {
 		op.Deps = nil
 	}
+	if len(op.AddLines) == 0 {
+		op.AddLines = nil
+	}
+	if len(op.RemoveLines) == 0 {
+		op.RemoveLines = nil
+	}
 	if op.Unless != nil {
 		// Copy before normalizing: op.Unless is a pointer that may be shared
 		// with other Op values referencing the same underlying Guard (e.g.

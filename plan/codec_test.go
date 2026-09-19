@@ -257,7 +257,7 @@ func TestDecodePlanVersionGate(t *testing.T) {
 // up-front, and newer binaries must keep applying every prior schema.
 func TestDecodePlanAcceptsOlderVersions(t *testing.T) {
 	t.Parallel()
-	for _, version := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, CurrentVersion} {
+	for _, version := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, CurrentVersion} {
 		input := fmt.Sprintf(`{"op":"plan","version":%d}`+"\n", version)
 		if _, err := DecodePlan(strings.NewReader(input)); err != nil {
 			t.Errorf("version %d header should decode: %v", version, err)
@@ -391,14 +391,35 @@ func TestEncodeDecodeEmptyNonNilSlices(t *testing.T) {
 
 func TestNormalizeEmptySlices(t *testing.T) {
 	t.Parallel()
-	raw := []byte(`{"op":"command","bin":"x","args":[],"unless":{"bin":"y","args":[]},"all":[]}`)
+	raw := []byte(`{"op":"command","bin":"x","args":[],"unless":{"bin":"y","args":[]},"all":[],"add_lines":[],"remove_lines":[]}`)
 	// Note: "all" on command is odd but exercises normalizeOp.
 	op, err := DecodeOp(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if op.Args != nil || op.All != nil || op.Unless.Args != nil {
+	if op.Args != nil || op.All != nil || op.Unless.Args != nil || op.AddLines != nil || op.RemoveLines != nil {
 		t.Fatalf("expected nil empty slices, got %#v", op)
+	}
+}
+
+func TestEncodeDecodeLineArraysRoundTrip(t *testing.T) {
+	t.Parallel()
+	want := Op{
+		Op:          KindFile,
+		Path:        "/etc/rc.local",
+		AddLines:    []string{"first", "second"},
+		RemoveLines: []string{"old", "stale"},
+	}
+	raw, err := EncodeOp(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecodeOp(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("round-trip\ngot  %#v\nwant %#v", got, want)
 	}
 }
 

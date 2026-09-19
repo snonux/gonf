@@ -33,6 +33,7 @@ func TestAllKindsExhaustiveAndUnique(t *testing.T) {
 		KindCommand:      "command",
 		KindSyncDir:      "sync_dir",
 		KindEnsureDir:    "ensure_dir",
+		KindEnsureFile:   "ensure_file",
 		KindLinkIfExists: "link_if_exists",
 		KindWhenBegin:    "when_begin",
 		KindWhenEnd:      "when_end",
@@ -305,14 +306,19 @@ func TestOpJSONTagsMatchPlanExamples(t *testing.T) {
 			want: `{"op":"package","id":"Package[helix]","name":"helix"}`,
 		},
 		{
-			name: "file add_line remove_line",
+			name: "file add_lines remove_lines",
 			op: Op{
-				Op:         KindFile,
-				Path:       "${HOME}/.config/tmux/tmux.conf",
-				AddLine:    "source-file ~/.config/tmux/tmux.rocky.conf",
-				RemoveLine: "old-line",
+				Op:          KindFile,
+				Path:        "${HOME}/.config/tmux/tmux.conf",
+				AddLines:    []string{"source-file ~/.config/tmux/tmux.rocky.conf", "set -g mouse on"},
+				RemoveLines: []string{"old-line", "stale-line"},
 			},
-			want: `{"op":"file","path":"${HOME}/.config/tmux/tmux.conf","add_line":"source-file ~/.config/tmux/tmux.rocky.conf","remove_line":"old-line"}`,
+			want: `{"op":"file","path":"${HOME}/.config/tmux/tmux.conf","add_lines":["source-file ~/.config/tmux/tmux.rocky.conf","set -g mouse on"],"remove_lines":["old-line","stale-line"]}`,
+		},
+		{
+			name: "ensure_file",
+			op:   Op{Op: KindEnsureFile, ID: "EnsureFile[/etc/daily.local]", Path: "/etc/daily.local", Mode: "0644"},
+			want: `{"op":"ensure_file","id":"EnsureFile[/etc/daily.local]","path":"/etc/daily.local","mode":"0644"}`,
 		},
 		{
 			name: "command with deps",

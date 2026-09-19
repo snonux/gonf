@@ -1174,6 +1174,110 @@ func TestWithLineAndWithoutLineReplace(t *testing.T) {
 	}
 }
 
+func TestWithLinesBatchesInOrderAndDeduplicates(t *testing.T) {
+	resource.ResetRepository()
+	path := filepath.Join(t.TempDir(), "lines.conf")
+	if err := os.WriteFile(path, []byte("keep\nold\nold\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Ensure(path,
+		WithoutLines("old", "old", "stale"),
+		WithoutLine("stale"),
+		WithLines("second", "first", "second"),
+		WithLine("third"),
+	); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "keep\nsecond\nfirst\nthird\n"; string(got) != want {
+		t.Fatalf("content = %q, want %q", got, want)
+	}
+}
+
+func TestEnsurePresentPreservesExistingContentAndConvergesExplicitMode(t *testing.T) {
+	resource.ResetRepository()
+	path := filepath.Join(t.TempDir(), "daily.local")
+	if err := os.WriteFile(path, []byte("keep this\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsurePresent(path, WithMode(0o644)); err != nil {
+		t.Fatalf("EnsurePresent: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "keep this\n" {
+		t.Fatalf("content = %q, want preserved bytes", got)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("mode = %v, want 0644", info.Mode().Perm())
+	}
+}
+
+func TestEnsurePresentRerunWithMatchingMetadataIsOK(t *testing.T) {
+	resource.ResetRepository()
+	userName, _, groupName := currentOwnerForTest(t)
+	path := filepath.Join(t.TempDir(), "daily.local")
+	if err := os.WriteFile(path, []byte("keep this\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	resource.ResetReport()
+	if err := EnsurePresent(path, WithMode(0o640), WithOwner(userName), WithGroup(groupName)); err != nil {
+		t.Fatalf("EnsurePresent: %v", err)
+	}
+	if resource.AnyChanged("EnsureFile[" + path + "]") {
+		t.Fatal("matching explicit metadata should report OK, not changed")
+	}
+
+	resource.SetDryRun(true)
+	t.Cleanup(func() { resource.SetDryRun(false) })
+	resource.ResetReport()
+	if err := EnsurePresent(path, WithMode(0o640), WithOwner(userName), WithGroup(groupName)); err != nil {
+		t.Fatalf("EnsurePresent dry-run: %v", err)
+	}
+	if resource.AnyChanged("EnsureFile[" + path + "]") {
+		t.Fatal("matching metadata should remain OK in dry-run")
+	}
+}
+
+func TestEnsurePresentCreatesMissingAndDryRunDoesNotMutate(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "rc.local")
+	if err := EnsurePresent(missing); err != nil {
+		t.Fatalf("EnsurePresent missing: %v", err)
+	}
+	got, err := os.ReadFile(missing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("new file = %q, want empty", got)
+	}
+
+	dry := filepath.Join(dir, "dry.local")
+	resource.ResetReport()
+	resource.SetDryRun(true)
+	t.Cleanup(func() { resource.SetDryRun(false) })
+	if err := EnsurePresent(dry, WithMode(0o600)); err != nil {
+		t.Fatalf("EnsurePresent dry-run: %v", err)
+	}
+	if _, err := os.Lstat(dry); !os.IsNotExist(err) {
+		t.Fatalf("dry-run created file: %v", err)
+	}
+	if !resource.AnyChanged("EnsureFile[" + dry + "]") {
+		t.Fatal("dry-run did not report the pending file creation")
+	}
+}
+
 // TestAbsentDoesNotMutateCallerOptionSlice guards against 100 Go Mistakes
 // #25: Absent used to append IsAbsent onto the caller-owned variadic slice,
 // writing into the spare capacity of a reusable option list and silently

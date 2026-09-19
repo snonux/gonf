@@ -133,6 +133,7 @@ ops, err := RecordPlan("my-plan", planDir, "home_helix", "home_tmux")
 | `WhenPathExists(path, fn)` | `when_begin` with `path_exists` around `fn` |
 | `WhenHostname(substr\|List(...), fn)` | `when_begin` with `hostname_contains` around `fn` (`List` → one block per entry) |
 | `EnsureDir` | `ensure_dir` |
+| `EnsureFile` | `ensure_file` |
 | `LinkIfExists` / `SymlinkMap` | `link_if_exists` |
 
 `WhenProfile(a)` lowers to `{"fact":"profile","eq":"a"}`. `WhenProfile(a, b,
@@ -523,6 +524,14 @@ Plan schema **version 13** adds additive-only `user` operations. It records
 the requested primary and supplementary groups plus creation-time home, shell,
 login-class, and system-account settings. Older binaries must refuse these
 plans rather than silently skipping the unknown resource kind.
+
+Plan schema **version 14** adds `ensure_file` and the `add_lines` /
+`remove_lines` arrays on `file` operations. `EnsureFile` makes the
+existence decision on the destination: it creates a missing empty regular
+file but preserves the bytes of an existing regular file while explicit
+metadata converges. The arrays preserve declaration order and allow one
+resource to apply a complete batch of line edits; older singular line fields
+remain accepted when applying older plans.
 
 ### Secret material
 

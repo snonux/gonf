@@ -49,6 +49,8 @@ func TestEveryExportedOptionHasAResourceFamily(t *testing.T) {
 		{"WithTemplateData", func() { acceptFile(WithTemplateData(map[string]any{})) }},
 		{"WithSourceBase", func() { acceptDir(WithSourceBase("source")) }},
 		{"WithContent", func() { acceptFile(WithContent("content")) }},
+		{"WithLines", func() { acceptFile(WithLines("one", "two")) }},
+		{"WithoutLines", func() { acceptFile(WithoutLines("one", "two")) }},
 		{"WithLine", func() { acceptFile(WithLine("line")) }},
 		{"WithoutLine", func() { acceptFile(WithoutLine("line")) }},
 		{"WithFileMode", func() { acceptDir(WithFileMode(0o640)) }},
