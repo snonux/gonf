@@ -11,6 +11,11 @@ import (
 
 const netbsdService = "/usr/sbin/service"
 
+type netbsdAction struct {
+	desc string
+	run  func() error
+}
+
 // netbsdRcConfD is the rc.conf.d override directory written by
 // netbsdSetEnabled. A variable so tests can redirect it to a temporary
 // directory instead of touching /etc.
@@ -28,49 +33,44 @@ func applyNetBSD(s *Service) error {
 		return err
 	}
 
-	type action struct {
-		desc string
-		run  func() error
-	}
-	var actions []action
-
-	if s.Absent {
-		if running {
-			actions = append(actions, action{"service " + s.name + " stop", func() error {
-				return netbsdSvcRun(s.name, "stop")
-			}})
-		}
-		if enabled {
-			actions = append(actions, action{"disable " + s.name, func() error {
-				return netbsdSetEnabled(s.name, false)
-			}})
-		}
-	} else {
-		if !enabled {
-			actions = append(actions, action{"enable " + s.name, func() error {
-				return netbsdSetEnabled(s.name, true)
-			}})
-		}
-		if !running {
-			actions = append(actions, action{"service " + s.name + " start", func() error {
-				return netbsdSvcRun(s.name, "start")
-			}})
-		} else if s.reload {
-			actions = append(actions, action{"service " + s.name + " reload", func() error {
-				return netbsdSvcRun(s.name, "reload")
-			}})
-		} else if s.restart {
-			actions = append(actions, action{"service " + s.name + " restart", func() error {
-				return netbsdSvcRun(s.name, "restart")
-			}})
-		}
-	}
+	actions := netbsdActions(s, running, enabled)
 
 	if len(actions) == 0 {
 		resource.NoteResult(id, false)
 		return nil
 	}
 
+	return runNetBSDActions(id, actions)
+}
+
+func netbsdActions(s *Service, running, enabled bool) []netbsdAction {
+	var actions []netbsdAction
+	add := func(desc string, run func() error) {
+		actions = append(actions, netbsdAction{desc: desc, run: run})
+	}
+	if s.Absent {
+		if running {
+			add("service "+s.name+" stop", func() error { return netbsdSvcRun(s.name, "stop") })
+		}
+		if enabled {
+			add("disable "+s.name, func() error { return netbsdSetEnabled(s.name, false) })
+		}
+		return actions
+	}
+	if !enabled {
+		add("enable "+s.name, func() error { return netbsdSetEnabled(s.name, true) })
+	}
+	if !running {
+		add("service "+s.name+" start", func() error { return netbsdSvcRun(s.name, "start") })
+	} else if s.reload {
+		add("service "+s.name+" reload", func() error { return netbsdSvcRun(s.name, "reload") })
+	} else if s.restart {
+		add("service "+s.name+" restart", func() error { return netbsdSvcRun(s.name, "restart") })
+	}
+	return actions
+}
+
+func runNetBSDActions(id string, actions []netbsdAction) error {
 	if resource.DryRun() {
 		for _, a := range actions {
 			logger.Info("dry-run: would %s", a.desc)
@@ -78,7 +78,6 @@ func applyNetBSD(s *Service) error {
 		resource.NoteResult(id, true)
 		return nil
 	}
-
 	for _, a := range actions {
 		if err := a.run(); err != nil {
 			return err

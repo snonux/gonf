@@ -59,11 +59,20 @@ func WithGroupWhen(opts ...TaskOption) RegisterOption {
 //
 // Methods named Desc*, When*, or Opts* are not registered as tasks.
 func RegisterMethods(v any, opts ...RegisterOption) {
+	cfg := registerConfigFor(opts)
+	rv, rt := registerReceiver(v)
+	registerMethodTasks(rv, rt, cfg)
+}
+
+func registerConfigFor(opts []RegisterOption) registerConfig {
 	cfg := registerConfig{}
 	for _, o := range opts {
 		o(&cfg)
 	}
+	return cfg
+}
 
+func registerReceiver(v any) (reflect.Value, reflect.Type) {
 	rv := reflect.ValueOf(v)
 	if rv.Kind() == reflect.Pointer {
 		if rv.IsNil() {
@@ -77,14 +86,15 @@ func RegisterMethods(v any, opts ...RegisterOption) {
 	// false unless the value came from a pointer deref), so a struct
 	// argument is wrapped in a fresh pointer to reach pointer-receiver
 	// methods; pointer arguments stay as-is.
-	rt := rv.Type()
 	if rv.Kind() == reflect.Struct {
 		ptr := reflect.New(rv.Type())
 		ptr.Elem().Set(rv)
 		rv = ptr
-		rt = rv.Type()
 	}
+	return rv, rv.Type()
+}
 
+func registerMethodTasks(rv reflect.Value, rt reflect.Type, cfg registerConfig) {
 	// Struct-level default TaskOptions: embedded StructOption markers
 	// (e.g. RequiresRoot) and/or the Opts() companion. A method's own
 	// OptsX companion replaces the combined default for that method (an

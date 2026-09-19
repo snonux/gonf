@@ -268,17 +268,12 @@ func readBlobsGzipTar(r *bufio.Reader, planDir string) error {
 }
 
 func extractTarHeader(planDir string, hdr *tar.Header, r io.Reader) error {
-	name := filepath.Clean(filepath.FromSlash(hdr.Name))
-	if name == "." || name == "" {
+	target, err := tarTarget(planDir, hdr.Name)
+	if err != nil {
+		return err
+	}
+	if target == "" {
 		return nil
-	}
-	if filepath.IsAbs(name) || strings.HasPrefix(name, ".."+string(filepath.Separator)) || name == ".." {
-		return fmt.Errorf("plan push: zip-slip path %q", hdr.Name)
-	}
-	target := filepath.Join(planDir, name)
-	rel, err := filepath.Rel(planDir, target)
-	if err != nil || strings.HasPrefix(rel, "..") {
-		return fmt.Errorf("plan push: zip-slip path %q", hdr.Name)
 	}
 	// Defense-in-depth against planted ancestor symlinks (e.g. a crafted
 	// TypeSymlink "blobs" -> /etc followed by a regular "blobs/x"): no path
@@ -291,61 +286,65 @@ func extractTarHeader(planDir string, hdr *tar.Header, r io.Reader) error {
 		return err
 	}
 
-	switch {
-	case hdr.Typeflag == tar.TypeDir || strings.HasSuffix(hdr.Name, "/"):
+	if hdr.Typeflag == tar.TypeDir || strings.HasSuffix(hdr.Name, "/") {
 		return os.MkdirAll(target, 0o700)
-	case hdr.Typeflag == tar.TypeSymlink:
-		// Recreate the symlink with its raw link target — the exact string
-		// the admin's source tree carries (dangling included), matching the
-		// disk Store's planDir tree. A pre-existing entry of ANY type at the
-		// target is removed first: os.Symlink refuses to replace an existing
-		// name, and a stale directory would otherwise block extraction. The
-		// header's mode is ignored — symlinks carry no meaningful mode.
-		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-			return err
-		}
-		if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
-			// Note: a non-empty pre-existing directory at the target also fails
-			// here (os.Remove does not remove non-empty dirs) and aborts the
-			// stream; planDir is fresh in practice.
-			return fmt.Errorf("plan push: clear %s for symlink: %w", target, err)
-		}
-		if err := os.Symlink(hdr.Linkname, target); err != nil {
-			return fmt.Errorf("plan push: symlink %s -> %s: %w", target, hdr.Linkname, err)
-		}
-		return nil
-	default:
-		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-			return err
-		}
-		// O_NONBLOCK turns a planted FIFO at the target (a leftover in a
-		// reused sticky -apply-dir planDir, for instance) into a loud error:
-		// a plain O_WRONLY open would block until a reader appears, while a
-		// non-blocking open fails immediately (ENXIO with no reader) or lets
-		// the write fail with EPIPE instead of hanging the extraction. On
-		// regular files O_NONBLOCK has no effect.
-		//
-		// No O_EXCL create: a pre-planted entry at the target requires write
-		// access to planDir, which is owner-only 0700 and — for the sticky
-		// -apply-dir flow — ownership-verified by the CLI before any blob is
-		// extracted (internal/cli verifyStickyDirOwned; the fresh-run-dir flow
-		// uses an unpredictable MkdirTemp name). writeTreeTar emits each
-		// entry exactly once per stream, so an EEXIST could only mean a
-		// pre-planted entry — impossible here for a non-root attacker. O_TRUNC
-		// therefore only ever overwrites the current user's own stale
-		// leftovers, never attacker data; a root attacker is out of scope
-		// (game over on the host anyway).
-		f, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY|syscall.O_NONBLOCK, 0o600)
-		if err != nil {
-			return err
-		}
-		_, copyErr := io.Copy(f, r)
-		closeErr := f.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		return closeErr
 	}
+	if hdr.Typeflag == tar.TypeSymlink {
+		return extractTarSymlink(target, hdr.Linkname)
+	}
+	return extractTarFile(target, r)
+}
+
+func tarTarget(planDir, name string) (string, error) {
+	clean := filepath.Clean(filepath.FromSlash(name))
+	if clean == "." || clean == "" {
+		return "", nil
+	}
+	if filepath.IsAbs(clean) || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || clean == ".." {
+		return "", fmt.Errorf("plan push: zip-slip path %q", name)
+	}
+	target := filepath.Join(planDir, clean)
+	rel, err := filepath.Rel(planDir, target)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("plan push: zip-slip path %q", name)
+	}
+	return target, nil
+}
+
+func extractTarSymlink(target, linkname string) error {
+	// Recreate the symlink with its raw link target — the exact string
+	// the admin's source tree carries (dangling included), matching the
+	// disk Store's planDir tree. A pre-existing entry of ANY type at the
+	// target is removed first: os.Symlink refuses to replace an existing
+	// name, and a stale directory would otherwise block extraction.
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		return err
+	}
+	if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("plan push: clear %s for symlink: %w", target, err)
+	}
+	if err := os.Symlink(linkname, target); err != nil {
+		return fmt.Errorf("plan push: symlink %s -> %s: %w", target, linkname, err)
+	}
+	return nil
+}
+
+func extractTarFile(target string, r io.Reader) error {
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		return err
+	}
+	// O_NONBLOCK turns a planted FIFO at the target into a loud error instead
+	// of allowing OpenFile to block while waiting for a reader.
+	f, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY|syscall.O_NONBLOCK, 0o600)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(f, r)
+	closeErr := f.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
 }
 
 // ensureNoAncestorSymlink refuses extraction when any existing path component

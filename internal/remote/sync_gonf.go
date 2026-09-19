@@ -314,99 +314,14 @@ const scpRejectedOptLetters = "LRDWetTxSf"
 func scpArgv(t PushTarget, localPath, remotePath string) ([]string, error) {
 	argv := []string{"scp"}
 	port := t.Port
-	n := len(t.ExtraSSH)
-	for i := 0; i < n; i++ {
-		a := t.ExtraSSH[i]
-
-		// Separate-form "-p PORT" / "-P PORT" -> scp's "-P PORT". Because
-		// this branch matches on the CURRENT token being exactly "-p"/"-P",
-		// the following token is unconditionally consumed as the port value
-		// below — it is never itself run through any flag-shape check, no
-		// matter what it looks like.
-		if a == "-p" || a == "-P" {
-			if i+1 >= n {
-				return nil, fmt.Errorf(`ExtraSSH option %q is missing a value; want "-p PORT" or "-P PORT"`, a)
-			}
-			val := t.ExtraSSH[i+1]
-			i++
-			p, err := strconv.Atoi(val)
-			if err != nil {
-				return nil, fmt.Errorf(`ExtraSSH option %q has a non-numeric port %q; want "-p PORT" or "-P PORT"`, a, val)
-			}
-			if port == 0 {
-				port = p
-			}
-			continue
+	for i := 0; i < len(t.ExtraSSH); i++ {
+		args, nextPort, skip, err := translateScpArg(t.ExtraSSH, i, port)
+		if err != nil {
+			return nil, err
 		}
-		// Separate-form "-l USER" -> scp's "-o User=USER". Same unconditional
-		// lookahead-consumption as above.
-		if a == "-l" {
-			if i+1 >= n {
-				return nil, fmt.Errorf(`ExtraSSH option %q is missing a login-user value; want "-l USER"`, a)
-			}
-			argv = append(argv, "-o", "User="+t.ExtraSSH[i+1])
-			i++
-			continue
-		}
-
-		// Joined "-pPORT" / "-PPORT" -> scp's "-P PORT". This only matches a
-		// token that is COMPLETE in itself (len(a) > 2, starts with '-'), so
-		// there is no following value to consume or misclassify.
-		if len(a) > 2 && a[0] == '-' && (a[1] == 'p' || a[1] == 'P') {
-			p, err := strconv.Atoi(a[2:])
-			if err != nil {
-				return nil, fmt.Errorf(`ExtraSSH option %q has a non-numeric port; want "-pPORT" or "-PPORT"`, a)
-			}
-			if port == 0 {
-				port = p
-			}
-			continue
-		}
-		// Joined "-lUSER" -> scp's "-o User=USER". Likewise complete in
-		// itself: nothing follows it to consume.
-		if len(a) > 2 && a[0] == '-' && a[1] == 'l' {
-			argv = append(argv, "-o", "User="+a[2:])
-			continue
-		}
-
-		if len(a) >= 2 && a[0] == '-' {
-			letter := a[1]
-			switch {
-			case strings.ContainsRune(scpPassThroughOptLetters, rune(letter)):
-				argv = append(argv, a)
-				// Bare separate-form flag (e.g. "-o", not the joined
-				// "-oFoo=Bar") whose letter takes a value: the very next
-				// ExtraSSH token is unconditionally that value and is
-				// appended as-is, with no flag-shape check of its own —
-				// this is what stops a value like "-lweird" or
-				// "-p2222lookalike" from ever being reinterpreted as a
-				// flag, regardless of what it starts with or looks like.
-				if len(a) == 2 && strings.ContainsRune(scpPassThroughTakesValueLetters, rune(letter)) {
-					if i+1 >= n {
-						return nil, fmt.Errorf("ExtraSSH option %q is missing a value", a)
-					}
-					argv = append(argv, t.ExtraSSH[i+1])
-					i++
-				}
-				continue
-			case strings.ContainsRune(scpRejectedOptLetters, rune(letter)):
-				return nil, fmt.Errorf("ExtraSSH option %q is ssh-only, means something different under scp, or would hang the scp subprocess, and cannot be used for the gonf binary sync step; remove it from ExtraSSH", a)
-			default:
-				// Default-deny: a flag letter that is neither an explicit
-				// pass-through nor an explicit rejection is not known to be
-				// safe to forward (see the scpPassThroughOptLetters doc
-				// comment for why "unrecognized" cannot be assumed to mean
-				// "harmless").
-				return nil, fmt.Errorf("ExtraSSH option %q is not a recognized scp option for the gonf binary sync step; add it to scpArgv's allow/deny list if it is genuinely safe, or remove it from ExtraSSH", a)
-			}
-		}
-
-		// A token that both (a) does not start with '-' and (b) was not
-		// already consumed above as a preceding flag's value should not
-		// normally occur in well-formed ExtraSSH, but there is nothing else
-		// it could be — forward it verbatim rather than silently dropping
-		// it.
-		argv = append(argv, a)
+		argv = append(argv, args...)
+		port = nextPort
+		i += skip
 	}
 	argv = append(argv, "-o", "ConnectTimeout="+sshConnectTimeout)
 	if port > 0 {
@@ -416,6 +331,74 @@ func scpArgv(t PushTarget, localPath, remotePath string) ([]string, error) {
 		argv = append(argv, "-i", t.Identity)
 	}
 	return append(argv, localPath, t.Destination()+":"+remotePath), nil
+}
+
+func translateScpArg(extra []string, i, port int) ([]string, int, int, error) {
+	a := extra[i]
+	if a == "-p" || a == "-P" {
+		return scpPortValue(extra, i, a, port)
+	}
+	if a == "-l" {
+		if i+1 >= len(extra) {
+			return nil, port, 0, fmt.Errorf(`ExtraSSH option %q is missing a login-user value; want "-l USER"`, a)
+		}
+		return []string{"-o", "User=" + extra[i+1]}, port, 1, nil
+	}
+	if len(a) > 2 && a[0] == '-' && (a[1] == 'p' || a[1] == 'P') {
+		return scpJoinedPortValue(a, port)
+	}
+	if len(a) > 2 && a[0] == '-' && a[1] == 'l' {
+		return []string{"-o", "User=" + a[2:]}, port, 0, nil
+	}
+	if len(a) >= 2 && a[0] == '-' {
+		return translateScpFlag(extra, i, a, port)
+	}
+	return []string{a}, port, 0, nil
+}
+
+func scpPortValue(extra []string, i int, option string, port int) ([]string, int, int, error) {
+	if i+1 >= len(extra) {
+		return nil, port, 0, fmt.Errorf(`ExtraSSH option %q is missing a value; want "-p PORT" or "-P PORT"`, option)
+	}
+	value := extra[i+1]
+	p, err := strconv.Atoi(value)
+	if err != nil {
+		return nil, port, 0, fmt.Errorf(`ExtraSSH option %q has a non-numeric port %q; want "-p PORT" or "-P PORT"`, option, value)
+	}
+	if port == 0 {
+		port = p
+	}
+	return nil, port, 1, nil
+}
+
+func scpJoinedPortValue(option string, port int) ([]string, int, int, error) {
+	p, err := strconv.Atoi(option[2:])
+	if err != nil {
+		return nil, port, 0, fmt.Errorf(`ExtraSSH option %q has a non-numeric port; want "-pPORT" or "-PPORT"`, option)
+	}
+	if port == 0 {
+		port = p
+	}
+	return nil, port, 0, nil
+}
+
+func translateScpFlag(extra []string, i int, option string, port int) ([]string, int, int, error) {
+	letter := option[1]
+	switch {
+	case strings.ContainsRune(scpPassThroughOptLetters, rune(letter)):
+		args := []string{option}
+		if len(option) != 2 || !strings.ContainsRune(scpPassThroughTakesValueLetters, rune(letter)) {
+			return args, port, 0, nil
+		}
+		if i+1 >= len(extra) {
+			return nil, port, 0, fmt.Errorf("ExtraSSH option %q is missing a value", option)
+		}
+		return append(args, extra[i+1]), port, 1, nil
+	case strings.ContainsRune(scpRejectedOptLetters, rune(letter)):
+		return nil, port, 0, fmt.Errorf("ExtraSSH option %q is ssh-only, means something different under scp, or would hang the scp subprocess, and cannot be used for the gonf binary sync step; remove it from ExtraSSH", option)
+	default:
+		return nil, port, 0, fmt.Errorf("ExtraSSH option %q is not a recognized scp option for the gonf binary sync step; add it to scpArgv's allow/deny list if it is genuinely safe, or remove it from ExtraSSH", option)
+	}
 }
 
 // defaultGoBuildRunner cross-compiles a package. It is Pusher's default
@@ -494,12 +477,19 @@ func (p *Pusher) EnsureRemoteGonf(ctx context.Context, t PushTarget) (installedP
 	if !needUpgrade {
 		return "", nil
 	}
+	goos, goarch, err := remoteBuildTarget(ctx, t)
+	if err != nil {
+		return "", fmt.Errorf("ensure gonf: %w", err)
+	}
+	return p.installRemoteGonf(ctx, t, goos, goarch)
+}
 
+func remoteBuildTarget(ctx context.Context, t PushTarget) (string, string, error) {
 	goos, goarch := t.GOOS, t.GOARCH
 	if goos == "" || goarch == "" {
 		detectedOS, detectedArch, err := probeUname(ctx, t)
 		if err != nil {
-			return "", fmt.Errorf("ensure gonf: %w", err)
+			return "", "", err
 		}
 		if goos == "" {
 			goos = detectedOS
@@ -508,12 +498,25 @@ func (p *Pusher) EnsureRemoteGonf(ctx context.Context, t PushTarget) (installedP
 			goarch = detectedArch
 		}
 	}
+	return goos, goarch, nil
+}
 
+func (p *Pusher) installRemoteGonf(ctx context.Context, t PushTarget, goos, goarch string) (string, error) {
 	localBin, err := p.buildGonf(ctx, goos, goarch)
 	if err != nil {
 		return "", fmt.Errorf("ensure gonf: build %s/%s: %w", goos, goarch, err)
 	}
+	installPath := t.GonfPath
+	if installPath == "" {
+		installPath = "/usr/local/bin/gonf"
+	}
+	if err := p.installRemoteBinary(ctx, t, localBin, installPath); err != nil {
+		return "", err
+	}
+	return installPath, nil
+}
 
+func (p *Pusher) installRemoteBinary(ctx context.Context, t PushTarget, localBin, installPath string) error {
 	// Stage the binary under a remote directory that mktemp creates
 	// exclusively (mode 0700, owned by the SSH login user): unlike the old
 	// fixed "/tmp/gonf.new.<pid>" path, a local attacker on a shared host
@@ -523,7 +526,7 @@ func (p *Pusher) EnsureRemoteGonf(ctx context.Context, t PushTarget) (installedP
 	// same host (even from the same controller PID) never collide.
 	remoteDir, err := createRemoteStagingDir(ctx, t)
 	if err != nil {
-		return "", fmt.Errorf("ensure gonf: mktemp: %w", err)
+		return fmt.Errorf("ensure gonf: mktemp: %w", err)
 	}
 	defer removeRemoteStagingDir(ctx, t, remoteDir)
 
@@ -533,19 +536,15 @@ func (p *Pusher) EnsureRemoteGonf(ctx context.Context, t PushTarget) (installedP
 		// used to, producing a double-prefixed "ensure gonf: scp: scp:
 		// ExtraSSH option ..." message); a real scp(1) exec failure still
 		// gets tagged exactly once, here.
-		return "", fmt.Errorf("ensure gonf: scp: %w", err)
+		return fmt.Errorf("ensure gonf: scp: %w", err)
 	}
 
-	installPath := t.GonfPath
-	if installPath == "" {
-		installPath = "/usr/local/bin/gonf"
-	}
 	installCmd, err := remoteInstallCmd(t, remoteTmp, installPath)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if err := SSHRunner(ctx, bytes.NewReader(nil), t.sshArgv(installCmd)); err != nil {
-		return "", fmt.Errorf("ensure gonf: install: %w", err)
+		return fmt.Errorf("ensure gonf: install: %w", err)
 	}
 
 	// Verify via the installed path so PATH order cannot hide an older binary.
@@ -553,13 +552,13 @@ func (p *Pusher) EnsureRemoteGonf(ctx context.Context, t PushTarget) (installedP
 	verify.GonfPath = installPath
 	got, err := probePlanVersion(ctx, verify)
 	if err != nil {
-		return "", fmt.Errorf("ensure gonf: verify: %w", err)
+		return fmt.Errorf("ensure gonf: verify: %w", err)
 	}
 	if got < plan.CurrentVersion {
-		return "", fmt.Errorf("ensure gonf: remote still reports plan schema %d after install (want ≥ %d)", got, plan.CurrentVersion)
+		return fmt.Errorf("ensure gonf: remote still reports plan schema %d after install (want ≥ %d)", got, plan.CurrentVersion)
 	}
 	logger.Info("push %s: remote gonf plan schema now %d", t.Destination(), got)
-	return installPath, nil
+	return nil
 }
 
 // probePlanVersion returns the remote binary's plan wire-schema version (as

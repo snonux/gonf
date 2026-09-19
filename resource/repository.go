@@ -74,7 +74,18 @@ func (r *repository) apply() error {
 	defer r.mu.Unlock()
 
 	ResetReport()
+	order, err := r.resolveApplyOrder()
+	if err != nil {
+		return err
+	}
+	if err := r.applyResources(order); err != nil {
+		return err
+	}
+	PrintSummary(os.Stderr)
+	return nil
+}
 
+func (r *repository) resolveApplyOrder() ([]Resource, error) {
 	visited := make(map[string]bool)
 	visiting := make(map[string]bool)
 	var order []Resource
@@ -114,10 +125,13 @@ func (r *repository) apply() error {
 
 	for _, id := range roots {
 		if err := visit(id); err != nil {
-			return err
+			return nil, err
 		}
 	}
+	return order, nil
+}
 
+func (r *repository) applyResources(order []Resource) error {
 	orderIDs := make([]string, 0, len(order))
 	for _, res := range order {
 		orderIDs = append(orderIDs, res.ID())
@@ -135,8 +149,6 @@ func (r *repository) apply() error {
 			return fmt.Errorf("failed to apply %v: %w", res, err)
 		}
 	}
-
-	PrintSummary(os.Stderr)
 	return nil
 }
 

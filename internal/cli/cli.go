@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/internal"
@@ -17,6 +18,20 @@ import (
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
+
+// cliOptions contains the process-wide flags consumed by CLI.
+type cliOptions struct {
+	version     bool
+	planVersion bool
+	list        bool
+	profile     string
+	verbose     bool
+	quiet       bool
+	dryRun      bool
+	privilege   string
+	cmdTimeout  time.Duration
+	args        []string
+}
 
 // CLI parses flags and runs or lists tasks. Returns a process exit code.
 //
@@ -36,7 +51,20 @@ func CLI() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	fs := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
+	options, err := parseCLIFlags(os.Args[0], os.Args[1:])
+	if err != nil {
+		return 2
+	}
+	if err := configureCLI(options); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 2
+	}
+	api.Activate(api.DetectFacts())
+	return runCLI(ctx, options)
+}
+
+func parseCLIFlags(program string, args []string) (cliOptions, error) {
+	fs := flag.NewFlagSet(program, flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 
 	version := fs.Bool("version", false, "Print version")
@@ -49,24 +77,35 @@ func CLI() int {
 	dryRunShort := fs.Bool("n", false, "Alias for -dry-run")
 	privFlag := fs.String("privilege", "none", "Privilege helper for Privileged() tasks: none|sudo|doas")
 	cmdTimeout := fs.Duration("cmd-timeout", exec.DefaultTimeout(), "default per-command timeout for backend execs (package manager, systemctl, crontab, ...; 0 or negative keeps the current default)")
-
-	if err := fs.Parse(os.Args[1:]); err != nil {
-		return 2
+	if err := fs.Parse(args); err != nil {
+		return cliOptions{}, err
 	}
+	return cliOptions{
+		version:     *version,
+		planVersion: *planVersion,
+		list:        *list,
+		profile:     *profile,
+		verbose:     *verbose,
+		quiet:       *quiet,
+		dryRun:      *dryRun || *dryRunShort,
+		privilege:   *privFlag,
+		cmdTimeout:  *cmdTimeout,
+		args:        fs.Args(),
+	}, nil
+}
 
-	if *cmdTimeout > 0 {
-		api.SetCommandTimeout(*cmdTimeout)
+func configureCLI(options cliOptions) error {
+	if options.cmdTimeout > 0 {
+		api.SetCommandTimeout(options.cmdTimeout)
 	}
-
 	switch {
-	case *verbose:
+	case options.verbose:
 		logger.SetLevel(logger.LevelDebug)
-	case *quiet:
+	case options.quiet:
 		logger.SetLevel(logger.LevelWarn)
 	default:
 		logger.SetLevel(logger.LevelInfo)
 	}
-
 	// Unconditional: CLI() is the sole real process entry point (and the
 	// single point every test re-enters per invocation), so it must always
 	// reflect this invocation's own top-level flags exactly — including
@@ -76,35 +115,33 @@ func CLI() int {
 	// -shuffle`). Subcommand handlers (cliApply/cliPush/cliCluster/
 	// cliFleet) escalate-only, so a top-level "gonf -n <subcmd> ..." set
 	// here survives their own flag parsing.
-	resource.SetDryRun(*dryRun || *dryRunShort)
-	if m, err := privilege.ParseMode(*privFlag); err != nil {
-		fmt.Fprintf(os.Stderr, "privilege: %v\n", err)
-		return 2
-	} else {
-		api.SetPrivilege(m)
+	resource.SetDryRun(options.dryRun)
+	m, err := privilege.ParseMode(options.privilege)
+	if err != nil {
+		return fmt.Errorf("privilege: %w", err)
 	}
-
-	if *profile != "" {
-		api.SetProfileOverride(*profile)
+	api.SetPrivilege(m)
+	if options.profile != "" {
+		api.SetProfileOverride(options.profile)
 	}
+	return nil
+}
 
-	// Resolve When guards after -profile so init()-queued tasks see CLI facts.
-	api.Activate(api.DetectFacts())
-
-	if *version {
+func runCLI(ctx context.Context, options cliOptions) int {
+	if options.version {
 		fmt.Println(internal.Version)
 		return 0
 	}
-	if *planVersion {
+	if options.planVersion {
 		fmt.Println(plan.CurrentVersion)
 		return 0
 	}
 
-	if *list {
+	if options.list {
 		return cliList()
 	}
 
-	names := fs.Args()
+	names := options.args
 	if len(names) == 0 {
 		printUsage()
 		return 2
@@ -265,55 +302,10 @@ func cliApply(args []string) int {
 }
 
 func cliApplyStdin(applyDir string) int {
-	var (
-		runDir  string
-		cleanup func()
-		err     error
-	)
-	if applyDir != "" {
-		if err := os.MkdirAll(applyDir, 0o700); err != nil {
-			fmt.Fprintf(os.Stderr, "apply: apply-dir: %v\n", err)
-			return 1
-		}
-		// Loud: the sticky path under /tmp is predictable, so a local
-		// attacker on the remote host can pre-create it foreign-owned
-		// (0777). That Chmod fails EPERM — discarding the error (as this
-		// path once did) would let the pushed blobs land in an
-		// attacker-writable dir, ready for substitution or theft.
-		if err := os.Chmod(applyDir, 0o700); err != nil {
-			fmt.Fprintf(os.Stderr, "apply: apply-dir %s: %v\n", applyDir, err)
-			return 1
-		}
-		if err := verifyStickyDirOwned(applyDir); err != nil {
-			fmt.Fprintf(os.Stderr, "apply: %v\n", err)
-			return 1
-		}
-		// The sticky dir's PATH is deterministic and reused across pushes to
-		// the same host (internal/remote derives it from the plan id) so the
-		// directory slot itself is a caching benefit — but its CONTENTS must
-		// not be reused. A prior run that never reached the controller's
-		// pushRemoveSticky cleanup (SIGINT, -host-timeout, a sibling host's
-		// failure aborting the fleet fan-out) leaves old blobs behind, and
-		// plan.DecodePush only overlays the new stream on top of whatever is
-		// already there (it truncates files the new stream also writes but
-		// never removes ones absent from it). Left alone, that would silently
-		// resurrect files the admin deleted from the source tree on the next
-		// push. Wiping just the contents (not the dir) after the ownership
-		// check above keeps that check's guarantee intact — we only ever wipe
-		// a dir already proven to be owned by us — while guaranteeing
-		// DecodePush extracts into a clean directory every time.
-		if err := wipeDirContents(applyDir); err != nil {
-			fmt.Fprintf(os.Stderr, "apply: apply-dir %s: wipe stale contents: %v\n", applyDir, err)
-			return 1
-		}
-		runDir = applyDir
-		cleanup = func() {} // sticky — caller owns lifecycle
-	} else {
-		runDir, cleanup, err = plan.NewApplyRunDir()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "apply: run dir: %v\n", err)
-			return 1
-		}
+	runDir, cleanup, err := prepareApplyRunDir(applyDir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
 	}
 	defer cleanup()
 
@@ -336,6 +328,42 @@ func cliApplyStdin(applyDir string) int {
 	}
 	fmt.Fprintf(os.Stderr, "applied %s (%d ops)\n", src, len(payload.Ops))
 	return 0
+}
+
+func prepareApplyRunDir(applyDir string) (string, func(), error) {
+	if applyDir == "" {
+		runDir, cleanup, err := plan.NewApplyRunDir()
+		if err != nil {
+			return "", nil, fmt.Errorf("apply: run dir: %w", err)
+		}
+		return runDir, cleanup, nil
+	}
+	if err := prepareStickyApplyDir(applyDir); err != nil {
+		return "", nil, err
+	}
+	return applyDir, func() {}, nil
+}
+
+func prepareStickyApplyDir(applyDir string) error {
+	if err := os.MkdirAll(applyDir, 0o700); err != nil {
+		return fmt.Errorf("apply: apply-dir: %w", err)
+	}
+	// Loud: the sticky path under /tmp is predictable, so a local attacker on
+	// the remote host can pre-create it foreign-owned. Failing Chmod or the
+	// ownership check prevents staging blobs into an attacker-writable dir.
+	if err := os.Chmod(applyDir, 0o700); err != nil {
+		return fmt.Errorf("apply: apply-dir %s: %w", applyDir, err)
+	}
+	if err := verifyStickyDirOwned(applyDir); err != nil {
+		return fmt.Errorf("apply: %w", err)
+	}
+	// The directory slot is reused across pushes, but its contents must not
+	// be reused: otherwise stale blobs could resurrect files removed from the
+	// source tree. Ownership is verified before wiping the contents.
+	if err := wipeDirContents(applyDir); err != nil {
+		return fmt.Errorf("apply: apply-dir %s: wipe stale contents: %w", applyDir, err)
+	}
+	return nil
 }
 
 // wipeDirContents removes every entry directly inside dir, leaving dir itself

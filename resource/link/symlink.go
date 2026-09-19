@@ -27,47 +27,10 @@ func ensureSymlink(l *Link) error {
 	info, err := os.Lstat(l.path)
 	switch {
 	case err == nil && info.Mode()&os.ModeSymlink != 0:
-		current, err := os.Readlink(l.path)
-		if err != nil {
-			return fmt.Errorf("failed to read symlink %s: %w", l.path, err)
-		}
-		if current == l.target {
-			logger.Debug("symlink %s already points at %s", l.path, l.target)
-			resource.Note(id, resource.StatusOK)
-			return nil
-		}
-		logger.Debug("repointing symlink %s from %s to %s", l.path, current, l.target)
-		if resource.DryRun() {
-			resource.Note(id, resource.StatusWouldChange)
-			logger.Info("dry-run: would repoint symlink %s", l.path)
-			return nil
-		}
-		if err := os.Remove(l.path); err != nil {
-			return fmt.Errorf("failed to remove stale symlink %s: %w", l.path, err)
-		}
+		return repointSymlink(l, id)
 
 	case err == nil:
-		// The assert also runs on dry-runs (like assertSymlinkTargetExists):
-		// the real apply would refuse, so the preview must show it.
-		if err := assertNoAsideBackup(l.path); err != nil {
-			return err
-		}
-		if resource.DryRun() {
-			resource.Note(id, resource.StatusWouldChange)
-			logger.Info("dry-run: would replace %s with symlink", l.path)
-			return nil
-		}
-		if err := replaceWithLink(l.path, func() error {
-			if err := os.Symlink(l.target, l.path); err != nil {
-				return fmt.Errorf("failed to create symlink %s -> %s: %w", l.path, l.target, err)
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
-		resource.Note(id, resource.StatusChanged)
-		logger.Info("replaced %s with symlink -> %s", l.path, l.target)
-		return nil
+		return replaceExistingSymlink(l, id)
 
 	case !os.IsNotExist(err):
 		return fmt.Errorf("failed to stat %s: %w", l.path, err)
@@ -80,10 +43,59 @@ func ensureSymlink(l *Link) error {
 		}
 	}
 
+	return createSymlink(l, id)
+}
+
+func repointSymlink(l *Link, id string) error {
+	current, err := os.Readlink(l.path)
+	if err != nil {
+		return fmt.Errorf("failed to read symlink %s: %w", l.path, err)
+	}
+	if current == l.target {
+		logger.Debug("symlink %s already points at %s", l.path, l.target)
+		resource.Note(id, resource.StatusOK)
+		return nil
+	}
+	logger.Debug("repointing symlink %s from %s to %s", l.path, current, l.target)
+	if resource.DryRun() {
+		resource.Note(id, resource.StatusWouldChange)
+		logger.Info("dry-run: would repoint symlink %s", l.path)
+		return nil
+	}
+	if err := os.Remove(l.path); err != nil {
+		return fmt.Errorf("failed to remove stale symlink %s: %w", l.path, err)
+	}
+	return createSymlink(l, id)
+}
+
+func replaceExistingSymlink(l *Link, id string) error {
+	// The assert also runs on dry-runs: the real apply would refuse, so the
+	// preview must show it.
+	if err := assertNoAsideBackup(l.path); err != nil {
+		return err
+	}
+	if resource.DryRun() {
+		resource.Note(id, resource.StatusWouldChange)
+		logger.Info("dry-run: would replace %s with symlink", l.path)
+		return nil
+	}
+	if err := replaceWithLink(l.path, func() error {
+		if err := os.Symlink(l.target, l.path); err != nil {
+			return fmt.Errorf("failed to create symlink %s -> %s: %w", l.path, l.target, err)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	resource.Note(id, resource.StatusChanged)
+	logger.Info("replaced %s with symlink -> %s", l.path, l.target)
+	return nil
+}
+
+func createSymlink(l *Link, id string) error {
 	if err := os.Symlink(l.target, l.path); err != nil {
 		return fmt.Errorf("failed to create symlink %s -> %s: %w", l.path, l.target, err)
 	}
-
 	resource.Note(id, resource.StatusChanged)
 	logger.Info("created symlink %s -> %s", l.path, l.target)
 	return nil

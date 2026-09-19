@@ -61,41 +61,32 @@ func copySourceDir(d *Dir, target string) error {
 	id := fmt.Sprintf("Directory[%s]", target)
 
 	if resource.DryRun() {
-		// Dry-run must not mutate the filesystem: skip both the MkdirAll and
-		// the attribute application (which would chmod/chown the destination
-		// tree for real). Mirror ensureDirectorySelf's structure so a real
-		// run's loud failure is previewed too: symlink and non-directory
-		// targets are refused with the same dedicated messages
-		// ensureDirectorySelf uses for the root, a missing target is noted as
-		// would-change, and an already-existing directory is noted as ok —
-		// the same status the real path notes for it, since the real path
-		// only re-enforces its attributes (converged). Dry-run and real-run
-		// note sets for source-tree subdirectories are identical.
-		info, err := os.Lstat(target)
-		switch {
-		case err == nil:
-			if info.Mode()&os.ModeSymlink != 0 {
-				return fmt.Errorf("%s is a symlink; dir resources never follow or manage a symlinked directory", target)
-			}
-			if !info.IsDir() {
-				return fmt.Errorf("%s exists and is not a directory", target)
-			}
-			resource.Note(id, resource.StatusOK)
-		case os.IsNotExist(err):
-			resource.Note(id, resource.StatusWouldChange)
-			logger.Info("dry-run: would create directory %s", target)
-		default:
-			return fmt.Errorf("failed to stat %s: %w", target, err)
-		}
-		return nil
+		return noteSourceDirDryRun(id, target)
 	}
+	return createSourceDir(d, id, target)
+}
 
-	// Lstat before MkdirAll so the notes below can tell creating the
-	// directory from re-enforcing an existing one, mirroring
-	// ensureDirectorySelf's note flow for the root. No new refusals live
-	// here: a non-directory is refused by MkdirAll and a planted symlink by
-	// applyAttributesTo's O_NOFOLLOW|O_DIRECTORY open, exactly as before
-	// this note bookkeeping existed; nothing is noted when either fails.
+func noteSourceDirDryRun(id, target string) error {
+	info, err := os.Lstat(target)
+	switch {
+	case err == nil:
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%s is a symlink; dir resources never follow or manage a symlinked directory", target)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("%s exists and is not a directory", target)
+		}
+		resource.Note(id, resource.StatusOK)
+	case os.IsNotExist(err):
+		resource.Note(id, resource.StatusWouldChange)
+		logger.Info("dry-run: would create directory %s", target)
+	default:
+		return fmt.Errorf("failed to stat %s: %w", target, err)
+	}
+	return nil
+}
+
+func createSourceDir(d *Dir, id, target string) error {
 	_, statErr := os.Lstat(target)
 	existed := statErr == nil
 	switch {

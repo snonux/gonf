@@ -58,55 +58,75 @@ func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	// build() defaults (apply-side user) identical to direct resource use.
 	ownership := plan.OwnerGroupOptions(op)
 
-	var opts []opt.FileOption
 	if op.AddLine != "" || op.RemoveLine != "" {
-		if op.ContentB64 != "" || op.Blob != "" {
-			return fmt.Errorf("file: add_line/remove_line cannot combine with content_b64/blob")
-		}
-		if op.RemoveLine != "" {
-			opts = append(opts, opt.WithoutLine(op.RemoveLine))
-		}
-		if op.AddLine != "" {
-			opts = append(opts, opt.WithLine(op.AddLine))
-		}
-		if op.Mode != "" {
-			mode, err := plan.ParseMode(op.Mode)
-			if err != nil {
-				return fmt.Errorf("file: %w", err)
-			}
-			opts = append(opts, opt.WithMode(mode))
-		}
-		for _, ownerOpt := range ownership {
-			opts = append(opts, ownerOpt)
-		}
-		return Ensure(path, opts...)
+		return applyFileLines(path, op, ownership)
 	}
+	return applyFileContent(path, op, ownership, ctx.PlanDir)
+}
 
-	var content []byte
+func applyFileLines(path string, op plan.Op, ownership []opt.FileDirOption) error {
+	if op.ContentB64 != "" || op.Blob != "" {
+		return fmt.Errorf("file: add_line/remove_line cannot combine with content_b64/blob")
+	}
+	var opts []opt.FileOption
+	if op.RemoveLine != "" {
+		opts = append(opts, opt.WithoutLine(op.RemoveLine))
+	}
+	if op.AddLine != "" {
+		opts = append(opts, opt.WithLine(op.AddLine))
+	}
+	if op.Mode != "" {
+		mode, err := plan.ParseMode(op.Mode)
+		if err != nil {
+			return fmt.Errorf("file: %w", err)
+		}
+		opts = append(opts, opt.WithMode(mode))
+	}
+	for _, ownerOpt := range ownership {
+		opts = append(opts, ownerOpt)
+	}
+	return Ensure(path, opts...)
+}
+
+func applyFileContent(path string, op plan.Op, ownership []opt.FileDirOption, planDir string) error {
+	content, err := fileContent(op, planDir)
+	if err != nil {
+		return err
+	}
+	opts, err := fileContentOptions(op, content, ownership)
+	if err != nil {
+		return err
+	}
+	return Ensure(path, opts...)
+}
+
+func fileContent(op plan.Op, planDir string) ([]byte, error) {
 	switch {
 	case op.ContentB64 != "":
 		data, err := plan.DecodeContentB64(op.ContentB64)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		content = data
+		return data, nil
 	case op.Blob != "":
-		data, err := plan.ReadFile(ctx.PlanDir, op.Blob)
+		data, err := plan.ReadFile(planDir, op.Blob)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		content = data
+		return data, nil
 	case op.HasContent:
 		// WithContent("") or a zero-byte WithSource file: content_b64
 		// legitimately encodes as "" for zero bytes. HasContent (recorded
 		// whenever WithContent/WithSource was configured at all) is what
 		// tells this apart from an op that never got content data.
-		content = nil
+		return nil, nil
 	default:
-		return fmt.Errorf("file: missing content_b64 and blob")
+		return nil, fmt.Errorf("file: missing content_b64 and blob")
 	}
+}
 
-	opts = []opt.FileOption{opt.WithContent(string(content))}
+func fileContentOptions(op plan.Op, content []byte, ownership []opt.FileDirOption) ([]opt.FileOption, error) {
+	opts := []opt.FileOption{opt.WithContent(string(content))}
 	if op.Template {
 		// The wire content is raw template text (packageDraft/RecordPlan
 		// reads a .tmpl source's bytes verbatim), and by now neither path
@@ -123,12 +143,12 @@ func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	if op.Mode != "" {
 		mode, err := plan.ParseMode(op.Mode)
 		if err != nil {
-			return fmt.Errorf("file: %w", err)
+			return nil, fmt.Errorf("file: %w", err)
 		}
 		opts = append(opts, opt.WithMode(mode))
 	}
 	for _, ownerOpt := range ownership {
 		opts = append(opts, ownerOpt)
 	}
-	return Ensure(path, opts...)
+	return opts, nil
 }
