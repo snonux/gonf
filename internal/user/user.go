@@ -33,6 +33,9 @@ type DesiredUser struct {
 	// Shell is the account's login shell when creating it. Empty selects the
 	// platform default.
 	Shell string
+	// LoginClass selects the platform login class when creating the account.
+	// Empty selects the platform default.
+	LoginClass string
 	// System requests a system account when creating it.
 	System bool
 }
@@ -60,6 +63,9 @@ func (u DesiredUser) Validate() error {
 	}
 	if strings.ContainsRune(u.Shell, '\x00') {
 		return fmt.Errorf("user %q: shell contains NUL", u.Name)
+	}
+	if strings.ContainsRune(u.LoginClass, '\x00') {
+		return fmt.Errorf("user %q: login class contains NUL", u.Name)
 	}
 	return nil
 }

@@ -35,6 +35,9 @@ func (r Rocky) Ensure(want DesiredUser) error {
 	if err := want.Validate(); err != nil {
 		return err
 	}
+	if want.LoginClass != "" {
+		return fmt.Errorf("user %q: login classes are not supported on Rocky Linux", want.Name)
+	}
 	exists, err := r.userExists(want.Name)
 	if err != nil {
 		return err

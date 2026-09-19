@@ -179,6 +179,16 @@ func TestRockyEnsureErrors(t *testing.T) {
 	}
 }
 
+func TestRockyEnsureRejectsLoginClass(t *testing.T) {
+	err := NewRocky(scriptedRockyRunner(t, nil)).Ensure(DesiredUser{
+		Name:       "svc",
+		LoginClass: "daemon",
+	})
+	if err == nil || !strings.Contains(err.Error(), "login classes are not supported") {
+		t.Fatalf("Ensure() = %v", err)
+	}
+}
+
 func TestRockyEnsureDryRunProbesWithoutMutating(t *testing.T) {
 	originalDryRun := resource.DryRun()
 	resource.ResetReport()

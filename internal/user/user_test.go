@@ -51,7 +51,7 @@ func TestDesiredUserValidate(t *testing.T) {
 		user DesiredUser
 		want string
 	}{
-		{"valid", DesiredUser{Name: "svc", Home: "/var/lib/svc", Shell: "/sbin/nologin"}, ""},
+		{"valid", DesiredUser{Name: "svc", Home: "/var/lib/svc", Shell: "/sbin/nologin", LoginClass: "daemon"}, ""},
 		{"empty user", DesiredUser{}, "user name is empty"},
 		{"spaced user", DesiredUser{Name: "bad user"}, "user name"},
 		{"flag user", DesiredUser{Name: "-bad"}, "starts with -"},
@@ -60,6 +60,7 @@ func TestDesiredUserValidate(t *testing.T) {
 		{"nul group", DesiredUser{Name: "svc", PrimaryGroup: "bad\x00group"}, "primary group"},
 		{"empty supplementary", DesiredUser{Name: "svc", SupplementaryGroups: []string{""}}, "supplementary group name is empty"},
 		{"nul home", DesiredUser{Name: "svc", Home: "/bad\x00home"}, "home contains NUL"},
+		{"nul login class", DesiredUser{Name: "svc", LoginClass: "bad\x00class"}, "login class contains NUL"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
