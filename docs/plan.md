@@ -45,6 +45,12 @@ gonf separates **registration-time** misuse from **runtime** failures:
   stash) and the enclosing record fails with `aggregate <name>: <cause>`.
   Nothing is applied in that case: the abort happens during recording, before
   plan apply runs.
+- **Secret failures return record-time errors**: `MustSecret` and
+  `OptionalSecret` load controller-local `secrets/<path>` files while a task is
+  recorded. Required missing secrets, empty secrets, unreadable files, and
+  unsafe paths fail before local apply or SSH push; an optional missing file
+  simply lets the recipe omit that host's fragment. This preserves deferred
+  plan-directory cleanup and prevents a partial plan from reaching a host.
 - **Apply-time failures return errors**: `plan.Apply`, the resource `Ensure`
   helpers, and `ApplyChunks` never exit the process. The error travels up to
   the CLI (or the embedding caller), which prints it and exits 1 — so deferred
@@ -511,6 +517,22 @@ must refuse these plans: otherwise they would render a template without its
 declared data and either fail or silently produce incorrect output. Version 12
 also makes destination facts available beneath the reserved `.Gonf` template
 context.
+
+### Secret material
+
+`MustSecret(path)` reads a required non-empty file below the controller
+recipe's `secrets/` directory; `OptionalSecret(path)` returns `(value, false)`
+when that file is absent, which is useful for optional per-host plan fragments.
+Both preserve bytes exactly (including newlines), reject paths that escape the
+secrets directory and any symlink in the secret path, and report only the path
+and failure class—never secret contents. A leading `/` remains below `secrets/` for Rex compatibility, so
+`MustSecret("/var/nsd/key")` reads `secrets/var/nsd/key`.
+
+When secret bytes are passed to `WithContent`, they are managed material:
+they are present in clear text in the owner-only (`0600`) `plan.jsonl` output
+and in the encrypted SSH transport payload. Do not use `gonf plan -stdout` for
+such a recipe: stdout is easily logged, redirected, or copied. Never put secret
+values in task names, descriptions, or host values.
 
 Plan schema **version 10** adds the `latest` field to `package` ops: a
 `Package` recorded with `IsLatest` now carries that intent explicitly, so

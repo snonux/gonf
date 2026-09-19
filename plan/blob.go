@@ -70,10 +70,10 @@ func (s *Store) WriteFile(name string, data []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {
+	if err := SecureDir(filepath.Dir(abs)); err != nil {
 		return "", fmt.Errorf("plan: mkdir blobs: %w", err)
 	}
-	if err := os.WriteFile(abs, data, 0o600); err != nil {
+	if err := WritePrivateFile(filepath.Dir(abs), filepath.Base(abs), data); err != nil {
 		return "", fmt.Errorf("plan: write blob %q: %w", ref, err)
 	}
 	return ref, nil

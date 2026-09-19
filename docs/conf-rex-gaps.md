@@ -87,7 +87,7 @@ Status against every conf Rex primitive, as of gonf v0.12.2:
 | `service x, ensure => started` (rcctl / systemd / FreeBSD+NetBSD `service`) | `Service` / `NoService` auto-detect, `WithRestart` (restart once when already active), `WithReload`, `WithUser` (systemd) | **Done** |
 | `on_change => sub { service 'x' => 'restart' }` (restart only when a file changed) | `OnChange(res…)`: Command runs only on a watched change; Service/Timer preserve state convergence but gate requested restart/reload; DaemonReload is gated too | **Done** (plan v11) |
 | `template(...)` with arrays/loops/closures/per-server data | `.tmpl` sources render at destination apply with environment, `.Param`, structured `WithTemplateData`, and `.Gonf` host facts; Go still computes closures | **Done** |
-| `$secrets->('path')` (`read_file './secrets/…'`) | no helper; recipe code may `os.ReadFile` today | **Gap** → `Secret()` convention |
+| `$secrets->('path')` (`read_file './secrets/…'`) | `MustSecret` / `OptionalSecret` controller helpers | Covered |
 | `append_if_no_such_line` | `WithLine` / `WithoutLine` (idempotent, mode-aware) | **Done** |
 | `file …, ensure => 'absent'` | `NoFile` | **Done** |
 | Rex `cron add => user, {…}` | `Cron` / `NoCron`: marker-managed per-user crontabs, full schedule fields, `WithCronEnv`, `WithCronUser` | **Done** (`@reboot` nice-to-have) |
@@ -140,9 +140,9 @@ nsd `key.conf`, garage `rpc_secret`). gonf recipes can `os.ReadFile` today; a
 tiny helper fixes the convention and failure mode:
 
 ```go
-// helpers (or api): reads <recipe-root>/secrets/<path…>, fails loudly when
-// missing/empty, never logs the value.
-key := Secret("var/nsd/etc/nsd_key.txt")
+// reads <recipe-root>/secrets/<path…>, fails recording before push when
+// missing/empty, and never logs the value.
+key := MustSecret("var/nsd/etc/nsd_key.txt")
 File("/var/nsd/etc/key.conf", WithContent(buildKeyConf(key)), …) // buildKeyConf = record-time Go
 ```
 
@@ -228,7 +228,7 @@ match; LAN hosts pin `WithSSHPort(22)` because `~/.ssh/config` maps
 1. **Complete: `OnChange` on Service / Timer / Command / DaemonReload**
    (schema 11) — unblocks httpd, inetd, relayd, smtpd, nsd, gorum, pf, r-nodes
    monitor + journal, garage restart, and login.conf `cap_mkdb`.
-2. **`Secret()` helper + plan-secrecy doc note** — unblocks goprecords_upload,
+2. **`MustSecret` / `OptionalSecret` + plan-secrecy doc note** — unblocks goprecords_upload,
    nsd key.conf, garage_deploy (which can already ship with `os.ReadFile`).
 3. **`WithPkgPath` on Package** — unblocks dtail_install, gogios_install,
    complements `pkgrepo_setup`.

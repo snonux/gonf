@@ -26,6 +26,15 @@ func TestCLIPlanAndApply(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("GONF_CLI_TEST_DIR", root)
 	planDir := filepath.Join(root, "planout")
+	if err := os.MkdirAll(planDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(planDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(planDir, "plan.jsonl"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	oldArgs := os.Args
 	t.Cleanup(func() { os.Args = oldArgs })
@@ -35,6 +44,12 @@ func TestCLIPlanAndApply(t *testing.T) {
 		t.Fatalf("plan exit %d", code)
 	}
 	planPath := filepath.Join(planDir, "plan.jsonl")
+	if info, err := os.Stat(planDir); err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("plan directory mode = %v, %v; want 0700", info.Mode(), err)
+	}
+	if info, err := os.Stat(planPath); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("plan file mode = %v, %v; want 0600", info.Mode(), err)
+	}
 	raw, err := os.ReadFile(planPath)
 	if err != nil {
 		t.Fatal(err)
@@ -96,6 +111,39 @@ func TestCLIPlanStdout(t *testing.T) {
 	}
 	if len(ops) < 2 || ops[0].Op != plan.KindPlan || ops[0].ID != "stdout-test" {
 		t.Fatalf("unexpected ops: %#v", ops)
+	}
+}
+
+func TestCLIPlanReplacesOutputSymlinkWithoutFollowingIt(t *testing.T) {
+	api.ResetTasks()
+	resource.ResetRepository()
+	root := t.TempDir()
+	api.Task("cli_private_output", "", func() {
+		api.File(filepath.Join(root, "out"), options.WithContent("secret plan material"))
+	})
+	planDir := filepath.Join(root, "plan")
+	if err := os.MkdirAll(planDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(root, "outside")
+	if err := os.WriteFile(outside, []byte("do not overwrite"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(planDir, "plan.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+	os.Args = []string{"gonf", "plan", "-o", planDir, "cli_private_output"}
+	if code := CLI(); code != 0 {
+		t.Fatalf("plan exit %d", code)
+	}
+	if got, err := os.ReadFile(outside); err != nil || string(got) != "do not overwrite" {
+		t.Fatalf("symlink target changed to %q, %v", got, err)
+	}
+	info, err := os.Lstat(filepath.Join(planDir, "plan.jsonl"))
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o600 {
+		t.Fatalf("replacement mode = %v, %v; want regular 0600", info.Mode(), err)
 	}
 }
 
