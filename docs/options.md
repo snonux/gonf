@@ -38,6 +38,18 @@ See [file-dir-link.md](file-dir-link.md): `WithContent`, `WithSource`,
 |--------|---------|
 | `IsLatest` | Upgrade/install to latest where the backend supports it |
 
+## User
+
+`User` is additive-only; see [user.md](user.md) for creation-only semantics
+and backend limits.
+
+| Option | Meaning |
+|--------|---------|
+| `WithPrimaryGroup` | Primary group for a missing account |
+| `WithUserGroup` / `WithSupplementaryGroups` | Add one or several supplementary memberships; never remove existing memberships |
+| `WithHome` / `WithCreateHome` | Creation-time home path and optional creation |
+| `WithShell` / `WithLoginClass` / `WithSystem` | Creation-time account attributes |
+
 ## Service / Timer / DaemonReload / SystemdTimer
 
 | Option | Meaning |

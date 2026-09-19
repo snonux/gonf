@@ -23,6 +23,7 @@ func acceptTimer(TimerOption)               {}
 func acceptSystemdTimer(SystemdTimerOption) {}
 func acceptDaemonReload(DaemonReloadOption) {}
 func acceptCommand(CommandOption)           {}
+func acceptLocalUser(LocalUserOption)       {}
 
 func TestEveryExportedOptionHasAResourceFamily(t *testing.T) {
 	tests := []struct {
@@ -32,6 +33,14 @@ func TestEveryExportedOptionHasAResourceFamily(t *testing.T) {
 		{"DependsOn", func() { acceptFile(DependsOn()) }},
 		{"WithOwner", func() { acceptFile(WithOwner("user")) }},
 		{"WithGroup", func() { acceptDir(WithGroup("group")) }},
+		{"WithUserGroup", func() { acceptLocalUser(WithUserGroup("wheel")) }},
+		{"WithPrimaryGroup", func() { acceptLocalUser(WithPrimaryGroup("svc")) }},
+		{"WithSupplementaryGroups", func() { acceptLocalUser(WithSupplementaryGroups("audio", "wheel")) }},
+		{"WithLoginClass", func() { acceptLocalUser(WithLoginClass("daemon")) }},
+		{"WithHome", func() { acceptLocalUser(WithHome("/var/lib/svc")) }},
+		{"WithCreateHome", func() { acceptLocalUser(WithCreateHome) }},
+		{"WithShell", func() { acceptLocalUser(WithShell("/sbin/nologin")) }},
+		{"WithSystem", func() { acceptLocalUser(WithSystem) }},
 		{"WithMode", func() { acceptFile(WithMode(0o644)) }},
 		{"WithSource", func() { acceptDir(WithSource("source")) }},
 		{"WithSourceGlob", func() { acceptDir(WithSourceGlob("*.conf")) }},
@@ -133,8 +142,17 @@ func TestSharedOptionsHaveCompleteFamilyMatrix(t *testing.T) {
 	}
 
 	acceptAll(DependsOn())
+	acceptLocalUser(DependsOn())
 	acceptFileDir(WithOwner("user"))
 	acceptFileDir(WithGroup("group"))
+	acceptLocalUser(WithUserGroup("wheel"))
+	acceptLocalUser(WithPrimaryGroup("svc"))
+	acceptLocalUser(WithSupplementaryGroups("audio"))
+	acceptLocalUser(WithLoginClass("daemon"))
+	acceptLocalUser(WithHome("/var/lib/svc"))
+	acceptLocalUser(WithCreateHome)
+	acceptLocalUser(WithShell("/sbin/nologin"))
+	acceptLocalUser(WithSystem)
 	acceptFileDir(WithMode(0o644))
 	acceptFileDir(WithSource("source"))
 	acceptDir(WithSourceGlob("*.conf"))
@@ -205,6 +223,7 @@ func TestLegacyOptionAdapters(t *testing.T) {
 		{"systemd timer", len(ToSystemdTimerOptions(WithOnCalendar("daily"))), 1},
 		{"daemon reload", len(ToDaemonReloadOptions(IfChanged)), 1},
 		{"command", len(ToCommandOptions(WithName("name"))), 1},
+		{"local user", len(ToLocalUserOptions(WithLoginClass("daemon"))), 1},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -218,8 +218,9 @@ Go-internal ownership/dispatch change only.
 As of task i5, **every** resource kind uses the `Handler` pattern: `package`,
 `cron`, and `service` migrated in task j5; `file`, `dir`, `sync_dir`, `link`,
 `link_if_exists`, `ensure_dir`, `command`, `timer`, `daemon_reload`, and
-`systemd_timer` migrated in task i5 (see `resource/{file,dir,link,cmd,timer,
-systemd,systemdtimer}/planwire.go` — `dir` registers three Handlers for its
+`systemd_timer` migrated in task i5; `user` owns its handler in
+`resource/user/planwire.go` (see `resource/{file,dir,link,cmd,timer,
+systemd,systemdtimer,user}/planwire.go` — `dir` registers three Handlers for its
 three kinds, `link` registers two). `api/plan.go`'s `draftToOp` and
 `plan/apply.go`'s `applyActive` are now pure `HandlerFor` dispatch with no
 fallback switch cases and no resource-package imports of their own — this is
@@ -517,6 +518,11 @@ must refuse these plans: otherwise they would render a template without its
 declared data and either fail or silently produce incorrect output. Version 12
 also makes destination facts available beneath the reserved `.Gonf` template
 context.
+
+Plan schema **version 13** adds additive-only `user` operations. It records
+the requested primary and supplementary groups plus creation-time home, shell,
+login-class, and system-account settings. Older binaries must refuse these
+plans rather than silently skipping the unknown resource kind.
 
 ### Secret material
 

@@ -41,6 +41,7 @@ func TestAllKindsExhaustiveAndUnique(t *testing.T) {
 		KindCron:         "cron",
 		KindService:      "service",
 		KindSystemdTimer: "systemd_timer",
+		KindUser:         "user",
 	}
 	kinds := AllKinds()
 	if len(kinds) != len(want) {
@@ -231,6 +232,22 @@ func TestOpJSONTagsMatchPlanExamples(t *testing.T) {
 				ID:                 "SystemdTimer[fit-job]",
 			},
 			want: `{"op":"systemd_timer","id":"SystemdTimer[fit-job]","name":"fit-job","command":"/bin/true","on_calendar":"*-*-* *:05:00","on_boot_sec":"10min","persistent":true,"description":"fit timer","service_description":"fit oneshot","after":["network-online.target"],"wants":["network-online.target"]}`,
+		},
+		{
+			name: "user",
+			op: Op{
+				Op:                  KindUser,
+				ID:                  "User[svc]",
+				Name:                "svc",
+				PrimaryGroup:        "svc",
+				SupplementaryGroups: []string{"audio", "wheel"},
+				Home:                "/var/lib/svc",
+				CreateHome:          true,
+				Shell:               "/sbin/nologin",
+				LoginClass:          "daemon",
+				System:              true,
+			},
+			want: `{"op":"user","id":"User[svc]","primary_group":"svc","supplementary_groups":["audio","wheel"],"home":"/var/lib/svc","create_home":true,"shell":"/sbin/nologin","login_class":"daemon","system":true,"name":"svc"}`,
 		},
 		{
 			name: "when_end",

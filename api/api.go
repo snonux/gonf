@@ -15,6 +15,7 @@ import (
 	"github.com/snonux/gonf/resource/systemd"
 	"github.com/snonux/gonf/resource/systemdtimer"
 	"github.com/snonux/gonf/resource/timer"
+	"github.com/snonux/gonf/resource/user"
 )
 
 // Path constraint for resources that can be defined as a single item or a list.
@@ -135,6 +136,14 @@ func Packages(names []string, opts ...options.PackageOption) Resource {
 // NoPackage creates one or more package resources that are ensured to be absent.
 func NoPackage[T Path](name T, opts ...options.PackageOption) Resource {
 	return Package(name, append(slices.Clone(opts), options.IsAbsent)...)
+}
+
+// User ensures a local account exists. It is deliberately additive-only:
+// creation attributes apply only to a missing account, and existing accounts
+// may receive missing supplementary group memberships but are never removed
+// or rewritten.
+func User(name string, opts ...options.LocalUserOption) Resource {
+	return user.Present(name, opts...)
 }
 
 // Service ensures one or more OS services are running and enabled at boot.

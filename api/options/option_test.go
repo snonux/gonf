@@ -76,6 +76,14 @@ func (c *capTarget) SetEnv(v map[string]string) { c.record("SetEnv", v) }
 func (c *capTarget) SetCreates(v string)        { c.record("SetCreates", v) }
 func (c *capTarget) SetUnless(v *Guard)         { c.record("SetUnless", v) }
 func (c *capTarget) SetOnlyIf(v *Guard)         { c.record("SetOnlyIf", v) }
+func (c *capTarget) SetHome(v string)           { c.record("SetHome", v) }
+func (c *capTarget) SetCreateHome()             { c.record("SetCreateHome", nil) }
+func (c *capTarget) SetShell(v string)          { c.record("SetShell", v) }
+func (c *capTarget) SetLoginClass(v string)     { c.record("SetLoginClass", v) }
+func (c *capTarget) SetSystem()                 { c.record("SetSystem", nil) }
+func (c *capTarget) AddSupplementaryGroups(v ...string) {
+	c.record("AddSupplementaryGroups", v)
+}
 
 func TestDependsOnSingle(t *testing.T) {
 	target := &fakeTarget{}
@@ -158,6 +166,14 @@ func TestOptionsReachTheirSetters(t *testing.T) {
 	}{
 		{"WithOwner", WithOwner("paul"), "SetOwner", "paul"},
 		{"WithGroup", WithGroup("wheel"), "SetGroup", "wheel"},
+		{"WithUserGroup", WithUserGroup("wheel"), "AddSupplementaryGroups", []string{"wheel"}},
+		{"WithPrimaryGroup", WithPrimaryGroup("svc"), "SetGroup", "svc"},
+		{"WithSupplementaryGroups", WithSupplementaryGroups("audio", "wheel"), "AddSupplementaryGroups", []string{"audio", "wheel"}},
+		{"WithLoginClass", WithLoginClass("daemon"), "SetLoginClass", "daemon"},
+		{"WithHome", WithHome("/var/lib/svc"), "SetHome", "/var/lib/svc"},
+		{"WithCreateHome", WithCreateHome, "SetCreateHome", nil},
+		{"WithShell", WithShell("/sbin/nologin"), "SetShell", "/sbin/nologin"},
+		{"WithSystem", WithSystem, "SetSystem", nil},
 		{"WithMode", WithMode(0o644), "SetMode", os.FileMode(0o644)},
 		{"WithSource", WithSource("/srv/src"), "SetSource", "/srv/src"},
 		{"WithSourceGlob", WithSourceGlob("*.conf"), "SetSourceGlob", "*.conf"},

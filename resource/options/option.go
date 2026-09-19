@@ -52,22 +52,28 @@ type (
 		SetSymlink(string)
 		SetHardlink(string)
 	}
-	Restartable     interface{ SetRestart() }
-	Reloadable      interface{ SetReload() }
-	UserService     interface{ SetUser() }
-	EnableOnlyable  interface{ SetEnableOnly() }
-	ChangeGated     interface{ SetIfChanged() }
-	Watchable       interface{ SetWatch([]string) }
-	ChangeWatchable interface{ SetChangeWatch([]string) }
-	Elevatable      interface{ SetElevate() }
-	CronUserable    interface{ SetCronUser(string) }
-	Commandable     interface{ SetCommand(string) }
-	Minuteable      interface{ SetMinute(string) }
-	Hourable        interface{ SetHour(string) }
-	Monthdayable    interface{ SetMonthday(string) }
-	Monthable       interface{ SetMonth(string) }
-	Weekdayable     interface{ SetWeekday(string) }
-	CronEnvable     interface{ AddCronEnv(string) }
+	Restartable            interface{ SetRestart() }
+	Reloadable             interface{ SetReload() }
+	UserService            interface{ SetUser() }
+	EnableOnlyable         interface{ SetEnableOnly() }
+	ChangeGated            interface{ SetIfChanged() }
+	Watchable              interface{ SetWatch([]string) }
+	ChangeWatchable        interface{ SetChangeWatch([]string) }
+	Elevatable             interface{ SetElevate() }
+	CronUserable           interface{ SetCronUser(string) }
+	Commandable            interface{ SetCommand(string) }
+	Minuteable             interface{ SetMinute(string) }
+	Hourable               interface{ SetHour(string) }
+	Monthdayable           interface{ SetMonthday(string) }
+	Monthable              interface{ SetMonth(string) }
+	Weekdayable            interface{ SetWeekday(string) }
+	CronEnvable            interface{ AddCronEnv(string) }
+	Homeable               interface{ SetHome(string) }
+	CreateHomeable         interface{ SetCreateHome() }
+	Shellable              interface{ SetShell(string) }
+	Classable              interface{ SetLoginClass(string) }
+	Systemable             interface{ SetSystem() }
+	SupplementaryGroupable interface{ AddSupplementaryGroups(...string) }
 
 	OnCalendarable         interface{ SetOnCalendar(string) }
 	OnBootSecable          interface{ SetOnBootSec(string) }
@@ -121,6 +127,11 @@ type (
 		Apply(any)
 		commandOption()
 	}
+	// LocalUserOption configures an additive-only local user resource.
+	LocalUserOption interface {
+		Apply(any)
+		localUserOption()
+	}
 
 	AllResourceOption interface {
 		FileOption
@@ -133,6 +144,7 @@ type (
 		SystemdTimerOption
 		DaemonReloadOption
 		CommandOption
+		LocalUserOption
 	}
 	FileDirOption interface {
 		FileOption
@@ -187,6 +199,8 @@ type (
 	systemdTimerOption     func(any)
 	daemonReloadOption     func(any)
 	commandOption          func(any)
+	groupOption            func(any)
+	userAccountOption      func(any)
 	absentOption           func(any)
 	serviceTimerOption     func(any)
 	userOption             func(any)
@@ -206,6 +220,8 @@ func (o cronOption) Apply(target any)             { o(target) }
 func (o systemdTimerOption) Apply(target any)     { o(target) }
 func (o daemonReloadOption) Apply(target any)     { o(target) }
 func (o commandOption) Apply(target any)          { o(target) }
+func (o groupOption) Apply(target any)            { o(target) }
+func (o userAccountOption) Apply(target any)      { o(target) }
 func (o absentOption) Apply(target any)           { o(target) }
 func (o serviceTimerOption) Apply(target any)     { o(target) }
 func (o userOption) Apply(target any)             { o(target) }
@@ -223,6 +239,7 @@ func (allResourceOption) timerOption()             {}
 func (allResourceOption) systemdTimerOption()      {}
 func (allResourceOption) daemonReloadOption()      {}
 func (allResourceOption) commandOption()           {}
+func (allResourceOption) localUserOption()         {}
 func (fileDirOption) fileOption()                  {}
 func (fileDirOption) dirOption()                   {}
 func (fileOption) fileOption()                     {}
@@ -234,6 +251,10 @@ func (cronOption) cronOption()                     {}
 func (systemdTimerOption) systemdTimerOption()     {}
 func (daemonReloadOption) daemonReloadOption()     {}
 func (commandOption) commandOption()               {}
+func (groupOption) fileOption()                    {}
+func (groupOption) dirOption()                     {}
+func (groupOption) localUserOption()               {}
+func (userAccountOption) localUserOption()         {}
 func (absentOption) fileOption()                   {}
 func (absentOption) dirOption()                    {}
 func (absentOption) linkOption()                   {}
@@ -311,6 +332,11 @@ func ToCommandOptions(opts ...Option) []CommandOption {
 	return toLegacyOptions(opts, func(fn func(any)) CommandOption { return commandOption(fn) })
 }
 
+// ToLocalUserOptions adapts erased options to local-user options.
+func ToLocalUserOptions(opts ...Option) []LocalUserOption {
+	return toLegacyOptions(opts, func(fn func(any)) LocalUserOption { return userAccountOption(fn) })
+}
+
 func toLegacyOptions[T any](opts []Option, legacy func(func(any)) T) []T {
 	out := make([]T, 0, len(opts))
 	for _, option := range opts {
@@ -360,11 +386,75 @@ func WithOwner(owner string) fileDirOption {
 	})
 }
 
-// WithGroup sets the owning group of a file or directory resource.
-func WithGroup(group string) fileDirOption {
-	return fileDirOption(func(target any) {
+// WithGroup sets the owning group of a file or directory resource, or the
+// creation-time primary group of a user resource.
+func WithGroup(group string) groupOption {
+	return groupOption(func(target any) {
 		requires(target, "WithGroup", func(r Grouped) { r.SetGroup(group) })
 	})
+}
+
+// WithHome sets a user's home directory when creating a missing account.
+// It does not create the directory; use WithCreateHome to request that.
+func WithHome(home string) userAccountOption {
+	return userAccountOption(func(target any) {
+		requires(target, "WithHome", func(r Homeable) { r.SetHome(home) })
+	})
+}
+
+// WithCreateHome creates the configured (or platform-default) home directory
+// only while creating a missing user.
+var WithCreateHome = userAccountOption(func(target any) {
+	requires(target, "WithCreateHome", func(r CreateHomeable) { r.SetCreateHome() })
+})
+
+// WithShell sets a user's login shell when creating a missing account.
+func WithShell(shell string) userAccountOption {
+	return userAccountOption(func(target any) {
+		requires(target, "WithShell", func(r Shellable) { r.SetShell(shell) })
+	})
+}
+
+// WithLoginClass sets a user's platform login class when creating a missing
+// account. Rocky Linux rejects this option because it has no login classes.
+func WithLoginClass(class string) userAccountOption {
+	return userAccountOption(func(target any) {
+		requires(target, "WithLoginClass", func(r Classable) { r.SetLoginClass(class) })
+	})
+}
+
+// WithClass is a compatibility alias for WithLoginClass.
+func WithClass(class string) userAccountOption { return WithLoginClass(class) }
+
+// WithPrimaryGroup sets a user's creation-time primary group.
+func WithPrimaryGroup(group string) userAccountOption {
+	return userAccountOption(func(target any) {
+		requires(target, "WithPrimaryGroup", func(r Grouped) { r.SetGroup(group) })
+	})
+}
+
+// WithSystem requests a system account while creating a missing user.
+// BSD backends reject it because their supported account utilities do not
+// expose one portable system-account mode.
+var WithSystem = userAccountOption(func(target any) {
+	requires(target, "WithSystem", func(r Systemable) { r.SetSystem() })
+})
+
+// WithSupplementaryGroups adds memberships for a user. Existing memberships
+// not named here are retained.
+func WithSupplementaryGroups(groups ...string) userAccountOption {
+	return userAccountOption(func(target any) {
+		requires(target, "WithSupplementaryGroups", func(r SupplementaryGroupable) {
+			r.AddSupplementaryGroups(groups...)
+		})
+	})
+}
+
+// WithUserGroup adds one supplementary group membership for a user. Existing
+// memberships are retained; use WithPrimaryGroup for the creation-time
+// primary group.
+func WithUserGroup(group string) userAccountOption {
+	return WithSupplementaryGroups(group)
 }
 
 // WithMode sets a resource's own file mode.

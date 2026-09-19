@@ -93,7 +93,7 @@ Status against every conf Rex primitive, as of gonf v0.12.2:
 | Rex `cron add => user, {…}` | `Cron` / `NoCron`: marker-managed per-user crontabs, full schedule fields, `WithCronEnv`, `WithCronUser` | **Done** (`@reboot` nice-to-have) |
 | Raw crontab surgery via `run` (rsync, nsd_failover, pf rebuild root crontab) | superseded by `Cron` (marker-based, idempotent, no temp-file race) | **Done** (gonf is ahead) |
 | Multi-Rexfile `require` composition | one Go module + `RegisterMethods(…, WithPrefix, WithCluster)` + `Aggregate`; proven by `~/git/conf/gonf` and `~/git/dotfiles/gonf` | **Done** |
-| `adduser -batch _dserver … unless id _dserver`, `usermod -d` | `Command` + `Unless` / `OnlyIf` guards | **Workable**; nice-to-have `User` resource |
+| `adduser -batch _dserver … unless id _dserver`, `usermod -d` | additive-only `User` with creation-time group/home/shell options | **Done** |
 | `/etc/login.conf.d` + `cap_mkdb` on change | `InstallFile` + `Command(..., OnChange(login))` | **Done** |
 | garage pattern: write `/tmp` as login user, then `doas install … && doas service restart` | plain chunk `File(/tmp/…, owner login-user)` + `Command(…, WithElevate)` in the elevated chunk (wrapped `doas` by the host's `PrivilegeDoas`) | **Done** |
 | Deferred `on_change` flag (`$restart = TRUE` … `service restart if $restart`) | `OnChange` supports multi-resource fan-in and carries ordering dependencies | **Done** |
@@ -174,16 +174,18 @@ script ("boot catch-up is the next hourly tick"). Proposal: `WithSpec("@reboot")
 or a `WithReboot()` option that emits `@reboot` in the marker block. Low value —
 the workaround holds.
 
-### 5. `User` resource (nice-to-have)
+### 5. `User` resource (complete)
 
-`dtail`, `gogios`, `gorum` create service users (`adduser -batch … unless id …`
-+ `usermod -d`). Proposal:
+`dtail`, `gogios`, and `gorum` create service users (`adduser -batch … unless
+id …` + `usermod -d`). The public resource is:
 
 ```go
-User("_dserver", WithClass("nologin"), WithGroup("_dserver"), WithHome("/var/run/dserver"))
+User("_dserver", WithLoginClass("nologin"), WithPrimaryGroup("_dserver"), WithHome("/var/run/dserver"))
 ```
 
-Until then: `Command("adduser", …, Unless("id", List("_dserver")))` + `Command("usermod", …)`.
+`User` is deliberately additive-only: it creates only missing accounts/groups
+and adds missing supplementary memberships, without deleting or rewriting
+existing accounts. See [user.md](user.md).
 
 ### Templates (rich data + closures)
 
@@ -253,8 +255,8 @@ converges).
 ## Rex task mapping
 
 Every conf Rex task and its gonf fate. "consumer" = already lives in
-`~/git/conf/gonf`. Feature codes: [on-change], [secrets], [pkg-path],
-[templates], [user] — see gaps above.
+`~/git/conf/gonf`. Feature codes: [on-change], [secrets], [pkg-path], and
+[templates] — see gaps above.
 
 Privilege note: the frontends tasks write root-owned files (`/etc/*`,
 `/usr/local/*`, `/root/.profile`) while the SSH login is `rex`, so those tasks
@@ -285,13 +287,13 @@ lands in `/tmp` owned by the login user (plain chunk), only the two
 | `nsd` (flags append; key.conf from secret; nsd.conf.master; per-zone templates; zone removals; restart-if-changed; service) | `File(WithLine)` + `Secret()` + `File` + `for` loop over zones emitting one `File` per zone + `NoFile` ×removed + `Service("nsd", IfChanged, …)` | Needs [on-change] + [secrets] + [templates→Go]. **To do** |
 | `nsd_failover` (script + root crontab via run) | `InstallFile` + `Cron("nsd_failover", WithCommand("-ns /usr/local/bin/dns-failover.ksh"), WithMinute("*"))` | **To do** (no new features; Cron replaces the temp-file crontab race, `-ns` in the command field, root is the default user) |
 | `dtail_install` (remove stray binaries; `PKG_PATH=… pkg_add -u dtail ‖ pkg_add dtail`) | `Command` cleanup probes + `Package("dtail", WithPkgPath(…), IsLatest)` | Needs [pkg-path] (workaround `Command(WithEnv)` today). **To do** |
-| `dtail` (dtail_install + adduser `_dserver` + `usermod -d` + daily.local appends + service) | depends on dtail port + `Command(adduser, Unless(id…))`/future `User` + `File(WithLine)` ×2 + `Service("dserver")` | Needs [pkg-path], [user]. **To do** |
+| `dtail` (dtail_install + adduser `_dserver` + `usermod -d` + daily.local appends + service) | depends on dtail port + `User("_dserver", WithHome("/var/run/dserver"))` + `File(WithLine)` ×2 + `Service("dserver")` | Needs [pkg-path]. **To do** |
 | `pkgrepo_setup` (`PKG_PATH` export appended to `/root/.profile`) | `File("/root/.profile", WithLine(export PKG_PATH=…))` | **To do** (no new features) |
 | `gogios_install` (uname branch: OpenBSD custom-repo `pkg_add -u ‖ install`; FreeBSD branch is dead code) | `Package("gogios", WithPkgPath(…), IsLatest)` (frontends are all OpenBSD; branch collapses) | Needs [pkg-path]. **To do** |
-| `gogios` (pkg ×2; adduser `_gogios`; dirs; gogios.json template over 3 arrays; `check_shuriken_age` sourced from `~/git/shuriken.sh`; `_gogios` crontab from template; rc.local appends) | `Package` ×2 + `User`/`Command` + `EnsureDir` ×2 + Go-computed `gogios.json` + `InstallFile` (absolute source outside repo — supported) + `Cron("gogios_check", WithCronUser("_gogios"), …)` + `File(WithLine)` ×2 | Needs [templates→Go], [user]. **To do** |
+| `gogios` (pkg ×2; adduser `_gogios`; dirs; gogios.json template over 3 arrays; `check_shuriken_age` sourced from `~/git/shuriken.sh`; `_gogios` crontab from template; rc.local appends) | `Package` ×2 + `User("_gogios")` + `EnsureDir` ×2 + Go-computed `gogios.json` + `InstallFile` (absolute source outside repo — supported) + `Cron("gogios_check", WithCronUser("_gogios"), …)` + `File(WithLine)` ×2 | Needs [templates→Go]. **To do** |
 | `cron_test` (Rex cron canary, `_gogios` user) | `Cron("frontends_cron_test", WithCronUser("_gogios"), …)` | **To do** (canary; low priority) |
 | `gorum_install` (source file; Rexfile has malformed owner/group attrs — fix at port) | `InstallFile("/usr/local/bin/gorum", …)` | **To do** (no new features; note the Rexfile attribute-syntax bug) |
-| `gorum` (adduser `_gorum`; gorum.json + rc.d/gorum restart-on-change; `/var/run/gorum`; service) | `User`/`Command` + 2× `File` (templates) + `EnsureDir` + `Service("gorum", IfChanged, …)` | Needs [on-change], [templates→Go], [user]. **To do** |
+| `gorum` (adduser `_gorum`; gorum.json + rc.d/gorum restart-on-change; `/var/run/gorum`; service) | `User("_gorum")` + 2× `File` (templates) + `EnsureDir` + `Service("gorum", IfChanged, …)` | Needs [on-change], [templates→Go]. **To do** |
 | `foostats` (copies scripts from `~/git/foostats`; installs; dirs; daily.local; 5× p5-* pkg; newsyslog.conf) | `InstallFile` (source directly from `~/git/foostats/…`) + `EnsureDir` ×2 + `File(WithLine)` + `Package` ×5 + `InstallFile` | **To do** (no new features) |
 | `ircbouncer` (pkg znc; service; fishfinger only) | `Package("znc")` + `Service("znc")` as `frontends_ircbouncer` (`WhenHostname("fishfinger")`) | **To do** (no new features) |
 | `pf` (pf.conf restart-on-change → `pfctl -f`; `/var/node_exporter` dir; exporter script; root cron (`-ns`); `rcctl set node_exporter flags`; restart) | privileged task (task-level elevation covers every op): `File` (template, DependsOn target) + `EnsureDir` + `InstallFile` + `Cron("pf_labels", WithCommand("-ns …"))` + `Command("rcctl", …)` ×2 + `Command("pfctl", List("-f", "/etc/pf.conf"), DependsOn(conf), IfChanged)` | Needs [on-change], [templates→Go]. **To do** |

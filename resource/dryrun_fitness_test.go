@@ -1,11 +1,13 @@
 package resource_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
 
+	"github.com/snonux/gonf/api"
 	opt "github.com/snonux/gonf/api/options"
 	iexec "github.com/snonux/gonf/internal/exec"
 	"github.com/snonux/gonf/resource"
@@ -135,6 +137,7 @@ func TestDryRunFitness(t *testing.T) {
 		{"daemon_reload", dryRunDaemonReload},
 		{"timer", dryRunTimer},
 		{"systemdtimer", dryRunSystemdTimer},
+		{"user", dryRunUser},
 	}
 
 	for _, k := range kinds {
@@ -144,6 +147,24 @@ func TestDryRunFitness(t *testing.T) {
 			resource.SetDryRun(true)
 			k.run(t, t.TempDir())
 		})
+	}
+}
+
+// dryRunUser exercises the public User → PlanDraft → user plan.Handler path.
+// The random name makes an existing account extraordinarily unlikely, so all
+// platform probes reach the mutation decisions; resource.Mutate must then
+// suppress group/user creation while still reporting the pending change.
+func dryRunUser(t *testing.T, _ string) {
+	name := fmt.Sprintf("gonf-dryrun-user-%d", os.Getpid())
+	api.User(name,
+		opt.WithPrimaryGroup(name),
+		opt.WithSupplementaryGroups("wheel"),
+	)
+	if err := api.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	if !resource.AnyChanged("Group["+name+"]", "User["+name+"]") {
+		t.Fatal("dry-run user resource did not report suppressed mutations")
 	}
 }
 

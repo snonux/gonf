@@ -33,8 +33,9 @@ import "encoding/json"
 // the same intent-loss class as previous bumps, so v10 binaries refuse v11
 // plans up-front at the header gate instead, while this binary keeps
 // applying v1–10 plans. Version 12 adds template_data to file ops for
-// structured destination-side template rendering.
-const CurrentVersion = 12
+// structured destination-side template rendering. Version 13 adds
+// additive-only user operations and their creation-time account attributes.
+const CurrentVersion = 13
 
 // supportedVersions is the set of plan schema versions this binary can apply.
 // Apply must refuse plans whose version is not in this set before any mutation.
@@ -50,6 +51,7 @@ var supportedVersions = map[int]struct{}{
 	9:              {},
 	10:             {},
 	11:             {},
+	12:             {},
 	CurrentVersion: {},
 }
 
@@ -79,6 +81,7 @@ const (
 	KindCron         Kind = "cron"
 	KindService      Kind = "service"
 	KindSystemdTimer Kind = "systemd_timer"
+	KindUser         Kind = "user"
 )
 
 // allKinds lists every Kind constant in stable declaration order.
@@ -99,6 +102,7 @@ var allKinds = []Kind{
 	KindCron,
 	KindService,
 	KindSystemdTimer,
+	KindUser,
 }
 
 // AllKinds returns a copy of every Kind constant in stable declaration order.
@@ -241,6 +245,19 @@ type Op struct {
 	// update / pkg upgrade / pkg_add -u / pkgin install) instead of a plain
 	// install, even when the package is already present.
 	Latest bool `json:"latest,omitempty"`
+
+	// PrimaryGroup and SupplementaryGroups are the requested groups for a
+	// KindUser operation. Only missing supplementary memberships are added;
+	// no existing membership or primary group is removed or rewritten.
+	PrimaryGroup        string   `json:"primary_group,omitempty"`
+	SupplementaryGroups []string `json:"supplementary_groups,omitempty"`
+	// Home, CreateHome, Shell, LoginClass, and System are only used when a
+	// KindUser operation creates a missing account.
+	Home       string `json:"home,omitempty"`
+	CreateHome bool   `json:"create_home,omitempty"`
+	Shell      string `json:"shell,omitempty"`
+	LoginClass string `json:"login_class,omitempty"`
+	System     bool   `json:"system,omitempty"`
 
 	// AddLine appends a line to a file when missing (line-in-file).
 	AddLine string `json:"add_line,omitempty"`

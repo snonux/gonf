@@ -7,6 +7,7 @@
 | [file-dir-link.md](file-dir-link.md) | `File` / `Dir` / `Link` (+ multi-path, lines, sources) |
 | [command.md](command.md) | `Command` with `Unless` / `OnlyIf` / `Creates` |
 | [package.md](package.md) | `Package` / `NoPackage` (dnf, pkg_add, pkg, pkgin) |
+| [user.md](user.md) | additive-only local `User` accounts |
 | [service.md](service.md) | `Service` / `NoService` (systemd, rcctl, FreeBSD/NetBSD) |
 | [timer.md](timer.md) | `Timer` / `NoTimer` (systemd `.timer`, Linux) |
 | [systemdtimer.md](systemdtimer.md) | `SystemdTimer` / `NoSystemdTimer` (install + enable) |

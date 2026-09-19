@@ -96,6 +96,20 @@ type PlanDraft struct {
 	// upgrade / pkg_add -u / pkgin install) instead of a plain install.
 	Latest bool
 
+	// PrimaryGroup and SupplementaryGroups describe a "user" draft. The
+	// resource only adds missing supplementary memberships; it never changes
+	// an existing account's primary group or removes memberships.
+	PrimaryGroup        string
+	SupplementaryGroups []string
+	// Home, CreateHome, Shell, LoginClass, and System are creation-time user
+	// attributes. They are retained on the wire so destination apply makes the
+	// same decision for a missing account as a direct resource apply.
+	Home       string
+	CreateHome bool
+	Shell      string
+	LoginClass string
+	System     bool
+
 	// AddLine appends a line to a file when missing (line-in-file).
 	AddLine string
 	// RemoveLine removes matching lines from a file.

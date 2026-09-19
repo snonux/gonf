@@ -133,6 +133,19 @@ func kindFitnessTable() map[plan.Kind]kindFixture {
 			After:              []string{"network-online.target"},
 			Wants:              []string{"network-online.target"},
 		}},
+		plan.KindUser: {draft: &resource.PlanDraft{
+			Kind:                "user",
+			ID:                  "User[fit-user]",
+			Name:                "fit-user",
+			PrimaryGroup:        "fit-user",
+			SupplementaryGroups: []string{"audio", "wheel"},
+			Home:                "/var/lib/fit-user",
+			CreateHome:          true,
+			Shell:               "/sbin/nologin",
+			LoginClass:          "daemon",
+			System:              true,
+			Deps:                []string{"Package[fit-base]"},
+		}},
 	}
 }
 

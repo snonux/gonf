@@ -257,7 +257,7 @@ func TestDecodePlanVersionGate(t *testing.T) {
 // up-front, and newer binaries must keep applying every prior schema.
 func TestDecodePlanAcceptsOlderVersions(t *testing.T) {
 	t.Parallel()
-	for _, version := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, CurrentVersion} {
+	for _, version := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, CurrentVersion} {
 		input := fmt.Sprintf(`{"op":"plan","version":%d}`+"\n", version)
 		if _, err := DecodePlan(strings.NewReader(input)); err != nil {
 			t.Errorf("version %d header should decode: %v", version, err)
