@@ -147,9 +147,13 @@ type PlanDraft struct {
 	Reload bool
 	// EnableOnly skips start/stop for timer present (enable/disable only).
 	EnableOnly bool
-	// IfChanged gates daemon_reload on watched dependency outcomes.
+	// IfChanged arms the draft's change gate (the OnChange option): a gated
+	// command is skipped entirely, a service/timer's restart/reload action
+	// is held, and a daemon-reload is skipped, unless one of the Watch ids
+	// reported a change during this apply.
 	IfChanged bool
-	// Watch lists resource ids for IfChanged (usually DependsOn targets).
+	// Watch lists resource ids for IfChanged (the OnChange targets; usually
+	// also DependsOn targets for daemon_reload).
 	Watch []string
 	// Deps lists the sorted resource IDs this draft's resource depends on
 	// (the DependsOn targets). draftToOp copies them into plan.Op.Deps so

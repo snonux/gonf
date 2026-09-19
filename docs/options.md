@@ -46,7 +46,8 @@ See [file-dir-link.md](file-dir-link.md): `WithContent`, `WithSource`,
 | `WithReload` | Reload once when already active (**Service only**; no restart fallback) |
 | `WithUser` | `systemctl --user` (systemd Service/Timer/DaemonReload/SystemdTimer) |
 | `WithEnableOnly` | Timer/SystemdTimer: enable/disable only (skip start/stop) |
-| `IfChanged` | DaemonReload: skip unless a DependsOn/WithWatch target changed |
+| `OnChange(res…)` | Command: run only when watched resources changed; Service/Timer: still converge state, but fire `WithRestart`/`WithReload` only on a watched change; DaemonReload: reload only on a watched change. It also records ordering dependencies. |
+| `IfChanged` | Legacy DaemonReload-only change gate; prefer `OnChange(res…)` in recipes |
 | `WithWatch(ids…)` | DaemonReload: explicit ids for IfChanged (plan/Ensure) |
 | `WithCommand` | SystemdTimer: oneshot `ExecStart=` (also Cron) |
 | `WithOnCalendar` / `WithOnBootSec` / `WithPersistent` | SystemdTimer schedule |

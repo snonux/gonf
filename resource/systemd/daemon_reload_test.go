@@ -96,6 +96,53 @@ func TestDaemonReloadIfChangedRuns(t *testing.T) {
 	}
 }
 
+func TestDaemonReloadOnChangeAndWithWatchMergeRegardlessOfOptionOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts func(resource.Resource, resource.Resource) []opt.DaemonReloadOption
+	}{
+		{
+			name: "OnChange then legacy WithWatch",
+			opts: func(changed, unchanged resource.Resource) []opt.DaemonReloadOption {
+				return []opt.DaemonReloadOption{opt.OnChange(changed), opt.WithWatch(unchanged.ID()), opt.IfChanged}
+			},
+		},
+		{
+			name: "legacy WithWatch then OnChange",
+			opts: func(changed, unchanged resource.Resource) []opt.DaemonReloadOption {
+				return []opt.DaemonReloadOption{opt.WithWatch(unchanged.ID()), opt.IfChanged, opt.OnChange(changed)}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resource.ResetRepository()
+			old := runCmd
+			t.Cleanup(func() { runCmd = old })
+
+			called := false
+			runCmd = func(string, ...string) (string, string, int, error) {
+				called = true
+				return "", "", 0, nil
+			}
+			changed := resource.Register("File", "changed", resource.ApplierFunc(func() error {
+				resource.Note("File[changed]", resource.StatusChanged)
+				return nil
+			}))
+			unchanged := resource.Register("File", "unchanged", resource.ApplierFunc(func() error {
+				resource.Note("File[unchanged]", resource.StatusOK)
+				return nil
+			}))
+			Present(tc.opts(changed, unchanged)...)
+			if err := resource.Apply(); err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if !called {
+				t.Fatal("daemon-reload must observe the changed OnChange target regardless of WithWatch order")
+			}
+		})
+	}
+}
+
 func TestDaemonReloadIfChangedSeesDirectoryChildFile(t *testing.T) {
 	resource.ResetRepository()
 	old := runCmd

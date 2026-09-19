@@ -22,9 +22,12 @@ var (
 )
 
 // Cmd is a command resource. It embeds DependsOn but not Absence: there is no
-// meaningful "absent" state for a one-shot command.
+// meaningful "absent" state for a one-shot command. The ChangeGate embed backs
+// the OnChange option: a gated command is skipped unless a watched resource
+// changed during this apply.
 type Cmd struct {
 	embed.DependsOn
+	embed.ChangeGate
 	name    string // registry name; defaults to "name args..."
 	bin     string
 	args    []string
@@ -45,13 +48,14 @@ func (c *Cmd) SetOnlyIf(g *opt.Guard)       { c.onlyIf = g }
 func (c *Cmd) SetElevate()                  { c.elevate = true }
 
 var (
-	_ opt.Named      = (*Cmd)(nil)
-	_ opt.Dirable    = (*Cmd)(nil)
-	_ opt.Envable    = (*Cmd)(nil)
-	_ opt.Creatable  = (*Cmd)(nil)
-	_ opt.Guardable  = (*Cmd)(nil)
-	_ opt.Dependable = (*Cmd)(nil)
-	_ opt.Elevatable = (*Cmd)(nil)
+	_ opt.Named           = (*Cmd)(nil)
+	_ opt.Dirable         = (*Cmd)(nil)
+	_ opt.Envable         = (*Cmd)(nil)
+	_ opt.Creatable       = (*Cmd)(nil)
+	_ opt.Guardable       = (*Cmd)(nil)
+	_ opt.Dependable      = (*Cmd)(nil)
+	_ opt.Elevatable      = (*Cmd)(nil)
+	_ opt.ChangeWatchable = (*Cmd)(nil)
 )
 
 // Present registers a command resource that runs bin with args on Apply.
@@ -125,6 +129,10 @@ func (c *Cmd) planDraft(id string) resource.PlanDraft {
 	d.Unless = planGuardDraft(c.unless)
 	d.OnlyIf = planGuardDraft(c.onlyIf)
 	d.Elevate = c.elevate
+	d.IfChanged = c.Gated
+	if d.IfChanged {
+		d.Watch = append([]string(nil), c.Watch...)
+	}
 	return d
 }
 
@@ -155,6 +163,12 @@ func defaultName(bin string, args []string) string {
 func (c *Cmd) Apply() error { return c.apply() }
 
 func (c *Cmd) apply() error {
+	if c.Gated && !resource.AnyChanged(c.Watch...) {
+		logger.Info("skipping %s: no watched dependency changed", c.id())
+		resource.Note(c.id(), resource.StatusSkipped)
+		return nil
+	}
+
 	if c.creates != "" {
 		if _, err := os.Stat(c.creates); err == nil {
 			logger.Info("skipping %s: %s already exists", c.id(), c.creates)

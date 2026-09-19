@@ -195,6 +195,69 @@ func TestPushRefusesForwardCrossChunkDepsWithZeroSSH(t *testing.T) {
 	}
 }
 
+func TestChangeGatePreflightsRefuseBeforeApplyOrPush(t *testing.T) {
+	cases := []struct {
+		name string
+		ops  []plan.Op
+		want string
+	}{
+		{
+			name: "empty watch",
+			ops: []plan.Op{
+				{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "empty-watch"},
+				{Op: plan.KindCommand, Bin: "touch", Args: []string{"unused"}, ID: "Command[gated]", IfChanged: true},
+			},
+			want: "watches nothing",
+		},
+		{
+			name: "dangling watch",
+			ops: []plan.Op{
+				{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "dangling-watch"},
+				{Op: plan.KindCommand, Bin: "touch", Args: []string{"unused"}, ID: "Command[gated]", IfChanged: true, Watch: []string{"File[missing]"}},
+			},
+			want: "dangling watch",
+		},
+		{
+			name: "cross privilege watch",
+			ops: []plan.Op{
+				{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "cross-watch"},
+				{Op: plan.KindFile, ID: "File[unit]", Elevate: true},
+				{Op: plan.KindCommand, Bin: "touch", Args: []string{"unused"}, ID: "Command[gated]", IfChanged: true, Watch: []string{"File[unit]"}},
+			},
+			want: "must live in the same chunk",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			oldElevated := elevatedApplyRunner
+			t.Cleanup(func() { elevatedApplyRunner = oldElevated })
+			elevatedApplyRunner = func(context.Context, privilege.Mode, []plan.Op, string) error {
+				t.Error("elevated apply must not run before change-gate preflight")
+				return nil
+			}
+			err := ApplyChunks(tc.ops, t.TempDir(), privilege.Sudo)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("ApplyChunks error = %v, want %q", err, tc.want)
+			}
+
+			oldSSH := remote.SSHRunner
+			restoreProbe := remote.AssumeRemotePlanCurrent()
+			t.Cleanup(func() {
+				remote.SSHRunner = oldSSH
+				restoreProbe()
+			})
+			remote.SSHRunner = func(context.Context, io.Reader, []string) error {
+				t.Error("SSH must not run before change-gate preflight")
+				return nil
+			}
+			err = remote.PushChunks(context.Background(), PushTarget{Host: "h.example", Privilege: privilege.Doas}, "demo", tc.ops, nil)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("PushChunks error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestApplyChunksElevatedRunner(t *testing.T) {
 	ResetTasks()
 	resource.ResetRepository()

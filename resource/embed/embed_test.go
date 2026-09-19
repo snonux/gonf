@@ -35,3 +35,32 @@ func TestSortedIDsSortsAndDedupes(t *testing.T) {
 		t.Errorf("SortedIDs mutated IDs: %#v", d.IDs)
 	}
 }
+
+// TestChangeGateDisarmedByDefault pins that a zero ChangeGate is inert: the
+// gated action runs unconditionally and no ids are watched.
+func TestChangeGateDisarmedByDefault(t *testing.T) {
+	var c ChangeGate
+	if c.Gated {
+		t.Error("zero ChangeGate.Gated = true, want false")
+	}
+	if len(c.Watch) != 0 {
+		t.Errorf("zero ChangeGate.Watch = %#v, want empty", c.Watch)
+	}
+}
+
+// TestSetChangeWatchArmsAndAccumulates pins SetChangeWatch's contract: it
+// arms the gate and accumulates watched ids across calls (OnChange may be
+// applied more than once, and multi-resource fan-in passes several ids in
+// one call).
+func TestSetChangeWatchArmsAndAccumulates(t *testing.T) {
+	var c ChangeGate
+	c.SetChangeWatch([]string{"File[a]", "File[b]"})
+	if !c.Gated {
+		t.Fatal("SetChangeWatch did not arm the gate")
+	}
+	c.SetChangeWatch([]string{"File[c]"})
+	want := []string{"File[a]", "File[b]", "File[c]"}
+	if !reflect.DeepEqual(c.Watch, want) {
+		t.Errorf("Watch = %#v, want %#v", c.Watch, want)
+	}
+}

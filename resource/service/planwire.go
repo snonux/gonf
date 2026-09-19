@@ -20,7 +20,7 @@ func init() {
 
 // ToOp lowers a "service" resource draft to a plan.Op.
 func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
-	return plan.Op{
+	op := plan.Op{
 		Op:      plan.KindService,
 		ID:      d.ID,
 		Name:    d.Name,
@@ -29,7 +29,13 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		Reload:  d.Reload,
 		User:    d.User,
 		Deps:    d.Deps,
-	}, nil
+	}
+	// Change gate (schema v11): OnChange arms IfChanged with the watched ids.
+	if d.IfChanged {
+		op.IfChanged = true
+		op.Watch = append([]string(nil), d.Watch...)
+	}
+	return op, nil
 }
 
 // Apply starts/stops/enables/disables the named service, mirroring
@@ -50,6 +56,12 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	}
 	if op.User {
 		opts = append(opts, opt.WithUser)
+	}
+	if op.IfChanged {
+		if len(op.Watch) == 0 {
+			return fmt.Errorf("service: if_changed without watch ids")
+		}
+		opts = append(opts, opt.WatchChanges(op.Watch...))
 	}
 	return Ensure(op.Name, opts...)
 }

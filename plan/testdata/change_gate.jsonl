@@ -1,0 +1,6 @@
+{"op":"plan","version":11,"id":"change_gate"}
+{"op":"file","id":"File[/etc/relayd.conf]","path":"/etc/relayd.conf","mode":"0600","content_b64":"Li4u"}
+{"op":"command","id":"Command[cap_mkdb /etc/login.conf]","name":"cap_mkdb /etc/login.conf","bin":"cap_mkdb","args":["/etc/login.conf"],"if_changed":true,"watch":["File[/etc/relayd.conf]"],"deps":["File[/etc/relayd.conf]"]}
+{"op":"service","id":"Service[relayd]","name":"relayd","restart":true,"if_changed":true,"watch":["File[/etc/relayd.conf]"],"deps":["File[/etc/relayd.conf]"]}
+{"op":"timer","id":"Timer[nfs-mount-monitor.timer]","name":"nfs-mount-monitor.timer","restart":true,"if_changed":true,"watch":["File[/etc/relayd.conf]"],"deps":["File[/etc/relayd.conf]"]}
+{"op":"daemon_reload","id":"DaemonReload[system]","if_changed":true,"watch":["File[/etc/relayd.conf]"],"deps":["File[/etc/relayd.conf]"]}

@@ -51,21 +51,22 @@ type (
 		SetSymlink(string)
 		SetHardlink(string)
 	}
-	Restartable    interface{ SetRestart() }
-	Reloadable     interface{ SetReload() }
-	UserService    interface{ SetUser() }
-	EnableOnlyable interface{ SetEnableOnly() }
-	ChangeGated    interface{ SetIfChanged() }
-	Watchable      interface{ SetWatch([]string) }
-	Elevatable     interface{ SetElevate() }
-	CronUserable   interface{ SetCronUser(string) }
-	Commandable    interface{ SetCommand(string) }
-	Minuteable     interface{ SetMinute(string) }
-	Hourable       interface{ SetHour(string) }
-	Monthdayable   interface{ SetMonthday(string) }
-	Monthable      interface{ SetMonth(string) }
-	Weekdayable    interface{ SetWeekday(string) }
-	CronEnvable    interface{ AddCronEnv(string) }
+	Restartable     interface{ SetRestart() }
+	Reloadable      interface{ SetReload() }
+	UserService     interface{ SetUser() }
+	EnableOnlyable  interface{ SetEnableOnly() }
+	ChangeGated     interface{ SetIfChanged() }
+	Watchable       interface{ SetWatch([]string) }
+	ChangeWatchable interface{ SetChangeWatch([]string) }
+	Elevatable      interface{ SetElevate() }
+	CronUserable    interface{ SetCronUser(string) }
+	Commandable     interface{ SetCommand(string) }
+	Minuteable      interface{ SetMinute(string) }
+	Hourable        interface{ SetHour(string) }
+	Monthdayable    interface{ SetMonthday(string) }
+	Monthable       interface{ SetMonth(string) }
+	Weekdayable     interface{ SetWeekday(string) }
+	CronEnvable     interface{ AddCronEnv(string) }
 
 	OnCalendarable         interface{ SetOnCalendar(string) }
 	OnBootSecable          interface{ SetOnBootSec(string) }
@@ -157,6 +158,12 @@ type (
 		SystemdTimerOption
 		DaemonReloadOption
 	}
+	ChangeGateOption interface {
+		CommandOption
+		ServiceOption
+		TimerOption
+		DaemonReloadOption
+	}
 	EnableOnlyOption interface {
 		TimerOption
 		SystemdTimerOption
@@ -184,6 +191,7 @@ type (
 	userOption             func(any)
 	enableOnlyOption       func(any)
 	cronSystemdTimerOption func(any)
+	changeGateOption       func(any)
 )
 
 func (o allResourceOption) Apply(target any)      { o(target) }
@@ -202,6 +210,7 @@ func (o serviceTimerOption) Apply(target any)     { o(target) }
 func (o userOption) Apply(target any)             { o(target) }
 func (o enableOnlyOption) Apply(target any)       { o(target) }
 func (o cronSystemdTimerOption) Apply(target any) { o(target) }
+func (o changeGateOption) Apply(target any)       { o(target) }
 
 func (allResourceOption) fileOption()              {}
 func (allResourceOption) dirOption()               {}
@@ -243,6 +252,10 @@ func (enableOnlyOption) timerOption()              {}
 func (enableOnlyOption) systemdTimerOption()       {}
 func (cronSystemdTimerOption) cronOption()         {}
 func (cronSystemdTimerOption) systemdTimerOption() {}
+func (changeGateOption) commandOption()            {}
+func (changeGateOption) serviceOption()            {}
+func (changeGateOption) timerOption()              {}
+func (changeGateOption) daemonReloadOption()       {}
 
 // ToFileOptions adapts erased options kept in legacy []Option slices to the
 // typed file-option slice accepted by file resources. Prefer passing typed
@@ -470,6 +483,58 @@ var IfChanged = daemonReloadOption(func(target any) {
 func WithWatch(ids ...string) daemonReloadOption {
 	return daemonReloadOption(func(target any) {
 		requires(target, "WithWatch", func(r Watchable) { r.SetWatch(ids) })
+	})
+}
+
+// OnChange gates a resource's mutating action on the change reports of the
+// supplied resources: the action fires only when one of them changed (or
+// would change, under dry-run) during this apply. It also records the
+// watched resources as regular dependencies, so they apply first (via
+// DependsOn ordering, on the plan wire's deps field).
+//
+// Per resource family the gated action is:
+//
+//   - Command: the command is skipped entirely unless a watched resource
+//     changed.
+//   - Service / Timer: state still converges (started/enabled/stopped), but
+//     WithRestart / WithReload fire only on a watched change.
+//   - DaemonReload: the reload is skipped unless a watched resource changed
+//     (the same semantics the legacy IfChanged option gives it).
+//
+// OnChange requires at least one resource: a gate with nothing to watch can
+// never fire, so it is registration-time misuse (fail-fast DSL contract).
+func OnChange(resources ...resource.Dependency) changeGateOption {
+	return changeGateOption(func(target any) {
+		var ids []string
+		for _, res := range resources {
+			ids = append(ids, res.Dependencies()...)
+		}
+		if len(ids) == 0 {
+			logger.Fatal("OnChange requires at least one resource to watch")
+		}
+		requires(target, "OnChange", func(r ChangeWatchable) { r.SetChangeWatch(ids) })
+		// The watched resources must also apply first: reuse the ordinary
+		// dependency accumulation so ordering (and the plan wire's deps
+		// field) flows through the existing DependsOn embed.
+		requires(target, "OnChange", func(r Dependable) {
+			for _, id := range ids {
+				r.AddDependency(id)
+			}
+		})
+	})
+}
+
+// WatchChanges arms the change gate on explicit watched resource IDs, the
+// ids-level counterpart of OnChange(resources...). Plan handlers use it to
+// rebuild a recorded gate on the destination (ordering there is already
+// handled by the plan engine's dep sort); recipes should prefer OnChange.
+// An empty watch list can never fire, so it is registration-time misuse.
+func WatchChanges(ids ...string) changeGateOption {
+	return changeGateOption(func(target any) {
+		if len(ids) == 0 {
+			logger.Fatal("WatchChanges requires at least one resource id to watch")
+		}
+		requires(target, "OnChange", func(r ChangeWatchable) { r.SetChangeWatch(ids) })
 	})
 }
 

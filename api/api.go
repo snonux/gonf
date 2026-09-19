@@ -207,8 +207,9 @@ func NoTimer[T Path](name T, opts ...options.TimerOption) Resource {
 	return Timer(name, append(slices.Clone(opts), options.IsAbsent)...)
 }
 
-// DaemonReload runs systemctl daemon-reload (or --user). Combine with
-// DependsOn(unitFiles) and IfChanged to reload only when unit files changed.
+// DaemonReload runs systemctl daemon-reload (or --user). Prefer OnChange(unitFiles)
+// to reload only when unit files changed; the legacy DependsOn + IfChanged form
+// remains supported.
 func DaemonReload(opts ...options.DaemonReloadOption) Resource {
 	return systemd.Present(opts...)
 }

@@ -33,9 +33,13 @@ func applyNetBSD(s *Service) error {
 		return err
 	}
 
-	actions := netbsdActions(s, running, enabled)
+	actions, held := netbsdActions(s, running, enabled)
 
 	if len(actions) == 0 {
+		if held {
+			resource.Note(id, resource.StatusSkipped)
+			return nil
+		}
 		resource.NoteResult(id, false)
 		return nil
 	}
@@ -43,8 +47,9 @@ func applyNetBSD(s *Service) error {
 	return runNetBSDActions(id, actions)
 }
 
-func netbsdActions(s *Service, running, enabled bool) []netbsdAction {
+func netbsdActions(s *Service, running, enabled bool) ([]netbsdAction, bool) {
 	var actions []netbsdAction
+	held := false // change gate suppressed the restart/reload action
 	add := func(desc string, run func() error) {
 		actions = append(actions, netbsdAction{desc: desc, run: run})
 	}
@@ -55,19 +60,28 @@ func netbsdActions(s *Service, running, enabled bool) []netbsdAction {
 		if enabled {
 			add("disable "+s.name, func() error { return netbsdSetEnabled(s.name, false) })
 		}
-		return actions
+		return actions, held
 	}
 	if !enabled {
 		add("enable "+s.name, func() error { return netbsdSetEnabled(s.name, true) })
 	}
 	if !running {
 		add("service "+s.name+" start", func() error { return netbsdSvcRun(s.name, "start") })
-	} else if s.reload {
-		add("service "+s.name+" reload", func() error { return netbsdSvcRun(s.name, "reload") })
-	} else if s.restart {
-		add("service "+s.name+" restart", func() error { return netbsdSvcRun(s.name, "restart") })
+	} else if s.reload || s.restart {
+		// The gated action only fires after a watched resource changed. When
+		// the gate holds, no action is added: with the unit already running
+		// and enabled that leaves zero actions, which applyNetBSD reports as
+		// skipped (the gated restart was requested but held).
+		if s.gateHolds() {
+			logger.Debug("Service[%s]: restart/reload held by change gate (no watched dependency changed)", s.name)
+			held = true
+		} else if s.reload {
+			add("service "+s.name+" reload", func() error { return netbsdSvcRun(s.name, "reload") })
+		} else {
+			add("service "+s.name+" restart", func() error { return netbsdSvcRun(s.name, "restart") })
+		}
 	}
-	return actions
+	return actions, held
 }
 
 func runNetBSDActions(id string, actions []netbsdAction) error {

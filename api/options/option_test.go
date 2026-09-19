@@ -57,6 +57,8 @@ func (c *capTarget) SetElevate()                { c.record("SetElevate", nil) }
 func (c *capTarget) SetEnableOnly()             { c.record("SetEnableOnly", nil) }
 func (c *capTarget) SetIfChanged()              { c.record("SetIfChanged", nil) }
 func (c *capTarget) SetWatch(v []string)        { c.record("SetWatch", v) }
+func (c *capTarget) SetChangeWatch(v []string)  { c.record("SetChangeWatch", v) }
+func (c *capTarget) AddDependency(v string)     { c.record("AddDependency", v) }
 func (c *capTarget) SetCronUser(v string)       { c.record("SetCronUser", v) }
 func (c *capTarget) SetCommand(v string)        { c.record("SetCommand", v) }
 func (c *capTarget) SetMinute(v string)         { c.record("SetMinute", v) }
@@ -118,6 +120,27 @@ func TestDependsOnMixed(t *testing.T) {
 	want := []string{"File[a]", "File[b]", "File[c]"}
 	if !reflect.DeepEqual(target.deps, want) {
 		t.Errorf("deps = %v, want %v", target.deps, want)
+	}
+}
+
+func TestOnChangeArmsGateAndAddsDependencyEdges(t *testing.T) {
+	target := &capTarget{}
+	OnChange(
+		resource.Resource{Type: "File", Name: "a"},
+		resource.Multi{
+			resource.Resource{Type: "File", Name: "b"},
+			resource.Resource{Type: "File", Name: "c"},
+		},
+	).Apply(target)
+
+	want := []capCall{
+		{method: "SetChangeWatch", value: []string{"File[a]", "File[b]", "File[c]"}},
+		{method: "AddDependency", value: "File[a]"},
+		{method: "AddDependency", value: "File[b]"},
+		{method: "AddDependency", value: "File[c]"},
+	}
+	if !reflect.DeepEqual(target.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", target.calls, want)
 	}
 }
 

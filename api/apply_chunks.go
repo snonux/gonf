@@ -160,15 +160,20 @@ func ApplyChunksContext(ctx context.Context, ops []plan.Op, planDir string, mode
 	return nil
 }
 
-// validateChunkDeps runs the plan-level cross-chunk dependency pre-flight
-// (plan.ValidateChunkDeps) over the split privilege chunks: forward
-// cross-chunk and dangling deps fail before any chunk is applied or
-// uploaded. Shared by ApplyChunks (api, local apply) and remote.PushChunks
-// (internal/remote, SSH push).
+// validateChunkDeps runs the plan-level cross-chunk pre-flights over the
+// split privilege chunks: plan.ValidateChunkDeps (forward cross-chunk and
+// dangling deps fail before any chunk is applied or uploaded) and
+// plan.ValidateChangeGates (change-gated watches must live in the gated
+// op's own chunk — change reports are chunk-local). Shared by ApplyChunks
+// (api, local apply) and remote.PushChunks (internal/remote, SSH push);
+// RecordPlanTo additionally runs the change-gate check at record time.
 func validateChunkDeps(chunks []plan.Chunk) error {
 	bodies := make([][]plan.Op, len(chunks))
 	for i, ch := range chunks {
 		bodies[i] = ch.Ops
 	}
-	return plan.ValidateChunkDeps(bodies)
+	if err := plan.ValidateChunkDeps(bodies); err != nil {
+		return err
+	}
+	return plan.ValidateChangeGates(bodies)
 }

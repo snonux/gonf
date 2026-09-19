@@ -493,6 +493,16 @@ Design decisions:
   `exec.Opts.Timeout` field exists for opt-in callers; wiring it globally was
   deliberately deferred (it would change apply semantics).
 
+Plan schema **version 11** extends `if_changed` / `watch` from
+`daemon_reload` to `command`, `service`, and `timer` ops. `OnChange(res…)`
+records both the watched IDs and normal dependency IDs: commands run only
+after a watched change, while services and timers still converge state but
+hold requested restart/reload actions until a watched change. An older binary
+would ignore these fields on the newly supported kinds and run the action on
+every apply, so v10 binaries refuse v11 plans at the header gate before any
+mutation. Change reports are privilege-chunk-local; controller-side plan
+validation rejects a watched op in another chunk or an empty/dangling watch.
+
 Plan schema **version 10** adds the `latest` field to `package` ops: a
 `Package` recorded with `IsLatest` now carries that intent explicitly, so
 destination apply runs the backend's upgrade-check path (`dnf update` / `pkg

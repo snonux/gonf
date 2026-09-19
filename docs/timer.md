@@ -24,8 +24,11 @@ After dropping new unit files, run [`DaemonReload`](service.md) (with
 ```go
 units := SyncDir(Home(".config/systemd/user"), ".../systemd-user/*")
 reload := DaemonReload(WithUser, DependsOn(units), IfChanged)
-Timer("random-wallpaper", WithUser, DependsOn(reload))
+Timer("random-wallpaper", WithUser, OnChange(reload), WithRestart)
 ```
+
+`OnChange` never suppresses enable/start convergence. It only holds a requested
+`WithRestart` until one watched resource reports a change.
 
 ## Options
 
@@ -33,6 +36,7 @@ Timer("random-wallpaper", WithUser, DependsOn(reload))
 |--------|---------|
 | `WithUser` | Use `systemctl --user` |
 | `WithRestart` | Restart the timer once when already active |
+| `OnChange(res…)` | Gate `WithRestart` on managed-resource changes and apply after them |
 | `WithEnableOnly` | Enable/disable only — skip start/stop |
 | `IsAbsent` / `NoTimer` | Stop and disable (stop skipped with `WithEnableOnly`) |
 | `DependsOn` | Apply after other resources |

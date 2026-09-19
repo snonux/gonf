@@ -335,6 +335,19 @@ func TestPlanOptionFitness_Service(t *testing.T) {
 			t.Fatalf("Absent: expected stop and disable, got %v", planCalls)
 		}
 	})
+
+	t.Run("OnChangeRestart", func(t *testing.T) {
+		var planCalls [][]string
+		systemd.SetRunCmdForTest(fakeSystemctl(&planCalls, true, true))
+		path := filepath.Join(t.TempDir(), "service.conf")
+		recordApplyOption(t, "service_opt_on_change", func() {
+			conf := File(path, opt.WithContent("managed\n"))
+			Service("optfitsvc", opt.WithRestart, opt.OnChange(conf))
+		})
+		if !argsContainOpt(flatten(planCalls), "restart") {
+			t.Fatalf("OnChange service plan apply did not restart after its managed file changed: %v", planCalls)
+		}
+	})
 }
 
 func flatten(calls [][]string) []string {
@@ -403,6 +416,19 @@ func TestPlanOptionFitness_Timer(t *testing.T) {
 			t.Fatalf("Absent: plan round-trip diverged from direct Ensure\n direct: %v\n plan:   %v", directCalls, planCalls)
 		}
 	})
+
+	t.Run("OnChangeRestart", func(t *testing.T) {
+		var planCalls [][]string
+		systemd.SetRunCmdForTest(fakeSystemctl(&planCalls, true, true))
+		path := filepath.Join(t.TempDir(), "timer.conf")
+		recordApplyOption(t, "timer_opt_on_change", func() {
+			conf := File(path, opt.WithContent("managed\n"))
+			Timer("optfit.timer", opt.WithRestart, opt.OnChange(conf))
+		})
+		if !argsContainOpt(flatten(planCalls), "restart") {
+			t.Fatalf("OnChange timer plan apply did not restart after its managed file changed: %v", planCalls)
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -445,6 +471,19 @@ func TestPlanOptionFitness_DaemonReload(t *testing.T) {
 	if len(planCalls) != 1 || !argsContainOpt(planCalls[0], "--user") {
 		t.Fatalf("expected a single --user daemon-reload call, got %v", planCalls)
 	}
+
+	t.Run("OnChangeAndLegacyIfChangedWatch", func(t *testing.T) {
+		var calls [][]string
+		systemd.SetRunCmdForTest(fake(&calls))
+		path := filepath.Join(t.TempDir(), "unit.service")
+		recordApplyOption(t, "daemon_reload_opt_on_change", func() {
+			unit := File(path, opt.WithContent("[Unit]\n"))
+			DaemonReload(opt.IfChanged, opt.WithWatch(unit.ID()), opt.OnChange(unit))
+		})
+		if len(calls) != 1 || !argsContainOpt(calls[0], "daemon-reload") {
+			t.Fatalf("OnChange plus legacy IfChanged/WithWatch did not reload after its managed file changed: %v", calls)
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------

@@ -125,6 +125,46 @@ func TestE2ERecordApplyConditionalsAndContent(t *testing.T) {
 	}
 }
 
+// TestE2EOnChangeRunsOncePerManagedInputChange proves the plan path, not
+// merely direct resources: a changed File report reaches a subsequently
+// applied Command handler through the recorded IfChanged/Watch fields, and
+// a converged second apply holds that command.
+func TestE2EOnChangeRunsOncePerManagedInputChange(t *testing.T) {
+	api.ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	base := t.TempDir()
+	input := filepath.Join(base, "input.conf")
+	output := filepath.Join(base, "reloads")
+	api.Task("on_change_e2e", "", func() {
+		managed := api.File(input, options.WithContent("managed\n"))
+		api.Command("sh", []string{"-c", "printf 'reload\\n' >> " + output}, options.OnChange(managed))
+	})
+
+	ops, err := api.RecordPlan("on-change-e2e", base, "on_change_e2e")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+	if err := api.ApplyPlan(ops, base); err != nil {
+		t.Fatalf("first ApplyPlan: %v", err)
+	}
+	if err := api.ApplyPlan(ops, base); err != nil {
+		t.Fatalf("second ApplyPlan: %v", err)
+	}
+	got, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatalf("read gated command output: %v", err)
+	}
+	if string(got) != "reload\n" {
+		t.Fatalf("gated command output = %q, want one run", got)
+	}
+}
+
 // End-to-end for the cron and service plan kinds: RecordPlan → Encode →
 // Decode → plan.Apply, with the crontab and systemctl exec layers faked so no
 // real crontab or service manager is touched.

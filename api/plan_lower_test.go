@@ -471,6 +471,95 @@ func TestRecordPlanLowersTimerRestart(t *testing.T) {
 	}
 }
 
+// TestRecordPlanLowersOnChange verifies that the public OnChange DSL keeps
+// both parts of its contract on the plan wire: watched IDs gate the action,
+// and normal dependency IDs preserve the apply order. The command fan-in
+// covers a Multi-like multi-resource gate while the other resource families
+// cover their individual lowering paths.
+func TestRecordPlanLowersOnChange(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	base := t.TempDir()
+	first := filepath.Join(base, "first.conf")
+	second := filepath.Join(base, "second.conf")
+	Task("on_change", "on change lowering", func() {
+		firstRes := File(first, options.WithContent("first"))
+		secondRes := File(second, options.WithContent("second"))
+		Command("true", nil, options.OnChange(firstRes, secondRes))
+		Service("change-gated.service", options.WithRestart, options.OnChange(firstRes))
+		Timer("change-gated.timer", options.WithRestart, options.OnChange(firstRes))
+		DaemonReload(options.OnChange(firstRes))
+	})
+
+	ops, err := RecordPlan("on-change", t.TempDir(), "on_change")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+	if !reflect.DeepEqual(opsKinds(ops), []plan.Kind{
+		plan.KindPlan, plan.KindFile, plan.KindFile, plan.KindCommand,
+		plan.KindService, plan.KindTimer, plan.KindDaemonReload,
+	}) {
+		t.Fatalf("ops kinds = %v", opsKinds(ops))
+	}
+	firstID := "File[" + first + "]"
+	secondID := "File[" + second + "]"
+	cases := []struct {
+		name  string
+		op    plan.Op
+		watch []string
+		deps  []string
+	}{
+		{"command fan-in", ops[3], []string{firstID, secondID}, []string{firstID, secondID}},
+		{"service", ops[4], []string{firstID}, []string{firstID}},
+		{"timer", ops[5], []string{firstID}, []string{firstID}},
+		{"daemon reload", ops[6], []string{firstID}, []string{firstID}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.op.IfChanged || !reflect.DeepEqual(tc.op.Watch, tc.watch) || !reflect.DeepEqual(tc.op.Deps, tc.deps) {
+				t.Fatalf("op = %#v, want if_changed with watch=%#v deps=%#v", tc.op, tc.watch, tc.deps)
+			}
+		})
+	}
+
+	raw, err := plan.EncodePlan(ops)
+	if err != nil {
+		t.Fatalf("EncodePlan: %v", err)
+	}
+	decoded, err := plan.DecodePlanBytes(raw)
+	if err != nil {
+		t.Fatalf("DecodePlanBytes: %v", err)
+	}
+	if !reflect.DeepEqual(decoded, ops) {
+		t.Fatalf("round-trip mismatch\ngot  %#v\nwant %#v", decoded, ops)
+	}
+}
+
+func TestRecordPlanRejectsOnChangeAcrossPrivilegeChunks(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	Task("cross_chunk_change_gate", "", func() {
+		privileged := Command("true", nil, options.WithName("privileged"), options.WithElevate)
+		Command("true", nil, options.WithName("gated"), options.OnChange(privileged))
+	})
+	_, err := RecordPlan("cross-chunk", t.TempDir(), "cross_chunk_change_gate")
+	if err == nil || !strings.Contains(err.Error(), "must live in the same chunk") {
+		t.Fatalf("RecordPlan error = %v, want cross-chunk change-gate refusal", err)
+	}
+}
+
 // TestRecordPlanLowersSystemdTimer pins declarative timer install fields on
 // the wire (schema v7): command, calendar, and unit metadata must survive
 // record → encode → decode.

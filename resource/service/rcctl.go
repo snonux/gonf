@@ -20,6 +20,7 @@ func applyRcctl(s *Service) error {
 	}
 
 	var actions [][]string
+	held := false // change gate suppressed the restart/reload action
 	if s.Absent {
 		if running {
 			actions = append(actions, []string{"stop", s.name})
@@ -33,14 +34,24 @@ func applyRcctl(s *Service) error {
 		}
 		if !running {
 			actions = append(actions, []string{"start", s.name})
-		} else if s.reload {
-			actions = append(actions, []string{"reload", s.name})
-		} else if s.restart {
-			actions = append(actions, []string{"restart", s.name})
+		} else if s.reload || s.restart {
+			// The gated action only fires after a watched resource changed.
+			if s.gateHolds() {
+				logger.Debug("%s: restart/reload held by change gate (no watched dependency changed)", id)
+				held = true
+			} else if s.reload {
+				actions = append(actions, []string{"reload", s.name})
+			} else {
+				actions = append(actions, []string{"restart", s.name})
+			}
 		}
 	}
 
 	if len(actions) == 0 {
+		if held {
+			resource.Note(id, resource.StatusSkipped)
+			return nil
+		}
 		resource.NoteResult(id, false)
 		return nil
 	}

@@ -519,6 +519,38 @@ func TestApplyDependencyDanglingSatisfiedAtChunkLevel(t *testing.T) {
 	}
 }
 
+func TestApplyRefusesInvalidChangeGateBeforeMutation(t *testing.T) {
+	root := t.TempDir()
+	marker := filepath.Join(root, "marker")
+	cases := []struct {
+		name string
+		op   Op
+		want string
+	}{
+		{
+			name: "empty watch",
+			op:   Op{Op: KindCommand, Bin: "touch", Args: []string{marker}, ID: "Command[gated]", IfChanged: true},
+			want: "watches nothing",
+		},
+		{
+			name: "dangling watch",
+			op:   Op{Op: KindCommand, Bin: "touch", Args: []string{marker}, ID: "Command[gated]", IfChanged: true, Watch: []string{"File[missing]"}},
+			want: "dangling watch",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := Apply([]Op{header(), tc.op}, Facts{}, "")
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Apply error = %v, want %q", err, tc.want)
+			}
+			if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
+				t.Fatal("invalid change gate must be rejected before its command mutates")
+			}
+		})
+	}
+}
+
 // TestApplyDepInLaterWhenBlockRejected pins the cross-guard rule: an op may
 // not depend on a resource recorded inside a LATER when-block (or any later
 // segment); apply cannot reorder ops across when_* boundaries.

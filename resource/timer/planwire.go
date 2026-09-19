@@ -20,7 +20,7 @@ func init() {
 
 // ToOp lowers a "timer" resource draft to a plan.Op.
 func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
-	return plan.Op{
+	op := plan.Op{
 		Op:         plan.KindTimer,
 		ID:         d.ID,
 		Name:       d.Name,
@@ -29,7 +29,13 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		Restart:    d.Restart,
 		EnableOnly: d.EnableOnly,
 		Deps:       d.Deps,
-	}, nil
+	}
+	// Change gate (schema v11): OnChange arms IfChanged with the watched ids.
+	if d.IfChanged {
+		op.IfChanged = true
+		op.Watch = append([]string(nil), d.Watch...)
+	}
+	return op, nil
 }
 
 // Apply enables/starts, restarts, or stops/disables the named systemd timer
@@ -50,6 +56,12 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	}
 	if op.EnableOnly {
 		opts = append(opts, opt.WithEnableOnly)
+	}
+	if op.IfChanged {
+		if len(op.Watch) == 0 {
+			return fmt.Errorf("timer: if_changed without watch ids")
+		}
+		opts = append(opts, opt.WatchChanges(op.Watch...))
 	}
 	return Ensure(op.Name, opts...)
 }

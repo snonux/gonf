@@ -193,6 +193,41 @@ func TestWithRestartIssuesRestart(t *testing.T) {
 	}
 }
 
+func TestOnChangeGatesRestart(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Timer is Linux-only")
+	}
+	for _, tc := range []struct {
+		name        string
+		watchStatus resource.Status
+		wantRestart bool
+	}{
+		{name: "unchanged watch holds restart", watchStatus: resource.StatusOK},
+		{name: "changed watch fires restart", watchStatus: resource.StatusChanged, wantRestart: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resource.ResetRepository()
+			defer systemd.ResetRunCmdForTest()
+			var sawRestart bool
+			systemd.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+				sawRestart = sawRestart || name == "systemctl" && contains(args, "restart")
+				return fakeSystemdAlreadyOK(name, args...)
+			})
+			watched := resource.Register("File", "unit", resource.ApplierFunc(func() error {
+				resource.Note("File[unit]", tc.watchStatus)
+				return nil
+			}))
+			Present("fstrim", opt.WithRestart, opt.OnChange(watched))
+			if err := resource.Apply(); err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if sawRestart != tc.wantRestart {
+				t.Fatalf("restart = %t, want %t", sawRestart, tc.wantRestart)
+			}
+		})
+	}
+}
+
 func TestWithUserPassesUserFlag(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Timer is Linux-only")

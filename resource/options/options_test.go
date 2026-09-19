@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/snonux/gonf/resource"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -51,6 +52,8 @@ func TestEveryExportedOptionHasAResourceFamily(t *testing.T) {
 		{"WithEnableOnly", func() { acceptTimer(WithEnableOnly) }},
 		{"IfChanged", func() { acceptDaemonReload(IfChanged) }},
 		{"WithWatch", func() { acceptDaemonReload(WithWatch("id")) }},
+		{"OnChange", func() { acceptCommand(OnChange(resource.Resource{Type: "File", Name: "unit"})) }},
+		{"WatchChanges", func() { acceptTimer(WatchChanges("File[unit]")) }},
 		{"WithCronUser", func() { acceptCron(WithCronUser("root")) }},
 		{"WithCommand", func() { acceptSystemdTimer(WithCommand("true")) }},
 		{"WithMinute", func() { acceptCron(WithMinute("*")) }},
@@ -151,6 +154,14 @@ func TestSharedOptionsHaveCompleteFamilyMatrix(t *testing.T) {
 	acceptEnableOnly(WithEnableOnly)
 	acceptDaemonReload(IfChanged)
 	acceptDaemonReload(WithWatch("id"))
+	acceptChangeGate := func(option ChangeGateOption) {
+		acceptCommand(option)
+		acceptService(option)
+		acceptTimer(option)
+		acceptDaemonReload(option)
+	}
+	acceptChangeGate(OnChange(resource.Resource{Type: "File", Name: "unit"}))
+	acceptChangeGate(WatchChanges("File[unit]"))
 	acceptCron(WithCronUser("root"))
 	acceptCronSystemdTimer(WithCommand("true"))
 	acceptCron(WithMinute("*"))

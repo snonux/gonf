@@ -42,6 +42,16 @@ func Apply(ops []Op, facts Facts, planDir string) error {
 	if err := ValidateHeader(ops[0]); err != nil {
 		return err
 	}
+	// A direct `gonf apply` receives one privilege chunk (or an unsplit local
+	// plan), so it must enforce the same change-gate safety contract as the
+	// controller record/chunk/push paths. In particular, a manually supplied
+	// schema-11 plan may not silently turn an empty or dangling watch into a
+	// permanently skipped command. Cross-chunk watches are rejected by the
+	// controller before chunks are written or sent; within this invocation all
+	// watched IDs must therefore be present here.
+	if err := ValidateChangeGates([][]Op{ops}); err != nil {
+		return err
+	}
 
 	resource.ResetReport()
 	// The summary is what the report machinery exists for: every apply ends

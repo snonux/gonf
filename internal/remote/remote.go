@@ -378,15 +378,19 @@ func sanitizeID(id string) string {
 	return b.String()
 }
 
-// validateChunkDeps runs the plan-level cross-chunk dependency pre-flight
-// (plan.ValidateChunkDeps) over the split privilege chunks: forward
-// cross-chunk and dangling deps fail before any chunk is applied or
-// uploaded. Mirrors the api-side helper of the same name shared by the local
-// ApplyChunks engine.
+// validateChunkDeps runs the plan-level cross-chunk pre-flights over the
+// split privilege chunks: plan.ValidateChunkDeps (forward cross-chunk and
+// dangling deps) and plan.ValidateChangeGates (change-gated watches must
+// live in the gated op's own chunk — change reports are chunk-local),
+// before any chunk is applied or uploaded. Mirrors the api-side helper of
+// the same name shared by the local ApplyChunks engine.
 func validateChunkDeps(chunks []plan.Chunk) error {
 	bodies := make([][]plan.Op, len(chunks))
 	for i, ch := range chunks {
 		bodies[i] = ch.Ops
 	}
-	return plan.ValidateChunkDeps(bodies)
+	if err := plan.ValidateChunkDeps(bodies); err != nil {
+		return err
+	}
+	return plan.ValidateChangeGates(bodies)
 }

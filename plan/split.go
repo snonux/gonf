@@ -24,17 +24,7 @@ type Chunk struct {
 // uploading anything, so a rejected plan mutates no destination and, on
 // push, sends zero SSH traffic.
 func ValidateChunkDeps(chunks [][]Op) error {
-	// firstChunk maps an op ID to the first chunk index carrying it.
-	firstChunk := map[string]int{}
-	for i, chunk := range chunks {
-		for _, op := range chunk {
-			if op.ID != "" {
-				if _, seen := firstChunk[op.ID]; !seen {
-					firstChunk[op.ID] = i
-				}
-			}
-		}
-	}
+	firstChunk := firstChunkOf(chunks)
 	for i, chunk := range chunks {
 		for _, op := range chunk {
 			for _, dep := range op.Deps {
@@ -48,6 +38,63 @@ func ValidateChunkDeps(chunks [][]Op) error {
 					return fmt.Errorf(
 						"plan: chunk %d: op %s depends on %s which is recorded in later chunk %d; a dependency recorded after its dependent crosses the privilege boundary",
 						i, op.ID, dep, j)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// firstChunkOf maps an op ID to the first chunk index carrying it.
+func firstChunkOf(chunks [][]Op) map[string]int {
+	firstChunk := map[string]int{}
+	for i, chunk := range chunks {
+		for _, op := range chunk {
+			if op.ID != "" {
+				if _, seen := firstChunk[op.ID]; !seen {
+					firstChunk[op.ID] = i
+				}
+			}
+		}
+	}
+	return firstChunk
+}
+
+// ValidateChangeGates checks change-gate watch locality across privilege
+// chunks before any chunk is applied: change reports (resource.Note) are
+// chunk-local — every privilege chunk is applied as its own plan.Apply
+// invocation, and an elevated chunk is a separate sudo/doas process with a
+// report of its own — so a gated op can only see change reports from
+// resources recorded in its OWN chunk. A watch crossing the privilege
+// boundary (earlier or later chunk) can never fire and is refused; so is a
+// watch recorded in no chunk at all (dangling) and a gated op with no watch
+// ids at all (its gate could never fire). Like ValidateChunkDeps, this is a
+// controller-side pre-flight: api.ApplyChunks, remote.PushChunks, and
+// RecordPlanTo (record time) all run it, so a rejected plan mutates no
+// destination and, on push, sends zero SSH traffic.
+func ValidateChangeGates(chunks [][]Op) error {
+	firstChunk := firstChunkOf(chunks)
+	for i, chunk := range chunks {
+		for _, op := range chunk {
+			if !op.IfChanged {
+				continue
+			}
+			if len(op.Watch) == 0 {
+				return fmt.Errorf(
+					"plan: chunk %d: op %s is change-gated (if_changed) but watches nothing; the gate can never fire",
+					i, op.ID)
+			}
+			for _, watch := range op.Watch {
+				j, ok := firstChunk[watch]
+				if !ok {
+					return fmt.Errorf(
+						"plan: chunk %d: op %s watches %s which is recorded in no chunk (dangling watch); change reports are chunk-local",
+						i, op.ID, watch)
+				}
+				if j != i {
+					return fmt.Errorf(
+						"plan: chunk %d: op %s watches %s which is recorded in chunk %d; change reports are chunk-local (each privilege chunk applies as its own process), so a watch must live in the same chunk as the gated op",
+						i, op.ID, watch, j)
 				}
 			}
 		}

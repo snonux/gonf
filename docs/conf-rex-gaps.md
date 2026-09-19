@@ -1,6 +1,7 @@
 # Replacing `~/git/conf` Rex with gonf — gap audit
 
-Refreshed 2026-09-19 against **gonf v0.12.2** (plan schema 10). This document is the
+Refreshed 2026-09-19 against the **gonf v0.12.2 baseline**; current trunk uses
+plan schema 11. This document is the
 canonical plan for porting the [`~/git/conf`](https://codeberg.org/snonux/conf)
 Rexfiles to gonf. Earlier revisions claimed gonf "still lacks Rex-style sudo/doas"
 and that pkg/service/cron "fleet still needs transport" — both are **stale**:
@@ -10,9 +11,10 @@ unattended-upgrades migration already runs on top of them (see
 [The conf/gonf consumer](#the-confgonf-consumer)).
 
 **Where things stand:** gonf is a full match for conf Rex on transport, privilege,
-packages, services, cron, and file/line primitives. Three real gaps remain:
-**change-gated service restart** (Rex `on_change`), a **secrets convention**
-(Rex `$secrets`), and **custom package repos** (Rex `PKG_PATH` env). Rich
+packages, services, cron, and file/line primitives. Two real gaps remain: a
+**secrets convention** (Rex `$secrets`) and **custom package repos** (Rex
+`PKG_PATH` env). Change-gated service restart (Rex `on_change`) is now covered
+by `OnChange`. Rich
 templates are an ergonomics gap, not a capability gap — record-time Go code can
 compute any content Perl closures could (see
 [Templates](#templates-rich-data--closures)).
@@ -83,7 +85,7 @@ Status against every conf Rex primitive, as of gonf v0.12.2:
 | `pkg … ensure => present/absent` (pkg_add, pkg, pkgin, dnf) | `Package` / `NoPackage` with OS-auto-detected backends; `IsLatest` upgrade path (plan v10 `latest`) | **Done** |
 | Custom repo / `PKG_PATH="https://pkgrepo…"` env on pkg_add | nothing on `Package`; recipe-side workaround is `Command` with `WithEnv` | **Gap** → `WithPkgPath` |
 | `service x, ensure => started` (rcctl / systemd / FreeBSD+NetBSD `service`) | `Service` / `NoService` auto-detect, `WithRestart` (restart once when already active), `WithReload`, `WithUser` (systemd) | **Done** |
-| `on_change => sub { service 'x' => 'restart' }` (restart only when a file changed) | only `DaemonReload(IfChanged, WithWatch/DependsOn)` is change-gated; `Service`/`Timer` restart unconditionally when active | **Gap** → `IfChanged` on Service/Timer |
+| `on_change => sub { service 'x' => 'restart' }` (restart only when a file changed) | `OnChange(res…)`: Command runs only on a watched change; Service/Timer preserve state convergence but gate requested restart/reload; DaemonReload is gated too | **Done** (plan v11) |
 | `template(...)` with arrays/loops/closures/per-server data | `.tmpl` sources render at apply time with process env + `{{.Param}}` only; **record-time Go can compute any content** (closures, arrays, per-host data via `WhenHostname` fragments) | **Partial** (ergonomics — see [Templates](#templates-rich-data--closures)) |
 | `$secrets->('path')` (`read_file './secrets/…'`) | no helper; recipe code may `os.ReadFile` today | **Gap** → `Secret()` convention |
 | `append_if_no_such_line` | `WithLine` / `WithoutLine` (idempotent, mode-aware) | **Done** |
@@ -92,15 +94,15 @@ Status against every conf Rex primitive, as of gonf v0.12.2:
 | Raw crontab surgery via `run` (rsync, nsd_failover, pf rebuild root crontab) | superseded by `Cron` (marker-based, idempotent, no temp-file race) | **Done** (gonf is ahead) |
 | Multi-Rexfile `require` composition | one Go module + `RegisterMethods(…, WithPrefix, WithCluster)` + `Aggregate`; proven by `~/git/conf/gonf` and `~/git/dotfiles/gonf` | **Done** |
 | `adduser -batch _dserver … unless id _dserver`, `usermod -d` | `Command` + `Unless` / `OnlyIf` guards | **Workable**; nice-to-have `User` resource |
-| `/etc/login.conf.d` + `cap_mkdb` on change | `InstallFile` + change-gated `Command` | **Gap** (same as `on_change`) |
+| `/etc/login.conf.d` + `cap_mkdb` on change | `InstallFile` + `Command(..., OnChange(login))` | **Done** |
 | garage pattern: write `/tmp` as login user, then `doas install … && doas service restart` | plain chunk `File(/tmp/…, owner login-user)` + `Command(…, WithElevate)` in the elevated chunk (wrapped `doas` by the host's `PrivilegeDoas`) | **Done** |
-| Deferred `on_change` flag (`$restart = TRUE` … `service restart if $restart`) | covered by change-gated fan-in once `IfChanged` reaches `Service`/`Timer` (today: unconditional `WithRestart`) | **Gap** |
+| Deferred `on_change` flag (`$restart = TRUE` … `service restart if $restart`) | `OnChange` supports multi-resource fan-in and carries ordering dependencies | **Done** |
 
 ## Remaining gaps and proposed DSL APIs
 
 Ordered by how often conf Rex uses them and how many ported tasks unblock.
 
-### 1. Change-gated restart/reload (`on_change`) — highest value
+### Implemented: change-gated restart/reload (`on_change`)
 
 Rex restarts a service **only when a file changed** (11+ uses across httpd,
 inetd, relayd, smtpd, nsd, gorum, pf, and both r-nodes tasks). gonf has the
@@ -108,27 +110,28 @@ plumbing (`IfChanged` watches `DependsOn` targets and dependency change notes)
 but only `DaemonReload` implements it. (Garage restarts unconditionally every
 run — no `on_change` there.)
 
-Proposal — extend `IfChanged` (the `ChangeGated` capability) to `Service`,
-`Timer`, and `Command`:
+`OnChange(resources...)` is the public, typed DSL for `Service`, `Timer`,
+`Command`, and `DaemonReload`. It adds normal dependency ordering, supports
+multi-resource fan-in, and records a schema-11 `if_changed`/`watch` gate:
 
 ```go
 conf := InstallFile("/etc/relayd.conf", tplDir+"/relayd.conf", WithMode(0o600))
-Service("relayd", DependsOn(conf), IfChanged)              // restart only when conf changed
+Service("relayd", WithRestart, OnChange(conf))             // restart only when conf changed
 
 login := InstallFile("/etc/login.conf.d/daemon", src)
-Command("cap_mkdb", List("/etc/login.conf"), DependsOn(login), IfChanged) // run once on change
+Command("cap_mkdb", List("/etc/login.conf"), OnChange(login)) // run once on change
 
 units := InstallFile("/etc/systemd/system/nfs-mount-monitor.timer", src)
-DaemonReload(DependsOn(units…), IfChanged)
-Timer("nfs-mount-monitor", DependsOn(units), IfChanged)    // restart timer only when units changed
+DaemonReload(OnChange(units…))
+Timer("nfs-mount-monitor", WithRestart, OnChange(units))   // restart timer only when units changed
 ```
 
-Semantics: `IfChanged` skips the mutating action (restart / reload / run) when
-none of the `DependsOn` targets reported a change during this apply; the
-idempotent state enforcement (started/enabled) still runs. Without `DependsOn`
-targets, `IfChanged` + mutation is a registration-time error (fail-fast DSL
-contract). Plan-schema impact: `service` / `command` / `timer` ops grow an
-`if_changed` flag (version bump, old binaries refuse up-front).
+`OnChange` skips the command or holds the requested service/timer
+restart/reload when no watched target reported a change; state enforcement
+(started/enabled) still runs. Empty watches fail at registration, and empty,
+dangling, or cross-privilege-chunk watches fail before a plan is written,
+pushed, or applied. Legacy `IfChanged`/`WithWatch` remain compatible for
+DaemonReload.
 
 ### 2. Secrets convention (`$secrets`)
 
@@ -224,9 +227,9 @@ match; LAN hosts pin `WithSSHPort(22)` because `~/.ssh/config` maps
 
 ## Implementation ordering
 
-1. **`IfChanged` on Service / Timer / Command** (plan bump for `if_changed`
-   flags) — unblocks the largest set of ports: httpd, inetd, relayd, smtpd, nsd,
-   gorum, pf, r-nodes monitor + journal, garage restart, login.conf `cap_mkdb`.
+1. **Complete: `OnChange` on Service / Timer / Command / DaemonReload**
+   (schema 11) — unblocks httpd, inetd, relayd, smtpd, nsd, gorum, pf, r-nodes
+   monitor + journal, garage restart, and login.conf `cap_mkdb`.
 2. **`Secret()` helper + plan-secrecy doc note** — unblocks goprecords_upload,
    nsd key.conf, garage_deploy (which can already ship with `os.ReadFile`).
 3. **`WithPkgPath` on Package** — unblocks dtail_install, gogios_install,

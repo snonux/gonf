@@ -15,25 +15,27 @@ import (
 // DaemonReloadResource runs systemctl daemon-reload (optionally --user).
 type DaemonReloadResource struct {
 	embed.DependsOn
-	user      bool
-	ifChanged bool
-	watch     []string // optional explicit watch list (plan apply); else DependsOn.IDs
+	embed.ChangeGate
+	user        bool
+	legacyWatch []string // WithWatch target ids; merged with OnChange watches
 }
 
 func (d *DaemonReloadResource) SetUser()      { d.user = true }
-func (d *DaemonReloadResource) SetIfChanged() { d.ifChanged = true }
+func (d *DaemonReloadResource) SetIfChanged() { d.Gated = true }
 
-// SetWatch overrides the watched resource ids for IfChanged; when unset the
-// DependsOn ids are watched.
+// SetWatch sets the explicit legacy IfChanged watch ids. They are merged with
+// OnChange targets so composing legacy WithWatch and OnChange is order
+// independent; when neither form supplies ids, DependsOn ids are watched.
 func (d *DaemonReloadResource) SetWatch(ids []string) {
-	d.watch = append([]string(nil), ids...)
+	d.legacyWatch = append([]string(nil), ids...)
 }
 
 var (
-	_ opt.UserService = (*DaemonReloadResource)(nil)
-	_ opt.Dependable  = (*DaemonReloadResource)(nil)
-	_ opt.ChangeGated = (*DaemonReloadResource)(nil)
-	_ opt.Watchable   = (*DaemonReloadResource)(nil)
+	_ opt.UserService     = (*DaemonReloadResource)(nil)
+	_ opt.Dependable      = (*DaemonReloadResource)(nil)
+	_ opt.ChangeGated     = (*DaemonReloadResource)(nil)
+	_ opt.Watchable       = (*DaemonReloadResource)(nil)
+	_ opt.ChangeWatchable = (*DaemonReloadResource)(nil)
 )
 
 // Present registers a daemon-reload resource.
@@ -61,15 +63,12 @@ func Ensure(opts ...opt.DaemonReloadOption) error {
 }
 
 func (d *DaemonReloadResource) planDraft(id string) resource.PlanDraft {
-	watch := d.watch
-	if len(watch) == 0 {
-		watch = append([]string(nil), d.DependsOn.IDs...)
-	}
+	watch := d.watchIDs()
 	return resource.PlanDraft{
 		Kind:      "daemon_reload",
 		ID:        id,
 		User:      d.user,
-		IfChanged: d.ifChanged,
+		IfChanged: d.Gated,
 		Watch:     watch,
 		Deps:      d.DependsOn.SortedIDs(),
 	}
@@ -84,11 +83,8 @@ func (d *DaemonReloadResource) apply() error {
 		return fmt.Errorf("%s: %w", id, err)
 	}
 
-	if d.ifChanged {
-		watch := d.watch
-		if len(watch) == 0 {
-			watch = d.DependsOn.IDs
-		}
+	if d.Gated {
+		watch := d.watchIDs()
 		if !resource.AnyChanged(watch...) {
 			resource.Note(id, resource.StatusSkipped)
 			logger.Debug("%s: skipped (no watched dependency changed)", id)
@@ -105,6 +101,34 @@ func (d *DaemonReloadResource) apply() error {
 		logger.Info("systemctl %v", args)
 		return nil
 	})
+}
+
+// watchIDs combines OnChange and legacy WithWatch targets. Keeping the
+// legacy list separate means WithWatch cannot accidentally erase an earlier
+// OnChange target (or vice versa); both forms describe resources whose change
+// should cause the same daemon reload. A legacy-only IfChanged retains its
+// historical fallback to DependsOn IDs.
+func (d *DaemonReloadResource) watchIDs() []string {
+	watch := uniqueWatchIDs(d.Watch, d.legacyWatch)
+	if len(watch) == 0 {
+		watch = uniqueWatchIDs(d.DependsOn.IDs)
+	}
+	return watch
+}
+
+func uniqueWatchIDs(groups ...[]string) []string {
+	seen := make(map[string]struct{})
+	var ids []string
+	for _, group := range groups {
+		for _, id := range group {
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 func (d *DaemonReloadResource) id() string {

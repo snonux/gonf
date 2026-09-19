@@ -104,6 +104,59 @@ func TestWithRestartIssuesRestart(t *testing.T) {
 	}
 }
 
+func TestOnChangeGatesRestartButNotServiceConvergence(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		watchStatus resource.Status
+		wantRestart bool
+	}{
+		{name: "unchanged watch holds restart", watchStatus: resource.StatusOK},
+		{name: "changed watch fires restart", watchStatus: resource.StatusChanged, wantRestart: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resource.ResetRepository()
+			var sawRestart bool
+			switch runtime.GOOS {
+			case "linux":
+				SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+					sawRestart = sawRestart || name == "systemctl" && contains(args, "restart")
+					return fakeSystemdAlreadyOK(name, args...)
+				})
+			case "openbsd":
+				SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+					sawRestart = sawRestart || name == "rcctl" && contains(args, "restart")
+					return fakeRcctlAlreadyOK(name, args...)
+				})
+			case "freebsd":
+				SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+					sawRestart = sawRestart || name == "service" && contains(args, "restart")
+					return fakeFreeBSDAlreadyOK(name, args...)
+				})
+			case "netbsd":
+				SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+					sawRestart = sawRestart || name == netbsdService && contains(args, "restart")
+					return fakeNetBSDAlreadyOK(name, args...)
+				})
+			default:
+				t.Skip("unsupported GOOS")
+			}
+			t.Cleanup(ResetRunCmdForTest)
+
+			watched := resource.Register("File", "unit", resource.ApplierFunc(func() error {
+				resource.Note("File[unit]", tc.watchStatus)
+				return nil
+			}))
+			Present("uptimed", opt.WithRestart, opt.OnChange(watched))
+			if err := resource.Apply(); err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if sawRestart != tc.wantRestart {
+				t.Fatalf("restart = %t, want %t", sawRestart, tc.wantRestart)
+			}
+		})
+	}
+}
+
 func TestWithUserRejectedOnNonSystemd(t *testing.T) {
 	if runtime.GOOS == "linux" {
 		t.Skip("linux uses systemd")

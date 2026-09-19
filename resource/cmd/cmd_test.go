@@ -46,6 +46,40 @@ func TestCreatesRunsWhenPathMissing(t *testing.T) {
 	}
 }
 
+func TestOnChangeRunsCommandOnlyForChangedDependency(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  resource.Status
+		wantRun bool
+	}{
+		{name: "unchanged dependency skips", status: resource.StatusOK},
+		{name: "changed dependency runs", status: resource.StatusChanged, wantRun: true},
+		{name: "dry run change runs", status: resource.StatusWouldChange, wantRun: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resource.ResetRepository()
+			out := filepath.Join(t.TempDir(), "ran")
+			watched := resource.Register("File", "unit", resource.ApplierFunc(func() error {
+				resource.Note("File[unit]", tt.status)
+				return nil
+			}))
+			Present("touch", []string{out}, opt.OnChange(watched))
+
+			if err := resource.Apply(); err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			_, err := os.Stat(out)
+			if tt.wantRun && err != nil {
+				t.Fatalf("gated command did not run: %v", err)
+			}
+			if !tt.wantRun && !os.IsNotExist(err) {
+				t.Fatalf("gated command ran without a changed dependency: %v", err)
+			}
+		})
+	}
+}
+
 func TestUnlessSkipsOnSuccess(t *testing.T) {
 	resource.ResetRepository()
 	dir := t.TempDir()

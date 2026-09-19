@@ -79,6 +79,54 @@ func TestValidateChunkDepsNamesLaterChunk(t *testing.T) {
 	}
 }
 
+// TestValidateChangeGates pins the additional safety rule for OnChange: a
+// change report only exists within the process applying its privilege chunk,
+// so every watched resource must be in the gated op's own chunk.
+func TestValidateChangeGates(t *testing.T) {
+	cmd := func(id string, watch ...string) Op {
+		return Op{Op: KindCommand, Bin: "true", ID: id, IfChanged: true, Watch: watch}
+	}
+	cases := []struct {
+		name    string
+		chunks  [][]Op
+		wantErr string
+	}{
+		{
+			name:   "same chunk fan in is valid",
+			chunks: [][]Op{{cmd("Command[reload]", "File[a]", "File[b]"), {Op: KindFile, ID: "File[a]"}, {Op: KindFile, ID: "File[b]"}}},
+		},
+		{
+			name:    "empty watch is refused",
+			chunks:  [][]Op{{cmd("Command[reload]")}},
+			wantErr: "watches nothing",
+		},
+		{
+			name:    "dangling watch is refused",
+			chunks:  [][]Op{{cmd("Command[reload]", "File[missing]")}},
+			wantErr: "dangling watch",
+		},
+		{
+			name:    "earlier privilege chunk is refused",
+			chunks:  [][]Op{{{Op: KindFile, ID: "File[unit]"}}, {cmd("Command[reload]", "File[unit]")}},
+			wantErr: "must live in the same chunk",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateChangeGates(tc.chunks)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("ValidateChangeGates: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("want error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
 func TestSplitPrivilegeChunks(t *testing.T) {
 	header := Op{Op: KindPlan, Version: 2, ID: "t"}
 	ops := []Op{

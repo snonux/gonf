@@ -20,6 +20,7 @@ import (
 type Timer struct {
 	embed.DependsOn
 	embed.Absence
+	embed.ChangeGate
 	name       string // unit name ending in .timer
 	restart    bool
 	user       bool // systemctl --user
@@ -31,11 +32,12 @@ func (t *Timer) SetUser()       { t.user = true }
 func (t *Timer) SetEnableOnly() { t.enableOnly = true }
 
 var (
-	_ opt.Absentable     = (*Timer)(nil)
-	_ opt.Restartable    = (*Timer)(nil)
-	_ opt.UserService    = (*Timer)(nil)
-	_ opt.EnableOnlyable = (*Timer)(nil)
-	_ opt.Dependable     = (*Timer)(nil)
+	_ opt.Absentable      = (*Timer)(nil)
+	_ opt.Restartable     = (*Timer)(nil)
+	_ opt.UserService     = (*Timer)(nil)
+	_ opt.EnableOnlyable  = (*Timer)(nil)
+	_ opt.Dependable      = (*Timer)(nil)
+	_ opt.ChangeWatchable = (*Timer)(nil)
 )
 
 // Present registers a timer that should be active and enabled (or only
@@ -66,7 +68,7 @@ func Absent(name string, opts ...opt.TimerOption) resource.Resource {
 }
 
 func (t *Timer) planDraft(id string) resource.PlanDraft {
-	return resource.PlanDraft{
+	d := resource.PlanDraft{
 		Kind:       "timer",
 		ID:         id,
 		Name:       t.name,
@@ -76,6 +78,11 @@ func (t *Timer) planDraft(id string) resource.PlanDraft {
 		EnableOnly: t.enableOnly,
 		Deps:       t.DependsOn.SortedIDs(),
 	}
+	d.IfChanged = t.Gated
+	if d.IfChanged {
+		d.Watch = append([]string(nil), t.Watch...)
+	}
+	return d
 }
 
 func normalizeUnit(name string) string {
@@ -111,6 +118,7 @@ func (t *Timer) apply() error {
 	}
 
 	var actions [][]string
+	held := false // change gate suppressed the restart action
 	if t.Absent {
 		if !t.enableOnly && active {
 			actions = append(actions, systemd.Args(t.user, "stop", t.name))
@@ -126,12 +134,22 @@ func (t *Timer) apply() error {
 			if !active {
 				actions = append(actions, systemd.Args(t.user, "start", t.name))
 			} else if t.restart {
-				actions = append(actions, systemd.Args(t.user, "restart", t.name))
+				// The gated restart only fires after a watched resource changed.
+				if t.Gated && !resource.AnyChanged(t.Watch...) {
+					logger.Debug("%s: restart held by change gate (no watched dependency changed)", id)
+					held = true
+				} else {
+					actions = append(actions, systemd.Args(t.user, "restart", t.name))
+				}
 			}
 		}
 	}
 
 	if len(actions) == 0 {
+		if held {
+			resource.Note(id, resource.StatusSkipped)
+			return nil
+		}
 		resource.NoteResult(id, false)
 		return nil
 	}

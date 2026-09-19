@@ -39,6 +39,7 @@ type (
 	EnableOnlyable         = resourceoptions.EnableOnlyable
 	ChangeGated            = resourceoptions.ChangeGated
 	Watchable              = resourceoptions.Watchable
+	ChangeWatchable        = resourceoptions.ChangeWatchable
 	Elevatable             = resourceoptions.Elevatable
 	CronUserable           = resourceoptions.CronUserable
 	Commandable            = resourceoptions.Commandable
@@ -73,6 +74,7 @@ type (
 	UserOption             = resourceoptions.UserOption
 	EnableOnlyOption       = resourceoptions.EnableOnlyOption
 	CronSystemdTimerOption = resourceoptions.CronSystemdTimerOption
+	ChangeGateOption       = resourceoptions.ChangeGateOption
 )
 
 var (
@@ -101,6 +103,8 @@ var (
 	WithEnableOnly         = resourceoptions.WithEnableOnly
 	IfChanged              = resourceoptions.IfChanged
 	WithWatch              = resourceoptions.WithWatch
+	OnChange               = resourceoptions.OnChange
+	WatchChanges           = resourceoptions.WatchChanges
 	WithCronUser           = resourceoptions.WithCronUser
 	WithCommand            = resourceoptions.WithCommand
 	WithMinute             = resourceoptions.WithMinute

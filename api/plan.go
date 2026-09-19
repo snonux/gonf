@@ -176,7 +176,30 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 
 	ops := plan.FinishRecord(planID)
 	plan.ResetRecord()
+	if err := validateRecordedChangeGates(ops); err != nil {
+		return nil, err
+	}
 	return ops, nil
+}
+
+// validateRecordedChangeGates refuses plans whose change-gated ops (OnChange
+// / IfChanged) watch resources recorded in a different privilege chunk:
+// change reports are chunk-local (each privilege chunk applies as its own
+// plan.Apply invocation, and an elevated chunk is a separate sudo/doas
+// process with a report of its own), so such a watch could never fire. The
+// check runs at record time — the earliest point all ops and their elevate
+// flags are known — so Run, gonf plan, and every push path fail before the
+// plan is written, shipped, or applied. plan.ValidateChangeGates is the
+// sibling of the cross-chunk dependency pre-flight and reuses its
+// chunk-locality logic; the apply/push side re-runs it on received plans
+// (api.ApplyChunks / remote.PushChunks).
+func validateRecordedChangeGates(ops []plan.Op) error {
+	chunks := plan.SplitPrivilegeChunks(ops)
+	bodies := make([][]plan.Op, len(chunks))
+	for i, ch := range chunks {
+		bodies[i] = ch.Ops
+	}
+	return plan.ValidateChangeGates(bodies)
 }
 
 // RefuseOpaqueOnlyPush errors when the RecordPlanTo call that just returned

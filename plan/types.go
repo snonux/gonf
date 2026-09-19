@@ -22,8 +22,16 @@ package plan
 // latest field to package ops (a Package configured with IsLatest now
 // carries that intent onto the wire, so plan apply runs the backend's
 // upgrade-check path — dnf update / pkg upgrade / pkg_add -u / pkgin
-// install — instead of a plain install).
-const CurrentVersion = 10
+// install — instead of a plain install); version 11 extended the
+// if_changed/watch fields (previously daemon_reload-only) to command,
+// service, and timer ops: the OnChange option arms a change gate on those
+// resources (skip the command; hold restart/reload until a watched resource
+// changed), and an older binary that ignored the fields on the new kinds
+// would run the command / restart the service unconditionally every apply —
+// the same intent-loss class as previous bumps, so v10 binaries refuse v11
+// plans up-front at the header gate instead, while this binary keeps
+// applying v1–10 plans.
+const CurrentVersion = 11
 
 // supportedVersions is the set of plan schema versions this binary can apply.
 // Apply must refuse plans whose version is not in this set before any mutation.
@@ -37,6 +45,7 @@ var supportedVersions = map[int]struct{}{
 	7:              {},
 	8:              {},
 	9:              {},
+	10:             {},
 	CurrentVersion: {},
 }
 
@@ -285,7 +294,14 @@ type Op struct {
 	// EnableOnly skips start/stop for KindTimer / KindSystemdTimer present
 	// (enable/disable only).
 	EnableOnly bool `json:"enable_only,omitempty"`
-	// IfChanged gates KindDaemonReload on watched dependency outcomes.
+	// IfChanged gates the op's mutating action on watched dependency
+	// outcomes (schema v2 for KindDaemonReload; schema v11 extended the
+	// field to KindCommand, KindService, and KindTimer): a gated command is
+	// skipped entirely, a service/timer's restart/reload action is held,
+	// and a daemon-reload is skipped, unless one of the Watch ids reported
+	// a change during this apply. Change reports are chunk-local: the
+	// controller-side ValidateChangeGates pre-flight refuses gated ops
+	// whose watch ids are recorded in another privilege chunk.
 	IfChanged bool `json:"if_changed,omitempty"`
 	// Watch lists resource ids consulted when IfChanged is set.
 	Watch []string `json:"watch,omitempty"`

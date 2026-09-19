@@ -17,6 +17,15 @@ Service("foo", WithUser)            // systemd --user only
 NoService("olddaemon")              // stopped + disabled
 ```
 
+For a restart or reload only when managed input changed, use `OnChange`; it
+adds the required ordering edge too, while preserving normal enable/start
+convergence:
+
+```go
+conf := InstallFile("/etc/httpd.conf", "httpd.conf")
+Service("httpd", WithRestart, OnChange(conf))
+```
+
 For dedicated systemd timer units, prefer [`Timer` / `NoTimer`](timer.md).
 
 `Run`, `push`, `apply`, and `fleet` all go through the one apply engine:
@@ -31,6 +40,7 @@ Linux systemd only. Reloads the unit manager after installing unit files:
 units := SyncDir(...)
 DaemonReload(WithUser, DependsOn(units), IfChanged) // skip when units unchanged
 DaemonReload(WithUser, DependsOn(units))            // always reload
+DaemonReload(WithUser, OnChange(units))              // preferred change gate + ordering
 ```
 
 `IfChanged` watches `DependsOn` targets; a `Directory[path]` dependency also

@@ -23,6 +23,7 @@ func applyFreeBSD(s *Service) error {
 		bin  string
 		args []string
 	}
+	held := false // change gate suppressed the restart/reload action
 	add := func(bin string, args ...string) {
 		actions = append(actions, struct {
 			bin  string
@@ -43,14 +44,24 @@ func applyFreeBSD(s *Service) error {
 		}
 		if !running {
 			add("service", s.name, "start")
-		} else if s.reload {
-			add("service", s.name, "reload")
-		} else if s.restart {
-			add("service", s.name, "restart")
+		} else if s.reload || s.restart {
+			// The gated action only fires after a watched resource changed.
+			if s.gateHolds() {
+				logger.Debug("%s: restart/reload held by change gate (no watched dependency changed)", id)
+				held = true
+			} else if s.reload {
+				add("service", s.name, "reload")
+			} else {
+				add("service", s.name, "restart")
+			}
 		}
 	}
 
 	if len(actions) == 0 {
+		if held {
+			resource.Note(id, resource.StatusSkipped)
+			return nil
+		}
 		resource.NoteResult(id, false)
 		return nil
 	}

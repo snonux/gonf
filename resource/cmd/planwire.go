@@ -20,7 +20,7 @@ func init() {
 
 // ToOp lowers a "command" resource draft to a plan.Op.
 func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
-	return plan.Op{
+	op := plan.Op{
 		Op:      plan.KindCommand,
 		ID:      d.ID,
 		Name:    d.Name,
@@ -32,11 +32,17 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		Unless:  planGuard(d.Unless),
 		OnlyIf:  planGuard(d.OnlyIf),
 		Deps:    d.Deps,
-	}, nil
+	}
+	// Change gate (schema v11): OnChange arms IfChanged with the watched ids.
+	if d.IfChanged {
+		op.IfChanged = true
+		op.Watch = append([]string(nil), d.Watch...)
+	}
+	return op, nil
 }
 
-// Apply runs the command (subject to Creates/Unless/OnlyIf guards),
-// mirroring the resource's own guard handling exactly.
+// Apply runs the command (subject to Creates/Unless/OnlyIf guards and the
+// OnChange change gate), mirroring the resource's own guard handling exactly.
 func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if op.Bin == "" {
 		return fmt.Errorf("command: missing bin")
@@ -44,6 +50,13 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	var opts []opt.CommandOption
 	if op.Name != "" {
 		opts = append(opts, opt.WithName(op.Name))
+	}
+	if op.IfChanged {
+		gate, err := planChangeGate(op)
+		if err != nil {
+			return err
+		}
+		opts = append(opts, gate)
 	}
 	if op.Dir != "" {
 		dirPath, err := plan.ExpandPath(op.Dir)
@@ -83,4 +96,16 @@ func planGuard(g *resource.PlanGuardDraft) *plan.Guard {
 		ExpectStdout: g.ExpectStdout,
 		ExpectExit:   g.ExpectExit,
 	}
+}
+
+// planChangeGate converts a recorded change gate into the option that arms
+// it on the rebuilt resource: the ids-level WatchChanges counterpart of
+// OnChange(resources...). A gated op with no watch ids can never fire and
+// is an apply-time error (the record-side pre-flight refuses such plans
+// before they get here).
+func planChangeGate(op plan.Op) (opt.CommandOption, error) {
+	if len(op.Watch) == 0 {
+		return nil, fmt.Errorf("command: if_changed without watch ids")
+	}
+	return opt.WatchChanges(op.Watch...), nil
 }
