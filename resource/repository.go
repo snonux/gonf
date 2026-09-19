@@ -46,12 +46,14 @@ func ResetRepository() {
 
 type repository struct {
 	registered map[string]Resource
+	drafts     map[string]PlanDraft
 	mu         sync.Mutex
 }
 
 func newRepository() *repository {
 	return &repository{
 		registered: make(map[string]Resource),
+		drafts:     make(map[string]PlanDraft),
 	}
 }
 
@@ -152,10 +154,12 @@ func (r *repository) applyResources(order []Resource) error {
 	return nil
 }
 
-// Apply applies every registered resource in dependency order: it
+// Apply applies every registered resource through the legacy direct path. It
 // topologically sorts the registration graph (rejecting cycles and dangling
 // dependency IDs), applies each resource, and prints the outcome summary to
 // stderr.
+//
+// Prefer api.Apply or api.Run, which use the plan engine.
 func Apply() error {
 	return getRepository().apply()
 }
@@ -177,4 +181,32 @@ func (r *repository) registeredIDs() []string {
 	}
 	sort.Strings(ids)
 	return ids
+}
+
+func (r *repository) recordDraft(draft PlanDraft) {
+	if draft.ID == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, registered := r.registered[draft.ID]; !registered {
+		return
+	}
+	r.drafts[draft.ID] = draft
+}
+
+func (r *repository) draftsSnapshot() []PlanDraft {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	ids := make([]string, 0, len(r.drafts))
+	for id := range r.drafts {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	drafts := make([]PlanDraft, 0, len(ids))
+	for _, id := range ids {
+		drafts = append(drafts, r.drafts[id])
+	}
+	return drafts
 }

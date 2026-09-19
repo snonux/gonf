@@ -51,6 +51,9 @@ func build(path string, opts ...opt.LinkOption) *Link {
 	return l
 }
 
+// Apply runs the link reconciliation directly for the legacy resource path.
+func (l *Link) Apply() error { return l.apply() }
+
 func (l *Link) apply() error {
 	switch {
 	case l.Absent:
@@ -85,8 +88,7 @@ func Ensure(path string, opts ...opt.LinkOption) error {
 // symlink or hardlink, and records a plan draft for remote apply.
 func Present(path string, opts ...opt.LinkOption) resource.Resource {
 	l := build(path, opts...)
-	l.resource = resource.Register(l.resourceType(), l.path,
-		resource.ApplierFunc(func() error { return l.apply() }), l.DependsOn.IDs...)
+	l.resource = resource.Register(l.resourceType(), l.path, l, l.DependsOn.IDs...)
 	resource.RecordPlanDraft(l.planDraft())
 	return l.resource
 }

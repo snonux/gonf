@@ -42,6 +42,9 @@ var (
 // whichever backend runtime.GOOS happens to select.
 var detectSvcManager = detectServiceManager
 
+// Apply runs the service reconciliation directly for the legacy resource path.
+func (s *Service) Apply() error { return s.apply() }
+
 func (s *Service) apply() error {
 	mgr, err := detectSvcManager()
 	if err != nil {
@@ -77,8 +80,7 @@ func newService(name string, opts []opt.ServiceOption) *Service {
 // Present registers a service that should be running and enabled at boot.
 func Present(name string, opts ...opt.ServiceOption) resource.Resource {
 	s := newService(name, opts)
-	r := resource.Register("Service", s.name,
-		resource.ApplierFunc(func() error { return s.apply() }), s.DependsOn.IDs...)
+	r := resource.Register("Service", s.name, s, s.DependsOn.IDs...)
 	resource.RecordPlanDraft(s.planDraft(r.ID()))
 	return r
 }

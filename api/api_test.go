@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
@@ -61,5 +62,59 @@ func TestNoFileDoesNotMutateCallerOptionSlice(t *testing.T) {
 	}
 	if _, err := os.Stat(gone); !os.IsNotExist(err) {
 		t.Errorf("expected %s to be removed", gone)
+	}
+}
+
+func TestApplyUsesPlanEngineForRegisteredResources(t *testing.T) {
+	ResetTasks()
+	resource.ResetForTest()
+	dir := t.TempDir()
+	dependencyPath := filepath.Join(dir, "z-dependency")
+
+	dependency := File(dependencyPath, options.WithContent("ready"))
+	Command("test", []string{"-f", dependencyPath}, options.DependsOn(dependency))
+
+	if err := Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+	content, err := os.ReadFile(dependencyPath)
+	if err != nil {
+		t.Fatalf("dependency was not applied: %v", err)
+	}
+	if string(content) != "ready" {
+		t.Fatalf("dependency content = %q, want ready", content)
+	}
+}
+
+func TestApplyRejectsUndraftedRegisteredResource(t *testing.T) {
+	ResetTasks()
+	resource.ResetForTest()
+	resource.Register("Custom", "undrafted", nil)
+
+	err := Apply()
+	if err == nil || !strings.Contains(err.Error(), "without plan drafts") {
+		t.Fatalf("Apply() error = %v, want an undrafted-resource error", err)
+	}
+}
+
+func TestApplyPackagesSourceThroughPlanEngine(t *testing.T) {
+	ResetTasks()
+	resource.ResetForTest()
+	src := filepath.Join(t.TempDir(), "source.txt")
+	dst := filepath.Join(t.TempDir(), "destination.txt")
+	if err := os.WriteFile(src, []byte("from source"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	InstallFile(dst, src)
+	if err := Apply(); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+	content, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("destination was not created: %v", err)
+	}
+	if string(content) != "from source" {
+		t.Fatalf("destination content = %q, want source content", content)
 	}
 }

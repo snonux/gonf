@@ -46,8 +46,7 @@ func Present(opts ...opt.DaemonReloadOption) resource.Resource {
 	if d.user {
 		name = "user"
 	}
-	r := resource.Register("DaemonReload", name,
-		resource.ApplierFunc(func() error { return d.apply() }), d.DependsOn.IDs...)
+	r := resource.Register("DaemonReload", name, d, d.DependsOn.IDs...)
 	resource.RecordPlanDraft(d.planDraft(r.ID()))
 	return r
 }
@@ -75,6 +74,9 @@ func (d *DaemonReloadResource) planDraft(id string) resource.PlanDraft {
 		Deps:      d.DependsOn.SortedIDs(),
 	}
 }
+
+// Apply runs the daemon-reload reconciliation directly for the legacy resource path.
+func (d *DaemonReloadResource) Apply() error { return d.apply() }
 
 func (d *DaemonReloadResource) apply() error {
 	id := d.id()

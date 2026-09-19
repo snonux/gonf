@@ -152,6 +152,9 @@ func (f *File) lineEdit() bool {
 
 // apply performs the idempotent OS work for f without registering a
 // resource.
+// Apply runs the file reconciliation directly for the legacy resource path.
+func (f *File) Apply() error { return f.apply() }
+
 func (f *File) apply() error {
 	if f.Absent {
 		return ensureAbsent(f.targetPath())
@@ -646,8 +649,7 @@ func Present(path string, opts ...opt.FileOption) resource.Resource {
 		logger.Fatal("%v", err)
 	}
 
-	f.resource = resource.Register("File", f.targetPath(),
-		resource.ApplierFunc(func() error { return f.apply() }), f.DependsOn.IDs...)
+	f.resource = resource.Register("File", f.targetPath(), f, f.DependsOn.IDs...)
 	resource.RecordPlanDraft(f.planDraft())
 	return f.resource
 }

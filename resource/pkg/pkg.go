@@ -44,6 +44,9 @@ func ResetRunCmdForTest() {
 // detectPkgManager is swapped in unit tests (CI runners are often Ubuntu).
 var detectPkgManager = detectPackageManager
 
+// Apply runs the package reconciliation directly for the legacy resource path.
+func (p *Package) Apply() error { return p.apply() }
+
 func (p *Package) apply() error {
 	pkgMan, err := detectPkgManager()
 	if err != nil {
@@ -75,8 +78,7 @@ func Present(name string, opts ...opt.PackageOption) resource.Resource {
 		o.Apply(p)
 	}
 
-	r := resource.Register("Package", p.name,
-		resource.ApplierFunc(func() error { return p.apply() }), p.DependsOn.IDs...)
+	r := resource.Register("Package", p.name, p, p.DependsOn.IDs...)
 	resource.RecordPlanDraft(p.planDraft(r.ID()))
 	return r
 }

@@ -67,8 +67,7 @@ func Present(bin string, args []string, opts ...opt.CommandOption) resource.Reso
 		c.name = defaultName(bin, c.args)
 	}
 
-	r := resource.Register("Command", c.name,
-		resource.ApplierFunc(func() error { return c.apply() }), c.DependsOn.IDs...)
+	r := resource.Register("Command", c.name, c, c.DependsOn.IDs...)
 	resource.RecordPlanDraft(c.planDraft(r.ID()))
 	return r
 }
@@ -151,6 +150,9 @@ func defaultName(bin string, args []string) string {
 	}
 	return bin + " " + strings.Join(args, " ")
 }
+
+// Apply runs the command directly for the legacy resource path.
+func (c *Cmd) Apply() error { return c.apply() }
 
 func (c *Cmd) apply() error {
 	if c.creates != "" {

@@ -11,14 +11,17 @@ import (
 	"github.com/snonux/gonf/internal/logger"
 )
 
-// Applier is the idempotent work a registered resource performs during
-// Apply. Concrete resource types hand an ApplierFunc to Register.
+// Applier is the idempotent work a registered resource performs during the
+// legacy resource.Apply path.
+//
+// Prefer api.Apply or api.Run, which use the plan engine.
 type Applier interface {
 	Apply() error
 }
 
-// ApplierFunc adapts a plain function to the Applier interface so resource
-// packages can register closures without declaring a named type.
+// ApplierFunc adapts a plain function to the legacy Applier interface.
+//
+// Prefer api.Apply or api.Run, which use the plan engine.
 type ApplierFunc func() error
 
 // Apply runs the wrapped function.
@@ -28,8 +31,8 @@ func (f ApplierFunc) Apply() error {
 
 // Resource is the value returned by the DSL constructors (api.File,
 // api.Dir, ...). It identifies the registered resource and can be passed to
-// the DependsOn option. The actual OS work stays behind the unexported
-// applier so this package does not depend on concrete resource types.
+// the DependsOn option. The applier is retained for the legacy direct apply
+// path; api.Apply uses the registered plan draft instead.
 type Resource struct {
 	// Type is the resource kind label, e.g. "File" or "Directory".
 	Type string
@@ -96,8 +99,10 @@ func (r Resource) sortedDependsOn() []string {
 	return ids
 }
 
-// Apply runs this resource's idempotent work. The repository calls it only
-// after every dependency has been applied.
+// Apply runs this resource's idempotent work through the legacy repository
+// path.
+//
+// Prefer api.Apply or api.Run, which use the plan engine.
 func (r Resource) Apply() error {
 	return r.applier.Apply()
 }

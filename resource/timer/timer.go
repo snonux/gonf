@@ -45,8 +45,7 @@ func Present(name string, opts ...opt.TimerOption) resource.Resource {
 	for _, o := range opts {
 		o.Apply(t)
 	}
-	r := resource.Register("Timer", t.name,
-		resource.ApplierFunc(func() error { return t.apply() }), t.DependsOn.IDs...)
+	r := resource.Register("Timer", t.name, t, t.DependsOn.IDs...)
 	resource.RecordPlanDraft(t.planDraft(r.ID()))
 	return r
 }
@@ -89,6 +88,9 @@ func normalizeUnit(name string) string {
 	}
 	return name + ".timer"
 }
+
+// Apply runs the timer reconciliation directly for the legacy resource path.
+func (t *Timer) Apply() error { return t.apply() }
 
 func (t *Timer) apply() error {
 	id := fmt.Sprintf("Timer[%s]", t.name)

@@ -71,8 +71,7 @@ var (
 // started (or only enabled when WithEnableOnly is set).
 func Present(name string, opts ...opt.SystemdTimerOption) resource.Resource {
 	t := newTimer(name, opts...)
-	r := resource.Register("SystemdTimer", t.base,
-		resource.ApplierFunc(func() error { return t.apply() }), t.DependsOn.IDs...)
+	r := resource.Register("SystemdTimer", t.base, t, t.DependsOn.IDs...)
 	resource.RecordPlanDraft(t.planDraft(r.ID()))
 	return r
 }
@@ -127,6 +126,9 @@ func normalizeName(name string) (base, unit string) {
 	}
 	return name, name + ".timer"
 }
+
+// Apply runs the systemd timer reconciliation directly for the legacy resource path.
+func (t *SystemdTimer) Apply() error { return t.apply() }
 
 func (t *SystemdTimer) apply() error {
 	id := fmt.Sprintf("SystemdTimer[%s]", t.base)

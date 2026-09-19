@@ -189,10 +189,20 @@ func PlanDraftRecording() bool {
 
 // RecordPlanDraft forwards draft to the installed recorder when present.
 func RecordPlanDraft(draft PlanDraft) {
+	getRepository().recordDraft(draft)
+
 	draftMu.Lock()
 	fn := draftRecorder
 	draftMu.Unlock()
 	if fn != nil {
 		fn(draft)
 	}
+}
+
+// RegisteredPlanDrafts returns the plan drafts emitted by the currently
+// registered resources, sorted by resource ID. The api package uses this
+// snapshot for its direct Apply compatibility path; plan recording sessions
+// continue to receive drafts through SetPlanDraftRecorder as before.
+func RegisteredPlanDrafts() []PlanDraft {
+	return getRepository().draftsSnapshot()
 }

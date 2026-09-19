@@ -573,7 +573,8 @@ when ops/fields change meaning; old apply binaries reject newer plans cleanly.
 
 ## Low-level `Apply()`
 
-`api.Apply()` / registering resources then `resource.Apply()` still exists for
-unit tests and ad-hoc resource use. Normal task execution goes through the
-plan engine above — do not rely on the register-then-`Apply` path for configs
-you also want to run remotely.
+`api.Apply()` snapshots registered resource drafts and uses the same plan
+engine as `Run`, including dependency ordering and source/blob packaging.
+The lower-level `resource.Apply()` path remains for resource-package unit tests
+and ad-hoc compatibility use; new application code should prefer `Run` or
+`api.Apply` so local and remote execution share the plan engine.

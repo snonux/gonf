@@ -9,7 +9,9 @@ embed `embed.DependsOn` to accumulate dependency IDs. The `DependsOn` option
 records those IDs, and each `Present` function forwards them into
 `resource.Register(..., x.DependsOn.IDs...)`. A `Multi` dependency is expanded
 via `Dependencies()` so each member is depended upon individually, and
-`repository.apply()` topologically sorts resources by their `dependsOn` set.
+  The public `api.Apply()` snapshots registered drafts and uses the plan
+  engine's dependency ordering. The lower-level `resource.Apply()` repository
+  path remains only for tests and compatibility, and is deprecated.
 
 ## Shared embeds
 State common to all concrete resource types lives in the `embed` package and is

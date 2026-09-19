@@ -112,6 +112,9 @@ func build(path string, opts ...opt.DirOption) (*Dir, error) {
 
 // apply performs the idempotent OS work for d without registering a
 // resource.
+// Apply runs the directory reconciliation directly for the legacy resource path.
+func (d *Dir) Apply() error { return d.apply() }
+
 func (d *Dir) apply() error {
 	if d.Absent {
 		return ensureAbsent(d)
@@ -426,8 +429,7 @@ func Present(path string, opts ...opt.DirOption) resource.Resource {
 		logger.Fatal("%v", err)
 	}
 
-	d.resource = resource.Register("Directory", d.path,
-		resource.ApplierFunc(func() error { return d.apply() }), d.DependsOn.IDs...)
+	d.resource = resource.Register("Directory", d.path, d, d.DependsOn.IDs...)
 	resource.RecordPlanDraft(d.planDraft())
 	return d.resource
 }

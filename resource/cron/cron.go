@@ -81,8 +81,7 @@ func newCron(name string, opts []opt.CronOption) *Cron {
 func Present(name string, opts ...opt.CronOption) resource.Resource {
 	c := newCron(name, opts)
 	regName := c.user + "/" + c.name
-	r := resource.Register("Cron", regName,
-		resource.ApplierFunc(func() error { return c.apply() }), c.DependsOn.IDs...)
+	r := resource.Register("Cron", regName, c, c.DependsOn.IDs...)
 	resource.RecordPlanDraft(c.planDraft(r.ID()))
 	return r
 }
@@ -130,6 +129,9 @@ func (c *Cron) planDraft(id string) resource.PlanDraft {
 		Deps:    c.DependsOn.SortedIDs(),
 	}
 }
+
+// Apply runs the cron reconciliation directly for the legacy resource path.
+func (c *Cron) Apply() error { return c.apply() }
 
 func (c *Cron) apply() error {
 	id := fmt.Sprintf("Cron[%s/%s]", c.user, c.name)
