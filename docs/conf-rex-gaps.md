@@ -55,7 +55,7 @@ compute any content Perl closures could (see
 |------|-------|------|
 | `Rexfile` | 0 | Aggregator: `require for <'*/Rexfile'>` + explicit `f3s/*` requires |
 | `frontends/Rexfile` | 27 + `commons` | Main OpenBSD frontend fleet (blowfish, fishfinger; port 2; user `rex`; `sudo TRUE`; `parallelism 5`) |
-| `f3s/garage/Rexfile` | 1 | Garage S3 config deploy to f0–f2 (user `paul`, no sudo, per-group `auth for`, `parallelism 1`) |
+| `f3s/garage/Rexfile` | retired | Garage S3 config now deploys through `gonf garage_config` to f0–f2 (user `paul`, doas, parallelism 1) |
 | `f3s/r-nodes/Rexfile` | 2 | Rocky k3s VMs r0–r2 (user `root`, `parallelism 3`): NFS-mount monitor units + persistent journal |
 | `playground/Rexfile` | 1 | Rex cron API canary (blowfish) |
 
@@ -98,7 +98,7 @@ Status against every conf Rex primitive in v0.13.0 (plan schema 15):
 | Multi-Rexfile `require` composition | one Go module + `RegisterMethods(…, WithPrefix, WithCluster)` + `Aggregate`; proven by `~/git/conf/gonf` and `~/git/dotfiles/gonf` | **Done** |
 | `adduser -batch _dserver … unless id _dserver`, `usermod -d` | additive-only `User` for creation-time group/class/home attributes; a guarded `Command("usermod", …)` remains necessary to converge the home of an already-existing OpenBSD account | **Done** for account creation; existing-account updates remain explicit |
 | `/etc/login.conf.d` + `cap_mkdb` on change | `InstallFile` + `Command(..., OnChange(login))` | **Done** |
-| garage pattern: write `/tmp` as login user, then `doas install … && doas service restart` | plain chunk `File(/tmp/…, owner login-user)` + `Command(…, WithElevate)` in the elevated chunk (wrapped `doas` by the host's `PrivilegeDoas`) | **Done** |
+| Garage config deployment | `RequiresRoot` task + direct `InstallFile("/usr/local/etc/garage.toml", …, root:garage, 0640, WithTemplateData(...))` + `Service("garage", WithRestart, OnChange(config))`; the host's `PrivilegeDoas` wraps the one privileged chunk | **Done** |
 | Deferred `on_change` flag (`$restart = TRUE` … `service restart if $restart`) | `OnChange` supports multi-resource fan-in and carries ordering dependencies | **Done** |
 
 ## Implemented gaps and remaining migration work
@@ -108,10 +108,10 @@ Ordered by how often conf Rex uses them and how many ported tasks unblock.
 ### Implemented: change-gated restart/reload (`on_change`)
 
 Rex restarts a service **only when a file changed** (11+ uses across httpd,
-inetd, relayd, smtpd, nsd, gorum, pf, and both r-nodes tasks). gonf has the
-plumbing (`IfChanged` watches `DependsOn` targets and dependency change notes)
-but only `DaemonReload` implements it. (Garage restarts unconditionally every
-run — no `on_change` there.)
+inetd, relayd, smtpd, nsd, gorum, pf, and both r-nodes tasks). gonf implements
+the same change gate for `Service`, `Timer`, `Command`, and `DaemonReload`:
+`OnChange` records dependency ordering and watched change reports. The retired
+Garage Rex task restarted unconditionally; `garage_config` now uses that gate.
 
 `OnChange(resources...)` is the public, typed DSL for `Service`, `Timer`,
 `Command`, and `DaemonReload`. It adds normal dependency ordering, supports
@@ -264,7 +264,7 @@ match; LAN hosts pin `WithSSHPort(22)` because `~/.ssh/config` maps
    (schema 11) — unblocks httpd, inetd, relayd, smtpd, nsd, gorum, pf, r-nodes
    monitor + journal, garage restart, and login.conf `cap_mkdb`.
 2. **Complete: `MustSecret` / `OptionalSecret` + plan-secrecy doc note** — unblocks goprecords_upload,
-   nsd key.conf, garage_deploy (which can already ship with `os.ReadFile`).
+   nsd key.conf, and `garage_config`.
 3. **Complete: `WithEnv` on Package** — unblocks dtail_install, gogios_install,
    complements `pkgrepo_setup`.
 4. **Port mechanical frontends tasks** (no feature deps): base pkgs, hosts_wg,
@@ -274,8 +274,9 @@ match; LAN hosts pin `WithSSHPort(22)` because `~/.ssh/config` maps
    base/myname,
    gemtexter, acme, httpd, inetd, relayd, smtpd, nsd zones, gogios.json, pf —
    each using the completed restart wiring where needed.
-6. **Port f3s tasks**: garage_deploy and r-nodes nfs_mount_monitor +
-   persistent_journal, using the completed secret and change-gate APIs.
+6. **Complete Garage port; port remaining f3s tasks**: `garage_config` now
+   uses the completed secret/template/change-gate APIs; r-nodes
+   nfs_mount_monitor + persistent_journal remain separate ports.
 7. **Nice-to-have** (only if consumers still feel the pain): cron `@reboot`.
 
 Steps 1–3 are gonf-library work (tests + plan bump + docs); steps 4–6 are
@@ -292,10 +293,9 @@ Every conf Rex task and its gonf fate. "consumer" = already lives in
 Privilege note: the frontends tasks write root-owned files (`/etc/*`,
 `/usr/local/*`, `/root/.profile`) while the SSH login is `rex`, so those tasks
 carry `RequiresRoot` / `Privileged()` exactly like the consumer's unattended
-structs — `File` / `InstallFile` have no per-op elevate; only `Command(…,
-WithElevate)` does. The garage task is the deliberate exception: its `File`
-lands in `/tmp` owned by the login user (plain chunk), only the two
-`install`/`service` commands are elevated.
+structs — `File` / `InstallFile` have no per-op elevate. The Garage port is
+also task-privileged: it writes the final root-owned configuration directly,
+so the plan has no login-owned `/tmp` secret staging step.
 
 ### frontends/Rexfile (target: gonf cluster `frontends`, tasks `frontends_*`)
 
@@ -329,11 +329,11 @@ lands in `/tmp` owned by the login user (plain chunk), only the two
 | `ircbouncer` (pkg znc; service; fishfinger only) | `Package("znc")` + `Service("znc")` as `frontends_ircbouncer` (`WhenHostname("fishfinger")`) | **To do** (no new features) |
 | `pf` (pf.conf restart-on-change → `pfctl -f`; `/var/node_exporter` dir; exporter script; root cron (`-ns`); `rcctl set node_exporter flags`; restart) | privileged task (task-level elevation covers every op): `File` (template) + `EnsureDir` + `InstallFile` + `Cron("pf_labels", WithCommand("-ns …"))` + `Command("rcctl", …)` ×2 + `Command("pfctl", List("-f", "/etc/pf.conf"), OnChange(conf))` | **To do** (template translation; no missing feature) |
 
-### f3s/garage/Rexfile (target: new gonf cluster, e.g. `garage` on f0–f2)
+### f3s/garage (Rexfile retired; gonf cluster `garage` on f0–f2)
 
 | Rex task | gonf port | Status / needs |
 |----------|-----------|----------------|
-| `garage_deploy` (secret substitution into `garage.$suffix.toml`; `/tmp` staging write as `paul` then removed; `doas install -o root -g garage -m 640`; `doas service garage restart`; per-group auth, parallelism 1) | `Host("f0"…"f2", WithSSHUser("paul"), WithPrivilege(PrivilegeDoas), WithGOOS("freebsd"))` cluster `.Parallel(1)`; task: `File("/tmp/garage.toml…", WithContent(Go-substituted from MustSecret), WithOwner("paul"), WithMode(0o600))` + `Command("install", …, WithElevate)` + `Command("service", …, WithElevate)` (elevated chunk wrapped `doas`) + `Command("rm", List("-f", tmp), WithElevate)` — op targets persist after apply, so Rex's `rm -f $tmp` needs an explicit command | **To do** (no missing feature; Rex intentionally restarts every run) |
+| `garage_deploy` (secret substitution into per-node TOML; `/tmp` staging as `paul`; `doas install root:garage 0640`; unconditional restart; per-group auth, parallelism 1) | `garage_config`: `Host("f0"…"f2", WithSSHUser("paul"), WithSSHPort(22), WithPrivilege(PrivilegeDoas), WithGOOS("freebsd"))` cluster `.Parallel(1)`; per-host `garage.rpc_public_addr` inventory value; `MustSecret("garage/rpc_secret")` before plan recording; a shared `garage.toml.tmpl` receives structured `WithTemplateData`; `RequiresRoot` writes `/usr/local/etc/garage.toml` directly as root:garage 0640 and `Service("garage", WithRestart, OnChange(config))` restarts only after a config change | **Done** — no destination `/tmp` secret staging. `just init-secrets` copies a Rex-era controller secret once so migration cannot rotate the live cluster secret. |
 
 ### f3s/r-nodes/Rexfile (target: gonf cluster `rocky-k3s` — r0–r2 already registered)
 
@@ -403,8 +403,10 @@ consumer ports 4–6):
 
 - Consumer that fits gonf today: `~/git/dotfiles/gonf` (Fedora laptop) and
   `~/git/conf/gonf` (this plan's first migration wave).
-- `f3s/garage/Justfile` `deploy` still calls `rex garage_deploy`; it switches to
-  `./gonf.sh cluster garage garage_deploy` once that task ports.
+- `f3s/garage/Justfile` `deploy` calls
+  `./gonf.sh cluster garage garage_config`; run `just -f f3s/garage/Justfile
+  init-secrets` once to copy a Rex-era controller secret or initialize a new
+  cluster before its first deployment.
 - Feature docs: [README.md](README.md) (index), [plan.md](plan.md) (transport +
   privilege split), [package.md](package.md), [service.md](service.md),
   [cron.md](cron.md), [helpers.md](helpers.md), [options.md](options.md).
