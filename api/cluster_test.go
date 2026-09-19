@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -681,7 +682,10 @@ func TestPushFleetParallelOverrideAppliesToAllGroups(t *testing.T) {
 	})
 
 	var oneInFlight, oneMaxFlight, fiveInFlight, fiveMaxFlight atomic.Int32
-	track := func(dest string, inFlight, maxFlight *atomic.Int32) {
+	ready := make(chan struct{}, 4)
+	oneRelease := make(chan struct{})
+	fiveRelease := make(chan struct{})
+	track := func(ctx context.Context, dest string, inFlight, maxFlight *atomic.Int32, release <-chan struct{}) error {
 		n := inFlight.Add(1)
 		for {
 			cur := maxFlight.Load()
@@ -690,21 +694,47 @@ func TestPushFleetParallelOverrideAppliesToAllGroups(t *testing.T) {
 			}
 		}
 		defer inFlight.Add(-1)
-		time.Sleep(30 * time.Millisecond)
+		ready <- struct{}{}
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 		_ = dest
+		return nil
 	}
 	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		_, _ = io.Copy(io.Discard, stdin)
 		dest := argv[len(argv)-2]
 		if strings.HasPrefix(dest, "o") {
-			track(dest, &oneInFlight, &oneMaxFlight)
-		} else {
-			track(dest, &fiveInFlight, &fiveMaxFlight)
+			return track(ctx, dest, &oneInFlight, &oneMaxFlight, oneRelease)
 		}
-		return nil
+		return track(ctx, dest, &fiveInFlight, &fiveMaxFlight, fiveRelease)
 	}
 
-	if err := PushFleetRun(context.Background(), "over", "", 2, remote.DefaultHostTimeout, "fleet_override"); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			close(oneRelease)
+			close(fiveRelease)
+		})
+	}
+	defer release()
+	errs := make(chan error, 1)
+	go func() {
+		errs <- PushFleetRun(ctx, "over", "", 2, remote.DefaultHostTimeout, "fleet_override")
+	}()
+	for range 4 {
+		select {
+		case <-ready:
+		case <-ctx.Done():
+			t.Fatal("-j did not start two pushes in each cluster")
+		}
+	}
+	release()
+	if err := <-errs; err != nil {
 		t.Fatal(err)
 	}
 	if oneMaxFlight.Load() != 2 {
