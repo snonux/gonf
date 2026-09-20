@@ -149,6 +149,63 @@ func TestGapFeatureSetRecordsAndAppliesTogether(t *testing.T) {
 	}
 }
 
+// TestGapCandidateValidatorBlocksLiveConfigWrite verifies that a failed
+// candidate validator blocks its dependent live configuration write. The
+// dependency checks pin the recipe shape while Apply proves the failure barrier
+// holds when operations are encoded and decoded for the destination.
+func TestGapCandidateValidatorBlocksLiveConfigWrite(t *testing.T) {
+	ResetForTest()
+	t.Cleanup(ResetForTest)
+
+	base := t.TempDir()
+	candidate := filepath.Join(base, "gonf-validate", "nsd.conf")
+	live := filepath.Join(base, "nsd", "nsd.conf")
+	const candidateContent = "candidate NSD configuration\n"
+	const liveContent = "live NSD configuration\n"
+
+	Task("nsd_validator", "validate candidate before writing live NSD configuration", func() {
+		candidateDir := Dir(filepath.Dir(candidate))
+		candidateConfig := File(candidate, options.WithContent(candidateContent), options.DependsOn(candidateDir))
+		check := Command("sh", []string{"-c", "exit 1"},
+			options.DependsOn(candidateConfig), options.WithName("validate-nsd-config"))
+		File(live, options.WithContent(liveContent), options.DependsOn(check))
+	})
+
+	ops, err := RecordPlan("nsd-validator", base, "nsd_validator")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+	raw, err := plan.EncodePlan(ops)
+	if err != nil {
+		t.Fatalf("EncodePlan: %v", err)
+	}
+	decoded, err := plan.DecodePlanBytes(raw)
+	if err != nil {
+		t.Fatalf("DecodePlanBytes: %v", err)
+	}
+
+	candidateOp := findGapOp(t, decoded, plan.KindFile, "File["+candidate+"]")
+	validatorOp := findGapOp(t, decoded, plan.KindCommand, "Command[validate-nsd-config]")
+	liveOp := findGapOp(t, decoded, plan.KindFile, "File["+live+"]")
+	if !reflect.DeepEqual(validatorOp.Deps, []string{candidateOp.ID}) {
+		t.Fatalf("validator dependencies = %v, want [%s]", validatorOp.Deps, candidateOp.ID)
+	}
+	if !reflect.DeepEqual(liveOp.Deps, []string{validatorOp.ID}) {
+		t.Fatalf("live configuration dependencies = %v, want [%s]", liveOp.Deps, validatorOp.ID)
+	}
+
+	if err := plan.Apply(decoded, plan.Facts{GOOS: "openbsd"}, base); err == nil {
+		t.Fatal("Apply succeeded despite failing candidate validator")
+	}
+	got, err := os.ReadFile(candidate)
+	if err != nil || string(got) != candidateContent {
+		t.Fatalf("candidate config = %q, %v", got, err)
+	}
+	if _, err := os.Stat(live); !os.IsNotExist(err) {
+		t.Fatalf("live config was written after validator failure: %v", err)
+	}
+}
+
 func TestNamedFileLineEditsRemainDistinctAcrossTasksAndGateChanges(t *testing.T) {
 	ResetForTest()
 	t.Cleanup(ResetForTest)
