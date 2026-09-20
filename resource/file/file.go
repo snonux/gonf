@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"os/user"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"slices"
@@ -68,6 +69,9 @@ type File struct {
 	mode            os.FileMode
 	modeSet         bool
 	preserveContent bool
+	validationBin   string
+	validationArgs  []string
+	validationSet   bool
 }
 
 // SetName implements opt.Named. It overrides this resource's identity but
@@ -106,6 +110,14 @@ func (f *File) SetTemplateData(data any) {
 	f.templateData = data
 	f.templateDataSet = true
 	f.template = true
+}
+
+// SetValidation implements opt.Validatable. The arguments are copied because
+// callers commonly reuse List values for command declarations.
+func (f *File) SetValidation(bin string, args []string) {
+	f.validationBin = bin
+	f.validationArgs = slices.Clone(args)
+	f.validationSet = true
 }
 
 // SetAddLine implements opt.LineAddable.
@@ -156,6 +168,7 @@ var (
 	_ opt.Paramable        = (*File)(nil)
 	_ opt.Templateable     = (*File)(nil)
 	_ opt.TemplateDataable = (*File)(nil)
+	_ opt.Validatable      = (*File)(nil)
 )
 
 func build(path string, opts ...opt.FileOption) (*File, error) {
@@ -179,8 +192,45 @@ func build(path string, opts ...opt.FileOption) (*File, error) {
 	if f.lineEdit() && (f.contentSet || f.source != "") {
 		return nil, fmt.Errorf("file %s: WithLine(s)/WithoutLine(s) cannot be combined with WithContent/WithSource", path)
 	}
+	if err := f.validateConfiguration(path); err != nil {
+		return nil, err
+	}
 
 	return f, nil
+}
+
+func (f *File) validateConfiguration(path string) error {
+	if !f.validationSet {
+		return nil
+	}
+	if f.validationBin == "" {
+		return fmt.Errorf("file %s: WithValidation requires a validator binary", path)
+	}
+	if f.Absent {
+		return fmt.Errorf("file %s: WithValidation cannot combine with IsAbsent", path)
+	}
+	if f.lineEdit() {
+		return fmt.Errorf("file %s: WithValidation cannot combine with WithLine(s)/WithoutLine(s)", path)
+	}
+	if !f.contentSet {
+		return fmt.Errorf("file %s: WithValidation requires WithContent or WithSource", path)
+	}
+	if !filepath.IsAbs(f.targetPath()) {
+		return fmt.Errorf("file %s: WithValidation requires an absolute target path", path)
+	}
+	if _, err := validationPathComponents(f.targetPath()); err != nil {
+		return fmt.Errorf("file %s: invalid validation target path: %w", path, err)
+	}
+	count := 0
+	for _, arg := range f.validationArgs {
+		if arg == opt.CandidatePath {
+			count++
+		}
+	}
+	if count != 1 {
+		return fmt.Errorf("file %s: WithValidation arguments must contain CandidatePath exactly once", path)
+	}
+	return nil
 }
 
 func (f *File) lineEdit() bool {
@@ -235,6 +285,9 @@ func (f *File) apply() error {
 		return ensureAbsentWithID(f.targetPath(), f.reportID(f.targetPath()))
 	}
 	if f.preserveContent {
+		if f.validationSet {
+			return fmt.Errorf("file %s: WithValidation cannot combine with EnsureFile", f.path)
+		}
 		return f.ensurePresent()
 	}
 
@@ -248,7 +301,7 @@ func (f *File) apply() error {
 			resource.Note(f.reportID(finalPath), resource.StatusSkipped)
 			return nil
 		}
-		return f.ensureFile(finalPath, content)
+		return f.ensureValidatedFile(finalPath, content)
 	}
 
 	finalPath, content, err := f.resolveFromSourceOrContent()
@@ -256,7 +309,7 @@ func (f *File) apply() error {
 		return fmt.Errorf("failed to resolve content for %s: %w", f.path, err)
 	}
 
-	return f.ensureFile(finalPath, content)
+	return f.ensureValidatedFile(finalPath, content)
 }
 
 // targetPath returns the actual on-disk path f writes to. It strips a
@@ -926,7 +979,7 @@ func EnsurePresent(path string, opts ...opt.FileOption) error {
 	if err != nil {
 		return err
 	}
-	if f.contentSet || f.lineEdit() || f.Absent {
+	if f.contentSet || f.lineEdit() || f.Absent || f.validationSet {
 		return fmt.Errorf("file %s: EnsureFile cannot combine WithContent/WithSource, WithLine(s)/WithoutLine(s), or IsAbsent", path)
 	}
 	f.preserveContent = true
@@ -965,7 +1018,7 @@ func PresentEnsure(path string, opts ...opt.FileOption) resource.Resource {
 	if err != nil {
 		logger.Fatal("%v", err)
 	}
-	if f.contentSet || f.lineEdit() || f.Absent {
+	if f.contentSet || f.lineEdit() || f.Absent || f.validationSet {
 		logger.Fatal("file %s: EnsureFile cannot combine WithContent/WithSource, WithLine(s)/WithoutLine(s), or IsAbsent", path)
 	}
 	f.preserveContent = true
@@ -976,15 +1029,17 @@ func PresentEnsure(path string, opts ...opt.FileOption) resource.Resource {
 
 func (f *File) planDraft() resource.PlanDraft {
 	d := resource.PlanDraft{
-		Kind:        "file",
-		ID:          f.resource.ID(),
-		Name:        f.name,
-		Path:        f.targetPath(),
-		Mode:        opt.ModeToWire(f.mode),
-		Absent:      f.Absent,
-		AddLines:    slices.Clone(f.addLines),
-		RemoveLines: slices.Clone(f.removeLines),
-		Deps:        f.DependsOn.SortedIDs(),
+		Kind:           "file",
+		ID:             f.resource.ID(),
+		Name:           f.name,
+		Path:           f.targetPath(),
+		Mode:           opt.ModeToWire(f.mode),
+		Absent:         f.Absent,
+		AddLines:       slices.Clone(f.addLines),
+		RemoveLines:    slices.Clone(f.removeLines),
+		ValidationBin:  f.validationBin,
+		ValidationArgs: slices.Clone(f.validationArgs),
+		Deps:           f.DependsOn.SortedIDs(),
 	}
 	if f.preserveContent {
 		d.Kind = "ensure_file"

@@ -44,8 +44,9 @@ import "encoding/json"
 // It must therefore refuse v16 before any mutation. Version 17 adds
 // legacy_command to cron operations. An older destination would leave the
 // unmanaged legacy line in place and run it alongside the new managed block,
-// so it must refuse v17 before any mutation.
-const CurrentVersion = 17
+// so it must refuse v17 before any mutation. Version 18 adds file validator
+// argv fields; older binaries would otherwise publish unvalidated content.
+const CurrentVersion = 18
 
 // supportedVersions is the set of plan schema versions this binary can apply.
 // Apply must refuse plans whose version is not in this set before any mutation.
@@ -66,6 +67,7 @@ var supportedVersions = map[int]struct{}{
 	14:             {},
 	15:             {},
 	16:             {},
+	17:             {},
 	CurrentVersion: {},
 }
 
@@ -244,6 +246,11 @@ type Op struct {
 	TemplateParam string `json:"template_param,omitempty"`
 	// TemplateData is JSON-compatible data supplied by WithTemplateData.
 	TemplateData json.RawMessage `json:"template_data,omitempty"`
+	// ValidationBin and ValidationArgs are an optional file validator argv.
+	// ValidationArgs contains CandidatePath, which destination apply replaces
+	// with a private staged filename before starting ValidationBin.
+	ValidationBin  string   `json:"validation_bin,omitempty"`
+	ValidationArgs []string `json:"validation_args,omitempty"`
 	// SourceDir is the recipe's declared source directory for KindSyncDir
 	// (for the glob flavor, the declared glob pattern's directory). Apply
 	// passes it to the synced tree so .tmpl files inside render {{.Param}}

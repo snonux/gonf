@@ -1580,3 +1580,399 @@ func TestWithParamOverridesTemplateParam(t *testing.T) {
 		t.Errorf("rendered content must not embed the mechanical source path %q: %q", sourcePath, got)
 	}
 }
+
+func TestValidationFailureLeavesLiveFileUntouchedAndCleansCandidate(t *testing.T) {
+	resource.ResetRepository()
+	resource.ResetReport()
+	dir := t.TempDir()
+	target := filepath.Join(dir, "service.conf")
+	if err := os.WriteFile(target, []byte("live\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	validator := writeValidationScript(t, "exit 1")
+
+	err := Ensure(target, WithContent("candidate\n"), WithValidation(validator, []string{CandidatePath}))
+	if err == nil || !strings.Contains(err.Error(), "validation by") {
+		t.Fatalf("validation error = %v, want validator failure", err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "live\n" {
+		t.Fatalf("live content = %q, want untouched content", got)
+	}
+	if candidates, err := filepath.Glob(target + ".gonfvalidate*"); err != nil || len(candidates) != 0 {
+		t.Fatalf("candidates after failed validation = %v, glob error = %v", candidates, err)
+	}
+	if resource.AnyChanged("File[" + target + "]") {
+		t.Fatal("failed validation must not report a published file change")
+	}
+}
+
+func TestValidationUsesPrivateCandidateArgvAndRepairsDrift(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	target := filepath.Join(dir, "service.conf")
+	marker := filepath.Join(dir, "validator-record")
+	validator, args := validationHelper(t, "content-and-mode", "--literal;not-a-shell-command", marker)
+	if err := Ensure(target, WithContent("candidate"), WithValidation(validator, args)); err != nil {
+		t.Fatalf("first validated apply: %v", err)
+	}
+	if err := os.WriteFile(target, []byte("manual drift"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Ensure(target, WithContent("candidate"), WithValidation(validator, args)); err != nil {
+		t.Fatalf("drift repair: %v", err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "candidate" {
+		t.Fatalf("repaired content = %q", got)
+	}
+	record, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := strings.Fields(string(record))
+	if len(paths) != 2 {
+		t.Fatalf("validator runs = %q, want two", record)
+	}
+	for _, path := range paths {
+		if filepath.Dir(path) != dir || path == target {
+			t.Fatalf("candidate path = %q, want private neighbor of %q", path, target)
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("candidate %q was not cleaned up: %v", path, err)
+		}
+	}
+}
+
+func TestValidationRejectsInvalidContracts(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		opts []FileOption
+		want string
+	}{
+		{"missing placeholder", "/tmp/config", []FileOption{WithContent("x"), WithValidation("true", nil)}, "CandidatePath exactly once"},
+		{"repeated placeholder", "/tmp/config", []FileOption{WithContent("x"), WithValidation("true", []string{CandidatePath, CandidatePath})}, "CandidatePath exactly once"},
+		{"relative path", "config", []FileOption{WithContent("x"), WithValidation("true", []string{CandidatePath})}, "absolute target path"},
+		{"line edit", "/tmp/config", []FileOption{WithLine("x"), WithValidation("true", []string{CandidatePath})}, "cannot combine with WithLine"},
+		{"absent", "/tmp/config", []FileOption{IsAbsent, WithValidation("true", []string{CandidatePath})}, "cannot combine with IsAbsent"},
+		{"missing content", "/tmp/config", []FileOption{WithValidation("true", []string{CandidatePath})}, "requires WithContent or WithSource"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := build(tt.path, tt.opts...)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("build error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidationPlanApplyAndConcurrentCandidates(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	target := filepath.Join(dir, "service.conf")
+	// Use a tiny external validator here: launching the whole Go test binary
+	// once per concurrent apply makes this stress test needlessly memory-heavy.
+	validator := writeValidationScript(t, "test -s \"$1\"")
+	op := plan.Op{
+		Op:             plan.KindFile,
+		Path:           target,
+		ContentB64:     base64.StdEncoding.EncodeToString([]byte("from plan")),
+		HasContent:     true,
+		ValidationBin:  validator,
+		ValidationArgs: []string{CandidatePath},
+	}
+	if err := plan.Apply([]plan.Op{{Op: plan.KindPlan, Version: plan.CurrentVersion}, op}, plan.Facts{}, ""); err != nil {
+		t.Fatalf("plan apply: %v", err)
+	}
+
+	const applies = 12
+	errs := make(chan error, applies)
+	var wg sync.WaitGroup
+	for i := range applies {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- Ensure(target, WithContent(fmt.Sprintf("concurrent-%d", i)), WithValidation(validator, []string{CandidatePath}))
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent validated apply: %v", err)
+		}
+	}
+	if candidates, err := filepath.Glob(target + ".gonfvalidate*"); err != nil || len(candidates) != 0 {
+		t.Fatalf("candidates after concurrent applies = %v, glob error = %v", candidates, err)
+	}
+}
+
+func TestValidationPlanRejectsMissingContentBeforeMutation(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	target := filepath.Join(dir, "service.conf")
+	if err := os.WriteFile(target, []byte("live"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := plan.Apply([]plan.Op{
+		{Op: plan.KindPlan, Version: plan.CurrentVersion},
+		{Op: plan.KindFile, Path: target, ValidationBin: "true", ValidationArgs: []string{CandidatePath}},
+	}, plan.Facts{}, "")
+	if err == nil || !strings.Contains(err.Error(), "requires WithContent or WithSource") {
+		t.Fatalf("malformed validation plan error = %v", err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "live" {
+		t.Fatalf("malformed plan changed live target to %q", got)
+	}
+}
+
+func TestValidationRejectsUntrustedCandidateParent(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "service.conf")
+	if err := os.WriteFile(target, []byte("live"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	validator, args := validationHelper(t, "mode")
+	err := Ensure(target, WithContent("candidate"), WithValidation(validator, args))
+	if err == nil || !strings.Contains(err.Error(), "writable by group or other users") {
+		t.Fatalf("unsafe parent error = %v", err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "live" {
+		t.Fatalf("unsafe parent changed live target to %q", got)
+	}
+	if candidates, err := filepath.Glob(target + ".gonfvalidate*"); err != nil || len(candidates) != 0 {
+		t.Fatalf("unsafe parent created candidates = %v, glob error = %v", candidates, err)
+	}
+}
+
+func TestValidationRejectsSymlinkedCandidateParent(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	realParent := filepath.Join(dir, "real")
+	linkParent := filepath.Join(dir, "link")
+	if err := os.Mkdir(realParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realParent, linkParent); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(linkParent, "service.conf")
+	if err := os.WriteFile(target, []byte("live"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	validator, args := validationHelper(t, "mode")
+	err := Ensure(target, WithContent("candidate"), WithValidation(validator, args))
+	if err == nil || !strings.Contains(err.Error(), "contains a symlink path component") {
+		t.Fatalf("symlinked parent error = %v", err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "live" {
+		t.Fatalf("symlinked parent changed live target to %q", got)
+	}
+}
+
+func TestValidationRejectsParentDirectoryCandidatePath(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	target := dir + string(filepath.Separator) + ".." + string(filepath.Separator) + filepath.Base(dir) + string(filepath.Separator) + "service.conf"
+	validator, args := validationHelper(t, "mode")
+	err := Ensure(target, WithContent("candidate"), WithValidation(validator, args))
+	if err == nil || !strings.Contains(err.Error(), "parent-directory path component") {
+		t.Fatalf("parent-directory path error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Clean(target)); !os.IsNotExist(err) {
+		t.Fatalf("parent-directory path created live target: %v", err)
+	}
+}
+
+func TestValidationCleanupFailureIsReported(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	target := filepath.Join(dir, "service.conf")
+	validator := writeValidationScript(t, `rm "$1"
+mkdir "$1"
+touch "$1/leftover"`)
+	err := Ensure(target, WithContent("candidate"), WithValidation(validator, []string{CandidatePath}))
+	if err == nil || !strings.Contains(err.Error(), "remove validation candidate") {
+		t.Fatalf("cleanup error = %v, want reported candidate cleanup failure", err)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("cleanup failure published live target: %v", err)
+	}
+}
+
+func TestValidationRendersSourceOnceBeforeValidatorRuns(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	source := filepath.Join(dir, "service.conf.tmpl")
+	target := filepath.Join(dir, "service.conf")
+	if err := os.WriteFile(source, []byte("value={{.Param}}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	validator, args := validationHelper(t, "rewrite-source", source)
+	if err := Ensure(target, WithSource(source), WithValidation(validator, args)); err != nil {
+		t.Fatalf("validated source apply: %v", err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "value=" + source + "\n"
+	if string(got) != want {
+		t.Fatalf("target after validator rewrote source = %q, want rendered-once %q", got, want)
+	}
+}
+
+func TestValidationDryRunSkipsValidatorAndStaging(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	target := filepath.Join(dir, "service.conf")
+	marker := filepath.Join(dir, "validator-record")
+	validator, args := validationHelper(t, "content-and-mode", "--literal;not-a-shell-command", marker)
+	resource.SetDryRun(true)
+	t.Cleanup(func() { resource.SetDryRun(false) })
+	if err := Ensure(target, WithContent("candidate"), WithValidation(validator, args)); err != nil {
+		t.Fatalf("validated dry-run: %v", err)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("dry-run created live target: %v", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("dry-run ran validator: %v", err)
+	}
+	if candidates, err := filepath.Glob(target + ".gonfvalidate*"); err != nil || len(candidates) != 0 {
+		t.Fatalf("dry-run created candidates = %v, glob error = %v", candidates, err)
+	}
+}
+
+func TestValidationPlanRejectsMalformedAbsenceBeforeMutation(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	target := filepath.Join(dir, "service.conf")
+	if err := os.WriteFile(target, []byte("live"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := plan.Apply([]plan.Op{
+		{Op: plan.KindPlan, Version: plan.CurrentVersion},
+		{Op: plan.KindFile, Path: target, Absent: true, ValidationBin: "true", ValidationArgs: []string{CandidatePath}},
+	}, plan.Facts{}, "")
+	if err == nil || !strings.Contains(err.Error(), "cannot combine with IsAbsent") {
+		t.Fatalf("malformed validation plan error = %v", err)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("malformed plan removed live target: %v", err)
+	}
+}
+
+func writeValidationScript(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "validator.sh")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nset -eu\n"+body+"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// validationHelper runs the current Go test binary as a validator so tests
+// can inspect the candidate with portable os.Stat/os.ReadFile calls instead
+// of GNU-only shell utilities. The CandidatePath placeholder stays in the
+// argv under test and is replaced by the production validation code.
+func validationHelper(t *testing.T, check string, args ...string) (string, []string) {
+	t.Helper()
+	t.Setenv("GONF_FILE_VALIDATION_HELPER", "1")
+	validatorArgs := []string{"-test.run=^TestValidationHelperProcess$", check}
+	validatorArgs = append(validatorArgs, args...)
+	validatorArgs = append(validatorArgs, CandidatePath)
+	return os.Args[0], validatorArgs
+}
+
+func TestValidationHelperProcess(t *testing.T) {
+	if os.Getenv("GONF_FILE_VALIDATION_HELPER") != "1" {
+		return
+	}
+	for i, arg := range os.Args {
+		switch arg {
+		case "mode":
+			if i+1 >= len(os.Args) {
+				t.Fatal("validation helper missing candidate path")
+			}
+			assertValidationCandidate(t, os.Args[i+1], "")
+			return
+		case "content-and-mode":
+			if i+3 >= len(os.Args) {
+				t.Fatal("validation helper missing literal, marker, or candidate path")
+			}
+			if os.Args[i+1] != "--literal;not-a-shell-command" {
+				t.Fatalf("literal argv = %q", os.Args[i+1])
+			}
+			candidate := os.Args[i+3]
+			assertValidationCandidate(t, candidate, "candidate")
+			marker, err := os.OpenFile(os.Args[i+2], os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+			if err != nil {
+				t.Fatalf("open marker: %v", err)
+			}
+			if _, err := marker.WriteString(candidate + "\n"); err != nil {
+				_ = marker.Close()
+				t.Fatalf("record candidate: %v", err)
+			}
+			if err := marker.Close(); err != nil {
+				t.Fatalf("close marker: %v", err)
+			}
+			return
+		case "rewrite-source":
+			if i+2 >= len(os.Args) {
+				t.Fatal("validation helper missing source or candidate path")
+			}
+			assertValidationCandidate(t, os.Args[i+2], "")
+			if err := os.WriteFile(os.Args[i+1], []byte("rewritten by validator\n"), 0o600); err != nil {
+				t.Fatalf("rewrite source: %v", err)
+			}
+			return
+		}
+	}
+	t.Fatal("validation helper check was not supplied")
+}
+
+func assertValidationCandidate(t *testing.T, candidate, wantContent string) {
+	t.Helper()
+	info, err := os.Stat(candidate)
+	if err != nil {
+		t.Fatalf("stat candidate: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("candidate mode = %v, want 0600", info.Mode().Perm())
+	}
+	if wantContent == "" {
+		return
+	}
+	got, err := os.ReadFile(candidate)
+	if err != nil {
+		t.Fatalf("read candidate: %v", err)
+	}
+	if string(got) != wantContent {
+		t.Fatalf("candidate content = %q, want %q", got, wantContent)
+	}
+}

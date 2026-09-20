@@ -102,6 +102,12 @@ ops, err := RecordPlan("my-plan", planDir, "home_helix", "home_tmux")
 - `WithTemplateData` is encoded as `template_data` on `file` ops (schema v12).
   It remains JSON data until destination apply, where the file handler exposes
   it to the template along with live destination facts under `.Gonf`.
+- `WithValidation` is encoded as `validation_bin` and `validation_args` on a
+  content-managed `file` op (schema v18). `validation_args` retains exactly
+  one `CandidatePath` wire token; destination apply replaces it with a private
+  validated candidate before the live file is published. The op still carries
+  `has_content:true`, including for an intentionally empty source/content, so
+  apply can reject a malformed validator op that has no declared content.
 - `SyncDir` trees → `planDir/blobs/<name>/`.
 - The recipe's declared source directory travels on the `sync_dir` op
   (`source_dir`, schema v6): destination apply renders `.tmpl` files inside
@@ -212,9 +218,10 @@ registry (`RegisterHandler`/`HandlerFor`). A resource package can implement
 `resource/cron/planwire.go`, `resource/service/planwire.go`) and register it
 from an `init()`; `api/plan.go`'s `draftToOp` and `plan/apply.go`'s
 `applyActive` both consult the registry first and only fall back to their
-explicit switch cases for kinds that have not migrated yet. The wire format
-(`Op`/`PlanDraft` JSON shape, `CurrentVersion`) is unchanged — this is a
-Go-internal ownership/dispatch change only.
+explicit switch cases for kinds that have not migrated yet. The handler
+registry change itself was a Go-internal ownership/dispatch change; later
+schema additions such as file validation still require the documented wire
+version bump and compatibility gate.
 
 As of task i5, **every** resource kind uses the `Handler` pattern: `package`,
 `cron`, and `service` migrated in task j5; `file`, `dir`, `sync_dir`, `link`,
@@ -570,6 +577,19 @@ line-edit declarations for one path and precise `DependsOn` / `OnChange`
 wiring. An older binary would ignore `name` for a file, report its change as
 `File[path]`, and leave an `OnChange(File[name])` action permanently skipped;
 it must therefore reject v16 plans at the header gate before any mutation.
+
+Plan schema **version 17** adds `legacy_command` to `cron` operations. It
+identifies an exact legacy unmanaged cron command that the destination removes
+while adopting the named Gonf block. An older binary would leave that command
+running alongside the managed block, so it must refuse v17 plans before any
+mutation.
+
+Plan schema **version 18** adds `validation_bin` and `validation_args` to
+content-managed `file` operations. The destination writes a private candidate,
+substitutes its path for the one `CandidatePath` argument, and runs the argv
+directly before it can publish the live file. An older binary would ignore the
+validator fields and publish unvalidated content, so it must refuse v18 plans
+before any mutation.
 
 ### Secret material
 

@@ -25,24 +25,26 @@ func init() {
 // ToOp lowers a "file" resource draft to a plan.Op.
 func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 	op := plan.Op{
-		Op:            plan.KindFile,
-		ID:            d.ID,
-		Name:          d.Name,
-		Path:          d.Path,
-		Mode:          d.Mode,
-		Owner:         d.Owner,
-		Group:         d.Group,
-		ContentB64:    d.ContentB64,
-		Blob:          d.Blob,
-		HasContent:    d.HasContent,
-		Template:      d.Template,
-		TemplateParam: d.TemplateParam,
-		AddLines:      d.AddLines,
-		RemoveLines:   d.RemoveLines,
-		AddLine:       d.AddLine,
-		RemoveLine:    d.RemoveLine,
-		Absent:        d.Absent,
-		Deps:          d.Deps,
+		Op:             plan.KindFile,
+		ID:             d.ID,
+		Name:           d.Name,
+		Path:           d.Path,
+		Mode:           d.Mode,
+		Owner:          d.Owner,
+		Group:          d.Group,
+		ContentB64:     d.ContentB64,
+		Blob:           d.Blob,
+		HasContent:     d.HasContent,
+		Template:       d.Template,
+		TemplateParam:  d.TemplateParam,
+		ValidationBin:  d.ValidationBin,
+		ValidationArgs: slices.Clone(d.ValidationArgs),
+		AddLines:       d.AddLines,
+		RemoveLines:    d.RemoveLines,
+		AddLine:        d.AddLine,
+		RemoveLine:     d.RemoveLine,
+		Absent:         d.Absent,
+		Deps:           d.Deps,
 	}
 	if d.TemplateDataSet {
 		raw, err := json.Marshal(d.TemplateData)
@@ -79,6 +81,9 @@ func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	if path == "" {
 		return fmt.Errorf("file: missing path")
 	}
+	if err := validatePlanValidation(path, op); err != nil {
+		return err
+	}
 	if op.Absent {
 		opts := []opt.FileOption{opt.IsAbsent}
 		if op.Name != "" {
@@ -95,6 +100,35 @@ func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 		return applyFileLines(path, op, ownership)
 	}
 	return applyFileContent(path, op, ownership, ctx)
+}
+
+// validatePlanValidation rejects malformed validation-bearing file ops before
+// the absent or line-edit branches could mutate while ignoring their validator
+// fields. Normal File recording cannot produce these combinations because
+// build validates them first; the explicit check protects hand-authored plans.
+func validatePlanValidation(path string, op plan.Op) error {
+	if op.ValidationBin == "" && len(op.ValidationArgs) == 0 {
+		return nil
+	}
+	addLines := slices.Clone(op.AddLines)
+	if op.AddLine != "" {
+		addLines = append(addLines, op.AddLine)
+	}
+	removeLines := slices.Clone(op.RemoveLines)
+	if op.RemoveLine != "" {
+		removeLines = append(removeLines, op.RemoveLine)
+	}
+	f := File{
+		path:           path,
+		contentSet:     op.HasContent,
+		validationBin:  op.ValidationBin,
+		validationArgs: slices.Clone(op.ValidationArgs),
+		validationSet:  true,
+		addLines:       addLines,
+		removeLines:    removeLines,
+	}
+	f.Absent = op.Absent
+	return f.validateConfiguration(path)
 }
 
 // Apply creates an empty regular file only when it is absent. Existing files
@@ -207,6 +241,9 @@ func fileContentOptions(op plan.Op, content []byte, ownership []opt.FileDirOptio
 		if op.TemplateParam != "" {
 			opts = append(opts, opt.WithParam(op.TemplateParam))
 		}
+	}
+	if op.ValidationBin != "" || len(op.ValidationArgs) != 0 {
+		opts = append(opts, opt.WithValidation(op.ValidationBin, slices.Clone(op.ValidationArgs)))
 	}
 	if len(op.TemplateData) != 0 {
 		data, err := decodeTemplateData(op.TemplateData)

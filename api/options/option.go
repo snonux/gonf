@@ -20,6 +20,7 @@ type (
 	Paramable              = resourceoptions.Paramable
 	Templateable           = resourceoptions.Templateable
 	TemplateDataable       = resourceoptions.TemplateDataable
+	Validatable            = resourceoptions.Validatable
 	Contented              = resourceoptions.Contented
 	LineAddable            = resourceoptions.LineAddable
 	LineRemovable          = resourceoptions.LineRemovable
@@ -109,6 +110,7 @@ var (
 	WithParam               = resourceoptions.WithParam
 	WithTemplate            = resourceoptions.WithTemplate
 	WithTemplateData        = resourceoptions.WithTemplateData
+	WithValidation          = resourceoptions.WithValidation
 	WithSourceBase          = resourceoptions.WithSourceBase
 	WithContent             = resourceoptions.WithContent
 	WithLines               = resourceoptions.WithLines
@@ -164,3 +166,5 @@ var (
 	ToCommandOptions        = resourceoptions.ToCommandOptions
 	ToLocalUserOptions      = resourceoptions.ToLocalUserOptions
 )
+
+const CandidatePath = resourceoptions.CandidatePath

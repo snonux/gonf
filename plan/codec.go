@@ -65,6 +65,9 @@ func normalizeOp(op *Op) {
 	if len(op.RemoveLines) == 0 {
 		op.RemoveLines = nil
 	}
+	if len(op.ValidationArgs) == 0 {
+		op.ValidationArgs = nil
+	}
 	if op.Unless != nil {
 		// Copy before normalizing: op.Unless is a pointer that may be shared
 		// with other Op values referencing the same underlying Guard (e.g.

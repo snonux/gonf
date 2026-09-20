@@ -79,6 +79,11 @@ type PlanDraft struct {
 	// The file handler encodes it so invalid values fail during RecordPlan.
 	TemplateData    any
 	TemplateDataSet bool
+	// ValidationBin and ValidationArgs describe an optional argv validator for
+	// a content-managed file. ValidationArgs retains CandidatePath as a typed
+	// wire token; destination apply supplies the private candidate filename.
+	ValidationBin  string
+	ValidationArgs []string
 	// SourceDir is a controller-local directory to package as a blob tree;
 	// for sync_dir drafts it also carries the recipe's DECLARED source
 	// directory onto the op's source_dir field (the glob pattern's

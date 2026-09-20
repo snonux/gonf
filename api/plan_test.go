@@ -565,3 +565,110 @@ func TestApplyPlanEmptyFileResourceSucceeds(t *testing.T) {
 		}
 	}
 }
+
+// TestRecordPlanValidationCodecApply exercises the complete public plan
+// path for WithValidation: RecordPlan, JSON codec, and destination apply. It
+// also proves the typed CandidatePath token survives the codec rather than
+// accidentally turning into a controller-side pathname.
+func TestRecordPlanValidationCodecApply(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+
+	dir := t.TempDir()
+	target := filepath.Join(dir, "service.conf")
+	marker := filepath.Join(dir, "validator-record")
+	t.Setenv("GONF_API_VALIDATION_HELPER", "1")
+	validatorArgs := List("-test.run=^TestPlanValidationHelperProcess$", "validated-content", marker, options.CandidatePath)
+	Task("validated_file", "", func() {
+		File(target, options.WithContent("from recorded plan\n"), options.WithValidation(os.Args[0], validatorArgs))
+	})
+
+	ops, err := RecordPlan("validated-plan", dir, "validated_file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fileOp *plan.Op
+	for i := range ops {
+		if ops[i].Op == plan.KindFile {
+			fileOp = &ops[i]
+			break
+		}
+	}
+	if fileOp == nil {
+		t.Fatal("recorded plan has no file op")
+	}
+	if fileOp.ValidationBin != os.Args[0] || len(fileOp.ValidationArgs) != len(validatorArgs) || fileOp.ValidationArgs[len(fileOp.ValidationArgs)-1] != options.CandidatePath || !fileOp.HasContent {
+		t.Fatalf("recorded validation op = %+v", fileOp)
+	}
+	raw, err := plan.EncodePlan(ops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := plan.DecodePlanBytes(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyPlan(decoded, dir); err != nil {
+		t.Fatalf("ApplyPlan: %v", err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "from recorded plan\n" {
+		t.Fatalf("target content = %q", got)
+	}
+	candidatePath, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("validator did not record its candidate: %v", err)
+	}
+	candidate := strings.TrimSpace(string(candidatePath))
+	if candidate == "" || candidate == target || filepath.Dir(candidate) != dir {
+		t.Fatalf("validator candidate = %q, target = %q", candidate, target)
+	}
+	if _, err := os.Stat(candidate); !os.IsNotExist(err) {
+		t.Fatalf("candidate was not cleaned up: %v", err)
+	}
+}
+
+// TestPlanValidationHelperProcess is invoked as a direct argv validator by
+// TestRecordPlanValidationCodecApply. Keeping the assertion in Go makes the
+// test portable across Linux and BSD destinations.
+func TestPlanValidationHelperProcess(t *testing.T) {
+	if os.Getenv("GONF_API_VALIDATION_HELPER") != "1" {
+		return
+	}
+	for i, arg := range os.Args {
+		if arg != "validated-content" {
+			continue
+		}
+		if i+2 >= len(os.Args) {
+			t.Fatal("validation helper missing marker or candidate")
+		}
+		candidate := os.Args[i+2]
+		info, err := os.Stat(candidate)
+		if err != nil {
+			t.Fatalf("stat candidate: %v", err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("candidate mode = %v, want 0600", info.Mode().Perm())
+		}
+		content, err := os.ReadFile(candidate)
+		if err != nil {
+			t.Fatalf("read candidate: %v", err)
+		}
+		if string(content) != "from recorded plan\n" {
+			t.Fatalf("candidate content = %q", content)
+		}
+		if err := os.WriteFile(os.Args[i+1], []byte(candidate+"\n"), 0o600); err != nil {
+			t.Fatalf("record candidate: %v", err)
+		}
+		return
+	}
+	t.Fatal("validation helper invocation missing marker")
+}

@@ -32,6 +32,7 @@ type (
 	Paramable        interface{ SetParam(string) }
 	Templateable     interface{ SetTemplate() }
 	TemplateDataable interface{ SetTemplateData(any) }
+	Validatable      interface{ SetValidation(string, []string) }
 	Contented        interface{ SetContent(string) }
 	LineAddable      interface{ SetAddLine(string) }
 	LineRemovable    interface{ SetRemoveLine(string) }
@@ -508,6 +509,22 @@ var WithTemplate = fileOption(func(target any) {
 func WithTemplateData(data any) fileOption {
 	return fileOption(func(target any) {
 		requires(target, "WithTemplateData", func(r TemplateDataable) { r.SetTemplateData(data) })
+	})
+}
+
+// CandidatePath is the sole placeholder allowed in WithValidation arguments.
+// Gonf replaces it with a freshly staged, private candidate path at apply
+// time. It is deliberately not a usable filesystem path in a recipe.
+const CandidatePath = "\x00gonf-candidate-path\x00"
+
+// WithValidation validates a rendered File candidate with bin and args before
+// publishing it at the resource's live path. args must contain CandidatePath
+// exactly once; the validator is invoked directly with argv, never through a
+// shell. Validation is supported only for content-managed absolute files, not
+// line edits, absence, or preserve-content resources.
+func WithValidation(bin string, args []string) fileOption {
+	return fileOption(func(target any) {
+		requires(target, "WithValidation", func(r Validatable) { r.SetValidation(bin, args) })
 	})
 }
 

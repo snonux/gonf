@@ -35,15 +35,18 @@ func (c *capTarget) record(method string, value any) {
 	c.calls = append(c.calls, capCall{method: method, value: value})
 }
 
-func (c *capTarget) SetOwner(v string)          { c.record("SetOwner", v) }
-func (c *capTarget) SetGroup(v string)          { c.record("SetGroup", v) }
-func (c *capTarget) SetMode(v os.FileMode)      { c.record("SetMode", v) }
-func (c *capTarget) SetSource(v string)         { c.record("SetSource", v) }
-func (c *capTarget) SetSourceGlob(v string)     { c.record("SetSourceGlob", v) }
-func (c *capTarget) SetSourceBase(v string)     { c.record("SetSourceBase", v) }
-func (c *capTarget) SetParam(v string)          { c.record("SetParam", v) }
-func (c *capTarget) SetTemplate()               { c.record("SetTemplate", nil) }
-func (c *capTarget) SetTemplateData(v any)      { c.record("SetTemplateData", v) }
+func (c *capTarget) SetOwner(v string)      { c.record("SetOwner", v) }
+func (c *capTarget) SetGroup(v string)      { c.record("SetGroup", v) }
+func (c *capTarget) SetMode(v os.FileMode)  { c.record("SetMode", v) }
+func (c *capTarget) SetSource(v string)     { c.record("SetSource", v) }
+func (c *capTarget) SetSourceGlob(v string) { c.record("SetSourceGlob", v) }
+func (c *capTarget) SetSourceBase(v string) { c.record("SetSourceBase", v) }
+func (c *capTarget) SetParam(v string)      { c.record("SetParam", v) }
+func (c *capTarget) SetTemplate()           { c.record("SetTemplate", nil) }
+func (c *capTarget) SetTemplateData(v any)  { c.record("SetTemplateData", v) }
+func (c *capTarget) SetValidation(bin string, args []string) {
+	c.record("SetValidation", []any{bin, args})
+}
 func (c *capTarget) SetContent(v string)        { c.record("SetContent", v) }
 func (c *capTarget) SetAddLine(v string)        { c.record("SetAddLine", v) }
 func (c *capTarget) SetRemoveLine(v string)     { c.record("SetRemoveLine", v) }
@@ -184,6 +187,7 @@ func TestOptionsReachTheirSetters(t *testing.T) {
 		{"WithParam", WithParam("stable"), "SetParam", "stable"},
 		{"WithTemplate", WithTemplate, "SetTemplate", nil},
 		{"WithTemplateData", WithTemplateData(map[string]any{"name": "relay"}), "SetTemplateData", map[string]any{"name": "relay"}},
+		{"WithValidation", WithValidation("validator", []string{CandidatePath}), "SetValidation", []any{"validator", []string{CandidatePath}}},
 		{"WithContent", WithContent("hello"), "SetContent", "hello"},
 		{"WithLines", WithLines("one", "two"), "AddLines", []string{"one", "two"}},
 		{"WithoutLines", WithoutLines("old", "stale"), "RemoveLines", []string{"old", "stale"}},

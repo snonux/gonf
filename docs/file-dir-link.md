@@ -25,6 +25,7 @@ NoLink("/tmp/stale-link")
 |--------|------------|---------|
 | `WithContent` | File | Inline body (templates: env + `.Param` via source `.tmpl`) |
 | `WithTemplateData` | File | JSON-compatible map, slice, or struct made available to destination-side templates; also enables rendering |
+| `WithValidation` | File | Validate one rendered candidate before publishing it; see below |
 | `WithSource` | File / Dir | Copy from path or template |
 | `WithSourceGlob` | Dir | Install glob matches into the directory by basename |
 | `WithLines` / `WithoutLines` | File | Ensure / remove lines in declaration order (duplicates are ignored); singular `WithLine` / `WithoutLine` remain compatibility wrappers |
@@ -37,6 +38,45 @@ NoLink("/tmp/stale-link")
 | `DependsOn` | all | Apply after other resources |
 
 Helpers that wrap these: [helpers.md](helpers.md) (`InstallFile`, `SyncDir`, `EnsureDir`, `EnsureFile`, `LinkIfExists`, `SymlinkMap`). `EnsureFile` creates an empty regular file only when absent; existing regular files retain their content while explicitly supplied mode, owner, and group converge.
+
+### Single-file candidate validation
+
+`WithValidation` makes an absolute `File` with explicit `WithContent` or
+`WithSource` render once, write a fresh `0600` candidate next to the live
+target, run a validator using argv, and only then publish through the normal
+atomic single-file rename. Put
+`CandidatePath` exactly once in the argument list; it is supplied by Gonf, so
+recipes do not construct or interpolate a temporary filename.
+
+```go
+config := File("/etc/httpd.conf", WithContent(rendered),
+    WithValidation("httpd", List("-n", "-f", CandidatePath)))
+Service("httpd", WithRestart, OnChange(config))
+```
+
+Validation runs before every non-dry-run reconciliation, including repair of
+manually changed live content. A failed validator removes its candidate, leaves
+the live file untouched, and reports no `File` change, so an `OnChange` restart
+does not run. Candidates are unique per apply and cleaned after both success
+and failure; their private mode is independent of the final file mode.
+
+This is deliberately a **single-file** contract. The candidate shares the live
+file's parent directory, which preserves ordinary relative-path resolution, but
+that directory must be owned by the applying uid and have no group or
+other-write permission. Every ancestor must likewise be owned by root or the
+applying uid; group/other-writable ancestors also need sticky protection (as
+with `/tmp`). Symlinks and `..` path components are refused. Otherwise another
+user could replace the
+candidate after it is closed and before the validator opens it; Gonf refuses
+such a path rather than treating a `0600` candidate as sufficient protection.
+It cannot safely validate a configuration whose includes, chroot, or companion
+files must move together. Use a future multi-file configuration resource for
+those cases.
+Concurrent validations use separate candidates, but concurrent publishes to
+the same target are not serialized: each is atomic individually and the last
+successful rename wins. Several files are likewise not an atomic transaction;
+a failure after one publication requires a later apply or explicit recovery to
+converge the set.
 
 ### Template `{{.Param}}` in synced trees
 
