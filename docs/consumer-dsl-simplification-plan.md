@@ -63,8 +63,9 @@ Verification performed:
   anything. All 52 controller-activated conf task/aggregate plans and all 26
   controller-activated dotfiles task/aggregate plans recorded successfully.
   This is not an all-profile or all-OS execution test.
-- That recorder confirmed literal backslash-t directives in NSD output, valid
-  JSON syntax for Gogios, and 20 repeated resource IDs in the `home` aggregate.
+- That recorder confirmed valid JSON syntax for Gogios and 20 repeated resource
+  IDs in the `home` aggregate. The NSD directive-prefix defect it recorded was
+  fixed by `c52`.
 - Recording pinned dotfiles' explicit Fedora package task produced 39 package
   operations, none marked for elevation. Recording `home_prompts` succeeded;
   nested `Run` does not apply resources during recording.
@@ -74,19 +75,15 @@ secret values were inspected or printed, and no native OpenBSD validators were
 run. This is a consumer/DSL review, not a complete security audit of foostore or an
 audit of every unrelated shell script, Helm chart, and application in either repo.
 
-## Findings to resolve before calling the migration complete
+## Findings and resolution status before calling the migration complete
 
-### F1 — NSD renders malformed directive prefixes (high; confirmed output)
+### F1 — NSD directive prefixes (fixed by `c52`)
 
-In [maildns.go](../../conf/gonf/frontends/maildns.go), `renderNSDConfig` (line 209)
-uses a Go raw string containing `\thide-version`, `\tverbosity`, and similar
-prefixes. `appendString` in `web.go` writes those bytes unchanged. These are not
-tabs. The recorded candidate and live config both contain those literal escapes.
-
-Replace with ordinary whitespace in a native template, then run `nsd-checkconf`
-against a staged candidate on OpenBSD. Expected consequence of the present output
-is validation rejection; this review confirmed the bytes, not a live failure.
-Keep the existing validation barrier while fixing rendering.
+The P0 recorder found literal backslash-t directive prefixes in the rendered NSD
+configuration. `c52` corrected that rendering, so current candidates use
+ordinary directive whitespace. Keep the NSD validation barrier and validate
+staged candidates with `nsd-checkconf` on OpenBSD as required by the separate
+validation work.
 
 ### F2 — DNS cannot converge, and two writers own the live zones (high; source-confirmed)
 
@@ -100,14 +97,118 @@ using the current failover roles, while gonf renders addresses from the static
 active failover until the failover job rewrites the files again. This writer
 conflict predates some of the Go port; matching Rex does not make it safe.
 
-Choose one owner of effective zone publication. Recommended direction: gonf owns
-declarative zone inputs; a shared publisher combines those inputs with current
-role state, validates, and publishes. Advance the serial only when effective
-records change, coordinating with the existing serial and failover lock. Do not
-replace time with a hash as the serial: DNS serial ordering matters. The eventual
-generic zone resource must handle serial arithmetic, failed publication, and
-repeated/concurrent applies explicitly. Start with the ownership contract, not
-with a new `DNSZone` spelling.
+The following is the approved ownership contract, recorded by task `d52`. It
+is a design correction: until `e52` is implemented, the current direct-file
+writers described above will remain in place and will not satisfy this
+contract. The statements below describe the future publisher, not current
+behaviour.
+
+#### DNS publication and SOA contract
+
+`frontends` owns the declarative inputs: the zone templates under
+`frontends/var/nsd/zones/master`, the zone list and frontend topology in
+`gonf/frontends/data.go`, and the source-controlled F3S host list. Those inputs
+will describe records and role placeholders. They will not own a live zone
+file, an SOA serial, a health result, or the active role. In particular,
+`Master` and `Standby` are service-routing defaults; neither constant will
+select a DNS writer.
+
+`DNSPublisher = "blowfish"` is the direct, stable publisher identity; it must
+not be derived from the service-routing `Standby` value. The contract designates
+**blowfish** as the one effective-zone publisher.
+It will be the NSD master and the only host permitted to change
+`/var/nsd/zones/master/*.zone`, committed role state, or SOA serials. Fishfinger
+will be an NSD transfer slave and will never edit an effective zone; it will
+receive committed versions by zone transfer. Blowfish will remain the publisher
+when a health failover directs public records to fishfinger: service role and
+publication ownership are different concerns. If blowfish is unavailable, its
+already published zones will continue to be served by fishfinger. A second
+simultaneous frontend failure is outside this two-node failover contract; the
+slave will not publish independently.
+
+`e52` will implement a frontend-specific publisher wrapper on blowfish. This
+wrapper, rather than a `DNSZoneSet` resource or callback, will own the
+target-local lock, durable role and per-zone serial state, rendering, validation,
+and the journalled state-and-zone transaction. A future `DNSZoneSet` helper may
+parse, canonicalise, stage, or validate immutable candidates, but will not own
+the lock, role state, rendering, or publication transaction. This is the chosen
+boundary; it is not a generic callback contract.
+
+The wrapper will own durable failover state, initially the declared service
+role. A failed health decision, timeout, malformed state, or unavailable
+candidate will keep the committed role and zones unchanged. A successful
+health-triggered promotion will record the new role only as part of a successful
+publication. The weekly `date +%U` rotation will not be a role source:
+wall-clock jumps, DST, reboot, and clock correction must not alter DNS.
+Returning from an active failover will require a separate verified promotion
+(or an explicit, authorised operator action), rather than an inference from the
+current week. Until then, the legacy script's temporary `current_*` and address
+files are current implementation caches; the wrapper will not treat them as
+shared authority.
+
+One target-local publisher lock will cover the complete
+read-render-validate-publish transaction. Gonf apply, cron, and a manual
+recovery command will call that wrapper, never write zones independently;
+cron's `-s` option will be only secondary protection. While holding the lock,
+the wrapper will reread committed role state and zones, render the complete
+effective candidate set, and validate every candidate zone plus its NSD
+configuration. It will recheck any input whose version changed while it waited
+for the lock. No lock is claimed to be a distributed mutex: the fixed publisher
+host and NSD transfer topology remove the need for one.
+
+All effective zones will use `blowfish.buetow.org.` as the SOA MNAME. It names
+the stable publication primary, not the currently active public-service role,
+and will therefore remain unchanged during a service failover. Rendering will
+set this MNAME explicitly; a template's present MNAME will not override that
+policy.
+
+The serial will belong to each committed effective zone. The fixed initial
+serial for a newly created zone will be unsigned 32-bit decimal `1`
+(`uint32(1)`). A migration from an existing zone will parse that zone's serial
+as an unsigned base-10 integer in `[0, 4294967295]` and use its RFC 1982
+successor, `(old + 1) mod 2^32`; it will never replace an existing serial with
+the initial value. A missing, duplicate, non-apex, or unparseable committed SOA
+serial will be a hard publication failure. The wrapper will leave every zone and
+state file unchanged and require operator repair; it will not guess, reset, or
+advance the serial. This single-writer, one-step rule will preserve serial order
+for normal secondaries, including wraparound, provided a secondary is not left
+more than half the sequence space behind. A timestamp or content hash will never
+be a serial source, so clock changes and repeated rendering cannot move it.
+
+For the no-change decision, the wrapper will parse both the candidate and the
+committed master file as a single zone and require exactly one apex SOA in each.
+It will expand `$ORIGIN`, relative owner names, and relative domain-name RDATA;
+resolve inherited TTLs; discard comments and directives; lower-case DNS names;
+and encode each RR as its canonical DNS owner, type, class, effective TTL, and
+canonical RDATA wire form. It will sort those encodings lexicographically and
+compare the resulting RR multisets, after replacing only the apex SOA serial
+with an omitted value. Thus comments, whitespace, directives, record order, and
+the serial itself will not cause publication; every other RR value, including
+the SOA MNAME, RNAME, refresh, retry, expire, and minimum fields, will. Parse
+failure, an origin mismatch, or an invalid candidate will be a hard failure,
+not a comparison that can be treated as changed or unchanged.
+
+On canonical equality, the wrapper will publish nothing: no serial advance,
+zone write, state write, or NSD reload. On a difference, it will assign one
+successor serial to every changed zone before staging validation.
+
+Validation, replacement, reload, and serial/state persistence will form one
+success condition. The wrapper will validate staged files before any live
+replacement, journal the complete preimage and intended state before making the
+first replacement, and only mark the new role and serial state committed after
+the complete zone set is installed and NSD reload succeeds. If validation,
+replacement, state persistence, or reload fails, it will restore the saved zone
+set and state, attempt an NSD reload of that restored set, and return a hard
+failure. The wrapper will complete recovery from its journal before accepting a
+later publication. Multiple zone-file replacements are not filesystem-atomic;
+the journal and recovery rule define the required atomic state-and-zone outcome
+while the publisher lock is held. A failed reload with an unsuccessful rollback
+will be a visible degraded state, never a successful publication.
+
+The wrapper will need record/codec/apply coverage for repeat apply, changed
+input, active failover, clock changes, serial wrap, lock contention, invalid or
+unparseable zones, failed replacement/reload, crash recovery, and retry after
+failure before either frontend task uses it.
 
 ### F3 — Cron migration is incomplete and one cleanup is self-defeating (high)
 
@@ -250,7 +351,7 @@ The following are proposed APIs/capabilities, not features already available.
 | Config lines in shared rc/profile/daily files | Core keyed/block editing where exact-line edits are insufficient; explicit ownership, not whole-file replacement | Next |
 | Per-host typed data inside destination guards | API helper, e.g. `ForHosts[T](key, fn)` using current cluster inventory | Next |
 | Secrets from an external store | Provider interface plus sensitive references/content handling; foostore adapter outside recipe bodies | Parallel prerequisite track |
-| Zone publication and serial lifecycle | Potential core DNS-zone resource after resolving failover ownership | Design first |
+| Zone publication and serial lifecycle | Frontend publisher wrapper; optional non-owning DNS-zone helper | `d52` contract; `e52` implementation |
 | OS update windows, reboots, drain policy, service restart allowlists | Consumer recipes and existing audited scripts | Keep local |
 | Websites, routes, check catalogues, Garage sizing, failover roles | Consumer data and templates | Keep local |
 | Repeated simple dotfile copies/links | Existing `SyncDir`, `InstallFile`, `SymlinkMap`; small local helpers where useful | Do not over-abstract |
@@ -583,7 +684,7 @@ home_taskwarrior home_timesamurai home_tmux home_vale pkg_fedora
 | Consumer area | Public inputs and owner | Compatibility and first-install boundary |
 | --- | --- | --- |
 | conf composition | `cmd/gonf/main.go` calls `cluster.Register` and `tasks.Register`; `tasks/tasks.go` owns prefixes and aggregate membership; `cluster/cluster.go` owns hosts, clusters, SSH/privilege facts, and typed values. | Keep task names, cluster names, privilege chunks, and inventory values stable. A task may rely on a destination-side `WhenHostname` guard even when the controller runs on another OS. |
-| conf frontend configuration | `frontends` owns topology, controller-rendered configuration, source assets under `~/git/conf/frontends`, and the controller-relative `secrets/` inputs. Gonf owns a ported task only after Rex stops writing the same live state. | `frontends` deliberately excludes `frontends_acme_invoke` and `frontends_irc_bouncer`; certificate requests and the existing ZNC deployment remain explicit actions. NSD/PF validation, cron adoption, and DNS publication have known gaps F1–F4 and must retain their current names while corrected. |
+| conf frontend configuration | `frontends` owns topology, controller-rendered configuration, source assets under `~/git/conf/frontends`, and the controller-relative `secrets/` inputs. Gonf owns a ported task only after Rex stops writing the same live state. | `frontends` deliberately excludes `frontends_acme_invoke` and `frontends_irc_bouncer`; certificate requests and the existing ZNC deployment remain explicit actions. NSD/PF validation, cron adoption, and DNS publication have known gaps F2–F4 and must retain their current names while corrected. |
 | conf OS, r-node, and Garage recipes | The OS packages own unattended-update declarations; `rnodes` owns the two systemd maintenance recipes; `garage_config` owns only Garage TOML plus service convergence. | `garage_config` assumes the package, `garage` group, data/metadata directories, and an initialized cluster already exist. It requires `secrets/garage/rpc_secret`; it is configuration deployment, not first-host provisioning. |
 | dotfiles composition | `cmd/gonf/main.go` registers `home_*`, profile-gates `pkg_fedora`, and defines the `home` regex aggregate. Sources resolve below `~/git/dotfiles`; optional private input resolves below `~/git/conf_private/dotfiles`. | Keep `home_prompts` as the public legacy alias for `home_agents` until the alias task can preserve compatibility without duplicate aggregate expansion. `pkg_fedora` is the Fedora profile entry point and needs its privilege contract corrected separately. |
 | plan and secret inputs | `MustSecret` and `OptionalSecret` resolve only regular files beneath the invoking consumer's `./secrets` directory. File/template assets may be packaged as blobs; host values and template data are public record-time inputs. | Secret values enter executable plan material today. The P0 tests used disposable synthetic values only. Do not infer encrypted plans, external-provider support, native validation, or a production preview from successful recording. |
@@ -656,7 +757,7 @@ in gonf, not `conf/gonf/*_test.go`, per conf's AGENTS.md.
 | Order | Work package | Dependencies and completion evidence |
 | --- | --- | --- |
 | P0 | Baseline and ownership map | Capture current task inventory, source inputs, pins, representative non-applying synthetic-secret plans, and intended Rex differences; identify live validation gates |
-| P1 | Correctness repairs | F1–F8; native config validation, cron migration fixtures, role dependency checks, privilege/OS tests, and explicit DNS writer decision; no broad refactor mixed in |
+| P1 | Correctness repairs | F2–F8; native config validation, cron migration fixtures, role dependency checks, privilege/OS tests, and explicit DNS writer decision; no broad refactor mixed in |
 | P2 | Core validation and safe config publication | P1 fixtures; single-file first, then SMTPD/config-set use case; no live replacement on failed validation, no accidental restart, retry/concurrency tests |
 | P3 | Core Cron adoption and small account extension | Preserve current marker format and additive account defaults; four-platform account command/state fixtures; remove corresponding consumer shell bookkeeping |
 | P4 | Extract native templates and simplify frontend data | P1/P2; compare outputs semantically, eliminate Perl translation and format-string config assembly; keep JSON safely serialized |
@@ -740,7 +841,7 @@ Inspect the batch from `~/git/gonf` with:
 | Task alias | Scope | Plan reference |
 | --- | --- | --- |
 | `b52` | Record consumer DSL review baseline and ownership/compatibility matrix | P0; F9; Coverage inventory |
-| `c52` | Fix literal backslash-t directives in rendered frontend NSD configuration | F1; P1 |
+| `c52` | Fixed NSD directive whitespace in rendered frontend configuration | F1; P1 (complete) |
 | `d52` | Specify one DNS publication owner and failover-safe SOA serial contract | F2; P1 |
 | `e52` | Implement failover-safe DNS publication and stable-on-no-change SOA serials | F2; P1 |
 | `f52` | Add fail-closed opt-in legacy-job adoption to the core Cron resource | F3; P3 |
