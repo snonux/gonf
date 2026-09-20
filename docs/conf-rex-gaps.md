@@ -28,8 +28,8 @@ compute any content Perl closures could (see
   `gonf/cluster/cluster.go` and deploys via `./gonf.sh cluster <cluster> <tasks…>`
   (wrapper = `cd ./gonf && go run ./cmd/gonf`).
 - **One consumer module per repository**, depending on `github.com/snonux/gonf`
-  (dotfiles currently pins v0.12.2 and conf pins v0.13.0; the downstream
-  migration updates consumers to v0.14.0). Multi-Rexfile composition maps to Go packages +
+  (dotfiles currently pins v0.12.2 and conf pins v0.14.0; any later consumer
+  upgrade is a deliberate compatibility change). Multi-Rexfile composition maps to Go packages +
   `RegisterMethods` + `Aggregate`, not to multiple Rexfiles.
 - **Inventory lives in the consumer** (`Host` / `Cluster` / `Fleet` with
   `WithSSHUser` / `WithSSHPort` / `WithPrivilege` / `WithGOOS` / `WithGOARCH` /
