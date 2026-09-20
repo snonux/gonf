@@ -301,10 +301,10 @@ import from an external `plan_test` file is fine.
 |---------|--------|
 | `gonf <task> [task…]` | Record + apply locally |
 | `gonf plan [-o dir\|-stdout] [-id name] <task>…` | Write `dir/plan.jsonl` (+ `blobs/`), or print JSONL to stdout |
-| `gonf apply [-n\|-dry-run] <plan.jsonl\|->` | Apply a plan file, or read **GONF-PUSH/1** / bare JSONL from stdin |
-| `gonf push [-n] [-id name] [-- ssh-args…] user@host <task>…` | Record in memory, stream over `ssh` to remote `gonf apply -` |
-| `gonf cluster [-n] [-j N] [-id name] [-host-timeout 10m] <cluster> <task>…` | Resolve inventory cluster; record once; parallel push to each host |
-| `gonf fleet [-n] [-j N] [-id name] [-host-timeout 10m] <fleet> <task>…` | Resolve fleet (list of clusters); push to unique hosts across all members |
+| `gonf apply [-n\|-dry-run\|-strict-preview] <plan.jsonl\|->` | Apply a plan file, or read **GONF-PUSH/1** / bare JSONL from stdin |
+| `gonf push [-n\|-preview] [-id name] [-- ssh-args…] user@host <task>…` | Record in memory, stream over `ssh` to remote `gonf apply -` |
+| `gonf cluster [-n\|-preview] [-j N] [-id name] [-host-timeout 10m] <cluster> <task>…` | Resolve inventory cluster; record once; parallel push or strict preview to each host |
+| `gonf fleet [-n\|-preview] [-j N] [-id name] [-host-timeout 10m] <fleet> <task>…` | Resolve fleet (list of clusters); push or strict preview on unique hosts |
 | `gonf hosts` / `gonf clusters` / `gonf fleets` | List registered inventory |
 
 ### Inventory DSL (`Host` / `Cluster` / `Fleet`)
@@ -441,7 +441,7 @@ regression test. The push summary line (`pushed <plan> (<ops>) to <name>
 (<ok>/<total> hosts)`) is still printed once per contributing member cluster
 rather than once for the whole fleet.
 
-### Remote gonf binary sync
+### Remote gonf binary sync and strict preview
 
 Before the first SSH apply chunk, `PushChunks` probes `gonf -plan-version` on
 the target. If the remote binary is missing or reports a plan schema older
@@ -454,14 +454,39 @@ commands on that push use the installed path so PATH cannot hide an older
 binary.
 
 `gonf -plan-version` prints the plan schema integer (distinct from
-`gonf -version`, which prints the release string).
+`gonf -version`, which prints the release string). `gonf
+-strict-preview-version` prints the strict-preview capability version. The
+separate capability probe prevents a controller from treating an older binary
+with a coincidentally matching release/schema as able to parse
+`apply -strict-preview`.
+
+`push -n` / `cluster -n` / `fleet -n` retain their established compatibility
+behavior: they bootstrap a missing or stale remote gonf binary before running
+`gonf apply -n`. That is a dry-run of managed resources, but it is not a
+non-mutating remote preview because bootstrap can build, copy, and install a
+binary.
+
+Use `-preview` for a strict remote preview. It performs only read-only remote
+version probes before running `gonf apply -n -strict-preview -`; it never
+cross-compiles, SCPs, installs, or updates gonf. The remote runtime must
+already report a plan schema, strict-preview capability, and release version
+at least as new as the controller. A missing, unparseable, or stale runtime
+fails with an instruction to run the ordinary push first. Strict preview
+rejects plans with blobs rather than staging controller data on the target,
+and its remote apply mode performs resource probes under dry-run semantics
+without writing managed resources.
+
+This gives the command an explicit no-bootstrap/no-managed-resource-write
+contract. It does not claim that arbitrary resource probe commands are pure:
+resource implementations must preserve their existing dry-run contract.
 
 Example:
 
 ```text
 gonf push -n user@host home_helix home_tmux
+gonf push -preview user@host home_helix home_tmux
 gonf push -- -p 2222 user@host home_helix
-gonf fleet -n frontends base commons
+gonf fleet -preview frontends base commons
 gonf fleet -j 2 garage garage_deploy
 ```
 

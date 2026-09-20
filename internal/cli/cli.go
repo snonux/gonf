@@ -21,22 +21,24 @@ import (
 
 // cliOptions contains the process-wide flags consumed by CLI.
 type cliOptions struct {
-	version     bool
-	planVersion bool
-	list        bool
-	profile     string
-	verbose     bool
-	quiet       bool
-	dryRun      bool
-	privilege   string
-	cmdTimeout  time.Duration
-	args        []string
+	version              bool
+	planVersion          bool
+	strictPreviewVersion bool
+	list                 bool
+	profile              string
+	verbose              bool
+	quiet                bool
+	dryRun               bool
+	privilege            string
+	cmdTimeout           time.Duration
+	args                 []string
 }
 
 // CLI parses flags and runs or lists tasks. Returns a process exit code.
 //
 //	gonf -version
 //	gonf -plan-version
+//	gonf -strict-preview-version
 //	gonf -list
 //	gonf -profile=fedora
 //	gonf -verbose | -quiet
@@ -69,6 +71,7 @@ func parseCLIFlags(program string, args []string) (cliOptions, error) {
 
 	version := fs.Bool("version", false, "Print version")
 	planVersion := fs.Bool("plan-version", false, "Print plan schema version this binary can emit/apply")
+	strictPreviewVersion := fs.Bool("strict-preview-version", false, "Print strict remote preview capability version")
 	list := fs.Bool("list", false, "List registered tasks")
 	profile := fs.String("profile", "", "Override detected profile (fedora, rocky, ...)")
 	verbose := fs.Bool("verbose", false, "Debug logging")
@@ -81,16 +84,17 @@ func parseCLIFlags(program string, args []string) (cliOptions, error) {
 		return cliOptions{}, err
 	}
 	return cliOptions{
-		version:     *version,
-		planVersion: *planVersion,
-		list:        *list,
-		profile:     *profile,
-		verbose:     *verbose,
-		quiet:       *quiet,
-		dryRun:      *dryRun || *dryRunShort,
-		privilege:   *privFlag,
-		cmdTimeout:  *cmdTimeout,
-		args:        fs.Args(),
+		version:              *version,
+		planVersion:          *planVersion,
+		strictPreviewVersion: *strictPreviewVersion,
+		list:                 *list,
+		profile:              *profile,
+		verbose:              *verbose,
+		quiet:                *quiet,
+		dryRun:               *dryRun || *dryRunShort,
+		privilege:            *privFlag,
+		cmdTimeout:           *cmdTimeout,
+		args:                 fs.Args(),
 	}, nil
 }
 
@@ -134,6 +138,10 @@ func runCLI(ctx context.Context, options cliOptions) int {
 	}
 	if options.planVersion {
 		fmt.Println(plan.CurrentVersion)
+		return 0
+	}
+	if options.strictPreviewVersion {
+		fmt.Println(internal.StrictPreviewVersion)
 		return 0
 	}
 
@@ -263,6 +271,7 @@ func cliApply(args []string) int {
 	fs.SetOutput(os.Stderr)
 	dryRun := fs.Bool("dry-run", false, "Preview changes without applying them")
 	dryRunShort := fs.Bool("n", false, "Alias for -dry-run")
+	strictPreview := fs.Bool("strict-preview", false, "Require a no-staging remote preview")
 	applyDir := fs.String("apply-dir", "", "sticky staging dir for multi-chunk push (skip wipe)")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -270,17 +279,17 @@ func cliApply(args []string) int {
 	// Escalate-only: a top-level "gonf -n apply ..." already set this via
 	// CLI()'s unconditional call before dispatch; don't stomp it back to
 	// false just because this subcommand's own flags didn't repeat -n.
-	if *dryRun || *dryRunShort {
+	if *dryRun || *dryRunShort || *strictPreview {
 		resource.SetDryRun(true)
 	}
 	rest := fs.Args()
 	if len(rest) != 1 {
-		fmt.Fprintln(os.Stderr, "usage: gonf apply [-n|-dry-run] [-apply-dir dir] <plan.jsonl|->")
+		fmt.Fprintln(os.Stderr, "usage: gonf apply [-n|-dry-run] [-strict-preview] [-apply-dir dir] <plan.jsonl|->")
 		return 2
 	}
 	planPath := rest[0]
 	if planPath == "-" {
-		return cliApplyStdin(*applyDir)
+		return cliApplyStdin(*applyDir, *strictPreview)
 	}
 	raw, err := os.ReadFile(planPath)
 	if err != nil {
@@ -301,7 +310,27 @@ func cliApply(args []string) int {
 	return 0
 }
 
-func cliApplyStdin(applyDir string) int {
+func cliApplyStdin(applyDir string, strictPreview bool) int {
+	if strictPreview {
+		if applyDir != "" {
+			fmt.Fprintln(os.Stderr, "apply: -strict-preview cannot use -apply-dir")
+			return 2
+		}
+		// DecodePush refuses blobs without a plan directory. This deliberately
+		// avoids NewApplyRunDir, so strict remote preview does not create a
+		// staging directory merely to inspect a plan.
+		payload, err := plan.DecodePush(os.Stdin, "")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "apply: %v\n", err)
+			return 1
+		}
+		if err := api.ApplyPlan(payload.Ops, ""); err != nil {
+			fmt.Fprintf(os.Stderr, "apply: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "previewed stdin (%d ops)\n", len(payload.Ops))
+		return 0
+	}
 	runDir, cleanup, err := prepareApplyRunDir(applyDir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -425,11 +454,11 @@ func verifyStickyDirOwned(path string) error {
 }
 
 func printUsage() {
-	fmt.Fprintln(os.Stderr, "usage: gonf [-list] [-version] [-plan-version] [-profile=...] [-verbose|-quiet] [-dry-run|-n] [-privilege=none|sudo|doas] [-cmd-timeout 5m] <task> [task...]")
+	fmt.Fprintln(os.Stderr, "usage: gonf [-list] [-version] [-plan-version] [-strict-preview-version] [-profile=...] [-verbose|-quiet] [-dry-run|-n] [-privilege=none|sudo|doas] [-cmd-timeout 5m] <task> [task...]")
 	fmt.Fprintln(os.Stderr, "       gonf plan [-o dir|-stdout] [-id name] <task> [task...]")
-	fmt.Fprintln(os.Stderr, "       gonf apply [-n|-dry-run] [-apply-dir dir] <plan.jsonl|->")
-	fmt.Fprintln(os.Stderr, "       gonf push [-n] [-id name] [-privilege=...] [-- ssh-args...] user@host <task> [task...]")
-	fmt.Fprintln(os.Stderr, "       gonf cluster [-n] [-j N] [-id name] [-host-timeout 10m] <cluster> <task> [task...]")
-	fmt.Fprintln(os.Stderr, "       gonf fleet [-n] [-j N] [-id name] [-host-timeout 10m] <fleet> <task> [task...]")
+	fmt.Fprintln(os.Stderr, "       gonf apply [-n|-dry-run|-strict-preview] [-apply-dir dir] <plan.jsonl|->")
+	fmt.Fprintln(os.Stderr, "       gonf push [-n|-dry-run|-preview] [-id name] [-privilege=...] [-- ssh-args...] user@host <task> [task...]")
+	fmt.Fprintln(os.Stderr, "       gonf cluster [-n|-dry-run|-preview] [-j N] [-id name] [-host-timeout 10m] <cluster> <task> [task...]")
+	fmt.Fprintln(os.Stderr, "       gonf fleet [-n|-dry-run|-preview] [-j N] [-id name] [-host-timeout 10m] <fleet> <task> [task...]")
 	fmt.Fprintln(os.Stderr, "       gonf hosts | clusters | fleets")
 }

@@ -11,8 +11,10 @@ import (
 
 	"github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/api/options"
+	iexec "github.com/snonux/gonf/internal/exec"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
+	"github.com/snonux/gonf/resource/cmd"
 )
 
 func TestCLIPlanAndApply(t *testing.T) {
@@ -241,6 +243,86 @@ func TestCLIApplyDryRun(t *testing.T) {
 	}
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
 		t.Fatal("dry-run must not create file")
+	}
+}
+
+func TestCLIUsageDocumentsStrictPreview(t *testing.T) {
+	oldArgs := os.Args
+	oldStderr := os.Stderr
+	stderrReader, stderrWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		os.Args = oldArgs
+		os.Stderr = oldStderr
+		_ = stderrReader.Close()
+		_ = stderrWriter.Close()
+	})
+
+	os.Args = []string{"gonf"}
+	os.Stderr = stderrWriter
+	if code := CLI(); code != 2 {
+		t.Fatalf("CLI() exit code = %d, want 2", code)
+	}
+	if err := stderrWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = oldStderr
+	usage, err := io.ReadAll(stderrReader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, flag := range []string{"-strict-preview-version", "apply [-n|-dry-run|-strict-preview]", "push [-n|-dry-run|-preview]", "cluster [-n|-dry-run|-preview]", "fleet [-n|-dry-run|-preview]"} {
+		if !strings.Contains(string(usage), flag) {
+			t.Fatalf("usage does not document %q:\n%s", flag, usage)
+		}
+	}
+}
+
+func TestCLIApplyStrictPreviewUsesResourceDryRunWithoutStaging(t *testing.T) {
+	resource.SetDryRun(false)
+	t.Cleanup(func() { resource.SetDryRun(false) })
+
+	var ran bool
+	cmd.SetRunnersForTest(func(iexec.Opts, string, ...string) (string, string, int, error) {
+		ran = true
+		return "", "", 0, nil
+	}, nil)
+	t.Cleanup(cmd.ResetRunnersForTest)
+
+	ops := []plan.Op{
+		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "strict-preview"},
+		{Op: plan.KindCommand, Bin: "would-mutate", Args: []string{"target"}},
+	}
+	var frame bytes.Buffer
+	if err := plan.EncodePush(&frame, ops, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	oldStdin := os.Stdin
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdin = r
+	t.Cleanup(func() {
+		os.Stdin = oldStdin
+		_ = r.Close()
+	})
+	go func() {
+		_, _ = w.Write(frame.Bytes())
+		_ = w.Close()
+	}()
+
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+	os.Args = []string{"gonf", "apply", "-strict-preview", "-"}
+	if code := CLI(); code != 0 {
+		t.Fatalf("strict preview exit %d", code)
+	}
+	if ran {
+		t.Fatal("strict preview ran a mutating command instead of only reporting it")
 	}
 }
 

@@ -23,9 +23,10 @@ const gonfCmdPackage = "github.com/snonux/gonf/cmd/gonf"
 
 // Pusher bundles the exec/network seams this file needs to build and stage a
 // fresh gonf binary on a remote host: cross-compiling it (GoBuildRunner),
-// probing the remote's installed plan-schema version (PlanVersionProber),
-// and copying the binary over (SCPRunner) — plus the build cache/lock state
-// those seams share (buildGonf). Bundling them in a struct instead of three
+// probing the remote's installed plan-schema and strict-preview capability
+// versions (PlanVersionProber and StrictPreviewProber), and copying the
+// binary over (SCPRunner) — plus the build cache/lock state those seams share
+// (buildGonf). Bundling them in a struct instead of package-level variables
 // separate package-level vars means a test can construct its own *Pusher
 // with fake fields and call its methods directly: nothing is shared,
 // mutable package state to race on, so such a test is free to run with
@@ -37,7 +38,7 @@ const gonfCmdPackage = "github.com/snonux/gonf/cmd/gonf"
 // (api.PushTo, Fanout, and every test that calls
 // remote.AssumeRemotePlanCurrent) keeps working completely unchanged.
 //
-// SSHRunner (remote.go) is deliberately NOT a Pusher field. Unlike the three
+// SSHRunner (remote.go) is deliberately NOT a Pusher field. Unlike these
 // seams above — which, before this change, were read only from this file and
 // its own test — SSHRunner is stubbed from roughly a dozen other test files
 // across api/, internal/cli/ and internal/orchestrate/ (over a hundred
@@ -50,6 +51,10 @@ type Pusher struct {
 	SCPRunner         func(ctx context.Context, localPath string, t PushTarget, remotePath string) error
 	GoBuildRunner     func(ctx context.Context, goos, goarch, out, pkg string) error
 	PlanVersionProber func(ctx context.Context, t PushTarget) (int, error)
+	// StrictPreviewProber reports the target's strict-preview capability
+	// version. It is distinct from the plan schema because strict preview
+	// changes transport safety rather than plan encoding.
+	StrictPreviewProber func(ctx context.Context, t PushTarget) (int, error)
 
 	// ReleaseVersionProber probes the remote gonf binary's own release
 	// version (internal.Version, e.g. "0.12.1", as printed by `gonf
@@ -83,6 +88,7 @@ func NewPusher() *Pusher {
 		SCPRunner:            defaultSCPRunner,
 		GoBuildRunner:        defaultGoBuildRunner,
 		PlanVersionProber:    probePlanVersion,
+		StrictPreviewProber:  probeStrictPreviewVersion,
 		ReleaseVersionProber: probeReleaseVersion,
 		buildCache:           map[string]string{},
 		buildKeyLocks:        map[string]*sync.Mutex{},
@@ -430,6 +436,29 @@ func AssumeRemotePlanCurrent() func() {
 	return func() { defaultPusher.PlanVersionProber = old }
 }
 
+// AssumeRemoteGonfCurrent makes the default pusher report the controller's
+// current plan schema and release version. It is a test seam for callers that
+// fake SSH transport and need to exercise strict preview without a live host.
+func AssumeRemoteGonfCurrent() func() {
+	oldPlan := defaultPusher.PlanVersionProber
+	oldStrictPreview := defaultPusher.StrictPreviewProber
+	oldRelease := defaultPusher.ReleaseVersionProber
+	defaultPusher.PlanVersionProber = func(context.Context, PushTarget) (int, error) {
+		return plan.CurrentVersion, nil
+	}
+	defaultPusher.ReleaseVersionProber = func(context.Context, PushTarget) (string, error) {
+		return internal.Version, nil
+	}
+	defaultPusher.StrictPreviewProber = func(context.Context, PushTarget) (int, error) {
+		return internal.StrictPreviewVersion, nil
+	}
+	return func() {
+		defaultPusher.PlanVersionProber = oldPlan
+		defaultPusher.ReleaseVersionProber = oldRelease
+		defaultPusher.StrictPreviewProber = oldStrictPreview
+	}
+}
+
 // EnsureRemoteGonf upgrades the remote gonf binary when it cannot apply the
 // controller's plan schema (missing gonf, or -plan-version < CurrentVersion),
 // OR when the plan schema is fine but the remote binary's own release
@@ -446,6 +475,66 @@ func AssumeRemotePlanCurrent() func() {
 // function.
 func EnsureRemoteGonf(ctx context.Context, t PushTarget) (installedPath string, err error) {
 	return defaultPusher.EnsureRemoteGonf(ctx, t)
+}
+
+// RequireRemoteGonf verifies that the target already has a gonf binary that
+// can safely preview this controller's plan. It only runs remote version
+// probes; unlike EnsureRemoteGonf, it never cross-compiles, copies, or
+// installs a binary. Strict remote preview uses this check so an absent or
+// stale runtime fails clearly instead of turning a preview into provisioning.
+func RequireRemoteGonf(ctx context.Context, t PushTarget) error {
+	return defaultPusher.RequireRemoteGonf(ctx, t)
+}
+
+// RequireRemoteGonf is the Pusher-scoped implementation of
+// RequireRemoteGonf. It deliberately treats a missing, unparseable, or older
+// release version as a refusal: strict preview must establish that the remote
+// runtime has the same behavior as the controller, whereas ordinary push can
+// repair a stale runtime through EnsureRemoteGonf.
+func (p *Pusher) RequireRemoteGonf(ctx context.Context, t PushTarget) error {
+	if t.Host == "" {
+		return fmt.Errorf("remote preview: empty host")
+	}
+	remotePlanVersion, err := p.PlanVersionProber(ctx, t)
+	if err != nil {
+		return fmt.Errorf("remote preview: probe gonf plan schema: %w", err)
+	}
+	if remotePlanVersion < plan.CurrentVersion {
+		return fmt.Errorf("remote preview: remote gonf plan schema %d is older than controller schema %d; preview does not install or update gonf, run push first", remotePlanVersion, plan.CurrentVersion)
+	}
+	if p.StrictPreviewProber == nil {
+		return fmt.Errorf("remote preview: cannot verify remote strict-preview capability; preview does not install or update gonf, run push first")
+	}
+	remoteStrictPreviewVersion, err := p.StrictPreviewProber(ctx, t)
+	if err != nil {
+		return fmt.Errorf("remote preview: probe gonf strict-preview capability: %w", err)
+	}
+	if remoteStrictPreviewVersion < internal.StrictPreviewVersion {
+		return fmt.Errorf("remote preview: remote gonf strict-preview capability %d is older than controller capability %d; preview does not install or update gonf, run push first", remoteStrictPreviewVersion, internal.StrictPreviewVersion)
+	}
+	if p.ReleaseVersionProber == nil {
+		return fmt.Errorf("remote preview: cannot verify remote gonf release version; preview does not install or update gonf, run push first")
+	}
+
+	remoteRelease, err := p.ReleaseVersionProber(ctx, t)
+	if err != nil {
+		return fmt.Errorf("remote preview: probe gonf release version: %w", err)
+	}
+	if remoteRelease == "" {
+		return fmt.Errorf("remote preview: remote gonf did not report a release version; preview does not install or update gonf, run push first")
+	}
+	remoteVersion, err := parseReleaseVersion(remoteRelease)
+	if err != nil {
+		return fmt.Errorf("remote preview: remote gonf release version %q: %w", remoteRelease, err)
+	}
+	controllerVersion, err := parseReleaseVersion(internal.Version)
+	if err != nil {
+		return fmt.Errorf("remote preview: controller gonf release version %q: %w", internal.Version, err)
+	}
+	if releaseVersionLess(remoteVersion, controllerVersion) {
+		return fmt.Errorf("remote preview: remote gonf release %s is older than controller %s; preview does not install or update gonf, run push first", remoteRelease, internal.Version)
+	}
+	return nil
 }
 
 // EnsureRemoteGonf is the Pusher-scoped implementation of the package-level
@@ -579,12 +668,15 @@ func (p *Pusher) installRemoteBinary(ctx context.Context, t PushTarget, localBin
 // unparsed line — surfaces that cause directly instead of masking it behind
 // a misleading rebuild attempt.
 func probePlanVersion(ctx context.Context, t PushTarget) (int, error) {
-	bin := remoteGonfBin(t)
+	cmd, err := remoteProbeCmd(t, "-plan-version")
+	if err != nil {
+		return 0, err
+	}
 	// No "2>/dev/null || true": FreeBSD login shells are often tcsh, which
 	// mishandles that idiom and yields empty stdout even when gonf works.
 	// sshCapture already treats a remote non-zero exit (missing binary) as
 	// empty stdout without failing the SSH session.
-	out, err := sshCapture(ctx, t, bin+" -plan-version")
+	out, err := sshCapture(ctx, t, cmd)
 	if err != nil {
 		return 0, err
 	}
@@ -594,7 +686,31 @@ func probePlanVersion(ctx context.Context, t PushTarget) (int, error) {
 	}
 	n, err := strconv.Atoi(line)
 	if err != nil {
-		return 0, fmt.Errorf("plan-version probe: %s -plan-version returned unparseable output %q instead of an integer plan schema version (a login banner, MOTD, or other ssh startup noise may be mixed into the probe output — check the remote login shell's startup files)", bin, line)
+		return 0, fmt.Errorf("plan-version probe: %s returned unparseable output %q instead of an integer plan schema version (a login banner, MOTD, or other ssh startup noise may be mixed into the probe output — check the remote login shell's startup files)", cmd, line)
+	}
+	return n, nil
+}
+
+// probeStrictPreviewVersion returns the remote binary's strict-preview
+// capability version, or 0 with nil error when the binary does not support
+// the probe. RequireRemoteGonf turns that absence into a clear strict-preview
+// refusal; ordinary pushes do not need this capability.
+func probeStrictPreviewVersion(ctx context.Context, t PushTarget) (int, error) {
+	cmd, err := remoteProbeCmd(t, "-strict-preview-version")
+	if err != nil {
+		return 0, err
+	}
+	out, err := sshCapture(ctx, t, cmd)
+	if err != nil {
+		return 0, err
+	}
+	line := strings.TrimSpace(out)
+	if line == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(line)
+	if err != nil {
+		return 0, fmt.Errorf("strict-preview probe: %s returned unparseable output %q instead of an integer capability version", cmd, line)
 	}
 	return n, nil
 }
@@ -608,12 +724,21 @@ func probePlanVersion(ctx context.Context, t PushTarget) (int, error) {
 // comparison is a best-effort safety net layered on top of the authoritative
 // plan-schema check.
 func probeReleaseVersion(ctx context.Context, t PushTarget) (string, error) {
-	bin := remoteGonfBin(t)
-	out, err := sshCapture(ctx, t, bin+" -version")
+	cmd, err := remoteProbeCmd(t, "-version")
+	if err != nil {
+		return "", err
+	}
+	out, err := sshCapture(ctx, t, cmd)
 	if err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(out), nil
+}
+
+// remoteProbeCmd builds a version/capability probe in the same privilege
+// context that will run a strict-preview apply chunk.
+func remoteProbeCmd(t PushTarget, args string) (string, error) {
+	return privilege.WrapApplyBinCmd(t.privilegeMode(), t.probeElevated, remoteGonfBin(t), args)
 }
 
 // remoteReleaseIsStale reports whether the remote's own release version

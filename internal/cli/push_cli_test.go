@@ -212,6 +212,32 @@ func TestCLIPushGlobalDryRun(t *testing.T) {
 	}
 }
 
+func TestCLIPushStrictPreview(t *testing.T) {
+	api.ResetTasks()
+	resource.ResetRepository()
+	api.Task("push_preview", "", func() {})
+
+	oldRunner := remote.SSHRunner
+	restoreRuntime := remote.AssumeRemoteGonfCurrent()
+	t.Cleanup(func() {
+		remote.SSHRunner = oldRunner
+		restoreRuntime()
+	})
+	var remoteCmd string
+	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
+		remoteCmd = argv[len(argv)-1]
+		_, _ = io.Copy(io.Discard, stdin)
+		return nil
+	}
+
+	if code := cliPush(context.Background(), []string{"-preview", "host", "push_preview"}); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if remoteCmd != "gonf apply -n -strict-preview -" {
+		t.Fatalf("remote=%q", remoteCmd)
+	}
+}
+
 func TestCLIPushLoneID(t *testing.T) {
 	if code := cliPush(context.Background(), []string{"-id"}); code != 2 {
 		t.Fatalf("exit %d want 2", code)

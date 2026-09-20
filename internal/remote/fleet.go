@@ -41,6 +41,16 @@ func hostTimeoutCtx(fleetCtx context.Context, hostTimeout time.Duration) (contex
 // Each host's push is bounded by hostTimeout (DefaultHostTimeout for library
 // callers, the CLI -host-timeout flag otherwise; <= 0 means unlimited).
 func Fanout(ctx context.Context, name, planID string, ops []plan.Op, mem plan.BlobReader, targets []PushTarget, labels []string, limit int, hostTimeout time.Duration) error {
+	return fanout(ctx, name, planID, ops, mem, targets, labels, limit, hostTimeout, false)
+}
+
+// PreviewFanout is Fanout's strict-preview variant. Each target must already
+// have a compatible gonf runtime; unlike Fanout it never bootstraps it.
+func PreviewFanout(ctx context.Context, name, planID string, ops []plan.Op, mem plan.BlobReader, targets []PushTarget, labels []string, limit int, hostTimeout time.Duration) error {
+	return fanout(ctx, name, planID, ops, mem, targets, labels, limit, hostTimeout, true)
+}
+
+func fanout(ctx context.Context, name, planID string, ops []plan.Op, mem plan.BlobReader, targets []PushTarget, labels []string, limit int, hostTimeout time.Duration, strictPreview bool) error {
 	var (
 		eg       *errgroup.Group
 		egCtx    context.Context
@@ -59,7 +69,12 @@ func Fanout(ctx context.Context, name, planID string, ops []plan.Op, mem plan.Bl
 		eg.Go(func() error {
 			hostCtx, cancel := hostTimeoutCtx(egCtx, hostTimeout)
 			defer cancel()
-			err := PushChunks(hostCtx, targets[i], planID+"-"+labels[i], ops, mem)
+			var err error
+			if strictPreview {
+				err = PreviewChunks(hostCtx, targets[i], planID+"-"+labels[i], ops, mem)
+			} else {
+				err = PushChunks(hostCtx, targets[i], planID+"-"+labels[i], ops, mem)
+			}
 			errMu.Lock()
 			defer errMu.Unlock()
 			if err == nil {
@@ -87,8 +102,12 @@ func Fanout(ctx context.Context, name, planID string, ops []plan.Op, mem plan.Bl
 	// for aborts); Wait's own first error would be redundant.
 	_ = eg.Wait()
 
-	fmt.Fprintf(os.Stderr, "pushed %s (%d ops) to %s (%d/%d hosts)\n",
-		planID, len(ops), name, okCount, len(targets))
+	verb := "pushed"
+	if strictPreview {
+		verb = "previewed"
+	}
+	fmt.Fprintf(os.Stderr, "%s %s (%d ops) to %s (%d/%d hosts)\n",
+		verb, planID, len(ops), name, okCount, len(targets))
 	if len(failed) > 0 {
 		sort.Strings(failed)
 		return fmt.Errorf("cluster %q: %s", name, strings.Join(failed, "; "))

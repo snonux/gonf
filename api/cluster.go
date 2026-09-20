@@ -272,6 +272,17 @@ func PushHost(h HostRef, tasks ...string) error {
 	return PushTo(t, "push-"+h.name, tasks...)
 }
 
+// PreviewHost performs a strict non-mutating remote preview for one host.
+// The host must already have a compatible gonf runtime; no binary bootstrap
+// occurs.
+func PreviewHost(h HostRef, tasks ...string) error {
+	t, err := h.pushTarget()
+	if err != nil {
+		return err
+	}
+	return PreviewTo(t, "preview-"+h.name, tasks...)
+}
+
 // PushCluster records once and fans out the same push payload to every host in
 // the cluster. Thin wrapper: it runs the full-parameter PushClusterRun with the
 // library defaults (no context, no per-run overrides).
@@ -288,7 +299,21 @@ func PushCluster(name string, tasks ...string) error {
 // internal/remote (remote.Fanout); the record-once-then-fan-out plumbing is
 // shared with PushFleetRun via internal/orchestrate.Push.
 func PushClusterRun(ctx context.Context, name, planID string, parallelOverride int, hostTimeout time.Duration, tasks ...string) error {
+	return runCluster(ctx, name, planID, parallelOverride, hostTimeout, false, tasks...)
+}
+
+// PreviewClusterRun records tasks once and performs strict non-mutating
+// remote previews across a cluster. Missing or stale remote gonf binaries
+// fail instead of being installed or updated.
+func PreviewClusterRun(ctx context.Context, name, planID string, parallelOverride int, hostTimeout time.Duration, tasks ...string) error {
+	return runCluster(ctx, name, planID, parallelOverride, hostTimeout, true, tasks...)
+}
+
+func runCluster(ctx context.Context, name, planID string, parallelOverride int, hostTimeout time.Duration, strictPreview bool, tasks ...string) error {
 	if len(tasks) == 0 {
+		if strictPreview {
+			return fmt.Errorf("cluster preview %q: no tasks", name)
+		}
 		return fmt.Errorf("cluster %q: no tasks", name)
 	}
 	rec, ok := inventory.LookupCluster(name)
@@ -301,7 +326,11 @@ func PushClusterRun(ctx context.Context, name, planID string, parallelOverride i
 		limit = parallelOverride
 	}
 	if planID == "" {
-		planID = "cluster-" + name
+		if strictPreview {
+			planID = "preview-cluster-" + name
+		} else {
+			planID = "cluster-" + name
+		}
 	}
 
 	mem := plan.NewMemoryStore()
@@ -309,8 +338,15 @@ func PushClusterRun(ctx context.Context, name, planID string, parallelOverride i
 	if err != nil {
 		return fmt.Errorf("record: %w", err)
 	}
-	if err := RefuseOpaqueOnlyPush(fmt.Sprintf("cluster %q", name)); err != nil {
+	label := fmt.Sprintf("cluster %q", name)
+	if strictPreview {
+		label = fmt.Sprintf("cluster preview %q", name)
+	}
+	if err := RefuseOpaqueOnlyPush(label); err != nil {
 		return err
+	}
+	if strictPreview {
+		return orchestrate.Preview(ctx, name, planID, rec.Hosts, limit, hostTimeout, ops, mem)
 	}
 	return orchestrate.Push(ctx, name, planID, rec.Hosts, limit, hostTimeout, ops, mem)
 }

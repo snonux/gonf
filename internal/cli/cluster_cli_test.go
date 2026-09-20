@@ -45,6 +45,34 @@ func TestCLICluster(t *testing.T) {
 	}
 }
 
+func TestCLIClusterStrictPreview(t *testing.T) {
+	api.ResetInventory()
+	api.ResetTasks()
+	resource.ResetRepository()
+	api.Task("cli_preview_task", "", func() {})
+	api.Cluster("cli_preview", api.Host("cli_preview_host", api.WithSSHHost("preview.example")))
+
+	old := remote.SSHRunner
+	restoreRuntime := remote.AssumeRemoteGonfCurrent()
+	t.Cleanup(func() {
+		remote.SSHRunner = old
+		restoreRuntime()
+	})
+	var remoteCmd string
+	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
+		remoteCmd = argv[len(argv)-1]
+		_, _ = io.Copy(io.Discard, stdin)
+		return nil
+	}
+
+	if code := cliCluster(context.Background(), []string{"-preview", "cli_preview", "cli_preview_task"}); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if remoteCmd != "gonf apply -n -strict-preview -" {
+		t.Fatalf("remote=%q", remoteCmd)
+	}
+}
+
 func TestCLIHostsClusters(t *testing.T) {
 	api.ResetInventory()
 	api.Host("list_h", api.WithSSHUser("u"), api.WithSSHHost("h.example"), api.WithSSHPort(22))

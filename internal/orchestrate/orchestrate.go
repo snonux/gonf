@@ -33,6 +33,17 @@ import (
 // member cluster's host group — see PushFleetRun's doc comment for why
 // parallelism is applied per group instead of once for the whole fleet).
 func Push(ctx context.Context, name, planID string, hostNames []string, limit int, hostTimeout time.Duration, ops []plan.Op, mem plan.BlobReader) error {
+	return deliver(ctx, name, planID, hostNames, limit, hostTimeout, ops, mem, false)
+}
+
+// Preview performs a strict non-mutating remote preview for every host. It
+// shares Push's inventory resolution and fan-out behavior, but remote hosts
+// must already have a compatible gonf runtime: no binary bootstrap occurs.
+func Preview(ctx context.Context, name, planID string, hostNames []string, limit int, hostTimeout time.Duration, ops []plan.Op, mem plan.BlobReader) error {
+	return deliver(ctx, name, planID, hostNames, limit, hostTimeout, ops, mem, true)
+}
+
+func deliver(ctx context.Context, name, planID string, hostNames []string, limit int, hostTimeout time.Duration, ops []plan.Op, mem plan.BlobReader, strictPreview bool) error {
 	targets := make([]remote.PushTarget, 0, len(hostNames))
 	labels := make([]string, 0, len(hostNames))
 	for _, hn := range hostNames {
@@ -42,6 +53,9 @@ func Push(ctx context.Context, name, planID string, hostNames []string, limit in
 		}
 		targets = append(targets, t)
 		labels = append(labels, hn)
+	}
+	if strictPreview {
+		return remote.PreviewFanout(ctx, name, planID, ops, mem, targets, labels, limit, hostTimeout)
 	}
 	return remote.Fanout(ctx, name, planID, ops, mem, targets, labels, limit, hostTimeout)
 }

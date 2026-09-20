@@ -1043,6 +1043,50 @@ func TestEnsureRemoteGonfUpgradesWhenReleaseVersionStale(t *testing.T) {
 	}
 }
 
+// TestEnsureRemoteGonfUpgradesReleasedV014WithoutStrictPreview verifies the
+// ordinary-push recovery path for hosts on the immediately preceding release:
+// they share the plan schema but lack this release's strict-preview support.
+func TestEnsureRemoteGonfUpgradesReleasedV014WithoutStrictPreview(t *testing.T) {
+	oldSSH := SSHRunner
+	oldCapture := sshCaptureExec
+	t.Cleanup(func() {
+		SSHRunner = oldSSH
+		sshCaptureExec = oldCapture
+	})
+	t.Cleanup(func() { removeGonfCrossBuildDirs(t, [2]string{"linux", "amd64"}) })
+
+	SSHRunner = func(context.Context, io.Reader, []string) error { return nil }
+	sshCaptureExec = func(_ context.Context, argv []string) (string, string, error) {
+		if strings.HasPrefix(argv[len(argv)-1], "mktemp -d ") {
+			return "/tmp/gonf-sync.prevw001\n", "", nil
+		}
+		if strings.Contains(argv[len(argv)-1], "-plan-version") {
+			return strconv.Itoa(plan.CurrentVersion) + "\n", "", nil
+		}
+		return "", "", fmt.Errorf("unexpected remote command %q", argv[len(argv)-1])
+	}
+
+	p := NewPusher()
+	p.PlanVersionProber = func(context.Context, PushTarget) (int, error) { return plan.CurrentVersion, nil }
+	p.ReleaseVersionProber = func(context.Context, PushTarget) (string, error) { return "0.14.0", nil }
+	p.GoBuildRunner = func(_ context.Context, _, _, out, _ string) error {
+		return os.WriteFile(out, []byte("fake"), 0o755)
+	}
+	var scpCalls int
+	p.SCPRunner = func(context.Context, string, PushTarget, string) error {
+		scpCalls++
+		return nil
+	}
+
+	installed, err := p.EnsureRemoteGonf(context.Background(), gonfSyncTarget())
+	if err != nil {
+		t.Fatalf("EnsureRemoteGonf() = %v", err)
+	}
+	if installed == "" || scpCalls != 1 {
+		t.Fatalf("installed=%q scpCalls=%d, want ordinary push to install the strict-preview-capable release", installed, scpCalls)
+	}
+}
+
 // TestEnsureRemoteGonfSkipsUpgradeWhenReleaseVersionCurrentAndSchemaCurrent
 // guards the other side of the same check: when neither the plan schema nor
 // the release version is stale, no build/scp should happen at all.

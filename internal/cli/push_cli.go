@@ -17,6 +17,7 @@ func cliPush(ctx context.Context, args []string) int {
 	fs.SetOutput(os.Stderr)
 	dryRun := fs.Bool("dry-run", false, "Remote dry-run (-n on apply)")
 	dryRunShort := fs.Bool("n", false, "Alias for -dry-run")
+	preview := fs.Bool("preview", false, "Strict remote preview: no gonf bootstrap or remote writes")
 	planID := fs.String("id", "push", "plan id written into the header")
 	privFlag := fs.String("privilege", "", "none|sudo|doas for privileged chunks")
 
@@ -30,7 +31,7 @@ func cliPush(ctx context.Context, args []string) int {
 
 	sshOpts, pos := parsePushArgs(rest)
 	if len(pos) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: gonf push [-n|-dry-run] [-id name] [-privilege=sudo|doas|none] [-- ssh-args...] user@host <task> [task...]")
+		fmt.Fprintln(os.Stderr, "usage: gonf push [-n|-dry-run|-preview] [-id name] [-privilege=sudo|doas|none] [-- ssh-args...] user@host <task> [task...]")
 		return 2
 	}
 
@@ -55,7 +56,13 @@ func cliPush(ctx context.Context, args []string) int {
 	// PushToContext (not PushTo): "gonf push" is a CLI entry point with a
 	// signal-derived context, so SIGINT/SIGTERM should tear down an in-flight
 	// single-host push exactly like the fleet fan-out already does.
-	if err := api.PushToContext(ctx, t, *planID, pos[1:]...); err != nil {
+	var err error
+	if *preview {
+		err = api.PreviewToContext(ctx, t, *planID, pos[1:]...)
+	} else {
+		err = api.PushToContext(ctx, t, *planID, pos[1:]...)
+	}
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "push: %v\n", err)
 		return 1
 	}
@@ -76,7 +83,7 @@ func takePushFlags(args []string) (pushFlags, rest []string) {
 		}
 		name, hasVal, _ := splitFlagToken(a)
 		switch name {
-		case "n", "dry-run":
+		case "n", "dry-run", "preview":
 			pushFlags = append(pushFlags, a)
 			i++
 		case "id", "privilege":

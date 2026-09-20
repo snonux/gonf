@@ -156,7 +156,21 @@ func PushFleet(name string, tasks ...string) error {
 // "Fleet parallelism semantics" and TestPushFleetFailureCancelsOtherClusters
 // (api/cluster_test.go).
 func PushFleetRun(ctx context.Context, name, planID string, parallelOverride int, hostTimeout time.Duration, tasks ...string) error {
+	return runFleet(ctx, name, planID, parallelOverride, hostTimeout, false, tasks...)
+}
+
+// PreviewFleetRun records tasks once and performs strict non-mutating remote
+// previews across every host in a fleet. Missing or stale remote gonf
+// binaries fail instead of being installed or updated.
+func PreviewFleetRun(ctx context.Context, name, planID string, parallelOverride int, hostTimeout time.Duration, tasks ...string) error {
+	return runFleet(ctx, name, planID, parallelOverride, hostTimeout, true, tasks...)
+}
+
+func runFleet(ctx context.Context, name, planID string, parallelOverride int, hostTimeout time.Duration, strictPreview bool, tasks ...string) error {
 	if len(tasks) == 0 {
+		if strictPreview {
+			return fmt.Errorf("fleet preview %q: no tasks", name)
+		}
 		return fmt.Errorf("fleet %q: no tasks", name)
 	}
 	entries, err := inventory.CollectFleetHosts(name)
@@ -165,7 +179,11 @@ func PushFleetRun(ctx context.Context, name, planID string, parallelOverride int
 	}
 
 	if planID == "" {
-		planID = "fleet-" + name
+		if strictPreview {
+			planID = "preview-fleet-" + name
+		} else {
+			planID = "fleet-" + name
+		}
 	}
 	groups := inventory.GroupFleetHostsByCluster(entries)
 
@@ -174,7 +192,11 @@ func PushFleetRun(ctx context.Context, name, planID string, parallelOverride int
 	if err != nil {
 		return fmt.Errorf("record: %w", err)
 	}
-	if err := RefuseOpaqueOnlyPush(fmt.Sprintf("fleet %q", name)); err != nil {
+	label := fmt.Sprintf("fleet %q", name)
+	if strictPreview {
+		label = fmt.Sprintf("fleet preview %q", name)
+	}
+	if err := RefuseOpaqueOnlyPush(label); err != nil {
 		return err
 	}
 
@@ -201,7 +223,13 @@ func PushFleetRun(ctx context.Context, name, planID string, parallelOverride int
 		wg.Add(1)
 		go func(g inventory.FleetHostGroup, limit int) {
 			defer wg.Done()
-			if err := orchestrate.Push(fleetCtx, g.Cluster.Name, planID, g.HostNames, limit, hostTimeout, ops, mem); err != nil {
+			var err error
+			if strictPreview {
+				err = orchestrate.Preview(fleetCtx, g.Cluster.Name, planID, g.HostNames, limit, hostTimeout, ops, mem)
+			} else {
+				err = orchestrate.Push(fleetCtx, g.Cluster.Name, planID, g.HostNames, limit, hostTimeout, ops, mem)
+			}
+			if err != nil {
 				errMu.Lock()
 				errs = append(errs, err.Error())
 				errMu.Unlock()

@@ -88,6 +88,13 @@ type PushTarget struct {
 	// GonfPath is the remote install path for synced binaries (default
 	// /usr/local/bin/gonf).
 	GonfPath string
+
+	// probeElevated is internal-only state used while strict preview verifies
+	// the exact privilege context that will run an apply chunk. A sudo/doas
+	// secure_path can resolve a different gonf binary from the SSH login's
+	// PATH, so probing only the login command would not establish the applied
+	// binary's capabilities.
+	probeElevated bool
 }
 
 // Destination returns the user@host (or bare host) this target connects to.
@@ -134,7 +141,7 @@ func PushPayloadContext(ctx context.Context, t PushTarget, payload []byte, eleva
 	if t.Host == "" {
 		return fmt.Errorf("push: empty host")
 	}
-	remote, err := remoteApplyCmd(elevate, t, applyDir)
+	remote, err := remoteApplyCmd(elevate, t, applyDir, false)
 	if err != nil {
 		return err
 	}
@@ -169,11 +176,31 @@ func PushPayloadContext(ctx context.Context, t PushTarget, payload []byte, eleva
 // an interrupted prior run; the remote side guarantees a clean extraction
 // target either way.
 func PushChunks(ctx context.Context, t PushTarget, planID string, ops []plan.Op, mem plan.BlobReader) error {
+	return pushChunks(ctx, t, planID, ops, mem, false)
+}
+
+// PreviewChunks performs a strict remote preview. It verifies that the
+// target already has a gonf binary compatible with the controller, then
+// streams the plan to remote "gonf apply -n -strict-preview -". Unlike
+// PushChunks it never builds, copies, or installs gonf. Blob-backed plans
+// are refused because receiving blobs requires remote staging writes.
+//
+// This is deliberately separate from PushChunks with resource.DryRun set:
+// established "push -n" flows retain their compatibility behavior, which
+// may bootstrap gonf before doing a dry-run apply.
+func PreviewChunks(ctx context.Context, t PushTarget, planID string, ops []plan.Op, mem plan.BlobReader) error {
+	return pushChunks(ctx, t, planID, ops, mem, true)
+}
+
+func pushChunks(ctx context.Context, t PushTarget, planID string, ops []plan.Op, mem plan.BlobReader, strictPreview bool) error {
 	chunks := plan.SplitPrivilegeChunks(ops)
 	if err := validateChunkDeps(chunks); err != nil {
 		return err
 	}
 	hasBlobs := mem != nil && mem.HasBlobs()
+	if strictPreview && hasBlobs {
+		return fmt.Errorf("remote preview: plan %q has blobs; strict preview does not stage remote data, use push -n for the compatible dry-run path", planID)
+	}
 	// Sticky dir for multi-chunk plans with blobs: uploaded once, referenced
 	// read-only by every chunk. A concrete remote path; the ID is sanitized.
 	sticky := ""
@@ -184,21 +211,27 @@ func PushChunks(ctx context.Context, t PushTarget, planID string, ops []plan.Op,
 	// Pre-flight: build every remote apply command before any SSH traffic so
 	// a privilege misconfiguration (e.g. -privilege=none with an elevated
 	// chunk) fails the push before syncing gonf or sending any chunk.
-	remotes, err := buildRemoteCmds(chunks, t, sticky)
+	remotes, err := buildRemoteCmds(chunks, t, sticky, strictPreview)
 	if err != nil {
 		return err
 	}
 
-	installed, err := EnsureRemoteGonf(ctx, t)
-	if err != nil {
-		return err
-	}
-	if installed != "" && t.GonfPath == "" {
-		t.GonfPath = installed
-		// Rebuild remotes so apply uses the freshly installed binary path.
-		remotes, err = buildRemoteCmds(chunks, t, sticky)
+	if strictPreview {
+		if err := requireRemoteGonfForChunks(ctx, t, chunks); err != nil {
+			return err
+		}
+	} else {
+		installed, err := EnsureRemoteGonf(ctx, t)
 		if err != nil {
 			return err
+		}
+		if installed != "" && t.GonfPath == "" {
+			t.GonfPath = installed
+			// Rebuild remotes so apply uses the freshly installed binary path.
+			remotes, err = buildRemoteCmds(chunks, t, sticky, false)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -217,18 +250,45 @@ func PushChunks(ctx context.Context, t PushTarget, planID string, ops []plan.Op,
 	return nil
 }
 
+// requireRemoteGonfForChunks verifies every privilege context that will run a
+// strict-preview apply. The same path can resolve to different binaries for
+// the SSH user and sudo/doas, so mixed plans require both probes.
+func requireRemoteGonfForChunks(ctx context.Context, t PushTarget, chunks []plan.Chunk) error {
+	var needUnprivileged, needElevated bool
+	for _, chunk := range chunks {
+		if chunk.Elevate {
+			needElevated = true
+		} else {
+			needUnprivileged = true
+		}
+	}
+	if needUnprivileged {
+		if err := RequireRemoteGonf(ctx, t); err != nil {
+			return err
+		}
+	}
+	if needElevated {
+		elevatedTarget := t
+		elevatedTarget.probeElevated = true
+		if err := RequireRemoteGonf(ctx, elevatedTarget); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // buildRemoteCmds builds the remote apply command for every chunk, in order.
 // Called once up front (pre-flight, before any SSH traffic) and again after
 // EnsureRemoteGonf if it installed a fresh binary at a new path, so both
 // passes share one implementation instead of drifting apart.
-func buildRemoteCmds(chunks []plan.Chunk, t PushTarget, sticky string) ([]string, error) {
+func buildRemoteCmds(chunks []plan.Chunk, t PushTarget, sticky string, strictPreview bool) ([]string, error) {
 	remotes := make([]string, len(chunks))
 	for i, ch := range chunks {
 		applyDir := ""
 		if sticky != "" {
 			applyDir = sticky
 		}
-		remote, err := remoteApplyCmd(ch.Elevate, t, applyDir)
+		remote, err := remoteApplyCmd(ch.Elevate, t, applyDir, strictPreview)
 		if err != nil {
 			return nil, fmt.Errorf("chunk %d: %w", i, err)
 		}
@@ -294,10 +354,13 @@ func streamChunks(ctx context.Context, t PushTarget, chunks []plan.Chunk, remote
 }
 
 // remoteApplyCmd builds the remote shell command for one apply session.
-func remoteApplyCmd(elevate bool, t PushTarget, applyDir string) (string, error) {
+func remoteApplyCmd(elevate bool, t PushTarget, applyDir string, strictPreview bool) (string, error) {
 	stdinArg := "-"
-	if resource.DryRun() {
+	if resource.DryRun() || strictPreview {
 		stdinArg = "-n -"
+	}
+	if strictPreview {
+		stdinArg = "-n -strict-preview -"
 	}
 	args := "apply " + stdinArg
 	if applyDir != "" {
@@ -352,7 +415,7 @@ func pushBlobs(ctx context.Context, t PushTarget, header plan.Op, mem plan.BlobR
 	if err := plan.EncodePush(&buf, []plan.Op{header}, mem); err != nil {
 		return fmt.Errorf("encode blobs: %w", err)
 	}
-	remote, err := remoteApplyCmd(false, t, applyDir)
+	remote, err := remoteApplyCmd(false, t, applyDir, false)
 	if err != nil {
 		return err
 	}

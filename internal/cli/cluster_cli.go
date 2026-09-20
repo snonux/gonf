@@ -68,12 +68,13 @@ func cliFleets() int {
 // shared parser; cliCluster/cliFleet used to each carry their own
 // near-identical copy of it, including the plan-ID-default calculation.
 type pushFlags struct {
-	dryRun      bool
-	planID      string
-	jobs        int
-	hostTimeout time.Duration
-	name        string
-	tasks       []string
+	dryRun        bool
+	strictPreview bool
+	planID        string
+	jobs          int
+	hostTimeout   time.Duration
+	name          string
+	tasks         []string
 }
 
 // parsePushFlags parses the `gonf cluster`/`gonf fleet` flag set. kind is
@@ -85,6 +86,7 @@ func parsePushFlags(kind string, args []string) (pf pushFlags, exitCode int, ok 
 	fs.SetOutput(os.Stderr)
 	dryRun := fs.Bool("dry-run", false, "Remote dry-run (-n on apply)")
 	dryRunShort := fs.Bool("n", false, "Alias for -dry-run")
+	preview := fs.Bool("preview", false, "Strict remote preview: no gonf bootstrap or remote writes")
 	planID := fs.String("id", "", fmt.Sprintf("plan id written into the header (default %s-<name>)", kind))
 	jobs := fs.Int("j", 0, fmt.Sprintf("override %s fan-out parallelism for this run", kind))
 	hostTimeout := fs.Duration("host-timeout", remote.DefaultHostTimeout, "per-host push timeout (all chunks; 0 = unlimited)")
@@ -93,7 +95,7 @@ func parsePushFlags(kind string, args []string) (pf pushFlags, exitCode int, ok 
 	}
 	pos := fs.Args()
 	if len(pos) < 2 {
-		fmt.Fprintf(os.Stderr, "usage: gonf %s [-n|-dry-run] [-j N] [-id name] [-host-timeout 10m] <%s> <task> [task...]\n", kind, kind)
+		fmt.Fprintf(os.Stderr, "usage: gonf %s [-n|-dry-run|-preview] [-j N] [-id name] [-host-timeout 10m] <%s> <task> [task...]\n", kind, kind)
 		return pushFlags{}, 2, false
 	}
 	name := pos[0]
@@ -102,12 +104,13 @@ func parsePushFlags(kind string, args []string) (pf pushFlags, exitCode int, ok 
 		id = kind + "-" + name
 	}
 	return pushFlags{
-		dryRun:      *dryRun || *dryRunShort,
-		planID:      id,
-		jobs:        *jobs,
-		hostTimeout: *hostTimeout,
-		name:        name,
-		tasks:       pos[1:],
+		dryRun:        *dryRun || *dryRunShort,
+		strictPreview: *preview,
+		planID:        id,
+		jobs:          *jobs,
+		hostTimeout:   *hostTimeout,
+		name:          name,
+		tasks:         pos[1:],
 	}, 0, true
 }
 
@@ -122,7 +125,13 @@ func cliFleet(ctx context.Context, args []string) int {
 	if pf.dryRun {
 		resource.SetDryRun(true)
 	}
-	if err := api.PushFleetRun(ctx, pf.name, pf.planID, pf.jobs, pf.hostTimeout, pf.tasks...); err != nil {
+	var err error
+	if pf.strictPreview {
+		err = api.PreviewFleetRun(ctx, pf.name, pf.planID, pf.jobs, pf.hostTimeout, pf.tasks...)
+	} else {
+		err = api.PushFleetRun(ctx, pf.name, pf.planID, pf.jobs, pf.hostTimeout, pf.tasks...)
+	}
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "fleet: %v\n", err)
 		return 1
 	}
@@ -138,7 +147,13 @@ func cliCluster(ctx context.Context, args []string) int {
 	if pf.dryRun {
 		resource.SetDryRun(true)
 	}
-	if err := api.PushClusterRun(ctx, pf.name, pf.planID, pf.jobs, pf.hostTimeout, pf.tasks...); err != nil {
+	var err error
+	if pf.strictPreview {
+		err = api.PreviewClusterRun(ctx, pf.name, pf.planID, pf.jobs, pf.hostTimeout, pf.tasks...)
+	} else {
+		err = api.PushClusterRun(ctx, pf.name, pf.planID, pf.jobs, pf.hostTimeout, pf.tasks...)
+	}
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "cluster: %v\n", err)
 		return 1
 	}

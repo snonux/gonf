@@ -60,7 +60,30 @@ func PushTo(t PushTarget, planID string, tasks ...string) error {
 // CLI's SIGINT/SIGTERM context) kills the in-flight ssh push. When ctx has no
 // deadline of its own, remote.DefaultHostTimeout is applied.
 func PushToContext(ctx context.Context, t PushTarget, planID string, tasks ...string) error {
+	return recordAndPush(ctx, t, planID, false, tasks...)
+}
+
+// PreviewTo records tasks and performs a strict non-mutating remote preview.
+// The remote host must already have a gonf release and plan schema at least as
+// new as the controller; PreviewTo never installs or updates it. Existing
+// PushTo callers retain the compatibility behavior that bootstraps gonf when
+// needed, including when resource dry-run is enabled.
+func PreviewTo(t PushTarget, planID string, tasks ...string) error {
+	return PreviewToContext(context.Background(), t, planID, tasks...)
+}
+
+// PreviewToContext is PreviewTo bounded and cancelable by ctx. It invokes the
+// remote strict-preview apply mode, which rejects blob-backed plans instead
+// of staging remote data and runs resource probes under dry-run semantics.
+func PreviewToContext(ctx context.Context, t PushTarget, planID string, tasks ...string) error {
+	return recordAndPush(ctx, t, planID, true, tasks...)
+}
+
+func recordAndPush(ctx context.Context, t PushTarget, planID string, strictPreview bool, tasks ...string) error {
 	if len(tasks) == 0 {
+		if strictPreview {
+			return fmt.Errorf("remote preview: no tasks")
+		}
 		return fmt.Errorf("push: no tasks")
 	}
 	if planID == "" {
@@ -71,7 +94,11 @@ func PushToContext(ctx context.Context, t PushTarget, planID string, tasks ...st
 	if err != nil {
 		return fmt.Errorf("record: %w", err)
 	}
-	if err := RefuseOpaqueOnlyPush("push"); err != nil {
+	label := "push"
+	if strictPreview {
+		label = "remote preview"
+	}
+	if err := RefuseOpaqueOnlyPush(label); err != nil {
 		return err
 	}
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
@@ -79,9 +106,19 @@ func PushToContext(ctx context.Context, t PushTarget, planID string, tasks ...st
 		ctx, cancel = context.WithTimeout(ctx, remote.DefaultHostTimeout)
 		defer cancel()
 	}
-	if err := remote.PushChunks(ctx, t, planID, ops, mem); err != nil {
-		return err
+	var pushErr error
+	if strictPreview {
+		pushErr = remote.PreviewChunks(ctx, t, planID, ops, mem)
+	} else {
+		pushErr = remote.PushChunks(ctx, t, planID, ops, mem)
 	}
-	fmt.Fprintf(os.Stderr, "pushed %s (%d ops) to %s\n", planID, len(ops), t.Destination())
+	if pushErr != nil {
+		return pushErr
+	}
+	if strictPreview {
+		fmt.Fprintf(os.Stderr, "previewed %s (%d ops) on %s\n", planID, len(ops), t.Destination())
+	} else {
+		fmt.Fprintf(os.Stderr, "pushed %s (%d ops) to %s\n", planID, len(ops), t.Destination())
+	}
 	return nil
 }
