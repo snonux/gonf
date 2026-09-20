@@ -33,7 +33,7 @@ func applyOpenBSD(p *Package) error {
 		logger.Info("pkg_delete %v", args)
 		resource.NoteResult(id, true)
 		return nil
-	case p.latest:
+	case p.latest && installed:
 		args = []string{"-u", p.name}
 	case installed:
 		resource.NoteResult(id, false)

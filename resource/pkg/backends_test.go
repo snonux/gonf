@@ -346,9 +346,9 @@ func TestApplyOpenBSDFake(t *testing.T) {
 			wantNote:  resource.StatusChanged,
 		},
 		{
-			name:     "latest upgrades when not installed",
+			name:     "latest installs when not installed",
 			pkg:      withLatest(Package{name: "rsync"}),
-			wantRun:  []string{"pkg_add", "-u", "rsync"},
+			wantRun:  []string{"pkg_add", "rsync"},
 			wantNote: resource.StatusChanged,
 		},
 		{

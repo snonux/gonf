@@ -31,7 +31,7 @@ func TestPackageWithEnvReachesEveryBackendProbeAndAction(t *testing.T) {
 	}{
 		{"dnf install", applyDNF, false, []string{"dnf", "install", "-y", "dtail"}},
 		{"openbsd PKG_PATH install", applyOpenBSD, false, []string{"pkg_add", "dtail"}},
-		{"openbsd PKG_PATH upgrade", applyOpenBSD, true, []string{"pkg_add", "-u", "dtail"}},
+		{"openbsd PKG_PATH latest installs when absent", applyOpenBSD, true, []string{"pkg_add", "dtail"}},
 		{"freebsd install", applyFreeBSDPkg, false, []string{"pkg", "install", "-y", "dtail"}},
 		{"netbsd install", applyNetBSD, false, []string{netbsdPkgin, "-y", "install", "dtail"}},
 	}
