@@ -177,33 +177,38 @@ be a serial source, so clock changes and repeated rendering cannot move it.
 
 For the no-change decision, the wrapper will parse both the candidate and the
 committed master file as a single zone and require exactly one apex SOA in each.
-It will expand `$ORIGIN`, relative owner names, and relative domain-name RDATA;
-resolve inherited TTLs; discard comments and directives; lower-case DNS names;
-and encode each RR as its canonical DNS owner, type, class, effective TTL, and
-canonical RDATA wire form. It will sort those encodings lexicographically and
-compare the resulting RR multisets, after replacing only the apex SOA serial
-with an omitted value. Thus comments, whitespace, directives, record order, and
-the serial itself will not cause publication; every other RR value, including
-the SOA MNAME, RNAME, refresh, retry, expire, and minimum fields, will. Parse
-failure, an origin mismatch, or an invalid candidate will be a hard failure,
-not a comparison that can be treated as changed or unchanged.
+It will expand `$ORIGIN`, relative owner names, and inherited TTLs; discard
+comments and directives; encode the parsed RRs as DNS wire data; sort the
+encodings lexicographically; and compare the resulting RR multisets after
+replacing only the apex SOA serial with an omitted value. It intentionally does
+not attempt a partial case-fold of domain-name RDATA: DNS has many record forms
+and an incomplete canonicalizer could misclassify opaque text as a name and
+hide a real change. Controller templates must keep owner and RDATA spelling
+stable; a spelling-only case change conservatively causes publication. Comments,
+whitespace, directives, record order, and the serial itself will not cause
+publication; every other parsed RR value, including the SOA MNAME, RNAME,
+refresh, retry, expire, and minimum fields, will. Parse failure, an origin
+mismatch, or an invalid candidate will be a hard failure, not a comparison that
+can be treated as changed or unchanged.
 
 On canonical equality, the wrapper will publish nothing: no serial advance,
 zone write, state write, or NSD reload. On a difference, it will assign one
 successor serial to every changed zone before staging validation.
 
-Validation, replacement, reload, and serial/state persistence will form one
-success condition. The wrapper will validate staged files before any live
-replacement, journal the complete preimage and intended state before making the
-first replacement, and only mark the new role and serial state committed after
-the complete zone set is installed and NSD reload succeeds. If validation,
-replacement, state persistence, or reload fails, it will restore the saved zone
-set and state, attempt an NSD reload of that restored set, and return a hard
-failure. The wrapper will complete recovery from its journal before accepting a
-later publication. Multiple zone-file replacements are not filesystem-atomic;
-the journal and recovery rule define the required atomic state-and-zone outcome
-while the publisher lock is held. A failed reload with an unsuccessful rollback
-will be a visible degraded state, never a successful publication.
+Validation, replacement, reload, and state persistence will form one success
+condition. The wrapper will stage every zone, key, and configuration file before
+any live replacement; build the complete preimage in a temporary journal; then
+atomically publish that snapshot and its incomplete intent before the first
+replacement. It writes the new state inside that rollback boundary and removes
+the intent only after NSD reload succeeds. If validation, replacement, state
+persistence, or reload fails, it will restore the saved zones, key,
+configuration, and state, attempt an NSD reload of that restored set, and
+return a hard failure. The wrapper will recover an intent-marked journal before
+accepting later publication. Multiple zone-file replacements are not
+filesystem-atomic; the journal and recovery rule define the required atomic
+state-and-zone outcome while the publisher lock is held. A failed reload with
+an unsuccessful rollback will be a visible degraded state, never a successful
+publication.
 
 The wrapper will need record/codec/apply coverage for repeat apply, changed
 input, active failover, clock changes, serial wrap, lock contention, invalid or

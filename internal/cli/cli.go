@@ -17,6 +17,7 @@ import (
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
+	"github.com/snonux/gonf/resource/dnszone"
 )
 
 // cliOptions contains the process-wide flags consumed by CLI.
@@ -156,6 +157,10 @@ func runCLI(ctx context.Context, options cliOptions) int {
 	}
 
 	switch names[0] {
+	case "dns-zone-equivalent":
+		return cliDNSZoneEquivalent(names[1:])
+	case "dns-zone-serial":
+		return cliDNSZoneSerial(names[1:])
 	case "plan":
 		return cliPlan(names[1:])
 	case "apply":
@@ -182,6 +187,51 @@ func runCLI(ctx context.Context, options cliOptions) int {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
+	return 0
+}
+
+func cliDNSZoneEquivalent(args []string) int {
+	if len(args) != 3 {
+		fmt.Fprintln(os.Stderr, "usage: gonf dns-zone-equivalent <origin> <candidate.zone> <committed.zone>")
+		return 2
+	}
+	candidate, err := os.ReadFile(args[1])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "dns-zone-equivalent: read candidate: %v\n", err)
+		return 2
+	}
+	committed, err := os.ReadFile(args[2])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "dns-zone-equivalent: read committed: %v\n", err)
+		return 2
+	}
+	equal, err := dnszone.Equivalent(candidate, committed, args[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "dns-zone-equivalent: %v\n", err)
+		return 2
+	}
+	if equal {
+		return 0
+	}
+	return 1
+}
+
+func cliDNSZoneSerial(args []string) int {
+	if len(args) != 2 {
+		fmt.Fprintln(os.Stderr, "usage: gonf dns-zone-serial <origin> <zone>")
+		return 2
+	}
+	zone, err := os.ReadFile(args[1])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "dns-zone-serial: read zone: %v\n", err)
+		return 2
+	}
+	serial, err := dnszone.Serial(zone, args[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "dns-zone-serial: %v\n", err)
+		return 2
+	}
+	fmt.Println(serial)
 	return 0
 }
 

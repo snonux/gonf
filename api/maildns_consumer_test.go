@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"testing"
 
@@ -46,6 +45,7 @@ func TestConsumerMailDNSNSDPlan(t *testing.T) {
 	if err := mod.Close(); err != nil {
 		t.Fatalf("close copied go.mod: %v", err)
 	}
+	tidyConsumerModule(t, consumer)
 
 	planDir := filepath.Join(t.TempDir(), "plan")
 	cmd := exec.Command("go", "run", "./cmd/gonf", "plan", "-o", planDir, "frontends_nsd")
@@ -65,56 +65,149 @@ func TestConsumerMailDNSNSDPlan(t *testing.T) {
 		t.Fatalf("decode recorded plan: %v", err)
 	}
 
-	const validatorID = "Command[validate-nsd-config]"
-	const candidateKeyID = "File[/var/nsd/etc/gonf-validate/key.conf]"
-	const candidateConfigID = "File[/var/nsd/etc/gonf-validate/nsd.conf]"
-	candidateKey := consumerPlanOp(t, ops, plan.KindFile, candidateKeyID)
-	candidateConfig := consumerPlanOp(t, ops, plan.KindFile, candidateConfigID)
-	validator := consumerPlanOp(t, ops, plan.KindCommand, validatorID)
-	if validator.Bin != "nsd-checkconf" || !slices.Equal(validator.Args, []string{"/var/nsd/etc/gonf-validate/nsd.conf"}) {
-		t.Fatalf("NSD config validator = %#v", validator)
+	publisher := consumerPlanOp(t, ops, plan.KindCommand, "Command[publish-nsd-zones]")
+	if publisher.Bin != "/usr/local/bin/dns-publish.ksh" || publisher.IfChanged {
+		t.Fatalf("DNS publisher command = %#v", publisher)
 	}
-	for _, id := range []string{candidateKey.ID, candidateConfig.ID} {
-		if !slices.Contains(validator.Deps, id) {
-			t.Errorf("NSD config validator dependencies = %v, want %s", validator.Deps, id)
-		}
+	publisherScript := consumerPlanOp(t, ops, plan.KindFile, "File[/usr/local/bin/dns-publish.ksh]")
+	if !contains(publisher.Deps, publisherScript.ID) {
+		t.Errorf("publisher dependencies = %v, want installed publisher %s", publisher.Deps, publisherScript.ID)
 	}
-	zoneChecks := 0
-	for _, op := range ops {
-		if op.Op != plan.KindCommand || !strings.HasPrefix(op.ID, "Command[validate-nsd-zone-") {
-			continue
-		}
-		zoneChecks++
-		if !slices.Contains(validator.Deps, op.ID) {
-			t.Errorf("NSD config validator dependencies = %v, want %s", validator.Deps, op.ID)
-		}
-	}
-	if zoneChecks == 0 {
-		t.Fatal("frontend NSD plan did not validate any candidate zones")
+	stagedKey := consumerPlanOp(t, ops, plan.KindFile, "File[/var/nsd/etc/gonf-publisher/key.conf]")
+	if !contains(publisher.Deps, stagedKey.ID) {
+		t.Errorf("publisher dependencies = %v, want staged key %s", publisher.Deps, stagedKey.ID)
 	}
 
-	candidateContent, err := plan.DecodeContentB64(candidateConfig.ContentB64)
+	inputs := 0
+	for _, op := range ops {
+		if op.Op != plan.KindFile || !strings.HasPrefix(op.Path, "/var/nsd/etc/gonf-publisher/") {
+			continue
+		}
+		inputs++
+		if !contains(publisher.Deps, op.ID) && !strings.HasSuffix(op.Path, ".zone.tpl") {
+			t.Errorf("publisher dependencies = %v, want %s", publisher.Deps, op.ID)
+		}
+	}
+	if inputs == 0 {
+		t.Fatal("frontend NSD plan did not contain immutable publisher inputs")
+	}
+
+	publisherConfig := consumerPlanOp(t, ops, plan.KindFile, "File[/var/nsd/etc/gonf-publisher/publisher.conf]")
+	publisherContent, err := plan.DecodeContentB64(publisherConfig.ContentB64)
 	if err != nil {
-		t.Fatalf("decode candidate NSD config: %v", err)
+		t.Fatalf("decode publisher config: %v", err)
 	}
-	const directives = "server:\n\thide-version: yes\n\tverbosity: 1\n\tdatabase: \"\" # disable database\n\tdebug-mode: no\n\nremote-control:\n\tcontrol-enable: yes\n\tcontrol-interface: /var/run/nsd.sock\n"
-	if !strings.Contains(string(candidateContent), directives) || strings.Contains(string(candidateContent), `\t`) {
-		t.Fatalf("candidate NSD directives are malformed: %q", candidateContent)
+	zoneTemplate := consumerPlanOp(t, ops, plan.KindFile, "File[/var/nsd/etc/gonf-publisher/zones/buetow.org.zone.tpl]")
+	zoneContent, err := plan.DecodeContentB64(zoneTemplate.ContentB64)
+	if err != nil {
+		t.Fatalf("decode zone template: %v", err)
+	}
+	if !strings.Contains(string(zoneContent), "@SERIAL@") ||
+		!strings.Contains(string(zoneContent), "SOA  blowfish.buetow.org.") ||
+		strings.Contains(string(zoneContent), "<%= time() %>") {
+		t.Fatalf("publisher zone template lost stable serial/MNAME policy: %q", zoneContent)
+	}
+	if !strings.Contains(string(publisherContent), `DEFAULT_ROLE="fishfinger"`) ||
+		!strings.Contains(string(publisherContent), `PUBLISHER_FQDN="blowfish.buetow.org"`) ||
+		!strings.Contains(string(publisherContent), `REMOVED_ZONES=""`) {
+		t.Fatalf("publisher config lost stable role or identity: %q", publisherContent)
 	}
 
-	liveResources := 0
 	for _, op := range ops {
-		if op.Op != plan.KindFile || !strings.HasPrefix(op.Path, "/var/nsd/") ||
-			strings.Contains(op.Path, "/gonf-validate/") {
-			continue
-		}
-		liveResources++
-		if !slices.Contains(op.Deps, validatorID) {
-			t.Errorf("live NSD resource %s dependencies = %v, want %s", op.ID, op.Deps, validatorID)
+		if op.Op == plan.KindFile && strings.HasPrefix(op.Path, "/var/nsd/zones/master/") {
+			t.Fatalf("ordinary Gonf plan directly writes effective zone %q", op.Path)
 		}
 	}
-	if liveResources == 0 {
-		t.Fatal("frontend NSD plan did not contain live NSD resources")
+}
+
+func TestConsumerDNSFailoverPlanUsesSolePublisher(t *testing.T) {
+	consumerSource := consumerGonfSource(t)
+	consumer := filepath.Join(t.TempDir(), "consumer")
+	if err := copyConsumerSource(consumer, consumerSource); err != nil {
+		t.Fatalf("copy consumer source: %v", err)
+	}
+
+	gonfRoot := filepath.Dir(filepath.Dir(sourceFile(t)))
+	goMod := filepath.Join(consumer, "go.mod")
+	mod, err := os.OpenFile(goMod, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open copied go.mod: %v", err)
+	}
+	if _, err := fmt.Fprintf(mod, "\nreplace github.com/snonux/gonf => %s\n", gonfRoot); err != nil {
+		_ = mod.Close()
+		t.Fatalf("point consumer at this checkout: %v", err)
+	}
+	if err := mod.Close(); err != nil {
+		t.Fatalf("close copied go.mod: %v", err)
+	}
+	tidyConsumerModule(t, consumer)
+
+	planDir := filepath.Join(t.TempDir(), "plan")
+	cmd := exec.Command("go", "run", "./cmd/gonf", "plan", "-o", planDir, "frontends_dns_failover")
+	cmd.Dir = consumer
+	cmd.Env = append(withoutEnv(os.Environ(), "GOWORK"), "GOWORK=off")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("record frontend DNS failover plan: %v\n%s", err, output)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(planDir, "plan.jsonl"))
+	if err != nil {
+		t.Fatalf("read recorded plan: %v", err)
+	}
+	ops, err := plan.DecodePlanBytes(raw)
+	if err != nil {
+		t.Fatalf("decode recorded plan: %v", err)
+	}
+	publisher := consumerPlanOp(t, ops, plan.KindFile, "File[/usr/local/bin/dns-publish.ksh]")
+	publisherContent, err := plan.DecodeContentB64(publisher.ContentB64)
+	if err != nil {
+		t.Fatalf("decode publisher script: %v", err)
+	}
+	if !strings.Contains(string(publisherContent), "acquire_lock") ||
+		!strings.Contains(string(publisherContent), "ps -o lstart=") ||
+		!strings.Contains(string(publisherContent), "token=$LOCK_TOKEN") ||
+		!strings.Contains(string(publisherContent), "lock_is_ours || return 0") ||
+		!strings.Contains(string(publisherContent), "mv \"$LOCK\" \"$stale_lock\"") ||
+		!strings.Contains(string(publisherContent), "incomplete or unverifiable; refusing recovery") ||
+		!strings.Contains(string(publisherContent), "create_journal()") ||
+		!strings.Contains(string(publisherContent), "snapshot_file \"$LIVE_KEY\"") ||
+		!strings.Contains(string(publisherContent), "render_candidate_config") ||
+		!strings.Contains(string(publisherContent), "dns-zone-serial") ||
+		!strings.Contains(string(publisherContent), "REMOVED_ZONES") ||
+		!strings.Contains(string(publisherContent), "rm -f \"$JOURNAL/incomplete\"") {
+		t.Fatalf("publisher script lacks transaction boundary: %q", publisherContent)
+	}
+	failover := consumerPlanOp(t, ops, plan.KindFile, "File[/usr/local/bin/dns-failover.ksh]")
+	failoverContent, err := plan.DecodeContentB64(failover.ContentB64)
+	if err != nil {
+		t.Fatalf("decode failover script: %v", err)
+	}
+	if !strings.Contains(string(failoverContent), "exec \"$PUBLISH\" -r \"$desired\"") ||
+		!strings.Contains(string(failoverContent), "readonly DOMAIN=buetow.org") ||
+		!strings.Contains(string(failoverContent), "fqdn=$2.$DOMAIN") ||
+		!strings.Contains(string(failoverContent), "https://$fqdn/index.txt") ||
+		!strings.Contains(string(failoverContent), "print fishfinger") ||
+		strings.Contains(string(failoverContent), "ZONES_DIR") || strings.Contains(string(failoverContent), "date +%U") {
+		t.Fatalf("failover script remains a direct or wall-clock writer: %q", failoverContent)
+	}
+}
+
+func contains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func tidyConsumerModule(t *testing.T, consumer string) {
+	t.Helper()
+	cmd := exec.Command("go", "mod", "tidy")
+	cmd.Dir = consumer
+	cmd.Env = append(withoutEnv(os.Environ(), "GOWORK"), "GOWORK=off")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("tidy copied consumer module: %v\n%s", err, output)
 	}
 }
 
