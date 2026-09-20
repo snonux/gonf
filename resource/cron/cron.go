@@ -20,6 +20,7 @@ type Cron struct {
 	embed.Absence
 	name     string
 	user     string
+	legacy   string
 	command  string
 	minute   string
 	hour     string
@@ -29,28 +30,30 @@ type Cron struct {
 	env      []string
 }
 
-func (c *Cron) SetCronUser(u string)  { c.user = u }
-func (c *Cron) SetCommand(cmd string) { c.command = cmd }
-func (c *Cron) SetMinute(v string)    { c.minute = v }
-func (c *Cron) SetHour(v string)      { c.hour = v }
-func (c *Cron) SetMonthday(v string)  { c.monthday = v }
-func (c *Cron) SetMonth(v string)     { c.month = v }
-func (c *Cron) SetWeekday(v string)   { c.weekday = v }
+func (c *Cron) SetCronUser(u string)        { c.user = u }
+func (c *Cron) SetLegacyCommand(cmd string) { c.legacy = cmd }
+func (c *Cron) SetCommand(cmd string)       { c.command = cmd }
+func (c *Cron) SetMinute(v string)          { c.minute = v }
+func (c *Cron) SetHour(v string)            { c.hour = v }
+func (c *Cron) SetMonthday(v string)        { c.monthday = v }
+func (c *Cron) SetMonth(v string)           { c.month = v }
+func (c *Cron) SetWeekday(v string)         { c.weekday = v }
 
 // AddCronEnv appends a KEY=VAL environment line above the cron job.
 func (c *Cron) AddCronEnv(kv string) { c.env = append(c.env, kv) }
 
 var (
-	_ opt.Absentable   = (*Cron)(nil)
-	_ opt.Dependable   = (*Cron)(nil)
-	_ opt.CronUserable = (*Cron)(nil)
-	_ opt.Commandable  = (*Cron)(nil)
-	_ opt.Minuteable   = (*Cron)(nil)
-	_ opt.Hourable     = (*Cron)(nil)
-	_ opt.Monthdayable = (*Cron)(nil)
-	_ opt.Monthable    = (*Cron)(nil)
-	_ opt.Weekdayable  = (*Cron)(nil)
-	_ opt.CronEnvable  = (*Cron)(nil)
+	_ opt.Absentable            = (*Cron)(nil)
+	_ opt.Dependable            = (*Cron)(nil)
+	_ opt.CronUserable          = (*Cron)(nil)
+	_ opt.LegacyCronCommandable = (*Cron)(nil)
+	_ opt.Commandable           = (*Cron)(nil)
+	_ opt.Minuteable            = (*Cron)(nil)
+	_ opt.Hourable              = (*Cron)(nil)
+	_ opt.Monthdayable          = (*Cron)(nil)
+	_ opt.Monthable             = (*Cron)(nil)
+	_ opt.Weekdayable           = (*Cron)(nil)
+	_ opt.CronEnvable           = (*Cron)(nil)
 )
 
 // runCmd reads a crontab (crontab -l) and runCmdWithStdin writes one (crontab
@@ -116,11 +119,12 @@ func ResetRunnersForTest() {
 
 func (c *Cron) planDraft(id string) resource.PlanDraft {
 	return resource.PlanDraft{
-		Kind:     "cron",
-		ID:       id,
-		Name:     c.name,
-		CronUser: c.user,
-		Command:  c.command,
+		Kind:          "cron",
+		ID:            id,
+		Name:          c.name,
+		CronUser:      c.user,
+		Command:       c.command,
+		LegacyCommand: c.legacy,
 		Schedule: strings.Join([]string{
 			c.minute, c.hour, c.monthday, c.month, c.weekday,
 		}, " "),
@@ -139,6 +143,26 @@ func (c *Cron) apply() error {
 		return fmt.Errorf("%s: %w", id, err)
 	}
 
+	// A dry-run still reads and renders the target crontab to report an
+	// accurate preview, but acquiring this file lock would create filesystem
+	// state. There is no write transaction to serialize in that case.
+	if resource.DryRun() {
+		return c.reconcile(id)
+	}
+
+	// crontab has no compare-and-swap write. Hold a per-user advisory lock
+	// across the read/merge/write transaction so separate Gonf processes cannot
+	// discard each other's changes.
+	unlock, err := lockCrontab(c.user)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = unlock() }()
+
+	return c.reconcile(id)
+}
+
+func (c *Cron) reconcile(id string) error {
 	current, err := readCrontab(c.user)
 	if err != nil {
 		return err
@@ -149,7 +173,9 @@ func (c *Cron) apply() error {
 		desired = c.block()
 	}
 
-	newTab, changed := mergeCrontab(current, c.name, desired)
+	adopted, adoptedChanged := adoptLegacyCommand(current, c.legacy)
+	newTab, changed := mergeCrontab(adopted, c.name, desired)
+	changed = changed || adoptedChanged
 	if !changed {
 		resource.Note(id, resource.StatusOK)
 		return nil
@@ -183,6 +209,14 @@ func (c *Cron) validate() error {
 			return fmt.Errorf("command must not contain newlines")
 		}
 	}
+	if c.legacy != "" {
+		if c.Absent {
+			return fmt.Errorf("WithLegacyCommand cannot be used with an absent cron job")
+		}
+		if strings.TrimSpace(c.legacy) == "" || strings.ContainsAny(c.legacy, "\n\r") {
+			return fmt.Errorf("WithLegacyCommand must be a non-empty single-line command")
+		}
+	}
 	for _, field := range []struct {
 		label, value string
 	}{
@@ -192,8 +226,8 @@ func (c *Cron) validate() error {
 		{"month", c.month},
 		{"weekday", c.weekday},
 	} {
-		if field.value == "" || strings.ContainsAny(field.value, " \t\n\r") {
-			return fmt.Errorf("%s field must be non-empty and free of whitespace", field.label)
+		if !validCronField(field.value, cronFieldRange(field.label)) {
+			return fmt.Errorf("%s field must use portable cron syntax", field.label)
 		}
 	}
 	for _, e := range c.env {
@@ -226,5 +260,10 @@ func (c *Cron) block() string {
 	return b.String()
 }
 
-func beginMarker(name string) string { return "# BEGIN GONF Cron[" + name + "]" }
-func endMarker(name string) string   { return "# END GONF Cron[" + name + "]" }
+const (
+	beginMarkerPrefix = "# BEGIN GONF Cron["
+	endMarkerPrefix   = "# END GONF Cron["
+)
+
+func beginMarker(name string) string { return beginMarkerPrefix + name + "]" }
+func endMarker(name string) string   { return endMarkerPrefix + name + "]" }

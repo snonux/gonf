@@ -62,13 +62,14 @@ func sampleOps() []Op {
 		{Op: KindEnsureDir, Path: "${HOME}/.cursor", Mode: "0750"},
 		{Op: KindDir, Path: "${HOME}/data", Mode: "0700"},
 		{
-			Op:       KindCron,
-			Name:     "backup",
-			CronUser: "root",
-			Command:  "/usr/local/bin/backup.sh",
-			Schedule: "0 2 * * *",
-			CronEnv:  []string{"PATH=/usr/bin:/bin", "MAILTO=root"},
-			ID:       "Cron[root/backup]",
+			Op:            KindCron,
+			Name:          "backup",
+			CronUser:      "root",
+			Command:       "/usr/local/bin/backup.sh",
+			LegacyCommand: "/usr/local/bin/old-backup.sh",
+			Schedule:      "0 2 * * *",
+			CronEnv:       []string{"PATH=/usr/bin:/bin", "MAILTO=root"},
+			ID:            "Cron[root/backup]",
 		},
 		{
 			Op:      KindService,
@@ -249,7 +250,7 @@ func TestDecodePlanVersionGate(t *testing.T) {
 }
 
 // TestDecodePlanAcceptsOlderVersions pins backward compatibility: plans
-// recorded by older binaries (v1–v15) must still decode after a schema bump.
+// recorded by older binaries (v1–v16) must still decode after a schema bump.
 // The cron/service kinds bumped CurrentVersion to 3; the file/dir owner/group
 // fields bumped it to 4; the deps field (DependsOn ordering) bumped it to 5;
 // the sync_dir source_dir field (stable {{.Param}} for tree templates) bumped
@@ -257,7 +258,7 @@ func TestDecodePlanVersionGate(t *testing.T) {
 // up-front, and newer binaries must keep applying every prior schema.
 func TestDecodePlanAcceptsOlderVersions(t *testing.T) {
 	t.Parallel()
-	for _, version := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, CurrentVersion} {
+	for _, version := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, CurrentVersion} {
 		input := fmt.Sprintf(`{"op":"plan","version":%d}`+"\n", version)
 		if _, err := DecodePlan(strings.NewReader(input)); err != nil {
 			t.Errorf("version %d header should decode: %v", version, err)

@@ -67,6 +67,7 @@ func TestEveryExportedOptionHasAResourceFamily(t *testing.T) {
 		{"OnChange", func() { acceptCommand(OnChange(resource.Resource{Type: "File", Name: "unit"})) }},
 		{"WatchChanges", func() { acceptTimer(WatchChanges("File[unit]")) }},
 		{"WithCronUser", func() { acceptCron(WithCronUser("root")) }},
+		{"WithLegacyCommand", func() { acceptCron(WithLegacyCommand("/usr/local/bin/old")) }},
 		{"WithCommand", func() { acceptSystemdTimer(WithCommand("true")) }},
 		{"WithMinute", func() { acceptCron(WithMinute("*")) }},
 		{"WithHour", func() { acceptCron(WithHour("*")) }},
@@ -191,6 +192,7 @@ func TestSharedOptionsHaveCompleteFamilyMatrix(t *testing.T) {
 	acceptChangeGate(OnChange(resource.Resource{Type: "File", Name: "unit"}))
 	acceptChangeGate(WatchChanges("File[unit]"))
 	acceptCron(WithCronUser("root"))
+	acceptCron(WithLegacyCommand("/usr/local/bin/old"))
 	acceptCronSystemdTimer(WithCommand("true"))
 	acceptCron(WithMinute("*"))
 	acceptCron(WithHour("*"))

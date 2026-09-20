@@ -219,7 +219,7 @@ func TestPlanOptionFitness_PackageWithEnv(t *testing.T) {
 // ---------------------------------------------------------------------------
 // cron (resource/cron): migrated to a plan.Handler (j5). Options:
 // WithCronUser, WithCommand, WithMinute/Hour/Monthday/Month/Weekday,
-// WithCronEnv, IsAbsent.
+// WithCronEnv, WithLegacyCommand, IsAbsent.
 // ---------------------------------------------------------------------------
 
 func fakeCrontab(tab *string) (
@@ -247,13 +247,18 @@ func fakeCrontab(tab *string) (
 
 func TestPlanOptionFitness_Cron(t *testing.T) {
 	t.Cleanup(cron.ResetRunnersForTest)
+	current, err := user.Current()
+	if err != nil {
+		t.Skipf("cannot resolve current user: %v", err)
+	}
 
 	cases := []struct {
 		name string
 		opts []opt.CronOption
+		seed string
 	}{
-		{"KitchenSink", []opt.CronOption{
-			opt.WithCronUser("root"),
+		{name: "KitchenSink", opts: []opt.CronOption{
+			opt.WithCronUser(current.Username),
 			opt.WithCommand("/usr/bin/backup"),
 			opt.WithMinute("15"),
 			opt.WithHour("2"),
@@ -263,17 +268,23 @@ func TestPlanOptionFitness_Cron(t *testing.T) {
 			opt.WithCronEnv("FOO=1"),
 			opt.WithCronEnv("BAR=2"),
 		}},
+		{name: "LegacyCommand", opts: []opt.CronOption{
+			opt.WithCronUser(current.Username),
+			opt.WithCommand("/usr/bin/backup"),
+			opt.WithLegacyCommand("/usr/bin/old-backup"),
+			opt.WithMinute("15"),
+		}, seed: "0 * * * * /usr/bin/old-backup\n"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			var directTab string
+			directTab := c.seed
 			read, write := fakeCrontab(&directTab)
 			cron.SetRunnersForTest(read, write)
 			if err := cron.Ensure("optfit", c.opts...); err != nil {
 				t.Fatalf("direct Ensure: %v", err)
 			}
 
-			var planTab string
+			planTab := c.seed
 			read2, write2 := fakeCrontab(&planTab)
 			cron.SetRunnersForTest(read2, write2)
 			recordApplyOption(t, "cron_opt_"+c.name, func() {
@@ -283,8 +294,11 @@ func TestPlanOptionFitness_Cron(t *testing.T) {
 			if directTab != planTab {
 				t.Fatalf("%s: plan round-trip crontab diverged from direct Ensure\n direct: %q\n plan:   %q", c.name, directTab, planTab)
 			}
-			if !strings.Contains(planTab, "FOO=1") || !strings.Contains(planTab, "15 2 1 * *") {
+			if c.name == "KitchenSink" && (!strings.Contains(planTab, "FOO=1") || !strings.Contains(planTab, "15 2 1 * *")) {
 				t.Fatalf("%s: crontab missing expected content: %q", c.name, planTab)
+			}
+			if c.name == "LegacyCommand" && (strings.Contains(planTab, "/usr/bin/old-backup") || !strings.Contains(planTab, "15 * * * * /usr/bin/backup")) {
+				t.Fatalf("%s: legacy adoption did not survive plan round-trip: %q", c.name, planTab)
 			}
 		})
 	}
@@ -295,7 +309,7 @@ func TestPlanOptionFitness_Cron(t *testing.T) {
 		directTab := seed
 		read, write := fakeCrontab(&directTab)
 		cron.SetRunnersForTest(read, write)
-		if err := cron.Ensure("optfit", opt.IsAbsent); err != nil {
+		if err := cron.Ensure("optfit", opt.WithCronUser(current.Username), opt.IsAbsent); err != nil {
 			t.Fatalf("direct Ensure: %v", err)
 		}
 
@@ -303,7 +317,7 @@ func TestPlanOptionFitness_Cron(t *testing.T) {
 		read2, write2 := fakeCrontab(&planTab)
 		cron.SetRunnersForTest(read2, write2)
 		recordApplyOption(t, "cron_opt_Absent", func() {
-			Cron("optfit", opt.IsAbsent)
+			Cron("optfit", opt.WithCronUser(current.Username), opt.IsAbsent)
 		})
 
 		if directTab != planTab {

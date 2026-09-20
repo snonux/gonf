@@ -41,8 +41,11 @@ import "encoding/json"
 // 16 lets file operations carry an explicit Name identity distinct from Path:
 // an older destination would ignore that identity, report changes under
 // File[path], and make an OnChange target of File[name] silently never fire.
-// It must therefore refuse v16 before any mutation.
-const CurrentVersion = 16
+// It must therefore refuse v16 before any mutation. Version 17 adds
+// legacy_command to cron operations. An older destination would leave the
+// unmanaged legacy line in place and run it alongside the new managed block,
+// so it must refuse v17 before any mutation.
+const CurrentVersion = 17
 
 // supportedVersions is the set of plan schema versions this binary can apply.
 // Apply must refuse plans whose version is not in this set before any mutation.
@@ -62,6 +65,7 @@ var supportedVersions = map[int]struct{}{
 	13:             {},
 	14:             {},
 	15:             {},
+	16:             {},
 	CurrentVersion: {},
 }
 
@@ -302,6 +306,8 @@ type Op struct {
 	CronUser string `json:"cron_user,omitempty"`
 	// Command is the crontab command for KindCron.
 	Command string `json:"command,omitempty"`
+	// LegacyCommand opts KindCron into adopting one exact unmanaged command.
+	LegacyCommand string `json:"legacy_command,omitempty"`
 	// Schedule holds the five space-separated cron time fields
 	// (minute hour monthday month weekday) for KindCron.
 	Schedule string `json:"schedule,omitempty"`

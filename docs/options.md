@@ -77,6 +77,7 @@ and backend limits.
 | `WithCronUser` | Crontab owner (default `root`) |
 | `WithMinute` / `WithHour` / `WithMonthday` / `WithMonth` / `WithWeekday` | Schedule |
 | `WithCronEnv` | `KEY=VAL` line above the job |
+| `WithLegacyCommand` | Remove one exact unmanaged command from a valid cron entry before creating the managed job |
 
 ## Command
 

@@ -172,6 +172,10 @@ func TestE2ECronAndServicePlanApply(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("service backend fake is systemd-specific")
 	}
+	current, err := user.Current()
+	if err != nil {
+		t.Skipf("cannot resolve current user: %v", err)
+	}
 	api.ResetTasks()
 	resource.ResetRepository()
 	cron.ResetRunnersForTest()
@@ -220,6 +224,7 @@ func TestE2ECronAndServicePlanApply(t *testing.T) {
 
 	api.Task("cron_svc", "cron and service e2e", func() {
 		api.Cron("zzjob",
+			options.WithCronUser(current.Username),
 			options.WithCommand("/bin/true"),
 			options.WithMinute("7"),
 			options.WithHour("3"),
@@ -488,18 +493,22 @@ func TestE2EGoldenMiniApplyWithTempTargets(t *testing.T) {
 // falling back to the every-minute default schedule. Nothing reaches the
 // crontab backend because the check fires before cron.Ensure.
 func TestApplyCronRejectsMissingSchedule(t *testing.T) {
+	current, err := user.Current()
+	if err != nil {
+		t.Skipf("cannot resolve current user: %v", err)
+	}
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "cron"},
 		{Op: plan.KindCron, Name: "zzjob", Command: "/bin/true"},
 	}
-	err := plan.Apply(ops, plan.Facts{GOOS: "linux"}, "")
+	err = plan.Apply(ops, plan.Facts{GOOS: "linux"}, "")
 	if err == nil || !strings.Contains(err.Error(), "5 whitespace-separated fields") {
 		t.Fatalf("expected missing-schedule error, got %v", err)
 	}
 	// Absent ops legitimately carry no schedule.
 	absent := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "cron"},
-		{Op: plan.KindCron, Name: "zzjob", Absent: true},
+		{Op: plan.KindCron, Name: "zzjob", CronUser: current.Username, Absent: true},
 	}
 	cron.ResetRunnersForTest()
 	service.ResetRunCmdForTest()

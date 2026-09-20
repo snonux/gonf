@@ -23,8 +23,13 @@ PATH=/usr/bin:/bin
 ```
 
 `Run`, `push`, `apply`, and `fleet` all go through the one apply engine: Cron
-records a `cron` plan op (name, user, command, schedule, env) that is applied
+records a `cron` plan op (name, user, command, legacy command, schedule, env) that is applied
 like any other resource (see [plan.md](plan.md)).
+
+Gonf accepts the portable five-field Linux/BSD cron syntax: numbers, `*`,
+lists, ranges, positive `/step` values, plus three-letter month and weekday
+names. It rejects `@` directives and malformed schedules before changing a
+crontab.
 
 When `WithCronUser` matches the process user, gonf omits `crontab -u` (Linux
 rejects `-u` for your own account without privileges). Other users still use
@@ -38,7 +43,13 @@ rejects `-u` for your own account without privileges). Other users still use
 | `WithCronUser` | Crontab owner (default `root`) |
 | `WithMinute` / `WithHour` / `WithMonthday` / `WithMonth` / `WithWeekday` | Schedule fields (default `*`) |
 | `WithCronEnv` | Environment line `KEY=VAL` above the job |
+| `WithLegacyCommand` | Remove one exact unmanaged command from a valid cron entry before creating this job; cannot be used with `NoCron` |
 | `IsAbsent` / `NoCron` | Remove the named job |
+
+Each reconciliation holds an advisory lock for that crontab across its
+read/merge/write transaction. This prevents two Gonf processes from losing
+each other's updates; other programs that write the same crontab must use the
+same operational serialization.
 
 ## Live tests
 

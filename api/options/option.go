@@ -45,6 +45,7 @@ type (
 	ChangeWatchable        = resourceoptions.ChangeWatchable
 	Elevatable             = resourceoptions.Elevatable
 	CronUserable           = resourceoptions.CronUserable
+	LegacyCronCommandable  = resourceoptions.LegacyCronCommandable
 	Commandable            = resourceoptions.Commandable
 	Minuteable             = resourceoptions.Minuteable
 	Hourable               = resourceoptions.Hourable
@@ -128,6 +129,7 @@ var (
 	OnChange                = resourceoptions.OnChange
 	WatchChanges            = resourceoptions.WatchChanges
 	WithCronUser            = resourceoptions.WithCronUser
+	WithLegacyCommand       = resourceoptions.WithLegacyCommand
 	WithCommand             = resourceoptions.WithCommand
 	WithMinute              = resourceoptions.WithMinute
 	WithHour                = resourceoptions.WithHour

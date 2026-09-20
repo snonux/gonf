@@ -22,15 +22,16 @@ func init() {
 // ToOp lowers a "cron" resource draft to a plan.Op.
 func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 	return plan.Op{
-		Op:       plan.KindCron,
-		ID:       d.ID,
-		Name:     d.Name,
-		Absent:   d.Absent,
-		CronUser: d.CronUser,
-		Command:  d.Command,
-		Schedule: d.Schedule,
-		CronEnv:  d.CronEnv,
-		Deps:     d.Deps,
+		Op:            plan.KindCron,
+		ID:            d.ID,
+		Name:          d.Name,
+		Absent:        d.Absent,
+		CronUser:      d.CronUser,
+		Command:       d.Command,
+		LegacyCommand: d.LegacyCommand,
+		Schedule:      d.Schedule,
+		CronEnv:       d.CronEnv,
+		Deps:          d.Deps,
 	}, nil
 }
 
@@ -49,6 +50,9 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	}
 	if op.Command != "" {
 		opts = append(opts, opt.WithCommand(op.Command))
+	}
+	if op.LegacyCommand != "" {
+		opts = append(opts, opt.WithLegacyCommand(op.LegacyCommand))
 	}
 	// A present cron job needs a schedule: silently falling back to the
 	// resource default (* * * * *, every minute) would run the command far

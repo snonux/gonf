@@ -1,13 +1,21 @@
 package cron
 
 import (
+	"bufio"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"os/user"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/resource"
+	"golang.org/x/sys/unix"
 )
 
 func TestMergeCrontabAddReplaceRemove(t *testing.T) {
@@ -49,6 +57,80 @@ func TestMergePreservesOtherLines(t *testing.T) {
 	out, _ := mergeCrontab(existing, "gonfjob", c.block())
 	if !strings.Contains(out, "/bin/echo keep") || !strings.Contains(out, "MAILTO=root") {
 		t.Fatalf("lost existing lines: %q", out)
+	}
+}
+
+func TestAdoptLegacyCommandExactAndProtected(t *testing.T) {
+	legacy := "/usr/local/bin/example --run >/dev/null 2>&1"
+	current := strings.Join([]string{
+		"MAILTO=root",
+		"0 * * * * " + legacy,
+		"0 * * * * " + legacy + " --extra",
+		"# BEGIN GONF Cron[other]",
+		"0 * * * * " + legacy,
+		"# END GONF Cron[other]",
+		"# a comment mentioning " + legacy,
+		"",
+	}, "\n")
+
+	got, changed := adoptLegacyCommand(current, legacy)
+	if !changed {
+		t.Fatal("expected the unmanaged exact command to be adopted")
+	}
+	if strings.Count(got, legacy) != 3 {
+		t.Fatalf("adoption removed a non-exact or protected line:\n%s", got)
+	}
+	if !strings.Contains(got, "MAILTO=root") || !strings.Contains(got, beginMarker("other")) {
+		t.Fatalf("adoption lost unrelated crontab content:\n%s", got)
+	}
+}
+
+func TestAdoptLegacyCommandFailsClosedOnMalformedMarkers(t *testing.T) {
+	legacy := "/usr/local/bin/example"
+	for _, current := range []string{
+		"# BEGIN GONF Cron[broken]\n0 * * * * " + legacy + "\n",
+		"# END GONF Cron[broken]\n0 * * * * " + legacy + "\n",
+		"# BEGIN GONF something\n0 * * * * " + legacy + "\n",
+		"# BEGIN GONF Cron[first]\n# BEGIN GONF Cron[second]\n0 * * * * " + legacy + "\n# END GONF Cron[second]\n# END GONF Cron[first]\n",
+	} {
+		got, changed := adoptLegacyCommand(current, legacy)
+		if changed || got != current {
+			t.Fatalf("malformed marker must disable adoption:\nwant %q\n got %q", current, got)
+		}
+	}
+}
+
+func TestAdoptLegacyCommandRejectsNonCronLines(t *testing.T) {
+	legacy := "/usr/local/bin/example"
+	for _, line := range []string{
+		"# * * * * " + legacy,
+		"@reboot " + legacy,
+		"SHELL=/bin/sh * * * * " + legacy,
+		"60 * * * * " + legacy,
+		"* 24 * * * " + legacy,
+		"* * 0 * * " + legacy,
+		"* * * 13 * " + legacy,
+		"* * * * 8 " + legacy,
+		"*/0 * * * * " + legacy,
+		"nonsense * * * * " + legacy,
+	} {
+		got, changed := adoptLegacyCommand(line+"\n", legacy)
+		if changed || got != line+"\n" {
+			t.Fatalf("non-cron line must not be adopted: %q", line)
+		}
+	}
+}
+
+func TestCronEntryCommandAcceptsPortableSyntax(t *testing.T) {
+	command := "/usr/local/bin/example --run"
+	for _, line := range []string{
+		"0 * * * * " + command,
+		"*/15 1-23/2 1,15 jan-mar mon-fri " + command,
+	} {
+		got, ok := cronEntryCommand(line)
+		if !ok || got != command {
+			t.Fatalf("cronEntryCommand(%q) = %q, %v", line, got, ok)
+		}
 	}
 }
 
@@ -97,6 +179,35 @@ func TestPresentRejectsBadEnvAndBlankCommand(t *testing.T) {
 	Present("x", opt.WithCommand("/bin/true"), opt.WithCronUser(""))
 	if err := resource.Apply(); err == nil {
 		t.Fatal("expected error for empty cron user")
+	}
+	resource.ResetRepository()
+	Present("x", opt.WithCommand("/bin/true"), opt.WithLegacyCommand("\n"))
+	if err := resource.Apply(); err == nil {
+		t.Fatal("expected error for invalid legacy command")
+	}
+	resource.ResetRepository()
+	Absent("x", opt.WithLegacyCommand("/bin/true"))
+	if err := resource.Apply(); err == nil {
+		t.Fatal("expected error for legacy adoption on absent cron")
+	}
+	for _, option := range []opt.CronOption{
+		opt.WithMinute("60"),
+		opt.WithHour("24"),
+		opt.WithMonthday("0"),
+		opt.WithMonth("13"),
+		opt.WithWeekday("8"),
+		opt.WithMinute("@reboot"),
+		opt.WithMinute("1/2"),
+		opt.WithMinute("+1"),
+		opt.WithMinute("*/+2"),
+		opt.WithMinute("1-2/+2"),
+		opt.WithMonth("jan/2"),
+	} {
+		resource.ResetRepository()
+		Present("x", opt.WithCommand("/bin/true"), option)
+		if err := resource.Apply(); err == nil {
+			t.Fatal("expected error for invalid cron schedule")
+		}
 	}
 }
 
@@ -182,7 +293,7 @@ func TestAbsentWithoutCommand(t *testing.T) {
 	}
 
 	resource.ResetRepository()
-	Absent("gone", opt.WithCronUser("root"))
+	Absent("gone", opt.WithCronUser(currentCronUser(t)))
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("absent without command: %v", err)
 	}
@@ -212,9 +323,10 @@ func TestApplyMockedPresentIdempotentAndDryRun(t *testing.T) {
 		return "", "", 0, nil
 	}
 
+	userName := currentCronUser(t)
 	resource.ResetRepository()
 	Present("job",
-		opt.WithCronUser("root"),
+		opt.WithCronUser(userName),
 		opt.WithCommand("/bin/true"),
 		opt.WithMinute("7"),
 		opt.WithHour("3"),
@@ -229,7 +341,7 @@ func TestApplyMockedPresentIdempotentAndDryRun(t *testing.T) {
 
 	resource.ResetRepository()
 	Present("job",
-		opt.WithCronUser("root"),
+		opt.WithCronUser(userName),
 		opt.WithCommand("/bin/true"),
 		opt.WithMinute("7"),
 		opt.WithHour("3"),
@@ -246,7 +358,7 @@ func TestApplyMockedPresentIdempotentAndDryRun(t *testing.T) {
 	defer resource.SetDryRun(false)
 	resource.ResetRepository()
 	Present("job",
-		opt.WithCronUser("root"),
+		opt.WithCronUser(userName),
 		opt.WithCommand("/bin/true"),
 		opt.WithMinute("8"),
 		opt.WithHour("3"),
@@ -261,12 +373,331 @@ func TestApplyMockedPresentIdempotentAndDryRun(t *testing.T) {
 	resource.SetDryRun(false)
 
 	resource.ResetRepository()
-	Absent("job", opt.WithCronUser("root"))
+	Absent("job", opt.WithCronUser(userName))
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("absent: %v", err)
 	}
 	if writes != 2 || strings.Contains(tab, "GONF Cron[job]") {
 		t.Fatalf("absent failed: writes=%d tab=%q", writes, tab)
+	}
+}
+
+func TestEnsureAdoptsLegacyCommandAndPreservesMixedCrontab(t *testing.T) {
+	t.Cleanup(ResetRunnersForTest)
+	legacy := "/usr/local/bin/old-job"
+	tab := strings.Join([]string{
+		"PATH=/usr/bin:/bin",
+		"0 * * * * " + legacy,
+		"# BEGIN GONF Cron[other]",
+		"0 * * * * " + legacy,
+		"# END GONF Cron[other]",
+		"0 * * * * /usr/local/bin/keep",
+		"",
+	}, "\n")
+	writes := 0
+	SetRunnersForTest(
+		func(name string, args ...string) (string, string, int, error) { return tab, "", 0, nil },
+		func(stdin string, name string, args ...string) (string, string, int, error) {
+			writes++
+			tab = stdin
+			return "", "", 0, nil
+		},
+	)
+
+	userName := currentCronUser(t)
+	if err := Ensure("new-job", opt.WithCronUser(userName), opt.WithCommand("/usr/local/bin/new-job"), opt.WithLegacyCommand(legacy)); err != nil {
+		t.Fatalf("first apply: %v", err)
+	}
+	if strings.Count(tab, legacy) != 1 || !strings.Contains(tab, beginMarker("new-job")) || !strings.Contains(tab, "/usr/local/bin/keep") {
+		t.Fatalf("mixed crontab was not adopted safely:\n%s", tab)
+	}
+	if err := Ensure("new-job", opt.WithCronUser(userName), opt.WithCommand("/usr/local/bin/new-job"), opt.WithLegacyCommand(legacy)); err != nil {
+		t.Fatalf("repeat apply: %v", err)
+	}
+	if writes != 1 {
+		t.Fatalf("repeat apply rewrote converged crontab %d times", writes)
+	}
+}
+
+func TestEnsureLegacyAdoptionReadFailureDoesNotWrite(t *testing.T) {
+	t.Cleanup(ResetRunnersForTest)
+	wrote := false
+	SetRunnersForTest(
+		func(name string, args ...string) (string, string, int, error) {
+			return "", "permission denied", 1, nil
+		},
+		func(stdin string, name string, args ...string) (string, string, int, error) {
+			wrote = true
+			return "", "", 0, nil
+		},
+	)
+	if err := Ensure("new-job", opt.WithCronUser(currentCronUser(t)), opt.WithCommand("/usr/local/bin/new-job"), opt.WithLegacyCommand("/usr/local/bin/old-job")); err == nil {
+		t.Fatal("expected crontab probe failure")
+	}
+	if wrote {
+		t.Fatal("a failed crontab probe must not be treated as an empty crontab")
+	}
+}
+
+func TestEnsureConcurrentCronUpdatesDoNotLoseEitherBlock(t *testing.T) {
+	t.Cleanup(ResetRunnersForTest)
+	var tab string
+	var tabMu sync.Mutex
+	SetRunnersForTest(
+		func(name string, args ...string) (string, string, int, error) {
+			tabMu.Lock()
+			defer tabMu.Unlock()
+			return tab, "", 0, nil
+		},
+		func(stdin string, name string, args ...string) (string, string, int, error) {
+			tabMu.Lock()
+			defer tabMu.Unlock()
+			tab = stdin
+			return "", "", 0, nil
+		},
+	)
+
+	userName := currentCronUser(t)
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, name := range []string{"first", "second"} {
+		wg.Add(1)
+		go func(name string) {
+			defer wg.Done()
+			errs <- Ensure(name, opt.WithCronUser(userName), opt.WithCommand("/usr/local/bin/"+name))
+		}(name)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent apply: %v", err)
+		}
+	}
+	if !strings.Contains(tab, beginMarker("first")) || !strings.Contains(tab, beginMarker("second")) {
+		t.Fatalf("concurrent applies lost a managed block:\n%s", tab)
+	}
+}
+
+func TestCrontabLockSerializesSeparateProcesses(t *testing.T) {
+	userName := currentCronUser(t)
+	cmd := exec.Command(os.Args[0], "-test.run=^TestCrontabLockHelper$")
+	cmd.Env = append(os.Environ(), "GONF_CRON_LOCK_HELPER=1", "GONF_CRON_LOCK_USER="+userName)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	line, err := bufio.NewReader(stdout).ReadString('\n')
+	if err != nil || line != "locked\n" {
+		_ = stdin.Close()
+		_ = cmd.Wait()
+		t.Fatalf("lock helper did not start: line=%q err=%v", line, err)
+	}
+
+	start := time.Now()
+	if _, err := lockCrontabWithin(userName, 40*time.Millisecond); err == nil {
+		t.Fatal("second process acquired lock before release")
+	} else if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
+		t.Fatalf("contended lock did not time out promptly: %s", elapsed)
+	}
+	if err := stdin.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := lockCrontabWithin(userName, time.Second)
+	if err != nil {
+		t.Fatalf("second process lock after release: %v", err)
+	}
+	if err := unlock(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCrontabLockRejectsHostilePreseed(t *testing.T) {
+	testCases := []struct {
+		name string
+		seed func(t *testing.T, dir, path string)
+	}{
+		{
+			name: "world-readable directory",
+			seed: func(t *testing.T, dir, _ string) {
+				t.Helper()
+				if err := os.Mkdir(dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "symlinked directory",
+			seed: func(t *testing.T, dir, _ string) {
+				t.Helper()
+				if err := os.Symlink(t.TempDir(), dir); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "world-readable lock file",
+			seed: func(t *testing.T, dir, path string) {
+				t.Helper()
+				if err := os.Mkdir(dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(path, 0o666); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := t.TempDir()
+			targetUID := uint32(unix.Geteuid())
+			dir, path := crontabLockPath(root, targetUID, "target")
+			testCase.seed(t, dir, path)
+			if _, err := lockCrontabAtUID("target", targetUID, 10*time.Millisecond, root); err == nil {
+				t.Fatal("hostile preseed was accepted")
+			}
+		})
+	}
+}
+
+func TestCrontabLockUsesTargetUIDNamespace(t *testing.T) {
+	root := t.TempDir()
+	targetUser := currentCronUser(t)
+	targetUID, err := crontabUserID(targetUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The caller UID is deliberately absent from the path calculation. These
+	// model root applying targetUser's crontab and targetUser applying it
+	// directly: both resolve to this one target-owned namespace.
+	rootApplyingDir, rootApplyingPath := crontabLockPath(root, targetUID, targetUser)
+	targetApplyingDir, targetApplyingPath := crontabLockPath(root, targetUID, targetUser)
+	if rootApplyingDir != targetApplyingDir || rootApplyingPath != targetApplyingPath {
+		t.Fatalf("same target user chose different lock paths: root=%s/%s target=%s/%s", rootApplyingDir, rootApplyingPath, targetApplyingDir, targetApplyingPath)
+	}
+
+	otherUID := targetUID + 1
+	otherDir, _ := crontabLockPath(root, otherUID, targetUser)
+	if otherDir == targetApplyingDir {
+		t.Fatalf("target UID did not scope lock directory: %q", otherDir)
+	}
+}
+
+func TestCrontabLockPrivilegedCreationTransfersOwnership(t *testing.T) {
+	if unix.Geteuid() != 0 {
+		t.Skip("requires root to model a root apply for another account")
+	}
+	const targetUID = uint32(65534)
+	root := t.TempDir()
+	dir, path := crontabLockPath(root, targetUID, "target")
+
+	unlock, err := lockCrontabAtUID("target", targetUID, time.Second, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := unlock(); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	for _, candidate := range []struct {
+		path string
+		mode uint32
+	}{
+		{dir, unix.S_IFDIR | 0o700},
+		{path, unix.S_IFREG | 0o600},
+	} {
+		var stat unix.Stat_t
+		if err := unix.Stat(candidate.path, &stat); err != nil {
+			t.Fatal(err)
+		}
+		if stat.Uid != targetUID || uint32(stat.Mode&unix.S_IFMT) != candidate.mode&unix.S_IFMT || uint32(stat.Mode&0o777) != candidate.mode&0o777 {
+			t.Fatalf("lock object %s has uid=%d mode=%#o, want uid=%d mode=%#o", candidate.path, stat.Uid, stat.Mode, targetUID, candidate.mode)
+		}
+	}
+}
+
+func TestCrontabUserIDResolvesCurrentAccount(t *testing.T) {
+	current := currentCronUser(t)
+	uid, err := crontabUserID(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uid != uint32(unix.Geteuid()) {
+		t.Fatalf("resolved uid %d, want effective uid %d", uid, unix.Geteuid())
+	}
+}
+
+func currentCronUser(t *testing.T) string {
+	t.Helper()
+	current, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Username == "" {
+		t.Fatal("current user has no username")
+	}
+	return current.Username
+}
+
+func TestCronFieldRejectsNonPortableForms(t *testing.T) {
+	minute := cronFieldRange("minute")
+	for _, value := range []string{
+		"1/2", "1/+2", "*/+2", "1-2/+2", "+1", "+1-2", "1-2/", "jan", "", "1,,2",
+	} {
+		if validCronField(value, minute) {
+			t.Fatalf("minute field accepted invalid portable syntax %q", value)
+		}
+	}
+	month := cronFieldRange("month")
+	for _, value := range []string{"jan/2", "jan-mar/+2"} {
+		if validCronField(value, month) {
+			t.Fatalf("month field accepted invalid portable syntax %q", value)
+		}
+	}
+	if !validCronField("*/15,1-23/2", minute) || !validCronField("jan-mar/2", month) {
+		t.Fatal("valid portable stepped field rejected")
+	}
+}
+
+func TestCrontabLockHelper(t *testing.T) {
+	if os.Getenv("GONF_CRON_LOCK_HELPER") != "1" {
+		return
+	}
+	unlock, err := lockCrontab(os.Getenv("GONF_CRON_LOCK_USER"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := unlock(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if _, err := fmt.Fprintln(os.Stdout, "locked"); err != nil {
+		t.Fatal(err)
+	}
+	var byteRead [1]byte
+	if _, err := os.Stdin.Read(byteRead[:]); err != nil && !errors.Is(err, io.EOF) {
+		t.Fatal(err)
 	}
 }
 

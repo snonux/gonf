@@ -63,6 +63,7 @@ func (c *capTarget) SetWatch(v []string)        { c.record("SetWatch", v) }
 func (c *capTarget) SetChangeWatch(v []string)  { c.record("SetChangeWatch", v) }
 func (c *capTarget) AddDependency(v string)     { c.record("AddDependency", v) }
 func (c *capTarget) SetCronUser(v string)       { c.record("SetCronUser", v) }
+func (c *capTarget) SetLegacyCommand(v string)  { c.record("SetLegacyCommand", v) }
 func (c *capTarget) SetCommand(v string)        { c.record("SetCommand", v) }
 func (c *capTarget) SetMinute(v string)         { c.record("SetMinute", v) }
 func (c *capTarget) SetHour(v string)           { c.record("SetHour", v) }
@@ -200,6 +201,7 @@ func TestOptionsReachTheirSetters(t *testing.T) {
 		{"IfChanged", IfChanged, "SetIfChanged", nil},
 		{"WithWatch", WithWatch("a", "b"), "SetWatch", []string{"a", "b"}},
 		{"WithCronUser", WithCronUser("root"), "SetCronUser", "root"},
+		{"WithLegacyCommand", WithLegacyCommand("/usr/local/bin/old"), "SetLegacyCommand", "/usr/local/bin/old"},
 		{"WithCommand", WithCommand("true"), "SetCommand", "true"},
 		{"WithMinute", WithMinute("5"), "SetMinute", "5"},
 		{"WithHour", WithHour("6"), "SetHour", "6"},

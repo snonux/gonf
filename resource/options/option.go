@@ -63,6 +63,7 @@ type (
 	ChangeWatchable        interface{ SetChangeWatch([]string) }
 	Elevatable             interface{ SetElevate() }
 	CronUserable           interface{ SetCronUser(string) }
+	LegacyCronCommandable  interface{ SetLegacyCommand(string) }
 	Commandable            interface{ SetCommand(string) }
 	Minuteable             interface{ SetMinute(string) }
 	Hourable               interface{ SetHour(string) }
@@ -667,6 +668,16 @@ func WatchChanges(ids ...string) changeGateOption {
 func WithCronUser(user string) cronOption {
 	return cronOption(func(target any) {
 		requires(target, "WithCronUser", func(r CronUserable) { r.SetCronUser(user) })
+	})
+}
+
+// WithLegacyCommand opts into adopting one unmanaged cron line whose parsed
+// command is exactly command. It never matches command substrings or lines in
+// a Gonf-managed block. Gonf serializes its own crontab updates, but callers
+// must ensure external crontab writers do not run concurrently.
+func WithLegacyCommand(command string) cronOption {
+	return cronOption(func(target any) {
+		requires(target, "WithLegacyCommand", func(r LegacyCronCommandable) { r.SetLegacyCommand(command) })
 	})
 }
 

@@ -209,6 +209,7 @@ func TestRecordPlanLowersCronAndService(t *testing.T) {
 	Task("cron_svc", "cron and service lowering", func() {
 		Cron("zzjob",
 			options.WithCommand("true"),
+			options.WithLegacyCommand("old-true"),
 			options.WithMinute("7"),
 			options.WithHour("3"),
 			options.WithCronEnv("FOO=1"),
@@ -237,7 +238,7 @@ func TestRecordPlanLowersCronAndService(t *testing.T) {
 	if cronOp.ID != wantID {
 		t.Fatalf("cron id = %q, want %q (IDs must stay stable for DependsOn)", cronOp.ID, wantID)
 	}
-	if cronOp.Name != "zzjob" || cronOp.CronUser != "root" || cronOp.Command != "true" {
+	if cronOp.Name != "zzjob" || cronOp.CronUser != "root" || cronOp.Command != "true" || cronOp.LegacyCommand != "old-true" {
 		t.Fatalf("cron payload = %#v", cronOp)
 	}
 	if cronOp.Schedule != "7 3 * * *" {

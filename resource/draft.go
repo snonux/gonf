@@ -144,6 +144,8 @@ type PlanDraft struct {
 	CronUser string
 	// Command is the crontab command for cron drafts.
 	Command string
+	// LegacyCommand opts a cron draft into removing one exact unmanaged command.
+	LegacyCommand string
 	// Schedule holds the five space-separated cron time fields
 	// (minute hour monthday month weekday) for cron drafts.
 	Schedule string
