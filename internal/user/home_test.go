@@ -278,19 +278,20 @@ func TestManageHomeAfterMembershipsKeepsBothAdditive(t *testing.T) {
 	if err := NewRocky(scriptedBSDRunner(t, rocky)).Ensure(want); err != nil {
 		t.Fatalf("Rocky Ensure() = %v", err)
 	}
-	bsdCalls := func() []bsdCall {
-		return []bsdCall{
-			{command: "getent", args: []string{"passwd", "svc"}, stdout: "svc:*:1001:1001::" + oldHome + ":/bin/sh\n"},
-			{command: "getent", args: []string{"group", "wheel"}},
-			{command: "id", args: []string{"-Gn", "svc"}, stdout: "svc\n"},
-			{command: "usermod", args: []string{"-G", "wheel", "svc"}},
-			{command: "usermod", args: []string{"-d", newHome, "svc"}},
-		}
-	}
-	if err := NewOpenBSD(scriptedBSDRunner(t, bsdCalls())).Ensure(want); err != nil {
+	// OpenBSD appends only the missing group; NetBSD first enumerates the
+	// group database and passes the existing explicit membership (audio)
+	// along, so a replacing usermod -G keeps it. Membership probes run before
+	// the requested group is checked or created.
+	bsdCalls := combinedBSDCalls
+	openbsd := bsdCalls(nil, bsdCall{command: "usermod", args: []string{"-G", "wheel", "svc"}})
+	if err := NewOpenBSD(scriptedBSDRunner(t, openbsd)).Ensure(want); err != nil {
 		t.Fatalf("OpenBSD Ensure() = %v", err)
 	}
-	if err := NewNetBSD(scriptedBSDRunner(t, bsdCalls())).Ensure(want); err != nil {
+	netbsd := bsdCalls(
+		[]bsdCall{{command: "getent", args: []string{"group"}, stdout: "svc:*:1001:\naudio:*:1002:svc\nwheel:*:0:root\n"}},
+		bsdCall{command: "usermod", args: []string{"-G", "audio,wheel", "svc"}},
+	)
+	if err := NewNetBSD(scriptedBSDRunner(t, netbsd)).Ensure(want); err != nil {
 		t.Fatalf("NetBSD Ensure() = %v", err)
 	}
 	freebsd := []bsdCall{
@@ -303,6 +304,23 @@ func TestManageHomeAfterMembershipsKeepsBothAdditive(t *testing.T) {
 	if err := NewFreeBSD(scriptedBSDRunner(t, freebsd)).Ensure(want); err != nil {
 		t.Fatalf("FreeBSD Ensure() = %v", err)
 	}
+}
+
+// combinedBSDCalls is the OpenBSD/NetBSD command script for
+// TestManageHomeAfterMembershipsKeepsBothAdditive: passwd and membership
+// probes (plus the platform's union probes), the requested-group check, the
+// membership command, then the home-field update.
+func combinedBSDCalls(unionProbes []bsdCall, usermod bsdCall) []bsdCall {
+	calls := []bsdCall{
+		{command: "getent", args: []string{"passwd", "svc"}, stdout: "svc:*:1001:1001::" + oldHome + ":/bin/sh\n"},
+		{command: "id", args: []string{"-Gn", "svc"}, stdout: "svc audio\n"},
+	}
+	calls = append(calls, unionProbes...)
+	return append(calls,
+		bsdCall{command: "getent", args: []string{"group", "wheel"}},
+		usermod,
+		bsdCall{command: "usermod", args: []string{"-d", newHome, "svc"}},
+	)
 }
 
 func TestPasswdHome(t *testing.T) {

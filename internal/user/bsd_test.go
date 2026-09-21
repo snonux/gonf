@@ -68,16 +68,55 @@ func TestNetBSDEnsureNoOp(t *testing.T) {
 	})
 }
 
+// TestOpenBSDEnsureUpdate pins the OpenBSD argv: usermod -G receives only the
+// missing group because OpenBSD documents -G as appending.
 func TestOpenBSDEnsureUpdate(t *testing.T) {
-	testBSDEnsureUpdate(t, func(runner Runner) interface{ Ensure(DesiredUser) error } {
-		return NewOpenBSD(runner)
-	})
+	calls := bsdUpdateCalls(nil, bsdCall{command: "usermod", args: []string{"-G", "audio", "svc"}})
+	if err := NewOpenBSD(scriptedBSDRunner(t, calls)).Ensure(bsdUpdateWant()); err != nil {
+		t.Fatalf("Ensure() = %v", err)
+	}
 }
 
+// TestNetBSDEnsureUpdate pins the NetBSD argv: usermod -G receives every
+// group that already lists the account (video, wheel) plus the missing one,
+// so a replacing -G keeps the existing memberships. Groups whose member list
+// only contains a longer name sharing the prefix, and the primary group that
+// does not list the account, are not included.
 func TestNetBSDEnsureUpdate(t *testing.T) {
-	testBSDEnsureUpdate(t, func(runner Runner) interface{ Ensure(DesiredUser) error } {
-		return NewNetBSD(runner)
-	})
+	calls := bsdUpdateCalls(
+		[]bsdCall{{command: "getent", args: []string{"group"}, stdout: bsdGroupDB}},
+		bsdCall{command: "usermod", args: []string{"-G", "audio,video,wheel", "svc"}},
+	)
+	if err := NewNetBSD(scriptedBSDRunner(t, calls)).Ensure(bsdUpdateWant()); err != nil {
+		t.Fatalf("Ensure() = %v", err)
+	}
+}
+
+// bsdGroupDB is a getent group enumeration in which svc is an explicit member
+// of wheel and video, has primary group svc, and is not in audio or staff
+// (staff only lists svcx).
+const bsdGroupDB = "wheel:*:0:root,svc\nsvc:*:1001:\nvideo:*:44:svc\naudio:*:45:\nstaff:*:20:root,svcx\n"
+
+func bsdUpdateWant() DesiredUser {
+	return DesiredUser{Name: "svc", SupplementaryGroups: []string{"wheel", "audio", "wheel"}}
+}
+
+// bsdUpdateCalls is the command sequence for adding the missing audio
+// membership to an existing svc account: the account and membership probes
+// (id -Gn, then any platform union probes) run before the missing audio
+// group is created, and usermod runs last.
+func bsdUpdateCalls(unionProbes []bsdCall, usermod bsdCall) []bsdCall {
+	calls := []bsdCall{
+		{command: "getent", args: []string{"passwd", "svc"}},
+		{command: "id", args: []string{"-Gn", "svc"}, stdout: "svc wheel video\n"},
+	}
+	calls = append(calls, unionProbes...)
+	return append(calls,
+		bsdCall{command: "getent", args: []string{"group", "audio"}, code: 2},
+		bsdCall{command: "groupadd", args: []string{"audio"}},
+		bsdCall{command: "getent", args: []string{"group", "wheel"}},
+		usermod,
+	)
 }
 
 func TestOpenBSDEnsureInvalidLoginClass(t *testing.T) {
@@ -107,13 +146,13 @@ func TestNetBSDEnsureDryRun(t *testing.T) {
 func TestOpenBSDEnsureSupplementaryGroupLimit(t *testing.T) {
 	testBSDEnsureSupplementaryGroupLimit(t, func(runner Runner) interface{ Ensure(DesiredUser) error } {
 		return NewOpenBSD(runner)
-	})
+	}, nil)
 }
 
 func TestNetBSDEnsureSupplementaryGroupLimit(t *testing.T) {
 	testBSDEnsureSupplementaryGroupLimit(t, func(runner Runner) interface{ Ensure(DesiredUser) error } {
 		return NewNetBSD(runner)
-	})
+	}, []bsdCall{{command: "getent", args: []string{"group"}, stdout: "svc:*:1001:\n"}})
 }
 
 func TestNetBSDEnsureSurfacesUnavailableLoginClassOption(t *testing.T) {
@@ -184,9 +223,9 @@ func testBSDEnsureNoOp(t *testing.T, newBackend bsdBackend) {
 	t.Helper()
 	calls := []bsdCall{
 		{command: "getent", args: []string{"passwd", "svc"}},
+		{command: "id", args: []string{"-Gn", "svc"}, stdout: "svc audio wheel\n"},
 		{command: "getent", args: []string{"group", "audio"}},
 		{command: "getent", args: []string{"group", "wheel"}},
-		{command: "id", args: []string{"-Gn", "svc"}, stdout: "svc audio wheel\n"},
 	}
 	if err := newBackend(scriptedBSDRunner(t, calls)).Ensure(DesiredUser{
 		Name:                "svc",
@@ -197,24 +236,6 @@ func testBSDEnsureNoOp(t *testing.T, newBackend bsdBackend) {
 		Shell:               "/sbin/nologin",
 		LoginClass:          "daemon",
 		System:              true,
-	}); err != nil {
-		t.Fatalf("Ensure() = %v", err)
-	}
-}
-
-func testBSDEnsureUpdate(t *testing.T, newBackend bsdBackend) {
-	t.Helper()
-	calls := []bsdCall{
-		{command: "getent", args: []string{"passwd", "svc"}},
-		{command: "getent", args: []string{"group", "audio"}, code: 2},
-		{command: "groupadd", args: []string{"audio"}},
-		{command: "getent", args: []string{"group", "wheel"}},
-		{command: "id", args: []string{"-Gn", "svc"}, stdout: "svc wheel\n"},
-		{command: "usermod", args: []string{"-G", "audio", "svc"}},
-	}
-	if err := newBackend(scriptedBSDRunner(t, calls)).Ensure(DesiredUser{
-		Name:                "svc",
-		SupplementaryGroups: []string{"wheel", "audio", "wheel"},
 	}); err != nil {
 		t.Fatalf("Ensure() = %v", err)
 	}
@@ -253,7 +274,10 @@ func testBSDEnsureDryRun(t *testing.T, newBackend bsdBackend) {
 	}
 }
 
-func testBSDEnsureSupplementaryGroupLimit(t *testing.T, newBackend bsdBackend) {
+// testBSDEnsureSupplementaryGroupLimit checks the desired-set limit on both
+// BSDs. unionProbe is the extra group-database probe NetBSD issues before a
+// membership update (nil on OpenBSD).
+func testBSDEnsureSupplementaryGroupLimit(t *testing.T, newBackend bsdBackend, unionProbe []bsdCall) {
 	t.Helper()
 	groups := bsdGroupNames(maxBSDSupplementaryGroups)
 	joined := strings.Join(groups, ",")
@@ -276,13 +300,12 @@ func testBSDEnsureSupplementaryGroupLimit(t *testing.T, newBackend bsdBackend) {
 	t.Run("update accepts the portable limit without truncation", func(t *testing.T) {
 		calls := make([]bsdCall, 0, len(groups)+3)
 		calls = append(calls, bsdCall{command: "getent", args: []string{"passwd", "svc"}})
+		calls = append(calls, bsdCall{command: "id", args: []string{"-Gn", "svc"}, stdout: "svc\n"})
+		calls = append(calls, unionProbe...)
 		for _, group := range groups {
 			calls = append(calls, bsdCall{command: "getent", args: []string{"group", group}})
 		}
-		calls = append(calls,
-			bsdCall{command: "id", args: []string{"-Gn", "svc"}, stdout: "svc\n"},
-			bsdCall{command: "usermod", args: []string{"-G", joined, "svc"}},
-		)
+		calls = append(calls, bsdCall{command: "usermod", args: []string{"-G", joined, "svc"}})
 		if err := newBackend(scriptedBSDRunner(t, calls)).Ensure(DesiredUser{
 			Name:                "svc",
 			SupplementaryGroups: groups,

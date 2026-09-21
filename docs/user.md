@@ -86,6 +86,49 @@ What the tools then do (per platform documentation, not verified natively):
   on Rocky, OpenBSD, and NetBSD; `/usr/sbin/nologin` on FreeBSD). On the BSDs,
   add `WithLoginClass` for a class that must already exist in `login.conf`.
 
+## Supplementary memberships of an existing account
+
+For an account that already exists, gonf probes the current memberships,
+creates any missing requested group, and issues one membership command only
+when a requested group is missing (on Rocky the missing group is created
+before the probes; the order does not change the result there). A second run with the same recipe issues no
+membership command. Existing memberships the recipe does not mention are
+kept. On OpenBSD and NetBSD the membership probes (and NetBSD's checks below)
+run before the first `groupadd`, so a refused update creates no group.
+Commands issued (verified in gonf's unit tests; they model OpenBSD `-G` as
+appending only, per its manual, and NetBSD `-G` both as appending and as
+replacing):
+
+| Platform | Probe | Membership command | Groups passed |
+|---|---|---|---|
+| Rocky Linux | `id --groups --name NAME` | `usermod --append --groups G1,G2 -- NAME` | only the missing groups |
+| OpenBSD | `id -Gn NAME` | `usermod -G G1,G2 NAME` | only the missing groups |
+| NetBSD | `id -Gn NAME`, then `getent group` when something is missing | `usermod -G G1,G2,... NAME` | every group that already lists the account, plus the missing groups |
+| FreeBSD | `pw usershow -n NAME`, `pw groupshow -a` | `pw usermod -n NAME -G G1,G2,...` | every current secondary group, plus the missing groups (primary group excluded) |
+
+Why the argument differs (per platform documentation, not verified natively):
+
+- Rocky Linux `usermod --append` adds to the list; without it `--groups`
+  would replace the list.
+- OpenBSD `usermod(8)` documents `-G` as appending to the secondary groups
+  (its `-S` option replaces them), so passing only the missing groups keeps
+  the rest.
+- NetBSD `usermod(8)` describes `-G` only as the secondary groups the user
+  will be a member of, without saying whether existing ones are kept, and has
+  no separate append option. gonf therefore passes the full union of the
+  current explicit memberships (read from `getent group`) and the missing
+  groups, which keeps every membership whether `-G` replaces or appends.
+  Under the append reading this also relies on `usermod` not duplicating a
+  member entry for a group the user is already in; that the BSD `user.c`
+  append step skips such groups is an unverified recollection of the source,
+  pending native verification (task y42). A union of more than 16 groups, or
+  a group name from `getent group` containing whitespace or a comma, is
+  rejected before any `groupadd` or `usermod` runs. A primary group that
+  also lists the account in `/etc/group` stays in the union, so that entry is
+  kept too.
+- FreeBSD `pw usermod -G` replaces the secondary-group list, so gonf passes
+  the full union read from `pw groupshow -a`.
+
 ## Managing an existing account's home field
 
 `WithManageHome` opts one `User` in to converging the passwd home field of an

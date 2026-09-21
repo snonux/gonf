@@ -2,6 +2,7 @@ package user
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	gonfexec "github.com/snonux/gonf/internal/exec"
@@ -10,8 +11,33 @@ import (
 
 // maxBSDSupplementaryGroups is the portable useradd/usermod -G limit. NetBSD
 // documents a maximum of 16 groups; rejecting a larger desired set prevents a
-// platform utility from silently truncating it.
+// platform utility from silently truncating it. On NetBSD the limit also
+// applies to the full union gonf passes to usermod -G for an existing account
+// (see membershipUnion).
 const maxBSDSupplementaryGroups = 16
+
+// membershipMode selects how a BSD backend adds supplementary memberships to
+// an account that already exists. The two BSDs share useradd/usermod
+// ancestry but document usermod -G differently.
+type membershipMode int
+
+const (
+	// appendMissing passes only the missing groups to usermod -G. OpenBSD
+	// usermod(8) documents -G as appending to the user's secondary groups
+	// (and a separate -S option as replacing them), so the missing set alone
+	// never drops an existing membership.
+	appendMissing membershipMode = iota
+	// membershipUnion passes every group that already lists the account as
+	// an explicit member plus the missing ones. NetBSD usermod(8) only says
+	// -G names the secondary groups the user will be a member of and offers
+	// no separate append/set option, so gonf must not rely on append
+	// behaviour: the full union keeps every existing membership whether -G
+	// replaces or appends. Under the append reading, re-listing a group the
+	// user is already in must not duplicate the member entry; that the
+	// shared BSD user.c append step skips such groups is an unverified
+	// recollection of the source, pending native verification (task y42).
+	membershipUnion
+)
 
 // OpenBSD reconciles DesiredUser values using OpenBSD's user-management
 // utilities. It creates only missing groups and users, and adds only missing
@@ -19,6 +45,8 @@ const maxBSDSupplementaryGroups = 16
 // membership, or changes an existing account's primary group, shell, or login
 // class. An existing account's home field changes only when
 // DesiredUser.ManageHome opts in, and then only via usermod -d without -m.
+// Missing memberships are passed alone to usermod -G, which OpenBSD
+// documents as appending (see appendMissing).
 type OpenBSD struct {
 	run Runner
 }
@@ -29,12 +57,18 @@ type OpenBSD struct {
 // membership, or changes an existing account's primary group, shell, or login
 // class. An existing account's home field changes only when
 // DesiredUser.ManageHome opts in, and then only via usermod -d without -m.
+// Because NetBSD does not document whether usermod -G appends or replaces,
+// missing memberships are added by passing the full union of the existing
+// explicit memberships and the missing groups (see membershipUnion).
 type NetBSD struct {
 	run Runner
 }
 
+// bsd is the shared OpenBSD/NetBSD implementation. membership is the only
+// behavioural difference between the two platforms.
 type bsd struct {
-	run Runner
+	run        Runner
+	membership membershipMode
 }
 
 // NewOpenBSD constructs an OpenBSD backend with runner. A nil runner uses the
@@ -51,12 +85,12 @@ func NewNetBSD(runner Runner) NetBSD {
 
 // Ensure converges want without destructive account operations.
 func (b OpenBSD) Ensure(want DesiredUser) error {
-	return bsd(b).Ensure(want)
+	return bsd{run: b.run, membership: appendMissing}.Ensure(want)
 }
 
 // Ensure converges want without destructive account operations.
 func (b NetBSD) Ensure(want DesiredUser) error {
-	return bsd(b).Ensure(want)
+	return bsd{run: b.run, membership: membershipUnion}.Ensure(want)
 }
 
 // EnsureOpenBSD reconciles want with the default bounded command runner.
@@ -99,14 +133,25 @@ func (b bsd) Ensure(want DesiredUser) error {
 // ensureExistingUser adds missing memberships and then, only when opted in,
 // converges the passwd home field. record is the getent passwd line read
 // before any mutation; membership changes never alter the home field.
+//
+// The usermod -G argument is computed and validated (membership probes,
+// NetBSD group enumeration, name checks, group limit) before the first
+// groupadd, so a refused membership update mutates nothing rather than
+// leaving freshly created groups behind on every failing run.
 func (b bsd) ensureExistingUser(record string, want DesiredUser) error {
+	groups, err := b.membershipArgument(want)
+	if err != nil {
+		return err
+	}
 	for _, group := range want.Supplementary() {
 		if err := b.ensureGroup(group); err != nil {
 			return err
 		}
 	}
-	if err := b.addMissingMemberships(want); err != nil {
-		return err
+	if len(groups) > 0 {
+		if err := b.runMutation("User["+want.Name+"]", "usermod", "-G", strings.Join(groups, ","), want.Name); err != nil {
+			return err
+		}
 	}
 	return b.ensureHomeField(record, want)
 }
@@ -172,14 +217,22 @@ func (b bsd) addUser(want DesiredUser) error {
 	return b.runMutation("User["+want.Name+"]", "useradd", args...)
 }
 
-func (b bsd) addMissingMemberships(want DesiredUser) error {
+// membershipArgument returns the groups to pass to usermod -G, or nil when
+// the account already has every desired supplementary group (an empty
+// result means the same). It only probes
+// and never mutates. id -Gn decides what is missing, so a converged account
+// issues no membership command on either platform; a group that does not
+// exist yet is simply reported missing. The argument never removes a
+// membership: on OpenBSD it is the missing set, on NetBSD the union built by
+// unionWithExplicitGroups (see membershipMode).
+func (b bsd) membershipArgument(want DesiredUser) ([]string, error) {
 	desired := want.Supplementary()
 	if len(desired) == 0 {
-		return nil
+		return nil, nil
 	}
 	current, err := b.userGroups(want.Name)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	missing := make([]string, 0, len(desired))
 	for _, group := range desired {
@@ -187,10 +240,67 @@ func (b bsd) addMissingMemberships(want DesiredUser) error {
 			missing = append(missing, group)
 		}
 	}
-	if len(missing) == 0 {
-		return nil
+	if len(missing) == 0 || b.membership == appendMissing {
+		return missing, nil
 	}
-	return b.runMutation("User["+want.Name+"]", "usermod", "-G", strings.Join(missing, ","), want.Name)
+	return b.unionWithExplicitGroups(want.Name, missing)
+}
+
+// unionWithExplicitGroups returns the sorted union of missing and every group
+// that lists name as an explicit member in the group database: the set a
+// replacing usermod -G must receive to keep existing memberships. The union
+// is checked against maxBSDSupplementaryGroups here, before ensureExistingUser
+// creates any group or runs usermod, so a refusal mutates nothing and the
+// platform tool can neither truncate the list nor fail half-way through.
+func (b bsd) unionWithExplicitGroups(name string, missing []string) ([]string, error) {
+	groups, err := b.explicitGroups(name)
+	if err != nil {
+		return nil, err
+	}
+	for _, group := range missing {
+		groups[group] = struct{}{}
+	}
+	union := sortedGroups(groups)
+	if len(union) > maxBSDSupplementaryGroups {
+		return nil, fmt.Errorf("user %q: adding %s while keeping existing memberships needs %d supplementary groups; at most %d are supported on BSD",
+			name, strings.Join(missing, ","), len(union), maxBSDSupplementaryGroups)
+	}
+	return union, nil
+}
+
+// explicitGroups enumerates the group database (getent group) and returns
+// the groups whose member list names the account. Unlike id -Gn it is not
+// bounded by the kernel's group limit and does not report the primary group
+// merely because it is the passwd gid, so it matches the member lists that
+// usermod rewrites. A primary group that also lists the account explicitly
+// is kept, so that listing survives a replacing -G. Group names are validated
+// so a surprising entry cannot inject a comma or whitespace into the -G value.
+func (b bsd) explicitGroups(name string) (map[string]struct{}, error) {
+	stdout, stderr, code, err := b.run("getent", "group")
+	if err != nil {
+		return nil, fmt.Errorf("getent group: %w", err)
+	}
+	if code != 0 {
+		return nil, commandError("getent", []string{"group"}, code, stdout, stderr)
+	}
+	groups := make(map[string]struct{})
+	for _, line := range strings.Split(strings.TrimSpace(stdout), "\n") {
+		if line == "" {
+			continue
+		}
+		fields := strings.SplitN(line, ":", 4)
+		if len(fields) != 4 {
+			return nil, fmt.Errorf("getent group returned malformed group entry %q", line)
+		}
+		if !slices.Contains(strings.Split(fields[3], ","), name) {
+			continue
+		}
+		if err := validateName("group returned by getent group", fields[0]); err != nil {
+			return nil, err
+		}
+		groups[fields[0]] = struct{}{}
+	}
+	return groups, nil
 }
 
 func (b bsd) groupExists(group string) (bool, error) {
