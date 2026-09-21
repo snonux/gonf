@@ -23,12 +23,14 @@ import (
 //     directories whose mode SecureDir ever changes;
 //   - a pre-existing dir is VERIFIED and left exactly as it is, mode included
 //     (a 0755 checkout stays 0755): it must be a directory (not a symlink),
-//     owned by the effective user, and not writable by group or others. A
-//     sticky directory such as /tmp is refused like any other world-writable
-//     one: the sticky bit stops others from deleting our entries but not from
-//     planting entries of their own next to ours, and plan output should not
-//     depend on that subtlety. Anything else is an error naming the directory
-//     and the problem, and nothing was changed;
+//     owned by the effective user, not writable by others, and writable by
+//     group only when that group is the caller's user-private group (see
+//     checkDirAttrs for the rule and why). A sticky directory such as /tmp is
+//     refused like any other world-writable one: the sticky bit stops others
+//     from deleting our entries but not from planting entries of their own
+//     next to ours, and plan output should not depend on that subtlety.
+//     Anything else is an error naming the directory and the problem, and
+//     nothing was changed;
 //   - pre-existing ancestors of dir are only traversed, not verified: they are
 //     the operator's path to the directory, not somewhere gonf stores
 //     anything. Every component, though, is opened relative to the descriptor
@@ -172,6 +174,7 @@ func finishSecureDir(fd int, dir string, created bool) error {
 	return checkDirAttrs(dirLabel(dir), dirAttrs{
 		isDir: st.Mode&unix.S_IFMT == unix.S_IFDIR,
 		uid:   st.Uid,
+		gid:   st.Gid,
 		mode:  uint32(st.Mode) & 0o7777,
 	})
 }
@@ -182,32 +185,65 @@ func finishSecureDir(fd int, dir string, created bool) error {
 type dirAttrs struct {
 	isDir bool
 	uid   uint32
+	gid   uint32
 	mode  uint32 // permission bits plus setuid/setgid/sticky
 }
 
 // checkDirAttrs is the single acceptance rule for a pre-existing plan output
-// directory (SecureDir and CheckExistingDir both use it, so the up-front check
-// cannot drift from the enforcement): a directory, owned by the effective
-// user, that neither group nor others can write. root is not exempt: a
-// directory owned by someone else lets that user swap plan.jsonl, which a
-// later root-run `gonf apply` would then trust. The messages name the
-// directory and say what to do about it.
+// directory. SecureDir (and through it WritePrivateFile and the blobs/ policy
+// of Store.WriteTree/WriteGlob) and CheckExistingDir (and through it the api
+// pre-check) all use it, so the up-front check cannot drift from the
+// enforcement. The directory must be
+//
+//   - a directory, owned by the effective user (root is not exempt: a
+//     directory owned by someone else lets that user swap plan.jsonl, which a
+//     later root-run `gonf apply` would then trust);
+//   - not writable by others, sticky bit or not;
+//   - not writable by group, unless the group is the caller's user-private
+//     group (isPrivateGroup).
+//
+// Why the private-group exception: Fedora, Ubuntu, RHEL, Rocky and most other
+// Linux distributions give every user a private group (gid == uid, that user
+// its only member) and set umask 002, so a fresh `git clone` or mkdir is 0775.
+// Group write on such a directory lets nobody but the caller write, so
+// refusing it protected nothing, yet it made the default `gonf plan -o .` fail
+// in every recipe checkout. Group write for any other group (a shared 2775
+// project directory, a directory whose group is not the caller's own) does let
+// other users replace plan.jsonl and stays refused. The messages say why and
+// what to do about it.
 func checkDirAttrs(label string, a dirAttrs) error {
 	if !a.isDir {
 		return fmt.Errorf("%s is not a directory", label)
 	}
 	if euid := uint32(unix.Geteuid()); a.uid != euid {
 		return fmt.Errorf("%s is owned by uid %d, not by the current user (uid %d); "+
-			"refusing to store plan output where its owner can replace it: choose a directory you own (-o <dir>)",
+			"refusing to store plan output where its owner can replace it: choose a directory you own (-o <private dir>)",
 			label, a.uid, euid)
 	}
-	if a.mode&0o022 != 0 {
-		return fmt.Errorf("%s is writable by group or others (mode %04o); "+
-			"refusing to store plan output where others can replace it: "+
-			"run chmod go-w on it, or choose a private directory (-o <dir>)",
-			label, a.mode)
+	const remedy = "run chmod go-w on it, or choose a private directory you own (-o <private dir>)"
+	switch {
+	case a.mode&0o002 != 0:
+		return fmt.Errorf("%s is world-writable (mode %04o); "+
+			"refusing to store plan output where any user can replace it: %s", label, a.mode, remedy)
+	case a.mode&0o020 != 0 && !isPrivateGroup(a.gid):
+		return fmt.Errorf("%s is group-writable by group %d, which is not your private group (mode %04o); "+
+			"refusing to store plan output where members of that group can replace it: %s",
+			label, a.gid, a.mode, remedy)
 	}
 	return nil
+}
+
+// isPrivateGroup reports whether gid is the caller's user-private group by the
+// standard convention: it is the caller's effective gid and that gid equals
+// the effective uid. Anything else (a supplementary group, a primary group
+// shared by many users as with a classic "users" group, or a process whose
+// egid differs from its euid) is a group other users may belong to. The
+// convention is not verified against the group database: an administrator who
+// added extra members to a private group defeats it, which is their choice to
+// make.
+func isPrivateGroup(gid uint32) bool {
+	egid := uint32(unix.Getegid())
+	return gid == egid && egid == uint32(unix.Geteuid())
 }
 
 // CheckExistingDir applies SecureDir's acceptance rule to a directory that
@@ -216,9 +252,14 @@ func checkDirAttrs(label string, a dirAttrs) error {
 // refuse an unusable directory early; SecureDir remains the authority, as it
 // checks the descriptor it then writes through.
 func CheckExistingDir(path string, info fs.FileInfo) error {
-	a := dirAttrs{isDir: info.IsDir(), uid: uint32(unix.Geteuid()), mode: unixModeBits(info.Mode())}
+	a := dirAttrs{
+		isDir: info.IsDir(),
+		uid:   uint32(unix.Geteuid()),
+		gid:   uint32(unix.Getegid()),
+		mode:  unixModeBits(info.Mode()),
+	}
 	if st, ok := info.Sys().(*syscall.Stat_t); ok {
-		a.uid = st.Uid
+		a.uid, a.gid = st.Uid, st.Gid
 	}
 	return checkDirAttrs(dirLabel(path), a)
 }

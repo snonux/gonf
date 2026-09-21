@@ -17,16 +17,11 @@ import (
 // directory (the current directory by default) without changing its mode, and
 // refuses one it cannot trust, before any task body runs.
 
-// outDirWithMode creates dir with exactly mode (mkdir applies the umask).
+// outDirWithMode creates dir with exactly mode (mkdir applies the umask) and
+// the caller's own group.
 func outDirWithMode(t *testing.T, dir string, mode os.FileMode) string {
 	t.Helper()
-	if err := os.Mkdir(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(dir, mode); err != nil {
-		t.Fatal(err)
-	}
-	return dir
+	return testutil.MkdirMode(t, dir, mode)
 }
 
 // registerOutDirProbe registers "cli_outdir", which packages a source tree as a
@@ -122,20 +117,53 @@ func TestCLIPlanCreatesOutputDirPrivate(t *testing.T) {
 	}
 }
 
-// TestCLIPlanRefusesUnsafeOutputDir: a -o directory that group or others can
-// write (sticky /tmp-style ones included), whether named or the "." default,
-// is refused with an actionable message BEFORE any task body runs, and is left
-// exactly as it was: nothing written, mode unchanged.
+// unsafeOutDir is one -o directory that must be refused, with the text of the
+// refusal.
+type unsafeOutDir struct {
+	name string
+	mk   func(t *testing.T) string
+	want string
+}
+
+// unsafeOutDirs are the output directories `gonf plan` refuses: world-writable
+// ones (sticky /tmp-style included), whatever their group, and, when the runner
+// has a supplementary group to chgrp to, a group-writable one of a shared group.
+func unsafeOutDirs(t *testing.T) []unsafeOutDir {
+	t.Helper()
+	var cases []unsafeOutDir
+	for _, mode := range []os.FileMode{0o757, 0o777, 0o777 | os.ModeSticky} {
+		cases = append(cases, unsafeOutDir{mode.String(), func(t *testing.T) string {
+			return outDirWithMode(t, filepath.Join(t.TempDir(), "out"), mode)
+		}, "world-writable"})
+	}
+	if _, ok := testutil.FindForeignGroup(); ok {
+		cases = append(cases, unsafeOutDir{"0775 shared group", func(t *testing.T) string {
+			dir := outDirWithMode(t, filepath.Join(t.TempDir(), "out"), 0o700)
+			testutil.ChgrpForeign(t, dir)
+			if err := os.Chmod(dir, 0o775); err != nil {
+				t.Fatal(err)
+			}
+			return dir
+		}, "group-writable by group"})
+	}
+	return cases
+}
+
+// TestCLIPlanRefusesUnsafeOutputDir: a -o directory that others can write
+// (sticky /tmp-style ones included) or that a shared group can write, whether
+// named or the "." default, is refused with an actionable message BEFORE any
+// task body runs, and is left exactly as it was: nothing written, mode
+// unchanged.
 func TestCLIPlanRefusesUnsafeOutputDir(t *testing.T) {
-	for _, mode := range []os.FileMode{0o775, 0o757, 0o777, 0o777 | os.ModeSticky} {
+	for _, tc := range unsafeOutDirs(t) {
 		for _, useDefault := range []bool{false, true} {
-			name := mode.String() + " explicit -o"
+			name := tc.name + " explicit -o"
 			if useDefault {
-				name = mode.String() + " default -o ."
+				name = tc.name + " default -o ."
 			}
 			t.Run(name, func(t *testing.T) {
 				ran := registerOutDirProbe(t)
-				dir := outDirWithMode(t, filepath.Join(t.TempDir(), "out"), mode)
+				dir := tc.mk(t)
 				before := testutil.Snapshot(t, dir)
 				args := []string{"plan", "cli_outdir"}
 				if useDefault {
@@ -144,7 +172,7 @@ func TestCLIPlanRefusesUnsafeOutputDir(t *testing.T) {
 					args = []string{"plan", "-o", dir, "cli_outdir"}
 				}
 				code, stderr := runGonf(t, args...)
-				for _, want := range []string{"plan: RecordPlan: plan dir: ", dir, "writable by group or others", "chmod go-w", "-o <dir>"} {
+				for _, want := range []string{"plan: RecordPlan: plan dir: ", dir, tc.want, "chmod go-w", "-o <private dir>"} {
 					if code != 1 || !strings.Contains(stderr, want) {
 						t.Fatalf("exit %d, stderr %q; want exit 1 and a refusal containing %q", code, stderr, want)
 					}
@@ -155,6 +183,132 @@ func TestCLIPlanRefusesUnsafeOutputDir(t *testing.T) {
 				testutil.RequireUnchanged(t, before, dir)
 			})
 		}
+	}
+}
+
+// TestCLIPlanAcceptsPrivateGroupWritableOutputDir is the UPG regression: on a
+// distribution with user-private groups and umask 002 (Fedora, Ubuntu, RHEL,
+// Rocky) every fresh checkout is 0775 with the user's own group, and the
+// default `gonf plan` (-o .) must keep working there without touching the mode.
+// The whole run, directory creation included, happens under umask 002, which
+// is process-wide, so this test must not run in parallel.
+func TestCLIPlanAcceptsPrivateGroupWritableOutputDir(t *testing.T) {
+	testutil.RequirePrivateGroupUser(t)
+	for _, useDefault := range []bool{false, true} {
+		name := "explicit -o"
+		if useDefault {
+			name = "default -o ."
+		}
+		t.Run(name, func(t *testing.T) {
+			ran := registerOutDirProbe(t)
+			dir := filepath.Join(t.TempDir(), "checkout")
+			testutil.WithUmask(0o002, func() {
+				if err := os.Mkdir(dir, 0o777); err != nil {
+					t.Fatal(err)
+				}
+			})
+			if err := os.Chown(dir, -1, os.Getegid()); err != nil {
+				t.Fatal(err)
+			}
+			if got := modePerm(t, dir); got != 0o775 {
+				t.Fatalf("test setup: mkdir under umask 002 made %04o, want 0775", got)
+			}
+			args := []string{"plan", "cli_outdir"}
+			if useDefault {
+				t.Chdir(dir)
+			} else {
+				args = []string{"plan", "-o", dir, "cli_outdir"}
+			}
+			var code int
+			var stderr string
+			testutil.WithUmask(0o002, func() {
+				_ = captureStdout(t, func() { code, stderr = runGonf(t, args...) })
+			})
+			if code != 0 || !*ran {
+				t.Fatalf("exit %d (body ran: %v), stderr: %s", code, *ran, stderr)
+			}
+			for path, want := range map[string]os.FileMode{dir: 0o775, filepath.Join(dir, "plan.jsonl"): 0o600, filepath.Join(dir, "blobs"): 0o700} {
+				if got := modePerm(t, path); got != want {
+					t.Fatalf("%s mode = %04o, want %04o", path, got, want)
+				}
+			}
+		})
+	}
+}
+
+// blobsCase is one unsafe existing blobs/ directory inside an -o directory: mk
+// creates it in out and returns a second directory that must stay unchanged
+// too ("" if none: what a symlink points at), and want is a substring of the
+// refusal.
+type blobsCase struct {
+	name string
+	mk   func(t *testing.T, out string) (target string)
+	want string
+}
+
+// unsafeBlobsCases are the blobs/ directories `gonf plan` refuses at commit
+// time: world-writable, a symlink and, when the runner has a supplementary group
+// to chgrp to, group-writable by a shared group.
+func unsafeBlobsCases(t *testing.T) []blobsCase {
+	t.Helper()
+	cases := []blobsCase{
+		{"world-writable", func(t *testing.T, out string) string {
+			outDirWithMode(t, filepath.Join(out, "blobs"), 0o777)
+			return ""
+		}, "world-writable"},
+		{"symlink", func(t *testing.T, out string) string {
+			target := outDirWithMode(t, filepath.Join(t.TempDir(), "elsewhere"), 0o700)
+			if err := os.Symlink(target, filepath.Join(out, "blobs")); err != nil {
+				t.Fatal(err)
+			}
+			return target
+		}, `component "blobs"`},
+	}
+	if _, ok := testutil.FindForeignGroup(); ok {
+		cases = append(cases, blobsCase{"shared group", func(t *testing.T, out string) string {
+			blobs := outDirWithMode(t, filepath.Join(out, "blobs"), 0o700)
+			testutil.ChgrpForeign(t, blobs)
+			if err := os.Chmod(blobs, 0o775); err != nil {
+				t.Fatal(err)
+			}
+			return ""
+		}, "group-writable by group"})
+	}
+	return cases
+}
+
+// TestCLIPlanRefusesUnsafeBlobsDir: an existing blobs/ inside an acceptable -o
+// directory that others can write, that a shared group can write, or that is a
+// symlink is refused when the blobs are committed: after the task body ran
+// (the up-front check does not look at blobs/), before anything is written, so
+// plan.jsonl is not produced and the directory (and a symlink's target) stay
+// exactly as they were. The message names blobs/ and is not wrapped in a second
+// "plan dir: ... plan: ..." chain.
+func TestCLIPlanRefusesUnsafeBlobsDir(t *testing.T) {
+	for _, tc := range unsafeBlobsCases(t) {
+		t.Run(tc.name, func(t *testing.T) {
+			ran := registerOutDirProbe(t)
+			out := outDirWithMode(t, filepath.Join(t.TempDir(), "out"), 0o755)
+			target := tc.mk(t, out)
+			before := testutil.Snapshot(t, out)
+			var targetBefore testutil.DirSnapshot
+			if target != "" {
+				targetBefore = testutil.Snapshot(t, target)
+			}
+			code, stderr := runGonf(t, "plan", "-o", out, "cli_outdir")
+			for _, want := range []string{"plan: RecordPlan: ", filepath.Join(out, "blobs"), tc.want} {
+				if code != 1 || !strings.Contains(stderr, want) {
+					t.Fatalf("exit %d, stderr %q; want exit 1 and a refusal containing %q", code, stderr, want)
+				}
+			}
+			if strings.Contains(stderr, "plan dir:") || !*ran {
+				t.Fatalf("stderr %q, body ran %v; want no doubled \"plan dir: ... plan: ...\" prefix and a commit-time (post-body) refusal", stderr, *ran)
+			}
+			testutil.RequireUnchanged(t, before, out)
+			if target != "" {
+				testutil.RequireUnchanged(t, targetBefore, target)
+			}
+		})
 	}
 }
 

@@ -54,8 +54,8 @@ applies. What is guaranteed, and what is not:
   cycle or packaging error) `dir` is exactly as it was (byte for byte and
   mtime for mtime), and a `dir` that did not exist is not created. The same
   holds when `dir` itself is unusable (a symlink, or below a symlinked
-  directory; a file; owned by another user; writable by group or others; not
-  writable by you; nowhere writable to create it): a cheap best-effort check
+  directory; a file; owned by another user; world-writable or group-writable by a group other than
+  your private group; not writable by you; nowhere writable to create it): a cheap best-effort check
   rejects those before any task body runs, creating and changing nothing. It
   is a pre-check, not a guarantee: whatever it misses (the path changed in
   between, ACLs) is still refused by the same no-follow directory open that
@@ -399,7 +399,7 @@ import from an external `plan_test` file is fine.
 | Command | Effect |
 |---------|--------|
 | `gonf <task> [task…]` | Record + apply locally |
-| `gonf plan [-o dir\|-stdout] [-id name] <task>…` | Write `dir/plan.jsonl` (+ `blobs/`; `dir` defaults to `.`, is created `0700` when missing, is never chmod'ed when it exists and must be yours and not group/other-writable), or print JSONL to stdout |
+| `gonf plan [-o dir\|-stdout] [-id name] <task>…` | Write `dir/plan.jsonl` (+ `blobs/`; `dir` defaults to `.`, is created `0700` when missing, is never chmod'ed when it exists and must be yours, not world-writable and not group-writable except by your private group, see "The output directory" below), or print JSONL to stdout |
 | `gonf apply [-n\|-dry-run\|-strict-preview] <plan.jsonl\|->` | Apply a plan file, or read **GONF-PUSH/1** / bare JSONL from stdin |
 | `gonf push [-n\|-preview] [-id name] [-- ssh-args…] user@host <task>…` | Record in memory, stream over `ssh` to remote `gonf apply -` |
 | `gonf cluster [-n\|-preview] [-j N] [-id name] [-host-timeout 10m] <cluster> <task>…` | Resolve inventory cluster; record once; parallel push or strict preview to each host |
@@ -417,20 +417,41 @@ mode:
 | `dir` | Result |
 |-------|--------|
 | missing (any missing parents too) | created, every created component `0700` whatever the umask |
-| exists, yours, not writable by group/others (`0755`, `0750`, `0700`, ...) | used **as it is**; its mode is not changed. Only `plan.jsonl` (`0600`) and the `blobs/` directory gonf creates (`0700`) are private |
-| exists, writable by group or others (`0775`, `0777`, sticky `/tmp` included) | refused, nothing changed |
+| exists, yours, not writable by others, and group-writable at most by your private group (`0755`, `0750`, `0700`, and the `0775` a fresh checkout gets under umask `002`, ...) | used **as it is**; its mode is not changed. Only `plan.jsonl` (`0600`) and the `blobs/` directory gonf creates (`0700`) are private |
+| exists, yours, but read-only for you (`0555`, `0500`, ...) | refused up front, before any task runs, with `cannot write to <dir>: permission denied; run chmod u+w on it, or ...`. **New since m62:** such a directory used to be chmod'ed to `0700` and the run worked; gonf no longer changes the mode of a directory it did not create |
+| exists, world-writable (`0777`, `0757`, ...; sticky `/tmp` included) | refused, nothing changed |
+| exists, group-writable by a group other than your private group (a shared `2775` project directory, or any `g+w` directory of a group that is not yours alone) | refused, nothing changed |
 | exists, owned by another user (root included: a root run does not take over a user's directory) | refused, nothing changed |
 | not a directory, or a symlink (or below one) | refused |
 
-A refusal names the directory and the problem and says what to do: `chmod go-w`
-it, or pass `-o <private dir>`. Pre-existing parents of `dir` are only walked
-(no symlinks), not checked. The same rule applies to a `blobs/` directory that
-already exists inside `dir`: kept as it is when it is yours and not group/other
-writable, refused otherwise. **Behaviour change:** earlier versions chmod'ed
-`dir` to `0700` on every run (breaking a served or shared directory, and
-changing the mode of the checkout for the default `-o .`); an unsafe directory
-that used to be silently narrowed is now refused, and on a system whose default
-umask is `002` a `0775` checkout therefore needs `-o <dir>` or `chmod g-w`.
+**Why group write is accepted for your private group.** Fedora, Ubuntu, RHEL,
+Rocky and most other Linux distributions give every user a *user-private
+group* (gid equal to uid, the user its only member) and a default umask of
+`002`, so a fresh `git clone` or `mkdir` is `0775`. Nobody but you can write
+through such a group, so refusing it protected nothing while it broke the
+default `gonf plan -o .` in every recipe checkout. gonf therefore treats `g+w`
+as safe exactly when the directory's group is your effective gid **and** that
+gid equals your effective uid (the standard convention; the group database is
+not consulted, so an administrator who added members to a private group opts
+out of the protection). World-writable is refused always, sticky bit or not,
+and `g+w` on any other group (a supplementary group, a shared project group)
+is refused because its members could replace `plan.jsonl`, which a later
+`gonf apply` trusts.
+
+A refusal names the directory and the reason (world-writable, or
+group-writable by a named group that is not your private group) and says what
+to do: `chmod go-w` it, or pass `-o <private dir>`. Pre-existing parents of
+`dir` are only walked (no symlinks), not checked. The same rule applies to a
+`blobs/` directory that already exists inside `dir`: kept as it is when it
+passes, refused otherwise. That check is not part of the up-front pre-check: a
+plan that packages no blob never touches `blobs/`, so an unsafe leftover
+`blobs/` is refused only when the blobs are committed, after the task bodies
+ran but before anything is written (a symlinked `blobs/` is refused the same
+way and nothing is written through it; a `plan.jsonl` that is a symlink is
+replaced by the new file, never written through). **Behaviour change:**
+earlier versions chmod'ed `dir` to `0700` on every run (breaking a served or
+shared directory, and changing the mode of the checkout for the default
+`-o .`); an unsafe directory that used to be silently narrowed is now refused.
 
 ### Inventory DSL (`Host` / `Cluster` / `Fleet`)
 

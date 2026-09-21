@@ -64,8 +64,9 @@ func ReadFile(planDir, blobRef string) ([]byte, error) {
 // WriteFile writes data as blobs/<name> (a single file) and returns the ref.
 // The blobs directory is created 0700 when missing; one that already exists is
 // verified, not rewritten (WritePrivateFile, see SecureDir): it must be ours and
-// not group/other-writable, so a blob never lands in a directory somebody else
-// can modify, but a mode such as 0755 that the operator chose is kept. The blob
+// not writable by others or by a shared group (SecureDir's rule; your private
+// group may write), so a blob never lands in a directory somebody else can
+// modify, but a mode such as 0755 that the operator chose is kept. The blob
 // file itself is always 0600.
 func (s *Store) WriteFile(name string, data []byte) (string, error) {
 	if s == nil || s.Root == "" {
@@ -151,8 +152,9 @@ func (s *Store) WriteGlob(name, pattern string) (string, error) {
 // secureBlobParent applies the directory policy of SecureDir to the directory
 // that will hold the blob at abs (blobs/), which WriteTree and WriteGlob would
 // otherwise create with MkdirAll and never look at again: a missing one is
-// created 0700, an existing one must be ours and not group/other-writable, so
-// tree blobs get the same guarantee as the single-file blobs that
+// created 0700, an existing one must pass the same rule (ours, not
+// world-writable, not group-writable by a group other than the caller's private
+// group), so tree blobs get the same guarantee as the single-file blobs that
 // WritePrivateFile writes. The tree itself (abs) is gonf's own scratch space
 // below it: it is cleared and recreated 0700 on every write.
 func secureBlobParent(abs string) error {

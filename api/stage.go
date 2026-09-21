@@ -45,7 +45,7 @@ func stageBlobs(planID, planDir string, taskNames []string) ([]plan.Op, error) {
 		return nil, err
 	}
 	if err := commitStagedBlobs(ops, stage.path(), planDir); err != nil {
-		return nil, fmt.Errorf("RecordPlan: plan dir: %w", err)
+		return nil, err
 	}
 	return ops, nil
 }
@@ -135,15 +135,27 @@ func (l *lazyStage) WriteGlob(name, pattern string) (string, error) {
 //     symlink "link", which a plain Lstat of "link/" would follow);
 //   - an existing planDir fails plan.CheckExistingDir, SecureDir's own
 //     acceptance rule for a pre-existing directory: it must be a directory,
-//     owned by the effective user (root included) and not writable by group or
-//     others. SecureDir never chmods such a directory, so a 0755 one of ours
-//     passes and stays 0755, while a group-writable, world-writable (sticky
-//     /tmp too) or foreign-owned one is refused;
-//   - an existing planDir we cannot write to (a read-only directory of ours:
-//     SecureDir no longer makes it writable by chmod'ing it). SecureDir itself
-//     does not test this, the write that follows would fail; the check turns
-//     that into an early refusal;
+//     owned by the effective user (root included), not world-writable and not
+//     writable by a group other than the caller's private group (see
+//     plan.checkDirAttrs; a 0775 checkout of a user-private-group user passes).
+//     SecureDir never chmods such a directory, so a 0755 one of ours passes and
+//     stays 0755, while a world-writable (sticky /tmp too), shared-group-writable
+//     or foreign-owned one is refused;
+//   - an existing planDir we cannot write to (a read-only directory of ours,
+//     0555/0500: SecureDir no longer makes it writable by chmod'ing it, which
+//     is new since m62, before it the directory was chmod'ed to 0700 and the
+//     run worked). SecureDir itself does not test this, the write that follows
+//     would fail; the check turns that into an early refusal that says how to
+//     fix it;
 //   - an absent planDir has no existing ancestor we can create entries in.
+//
+// An existing <planDir>/blobs is deliberately NOT inspected here: whether the
+// plan needs blobs/ at all is only known after the task bodies ran, and a
+// blob-less plan never touches it, so refusing an unsafe leftover blobs/
+// up front would reject plans that would have worked. An unsafe blobs/ (a
+// symlink, foreign-owned, world- or shared-group-writable) is therefore
+// refused at commit time, by the same policy (plan.SecureDir on blobs/),
+// before any blob is written.
 //
 // It is a best-effort pre-check, not a guarantee: it inspects the path with
 // Lstat/access(2) while SecureDir opens it component by component, so the
@@ -208,7 +220,8 @@ func checkExistingPlanDir(path string, info os.FileInfo) error {
 		return err
 	}
 	if err := unix.Access(path, unix.W_OK|unix.X_OK); err != nil {
-		return fmt.Errorf("cannot write to %s: %w", path, err)
+		return fmt.Errorf("cannot write to %s: %w; run chmod u+w on it, "+
+			"or choose a writable private directory you own (-o <private dir>)", path, err)
 	}
 	return nil
 }
@@ -222,9 +235,14 @@ func checkExistingPlanDir(path string, info os.FileInfo) error {
 // after every validation, so what can still fail here is I/O on the destination
 // itself (permissions, full disk); those errors may leave some blobs copied,
 // which is unavoidable without transactional directories.
+//
+// Error prefixes: a refused planDir is reported as "RecordPlan: plan dir: ...".
+// The blob store's own errors already name the blob and start with "plan: "
+// (for example an unsafe existing blobs/ directory), so they only get the
+// "RecordPlan: " prefix instead of a second "plan dir: ... plan: ..." chain.
 func commitStagedBlobs(ops []plan.Op, stage, planDir string) error {
 	if err := plan.SecureDir(planDir); err != nil {
-		return err
+		return fmt.Errorf("RecordPlan: plan dir: %w", err)
 	}
 	dest := plan.NewStore(planDir)
 	copied := make(map[string]bool)
@@ -234,7 +252,7 @@ func commitStagedBlobs(ops []plan.Op, stage, planDir string) error {
 		}
 		copied[op.Blob] = true
 		if err := copyStagedBlob(stage, dest, op.Blob); err != nil {
-			return err
+			return fmt.Errorf("RecordPlan: %w", err)
 		}
 	}
 	return nil

@@ -6,18 +6,16 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/snonux/gonf/internal/testutil"
 )
 
 // mkdirMode creates dir with exactly mode (os.Mkdir is subject to the umask,
-// so it chmods afterwards), for the directories the tests pre-create.
+// so it chmods afterwards) and the caller's own group, for the directories the
+// tests pre-create.
 func mkdirMode(t *testing.T, dir string, mode os.FileMode) {
 	t.Helper()
-	if err := os.Mkdir(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(dir, mode); err != nil {
-		t.Fatal(err)
-	}
+	testutil.MkdirMode(t, dir, mode)
 }
 
 // modeOf is the permission, setuid/setgid and sticky bits of path (no
@@ -29,14 +27,6 @@ func modeOf(t *testing.T, path string) os.FileMode {
 		t.Fatal(err)
 	}
 	return info.Mode() &^ os.ModeDir
-}
-
-// withUmask runs fn under umask mask and restores the old one. The umask is
-// process-wide, so callers must not be parallel tests.
-func withUmask(mask int, fn func()) {
-	old := syscall.Umask(mask)
-	defer syscall.Umask(old)
-	fn()
 }
 
 // requireEntries fails unless dir contains exactly the given entry names.
@@ -90,14 +80,14 @@ func TestSecureDirCurrentDirectory(t *testing.T) {
 	if got := modeOf(t, cwd); got != 0o755 {
 		t.Fatalf("cwd mode = %v, want 0755 unchanged", got)
 	}
-	if err := os.Chmod(cwd, 0o775); err != nil {
+	if err := os.Chmod(cwd, 0o777); err != nil {
 		t.Fatal(err)
 	}
-	if err := SecureDir("."); err == nil || !strings.Contains(err.Error(), "writable by group or others") {
-		t.Fatalf("SecureDir(.) on a group-writable cwd = %v, want a refusal", err)
+	if err := SecureDir("."); err == nil || !strings.Contains(err.Error(), "world-writable") {
+		t.Fatalf("SecureDir(.) on a world-writable cwd = %v, want a refusal", err)
 	}
-	if got := modeOf(t, cwd); got != 0o775 {
-		t.Fatalf("cwd mode = %v, want the refused directory left at 0775", got)
+	if got := modeOf(t, cwd); got != 0o777 {
+		t.Fatalf("cwd mode = %v, want the refused directory left at 0777", got)
 	}
 }
 
@@ -110,7 +100,7 @@ func TestSecureDirCreatesEveryComponentPrivate(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			base := filepath.Join(t.TempDir(), "base")
 			mkdirMode(t, base, 0o755)
-			withUmask(mask, func() {
+			testutil.WithUmask(mask, func() {
 				if err := SecureDir(filepath.Join(base, "a", "b", "c")); err != nil {
 					t.Fatal(err)
 				}
@@ -141,13 +131,14 @@ func TestSecureDirAcceptsItsOwnDirectoryAgain(t *testing.T) {
 	}
 }
 
-// TestSecureDirRefusesWritableDirs: a group- or other-writable directory (a
-// sticky one such as /tmp included: sticky stops deleting foreign entries, but
-// not planting entries, and plan material must not depend on that) is refused
-// with an error naming the directory and the problem, and is left exactly as
-// it was, with nothing created inside.
-func TestSecureDirRefusesWritableDirs(t *testing.T) {
-	for _, mode := range []os.FileMode{0o770, 0o775, 0o720, 0o702, 0o757, 0o777, 0o777 | os.ModeSticky, os.ModeSetgid | 0o775} {
+// TestSecureDirRefusesWorldWritableDirs: a world-writable directory is refused
+// whatever its group (a user-private group user's own group included) and
+// whether or not it is sticky (sticky stops deleting foreign entries, but not
+// planting entries, and plan material must not depend on that). The error names
+// the directory and the reason, the directory is left exactly as it was, and
+// nothing is created inside.
+func TestSecureDirRefusesWorldWritableDirs(t *testing.T) {
+	for _, mode := range []os.FileMode{0o702, 0o707, 0o757, 0o777, 0o777 | os.ModeSticky, os.ModeSetgid | 0o777} {
 		t.Run(mode.String(), func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "shared")
 			mkdirMode(t, dir, mode)
@@ -156,7 +147,7 @@ func TestSecureDirRefusesWritableDirs(t *testing.T) {
 			if err == nil {
 				t.Fatalf("SecureDir(%s, mode %v) = nil, want a refusal", dir, mode)
 			}
-			for _, part := range []string{dir, "writable by group or others", "chmod go-w"} {
+			for _, part := range []string{dir, "world-writable", "chmod go-w", "-o <private dir>"} {
 				if !strings.Contains(err.Error(), part) {
 					t.Fatalf("error %q must contain %q", err, part)
 				}
@@ -230,15 +221,15 @@ func TestSecureDirRefusesNonDirectories(t *testing.T) {
 }
 
 // TestWritePrivateFileRefusesWritableDir: the file writer shares the directory
-// policy, so secret plan material never lands in a group- or other-writable
-// directory; a plain 0755 directory of ours is fine and keeps its mode, while
-// the file itself is owner-only.
+// policy, so secret plan material never lands in a world-writable directory
+// (the group rule has its own tests); a plain 0755 directory of ours is fine
+// and keeps its mode, while the file itself is owner-only.
 func TestWritePrivateFileRefusesWritableDir(t *testing.T) {
 	root := t.TempDir()
 	unsafe := filepath.Join(root, "unsafe")
-	mkdirMode(t, unsafe, 0o775)
+	mkdirMode(t, unsafe, 0o777)
 	if err := WritePrivateFile(unsafe, "plan.jsonl", []byte("secret")); err == nil {
-		t.Fatal("WritePrivateFile into a group-writable directory = nil, want a refusal")
+		t.Fatal("WritePrivateFile into a world-writable directory = nil, want a refusal")
 	}
 	requireEntries(t, unsafe)
 
@@ -255,13 +246,14 @@ func TestWritePrivateFileRefusesWritableDir(t *testing.T) {
 
 // TestStoreWriteFileBlobsDirPolicy: Store.WriteFile creates blobs/ 0700 in a
 // plan directory it does not otherwise touch, keeps an existing blobs/ of
-// ours as it is (0755 included), and refuses one that group or others can
-// write, without writing a blob into it.
+// ours as it is (0755 included), and refuses one that others can write (the
+// group rule is pinned in private_group_test.go), without writing a blob into
+// it.
 func TestStoreWriteFileBlobsDirPolicy(t *testing.T) {
 	t.Run("creates blobs private and leaves the plan dir alone", func(t *testing.T) {
 		root := filepath.Join(t.TempDir(), "plan")
 		mkdirMode(t, root, 0o755)
-		withUmask(0, func() {
+		testutil.WithUmask(0, func() {
 			if _, err := NewStore(root).WriteFile("b", []byte("x")); err != nil {
 				t.Fatal(err)
 			}
@@ -309,7 +301,7 @@ func TestStoreTreeBlobsDirPolicy(t *testing.T) {
 	for name, write := range writers {
 		t.Run(name+" creates blobs private", func(t *testing.T) {
 			root := t.TempDir()
-			withUmask(0, func() {
+			testutil.WithUmask(0, func() {
 				if err := write(NewStore(root)); err != nil {
 					t.Fatal(err)
 				}
@@ -330,7 +322,7 @@ func TestStoreTreeBlobsDirPolicy(t *testing.T) {
 			root := t.TempDir()
 			mkdirMode(t, filepath.Join(root, "blobs"), 0o777)
 			err := write(NewStore(root))
-			if err == nil || !strings.Contains(err.Error(), "writable by group or others") {
+			if err == nil || !strings.Contains(err.Error(), "world-writable") {
 				t.Fatalf("write into a world-writable blobs dir = %v, want a refusal", err)
 			}
 			requireEntries(t, filepath.Join(root, "blobs"))
@@ -339,23 +331,34 @@ func TestStoreTreeBlobsDirPolicy(t *testing.T) {
 }
 
 // TestCheckExistingDirMatchesSecureDir: the FileInfo-based pre-check accepts
-// and refuses exactly what SecureDir does for the same directories, and words
-// the mode the same way (sticky bit included), so an up-front refusal cannot
+// and refuses exactly what SecureDir does for the same directories (own group
+// and, where the caller has a supplementary group, a foreign one), and words the
+// refusal the same way (sticky bit included), so an up-front refusal cannot
 // disagree with the enforcement.
 func TestCheckExistingDirMatchesSecureDir(t *testing.T) {
-	for _, mode := range []os.FileMode{0o700, 0o755, 0o555, 0o775, 0o757, 0o777 | os.ModeSticky, os.ModeSetgid | 0o770} {
-		dir := filepath.Join(t.TempDir(), "d")
-		mkdirMode(t, dir, mode)
-		info, err := os.Lstat(dir)
-		if err != nil {
-			t.Fatal(err)
+	modes := []os.FileMode{0o700, 0o755, 0o555, 0o775, 0o757, 0o777 | os.ModeSticky, os.ModeSetgid | 0o770}
+	_, haveForeign := testutil.FindForeignGroup()
+	for _, foreign := range []bool{false, true} {
+		if foreign && !haveForeign {
+			continue
 		}
-		checkErr, secureErr := CheckExistingDir(dir, info), SecureDir(dir)
-		if (checkErr == nil) != (secureErr == nil) {
-			t.Fatalf("mode %v: CheckExistingDir = %v, SecureDir = %v; want the same verdict", mode, checkErr, secureErr)
-		}
-		if checkErr != nil && checkErr.Error() != secureErr.Error() {
-			t.Fatalf("mode %v: messages differ:\n  check:  %v\n  secure: %v", mode, checkErr, secureErr)
+		for _, mode := range modes {
+			dir := filepath.Join(t.TempDir(), "d")
+			mkdirMode(t, dir, mode)
+			if foreign {
+				testutil.ChgrpForeign(t, dir)
+			}
+			info, err := os.Lstat(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkErr, secureErr := CheckExistingDir(dir, info), SecureDir(dir)
+			if (checkErr == nil) != (secureErr == nil) {
+				t.Fatalf("mode %v foreign group %v: CheckExistingDir = %v, SecureDir = %v; want the same verdict", mode, foreign, checkErr, secureErr)
+			}
+			if checkErr != nil && checkErr.Error() != secureErr.Error() {
+				t.Fatalf("mode %v foreign group %v: messages differ:\n  check:  %v\n  secure: %v", mode, foreign, checkErr, secureErr)
+			}
 		}
 	}
 	link := filepath.Join(t.TempDir(), "link")

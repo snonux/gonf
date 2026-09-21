@@ -18,7 +18,44 @@ import (
 	"github.com/snonux/gonf/resource/cmd"
 )
 
+// TestCLIPlanAndApply plans the "cli_touch" task into an existing directory
+// (holding a stale, group-readable plan.jsonl) and applies the resulting plan.
 func TestCLIPlanAndApply(t *testing.T) {
+	root, planDir := setupPlanAndApply(t)
+	setOSArgs(t, "gonf", "plan", "-o", planDir, "-id", "cli-test", "cli_touch")
+	if code := CLI(); code != 0 {
+		t.Fatalf("plan exit %d", code)
+	}
+	planPath := filepath.Join(planDir, "plan.jsonl")
+	assertPlanDirAndFileModes(t, planDir, planPath)
+	assertDecodedPlan(t, planPath)
+
+	setOSArgs(t, "gonf", "apply", planPath)
+	if code := CLI(); code != 0 {
+		t.Fatalf("apply exit %d", code)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "out.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "hello from plan" {
+		t.Fatalf("got %q", data)
+	}
+}
+
+// setOSArgs sets os.Args (which CLI reads) for the rest of the test.
+func setOSArgs(t *testing.T, args ...string) {
+	t.Helper()
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+	os.Args = args
+}
+
+// setupPlanAndApply registers the "cli_touch" task and returns the directory
+// it writes into and an existing 0755 plan directory that already holds a stale
+// 0644 plan.jsonl, which the plan run must replace.
+func setupPlanAndApply(t *testing.T) (root, planDir string) {
+	t.Helper()
 	api.ResetTasks()
 	resource.ResetRepository()
 	api.Task("cli_touch", "touch a file via plan", func() {
@@ -26,9 +63,9 @@ func TestCLIPlanAndApply(t *testing.T) {
 		api.File(filepath.Join(dir, "out.txt"), options.WithContent("hello from plan"))
 	})
 
-	root := t.TempDir()
+	root = t.TempDir()
 	t.Setenv("GONF_CLI_TEST_DIR", root)
-	planDir := filepath.Join(root, "planout")
+	planDir = filepath.Join(root, "planout")
 	if err := os.MkdirAll(planDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -38,23 +75,26 @@ func TestCLIPlanAndApply(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(planDir, "plan.jsonl"), []byte("old"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	return root, planDir
+}
 
-	oldArgs := os.Args
-	t.Cleanup(func() { os.Args = oldArgs })
-
-	os.Args = []string{"gonf", "plan", "-o", planDir, "-id", "cli-test", "cli_touch"}
-	if code := CLI(); code != 0 {
-		t.Fatalf("plan exit %d", code)
-	}
-	planPath := filepath.Join(planDir, "plan.jsonl")
-	// m62: an existing output directory is verified, never rewritten, so the
-	// 0755 the operator chose survives; only plan.jsonl is owner-only.
+// assertPlanDirAndFileModes: m62: an existing output directory is verified,
+// never rewritten, so the 0755 the operator chose survives; only plan.jsonl is
+// owner-only.
+func assertPlanDirAndFileModes(t *testing.T, planDir, planPath string) {
+	t.Helper()
 	if info, err := os.Stat(planDir); err != nil || info.Mode().Perm() != 0o755 {
 		t.Fatalf("plan directory mode = %v, %v; want the existing 0755 unchanged", info.Mode(), err)
 	}
 	if info, err := os.Stat(planPath); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("plan file mode = %v, %v; want 0600", info.Mode(), err)
 	}
+}
+
+// assertDecodedPlan checks that planPath decodes to a plan header plus at least
+// one operation.
+func assertDecodedPlan(t *testing.T, planPath string) {
+	t.Helper()
 	raw, err := os.ReadFile(planPath)
 	if err != nil {
 		t.Fatal(err)
@@ -65,19 +105,6 @@ func TestCLIPlanAndApply(t *testing.T) {
 	}
 	if len(ops) < 2 || ops[0].Op != plan.KindPlan {
 		t.Fatalf("unexpected ops: %#v", ops)
-	}
-
-	outFile := filepath.Join(root, "out.txt")
-	os.Args = []string{"gonf", "apply", planPath}
-	if code := CLI(); code != 0 {
-		t.Fatalf("apply exit %d", code)
-	}
-	data, err := os.ReadFile(outFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "hello from plan" {
-		t.Fatalf("got %q", data)
 	}
 }
 

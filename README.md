@@ -17,7 +17,8 @@ Pure-Go syntax KISS configuration management system for personal use. Built with
 gonf -list
 gonf -version
 gonf [-n] <task> [task…]           # RecordPlan + Apply locally
-gonf plan -o out -id demo <task>…  # write out/plan.jsonl (+ blobs/); out is yours, not group/other-writable
+gonf plan -o out -id demo <task>…  # write out/plan.jsonl (+ blobs/); out is yours, not world-writable,
+                                   # not group-writable except by your private group (a UPG 0775 checkout is fine)
 gonf plan -stdout <task>…          # print plan JSONL to stdout
 gonf apply [-n] out/plan.jsonl     # apply on this or another host
 gonf apply -                       # apply GONF-PUSH/1 or JSONL from stdin
