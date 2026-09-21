@@ -32,18 +32,29 @@ import (
 //	)
 //
 // FanIn is required: a unit set with nothing to watch can never gate its
-// reload, so calling without it is registration-time misuse.
+// reload, so calling without watchable inputs is registration-time misuse.
 func SystemdUnits(opts ...SystemdUnitsOption) Resource {
 	cfg := &systemdUnitsConfig{}
 	for _, o := range opts {
 		o(cfg)
 	}
-	if len(cfg.inputs) == 0 {
-		logger.Fatal("SystemdUnits: no managed inputs; pass FanIn(...) so the daemon-reload and activation gates watch real resources")
+	watch := cfg.watchedIDs()
+	deps := cfg.watchedDeps()
+	for _, a := range cfg.timers {
+		if a.name == "" {
+			logger.Fatal("SystemdUnits: ActivateTimer name must not be empty")
+		}
+	}
+	for _, a := range cfg.services {
+		if a.name == "" {
+			logger.Fatal("SystemdUnits: ActivateService name must not be empty")
+		}
 	}
 
-	watched := cfg.watchedDeps()
-	reloadOpts := []options.DaemonReloadOption{options.OnChange(watched...)}
+	reloadOpts := []options.DaemonReloadOption{
+		options.WatchChanges(watch...),
+		options.DependsOn(deps...),
+	}
 	if cfg.user {
 		reloadOpts = append(reloadOpts, options.WithUser)
 	}
@@ -56,7 +67,8 @@ func SystemdUnits(opts ...SystemdUnitsOption) Resource {
 		if cfg.user {
 			timerOpts = append(timerOpts, options.WithUser)
 		}
-		timerOpts = append(timerOpts, options.DependsOn(reload), options.OnChange(watched...))
+		timerOpts = append(timerOpts,
+			options.DependsOn(reload), options.DependsOn(deps...), options.WatchChanges(watch...))
 		members = append(members, timer.Present(a.name, timerOpts...))
 	}
 	for _, a := range cfg.services {
@@ -64,7 +76,8 @@ func SystemdUnits(opts ...SystemdUnitsOption) Resource {
 		if cfg.user {
 			svcOpts = append(svcOpts, options.WithUser)
 		}
-		svcOpts = append(svcOpts, options.DependsOn(reload), options.OnChange(watched...))
+		svcOpts = append(svcOpts,
+			options.DependsOn(reload), options.DependsOn(deps...), options.WatchChanges(watch...))
 		members = append(members, svc.Present(a.name, svcOpts...))
 	}
 	return resource.Multi(members)
@@ -90,9 +103,31 @@ type unitsServiceActivation struct {
 	opts []options.ServiceOption
 }
 
-// watchedDeps flattens the declared inputs into the dependency values the
-// shared OnChange gate consumes; a Multi input (e.g. a SyncDir result)
-// expands to its members.
+// watchedIDs flattens the FanIn inputs into a deduplicated, first-seen
+// ordered watch list; Multi inputs (e.g. SyncDir results) expand to their
+// member ids. Registration-time misuse — no FanIn, or inputs that expand to
+// no resource ids — aborts the recipe before anything is registered.
+func (c *systemdUnitsConfig) watchedIDs() []string {
+	seen := make(map[string]struct{}, len(c.inputs))
+	var ids []string
+	for _, in := range c.inputs {
+		for _, id := range in.Dependencies() {
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		logger.Fatal("SystemdUnits: no watchable managed inputs; pass FanIn(...) with resources that expand to registered resource ids")
+	}
+	return ids
+}
+
+// watchedDeps returns the FanIn inputs as dependency values, so the watched
+// resources apply before the composed reload and activations; duplicated ids
+// across inputs collapse when the drafts sort their dependency ids.
 func (c *systemdUnitsConfig) watchedDeps() []resource.Dependency {
 	deps := make([]resource.Dependency, 0, len(c.inputs))
 	for _, in := range c.inputs {
@@ -113,9 +148,9 @@ func FanIn(inputs ...Resource) SystemdUnitsOption {
 	}
 }
 
-// WithUserBus routes the composed daemon-reload and timer activations through
+// WithUserBus routes the composed daemon-reload and unit activations through
 // the systemd user bus (~/.config/systemd/user) instead of the system bus.
-// Services on the user bus also honor it; pass it once per composition.
+// Pass it once per composition.
 func WithUserBus() SystemdUnitsOption {
 	return func(c *systemdUnitsConfig) {
 		c.user = true

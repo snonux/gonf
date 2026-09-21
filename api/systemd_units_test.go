@@ -4,11 +4,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
+	"github.com/snonux/gonf/resource/systemd"
 )
 
 // systemdUnitsFixture registers one task whose body composes SystemdUnits and
@@ -123,9 +125,47 @@ func TestSystemdUnitsComposesOneReloadAndFanIn(t *testing.T) {
 		if op.Restart || op.User {
 			t.Fatalf("service %d unexpectedly restarts or uses the user bus: %#v", i, op)
 		}
+		// The uniform activation gate is inert without a restart/reload
+		// policy, but it must still be armed and watching the inputs — a
+		// future WithRestart on this activation relies on it.
+		if !op.IfChanged || !reflect.DeepEqual(op.Watch, inputIDs) {
+			t.Fatalf("service %d gate = %#v, want armed and watching %v", i, op, inputIDs)
+		}
 		if !reflect.DeepEqual(op.Deps, wantDeps) {
 			t.Fatalf("service %d deps = %v, want %v", i, op.Deps, wantDeps)
 		}
+	}
+}
+
+func TestSystemdUnitsFanInDuplicateInputsDeduplicateWatch(t *testing.T) {
+	dir := t.TempDir()
+	writeFixtureFile(t, filepath.Join(dir, "a.service"), "[Unit]\n")
+
+	ops := systemdUnitsFixture(t, func() {
+		unit := InstallFile("/etc/systemd/system/a.service", filepath.Join(dir, "a.service"), options.WithMode(0o644))
+		SystemdUnits(
+			FanIn(unit, unit),
+			ActivateTimer("a-run", options.WithRestart),
+		)
+	})
+
+	// plan + file + reload + timer.
+	if len(ops) != 4 {
+		t.Fatalf("ops = %d (%#v), want 4", len(ops), ops)
+	}
+	unitID := "File[/etc/systemd/system/a.service]"
+	if !reflect.DeepEqual(ops[2].Watch, []string{unitID}) {
+		t.Fatalf("reload watch = %v, want the input id exactly once", ops[2].Watch)
+	}
+	if !reflect.DeepEqual(ops[2].Deps, []string{unitID}) {
+		t.Fatalf("reload deps = %v, want %v", ops[2].Deps, []string{unitID})
+	}
+	if !reflect.DeepEqual(ops[3].Watch, []string{unitID}) {
+		t.Fatalf("timer watch = %v, want the input id exactly once", ops[3].Watch)
+	}
+	wantDeps := []string{"DaemonReload[system]", unitID}
+	if !reflect.DeepEqual(ops[3].Deps, wantDeps) {
+		t.Fatalf("timer deps = %v, want %v", ops[3].Deps, wantDeps)
 	}
 }
 
@@ -244,25 +284,13 @@ func TestSystemdUnitsReturnsComposedMembers(t *testing.T) {
 	writeFixtureFile(t, filepath.Join(dir, "a.service"), "[Unit]\n")
 
 	var composed Resource
-	ResetTasks()
-	resource.ResetRepository()
-	t.Cleanup(func() {
-		resource.SetPlanDraftRecorder(nil)
-		plan.SetRecording(false)
-		plan.ResetRecord()
-	})
-	RegisterMethods(systemdUnitsTasks{body: func() {
+	systemdUnitsFixture(t, func() {
 		unit := InstallFile("/etc/systemd/system/a.service", filepath.Join(dir, "a.service"), options.WithMode(0o644))
 		composed = SystemdUnits(
 			FanIn(unit),
 			ActivateService("a-marker"),
 		)
-	}}, WithPrefix("demo_"))
-
-	// Recording runs the task body, which builds the composition.
-	if _, err := RecordPlan("units", "", "demo_units"); err != nil {
-		t.Fatalf("RecordPlan: %v", err)
-	}
+	})
 
 	if composed == nil {
 		t.Fatal("SystemdUnits returned nil")
@@ -271,5 +299,90 @@ func TestSystemdUnitsReturnsComposedMembers(t *testing.T) {
 	want := []string{"DaemonReload[system]", "Service[a-marker]"}
 	if !reflect.DeepEqual(deps, want) {
 		t.Fatalf("composition dependencies = %v, want %v (inputs stay caller-owned)", deps, want)
+	}
+}
+
+// TestSystemdUnitsRecordedPlanApplies round-trips a composed plan through the
+// real destination apply path with a stubbed systemctl: the unit files land,
+// exactly one daemon-reload fires, and the restart-on-change fan-in reaches
+// the timer.
+func TestSystemdUnitsRecordedPlanApplies(t *testing.T) {
+	if runtime.GOOS != "linux" || !systemd.Detected() {
+		t.Skip("systemd apply fake is Linux-specific")
+	}
+	dir := t.TempDir()
+	writeFixtureFile(t, filepath.Join(dir, "a.service"), "[Unit]\n")
+	writeFixtureFile(t, filepath.Join(dir, "check.sh"), "run\n")
+	// Real recipes ensure the destination dirs; mirror that so the file
+	// apply can stage its temp files.
+	for _, sub := range []string{"units", "bin"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+	RegisterMethods(systemdUnitsTasks{body: func() {
+		unit := InstallFile(filepath.Join(dir, "units", "a.service"), filepath.Join(dir, "a.service"), options.WithMode(0o644))
+		script := InstallFile(filepath.Join(dir, "bin", "check"), filepath.Join(dir, "check.sh"), options.WithMode(0o755))
+		SystemdUnits(
+			FanIn(unit, script),
+			ActivateTimer("a-run", options.WithRestart),
+			ActivateService("a-marker"),
+		)
+	}}, WithPrefix("demo_"))
+
+	ops, err := RecordPlan("apply-units", t.TempDir(), "demo_units")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+
+	var invoked [][]string
+	systemd.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+		if name == "systemctl" {
+			invoked = append(invoked, args)
+		}
+		// Report every queried unit as active and enabled so the only
+		// possible mutating action is the gated timer restart.
+		return "", "", 0, nil
+	})
+	t.Cleanup(systemd.ResetRunCmdForTest)
+
+	if err := plan.Apply(ops, plan.Facts{GOOS: runtime.GOOS}, ""); err != nil {
+		t.Fatalf("plan.Apply: %v", err)
+	}
+
+	for _, dst := range []string{
+		filepath.Join(dir, "units", "a.service"),
+		filepath.Join(dir, "bin", "check"),
+	} {
+		if _, err := os.Stat(dst); err != nil {
+			t.Fatalf("apply did not install %s: %v", dst, err)
+		}
+	}
+
+	reloads := 0
+	restarted := false
+	for _, args := range invoked {
+		switch {
+		case args[0] == "daemon-reload":
+			reloads++
+		case args[0] == "restart" && len(args) == 2 && args[1] == "a-run.timer":
+			restarted = true
+		case args[0] == "enable" || args[0] == "start":
+			t.Fatalf("unexpected systemctl %v with units already active and enabled", args)
+		}
+	}
+	if reloads != 1 {
+		t.Fatalf("daemon-reload ran %d times, want exactly once: %v", reloads, invoked)
+	}
+	if !restarted {
+		t.Fatalf("changed inputs did not fan into the timer restart: %v", invoked)
 	}
 }
