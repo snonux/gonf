@@ -55,19 +55,28 @@ func TestValidateChunkDeps(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("want error containing %q, got %v", tc.wantErr, err)
 			}
-			var dangling *DanglingDepError
-			isDangling := errors.As(err, &dangling)
-			switch {
-			case tc.dangling && (!isDangling || dangling.Op != "a" || dangling.Dep != "File[missing]"):
-				t.Fatalf("error %#v, want a *DanglingDepError for a -> File[missing]", err)
-			case tc.dangling && strings.Contains(err.Error(), "chunk"):
-				t.Fatalf("dangling error %q must not mention chunks", err.Error())
-			case !tc.dangling && isDangling:
-				t.Fatalf("error %q must not be a dangling-dependency error", err.Error())
-			case !tc.dangling && !strings.Contains(err.Error(), "chunk 0"):
-				t.Fatalf("error %q must name the dependent's chunk 0", err.Error())
-			}
+			requireRefusalKind(t, err, tc.dangling)
 		})
+	}
+}
+
+// requireRefusalKind asserts how a ValidateChunkDeps refusal is classified: a
+// dangling dep is a *DanglingDepError for op a -> File[missing] that never
+// mentions chunks; every other refusal is not one and names the dependent's
+// chunk 0.
+func requireRefusalKind(t *testing.T, err error, wantDangling bool) {
+	t.Helper()
+	var dangling *DanglingDepError
+	isDangling := errors.As(err, &dangling)
+	switch {
+	case wantDangling && (!isDangling || dangling.Op != "a" || dangling.Dep != "File[missing]"):
+		t.Fatalf("error %#v, want a *DanglingDepError for a -> File[missing]", err)
+	case wantDangling && strings.Contains(err.Error(), "chunk"):
+		t.Fatalf("dangling error %q must not mention chunks", err.Error())
+	case !wantDangling && isDangling:
+		t.Fatalf("error %q must not be a dangling-dependency error", err.Error())
+	case !wantDangling && !strings.Contains(err.Error(), "chunk 0"):
+		t.Fatalf("error %q must name the dependent's chunk 0", err.Error())
 	}
 }
 
