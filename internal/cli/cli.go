@@ -88,7 +88,7 @@ func parseCLIFlags(program string, args []string) (cliOptions, error) {
 	dryRun := fs.Bool("dry-run", false, "Preview changes without applying them")
 	dryRunShort := fs.Bool("n", false, "Alias for -dry-run")
 	privFlag := fs.String("privilege", "none", "Privilege helper for Privileged() tasks: none|sudo|doas")
-	cmdTimeout := fs.Duration("cmd-timeout", exec.DefaultTimeout(), "default per-command timeout for backend execs (package manager, systemctl, crontab, ...; 0 or negative keeps the current default)")
+	cmdTimeout := fs.Duration("cmd-timeout", exec.DefaultTimeout(), "default per-command timeout for backend execs (package manager, systemctl, crontab, ...) and File WithValidation validators; 0 or negative keeps the current default")
 	if err := fs.Parse(args); err != nil {
 		return cliOptions{}, err
 	}

@@ -60,6 +60,38 @@ the live file untouched, and reports no `File` change, so an `OnChange` restart
 does not run. Candidates are unique per apply and cleaned after both success
 and failure; their private mode is independent of the final file mode.
 
+The validator runs without a shell, with stdin from `/dev/null`, in gonf's own
+process group (so a terminal's Ctrl-C, hangup or Ctrl-Z reaches it as it
+reaches gonf), and is bounded by the same per-command timeout as every other
+backend command (`-cmd-timeout` / `api.SetCommandTimeout`, 5 minutes by
+default). When the timeout expires, the validator process is killed and
+validation fails with `... failed: timed out after 5m0s: context deadline
+exceeded`. Only the validator itself is killed: processes it started keep
+running. If gonf is not allowed to kill it (`EPERM`, e.g. a non-root gonf
+running the validator through `sudo`/`doas`), the timeout cannot bound it and
+gonf waits until it exits; 2 seconds after the failed kill gonf also stops
+reading its output, so its next write may kill it with `SIGPIPE`, reported as
+`... failed: signal: broken pipe`. If a process it started still holds the
+validator's stdout/stderr, gonf stops reading that output 2 seconds after the
+validator exited or was killed and continues without waiting for it (a
+validator that exited 0 still counts as a success). The live file stays
+untouched and the candidate is removed on a timeout too. A failure includes
+the validator's combined stdout/stderr, with lines joined by ` | ` and
+control characters and invalid UTF-8 replaced by `?`. All output is read, but
+only the first 4 KiB are kept and the rendered text is cut to at most 4 KiB;
+when anything was cut, a note such as
+`[output truncated, 1000000 bytes in total]` follows (or
+`[no printable output; N bytes in total]` when what was kept is only
+whitespace):
+
+```
+file /etc/httpd.conf: validation by httpd failed: exit status 1: validator output: /etc/httpd.conf.gonfvalidate123:12: syntax error
+```
+
+Gonf never adds candidate content to the error, but whatever the validator
+prints is reported (and logged), so do not use a validator that echoes secret
+input. Output of a successful validator is discarded.
+
 This is deliberately a **single-file** contract. The candidate shares the live
 file's parent directory, which preserves ordinary relative-path resolution, but
 that directory must be owned by the applying uid and have no group or
