@@ -134,6 +134,69 @@ func TestCronEntryCommandAcceptsPortableSyntax(t *testing.T) {
 	}
 }
 
+// TestCronEntryCommandSplitsOnlyOnCrontabBlanks pins the field separator to
+// crontab(5)'s "blank" (ASCII space or tab). A byte-wise
+// unicode.IsSpace(rune(b)) test used to treat the lone bytes 0x85 and 0xA0 —
+// UTF-8 continuation bytes, not characters — as whitespace, and a rune-wise
+// Unicode test would treat U+00A0/U+2003 as separators. cron itself does
+// neither, so both would move the command boundary away from what cron runs.
+func TestCronEntryCommandSplitsOnlyOnCrontabBlanks(t *testing.T) {
+	testCases := []struct {
+		name    string
+		line    string
+		command string
+		ok      bool
+	}{
+		{"tabs separate fields", "0\t*\t*\t*\t*\t/bin/cmd", "/bin/cmd", true},
+		{"mixed runs of blanks", "0 \t *  *\t\t* *  \t/bin/cmd", "/bin/cmd", true},
+		{"multibyte command kept intact", "0 * * * * /bin/echo héllo à\u00a0x", "/bin/echo héllo à\u00a0x", true},
+		{"no-break space starts the command", "0 * * * * \u00a0/bin/cmd", "\u00a0/bin/cmd", true},
+		{"em space starts the command", "0 * * * * \u2003/bin/cmd", "\u2003/bin/cmd", true},
+		{"lone 0xA0 byte starts the command", "0 * * * * \xa0/bin/cmd", "\xa0/bin/cmd", true},
+		{"lone 0x85 byte starts the command", "0 * * * * \x85/bin/cmd", "\x85/bin/cmd", true},
+		{"no-break space is not a field separator", "0\u00a0* * * * /bin/cmd", "", false},
+		{"no-break space before the command", "0 * * * *\u00a0/bin/cmd", "", false},
+		{"ideographic space is not a separator", "0\u3000* * * * * /bin/cmd", "", false},
+		{"lone 0xA0 byte is not a separator", "0\xa0* * * * /bin/cmd", "", false},
+		{"lone 0x85 byte is not a separator", "0 *\x85* * * /bin/cmd", "", false},
+		{"vertical tab is not a separator", "0\v* * * * /bin/cmd", "", false},
+		{"leading no-break space", "\u00a00 * * * * /bin/cmd", "", false},
+		{"only blanks after fields", "0 * * * * \t ", "", false},
+		{"leading blanks before a comment", " \t# 0 * * * * /bin/cmd", "", false},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, ok := cronEntryCommand(testCase.line)
+			if ok != testCase.ok || got != testCase.command {
+				t.Fatalf("cronEntryCommand(%q) = %q, %v; want %q, %v", testCase.line, got, ok, testCase.command, testCase.ok)
+			}
+		})
+	}
+}
+
+// TestAdoptLegacyCommandIgnoresNonBlankWhitespace is the adoption-level
+// consequence: a line whose command, as cron sees it, begins with a
+// non-blank byte or rune is a different command and must never be deleted.
+func TestAdoptLegacyCommandIgnoresNonBlankWhitespace(t *testing.T) {
+	legacy := "/usr/local/bin/example"
+	for _, line := range []string{
+		"0 * * * * \xa0" + legacy,
+		"0 * * * * \x85" + legacy,
+		"0 * * * * \u00a0" + legacy,
+		"0 * * * *\u00a0" + legacy,
+		"0\u00a0* * * * " + legacy,
+		"0 * * * * \u2003" + legacy,
+	} {
+		got, changed := adoptLegacyCommand(line+"\n", legacy)
+		if changed || got != line+"\n" {
+			t.Fatalf("line with non-blank whitespace was adopted: %q", line)
+		}
+	}
+	if got, changed := adoptLegacyCommand("0\t*\t*\t*\t*\t"+legacy+"\n", legacy); !changed || got != "" {
+		t.Fatalf("tab-separated legacy entry was not adopted: changed=%v got=%q", changed, got)
+	}
+}
+
 func TestMergeUnclosedBeginKeepsTail(t *testing.T) {
 	existing := "# BEGIN GONF Cron[job]\n0 * * * * /bin/broken\nMAILTO=root\n0 * * * * /bin/echo keep\n"
 	c := &Cron{

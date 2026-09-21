@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"golang.org/x/sys/unix"
 )
@@ -336,20 +335,21 @@ func looksLikeGonfMarker(line string) bool {
 // cronEntryCommand returns the command portion of a portable five-field
 // crontab entry. It deliberately rejects comments, @directives, environment
 // assignments, and syntax outside the Linux/BSD cron subset. Legacy adoption
-// must leave a line in place when it cannot prove that it is a cron entry.
+// must leave a line in place when it cannot prove that it is a cron entry,
+// because this parser decides which unmanaged lines get deleted.
+//
+// Fields are separated only by crontab(5) "blanks" (ASCII space and tab); see
+// isCrontabBlank for why Unicode whitespace is deliberately not a separator.
 func cronEntryCommand(line string) (string, bool) {
-	trimmed := strings.TrimSpace(line)
-	if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "@") {
+	i := skipCrontabBlanks(line, 0)
+	if i == len(line) || line[i] == '#' || line[i] == '@' {
 		return "", false
 	}
-	i := 0
 	fields := [5]string{}
-	for field := 0; field < 5; field++ {
-		for i < len(line) && unicode.IsSpace(rune(line[i])) {
-			i++
-		}
+	for field := range fields {
+		i = skipCrontabBlanks(line, i)
 		start := i
-		for i < len(line) && !unicode.IsSpace(rune(line[i])) {
+		for i < len(line) && !isCrontabBlank(line[i]) {
 			i++
 		}
 		if start == i {
@@ -362,13 +362,37 @@ func cronEntryCommand(line string) (string, bool) {
 			return "", false
 		}
 	}
-	for i < len(line) && unicode.IsSpace(rune(line[i])) {
-		i++
-	}
+	i = skipCrontabBlanks(line, i)
 	if i == len(line) {
 		return "", false
 	}
 	return line[i:], true
+}
+
+// isCrontabBlank reports whether b separates crontab fields. crontab(5) on
+// Linux and the BSDs documents fields as separated by spaces or tabs, so only
+// those two bytes qualify. This is intentionally byte-based and ASCII-only:
+//
+//   - Both bytes are below 0x80, and UTF-8 never uses a byte below 0x80
+//     inside a multibyte sequence, so a split can never land mid-character
+//     and non-ASCII text (valid or not) stays verbatim in fields and command.
+//   - Unicode whitespace such as U+00A0 or U+2003, lone continuation bytes
+//     like 0x85/0xA0 (which unicode.IsSpace(rune(b)) misreports as spaces),
+//     and other ASCII controls such as \v are not separators. A line that
+//     uses them either fails validCronField, or keeps them at the start of
+//     its command so it cannot equal a legacy command that lacks them. Both
+//     outcomes leave the line in place, the safe direction for adoption.
+func isCrontabBlank(b byte) bool {
+	return b == ' ' || b == '\t'
+}
+
+// skipCrontabBlanks returns the index of the first non-blank byte of line at
+// or after i, or len(line) when only blanks remain.
+func skipCrontabBlanks(line string, i int) int {
+	for i < len(line) && isCrontabBlank(line[i]) {
+		i++
+	}
+	return i
 }
 
 type cronRange struct {
