@@ -340,7 +340,8 @@ if err := ApplyPlan(ops, planDir); err != nil { /* … */ }
   refuses dangling deps and forward cross-chunk deps before anything is
   applied. `api.Apply` with elevated ops sorts its ops by dependency before
   splitting them, so for it a forward cross-chunk dep can only come from a
-  dependency cycle, which the sort itself refuses first.
+  dependency cycle (a resource depending on itself included), which the sort
+  itself refuses first.
 - Stackable `when_begin` / `when_end`: failed predicates skip the body
   without touching the filesystem.
 - A `when_begin` carrying `require` (v20) is a requirement: a failed
@@ -1004,8 +1005,9 @@ after the split. `api.Apply` is the exception: its ops have no meaningful
 recorded order (its drafts are sorted by resource ID), so when an op is
 elevated it chooses the order itself BEFORE splitting: a dependency sort
 with as few chunks as the graph allows (see "Low-level `Apply()`"). After
-that sort a forward cross-chunk dep can only come from a dependency cycle,
-which Apply refuses, naming the cycle, before any chunk applies.
+that sort a forward cross-chunk dep can only come from a dependency cycle
+(a resource depending on itself included), which Apply refuses, naming the
+cycle, before any chunk applies.
 
 ## JSONL sketch
 
@@ -1046,7 +1048,9 @@ With an elevated op, Apply refuses the plan before ANY chunk applies (so
 nothing runs as root, and no unprivileged chunk mutates first) when:
 
 - the ops have a dependency cycle. The error names it, e.g.
-  `Apply: circular dependency: Command[x] -> Command[y] -> Command[x]`;
+  `Apply: circular dependency: Command[x] -> Command[y] -> Command[x]`. A
+  resource depending on itself is the smallest cycle
+  (`Command[b] -> Command[b]`);
 - the privilege mode is `none` and the process is not root;
 - the process does not run gonf's CLI (`cli.CLI()`). The re-exec runs
   `<this binary> apply <chunk>`, and in a program with its own `main` that

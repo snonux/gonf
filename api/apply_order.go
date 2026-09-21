@@ -29,8 +29,9 @@ import (
 // ops[0] is the plan header and stays first. Apply lowers registered
 // resources to a flat op list (no when_begin/when_end), so the whole body is
 // one sortable run. Deps naming no op of the plan are ignored here; the
-// pre-flight refuses them as dangling. A dependency cycle is an error naming
-// the cycle: the elevated chunk is a separate root process, so the plan must
+// pre-flight refuses them as dangling. A dependency cycle, including an op
+// depending on itself, is an error naming the cycle ("A -> B -> A", or
+// "A -> A"): the elevated chunk is a separate root process, so the plan must
 // be refused before ANY chunk applies, not by the engine once a later chunk
 // is reached.
 func orderForPrivilegeSplit(ops []plan.Op) ([]plan.Op, error) {
@@ -60,7 +61,10 @@ func orderForPrivilegeSplit(ops []plan.Op) ([]plan.Op, error) {
 }
 
 // depGraph is the in-plan dependency graph of an Apply body, by body index.
-// A dep matching no op ID in the body adds no edge.
+// A dep matching no op ID in the body adds no edge. A dep on the op's own ID
+// IS an edge (a self-loop): it is the smallest dependency cycle, and the
+// plan engine refuses it as circular too, so dropping it here would let the
+// elevated chunk run as root before a later chunk hit that refusal.
 type depGraph struct {
 	deps    [][]int // op → the ops it depends on
 	waiters [][]int // op → the ops depending on it
@@ -76,7 +80,7 @@ func newDepGraph(body []plan.Op) depGraph {
 	g := depGraph{deps: make([][]int, len(body)), waiters: make([][]int, len(body))}
 	for i, op := range body {
 		for _, dep := range op.Deps {
-			if at, found := byID[dep]; found && at != i {
+			if at, found := byID[dep]; found {
 				g.deps[i] = append(g.deps[i], at)
 				g.waiters[at] = append(g.waiters[at], i)
 			}

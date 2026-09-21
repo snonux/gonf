@@ -192,3 +192,38 @@ func TestApplyChunksRefusesElevationUpFront(t *testing.T) {
 		})
 	}
 }
+
+// TestApplyRefusesSelfDependencyWithElevatedOps pins that a resource
+// depending on itself is refused as a cycle before any chunk applies, in
+// both chunk orders: after the elevated chunk (the elevated chunk used to run
+// as root first) and on the elevated op itself (the unprivileged chunk used
+// to mutate first).
+func TestApplyRefusesSelfDependencyWithElevatedOps(t *testing.T) {
+	cases := []struct {
+		name         string
+		elevatedSelf bool
+	}{
+		{name: "unprivileged self-dependency", elevatedSelf: false},
+		{name: "elevated self-dependency", elevatedSelf: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := refuseElevation(t, privilege.Sudo)
+			marker := filepath.Join(t.TempDir(), "marker")
+			File(marker, options.WithContent("x"))
+			self := options.DependsOn(unregisteredDep("Command[b]"))
+			if tc.elevatedSelf {
+				Command("true", nil, options.WithName("a"))
+				Command("true", nil, options.WithName("b"), options.WithElevate, self)
+			} else {
+				Command("true", nil, options.WithName("a"), options.WithElevate)
+				Command("true", nil, options.WithName("b"), self)
+			}
+			err := Apply()
+			if err == nil || !strings.HasPrefix(err.Error(), "Apply: circular dependency: Command[b] -> Command[b]") {
+				t.Fatalf("Apply() error = %v, want the Command[b] self-dependency named", err)
+			}
+			requireNothingApplied(t, marker, calls)
+		})
+	}
+}

@@ -175,7 +175,7 @@ func applyPackagedOps(ops []plan.Op, planDir string) error {
 //
 //   - orderForPrivilegeSplit puts the ops into dependency order with as few
 //     chunks as possible (Apply's draft order is only a sort by resource ID)
-//     and refuses a dependency cycle, naming it;
+//     and refuses a dependency cycle (a self-dependency included), naming it;
 //   - validateApplyDeps refuses dangling deps and watches crossing the
 //     privilege boundary;
 //   - preflightElevation refuses elevated chunks that could not run: mode
