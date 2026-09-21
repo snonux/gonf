@@ -58,17 +58,16 @@ applies. What is guaranteed, and what is not:
   by a group other than your private group; not writable by you; nowhere
   writable to create it): a cheap best-effort check rejects those before any
   task body runs, creating and changing nothing. It is a pre-check, not a
-  guarantee: whatever it misses (the path changed in between, ACLs) is still
-  refused at commit time, after the task bodies ran but before anything is
-  written to `dir`, by the same directory rule applied through a no-follow
-  open of `dir` (single-file blobs and `plan.jsonl` are then written through
-  that very descriptor; tree and glob blobs are checked the same way but
-  written by path, see "The output directory"). That rule covers type,
-  symlinks, owner and group/world write only. "Not writable by you" is
-  detected by the pre-check alone, so a directory made read-only in between
-  fails at commit time with a plain permission error rather than the
-  actionable message, and, like any commit-time I/O error (next point), may
-  already have replaced blobs in an existing `blobs/`.
+  guarantee, because the path can change before the commit; so the commit
+  re-checks `dir` before the first blob is written: the same directory rule
+  (type, no symlinked component, owner, group/world write) through a
+  no-follow open, plus the "writable by you" check, which is not part of that
+  rule. Either refusal writes nothing. Every later write (each single-file
+  blob, `plan.jsonl`) re-opens the directory with the same no-follow walk and
+  re-checks it; tree and glob blobs are written by path after `blobs/` itself
+  was checked (see "The output directory"). Only a change in the small window
+  between the commit-time re-check and the writes can surface as a plain I/O
+  error, with the non-atomic caveat of the next point.
 - An I/O error while COMMITTING the blobs into `dir` after a successful record
   (full disk, permissions, a blob path that cannot be replaced) is reported but
   not atomic: some blobs may already be copied, so a partially updated blob

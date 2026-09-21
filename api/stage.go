@@ -159,18 +159,15 @@ func (l *lazyStage) WriteGlob(name, pattern string) (string, error) {
 // before any blob is written.
 //
 // It is a best-effort pre-check, not a guarantee: it inspects the path with
-// Lstat/access(2) while SecureDir opens it component by component, so the
-// answers can differ when the path changes in between or on exotic setups
-// (security modules, unusual ACLs). SecureDir at commit time still refuses
-// what the shared directory rule covers (not a directory, a symlink, foreign
-// owner, unsafe group/world write) and writes nothing to such a directory.
-// Writability by the caller is NOT part of that rule: it is only checked here
-// (access(2)), so a directory that becomes read-only after this check fails at
-// commit time with a plain permission error instead of the actionable
-// "chmod u+w" message below. That failure is not atomic: blobs may already
-// have been replaced inside an existing (still writable) blobs/ before
-// plan.jsonl cannot be written — the same caveat as any commit-time I/O error
-// (see RecordPlan).
+// Lstat/access(2) before any task body runs, and the path can change before
+// the commit. commitStagedBlobs therefore re-checks at commit time, before the
+// first blob is written: plan.SecureDir applies the shared directory rule (a
+// real directory, no symlinked component, owned by the caller, no unsafe
+// group/world write) and requireWritableDir re-checks the caller's write
+// permission, which is not part of that rule. Either refusal writes nothing.
+// Only a change in the small window between that re-check and the writes
+// themselves can surface as a plain I/O error, with the non-atomic commit
+// caveat documented on RecordPlan.
 func checkPlanDirUsable(planDir string) error {
 	planDir = filepath.Clean(planDir)
 	if err := refuseSymlinkedPath(planDir); err != nil {
@@ -227,6 +224,14 @@ func checkExistingPlanDir(path string, info os.FileInfo) error {
 	if err := plan.CheckExistingDir(path, info); err != nil {
 		return err
 	}
+	return requireWritableDir(path)
+}
+
+// requireWritableDir refuses a directory the caller cannot create entries in,
+// with an actionable message. It is used both up front (checkExistingPlanDir)
+// and at commit time (commitStagedBlobs), because writability is not part of
+// the shared directory rule that plan.SecureDir enforces.
+func requireWritableDir(path string) error {
 	if err := unix.Access(path, unix.W_OK|unix.X_OK); err != nil {
 		// plan.DirLabel, like every other refusal of the shared rule, so the
 		// default "-o ." reads as the working directory, not as "cannot write to .".
@@ -253,6 +258,13 @@ func checkExistingPlanDir(path string, info os.FileInfo) error {
 // message has one package prefix, not a "plan dir: ... plan: ..." chain.
 func commitStagedBlobs(ops []plan.Op, stage, planDir string) error {
 	if err := plan.SecureDir(planDir); err != nil {
+		return fmt.Errorf("RecordPlan: plan dir: %w", err)
+	}
+	// SecureDir's shared rule does not cover the caller's write permission, so
+	// a directory made read-only after the up-front pre-check would pass it and
+	// an existing writable blobs/ inside it would be updated before plan.jsonl
+	// fails. Re-check writability here, before the first blob is written.
+	if err := requireWritableDir(planDir); err != nil {
 		return fmt.Errorf("RecordPlan: plan dir: %w", err)
 	}
 	dest := plan.NewStore(planDir)

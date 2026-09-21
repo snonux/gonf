@@ -816,3 +816,37 @@ func TestRecordPlanLeavesExistingDirModeAlone(t *testing.T) {
 		})
 	}
 }
+
+// TestCommitStagedBlobsRefusesDirMadeReadOnlyAfterPreCheck pins the commit-time
+// writability re-check: a caller-owned plan directory that became read-only
+// after the up-front pre-check passes plan.SecureDir (writability is not part of
+// the shared rule), and an existing, still-writable blobs/ inside it must not be
+// updated before the refusal. commitStagedBlobs is called directly so the
+// pre-check cannot mask the result.
+func TestCommitStagedBlobsRefusesDirMadeReadOnlyAfterPreCheck(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses write permission checks")
+	}
+	stage := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(stage, "blobs"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(stage, "blobs", "b"), []byte("new blob"))
+
+	planDir := filepath.Join(testutil.PrivateTempDir(t), "plans")
+	if err := os.MkdirAll(filepath.Join(planDir, "blobs"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(planDir, "blobs", "b"), []byte("earlier plan's blob"))
+	if err := os.Chmod(planDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(planDir, 0o700) })
+
+	before := testutil.Snapshot(t, planDir)
+	err := commitStagedBlobs([]plan.Op{{Blob: "blobs/b"}}, stage, planDir)
+	if err == nil || !strings.Contains(err.Error(), "chmod u+w") {
+		t.Fatalf("commitStagedBlobs = %v, want the actionable read-only refusal", err)
+	}
+	testutil.RequireUnchanged(t, before, planDir)
+}
