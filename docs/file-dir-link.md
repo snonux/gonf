@@ -102,6 +102,18 @@ non-map values use `.Data`). Existing environment variables and `.Param` stay
 available. `.Gonf` is reserved for live destination facts:
 `.Gonf.GOOS`, `.Gonf.Profile`, and `.Gonf.Hostname`.
 
+On plan apply these facts are detected on the destination per
+`api.ApplyPlan` call (i.e. per privilege chunk). On local applies
+(`gonf -profile=... <task>`, `gonf -profile=... apply plan.jsonl`, and their
+elevated re-exec) they honour the CLI `-profile` override, so
+`.Gonf.Profile` is the overridden profile. On `push` / `fleet` the remote
+`gonf apply` is not passed `-profile`, so the destination renders from its
+own detected facts. `.tmpl` entries inside a
+`SyncDir` / `Dir(..., WithSource(...))` tree render them identically to a
+single `File` with the same template text in the same apply. Only the
+deprecated direct (non-plan) resource path still detects the facts locally
+per file and ignores the `-profile` override.
+
 The stable string helpers are `join`, `lower`, `upper`, `trim`, and `replace`.
 Templates use `missingkey=error`; missing map keys fail the apply rather than
 silently rendering an empty value.

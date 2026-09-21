@@ -92,6 +92,9 @@ func (syncDirHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 
 // Apply mirrors the synced blob tree into the destination directory,
 // mirroring the resource's own WithSource/WithSourceGlob handling exactly.
+// ctx.Facts is threaded down to every copied entry (ensureWithPlanFacts), so
+// a .tmpl inside the synced tree renders {{.Gonf.*}} from the same plan
+// facts — -profile override included — as a single-file op in this apply.
 func (syncDirHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	path, err := plan.ExpandPath(op.Path)
 	if err != nil {
@@ -100,21 +103,42 @@ func (syncDirHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	if path == "" {
 		return fmt.Errorf("sync_dir: missing path")
 	}
-	if op.Blob == "" {
-		return fmt.Errorf("sync_dir: missing blob id")
-	}
-	src, err := plan.Resolve(ctx.PlanDir, op.Blob)
+	src, err := syncDirBlobTree(op.Blob, ctx.PlanDir)
 	if err != nil {
 		return err
 	}
+	opts, err := syncDirOptions(op, src)
+	if err != nil {
+		return err
+	}
+	return ensureWithPlanFacts(path, ctx.Facts, opts...)
+}
+
+// syncDirBlobTree resolves the op's blob ref under planDir and requires it
+// to be a directory: a sync_dir blob is always a packaged tree (or a
+// flattened glob).
+func syncDirBlobTree(blob, planDir string) (string, error) {
+	if blob == "" {
+		return "", fmt.Errorf("sync_dir: missing blob id")
+	}
+	src, err := plan.Resolve(planDir, blob)
+	if err != nil {
+		return "", err
+	}
 	info, err := os.Stat(src)
 	if err != nil {
-		return fmt.Errorf("sync_dir: blob %q: %w", op.Blob, err)
+		return "", fmt.Errorf("sync_dir: blob %q: %w", blob, err)
 	}
 	if !info.IsDir() {
-		return fmt.Errorf("sync_dir: blob %q is not a directory", op.Blob)
+		return "", fmt.Errorf("sync_dir: blob %q is not a directory", blob)
 	}
+	return src, nil
+}
 
+// syncDirOptions translates a sync_dir op's recorded fields into the
+// DirOptions the direct WithSource path would use, sourcing from the
+// resolved blob tree src.
+func syncDirOptions(op plan.Op, src string) ([]opt.DirOption, error) {
 	opts := []opt.DirOption{opt.WithSource(src)}
 	// source_dir is the recipe's declared source directory (the glob
 	// pattern's directory for the glob flavor): .tmpl files inside the
@@ -128,14 +152,14 @@ func (syncDirHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	if op.Mode != "" {
 		mode, err := plan.ParseMode(op.Mode)
 		if err != nil {
-			return fmt.Errorf("sync_dir: %w", err)
+			return nil, fmt.Errorf("sync_dir: %w", err)
 		}
 		opts = append(opts, opt.WithMode(mode))
 	}
 	if op.FileMode != "" {
 		mode, err := plan.ParseMode(op.FileMode)
 		if err != nil {
-			return fmt.Errorf("sync_dir: file_mode: %w", err)
+			return nil, fmt.Errorf("sync_dir: file_mode: %w", err)
 		}
 		opts = append(opts, opt.WithFileMode(mode))
 	}
@@ -145,7 +169,7 @@ func (syncDirHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	if op.Prune {
 		opts = append(opts, opt.WithPrune)
 	}
-	return Ensure(path, opts...)
+	return opts, nil
 }
 
 // ToOp lowers an "ensure_dir" resource draft to a plan.Op.

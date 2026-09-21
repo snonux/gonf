@@ -30,7 +30,8 @@ func GlobMatchCounts(match string, info os.FileInfo) bool {
 }
 
 // KeepBasename returns the basename the copy path writes a counting glob
-// match under: copySourceFile delegates to file.Ensure, whose targetPath
+// match under: copySourceFile delegates to file.Ensure (file.EnsureWithPlanFacts
+// on the plan path; both share file's build()/apply()), whose targetPath
 // strips a trailing ".tmpl" from the caller-given path when the source
 // triggers templating, so a match foo.tmpl installs as foo (rendered) while
 // every other match keeps its own basename. The prune keep-set must use the

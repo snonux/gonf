@@ -59,6 +59,9 @@ type File struct {
 	template        bool
 	templateData    any
 	templateDataSet bool
+	// templateFacts feeds {{.Gonf.*}}: build() seeds it from
+	// localTemplateFacts, and plan apply overrides it with the plan's
+	// facts (ensureWithFacts) so -profile is honored.
 	templateFacts   templateFacts
 	user            string
 	group           string
@@ -491,8 +494,9 @@ func readForLineEdit(path string) ([]byte, error) {
 // recipe declared, never something gonf may replace, classify as changed,
 // or read as empty. The read itself never blocks on a planted FIFO (see
 // readFollowNonBlocking). This guards both the single-file WithSource path
-// and dir's source-tree copies, which delegate every file to file.Ensure
-// with WithSource.
+// and dir's source-tree copies, which delegate every file with WithSource
+// to Ensure (direct path) or EnsureWithPlanFacts (plan path); both go
+// through build()/apply() and therefore through this read.
 func readForSource(path string) ([]byte, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -621,6 +625,16 @@ func decodeTemplateData(raw []byte) (any, error) {
 	return data, nil
 }
 
+// localTemplateFacts is the fallback {{.Gonf.*}} source for the direct
+// (non-plan) Ensure/Present path only, e.g. the deprecated resource.Apply
+// repository path and unit tests. It mirrors api.DetectFacts but cannot
+// honor api.SetProfileOverride: this package sits below api (api imports
+// it), so it cannot call api.DetectFacts without an import cycle. Plan apply
+// therefore never renders from it: every plan handler that writes template
+// content (file, and sync_dir per synced entry) replaces these facts with
+// plan.ApplyContext.Facts via EnsureWithPlanFacts (see
+// resource/file/planwire.go), which api.ApplyPlan detected on the
+// destination through api.DetectFacts, override included.
 func localTemplateFacts() templateFacts {
 	hostname, err := os.Hostname()
 	if err != nil {
@@ -986,6 +1000,8 @@ func EnsurePresent(path string, opts ...opt.FileOption) error {
 	return f.apply()
 }
 
+// ensureWithFacts is Ensure with build()'s locally detected template facts
+// replaced by facts; EnsureWithPlanFacts is its exported plan-apply wrapper.
 func ensureWithFacts(path string, facts templateFacts, opts ...opt.FileOption) error {
 	f, err := build(path, opts...)
 	if err != nil {

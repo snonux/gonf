@@ -236,6 +236,13 @@ func noteSourceSymlinkDryRun(target, rawTarget string) error {
 // override Param with declared-dir + "/" + the entry's path relative to the
 // synced root — exactly what the direct (non-plan) path derives from its
 // real source tree. Non-template entries are left untouched.
+//
+// Likewise {{.Gonf.*}}: on the plan path (d.planFacts set by the sync_dir
+// handler) the entry renders from the apply's plan facts through
+// file.EnsureWithPlanFacts — the same facts, -profile override included, a
+// single-file op of the same apply renders from — instead of file.Ensure's
+// local re-detection, which ignores the override. The direct path keeps
+// file.Ensure.
 func copySourceFile(d *Dir, sourcePath, target string) error {
 	opts := []opt.FileOption{
 		opt.WithSource(sourcePath),
@@ -250,13 +257,17 @@ func copySourceFile(d *Dir, sourcePath, target string) error {
 		}
 		opts = append(opts, opt.WithParam(filepath.Join(d.sourceBase, rel)))
 	}
+	if d.planFacts != nil {
+		return file.EnsureWithPlanFacts(target, *d.planFacts, opts...)
+	}
 	return file.Ensure(target, opts...)
 }
 
 // pruneTree removes anything under d.path that has no counterpart in
 // d.source. A destination entry also counts as having a counterpart if
 // d.source has the same relative path with a ".tmpl" suffix appended, since
-// copySourceFile (via file.Ensure) strips that suffix when writing —
+// copySourceFile (via file.Ensure, or file.EnsureWithPlanFacts on the plan
+// path — both share file's build()/apply()) strips that suffix when writing —
 // otherwise every templated file would be pruned immediately after being
 // copied. In dry-run mode nothing is removed; every would-be-pruned path is
 // only noted as StatusWouldChange (the walk still descends into stale

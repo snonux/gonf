@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"syscall"
 
+	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
 	opt "github.com/snonux/gonf/resource/options"
@@ -34,13 +35,20 @@ type Dir struct {
 	// entries copied from a synced tree. Empty on the direct path, which
 	// derives Param from the real source paths as before.
 	sourceBase string
-	user       string
-	group      string
-	userSet    bool        // WithOwner was called explicitly (build()'s default does not count)
-	groupSet   bool        // WithGroup was called explicitly (build()'s default does not count)
-	mode       os.FileMode // this directory's own mode, default 0o750
-	fileMode   os.FileMode // mode for regular files copied from source, default 0o640
-	prune      bool        // reconciles extra dest files during a source copy, and recursive-remove during IsAbsent()
+	// planFacts are the plan apply's destination facts
+	// (plan.ApplyContext.Facts), set only by the sync_dir handler via
+	// ensureWithPlanFacts. Non-nil, every copied file renders
+	// {{.Gonf.*}} from them (file.EnsureWithPlanFacts), exactly like a
+	// single-file op of the same apply; nil on the direct path, where
+	// file.Ensure detects facts locally as before.
+	planFacts *plan.Facts
+	user      string
+	group     string
+	userSet   bool        // WithOwner was called explicitly (build()'s default does not count)
+	groupSet  bool        // WithGroup was called explicitly (build()'s default does not count)
+	mode      os.FileMode // this directory's own mode, default 0o750
+	fileMode  os.FileMode // mode for regular files copied from source, default 0o640
+	prune     bool        // reconciles extra dest files during a source copy, and recursive-remove during IsAbsent()
 }
 
 // SetSource implements opt.Sourced.
@@ -415,6 +423,20 @@ func Ensure(path string, opts ...opt.DirOption) error {
 	if err != nil {
 		return err
 	}
+	return d.apply()
+}
+
+// ensureWithPlanFacts is Ensure for plan apply: facts (the apply's
+// plan.ApplyContext.Facts) reach every templated entry of a synced tree, so
+// {{.Gonf.*}} matches what the file handler renders for a standalone file op
+// in the same apply (see Dir.planFacts). facts is copied, so the caller's
+// value cannot change under a running apply.
+func ensureWithPlanFacts(path string, facts plan.Facts, opts ...opt.DirOption) error {
+	d, err := build(path, opts...)
+	if err != nil {
+		return err
+	}
+	d.planFacts = &facts
 	return d.apply()
 }
 

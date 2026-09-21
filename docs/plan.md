@@ -206,7 +206,15 @@ ops, err := RecordPlan("my-plan", planDir, "home_helix", "home_tmux")
   validated candidate before the live file is published. The op still carries
   `has_content:true`, including for an intentionally empty source/content, so
   apply can reject a malformed validator op that has no declared content.
-- `SyncDir` trees → `planDir/blobs/<name>/`.
+- `SyncDir` trees → `planDir/blobs/<name>/`. On apply, every `.tmpl` entry
+  of the synced tree (tree and glob flavor) renders `.Gonf.GOOS`,
+  `.Gonf.Profile`, and `.Gonf.Hostname` from the same destination plan facts
+  as a single-file `file` op (detected per `api.ApplyPlan` call, i.e. per
+  privilege chunk), so identical template text renders identically in one
+  apply. On local applies (`gonf <task>`, `gonf apply`, and their elevated
+  re-exec) those facts honour the CLI `-profile` override; on `push` /
+  `fleet` the remote `gonf apply` is not passed `-profile`, so the
+  destination renders from its own detected facts.
 - The recipe's declared source directory travels on the `sync_dir` op
   (`source_dir`, schema v6): destination apply renders `.tmpl` files inside
   the tree with `{{.Param}}` = declared source dir + "/" + the entry's path
@@ -670,7 +678,11 @@ gonf fleet -preview frontends base commons
 gonf fleet -j 2 garage garage_deploy
 ```
 
-Global flags (`-profile`, `-verbose`, `-quiet`, `-dry-run` / `-n`) still apply.
+Global flags (`-profile`, `-verbose`, `-quiet`, `-dry-run` / `-n`) still apply
+on the controller. `-profile` is not forwarded to the destination: it only
+affects controller-side (record-time) evaluation such as opaque `When*`
+checks, while the remote `gonf apply` evaluates `when_begin` guards and
+renders `.Gonf` template facts from the destination's own detected facts.
 `gonf -list` lists **activated** tasks (After `When*` filtering for display);
 plan recording still uses the full candidate set.
 
