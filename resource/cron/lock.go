@@ -88,12 +88,24 @@ const (
 // directory (so tests never touch /var/run or the real home), lockHostName
 // supplies the (per-process cached) host part of the lock file name,
 // osHostname is shortHostName's source, and flock is flock(2).
+//
+// Tests must never fill the process-wide lockHostName cache through a faked
+// osHostname: the cache outlives the test, so every later lock in the test
+// process would use the fake host's file name while a helper process uses
+// the real one. Tests exercise the production composition through a fresh
+// newLockHostName() instead.
 var (
 	crontabLockDirOverride string
-	lockHostName           = cacheHostName(shortHostName)
+	lockHostName           = newLockHostName()
 	osHostname             = os.Hostname
 	flock                  = unix.Flock
 )
+
+// newLockHostName builds the production host-name lookup: shortHostName,
+// memoised for the life of the returned function (see cacheHostName).
+func newLockHostName() func() (string, error) {
+	return cacheHostName(shortHostName)
+}
 
 // lockLocation is where one acquisition takes its lock: dir is the lock
 // directory; createParent says whether its parent may be created (one level

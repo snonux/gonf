@@ -1,12 +1,9 @@
 package cron
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strconv"
@@ -17,20 +14,23 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// lockDirEnv hands the package's test lock directory to the helper process
-// started by TestCrontabLockSerializesSeparateProcesses, so both processes
-// contend on the same lock.
-const lockDirEnv = "GONF_CRON_TEST_LOCK_DIR"
-
-// TestMain points every real (flock) lock taken by this package's tests, in
-// this process and in the helper process, at a throwaway directory, so tests
-// never touch /var/run or the real home directory. (Ensure under
-// SetRunnersForTest uses the in-process lock instead.) The directory itself
-// does not exist yet: the lock code creates it, exercising the production
-// path.
+// TestMain keeps every real (flock) lock taken by this package's tests away
+// from /var/run and the real home directory.
+//
+// In the helper process of TestCrontabLockSerializesSeparateProcesses the
+// parent test hands over its lock directory and host name (see
+// configureLockHelperProcess). Otherwise the default lock directory is a
+// package-wide throwaway root: a safety net only, because a lock leaked
+// there by one failing test would block every later test and -count
+// iteration. Tests that take the real lock through crontabLockLocation call
+// useTestLockDir for a directory of their own (the opt-in live tests,
+// GONF_RUN_CRON_TESTS=1, still use this shared root). (Ensure under
+// SetRunnersForTest uses the in-process lock instead.) The lock directory
+// itself does not exist yet: the lock code creates it, exercising the
+// production path.
 func TestMain(m *testing.M) {
-	if dir := os.Getenv(lockDirEnv); dir != "" {
-		crontabLockDirOverride = dir
+	if os.Getenv(lockHelperEnv) == "1" {
+		configureLockHelperProcess()
 		os.Exit(m.Run())
 	}
 	parent, err := os.MkdirTemp("", "gonf-cron-test-")
@@ -39,10 +39,6 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	crontabLockDirOverride = filepath.Join(parent, "locks")
-	if err := os.Setenv(lockDirEnv, crontabLockDirOverride); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
 	code := m.Run()
 	_ = os.RemoveAll(parent)
 	os.Exit(code)
@@ -57,6 +53,20 @@ func newLockParent(t *testing.T) (parent, dir string) {
 		t.Fatal(err)
 	}
 	return parent, filepath.Join(parent, "locks")
+}
+
+// useTestLockDir points crontabLockLocation (and so lockCrontab and the
+// production acquireCrontabLock) at a lock directory private to this test,
+// restored afterwards. A lock another test leaked, or one held by a helper
+// process that outlived its test, can then never block this test. It
+// returns the (not yet existing) lock directory.
+func useTestLockDir(t *testing.T) string {
+	t.Helper()
+	_, dir := newLockParent(t)
+	saved := crontabLockDirOverride
+	crontabLockDirOverride = dir
+	t.Cleanup(func() { crontabLockDirOverride = saved })
+	return dir
 }
 
 func euid() uint32 { return uint32(unix.Geteuid()) }
@@ -76,73 +86,6 @@ func assertLockObject(t *testing.T, path string, fileType, perm uint32) {
 	}
 	if uint32(stat.Mode)&unix.S_IFMT != fileType || uint32(stat.Mode)&0o7777 != perm || stat.Uid != euid() {
 		t.Fatalf("%s: uid=%d mode=%#o, want uid=%d type=%#o perm=%#o", path, stat.Uid, stat.Mode, euid(), fileType, perm)
-	}
-}
-
-func TestCrontabLockSerializesSeparateProcesses(t *testing.T) {
-	userName := currentCronUser(t)
-	cmd := exec.Command(os.Args[0], "-test.run=^TestCrontabLockHelper$")
-	cmd.Env = append(os.Environ(), "GONF_CRON_LOCK_HELPER=1", "GONF_CRON_LOCK_USER="+userName)
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	line, err := bufio.NewReader(stdout).ReadString('\n')
-	if err != nil || line != "locked\n" {
-		_ = stdin.Close()
-		_ = cmd.Wait()
-		t.Fatalf("lock helper did not start: line=%q err=%v", line, err)
-	}
-
-	start := time.Now()
-	if _, err := lockCrontabWithin(userName, 40*time.Millisecond); err == nil {
-		t.Fatal("second process acquired lock before release")
-	} else if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
-		t.Fatalf("contended lock did not time out promptly: %s", elapsed)
-	}
-	if err := stdin.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := cmd.Wait(); err != nil {
-		t.Fatal(err)
-	}
-	unlock, err := lockCrontabWithin(userName, time.Second)
-	if err != nil {
-		t.Fatalf("second process lock after release: %v", err)
-	}
-	if err := unlock(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// TestCrontabLockHelper is the other process of
-// TestCrontabLockSerializesSeparateProcesses; it is a no-op otherwise.
-func TestCrontabLockHelper(t *testing.T) {
-	if os.Getenv("GONF_CRON_LOCK_HELPER") != "1" {
-		return
-	}
-	unlock, err := lockCrontab(os.Getenv("GONF_CRON_LOCK_USER"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := unlock(); err != nil {
-			t.Error(err)
-		}
-	}()
-	if _, err := fmt.Fprintln(os.Stdout, "locked"); err != nil {
-		t.Fatal(err)
-	}
-	var byteRead [1]byte
-	if _, err := os.Stdin.Read(byteRead[:]); err != nil && !errors.Is(err, io.EOF) {
-		t.Fatal(err)
 	}
 }
 
@@ -459,15 +402,20 @@ func TestCrontabLockHostNameIsCachedPerProcess(t *testing.T) {
 	}
 }
 
-// TestCrontabLockRealHostLookupIsCached goes through the production
-// lockHostName (not a test double): even when the underlying host name
-// changes between calls, as when a run renames the host, the host-scoped
-// lock file name must stay the same within the process. If the cached value
-// was already filled by an earlier test, both names are that value, which
-// is equally stable; without caching the second call would see "second".
+// TestCrontabLockRealHostLookupIsCached goes through the production lookup
+// composition (newLockHostName, not a test double): even when the underlying
+// host name changes between calls, as when a run renames the host, the
+// host-scoped lock file name must stay the same within the process.
+//
+// It installs a FRESH production lookup rather than using the process-wide
+// lockHostName: filling that cache with the fake "first" host used to leak
+// into every later test (shuffle order), so this process locked
+// first.<hash>.lock while the helper process of
+// TestCrontabLockSerializesSeparateProcesses locked <realhost>.<hash>.lock.
 func TestCrontabLockRealHostLookupIsCached(t *testing.T) {
-	saved := osHostname
-	t.Cleanup(func() { osHostname = saved })
+	savedHostname, savedLookup := osHostname, lockHostName
+	t.Cleanup(func() { osHostname, lockHostName = savedHostname, savedLookup })
+	lockHostName = newLockHostName()
 	calls := 0
 	osHostname = func() (string, error) {
 		calls++
@@ -478,8 +426,8 @@ func TestCrontabLockRealHostLookupIsCached(t *testing.T) {
 	}
 	first := lockFileName(t, "target")
 	second := lockFileName(t, "target")
-	if first != second {
-		t.Fatalf("lock file name changed within one process: %q then %q", first, second)
+	if first != second || !strings.HasPrefix(first, "first.") || calls != 1 {
+		t.Fatalf("lock file names %q then %q after %d host lookups; want one cached lookup of host first", first, second, calls)
 	}
 }
 
@@ -655,10 +603,7 @@ func TestCrontabLockRejectsOtherAccountEarly(t *testing.T) {
 	if euid() == 0 {
 		t.Skip("the end-to-end half needs a non-root euid")
 	}
-	parent, dir := newLockParent(t)
-	saved := crontabLockDirOverride
-	crontabLockDirOverride = dir
-	t.Cleanup(func() { crontabLockDirOverride = saved })
+	parent := filepath.Dir(useTestLockDir(t))
 	if _, err := lockCrontabWithin("root", 10*time.Millisecond); err == nil {
 		t.Fatal("non-root lock for root's crontab succeeded")
 	}

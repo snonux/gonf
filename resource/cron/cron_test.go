@@ -332,7 +332,10 @@ func TestPresentRejectsEmptyMinute(t *testing.T) {
 	}
 }
 
+// TestAbsentWithoutCommand fakes only the crontab runners, so Apply takes
+// the real flock lock; useTestLockDir keeps it in a directory of its own.
 func TestAbsentWithoutCommand(t *testing.T) {
+	useTestLockDir(t)
 	origRun := runCmd
 	origStdin := runCmdWithStdin
 	defer func() {
@@ -358,74 +361,27 @@ func TestAbsentWithoutCommand(t *testing.T) {
 	_ = wrote
 }
 
+// TestApplyMockedPresentIdempotentAndDryRun takes the real flock lock (only
+// the crontab runners are faked) in a lock directory of its own.
 func TestApplyMockedPresentIdempotentAndDryRun(t *testing.T) {
-	origRun := runCmd
-	origStdin := runCmdWithStdin
-	defer func() {
-		runCmd = origRun
-		runCmdWithStdin = origStdin
-	}()
-
-	tab := ""
-	writes := 0
-	runCmd = func(name string, args ...string) (string, string, int, error) {
-		if tab == "" {
-			return "", "no crontab for root", 1, nil
-		}
-		return tab, "", 0, nil
-	}
-	runCmdWithStdin = func(stdin string, name string, args ...string) (string, string, int, error) {
-		writes++
-		tab = stdin
-		return "", "", 0, nil
-	}
-
+	useTestLockDir(t)
+	tab := fakeCrontabRunners(t)
 	userName := currentCronUser(t)
-	resource.ResetRepository()
-	Present("job",
-		opt.WithCronUser(userName),
-		opt.WithCommand("/bin/true"),
-		opt.WithMinute("7"),
-		opt.WithHour("3"),
-		opt.WithCronEnv("FOO=1"),
-	)
-	if err := resource.Apply(); err != nil {
-		t.Fatalf("present: %v", err)
-	}
-	if writes != 1 || !strings.Contains(tab, "FOO=1") || !strings.Contains(tab, "7 3 * * * /bin/true") {
-		t.Fatalf("write #%d tab=%q", writes, tab)
-	}
 
-	resource.ResetRepository()
-	Present("job",
-		opt.WithCronUser(userName),
-		opt.WithCommand("/bin/true"),
-		opt.WithMinute("7"),
-		opt.WithHour("3"),
-		opt.WithCronEnv("FOO=1"),
-	)
-	if err := resource.Apply(); err != nil {
-		t.Fatalf("idempotent: %v", err)
+	applyJobAtMinute(t, userName, "7", "present")
+	if tab.writes != 1 || !strings.Contains(tab.content, "FOO=1") || !strings.Contains(tab.content, "7 3 * * * /bin/true") {
+		t.Fatalf("write #%d tab=%q", tab.writes, tab.content)
 	}
-	if writes != 1 {
-		t.Fatalf("idempotent should not rewrite, writes=%d", writes)
+	applyJobAtMinute(t, userName, "7", "idempotent")
+	if tab.writes != 1 {
+		t.Fatalf("idempotent should not rewrite, writes=%d", tab.writes)
 	}
 
 	resource.SetDryRun(true)
 	defer resource.SetDryRun(false)
-	resource.ResetRepository()
-	Present("job",
-		opt.WithCronUser(userName),
-		opt.WithCommand("/bin/true"),
-		opt.WithMinute("8"),
-		opt.WithHour("3"),
-		opt.WithCronEnv("FOO=1"),
-	)
-	if err := resource.Apply(); err != nil {
-		t.Fatalf("dry-run: %v", err)
-	}
-	if writes != 1 {
-		t.Fatalf("dry-run must not write, writes=%d", writes)
+	applyJobAtMinute(t, userName, "8", "dry-run")
+	if tab.writes != 1 {
+		t.Fatalf("dry-run must not write, writes=%d", tab.writes)
 	}
 	resource.SetDryRun(false)
 
@@ -434,8 +390,54 @@ func TestApplyMockedPresentIdempotentAndDryRun(t *testing.T) {
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("absent: %v", err)
 	}
-	if writes != 2 || strings.Contains(tab, "GONF Cron[job]") {
-		t.Fatalf("absent failed: writes=%d tab=%q", writes, tab)
+	if tab.writes != 2 || strings.Contains(tab.content, "GONF Cron[job]") {
+		t.Fatalf("absent failed: writes=%d tab=%q", tab.writes, tab.content)
+	}
+}
+
+// fakeCrontab is the in-memory crontab behind fakeCrontabRunners: content
+// is the last written table and writes counts crontab writes.
+type fakeCrontab struct {
+	content string
+	writes  int
+}
+
+// fakeCrontabRunners replaces runCmd/runCmdWithStdin (restored on cleanup)
+// with an in-memory crontab that starts empty ("no crontab").
+func fakeCrontabRunners(t *testing.T) *fakeCrontab {
+	t.Helper()
+	origRun, origStdin := runCmd, runCmdWithStdin
+	t.Cleanup(func() { runCmd, runCmdWithStdin = origRun, origStdin })
+	tab := &fakeCrontab{}
+	runCmd = func(name string, args ...string) (string, string, int, error) {
+		if tab.content == "" {
+			return "", "no crontab for root", 1, nil
+		}
+		return tab.content, "", 0, nil
+	}
+	runCmdWithStdin = func(stdin string, name string, args ...string) (string, string, int, error) {
+		tab.writes++
+		tab.content = stdin
+		return "", "", 0, nil
+	}
+	return tab
+}
+
+// applyJobAtMinute registers and applies Cron "job" (/bin/true at
+// <minute> 3 * * * with FOO=1) on a fresh repository; step names the
+// phase in failure messages.
+func applyJobAtMinute(t *testing.T, userName, minute, step string) {
+	t.Helper()
+	resource.ResetRepository()
+	Present("job",
+		opt.WithCronUser(userName),
+		opt.WithCommand("/bin/true"),
+		opt.WithMinute(minute),
+		opt.WithHour("3"),
+		opt.WithCronEnv("FOO=1"),
+	)
+	if err := resource.Apply(); err != nil {
+		t.Fatalf("%s: %v", step, err)
 	}
 }
 
