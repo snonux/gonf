@@ -2,7 +2,6 @@ package api
 
 import (
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
@@ -47,11 +46,13 @@ func Apply() error {
 		return err
 	}
 
-	planDir, err := os.MkdirTemp("", "gonf-apply-*")
+	// Removed on return and, through logger.OnFatal, on a fail-fast
+	// logger.Fatal while resources are packaged or applied (tempPlanDir).
+	planDir, removePlanDir, err := tempPlanDir("gonf-apply-*")
 	if err != nil {
 		return fmt.Errorf("Apply: temp plan dir: %w", err)
 	}
-	defer func() { _ = os.RemoveAll(planDir) }()
+	defer removePlanDir()
 
 	ops, err := packageApplyOps(drafts, plan.NewStore(planDir))
 	if err != nil {

@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"fmt"
-	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -307,15 +306,17 @@ func RunContext(ctx context.Context, names ...string) error {
 		return recordNestedRun(names)
 	}
 
-	planDir, err := os.MkdirTemp("", "gonf-plan-*")
+	planDir, removePlanDir, err := tempPlanDir("gonf-plan-*")
 	if err != nil {
 		return fmt.Errorf("Run: temp plan dir: %w", err)
 	}
-	defer func() { _ = os.RemoveAll(planDir) }()
+	defer removePlanDir()
 
 	// Record straight into the private temp dir (no RecordPlan staging): the
-	// directory is removed on return whether the record succeeds or not, so
-	// nothing survives a refusal and staging would only copy large blobs twice.
+	// directory is removed on return whether the record succeeds or not, and
+	// through logger.OnFatal when a task body ends the process with
+	// logger.Fatal (tempPlanDir), so nothing survives a refusal and staging
+	// would only copy large blobs twice.
 	// The plan applies on this machine, so ForHosts only resolves the hosts
 	// whose destination guard this hostname satisfies (localHostSelection).
 	ops, err := recordPlanForHosts(localHostSelection(), "local", plan.NewStore(planDir), names...)

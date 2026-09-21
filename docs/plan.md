@@ -170,13 +170,23 @@ gonf separates **registration-time** misuse from **runtime** failures:
   SSH. There is no opt-in to silence this; the same recording still succeeds
   for local `Run` / `gonf plan`, where the refusal does not apply.
 
-Residual: a registration-time Fatal fired from *inside* a task body still
-skips `Run`'s deferred temp-plan-dir cleanup (the directory lives under
-`$TMPDIR`). That is the accepted cost of the fail-fast DSL contract. The one
-exception is `RecordPlan`'s staging directory (`gonf plan -o`), which is
-removed by a `logger.OnFatal` hook; a process killed by SIGKILL or a crash
-leaves it, and `Run`'s temp dir, behind. (`Run`'s temp dir could register the
-same hook; it is left as is here to keep the change small.)
+Temporary plan directories are removed on a fail-fast exit too, with the
+exceptions described below (a `logger.Fatal` from another goroutine racing a
+blob write; an unhandled signal, SIGKILL or a crash). A registration-time
+`logger.Fatal` fired from *inside* a task body exits with `os.Exit`, which
+skips deferred calls, so every directory that
+holds packaged sources while task bodies or resources run registers its
+removal with `logger.OnFatal` (the logger runs those hooks before exiting)
+and unregisters it when it returns: `Run`'s `$TMPDIR/gonf-plan-*`,
+`Apply`'s `$TMPDIR/gonf-apply-*` and `RecordPlan`'s staging directory
+(`gonf plan -o`). The hook is cleanup, not a barrier: when `logger.Fatal` is
+called from the goroutine running the task body (the usual case) nothing
+else writes to the directory, but when it is called from ANOTHER goroutine,
+`Run`, `Apply` or the record keep running until `os.Exit`, and a blob
+written in that window recreates the directory (the `$TMPDIR` store creates
+its root when missing), which is then left behind. A process killed by a
+signal nothing handles, by SIGKILL or by a crash also leaves them behind in
+`$TMPDIR` (owner-only, `0700`).
 
 ## Recording (`RecordPlan`)
 
