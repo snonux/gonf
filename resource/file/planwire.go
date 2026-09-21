@@ -1,6 +1,7 @@
 package file
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -282,4 +283,66 @@ func fileContentOptions(op plan.Op, content []byte, ownership []opt.FileDirOptio
 		opts = append(opts, ownerOpt)
 	}
 	return opts, nil
+}
+
+func (f *File) planDraft() resource.PlanDraft {
+	d := resource.PlanDraft{
+		Kind:           "file",
+		ID:             f.resource.ID(),
+		Name:           f.name,
+		Path:           f.targetPath(),
+		Mode:           opt.ModeToWire(f.mode),
+		Absent:         f.Absent,
+		AddLines:       slices.Clone(f.addLines),
+		RemoveLines:    slices.Clone(f.removeLines),
+		ValidationBin:  f.validationBin,
+		ValidationArgs: slices.Clone(f.validationArgs),
+		Deps:           f.DependsOn.SortedIDs(),
+	}
+	if f.preserveContent {
+		d.Kind = "ensure_file"
+		d.Absent = false
+		if !f.modeSet {
+			d.Mode = ""
+		}
+	}
+	// Only explicitly configured ownership is recorded: build()'s
+	// user.Current() default must not be pushed to remote hosts. Absent files
+	// are removed, so ownership would be dead wire data.
+	if !f.Absent {
+		if f.userSet {
+			d.Owner = f.user
+		}
+		if f.groupSet {
+			d.Group = f.group
+		}
+	}
+	// HasContent flags that WithContent/WithSource was configured at all, so
+	// packageDraft/applyFile can tell a legitimately empty file (content or
+	// source resolving to zero bytes, which base64-encodes as "") apart from
+	// an op with no content data recorded (a bug, not a valid empty file).
+	switch {
+	case f.source != "":
+		d.SourcePath = f.source
+		d.HasContent = true
+	case f.contentSet:
+		d.ContentB64 = base64.StdEncoding.EncodeToString([]byte(f.content))
+		d.HasContent = true
+	}
+	// Template intent must travel on the wire explicitly: packageDraft
+	// reads f.source's RAW bytes into content_b64/blob (below), and
+	// targetPath above already stripped ".tmpl" from the recorded Path, so
+	// neither field plan apply sees still carries the suffix
+	// shouldRenderTemplate would otherwise key off. Without Template/
+	// TemplateParam, plan apply (Run/push/cluster/fleet) would write the
+	// literal unrendered template text to the destination.
+	if f.shouldRenderTemplate() {
+		d.Template = true
+		d.TemplateParam = f.templateParam()
+	}
+	if f.templateDataSet {
+		d.TemplateData = f.templateData
+		d.TemplateDataSet = true
+	}
+	return d
 }
