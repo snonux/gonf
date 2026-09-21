@@ -142,7 +142,8 @@ func (p *Pusher) buildCacheSet(key string, c cachedBuild) {
 
 // defaultSCPRunner copies a local file to a remote path via scp. It is
 // Pusher's default SCPRunner implementation (see NewPusher); tests override
-// a Pusher's SCPRunner field directly instead of this function.
+// a Pusher's SCPRunner field directly instead of this function; inside a
+// test binary a real scp is refused (see refuseNetworkExecInTests).
 func defaultSCPRunner(ctx context.Context, localPath string, t PushTarget, remotePath string) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -151,6 +152,7 @@ func defaultSCPRunner(ctx context.Context, localPath string, t PushTarget, remot
 	if err != nil {
 		return err
 	}
+	refuseNetworkExecInTests(argv)
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
@@ -403,37 +405,57 @@ func defaultGoBuildRunner(ctx context.Context, goos, goarch, out, pkg string) er
 	return cmd.Run()
 }
 
-// AssumeRemotePlanCurrent stubs defaultPusher's PlanVersionProber so
-// EnsureRemoteGonf skips the upgrade path. Restore with the returned func
-// (or t.Cleanup).
+// AssumeRemotePlanCurrent is a test seam for callers that fake SSHRunner and
+// push: it makes defaultPusher report the controller's plan schema AND
+// release version, so EnsureRemoteGonf skips the upgrade path without any
+// ssh probe. Restore with the returned func (or t.Cleanup).
+//
+// Both probes must be faked because EnsureRemoteGonf consults the
+// release-version probe whenever the plan schema is current. Faking only the
+// plan schema (as this helper once did) left "gonf -version" running over a
+// real ssh against the test's fake hosts; the failure was only logged, so
+// tests passed while touching the network (task x72). The strict-preview
+// probe is deliberately left alone: only preview (RequireRemoteGonf) reads
+// it, and preview tests use AssumeRemoteGonfCurrent. A preview reached under
+// this helper hits refuseNetworkExecInTests instead of silently probing.
 func AssumeRemotePlanCurrent() func() {
-	old := defaultPusher.PlanVersionProber
-	defaultPusher.PlanVersionProber = func(context.Context, PushTarget) (int, error) {
-		return plan.CurrentVersion, nil
-	}
-	return func() { defaultPusher.PlanVersionProber = old }
-}
-
-// AssumeRemoteGonfCurrent makes the default pusher report the controller's
-// current plan schema and release version. It is a test seam for callers that
-// fake SSH transport and need to exercise strict preview without a live host.
-func AssumeRemoteGonfCurrent() func() {
 	oldPlan := defaultPusher.PlanVersionProber
-	oldStrictPreview := defaultPusher.StrictPreviewProber
 	oldRelease := defaultPusher.ReleaseVersionProber
-	defaultPusher.PlanVersionProber = func(context.Context, PushTarget) (int, error) {
-		return plan.CurrentVersion, nil
-	}
-	defaultPusher.ReleaseVersionProber = func(context.Context, PushTarget) (string, error) {
-		return internal.Version, nil
-	}
-	defaultPusher.StrictPreviewProber = func(context.Context, PushTarget) (int, error) {
-		return internal.StrictPreviewVersion, nil
-	}
+	defaultPusher.PlanVersionProber = currentPlanVersion
+	defaultPusher.ReleaseVersionProber = currentReleaseVersion
 	return func() {
 		defaultPusher.PlanVersionProber = oldPlan
 		defaultPusher.ReleaseVersionProber = oldRelease
+	}
+}
+
+// currentPlanVersion, currentReleaseVersion and currentStrictPreviewVersion
+// are the fake probes installed by the Assume* test seams: each reports the
+// controller's own value, i.e. "the remote gonf is up to date".
+func currentPlanVersion(context.Context, PushTarget) (int, error) {
+	return plan.CurrentVersion, nil
+}
+
+func currentReleaseVersion(context.Context, PushTarget) (string, error) {
+	return internal.Version, nil
+}
+
+func currentStrictPreviewVersion(context.Context, PushTarget) (int, error) {
+	return internal.StrictPreviewVersion, nil
+}
+
+// AssumeRemoteGonfCurrent makes the default pusher report the controller's
+// current plan schema, release version and strict-preview capability: every
+// probe AssumeRemotePlanCurrent fakes, plus the one strict preview
+// (RequireRemoteGonf) needs. It is a test seam for callers that fake SSH
+// transport and need to exercise strict preview without a live host.
+func AssumeRemoteGonfCurrent() func() {
+	restorePush := AssumeRemotePlanCurrent()
+	oldStrictPreview := defaultPusher.StrictPreviewProber
+	defaultPusher.StrictPreviewProber = currentStrictPreviewVersion
+	return func() {
 		defaultPusher.StrictPreviewProber = oldStrictPreview
+		restorePush()
 	}
 }
 
@@ -947,7 +969,15 @@ func remoteInstallCmd(t PushTarget, src, dst string) (string, error) {
 // tests override it to exercise createRemoteStagingDir / probePlanVersion /
 // probeUname (and, transitively, EnsureRemoteGonf's generated argv) without a
 // real ssh connection.
-var sshCaptureExec = func(ctx context.Context, argv []string) (stdout, stderr string, err error) {
+var sshCaptureExec = defaultSSHCaptureExec
+
+// defaultSSHCaptureExec is sshCaptureExec's production implementation. Inside
+// a test binary it refuses to exec a real ssh (see refuseNetworkExecInTests):
+// sshCapture turns most exec failures into "empty stdout", and the
+// release-version probe only logs its errors, so an un-faked probe would
+// otherwise pass silently while reaching for the network.
+func defaultSSHCaptureExec(ctx context.Context, argv []string) (stdout, stderr string, err error) {
+	refuseNetworkExecInTests(argv)
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	var so, se bytes.Buffer
 	cmd.Stdout = &so

@@ -39,8 +39,9 @@ func fanoutErrorFixture(n int) ([]plan.Op, []PushTarget, []string) {
 // for the duration of the test.
 func installFanoutRunner(t *testing.T, fn func(ctx context.Context, argv []string) error) {
 	t.Helper()
-	// AssumeRemoteGonfCurrent (not AssumeRemotePlanCurrent) so the release
-	// probe cannot shell out to a real ssh.
+	// AssumeRemoteGonfCurrent fakes every remote gonf probe (a superset of
+	// AssumeRemotePlanCurrent's), so no probe can shell out to a real ssh
+	// (refuseNetworkExecInTests would fail the test if one did).
 	restoreProbe := AssumeRemoteGonfCurrent()
 	old := SSHRunner
 	t.Cleanup(func() {

@@ -54,10 +54,17 @@ const (
 // an aborted push (errors.Is(err, context.Canceled / DeadlineExceeded)) from
 // the ssh command's own failure. Overridable in tests (including api and cli
 // tests, which install fake runners here).
-var SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
+var SSHRunner = defaultSSHRunner
+
+// defaultSSHRunner is SSHRunner's production implementation. Inside a test
+// binary it refuses to exec a real ssh (see refuseNetworkExecInTests), so a
+// test that forgot to fake SSHRunner fails loudly instead of touching the
+// network.
+func defaultSSHRunner(ctx context.Context, stdin io.Reader, argv []string) error {
 	if len(argv) == 0 {
 		return fmt.Errorf("ssh: empty argv")
 	}
+	refuseNetworkExecInTests(argv)
 	if ctx == nil {
 		ctx = context.Background()
 	}
