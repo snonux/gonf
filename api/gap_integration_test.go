@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 )
 
@@ -26,7 +27,7 @@ func TestGapFeatureSetRecordsAndAppliesTogether(t *testing.T) {
 	const secret = "integration-token\n"
 	writeSecret(t, "tokens/api", secret)
 
-	base := t.TempDir()
+	base := testutil.PrivateTempDir(t)
 	config := filepath.Join(base, "service.conf")
 	lines := filepath.Join(base, "daily.local")
 	preserved := filepath.Join(base, "preserved.conf")
@@ -157,7 +158,7 @@ func TestGapCandidateValidatorBlocksLiveConfigWrite(t *testing.T) {
 	ResetForTest()
 	t.Cleanup(ResetForTest)
 
-	base := t.TempDir()
+	base := testutil.PrivateTempDir(t)
 	candidate := filepath.Join(base, "gonf-validate", "nsd.conf")
 	live := filepath.Join(base, "nsd", "nsd.conf")
 	const candidateContent = "candidate NSD configuration\n"
@@ -210,7 +211,7 @@ func TestNamedFileLineEditsRemainDistinctAcrossTasksAndGateChanges(t *testing.T)
 	ResetForTest()
 	t.Cleanup(ResetForTest)
 
-	base := t.TempDir()
+	base := testutil.PrivateTempDir(t)
 	rcLocal := filepath.Join(base, "rc.conf.local")
 	reloads := filepath.Join(base, "reloads")
 	var packageScripts Resource

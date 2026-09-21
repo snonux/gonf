@@ -154,7 +154,8 @@ func (l *lazyStage) WriteGlob(name, pattern string) (string, error) {
 // blob-less plan never touches it, so refusing an unsafe leftover blobs/
 // up front would reject plans that would have worked. An unsafe blobs/ (a
 // symlink, foreign-owned, world- or shared-group-writable) is therefore
-// refused at commit time, by the same policy (plan.SecureDir on blobs/),
+// refused at commit time, by the same directory rule applied to blobs/ (see
+// plan.Store.WriteTree: blobs/ itself is checked, its ancestors are not),
 // before any blob is written.
 //
 // It is a best-effort pre-check, not a guarantee: it inspects the path with

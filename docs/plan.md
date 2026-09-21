@@ -444,22 +444,36 @@ is refused because its members could replace `plan.jsonl`, which a later
 
 A refusal names the directory and the reason (world-writable, or
 group-writable by a named group that is not your private group) and says what
-to do: `chmod go-w` it, or pass `-o <private dir>`. Pre-existing parents of
-`dir` are only walked (no symlinks), not checked. The same rule applies to a
-`blobs/` directory that already exists inside `dir`: kept as it is when it
-passes, refused otherwise. That check is not part of the up-front pre-check: a
-plan that packages no blob never touches `blobs/`, so an unsafe leftover
-`blobs/` is refused only when the blobs are committed, after the task bodies
-ran but before anything is written (a symlinked `blobs/` is refused the same
-way and nothing is written through it; a `plan.jsonl` that is a symlink is
-replaced by the new file, never written through). What the `blobs/` check
-guarantees differs by blob kind: a single-file blob is written through the
-descriptor of the `blobs/` directory that was verified, so check and write are
-on the same directory; a tree or glob blob (`SyncDir`, `WithSourceGlob`) is
-verified the same way, but then cleared and filled **by path**, so it is a
-check of the directory as it was at that moment, not protection against
-`blobs/` (or an unverified ancestor of `dir`) being swapped in between. It
-guards against an unsafe or pre-planted `blobs/`, not against a concurrent
+to do: `chmod go-w` it, or pass `-o <private dir>`. For a sticky directory such
+as `/tmp` (which a root run would otherwise "own") the advice is only to pass
+`-o <private dir>`: its mode is not yours to change. Pre-existing parents of
+`dir` are only walked (a symlink among them is refused, and reported as a
+symlink), not checked.
+
+The same rule applies to the `blobs/` directory inside `dir`, and to that
+directory alone: kept as it is when it passes, created `0700` when missing,
+refused otherwise (a symlinked `blobs/` is refused too, and nothing is written
+through it; a `plan.jsonl` that is a symlink is replaced by the new file, never
+written through). That check is not part of the up-front pre-check: a plan that
+packages no blob never touches `blobs/`, so an unsafe leftover `blobs/` is
+refused only when the blobs are committed, after the task bodies ran but before
+anything is written. What is checked and guaranteed differs by blob kind:
+
+- A single-file blob (larger than the inline limit) is written through the
+  descriptor of the `blobs/` directory that was verified, so check and write are
+  on the same directory. Every component of the path down to it is opened
+  without following symlinks, so a symlinked ancestor of the store root is
+  refused too.
+- A tree or glob blob (`SyncDir`, `WithSourceGlob`) has only `blobs/` itself
+  verified, then is cleared and filled **by path**: it is a check of `blobs/` as
+  it was at that moment, not protection against `blobs/` being swapped in
+  between, and the ancestors of the plan directory are not looked at, so a
+  plan directory or `$TMPDIR` that is reached through a symlink (macOS's
+  `/var/folders`, a symlinked home) works. The plan directory that `gonf plan
+  -o` names is verified in full (no symlink anywhere in its path) before
+  anything is committed to it.
+
+This guards against an unsafe or pre-planted `blobs/`, not against a concurrent
 attacker with write access to `dir`'s parent. **Behaviour change:**
 earlier versions chmod'ed `dir` to `0700` on every run (breaking a served or
 shared directory, and changing the mode of the checkout for the default

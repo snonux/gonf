@@ -478,7 +478,7 @@ func TestRecordPlanCommitFailureIsReportedAndPartial(t *testing.T) {
 // scratch directory.
 func probeGlobAndBigRefs(t *testing.T) (glob, big string) {
 	t.Helper()
-	probe, err := RecordPlan("x", filepath.Join(t.TempDir(), "probe"), "commit_fail")
+	probe, err := RecordPlan("x", filepath.Join(testutil.PrivateTempDir(t), "probe"), "commit_fail")
 	if err != nil {
 		t.Fatalf("probe record: %v", err)
 	}

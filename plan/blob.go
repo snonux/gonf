@@ -67,10 +67,13 @@ func ReadFile(planDir, blobRef string) ([]byte, error) {
 // not writable by others or by a shared group (SecureDir's rule; your private
 // group may write), so a blob never lands in a directory somebody else can
 // modify, but a mode such as 0755 that the operator chose is kept. The blob
-// file itself is always 0600.
+// file itself is always 0600. Every component of the path down to blobs/ is
+// opened without following symlinks, so a store whose Root is reached through
+// a symlinked ancestor is refused here (WriteTree and WriteGlob are more
+// lenient about that, see secureBlobsDir).
 func (s *Store) WriteFile(name string, data []byte) (string, error) {
-	if s == nil || s.Root == "" {
-		return "", fmt.Errorf("plan: blob store: no plan directory")
+	if err := s.usable(); err != nil {
+		return "", err
 	}
 	ref, abs, err := s.prepareRef(name)
 	if err != nil {
@@ -89,8 +92,8 @@ func (s *Store) WriteFile(name string, data []byte) (string, error) {
 // fail loudly. This is the same manifest MemoryStore packages, so a tree
 // applied locally matches the same tree pushed to a remote host.
 func (s *Store) WriteTree(name, srcDir string) (string, error) {
-	if s == nil || s.Root == "" {
-		return "", fmt.Errorf("plan: blob store: no plan directory")
+	if err := s.usable(); err != nil {
+		return "", err
 	}
 	entries, err := scanTree(srcDir)
 	if err != nil {
@@ -100,7 +103,7 @@ func (s *Store) WriteTree(name, srcDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := secureBlobParent(abs); err != nil {
+	if err := s.secureBlobsDir(); err != nil {
 		return "", blobErrorf("blob %q: %w", ref, err)
 	}
 	if err := os.RemoveAll(abs); err != nil {
@@ -123,8 +126,8 @@ func (s *Store) WriteTree(name, srcDir string) (string, error) {
 // ops stay identical across local and remote apply. (Tree packaging via
 // WriteTree preserves symlinks instead.)
 func (s *Store) WriteGlob(name, pattern string) (string, error) {
-	if s == nil || s.Root == "" {
-		return "", fmt.Errorf("plan: blob store: no plan directory")
+	if err := s.usable(); err != nil {
+		return "", err
 	}
 	entries, err := scanGlob(pattern)
 	if err != nil {
@@ -134,7 +137,7 @@ func (s *Store) WriteGlob(name, pattern string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := secureBlobParent(abs); err != nil {
+	if err := s.secureBlobsDir(); err != nil {
 		return "", blobErrorf("blob %q: %w", ref, err)
 	}
 	if err := os.RemoveAll(abs); err != nil {
@@ -149,40 +152,69 @@ func (s *Store) WriteGlob(name, pattern string) (string, error) {
 	return ref, nil
 }
 
-// secureBlobParent applies the directory policy of SecureDir to the directory
-// that will hold the blob at abs (blobs/), which WriteTree and WriteGlob would
-// otherwise create with MkdirAll and never look at again: a missing one is
-// created 0700, an existing one must pass the same rule (ours, not
-// world-writable, not group-writable by a group other than the caller's private
-// group; a symlinked blobs/ is refused).
+// secureBlobsDir applies SecureDir's directory policy to the blobs/ directory
+// of the plan directory that WriteTree and WriteGlob are about to fill, which
+// they would otherwise create with MkdirAll and never look at again. Exactly
+// what is checked:
 //
-// The guarantee is weaker than WriteFile's, and deliberately stated as such:
-// WriteFile writes through the descriptor of the directory it verified, so the
-// check and the write are on the same directory. SecureDir closes its
-// descriptor when it returns, and WriteTree/WriteGlob then clear, create and
-// fill the tree BY PATH (os.RemoveAll, os.MkdirAll, materializeEntries). It is
-// therefore a check of the state at the time of the call, not a protection
-// against blobs/ (or a component above it, which is never verified, see
-// SecureDir) being swapped for a symlink or another directory between the
-// check and the use. Closing that would need the tree written through the held
-// descriptor too; it is not needed for the honest case this guards against, an
-// unsafe leftover or pre-planted blobs/ directory. The tree itself (abs) is
-// gonf's own scratch space below blobs/: it is cleared and recreated 0700 on
-// every write.
-func secureBlobParent(abs string) error {
-	return SecureDir(filepath.Dir(abs))
+//   - <Root>/blobs itself, and only it: missing => created 0700 (exactly 0700,
+//     whatever the umask); existing => it must not be a symlink, must be a
+//     directory owned by the effective user, must not be writable by others
+//     and must not be writable by a group other than the caller's private
+//     group (checkDirAttrs), and it is left unmodified;
+//   - <Root> is created when missing (0700 masked by the umask, like the
+//     MkdirAll these writers used before) and otherwise not looked at, and
+//     neither is any ancestor of it: they are followed through symlinks. This
+//     is deliberately weaker than SecureDir's walk. The staging store
+//     (api/stage.go) and the local-run directory (api/task.go) are made under
+//     $TMPDIR, and a $TMPDIR reached through a symlink (macOS: /var ->
+//     /private/var) is normal; the plan directory the operator names is
+//     verified in full by SecureDir before anything is committed to it.
+//
+// WriteFile is stricter and unchanged: it writes through a descriptor of its
+// directory that SecureDir opened by walking every component O_NOFOLLOW, so a
+// symlinked ancestor of the store root is refused there.
+//
+// The guarantee is also weaker than WriteFile's in another respect, and
+// deliberately stated as such: WriteFile writes through the descriptor of the
+// directory it verified, so the check and the write are on the same
+// directory. secureChildDir closes its descriptor when it returns, and
+// WriteTree/WriteGlob then clear, create and fill the tree BY PATH
+// (os.RemoveAll, os.MkdirAll, materializeEntries). It is therefore a check of
+// the state at the time of the call, not a protection against blobs/ being
+// swapped for a symlink or another directory between the check and the use.
+// Closing that would need the tree written through the held descriptor too; it
+// is not needed for the honest case this guards against, an unsafe leftover or
+// pre-planted blobs/ directory. The tree itself (blobs/<name>) is gonf's own
+// scratch space below blobs/: it is cleared and recreated 0700 on every write.
+func (s *Store) secureBlobsDir() error {
+	return secureChildDir(s.Root, "blobs")
 }
 
-// blobError is an error of the blob store's write path. Its message starts
-// with the package prefix "plan: " like every other error of this package, and
-// it implements Refusal, so a caller that adds its own prefix (RecordPlan's
-// "RecordPlan: ") can show Reason() and print one prefix instead of
-// "RecordPlan: plan: ...". The wrapped cause stays reachable with errors.Is/As.
+// blobError is an error of the blob store that carries the package prefix: a
+// failed or refused write (WriteFile/WriteTree/WriteGlob, directory-policy
+// refusals included), the packaging scans they start with (scanTree,
+// scanGlob), blob-name/ref validation (BlobRefFor) and a store without a plan
+// directory. Its message starts with the package prefix "plan: " like every
+// other error of this package, and it implements Refusal, so a caller that adds
+// its own prefix (RecordPlan's "RecordPlan: ") can show Reason() and print one
+// prefix instead of "RecordPlan: plan: ...". The wrapped cause stays reachable
+// with errors.Is/As. Raw I/O errors from walking a source tree carry no "plan:"
+// prefix at all and are not blobErrors; they need no re-wording.
 type blobError struct{ err error }
 
 func (e *blobError) Error() string  { return "plan: " + e.err.Error() }
 func (e *blobError) Reason() string { return e.err.Error() }
 func (e *blobError) Unwrap() error  { return e.err }
+
+// usable refuses a store without a plan directory. A nil receiver is refused
+// too, so the write methods can be called on an unset store.
+func (s *Store) usable() error {
+	if s == nil || s.Root == "" {
+		return blobErrorf("blob store: no plan directory")
+	}
+	return nil
+}
 
 // blobErrorf formats a blobError; the format and its %w wrap the cause, and
 // must not carry a "plan: " prefix (blobError adds it once).
@@ -207,7 +239,7 @@ func (s *Store) prepareRef(name string) (ref, abs string, err error) {
 func BlobRefFor(name string) (string, error) {
 	safe := sanitizeBlobName(name)
 	if safe == "" {
-		return "", fmt.Errorf("plan: empty blob name")
+		return "", blobErrorf("empty blob name")
 	}
 	ref := "blobs/" + safe
 	if err := validateBlobRef(ref); err != nil {
@@ -218,14 +250,14 @@ func BlobRefFor(name string) (string, error) {
 
 func validateBlobRef(ref string) error {
 	if ref == "" {
-		return fmt.Errorf("plan: missing blob id")
+		return blobErrorf("missing blob id")
 	}
 	if filepath.IsAbs(ref) || strings.Contains(ref, "..") {
-		return fmt.Errorf("plan: invalid blob id %q", ref)
+		return blobErrorf("invalid blob id %q", ref)
 	}
 	slash := filepath.ToSlash(ref)
 	if !strings.HasPrefix(slash, "blobs/") || slash == "blobs/" {
-		return fmt.Errorf("plan: invalid blob id %q", ref)
+		return blobErrorf("invalid blob id %q", ref)
 	}
 	return nil
 }

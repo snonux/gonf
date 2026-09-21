@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/cmd"
@@ -69,7 +70,7 @@ func recordApplyOption(t *testing.T, taskName string, build func()) {
 
 	Task(taskName, "option fitness", build)
 
-	planDir := t.TempDir()
+	planDir := testutil.PrivateTempDir(t)
 	ops, err := RecordPlan(taskName, planDir, taskName)
 	if err != nil {
 		t.Fatalf("RecordPlan: %v", err)

@@ -235,3 +235,88 @@ func TestRecordPlanBloblessPlanIgnoresUnsafeBlobsDir(t *testing.T) {
 		t.Fatal("the task body did not run")
 	}
 }
+
+// treeAndGlobTask registers name, a task that packages one glob blob (SyncDir
+// with a glob source) and one tree blob (Dir with a source tree), the two kinds
+// that go through the blobs/ policy of Store.WriteTree and WriteGlob, and
+// returns the directory the plan applies into.
+func treeAndGlobTask(t *testing.T, name string) string {
+	t.Helper()
+	ResetForTest()
+	t.Cleanup(ResetForTest)
+	src := newStagedSources(t)
+	Task(name, "", func() {
+		SyncDir(filepath.Join(src.dst, "synced"), filepath.Join(src.globDir, "*"))
+		Dir(filepath.Join(src.dst, "tree"), options.WithSource(src.tree))
+	})
+	return src.dst
+}
+
+// TestRecordPlanWithSymlinkedTempDir is the regression for the $TMPDIR bug: the
+// staging store lives below $TMPDIR, and when that is reached through a symlink
+// (macOS's /var/folders, where /var is a symlink) tree and glob blobs must
+// still be staged and committed, exactly as before the blobs/ policy walked every
+// component of the store's path. The plan directory is an ordinary path (a
+// symlinked plan directory is refused, see TestRecordPlanRefusesSymlinkedPlanDir),
+// it ends up with both blobs and 0700 blobs/, and the staging directory below the
+// link is removed again.
+func TestRecordPlanWithSymlinkedTempDir(t *testing.T) {
+	treeAndGlobTask(t, "linked_tmp")
+	link, realTmp := testutil.SymlinkedDir(t)
+	t.Setenv("TMPDIR", link)
+	planDir := filepath.Join(testutil.PrivateTempDir(t), "out")
+	ops, err := RecordPlan("x", planDir, "linked_tmp")
+	if err != nil {
+		t.Fatalf("RecordPlan with $TMPDIR below a symlink = %v, want success", err)
+	}
+	blobs := 0
+	for _, op := range ops {
+		if op.Blob == "" {
+			continue
+		}
+		blobs++
+		if _, err := os.Stat(filepath.Join(planDir, filepath.FromSlash(op.Blob))); err != nil {
+			t.Fatalf("blob %s of the plan was not committed: %v", op.Blob, err)
+		}
+	}
+	if blobs != 2 {
+		t.Fatalf("plan has %d blobs, want the glob and the tree blob", blobs)
+	}
+	if fi, err := os.Stat(filepath.Join(planDir, "blobs")); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Fatalf("blobs/ = %v, %v; want a 0700 directory", fi, err)
+	}
+	assertNoStagingLeft(t, realTmp)
+}
+
+// TestRunWithSymlinkedTempDir: the local run (`gonf task`) records straight into
+// a gonf-plan-* directory below $TMPDIR and applies from it, so it hits the same
+// symlinked-$TMPDIR case and must apply both blobs, then remove the directory.
+func TestRunWithSymlinkedTempDir(t *testing.T) {
+	dst := treeAndGlobTask(t, "linked_run")
+	link, realTmp := testutil.SymlinkedDir(t)
+	t.Setenv("TMPDIR", link)
+	if err := Run("linked_run"); err != nil {
+		t.Fatalf("Run with $TMPDIR below a symlink = %v, want success", err)
+	}
+	for _, rel := range []string{"synced/f1", "tree/file"} {
+		if _, err := os.Stat(filepath.Join(dst, filepath.FromSlash(rel))); err != nil {
+			t.Fatalf("applied plan did not create %s: %v", rel, err)
+		}
+	}
+	assertNoStagingLeft(t, realTmp)
+}
+
+// TestRecordPlanRefusesSymlinkedPlanDir pins what stays strict: the plan
+// directory the operator names is verified in full, so one reached through a
+// symlink is refused up front, before any task body runs, and nothing is written
+// through the link. The relaxed blobs/ policy applies to $TMPDIR only.
+func TestRecordPlanRefusesSymlinkedPlanDir(t *testing.T) {
+	treeAndGlobTask(t, "linked_plan")
+	link, realDir := testutil.SymlinkedDir(t)
+	before := testutil.Snapshot(t, realDir)
+	_, err := RecordPlan("x", filepath.Join(link, "out"), "linked_plan")
+	if err == nil || !strings.Contains(err.Error(), "is a symlink") {
+		t.Fatalf("RecordPlan below a symlinked ancestor = %v, want a symlink refusal", err)
+	}
+	testutil.RequireUnchanged(t, before, realDir)
+}

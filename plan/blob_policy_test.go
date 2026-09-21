@@ -52,8 +52,8 @@ func requireBlobRefusal(t *testing.T, err error, wantParts ...string) {
 }
 
 // TestStoreRefusesSymlinkedBlobsDir: a blobs/ that is a symlink (to a directory
-// somewhere else) is refused by every writer, because every component of the
-// path is opened O_NOFOLLOW, and nothing is written, cleared or changed
+// somewhere else) is refused by every writer, because blobs/ is opened
+// O_NOFOLLOW, and nothing is written, cleared or changed
 // through the link: the link's target keeps its content and its mode. The
 // refusal names the blobs component; which errno the kernel reports for it
 // (ENOTDIR on Linux, ELOOP or EMLINK elsewhere) is not asserted.
@@ -69,7 +69,7 @@ func TestStoreRefusesSymlinkedBlobsDir(t *testing.T) {
 				t.Fatal(err)
 			}
 			targetBefore, rootBefore := testutil.Snapshot(t, target), testutil.Snapshot(t, root)
-			requireBlobRefusal(t, write(NewStore(root)), `component "blobs"`)
+			requireBlobRefusal(t, write(NewStore(root)), `component "blobs"`, "is a symlink")
 			testutil.RequireUnchanged(t, targetBefore, target)
 			testutil.RequireUnchanged(t, rootBefore, root)
 		})
@@ -83,6 +83,9 @@ func TestWritePrivateFileReplacesSymlinkedPlanFile(t *testing.T) {
 	dir := testutil.MkdirMode(t, filepath.Join(t.TempDir(), "out"), 0o700)
 	target := filepath.Join(t.TempDir(), "precious")
 	if err := os.WriteFile(target, []byte("precious"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(target, 0o644); err != nil { // WriteFile's mode is masked by the umask
 		t.Fatal(err)
 	}
 	link := filepath.Join(dir, "plan.jsonl")
@@ -132,4 +135,63 @@ func TestStoreBlobsDirGroupRule(t *testing.T) {
 			requireEntries(t, filepath.Join(root, "blobs"))
 		})
 	}
+}
+
+// TestStoreTreeAndGlobFollowSymlinkedAncestors is the regression for the
+// $TMPDIR bug: the blobs/ policy applies to blobs/ ALONE, so a plan directory
+// that is reached through a symlinked ancestor (macOS's $TMPDIR below /var, a
+// symlinked home) keeps working for tree and glob blobs, present or still to be
+// created, exactly as it did with MkdirAll before the policy existed. The blobs
+// are written into the directory the link leads to, and blobs/ is still created
+// 0700.
+func TestStoreTreeAndGlobFollowSymlinkedAncestors(t *testing.T) {
+	for name, write := range blobWriters(t) {
+		if name == "WriteFile" {
+			continue // stricter by design, see TestStoreWriteFileStillRefusesSymlinkedAncestors
+		}
+		t.Run(name+" existing plan dir", func(t *testing.T) {
+			link, realDir := testutil.SymlinkedDir(t)
+			plan := testutil.MkdirMode(t, filepath.Join(realDir, "plan"), 0o700)
+			if err := write(NewStore(filepath.Join(link, "plan"))); err != nil {
+				t.Fatalf("%s below a symlinked ancestor = %v, want success", name, err)
+			}
+			assertOwnerOnlyDir(t, filepath.Join(plan, "blobs"))
+		})
+		t.Run(name+" missing plan dir", func(t *testing.T) {
+			link, realDir := testutil.SymlinkedDir(t)
+			if err := write(NewStore(filepath.Join(link, "new", "plan"))); err != nil {
+				t.Fatalf("%s into a missing dir below a symlinked ancestor = %v, want success", name, err)
+			}
+			assertOwnerOnlyDir(t, filepath.Join(realDir, "new", "plan", "blobs"))
+		})
+		t.Run(name+" unsafe blobs is still refused", func(t *testing.T) {
+			link, realDir := testutil.SymlinkedDir(t)
+			plan := testutil.MkdirMode(t, filepath.Join(realDir, "plan"), 0o700)
+			mkdirMode(t, filepath.Join(plan, "blobs"), 0o777)
+			requireBlobRefusal(t, write(NewStore(filepath.Join(link, "plan"))), "world-writable")
+			requireEntries(t, filepath.Join(plan, "blobs"))
+		})
+		t.Run(name+" symlinked blobs is still refused", func(t *testing.T) {
+			link, realDir := testutil.SymlinkedDir(t)
+			plan := testutil.MkdirMode(t, filepath.Join(realDir, "plan"), 0o700)
+			elsewhere := testutil.MkdirMode(t, filepath.Join(t.TempDir(), "elsewhere"), 0o700)
+			if err := os.Symlink(elsewhere, filepath.Join(plan, "blobs")); err != nil {
+				t.Fatal(err)
+			}
+			requireBlobRefusal(t, write(NewStore(filepath.Join(link, "plan"))), `component "blobs"`, "is a symlink")
+			requireEntries(t, elsewhere)
+		})
+	}
+}
+
+// TestStoreWriteFileStillRefusesSymlinkedAncestors pins what did NOT change:
+// WriteFile opens every component of the path down to blobs/ without following
+// symlinks (SecureDir's walk, as before m62), so a store rooted below a symlinked
+// ancestor refuses a single-file blob, names the symlink, and writes nothing.
+// (Tree and glob blobs work there, see the test above.)
+func TestStoreWriteFileStillRefusesSymlinkedAncestors(t *testing.T) {
+	link, realDir := testutil.SymlinkedDir(t)
+	_, err := NewStore(filepath.Join(link, "plan")).WriteFile("b", []byte("x"))
+	requireBlobRefusal(t, err, `component "lnk"`, "is a symlink")
+	requireEntries(t, realDir)
 }

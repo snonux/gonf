@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
@@ -138,7 +139,7 @@ func TestRunAggregateSelfMatchingPattern(t *testing.T) {
 
 	// The aggregate must expand to its child exactly once: exactly one file
 	// op for the child path and none for the aggregate itself.
-	ops, err := RecordPlan("count", t.TempDir(), "all")
+	ops, err := RecordPlan("count", testutil.PrivateTempDir(t), "all")
 	if err != nil {
 		t.Fatalf("RecordPlan: %v", err)
 	}
@@ -241,7 +242,7 @@ func TestRunDiamondIncludesNoCycle(t *testing.T) {
 
 	// Preserve current behavior: the shared task is recorded once per
 	// including branch, so two identical file ops reach the plan.
-	ops, err := RecordPlan("count", t.TempDir(), "dia_root")
+	ops, err := RecordPlan("count", testutil.PrivateTempDir(t), "dia_root")
 	if err != nil {
 		t.Fatalf("RecordPlan: %v", err)
 	}
@@ -377,7 +378,7 @@ func TestNestedRunSurfacesRealPackError(t *testing.T) {
 		_ = Run("child_bad_source")
 	})
 
-	_, err := RecordPlan("nested_pack_err", t.TempDir(), "outer_nested")
+	_, err := RecordPlan("nested_pack_err", testutil.PrivateTempDir(t), "outer_nested")
 	if err == nil {
 		t.Fatal("expected the record to fail on the unreadable source")
 	}
@@ -465,7 +466,7 @@ func TestNestedAggregateChainVisibleInBodyError(t *testing.T) {
 	Aggregate("innerB", "inner aggregate", "^leaf_fail$")
 	Aggregate("outerA", "outer aggregate", "^innerB$")
 
-	_, err := RecordPlan("body_err_chain", t.TempDir(), "outerA")
+	_, err := RecordPlan("body_err_chain", testutil.PrivateTempDir(t), "outerA")
 	if err == nil {
 		t.Fatal("expected the record to fail on the nested aggregate failure")
 	}
@@ -492,10 +493,10 @@ func TestBodyErrNotLeakedToNextSession(t *testing.T) {
 	Aggregate("bad_agg", "matches nothing", "^nonexistent$")
 	Task("healthy", "healthy task", func() {})
 
-	if _, err := RecordPlan("first", t.TempDir(), "bad_agg"); err == nil {
+	if _, err := RecordPlan("first", testutil.PrivateTempDir(t), "bad_agg"); err == nil {
 		t.Fatal("expected the first record to fail")
 	}
-	if _, err := RecordPlan("healthy_session", t.TempDir(), "healthy"); err != nil {
+	if _, err := RecordPlan("healthy_session", testutil.PrivateTempDir(t), "healthy"); err != nil {
 		t.Fatalf("a later healthy session must not inherit the stashed body error: %v", err)
 	}
 }

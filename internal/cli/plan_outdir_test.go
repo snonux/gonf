@@ -118,11 +118,14 @@ func TestCLIPlanCreatesOutputDirPrivate(t *testing.T) {
 }
 
 // unsafeOutDir is one -o directory that must be refused, with the text of the
-// refusal.
+// refusal. sticky marks a /tmp-style directory, for which the refusal must NOT
+// advise chmod (its mode is not the operator's to change): only choosing another
+// directory.
 type unsafeOutDir struct {
-	name string
-	mk   func(t *testing.T) string
-	want string
+	name   string
+	mk     func(t *testing.T) string
+	want   string
+	sticky bool
 }
 
 // unsafeOutDirs are the output directories `gonf plan` refuses: world-writable
@@ -137,7 +140,7 @@ func unsafeOutDirs(t *testing.T) []unsafeOutDir {
 	for _, mode := range []os.FileMode{0o757, 0o777, 0o777 | os.ModeSticky} {
 		cases = append(cases, unsafeOutDir{mode.String(), func(t *testing.T) string {
 			return outDirWithMode(t, filepath.Join(t.TempDir(), "out"), mode)
-		}, "world-writable"})
+		}, "world-writable", mode&os.ModeSticky != 0})
 	}
 	return append(cases, unsafeOutDir{"0775 shared group", func(t *testing.T) string {
 		dir := outDirWithMode(t, filepath.Join(t.TempDir(), "out"), 0o700)
@@ -146,7 +149,7 @@ func unsafeOutDirs(t *testing.T) []unsafeOutDir {
 			t.Fatal(err)
 		}
 		return dir
-	}, "group-writable by group"})
+	}, "group-writable by group", false})
 }
 
 // TestCLIPlanRefusesUnsafeOutputDir: a -o directory that others can write
@@ -176,10 +179,13 @@ func TestCLIPlanRefusesUnsafeOutputDir(t *testing.T) {
 					t.Fatalf("exit %d, stderr %q; want exit 1", code, stderr)
 				}
 				requireCLIRecordRefusal(t, stderr, "plan dir: ")
-				for _, want := range []string{dir, tc.want, "chmod go-w", "-o <private dir>"} {
+				for _, want := range []string{dir, tc.want, "-o <private dir>"} {
 					if !strings.Contains(stderr, want) {
 						t.Fatalf("stderr %q; want a refusal containing %q", stderr, want)
 					}
+				}
+				if got := strings.Contains(stderr, "chmod go-w"); got == tc.sticky {
+					t.Fatalf("stderr %q; chmod advice present = %v, want %v (never for a sticky directory)", stderr, got, !tc.sticky)
 				}
 				if *ran {
 					t.Fatal("the task body ran; an unsafe -o must fail before any body")
@@ -338,4 +344,36 @@ func TestCLIPlanRefusesForeignOutputDir(t *testing.T) {
 		return
 	}
 	t.Skip("no root-owned system directory found")
+}
+
+// TestCLIWithSymlinkedTempDir is the regression for the $TMPDIR bug: with $TMPDIR
+// reached through a symlink (macOS's /var/folders, where /var is a symlink) both
+// `gonf plan -o out` (which stages blobs below $TMPDIR) and the local `gonf -n`
+// run (which records into a gonf-plan-* directory below $TMPDIR) must work for a
+// task that packages a tree blob, as they did before the blobs/ policy walked
+// every component of the store's path. The -o directory is an ordinary path,
+// since a symlinked one is still refused.
+func TestCLIWithSymlinkedTempDir(t *testing.T) {
+	ran := registerOutDirProbe(t)
+	link, realTmp := testutil.SymlinkedDir(t)
+	t.Setenv("TMPDIR", link)
+	out := filepath.Join(testutil.PrivateTempDir(t), "out")
+	var code int
+	var stderr string
+	_ = captureStdout(t, func() { code, stderr = runGonf(t, "plan", "-o", out, "cli_outdir") })
+	if code != 0 || !*ran {
+		t.Fatalf("gonf plan -o: exit %d (body ran: %v), stderr: %s", code, *ran, stderr)
+	}
+	if got := modePerm(t, filepath.Join(out, "blobs")); got != 0o700 {
+		t.Fatalf("blobs mode = %04o, want 0700", got)
+	}
+	*ran = false
+	_ = captureStdout(t, func() { code, stderr = runGonf(t, "-n", "cli_outdir") })
+	if code != 0 || !*ran {
+		t.Fatalf("gonf -n: exit %d (body ran: %v), stderr: %s", code, *ran, stderr)
+	}
+	entries, err := os.ReadDir(realTmp)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("temp dir %s after both runs: %v, %v; want it empty", realTmp, entries, err)
+	}
 }

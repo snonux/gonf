@@ -11,6 +11,7 @@ import (
 	"github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/internal/remote"
+	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
@@ -25,7 +26,7 @@ func TestPrivilegedTaskTagsElevate(t *testing.T) {
 		File(filepath.Join(t.TempDir(), "r"), options.WithContent("r"))
 	}, Privileged())
 
-	dir := t.TempDir()
+	dir := testutil.PrivateTempDir(t)
 	ops, err := RecordPlan("t", dir, "user_f", "root_f")
 	if err != nil {
 		t.Fatal(err)
@@ -125,7 +126,7 @@ func TestWithElevateOnCommand(t *testing.T) {
 	Task("mixed", "", func() {
 		Command("true", nil, options.WithElevate)
 	})
-	ops, err := RecordPlan("t", t.TempDir(), "mixed")
+	ops, err := RecordPlan("t", testutil.PrivateTempDir(t), "mixed")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +262,7 @@ func TestChangeGatePreflightsRefuseBeforeApplyOrPush(t *testing.T) {
 func TestApplyChunksElevatedRunner(t *testing.T) {
 	ResetTasks()
 	resource.ResetRepository()
-	dir := t.TempDir()
+	dir := testutil.PrivateTempDir(t)
 	path := filepath.Join(dir, "x.txt")
 	Task("u", "", func() {
 		File(path, options.WithContent("ok"))

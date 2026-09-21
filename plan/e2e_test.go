@@ -12,6 +12,7 @@ import (
 
 	"github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/cron"
@@ -138,7 +139,7 @@ func TestE2EOnChangeRunsOncePerManagedInputChange(t *testing.T) {
 		plan.ResetRecord()
 	})
 
-	base := t.TempDir()
+	base := testutil.PrivateTempDir(t)
 	input := filepath.Join(base, "input.conf")
 	output := filepath.Join(base, "reloads")
 	api.Task("on_change_e2e", "", func() {
@@ -233,7 +234,7 @@ func TestE2ECronAndServicePlanApply(t *testing.T) {
 		api.Service("zzsvc", options.WithRestart)
 	})
 
-	planDir := t.TempDir()
+	planDir := testutil.PrivateTempDir(t)
 	ops, err := api.RecordPlan("cronsvc", planDir, "cron_svc")
 	if err != nil {
 		t.Fatalf("RecordPlan: %v", err)
@@ -345,7 +346,7 @@ func TestE2EFileOwnershipPlanApply(t *testing.T) {
 		)
 	})
 
-	planDir := t.TempDir()
+	planDir := testutil.PrivateTempDir(t)
 	ops, err := api.RecordPlan("ownership", planDir, "ownership_e2e")
 	if err != nil {
 		t.Fatalf("RecordPlan: %v", err)
@@ -578,7 +579,7 @@ func TestE2ESyncDirOwnershipPlanApply(t *testing.T) {
 		)
 	})
 
-	planDir := t.TempDir()
+	planDir := testutil.PrivateTempDir(t)
 	ops, err := api.RecordPlan("syncdir_ownership", planDir, "syncdir_ownership_e2e")
 	if err != nil {
 		t.Fatalf("RecordPlan: %v", err)
@@ -819,7 +820,7 @@ func TestE2ESpecialBitsModePlanApply(t *testing.T) {
 		)
 	})
 
-	planDir := t.TempDir()
+	planDir := testutil.PrivateTempDir(t)
 	ops, err := api.RecordPlan("specialbits", planDir, "special_bits_e2e")
 	if err != nil {
 		t.Fatalf("RecordPlan: %v", err)

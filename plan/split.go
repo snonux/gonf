@@ -10,12 +10,14 @@ type Chunk struct {
 }
 
 // Refusal is implemented by every error ValidateChunkDeps and
-// ValidateChangeGates return, and by the errors of the blob store's write
-// methods (Store.WriteFile, WriteTree, WriteGlob). Reason is the refusal without the plan engine's
-// "plan: " prefix, so a caller that adds its own prefix (RecordPlanTo's
-// "RecordPlan: ...", api.Apply's "Apply: ...") can show one prefix instead of
-// "plan: plan: ..." or "record: plan: ...". Callers reach it with errors.As
-// against a Refusal target; they never parse the message.
+// ValidateChangeGates return, and by every "plan: "-prefixed error of the blob
+// store's write path (blobError: Store.WriteFile, WriteTree and WriteGlob, their
+// packaging scans, BlobRefFor and the missing-plan-directory error). Reason is
+// the refusal without the plan engine's "plan: " prefix, so a caller that adds
+// its own prefix (RecordPlanTo's "RecordPlan: ...", api.Apply's "Apply: ...")
+// can show one prefix instead of "plan: plan: ..." or "record: plan: ...".
+// Callers reach it with errors.As against a Refusal target; they never parse
+// the message.
 type Refusal interface {
 	error
 	Reason() string

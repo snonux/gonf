@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
@@ -302,7 +303,7 @@ func TestRecordPlanLowersFileAndDirOwnership(t *testing.T) {
 		)
 	})
 
-	ops, err := RecordPlan("ownership", t.TempDir(), "ownership")
+	ops, err := RecordPlan("ownership", testutil.PrivateTempDir(t), "ownership")
 	if err != nil {
 		t.Fatalf("RecordPlan: %v", err)
 	}
@@ -445,7 +446,7 @@ func TestRecordPlanLowersTimerRestart(t *testing.T) {
 		Timer("fit.timer", options.WithUser, options.WithRestart)
 	})
 
-	ops, err := RecordPlan("timer_restart", t.TempDir(), "timer_restart")
+	ops, err := RecordPlan("timer_restart", testutil.PrivateTempDir(t), "timer_restart")
 	if err != nil {
 		t.Fatalf("RecordPlan: %v", err)
 	}
@@ -498,7 +499,7 @@ func TestRecordPlanLowersOnChange(t *testing.T) {
 		DaemonReload(options.OnChange(firstRes))
 	})
 
-	ops, err := RecordPlan("on-change", t.TempDir(), "on_change")
+	ops, err := RecordPlan("on-change", testutil.PrivateTempDir(t), "on_change")
 	if err != nil {
 		t.Fatalf("RecordPlan: %v", err)
 	}
@@ -555,7 +556,7 @@ func TestRecordPlanRejectsOnChangeAcrossPrivilegeChunks(t *testing.T) {
 		privileged := Command("true", nil, options.WithName("privileged"), options.WithElevate)
 		Command("true", nil, options.WithName("gated"), options.OnChange(privileged))
 	})
-	_, err := RecordPlan("cross-chunk", t.TempDir(), "cross_chunk_change_gate")
+	_, err := RecordPlan("cross-chunk", testutil.PrivateTempDir(t), "cross_chunk_change_gate")
 	if err == nil || !strings.Contains(err.Error(), "must live in the same chunk") {
 		t.Fatalf("RecordPlan error = %v, want cross-chunk change-gate refusal", err)
 	}
@@ -586,7 +587,7 @@ func TestRecordPlanLowersSystemdTimer(t *testing.T) {
 		)
 	})
 
-	ops, err := RecordPlan("systemd_timer_lower", t.TempDir(), "systemd_timer_lower")
+	ops, err := RecordPlan("systemd_timer_lower", testutil.PrivateTempDir(t), "systemd_timer_lower")
 	if err != nil {
 		t.Fatalf("RecordPlan: %v", err)
 	}
@@ -757,7 +758,7 @@ func TestRecordPlanLowersSyncDirSourceDir(t *testing.T) {
 		File(filepath.Join(base, "f.conf"), options.WithContent("x"))
 	})
 
-	ops, err := RecordPlan("syncdir_src", t.TempDir(), "syncdir_source")
+	ops, err := RecordPlan("syncdir_src", testutil.PrivateTempDir(t), "syncdir_source")
 	if err != nil {
 		t.Fatalf("RecordPlan: %v", err)
 	}

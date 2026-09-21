@@ -2,7 +2,6 @@ package plan
 
 import (
 	"archive/tar"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -49,10 +48,10 @@ type BlobEntry struct {
 func scanTree(srcDir string) ([]BlobEntry, error) {
 	info, err := os.Stat(srcDir)
 	if err != nil {
-		return nil, fmt.Errorf("plan: package tree %s: %w", srcDir, err)
+		return nil, blobErrorf("package tree %s: %w", srcDir, err)
 	}
 	if !info.IsDir() {
-		return nil, fmt.Errorf("plan: package tree %s: not a directory", srcDir)
+		return nil, blobErrorf("package tree %s: not a directory", srcDir)
 	}
 	var out []BlobEntry
 	walkErr := filepath.WalkDir(srcDir, func(path string, entry fs.DirEntry, err error) error {
@@ -82,7 +81,7 @@ func scanTree(srcDir string) ([]BlobEntry, error) {
 			}
 			out = append(out, BlobEntry{Rel: filepath.ToSlash(rel), Kind: BlobFile, Data: data})
 		default:
-			return fmt.Errorf("plan: package tree %s: unsupported file type at %s", srcDir, path)
+			return blobErrorf("package tree %s: unsupported file type at %s", srcDir, path)
 		}
 		return nil
 	})
@@ -104,13 +103,13 @@ func scanTree(srcDir string) ([]BlobEntry, error) {
 func scanGlob(pattern string) ([]BlobEntry, error) {
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
-		return nil, fmt.Errorf("plan: package glob %q: %w", pattern, err)
+		return nil, blobErrorf("package glob %q: %w", pattern, err)
 	}
 	var out []BlobEntry
 	for _, match := range matches {
 		info, err := os.Lstat(match)
 		if err != nil {
-			return nil, fmt.Errorf("plan: package glob match %s: %w", match, err)
+			return nil, blobErrorf("package glob match %s: %w", match, err)
 		}
 		if !GlobMatchCounts(match, info) {
 			continue
@@ -121,7 +120,7 @@ func scanGlob(pattern string) ([]BlobEntry, error) {
 		// counting matches are read through into content.
 		data, err := os.ReadFile(match)
 		if err != nil {
-			return nil, fmt.Errorf("plan: package glob match %s: %w", match, err)
+			return nil, blobErrorf("package glob match %s: %w", match, err)
 		}
 		out = append(out, BlobEntry{Rel: filepath.Base(match), Kind: BlobFile, Data: data})
 	}

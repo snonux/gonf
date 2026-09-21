@@ -18,9 +18,11 @@ import (
 // or renamed by anyone else. It never rewrites a directory it did not create:
 //
 //   - a missing component (dir itself or any missing ancestor) is created 0700
-//     and chmod'ed to exactly 0700 (mkdir(2) applies the umask, which could
-//     otherwise leave it wider or unusably narrow); these are the only
-//     directories whose mode SecureDir ever changes;
+//     and chmod'ed to exactly 0700: mkdir(2) applies the umask, which can only
+//     narrow the requested 0700 (never widen it), so a restrictive umask such
+//     as 0277 would leave an unusable 0400 directory that nothing can be
+//     created in. These are the only directories whose mode SecureDir ever
+//     changes;
 //   - a pre-existing dir is VERIFIED and left exactly as it is, mode included
 //     (a 0755 checkout stays 0755): it must be a directory (not a symlink),
 //     owned by the effective user, not writable by others, and writable by
@@ -35,7 +37,14 @@ import (
 //     the operator's path to the directory, not somewhere gonf stores
 //     anything. Every component, though, is opened relative to the descriptor
 //     of its parent with O_NOFOLLOW, so a symlink anywhere in the path is
-//     refused.
+//     refused (and reported as a symlink, not as "not a directory").
+//
+// SecureDir is for a directory the operator names (the plan directory) and
+// for the blobs/ directory of single-file blobs. Store.WriteTree and
+// WriteGlob apply the same rule to blobs/ alone, through secureChildDir, and
+// do NOT refuse a symlinked ancestor of the plan directory: the staging store
+// and the local-run directory live under $TMPDIR, whose path may legitimately
+// pass through a symlink (macOS: /var -> /private/var).
 //
 // This replaced an unconditional chmod 0700 of the final component, which
 // silently changed the mode of whatever directory the operator named (the
@@ -109,7 +118,7 @@ func openSecureDir(dir string) (int, error) {
 		next, madeHere, err := openOrCreateChild(fd, part)
 		_ = unix.Close(fd)
 		if err != nil {
-			return -1, fmt.Errorf("open %s: component %q: %w", DirLabel(dir), part, err)
+			return -1, componentError(dir, part, err)
 		}
 		fd, created = next, madeHere
 	}
@@ -142,25 +151,57 @@ func splitSecurePath(dir string) (base string, parts []string) {
 	return base, parts
 }
 
+// errSymlinkComponent is how a path component that is a symlink is reported.
+// The kernel says so differently per platform (ENOTDIR on Linux, ELOOP or
+// EMLINK on the BSDs and macOS, for O_NOFOLLOW|O_DIRECTORY), and ENOTDIR also
+// means "a regular file", so openOrCreateChild checks with fstatat and reports
+// this one error, worded like the up-front refusal of the api pre-check.
+var errSymlinkComponent = errors.New("is a symlink; symlinked plan directories are refused")
+
+// componentError words a failure to open one component of dir.
+func componentError(dir, part string, err error) error {
+	return fmt.Errorf("open %s: component %q: %w", DirLabel(dir), part, err)
+}
+
+// diagnoseOpenError turns the errno of a failed O_NOFOLLOW|O_DIRECTORY open
+// of name below parent into errSymlinkComponent when name is a symlink, and
+// leaves every other error (a regular file, a permission problem) as it is.
+func diagnoseOpenError(parent int, name string, err error) error {
+	if !errors.Is(err, unix.ENOTDIR) && !errors.Is(err, unix.ELOOP) && !errors.Is(err, unix.EMLINK) {
+		return err
+	}
+	var st unix.Stat_t
+	if unix.Fstatat(parent, name, &st, unix.AT_SYMLINK_NOFOLLOW) == nil && st.Mode&unix.S_IFMT == unix.S_IFLNK {
+		return errSymlinkComponent
+	}
+	return err
+}
+
+// mkdirChild creates a directory below an open parent. It is a variable only
+// so a test can make another process "win" the creation race
+// deterministically (see TestOpenOrCreateChildLosingTheRace).
+var mkdirChild = unix.Mkdirat
+
 // openOrCreateChild opens the directory name below parent, creating it 0700
 // when it is missing. created is true only when this call made it: losing the
 // creation race to another process (EEXIST) counts as opening a pre-existing
-// directory, which the caller then treats as somebody else's. A directory made
-// here is chmod'ed to exactly 0700 right away, before anything is put into it
-// or below it, because the umask may have masked mkdir's mode.
+// directory, which the caller then treats as somebody else's: verified, never
+// chmod'ed. A directory made here is chmod'ed to exactly 0700 right away,
+// before anything is put into it or below it, because the umask may have
+// narrowed mkdir's mode (never widened it).
 func openOrCreateChild(parent int, name string) (fd int, created bool, err error) {
 	fd, err = unix.Openat(parent, name, openDirFlags, 0)
 	if !errors.Is(err, unix.ENOENT) {
-		return fd, false, err
+		return fd, false, diagnoseOpenError(parent, name, err)
 	}
-	switch err = unix.Mkdirat(parent, name, 0o700); {
+	switch err = mkdirChild(parent, name, 0o700); {
 	case err == nil:
 		created = true
 	case !errors.Is(err, unix.EEXIST):
 		return -1, false, err
 	}
 	if fd, err = unix.Openat(parent, name, openDirFlags, 0); err != nil {
-		return -1, false, err
+		return -1, false, diagnoseOpenError(parent, name, err)
 	}
 	if created {
 		if err = unix.Fchmod(fd, 0o700); err != nil {
@@ -169,6 +210,33 @@ func openOrCreateChild(parent int, name string) (fd int, created bool, err error
 		}
 	}
 	return fd, created, nil
+}
+
+// secureChildDir applies SecureDir's policy to the single directory name
+// below parent, and to nothing above it. It is what Store.WriteTree and
+// WriteGlob use for blobs/: parent (the plan directory) is created when missing
+// and opened the way os.MkdirAll and os.Open would, following symlinks, since
+// how the operator (or $TMPDIR) reaches the plan directory is not gonf's
+// business and was never checked for these blobs; name itself is opened
+// O_NOFOLLOW, created 0700 when missing, and otherwise verified by
+// finishSecureDir (a symlink, a file, foreign ownership, world- or shared-group
+// write are refused; a pre-existing directory is not modified).
+func secureChildDir(parent, name string) error {
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return fmt.Errorf("create %s: %w", DirLabel(parent), err)
+	}
+	pfd, err := unix.Open(parent, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", DirLabel(parent), err)
+	}
+	fd, created, err := openOrCreateChild(pfd, name)
+	_ = unix.Close(pfd)
+	child := filepath.Join(parent, name)
+	if err != nil {
+		return componentError(child, name, err)
+	}
+	defer func() { _ = unix.Close(fd) }()
+	return finishSecureDir(fd, child, created)
 }
 
 // finishSecureDir applies the final-component policy: a directory this call
@@ -215,11 +283,11 @@ func currentIDs() procIDs {
 }
 
 // checkDirAttrs is the single acceptance rule for a pre-existing plan output
-// directory. SecureDir (and through it WritePrivateFile and the blobs/ policy
-// of Store.WriteTree/WriteGlob) and CheckExistingDir (and through it the api
-// pre-check) all use it, so the up-front check cannot drift from the
-// enforcement. me is the process the directory is judged for. The directory
-// must be
+// directory. finishSecureDir (so SecureDir, WritePrivateFile, and the blobs/
+// policy of Store.WriteFile/WriteTree/WriteGlob through secureChildDir) and
+// CheckExistingDir (and through it the api pre-check) all use it, so the
+// up-front check cannot drift from the enforcement. me is the process the
+// directory is judged for. The directory must be
 //
 //   - a directory, owned by the effective user (root is not exempt: a
 //     directory owned by someone else lets that user swap plan.jsonl, which a
@@ -246,17 +314,30 @@ func checkDirAttrs(label string, a dirAttrs, me procIDs) error {
 			"refusing to store plan output where its owner can replace it: choose a directory you own (-o <private dir>)",
 			label, a.uid, me.euid)
 	}
-	const remedy = "run chmod go-w on it, or choose a private directory you own (-o <private dir>)"
 	switch {
 	case a.mode&0o002 != 0:
 		return fmt.Errorf("%s is world-writable (mode %04o); "+
-			"refusing to store plan output where any user can replace it: %s", label, a.mode, remedy)
+			"refusing to store plan output where any user can replace it: %s", label, a.mode, writableRemedy(a.mode))
 	case a.mode&0o020 != 0 && !me.isPrivateGroup(a.gid):
 		return fmt.Errorf("%s is group-writable by group %d, which is not your private group (mode %04o); "+
 			"refusing to store plan output where members of that group can replace it: %s",
-			label, a.gid, a.mode, remedy)
+			label, a.gid, a.mode, writableRemedy(a.mode))
 	}
 	return nil
+}
+
+// writableRemedy is the advice that ends a refusal for a directory the caller
+// owns that others can write. Removing group/other write with chmod is only
+// good advice for an ordinary directory of the caller's. A sticky one (/tmp,
+// /var/tmp: for root the owner rule passes on them too) is a shared, system
+// wide scratch directory whose mode must not be touched, so the only advice
+// is to pick another directory.
+func writableRemedy(mode uint32) string {
+	const chooseOther = "choose a private directory you own (-o <private dir>)"
+	if mode&0o1000 != 0 {
+		return chooseOther
+	}
+	return "run chmod go-w on it, or " + chooseOther
 }
 
 // isPrivateGroup reports whether gid is the caller's user-private group by the

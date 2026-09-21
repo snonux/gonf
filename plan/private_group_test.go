@@ -161,66 +161,94 @@ func dirOf(uid, gid, mode uint32) dirAttrs {
 	return dirAttrs{isDir: true, uid: uid, gid: gid, mode: mode}
 }
 
+// Process identities of the rule's rows: a Fedora/Ubuntu-style user with a
+// private group, a user whose primary group is a shared "users" group, and root.
+var (
+	upg           = procIDs{euid: 1000, egid: 1000}
+	sharedPrimary = procIDs{euid: 1000, egid: 100}
+	rootIDs       = procIDs{euid: 0, egid: 0}
+)
+
+// caseAdder collects the rows of TestCheckDirAttrsRule.
+type caseAdder struct{ cases []idCase }
+
+func (c *caseAdder) add(name string, me procIDs, a dirAttrs, want string) {
+	c.cases = append(c.cases, idCase{name, me, a, want})
+}
+
+// groupWriteRows: the private group is accepted only when gid == egid == euid,
+// so a different gid or a shared primary group is refused (each row is chosen
+// so that dropping one condition of the rule flips it).
+func groupWriteRows(c *caseAdder) {
+	const notPrivate = "not your private group"
+	c.add("UPG user, 0775 in the private group", upg, dirOf(1000, 1000, 0o775), "")
+	c.add("UPG user, 2775 (setgid) in the private group", upg, dirOf(1000, 1000, 0o2775), "")
+	c.add("UPG user, 0720 in the private group", upg, dirOf(1000, 1000, 0o720), "")
+	c.add("UPG user, 0755 accepted", upg, dirOf(1000, 1000, 0o755), "")
+	// A different gid (someone else's group, or a supplementary one) drops "gid == egid".
+	c.add("UPG user, 0775 in another group", upg, dirOf(1000, 1001, 0o775), notPrivate)
+	c.add("UPG user, 2775 in another group", upg, dirOf(1000, 1001, 0o2775), notPrivate)
+	c.add("UPG user, 0755 in another group accepted (no group write)", upg, dirOf(1000, 1001, 0o755), "")
+	// egid != euid: the primary group is shared, so a group-writable dir of it
+	// is refused even though gid == egid (drops "egid == euid") ...
+	c.add("shared primary group, 0775 in the primary group", sharedPrimary, dirOf(1000, 100, 0o775), notPrivate)
+	c.add("shared primary group, 0770 in the primary group", sharedPrimary, dirOf(1000, 100, 0o770), notPrivate)
+	// ... and the group numbered like the user (gid == euid, not the egid) is not this process's private group either.
+	c.add("shared primary group, 0775 in the group numbered like the user", sharedPrimary, dirOf(1000, 1000, 0o775), notPrivate)
+	c.add("shared primary group, 0755 accepted", sharedPrimary, dirOf(1000, 100, 0o755), "")
+}
+
+// worldWritableRows: world-writable is refused for everybody, sticky or not,
+// private group or not.
+func worldWritableRows(c *caseAdder) {
+	c.add("UPG user, 0777", upg, dirOf(1000, 1000, 0o777), "world-writable")
+	c.add("UPG user, 0757", upg, dirOf(1000, 1000, 0o757), "world-writable")
+	c.add("UPG user, 1777 (sticky, like /tmp)", upg, dirOf(1000, 1000, 0o1777), "world-writable")
+	c.add("UPG user, 0702", upg, dirOf(1000, 1000, 0o702), "world-writable")
+	c.add("shared primary group, 0777", sharedPrimary, dirOf(1000, 100, 0o777), "world-writable")
+	c.add("root, 0777 root-owned", rootIDs, dirOf(0, 0, 0o777), "world-writable")
+}
+
+// ownerRows: root is not exempt from the owner rule, which is judged before the
+// mode; another user's directory lets that user swap plan.jsonl.
+func ownerRows(c *caseAdder) {
+	c.add("root, directory owned by another uid", rootIDs, dirOf(1000, 0, 0o755), "is owned by uid 1000")
+	c.add("root, directory owned by another uid, 0700", rootIDs, dirOf(1000, 1000, 0o700), "is owned by uid 1000")
+	c.add("UPG user, directory owned by another uid", upg, dirOf(1001, 1000, 0o755), "is owned by uid 1001")
+	c.add("UPG user, directory owned by root", upg, dirOf(0, 0, 0o755), "is owned by uid 0")
+	c.add("owner rule comes before the mode", upg, dirOf(1001, 1000, 0o777), "is owned by uid 1001")
+	c.add("root, own directory 0755 accepted", rootIDs, dirOf(0, 0, 0o755), "")
+	c.add("root, own directory 0700 accepted", rootIDs, dirOf(0, 0, 0o700), "")
+	c.add("root, own directory in another group 0750 accepted", rootIDs, dirOf(0, 5, 0o750), "")
+}
+
+// rootGroupAndKindRows: gid 0 is never a private group (on the BSDs it is
+// "wheel"), so a root run refuses group write even where gid == egid == euid
+// == 0 (drops "gid != 0"); and a non-directory (a file, a symlink as Lstat
+// reports it) is refused.
+func rootGroupAndKindRows(c *caseAdder) {
+	const notPrivate = "not your private group"
+	c.add("root, 0775 root:root", rootIDs, dirOf(0, 0, 0o775), notPrivate)
+	c.add("root, 0770 root:root", rootIDs, dirOf(0, 0, 0o770), notPrivate)
+	c.add("root, 2775 root:root", rootIDs, dirOf(0, 0, 0o2775), notPrivate)
+	c.add("root, 0775 in another group", rootIDs, dirOf(0, 5, 0o775), notPrivate)
+	c.add("non-root user whose egid is 0, 0775 root group", procIDs{euid: 1000, egid: 0}, dirOf(1000, 0, 0o775), notPrivate)
+	c.add("not a directory", upg, dirAttrs{uid: 1000, gid: 1000, mode: 0o700}, "is not a directory")
+	c.add("not a directory, root", rootIDs, dirAttrs{uid: 0, gid: 0, mode: 0o700}, "is not a directory")
+}
+
 // TestCheckDirAttrsRule pins the acceptance rule on synthetic identities and
 // attributes, independent of who runs the test: the owner rule (root is not
 // exempt), o+w always refused, and g+w accepted only for the caller's private
 // group, which needs BOTH halves of the convention, gid == egid and
-// egid == euid, and is never gid 0. Each row is chosen so that dropping one
-// condition of the rule flips it (see the comments on the groups of rows).
+// egid == euid, and is never gid 0. The rows live in the *Rows builders above.
 func TestCheckDirAttrsRule(t *testing.T) {
-	const notPrivate = "not your private group"
-	upg := procIDs{euid: 1000, egid: 1000}          // Fedora/Ubuntu-style user
-	sharedPrimary := procIDs{euid: 1000, egid: 100} // classic "users" primary group
-	root := procIDs{euid: 0, egid: 0}
-	var cases []idCase
-	add := func(name string, me procIDs, a dirAttrs, want string) {
-		cases = append(cases, idCase{name, me, a, want})
-	}
-	// The private group is accepted only when gid == egid == euid ...
-	add("UPG user, 0775 in the private group", upg, dirOf(1000, 1000, 0o775), "")
-	add("UPG user, 2775 (setgid) in the private group", upg, dirOf(1000, 1000, 0o2775), "")
-	add("UPG user, 0720 in the private group", upg, dirOf(1000, 1000, 0o720), "")
-	add("UPG user, 0755 accepted", upg, dirOf(1000, 1000, 0o755), "")
-	// ... so a different gid (a group of someone else, or a supplementary one) is refused
-	// (drops "gid == egid").
-	add("UPG user, 0775 in another group", upg, dirOf(1000, 1001, 0o775), notPrivate)
-	add("UPG user, 2775 in another group", upg, dirOf(1000, 1001, 0o2775), notPrivate)
-	add("UPG user, 0755 in another group accepted (no group write)", upg, dirOf(1000, 1001, 0o755), "")
-	// egid != euid: the primary group is shared, so a group-writable dir of it
-	// is refused even though gid == egid (drops "egid == euid")...
-	add("shared primary group, 0775 in the primary group", sharedPrimary, dirOf(1000, 100, 0o775), notPrivate)
-	add("shared primary group, 0770 in the primary group", sharedPrimary, dirOf(1000, 100, 0o770), notPrivate)
-	// ... and the group named like the user (gid == euid, but not the egid) is not this process's private group either.
-	add("shared primary group, 0775 in the group numbered like the user", sharedPrimary, dirOf(1000, 1000, 0o775), notPrivate)
-	add("shared primary group, 0755 accepted", sharedPrimary, dirOf(1000, 100, 0o755), "")
-	// World-writable is refused for everybody, sticky or not, private group or not.
-	add("UPG user, 0777", upg, dirOf(1000, 1000, 0o777), "world-writable")
-	add("UPG user, 0757", upg, dirOf(1000, 1000, 0o757), "world-writable")
-	add("UPG user, 1777 (sticky, like /tmp)", upg, dirOf(1000, 1000, 0o1777), "world-writable")
-	add("UPG user, 0702", upg, dirOf(1000, 1000, 0o702), "world-writable")
-	add("shared primary group, 0777", sharedPrimary, dirOf(1000, 100, 0o777), "world-writable")
-	add("root, 0777 root-owned", root, dirOf(0, 0, 0o777), "world-writable")
-	// Root is not exempt from the owner rule: another user's directory lets
-	// that user swap plan.jsonl (drops "uid == euid" for euid 0).
-	add("root, directory owned by another uid", root, dirOf(1000, 0, 0o755), "is owned by uid 1000")
-	add("root, directory owned by another uid, 0700", root, dirOf(1000, 1000, 0o700), "is owned by uid 1000")
-	add("UPG user, directory owned by another uid", upg, dirOf(1001, 1000, 0o755), "is owned by uid 1001")
-	add("UPG user, directory owned by root", upg, dirOf(0, 0, 0o755), "is owned by uid 0")
-	add("owner rule comes before the mode", upg, dirOf(1001, 1000, 0o777), "is owned by uid 1001")
-	add("root, own directory 0755 accepted", root, dirOf(0, 0, 0o755), "")
-	add("root, own directory 0700 accepted", root, dirOf(0, 0, 0o700), "")
-	add("root, own directory in another group 0750 accepted", root, dirOf(0, 5, 0o750), "")
-	// Gid 0 is never a private group: on the BSDs it is "wheel", so a root run
-	// refuses group write even where gid == egid == euid == 0 (drops "gid != 0").
-	add("root, 0775 root:root", root, dirOf(0, 0, 0o775), notPrivate)
-	add("root, 0770 root:root", root, dirOf(0, 0, 0o770), notPrivate)
-	add("root, 2775 root:root", root, dirOf(0, 0, 0o2775), notPrivate)
-	add("root, 0775 in another group", root, dirOf(0, 5, 0o775), notPrivate)
-	add("non-root user whose egid is 0, 0775 root group", procIDs{euid: 1000, egid: 0}, dirOf(1000, 0, 0o775), notPrivate)
-	// Not a directory (a file, a symlink as Lstat reports it).
-	add("not a directory", upg, dirAttrs{uid: 1000, gid: 1000, mode: 0o700}, "is not a directory")
-	add("not a directory, root", root, dirAttrs{uid: 0, gid: 0, mode: 0o700}, "is not a directory")
-	for _, tc := range cases {
+	var rows caseAdder
+	groupWriteRows(&rows)
+	worldWritableRows(&rows)
+	ownerRows(&rows)
+	rootGroupAndKindRows(&rows)
+	for _, tc := range rows.cases {
 		t.Run(tc.name, func(t *testing.T) {
 			err := checkDirAttrs("/some/dir", tc.a, tc.me)
 			switch {

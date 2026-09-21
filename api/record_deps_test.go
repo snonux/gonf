@@ -10,6 +10,7 @@ import (
 
 	"github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/privilege"
+	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 )
 
@@ -87,7 +88,7 @@ func TestRecordPlanRefusesDanglingDependency(t *testing.T) {
 	const dep = "File[/typo/never-registered]"
 	independent, marker := registerDanglingTask(t, "dangling_record", dep)
 
-	planDir := t.TempDir()
+	planDir := testutil.PrivateTempDir(t)
 	ops, err := RecordPlan("dangling", planDir, "dangling_record")
 	requireDanglingMessage(t, err, dep, "")
 	if ops != nil {
@@ -170,7 +171,7 @@ func TestRecordPlanRefusesDanglingDependencyInsideWhenBlock(t *testing.T) {
 		Command("touch", []string{marker}, options.DependsOn(unregisteredDep("File[/typo/guarded]")))
 	}, WhenLinux())
 
-	_, err := RecordPlan("guarded", t.TempDir(), "guarded_dangling")
+	_, err := RecordPlan("guarded", testutil.PrivateTempDir(t), "guarded_dangling")
 	requireDanglingMessage(t, err, "File[/typo/guarded]", "")
 	requireNoFiles(t, marker)
 }
@@ -187,7 +188,7 @@ func TestRecordPlanRefusesDependencyOnLaterPrivilegeChunk(t *testing.T) {
 		Command("true", nil, options.WithName("first"), options.DependsOn(unregisteredDep(later)))
 		Command("true", nil, options.WithName("later"), options.WithElevate)
 	})
-	_, err := RecordPlan("forward", t.TempDir(), "forward_cross_chunk")
+	_, err := RecordPlan("forward", testutil.PrivateTempDir(t), "forward_cross_chunk")
 	if err == nil || !strings.Contains(err.Error(), "later chunk") {
 		t.Fatalf("RecordPlan error = %v, want the later-chunk dependency refusal", err)
 	}
@@ -225,7 +226,7 @@ func TestRecordedValidPlansStillRecordAndApply(t *testing.T) {
 		File(p("present"), options.WithContent("p"))
 	})
 
-	ops, err := RecordPlan("valid", t.TempDir(), "chain_and_fan_in", "guarded_valid", "elevated_then_user", "absence")
+	ops, err := RecordPlan("valid", testutil.PrivateTempDir(t), "chain_and_fan_in", "guarded_valid", "elevated_then_user", "absence")
 	if err != nil {
 		t.Fatalf("RecordPlan of valid plans: %v", err)
 	}
@@ -258,7 +259,7 @@ func TestRecordPlanRecordsDependencyOnResourceFromEarlierTask(t *testing.T) {
 	Task("dependent_task", "", func() {
 		Command("test", []string{"-f", base}, options.DependsOn(baseRes))
 	})
-	if _, err := RecordPlan("cross-task", t.TempDir(), "base_task", "dependent_task"); err != nil {
+	if _, err := RecordPlan("cross-task", testutil.PrivateTempDir(t), "base_task", "dependent_task"); err != nil {
 		t.Fatalf("RecordPlan: %v", err)
 	}
 }
@@ -279,7 +280,7 @@ func TestRecordPlanRefusalWordingIsConsistent(t *testing.T) {
 			src := newStagedSources(t)
 			src.register("wording", tc.bad)
 
-			_, err := RecordPlan("wording", t.TempDir(), "wording")
+			_, err := RecordPlan("wording", testutil.PrivateTempDir(t), "wording")
 			if err == nil {
 				t.Fatal("RecordPlan = nil, want a refusal")
 			}

@@ -1,12 +1,15 @@
 package plan
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/snonux/gonf/internal/testutil"
 )
@@ -93,12 +96,16 @@ func TestSecureDirCurrentDirectory(t *testing.T) {
 }
 
 // TestSecureDirCreatesEveryComponentPrivate: components SecureDir creates are
-// 0700 whatever the umask says (a permissive one must not widen them, a
-// restrictive one must not leave an unusable 0500), while the pre-existing
-// prefix is not touched.
+// exactly 0700 under any umask, while the pre-existing prefix is not touched.
+// A umask can only narrow the 0700 that mkdir is asked for, never widen it, so
+// the cases that matter are the restrictive ones: under 0277 or 0377 mkdir alone
+// leaves an unusable 0400 or 0000 directory that nothing can be created in, and
+// only the fchmod after creation makes it 0700 (without it this test fails, and
+// the nested components could not even be created). The default 022 and the
+// permissive 0 are there to show the mode is the same everywhere.
 func TestSecureDirCreatesEveryComponentPrivate(t *testing.T) {
-	for name, mask := range map[string]int{"permissive umask 0": 0, "default umask 022": 0o022, "restrictive umask 0277": 0o277} {
-		t.Run(name, func(t *testing.T) {
+	for _, mask := range []int{0o277, 0o377, 0o077, 0o022, 0} {
+		t.Run(fmt.Sprintf("umask %04o", mask), func(t *testing.T) {
 			base := filepath.Join(t.TempDir(), "base")
 			mkdirMode(t, base, 0o755)
 			testutil.WithUmask(mask, func() {
@@ -148,10 +155,13 @@ func TestSecureDirRefusesWorldWritableDirs(t *testing.T) {
 			if err == nil {
 				t.Fatalf("SecureDir(%s, mode %v) = nil, want a refusal", dir, mode)
 			}
-			for _, part := range []string{dir, "world-writable", "chmod go-w", "-o <private dir>"} {
+			for _, part := range []string{dir, "world-writable", "-o <private dir>"} {
 				if !strings.Contains(err.Error(), part) {
 					t.Fatalf("error %q must contain %q", err, part)
 				}
+			}
+			if got := strings.Contains(err.Error(), "chmod go-w"); got == (mode&os.ModeSticky != 0) {
+				t.Fatalf("error %q: chmod advice present = %v, want it only for a non-sticky directory", err, got)
 			}
 			if got := modeOf(t, dir); got != want {
 				t.Fatalf("mode after refusal = %v, want it untouched (%v)", got, want)
@@ -189,7 +199,11 @@ func TestSecureDirRefusesForeignOwnedDir(t *testing.T) {
 
 // TestSecureDirRefusesNonDirectories: a file, a symlink to a directory and a
 // symlinked ancestor are refused (every component is opened O_NOFOLLOW), and
-// nothing is created or changed through them.
+// nothing is created or changed through them. A symlink is reported as a
+// symlink (errSymlinkComponent, whatever errno the platform gives for
+// O_NOFOLLOW|O_DIRECTORY on one), a file is not mistaken for one, and the
+// message names the offending component. The test looks at this package's own
+// wording and error value, never at the text of an errno.
 func TestSecureDirRefusesNonDirectories(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "target")
@@ -202,20 +216,155 @@ func TestSecureDirRefusesNonDirectories(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	for name, dir := range map[string]string{
-		"file":              file,
-		"below a file":      filepath.Join(file, "sub"),
-		"symlink":           link,
-		"symlink and slash": link + "/",
-		"symlinked parent":  filepath.Join(link, "sub"),
+	for _, tc := range []struct {
+		name, dir, component string
+		symlink              bool
+	}{
+		{"file", file, "file", false},
+		{"below a file", filepath.Join(file, "sub"), "file", false},
+		{"symlink", link, "link", true},
+		{"symlink and slash", link + "/", "link", true},
+		{"symlinked parent", filepath.Join(link, "sub"), "link", true},
 	} {
-		t.Run(name, func(t *testing.T) {
-			if err := SecureDir(dir); err == nil {
-				t.Fatalf("SecureDir(%s) = nil, want a refusal", dir)
+		t.Run(tc.name, func(t *testing.T) {
+			err := SecureDir(tc.dir)
+			if err == nil {
+				t.Fatalf("SecureDir(%s) = nil, want a refusal", tc.dir)
+			}
+			if got := errors.Is(err, errSymlinkComponent); got != tc.symlink {
+				t.Fatalf("SecureDir(%s) = %v; reported as a symlink = %v, want %v", tc.dir, err, got, tc.symlink)
+			}
+			if want := fmt.Sprintf("component %q: ", tc.component); !strings.Contains(err.Error(), want) {
+				t.Fatalf("SecureDir(%s) = %v, want it to name %s", tc.dir, err, want)
+			}
+			if tc.symlink && !strings.Contains(err.Error(), "is a symlink; symlinked plan directories are refused") {
+				t.Fatalf("SecureDir(%s) = %v, want the symlink refusal wording", tc.dir, err)
 			}
 			requireEntries(t, target)
 			if got := modeOf(t, target); got != 0o700 {
 				t.Fatalf("symlink target mode = %v, want 0700 untouched", got)
+			}
+		})
+	}
+}
+
+// TestRefusalAdviceMatchesTheDirectory: a world-writable directory of the
+// caller's own gets the chmod advice, a sticky one (a /tmp-style shared
+// scratch directory) must NOT: telling a root run with "-o /tmp" to chmod go-w
+// /tmp would break the whole system. It matters for root in particular, for
+// whom the owner rule passes on /tmp, which is why the sticky case is also
+// judged for a synthetic root that owns it. The wording is this package's own,
+// so the asserts are exact about which advice is present and that the
+// alternative (a private directory) always is.
+func TestRefusalAdviceMatchesTheDirectory(t *testing.T) {
+	const chmodAdvice, chooseAdvice = "chmod go-w", "-o <private dir>"
+	onDisk := func(t *testing.T, mode os.FileMode) error {
+		dir := filepath.Join(t.TempDir(), "shared")
+		mkdirMode(t, dir, mode)
+		return SecureDir(dir)
+	}
+	for _, tc := range []struct {
+		name      string
+		refuse    func(t *testing.T) error
+		wantChmod bool
+	}{
+		{"caller-owned 0777", func(t *testing.T) error { return onDisk(t, 0o777) }, true},
+		{"caller-owned 1777 (sticky)", func(t *testing.T) error { return onDisk(t, 0o777|os.ModeSticky) }, false},
+		{"root-owned 1777 judged for root, like /tmp", func(*testing.T) error {
+			return checkDirAttrs("/tmp", dirOf(0, 0, 0o1777), procIDs{euid: 0, egid: 0})
+		}, false},
+		{"root-owned 0777 judged for root", func(*testing.T) error {
+			return checkDirAttrs("/srv/x", dirOf(0, 0, 0o777), procIDs{euid: 0, egid: 0})
+		}, true},
+		{"sticky and group-writable by a shared group", func(*testing.T) error {
+			return checkDirAttrs("/srv/x", dirOf(1000, 5, 0o1770), procIDs{euid: 1000, egid: 1000})
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.refuse(t)
+			if err == nil {
+				t.Fatal("got nil, want a refusal")
+			}
+			if !strings.Contains(err.Error(), chooseAdvice) {
+				t.Fatalf("refusal %q must always offer %q", err, chooseAdvice)
+			}
+			if got := strings.Contains(err.Error(), chmodAdvice); got != tc.wantChmod {
+				t.Fatalf("refusal %q: chmod advice present = %v, want %v", err, got, tc.wantChmod)
+			}
+		})
+	}
+}
+
+// makeRivalWin makes mkdirChild behave as if another process created the
+// directory first: every call first creates <parent>/<name> with mode, exactly as
+// the rival would, and then asks the real mkdirat for the same name, which fails
+// with EEXIST (the very race openOrCreateChild handles). The seam is restored
+// when the test ends. parent is the path of the directory the descriptor of the
+// call refers to.
+func makeRivalWin(t *testing.T, parent string, mode os.FileMode) {
+	t.Helper()
+	real := mkdirChild
+	t.Cleanup(func() { mkdirChild = real })
+	mkdirChild = func(fd int, name string, perm uint32) error {
+		rival := filepath.Join(parent, name)
+		if err := os.Mkdir(rival, 0o700); err != nil {
+			return err
+		}
+		if err := os.Chmod(rival, mode); err != nil {
+			return err
+		}
+		return real(fd, name, perm) // EEXIST: the name is taken now
+	}
+}
+
+// TestOpenOrCreateChildLosingTheRace: when another process creates the
+// directory between the failed open and our mkdir, that directory is somebody
+// else's, not ours. openOrCreateChild reports created == false, so nothing
+// chmods it (the rival's 0755 stays 0755; counting it as created would have
+// chmod'ed it to 0700, exactly the m62 mistake for a directory we did not make),
+// and the verification that follows decides. The race is made deterministic by
+// makeRivalWin.
+func TestOpenOrCreateChildLosingTheRace(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "parent")
+	mkdirMode(t, parent, 0o755)
+	pfd, err := unix.Open(parent, openDirFlags, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = unix.Close(pfd) }()
+	makeRivalWin(t, parent, 0o755)
+	fd, created, err := openOrCreateChild(pfd, "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = unix.Close(fd)
+	if created {
+		t.Fatal("created = true after losing the creation race, want false (the directory is the rival's)")
+	}
+	if got := modeOf(t, filepath.Join(parent, "x")); got != 0o755 {
+		t.Fatalf("raced-in directory mode = %v, want the rival's 0755 untouched", got)
+	}
+}
+
+// TestSecureDirVerifiesADirectoryItLostTheRaceFor: through SecureDir, a
+// directory that appears between the open and the mkdir is verified like any
+// pre-existing one: an acceptable one is used and keeps its mode, an unsafe one
+// (world-writable) is refused and keeps its mode too.
+func TestSecureDirVerifiesADirectoryItLostTheRaceFor(t *testing.T) {
+	for _, tc := range []struct {
+		mode    os.FileMode
+		refused bool
+	}{{0o755, false}, {0o750, false}, {0o777, true}} {
+		t.Run(tc.mode.String(), func(t *testing.T) {
+			parent := filepath.Join(t.TempDir(), "parent")
+			mkdirMode(t, parent, 0o755)
+			makeRivalWin(t, parent, tc.mode)
+			err := SecureDir(filepath.Join(parent, "out"))
+			if tc.refused != (err != nil) || (err != nil && !strings.Contains(err.Error(), "world-writable")) {
+				t.Fatalf("SecureDir into a raced-in %v directory = %v, want refused = %v (world-writable)", tc.mode, err, tc.refused)
+			}
+			if got := modeOf(t, filepath.Join(parent, "out")); got != tc.mode {
+				t.Fatalf("raced-in directory mode = %v, want %v untouched", got, tc.mode)
 			}
 		})
 	}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/snonux/gonf/internal/orchestrate"
 	"github.com/snonux/gonf/internal/remote"
+	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
@@ -108,7 +109,7 @@ func TestHostValueAndClusterHosts(t *testing.T) {
 		_ = MustHostValue[[2]string](ClusterHosts()[0], "cron")
 	}, WithTaskCluster("grp"))
 
-	if _, err := RecordPlan("fleet-hosts", t.TempDir(), "demo_body"); err != nil {
+	if _, err := RecordPlan("fleet-hosts", testutil.PrivateTempDir(t), "demo_body"); err != nil {
 		t.Fatalf("RecordPlan: %v", err)
 	}
 	if len(seen) != 2 || seen[0] != "a" || seen[1] != "b" {

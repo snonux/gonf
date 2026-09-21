@@ -3,6 +3,7 @@ package testutil
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"syscall"
 	"testing"
 )
@@ -21,6 +22,37 @@ func MkdirMode(t testing.TB, dir string, mode os.FileMode) string {
 		t.Fatal(err)
 	}
 	if err := os.Chmod(dir, mode); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// SymlinkedDir returns realDir, a fresh private (0700) directory, and link, a
+// symlink to it, so a path built below link reaches realDir through a symlinked
+// ancestor. It stands for what $TMPDIR is on macOS (/var/folders/..., where /var
+// is a symlink to /private/var) and for any symlinked home or mount point;
+// tests point $TMPDIR or a plan directory below link.
+func SymlinkedDir(t testing.TB) (link, realDir string) {
+	t.Helper()
+	realDir = MkdirMode(t, filepath.Join(t.TempDir(), "real"), 0o700)
+	link = filepath.Join(t.TempDir(), "lnk")
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Fatal(err)
+	}
+	return link, realDir
+}
+
+// PrivateTempDir is t.TempDir() with its mode made exactly 0700. testing's
+// TempDir creates the per-call directory with mkdir(0777), which the umask
+// narrows: 0755 under 022, but 0777 under umask 0 and 0775 under 002, and plan
+// output directories are refused when others (or a shared group) can write to
+// them. A test that hands a directory to RecordPlan, SecureDir or `gonf plan
+// -o` must not depend on the ambient umask, so it takes its directory from here
+// (or from MkdirMode when it needs another mode).
+func PrivateTempDir(t testing.TB) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return dir

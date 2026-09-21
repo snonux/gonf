@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
@@ -478,7 +479,7 @@ func TestRecordPlanEmptyFileContentSetsHasContent(t *testing.T) {
 		plan.ResetRecord()
 	})
 
-	dir := t.TempDir()
+	dir := testutil.PrivateTempDir(t)
 	contentPath := filepath.Join(dir, "empty-content.conf")
 	sourcePath := filepath.Join(dir, "empty-source.conf")
 	emptySrc := filepath.Join(dir, "empty.src")
@@ -535,7 +536,7 @@ func TestApplyPlanEmptyFileResourceSucceeds(t *testing.T) {
 		plan.ResetRecord()
 	})
 
-	dir := t.TempDir()
+	dir := testutil.PrivateTempDir(t)
 	contentPath := filepath.Join(dir, "empty-content.conf")
 	sourcePath := filepath.Join(dir, "empty-source.conf")
 	emptySrc := filepath.Join(dir, "empty.src")
@@ -579,7 +580,7 @@ func TestRecordPlanValidationCodecApply(t *testing.T) {
 		plan.ResetRecord()
 	})
 
-	dir := t.TempDir()
+	dir := testutil.PrivateTempDir(t)
 	target := filepath.Join(dir, "service.conf")
 	marker := filepath.Join(dir, "validator-record")
 	t.Setenv("GONF_API_VALIDATION_HELPER", "1")

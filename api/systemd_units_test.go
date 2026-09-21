@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/systemd"
@@ -27,7 +28,7 @@ func systemdUnitsFixture(t *testing.T, body func()) []plan.Op {
 		plan.ResetRecord()
 	})
 	RegisterMethods(systemdUnitsTasks{body: body}, WithPrefix("demo_"))
-	ops, err := RecordPlan("units", t.TempDir(), "demo_units")
+	ops, err := RecordPlan("units", testutil.PrivateTempDir(t), "demo_units")
 	if err != nil {
 		t.Fatalf("RecordPlan: %v", err)
 	}
@@ -340,7 +341,7 @@ func TestSystemdUnitsRecordedPlanApplies(t *testing.T) {
 		)
 	}}, WithPrefix("demo_"))
 
-	ops, err := RecordPlan("apply-units", t.TempDir(), "demo_units")
+	ops, err := RecordPlan("apply-units", testutil.PrivateTempDir(t), "demo_units")
 	if err != nil {
 		t.Fatalf("RecordPlan: %v", err)
 	}
