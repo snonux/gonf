@@ -407,7 +407,9 @@ func WithGroup(group string) groupOption {
 }
 
 // WithHome sets a user's home directory when creating a missing account.
-// It does not create the directory; use WithCreateHome to request that.
+// It does not create the directory; use WithCreateHome to request that. An
+// existing account's home field is left alone unless WithManageHome is also
+// given (see resource/options/user.go).
 func WithHome(home string) userAccountOption {
 	return userAccountOption(func(target any) {
 		requires(target, "WithHome", func(r Homeable) { r.SetHome(home) })

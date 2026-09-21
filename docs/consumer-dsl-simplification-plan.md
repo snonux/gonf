@@ -417,9 +417,13 @@ stay visibly separate.
 ### Users and accounts on the four required systems
 
 Core `User` already supports creation on OpenBSD, FreeBSD, NetBSD, and Rocky
-Linux, plus additive supplementary memberships. `WithHome`, shell, primary group,
-login class, and related settings are currently creation-only. The OpenBSD
-consumer compensates with `usermod -d` and an AWK guard.
+Linux, plus additive supplementary memberships. Shell, primary group, login
+class, and related settings are creation-only. `WithHome` is creation-only by
+default. Core now also offers the explicit `WithManageHome` opt-in, which
+converges an existing account's passwd home field without moving data. It is
+in main, unreleased, as plan schema 19 (task s52; see [user.md](user.md)).
+Until a release is pinned, the OpenBSD consumer keeps its `usermod -d` command
+with an AWK guard. The prepared consumer migration is pending that release.
 
 Keep existing behavior backward-compatible. Introduce explicit opt-in management
 of selected existing attributes, starting with home, rather than changing what

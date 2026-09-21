@@ -1,10 +1,11 @@
 // Package user defines the backend-neutral description of a local account.
 // It deliberately contains no resource registration or plan-wire concerns;
-// those belong to a later public DSL.
+// those live in the public resource/user package.
 package user
 
 import (
 	"fmt"
+	"path"
 	"slices"
 	"sort"
 	"strings"
@@ -12,8 +13,10 @@ import (
 
 // DesiredUser describes an account that a platform backend should make
 // available. Optional creation attributes are applied only while creating a
-// missing account. Existing accounts are never removed or rewritten by this
-// model; backends may only add missing supplementary group memberships.
+// missing account. Existing accounts are never removed by this model; by
+// default backends may only add missing supplementary group memberships. The
+// single explicit exception is ManageHome, which lets a backend rewrite the
+// passwd home field of an existing account (never its contents).
 type DesiredUser struct {
 	// Name is the local account name.
 	Name string
@@ -24,7 +27,9 @@ type DesiredUser struct {
 	// listed here are retained.
 	SupplementaryGroups []string
 	// Home is the account's home directory when creating it. Empty selects the
-	// platform default. Setting Home alone never creates the directory.
+	// platform default. Setting Home alone never creates the directory. When
+	// ManageHome is set, Home is also the value an existing account's passwd
+	// home field converges to.
 	Home string
 	// CreateHome creates Home (or the platform default home when Home is empty)
 	// while creating a missing account. It defaults to false, so the zero-value
@@ -38,6 +43,12 @@ type DesiredUser struct {
 	LoginClass string
 	// System requests a system account when creating it.
 	System bool
+	// ManageHome opts in to converging the passwd home field of an account
+	// that already exists to Home. It only rewrites that one field (usermod -d
+	// without -m, or pw usermod -d): it never moves, creates, deletes, or
+	// chowns the directory, and never touches passwords, locks, the shell, or
+	// memberships. It requires Home to be an absolute, clean path.
+	ManageHome bool
 }
 
 // Validate reports malformed account or group names before a backend executes
@@ -67,7 +78,67 @@ func (u DesiredUser) Validate() error {
 	if strings.ContainsRune(u.LoginClass, '\x00') {
 		return fmt.Errorf("user %q: login class contains NUL", u.Name)
 	}
+	if u.ManageHome {
+		return ValidateManagedHome(u.Name, u.Home)
+	}
 	return nil
+}
+
+// ValidateManagedHome checks the contract of an opted-in existing-account
+// home field. usermod and pw store the value exactly as given, so gonf only
+// accepts values that are unambiguous and safe to store:
+//   - set, because there is no platform default to converge an existing
+//     account to;
+//   - absolute, because a relative passwd home has no defined meaning;
+//   - clean (no trailing '/', '.', '..' or repeated '/' segments), so each
+//     directory has exactly one canonical spelling in the passwd database and
+//     a recipe cannot record an alias of the directory it means;
+//   - free of ':' (the passwd field separator), line breaks (the record
+//     separator), and NUL, which the passwd format and the tools' argv cannot
+//     carry safely.
+//
+// It is exported so the plan wire can reject a bad recipe at record time
+// rather than on the destination.
+func ValidateManagedHome(name, home string) error {
+	switch {
+	case home == "":
+		return fmt.Errorf("user %q: managing an existing home requires a home directory", name)
+	case !path.IsAbs(home):
+		return fmt.Errorf("user %q: managed home %q must be absolute", name, home)
+	case path.Clean(home) != home:
+		return fmt.Errorf("user %q: managed home %q must be a clean path (want %q)", name, home, path.Clean(home))
+	case strings.ContainsAny(home, ":\n\r\x00"):
+		return fmt.Errorf("user %q: managed home %q contains ':', a line break, or NUL", name, home)
+	}
+	return nil
+}
+
+// getentHomeField is the zero-based home column of getent passwd output
+// (name:pw:uid:gid:gecos:home:shell).
+const getentHomeField = 5
+
+// freeBSDHomeField is the zero-based home column of pw usershow output, which
+// uses the master.passwd layout
+// (name:pw:uid:gid:class:change:expire:gecos:home:shell).
+const freeBSDHomeField = 8
+
+// passwdHome returns the home field of one passwd-format record for name.
+// homeField is getentHomeField or freeBSDHomeField. A record with too few
+// fields, or one that belongs to a different account, is an error, so a
+// surprising probe never triggers a home rewrite. The account mismatch gets
+// its own message: glibc getent passwd treats an all-digit key as a UID, so
+// a numeric account name can return another account's record, which is not a
+// malformed database but a lookup that answered a different question.
+func passwdHome(record, name string, homeField int) (string, error) {
+	line, _, _ := strings.Cut(strings.TrimSpace(record), "\n")
+	fields := strings.Split(line, ":")
+	if len(fields) <= homeField {
+		return "", fmt.Errorf("user %q: malformed passwd entry %q", name, line)
+	}
+	if fields[0] != name {
+		return "", fmt.Errorf("user %q: account lookup returned the entry of account %q (a numeric name may have been resolved as a UID); refusing to change the home", name, fields[0])
+	}
+	return fields[homeField], nil
 }
 
 // Groups returns every group that must exist for this account, sorted and

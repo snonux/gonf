@@ -18,7 +18,9 @@ const freeBSDNoUserExit = 67
 // FreeBSD reconciles DesiredUser values with FreeBSD's pw(8) utility. It
 // creates only missing groups and users, and adds only missing supplementary
 // memberships. It never deletes an account or group, removes a membership, or
-// changes an existing account's primary group, home, shell, or login class.
+// changes an existing account's primary group, shell, or login class. An
+// existing account's home field changes only when DesiredUser.ManageHome opts
+// in, and then only via pw usermod -d without -m.
 type FreeBSD struct {
 	run Runner
 }
@@ -60,7 +62,31 @@ func EnsureFreeBSD(want DesiredUser) error {
 	return NewFreeBSD(nil).Ensure(want)
 }
 
+// ensureExistingUser adds missing memberships and then, only when opted in,
+// converges the passwd home field. user.record is the pw usershow line read
+// before any mutation; a membership update never alters the home field.
 func (b FreeBSD) ensureExistingUser(user freeBSDUser, want DesiredUser) error {
+	if err := b.addMissingMemberships(user, want); err != nil {
+		return err
+	}
+	return b.ensureHomeField(user, want)
+}
+
+// ensureHomeField rewrites only the passwd home field. pw usermod -d without
+// -m neither creates, moves, nor chowns the directory, and leaves the
+// password, lock state, shell, and login class untouched.
+func (b FreeBSD) ensureHomeField(user freeBSDUser, want DesiredUser) error {
+	if !want.ManageHome {
+		return nil
+	}
+	current, err := passwdHome(user.record, want.Name, freeBSDHomeField)
+	if err != nil || current == want.Home {
+		return err
+	}
+	return b.runMutation("User["+want.Name+"]", "pw", "usermod", "-n", want.Name, "-d", want.Home)
+}
+
+func (b FreeBSD) addMissingMemberships(user freeBSDUser, want DesiredUser) error {
 	desired := want.Supplementary()
 	if len(desired) == 0 {
 		return nil

@@ -96,7 +96,7 @@ Status against every conf Rex primitive in v0.14.0 (plan schema 16):
 | Rex `cron add => user, {…}` | `Cron` / `NoCron`: marker-managed per-user crontabs, full schedule fields, `WithCronEnv`, `WithCronUser` | **Done** (`@reboot` nice-to-have) |
 | Raw crontab surgery via `run` (rsync, nsd_failover, pf rebuild root crontab) | superseded by `Cron` (marker-based, idempotent, no temp-file race) | **Done** (gonf is ahead) |
 | Multi-Rexfile `require` composition | one Go module + `RegisterMethods(…, WithPrefix, WithCluster)` + `Aggregate`; proven by `~/git/conf/gonf` and `~/git/dotfiles/gonf` | **Done** |
-| `adduser -batch _dserver … unless id _dserver`, `usermod -d` | additive-only `User` for creation-time group/class/home attributes; a guarded `Command("usermod", …)` remains necessary to converge the home of an already-existing OpenBSD account | **Done** for account creation; existing-account updates remain explicit |
+| `adduser -batch _dserver … unless id _dserver`, `usermod -d` | additive `User` for creation-time group/class/home attributes; existing-account `usermod -d` needs a guarded `Command` | **Done** for account creation in v0.14.0. The explicit `WithManageHome` opt-in for an existing account's passwd home field is in main, unreleased (plan v19); consumers drop the guarded `usermod` command after that release |
 | `/etc/login.conf.d` + `cap_mkdb` on change | `InstallFile` + `Command(..., OnChange(login))` | **Done** |
 | Garage config deployment | `RequiresRoot` task + direct `InstallFile("/usr/local/etc/garage.toml", …, root:garage, 0640, WithTemplateData(...))` + `Service("garage", WithRestart, OnChange(config))`; the host's `PrivilegeDoas` wraps the one privileged chunk | **Done** |
 | Deferred `on_change` flag (`$restart = TRUE` … `service restart if $restart`) | `OnChange` supports multi-resource fan-in and carries ordering dependencies | **Done** |
@@ -188,37 +188,38 @@ id …` + `usermod -d`). The public resource is:
 User("_dserver", WithLoginClass("nologin"), WithPrimaryGroup("_dserver"), WithHome("/var/run/dserver"))
 ```
 
-`User` is deliberately additive-only: it creates only missing accounts/groups
-and adds missing supplementary memberships, without deleting or rewriting
-existing accounts. In particular, `WithHome` is a creation attribute: it does
-**not** converge the home directory of an account that already exists. See
-[user.md](user.md).
+`User` is additive by default: it creates only missing accounts/groups and
+adds missing supplementary memberships, without deleting or rewriting existing
+accounts. `WithHome` alone is a creation attribute: it does **not** converge
+the home of an account that already exists. See [user.md](user.md).
 
 The OpenBSD frontend ports declare the creation attributes that
 the Rexfiles use: `_dserver` and `_gorum` need
 `WithPrimaryGroup(name)`, `WithLoginClass("nologin")`, and `WithHome`; `_gogios`
 needs `WithPrimaryGroup(name)` and `WithHome` (no nologin class in Rex). To
-preserve Rex's existing-account `usermod -d` behavior during migration, use a
-separate, explicitly OpenBSD-specific guarded command after the `User`
-resource:
+preserve Rex's existing-account `usermod -d` behavior, add the explicit
+`WithManageHome` opt-in (in gonf main, unreleased; plan schema v19):
 
 ```go
 account := User("_dserver",
     WithPrimaryGroup("_dserver"),
     WithLoginClass("nologin"),
     WithHome("/var/run/dserver"),
-)
-Command("usermod", List("-d", "/var/run/dserver", "_dserver"),
-    DependsOn(account),
-    Unless("sh", List("-c", `awk -F: '$1 == "_dserver" && $6 == "/var/run/dserver" { found = 1 } END { exit !found }' /etc/passwd`)),
+    WithManageHome,
 )
 ```
 
-That command is intentionally a migration-local compatibility step, rather
-than an implicit mutation by `User`. A future convergent existing-account
-update API is a narrow remaining gonf gap and must define per-platform safety
-and idempotency before it is added; until then, use an explicit guarded
-`Command` only when a port must preserve a Rex update.
+`WithManageHome` rewrites only the passwd home field (`usermod -d` on
+OpenBSD/NetBSD, `usermod --home` on Rocky, `pw usermod -d` on FreeBSD, never
+with the move flag) when it differs from `WithHome`. It never moves, creates,
+or chowns the directory, and never touches passwords, lock state, shell, login
+class, or memberships. It replaces the earlier migration-local guarded
+`Command("usermod", List("-d", …), Unless("sh", … awk … /etc/passwd))`
+workaround once the consumers pin a gonf release that contains it; until then
+the consumers keep that guarded command. These homes live under `/var/run`,
+which does not survive a reboot on OpenBSD; managing the passwd field does not
+recreate the directory, so the ports keep their separate boot-time handling
+(see the `/var/run` caveat in [user.md](user.md)).
 
 ### Templates (rich data + closures)
 

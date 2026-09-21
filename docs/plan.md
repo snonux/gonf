@@ -776,6 +776,14 @@ directly before it can publish the live file. An older binary would ignore the
 validator fields and publish unvalidated content, so it must refuse v18 plans
 before any mutation.
 
+Plan schema **version 19** adds `manage_home` to `user` operations.
+`User(name, WithHome(home), WithManageHome)` converges an existing account's
+passwd home field (never its directory contents) to `home`. An older binary
+would ignore the field and report the account as converged while leaving the
+old home in place, so it must reject v19 plans at the header gate before any
+mutation. Plans without the opt-in encode the `user` operation exactly as in
+v13–v18.
+
 ### Secret material
 
 `MustSecret(path)` reads a required non-empty file below the controller

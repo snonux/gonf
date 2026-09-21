@@ -16,8 +16,9 @@ const maxBSDSupplementaryGroups = 16
 // OpenBSD reconciles DesiredUser values using OpenBSD's user-management
 // utilities. It creates only missing groups and users, and adds only missing
 // supplementary memberships. It never deletes an account or group, removes a
-// membership, or changes an existing account's primary group, home, shell, or
-// login class.
+// membership, or changes an existing account's primary group, shell, or login
+// class. An existing account's home field changes only when
+// DesiredUser.ManageHome opts in, and then only via usermod -d without -m.
 type OpenBSD struct {
 	run Runner
 }
@@ -25,8 +26,9 @@ type OpenBSD struct {
 // NetBSD reconciles DesiredUser values using NetBSD's user-management
 // utilities. It creates only missing groups and users, and adds only missing
 // supplementary memberships. It never deletes an account or group, removes a
-// membership, or changes an existing account's primary group, home, shell, or
-// login class.
+// membership, or changes an existing account's primary group, shell, or login
+// class. An existing account's home field changes only when
+// DesiredUser.ManageHome opts in, and then only via usermod -d without -m.
 type NetBSD struct {
 	run Runner
 }
@@ -81,12 +83,12 @@ func (b bsd) Ensure(want DesiredUser) error {
 	if len(want.Supplementary()) > maxBSDSupplementaryGroups {
 		return fmt.Errorf("user %q: at most %d supplementary groups are supported on BSD", want.Name, maxBSDSupplementaryGroups)
 	}
-	exists, err := b.userExists(want.Name)
+	record, exists, err := getent(b.run, "passwd", want.Name)
 	if err != nil {
 		return err
 	}
 	if exists {
-		return b.ensureExistingUser(want)
+		return b.ensureExistingUser(record, want)
 	}
 	if want.System {
 		return fmt.Errorf("user %q: system accounts are not supported on BSD", want.Name)
@@ -94,13 +96,33 @@ func (b bsd) Ensure(want DesiredUser) error {
 	return b.ensureMissingUser(want)
 }
 
-func (b bsd) ensureExistingUser(want DesiredUser) error {
+// ensureExistingUser adds missing memberships and then, only when opted in,
+// converges the passwd home field. record is the getent passwd line read
+// before any mutation; membership changes never alter the home field.
+func (b bsd) ensureExistingUser(record string, want DesiredUser) error {
 	for _, group := range want.Supplementary() {
 		if err := b.ensureGroup(group); err != nil {
 			return err
 		}
 	}
-	return b.addMissingMemberships(want)
+	if err := b.addMissingMemberships(want); err != nil {
+		return err
+	}
+	return b.ensureHomeField(record, want)
+}
+
+// ensureHomeField rewrites only the passwd home field. OpenBSD and NetBSD
+// usermod -d without -m neither creates, moves, nor chowns the directory, and
+// leaves the password, lock state, shell, and login class untouched.
+func (b bsd) ensureHomeField(record string, want DesiredUser) error {
+	if !want.ManageHome {
+		return nil
+	}
+	current, err := passwdHome(record, want.Name, getentHomeField)
+	if err != nil || current == want.Home {
+		return err
+	}
+	return b.runMutation("User["+want.Name+"]", "usermod", "-d", want.Home, want.Name)
 }
 
 func (b bsd) ensureMissingUser(want DesiredUser) error {
@@ -172,26 +194,8 @@ func (b bsd) addMissingMemberships(want DesiredUser) error {
 }
 
 func (b bsd) groupExists(group string) (bool, error) {
-	return b.getentExists("group", group)
-}
-
-func (b bsd) userExists(name string) (bool, error) {
-	return b.getentExists("passwd", name)
-}
-
-func (b bsd) getentExists(database, key string) (bool, error) {
-	_, stderr, code, err := b.run("getent", database, key)
-	if err != nil {
-		return false, fmt.Errorf("getent %s %s: %w", database, key, err)
-	}
-	switch code {
-	case 0:
-		return true, nil
-	case 2:
-		return false, nil
-	default:
-		return false, commandError("getent", []string{database, key}, code, "", stderr)
-	}
+	_, exists, err := getent(b.run, "group", group)
+	return exists, err
 }
 
 func (b bsd) userGroups(name string) (map[string]bool, error) {

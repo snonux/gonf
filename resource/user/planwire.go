@@ -3,6 +3,7 @@ package user
 import (
 	"fmt"
 
+	internaluser "github.com/snonux/gonf/internal/user"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 	opt "github.com/snonux/gonf/resource/options"
@@ -15,8 +16,16 @@ func init() {
 	plan.RegisterHandler(plan.KindUser, planHandler{})
 }
 
-// ToOp lowers a "user" resource draft to a plan.Op.
+// ToOp lowers a "user" resource draft to a plan.Op. An opted-in managed home
+// is validated here so a malformed recipe fails at `gonf plan` time on the
+// controller instead of on the destination. Other fields keep their existing
+// apply-time validation so recipes that do not opt in record exactly as before.
 func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
+	if d.ManageHome {
+		if err := internaluser.ValidateManagedHome(d.Name, d.Home); err != nil {
+			return plan.Op{}, err
+		}
+	}
 	return plan.Op{
 		Op:                  plan.KindUser,
 		ID:                  d.ID,
@@ -28,6 +37,7 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		Shell:               d.Shell,
 		LoginClass:          d.LoginClass,
 		System:              d.System,
+		ManageHome:          d.ManageHome,
 		Deps:                d.Deps,
 	}, nil
 }
@@ -41,6 +51,12 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if op.Absent {
 		return fmt.Errorf("user %q: absence is not supported", op.Name)
 	}
+	return Ensure(op.Name, opOptions(op)...)
+}
+
+// opOptions rebuilds the recipe options from a recorded op, so destination
+// apply goes through exactly the same resource path as a direct apply.
+func opOptions(op plan.Op) []opt.LocalUserOption {
 	var opts []opt.LocalUserOption
 	if op.PrimaryGroup != "" {
 		opts = append(opts, opt.WithGroup(op.PrimaryGroup))
@@ -63,5 +79,8 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if op.System {
 		opts = append(opts, opt.WithSystem)
 	}
-	return Ensure(op.Name, opts...)
+	if op.ManageHome {
+		opts = append(opts, opt.WithManageHome)
+	}
+	return opts
 }

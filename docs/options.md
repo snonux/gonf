@@ -51,6 +51,7 @@ and backend limits.
 | `WithPrimaryGroup` | Primary group for a missing account |
 | `WithUserGroup` / `WithSupplementaryGroups` | Add one or several supplementary memberships; never remove existing memberships |
 | `WithHome` / `WithCreateHome` | Creation-time home path and optional creation |
+| `WithManageHome` | Opt-in: also converge an existing account's passwd home field to `WithHome` (no move, create, or chown; see [user.md](user.md)) |
 | `WithShell` / `WithLoginClass` / `WithSystem` | Creation-time account attributes |
 
 ## Service / Timer / DaemonReload / SystemdTimer

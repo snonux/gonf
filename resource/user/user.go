@@ -13,8 +13,9 @@ import (
 
 // User ensures a local account exists. Creation attributes are used only for
 // a missing account; for an existing account only missing supplementary group
-// memberships may be added. It never removes or rewrites accounts, groups, or
-// memberships.
+// memberships may be added and, when WithManageHome opts in, the passwd home
+// field may be rewritten to WithHome. It never removes accounts, groups, or
+// memberships, and never moves, creates, or chowns an existing home.
 type User struct {
 	embed.DependsOn
 	name                string
@@ -25,6 +26,7 @@ type User struct {
 	shell               string
 	loginClass          string
 	system              bool
+	manageHome          bool
 }
 
 var (
@@ -36,6 +38,7 @@ var (
 	_ opt.Classable              = (*User)(nil)
 	_ opt.Systemable             = (*User)(nil)
 	_ opt.SupplementaryGroupable = (*User)(nil)
+	_ opt.HomeManageable         = (*User)(nil)
 )
 
 // ensureCurrent is a variable only so this package can verify the public
@@ -66,7 +69,8 @@ func Ensure(name string, opts ...opt.LocalUserOption) error {
 // SetGroup sets the creation-time primary group.
 func (u *User) SetGroup(group string) { u.primaryGroup = group }
 
-// SetHome sets the creation-time home directory.
+// SetHome sets the creation-time home directory. With WithManageHome it is
+// also the value an existing account's passwd home field converges to.
 func (u *User) SetHome(home string) { u.home = home }
 
 // SetCreateHome requests creation of the home directory for a missing user.
@@ -80,6 +84,9 @@ func (u *User) SetLoginClass(class string) { u.loginClass = class }
 
 // SetSystem requests a system account when creating a missing user.
 func (u *User) SetSystem() { u.system = true }
+
+// SetManageHome opts in to converging an existing account's home field.
+func (u *User) SetManageHome() { u.manageHome = true }
 
 // AddSupplementaryGroups adds desired supplementary memberships.
 func (u *User) AddSupplementaryGroups(groups ...string) {
@@ -109,6 +116,7 @@ func (u *User) planDraft(id string) resource.PlanDraft {
 		Shell:               u.shell,
 		LoginClass:          u.loginClass,
 		System:              u.system,
+		ManageHome:          u.manageHome,
 		Deps:                u.DependsOn.SortedIDs(),
 	}
 }
@@ -121,10 +129,11 @@ func (u *User) apply() error {
 	if err := ensureCurrent(want); err != nil {
 		return err
 	}
-	// The backend uses Mutate for every account creation or membership update,
-	// which records User[name] as changed. A converged account has no mutation
-	// to report, so add the standard StatusOK outcome expected from a managed
-	// resource without duplicating a changed note.
+	// The backend uses Mutate for every account creation, membership update
+	// and opted-in home-field update, which records User[name] as changed. A
+	// converged account has no mutation to report, so add the standard
+	// StatusOK outcome expected from a managed resource without duplicating a
+	// changed note.
 	id := "User[" + want.Name + "]"
 	if !resource.AnyChanged(id) {
 		resource.NoteResult(id, false)
@@ -142,6 +151,7 @@ func (u *User) desired() internaluser.DesiredUser {
 		Shell:               u.shell,
 		LoginClass:          u.loginClass,
 		System:              u.system,
+		ManageHome:          u.manageHome,
 	}
 }
 

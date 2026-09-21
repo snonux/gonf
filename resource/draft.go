@@ -109,12 +109,17 @@ type PlanDraft struct {
 	SupplementaryGroups []string
 	// Home, CreateHome, Shell, LoginClass, and System are creation-time user
 	// attributes. They are retained on the wire so destination apply makes the
-	// same decision for a missing account as a direct resource apply.
+	// same decision for a missing account as a direct resource apply. Home is
+	// also used for an existing account when ManageHome opts in.
 	Home       string
 	CreateHome bool
 	Shell      string
 	LoginClass string
 	System     bool
+	// ManageHome is the one opt-in exception to creation-only attributes: it
+	// converges an existing account's passwd home field to Home, without
+	// moving, creating, or chowning the directory.
+	ManageHome bool
 
 	// AddLines appends lines to a file when missing (line-in-file).
 	AddLines []string

@@ -16,7 +16,9 @@ type Runner func(name string, args ...string) (stdout, stderr string, exitCode i
 // Rocky reconciles DesiredUser values on Rocky Linux using shadow-utils.
 // It creates only missing groups and users, and adds only missing
 // supplementary memberships. It never deletes an account or group, removes a
-// membership, or changes an existing account's primary group, home, or shell.
+// membership, or changes an existing account's primary group or shell. An
+// existing account's home field changes only when DesiredUser.ManageHome
+// opts in, and then only via usermod --home without --move-home.
 type Rocky struct {
 	run Runner
 }
@@ -38,23 +40,46 @@ func (r Rocky) Ensure(want DesiredUser) error {
 	if want.LoginClass != "" {
 		return fmt.Errorf("user %q: login classes are not supported on Rocky Linux", want.Name)
 	}
-	exists, err := r.userExists(want.Name)
+	record, exists, err := getent(r.run, "passwd", want.Name)
 	if err != nil {
 		return err
 	}
 	if exists {
-		return r.ensureExistingUser(want)
+		return r.ensureExistingUser(record, want)
 	}
 	return r.ensureMissingUser(want)
 }
 
-func (r Rocky) ensureExistingUser(want DesiredUser) error {
+// ensureExistingUser adds missing memberships and then, only when opted in,
+// converges the passwd home field. record is the getent passwd line read
+// before any mutation; membership changes never alter the home field, so it
+// stays accurate for the home comparison.
+func (r Rocky) ensureExistingUser(record string, want DesiredUser) error {
 	for _, group := range want.Supplementary() {
 		if err := r.ensureGroup(group); err != nil {
 			return err
 		}
 	}
-	return r.addMissingMemberships(want)
+	if err := r.addMissingMemberships(want); err != nil {
+		return err
+	}
+	return r.ensureHomeField(record, want)
+}
+
+// ensureHomeField rewrites only the passwd home field. shadow-utils usermod
+// without --move-home neither creates, moves, nor chowns the directory, and
+// leaves the password, lock state, and shell untouched. usermod may refuse
+// while the account has running processes; that error is returned as-is
+// rather than stopping anything.
+func (r Rocky) ensureHomeField(record string, want DesiredUser) error {
+	if !want.ManageHome {
+		return nil
+	}
+	current, err := passwdHome(record, want.Name, getentHomeField)
+	if err != nil || current == want.Home {
+		return err
+	}
+	return r.runMutation("User["+want.Name+"]", "usermod", "--home", want.Home, "--", want.Name)
 }
 
 func (r Rocky) ensureMissingUser(want DesiredUser) error {
@@ -123,26 +148,8 @@ func (r Rocky) addMissingMemberships(want DesiredUser) error {
 }
 
 func (r Rocky) groupExists(group string) (bool, error) {
-	return r.getentExists("group", group)
-}
-
-func (r Rocky) userExists(name string) (bool, error) {
-	return r.getentExists("passwd", name)
-}
-
-func (r Rocky) getentExists(database, key string) (bool, error) {
-	_, stderr, code, err := r.run("getent", database, key)
-	if err != nil {
-		return false, fmt.Errorf("getent %s %s: %w", database, key, err)
-	}
-	switch code {
-	case 0:
-		return true, nil
-	case 2:
-		return false, nil
-	default:
-		return false, commandError("getent", []string{database, key}, code, "", stderr)
-	}
+	_, exists, err := getent(r.run, "group", group)
+	return exists, err
 }
 
 func (r Rocky) userGroups(name string) (map[string]bool, error) {
@@ -175,6 +182,24 @@ func (r Rocky) runMutation(id, command string, args ...string) error {
 	return resource.Mutate(id, "run "+command+" "+strings.Join(args, " "), func() error {
 		return r.runAction(command, args...)
 	})
+}
+
+// getent runs getent(1), shared by the Rocky and OpenBSD/NetBSD backends,
+// and returns the record it printed. Exit status 2 means "key not found" on
+// all three platforms.
+func getent(run Runner, database, key string) (string, bool, error) {
+	stdout, stderr, code, err := run("getent", database, key)
+	if err != nil {
+		return "", false, fmt.Errorf("getent %s %s: %w", database, key, err)
+	}
+	switch code {
+	case 0:
+		return stdout, true, nil
+	case 2:
+		return "", false, nil
+	default:
+		return "", false, commandError("getent", []string{database, key}, code, "", stderr)
+	}
 }
 
 func commandError(command string, args []string, code int, stdout, stderr string) error {

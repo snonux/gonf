@@ -46,7 +46,15 @@ import "encoding/json"
 // unmanaged legacy line in place and run it alongside the new managed block,
 // so it must refuse v17 before any mutation. Version 18 adds file validator
 // argv fields; older binaries would otherwise publish unvalidated content.
-const CurrentVersion = 18
+// Version 19 adds manage_home to user operations: an older destination would
+// ignore it and silently leave an existing account's home field unmanaged
+// while reporting success, so it must refuse v19 at the header gate instead.
+const CurrentVersion = 19
+
+// VersionUserManageHome is the plan schema version that introduced the user
+// op's manage_home field. Tests pin it so a merge that loses the bump (and so
+// lets an older destination silently ignore manage_home) fails loudly.
+const VersionUserManageHome = 19
 
 // supportedVersions is the set of plan schema versions this binary can apply.
 // Apply must refuse plans whose version is not in this set before any mutation.
@@ -68,6 +76,7 @@ var supportedVersions = map[int]struct{}{
 	15:             {},
 	16:             {},
 	17:             {},
+	18:             {},
 	CurrentVersion: {},
 }
 
@@ -275,12 +284,17 @@ type Op struct {
 	PrimaryGroup        string   `json:"primary_group,omitempty"`
 	SupplementaryGroups []string `json:"supplementary_groups,omitempty"`
 	// Home, CreateHome, Shell, LoginClass, and System are only used when a
-	// KindUser operation creates a missing account.
+	// KindUser operation creates a missing account; Home is additionally the
+	// target of an existing account's home field when ManageHome is set.
 	Home       string `json:"home,omitempty"`
 	CreateHome bool   `json:"create_home,omitempty"`
 	Shell      string `json:"shell,omitempty"`
 	LoginClass string `json:"login_class,omitempty"`
 	System     bool   `json:"system,omitempty"`
+	// ManageHome (schema v19, VersionUserManageHome) opts a KindUser
+	// operation in to converging an existing account's passwd home field to
+	// Home. It never moves, creates, or chowns the directory.
+	ManageHome bool `json:"manage_home,omitempty"`
 
 	// AddLines appends lines to a file when missing (line-in-file), in order.
 	AddLines []string `json:"add_lines,omitempty"`

@@ -149,6 +149,7 @@ func kindFitnessTable() map[plan.Kind]kindFixture {
 			Shell:               "/sbin/nologin",
 			LoginClass:          "daemon",
 			System:              true,
+			ManageHome:          true,
 			Deps:                []string{"Package[fit-base]"},
 		}},
 	}
