@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/snonux/gonf/internal/dirperm"
 	gexec "github.com/snonux/gonf/internal/exec"
 	"github.com/snonux/gonf/internal/safepath"
 	"github.com/snonux/gonf/resource"
@@ -399,25 +400,28 @@ func substituteCandidatePath(args []string, candidatePath string) []string {
 	return out
 }
 
-// validationFstat and validationGeteuid are the only identity and attribute
+// validationFstat and validationIDs are the only identity and attribute
 // inputs of the candidate parent checks: the walk itself always opens the
 // real directories, but what each opened directory is judged by comes from
-// validationFstat. They are variables so tests can feed synthetic owners and
-// modes (foreign uids, a writable root, ...) that do not depend on the host
-// or on the ancestry of $TMPDIR. Production code never reassigns them.
+// validationFstat, and whom it is judged for from validationIDs. They are
+// variables so tests can feed synthetic owners, groups and modes (foreign
+// uids, a writable root, a user-private group, ...) that do not depend on the
+// host or on the ancestry of $TMPDIR. Production code never reassigns them.
 var (
-	validationFstat   = func(fd int, _ string) (safepath.Info, error) { return safepath.Fstat(fd) }
-	validationGeteuid = os.Geteuid
+	validationFstat = func(fd int, _ string) (safepath.Info, error) { return safepath.Fstat(fd) }
+	validationIDs   = dirperm.Current
 )
 
 // verifyValidationParent makes the candidate pathname safe to hand to an
 // external validator after the file has been closed. CreateTemp's 0600 mode
 // protects its bytes, but an untrusted writer of the parent could unlink and
 // replace the candidate between Close and exec. A safe single-file contract
-// therefore needs a real parent owned by the applying uid and not writable by
-// its group or other users. Normal system configuration parents (/etc,
-// /var/nsd/etc, ...) satisfy this; callers needing a shared writable staging
-// area need a separate multi-file/staging design instead.
+// therefore needs a real parent owned by the applying uid that nobody else can
+// write: not writable by other users, and writable by its group only when
+// that group is the applier's user-private group (writableByOthers).
+// Normal system configuration parents (/etc, /var/nsd/etc, ...) satisfy this;
+// callers needing a shared writable staging area need a separate
+// multi-file/staging design instead.
 //
 // The path is walked from "/" with the shared descriptor walk of
 // internal/safepath (every component opened O_NOFOLLOW relative to its
@@ -431,7 +435,7 @@ var (
 // because the rules above leave nobody but root and the applying uid able to
 // rename or replace anything along it.
 func verifyValidationParent(parent string) error {
-	currentUID := uint32(validationGeteuid())
+	ids := validationIDs()
 	if !filepath.IsAbs(parent) {
 		return fmt.Errorf("%s is not an absolute path", parent)
 	}
@@ -441,7 +445,7 @@ func verifyValidationParent(parent string) error {
 	}
 	root := filepath.VolumeName(parent) + string(filepath.Separator)
 	walk := safepath.Walk{Check: func(c safepath.Component) error {
-		return verifyValidationComponent(c, currentUID)
+		return verifyValidationComponent(c, ids)
 	}}
 	fd, err := walk.Open(root, components)
 	if err != nil {
@@ -473,38 +477,55 @@ func validationWalkError(err error) error {
 // applying uid; intermediates only need to stop others from renaming what lies
 // below them. When the parent is the filesystem root itself, the root is the
 // last (and only) component and gets the private rule.
-func verifyValidationComponent(c safepath.Component, currentUID uint32) error {
+func verifyValidationComponent(c safepath.Component, ids dirperm.IDs) error {
 	info, err := validationFstat(c.FD, c.Path)
 	if err != nil {
 		return fmt.Errorf("inspect %s: %w", c.Path, err)
 	}
 	if c.Last {
-		return verifyValidationPrivateDir(c.Path, info, currentUID)
+		return verifyValidationPrivateDir(c.Path, info, ids)
 	}
-	return verifyValidationIntermediate(c.Path, info, currentUID)
+	return verifyValidationIntermediate(c.Path, info, ids)
+}
+
+// writableByOthers reports whether users other than the applier can write
+// to the directory: any world write, and group write unless the group is the
+// applier's user-private group (dirperm.IDs.IsPrivateGroup), whose only
+// member is the applier. That is gonf's shared rule (plan output directories,
+// the crontab lock parent and the cross-build dir apply it too): under the
+// umask 002 that Fedora, Ubuntu, RHEL and Rocky set for user-private-group
+// accounts, every directory the user makes (a $TMPDIR, a home, a checkout) is
+// 0775, and refusing that protected nothing. Gid 0 is never private, so root
+// gets no group-write exception.
+func writableByOthers(info safepath.Info, ids dirperm.IDs) bool {
+	perm := info.Perm()
+	return perm&0o002 != 0 || (perm&0o020 != 0 && !ids.IsPrivateGroup(info.GID))
 }
 
 // verifyValidationPrivateDir requires the directory holding the candidate to
-// be owned by the applying uid and not writable by group or other users.
-// Unlike for intermediates, the sticky bit does not relax this rule.
-func verifyValidationPrivateDir(path string, info safepath.Info, currentUID uint32) error {
-	if info.UID != currentUID {
+// be owned by the applying uid and not writable by others (writableByOthers:
+// group write is fine only for the applier's private group). Unlike for
+// intermediates, the sticky bit does not relax this rule.
+func verifyValidationPrivateDir(path string, info safepath.Info, ids dirperm.IDs) error {
+	if info.UID != ids.EUID {
 		return fmt.Errorf("%s is not owned by the applying uid", path)
 	}
-	if info.Perm()&0o022 != 0 {
+	if writableByOthers(info, ids) {
 		return fmt.Errorf("%s is writable by group or other users", path)
 	}
 	return nil
 }
 
 // verifyValidationIntermediate accepts an ancestor owned by root or the
-// applying uid. It may be group/other-writable only with the sticky bit (as
-// /tmp is), which stops other users from renaming or replacing our subtree.
-func verifyValidationIntermediate(path string, info safepath.Info, currentUID uint32) error {
-	if info.UID != 0 && info.UID != currentUID {
+// applying uid. When others can write it (world write, or group write by a
+// group that is not the applier's private group: writableByOthers) it needs
+// the sticky bit (as /tmp has), which stops them from renaming or replacing
+// our subtree.
+func verifyValidationIntermediate(path string, info safepath.Info, ids dirperm.IDs) error {
+	if info.UID != 0 && info.UID != ids.EUID {
 		return fmt.Errorf("%s is owned by an untrusted uid", path)
 	}
-	if info.Perm()&0o022 != 0 && info.Perm()&0o1000 == 0 {
+	if writableByOthers(info, ids) && info.Perm()&0o1000 == 0 {
 		return fmt.Errorf("%s is writable by group or other users without sticky protection", path)
 	}
 	return nil

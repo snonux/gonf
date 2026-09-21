@@ -94,10 +94,15 @@ input. Output of a successful validator is discarded.
 
 This is deliberately a **single-file** contract. The candidate shares the live
 file's parent directory, which preserves ordinary relative-path resolution, but
-that directory must be owned by the applying uid and have no group or
-other-write permission. Every ancestor must likewise be owned by root or the
-applying uid; group/other-writable ancestors also need sticky protection (as
-with `/tmp`). Symlinks and `..` path components are refused. Otherwise another
+that directory must be owned by the applying uid, not world-writable, and
+group-writable only when its group is your user-private group (your effective
+gid, equal to your uid, as with the `0775` directories that the umask-002 default of Fedora
+and most Linux distributions creates; gid `0` is never private, so a root apply
+gets no such exception; the same rule as for `gonf plan -o` directories).
+Every ancestor must likewise be owned by root or the applying uid; ancestors
+that are world-writable, or group-writable by a group other than your private
+group, also need sticky protection (as with `/tmp`). Symlinks and `..` path
+components are refused. Otherwise another
 user could replace the
 candidate after it is closed and before the validator opens it; Gonf refuses
 such a path rather than treating a `0600` candidate as sufficient protection.

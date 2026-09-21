@@ -17,6 +17,8 @@ func TestIsPrivateGroup(t *testing.T) {
 		{"other group", IDs{EUID: 1000, EGID: 1000}, 100, false},
 		{"shared primary group", IDs{EUID: 1000, EGID: 100}, 100, false},
 		{"root never", IDs{EUID: 0, EGID: 0}, 0, false},
+		{"root, another gid", IDs{EUID: 0, EGID: 0}, 1, false},
+		{"egid == euid, gid differs", IDs{EUID: 1000, EGID: 1000}, 1001, false},
 		// egid differs from euid (after newgrp/sg): a group whose number
 		// happens to equal the uid is not the caller's private group.
 		{"uid-numbered group with foreign egid", IDs{EUID: 1000, EGID: 100}, 1000, false},

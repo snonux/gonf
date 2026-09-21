@@ -1,9 +1,11 @@
 // Package dirperm holds the permission conventions gonf applies when it
 // decides whether a directory is safe to keep its own files in, so such
-// checks accept and refuse the same things. The crontab lock parent and the
-// remote cross-build dir use it; plan output dirs (plan/private.go) and file
-// validator temp dirs still carry their own copy of the rule until task 582
-// switches them over.
+// checks accept and refuse the same things. Every such check uses it: plan
+// output directories (plan/private.go), the file validator's candidate parent
+// and its ancestors (resource/file/validation.go), the crontab lock parent
+// (resource/cron/lock_setup.go) and the remote cross-build dir
+// (internal/remote/crossbuild.go). A new check of this kind should call
+// IDs.IsPrivateGroup rather than restate the rule.
 package dirperm
 
 import "os"

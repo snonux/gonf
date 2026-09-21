@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/snonux/gonf/internal/dirperm"
 	"github.com/snonux/gonf/internal/safepath"
 )
 
@@ -397,20 +398,19 @@ func writableRemedy(mode uint32) string {
 	return "run chmod go-w on it, or " + chooseOther
 }
 
-// isPrivateGroup reports whether gid is the caller's user-private group by the
-// standard convention: it is the caller's effective gid, that gid equals the
-// effective uid, and it is not 0. Anything else (a supplementary group, a
-// primary group shared by many users as with a classic "users" group, or a
-// process whose egid differs from its euid) is a group other users may belong
-// to. Gid 0 is never private: for root, gid == uid == 0 would satisfy the
-// convention, but on FreeBSD, macOS and the other BSDs gid 0 is "wheel", whose
-// (administrator) members could then replace plan.jsonl. A root run therefore
-// refuses every group-writable directory; group write is not something root's
-// plan directory needs. The convention is not verified against the group
-// database: an administrator who added extra members to a private group
-// defeats it, which is their choice to make.
+// isPrivateGroup reports whether gid is the caller's user-private group. It
+// applies gonf's shared convention, dirperm.IDs.IsPrivateGroup (gid == egid
+// == euid, and not 0), so plan output directories, file validator parents,
+// the crontab lock parent and the cross-build dir all accept and refuse the
+// same groups. Anything else (a supplementary group, a primary group shared
+// by many users as with a classic "users" group, or a process whose egid
+// differs from its euid) is a group other users may belong to. Gid 0 is never
+// private: on FreeBSD, macOS and the other BSDs it is "wheel", whose
+// (administrator) members could then replace plan.jsonl, so a root run
+// refuses every group-writable directory; group write is not something
+// root's plan directory needs.
 func (p procIDs) isPrivateGroup(gid uint32) bool {
-	return gid == p.egid && p.egid == p.euid && p.egid != 0
+	return dirperm.IDs{EUID: p.euid, EGID: p.egid}.IsPrivateGroup(gid)
 }
 
 // CheckExistingDir applies SecureDir's acceptance rule to a directory that

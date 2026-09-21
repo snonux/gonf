@@ -13,7 +13,9 @@ import (
 	"golang.org/x/sys/unix"
 
 	. "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/dirperm"
 	"github.com/snonux/gonf/internal/safepath"
+	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -21,25 +23,33 @@ import (
 // validation helpers so refactors of validation.go stay behaviour-preserving.
 // The parent-directory walk (internal/safepath) always opens real
 // directories, so the synthetic cases build a real tree below a temp root and
-// judge it through the validationFstat and validationGeteuid seams with
-// synthetic owners and modes. They are hermetic: they neither depend on the
+// judge it through the validationFstat and validationIDs seams with
+// synthetic owners, groups and modes. They are hermetic: they neither depend on the
 // host's accounts nor on whether the ancestors of $TMPDIR would pass the
 // checks themselves (those are reported as trusted root-owned 0755
 // directories). None of the tests in this package run in parallel, so
 // swapping the seams is race-free.
 
 // fakeValidationEntry describes one synthetic path of a fake tree: a
-// directory (os.ModeDir plus perm, judged with that mode and uid), a symlink
-// (os.ModeSymlink) or a regular file (anything else). Symlinks and files are
-// created for real, since the walk refuses them itself.
+// directory (os.ModeDir plus perm, judged with that mode, uid and gid), a
+// symlink (os.ModeSymlink) or a regular file (anything else). Symlinks and
+// files are created for real, since the walk refuses them itself. gid defaults
+// to 0, which is never anyone's private group.
 type fakeValidationEntry struct {
 	mode os.FileMode
 	uid  uint32
+	gid  uint32
 }
 
-// dirEntry is a shorthand for a synthetic directory with perm and owner.
+// dirEntry is a shorthand for a synthetic directory with perm and owner, in
+// group 0.
 func dirEntry(perm os.FileMode, uid uint32) fakeValidationEntry {
 	return fakeValidationEntry{mode: os.ModeDir | perm, uid: uid}
+}
+
+// groupDirEntry is dirEntry with an explicit group.
+func groupDirEntry(perm os.FileMode, uid, gid uint32) fakeValidationEntry {
+	return fakeValidationEntry{mode: os.ModeDir | perm, uid: uid, gid: gid}
 }
 
 // info converts the entry to what the fstat seam reports.
@@ -51,7 +61,7 @@ func (e fakeValidationEntry) info() safepath.Info {
 	if e.mode.IsDir() {
 		mode |= unix.S_IFDIR
 	}
-	return safepath.Info{Mode: mode, UID: e.uid}
+	return safepath.Info{Mode: mode, UID: e.uid, GID: e.gid}
 }
 
 // trustedAncestorInfo is how the $TMPDIR chain above a test tree is reported.
@@ -110,19 +120,31 @@ func materializeValidationEntry(t *testing.T, root, real string, entry fakeValid
 	}
 }
 
-// setValidationSeams installs euid and an fstat seam that reports lookup's
-// synthetic info where it has one and the real fstat elsewhere.
+// setValidationSeams makes the checks run as euid, with egid == euid (a
+// user-private-group account, the common Linux default; for euid 0 that is
+// root, whose gid 0 is never private), and installs an fstat seam that
+// reports lookup's synthetic info where it has one and the real fstat
+// elsewhere.
 func setValidationSeams(t *testing.T, euid uint32, lookup func(path string) (safepath.Info, bool)) {
 	t.Helper()
-	prevFstat, prevEUID := validationFstat, validationGeteuid
-	t.Cleanup(func() { validationFstat, validationGeteuid = prevFstat, prevEUID })
-	validationGeteuid = func() int { return int(euid) }
+	setValidationIDs(t, dirperm.IDs{EUID: euid, EGID: euid})
+	prevFstat := validationFstat
+	t.Cleanup(func() { validationFstat = prevFstat })
 	validationFstat = func(fd int, path string) (safepath.Info, error) {
 		if info, ok := lookup(path); ok {
 			return info, nil
 		}
 		return prevFstat(fd, path)
 	}
+}
+
+// setValidationIDs makes the checks judge directories for ids until the test
+// ends.
+func setValidationIDs(t *testing.T, ids dirperm.IDs) {
+	t.Helper()
+	prevIDs := validationIDs
+	t.Cleanup(func() { validationIDs = prevIDs })
+	validationIDs = func() dirperm.IDs { return ids }
 }
 
 // privateValidationDir returns a real 0700 directory owned by the test user
@@ -250,8 +272,17 @@ func TestVerifyValidationParentLastComponentRules(t *testing.T) {
 		{"root-owned for non-root applier", 1000, dirEntry(0o755, 0), "$ROOT/srv/app is not owned by the applying uid"},
 		{"foreign owner", 1000, dirEntry(0o700, 2000), "$ROOT/srv/app is not owned by the applying uid"},
 		{"group writable", 1000, dirEntry(0o720, 1000), "$ROOT/srv/app is writable by group or other users"},
+		// The shared user-private-group rule (dirperm): group write by the
+		// applier's own private group (gid == egid == euid != 0) lets nobody
+		// else write, so the umask-002 0775 directory is accepted.
+		{"0775 in applier's private group", 1000, groupDirEntry(0o775, 1000, 1000), ""},
+		{"0770 in applier's private group", 1000, groupDirEntry(0o770, 1000, 1000), ""},
+		{"group writable by a foreign group", 1000, groupDirEntry(0o770, 1000, 100), "$ROOT/srv/app is writable by group or other users"},
+		{"private group does not excuse world write", 1000, groupDirEntry(0o777, 1000, 1000), "$ROOT/srv/app is writable by group or other users"},
+		{"root: gid 0 is never private", 0, groupDirEntry(0o775, 0, 0), "$ROOT/srv/app is writable by group or other users"},
 		{"other writable", 1000, dirEntry(0o702, 1000), "$ROOT/srv/app is writable by group or other users"},
 		{"sticky does not excuse", 1000, dirEntry(os.ModeSticky|0o777, 1000), "$ROOT/srv/app is writable by group or other users"},
+		{"sticky does not excuse a foreign group", 1000, groupDirEntry(os.ModeSticky|0o770, 1000, 100), "$ROOT/srv/app is writable by group or other users"},
 		{"not a directory", 1000, fakeValidationEntry{mode: 0o600, uid: 1000}, "$ROOT/srv/app is not a directory"},
 		{"symlink", 1000, fakeValidationEntry{mode: os.ModeSymlink | 0o777, uid: 1000}, "$ROOT/srv/app contains a symlink path component"},
 	}
@@ -277,6 +308,13 @@ func TestVerifyValidationParentIntermediateRules(t *testing.T) {
 		{"foreign owner", dirEntry(0o755, 2000), "$ROOT/srv/shared is owned by an untrusted uid"},
 		{"world writable without sticky", dirEntry(0o777, 0), "$ROOT/srv/shared is writable by group or other users without sticky protection"},
 		{"group writable without sticky", dirEntry(0o720, 1000), "$ROOT/srv/shared is writable by group or other users without sticky protection"},
+		// Group write by the applier's private group needs no sticky bit;
+		// by any other group it does, and world write always does.
+		{"0775 in applier's private group", groupDirEntry(0o775, 1000, 1000), ""},
+		{"root-owned 0775 in applier's private group", groupDirEntry(0o775, 0, 1000), ""},
+		{"foreign group writable without sticky", groupDirEntry(0o775, 1000, 100), "$ROOT/srv/shared is writable by group or other users without sticky protection"},
+		{"foreign group writable with sticky", groupDirEntry(os.ModeSticky|0o775, 1000, 100), ""},
+		{"private group, world writable without sticky", groupDirEntry(0o777, 1000, 1000), "$ROOT/srv/shared is writable by group or other users without sticky protection"},
 		{"not a directory", fakeValidationEntry{mode: 0o644}, "$ROOT/srv/shared is not a directory"},
 		{"symlink", fakeValidationEntry{mode: os.ModeSymlink | 0o777}, "$ROOT/srv/shared contains a symlink path component"},
 	}
@@ -384,9 +422,71 @@ func TestVerifyValidationParentRealDirectories(t *testing.T) {
 	wantValidationErr(t, verifyValidationParent(filepath.Join(shared, "app")),
 		shared+" is writable by group or other users without sticky protection")
 
+	// World write, not group write: whether a group-writable directory of
+	// the test user's own group is accepted depends on the account (the
+	// private-group tests below cover both sides).
 	writable := filepath.Join(dir, "writable")
-	mkdirValidationMode(t, writable, 0o770)
+	mkdirValidationMode(t, writable, 0o702)
 	wantValidationErr(t, verifyValidationParent(writable), writable+" is writable by group or other users")
+}
+
+// A process whose egid differs from its euid (after newgrp or sg) has no
+// private group, even for a group numbered like its uid: group write stays
+// refused, for the candidate parent and for intermediates alike.
+func TestVerifyValidationParentForeignEgidHasNoPrivateGroup(t *testing.T) {
+	root := fakeValidationFS(t, 1000, trustedValidationChain(map[string]fakeValidationEntry{
+		"/srv/shared":     groupDirEntry(0o775, 1000, 1000),
+		"/srv/shared/app": groupDirEntry(0o770, 1000, 100),
+	}))
+	setValidationIDs(t, dirperm.IDs{EUID: 1000, EGID: 100})
+	wantRootedValidationErr(t, root, verifyValidationParent(root+"/srv/shared/app"),
+		"$ROOT/srv/shared is writable by group or other users without sticky protection")
+	wantRootedValidationErr(t, root, verifyValidationParent(root+"/srv/shared"),
+		"$ROOT/srv/shared is writable by group or other users")
+}
+
+// Real directories under umask 002 on a user-private-group account: a 0775
+// ancestor and a 0775 candidate parent in the user's own group are accepted
+// by the real check (identity from the kernel, modes from fstat), and a whole
+// validated Ensure below them publishes the file.
+func TestValidationAcceptsPrivateGroupWritableDirs(t *testing.T) {
+	testutil.RequirePrivateGroupUser(t)
+	resource.ResetRepository()
+	inter := testutil.MkdirMode(t, filepath.Join(privateValidationDir(t), "inter"), 0o775)
+	parent := testutil.MkdirMode(t, filepath.Join(inter, "app"), 0o775)
+	wantValidationErr(t, verifyValidationParent(parent), "")
+
+	target := filepath.Join(parent, "service.conf")
+	if err := Ensure(target, WithContent("candidate"), WithValidation("true", []string{CandidatePath})); err != nil {
+		t.Fatalf("validated Ensure below 0775 private-group dirs: %v", err)
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "candidate" {
+		t.Fatalf("published content = %q, %v; want %q", got, err, "candidate")
+	}
+}
+
+// Real directories whose group is a foreign (supplementary) group: group
+// write lets that group's other members replace the candidate, so a 0770
+// candidate parent and a non-sticky 0775 ancestor are refused.
+func TestValidationRefusesForeignGroupWritableDirs(t *testing.T) {
+	dir := privateValidationDir(t)
+	parent := testutil.MkdirMode(t, filepath.Join(dir, "app"), 0o770)
+	testutil.ChgrpForeign(t, parent)
+	wantValidationErr(t, verifyValidationParent(parent), parent+" is writable by group or other users")
+
+	inter := testutil.MkdirMode(t, filepath.Join(dir, "inter"), 0o775)
+	testutil.ChgrpForeign(t, inter)
+	child := testutil.MkdirMode(t, filepath.Join(inter, "app"), 0o700)
+	wantValidationErr(t, verifyValidationParent(child), inter+" is writable by group or other users without sticky protection")
+}
+
+// A real world-writable ancestor without the sticky bit is refused even when
+// its group is the user's own (private) group.
+func TestValidationRefusesWorldWritableAncestorWithoutSticky(t *testing.T) {
+	dir := privateValidationDir(t)
+	inter := testutil.MkdirMode(t, filepath.Join(dir, "inter"), 0o777)
+	child := testutil.MkdirMode(t, filepath.Join(inter, "app"), 0o700)
+	wantValidationErr(t, verifyValidationParent(child), inter+" is writable by group or other users without sticky protection")
 }
 
 // An ancestor the applying user may search but not read (0311, like a
@@ -806,4 +906,13 @@ func TestValidateCandidateThroughSeamSucceeds(t *testing.T) {
 		t.Fatalf("clean run: err=%v panic=%v validatorRan=%v", res.err, res.recovered, res.validatorRan)
 	}
 	assertCandidateReleased(t, res.created)
+}
+
+// TestValidationIDsDefaultIsTheProcess pins the production wiring of the
+// validationIDs hook: every egid != euid test replaces it with fixed ids, so
+// only this test notices a default that ignores the real egid.
+func TestValidationIDsDefaultIsTheProcess(t *testing.T) {
+	if got, want := validationIDs(), dirperm.Current(); got != want {
+		t.Fatalf("validationIDs() = %+v, want dirperm.Current() = %+v", got, want)
+	}
 }

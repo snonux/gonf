@@ -27,7 +27,7 @@ package cron
 // (root for /var/run; a root-owned ~/.cache is refused because a non-root
 // apply could never create its lock there). It must not be world-writable,
 // and it may be group-writable only through the account's user-private group
-// (gid == egid == euid != 0, the rule plan.checkDirAttrs applies), since
+// (gid == egid == euid != 0, gonf's shared rule in internal/dirperm), since
 // Go and umask-002 systems create ~/.cache as 0775 that way. That is what
 // makes the lock directory impossible for another account to preseed or
 // swap: only the applying account (and root) can create, rename or replace
