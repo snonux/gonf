@@ -1,9 +1,12 @@
 package api
 
 import (
+	"fmt"
 	"sync"
 
+	"github.com/snonux/gonf/internal/inventory"
 	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/plan"
 )
 
 // taskClusterStack holds the cluster name associated with the currently running
@@ -41,17 +44,201 @@ func currentTaskCluster() string {
 // ClusterHosts returns List(MustCluster(name).HostNames()...) for the cluster
 // associated with the current task via RegisterMethods(..., WithCluster(name)).
 // Outside a WithCluster task body it fails fast via logger.Fatal.
+//
+// ClusterHosts is a plain inventory listing: it never applies the record-time
+// host selection that ForHosts honours, so existing
+// WhenHostname(ClusterHosts(), …) recipes keep recording one fragment per
+// cluster member regardless of the push target.
 func ClusterHosts() []string {
-	name := currentTaskCluster()
-	if name == "" {
-		logger.Fatal("ClusterHosts: no cluster on the current task (RegisterMethods(..., WithCluster(...)))")
+	hosts, err := currentClusterHosts()
+	if err != nil {
+		logger.Fatal("ClusterHosts: %v", err)
 	}
-	return List(MustCluster(name).HostNames()...)
+	return hosts
 }
 
-// resetTaskCluster clears the cluster stack (tests).
+// currentClusterHosts is the non-fatal core of ClusterHosts, shared with
+// ForHosts: the member names of the current task's WithCluster cluster.
+func currentClusterHosts() ([]string, error) {
+	name := currentTaskCluster()
+	if name == "" {
+		return nil, fmt.Errorf("no cluster on the current task (RegisterMethods(..., WithCluster(...)))")
+	}
+	rec, ok := inventory.LookupCluster(name)
+	if !ok {
+		return nil, fmt.Errorf("Cluster %q is not registered", name)
+	}
+	return List(rec.Hosts...), nil
+}
+
+// ForHosts is the typed current-cluster host iterator. It replaces the
+// repeated recipe loop
+//
+//	for _, host := range ClusterHosts() {
+//	    v := MustHostValue[T](host, key)
+//	    WhenHostname(host, func() { … })
+//	}
+//
+// with
+//
+//	ForHosts(key, func(host string, v T) { … })
+//
+// and keeps exactly those semantics for every host it visits:
+//
+//   - Hosts come from the current task's WithCluster inventory, in
+//     registration order. Inventory stays the only source of per-host values.
+//   - Every member's value under key is read and type-checked BEFORE any
+//     fragment is recorded, including members outside the host selection
+//     below: inventory values are public record-time data, so a missing key or
+//     a wrong type is an inventory bug that fails the same way whichever host a
+//     run targets.
+//   - fn runs inside WhenHostname(host, …): in plan-record mode it is wrapped
+//     in a hostname_contains destination guard evaluated on the destination at
+//     apply time, never against the controller's hostname. Outside recording
+//     it runs only when the local hostname contains host.
+//
+// Errors: while a plan is being recorded (Run, gonf plan, push, cluster,
+// fleet), an empty key, a nil fn, a missing WithCluster, or a missing or
+// mistyped value records nothing for this call and fails the record with an
+// error, like MustSecret: RecordPlan/Run/push return it, Run's temporary plan
+// directory is removed, and no SSH connection is opened. Outside recording
+// (a direct call from Go code) the same misuse ends the process via
+// logger.Fatal, like MustHostValue.
+//
+// Host selection: every recording entry point that knows where the plan will
+// apply records with a host selection (see recordPlanForHosts), and ForHosts
+// skips fn for cluster members outside it, so their inputs — e.g. a per-host
+// MustSecret read inside fn — are never resolved. A push selection contains
+// the target's names plus every alias sharing its SSH host and every name
+// contained in its inventory name or SSH host (the guard is a substring test
+// on the live hostname, which only the destination knows); a target that
+// cannot be identified exactly (raw ssh arguments, unknown destination,
+// contradicting user or port) records every member. A local Run selects the
+// names its own hostname contains, which is exact. Read host-specific inputs
+// inside fn, not before calling ForHosts.
+func ForHosts[T any](key string, fn func(host string, value T)) {
+	hosts, values, err := forHostsValues[T](key, fn != nil)
+	if err != nil {
+		failForHosts(err)
+		return
+	}
+	for i, host := range hosts {
+		if !hostSelected(host) {
+			continue
+		}
+		whenHostnameOne(host, func() { fn(host, values[i]) })
+	}
+}
+
+// forHostsValues validates ForHosts' arguments and resolves every current
+// cluster member's value under key, in member order. Resolving all values
+// first means a bad entry for a later host can never leave a partially
+// recorded set of fragments behind it.
+func forHostsValues[T any](key string, haveFn bool) ([]string, []T, error) {
+	if key == "" {
+		return nil, nil, fmt.Errorf("key must not be empty")
+	}
+	if !haveFn {
+		return nil, nil, fmt.Errorf("fn must not be nil")
+	}
+	hosts, err := currentClusterHosts()
+	if err != nil {
+		return nil, nil, err
+	}
+	values := make([]T, len(hosts))
+	for i, host := range hosts {
+		if values[i], err = lookupHostValue[T](host, key); err != nil {
+			return nil, nil, err
+		}
+	}
+	return hosts, values, nil
+}
+
+// failForHosts reports a ForHosts error: stashed into the current recording
+// session (the record then fails with it, see stashBodyError) or, outside
+// recording, fatal.
+func failForHosts(err error) {
+	err = fmt.Errorf("ForHosts: %w", err)
+	if plan.Recording() {
+		stashBodyError(err)
+		return
+	}
+	logger.Fatal("%v", err)
+}
+
+// hostSelection is the record-time set of inventory host names the current
+// recording is destined for. nil means "no selection": every host counts as
+// selected (gonf plan, RecordPlan, and pushes whose target cannot be
+// identified exactly).
+//
+// It is process-global state scoped to one recording session, and plan
+// recording is single-goroutine by the DSL invariant (recSession, api/plan.go):
+// two recordings must never run concurrently, whether they are pushes, local
+// runs or `gonf plan`, because they would also share recSession and the plan
+// recorder. No other goroutine touches the selection: recordPlanForHosts
+// restores it before any push fans out, and the fan-out never records. The
+// mutex is purely defensive; it does not make concurrent recordings with
+// different selections safe.
+var (
+	hostSelectionMu sync.Mutex
+	hostSelection   map[string]struct{}
+)
+
+// hostSelected reports whether ForHosts should visit name in the current
+// recording.
+func hostSelected(name string) bool {
+	hostSelectionMu.Lock()
+	defer hostSelectionMu.Unlock()
+	if hostSelection == nil {
+		return true
+	}
+	_, ok := hostSelection[name]
+	return ok
+}
+
+// setHostSelection installs hosts as the selection and returns a function
+// restoring the previous one. A nil hosts slice clears the selection (all
+// hosts selected); an empty non-nil slice selects none.
+func setHostSelection(hosts []string) (restore func()) {
+	hostSelectionMu.Lock()
+	defer hostSelectionMu.Unlock()
+	prev := hostSelection
+	if hosts == nil {
+		hostSelection = nil
+	} else {
+		hostSelection = make(map[string]struct{}, len(hosts))
+		for _, h := range hosts {
+			hostSelection[h] = struct{}{}
+		}
+	}
+	return func() {
+		hostSelectionMu.Lock()
+		defer hostSelectionMu.Unlock()
+		hostSelection = prev
+	}
+}
+
+// recordPlanForHosts is RecordPlanTo with the record-time host selection set
+// to hosts for the duration of the recording (see ForHosts); nil hosts
+// records exactly like RecordPlanTo. The deferred restore runs on every
+// return path, including an error or a panic in a task body; only a
+// logger.Fatal process exit skips it, and then nothing is left to restore.
+func recordPlanForHosts(hosts []string, planID string, store plan.BlobStore, tasks ...string) ([]plan.Op, error) {
+	defer setHostSelection(hosts)()
+	return RecordPlanTo(planID, store, tasks...)
+}
+
+// localHostSelection is the selection of a local Run: the inventory names the
+// local hostname contains — exactly the names whose destination guard the
+// local apply accepts, so no other host's ForHosts body could apply here.
+func localHostSelection() []string {
+	return inventory.SelectionForLocalHostname(DetectFacts().Hostname)
+}
+
+// resetTaskCluster clears the cluster stack and the host selection (tests).
 func resetTaskCluster() {
 	taskClusterMu.Lock()
-	defer taskClusterMu.Unlock()
 	taskClusterStack = nil
+	taskClusterMu.Unlock()
+	setHostSelection(nil)
 }

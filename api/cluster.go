@@ -263,24 +263,27 @@ func (h HostRef) pushTarget() (PushTarget, error) {
 }
 
 // PushHost records and pushes tasks to one HostRef. Thin wrapper: the
-// transport half lives in internal/remote (PushTo → remote.PushChunks).
+// transport half lives in internal/remote (PushTo → remote.PushChunks). It is
+// PushTo with a ForHosts host selection of this host plus every inventory name
+// that could match the same machine (aliases, substrings), so other cluster
+// members' ForHosts bodies (and their inputs) are skipped.
 func PushHost(h HostRef, tasks ...string) error {
 	t, err := h.pushTarget()
 	if err != nil {
 		return err
 	}
-	return PushTo(t, "push-"+h.name, tasks...)
+	return recordAndPush(context.Background(), t, "push-"+h.name, false, inventory.SelectionForHosts([]string{h.name}), tasks...)
 }
 
 // PreviewHost performs a strict non-mutating remote preview for one host.
 // The host must already have a compatible gonf runtime; no binary bootstrap
-// occurs.
+// occurs. It uses the same ForHosts host selection as PushHost.
 func PreviewHost(h HostRef, tasks ...string) error {
 	t, err := h.pushTarget()
 	if err != nil {
 		return err
 	}
-	return PreviewTo(t, "preview-"+h.name, tasks...)
+	return recordAndPush(context.Background(), t, "preview-"+h.name, true, inventory.SelectionForHosts([]string{h.name}), tasks...)
 }
 
 // PushCluster records once and fans out the same push payload to every host in
@@ -333,8 +336,11 @@ func runCluster(ctx context.Context, name, planID string, parallelOverride int, 
 		}
 	}
 
+	// Record once with the cluster's members (plus any inventory name that
+	// could match one of them) selected, so ForHosts bodies of hosts the push
+	// cannot reach are not resolved.
 	mem := plan.NewMemoryStore()
-	ops, err := RecordPlanTo(planID, mem, tasks...)
+	ops, err := recordPlanForHosts(inventory.SelectionForHosts(rec.Hosts), planID, mem, tasks...)
 	if err != nil {
 		return fmt.Errorf("record: %w", err)
 	}

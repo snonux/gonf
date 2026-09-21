@@ -269,7 +269,9 @@ func RunContext(ctx context.Context, names ...string) error {
 	// Record straight into the private temp dir (no RecordPlan staging): the
 	// directory is removed on return whether the record succeeds or not, so
 	// nothing survives a refusal and staging would only copy large blobs twice.
-	ops, err := RecordPlanTo("local", plan.NewStore(planDir), names...)
+	// The plan applies on this machine, so ForHosts only resolves the hosts
+	// whose destination guard this hostname satisfies (localHostSelection).
+	ops, err := recordPlanForHosts(localHostSelection(), "local", plan.NewStore(planDir), names...)
 	if err != nil {
 		return err
 	}

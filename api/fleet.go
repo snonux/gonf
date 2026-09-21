@@ -90,11 +90,7 @@ func (f FleetRef) HostNames() []string {
 	if err != nil {
 		logger.Fatal("%v", err)
 	}
-	names := make([]string, len(entries))
-	for i, e := range entries {
-		names[i] = e.HostName
-	}
-	return names
+	return fleetHostNames(entries)
 }
 
 // Fleets lists registered fleets sorted by name.
@@ -166,6 +162,9 @@ func PreviewFleetRun(ctx context.Context, name, planID string, parallelOverride 
 	return runFleet(ctx, name, planID, parallelOverride, hostTimeout, true, tasks...)
 }
 
+// runFleet records tasks once for the fleet and delivers the plan to every
+// cluster group (push or strict preview); see PushFleetRun for the
+// parallelism and cancellation contract.
 func runFleet(ctx context.Context, name, planID string, parallelOverride int, hostTimeout time.Duration, strictPreview bool, tasks ...string) error {
 	if len(tasks) == 0 {
 		if strictPreview {
@@ -177,18 +176,18 @@ func runFleet(ctx context.Context, name, planID string, parallelOverride int, ho
 	if err != nil {
 		return err
 	}
-
 	if planID == "" {
+		planID = "fleet-" + name
 		if strictPreview {
 			planID = "preview-fleet-" + name
-		} else {
-			planID = "fleet-" + name
 		}
 	}
-	groups := inventory.GroupFleetHostsByCluster(entries)
 
+	// Record once with the fleet's deduplicated hosts (plus any inventory
+	// name that could match one of them) selected, so ForHosts bodies of
+	// hosts the fleet cannot reach are not resolved.
 	mem := plan.NewMemoryStore()
-	ops, err := RecordPlanTo(planID, mem, tasks...)
+	ops, err := recordPlanForHosts(inventory.SelectionForHosts(fleetHostNames(entries)), planID, mem, tasks...)
 	if err != nil {
 		return fmt.Errorf("record: %w", err)
 	}
@@ -199,16 +198,38 @@ func runFleet(ctx context.Context, name, planID string, parallelOverride int, ho
 	if err := RefuseOpaqueOnlyPush(label); err != nil {
 		return err
 	}
+	d := fleetDelivery{planID: planID, parallelOverride: parallelOverride,
+		hostTimeout: hostTimeout, strictPreview: strictPreview, ops: ops, mem: mem}
+	if errs := d.deliver(ctx, inventory.GroupFleetHostsByCluster(entries)); len(errs) > 0 {
+		sort.Strings(errs)
+		return fmt.Errorf("fleet %q: %s", name, strings.Join(errs, "; "))
+	}
+	return nil
+}
 
-	// fleetCtx is shared by every group's push call: canceling it (below, the
-	// instant any group fails) propagates into every OTHER group's
-	// errgroup-derived context too, restoring the whole-fleet fail-fast
-	// contract. Each group still applies its own limit independently via its
-	// own errgroup.SetLimit inside orchestrate.Push/remote.Fanout, so this
-	// does not undo the per-cluster parallelism fix. context.CancelFunc is
-	// safe to call concurrently and more than once (only the first call has
-	// effect), so no extra synchronization (e.g. sync.Once) is needed around
-	// cancel().
+// fleetDelivery carries one recorded fleet plan and the per-run delivery
+// settings shared by every host group.
+type fleetDelivery struct {
+	planID           string
+	parallelOverride int
+	hostTimeout      time.Duration
+	strictPreview    bool
+	ops              []plan.Op
+	mem              *plan.MemoryStore
+}
+
+// deliver pushes (or strictly previews) the plan to every cluster group
+// concurrently and returns the groups' error messages, unsorted.
+//
+// fleetCtx is shared by every group's call: canceling it (the instant any
+// group fails) propagates into every OTHER group's errgroup-derived context
+// too, restoring the whole-fleet fail-fast contract. Each group still applies
+// its own limit independently via its own errgroup.SetLimit inside
+// orchestrate.Push/remote.Fanout, so this does not undo the per-cluster
+// parallelism fix. context.CancelFunc is safe to call concurrently and more
+// than once (only the first call has effect), so no extra synchronization
+// (e.g. sync.Once) is needed around cancel().
+func (d fleetDelivery) deliver(ctx context.Context, groups []inventory.FleetHostGroup) []string {
 	fleetCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -217,19 +238,13 @@ func runFleet(ctx context.Context, name, planID string, parallelOverride int, ho
 	var errs []string
 	for _, g := range groups {
 		limit := inventory.ClusterParallelism(g.Cluster)
-		if parallelOverride > 0 {
-			limit = parallelOverride
+		if d.parallelOverride > 0 {
+			limit = d.parallelOverride
 		}
 		wg.Add(1)
 		go func(g inventory.FleetHostGroup, limit int) {
 			defer wg.Done()
-			var err error
-			if strictPreview {
-				err = orchestrate.Preview(fleetCtx, g.Cluster.Name, planID, g.HostNames, limit, hostTimeout, ops, mem)
-			} else {
-				err = orchestrate.Push(fleetCtx, g.Cluster.Name, planID, g.HostNames, limit, hostTimeout, ops, mem)
-			}
-			if err != nil {
+			if err := d.deliverGroup(fleetCtx, g, limit); err != nil {
 				errMu.Lock()
 				errs = append(errs, err.Error())
 				errMu.Unlock()
@@ -238,10 +253,25 @@ func runFleet(ctx context.Context, name, planID string, parallelOverride int, ho
 		}(g, limit)
 	}
 	wg.Wait()
+	return errs
+}
 
-	if len(errs) > 0 {
-		sort.Strings(errs)
-		return fmt.Errorf("fleet %q: %s", name, strings.Join(errs, "; "))
+// deliverGroup pushes or strictly previews the plan on one cluster's group.
+func (d fleetDelivery) deliverGroup(ctx context.Context, g inventory.FleetHostGroup, limit int) error {
+	if d.strictPreview {
+		return orchestrate.Preview(ctx, g.Cluster.Name, d.planID, g.HostNames, limit, d.hostTimeout, d.ops, d.mem)
 	}
-	return nil
+	return orchestrate.Push(ctx, g.Cluster.Name, d.planID, g.HostNames, limit, d.hostTimeout, d.ops, d.mem)
+}
+
+// fleetHostNames returns the inventory host names of a fleet's collected
+// entries, in first-seen order. It backs FleetRef.HostNames and is the
+// record-time ForHosts host selection of a fleet push; it is never nil, so a
+// fleet push always records with an explicit selection.
+func fleetHostNames(entries []inventory.FleetHostEntry) []string {
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.HostName
+	}
+	return names
 }

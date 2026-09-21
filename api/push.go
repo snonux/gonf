@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/snonux/gonf/internal/inventory"
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/internal/remote"
 	"github.com/snonux/gonf/plan"
@@ -63,7 +64,7 @@ func PushTo(t PushTarget, planID string, tasks ...string) error {
 // CLI's SIGINT/SIGTERM context) kills the in-flight ssh push. When ctx has no
 // deadline of its own, remote.DefaultHostTimeout is applied.
 func PushToContext(ctx context.Context, t PushTarget, planID string, tasks ...string) error {
-	return recordAndPush(ctx, t, planID, false, tasks...)
+	return recordAndPush(ctx, t, planID, false, destinationHosts(t), tasks...)
 }
 
 // PreviewTo records tasks and performs a strict non-mutating remote preview.
@@ -79,10 +80,21 @@ func PreviewTo(t PushTarget, planID string, tasks ...string) error {
 // remote strict-preview apply mode, which rejects blob-backed plans instead
 // of staging remote data and runs resource probes under dry-run semantics.
 func PreviewToContext(ctx context.Context, t PushTarget, planID string, tasks ...string) error {
-	return recordAndPush(ctx, t, planID, true, tasks...)
+	return recordAndPush(ctx, t, planID, true, destinationHosts(t), tasks...)
 }
 
-func recordAndPush(ctx context.Context, t PushTarget, planID string, strictPreview bool, tasks ...string) error {
+// destinationHosts maps a raw push target (e.g. `gonf push user@host`) to the
+// ForHosts record-time host selection. Only an exact, unambiguous inventory
+// destination without raw ssh arguments narrows; anything else yields nil and
+// records every host, exactly as before host selection existed (see
+// inventory.SelectionForDestination).
+func destinationHosts(t PushTarget) []string {
+	return inventory.SelectionForDestination(t.User, t.Host, t.Port, len(t.ExtraSSH) > 0)
+}
+
+// recordAndPush records tasks with selected as the ForHosts host selection
+// (nil → every host), refuses opaque-only plans, and streams the chunks to t.
+func recordAndPush(ctx context.Context, t PushTarget, planID string, strictPreview bool, selected []string, tasks ...string) error {
 	if len(tasks) == 0 {
 		if strictPreview {
 			return fmt.Errorf("remote preview: no tasks")
@@ -93,7 +105,7 @@ func recordAndPush(ctx context.Context, t PushTarget, planID string, strictPrevi
 		planID = "push"
 	}
 	mem := plan.NewMemoryStore()
-	ops, err := RecordPlanTo(planID, mem, tasks...)
+	ops, err := recordPlanForHosts(selected, planID, mem, tasks...)
 	if err != nil {
 		return fmt.Errorf("record: %w", err)
 	}
