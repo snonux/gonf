@@ -11,6 +11,25 @@ import (
 	opt "github.com/snonux/gonf/resource/options"
 )
 
+// resourceType is the User resource's type label: the one input, with the
+// account name, to its resource.FormatID identifier.
+const resourceType = "User"
+
+var (
+	// Register takes the value as a resource.Applier; asserting it here reports a
+	// renamed or re-signed Apply at the declaration, not at the Register call.
+	_ resource.Applier           = (*User)(nil)
+	_ opt.Dependable             = (*User)(nil)
+	_ opt.Grouped                = (*User)(nil)
+	_ opt.Homeable               = (*User)(nil)
+	_ opt.CreateHomeable         = (*User)(nil)
+	_ opt.Shellable              = (*User)(nil)
+	_ opt.Classable              = (*User)(nil)
+	_ opt.Systemable             = (*User)(nil)
+	_ opt.SupplementaryGroupable = (*User)(nil)
+	_ opt.HomeManageable         = (*User)(nil)
+)
+
 // User ensures a local account exists. Creation attributes are used only for
 // a missing account; for an existing account only missing supplementary group
 // memberships may be added and, when WithManageHome opts in, the passwd home
@@ -33,24 +52,24 @@ type User struct {
 	backend internaluser.Backend
 }
 
-// resourceType is the User resource's type label: the one input, with the
-// account name, to its resource.FormatID identifier.
-const resourceType = "User"
+// unsupportedBackend stands in for a GOOS without a user backend: it
+// declares no capabilities and refuses every Ensure, naming the GOOS.
+type unsupportedBackend struct{ goos string }
 
-var (
-	// Register takes the value as a resource.Applier; asserting it here reports a
-	// renamed or re-signed Apply at the declaration, not at the Register call.
-	_ resource.Applier           = (*User)(nil)
-	_ opt.Dependable             = (*User)(nil)
-	_ opt.Grouped                = (*User)(nil)
-	_ opt.Homeable               = (*User)(nil)
-	_ opt.CreateHomeable         = (*User)(nil)
-	_ opt.Shellable              = (*User)(nil)
-	_ opt.Classable              = (*User)(nil)
-	_ opt.Systemable             = (*User)(nil)
-	_ opt.SupplementaryGroupable = (*User)(nil)
-	_ opt.HomeManageable         = (*User)(nil)
-)
+// newUser builds a User that converges through the backend for the running
+// GOOS.
+func newUser(name string, opts []opt.LocalUserOption) *User {
+	return newUserWith(backendForGOOS(runtime.GOOS, nil), name, opts)
+}
+
+// newUserWith builds a User that converges through backend.
+func newUserWith(backend internaluser.Backend, name string, opts []opt.LocalUserOption) *User {
+	u := &User{name: name, backend: backend}
+	for _, option := range opts {
+		option.Apply(u)
+	}
+	return u
+}
 
 // Present registers a local user that should exist.
 func Present(name string, opts ...opt.LocalUserOption) resource.Resource {
@@ -96,19 +115,15 @@ func (u *User) AddSupplementaryGroups(groups ...string) {
 // Apply runs user reconciliation directly for the legacy resource path.
 func (u *User) Apply() error { return u.apply() }
 
-// newUser builds a User that converges through the backend for the running
-// GOOS.
-func newUser(name string, opts []opt.LocalUserOption) *User {
-	return newUserWith(backendForGOOS(runtime.GOOS, nil), name, opts)
+// Ensure reports that goos has no user backend.
+func (b unsupportedBackend) Ensure(_ string, want internaluser.DesiredUser) error {
+	return fmt.Errorf("user %q: unsupported operating system %s", want.Name, b.goos)
 }
 
-// newUserWith builds a User that converges through backend.
-func newUserWith(backend internaluser.Backend, name string, opts []opt.LocalUserOption) *User {
-	u := &User{name: name, backend: backend}
-	for _, option := range opts {
-		option.Apply(u)
-	}
-	return u
+// Capabilities returns zero capabilities (only Platform names the GOOS);
+// Ensure refuses everything regardless.
+func (b unsupportedBackend) Capabilities() internaluser.Capabilities {
+	return internaluser.Capabilities{Platform: b.goos}
 }
 
 func (u *User) planDraft(id string) resource.PlanDraft {
@@ -173,19 +188,4 @@ func backendForGOOS(goos string, run internaluser.Runner) internaluser.Backend {
 		return backend
 	}
 	return unsupportedBackend{goos: goos}
-}
-
-// unsupportedBackend stands in for a GOOS without a user backend: it
-// declares no capabilities and refuses every Ensure, naming the GOOS.
-type unsupportedBackend struct{ goos string }
-
-// Ensure reports that goos has no user backend.
-func (b unsupportedBackend) Ensure(_ string, want internaluser.DesiredUser) error {
-	return fmt.Errorf("user %q: unsupported operating system %s", want.Name, b.goos)
-}
-
-// Capabilities returns zero capabilities (only Platform names the GOOS);
-// Ensure refuses everything regardless.
-func (b unsupportedBackend) Capabilities() internaluser.Capabilities {
-	return internaluser.Capabilities{Platform: b.goos}
 }

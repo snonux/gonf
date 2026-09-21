@@ -14,33 +14,15 @@ import (
 	opt "github.com/snonux/gonf/resource/options"
 )
 
-// Cron manages a named crontab entry for a user (default root).
-type Cron struct {
-	embed.DependsOn
-	embed.Absence
-	name     string
-	user     string
-	legacy   string
-	command  string
-	minute   string
-	hour     string
-	monthday string
-	month    string
-	weekday  string
-	env      []string
-}
+// cronType is the Cron resource's type label.
+const cronType = "Cron"
 
-func (c *Cron) SetCronUser(u string)        { c.user = u }
-func (c *Cron) SetLegacyCommand(cmd string) { c.legacy = cmd }
-func (c *Cron) SetCommand(cmd string)       { c.command = cmd }
-func (c *Cron) SetMinute(v string)          { c.minute = v }
-func (c *Cron) SetHour(v string)            { c.hour = v }
-func (c *Cron) SetMonthday(v string)        { c.monthday = v }
-func (c *Cron) SetMonth(v string)           { c.month = v }
-func (c *Cron) SetWeekday(v string)         { c.weekday = v }
-
-// AddCronEnv appends a KEY=VAL environment line above the cron job.
-func (c *Cron) AddCronEnv(kv string) { c.env = append(c.env, kv) }
+// beginMarkerPrefix and endMarkerPrefix start the lines that delimit each
+// Gonf-managed job block in a crontab; the job name and "]" follow.
+const (
+	beginMarkerPrefix = "# BEGIN GONF Cron["
+	endMarkerPrefix   = "# END GONF Cron["
+)
 
 var (
 	// Register takes the value as a resource.Applier; asserting it here reports a
@@ -68,6 +50,22 @@ var (
 	acquireCrontabLock = lockCrontab
 )
 
+// Cron manages a named crontab entry for a user (default root).
+type Cron struct {
+	embed.DependsOn
+	embed.Absence
+	name     string
+	user     string
+	legacy   string
+	command  string
+	minute   string
+	hour     string
+	monthday string
+	month    string
+	weekday  string
+	env      []string
+}
+
 // newCron builds a Cron with defaults applied, then applies opts.
 func newCron(name string, opts []opt.CronOption) *Cron {
 	c := &Cron{
@@ -84,6 +82,34 @@ func newCron(name string, opts []opt.CronOption) *Cron {
 	}
 	return c
 }
+
+// SetCronUser sets the account whose crontab is managed (default root).
+func (c *Cron) SetCronUser(u string) { c.user = u }
+
+// SetLegacyCommand opts into adopting one unmanaged crontab line whose parsed
+// command is exactly cmd (see opt.WithLegacyCommand).
+func (c *Cron) SetLegacyCommand(cmd string) { c.legacy = cmd }
+
+// SetCommand sets the command the cron job runs.
+func (c *Cron) SetCommand(cmd string) { c.command = cmd }
+
+// SetMinute sets the minute schedule field (default "*").
+func (c *Cron) SetMinute(v string) { c.minute = v }
+
+// SetHour sets the hour schedule field (default "*").
+func (c *Cron) SetHour(v string) { c.hour = v }
+
+// SetMonthday sets the day-of-month schedule field (default "*").
+func (c *Cron) SetMonthday(v string) { c.monthday = v }
+
+// SetMonth sets the month schedule field (default "*").
+func (c *Cron) SetMonth(v string) { c.month = v }
+
+// SetWeekday sets the day-of-week schedule field (default "*").
+func (c *Cron) SetWeekday(v string) { c.weekday = v }
+
+// AddCronEnv appends a KEY=VAL environment line above the cron job.
+func (c *Cron) AddCronEnv(kv string) { c.env = append(c.env, kv) }
 
 // Present registers a cron job that should exist in the user's crontab.
 func Present(name string, opts ...opt.CronOption) resource.Resource {
@@ -126,6 +152,10 @@ func ResetRunnersForTest() {
 	acquireCrontabLock = lockCrontab
 }
 
+// Apply runs the cron reconciliation directly for the legacy resource path.
+func (c *Cron) Apply() error { return c.apply() }
+
+// planDraft records c as a "cron" plan draft under id.
 func (c *Cron) planDraft(id string) resource.PlanDraft {
 	return resource.PlanDraft{
 		Kind:          "cron",
@@ -143,9 +173,6 @@ func (c *Cron) planDraft(id string) resource.PlanDraft {
 	}
 }
 
-// cronType is the Cron resource's type label.
-const cronType = "Cron"
-
 // regName is the Cron resource's registered name, "<user>/<name>": one cron
 // job name may exist once per crontab.
 func (c *Cron) regName() string { return c.user + "/" + c.name }
@@ -153,9 +180,6 @@ func (c *Cron) regName() string { return c.user + "/" + c.name }
 // id is the Cron resource's ID, the same value Present registers, so apply
 // reports under exactly the registered ID.
 func (c *Cron) id() string { return resource.FormatID(cronType, c.regName()) }
-
-// Apply runs the cron reconciliation directly for the legacy resource path.
-func (c *Cron) Apply() error { return c.apply() }
 
 func (c *Cron) apply() error {
 	id := c.id()
@@ -280,11 +304,6 @@ func (c *Cron) block() string {
 	b.WriteByte('\n')
 	return b.String()
 }
-
-const (
-	beginMarkerPrefix = "# BEGIN GONF Cron["
-	endMarkerPrefix   = "# END GONF Cron["
-)
 
 func beginMarker(name string) string { return beginMarkerPrefix + name + "]" }
 func endMarker(name string) string   { return endMarkerPrefix + name + "]" }

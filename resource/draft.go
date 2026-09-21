@@ -77,7 +77,9 @@ type PlanDraft struct {
 	TemplateParam string
 	// TemplateData is the JSON-compatible data supplied by WithTemplateData.
 	// The file handler encodes it so invalid values fail during RecordPlan.
-	TemplateData    any
+	TemplateData any
+	// TemplateDataSet reports that WithTemplateData was given, so TemplateData
+	// is encoded onto the op even when the supplied value is nil.
 	TemplateDataSet bool
 	// ValidationBin and ValidationArgs describe an optional argv validator for
 	// a content-managed file. ValidationArgs retains CandidatePath as a typed

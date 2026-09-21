@@ -20,6 +20,29 @@ import (
 	"github.com/snonux/gonf/resource/timer"
 )
 
+var (
+	// Register takes the value as a resource.Applier; asserting it here reports a
+	// renamed or re-signed Apply at the declaration, not at the Register call.
+	_ resource.Applier           = (*SystemdTimer)(nil)
+	_ opt.Absentable             = (*SystemdTimer)(nil)
+	_ opt.Dependable             = (*SystemdTimer)(nil)
+	_ opt.Commandable            = (*SystemdTimer)(nil)
+	_ opt.OnCalendarable         = (*SystemdTimer)(nil)
+	_ opt.OnBootSecable          = (*SystemdTimer)(nil)
+	_ opt.Persistentable         = (*SystemdTimer)(nil)
+	_ opt.Descriptionable        = (*SystemdTimer)(nil)
+	_ opt.ServiceDescriptionable = (*SystemdTimer)(nil)
+	_ opt.Afterable              = (*SystemdTimer)(nil)
+	_ opt.Wantsable              = (*SystemdTimer)(nil)
+	_ opt.UserService            = (*SystemdTimer)(nil)
+	_ opt.Restartable            = (*SystemdTimer)(nil)
+	_ opt.EnableOnlyable         = (*SystemdTimer)(nil)
+)
+
+// ensureReload applies a daemon-reload; tests swap it to observe the options
+// both apply paths hand it without running systemctl.
+var ensureReload = systemd.Ensure
+
 // SystemdTimer manages a named systemd .timer with a companion oneshot .service.
 type SystemdTimer struct {
 	embed.DependsOn
@@ -39,36 +62,54 @@ type SystemdTimer struct {
 	enableOnly         bool
 }
 
-func (t *SystemdTimer) SetCommand(cmd string)          { t.command = cmd }
-func (t *SystemdTimer) SetOnCalendar(v string)         { t.onCalendar = v }
-func (t *SystemdTimer) SetOnBootSec(v string)          { t.onBootSec = v }
-func (t *SystemdTimer) SetPersistent()                 { t.persistent = true }
-func (t *SystemdTimer) SetDescription(v string)        { t.description = v }
-func (t *SystemdTimer) SetServiceDescription(v string) { t.serviceDescription = v }
-func (t *SystemdTimer) AddAfter(units ...string)       { t.after = append(t.after, units...) }
-func (t *SystemdTimer) AddWants(units ...string)       { t.wants = append(t.wants, units...) }
-func (t *SystemdTimer) SetUser()                       { t.user = true }
-func (t *SystemdTimer) SetRestart()                    { t.restart = true }
-func (t *SystemdTimer) SetEnableOnly()                 { t.enableOnly = true }
+// newTimer builds a SystemdTimer for name (with or without a .timer or
+// .service suffix) and applies opts.
+func newTimer(name string, opts ...opt.SystemdTimerOption) *SystemdTimer {
+	base, unit := normalizeName(name)
+	t := &SystemdTimer{name: unit, base: base}
+	for _, o := range opts {
+		o.Apply(t)
+	}
+	return t
+}
 
-var (
-	// Register takes the value as a resource.Applier; asserting it here reports a
-	// renamed or re-signed Apply at the declaration, not at the Register call.
-	_ resource.Applier           = (*SystemdTimer)(nil)
-	_ opt.Absentable             = (*SystemdTimer)(nil)
-	_ opt.Dependable             = (*SystemdTimer)(nil)
-	_ opt.Commandable            = (*SystemdTimer)(nil)
-	_ opt.OnCalendarable         = (*SystemdTimer)(nil)
-	_ opt.OnBootSecable          = (*SystemdTimer)(nil)
-	_ opt.Persistentable         = (*SystemdTimer)(nil)
-	_ opt.Descriptionable        = (*SystemdTimer)(nil)
-	_ opt.ServiceDescriptionable = (*SystemdTimer)(nil)
-	_ opt.Afterable              = (*SystemdTimer)(nil)
-	_ opt.Wantsable              = (*SystemdTimer)(nil)
-	_ opt.UserService            = (*SystemdTimer)(nil)
-	_ opt.Restartable            = (*SystemdTimer)(nil)
-	_ opt.EnableOnlyable         = (*SystemdTimer)(nil)
-)
+// SetCommand sets the companion service's ExecStart= command (required for a
+// present timer).
+func (t *SystemdTimer) SetCommand(cmd string) { t.command = cmd }
+
+// SetOnCalendar sets the timer's OnCalendar= expression (required for a
+// present timer).
+func (t *SystemdTimer) SetOnCalendar(v string) { t.onCalendar = v }
+
+// SetOnBootSec sets the timer's OnBootSec= delay.
+func (t *SystemdTimer) SetOnBootSec(v string) { t.onBootSec = v }
+
+// SetPersistent writes Persistent=true into the timer unit.
+func (t *SystemdTimer) SetPersistent() { t.persistent = true }
+
+// SetDescription sets the timer unit's Description=. It is also the service
+// description when SetServiceDescription is not used.
+func (t *SystemdTimer) SetDescription(v string) { t.description = v }
+
+// SetServiceDescription sets the companion service unit's Description=.
+func (t *SystemdTimer) SetServiceDescription(v string) { t.serviceDescription = v }
+
+// AddAfter appends units to the companion service's After= ordering.
+func (t *SystemdTimer) AddAfter(units ...string) { t.after = append(t.after, units...) }
+
+// AddWants appends units to the companion service's Wants= dependencies.
+func (t *SystemdTimer) AddWants(units ...string) { t.wants = append(t.wants, units...) }
+
+// SetUser installs the units under ~/.config/systemd/user and manages them
+// on the systemd --user manager.
+func (t *SystemdTimer) SetUser() { t.user = true }
+
+// SetRestart restarts an already-active present timer on each apply.
+func (t *SystemdTimer) SetRestart() { t.restart = true }
+
+// SetEnableOnly limits the timer to enable/disable: it is never started,
+// stopped or restarted.
+func (t *SystemdTimer) SetEnableOnly() { t.enableOnly = true }
 
 // Present registers a systemd timer that should be installed, enabled, and
 // started (or only enabled when WithEnableOnly is set).
@@ -90,15 +131,10 @@ func Absent(name string, opts ...opt.SystemdTimerOption) resource.Resource {
 	return Present(name, opts...)
 }
 
-func newTimer(name string, opts ...opt.SystemdTimerOption) *SystemdTimer {
-	base, unit := normalizeName(name)
-	t := &SystemdTimer{name: unit, base: base}
-	for _, o := range opts {
-		o.Apply(t)
-	}
-	return t
-}
+// Apply runs the systemd timer reconciliation directly for the legacy resource path.
+func (t *SystemdTimer) Apply() error { return t.apply() }
 
+// planDraft records t as a "systemd_timer" plan draft under id.
 func (t *SystemdTimer) planDraft(id string) resource.PlanDraft {
 	return resource.PlanDraft{
 		Kind:               "systemd_timer",
@@ -120,6 +156,8 @@ func (t *SystemdTimer) planDraft(id string) resource.PlanDraft {
 	}
 }
 
+// normalizeName trims name and strips a .service or .timer suffix, returning
+// the bare base name and the .timer unit name (both empty for an empty name).
 func normalizeName(name string) (base, unit string) {
 	name = strings.TrimSpace(name)
 	name = strings.TrimSuffix(name, ".service")
@@ -130,9 +168,9 @@ func normalizeName(name string) (base, unit string) {
 	return name, name + ".timer"
 }
 
-// Apply runs the systemd timer reconciliation directly for the legacy resource path.
-func (t *SystemdTimer) Apply() error { return t.apply() }
-
+// apply converges the unit files, daemon-reload and timer unit for the
+// present or absent state, and reports the composite changed when any part
+// changed.
 func (t *SystemdTimer) apply() error {
 	id := resource.FormatID("SystemdTimer", t.base)
 	if err := t.validate(); err != nil {
@@ -166,10 +204,6 @@ func (t *SystemdTimer) apply() error {
 	return nil
 }
 
-// ensureReload applies a daemon-reload; tests swap it to observe the options
-// both apply paths hand it without running systemctl.
-var ensureReload = systemd.Ensure
-
 // ensureDaemonReload reloads the systemd manager only when one of the unit
 // files changed. Shared by the present and absent paths so both gate the
 // reload identically.
@@ -191,6 +225,8 @@ func (t *SystemdTimer) daemonReloadOpts(svcID, timerFileID string) []opt.DaemonR
 	return reloadOpts
 }
 
+// applyPresent writes both unit files (creating dir), daemon-reloads when
+// they changed and converges the timer unit via resource/timer.
 func (t *SystemdTimer) applyPresent(dir, svcPath, timerPath, svcID, timerFileID string) error {
 	if resource.DryRun() {
 		logger.Info("dry-run: would ensure unit dir %s", dir)
@@ -228,6 +264,8 @@ func (t *SystemdTimer) applyPresent(dir, svcPath, timerPath, svcID, timerFileID 
 	return timer.Ensure(t.name, timerOpts...)
 }
 
+// applyAbsent stops and disables the timer (best effort), removes both unit
+// files and daemon-reloads when they changed.
 func (t *SystemdTimer) applyAbsent(svcPath, timerPath, svcID, timerFileID string) error {
 	timerOpts := []opt.TimerOption{opt.IsAbsent}
 	if t.user {
@@ -250,6 +288,8 @@ func (t *SystemdTimer) applyAbsent(svcPath, timerPath, svcID, timerFileID string
 	return t.ensureDaemonReload(svcID, timerFileID)
 }
 
+// unitDir is the directory the unit files live in: /etc/systemd/system, or
+// ~/.config/systemd/user for a user timer.
 func (t *SystemdTimer) unitDir() (string, error) {
 	if !t.user {
 		return "/etc/systemd/system", nil
@@ -275,6 +315,7 @@ func daemonReloadID(user bool) string {
 	return resource.FormatID("DaemonReload", name)
 }
 
+// serviceUnit renders the companion oneshot .service unit.
 func (t *SystemdTimer) serviceUnit() string {
 	var b strings.Builder
 	b.WriteString("[Unit]\n")
@@ -298,6 +339,7 @@ func (t *SystemdTimer) serviceUnit() string {
 	return b.String()
 }
 
+// timerUnit renders the .timer unit.
 func (t *SystemdTimer) timerUnit() string {
 	var b strings.Builder
 	b.WriteString("[Unit]\n")
@@ -319,6 +361,8 @@ func (t *SystemdTimer) timerUnit() string {
 	return b.String()
 }
 
+// validate rejects an empty name or one containing whitespace or path
+// separators, and requires WithCommand and WithOnCalendar for a present timer.
 func (t *SystemdTimer) validate() error {
 	if t.base == "" || t.name == "" || t.name == ".timer" {
 		return errors.New("name must not be empty")

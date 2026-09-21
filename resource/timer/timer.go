@@ -16,21 +16,6 @@ import (
 	"github.com/snonux/gonf/resource/systemd"
 )
 
-// Timer manages a named systemd .timer unit.
-type Timer struct {
-	embed.DependsOn
-	embed.Absence
-	embed.ChangeGate
-	name       string // unit name ending in .timer
-	restart    bool
-	user       bool // systemctl --user
-	enableOnly bool // enable/disable only; skip start/stop
-}
-
-func (t *Timer) SetRestart()    { t.restart = true }
-func (t *Timer) SetUser()       { t.user = true }
-func (t *Timer) SetEnableOnly() { t.enableOnly = true }
-
 var (
 	// Register takes the value as a resource.Applier; asserting it here reports a
 	// renamed or re-signed Apply at the declaration, not at the Register call.
@@ -42,6 +27,28 @@ var (
 	_ opt.Dependable      = (*Timer)(nil)
 	_ opt.ChangeWatchable = (*Timer)(nil)
 )
+
+// Timer manages a named systemd .timer unit.
+type Timer struct {
+	embed.DependsOn
+	embed.Absence
+	embed.ChangeGate
+	name       string // unit name ending in .timer
+	restart    bool
+	user       bool // systemctl --user
+	enableOnly bool // enable/disable only; skip start/stop
+}
+
+// SetRestart requests a restart of an already-active present timer on each
+// apply (subject to the OnChange gate). It has no effect with SetEnableOnly.
+func (t *Timer) SetRestart() { t.restart = true }
+
+// SetUser targets the systemd --user manager instead of the system one.
+func (t *Timer) SetUser() { t.user = true }
+
+// SetEnableOnly limits convergence to enable/disable: the timer is never
+// started, stopped or restarted.
+func (t *Timer) SetEnableOnly() { t.enableOnly = true }
 
 // Present registers a timer that should be active and enabled (or only
 // enabled when WithEnableOnly is set).
@@ -70,6 +77,11 @@ func Absent(name string, opts ...opt.TimerOption) resource.Resource {
 	return Present(name, opts...)
 }
 
+// Apply runs the timer reconciliation directly for the legacy resource path.
+func (t *Timer) Apply() error { return t.apply() }
+
+// planDraft records t as a "timer" plan draft under id, including its
+// dependencies and OnChange gate.
 func (t *Timer) planDraft(id string) resource.PlanDraft {
 	d := resource.PlanDraft{
 		Kind:       "timer",
@@ -85,6 +97,8 @@ func (t *Timer) planDraft(id string) resource.PlanDraft {
 	return d
 }
 
+// normalizeUnit trims name and appends the .timer suffix when it is missing.
+// An empty (or all-space) name stays empty so validate can reject it.
 func normalizeUnit(name string) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -95,9 +109,6 @@ func normalizeUnit(name string) string {
 	}
 	return name + ".timer"
 }
-
-// Apply runs the timer reconciliation directly for the legacy resource path.
-func (t *Timer) Apply() error { return t.apply() }
 
 // apply probes the timer, derives the systemctl actions that converge it,
 // and runs them (or only logs them under dry-run) via converge.

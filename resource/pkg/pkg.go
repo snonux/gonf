@@ -14,6 +14,27 @@ import (
 	opt "github.com/snonux/gonf/resource/options"
 )
 
+// runCmd is swapped in unit tests for packages without an environment.
+// runCmdWithEnv receives a complete, inherited environment for packages with
+// WithEnv; keeping the seams separate preserves the legacy unset behavior.
+var (
+	runCmd        = exec.Run
+	runCmdWithEnv = func(env []string, name string, args ...string) (string, string, int, error) {
+		return exec.RunWith(exec.Opts{Env: env}, name, args...)
+	}
+)
+
+// detectPkgManager names the host's package manager; selectBackend maps the
+// name to a backend. It is swapped by SetDetectPackageManagerForTest (CI
+// runners are often Ubuntu); in-package tests instead hand a backend to
+// applyWith directly.
+var detectPkgManager = detectPackageManager
+
+// resource.Register takes this value as a resource.Applier. The assertion
+// pins that contract at the declaration, so a renamed or re-signed Apply is
+// reported here rather than at the Register call.
+var _ resource.Applier = (*Package)(nil)
+
 // Package reconciles an OS package's presence or absence using the
 // platform package manager (dnf on Linux, pkg on FreeBSD, pkgin on
 // NetBSD, pkg_add on OpenBSD).
@@ -25,6 +46,8 @@ type Package struct {
 	env    map[string]string
 }
 
+// SetLatest upgrades the package to the newest available version instead of
+// only ensuring it is installed.
 func (p *Package) SetLatest() { p.latest = true }
 
 // SetEnv configures extra environment variables for package-manager probes
@@ -35,16 +58,6 @@ func (p *Package) SetLatest() { p.latest = true }
 func (p *Package) SetEnv(env map[string]string) {
 	p.env = maps.Clone(env)
 }
-
-// runCmd is swapped in unit tests for packages without an environment.
-// runCmdWithEnv receives a complete, inherited environment for packages with
-// WithEnv; keeping the seams separate preserves the legacy unset behavior.
-var (
-	runCmd        = exec.Run
-	runCmdWithEnv = func(env []string, name string, args ...string) (string, string, int, error) {
-		return exec.RunWith(exec.Opts{Env: env}, name, args...)
-	}
-)
 
 // SetRunCmdForTest swaps the package-manager command runner (tests only).
 // Cross-package apply tests (e.g. plan.Apply on a package op) reach the
@@ -73,29 +86,8 @@ func ResetRunCmdWithEnvForTest() {
 	}
 }
 
-// detectPkgManager names the host's package manager; selectBackend maps the
-// name to a backend. It is swapped by SetDetectPackageManagerForTest (CI
-// runners are often Ubuntu); in-package tests instead hand a backend to
-// applyWith directly.
-var detectPkgManager = detectPackageManager
-
 // Apply runs the package reconciliation directly for the legacy resource path.
 func (p *Package) Apply() error { return p.apply() }
-
-// resource.Register takes this value as a resource.Applier. The assertion
-// pins that contract at the declaration, so a renamed or re-signed Apply is
-// reported here rather than at the Register call.
-var _ resource.Applier = (*Package)(nil)
-
-// apply selects the host's backend and converges p through it with p's own
-// runner (which carries WithEnv). The shared policy lives in applyWith.
-func (p *Package) apply() error {
-	b, err := selectBackend()
-	if err != nil {
-		return err
-	}
-	return p.applyWith(b, p.run)
-}
 
 // Present registers a package resource ensuring name is installed; IsLatest
 // upgrades it to the newest available version.
@@ -113,21 +105,6 @@ func Present(name string, opts ...opt.PackageOption) resource.Resource {
 	return r
 }
 
-func (p *Package) planDraft(id string) resource.PlanDraft {
-	d := resource.PlanDraft{
-		Kind:   "package",
-		ID:     id,
-		Name:   p.name,
-		Absent: p.Absent,
-		Latest: p.latest,
-		Deps:   p.DependsOn.SortedIDs(),
-	}
-	// The draft gets its own copy: stored drafts outlive this Package and
-	// must not share mutable state with it. maps.Clone keeps nil as nil.
-	d.Env = maps.Clone(p.env)
-	return d
-}
-
 // Ensure builds and applies a package resource without registering it or
 // recording a plan draft.
 func Ensure(name string, opts ...opt.PackageOption) error {
@@ -142,6 +119,42 @@ func Ensure(name string, opts ...opt.PackageOption) error {
 func Absent(name string, opts ...opt.PackageOption) resource.Resource {
 	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(name, opts...)
+}
+
+// SetDetectPackageManagerForTest stubs OS package-manager detection (tests only).
+func SetDetectPackageManagerForTest(fn func() (string, error)) {
+	detectPkgManager = fn
+}
+
+// ResetDetectPackageManagerForTest restores the real detector after a test stub.
+func ResetDetectPackageManagerForTest() {
+	detectPkgManager = detectPackageManager
+}
+
+// apply selects the host's backend and converges p through it with p's own
+// runner (which carries WithEnv). The shared policy lives in applyWith.
+func (p *Package) apply() error {
+	b, err := selectBackend()
+	if err != nil {
+		return err
+	}
+	return p.applyWith(b, p.run)
+}
+
+// planDraft records p as a "package" plan draft under id.
+func (p *Package) planDraft(id string) resource.PlanDraft {
+	d := resource.PlanDraft{
+		Kind:   "package",
+		ID:     id,
+		Name:   p.name,
+		Absent: p.Absent,
+		Latest: p.latest,
+		Deps:   p.DependsOn.SortedIDs(),
+	}
+	// The draft gets its own copy: stored drafts outlive this Package and
+	// must not share mutable state with it. maps.Clone keeps nil as nil.
+	d.Env = maps.Clone(p.env)
+	return d
 }
 
 func detectPackageManager() (string, error) {
@@ -174,14 +187,4 @@ func (p *Package) run(bin string, args ...string) (string, string, int, error) {
 		return runCmd(bin, args...)
 	}
 	return runCmdWithEnv(exec.MergeEnv(p.env), bin, args...)
-}
-
-// SetDetectPackageManagerForTest stubs OS package-manager detection (tests only).
-func SetDetectPackageManagerForTest(fn func() (string, error)) {
-	detectPkgManager = fn
-}
-
-// ResetDetectPackageManagerForTest restores the real detector after a test stub.
-func ResetDetectPackageManagerForTest() {
-	detectPkgManager = detectPackageManager
 }

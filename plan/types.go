@@ -108,6 +108,9 @@ func SupportsVersion(version int) bool {
 // Kind is the JSONL "op" discriminator for a plan line.
 type Kind string
 
+// Plan op kinds. KindPlan is the header line every plan starts with; every
+// other kind is one resource or control op (KindWhenBegin/KindWhenEnd bracket
+// a conditional block). Each kind must also be listed in allKinds.
 const (
 	KindPlan         Kind = "plan"
 	KindLink         Kind = "link"

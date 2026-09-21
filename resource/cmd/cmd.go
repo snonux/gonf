@@ -22,6 +22,20 @@ var (
 	runProbe = exec.Run
 )
 
+var (
+	// Register takes the value as a resource.Applier; asserting it here reports a
+	// renamed or re-signed Apply at the declaration, not at the Register call.
+	_ resource.Applier    = (*Cmd)(nil)
+	_ opt.Named           = (*Cmd)(nil)
+	_ opt.Dirable         = (*Cmd)(nil)
+	_ opt.Envable         = (*Cmd)(nil)
+	_ opt.Creatable       = (*Cmd)(nil)
+	_ opt.Guardable       = (*Cmd)(nil)
+	_ opt.Dependable      = (*Cmd)(nil)
+	_ opt.Elevatable      = (*Cmd)(nil)
+	_ opt.ChangeWatchable = (*Cmd)(nil)
+)
+
 // Cmd is a command resource. It embeds DependsOn but not Absence: there is no
 // meaningful "absent" state for a one-shot command. The ChangeGate embed backs
 // the OnChange option: a gated command is skipped unless a watched resource
@@ -40,12 +54,25 @@ type Cmd struct {
 	elevate bool
 }
 
-func (c *Cmd) SetName(name string)    { c.name = name }
-func (c *Cmd) SetDir(dir string)      { c.dir = dir }
+// SetName overrides the registry name, which otherwise defaults to the
+// command line ("bin args...").
+func (c *Cmd) SetName(name string) { c.name = name }
+
+// SetDir sets the working directory of the main command.
+func (c *Cmd) SetDir(dir string) { c.dir = dir }
+
+// SetCreates skips the command when path already exists.
 func (c *Cmd) SetCreates(path string) { c.creates = path }
+
+// SetUnless skips the command when guard g succeeds.
 func (c *Cmd) SetUnless(g *opt.Guard) { c.unless = g }
+
+// SetOnlyIf runs the command only when guard g succeeds.
 func (c *Cmd) SetOnlyIf(g *opt.Guard) { c.onlyIf = g }
-func (c *Cmd) SetElevate()            { c.elevate = true }
+
+// SetElevate marks the command for privileged execution. The flag is carried
+// on the plan draft; the plan engine decides how to elevate.
+func (c *Cmd) SetElevate() { c.elevate = true }
 
 // SetEnv configures extra environment variables for the main command. It
 // copies the caller's map (nil stays nil) so a recipe that mutates or reuses
@@ -53,20 +80,6 @@ func (c *Cmd) SetElevate()            { c.elevate = true }
 // or its recorded plan op. Package.SetEnv follows the same contract, since
 // both are reached through the one shared WithEnv option.
 func (c *Cmd) SetEnv(env map[string]string) { c.env = maps.Clone(env) }
-
-var (
-	// Register takes the value as a resource.Applier; asserting it here reports a
-	// renamed or re-signed Apply at the declaration, not at the Register call.
-	_ resource.Applier    = (*Cmd)(nil)
-	_ opt.Named           = (*Cmd)(nil)
-	_ opt.Dirable         = (*Cmd)(nil)
-	_ opt.Envable         = (*Cmd)(nil)
-	_ opt.Creatable       = (*Cmd)(nil)
-	_ opt.Guardable       = (*Cmd)(nil)
-	_ opt.Dependable      = (*Cmd)(nil)
-	_ opt.Elevatable      = (*Cmd)(nil)
-	_ opt.ChangeWatchable = (*Cmd)(nil)
-)
 
 // Present registers a command resource that runs bin with args on Apply.
 func Present(bin string, args []string, opts ...opt.CommandOption) resource.Resource {
@@ -119,6 +132,11 @@ func ResetRunnersForTest() {
 	runProbe = exec.Run
 }
 
+// Apply runs the command directly for the legacy resource path.
+func (c *Cmd) Apply() error { return c.apply() }
+
+// planDraft records c as a "command" plan draft under id, including its
+// guards, dependencies and OnChange gate.
 func (c *Cmd) planDraft(id string) resource.PlanDraft {
 	d := resource.PlanDraft{
 		Kind:    "command",
@@ -140,6 +158,8 @@ func (c *Cmd) planDraft(id string) resource.PlanDraft {
 	return d
 }
 
+// planGuardDraft converts guard g to its plan-draft form (nil stays nil). The
+// default expected exit code 0 is left unset on the draft.
 func planGuardDraft(g *opt.Guard) *resource.PlanGuardDraft {
 	if g == nil {
 		return nil
@@ -156,6 +176,8 @@ func planGuardDraft(g *opt.Guard) *resource.PlanGuardDraft {
 	return out
 }
 
+// defaultName is the registry name of an unnamed command: bin followed by
+// its space-joined args.
 func defaultName(bin string, args []string) string {
 	if len(args) == 0 {
 		return bin
@@ -163,9 +185,9 @@ func defaultName(bin string, args []string) string {
 	return bin + " " + strings.Join(args, " ")
 }
 
-// Apply runs the command directly for the legacy resource path.
-func (c *Cmd) Apply() error { return c.apply() }
-
+// apply checks, in order, the OnChange gate and the Creates, Unless and OnlyIf
+// guards; the first one that says to skip notes the command skipped.
+// Otherwise it runs the command.
 func (c *Cmd) apply() error {
 	// The change gate (OnChange) is checked first: a held command is skipped
 	// entirely, before any Creates/Unless/OnlyIf probe runs.
@@ -212,10 +234,13 @@ func (c *Cmd) apply() error {
 	return c.run()
 }
 
+// id is the resource ID the command registers and reports under.
 func (c *Cmd) id() string {
 	return resource.FormatID("Command", c.name)
 }
 
+// run executes the main command through resource.Mutate (so dry-run only
+// logs it), failing on a non-zero exit with its stdout and stderr.
 func (c *Cmd) run() error {
 	desc := fmt.Sprintf("run %s %s", c.bin, strings.Join(c.args, " "))
 	return resource.Mutate(c.id(), desc, func() error {
@@ -240,6 +265,8 @@ func (c *Cmd) run() error {
 	})
 }
 
+// guardPasses runs guard probe g and reports whether it exited with the
+// expected code and, when set, printed the expected trimmed stdout.
 func guardPasses(g *opt.Guard) (bool, error) {
 	stdout, _, exitCode, err := runProbe(g.Name, g.Args...)
 	if err != nil {

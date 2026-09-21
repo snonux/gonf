@@ -12,6 +12,82 @@ import (
 	"github.com/snonux/gonf/resource"
 )
 
+// CandidatePath is the sole placeholder allowed in WithValidation arguments.
+// Gonf replaces it with a freshly staged, private candidate path at apply
+// time. It is deliberately not a usable filesystem path in a recipe.
+const CandidatePath = "\x00gonf-candidate-path\x00"
+
+// Argument-less options are package-level values rather than functions: each
+// one sets a single flag on the resource it is applied to.
+
+// WithCreateHome creates the configured (or platform-default) home directory
+// only while creating a missing user.
+var WithCreateHome = userAccountOption(func(target any) {
+	requires(target, "WithCreateHome", func(r CreateHomeable) { r.SetCreateHome() })
+})
+
+// WithSystem requests a system account while creating a missing user.
+// BSD backends reject it because their supported account utilities do not
+// expose one portable system-account mode.
+var WithSystem = userAccountOption(func(target any) {
+	requires(target, "WithSystem", func(r Systemable) { r.SetSystem() })
+})
+
+// WithTemplate forces file content to render as a text/template.
+var WithTemplate = fileOption(func(target any) {
+	requires(target, "WithTemplate", func(r Templateable) { r.SetTemplate() })
+})
+
+// WithPrune enables source reconciliation for a directory.
+var WithPrune = dirOption(func(target any) {
+	requires(target, "WithPrune", func(r Prunable) { r.SetPrune() })
+})
+
+// IsAbsent marks a resource for removal.
+var IsAbsent = absentOption(func(target any) {
+	requires(target, "IsAbsent", func(r Absentable) { r.SetAbsent() })
+})
+
+// IsLatest marks a package for upgrade to the newest version.
+var IsLatest = packageOption(func(target any) {
+	requires(target, "IsLatest", func(r Latestable) { r.SetLatest() })
+})
+
+// WithRestart restarts a service or timer after convergence.
+var WithRestart = serviceTimerOption(func(target any) {
+	requires(target, "WithRestart", func(r Restartable) { r.SetRestart() })
+})
+
+// WithReload reloads a service after convergence.
+var WithReload = serviceOption(func(target any) {
+	requires(target, "WithReload", func(r Reloadable) { r.SetReload() })
+})
+
+// WithUser selects the systemd user bus.
+var WithUser = userOption(func(target any) {
+	requires(target, "WithUser", func(r UserService) { r.SetUser() })
+})
+
+// WithElevate marks a command for privileged execution.
+var WithElevate = commandOption(func(target any) {
+	requires(target, "WithElevate", func(r Elevatable) { r.SetElevate() })
+})
+
+// WithEnableOnly makes a timer converge enable/disable without start/stop.
+var WithEnableOnly = enableOnlyOption(func(target any) {
+	requires(target, "WithEnableOnly", func(r EnableOnlyable) { r.SetEnableOnly() })
+})
+
+// IfChanged gates daemon-reload on watched dependency outcomes.
+var IfChanged = daemonReloadOption(func(target any) {
+	requires(target, "IfChanged", func(r ChangeGated) { r.SetIfChanged() })
+})
+
+// WithPersistent enables Persistent=true on a systemd timer.
+var WithPersistent = systemdTimerOption(func(target any) {
+	requires(target, "WithPersistent", func(r Persistentable) { r.SetPersistent() })
+})
+
 // Option is the callable, erased legacy option operation retained for older
 // recipes. Prefer the resource-family interfaces (FileOption, DirOption, and
 // so on) everywhere a resource is constructed: values stored as Option have
@@ -191,6 +267,9 @@ type (
 	}
 )
 
+// Concrete option types. Each is a func(any) whose unexported marker methods
+// (below) decide which resource families it satisfies, so one value can be
+// accepted by several families without an unrelated family accepting it.
 type (
 	allResourceOption      func(any)
 	fileDirOption          func(any)
@@ -215,6 +294,31 @@ type (
 	changeGateOption       func(any)
 )
 
+// Guard describes an Unless/OnlyIf probe.
+type Guard struct {
+	Name         string
+	Args         []string
+	ExpectExit   int
+	ExpectStdout string
+}
+
+// GuardOption configures a Guard built by Unless or OnlyIf.
+type GuardOption func(*Guard)
+
+// newGuard builds the Guard for Unless/OnlyIf: it probes name with args and,
+// before opts are applied, expects exit code 0 and places no constraint on
+// stdout.
+func newGuard(name string, args []string, opts ...GuardOption) *Guard {
+	g := &Guard{Name: name, Args: args, ExpectExit: 0}
+	for _, opt := range opts {
+		opt(g)
+	}
+	return g
+}
+
+// Apply runs the option against target. Every concrete option type forwards to
+// its underlying func; target must implement the capability interface the
+// option needs, or requires aborts the recipe.
 func (o allResourceOption) Apply(target any)      { o(target) }
 func (o fileDirOption) Apply(target any)          { o(target) }
 func (o fileOption) Apply(target any)             { o(target) }
@@ -236,60 +340,6 @@ func (o userOption) Apply(target any)             { o(target) }
 func (o enableOnlyOption) Apply(target any)       { o(target) }
 func (o cronSystemdTimerOption) Apply(target any) { o(target) }
 func (o changeGateOption) Apply(target any)       { o(target) }
-
-func (allResourceOption) fileOption()              {}
-func (allResourceOption) dirOption()               {}
-func (allResourceOption) linkOption()              {}
-func (allResourceOption) packageOption()           {}
-func (allResourceOption) serviceOption()           {}
-func (allResourceOption) cronOption()              {}
-func (allResourceOption) timerOption()             {}
-func (allResourceOption) systemdTimerOption()      {}
-func (allResourceOption) daemonReloadOption()      {}
-func (allResourceOption) commandOption()           {}
-func (allResourceOption) localUserOption()         {}
-func (fileDirOption) fileOption()                  {}
-func (fileDirOption) dirOption()                   {}
-func (fileOption) fileOption()                     {}
-func (fileCommandOption) fileOption()              {}
-func (fileCommandOption) commandOption()           {}
-func (dirOption) dirOption()                       {}
-func (linkOption) linkOption()                     {}
-func (packageOption) packageOption()               {}
-func (packageCommandOption) packageOption()        {}
-func (packageCommandOption) commandOption()        {}
-func (serviceOption) serviceOption()               {}
-func (cronOption) cronOption()                     {}
-func (systemdTimerOption) systemdTimerOption()     {}
-func (daemonReloadOption) daemonReloadOption()     {}
-func (commandOption) commandOption()               {}
-func (groupOption) fileOption()                    {}
-func (groupOption) dirOption()                     {}
-func (groupOption) localUserOption()               {}
-func (userAccountOption) localUserOption()         {}
-func (absentOption) fileOption()                   {}
-func (absentOption) dirOption()                    {}
-func (absentOption) linkOption()                   {}
-func (absentOption) packageOption()                {}
-func (absentOption) serviceOption()                {}
-func (absentOption) cronOption()                   {}
-func (absentOption) timerOption()                  {}
-func (absentOption) systemdTimerOption()           {}
-func (serviceTimerOption) serviceOption()          {}
-func (serviceTimerOption) timerOption()            {}
-func (serviceTimerOption) systemdTimerOption()     {}
-func (userOption) serviceOption()                  {}
-func (userOption) timerOption()                    {}
-func (userOption) systemdTimerOption()             {}
-func (userOption) daemonReloadOption()             {}
-func (enableOnlyOption) timerOption()              {}
-func (enableOnlyOption) systemdTimerOption()       {}
-func (cronSystemdTimerOption) cronOption()         {}
-func (cronSystemdTimerOption) systemdTimerOption() {}
-func (changeGateOption) commandOption()            {}
-func (changeGateOption) serviceOption()            {}
-func (changeGateOption) timerOption()              {}
-func (changeGateOption) daemonReloadOption()       {}
 
 // ToFileOptions adapts erased options kept in legacy []Option slices to the
 // typed file-option slice accepted by file resources. Prefer passing typed
@@ -349,25 +399,6 @@ func ToLocalUserOptions(opts ...Option) []LocalUserOption {
 	return toLegacyOptions(opts, func(fn func(any)) LocalUserOption { return userAccountOption(fn) })
 }
 
-func toLegacyOptions[T any](opts []Option, legacy func(func(any)) T) []T {
-	out := make([]T, 0, len(opts))
-	for _, option := range opts {
-		out = append(out, legacy(option))
-	}
-	return out
-}
-
-// Guard describes an Unless/OnlyIf probe.
-type Guard struct {
-	Name         string
-	Args         []string
-	ExpectExit   int
-	ExpectStdout string
-}
-
-// GuardOption configures a Guard built by Unless or OnlyIf.
-type GuardOption func(*Guard)
-
 // ExpectExit sets the exit code that makes a guard succeed (default 0).
 func ExpectExit(code int) GuardOption {
 	return func(g *Guard) { g.ExpectExit = code }
@@ -416,12 +447,6 @@ func WithHome(home string) userAccountOption {
 	})
 }
 
-// WithCreateHome creates the configured (or platform-default) home directory
-// only while creating a missing user.
-var WithCreateHome = userAccountOption(func(target any) {
-	requires(target, "WithCreateHome", func(r CreateHomeable) { r.SetCreateHome() })
-})
-
 // WithShell sets a user's login shell when creating a missing account.
 func WithShell(shell string) userAccountOption {
 	return userAccountOption(func(target any) {
@@ -446,13 +471,6 @@ func WithPrimaryGroup(group string) userAccountOption {
 		requires(target, "WithPrimaryGroup", func(r Grouped) { r.SetGroup(group) })
 	})
 }
-
-// WithSystem requests a system account while creating a missing user.
-// BSD backends reject it because their supported account utilities do not
-// expose one portable system-account mode.
-var WithSystem = userAccountOption(func(target any) {
-	requires(target, "WithSystem", func(r Systemable) { r.SetSystem() })
-})
 
 // WithSupplementaryGroups adds memberships for a user. Existing memberships
 // not named here are retained.
@@ -499,11 +517,6 @@ func WithParam(value string) fileOption {
 	})
 }
 
-// WithTemplate forces file content to render as a text/template.
-var WithTemplate = fileOption(func(target any) {
-	requires(target, "WithTemplate", func(r Templateable) { r.SetTemplate() })
-})
-
 // WithTemplateData supplies JSON-compatible data to a file template. It also
 // enables template rendering, so literal template content need not carry a
 // .tmpl suffix. The value is validated while recording the plan and rendered
@@ -513,11 +526,6 @@ func WithTemplateData(data any) fileOption {
 		requires(target, "WithTemplateData", func(r TemplateDataable) { r.SetTemplateData(data) })
 	})
 }
-
-// CandidatePath is the sole placeholder allowed in WithValidation arguments.
-// Gonf replaces it with a freshly staged, private candidate path at apply
-// time. It is deliberately not a usable filesystem path in a recipe.
-const CandidatePath = "\x00gonf-candidate-path\x00"
 
 // WithValidation validates a rendered File candidate with bin and args before
 // publishing it at the resource's live path. args must contain CandidatePath
@@ -578,51 +586,6 @@ func WithFileMode(mode os.FileMode) dirOption {
 		requires(target, "WithFileMode", func(r FileModed) { r.SetFileMode(NormalizeMode(mode)) })
 	})
 }
-
-// WithPrune enables source reconciliation for a directory.
-var WithPrune = dirOption(func(target any) {
-	requires(target, "WithPrune", func(r Prunable) { r.SetPrune() })
-})
-
-// IsAbsent marks a resource for removal.
-var IsAbsent = absentOption(func(target any) {
-	requires(target, "IsAbsent", func(r Absentable) { r.SetAbsent() })
-})
-
-// IsLatest marks a package for upgrade to the newest version.
-var IsLatest = packageOption(func(target any) {
-	requires(target, "IsLatest", func(r Latestable) { r.SetLatest() })
-})
-
-// WithRestart restarts a service or timer after convergence.
-var WithRestart = serviceTimerOption(func(target any) {
-	requires(target, "WithRestart", func(r Restartable) { r.SetRestart() })
-})
-
-// WithReload reloads a service after convergence.
-var WithReload = serviceOption(func(target any) {
-	requires(target, "WithReload", func(r Reloadable) { r.SetReload() })
-})
-
-// WithUser selects the systemd user bus.
-var WithUser = userOption(func(target any) {
-	requires(target, "WithUser", func(r UserService) { r.SetUser() })
-})
-
-// WithElevate marks a command for privileged execution.
-var WithElevate = commandOption(func(target any) {
-	requires(target, "WithElevate", func(r Elevatable) { r.SetElevate() })
-})
-
-// WithEnableOnly makes a timer converge enable/disable without start/stop.
-var WithEnableOnly = enableOnlyOption(func(target any) {
-	requires(target, "WithEnableOnly", func(r EnableOnlyable) { r.SetEnableOnly() })
-})
-
-// IfChanged gates daemon-reload on watched dependency outcomes.
-var IfChanged = daemonReloadOption(func(target any) {
-	requires(target, "IfChanged", func(r ChangeGated) { r.SetIfChanged() })
-})
 
 // WithWatch sets the dependency IDs watched by IfChanged.
 func WithWatch(ids ...string) daemonReloadOption {
@@ -732,10 +695,6 @@ func WithWeekday(value string) cronOption {
 	return cronValue("WithWeekday", value, func(r Weekdayable, v string) { r.SetWeekday(v) })
 }
 
-func cronValue[T any](label, value string, set func(T, string)) cronOption {
-	return cronOption(func(target any) { requires(target, label, func(r T) { set(r, value) }) })
-}
-
 // WithCronEnv adds an environment assignment above a cron entry.
 func WithCronEnv(kv string) cronOption {
 	return cronOption(func(target any) {
@@ -756,11 +715,6 @@ func WithOnBootSec(value string) systemdTimerOption {
 		requires(target, "WithOnBootSec", func(r OnBootSecable) { r.SetOnBootSec(value) })
 	})
 }
-
-// WithPersistent enables Persistent=true on a systemd timer.
-var WithPersistent = systemdTimerOption(func(target any) {
-	requires(target, "WithPersistent", func(r Persistentable) { r.SetPersistent() })
-})
 
 // WithDescription sets the systemd timer unit description.
 func WithDescription(value string) systemdTimerOption {
@@ -856,18 +810,85 @@ func OnlyIf(name string, args []string, opts ...GuardOption) commandOption {
 	})
 }
 
+// Marker methods: each empty method admits the option type into one resource
+// family interface (fileOption into FileOption, and so on).
+func (allResourceOption) fileOption()              {}
+func (allResourceOption) dirOption()               {}
+func (allResourceOption) linkOption()              {}
+func (allResourceOption) packageOption()           {}
+func (allResourceOption) serviceOption()           {}
+func (allResourceOption) cronOption()              {}
+func (allResourceOption) timerOption()             {}
+func (allResourceOption) systemdTimerOption()      {}
+func (allResourceOption) daemonReloadOption()      {}
+func (allResourceOption) commandOption()           {}
+func (allResourceOption) localUserOption()         {}
+func (fileDirOption) fileOption()                  {}
+func (fileDirOption) dirOption()                   {}
+func (fileOption) fileOption()                     {}
+func (fileCommandOption) fileOption()              {}
+func (fileCommandOption) commandOption()           {}
+func (dirOption) dirOption()                       {}
+func (linkOption) linkOption()                     {}
+func (packageOption) packageOption()               {}
+func (packageCommandOption) packageOption()        {}
+func (packageCommandOption) commandOption()        {}
+func (serviceOption) serviceOption()               {}
+func (cronOption) cronOption()                     {}
+func (systemdTimerOption) systemdTimerOption()     {}
+func (daemonReloadOption) daemonReloadOption()     {}
+func (commandOption) commandOption()               {}
+func (groupOption) fileOption()                    {}
+func (groupOption) dirOption()                     {}
+func (groupOption) localUserOption()               {}
+func (userAccountOption) localUserOption()         {}
+func (absentOption) fileOption()                   {}
+func (absentOption) dirOption()                    {}
+func (absentOption) linkOption()                   {}
+func (absentOption) packageOption()                {}
+func (absentOption) serviceOption()                {}
+func (absentOption) cronOption()                   {}
+func (absentOption) timerOption()                  {}
+func (absentOption) systemdTimerOption()           {}
+func (serviceTimerOption) serviceOption()          {}
+func (serviceTimerOption) timerOption()            {}
+func (serviceTimerOption) systemdTimerOption()     {}
+func (userOption) serviceOption()                  {}
+func (userOption) timerOption()                    {}
+func (userOption) systemdTimerOption()             {}
+func (userOption) daemonReloadOption()             {}
+func (enableOnlyOption) timerOption()              {}
+func (enableOnlyOption) systemdTimerOption()       {}
+func (cronSystemdTimerOption) cronOption()         {}
+func (cronSystemdTimerOption) systemdTimerOption() {}
+func (changeGateOption) commandOption()            {}
+func (changeGateOption) serviceOption()            {}
+func (changeGateOption) timerOption()              {}
+func (changeGateOption) daemonReloadOption()       {}
+
+// toLegacyOptions wraps every erased option with legacy, the family-specific
+// conversion used by the To*Options adapters. It performs no validation.
+func toLegacyOptions[T any](opts []Option, legacy func(func(any)) T) []T {
+	out := make([]T, 0, len(opts))
+	for _, option := range opts {
+		out = append(out, legacy(option))
+	}
+	return out
+}
+
+// cronValue builds the cron option for one schedule field: label names the
+// option in misuse errors and set stores value through capability T.
+func cronValue[T any](label, value string, set func(T, string)) cronOption {
+	return cronOption(func(target any) { requires(target, label, func(r T) { set(r, value) }) })
+}
+
+// requires asserts that target implements capability T and calls use with it.
+// A target lacking T is recipe misuse, so it aborts through logger.Fatal
+// naming the target type and the option label.
 func requires[T any](target any, label string, use func(T)) {
 	r, ok := target.(T)
 	if !ok {
 		logger.Fatal("%T does not support %s", target, label)
 	}
 	use(r)
-}
-
-func newGuard(name string, args []string, opts ...GuardOption) *Guard {
-	g := &Guard{Name: name, Args: args, ExpectExit: 0}
-	for _, opt := range opts {
-		opt(g)
-	}
-	return g
 }

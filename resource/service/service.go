@@ -14,21 +14,6 @@ import (
 	"github.com/snonux/gonf/resource/systemd"
 )
 
-// Service manages a named OS service/daemon.
-type Service struct {
-	embed.DependsOn
-	embed.Absence
-	embed.ChangeGate
-	name    string
-	restart bool
-	reload  bool
-	user    bool // systemd --user only
-}
-
-func (s *Service) SetRestart() { s.restart = true }
-func (s *Service) SetReload()  { s.reload = true }
-func (s *Service) SetUser()    { s.user = true }
-
 var (
 	// Register takes the value as a resource.Applier; asserting it here reports a
 	// renamed or re-signed Apply at the declaration, not at the Register call.
@@ -49,17 +34,15 @@ var (
 // hand a backend to applyWith directly.
 var detectSvcManager = detectServiceManager
 
-// Apply runs the service reconciliation directly for the legacy resource path.
-func (s *Service) Apply() error { return s.apply() }
-
-// apply selects the host's backend and converges s through it. The shared
-// policy lives in applyWith (converge.go); backends are in backend.go.
-func (s *Service) apply() error {
-	b, err := selectBackend()
-	if err != nil {
-		return err
-	}
-	return s.applyWith(b)
+// Service manages a named OS service/daemon.
+type Service struct {
+	embed.DependsOn
+	embed.Absence
+	embed.ChangeGate
+	name    string
+	restart bool
+	reload  bool
+	user    bool // systemd --user only
 }
 
 // newService builds a Service with opts applied.
@@ -70,6 +53,21 @@ func newService(name string, opts []opt.ServiceOption) *Service {
 	}
 	return s
 }
+
+// SetRestart requests a restart of an already-running present service on
+// each apply (subject to the OnChange gate). SetReload wins when both are set.
+func (s *Service) SetRestart() { s.restart = true }
+
+// SetReload requests a reload of an already-running present service on each
+// apply (subject to the OnChange gate). It takes precedence over SetRestart.
+func (s *Service) SetReload() { s.reload = true }
+
+// SetUser targets the systemd --user manager instead of the system one.
+// Backends without a user bus reject it at apply time.
+func (s *Service) SetUser() { s.user = true }
+
+// Apply runs the service reconciliation directly for the legacy resource path.
+func (s *Service) Apply() error { return s.apply() }
 
 // Present registers a service that should be running and enabled at boot.
 func Present(name string, opts ...opt.ServiceOption) resource.Resource {
@@ -90,6 +88,30 @@ func Absent(name string, opts ...opt.ServiceOption) resource.Resource {
 	return Present(name, opts...)
 }
 
+// SetDetectServiceManagerForTest stubs OS service-manager detection (tests
+// only), mirroring resource/pkg's SetDetectPackageManagerForTest.
+func SetDetectServiceManagerForTest(fn func() (string, error)) {
+	detectSvcManager = fn
+}
+
+// ResetDetectServiceManagerForTest restores the real detector after a test
+// stub.
+func ResetDetectServiceManagerForTest() {
+	detectSvcManager = detectServiceManager
+}
+
+// apply selects the host's backend and converges s through it. The shared
+// policy lives in applyWith (converge.go); backends are in backend.go.
+func (s *Service) apply() error {
+	b, err := selectBackend()
+	if err != nil {
+		return err
+	}
+	return s.applyWith(b)
+}
+
+// planDraft records s as a "service" plan draft under id, including its
+// dependencies and OnChange gate.
 func (s *Service) planDraft(id string) resource.PlanDraft {
 	d := resource.PlanDraft{
 		Kind:    "service",
@@ -105,18 +127,9 @@ func (s *Service) planDraft(id string) resource.PlanDraft {
 	return d
 }
 
-// SetDetectServiceManagerForTest stubs OS service-manager detection (tests
-// only), mirroring resource/pkg's SetDetectPackageManagerForTest.
-func SetDetectServiceManagerForTest(fn func() (string, error)) {
-	detectSvcManager = fn
-}
-
-// ResetDetectServiceManagerForTest restores the real detector after a test
-// stub.
-func ResetDetectServiceManagerForTest() {
-	detectSvcManager = detectServiceManager
-}
-
+// detectServiceManager names the service manager for runtime.GOOS: rcctl,
+// freebsd or netbsd on the BSDs, and systemd on Linux only when systemd is
+// detected. Any other host is an error.
 func detectServiceManager() (string, error) {
 	switch runtime.GOOS {
 	case "openbsd":
