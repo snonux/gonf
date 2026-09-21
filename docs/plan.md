@@ -62,12 +62,13 @@ applies. What is guaranteed, and what is not:
   re-checks `dir` before the first blob is written: the same directory rule
   (type, no symlinked component, owner, group/world write) through a
   no-follow open, plus the "writable by you" check, which is not part of that
-  rule. Either refusal writes nothing. Each later write walks the path again
-  without following symlinks: a single-file blob write re-checks `blobs/`
-  against the rule (`dir` is then only an ancestor, checked for being a real
-  directory), `plan.jsonl` re-checks `dir` itself, and tree and glob blobs are
-  written by path after `blobs/` itself was checked (see "The output
-  directory"). Only a change in the small window
+  rule. Either refusal writes nothing. Later writes check again: a
+  single-file blob write walks the path without following symlinks and
+  re-checks `blobs/` against the rule (`dir` is then only an ancestor, checked
+  for being a real directory); `plan.jsonl` re-checks `dir` itself the same
+  way; a tree or glob blob write reaches `dir` following symlinks, opens only
+  `blobs/` without following one and checks it against the rule, then writes
+  the tree by path (see "The output directory"). Only a change in the small window
   between the commit-time re-check and the writes can surface as a plain I/O
   error, with the non-atomic caveat of the next point.
 - An I/O error while COMMITTING the blobs into `dir` after a successful record
