@@ -35,6 +35,14 @@ import (
 	"github.com/snonux/gonf/internal/dirperm"
 )
 
+// statLockParentEntry inspects (following symlinks) the lock parent entry
+// name inside dirFD after it could not be opened, to word advice specific
+// to why. A variable so tests can report an owner (root) that a non-root
+// test cannot really chown to.
+var statLockParentEntry = func(dirFD int, name string, stat *unix.Stat_t) error {
+	return unix.Fstatat(dirFD, name, stat, 0)
+}
+
 // lockSetup tracks one acquisition attempt: the directory descriptors to
 // close afterwards and the objects it created, for rollback.
 type lockSetup struct {
@@ -203,6 +211,11 @@ func (s *lockSetup) openLockDir(parentFD int, dir string) (int, error) {
 // creating it with mode 0700 when missing. followExisting allows a
 // pre-existing entry to be a symlink; a new one is always opened with
 // O_NOFOLLOW and fixed up through its descriptor (fixNewMode).
+//
+// followExisting is set only for the lock parent (~/.cache), which is shared
+// with other applications, so an existing one that cannot be opened gets
+// advice specific to the failure (unopenableParentError) and never the
+// "remove it" remedy reserved for Gonf's own lock directory.
 func (s *lockSetup) openOrCreateDir(parentFD int, path string, followExisting bool) (int, error) {
 	name := filepath.Base(path)
 	created := false
@@ -222,6 +235,8 @@ func (s *lockSetup) openOrCreateDir(parentFD int, path string, followExisting bo
 		return -1, fmt.Errorf("open new directory %s: %w (the umask removed the owner's own permissions; use a umask such as 022 or 077)", path, err)
 	case err != nil && created:
 		return -1, fmt.Errorf("open new directory %s: %w", path, err)
+	case err != nil && followExisting:
+		return -1, unopenableParentError(parentFD, name, path, err)
 	case err != nil:
 		return -1, fmt.Errorf("open %s: %w%s", path, err, lockRemedy(path))
 	}
@@ -299,9 +314,50 @@ func verifyLockObject(fd int, fileType, perm, ownerUID uint32) error {
 	return nil
 }
 
-// lockRemedy is the actionable tail of an error about an existing object.
-// Every lock object lives in the applying account's own namespace, so that
-// account can always remove a damaged one.
+// unopenableParentError explains why the existing lock parent path (entry
+// name in parentFD) could not be opened, keeping openErr for errors.Is. The
+// parent is ~/.cache, shared with every other application and possibly
+// root-owned, so the advice repairs it in place and never suggests removing
+// it: see parentAdvice. When the entry cannot even be inspected (e.g. a
+// dangling symlink) the plain open error is all there is to report.
+func unopenableParentError(parentFD int, name, path string, openErr error) error {
+	var stat unix.Stat_t
+	if err := statLockParentEntry(parentFD, name, &stat); err != nil {
+		return fmt.Errorf("open %s: %w", path, openErr)
+	}
+	attrs := lockParentAttrs{uid: stat.Uid, gid: stat.Gid, mode: uint32(stat.Mode)}
+	ids := lockIDs{euid: uint32(unix.Geteuid()), egid: uint32(unix.Getegid())}
+	advice := parentAdvice(path, attrs, ids, openErr)
+	if advice == "" {
+		return fmt.Errorf("open %s: %w", path, openErr)
+	}
+	return fmt.Errorf("open %s: %w; %s", path, openErr, advice)
+}
+
+// parentAdvice words the fix for an unopenable lock parent. An own parent
+// whose mode denies the owner (EACCES with an owner rwx bit missing, e.g.
+// mode 0000) needs its owner bits back. An own 0700 parent still denied is
+// blocked by something else (SELinux, AppArmor), where chmod would not help,
+// so it gets no chmod advice. Everything else reuses checkLockParent's rule
+// and wording, so a file in its place reads "is not a directory" and a
+// foreign (typically root) owner "chown it back to uid N", exactly as when
+// the parent does open. An empty result means there is no specific advice.
+func parentAdvice(path string, a lockParentAttrs, ids lockIDs, openErr error) string {
+	ownerDenied := a.mode&0o700 != 0o700 && errors.Is(openErr, unix.EACCES)
+	if a.uid == ids.euid && a.mode&unix.S_IFMT == unix.S_IFDIR && ownerDenied {
+		return fmt.Sprintf("crontab lock parent %s denies its owner uid %d access (mode %#o); chmod u+rwx it", path, ids.euid, a.mode&0o7777)
+	}
+	if err := checkLockParent(path, a, ids); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+// lockRemedy is the actionable tail of an error about an existing object of
+// Gonf's own: the lock directory or a lock file, never the shared parent
+// (see unopenableParentError). They live in the applying account's own
+// namespace and hold nothing but locks, so that account can always remove a
+// damaged one and Gonf recreates it on the next apply.
 func lockRemedy(path string) string {
 	return fmt.Sprintf("; remove %s so Gonf can recreate it", path)
 }
