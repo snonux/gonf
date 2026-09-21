@@ -26,7 +26,9 @@ import (
 // for one push) out to hostNames via remote.Fanout, bounded by limit
 // concurrent per-host pushes. name labels the Fanout summary line and error
 // messages (a cluster name for both a whole-cluster push and each of a
-// fleet push's per-cluster groups).
+// fleet push's per-cluster groups). The error is returned as-is (never
+// re-formatted), so the per-host causes remote.Fanout keeps stay reachable
+// with errors.Is / errors.As.
 //
 // This is the single push pipeline shared by every push entry point in api
 // (PushClusterRun for the whole cluster in one call; PushFleetRun once per

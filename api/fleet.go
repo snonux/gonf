@@ -3,13 +3,12 @@ package api
 import (
 	"context"
 	"fmt"
-	"sort"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/snonux/gonf/internal/inventory"
 	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/internal/multierr"
 	"github.com/snonux/gonf/internal/orchestrate"
 	"github.com/snonux/gonf/internal/remote"
 	"github.com/snonux/gonf/plan"
@@ -200,11 +199,10 @@ func runFleet(ctx context.Context, name, planID string, parallelOverride int, ho
 	}
 	d := fleetDelivery{planID: planID, parallelOverride: parallelOverride,
 		hostTimeout: hostTimeout, strictPreview: strictPreview, ops: ops, mem: mem}
-	if errs := d.deliver(ctx, inventory.GroupFleetHostsByCluster(entries)); len(errs) > 0 {
-		sort.Strings(errs)
-		return fmt.Errorf("fleet %q: %s", name, strings.Join(errs, "; "))
-	}
-	return nil
+	// One single-line `fleet "<name>": <group err>; <group err>` error with the
+	// groups sorted by message; it unwraps to every group's error (and so to
+	// every per-host cause) for errors.Is / errors.As. nil when all succeeded.
+	return multierr.JoinSorted(fmt.Sprintf("fleet %q", name), d.deliver(ctx, inventory.GroupFleetHostsByCluster(entries)))
 }
 
 // fleetDelivery carries one recorded fleet plan and the per-run delivery
@@ -219,7 +217,9 @@ type fleetDelivery struct {
 }
 
 // deliver pushes (or strictly previews) the plan to every cluster group
-// concurrently and returns the groups' error messages, unsorted.
+// concurrently and returns the groups' errors, unsorted. The errors are kept
+// as values (not flattened to strings) so runFleet's aggregate still unwraps
+// to every per-host cause.
 //
 // fleetCtx is shared by every group's call: canceling it (the instant any
 // group fails) propagates into every OTHER group's errgroup-derived context
@@ -229,13 +229,13 @@ type fleetDelivery struct {
 // parallelism fix. context.CancelFunc is safe to call concurrently and more
 // than once (only the first call has effect), so no extra synchronization
 // (e.g. sync.Once) is needed around cancel().
-func (d fleetDelivery) deliver(ctx context.Context, groups []inventory.FleetHostGroup) []string {
+func (d fleetDelivery) deliver(ctx context.Context, groups []inventory.FleetHostGroup) []error {
 	fleetCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	var wg sync.WaitGroup
 	var errMu sync.Mutex
-	var errs []string
+	var errs []error
 	for _, g := range groups {
 		limit := inventory.ClusterParallelism(g.Cluster)
 		if d.parallelOverride > 0 {
@@ -246,7 +246,7 @@ func (d fleetDelivery) deliver(ctx context.Context, groups []inventory.FleetHost
 			defer wg.Done()
 			if err := d.deliverGroup(fleetCtx, g, limit); err != nil {
 				errMu.Lock()
-				errs = append(errs, err.Error())
+				errs = append(errs, err)
 				errMu.Unlock()
 				cancel()
 			}

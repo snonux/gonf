@@ -68,7 +68,9 @@ var SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error 
 	err := cmd.Run()
 	if err != nil && ctx.Err() != nil {
 		// Killed by the push context (abort or deadline), not an ssh failure.
-		return fmt.Errorf("%w (ssh killed by context: %v)", ctx.Err(), err)
+		// Both causes are wrapped: the context error lets the fan-out tell an
+		// abort from a failure, and ssh's own exit error stays inspectable.
+		return fmt.Errorf("%w (ssh killed by context: %w)", ctx.Err(), err)
 	}
 	return err
 }
