@@ -7,8 +7,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 
+	"golang.org/x/sys/unix"
+
+	"github.com/snonux/gonf/internal/safepath"
 	"github.com/snonux/gonf/resource"
 	opt "github.com/snonux/gonf/resource/options"
 )
@@ -150,13 +152,14 @@ func substituteCandidatePath(args []string, candidatePath string) []string {
 	return out
 }
 
-// validationLstat and validationGeteuid are the only filesystem and identity
-// inputs of the candidate parent checks. They are variables so tests can feed
-// synthetic owners and modes (foreign uids, a writable root, ...) that do not
-// depend on the host or on the ancestry of $TMPDIR. Production code never
-// reassigns them.
+// validationFstat and validationGeteuid are the only identity and attribute
+// inputs of the candidate parent checks: the walk itself always opens the
+// real directories, but what each opened directory is judged by comes from
+// validationFstat. They are variables so tests can feed synthetic owners and
+// modes (foreign uids, a writable root, ...) that do not depend on the host
+// or on the ancestry of $TMPDIR. Production code never reassigns them.
 var (
-	validationLstat   = os.Lstat
+	validationFstat   = func(fd int, _ string) (safepath.Info, error) { return safepath.Fstat(fd) }
 	validationGeteuid = os.Geteuid
 )
 
@@ -169,8 +172,17 @@ var (
 // /var/nsd/etc, ...) satisfy this; callers needing a shared writable staging
 // area need a separate multi-file/staging design instead.
 //
-// Components are checked top-down so the first unsafe ancestor is the one
-// reported.
+// The path is walked from "/" with the shared descriptor walk of
+// internal/safepath (every component opened O_NOFOLLOW relative to its
+// parent's descriptor, nothing created), and each component is judged on the
+// descriptor that was opened, so what is checked is exactly the directory the
+// walk continues in, not a name that may have been swapped since an lstat.
+// Components are checked top-down, so the first unsafe ancestor is the one
+// reported and nothing below it is opened. The root itself is only checked
+// when it is the parent (see verifyValidationComponent). The final descriptor
+// is closed again: CreateTemp and the validator work by path, which is sound
+// because the rules above leave nobody but root and the applying uid able to
+// rename or replace anything along it.
 func verifyValidationParent(parent string) error {
 	currentUID := uint32(validationGeteuid())
 	if !filepath.IsAbs(parent) {
@@ -181,78 +193,58 @@ func verifyValidationParent(parent string) error {
 		return err
 	}
 	root := filepath.VolumeName(parent) + string(filepath.Separator)
-	if len(components) == 0 {
-		return verifyValidationRoot(root, currentUID)
+	walk := safepath.Walk{Check: func(c safepath.Component) error {
+		return verifyValidationComponent(c, currentUID)
+	}}
+	fd, err := walk.Open(root, components)
+	if err != nil {
+		return validationWalkError(err)
 	}
-	current := root
-	for i, component := range components {
-		current = filepath.Join(current, component)
-		last := i == len(components)-1
-		if err := verifyValidationComponent(current, last, currentUID); err != nil {
-			return err
-		}
-	}
-	return nil
+	return unix.Close(fd)
 }
 
-// verifyValidationRoot handles a candidate parent that is the filesystem root
-// itself. The root is then the directory holding the candidate, so it gets the
-// same private-directory rule as a last component. The root is always a real
-// directory, so only its ownership and mode are checked.
-func verifyValidationRoot(root string, currentUID uint32) error {
-	info, err := validationLstat(root)
-	if err != nil {
-		return fmt.Errorf("inspect %s: %w", root, err)
-	}
-	st, err := validationStat(root, info)
-	if err != nil {
+// validationWalkError words a component the walk could not open. A refusal
+// of verifyValidationComponent is already worded and returned as it is.
+func validationWalkError(err error) error {
+	var ce *safepath.ComponentError
+	if !errors.As(err, &ce) {
 		return err
 	}
-	return verifyValidationPrivateDir(root, info, st, currentUID)
+	switch {
+	case errors.Is(ce.Err, safepath.ErrSymlink):
+		return fmt.Errorf("%s contains a symlink path component", ce.Path)
+	case errors.Is(ce.Err, unix.ENOTDIR):
+		return fmt.Errorf("%s is not a directory", ce.Path)
+	}
+	return fmt.Errorf("inspect %s: %w", ce.Path, ce)
 }
 
 // verifyValidationComponent checks one directory on the path to the candidate
-// parent. Every component must be a real (non-symlink) directory. The last
-// one directly holds the candidate and must be private to the applying uid;
-// intermediates only need to stop others from renaming what lies below them.
-func verifyValidationComponent(current string, last bool, currentUID uint32) error {
-	info, err := validationLstat(current)
+// parent, as the walk opened it: it is a real directory already (the walk
+// opens components O_DIRECTORY|O_NOFOLLOW and refuses symlinks and other
+// files). The last one directly holds the candidate and must be private to the
+// applying uid; intermediates only need to stop others from renaming what lies
+// below them. When the parent is the filesystem root itself, the root is the
+// last (and only) component and gets the private rule.
+func verifyValidationComponent(c safepath.Component, currentUID uint32) error {
+	info, err := validationFstat(c.FD, c.Path)
 	if err != nil {
-		return fmt.Errorf("inspect %s: %w", current, err)
+		return fmt.Errorf("inspect %s: %w", c.Path, err)
 	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("%s contains a symlink path component", current)
+	if c.Last {
+		return verifyValidationPrivateDir(c.Path, info, currentUID)
 	}
-	if !info.IsDir() {
-		return fmt.Errorf("%s is not a directory", current)
-	}
-	st, err := validationStat(current, info)
-	if err != nil {
-		return err
-	}
-	if last {
-		return verifyValidationPrivateDir(current, info, st, currentUID)
-	}
-	return verifyValidationIntermediate(current, info, st, currentUID)
-}
-
-// validationStat exposes the raw owner information needed for the uid checks.
-func validationStat(path string, info os.FileInfo) (*syscall.Stat_t, error) {
-	st, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return nil, fmt.Errorf("cannot verify ownership of %s", path)
-	}
-	return st, nil
+	return verifyValidationIntermediate(c.Path, info, currentUID)
 }
 
 // verifyValidationPrivateDir requires the directory holding the candidate to
 // be owned by the applying uid and not writable by group or other users.
 // Unlike for intermediates, the sticky bit does not relax this rule.
-func verifyValidationPrivateDir(path string, info os.FileInfo, st *syscall.Stat_t, currentUID uint32) error {
-	if st.Uid != currentUID {
+func verifyValidationPrivateDir(path string, info safepath.Info, currentUID uint32) error {
+	if info.UID != currentUID {
 		return fmt.Errorf("%s is not owned by the applying uid", path)
 	}
-	if info.Mode().Perm()&0o022 != 0 {
+	if info.Perm()&0o022 != 0 {
 		return fmt.Errorf("%s is writable by group or other users", path)
 	}
 	return nil
@@ -261,20 +253,21 @@ func verifyValidationPrivateDir(path string, info os.FileInfo, st *syscall.Stat_
 // verifyValidationIntermediate accepts an ancestor owned by root or the
 // applying uid. It may be group/other-writable only with the sticky bit (as
 // /tmp is), which stops other users from renaming or replacing our subtree.
-func verifyValidationIntermediate(path string, info os.FileInfo, st *syscall.Stat_t, currentUID uint32) error {
-	if st.Uid != 0 && st.Uid != currentUID {
+func verifyValidationIntermediate(path string, info safepath.Info, currentUID uint32) error {
+	if info.UID != 0 && info.UID != currentUID {
 		return fmt.Errorf("%s is owned by an untrusted uid", path)
 	}
-	if info.Mode().Perm()&0o022 != 0 && info.Mode()&os.ModeSticky == 0 {
+	if info.Perm()&0o022 != 0 && info.Perm()&0o1000 == 0 {
 		return fmt.Errorf("%s is writable by group or other users without sticky protection", path)
 	}
 	return nil
 }
 
 // validationPathComponents returns the raw directory components without
-// resolving them through filepath.Clean. Rejecting ".." and checking every
-// component with Lstat prevents a symlink/parent alias from making the path
-// checked here differ from the path used by CreateTemp and the validator.
+// resolving them through filepath.Clean. Rejecting ".." (which the safepath
+// walk would otherwise follow to the parent) and refusing a symlink at every
+// component prevents a symlink/parent alias from making the path checked here
+// differ from the path used by CreateTemp and the validator.
 func validationPathComponents(path string) ([]string, error) {
 	volume := filepath.VolumeName(path)
 	rest := strings.TrimPrefix(path, volume)

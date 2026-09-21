@@ -5,46 +5,36 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"testing"
-	"time"
+
+	"golang.org/x/sys/unix"
 
 	. "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/safepath"
 	"github.com/snonux/gonf/resource"
 )
 
 // These tests pin the exact error text and ordering of the candidate
 // validation helpers so refactors of validation.go stay behaviour-preserving.
-// The parent-directory rules are driven through the validationLstat and
-// validationGeteuid seams with synthetic owners and modes, so they are
-// hermetic: they neither depend on the host's accounts nor on whether the
-// ancestors of $TMPDIR would pass the checks themselves. None of the tests in
-// this package run in parallel, so swapping the seams is race-free.
+// The parent-directory walk (internal/safepath) always opens real
+// directories, so the synthetic cases build a real tree below a temp root and
+// judge it through the validationFstat and validationGeteuid seams with
+// synthetic owners and modes. They are hermetic: they neither depend on the
+// host's accounts nor on whether the ancestors of $TMPDIR would pass the
+// checks themselves (those are reported as trusted root-owned 0755
+// directories). None of the tests in this package run in parallel, so
+// swapping the seams is race-free.
 
-// fakeValidationEntry describes one synthetic path for fakeValidationFS.
+// fakeValidationEntry describes one synthetic path of a fake tree: a
+// directory (os.ModeDir plus perm, judged with that mode and uid), a symlink
+// (os.ModeSymlink) or a regular file (anything else). Symlinks and files are
+// created for real, since the walk refuses them itself.
 type fakeValidationEntry struct {
-	mode   os.FileMode
-	uid    uint32
-	noStat bool // Sys() returns no *syscall.Stat_t
-}
-
-// fakeValidationInfo is the os.FileInfo returned by the fake Lstat.
-type fakeValidationInfo struct {
-	name  string
-	entry fakeValidationEntry
-}
-
-func (i fakeValidationInfo) Name() string       { return i.name }
-func (i fakeValidationInfo) Size() int64        { return 0 }
-func (i fakeValidationInfo) Mode() os.FileMode  { return i.entry.mode }
-func (i fakeValidationInfo) ModTime() time.Time { return time.Time{} }
-func (i fakeValidationInfo) IsDir() bool        { return i.entry.mode.IsDir() }
-func (i fakeValidationInfo) Sys() any {
-	if i.entry.noStat {
-		return nil
-	}
-	return &syscall.Stat_t{Uid: i.entry.uid}
+	mode os.FileMode
+	uid  uint32
 }
 
 // dirEntry is a shorthand for a synthetic directory with perm and owner.
@@ -52,37 +42,104 @@ func dirEntry(perm os.FileMode, uid uint32) fakeValidationEntry {
 	return fakeValidationEntry{mode: os.ModeDir | perm, uid: uid}
 }
 
-// fakeValidationFS makes the parent checks see only entries and run as euid.
-// Paths missing from entries report ENOENT like a real Lstat.
-func fakeValidationFS(t *testing.T, euid uint32, entries map[string]fakeValidationEntry) {
+// info converts the entry to what the fstat seam reports.
+func (e fakeValidationEntry) info() safepath.Info {
+	mode := uint32(e.mode.Perm())
+	if e.mode&os.ModeSticky != 0 {
+		mode |= 0o1000
+	}
+	if e.mode.IsDir() {
+		mode |= unix.S_IFDIR
+	}
+	return safepath.Info{Mode: mode, UID: e.uid}
+}
+
+// trustedAncestorInfo is how the $TMPDIR chain above a test tree is reported.
+var trustedAncestorInfo = dirEntry(0o755, 0).info()
+
+// isAncestorOrSelf reports whether path is dir or one of its ancestors.
+func isAncestorOrSelf(path, dir string) bool {
+	return path == dir || path == string(filepath.Separator) || strings.HasPrefix(dir, path+string(filepath.Separator))
+}
+
+// fakeValidationFS builds entries (keyed by absolute logical paths such as
+// "/srv/app") below a fresh temp root, makes the parent checks run as euid and
+// judge each entry by its synthetic mode and owner, and returns the root. A
+// logical path P is real at root+P; want strings use "$ROOT" for the root.
+func fakeValidationFS(t *testing.T, euid uint32, entries map[string]fakeValidationEntry) string {
 	t.Helper()
-	prevLstat, prevEUID := validationLstat, validationGeteuid
-	t.Cleanup(func() { validationLstat, validationGeteuid = prevLstat, prevEUID })
-	validationGeteuid = func() int { return int(euid) }
-	validationLstat = func(path string) (os.FileInfo, error) {
-		entry, ok := entries[path]
-		if !ok {
-			return nil, &fs.PathError{Op: "lstat", Path: path, Err: syscall.ENOENT}
+	root := t.TempDir()
+	materializeValidationTree(t, root, entries)
+	setValidationSeams(t, euid, func(path string) (safepath.Info, bool) {
+		if isAncestorOrSelf(path, root) {
+			return trustedAncestorInfo, true
 		}
-		return fakeValidationInfo{name: filepath.Base(path), entry: entry}, nil
+		entry, ok := entries[strings.TrimPrefix(path, root)]
+		return entry.info(), ok
+	})
+	return root
+}
+
+// materializeValidationTree creates entries below root, parents first.
+func materializeValidationTree(t *testing.T, root string, entries map[string]fakeValidationEntry) {
+	t.Helper()
+	paths := make([]string, 0, len(entries))
+	for path := range entries {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths) // parents before children
+	for _, path := range paths {
+		materializeValidationEntry(t, root, root+path, entries[path])
+	}
+}
+
+// materializeValidationEntry creates one entry of a fake tree for real.
+func materializeValidationEntry(t *testing.T, root, real string, entry fakeValidationEntry) {
+	t.Helper()
+	var err error
+	switch {
+	case entry.mode.IsDir():
+		err = os.Mkdir(real, 0o700)
+	case entry.mode&os.ModeSymlink != 0:
+		err = os.Symlink(root, real)
+	default:
+		err = os.WriteFile(real, nil, 0o600)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// setValidationSeams installs euid and an fstat seam that reports lookup's
+// synthetic info where it has one and the real fstat elsewhere.
+func setValidationSeams(t *testing.T, euid uint32, lookup func(path string) (safepath.Info, bool)) {
+	t.Helper()
+	prevFstat, prevEUID := validationFstat, validationGeteuid
+	t.Cleanup(func() { validationFstat, validationGeteuid = prevFstat, prevEUID })
+	validationGeteuid = func() int { return int(euid) }
+	validationFstat = func(fd int, path string) (safepath.Info, error) {
+		if info, ok := lookup(path); ok {
+			return info, nil
+		}
+		return prevFstat(fd, path)
 	}
 }
 
 // privateValidationDir returns a real 0700 directory owned by the test user
 // whose ancestors (the $TMPDIR chain) are reported to the parent checks as
 // trusted root-owned 0755 directories. The directory itself and everything
-// below it are still inspected with the real os.Lstat.
+// below it are judged by their real fstat.
 func privateValidationDir(t *testing.T) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "private")
 	mkdirValidationMode(t, dir, 0o700)
-	prevLstat := validationLstat
-	t.Cleanup(func() { validationLstat = prevLstat })
-	validationLstat = func(path string) (os.FileInfo, error) {
-		if path == string(filepath.Separator) || strings.HasPrefix(dir, path+string(filepath.Separator)) {
-			return fakeValidationInfo{name: filepath.Base(path), entry: dirEntry(0o755, 0)}, nil
+	prevFstat := validationFstat
+	t.Cleanup(func() { validationFstat = prevFstat })
+	validationFstat = func(fd int, path string) (safepath.Info, error) {
+		if path != dir && isAncestorOrSelf(path, dir) {
+			return trustedAncestorInfo, nil
 		}
-		return prevLstat(path)
+		return prevFstat(fd, path)
 	}
 	return dir
 }
@@ -124,9 +181,9 @@ func TestVerifyValidationParentRejectsParentComponentBeforeInspecting(t *testing
 		"/missing/../etc contains a parent-directory path component")
 }
 
-// The filesystem root has no components, so it is checked by the dedicated
-// root-only branch: it must be owned by the applying uid and not writable by
-// group or other users, whatever spelling of "/" is used.
+// The filesystem root has no components, so it is the last (and only)
+// component of the walk: it must be owned by the applying uid and not
+// writable by group or other users, whatever spelling of "/" is used.
 func TestVerifyValidationParentRootOnly(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -139,16 +196,21 @@ func TestVerifyValidationParentRootOnly(t *testing.T) {
 		{"owned by another uid", 1000, &fakeValidationEntry{mode: os.ModeDir | 0o755}, "/ is not owned by the applying uid"},
 		{"group writable", 0, &fakeValidationEntry{mode: os.ModeDir | 0o775}, "/ is writable by group or other users"},
 		{"world writable sticky", 0, &fakeValidationEntry{mode: os.ModeDir | os.ModeSticky | 0o757}, "/ is writable by group or other users"},
-		{"no stat data", 0, &fakeValidationEntry{mode: os.ModeDir | 0o755, noStat: true}, "cannot verify ownership of /"},
-		{"lstat failure", 0, nil, "inspect /: lstat /: no such file or directory"},
+		{"fstat failure", 0, nil, "inspect /: fstat /: no such file or directory"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			entries := map[string]fakeValidationEntry{}
-			if tt.entry != nil {
-				entries["/"] = *tt.entry
+			prevFstat := validationFstat
+			setValidationSeams(t, tt.euid, func(string) (safepath.Info, bool) { return safepath.Info{}, false })
+			validationFstat = func(fd int, path string) (safepath.Info, error) {
+				if path != "/" {
+					return prevFstat(fd, path)
+				}
+				if tt.entry == nil {
+					return safepath.Info{}, &fs.PathError{Op: "fstat", Path: path, Err: syscall.ENOENT}
+				}
+				return tt.entry.info(), nil
 			}
-			fakeValidationFS(t, tt.euid, entries)
 			for _, parent := range []string{"/", "//", "/./"} {
 				wantValidationErr(t, verifyValidationParent(parent), tt.want)
 			}
@@ -156,17 +218,23 @@ func TestVerifyValidationParentRootOnly(t *testing.T) {
 	}
 }
 
-// trustedValidationChain is /srv (root-owned 0755) under a trusted root; the
-// component tests below add the entries they vary.
+// trustedValidationChain is /srv (root-owned 0755) below the trusted test
+// root; the component tests below add the entries they vary.
 func trustedValidationChain(extra map[string]fakeValidationEntry) map[string]fakeValidationEntry {
 	entries := map[string]fakeValidationEntry{
-		"/":    dirEntry(0o755, 0),
 		"/srv": dirEntry(0o755, 0),
 	}
 	for path, entry := range extra {
 		entries[path] = entry
 	}
 	return entries
+}
+
+// wantRootedValidationErr is wantValidationErr with "$ROOT" in want replaced
+// by the fake tree's root.
+func wantRootedValidationErr(t *testing.T, root string, err error, want string) {
+	t.Helper()
+	wantValidationErr(t, err, strings.ReplaceAll(want, "$ROOT", root))
 }
 
 func TestVerifyValidationParentLastComponentRules(t *testing.T) {
@@ -179,19 +247,18 @@ func TestVerifyValidationParentLastComponentRules(t *testing.T) {
 		{"private to applying uid", 1000, dirEntry(0o700, 1000), ""},
 		{"readable by others", 1000, dirEntry(0o755, 1000), ""},
 		{"root applying to root-owned", 0, dirEntry(0o755, 0), ""},
-		{"root-owned for non-root applier", 1000, dirEntry(0o755, 0), "/srv/app is not owned by the applying uid"},
-		{"foreign owner", 1000, dirEntry(0o700, 2000), "/srv/app is not owned by the applying uid"},
-		{"group writable", 1000, dirEntry(0o720, 1000), "/srv/app is writable by group or other users"},
-		{"other writable", 1000, dirEntry(0o702, 1000), "/srv/app is writable by group or other users"},
-		{"sticky does not excuse", 1000, dirEntry(os.ModeSticky|0o777, 1000), "/srv/app is writable by group or other users"},
-		{"not a directory", 1000, fakeValidationEntry{mode: 0o600, uid: 1000}, "/srv/app is not a directory"},
-		{"symlink", 1000, fakeValidationEntry{mode: os.ModeSymlink | 0o777, uid: 1000}, "/srv/app contains a symlink path component"},
-		{"no stat data", 1000, fakeValidationEntry{mode: os.ModeDir | 0o700, noStat: true}, "cannot verify ownership of /srv/app"},
+		{"root-owned for non-root applier", 1000, dirEntry(0o755, 0), "$ROOT/srv/app is not owned by the applying uid"},
+		{"foreign owner", 1000, dirEntry(0o700, 2000), "$ROOT/srv/app is not owned by the applying uid"},
+		{"group writable", 1000, dirEntry(0o720, 1000), "$ROOT/srv/app is writable by group or other users"},
+		{"other writable", 1000, dirEntry(0o702, 1000), "$ROOT/srv/app is writable by group or other users"},
+		{"sticky does not excuse", 1000, dirEntry(os.ModeSticky|0o777, 1000), "$ROOT/srv/app is writable by group or other users"},
+		{"not a directory", 1000, fakeValidationEntry{mode: 0o600, uid: 1000}, "$ROOT/srv/app is not a directory"},
+		{"symlink", 1000, fakeValidationEntry{mode: os.ModeSymlink | 0o777, uid: 1000}, "$ROOT/srv/app contains a symlink path component"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			fakeValidationFS(t, tt.euid, trustedValidationChain(map[string]fakeValidationEntry{"/srv/app": tt.entry}))
-			wantValidationErr(t, verifyValidationParent("/srv/app"), tt.want)
+			root := fakeValidationFS(t, tt.euid, trustedValidationChain(map[string]fakeValidationEntry{"/srv/app": tt.entry}))
+			wantRootedValidationErr(t, root, verifyValidationParent(root+"/srv/app"), tt.want)
 		})
 	}
 }
@@ -207,20 +274,20 @@ func TestVerifyValidationParentIntermediateRules(t *testing.T) {
 		{"root-owned", dirEntry(0o755, 0), ""},
 		{"owned by applying uid", dirEntry(0o700, 1000), ""},
 		{"sticky world writable", dirEntry(os.ModeSticky|0o777, 0), ""},
-		{"foreign owner", dirEntry(0o755, 2000), "/srv/shared is owned by an untrusted uid"},
-		{"world writable without sticky", dirEntry(0o777, 0), "/srv/shared is writable by group or other users without sticky protection"},
-		{"group writable without sticky", dirEntry(0o720, 1000), "/srv/shared is writable by group or other users without sticky protection"},
-		{"not a directory", fakeValidationEntry{mode: 0o644}, "/srv/shared is not a directory"},
-		{"symlink", fakeValidationEntry{mode: os.ModeSymlink | 0o777}, "/srv/shared contains a symlink path component"},
-		{"no stat data", fakeValidationEntry{mode: os.ModeDir | 0o755, noStat: true}, "cannot verify ownership of /srv/shared"},
+		{"foreign owner", dirEntry(0o755, 2000), "$ROOT/srv/shared is owned by an untrusted uid"},
+		{"world writable without sticky", dirEntry(0o777, 0), "$ROOT/srv/shared is writable by group or other users without sticky protection"},
+		{"group writable without sticky", dirEntry(0o720, 1000), "$ROOT/srv/shared is writable by group or other users without sticky protection"},
+		{"not a directory", fakeValidationEntry{mode: 0o644}, "$ROOT/srv/shared is not a directory"},
+		{"symlink", fakeValidationEntry{mode: os.ModeSymlink | 0o777}, "$ROOT/srv/shared contains a symlink path component"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			fakeValidationFS(t, 1000, trustedValidationChain(map[string]fakeValidationEntry{
-				"/srv/shared":     tt.entry,
-				"/srv/shared/app": dirEntry(0o700, 1000),
-			}))
-			wantValidationErr(t, verifyValidationParent("/srv/shared/app"), tt.want)
+			entries := map[string]fakeValidationEntry{"/srv/shared": tt.entry}
+			if tt.entry.mode.IsDir() {
+				entries["/srv/shared/app"] = dirEntry(0o700, 1000)
+			}
+			root := fakeValidationFS(t, 1000, trustedValidationChain(entries))
+			wantRootedValidationErr(t, root, verifyValidationParent(root+"/srv/shared/app"), tt.want)
 		})
 	}
 }
@@ -228,22 +295,65 @@ func TestVerifyValidationParentIntermediateRules(t *testing.T) {
 // Components are checked top-down and the first failure wins; nothing below
 // a rejected or missing component is inspected.
 func TestVerifyValidationParentReportsFirstFailingComponent(t *testing.T) {
-	fakeValidationFS(t, 1000, trustedValidationChain(map[string]fakeValidationEntry{
+	root := fakeValidationFS(t, 1000, trustedValidationChain(map[string]fakeValidationEntry{
 		"/srv/a":   dirEntry(0o755, 2000),
-		"/srv/a/b": fakeValidationEntry{mode: os.ModeSymlink},
+		"/srv/a/b": {mode: os.ModeSymlink},
 	}))
-	wantValidationErr(t, verifyValidationParent("/srv/a/b/c"), "/srv/a is owned by an untrusted uid")
+	wantRootedValidationErr(t, root, verifyValidationParent(root+"/srv/a/b/c"), "$ROOT/srv/a is owned by an untrusted uid")
 
-	fakeValidationFS(t, 1000, trustedValidationChain(nil))
-	err := verifyValidationParent("/srv/missing/deeper")
-	wantValidationErr(t, err, "inspect /srv/missing: lstat /srv/missing: no such file or directory")
+	root = fakeValidationFS(t, 1000, trustedValidationChain(nil))
+	err := verifyValidationParent(root + "/srv/missing/deeper")
+	wantRootedValidationErr(t, root, err, "inspect $ROOT/srv/missing: open $ROOT/srv/missing: no such file or directory")
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("missing component error %v does not wrap os.ErrNotExist", err)
 	}
 }
 
-// The real-filesystem cases use os.Lstat for the test directories themselves
-// (only the $TMPDIR ancestry is reported as trusted).
+// Each component is judged by the descriptor the walk opened, and the walk
+// continues from that descriptor: the fstat seam sees every component top-down
+// exactly once, and a refusal stops the walk before the next component.
+func TestVerifyValidationParentJudgesEachOpenedComponentOnce(t *testing.T) {
+	root := fakeValidationFS(t, 1000, trustedValidationChain(map[string]fakeValidationEntry{
+		"/srv/a":     dirEntry(0o755, 0),
+		"/srv/a/app": dirEntry(0o700, 1000),
+	}))
+	var seen []string
+	prevFstat := validationFstat
+	validationFstat = func(fd int, path string) (safepath.Info, error) {
+		seen = append(seen, path)
+		return prevFstat(fd, path)
+	}
+	parent := root + "/srv/a/app"
+	wantValidationErr(t, verifyValidationParent(parent), "")
+	var want []string
+	for p := parent; p != "/"; p = filepath.Dir(p) {
+		want = append([]string{p}, want...)
+	}
+	if strings.Join(seen, ",") != strings.Join(want, ",") {
+		t.Fatalf("components judged = %v, want %v (top-down, each once)", seen, want)
+	}
+
+	seen = nil
+	extra := map[string]fakeValidationEntry{"/srv/b": dirEntry(0o777, 0), "/srv/b/app": dirEntry(0o700, 1000)}
+	materializeValidationTree(t, root, extra) // /srv exists already
+	entries := trustedValidationChain(extra)
+	setValidationSeams(t, 1000, func(path string) (safepath.Info, bool) {
+		seen = append(seen, path)
+		if isAncestorOrSelf(path, root) {
+			return trustedAncestorInfo, true
+		}
+		entry, ok := entries[strings.TrimPrefix(path, root)]
+		return entry.info(), ok
+	})
+	wantRootedValidationErr(t, root, verifyValidationParent(root+"/srv/b/app"),
+		"$ROOT/srv/b is writable by group or other users without sticky protection")
+	if last := seen[len(seen)-1]; last != root+"/srv/b" {
+		t.Fatalf("last component judged = %s, want the walk to stop at %s/srv/b", last, root)
+	}
+}
+
+// The real-filesystem cases judge the test directories themselves by their
+// real fstat (only the $TMPDIR ancestry is reported as trusted).
 func TestVerifyValidationParentRealDirectories(t *testing.T) {
 	dir := privateValidationDir(t)
 	wantValidationErr(t, verifyValidationParent(dir), "")
@@ -260,12 +370,43 @@ func TestVerifyValidationParentRealDirectories(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantValidationErr(t, verifyValidationParent(link), link+" contains a symlink path component")
+	wantValidationErr(t, verifyValidationParent(filepath.Join(link, "child")), link+" contains a symlink path component")
+
+	dangling := filepath.Join(dir, "dangling")
+	if err := os.Symlink(filepath.Join(dir, "nowhere"), dangling); err != nil {
+		t.Fatal(err)
+	}
+	wantValidationErr(t, verifyValidationParent(dangling), dangling+" contains a symlink path component")
 
 	shared := filepath.Join(dir, "shared")
 	mkdirValidationMode(t, shared, 0o777)
 	mkdirValidationMode(t, filepath.Join(shared, "app"), 0o700)
 	wantValidationErr(t, verifyValidationParent(filepath.Join(shared, "app")),
 		shared+" is writable by group or other users without sticky protection")
+
+	writable := filepath.Join(dir, "writable")
+	mkdirValidationMode(t, writable, 0o770)
+	wantValidationErr(t, verifyValidationParent(writable), writable+" is writable by group or other users")
+}
+
+// An ancestor the applying user may search but not read (0311, like a
+// root-owned 0711 /home) is accepted, as by the lstat walk before the
+// descriptor walk: on Linux and FreeBSD the walk opens directories
+// search-only (safepath.SearchOnly). The directory is the test user's own, so
+// the test needs no root; as root it passes trivially.
+func TestVerifyValidationParentSearchOnlyAncestor(t *testing.T) {
+	if !safepath.SearchOnly {
+		t.Skip("this platform's walk needs read permission on ancestors (see internal/safepath/search_other.go)")
+	}
+	dir := privateValidationDir(t)
+	inter := filepath.Join(dir, "inter")
+	mkdirValidationMode(t, inter, 0o700)
+	mkdirValidationMode(t, filepath.Join(inter, "app"), 0o700)
+	if err := os.Chmod(inter, 0o311); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(inter, 0o700) })
+	wantValidationErr(t, verifyValidationParent(filepath.Join(inter, "app")), "")
 }
 
 func TestValidationParentErrorIsWrappedWithTarget(t *testing.T) {

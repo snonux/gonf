@@ -8,11 +8,14 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/snonux/gonf/internal/safepath"
 	"github.com/snonux/gonf/plan"
 	"golang.org/x/sys/unix"
 )
 
-var errSecretNotRegular = errors.New("secret is not a regular file")
+// secretsDir is the controller-local directory secrets are read from,
+// relative to the working directory (the recipe checkout).
+const secretsDir = "secrets"
 
 // MustSecret reads the non-empty controller-local secret at secrets/path.
 // It preserves every byte exactly, including leading/trailing whitespace and
@@ -65,6 +68,9 @@ func stashSecretError(err error) {
 	panic(err)
 }
 
+// loadSecret reads secrets/path. A secret that is missing anywhere on its
+// path (secrets/ itself included) is ("", false, nil); every other failure is
+// an error that names the secret but never contains its value.
 func loadSecret(path string) (string, bool, error) {
 	fullPath, err := secretPath(path)
 	if err != nil {
@@ -74,14 +80,8 @@ func loadSecret(path string) (string, bool, error) {
 	if errors.Is(err, unix.ENOENT) {
 		return "", false, nil
 	}
-	if errors.Is(err, unix.ELOOP) || errors.Is(err, unix.ENOTDIR) {
-		return "", false, fmt.Errorf("secret path %q contains a symlink", fullPath)
-	}
-	if errors.Is(err, errSecretNotRegular) {
-		return "", false, fmt.Errorf("secret %q is not a regular file", path)
-	}
 	if err != nil {
-		return "", false, fmt.Errorf("open secret %q: %w", path, err)
+		return "", false, secretOpenError(path, fullPath, err)
 	}
 	defer func() { _ = file.Close() }()
 	data, err := readSecretFile(file)
@@ -94,42 +94,47 @@ func loadSecret(path string) (string, bool, error) {
 	return string(data), true, nil
 }
 
-// openSecret traverses the secrets directory through file descriptors only.
-// O_NOFOLLOW applies at every component, so an attacker cannot race a checked
-// pathname into a symlink outside the controller-owned secrets tree.
+// secretOpenError words a failure of openSecret. A symlink anywhere on the
+// path is reported as such; so is ENOTDIR, a component that is a regular file
+// where a directory is needed, which the walk has always reported with the
+// symlink wording (and ELOOP, which Linux gives for a symlink opened
+// O_NOFOLLOW, is kept for safety although safepath already diagnoses it as
+// safepath.ErrSymlink). Other errors keep the bare cause after the secret's
+// name, without the path the walk adds.
+func secretOpenError(path, fullPath string, err error) error {
+	switch {
+	case errors.Is(err, safepath.ErrSymlink), errors.Is(err, unix.ELOOP), errors.Is(err, unix.ENOTDIR):
+		return fmt.Errorf("secret path %q contains a symlink", fullPath)
+	case errors.Is(err, safepath.ErrNotRegular):
+		return fmt.Errorf("secret %q is not a regular file", path)
+	}
+	var ce *safepath.ComponentError
+	if errors.As(err, &ce) {
+		err = ce.Err
+	}
+	return fmt.Errorf("open secret %q: %w", path, err)
+}
+
+// openSecret opens fullPath (secrets/<clean path>, see secretPath) with the
+// shared descriptor walk of internal/safepath: secrets/ is opened relative to
+// the working directory without following it, every directory below it
+// relative to its parent's descriptor with O_NOFOLLOW, and the secret itself
+// O_NOFOLLOW|O_NONBLOCK and only when it is a regular file. An attacker can
+// therefore not race a checked pathname into a symlink outside the
+// controller-owned secrets tree. It also cannot climb out of it: the walk
+// would follow a ".." component, but secretPath has already refused any path
+// that keeps one after cleaning. Nothing is created, and ownership and modes
+// are not checked: the secrets tree is the operator's own checkout.
 func openSecret(fullPath string) (*os.File, error) {
-	rootFD, err := unix.Open("secrets", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	rel := strings.TrimPrefix(fullPath, secretsDir+string(filepath.Separator))
+	parts := strings.Split(rel, string(filepath.Separator))
+	dirs, name := parts[:len(parts)-1], parts[len(parts)-1]
+	dirFD, err := safepath.Walk{}.Open(secretsDir, dirs)
 	if err != nil {
 		return nil, err
 	}
-	fd := rootFD
-	parts := strings.Split(strings.TrimPrefix(fullPath, "secrets"+string(filepath.Separator)), string(filepath.Separator))
-	for i, part := range parts {
-		flags := unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_CLOEXEC | unix.O_NONBLOCK
-		if i < len(parts)-1 {
-			flags |= unix.O_DIRECTORY
-		}
-		next, err := unix.Openat(fd, part, flags, 0)
-		if err != nil {
-			_ = unix.Close(fd)
-			return nil, err
-		}
-		if err := unix.Close(fd); err != nil {
-			_ = unix.Close(next)
-			return nil, err
-		}
-		fd = next
-	}
-	var stat unix.Stat_t
-	if err := unix.Fstat(fd, &stat); err != nil {
-		_ = unix.Close(fd)
-		return nil, err
-	}
-	if stat.Mode&unix.S_IFMT != unix.S_IFREG {
-		_ = unix.Close(fd)
-		return nil, errSecretNotRegular
-	}
-	return os.NewFile(uintptr(fd), fullPath), nil
+	defer func() { _ = unix.Close(dirFD) }()
+	return safepath.OpenRegularAt(dirFD, name, fullPath)
 }
 
 func readSecretFile(file *os.File) ([]byte, error) {
@@ -148,5 +153,5 @@ func secretPath(path string) (string, error) {
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || filepath.IsAbs(clean) {
 		return "", fmt.Errorf("invalid secret path %q", path)
 	}
-	return filepath.Join("secrets", clean), nil
+	return filepath.Join(secretsDir, clean), nil
 }

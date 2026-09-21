@@ -3,6 +3,7 @@ package plan
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -11,6 +12,8 @@ import (
 	"syscall"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/snonux/gonf/internal/safepath"
 )
 
 // SecureDir makes sure dir exists as a directory that only the calling user
@@ -36,8 +39,9 @@ import (
 //   - pre-existing ancestors of dir are only traversed, not verified: they are
 //     the operator's path to the directory, not somewhere gonf stores
 //     anything. Every component, though, is opened relative to the descriptor
-//     of its parent with O_NOFOLLOW, so a symlink anywhere in the path is
-//     refused (and reported as a symlink, not as "not a directory").
+//     of its parent with O_NOFOLLOW (the shared walk of internal/safepath),
+//     so a symlink anywhere in the path is refused (and reported as a
+//     symlink, not as "not a directory").
 //
 // SecureDir is for a directory the operator names (the plan directory).
 // The blob store (Store.WriteFile, WriteTree, WriteGlob) applies the same rule
@@ -67,6 +71,88 @@ func WritePrivateFile(dir, name string, data []byte) error {
 		return fmt.Errorf("plan: %w", err)
 	}
 	return nil
+}
+
+// ReadPrivateFile reads the plan file name below dir: the read counterpart of
+// WritePrivateFile, used by `gonf apply <plan.jsonl>`. name is opened without
+// following a symlink and without blocking, and must be a regular file, so a
+// plan.jsonl swapped for a symlink (to a file the reader may read but its
+// owner never wrote as a plan) or for a FIFO is refused rather than read.
+//
+// It is deliberately weaker than the write side in two ways, both because the
+// reader is often not the writer: dir is opened following symlinks, and
+// neither dir nor the file is checked for ownership or mode. The elevated
+// apply of a local run re-executes `gonf apply` as root on a plan chunk the
+// unprivileged user wrote below $TMPDIR (which may be reached through a
+// symlink, as /var -> /private/var on macOS), and an operator may apply a plan
+// that another account recorded. Who may write the plan is decided when it is
+// written (SecureDir, WritePrivateFile). Its errors carry the package prefix
+// "plan: " exactly once.
+func ReadPrivateFile(dir, name string) ([]byte, error) {
+	path := filepath.Join(dir, name)
+	data, err := readPrivateFile(dir, name, path)
+	switch {
+	case errors.Is(err, safepath.ErrSymlink):
+		return nil, fmt.Errorf("plan: %s is a symlink; refusing to read a plan through it", path)
+	case errors.Is(err, safepath.ErrNotRegular):
+		return nil, fmt.Errorf("plan: %s is not a regular file", path)
+	case err != nil:
+		return nil, fmt.Errorf("plan: %w", err)
+	}
+	return data, nil
+}
+
+// ReadPrivateFilePath is ReadPrivateFile for a plan file path as an operator
+// types it (`gonf apply out/plan.jsonl`). The path is split at its last
+// separator BEFORE any cleaning: filepath.Dir/Base would clean "out/" into
+// the directory "out" plus the name "out" and silently read out/out. A path
+// whose last element is empty, "." or ".." ("out/", "out/.", ".", "/", "a/b/")
+// names a directory, never a plan file, and is refused.
+func ReadPrivateFilePath(path string) ([]byte, error) {
+	dir, name, ok := splitFilePath(path)
+	if !ok {
+		return nil, fmt.Errorf("plan: %s does not name a file; a directory is not a plan file", path)
+	}
+	return ReadPrivateFile(dir, name)
+}
+
+// splitFilePath splits path at its last separator without cleaning it. ok is
+// false when the last element does not name a file.
+func splitFilePath(path string) (dir, name string, ok bool) {
+	dir, name = ".", path
+	if i := strings.LastIndex(path, string(filepath.Separator)); i >= 0 {
+		dir, name = path[:i], path[i+1:]
+		if dir == "" {
+			dir = string(filepath.Separator)
+		}
+	}
+	return dir, name, name != "" && name != "." && name != ".."
+}
+
+// readPrivateFile opens dir (following symlinks) and reads name below it
+// through safepath.OpenRegularAt. path only names the file in errors.
+func readPrivateFile(dir, name, path string) ([]byte, error) {
+	if filepath.Base(name) != name || name == "." || name == ".." {
+		return nil, fmt.Errorf("invalid private file name %q", name)
+	}
+	dirFD, err := safepath.OpenFollowingDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", dir, err)
+	}
+	defer func() { _ = unix.Close(dirFD) }()
+	file, err := safepath.OpenRegularAt(dirFD, name, path)
+	if err != nil {
+		if errors.Is(err, safepath.ErrSymlink) || errors.Is(err, safepath.ErrNotRegular) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("open %s: %w", path, err)
+	}
+	defer func() { _ = file.Close() }()
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	return data, nil
 }
 
 // writePrivateFile is WritePrivateFile without the "plan: " prefix on its
@@ -110,115 +196,70 @@ func writePrivateFileAt(dirFD int, name string, data []byte) error {
 }
 
 // openSecureDir walks dir component by component (see SecureDir for the
-// policy) and returns a descriptor of the final directory, which the caller
-// closes. Working relative to a held descriptor keeps the checks and the later
-// writes on the same directory even if the path is swapped meanwhile.
+// policy) with the shared descriptor walk of internal/safepath and returns a
+// descriptor of the final directory, which the caller closes. Working
+// relative to a held descriptor keeps the checks and the later writes on the
+// same directory even if the path is swapped meanwhile.
 func openSecureDir(dir string) (int, error) {
-	base, parts := splitSecurePath(dir)
-	fd, err := unix.Open(base, openDirFlags, 0)
+	base, parts := safepath.Split(dir)
+	baseFD, err := safepath.OpenBase(base)
 	if err != nil {
 		return -1, fmt.Errorf("open %s: %w", DirLabel(dir), err)
 	}
-	// created reports whether the directory fd points at was made by this call.
-	// The starting point (".", "/") never was.
-	created := false
-	for _, part := range parts {
-		next, madeHere, err := openOrCreateChild(fd, part)
-		_ = unix.Close(fd)
-		if err != nil {
-			return -1, componentError(dir, part, err)
-		}
-		fd, created = next, madeHere
-	}
-	if err := finishSecureDir(fd, dir, created); err != nil {
-		_ = unix.Close(fd)
-		return -1, err
+	defer func() { _ = unix.Close(baseFD) }()
+	fd, err := secureDirWalk(dir).OpenAt(baseFD, base, parts)
+	if err != nil {
+		return -1, walkError(dir, err)
 	}
 	return fd, nil
 }
 
-// openDirFlags opens a directory without following a symlink in the last
-// path component.
-const openDirFlags = unix.O_RDONLY | unix.O_DIRECTORY | unix.O_NOFOLLOW | unix.O_CLOEXEC
-
-// splitSecurePath cleans dir and returns the directory to start from (the
-// root for an absolute path, "." otherwise) and the components below it.
-// Empty and "." components are dropped, so "." and "/" have none.
-func splitSecurePath(dir string) (base string, parts []string) {
-	clean := filepath.Clean(dir)
-	base = "."
-	if filepath.IsAbs(clean) {
-		base = string(filepath.Separator)
-		clean = strings.TrimPrefix(clean, base)
+// secureDirWalk is SecureDir's policy expressed as a safepath.Walk: missing
+// components are created (exactly 0700, through the mkdirChild seam), and only
+// the final directory is verified, and only when it already existed
+// (finishSecureDir). Components above it are merely traversed, never checked.
+func secureDirWalk(dir string) safepath.Walk {
+	return safepath.Walk{
+		Create: true,
+		Mkdir:  mkdirChild,
+		Check: func(c safepath.Component) error {
+			if !c.Last || c.Created {
+				return nil
+			}
+			return finishSecureDir(c.FD, dir)
+		},
 	}
-	for _, part := range strings.Split(clean, string(filepath.Separator)) {
-		if part != "" && part != "." {
-			parts = append(parts, part)
-		}
-	}
-	return base, parts
 }
 
-// errSymlinkComponent is how a path component that is a symlink is reported.
-// The kernel says so differently per platform (ENOTDIR on Linux, ELOOP or
-// EMLINK on the BSDs and macOS, for O_NOFOLLOW|O_DIRECTORY), and ENOTDIR also
-// means "a regular file", so openOrCreateChild checks with fstatat and reports
-// this one error, worded like the up-front refusal of the api pre-check.
+// errSymlinkComponent is how a path component that is a symlink is reported:
+// safepath.ErrSymlink, whatever errno the platform gave, worded like the
+// up-front refusal of the api pre-check.
 var errSymlinkComponent = errors.New("is a symlink; symlinked plan directories are refused")
 
 // componentError words a failure to open one component of dir.
 func componentError(dir, part string, err error) error {
+	if errors.Is(err, safepath.ErrSymlink) {
+		err = errSymlinkComponent
+	}
 	return fmt.Errorf("open %s: component %q: %w", DirLabel(dir), part, err)
 }
 
-// diagnoseOpenError turns the errno of a failed O_NOFOLLOW|O_DIRECTORY open
-// of name below parent into errSymlinkComponent when name is a symlink, and
-// leaves every other error (a regular file, a permission problem) as it is.
-func diagnoseOpenError(parent int, name string, err error) error {
-	if !errors.Is(err, unix.ENOTDIR) && !errors.Is(err, unix.ELOOP) && !errors.Is(err, unix.EMLINK) {
-		return err
-	}
-	var st unix.Stat_t
-	if unix.Fstatat(parent, name, &st, unix.AT_SYMLINK_NOFOLLOW) == nil && st.Mode&unix.S_IFMT == unix.S_IFLNK {
-		return errSymlinkComponent
+// walkError words an error of a secureDirWalk below dir: a component that
+// could not be opened or created gets componentError, a refusal of
+// finishSecureDir is already worded and returned as it is.
+func walkError(dir string, err error) error {
+	var ce *safepath.ComponentError
+	if errors.As(err, &ce) {
+		return componentError(dir, ce.Name, ce.Err)
 	}
 	return err
 }
 
 // mkdirChild creates a directory below an open parent. It is a variable only
-// so a test can make another process "win" the creation race
-// deterministically (see TestOpenOrCreateChildLosingTheRace).
-var mkdirChild = unix.Mkdirat
-
-// openOrCreateChild opens the directory name below parent, creating it 0700
-// when it is missing. created is true only when this call made it: losing the
-// creation race to another process (EEXIST) counts as opening a pre-existing
-// directory, which the caller then treats as somebody else's: verified, never
-// chmod'ed. A directory made here is chmod'ed to exactly 0700 right away,
-// before anything is put into it or below it, because the umask may have
-// narrowed mkdir's mode (never widened it).
-func openOrCreateChild(parent int, name string) (fd int, created bool, err error) {
-	fd, err = unix.Openat(parent, name, openDirFlags, 0)
-	if !errors.Is(err, unix.ENOENT) {
-		return fd, false, diagnoseOpenError(parent, name, err)
-	}
-	switch err = mkdirChild(parent, name, 0o700); {
-	case err == nil:
-		created = true
-	case !errors.Is(err, unix.EEXIST):
-		return -1, false, err
-	}
-	if fd, err = unix.Openat(parent, name, openDirFlags, 0); err != nil {
-		return -1, false, diagnoseOpenError(parent, name, err)
-	}
-	if created {
-		if err = unix.Fchmod(fd, 0o700); err != nil {
-			_ = unix.Close(fd)
-			return -1, false, err
-		}
-	}
-	return fd, created, nil
-}
+// so a test can make another process "win" the creation race deterministically
+// (see TestSecureDirVerifiesADirectoryItLostTheRaceFor); secureDirWalk hands
+// it to safepath.OpenOrCreateDirAt.
+var mkdirChild safepath.MkdirFunc = unix.Mkdirat
 
 // openSecureChildDir applies SecureDir's policy to the single directory name
 // below parent, and to nothing above it, and returns a descriptor of it that
@@ -226,27 +267,23 @@ func openOrCreateChild(parent int, name string) (fd int, created bool, err error
 // plan directory) is created when missing and opened the way os.MkdirAll and
 // os.Open would, following symlinks, since how the operator (or $TMPDIR)
 // reaches the plan directory is not gonf's business and was never checked for
-// blobs; name itself is opened O_NOFOLLOW, created 0700 when missing, and
-// otherwise verified by finishSecureDir (a symlink, a file, foreign ownership,
-// world- or shared-group write are refused; a pre-existing directory is not
-// modified).
+// blobs; name itself goes through the same safepath walk as SecureDir's
+// components: opened O_NOFOLLOW, created 0700 when missing, and otherwise
+// verified by finishSecureDir (a symlink, a file, foreign ownership, world- or
+// shared-group write are refused; a pre-existing directory is not modified).
 func openSecureChildDir(parent, name string) (int, error) {
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return -1, fmt.Errorf("create %s: %w", DirLabel(parent), err)
 	}
-	pfd, err := unix.Open(parent, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	pfd, err := safepath.OpenFollowingDir(parent)
 	if err != nil {
 		return -1, fmt.Errorf("open %s: %w", DirLabel(parent), err)
 	}
-	fd, created, err := openOrCreateChild(pfd, name)
-	_ = unix.Close(pfd)
+	defer func() { _ = unix.Close(pfd) }()
 	child := filepath.Join(parent, name)
+	fd, err := secureDirWalk(child).OpenAt(pfd, parent, []string{name})
 	if err != nil {
-		return -1, componentError(child, name, err)
-	}
-	if err := finishSecureDir(fd, child, created); err != nil {
-		_ = unix.Close(fd)
-		return -1, err
+		return -1, walkError(child, err)
 	}
 	return fd, nil
 }
@@ -261,22 +298,19 @@ func secureChildDir(parent, name string) error {
 	return unix.Close(fd)
 }
 
-// finishSecureDir applies the final-component policy: a directory this call
-// created is already 0700 and ours; a pre-existing one must pass the
-// verification, and is never modified.
-func finishSecureDir(fd int, dir string, created bool) error {
-	if created {
-		return nil
-	}
-	var st unix.Stat_t
-	if err := unix.Fstat(fd, &st); err != nil {
+// finishSecureDir applies the final-component policy to a directory that
+// already existed (one this walk created is 0700 and ours, and is not passed
+// here): it must pass the verification, and is never modified.
+func finishSecureDir(fd int, dir string) error {
+	info, err := safepath.Fstat(fd)
+	if err != nil {
 		return fmt.Errorf("inspect %s: %w", DirLabel(dir), err)
 	}
 	return checkDirAttrs(DirLabel(dir), dirAttrs{
-		isDir: st.Mode&unix.S_IFMT == unix.S_IFDIR,
-		uid:   st.Uid,
-		gid:   st.Gid,
-		mode:  uint32(st.Mode) & 0o7777,
+		isDir: info.IsDir(),
+		uid:   info.UID,
+		gid:   info.GID,
+		mode:  info.Perm(),
 	}, currentIDs())
 }
 

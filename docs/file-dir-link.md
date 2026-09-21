@@ -69,6 +69,12 @@ with `/tmp`). Symlinks and `..` path components are refused. Otherwise another
 user could replace the
 candidate after it is closed and before the validator opens it; Gonf refuses
 such a path rather than treating a `0600` candidate as sufficient protection.
+The path is checked by opening each directory without following symlinks and judging the
+opened directory itself; on Linux and FreeBSD this needs only search (`x`)
+permission on each ancestor, as before, while on macOS, NetBSD and OpenBSD
+every ancestor must also be readable by the applying user (a non-root apply
+below another user's `0711` directory fails there with `permission denied`;
+root is not affected).
 It cannot safely validate a configuration whose includes, chroot, or companion
 files must move together. Use a future multi-file configuration resource for
 those cases.

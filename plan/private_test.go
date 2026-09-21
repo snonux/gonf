@@ -9,8 +9,6 @@ import (
 	"syscall"
 	"testing"
 
-	"golang.org/x/sys/unix"
-
 	"github.com/snonux/gonf/internal/testutil"
 )
 
@@ -298,9 +296,10 @@ func TestRefusalAdviceMatchesTheDirectory(t *testing.T) {
 // makeRivalWin makes mkdirChild behave as if another process created the
 // directory first: every call first creates <parent>/<name> with mode, exactly as
 // the rival would, and then asks the real mkdirat for the same name, which fails
-// with EEXIST (the very race openOrCreateChild handles). The seam is restored
-// when the test ends. parent is the path of the directory the descriptor of the
-// call refers to.
+// with EEXIST (the very race safepath.OpenOrCreateDirAt handles; its own
+// TestOpenOrCreateDirAtLosingTheRace pins the created flag). The seam is
+// restored when the test ends. parent is the path of the directory the
+// descriptor of the call refers to.
 func makeRivalWin(t *testing.T, parent string, mode os.FileMode) {
 	t.Helper()
 	real := mkdirChild
@@ -314,35 +313,6 @@ func makeRivalWin(t *testing.T, parent string, mode os.FileMode) {
 			return err
 		}
 		return real(fd, name, perm) // EEXIST: the name is taken now
-	}
-}
-
-// TestOpenOrCreateChildLosingTheRace: when another process creates the
-// directory between the failed open and our mkdir, that directory is somebody
-// else's, not ours. openOrCreateChild reports created == false, so nothing
-// chmods it (the rival's 0755 stays 0755; counting it as created would have
-// chmod'ed it to 0700, exactly the m62 mistake for a directory we did not make),
-// and the verification that follows decides. The race is made deterministic by
-// makeRivalWin.
-func TestOpenOrCreateChildLosingTheRace(t *testing.T) {
-	parent := filepath.Join(t.TempDir(), "parent")
-	mkdirMode(t, parent, 0o755)
-	pfd, err := unix.Open(parent, openDirFlags, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = unix.Close(pfd) }()
-	makeRivalWin(t, parent, 0o755)
-	fd, created, err := openOrCreateChild(pfd, "x")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = unix.Close(fd)
-	if created {
-		t.Fatal("created = true after losing the creation race, want false (the directory is the rival's)")
-	}
-	if got := modeOf(t, filepath.Join(parent, "x")); got != 0o755 {
-		t.Fatalf("raced-in directory mode = %v, want the rival's 0755 untouched", got)
 	}
 }
 

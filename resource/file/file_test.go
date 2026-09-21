@@ -1584,7 +1584,7 @@ func TestWithParamOverridesTemplateParam(t *testing.T) {
 func TestValidationFailureLeavesLiveFileUntouchedAndCleansCandidate(t *testing.T) {
 	resource.ResetRepository()
 	resource.ResetReport()
-	dir := t.TempDir()
+	dir := validationTempDir(t)
 	target := filepath.Join(dir, "service.conf")
 	if err := os.WriteFile(target, []byte("live\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -1612,7 +1612,7 @@ func TestValidationFailureLeavesLiveFileUntouchedAndCleansCandidate(t *testing.T
 
 func TestValidationUsesPrivateCandidateArgvAndRepairsDrift(t *testing.T) {
 	resource.ResetRepository()
-	dir := t.TempDir()
+	dir := validationTempDir(t)
 	target := filepath.Join(dir, "service.conf")
 	marker := filepath.Join(dir, "validator-record")
 	validator, args := validationHelper(t, "content-and-mode", "--literal;not-a-shell-command", marker)
@@ -1676,7 +1676,7 @@ func TestValidationRejectsInvalidContracts(t *testing.T) {
 
 func TestValidationPlanApplyAndConcurrentCandidates(t *testing.T) {
 	resource.ResetRepository()
-	dir := t.TempDir()
+	dir := validationTempDir(t)
 	target := filepath.Join(dir, "service.conf")
 	// Use a tiny external validator here: launching the whole Go test binary
 	// once per concurrent apply makes this stress test needlessly memory-heavy.
@@ -1717,7 +1717,7 @@ func TestValidationPlanApplyAndConcurrentCandidates(t *testing.T) {
 
 func TestValidationPlanRejectsMissingContentBeforeMutation(t *testing.T) {
 	resource.ResetRepository()
-	dir := t.TempDir()
+	dir := validationTempDir(t)
 	target := filepath.Join(dir, "service.conf")
 	if err := os.WriteFile(target, []byte("live"), 0o600); err != nil {
 		t.Fatal(err)
@@ -1740,7 +1740,7 @@ func TestValidationPlanRejectsMissingContentBeforeMutation(t *testing.T) {
 
 func TestValidationRejectsUntrustedCandidateParent(t *testing.T) {
 	resource.ResetRepository()
-	dir := t.TempDir()
+	dir := validationTempDir(t)
 	if err := os.Chmod(dir, 0o777); err != nil {
 		t.Fatal(err)
 	}
@@ -1767,7 +1767,7 @@ func TestValidationRejectsUntrustedCandidateParent(t *testing.T) {
 
 func TestValidationRejectsSymlinkedCandidateParent(t *testing.T) {
 	resource.ResetRepository()
-	dir := t.TempDir()
+	dir := validationTempDir(t)
 	realParent := filepath.Join(dir, "real")
 	linkParent := filepath.Join(dir, "link")
 	if err := os.Mkdir(realParent, 0o700); err != nil {
@@ -1796,7 +1796,7 @@ func TestValidationRejectsSymlinkedCandidateParent(t *testing.T) {
 
 func TestValidationRejectsParentDirectoryCandidatePath(t *testing.T) {
 	resource.ResetRepository()
-	dir := t.TempDir()
+	dir := validationTempDir(t)
 	target := dir + string(filepath.Separator) + ".." + string(filepath.Separator) + filepath.Base(dir) + string(filepath.Separator) + "service.conf"
 	validator, args := validationHelper(t, "mode")
 	err := Ensure(target, WithContent("candidate"), WithValidation(validator, args))
@@ -1810,7 +1810,7 @@ func TestValidationRejectsParentDirectoryCandidatePath(t *testing.T) {
 
 func TestValidationCleanupFailureIsReported(t *testing.T) {
 	resource.ResetRepository()
-	dir := t.TempDir()
+	dir := validationTempDir(t)
 	target := filepath.Join(dir, "service.conf")
 	validator := writeValidationScript(t, `rm "$1"
 mkdir "$1"
@@ -1826,7 +1826,7 @@ touch "$1/leftover"`)
 
 func TestValidationRendersSourceOnceBeforeValidatorRuns(t *testing.T) {
 	resource.ResetRepository()
-	dir := t.TempDir()
+	dir := validationTempDir(t)
 	source := filepath.Join(dir, "service.conf.tmpl")
 	target := filepath.Join(dir, "service.conf")
 	if err := os.WriteFile(source, []byte("value={{.Param}}\n"), 0o600); err != nil {
@@ -1848,7 +1848,7 @@ func TestValidationRendersSourceOnceBeforeValidatorRuns(t *testing.T) {
 
 func TestValidationDryRunSkipsValidatorAndStaging(t *testing.T) {
 	resource.ResetRepository()
-	dir := t.TempDir()
+	dir := validationTempDir(t)
 	target := filepath.Join(dir, "service.conf")
 	marker := filepath.Join(dir, "validator-record")
 	validator, args := validationHelper(t, "content-and-mode", "--literal;not-a-shell-command", marker)
@@ -1870,7 +1870,7 @@ func TestValidationDryRunSkipsValidatorAndStaging(t *testing.T) {
 
 func TestValidationPlanRejectsMalformedAbsenceBeforeMutation(t *testing.T) {
 	resource.ResetRepository()
-	dir := t.TempDir()
+	dir := validationTempDir(t)
 	target := filepath.Join(dir, "service.conf")
 	if err := os.WriteFile(target, []byte("live"), 0o600); err != nil {
 		t.Fatal(err)
@@ -1885,6 +1885,19 @@ func TestValidationPlanRejectsMalformedAbsenceBeforeMutation(t *testing.T) {
 	if _, err := os.Stat(target); err != nil {
 		t.Fatalf("malformed plan removed live target: %v", err)
 	}
+}
+
+// validationTempDir is t.TempDir() made 0700. The testing package creates it
+// with 0777 minus the umask, so under umask 002 or 000 it would be group- or
+// world-writable and the candidate parent check would refuse it, which is not
+// what these tests are about (the refusal tests set their modes explicitly).
+func validationTempDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }
 
 func writeValidationScript(t *testing.T, body string) string {

@@ -394,7 +394,12 @@ func cliApply(args []string) int {
 	if planPath == "-" {
 		return cliApplyStdin(*applyDir, *strictPreview)
 	}
-	raw, err := os.ReadFile(planPath)
+	// Read the plan file the way planToDir wrote it: plan.ReadPrivateFilePath
+	// refuses a path that names a directory ("out/"), and a plan.jsonl that is
+	// a symlink or not a regular file (a FIFO), instead of following it as
+	// os.ReadFile would. The directory is reached the normal way: the elevated
+	// re-exec reads a chunk below $TMPDIR, which may be a symlinked path.
+	raw, err := plan.ReadPrivateFilePath(planPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "apply: read %s: %v\n", planPath, err)
 		return 1
