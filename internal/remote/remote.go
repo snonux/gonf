@@ -159,7 +159,7 @@ func PushPayloadContext(ctx context.Context, t PushTarget, payload []byte, eleva
 // PushChunks splits ops into privilege chunks and streams each chunk to one
 // SSH target. The ctx (Background for direct api.PushTo calls; the per-host
 // timeout context in the fleet fan-out) kills the in-flight ssh when
-// canceled. A ValidateChunkDeps pre-flight runs before any SSH traffic: a
+// canceled. A plan.ValidateChunks pre-flight runs before any SSH traffic: a
 // dep recorded in a later privilege chunk (or dangling) fails the push
 // without sending anything, mirroring the privilege pre-flight. Multi-chunk
 // plans with blobs first upload all blobs to a sticky dir in a dedicated
@@ -194,7 +194,7 @@ func PreviewChunks(ctx context.Context, t PushTarget, planID string, ops []plan.
 
 func pushChunks(ctx context.Context, t PushTarget, planID string, ops []plan.Op, mem plan.BlobReader, strictPreview bool) error {
 	chunks := plan.SplitPrivilegeChunks(ops)
-	if err := validateChunkDeps(chunks); err != nil {
+	if err := plan.ValidateChunks(chunks); err != nil {
 		return err
 	}
 	hasBlobs := mem != nil && mem.HasBlobs()
@@ -439,21 +439,4 @@ func sanitizeID(id string) string {
 		return "plan"
 	}
 	return b.String()
-}
-
-// validateChunkDeps runs the plan-level cross-chunk pre-flights over the
-// split privilege chunks: plan.ValidateChunkDeps (forward cross-chunk and
-// dangling deps) and plan.ValidateChangeGates (change-gated watches must
-// live in the gated op's own chunk — change reports are chunk-local),
-// before any chunk is applied or uploaded. Mirrors the api-side helper of
-// the same name shared by the local ApplyChunks engine.
-func validateChunkDeps(chunks []plan.Chunk) error {
-	bodies := make([][]plan.Op, len(chunks))
-	for i, ch := range chunks {
-		bodies[i] = ch.Ops
-	}
-	if err := plan.ValidateChunkDeps(bodies); err != nil {
-		return err
-	}
-	return plan.ValidateChangeGates(bodies)
 }

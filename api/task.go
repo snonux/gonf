@@ -266,10 +266,16 @@ func RunContext(ctx context.Context, names ...string) error {
 	}
 	defer func() { _ = os.RemoveAll(planDir) }()
 
-	ops, err := RecordPlan("local", planDir, names...)
+	// Record straight into the private temp dir (no RecordPlan staging): the
+	// directory is removed on return whether the record succeeds or not, so
+	// nothing survives a refusal and staging would only copy large blobs twice.
+	ops, err := RecordPlanTo("local", plan.NewStore(planDir), names...)
 	if err != nil {
 		return err
 	}
+	// The record already ran the dependency/change-gate pre-flight; the one in
+	// ApplyChunksContext repeats it on purpose (see validateRecordedPlan) and
+	// cannot fail here because both run the same plan.ValidateChunks.
 	return ApplyChunksContext(ctx, ops, planDir, processPrivilege)
 }
 

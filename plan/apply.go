@@ -31,7 +31,7 @@ type Facts struct {
 // deps legitimately live in an earlier chunk, and chunk boundaries are
 // invisible to it. Apply therefore does NOT catch typo'd/dangling deps
 // itself; that is the job of the callers that see the whole plan and run the
-// ValidateChunkDeps pre-flight before anything is applied or uploaded:
+// ValidateChunks pre-flight before anything is applied or uploaded:
 // api.RecordPlanTo at record time (so Run, `gonf plan`, push, cluster and
 // fleet never produce such a plan), api.ApplyChunks (local apply),
 // remote.PushChunks (SSH push) and api.Apply (registered resources, as a
@@ -111,7 +111,7 @@ type planLine struct {
 // Whether such a dep is legitimate or dangling cannot be decided from one
 // chunk; only callers holding the whole plan (api.RecordPlanTo,
 // api.ApplyChunks, remote.PushChunks, api.Apply) can, via the
-// ValidateChunkDeps pre-flight.
+// ValidateChunks pre-flight.
 func sortedApplyOrder(body []Op) ([]planLine, error) {
 	// bodyIDs maps an op ID to its first recorded index in the body, so an
 	// unmatched dep can be classified as later-in-body or absent entirely.
@@ -174,7 +174,7 @@ func sortedApplyOrder(body []Op) ([]planLine, error) {
 // recorded nowhere in this body is treated as satisfied: an earlier privilege
 // chunk or invocation may have applied it, and chunk boundaries are invisible
 // to a chunk-level Apply. This function cannot tell that case from a typo'd
-// dep; the ValidateChunkDeps pre-flight of the whole-plan callers
+// dep; the ValidateChunks pre-flight of the whole-plan callers
 // (api.RecordPlanTo, api.ApplyChunks, remote.PushChunks, api.Apply) is what
 // refuses dangling deps before anything is applied.
 func sortRunByDeps(run []planLine, placed map[string]bool, bodyIDs map[string]int, runEnd int) ([]planLine, error) {

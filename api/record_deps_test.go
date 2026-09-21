@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,23 +49,35 @@ func requireNoFiles(t *testing.T, paths ...string) {
 }
 
 // requireDanglingMessage checks the user-facing wording shared by every
-// entry point: it names the op, the missing dependency and how to fix it,
-// and never leaks the chunk bookkeeping of the plan engine.
-func requireDanglingMessage(t *testing.T, err error, dep string) {
+// entry point and pins that it comes from the RECORD layer: after wrapPrefix
+// (what the caller adds in front, "" for RecordPlan itself) the message starts
+// with exactly one "RecordPlan: " and names the op, the missing dependency and
+// how to fix it. It never leaks the plan engine's own "plan: " prefix or chunk
+// bookkeeping, and never doubles a prefix. The ApplyChunks/PushChunks copy of
+// the check words the same refusal "plan: op ...", so this assertion fails
+// when only their (later) pre-flight catches the plan.
+func requireDanglingMessage(t *testing.T, err error, dep, wrapPrefix string) {
 	t.Helper()
 	if err == nil {
 		t.Fatal("error = nil, want a dangling-dependency refusal")
 	}
 	msg := err.Error()
-	for _, want := range []string{"Command[touch", dep, "dangling dependency", "spelling", "register"} {
+	if want := wrapPrefix + "RecordPlan: Command[touch"; !strings.HasPrefix(msg, want) {
+		t.Fatalf("error = %q, want prefix %q (one record-time prefix, no engine wording)", msg, want)
+	}
+	for _, want := range []string{dep, "dangling dependency", "spelling", "register"} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("error = %q, want it to contain %q", msg, want)
 		}
 	}
-	for _, leak := range []string{"chunk", "no chunk"} {
+	for _, leak := range []string{"plan: ", "chunk", "no chunk", "RecordPlan: RecordPlan"} {
 		if strings.Contains(msg, leak) {
-			t.Fatalf("error = %q leaks internal wording %q", msg, leak)
+			t.Fatalf("error = %q leaks internal or doubled wording %q", msg, leak)
 		}
+	}
+	var dangling *plan.DanglingDepError
+	if !errors.As(err, &dangling) || dangling.Dep != dep {
+		t.Fatalf("error %#v: errors.As(*plan.DanglingDepError) = %v, want the typed error for %s", err, dangling, dep)
 	}
 }
 
@@ -76,7 +89,7 @@ func TestRecordPlanRefusesDanglingDependency(t *testing.T) {
 
 	planDir := t.TempDir()
 	ops, err := RecordPlan("dangling", planDir, "dangling_record")
-	requireDanglingMessage(t, err, dep)
+	requireDanglingMessage(t, err, dep, "")
 	if ops != nil {
 		t.Fatalf("ops = %v, want none for a refused record", ops)
 	}
@@ -91,7 +104,13 @@ func TestRunRefusesDanglingDependencyBeforeApplying(t *testing.T) {
 	const dep = "File[/typo/never-registered]"
 	independent, marker := registerDanglingTask(t, "dangling_run", dep)
 
-	requireDanglingMessage(t, Run("dangling_run"), dep)
+	old := elevatedApplyRunner
+	t.Cleanup(func() { elevatedApplyRunner = old })
+	elevatedApplyRunner = func(context.Context, privilege.Mode, []plan.Op, string) error {
+		t.Error("no chunk may be attempted for a plan refused at record time")
+		return nil
+	}
+	requireDanglingMessage(t, Run("dangling_run"), dep, "")
 	requireNoFiles(t, independent, marker)
 }
 
@@ -107,7 +126,7 @@ func TestPushRefusesDanglingDependencyBeforeAnySSH(t *testing.T) {
 
 	calls := captureSSH(t)
 	err := PushTo(PushTarget{Host: "h.example", Privilege: privilege.Doas}, "demo", "dangling_push")
-	requireDanglingMessage(t, err, dep)
+	requireDanglingMessage(t, err, dep, "record: ")
 	if len(*calls) != 0 {
 		t.Fatalf("ssh calls on a refused record: %v", remotes(*calls))
 	}
@@ -133,7 +152,7 @@ func TestClusterAndFleetRefuseDanglingDependencyBeforeAnySSH(t *testing.T) {
 		"cluster": func() error { return PushClusterRun(ctx, "web", "", 0, 0, "dangling_fanout") },
 		"fleet":   func() error { return PushFleetRun(ctx, "all", "", 0, 0, "dangling_fanout") },
 	} {
-		requireDanglingMessage(t, run(), dep)
+		requireDanglingMessage(t, run(), dep, "record: ")
 		if len(*calls) != 0 {
 			t.Fatalf("%s: ssh calls on a refused record: %v", name, remotes(*calls))
 		}
@@ -152,7 +171,7 @@ func TestRecordPlanRefusesDanglingDependencyInsideWhenBlock(t *testing.T) {
 	}, WhenLinux())
 
 	_, err := RecordPlan("guarded", t.TempDir(), "guarded_dangling")
-	requireDanglingMessage(t, err, "File[/typo/guarded]")
+	requireDanglingMessage(t, err, "File[/typo/guarded]", "")
 	requireNoFiles(t, marker)
 }
 
@@ -241,5 +260,51 @@ func TestRecordPlanRecordsDependencyOnResourceFromEarlierTask(t *testing.T) {
 	})
 	if _, err := RecordPlan("cross-task", t.TempDir(), "base_task", "dependent_task"); err != nil {
 		t.Fatalf("RecordPlan: %v", err)
+	}
+}
+
+// TestRecordPlanRefusalWordingIsConsistent pins the record-time wording shape
+// for EVERY pre-flight refusal, not only the dangling dependency: one
+// "RecordPlan: " prefix, no leaked engine prefix ("plan: plan: ..." at
+// `gonf plan`, "record: plan: ..." at push, the reviewer's findings), and the
+// typed plan error stays reachable through errors.As.
+func TestRecordPlanRefusalWordingIsConsistent(t *testing.T) {
+	for _, tc := range refusedRecordCauses() {
+		if tc.name == "packaging error of a later resource" {
+			continue // not a pre-flight refusal; covered by the staging tests
+		}
+		t.Run(tc.name, func(t *testing.T) {
+			ResetForTest()
+			t.Cleanup(ResetForTest)
+			src := newStagedSources(t)
+			src.register("wording", tc.bad)
+
+			_, err := RecordPlan("wording", t.TempDir(), "wording")
+			if err == nil {
+				t.Fatal("RecordPlan = nil, want a refusal")
+			}
+			msg := err.Error()
+			if !strings.HasPrefix(msg, "RecordPlan: ") || strings.Count(msg, "RecordPlan:") != 1 || strings.Contains(msg, "plan: ") {
+				t.Fatalf("error = %q, want exactly one leading %q and no engine %q prefix", msg, "RecordPlan: ", "plan: ")
+			}
+			if !strings.Contains(msg, tc.want) {
+				t.Fatalf("error = %q, want it to contain %q", msg, tc.want)
+			}
+			var refusal plan.Refusal
+			if !errors.As(err, &refusal) {
+				t.Fatalf("error %#v does not unwrap to a plan.Refusal", err)
+			}
+			if tc.name == "dangling watch" {
+				var watch *plan.DanglingWatchError
+				if !errors.As(err, &watch) || watch.Watch != "File[/typo-watch]" {
+					t.Fatalf("error %#v: want a *plan.DanglingWatchError for File[/typo-watch], got %v", err, watch)
+				}
+				for _, want := range []string{"not a registered resource", "OnChange/WatchChanges"} {
+					if !strings.Contains(msg, want) {
+						t.Fatalf("error = %q, want registered-resource wording %q", msg, want)
+					}
+				}
+			}
+		})
 	}
 }

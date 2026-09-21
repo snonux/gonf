@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -102,7 +103,12 @@ func TestApplyRejectsDanglingDependency(t *testing.T) {
 	for _, tc := range danglingApplyCases {
 		t.Run(tc.name, func(t *testing.T) {
 			dangling, independent, marker := registerDanglingApply(t, tc)
-			requireApplyDanglingMessage(t, Apply(), dangling)
+			err := Apply()
+			requireApplyDanglingMessage(t, err, dangling)
+			var typed *plan.DanglingDepError
+			if !errors.As(err, &typed) || typed.Dep != dangling {
+				t.Fatalf("Apply() error %#v: errors.As(*plan.DanglingDepError) = %v, want the typed error for %s", err, typed, dangling)
+			}
 			requireNoFiles(t, independent, marker)
 		})
 	}
@@ -110,20 +116,25 @@ func TestApplyRejectsDanglingDependency(t *testing.T) {
 
 // TestApplyRejectsDanglingChangeWatch covers the change-gate half of the
 // dependency contract through api.Apply. A typo'd OnChange target is also a
-// dependency, so the dependency pre-flight refuses it first with the same
-// wording; a WatchChanges id (a watch without a dependency) reaches
-// plan.Apply's change-gate validation instead, which refuses it before any
-// mutation. Either way nothing is applied and the error names the ID.
+// dependency, so it surfaces as a *plan.DanglingDepError; a WatchChanges ID (a
+// watch without a dependency) as a *plan.DanglingWatchError. Both are refused
+// by validateApplyDeps before any mutation, with the same single "Apply: "
+// prefix, registered-resource wording and no plan-engine leakage, and both stay
+// reachable through errors.As.
 func TestApplyRejectsDanglingChangeWatch(t *testing.T) {
+	const id = "File[/typo/watched]"
 	cases := []struct {
 		name string
-		gate func(id string) options.CommandOption
+		gate options.CommandOption
 		want []string
+		typ  func(error) bool
 	}{
-		{"OnChange", func(id string) options.CommandOption { return options.OnChange(unregisteredDep(id)) },
-			[]string{"dangling dependency", "spelling"}},
-		{"WatchChanges", func(id string) options.CommandOption { return options.WatchChanges(id) },
-			[]string{"dangling watch", "spelling"}},
+		{"OnChange", options.OnChange(unregisteredDep(id)),
+			[]string{"depends on " + id, "dangling dependency", "DependsOn"},
+			func(err error) bool { var e *plan.DanglingDepError; return errors.As(err, &e) && e.Dep == id }},
+		{"WatchChanges", options.WatchChanges(id),
+			[]string{"watches " + id, "dangling watch", "OnChange/WatchChanges"},
+			func(err error) bool { var e *plan.DanglingWatchError; return errors.As(err, &e) && e.Watch == id }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -132,21 +143,24 @@ func TestApplyRejectsDanglingChangeWatch(t *testing.T) {
 			dir := t.TempDir()
 			independent := filepath.Join(dir, "independent")
 			marker := filepath.Join(dir, "marker")
-			const id = "File[/typo/watched]"
 			File(independent, options.WithContent("x"))
-			Command("touch", []string{marker}, tc.gate(id))
+			Command("touch", []string{marker}, tc.gate)
 
 			err := Apply()
 			if err == nil {
 				t.Fatal("Apply() = nil, want a dangling refusal")
 			}
-			for _, want := range append(tc.want, id) {
-				if !strings.Contains(err.Error(), want) {
-					t.Fatalf("Apply() error = %q, want it to contain %q", err, want)
+			msg := err.Error()
+			for _, want := range append(tc.want, "Apply: ", "not a registered resource", "spelling", "register that resource") {
+				if !strings.Contains(msg, want) {
+					t.Fatalf("Apply() error = %q, want it to contain %q", msg, want)
 				}
 			}
-			if strings.Contains(err.Error(), "no chunk") {
-				t.Fatalf("Apply() error = %q leaks plan-engine chunk wording", err)
+			if !strings.HasPrefix(msg, "Apply: ") || strings.Contains(msg, "plan: ") || strings.Contains(msg, "chunk") {
+				t.Fatalf("Apply() error = %q, want one Apply: prefix and no plan-engine wording", msg)
+			}
+			if !tc.typ(err) {
+				t.Fatalf("Apply() error %#v does not unwrap to the typed plan error", err)
 			}
 			requireNoFiles(t, independent, marker)
 		})

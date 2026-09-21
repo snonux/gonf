@@ -199,3 +199,53 @@ func TestSplitPrivilegeAllUnpriv(t *testing.T) {
 		t.Fatalf("%#v", chunks)
 	}
 }
+
+// TestValidateChunksRefusalsAreTypedAndPrefixed pins the shape callers rely on
+// to word a refusal once: every error of the shared ValidateChunks helper is a
+// Refusal whose Reason has no "plan: " prefix (Error adds exactly one), the
+// dangling cases are their dedicated types, and dependency problems are
+// reported before change-gate problems.
+func TestValidateChunksRefusalsAreTypedAndPrefixed(t *testing.T) {
+	hdr := Op{Op: KindPlan, Version: CurrentVersion, ID: "p"}
+	dep := func(id string, deps ...string) Op { return Op{Op: KindCommand, Bin: "true", ID: id, Deps: deps} }
+	gate := func(id string, watch ...string) Op {
+		return Op{Op: KindCommand, Bin: "true", ID: id, IfChanged: true, Watch: watch}
+	}
+	chunk := func(ops ...Op) Chunk { return Chunk{Ops: append([]Op{hdr}, ops...)} }
+	cases := []struct {
+		name   string
+		chunks []Chunk
+		want   string
+		typed  func(error) bool
+	}{
+		{"dangling dep", []Chunk{chunk(dep("a", "missing"))}, "dangling dependency",
+			func(err error) bool { var e *DanglingDepError; return errors.As(err, &e) && e.Dep == "missing" }},
+		{"dangling watch", []Chunk{chunk(gate("g", "missing"))}, "dangling watch",
+			func(err error) bool { var e *DanglingWatchError; return errors.As(err, &e) && e.Watch == "missing" }},
+		{"forward dep", []Chunk{chunk(dep("b", "a")), chunk(dep("a"))}, "later chunk 1", nil},
+		{"cross-chunk watch", []Chunk{chunk(dep("u")), chunk(gate("g", "u"))}, "same chunk as the gated op", nil},
+		{"gate without watch", []Chunk{chunk(gate("g"))}, "watches nothing", nil},
+		{"dependency error wins over gate error", []Chunk{chunk(gate("g", "u"), dep("x", "missing"))}, "dangling dependency", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateChunks(tc.chunks)
+			var refusal Refusal
+			if err == nil || !errors.As(err, &refusal) {
+				t.Fatalf("ValidateChunks = %v, want a Refusal", err)
+			}
+			if !strings.Contains(refusal.Reason(), tc.want) || strings.Contains(refusal.Reason(), "plan: ") {
+				t.Fatalf("Reason = %q, want %q without a plan: prefix", refusal.Reason(), tc.want)
+			}
+			if err.Error() != "plan: "+refusal.Reason() {
+				t.Fatalf("Error = %q, want plan: + Reason (%q)", err.Error(), refusal.Reason())
+			}
+			if tc.typed != nil && !tc.typed(err) {
+				t.Fatalf("error %#v is not the expected typed refusal", err)
+			}
+		})
+	}
+	if err := ValidateChunks([]Chunk{chunk(dep("a"), dep("b", "a"))}); err != nil {
+		t.Fatalf("valid plan: %v", err)
+	}
+}

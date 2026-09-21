@@ -9,24 +9,67 @@ type Chunk struct {
 	Ops     []Op
 }
 
+// Refusal is implemented by every error ValidateChunkDeps and
+// ValidateChangeGates return. Reason is the refusal without the plan engine's
+// "plan: " prefix, so a caller that adds its own prefix (RecordPlanTo's
+// "RecordPlan: ...", api.Apply's "Apply: ...") can show one prefix instead of
+// "plan: plan: ..." or "record: plan: ...". Callers reach it with errors.As
+// against a Refusal target; they never parse the message.
+type Refusal interface {
+	error
+	Reason() string
+}
+
+// refusal is the untyped-detail Refusal: a plan-level pre-flight failure that
+// needs no fields of its own (a forward cross-chunk dependency, a cross-chunk
+// watch, a gate without a watch).
+type refusal struct{ reason string }
+
+func (r *refusal) Error() string  { return "plan: " + r.reason }
+func (r *refusal) Reason() string { return r.reason }
+
 // DanglingDepError reports an op whose dependency is recorded by no op of the
 // validated plan: a typo'd or never-registered DependsOn ID. It is a typed
 // error so callers that hold a friendlier vocabulary than the plan engine
-// (api.Apply speaks of registered resources) can re-word it via errors.As
-// without parsing strings. The message deliberately avoids the privilege-chunk
-// bookkeeping: for a dangling dependency the chunk index carries no
-// information (the dep is in no chunk at all) and only confuses users.
+// (api.Apply and api.RecordPlanTo speak of registered resources) can re-word it
+// via errors.As without parsing strings. The message deliberately avoids the
+// privilege-chunk bookkeeping: for a dangling dependency the chunk index
+// carries no information (the dep is in no chunk at all) and only confuses
+// users.
 type DanglingDepError struct {
 	Op  string // ID of the dependent op
 	Dep string // dependency ID that no op in the plan carries
 }
 
 // Error names the op, the missing dependency and how to fix it.
-func (e *DanglingDepError) Error() string {
+func (e *DanglingDepError) Error() string { return "plan: " + e.Reason() }
+
+// Reason is Error without the "plan: " prefix (see Refusal).
+func (e *DanglingDepError) Reason() string {
 	return fmt.Sprintf(
-		"plan: op %s depends on %s, which no resource in the plan provides (dangling dependency); "+
+		"op %s depends on %s, which no resource in the plan provides (dangling dependency); "+
 			"check the spelling of the ID passed to DependsOn and make sure that resource is registered in the same plan",
 		e.Op, e.Dep)
+}
+
+// DanglingWatchError reports a change-gated op watching an ID recorded by no
+// op of the validated plan: a typo'd OnChange/WatchChanges target. It is the
+// change-gate twin of DanglingDepError, typed for the same reason: callers
+// re-word it in their own vocabulary through errors.As.
+type DanglingWatchError struct {
+	Op    string // ID of the change-gated op
+	Watch string // watched ID that no op in the plan carries
+}
+
+// Error names the op, the missing watch target and how to fix it.
+func (e *DanglingWatchError) Error() string { return "plan: " + e.Reason() }
+
+// Reason is Error without the "plan: " prefix (see Refusal).
+func (e *DanglingWatchError) Reason() string {
+	return fmt.Sprintf(
+		"op %s watches %s, which no resource in the plan provides (dangling watch); "+
+			"check the spelling of the ID passed to OnChange/WatchChanges and make sure that resource is registered in the same plan",
+		e.Op, e.Watch)
 }
 
 // ValidateChunkDeps checks dependency direction across privilege chunks
@@ -61,14 +104,32 @@ func ValidateChunkDeps(chunks [][]Op) error {
 					return &DanglingDepError{Op: op.ID, Dep: dep}
 				}
 				if j > i {
-					return fmt.Errorf(
-						"plan: chunk %d: op %s depends on %s which is recorded in later chunk %d; a dependency recorded after its dependent crosses the privilege boundary",
-						i, op.ID, dep, j)
+					return &refusal{reason: fmt.Sprintf(
+						"chunk %d: op %s depends on %s which is recorded in later chunk %d; a dependency recorded after its dependent crosses the privilege boundary",
+						i, op.ID, dep, j)}
 				}
 			}
 		}
 	}
 	return nil
+}
+
+// ValidateChunks is the whole-plan pre-flight every controller-side entry
+// point runs over the split privilege chunks: ValidateChunkDeps (dangling and
+// forward cross-chunk dependencies) followed by ValidateChangeGates (watches
+// must live in the gated op's own chunk). api.RecordPlanTo, api.ApplyChunks,
+// api.Apply and remote.PushChunks all call this one helper instead of each
+// composing the two checks, so a check added here reaches all of them at once.
+// The error is a Refusal (see there for the exact concrete types).
+func ValidateChunks(chunks []Chunk) error {
+	bodies := make([][]Op, len(chunks))
+	for i, ch := range chunks {
+		bodies[i] = ch.Ops
+	}
+	if err := ValidateChunkDeps(bodies); err != nil {
+		return err
+	}
+	return ValidateChangeGates(bodies)
 }
 
 // firstChunkOf maps an op ID to the first chunk index carrying it.
@@ -93,12 +154,13 @@ func firstChunkOf(chunks [][]Op) map[string]int {
 // report of its own — so a gated op can only see change reports from
 // resources recorded in its OWN chunk. A watch crossing the privilege
 // boundary (earlier or later chunk) can never fire and is refused; so is a
-// watch recorded in no chunk at all (dangling; worded without chunk indexes,
-// which would only leak bookkeeping) and a gated op with no watch ids at all
-// (its gate could never fire). Like ValidateChunkDeps, this is a
-// controller-side pre-flight: api.ApplyChunks, remote.PushChunks, and
-// RecordPlanTo (record time) all run it, so a rejected plan mutates no
-// destination and, on push, sends zero SSH traffic.
+// watch recorded in no chunk at all (a *DanglingWatchError, worded without
+// chunk indexes, which would only leak bookkeeping) and a gated op with no
+// watch ids at all (its gate could never fire). Like ValidateChunkDeps, this is
+// a controller-side pre-flight, run through ValidateChunks by
+// api.RecordPlanTo (record time), api.ApplyChunks, api.Apply and
+// remote.PushChunks, so a rejected plan mutates no destination and, on push,
+// sends zero SSH traffic.
 func ValidateChangeGates(chunks [][]Op) error {
 	firstChunk := firstChunkOf(chunks)
 	for i, chunk := range chunks {
@@ -107,24 +169,21 @@ func ValidateChangeGates(chunks [][]Op) error {
 				continue
 			}
 			if len(op.Watch) == 0 {
-				return fmt.Errorf(
-					"plan: chunk %d: op %s is change-gated (if_changed) but watches nothing; the gate can never fire",
-					i, op.ID)
+				return &refusal{reason: fmt.Sprintf(
+					"chunk %d: op %s is change-gated (if_changed) but watches nothing; the gate can never fire",
+					i, op.ID)}
 			}
 			for _, watch := range op.Watch {
 				j, ok := firstChunk[watch]
 				if !ok {
 					// No chunk index: the watch is in no chunk at all, so an
 					// index would only leak the engine's bookkeeping.
-					return fmt.Errorf(
-						"plan: op %s watches %s, which no resource in the plan provides (dangling watch); "+
-							"check the spelling of the ID passed to OnChange/WatchChanges and make sure that resource is registered in the same plan",
-						op.ID, watch)
+					return &DanglingWatchError{Op: op.ID, Watch: watch}
 				}
 				if j != i {
-					return fmt.Errorf(
-						"plan: chunk %d: op %s watches %s which is recorded in chunk %d; change reports are chunk-local (each privilege chunk applies as its own process), so a watch must live in the same chunk as the gated op",
-						i, op.ID, watch, j)
+					return &refusal{reason: fmt.Sprintf(
+						"chunk %d: op %s watches %s which is recorded in chunk %d; change reports are chunk-local (each privilege chunk applies as its own process), so a watch must live in the same chunk as the gated op",
+						i, op.ID, watch, j)}
 				}
 			}
 		}

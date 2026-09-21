@@ -277,6 +277,10 @@ func cliPlan(args []string) int {
 		planDir = dir
 	}
 
+	// RecordPlan writes planDir (blobs) only after the whole record succeeded,
+	// so a refused plan leaves -o <dir> exactly as it was and does not create
+	// it; the error already carries its own "RecordPlan: " prefix, so only this
+	// command's "plan: " is added.
 	ops, err := api.RecordPlan(*planID, planDir, tasks...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "plan: %v\n", err)

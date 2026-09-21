@@ -1,7 +1,6 @@
 package api
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -132,28 +131,22 @@ func packageApplyOps(drafts []resource.PlanDraft, store plan.BlobStore) ([]plan.
 	return ops, nil
 }
 
-// validateApplyDeps is the dangling-dependency pre-flight for Apply. The
-// whole registered plan is applied by a single plan.Apply, i.e. it forms
-// exactly one privilege chunk, so plan.ValidateChunkDeps over that one chunk
-// reduces to "every dep is recorded somewhere in the plan": a dep naming no
-// registered resource (a typo, or a resource that was never registered) is
-// refused before any resource is applied, matching what the legacy repository
-// path reported as "depended upon but not registered". A dep recorded LATER
-// in the plan is fine here — plan.Apply's dependency sort reorders it — so
-// only the dangling case can fail.
+// validateApplyDeps is the dependency and change-gate pre-flight for Apply.
+// The whole registered plan is applied by a single plan.Apply, i.e. it forms
+// exactly one privilege chunk, so plan.ValidateChunks over that one chunk
+// reduces to "every dependency and every watch is recorded somewhere in the
+// plan": a dep or watch naming no registered resource (a typo, or a resource
+// that was never registered) is refused before any resource is applied,
+// matching what the legacy repository path reported as "depended upon but not
+// registered". A dep recorded LATER in the plan is fine here — plan.Apply's
+// dependency sort reorders it — so only the dangling cases can fail.
 //
-// The plan engine's error speaks of a "plan"; Apply users only know their
-// registered resources, so a *plan.DanglingDepError is re-worded in those
-// terms (op, missing dependency, how to fix) instead of being wrapped, which
-// would double the prefix ("Apply: plan: ...").
+// The refusal is re-worded in registered-resource terms with a single "Apply:"
+// prefix (preflightChunks), while errors.As still finds the typed
+// *plan.DanglingDepError / *plan.DanglingWatchError. Running the change-gate
+// half here, before anything is applied, also means a dangling WatchChanges
+// gets the same wording as a dangling OnChange instead of the plan engine's raw
+// "plan: op ... watches ..." message from plan.Apply's own gate check.
 func validateApplyDeps(ops []plan.Op) error {
-	err := plan.ValidateChunkDeps([][]plan.Op{ops})
-	var dangling *plan.DanglingDepError
-	if errors.As(err, &dangling) {
-		return fmt.Errorf(
-			"Apply: %s depends on %s, which is not a registered resource (dangling dependency); "+
-				"check the spelling of the ID passed to DependsOn and register that resource before calling Apply",
-			dangling.Op, dangling.Dep)
-	}
-	return err
+	return preflightChunks("Apply", fixHintApply, []plan.Chunk{{Ops: ops}})
 }

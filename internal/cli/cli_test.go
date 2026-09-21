@@ -12,6 +12,7 @@ import (
 	"github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/api/options"
 	iexec "github.com/snonux/gonf/internal/exec"
+	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/cmd"
@@ -178,11 +179,40 @@ func captureStderr(t *testing.T, fn func()) string {
 	return string(out)
 }
 
+// runGonf runs `gonf <args...>` in-process and returns the exit code and
+// everything written to stderr.
+func runGonf(t *testing.T, args ...string) (int, string) {
+	t.Helper()
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+	os.Args = append([]string{"gonf"}, args...)
+	var code int
+	stderr := captureStderr(t, func() { code = CLI() })
+	return code, stderr
+}
+
+// requireCLIRecordRefusal checks the exact wording shape a refused record has
+// at `gonf plan`: ONE record-time prefix behind the command's own "plan: "
+// ("plan: RecordPlan: <reason>"), never the engine prefix doubled ("plan: plan:
+// ...").
+func requireCLIRecordRefusal(t *testing.T, stderr, wantSubstr string) {
+	t.Helper()
+	line := strings.TrimRight(stderr, "\n")
+	if !strings.HasPrefix(line, "plan: RecordPlan: ") || strings.Contains(line, "plan: plan:") ||
+		strings.Contains(line[len("plan: RecordPlan: "):], "plan: ") || strings.Contains(line, "\n") {
+		t.Fatalf("stderr %q, want a single line shaped %q", stderr, "plan: RecordPlan: <reason>")
+	}
+	if !strings.Contains(line, wantSubstr) {
+		t.Fatalf("stderr %q must contain %q", stderr, wantSubstr)
+	}
+}
+
 // TestCLIPlanRefusesDanglingDependency pins the o62 record-time guard on the
 // documented `gonf plan` -> `gonf apply plan.jsonl` workflow: `gonf apply`
 // cannot tell a whole plan from a single privilege chunk, so a typo'd
 // DependsOn must fail when the plan is written. Nothing may be written (no
-// plan.jsonl, on stdout neither) and nothing applied.
+// plan.jsonl, on stdout neither), nothing applied, and the output directory
+// must not even be created.
 func TestCLIPlanRefusesDanglingDependency(t *testing.T) {
 	for _, stdout := range []bool{false, true} {
 		name := "file"
@@ -200,24 +230,17 @@ func TestCLIPlanRefusesDanglingDependency(t *testing.T) {
 			})
 			planDir := filepath.Join(root, "planout")
 
-			oldArgs := os.Args
-			t.Cleanup(func() { os.Args = oldArgs })
-			os.Args = []string{"gonf", "plan", "-o", planDir, "cli_dangling"}
+			args := []string{"plan", "-o", planDir, "cli_dangling"}
 			if stdout {
-				os.Args = []string{"gonf", "plan", "-stdout", "cli_dangling"}
+				args = []string{"plan", "-stdout", "cli_dangling"}
 			}
-			var code int
-			stderr := captureStderr(t, func() { code = CLI() })
+			code, stderr := runGonf(t, args...)
 			if code != 1 {
 				t.Fatalf("plan exit %d, want 1; stderr: %s", code, stderr)
 			}
-			for _, want := range []string{"File[/typo/never-registered]", "dangling dependency"} {
-				if !strings.Contains(stderr, want) {
-					t.Fatalf("stderr %q must contain %q", stderr, want)
-				}
-			}
-			for _, p := range []string{filepath.Join(planDir, "plan.jsonl"), marker, filepath.Join(root, "independent")} {
-				if _, err := os.Stat(p); !os.IsNotExist(err) {
+			requireCLIRecordRefusal(t, stderr, "depends on File[/typo/never-registered], which is not a registered resource (dangling dependency)")
+			for _, p := range []string{planDir, marker, filepath.Join(root, "independent")} {
+				if _, err := os.Lstat(p); !os.IsNotExist(err) {
 					t.Fatalf("%s exists (stat err %v); a refused plan writes and applies nothing", p, err)
 				}
 			}
@@ -225,9 +248,97 @@ func TestCLIPlanRefusesDanglingDependency(t *testing.T) {
 	}
 }
 
+// TestCLIPlanRefusalLeavesOutputDirUntouched is the review regression for
+// blobs: a refused `gonf plan -o dir` must leave dir exactly as it was. The
+// reproduction records a good SyncDir plan into dir, edits the source file, and
+// re-runs with a dangling dependency: blob names are deterministic, so the
+// refused run used to overwrite the blob and the earlier plan.jsonl then
+// applied content it was never recorded with. Every byte and mtime of dir must
+// be unchanged, and the earlier plan must still apply its original content.
+func TestCLIPlanRefusalLeavesOutputDirUntouched(t *testing.T) {
+	api.ResetTasks()
+	resource.ResetRepository()
+	root := t.TempDir()
+	srcDir := filepath.Join(root, "src")
+	dst := filepath.Join(root, "dst")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(srcDir, "f1")
+	if err := os.WriteFile(src, []byte("version one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	syncSrc := func() { api.SyncDir(dst, filepath.Join(srcDir, "*")) }
+	api.Task("cli_good", "", syncSrc)
+	api.Task("cli_refused", "", func() {
+		syncSrc()
+		api.Command("true", nil, options.DependsOn(unregisteredDep("File[/typo/never-registered]")))
+	})
+
+	// (1) The absent directory of a refused run is not created (the reviewer's
+	// stray "o2/blobs/sync-<hash>/f1" and empty "o1/").
+	absent := filepath.Join(root, "o2")
+	code, stderr := runGonf(t, "plan", "-o", absent, "cli_refused")
+	if code != 1 {
+		t.Fatalf("refused plan exit %d, want 1; stderr: %s", code, stderr)
+	}
+	requireCLIRecordRefusal(t, stderr, "dangling dependency")
+	testutil.RequireUnchanged(t, testutil.DirSnapshot{Absent: true}, absent)
+
+	// (2) A directory holding an earlier good plan survives a refused re-run.
+	o3 := filepath.Join(root, "o3")
+	if code, stderr := runGonf(t, "plan", "-o", o3, "cli_good"); code != 0 {
+		t.Fatalf("good plan exit %d; stderr: %s", code, stderr)
+	}
+	before := testutil.Snapshot(t, o3)
+	if err := os.WriteFile(src, []byte("version TWO\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, stderr = runGonf(t, "plan", "-o", o3, "cli_refused")
+	if code != 1 {
+		t.Fatalf("refused re-run exit %d, want 1; stderr: %s", code, stderr)
+	}
+	requireCLIRecordRefusal(t, stderr, "dangling dependency")
+	testutil.RequireUnchanged(t, before, o3)
+
+	if code, stderr := runGonf(t, "apply", filepath.Join(o3, "plan.jsonl")); code != 0 {
+		t.Fatalf("applying the earlier plan exit %d; stderr: %s", code, stderr)
+	}
+	got, err := os.ReadFile(filepath.Join(dst, "f1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "version one\n" {
+		t.Fatalf("the earlier plan applied %q, want the content it was recorded with", got)
+	}
+}
+
+// TestCLIPlanRefusesDependencyOnLaterPrivilegeChunk documents the small
+// tightening o62 brought to `gonf plan`: a dependency on a LATER privilege
+// chunk used to be recorded (Run and push already refused it at apply time)
+// and is now refused at record time. The wording keeps the one-prefix shape and
+// nothing is written.
+func TestCLIPlanRefusesDependencyOnLaterPrivilegeChunk(t *testing.T) {
+	api.ResetTasks()
+	resource.ResetRepository()
+	planDir := filepath.Join(t.TempDir(), "planout")
+	api.Task("cli_forward_chunk", "", func() {
+		api.Command("true", nil, options.WithName("first"), options.DependsOn(unregisteredDep("Command[later]")))
+		api.Command("true", nil, options.WithName("later"), options.WithElevate)
+	})
+	code, stderr := runGonf(t, "plan", "-o", planDir, "cli_forward_chunk")
+	if code != 1 {
+		t.Fatalf("plan exit %d, want 1; stderr: %s", code, stderr)
+	}
+	requireCLIRecordRefusal(t, stderr, "depends on Command[later] which is recorded in later chunk 1")
+	testutil.RequireUnchanged(t, testutil.DirSnapshot{Absent: true}, planDir)
+}
+
 // TestCLIPlanWithValidDependenciesStillAppliesInOrder is the positive
-// counterpart: a dependent recorded BEFORE its dependency (so ordering
-// matters) records, is written and applies correctly via `gonf apply`.
+// counterpart: a dependent recorded BEFORE its dependency (a forward dep inside
+// one privilege chunk, so ordering really matters: recorded order would run the
+// dependent first and fail its test -f) records, is written and applies in
+// dependency order via `gonf apply`.
 func TestCLIPlanWithValidDependenciesStillAppliesInOrder(t *testing.T) {
 	api.ResetTasks()
 	resource.ResetRepository()
@@ -235,8 +346,11 @@ func TestCLIPlanWithValidDependenciesStillAppliesInOrder(t *testing.T) {
 	dep := filepath.Join(root, "dep")
 	out := filepath.Join(root, "out")
 	api.Task("cli_valid_deps", "", func() {
-		base := api.File(dep, options.WithContent("d"))
-		api.Command("sh", []string{"-c", "test -f " + dep + " && touch " + out}, options.DependsOn(base))
+		// Recorded first, depending on the File registered right after it. The
+		// dep is spelled as an ID because the File value does not exist yet.
+		api.Command("sh", []string{"-c", "test -f " + dep + " && touch " + out},
+			options.WithName("dependent"), options.DependsOn(unregisteredDep("File["+dep+"]")))
+		api.File(dep, options.WithContent("d"))
 	})
 	planDir := filepath.Join(root, "planout")
 

@@ -120,27 +120,41 @@ func (s *recordingSession) reset() {
 // planDir/blobs/. planDir may be empty when no SyncDir or large-file packaging
 // is needed.
 //
+// planDir is written only when the WHOLE record succeeds. Blob names are
+// deterministic (basename plus a hash of the resource ID), so a refused record
+// that wrote straight into a directory holding an earlier good plan would
+// overwrite that plan's blobs — the older plan.jsonl would then apply content
+// it was never recorded with — and would leave stray blobs (or create an empty
+// directory) even though no plan came out. RecordPlan therefore records into a
+// private staging directory (stageBlobs) and copies the referenced blobs into
+// planDir only after RecordPlanTo, including its dependency and change-gate
+// pre-flight, returned a plan. On any error planDir is exactly as it was and
+// is not created.
+//
 // Nested Run calls while recording append into the same plan (used by Aggregate).
 func RecordPlan(planID, planDir string, taskNames ...string) ([]plan.Op, error) {
-	var store plan.BlobStore
-	if planDir != "" {
-		if err := plan.SecureDir(planDir); err != nil {
-			return nil, fmt.Errorf("RecordPlan: plan dir: %w", err)
-		}
-		store = plan.NewStore(planDir)
+	if planDir == "" {
+		return RecordPlanTo(planID, nil, taskNames...)
 	}
-	return RecordPlanTo(planID, store, taskNames...)
+	return stageBlobs(planID, planDir, taskNames)
 }
 
-// RecordPlanTo is like RecordPlan but packages blobs into store (disk or memory).
-// Pass a nil store only when tasks need no blob packaging.
+// RecordPlanTo is like RecordPlan but packages blobs straight into store
+// (disk or memory), with no staging. Pass a nil store only when tasks need no
+// blob packaging.
 //
 // Before returning, the finished plan passes validateRecordedPlan: dangling
 // or forward cross-chunk dependencies and cross-chunk change watches fail the
 // record, so no plan that ApplyChunks or remote.PushChunks would refuse is
 // ever written (`gonf plan`), shipped (push, cluster, fleet) or applied (Run).
-// Blobs already packaged into store before the refusal are left there; the
-// callers own that storage (a temp dir or memory store) and discard it.
+//
+// RecordPlanTo does NOT undo blob writes: a record that fails (the
+// pre-flight refusal, a task-body error, a packaging error) may already have
+// written blobs into store. That is safe only for storage the caller discards
+// on error — the per-call temp dir of Run, the staging directory of RecordPlan
+// or a MemoryStore of push/cluster/fleet. Never pass a directory that must
+// survive a refused record unchanged (such as `gonf plan -o dir`); use
+// RecordPlan for that.
 func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]plan.Op, error) {
 	if planID == "" {
 		return nil, fmt.Errorf("RecordPlan: plan id must not be empty")
@@ -189,13 +203,12 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 	return ops, nil
 }
 
-// validateRecordedPlan runs the whole-plan pre-flights over a freshly
-// recorded plan: dangling and forward cross-chunk dependencies
-// (plan.ValidateChunkDeps) and change-gated ops watching resources recorded
-// in a different privilege chunk (plan.ValidateChangeGates — change reports
-// are chunk-local: each privilege chunk applies as its own plan.Apply
-// invocation, and an elevated chunk is a separate sudo/doas process with a
-// report of its own, so such a watch could never fire).
+// validateRecordedPlan runs the whole-plan pre-flights (plan.ValidateChunks:
+// dangling and forward cross-chunk dependencies, and change-gated ops watching
+// resources recorded in a different privilege chunk — change reports are
+// chunk-local: each privilege chunk applies as its own plan.Apply invocation,
+// and an elevated chunk is a separate sudo/doas process with a report of its
+// own, so such a watch could never fire) over a freshly recorded plan.
 //
 // It lives here, in the single place every recorded plan passes through, for
 // two reasons. (1) It is the earliest point all ops and their elevate flags
@@ -204,12 +217,20 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 // protect `gonf plan` -> `gonf apply plan.jsonl`: the apply side cannot
 // distinguish a whole plan from a single privilege chunk (the elevated
 // re-exec child and remote pushes use the same `gonf apply <file|->` entry),
-// so it cannot run the dangling-dependency check itself. The apply/push side
-// re-runs the same checks on the split plan (api.ApplyChunks /
-// remote.PushChunks) through the shared validateChunkDeps, so nothing that
-// records here is refused later.
+// so it cannot run the dangling-dependency check itself.
+//
+// The apply and push side deliberately re-run the same check on the split plan
+// (ApplyChunksContext, remote.PushChunks): a public entry point cannot assume
+// its ops came from a record in this process (they may be decoded from a file
+// or recorded by an older gonf), and the check is a cheap linear pass. For Run
+// the second pass is therefore redundant by construction, never conflicting —
+// the very same plan.ValidateChunks accepts both times.
+//
+// The refusal reads "RecordPlan: <reason>" with one prefix, worded in terms of
+// registered resources (see preflightChunks); callers add their own context
+// ("plan: ", "push: ") in front.
 func validateRecordedPlan(ops []plan.Op) error {
-	return validateChunkDeps(plan.SplitPrivilegeChunks(ops))
+	return preflightChunks("RecordPlan", fixHintRecord, plan.SplitPrivilegeChunks(ops))
 }
 
 // RefuseOpaqueOnlyPush errors when the RecordPlanTo call that just returned
@@ -389,7 +410,7 @@ func checkUnrecordedDrafts(taskName string) error {
 
 // ApplyPlan applies ops using DetectFacts(). planDir is the blob sidecar root.
 //
-// ApplyPlan runs NO dangling-dependency pre-flight (plan.ValidateChunkDeps),
+// ApplyPlan runs NO dangling-dependency pre-flight (plan.ValidateChunks),
 // on purpose: it executes single privilege chunks too — the elevated re-exec
 // child, one chunk of a remote push, `gonf apply <plan.jsonl|->` — and from
 // one chunk it cannot tell a dep applied by an earlier chunk from a typo'd
@@ -397,7 +418,7 @@ func checkUnrecordedDrafts(taskName string) error {
 // whole plan is in hand: RecordPlanTo (record time: Run, `gonf plan`, push,
 // cluster, fleet), ApplyChunks, remote.PushChunks and Apply. A caller feeding
 // ApplyPlan a whole plan from elsewhere (a hand-written or older plan file)
-// must run plan.ValidateChunkDeps over plan.SplitPrivilegeChunks itself, or
+// must run plan.ValidateChunks over plan.SplitPrivilegeChunks itself, or
 // use ApplyChunks, which does.
 func ApplyPlan(ops []plan.Op, planDir string) error {
 	f := DetectFacts()

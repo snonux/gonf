@@ -108,7 +108,7 @@ func defaultElevatedApply(ctx context.Context, mode privilege.Mode, ops []plan.O
 // when_begin{fact:profile,...} guards evaluate identically in the
 // unprivileged (in-process) and privileged (re-exec'd) chunks of the same
 // plan, instead of the child re-detecting the profile from the actual host.
-// A ValidateChunkDeps pre-flight runs first: a dep recorded in a later chunk
+// A plan.ValidateChunks pre-flight runs first: a dep recorded in a later chunk
 // (or dangling) fails before any chunk is applied, so a rejected plan
 // mutates nothing.
 //
@@ -134,7 +134,7 @@ func ApplyChunks(ops []plan.Op, planDir string, mode privilege.Mode) error {
 // keeps the old context.Background() behavior instead of taking ctx directly.
 func ApplyChunksContext(ctx context.Context, ops []plan.Op, planDir string, mode privilege.Mode) error {
 	chunks := plan.SplitPrivilegeChunks(ops)
-	if err := validateChunkDeps(chunks); err != nil {
+	if err := plan.ValidateChunks(chunks); err != nil {
 		return err
 	}
 	for i, ch := range chunks {
@@ -158,22 +158,4 @@ func ApplyChunksContext(ctx context.Context, ops []plan.Op, planDir string, mode
 		}
 	}
 	return nil
-}
-
-// validateChunkDeps runs the plan-level cross-chunk pre-flights over the
-// split privilege chunks: plan.ValidateChunkDeps (forward cross-chunk and
-// dangling deps fail before any chunk is applied or uploaded) and
-// plan.ValidateChangeGates (change-gated watches must live in the gated
-// op's own chunk — change reports are chunk-local). Shared by ApplyChunks
-// (api, local apply) and, through validateRecordedPlan, RecordPlanTo (record
-// time); remote.PushChunks (internal/remote, SSH push) runs its own copy.
-func validateChunkDeps(chunks []plan.Chunk) error {
-	bodies := make([][]plan.Op, len(chunks))
-	for i, ch := range chunks {
-		bodies[i] = ch.Ops
-	}
-	if err := plan.ValidateChunkDeps(bodies); err != nil {
-		return err
-	}
-	return plan.ValidateChangeGates(bodies)
 }
