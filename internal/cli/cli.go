@@ -254,7 +254,8 @@ func cliList() int {
 func cliPlan(args []string) int {
 	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	outDir := fs.String("o", ".", "output directory for plan.jsonl and blobs/")
+	outDir := fs.String("o", ".", "output directory for plan.jsonl and blobs/ (default: the current directory); "+
+		"created 0700 when missing; an existing one is left as it is but must be yours and not group/other-writable")
 	stdout := fs.Bool("stdout", false, "print plan JSONL to stdout instead of writing plan.jsonl")
 	planID := fs.String("id", "plan", "plan id written into the header")
 	if err := fs.Parse(args); err != nil {
@@ -303,12 +304,20 @@ func planToStdout(planID string, tasks []string) int {
 
 // planToDir records into outDir. RecordPlan makes a best-effort check that
 // outDir is usable (a symlink or symlinked ancestor, a file, another user's
-// directory and an unwritable location are refused before any task body runs,
-// creating nothing) and writes outDir's blobs only after the whole record
-// succeeded, so a refused plan leaves an existing outDir exactly as it was and
-// does not create an absent one. What the check misses is still refused when
-// the blobs are committed, after the task bodies ran but before anything is
-// written to outDir.
+// directory, a group/other-writable directory and an unwritable location are
+// refused before any task body runs, creating and changing nothing) and writes
+// outDir's blobs only after the whole record succeeded, so a refused plan
+// leaves an existing outDir exactly as it was and does not create an absent
+// one. What the check misses is still refused when the blobs are committed,
+// after the task bodies ran but before anything is written to outDir.
+//
+// outDir is the operator's directory, not gonf's: a missing one is created
+// 0700, but an existing one (the default "-o ." is the recipe checkout) keeps
+// its mode - plan.SecureDir verifies it instead of chmod'ing it, and refuses
+// one that is not ours or that group/others can write, because plan.jsonl
+// carries secret material and a later apply trusts it. The refusal says what to
+// do (chmod go-w it, or pass -o <private dir>). Only plan.jsonl (0600) and the
+// blobs/ directory (0700) gonf writes are private, whatever the mode of outDir.
 //
 // Which prefixes the error carries depends on where it came from: pre-flight
 // refusals and a few packaging errors start with "RecordPlan: ", while an

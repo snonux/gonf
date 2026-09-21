@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/plan"
@@ -128,22 +127,30 @@ func (l *lazyStage) WriteGlob(name, pattern string) (string, error) {
 
 // checkPlanDirUsable is the cheap up-front counterpart of commitStagedBlobs's
 // plan.SecureDir. It runs before any task body so the common unusable
-// destinations fail early, without creating or changing anything, as they did
-// when RecordPlan called SecureDir first. It looks at the same things SecureDir
-// would trip over:
+// destinations fail early, without creating or changing anything. It looks at
+// the same things SecureDir would trip over:
 //
 //   - planDir or any of its ancestors is a symlink (SecureDir opens every path
 //     component with O_NOFOLLOW; filepath.Clean first, so "link/" is the
 //     symlink "link", which a plain Lstat of "link/" would follow);
-//   - an existing planDir is not a directory, or is owned by another user
-//     (SecureDir must chmod it; a read-only directory of ours is fine);
+//   - an existing planDir fails plan.CheckExistingDir, SecureDir's own
+//     acceptance rule for a pre-existing directory: it must be a directory,
+//     owned by the effective user (root included) and not writable by group or
+//     others. SecureDir never chmods such a directory, so a 0755 one of ours
+//     passes and stays 0755, while a group-writable, world-writable (sticky
+//     /tmp too) or foreign-owned one is refused;
+//   - an existing planDir we cannot write to (a read-only directory of ours:
+//     SecureDir no longer makes it writable by chmod'ing it). SecureDir itself
+//     does not test this, the write that follows would fail; the check turns
+//     that into an early refusal;
 //   - an absent planDir has no existing ancestor we can create entries in.
 //
 // It is a best-effort pre-check, not a guarantee: it inspects the path with
 // Lstat/access(2) while SecureDir opens it component by component, so the
 // answers can differ when the path changes in between or on exotic setups
-// (security modules, unusual ACLs). SecureDir at commit time always has the last word
-// and refuses safely, writing nothing to a directory it cannot take over.
+// (security modules, unusual ACLs). SecureDir at commit time always has the
+// last word and refuses safely, writing nothing to a directory it cannot take
+// over.
 func checkPlanDirUsable(planDir string) error {
 	planDir = filepath.Clean(planDir)
 	if err := refuseSymlinkedPath(planDir); err != nil {
@@ -152,7 +159,7 @@ func checkPlanDirUsable(planDir string) error {
 	info, err := os.Lstat(planDir)
 	switch {
 	case err == nil:
-		return checkOwnedDir(planDir, info)
+		return checkExistingPlanDir(planDir, info)
 	case !errors.Is(err, os.ErrNotExist):
 		return err
 	}
@@ -192,21 +199,22 @@ func refuseSymlinkedPath(path string) error {
 	}
 }
 
-// checkOwnedDir reports whether path (already Lstat'ed as info, and known not
-// to be a symlink: refuseSymlinkedPath ran first) is a directory that
-// plan.SecureDir can take over: owned by the effective user (or we are root),
-// since SecureDir has to chmod it.
-func checkOwnedDir(path string, info os.FileInfo) error {
-	if !info.IsDir() {
-		return fmt.Errorf("%s exists and is not a directory", path)
+// checkExistingPlanDir is the existing-directory half of checkPlanDirUsable:
+// path (already Lstat'ed as info, and known not to be a symlink because
+// refuseSymlinkedPath ran first) must satisfy plan.SecureDir's acceptance rule
+// and be writable and searchable by us.
+func checkExistingPlanDir(path string, info os.FileInfo) error {
+	if err := plan.CheckExistingDir(path, info); err != nil {
+		return err
 	}
-	if st, ok := info.Sys().(*syscall.Stat_t); ok && os.Geteuid() != 0 && int(st.Uid) != os.Geteuid() {
-		return fmt.Errorf("%s is owned by another user", path)
+	if err := unix.Access(path, unix.W_OK|unix.X_OK); err != nil {
+		return fmt.Errorf("cannot write to %s: %w", path, err)
 	}
 	return nil
 }
 
-// commitStagedBlobs makes planDir exist (owner-only) and copies every blob the
+// commitStagedBlobs makes planDir exist (created 0700 when missing, an existing
+// one is verified by plan.SecureDir and never chmod'ed) and copies every blob the
 // recorded ops reference from the staging directory into it. Blobs of earlier
 // plans that this plan does not reference stay untouched; a blob with the same
 // ref is replaced (the store's own write semantics: files atomically, trees

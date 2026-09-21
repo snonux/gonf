@@ -47,8 +47,10 @@ func TestCLIPlanAndApply(t *testing.T) {
 		t.Fatalf("plan exit %d", code)
 	}
 	planPath := filepath.Join(planDir, "plan.jsonl")
-	if info, err := os.Stat(planDir); err != nil || info.Mode().Perm() != 0o700 {
-		t.Fatalf("plan directory mode = %v, %v; want 0700", info.Mode(), err)
+	// m62: an existing output directory is verified, never rewritten, so the
+	// 0755 the operator chose survives; only plan.jsonl is owner-only.
+	if info, err := os.Stat(planDir); err != nil || info.Mode().Perm() != 0o755 {
+		t.Fatalf("plan directory mode = %v, %v; want the existing 0755 unchanged", info.Mode(), err)
 	}
 	if info, err := os.Stat(planPath); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("plan file mode = %v, %v; want 0600", info.Mode(), err)

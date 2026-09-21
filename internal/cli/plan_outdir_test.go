@@ -1,0 +1,183 @@
+package cli
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"testing"
+
+	"github.com/snonux/gonf/api"
+	"github.com/snonux/gonf/internal/testutil"
+	"github.com/snonux/gonf/resource"
+	"github.com/snonux/gonf/resource/options"
+)
+
+// The tests in this file pin m62: `gonf plan` writes into the operator's -o
+// directory (the current directory by default) without changing its mode, and
+// refuses one it cannot trust, before any task body runs.
+
+// outDirWithMode creates dir with exactly mode (mkdir applies the umask).
+func outDirWithMode(t *testing.T, dir string, mode os.FileMode) string {
+	t.Helper()
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, mode); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// registerOutDirProbe registers "cli_outdir", which packages a source tree as a
+// blob (so the plan needs blobs/ as well as plan.jsonl) and reports whether its
+// body ran.
+func registerOutDirProbe(t *testing.T) *bool {
+	t.Helper()
+	api.ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() { api.ResetTasks(); resource.ResetRepository() })
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "f"), []byte("payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(t.TempDir(), "dst")
+	ran := new(bool)
+	api.Task("cli_outdir", "", func() {
+		*ran = true
+		api.Dir(dst, options.WithSource(src))
+	})
+	return ran
+}
+
+func modePerm(t *testing.T, path string) os.FileMode {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.Mode().Perm()
+}
+
+// TestCLIPlanKeepsOutputDirMode: writing the plan into an existing -o
+// directory, given explicitly or as the "." default, leaves the directory's
+// mode alone (it used to become 0700, silently changing the recipe checkout
+// or a shared directory); plan.jsonl is 0600 and the blobs/ directory gonf
+// creates is 0700.
+func TestCLIPlanKeepsOutputDirMode(t *testing.T) {
+	for _, mode := range []os.FileMode{0o755, 0o750, 0o700} {
+		for _, useDefault := range []bool{false, true} {
+			name := mode.String() + " explicit -o"
+			if useDefault {
+				name = mode.String() + " default -o ."
+			}
+			t.Run(name, func(t *testing.T) {
+				ran := registerOutDirProbe(t)
+				dir := outDirWithMode(t, filepath.Join(t.TempDir(), "out"), mode)
+				args := []string{"plan", "cli_outdir"}
+				if useDefault {
+					t.Chdir(dir)
+				} else {
+					args = []string{"plan", "-o", dir, "cli_outdir"}
+				}
+				var code int
+				var stderr string
+				_ = captureStdout(t, func() { code, stderr = runGonf(t, args...) })
+				if code != 0 || !*ran {
+					t.Fatalf("exit %d (body ran: %v), stderr: %s", code, *ran, stderr)
+				}
+				if got := modePerm(t, dir); got != mode {
+					t.Fatalf("output directory mode = %04o, want %04o unchanged", got, mode)
+				}
+				if got := modePerm(t, filepath.Join(dir, "plan.jsonl")); got != 0o600 {
+					t.Fatalf("plan.jsonl mode = %04o, want 0600", got)
+				}
+				if got := modePerm(t, filepath.Join(dir, "blobs")); got != 0o700 {
+					t.Fatalf("blobs mode = %04o, want 0700", got)
+				}
+			})
+		}
+	}
+}
+
+// TestCLIPlanCreatesOutputDirPrivate: a -o directory (and its missing
+// parents) that gonf creates is 0700, the mode the old code gave every -o.
+func TestCLIPlanCreatesOutputDirPrivate(t *testing.T) {
+	registerOutDirProbe(t)
+	base := outDirWithMode(t, filepath.Join(t.TempDir(), "base"), 0o755)
+	out := filepath.Join(base, "x", "y")
+	var code int
+	var stderr string
+	_ = captureStdout(t, func() { code, stderr = runGonf(t, "plan", "-o", out, "cli_outdir") })
+	if code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, stderr)
+	}
+	if got := modePerm(t, base); got != 0o755 {
+		t.Fatalf("existing parent mode = %04o, want 0755 unchanged", got)
+	}
+	for _, dir := range []string{filepath.Join(base, "x"), out} {
+		if got := modePerm(t, dir); got != 0o700 {
+			t.Fatalf("created %s mode = %04o, want 0700", dir, got)
+		}
+	}
+}
+
+// TestCLIPlanRefusesUnsafeOutputDir: a -o directory that group or others can
+// write (sticky /tmp-style ones included), whether named or the "." default,
+// is refused with an actionable message BEFORE any task body runs, and is left
+// exactly as it was: nothing written, mode unchanged.
+func TestCLIPlanRefusesUnsafeOutputDir(t *testing.T) {
+	for _, mode := range []os.FileMode{0o775, 0o757, 0o777, 0o777 | os.ModeSticky} {
+		for _, useDefault := range []bool{false, true} {
+			name := mode.String() + " explicit -o"
+			if useDefault {
+				name = mode.String() + " default -o ."
+			}
+			t.Run(name, func(t *testing.T) {
+				ran := registerOutDirProbe(t)
+				dir := outDirWithMode(t, filepath.Join(t.TempDir(), "out"), mode)
+				before := testutil.Snapshot(t, dir)
+				args := []string{"plan", "cli_outdir"}
+				if useDefault {
+					t.Chdir(dir)
+				} else {
+					args = []string{"plan", "-o", dir, "cli_outdir"}
+				}
+				code, stderr := runGonf(t, args...)
+				for _, want := range []string{"plan: RecordPlan: plan dir: ", dir, "writable by group or others", "chmod go-w", "-o <dir>"} {
+					if code != 1 || !strings.Contains(stderr, want) {
+						t.Fatalf("exit %d, stderr %q; want exit 1 and a refusal containing %q", code, stderr, want)
+					}
+				}
+				if *ran {
+					t.Fatal("the task body ran; an unsafe -o must fail before any body")
+				}
+				testutil.RequireUnchanged(t, before, dir)
+			})
+		}
+	}
+}
+
+// TestCLIPlanRefusesForeignOutputDir: an -o directory owned by another user
+// (a root-owned system directory, only ever read) is refused up front too.
+func TestCLIPlanRefusesForeignOutputDir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("nothing is foreign to root here")
+	}
+	for _, dir := range []string{"/usr", "/etc", "/opt"} {
+		info, err := os.Lstat(dir)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		if st, ok := info.Sys().(*syscall.Stat_t); !ok || int(st.Uid) == os.Geteuid() {
+			continue
+		}
+		ran := registerOutDirProbe(t)
+		code, stderr := runGonf(t, "plan", "-o", dir, "cli_outdir")
+		if code != 1 || !strings.Contains(stderr, dir+" is owned by uid") || *ran {
+			t.Fatalf("exit %d, body ran %v, stderr %q; want an up-front \"is owned by uid\" refusal", code, *ran, stderr)
+		}
+		return
+	}
+	t.Skip("no root-owned system directory found")
+}

@@ -550,6 +550,19 @@ type unusablePlanDir struct {
 	nonRoot bool   // only refused for an unprivileged user (access(2) is not enforced for root)
 }
 
+// chmodedDir creates dir with exactly mode (mkdir applies the umask, so it
+// chmods afterwards) and returns it.
+func chmodedDir(t *testing.T, dir string, mode os.FileMode) string {
+	t.Helper()
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, mode); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 // unusablePlanDirs builds the up-front refusal table below root. Every case
 // lives inside root, and link points at root itself, so an attempt to create
 // anything through the symlink shows up as a change of root's snapshot.
@@ -562,13 +575,21 @@ func unusablePlanDirs(t *testing.T, root string) []unusablePlanDir {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(readonly, 0o700) })
+	groupW := chmodedDir(t, filepath.Join(root, "group-writable"), 0o770)
+	worldW := chmodedDir(t, filepath.Join(root, "world-writable"), 0o707)
+	sticky := chmodedDir(t, filepath.Join(root, "sticky-world-writable"), 0o777|os.ModeSticky)
 	link := filepath.Join(root, "link")
 	if err := os.Symlink(root, link); err != nil {
 		t.Fatal(err)
 	}
 	const symlinkRefusal = "is a symlink; symlinked plan directories are refused"
+	const groupWritableRefusal = "writable by group or others"
 	return []unusablePlanDir{
-		{"target is a file", file, "exists and is not a directory", false},
+		{"target is a file", file, "is not a directory", false},
+		{"existing dir is read-only", readonly, "cannot write to", true},
+		{"existing dir is group-writable", groupW, groupWritableRefusal, false},
+		{"existing dir is world-writable", worldW, groupWritableRefusal, false},
+		{"existing dir is sticky and world-writable (like /tmp)", sticky, groupWritableRefusal, false},
 		{"target is a symlink", link, symlinkRefusal, false},
 		{"target is a symlink with a trailing slash", link + "/", symlinkRefusal, false},
 		{"parent of an absent dir is a symlink", filepath.Join(link, "newsub"), symlinkRefusal, false},
@@ -581,9 +602,11 @@ func unusablePlanDirs(t *testing.T, root string) []unusablePlanDir {
 // TestRecordPlanRefusesUnusablePlanDirUpFront pins the early failure the old
 // SecureDir-first order gave for the common mistakes: a planDir SecureDir would
 // refuse (a symlink, a symlinked ancestor, a file below which nothing can be
-// created, an unwritable location) fails BEFORE any task body runs, with a
-// message that says what is wrong, and the check itself creates nothing. Only
-// the read-only case needs an unprivileged user; the others run as root too.
+// created, a group/other-writable directory, an unwritable location) fails
+// BEFORE any task body runs, with a message that says what is wrong, and the
+// check itself creates or changes nothing (the snapshot includes modes, so a
+// chmod of the refused directory would show). Only the read-only cases need an
+// unprivileged user; the others run as root too.
 func TestRecordPlanRefusesUnusablePlanDirUpFront(t *testing.T) {
 	root := t.TempDir()
 	for _, tc := range unusablePlanDirs(t, root) {
@@ -640,6 +663,31 @@ func TestCommitStagedBlobsRefusesSymlinkedPlanDir(t *testing.T) {
 	}
 }
 
+// TestCommitStagedBlobsRefusesWritablePlanDir pins the backstop for the
+// unsafe-mode refusal: even when a group- or world-writable plan directory gets
+// past the best-effort pre-check (the mode changed after it ran),
+// commitStagedBlobs refuses it and writes no blob into it. It is called
+// directly, so the pre-check cannot mask the result.
+func TestCommitStagedBlobsRefusesWritablePlanDir(t *testing.T) {
+	stage := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(stage, "blobs"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(stage, "blobs", "b"), []byte("blob"))
+	ops := []plan.Op{{Blob: "blobs/b"}}
+	for _, mode := range []os.FileMode{0o775, 0o757, 0o777 | os.ModeSticky} {
+		t.Run(mode.String(), func(t *testing.T) {
+			planDir := chmodedDir(t, filepath.Join(t.TempDir(), "out"), mode)
+			before := testutil.Snapshot(t, planDir)
+			err := commitStagedBlobs(ops, stage, planDir)
+			if err == nil || !strings.Contains(err.Error(), "writable by group or others") {
+				t.Fatalf("commitStagedBlobs into a %v directory = %v, want a refusal", mode, err)
+			}
+			testutil.RequireUnchanged(t, before, planDir)
+		})
+	}
+}
+
 // foreignOwnedDir returns a real (non-symlink) system directory that the
 // current user does not own, or skips the test. System directories are
 // root-owned everywhere gonf runs, so no chown (and no privilege) is needed.
@@ -662,33 +710,34 @@ func foreignOwnedDir(t *testing.T) string {
 }
 
 // TestCheckPlanDirUsableRefusesForeignOwner covers the "owned by another user"
-// refusal: SecureDir has to chmod an existing plan directory, which fails for
-// one we do not own, so it is refused up front. checkPlanDirUsable is called
-// directly (it only inspects the path) so the test can never modify the system
-// directory it uses as the example.
+// refusal: SecureDir only accepts an existing plan directory that the
+// effective user owns (its owner could otherwise swap plan.jsonl), so a
+// foreign one is refused up front. checkPlanDirUsable is called directly (it
+// only inspects the path) so the test can never modify the system directory it
+// uses as the example.
 func TestCheckPlanDirUsableRefusesForeignOwner(t *testing.T) {
 	dir := foreignOwnedDir(t)
 	err := checkPlanDirUsable(dir)
-	if err == nil || !strings.Contains(err.Error(), dir+" is owned by another user") {
-		t.Fatalf("checkPlanDirUsable(%s) = %v, want an \"owned by another user\" refusal", dir, err)
+	if err == nil || !strings.Contains(err.Error(), dir+" is owned by uid") {
+		t.Fatalf("checkPlanDirUsable(%s) = %v, want an \"is owned by uid\" refusal", dir, err)
 	}
 }
 
 // TestRecordPlanAcceptsUsablePlanDirs is the negative twin of the up-front
-// check: existing directories we own (also a read-only one, which SecureDir
-// has always chmod'ed to 0700 - the check must not turn that into a new
-// refusal) and absent ones (nested, under a writable ancestor) pass and record
-// normally.
+// check: existing directories we own that are not writable by others (0700, and
+// a 0755 one, the "-o ." checkout case) and absent ones (nested, under a
+// writable ancestor) pass and record normally. An existing directory keeps its
+// exact mode (SecureDir verifies it, m62: it used to chmod it to 0700), a
+// directory the record creates is 0700.
 func TestRecordPlanAcceptsUsablePlanDirs(t *testing.T) {
 	root := t.TempDir()
-	existing := filepath.Join(root, "existing")
-	readonly := filepath.Join(root, "readonly")
-	for dir, mode := range map[string]os.FileMode{existing: 0o700, readonly: 0o500} {
-		if err := os.Mkdir(dir, mode); err != nil {
-			t.Fatal(err)
-		}
+	wantMode := map[string]os.FileMode{
+		chmodedDir(t, filepath.Join(root, "private"), 0o700):  0o700,
+		chmodedDir(t, filepath.Join(root, "readable"), 0o755): 0o755,
+		filepath.Join(root, "absent"):                         0o700,
+		filepath.Join(root, "a", "b", "c"):                    0o700,
 	}
-	for _, planDir := range []string{existing, readonly, filepath.Join(root, "absent"), filepath.Join(root, "a", "b", "c")} {
+	for planDir, want := range wantMode {
 		ResetForTest()
 		ran := planDirProbe("probe")
 		if _, err := RecordPlan("x", planDir, "probe"); err != nil {
@@ -697,9 +746,35 @@ func TestRecordPlanAcceptsUsablePlanDirs(t *testing.T) {
 		if !*ran {
 			t.Fatalf("RecordPlan(%s): body did not run", planDir)
 		}
-		if fi, err := os.Stat(planDir); err != nil || fi.Mode().Perm() != 0o700 {
-			t.Fatalf("plan dir %s after record: %v, %v; want mode 0700", planDir, fi, err)
+		if fi, err := os.Stat(planDir); err != nil || fi.Mode().Perm() != want {
+			t.Fatalf("plan dir %s after record: %v, %v; want mode %04o", planDir, fi, err, want)
 		}
 	}
 	ResetForTest()
+}
+
+// TestRecordPlanLeavesExistingDirModeAlone is the m62 regression at the API:
+// RecordPlan into an existing plan directory, blobs included, keeps the
+// directory's mode (0755 and the read-only-for-others 0750/0555 cases) while
+// the blobs directory it creates inside is 0700.
+func TestRecordPlanLeavesExistingDirModeAlone(t *testing.T) {
+	src := t.TempDir()
+	mustWrite(t, filepath.Join(src, "f"), []byte("payload"))
+	for _, mode := range []os.FileMode{0o755, 0o750, 0o700} {
+		t.Run(mode.String(), func(t *testing.T) {
+			planDir := chmodedDir(t, filepath.Join(t.TempDir(), "out"), mode)
+			ResetForTest()
+			t.Cleanup(ResetForTest)
+			Task("tree", "", func() { Dir(filepath.Join(t.TempDir(), "dst"), options.WithSource(src)) })
+			if _, err := RecordPlan("x", planDir, "tree"); err != nil {
+				t.Fatal(err)
+			}
+			if fi, err := os.Stat(planDir); err != nil || fi.Mode().Perm() != mode {
+				t.Fatalf("plan dir after record: %v, %v; want mode %04o unchanged", fi, err, mode)
+			}
+			if fi, err := os.Stat(filepath.Join(planDir, "blobs")); err != nil || fi.Mode().Perm() != 0o700 {
+				t.Fatalf("blobs dir after record: %v, %v; want the created directory 0700", fi, err)
+			}
+		})
+	}
 }

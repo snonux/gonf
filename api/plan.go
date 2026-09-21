@@ -133,16 +133,19 @@ func (s *recordingSession) reset() {
 //   - Every error that arises while recording or validating (task-body,
 //     cycle, packaging and pre-flight refusals) leaves planDir exactly as it
 //     was, and an absent planDir is not created. So does the refusal of a
-//     planDir that plan.SecureDir cannot take over (a symlink or a symlinked
-//     ancestor, a file, another user's directory, no writable ancestor): a
-//     best-effort pre-check (checkPlanDirUsable) catches the common cases
+//     planDir that plan.SecureDir refuses (a symlink or a symlinked ancestor,
+//     a file, another user's directory, one that group or others can write,
+//     no writable ancestor): a best-effort pre-check (checkPlanDirUsable)
+//     catches the common cases
 //     before any task body runs, and whatever it misses (a path that changed
 //     in between, ACLs) is refused by SecureDir at commit time, after the
 //     task bodies ran but before anything is written to planDir.
 //   - An I/O failure while COMMITTING the blobs (full disk, permissions, a
 //     blob path that cannot be replaced) is reported but is not atomic: some
 //     blobs may already be copied, so a partially updated blob store is
-//     possible. planDir is created (owner-only) at that step.
+//     possible. A missing planDir is created (0700) at that step; an existing
+//     one is verified and keeps its mode (plan.SecureDir never chmods a
+//     directory it did not create).
 //   - The staging directory (in $TMPDIR, created only when a blob is written)
 //     is removed on every return path and when a task body calls logger.Fatal.
 //     A process killed by a signal it does not handle, or by SIGKILL, leaves

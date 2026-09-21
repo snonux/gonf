@@ -54,12 +54,13 @@ applies. What is guaranteed, and what is not:
   cycle or packaging error) `dir` is exactly as it was (byte for byte and
   mtime for mtime), and a `dir` that did not exist is not created. The same
   holds when `dir` itself is unusable (a symlink, or below a symlinked
-  directory; a file; owned by another user; nowhere writable to create it):
-  a cheap best-effort check rejects those before any task body runs, creating
-  nothing. It is a pre-check, not a guarantee: whatever it misses (the path
-  changed in between, ACLs) is still refused by the same no-follow directory
-  open that writes the blobs, at commit time, after the task bodies ran but
-  before anything is written to `dir`.
+  directory; a file; owned by another user; writable by group or others; not
+  writable by you; nowhere writable to create it): a cheap best-effort check
+  rejects those before any task body runs, creating and changing nothing. It
+  is a pre-check, not a guarantee: whatever it misses (the path changed in
+  between, ACLs) is still refused by the same no-follow directory open that
+  writes the blobs, at commit time, after the task bodies ran but before
+  anything is written to `dir`.
 - An I/O error while COMMITTING the blobs into `dir` after a successful record
   (full disk, permissions, a blob path that cannot be replaced) is reported but
   not atomic: some blobs may already be copied, so a partially updated blob
@@ -398,12 +399,38 @@ import from an external `plan_test` file is fine.
 | Command | Effect |
 |---------|--------|
 | `gonf <task> [task…]` | Record + apply locally |
-| `gonf plan [-o dir\|-stdout] [-id name] <task>…` | Write `dir/plan.jsonl` (+ `blobs/`), or print JSONL to stdout |
+| `gonf plan [-o dir\|-stdout] [-id name] <task>…` | Write `dir/plan.jsonl` (+ `blobs/`; `dir` defaults to `.`, is created `0700` when missing, is never chmod'ed when it exists and must be yours and not group/other-writable), or print JSONL to stdout |
 | `gonf apply [-n\|-dry-run\|-strict-preview] <plan.jsonl\|->` | Apply a plan file, or read **GONF-PUSH/1** / bare JSONL from stdin |
 | `gonf push [-n\|-preview] [-id name] [-- ssh-args…] user@host <task>…` | Record in memory, stream over `ssh` to remote `gonf apply -` |
 | `gonf cluster [-n\|-preview] [-j N] [-id name] [-host-timeout 10m] <cluster> <task>…` | Resolve inventory cluster; record once; parallel push or strict preview to each host |
 | `gonf fleet [-n\|-preview] [-j N] [-id name] [-host-timeout 10m] <fleet> <task>…` | Resolve fleet (list of clusters); push or strict preview on unique hosts |
 | `gonf hosts` / `gonf clusters` / `gonf fleets` | List registered inventory |
+
+### The output directory (`-o dir`, default `.`)
+
+`plan.jsonl` and the blobs can hold secret material, and a later
+`gonf apply` trusts them, so they are only written into a directory nobody
+else can modify. `dir` is nevertheless the operator's directory, not gonf's
+(the default `.` is normally the recipe checkout), so gonf never rewrites its
+mode:
+
+| `dir` | Result |
+|-------|--------|
+| missing (any missing parents too) | created, every created component `0700` whatever the umask |
+| exists, yours, not writable by group/others (`0755`, `0750`, `0700`, ...) | used **as it is**; its mode is not changed. Only `plan.jsonl` (`0600`) and the `blobs/` directory gonf creates (`0700`) are private |
+| exists, writable by group or others (`0775`, `0777`, sticky `/tmp` included) | refused, nothing changed |
+| exists, owned by another user (root included: a root run does not take over a user's directory) | refused, nothing changed |
+| not a directory, or a symlink (or below one) | refused |
+
+A refusal names the directory and the problem and says what to do: `chmod go-w`
+it, or pass `-o <private dir>`. Pre-existing parents of `dir` are only walked
+(no symlinks), not checked. The same rule applies to a `blobs/` directory that
+already exists inside `dir`: kept as it is when it is yours and not group/other
+writable, refused otherwise. **Behaviour change:** earlier versions chmod'ed
+`dir` to `0700` on every run (breaking a served or shared directory, and
+changing the mode of the checkout for the default `-o .`); an unsafe directory
+that used to be silently narrowed is now refused, and on a system whose default
+umask is `002` a `0775` checkout therefore needs `-o <dir>` or `chmod g-w`.
 
 ### Inventory DSL (`Host` / `Cluster` / `Fleet`)
 
