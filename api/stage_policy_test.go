@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/testutil"
+	"github.com/snonux/gonf/plan"
 )
 
 // These tests pin how RecordPlan applies plan.SecureDir's directory rule (m62)
@@ -94,6 +96,55 @@ func TestRecordPlanReadOnlyPlanDirSaysHowToFixIt(t *testing.T) {
 	}
 }
 
+// requireSinglePrefixRefusal pins the exact wording shape of a commit-time blob
+// refusal: it starts with "RecordPlan: ", carries that prefix and no other
+// "plan:" segment anywhere (neither "plan dir:" nor the blob store's own "plan:"
+// behind it: "RecordPlan: plan: write blob ..."), names the blob store
+// operation and the wanted parts, and keeps the typed cause reachable. It does
+// not depend on OS error text.
+func requireSinglePrefixRefusal(t *testing.T, err error, wantParts ...string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("RecordPlan = nil, want a refusal")
+	}
+	msg := err.Error()
+	if !strings.HasPrefix(msg, "RecordPlan: ") || strings.Count(msg, "RecordPlan:") != 1 || strings.Contains(msg, "plan: ") || strings.Contains(msg, "plan dir:") {
+		t.Fatalf("RecordPlan error = %q, want one leading %q and no other \"plan:\" segment", msg, "RecordPlan: ")
+	}
+	var refusal plan.Refusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("RecordPlan error = %q: the blob store's refusal is not reachable through errors.As", msg)
+	}
+	for _, part := range append([]string{`blob "blobs/`}, wantParts...) {
+		if !strings.Contains(msg, part) {
+			t.Fatalf("RecordPlan error = %q, want it to contain %q", msg, part)
+		}
+	}
+}
+
+// TestRecordPlanReadOnlyDefaultDirNamesTheWorkingDirectory: the read-only
+// refusal words the directory like every other refusal of the shared rule, as
+// an absolute path, so the default `-o .` reads "cannot write to <cwd>", not
+// "cannot write to .".
+func TestRecordPlanReadOnlyDefaultDirNamesTheWorkingDirectory(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission checks are not enforced for root")
+	}
+	ran := blobTask(t)
+	t.Chdir(chmodedDir(t, filepath.Join(t.TempDir(), "checkout"), 0o555))
+	cwd, err := filepath.Abs(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = RecordPlan("x", ".", "blobtask")
+	if err == nil || !strings.Contains(err.Error(), "cannot write to "+cwd+": permission denied") || strings.Contains(err.Error(), "cannot write to .") {
+		t.Fatalf("RecordPlan(%q) error = %v, want \"cannot write to %s: permission denied\"", ".", err, cwd)
+	}
+	if *ran {
+		t.Fatal("the task body ran; a read-only plan dir must fail before any body")
+	}
+}
+
 // unsafeBlobsDir is one existing blobs/ directory (inside an otherwise fine
 // plan directory) that must be refused, and the text the refusal must contain.
 type unsafeBlobsDir struct {
@@ -101,7 +152,10 @@ type unsafeBlobsDir struct {
 	// setup creates the unsafe blobs/ in planDir and returns a second directory
 	// the test must find unchanged as well ("" if none): what a symlink points at.
 	setup func(t *testing.T, planDir string) (also string)
-	want  string
+	// want is a substring of the refusal. A setup that needs the environment
+	// (a foreign group) skips its own subtest from within (testutil.ChgrpForeign
+	// is called on the subtest's t), so the case never silently drops out.
+	want string
 }
 
 func unsafeBlobsDirs(t *testing.T) []unsafeBlobsDir {
@@ -122,16 +176,14 @@ func unsafeBlobsDirs(t *testing.T) []unsafeBlobsDir {
 			}
 			return target
 		}, `component "blobs"`},
-	}
-	if _, ok := testutil.FindForeignGroup(); ok {
-		cases = append(cases, unsafeBlobsDir{"group-writable by a shared group", func(t *testing.T, planDir string) string {
+		{"group-writable by a shared group", func(t *testing.T, planDir string) string {
 			blobs := chmodedDir(t, filepath.Join(planDir, "blobs"), 0o700)
-			testutil.ChgrpForeign(t, blobs)
+			testutil.ChgrpForeign(t, blobs) // skips this subtest when no foreign group is usable
 			if err := os.Chmod(blobs, 0o775); err != nil {
 				t.Fatal(err)
 			}
 			return ""
-		}, "group-writable by group"})
+		}, "group-writable by group"},
 	}
 	return cases
 }
@@ -141,8 +193,8 @@ func unsafeBlobsDirs(t *testing.T) []unsafeBlobsDir {
 // the blobs are committed, after the task body ran (the pre-check does not
 // look at blobs/, see checkPlanDirUsable) and before anything is written: the
 // plan directory, and whatever a symlink points at, stay exactly as they were.
-// The message names the blobs directory and the reason and is not wrapped in a
-// second "plan dir: ... plan: ..." chain.
+// The message names the blobs directory and the reason and reads with a single
+// "RecordPlan: " prefix (requireSinglePrefixRefusal).
 func TestRecordPlanRefusesUnsafeBlobsDirAtCommit(t *testing.T) {
 	for _, tc := range unsafeBlobsDirs(t) {
 		t.Run(tc.name, func(t *testing.T) {
@@ -155,15 +207,7 @@ func TestRecordPlanRefusesUnsafeBlobsDirAtCommit(t *testing.T) {
 				alsoBefore = testutil.Snapshot(t, also)
 			}
 			ops, err := RecordPlan("x", planDir, "blobtask")
-			blobs := filepath.Join(planDir, "blobs")
-			for _, part := range []string{"RecordPlan: ", blobs, tc.want} {
-				if err == nil || !strings.Contains(err.Error(), part) {
-					t.Fatalf("RecordPlan error = %v, want a refusal containing %q", err, part)
-				}
-			}
-			if strings.Contains(err.Error(), "plan dir:") {
-				t.Fatalf("RecordPlan error = %v, want no doubled \"plan dir: ... plan: ...\" prefix", err)
-			}
+			requireSinglePrefixRefusal(t, err, filepath.Join(planDir, "blobs"), tc.want)
 			if ops != nil || !*ran {
 				t.Fatalf("ops = %v, body ran = %v; want no ops and a commit-time (post-body) refusal", ops, *ran)
 			}

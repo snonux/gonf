@@ -220,8 +220,10 @@ func checkExistingPlanDir(path string, info os.FileInfo) error {
 		return err
 	}
 	if err := unix.Access(path, unix.W_OK|unix.X_OK); err != nil {
+		// plan.DirLabel, like every other refusal of the shared rule, so the
+		// default "-o ." reads as the working directory, not as "cannot write to .".
 		return fmt.Errorf("cannot write to %s: %w; run chmod u+w on it, "+
-			"or choose a writable private directory you own (-o <private dir>)", path, err)
+			"or choose a writable private directory you own (-o <private dir>)", plan.DirLabel(path), err)
 	}
 	return nil
 }
@@ -237,9 +239,10 @@ func checkExistingPlanDir(path string, info os.FileInfo) error {
 // which is unavoidable without transactional directories.
 //
 // Error prefixes: a refused planDir is reported as "RecordPlan: plan dir: ...".
-// The blob store's own errors already name the blob and start with "plan: "
-// (for example an unsafe existing blobs/ directory), so they only get the
-// "RecordPlan: " prefix instead of a second "plan dir: ... plan: ..." chain.
+// A blob write error (for example an unsafe existing blobs/ directory) is a
+// plan.Refusal that names the blob; it is reported as "RecordPlan: <reason>"
+// with the store's own "plan: " prefix dropped (recordCommitError), so the
+// message has one package prefix, not a "plan dir: ... plan: ..." chain.
 func commitStagedBlobs(ops []plan.Op, stage, planDir string) error {
 	if err := plan.SecureDir(planDir); err != nil {
 		return fmt.Errorf("RecordPlan: plan dir: %w", err)
@@ -252,10 +255,23 @@ func commitStagedBlobs(ops []plan.Op, stage, planDir string) error {
 		}
 		copied[op.Blob] = true
 		if err := copyStagedBlob(stage, dest, op.Blob); err != nil {
-			return fmt.Errorf("RecordPlan: %w", err)
+			return recordCommitError(err)
 		}
 	}
 	return nil
+}
+
+// recordCommitError words a failure to copy a staged blob as "RecordPlan: ...".
+// The blob store's write errors are plan.Refusals whose Reason is the message
+// without the store's "plan: " prefix; showing that avoids "RecordPlan: plan:
+// ..." (and, at `gonf plan`, "plan: RecordPlan: plan: ..."). The original error
+// stays reachable through errors.Is/As. Any other error keeps its own text.
+func recordCommitError(err error) error {
+	var refusal plan.Refusal
+	if errors.As(err, &refusal) {
+		return &refusedError{msg: "RecordPlan: " + refusal.Reason(), cause: err}
+	}
+	return fmt.Errorf("RecordPlan: %w", err)
 }
 
 // copyStagedBlob copies one staged blob (a single file, or a tree/glob

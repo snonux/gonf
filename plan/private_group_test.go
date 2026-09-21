@@ -12,11 +12,16 @@ import (
 
 // The tests in this file pin the group-write rule of checkDirAttrs: a
 // directory the caller owns that is group-writable is accepted only when that
-// group is the caller's user-private group (gid == egid == euid), because such
-// a group has nobody else in it. They never change the process's gid: the
-// accepting cases skip unless the runner is a user-private-group user, and the
-// refusing ones chgrp a directory to a supplementary group of the runner (and
-// skip when it has none).
+// group is the caller's user-private group (gid == egid == euid, not 0),
+// because such a group has nobody else in it.
+//
+// TestCheckDirAttrsRule runs the rule against SYNTHETIC process identities
+// (procIDs) and directory attributes, so every branch is exercised on every
+// account, root and non-private-group users included, with no skips. The other
+// tests here are integration tests on real directories; they never change the
+// process's gid, so each environment-dependent case is its own subtest that
+// skips, with a reason, when the runner is not a user-private-group user or has
+// no supplementary group to chgrp to.
 
 // sharedGroupDir creates dir with mode and a group other than the caller's
 // effective gid (the mode is applied after the chgrp so nothing can clear a
@@ -128,63 +133,134 @@ func TestSecureDirRefusesSharedGroupWritableDirs(t *testing.T) {
 // in a shared group but 0755 or 0750 is accepted and left as it is.
 func TestSecureDirAcceptsForeignGroupWithoutGroupWrite(t *testing.T) {
 	for _, mode := range []os.FileMode{0o755, 0o750, 0o700} {
-		dir := filepath.Join(t.TempDir(), "shared-read")
-		sharedGroupDir(t, dir, mode)
-		if err := SecureDir(dir); err != nil {
-			t.Fatalf("SecureDir(%s, mode %v, foreign group) = %v, want success", dir, mode, err)
-		}
-		if got := modeOf(t, dir); got != mode {
-			t.Fatalf("mode after SecureDir = %v, want %v unchanged", got, mode)
-		}
-	}
-}
-
-// attrCase is one row of TestCheckDirAttrsGroupRule; want "" means accepted,
-// else a substring of the refusal.
-type attrCase struct {
-	name string
-	a    dirAttrs
-	want string
-}
-
-// TestCheckDirAttrsGroupRule pins the rule on synthetic attributes, so the
-// cases a test runner cannot create (a gid that is not the caller's, whoever
-// the caller is) are covered too: o+w is always refused, g+w only passes for
-// the caller's private group, and the owner rule comes first.
-func TestCheckDirAttrsGroupRule(t *testing.T) {
-	euid, egid := uint32(os.Geteuid()), uint32(os.Getegid())
-	otherGid := egid + 1
-	base := dirAttrs{isDir: true, uid: euid, gid: egid}
-	// The caller's own primary group is private only when egid == euid.
-	primary := attrCase{"0775 in the private group accepted", withMode(base, 0o775), ""}
-	if egid != euid {
-		primary = attrCase{"0775 in the primary group of a non-private-group process refused", withMode(base, 0o775), "not your private group"}
-	}
-	cases := []attrCase{
-		primary,
-		{"0755 accepted", withMode(base, 0o755), ""},
-		{"0777 refused", withMode(base, 0o777), "world-writable"},
-		{"1777 refused", withMode(base, 0o1777), "world-writable"},
-		{"0757 in a foreign group refused", withGID(withMode(base, 0o757), otherGid), "world-writable"},
-		{"0775 in a foreign group refused", withGID(withMode(base, 0o775), otherGid), "not your private group"},
-		{"2775 in a foreign group refused", withGID(withMode(base, 0o2775), otherGid), "not your private group"},
-		{"0755 in a foreign group accepted", withGID(withMode(base, 0o755), otherGid), ""},
-		{"foreign owner refused before the mode", withUID(withMode(base, 0o775), euid+1), "is owned by uid"},
-		{"not a directory refused", dirAttrs{uid: euid, gid: egid, mode: 0o700}, "is not a directory"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			err := checkDirAttrs("/some/dir", tc.a)
-			switch {
-			case tc.want == "" && err != nil:
-				t.Fatalf("checkDirAttrs = %v, want accepted", err)
-			case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
-				t.Fatalf("checkDirAttrs = %v, want a refusal containing %q", err, tc.want)
+		t.Run(mode.String(), func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "shared-read")
+			sharedGroupDir(t, dir, mode) // skips this subtest when no foreign group is usable
+			if err := SecureDir(dir); err != nil {
+				t.Fatalf("SecureDir(%s, mode %v, foreign group) = %v, want success", dir, mode, err)
+			}
+			if got := modeOf(t, dir); got != mode {
+				t.Fatalf("mode after SecureDir = %v, want %v unchanged", got, mode)
 			}
 		})
 	}
 }
 
-func withMode(a dirAttrs, mode uint32) dirAttrs { a.mode = mode; return a }
-func withGID(a dirAttrs, gid uint32) dirAttrs   { a.gid = gid; return a }
-func withUID(a dirAttrs, uid uint32) dirAttrs   { a.uid = uid; return a }
+// idCase is one row of TestCheckDirAttrsRule: the process identity, the
+// directory attributes and the verdict; want "" means accepted, else a
+// substring of the refusal.
+type idCase struct {
+	name string
+	me   procIDs
+	a    dirAttrs
+	want string
+}
+
+// dirOf is a directory owned by uid, group gid, with mode.
+func dirOf(uid, gid, mode uint32) dirAttrs {
+	return dirAttrs{isDir: true, uid: uid, gid: gid, mode: mode}
+}
+
+// TestCheckDirAttrsRule pins the acceptance rule on synthetic identities and
+// attributes, independent of who runs the test: the owner rule (root is not
+// exempt), o+w always refused, and g+w accepted only for the caller's private
+// group, which needs BOTH halves of the convention, gid == egid and
+// egid == euid, and is never gid 0. Each row is chosen so that dropping one
+// condition of the rule flips it (see the comments on the groups of rows).
+func TestCheckDirAttrsRule(t *testing.T) {
+	const notPrivate = "not your private group"
+	upg := procIDs{euid: 1000, egid: 1000}          // Fedora/Ubuntu-style user
+	sharedPrimary := procIDs{euid: 1000, egid: 100} // classic "users" primary group
+	root := procIDs{euid: 0, egid: 0}
+	var cases []idCase
+	add := func(name string, me procIDs, a dirAttrs, want string) {
+		cases = append(cases, idCase{name, me, a, want})
+	}
+	// The private group is accepted only when gid == egid == euid ...
+	add("UPG user, 0775 in the private group", upg, dirOf(1000, 1000, 0o775), "")
+	add("UPG user, 2775 (setgid) in the private group", upg, dirOf(1000, 1000, 0o2775), "")
+	add("UPG user, 0720 in the private group", upg, dirOf(1000, 1000, 0o720), "")
+	add("UPG user, 0755 accepted", upg, dirOf(1000, 1000, 0o755), "")
+	// ... so a different gid (a group of someone else, or a supplementary one) is refused
+	// (drops "gid == egid").
+	add("UPG user, 0775 in another group", upg, dirOf(1000, 1001, 0o775), notPrivate)
+	add("UPG user, 2775 in another group", upg, dirOf(1000, 1001, 0o2775), notPrivate)
+	add("UPG user, 0755 in another group accepted (no group write)", upg, dirOf(1000, 1001, 0o755), "")
+	// egid != euid: the primary group is shared, so a group-writable dir of it
+	// is refused even though gid == egid (drops "egid == euid")...
+	add("shared primary group, 0775 in the primary group", sharedPrimary, dirOf(1000, 100, 0o775), notPrivate)
+	add("shared primary group, 0770 in the primary group", sharedPrimary, dirOf(1000, 100, 0o770), notPrivate)
+	// ... and the group named like the user (gid == euid, but not the egid) is not this process's private group either.
+	add("shared primary group, 0775 in the group numbered like the user", sharedPrimary, dirOf(1000, 1000, 0o775), notPrivate)
+	add("shared primary group, 0755 accepted", sharedPrimary, dirOf(1000, 100, 0o755), "")
+	// World-writable is refused for everybody, sticky or not, private group or not.
+	add("UPG user, 0777", upg, dirOf(1000, 1000, 0o777), "world-writable")
+	add("UPG user, 0757", upg, dirOf(1000, 1000, 0o757), "world-writable")
+	add("UPG user, 1777 (sticky, like /tmp)", upg, dirOf(1000, 1000, 0o1777), "world-writable")
+	add("UPG user, 0702", upg, dirOf(1000, 1000, 0o702), "world-writable")
+	add("shared primary group, 0777", sharedPrimary, dirOf(1000, 100, 0o777), "world-writable")
+	add("root, 0777 root-owned", root, dirOf(0, 0, 0o777), "world-writable")
+	// Root is not exempt from the owner rule: another user's directory lets
+	// that user swap plan.jsonl (drops "uid == euid" for euid 0).
+	add("root, directory owned by another uid", root, dirOf(1000, 0, 0o755), "is owned by uid 1000")
+	add("root, directory owned by another uid, 0700", root, dirOf(1000, 1000, 0o700), "is owned by uid 1000")
+	add("UPG user, directory owned by another uid", upg, dirOf(1001, 1000, 0o755), "is owned by uid 1001")
+	add("UPG user, directory owned by root", upg, dirOf(0, 0, 0o755), "is owned by uid 0")
+	add("owner rule comes before the mode", upg, dirOf(1001, 1000, 0o777), "is owned by uid 1001")
+	add("root, own directory 0755 accepted", root, dirOf(0, 0, 0o755), "")
+	add("root, own directory 0700 accepted", root, dirOf(0, 0, 0o700), "")
+	add("root, own directory in another group 0750 accepted", root, dirOf(0, 5, 0o750), "")
+	// Gid 0 is never a private group: on the BSDs it is "wheel", so a root run
+	// refuses group write even where gid == egid == euid == 0 (drops "gid != 0").
+	add("root, 0775 root:root", root, dirOf(0, 0, 0o775), notPrivate)
+	add("root, 0770 root:root", root, dirOf(0, 0, 0o770), notPrivate)
+	add("root, 2775 root:root", root, dirOf(0, 0, 0o2775), notPrivate)
+	add("root, 0775 in another group", root, dirOf(0, 5, 0o775), notPrivate)
+	add("non-root user whose egid is 0, 0775 root group", procIDs{euid: 1000, egid: 0}, dirOf(1000, 0, 0o775), notPrivate)
+	// Not a directory (a file, a symlink as Lstat reports it).
+	add("not a directory", upg, dirAttrs{uid: 1000, gid: 1000, mode: 0o700}, "is not a directory")
+	add("not a directory, root", root, dirAttrs{uid: 0, gid: 0, mode: 0o700}, "is not a directory")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkDirAttrs("/some/dir", tc.a, tc.me)
+			switch {
+			case tc.want == "" && err != nil:
+				t.Fatalf("checkDirAttrs(%+v, %+v) = %v, want accepted", tc.a, tc.me, err)
+			case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+				t.Fatalf("checkDirAttrs(%+v, %+v) = %v, want a refusal containing %q", tc.a, tc.me, err, tc.want)
+			}
+		})
+	}
+}
+
+// TestIsPrivateGroup pins the convention itself, row by row, so a change of it
+// shows up here and not only through the wording of a refusal.
+func TestIsPrivateGroup(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		me   procIDs
+		gid  uint32
+		want bool
+	}{
+		{"gid == egid == euid", procIDs{1000, 1000}, 1000, true},
+		{"gid != egid", procIDs{1000, 1000}, 1001, false},
+		{"egid != euid, gid == egid", procIDs{1000, 100}, 100, false},
+		{"egid != euid, gid == euid", procIDs{1000, 100}, 1000, false},
+		{"root: gid 0 is wheel on the BSDs, never private", procIDs{0, 0}, 0, false},
+		{"root, another gid", procIDs{0, 0}, 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.me.isPrivateGroup(tc.gid); got != tc.want {
+				t.Fatalf("%+v.isPrivateGroup(%d) = %v, want %v", tc.me, tc.gid, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCurrentIDsIsTheProcess: production callers judge directories for the
+// running process, so the synthetic tests above are about the same rule.
+func TestCurrentIDsIsTheProcess(t *testing.T) {
+	if got, want := currentIDs(), (procIDs{uint32(os.Geteuid()), uint32(os.Getegid())}); got != want {
+		t.Fatalf("currentIDs() = %+v, want %+v", got, want)
+	}
+}

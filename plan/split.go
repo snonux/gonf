@@ -10,7 +10,8 @@ type Chunk struct {
 }
 
 // Refusal is implemented by every error ValidateChunkDeps and
-// ValidateChangeGates return. Reason is the refusal without the plan engine's
+// ValidateChangeGates return, and by the errors of the blob store's write
+// methods (Store.WriteFile, WriteTree, WriteGlob). Reason is the refusal without the plan engine's
 // "plan: " prefix, so a caller that adds its own prefix (RecordPlanTo's
 // "RecordPlan: ...", api.Apply's "Apply: ...") can show one prefix instead of
 // "plan: plan: ..." or "record: plan: ...". Callers reach it with errors.As

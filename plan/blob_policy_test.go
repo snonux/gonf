@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,10 +25,38 @@ func blobWriters(t *testing.T) map[string]func(*Store) error {
 	}
 }
 
+// requireBlobRefusal checks the exact wording shape of a blob store refusal:
+// ONE leading package prefix ("plan: ", never "plan: ... plan: ..."), the
+// refused directory and the wanted reason in the text, and, through the Refusal
+// interface, the same message without the prefix, which is what RecordPlan
+// shows behind its own. It does not look at OS error text (which differs per
+// platform), only at wording this package composes.
+func requireBlobRefusal(t *testing.T, err error, wantParts ...string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("got nil, want a refusal")
+	}
+	msg := err.Error()
+	if !strings.HasPrefix(msg, "plan: ") || strings.Count(msg, "plan:") != 1 {
+		t.Fatalf("refusal %q, want exactly one leading %q and no repeated package prefix", msg, "plan: ")
+	}
+	var refusal Refusal
+	if !errors.As(err, &refusal) || refusal.Reason() != strings.TrimPrefix(msg, "plan: ") {
+		t.Fatalf("refusal %q is not a Refusal whose Reason is the message without %q", msg, "plan: ")
+	}
+	for _, part := range wantParts {
+		if !strings.Contains(msg, part) {
+			t.Fatalf("refusal %q, want it to contain %q", msg, part)
+		}
+	}
+}
+
 // TestStoreRefusesSymlinkedBlobsDir: a blobs/ that is a symlink (to a directory
 // somewhere else) is refused by every writer, because every component of the
 // path is opened O_NOFOLLOW, and nothing is written, cleared or changed
-// through the link: the link's target keeps its content and its mode.
+// through the link: the link's target keeps its content and its mode. The
+// refusal names the blobs component; which errno the kernel reports for it
+// (ENOTDIR on Linux, ELOOP or EMLINK elsewhere) is not asserted.
 func TestStoreRefusesSymlinkedBlobsDir(t *testing.T) {
 	for name, write := range blobWriters(t) {
 		t.Run(name, func(t *testing.T) {
@@ -40,10 +69,7 @@ func TestStoreRefusesSymlinkedBlobsDir(t *testing.T) {
 				t.Fatal(err)
 			}
 			targetBefore, rootBefore := testutil.Snapshot(t, target), testutil.Snapshot(t, root)
-			err := write(NewStore(root))
-			if err == nil || !strings.Contains(err.Error(), `component "blobs"`) || !strings.Contains(err.Error(), "not a directory") {
-				t.Fatalf("%s through a symlinked blobs/ = %v, want a `component \"blobs\": not a directory` refusal", name, err)
-			}
+			requireBlobRefusal(t, write(NewStore(root)), `component "blobs"`)
 			testutil.RequireUnchanged(t, targetBefore, target)
 			testutil.RequireUnchanged(t, rootBefore, root)
 		})
@@ -102,10 +128,7 @@ func TestStoreBlobsDirGroupRule(t *testing.T) {
 		t.Run(name+" shared group is refused", func(t *testing.T) {
 			root := t.TempDir()
 			sharedGroupDir(t, filepath.Join(root, "blobs"), 0o775)
-			err := write(NewStore(root))
-			if err == nil || !strings.Contains(err.Error(), "group-writable by group") {
-				t.Fatalf("%s into a 0775 blobs/ of a shared group = %v, want a refusal", name, err)
-			}
+			requireBlobRefusal(t, write(NewStore(root)), filepath.Join(root, "blobs"), "group-writable by group")
 			requireEntries(t, filepath.Join(root, "blobs"))
 		})
 	}

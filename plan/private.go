@@ -52,31 +52,42 @@ func SecureDir(dir string) error {
 // WritePrivateFile atomically replaces name below dir with an owner-only file.
 // The data is written through a fresh O_EXCL descriptor before rename, so a
 // permissive pre-existing file or symlink never receives secret plan material.
+// Its errors carry the package prefix "plan: " exactly once.
 func WritePrivateFile(dir, name string, data []byte) error {
+	if err := writePrivateFile(dir, name, data); err != nil {
+		return fmt.Errorf("plan: %w", err)
+	}
+	return nil
+}
+
+// writePrivateFile is WritePrivateFile without the "plan: " prefix on its
+// errors, so a caller that wraps them in an error of its own (Store.WriteFile)
+// does not repeat the package prefix inside the message.
+func writePrivateFile(dir, name string, data []byte) error {
 	if filepath.Base(name) != name || name == "." {
-		return fmt.Errorf("plan: invalid private file name %q", name)
+		return fmt.Errorf("invalid private file name %q", name)
 	}
 	dirFD, err := openSecureDir(dir)
 	if err != nil {
-		return fmt.Errorf("plan: open private directory: %w", err)
+		return fmt.Errorf("open private directory: %w", err)
 	}
 	defer func() { _ = unix.Close(dirFD) }()
 	tempName := "." + name + ".tmp-" + strconv.Itoa(os.Getpid())
 	fileFD, err := unix.Openat(dirFD, tempName, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
 	if err != nil {
-		return fmt.Errorf("plan: create private file: %w", err)
+		return fmt.Errorf("create private file: %w", err)
 	}
 	file := os.NewFile(uintptr(fileFD), tempName)
 	defer func() { _ = unix.Unlinkat(dirFD, tempName, 0) }()
 	if _, err := file.Write(data); err != nil {
 		_ = file.Close()
-		return fmt.Errorf("plan: write private file: %w", err)
+		return fmt.Errorf("write private file: %w", err)
 	}
 	if err := file.Close(); err != nil {
-		return fmt.Errorf("plan: close private file: %w", err)
+		return fmt.Errorf("close private file: %w", err)
 	}
 	if err := unix.Renameat(dirFD, tempName, dirFD, name); err != nil {
-		return fmt.Errorf("plan: replace private file: %w", err)
+		return fmt.Errorf("replace private file: %w", err)
 	}
 	return nil
 }
@@ -89,7 +100,7 @@ func openSecureDir(dir string) (int, error) {
 	base, parts := splitSecurePath(dir)
 	fd, err := unix.Open(base, openDirFlags, 0)
 	if err != nil {
-		return -1, fmt.Errorf("open %s: %w", dirLabel(dir), err)
+		return -1, fmt.Errorf("open %s: %w", DirLabel(dir), err)
 	}
 	// created reports whether the directory fd points at was made by this call.
 	// The starting point (".", "/") never was.
@@ -98,7 +109,7 @@ func openSecureDir(dir string) (int, error) {
 		next, madeHere, err := openOrCreateChild(fd, part)
 		_ = unix.Close(fd)
 		if err != nil {
-			return -1, fmt.Errorf("open %s: component %q: %w", dirLabel(dir), part, err)
+			return -1, fmt.Errorf("open %s: component %q: %w", DirLabel(dir), part, err)
 		}
 		fd, created = next, madeHere
 	}
@@ -169,14 +180,14 @@ func finishSecureDir(fd int, dir string, created bool) error {
 	}
 	var st unix.Stat_t
 	if err := unix.Fstat(fd, &st); err != nil {
-		return fmt.Errorf("inspect %s: %w", dirLabel(dir), err)
+		return fmt.Errorf("inspect %s: %w", DirLabel(dir), err)
 	}
-	return checkDirAttrs(dirLabel(dir), dirAttrs{
+	return checkDirAttrs(DirLabel(dir), dirAttrs{
 		isDir: st.Mode&unix.S_IFMT == unix.S_IFDIR,
 		uid:   st.Uid,
 		gid:   st.Gid,
 		mode:  uint32(st.Mode) & 0o7777,
-	})
+	}, currentIDs())
 }
 
 // dirAttrs is what the acceptance rule for an existing directory looks at,
@@ -189,18 +200,33 @@ type dirAttrs struct {
 	mode  uint32 // permission bits plus setuid/setgid/sticky
 }
 
+// procIDs is the identity of the process the acceptance rule is judged for:
+// its effective uid and gid. Production callers fill it from the kernel
+// (currentIDs); tests pass synthetic values, so the rule can be exercised for
+// any account (an ordinary user, root, a user whose egid differs from its euid)
+// without changing the identity of the test process.
+type procIDs struct {
+	euid, egid uint32
+}
+
+// currentIDs returns the identity of the running process.
+func currentIDs() procIDs {
+	return procIDs{euid: uint32(unix.Geteuid()), egid: uint32(unix.Getegid())}
+}
+
 // checkDirAttrs is the single acceptance rule for a pre-existing plan output
 // directory. SecureDir (and through it WritePrivateFile and the blobs/ policy
 // of Store.WriteTree/WriteGlob) and CheckExistingDir (and through it the api
 // pre-check) all use it, so the up-front check cannot drift from the
-// enforcement. The directory must be
+// enforcement. me is the process the directory is judged for. The directory
+// must be
 //
 //   - a directory, owned by the effective user (root is not exempt: a
 //     directory owned by someone else lets that user swap plan.jsonl, which a
 //     later root-run `gonf apply` would then trust);
 //   - not writable by others, sticky bit or not;
 //   - not writable by group, unless the group is the caller's user-private
-//     group (isPrivateGroup).
+//     group (me.isPrivateGroup).
 //
 // Why the private-group exception: Fedora, Ubuntu, RHEL, Rocky and most other
 // Linux distributions give every user a private group (gid == uid, that user
@@ -211,21 +237,21 @@ type dirAttrs struct {
 // project directory, a directory whose group is not the caller's own) does let
 // other users replace plan.jsonl and stays refused. The messages say why and
 // what to do about it.
-func checkDirAttrs(label string, a dirAttrs) error {
+func checkDirAttrs(label string, a dirAttrs, me procIDs) error {
 	if !a.isDir {
 		return fmt.Errorf("%s is not a directory", label)
 	}
-	if euid := uint32(unix.Geteuid()); a.uid != euid {
+	if a.uid != me.euid {
 		return fmt.Errorf("%s is owned by uid %d, not by the current user (uid %d); "+
 			"refusing to store plan output where its owner can replace it: choose a directory you own (-o <private dir>)",
-			label, a.uid, euid)
+			label, a.uid, me.euid)
 	}
 	const remedy = "run chmod go-w on it, or choose a private directory you own (-o <private dir>)"
 	switch {
 	case a.mode&0o002 != 0:
 		return fmt.Errorf("%s is world-writable (mode %04o); "+
 			"refusing to store plan output where any user can replace it: %s", label, a.mode, remedy)
-	case a.mode&0o020 != 0 && !isPrivateGroup(a.gid):
+	case a.mode&0o020 != 0 && !me.isPrivateGroup(a.gid):
 		return fmt.Errorf("%s is group-writable by group %d, which is not your private group (mode %04o); "+
 			"refusing to store plan output where members of that group can replace it: %s",
 			label, a.gid, a.mode, remedy)
@@ -234,16 +260,19 @@ func checkDirAttrs(label string, a dirAttrs) error {
 }
 
 // isPrivateGroup reports whether gid is the caller's user-private group by the
-// standard convention: it is the caller's effective gid and that gid equals
-// the effective uid. Anything else (a supplementary group, a primary group
-// shared by many users as with a classic "users" group, or a process whose
-// egid differs from its euid) is a group other users may belong to. The
-// convention is not verified against the group database: an administrator who
-// added extra members to a private group defeats it, which is their choice to
-// make.
-func isPrivateGroup(gid uint32) bool {
-	egid := uint32(unix.Getegid())
-	return gid == egid && egid == uint32(unix.Geteuid())
+// standard convention: it is the caller's effective gid, that gid equals the
+// effective uid, and it is not 0. Anything else (a supplementary group, a
+// primary group shared by many users as with a classic "users" group, or a
+// process whose egid differs from its euid) is a group other users may belong
+// to. Gid 0 is never private: for root, gid == uid == 0 would satisfy the
+// convention, but on FreeBSD, macOS and the other BSDs gid 0 is "wheel", whose
+// (administrator) members could then replace plan.jsonl. A root run therefore
+// refuses every group-writable directory; group write is not something root's
+// plan directory needs. The convention is not verified against the group
+// database: an administrator who added extra members to a private group
+// defeats it, which is their choice to make.
+func (p procIDs) isPrivateGroup(gid uint32) bool {
+	return gid == p.egid && p.egid == p.euid && p.egid != 0
 }
 
 // CheckExistingDir applies SecureDir's acceptance rule to a directory that
@@ -252,16 +281,14 @@ func isPrivateGroup(gid uint32) bool {
 // refuse an unusable directory early; SecureDir remains the authority, as it
 // checks the descriptor it then writes through.
 func CheckExistingDir(path string, info fs.FileInfo) error {
-	a := dirAttrs{
-		isDir: info.IsDir(),
-		uid:   uint32(unix.Geteuid()),
-		gid:   uint32(unix.Getegid()),
-		mode:  unixModeBits(info.Mode()),
-	}
+	me := currentIDs()
+	// Without a Stat_t (a synthetic FileInfo) there is no owner to compare, so
+	// the directory is taken as the caller's own.
+	a := dirAttrs{isDir: info.IsDir(), uid: me.euid, gid: me.egid, mode: unixModeBits(info.Mode())}
 	if st, ok := info.Sys().(*syscall.Stat_t); ok {
 		a.uid, a.gid = st.Uid, st.Gid
 	}
-	return checkDirAttrs(dirLabel(path), a)
+	return checkDirAttrs(DirLabel(path), a, me)
 }
 
 // unixModeBits converts Go's FileMode back to the chmod bits (permissions plus
@@ -276,9 +303,9 @@ func unixModeBits(m fs.FileMode) uint32 {
 	return bits
 }
 
-// dirLabel names dir in messages: the absolute path when it can be resolved,
+// DirLabel names dir in messages: the absolute path when it can be resolved,
 // so that "." reads as the actual working directory.
-func dirLabel(dir string) string {
+func DirLabel(dir string) string {
 	if abs, err := filepath.Abs(dir); err == nil {
 		return abs
 	}

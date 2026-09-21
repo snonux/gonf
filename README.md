@@ -18,7 +18,7 @@ gonf -list
 gonf -version
 gonf [-n] <task> [task…]           # RecordPlan + Apply locally
 gonf plan -o out -id demo <task>…  # write out/plan.jsonl (+ blobs/); out is yours, not world-writable,
-                                   # not group-writable except by your private group (a UPG 0775 checkout is fine)
+                                   # not group-writable except by your private group (a UPG 0775 checkout is fine; root has none)
 gonf plan -stdout <task>…          # print plan JSONL to stdout
 gonf apply [-n] out/plan.jsonl     # apply on this or another host
 gonf apply -                       # apply GONF-PUSH/1 or JSONL from stdin

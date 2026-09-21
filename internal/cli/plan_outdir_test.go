@@ -126,8 +126,11 @@ type unsafeOutDir struct {
 }
 
 // unsafeOutDirs are the output directories `gonf plan` refuses: world-writable
-// ones (sticky /tmp-style included), whatever their group, and, when the runner
-// has a supplementary group to chgrp to, a group-writable one of a shared group.
+// ones (sticky /tmp-style included), whatever their group, and a group-writable
+// one of a shared group. The last one needs a supplementary group to chgrp to:
+// its mk skips the subtest it runs in (mk is called on the subtest's t) with the
+// reason where there is none, so the case never silently drops out and never
+// takes the unconditional ones with it.
 func unsafeOutDirs(t *testing.T) []unsafeOutDir {
 	t.Helper()
 	var cases []unsafeOutDir
@@ -136,17 +139,14 @@ func unsafeOutDirs(t *testing.T) []unsafeOutDir {
 			return outDirWithMode(t, filepath.Join(t.TempDir(), "out"), mode)
 		}, "world-writable"})
 	}
-	if _, ok := testutil.FindForeignGroup(); ok {
-		cases = append(cases, unsafeOutDir{"0775 shared group", func(t *testing.T) string {
-			dir := outDirWithMode(t, filepath.Join(t.TempDir(), "out"), 0o700)
-			testutil.ChgrpForeign(t, dir)
-			if err := os.Chmod(dir, 0o775); err != nil {
-				t.Fatal(err)
-			}
-			return dir
-		}, "group-writable by group"})
-	}
-	return cases
+	return append(cases, unsafeOutDir{"0775 shared group", func(t *testing.T) string {
+		dir := outDirWithMode(t, filepath.Join(t.TempDir(), "out"), 0o700)
+		testutil.ChgrpForeign(t, dir)
+		if err := os.Chmod(dir, 0o775); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}, "group-writable by group"})
 }
 
 // TestCLIPlanRefusesUnsafeOutputDir: a -o directory that others can write
@@ -172,9 +172,13 @@ func TestCLIPlanRefusesUnsafeOutputDir(t *testing.T) {
 					args = []string{"plan", "-o", dir, "cli_outdir"}
 				}
 				code, stderr := runGonf(t, args...)
-				for _, want := range []string{"plan: RecordPlan: plan dir: ", dir, tc.want, "chmod go-w", "-o <private dir>"} {
-					if code != 1 || !strings.Contains(stderr, want) {
-						t.Fatalf("exit %d, stderr %q; want exit 1 and a refusal containing %q", code, stderr, want)
+				if code != 1 {
+					t.Fatalf("exit %d, stderr %q; want exit 1", code, stderr)
+				}
+				requireCLIRecordRefusal(t, stderr, "plan dir: ")
+				for _, want := range []string{dir, tc.want, "chmod go-w", "-o <private dir>"} {
+					if !strings.Contains(stderr, want) {
+						t.Fatalf("stderr %q; want a refusal containing %q", stderr, want)
 					}
 				}
 				if *ran {
@@ -247,11 +251,12 @@ type blobsCase struct {
 }
 
 // unsafeBlobsCases are the blobs/ directories `gonf plan` refuses at commit
-// time: world-writable, a symlink and, when the runner has a supplementary group
-// to chgrp to, group-writable by a shared group.
+// time: world-writable, a symlink and group-writable by a shared group. As in
+// unsafeOutDirs, the shared-group case skips its own subtest (from mk, on the
+// subtest's t) where the runner has no group to chgrp to.
 func unsafeBlobsCases(t *testing.T) []blobsCase {
 	t.Helper()
-	cases := []blobsCase{
+	return []blobsCase{
 		{"world-writable", func(t *testing.T, out string) string {
 			outDirWithMode(t, filepath.Join(out, "blobs"), 0o777)
 			return ""
@@ -263,18 +268,15 @@ func unsafeBlobsCases(t *testing.T) []blobsCase {
 			}
 			return target
 		}, `component "blobs"`},
-	}
-	if _, ok := testutil.FindForeignGroup(); ok {
-		cases = append(cases, blobsCase{"shared group", func(t *testing.T, out string) string {
+		{"shared group", func(t *testing.T, out string) string {
 			blobs := outDirWithMode(t, filepath.Join(out, "blobs"), 0o700)
 			testutil.ChgrpForeign(t, blobs)
 			if err := os.Chmod(blobs, 0o775); err != nil {
 				t.Fatal(err)
 			}
 			return ""
-		}, "group-writable by group"})
+		}, "group-writable by group"},
 	}
-	return cases
 }
 
 // TestCLIPlanRefusesUnsafeBlobsDir: an existing blobs/ inside an acceptable -o
@@ -282,8 +284,8 @@ func unsafeBlobsCases(t *testing.T) []blobsCase {
 // symlink is refused when the blobs are committed: after the task body ran
 // (the up-front check does not look at blobs/), before anything is written, so
 // plan.jsonl is not produced and the directory (and a symlink's target) stay
-// exactly as they were. The message names blobs/ and is not wrapped in a second
-// "plan dir: ... plan: ..." chain.
+// exactly as they were. The message names blobs/ and reads
+// "plan: RecordPlan: <reason>" with no repeated package prefix.
 func TestCLIPlanRefusesUnsafeBlobsDir(t *testing.T) {
 	for _, tc := range unsafeBlobsCases(t) {
 		t.Run(tc.name, func(t *testing.T) {
@@ -296,13 +298,15 @@ func TestCLIPlanRefusesUnsafeBlobsDir(t *testing.T) {
 				targetBefore = testutil.Snapshot(t, target)
 			}
 			code, stderr := runGonf(t, "plan", "-o", out, "cli_outdir")
-			for _, want := range []string{"plan: RecordPlan: ", filepath.Join(out, "blobs"), tc.want} {
-				if code != 1 || !strings.Contains(stderr, want) {
-					t.Fatalf("exit %d, stderr %q; want exit 1 and a refusal containing %q", code, stderr, want)
-				}
+			if code != 1 || !*ran {
+				t.Fatalf("exit %d, body ran %v, stderr %q; want exit 1 and a commit-time (post-body) refusal", code, *ran, stderr)
 			}
-			if strings.Contains(stderr, "plan dir:") || !*ran {
-				t.Fatalf("stderr %q, body ran %v; want no doubled \"plan dir: ... plan: ...\" prefix and a commit-time (post-body) refusal", stderr, *ran)
+			// One "plan: RecordPlan: " prefix, no repeated "plan:" and no "plan dir:" chain.
+			requireCLIRecordRefusal(t, stderr, "blob \"blobs/")
+			for _, want := range []string{filepath.Join(out, "blobs"), tc.want} {
+				if !strings.Contains(stderr, want) || strings.Contains(stderr, "plan dir:") {
+					t.Fatalf("stderr %q; want a refusal containing %q and no \"plan dir:\" segment", stderr, want)
+				}
 			}
 			testutil.RequireUnchanged(t, before, out)
 			if target != "" {

@@ -58,9 +58,11 @@ applies. What is guaranteed, and what is not:
   your private group; not writable by you; nowhere writable to create it): a cheap best-effort check
   rejects those before any task body runs, creating and changing nothing. It
   is a pre-check, not a guarantee: whatever it misses (the path changed in
-  between, ACLs) is still refused by the same no-follow directory open that
-  writes the blobs, at commit time, after the task bodies ran but before
-  anything is written to `dir`.
+  between, ACLs) is still refused at commit time, after the task bodies ran
+  but before anything is written to `dir`, by the same directory rule applied
+  through a no-follow open of `dir` (single-file blobs and `plan.jsonl` are
+  then written through that very descriptor; tree and glob blobs are checked
+  the same way but written by path, see "The output directory").
 - An I/O error while COMMITTING the blobs into `dir` after a successful record
   (full disk, permissions, a blob path that cannot be replaced) is reported but
   not atomic: some blobs may already be copied, so a partially updated blob
@@ -420,7 +422,7 @@ mode:
 | exists, yours, not writable by others, and group-writable at most by your private group (`0755`, `0750`, `0700`, and the `0775` a fresh checkout gets under umask `002`, ...) | used **as it is**; its mode is not changed. Only `plan.jsonl` (`0600`) and the `blobs/` directory gonf creates (`0700`) are private |
 | exists, yours, but read-only for you (`0555`, `0500`, ...) | refused up front, before any task runs, with `cannot write to <dir>: permission denied; run chmod u+w on it, or ...`. **New since m62:** such a directory used to be chmod'ed to `0700` and the run worked; gonf no longer changes the mode of a directory it did not create |
 | exists, world-writable (`0777`, `0757`, ...; sticky `/tmp` included) | refused, nothing changed |
-| exists, group-writable by a group other than your private group (a shared `2775` project directory, or any `g+w` directory of a group that is not yours alone) | refused, nothing changed |
+| exists, group-writable by a group other than your private group (a shared `2775` project directory, any `g+w` directory of a group that is not yours alone, or any `g+w` directory at all when you are root, whose gid `0` is never a private group) | refused, nothing changed |
 | exists, owned by another user (root included: a root run does not take over a user's directory) | refused, nothing changed |
 | not a directory, or a symlink (or below one) | refused |
 
@@ -430,10 +432,12 @@ group* (gid equal to uid, the user its only member) and a default umask of
 `002`, so a fresh `git clone` or `mkdir` is `0775`. Nobody but you can write
 through such a group, so refusing it protected nothing while it broke the
 default `gonf plan -o .` in every recipe checkout. gonf therefore treats `g+w`
-as safe exactly when the directory's group is your effective gid **and** that
-gid equals your effective uid (the standard convention; the group database is
-not consulted, so an administrator who added members to a private group opts
-out of the protection). World-writable is refused always, sticky bit or not,
+as safe exactly when the directory's group is your effective gid, that
+gid equals your effective uid, **and** it is not `0` (the standard convention;
+the group database is not consulted, so an administrator who added members to
+a private group opts out of the protection). Gid `0` is never a private group:
+on FreeBSD, macOS and the other BSDs it is `wheel`, whose members could replace
+`plan.jsonl`, so a run as root refuses every group-writable directory. World-writable is refused always, sticky bit or not,
 and `g+w` on any other group (a supplementary group, a shared project group)
 is refused because its members could replace `plan.jsonl`, which a later
 `gonf apply` trusts.
@@ -448,7 +452,15 @@ plan that packages no blob never touches `blobs/`, so an unsafe leftover
 `blobs/` is refused only when the blobs are committed, after the task bodies
 ran but before anything is written (a symlinked `blobs/` is refused the same
 way and nothing is written through it; a `plan.jsonl` that is a symlink is
-replaced by the new file, never written through). **Behaviour change:**
+replaced by the new file, never written through). What the `blobs/` check
+guarantees differs by blob kind: a single-file blob is written through the
+descriptor of the `blobs/` directory that was verified, so check and write are
+on the same directory; a tree or glob blob (`SyncDir`, `WithSourceGlob`) is
+verified the same way, but then cleared and filled **by path**, so it is a
+check of the directory as it was at that moment, not protection against
+`blobs/` (or an unverified ancestor of `dir`) being swapped in between. It
+guards against an unsafe or pre-planted `blobs/`, not against a concurrent
+attacker with write access to `dir`'s parent. **Behaviour change:**
 earlier versions chmod'ed `dir` to `0700` on every run (breaking a served or
 shared directory, and changing the mode of the checkout for the default
 `-o .`); an unsafe directory that used to be silently narrowed is now refused.

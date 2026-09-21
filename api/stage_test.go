@@ -455,9 +455,7 @@ func TestRecordPlanCommitFailureIsReportedAndPartial(t *testing.T) {
 	ResetForTest()
 	src.register("commit_fail", nil)
 	ops, err := RecordPlan("x", planDir, "commit_fail")
-	if err == nil || !strings.HasPrefix(err.Error(), "RecordPlan: plan: write blob ") || strings.Contains(err.Error(), "plan dir") {
-		t.Fatalf("RecordPlan error = %v, want a \"RecordPlan: plan: write blob\" commit error without a \"plan dir\" chain", err)
-	}
+	requireSinglePrefixRefusal(t, err, `RecordPlan: write blob "`)
 	if ops != nil {
 		t.Fatalf("ops = %v, want nil on a commit failure", ops)
 	}
@@ -548,6 +546,7 @@ type unusablePlanDir struct {
 	path    string
 	want    string // substring of the refusal
 	nonRoot bool   // only refused for an unprivileged user (access(2) is not enforced for root)
+	skip    string // non-empty: the environment cannot exercise this case; the subtest skips with this reason
 }
 
 // chmodedDir creates dir with exactly mode (mkdir applies the umask, so it
@@ -578,28 +577,27 @@ func unusablePlanDirs(t *testing.T, root string) []unusablePlanDir {
 	const symlinkRefusal = "is a symlink; symlinked plan directories are refused"
 	const worldWritableRefusal = "world-writable"
 	cases := []unusablePlanDir{
-		{"target is a file", file, "is not a directory", false},
-		{"existing dir is read-only", readonly, "cannot write to", true},
-		{"existing dir is world-writable", worldW, worldWritableRefusal, false},
-		{"existing dir is sticky and world-writable (like /tmp)", sticky, worldWritableRefusal, false},
-		{"target is a symlink", link, symlinkRefusal, false},
-		{"target is a symlink with a trailing slash", link + "/", symlinkRefusal, false},
-		{"parent of an absent dir is a symlink", filepath.Join(link, "newsub"), symlinkRefusal, false},
-		{"ancestor of an absent dir is a symlink", filepath.Join(link, "newsub", "deeper"), symlinkRefusal, false},
-		{"parent of an absent dir is a file", filepath.Join(file, "sub"), "not a directory", false},
-		{"absent dir in a read-only parent", filepath.Join(readonly, "sub", "deeper"), "cannot create", true},
+		{"target is a file", file, "is not a directory", false, ""},
+		{"existing dir is read-only", readonly, "cannot write to", true, ""},
+		{"existing dir is world-writable", worldW, worldWritableRefusal, false, ""},
+		{"existing dir is sticky and world-writable (like /tmp)", sticky, worldWritableRefusal, false, ""},
+		{"target is a symlink", link, symlinkRefusal, false, ""},
+		{"target is a symlink with a trailing slash", link + "/", symlinkRefusal, false, ""},
+		{"parent of an absent dir is a symlink", filepath.Join(link, "newsub"), symlinkRefusal, false, ""},
+		{"ancestor of an absent dir is a symlink", filepath.Join(link, "newsub", "deeper"), symlinkRefusal, false, ""},
+		{"parent of an absent dir is a file", filepath.Join(file, "sub"), "not a directory", false, ""},
+		{"absent dir in a read-only parent", filepath.Join(readonly, "sub", "deeper"), "cannot create", true, ""},
 	}
-	if _, ok := testutil.FindForeignGroup(); ok {
-		// Group write is refused unless the group is the caller's private group,
-		// so this case needs a group of the caller's that is not its own.
-		shared := chmodedDir(t, filepath.Join(root, "shared-group-writable"), 0o700)
-		testutil.ChgrpForeign(t, shared)
-		if err := os.Chmod(shared, 0o2775); err != nil {
-			t.Fatal(err)
-		}
-		cases = append(cases, unusablePlanDir{"existing dir is group-writable by a shared group", shared, "group-writable by group", false})
+	// Group write is refused unless the group is the caller's private group, so
+	// this case needs a group of the caller's that is not its own. The case
+	// always stays in the table; where the runner cannot chgrp, its subtest
+	// skips with the reason (and only that subtest).
+	shared := chmodedDir(t, filepath.Join(root, "shared-group-writable"), 0o700)
+	_, skip := testutil.TryChgrpForeign(shared)
+	if err := os.Chmod(shared, 0o2775); err != nil {
+		t.Fatal(err)
 	}
-	return cases
+	return append(cases, unusablePlanDir{"existing dir is group-writable by a shared group", shared, "group-writable by group", false, skip})
 }
 
 // TestRecordPlanRefusesUnusablePlanDirUpFront pins the early failure the old
@@ -614,6 +612,9 @@ func TestRecordPlanRefusesUnusablePlanDirUpFront(t *testing.T) {
 	root := t.TempDir()
 	for _, tc := range unusablePlanDirs(t, root) {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.skip != "" {
+				t.Skip(tc.skip)
+			}
 			if tc.nonRoot && os.Geteuid() == 0 {
 				t.Skip("permission checks are not enforced for root")
 			}
@@ -678,22 +679,25 @@ func TestCommitStagedBlobsRefusesWritablePlanDir(t *testing.T) {
 	}
 	mustWrite(t, filepath.Join(stage, "blobs", "b"), []byte("blob"))
 	ops := []plan.Op{{Blob: "blobs/b"}}
-	type unsafeDir struct{ name, path, want string }
+	type unsafeDir struct{ name, path, want, skip string }
 	var dirs []unsafeDir
 	for _, mode := range []os.FileMode{0o757, 0o777, 0o777 | os.ModeSticky} {
 		planDir := chmodedDir(t, filepath.Join(t.TempDir(), "out"), mode)
-		dirs = append(dirs, unsafeDir{mode.String(), planDir, "world-writable"})
+		dirs = append(dirs, unsafeDir{mode.String(), planDir, "world-writable", ""})
 	}
-	if _, ok := testutil.FindForeignGroup(); ok {
-		shared := chmodedDir(t, filepath.Join(t.TempDir(), "out"), 0o700)
-		testutil.ChgrpForeign(t, shared)
-		if err := os.Chmod(shared, 0o775); err != nil {
-			t.Fatal(err)
-		}
-		dirs = append(dirs, unsafeDir{"0775 shared group", shared, "group-writable by group"})
+	// The shared-group case stays in the table; its subtest skips, with the
+	// reason, where the runner has no group it can chgrp to.
+	shared := chmodedDir(t, filepath.Join(t.TempDir(), "out"), 0o700)
+	_, skip := testutil.TryChgrpForeign(shared)
+	if err := os.Chmod(shared, 0o775); err != nil {
+		t.Fatal(err)
 	}
+	dirs = append(dirs, unsafeDir{"0775 shared group", shared, "group-writable by group", skip})
 	for _, d := range dirs {
 		t.Run(d.name, func(t *testing.T) {
+			if d.skip != "" {
+				t.Skip(d.skip)
+			}
 			before := testutil.Snapshot(t, d.path)
 			err := commitStagedBlobs(ops, stage, d.path)
 			if err == nil || !strings.Contains(err.Error(), d.want) || !strings.Contains(err.Error(), "RecordPlan: plan dir: ") {
@@ -745,39 +749,52 @@ func TestCheckPlanDirUsableRefusesForeignOwner(t *testing.T) {
 // user-private-group user) and absent ones (nested, under a
 // writable ancestor) pass and record normally. An existing directory keeps its
 // exact mode (SecureDir verifies it, m62: it used to chmod it to 0700), a
-// directory the record creates is 0700.
+// directory the record creates is 0700. Every directory is its own subtest; the
+// 0775 private-group one skips, with a reason, unless the runner is an
+// unprivileged user-private-group user (the rule itself is covered for every
+// identity by the synthetic tests in package plan).
 func TestRecordPlanAcceptsUsablePlanDirs(t *testing.T) {
 	root := t.TempDir()
-	wantMode := map[string]os.FileMode{
-		chmodedDir(t, filepath.Join(root, "private"), 0o700):  0o700,
-		chmodedDir(t, filepath.Join(root, "readable"), 0o755): 0o755,
-		filepath.Join(root, "absent"):                         0o700,
-		filepath.Join(root, "a", "b", "c"):                    0o700,
-	}
-	if os.Getegid() == os.Geteuid() {
+	cases := []struct {
+		name string
+		dir  string
+		want os.FileMode
+		skip string
+	}{
+		{"existing 0700", chmodedDir(t, filepath.Join(root, "private"), 0o700), 0o700, ""},
+		{"existing 0755", chmodedDir(t, filepath.Join(root, "readable"), 0o755), 0o755, ""},
+		{"absent", filepath.Join(root, "absent"), 0o700, ""},
+		{"absent and nested", filepath.Join(root, "a", "b", "c"), 0o700, ""},
 		// A UPG checkout: mkdir under umask 002 gives 0775 with the user's own group.
-		wantMode[chmodedDir(t, filepath.Join(root, "upg-checkout"), 0o775)] = 0o775
+		{"existing 0775 of the private group", chmodedDir(t, filepath.Join(root, "upg-checkout"), 0o775), 0o775, testutil.PrivateGroupSkipReason()},
 	}
-	for planDir, want := range wantMode {
-		ResetForTest()
-		ran := planDirProbe("probe")
-		if _, err := RecordPlan("x", planDir, "probe"); err != nil {
-			t.Fatalf("RecordPlan(%s): %v", planDir, err)
-		}
-		if !*ran {
-			t.Fatalf("RecordPlan(%s): body did not run", planDir)
-		}
-		if fi, err := os.Stat(planDir); err != nil || fi.Mode().Perm() != want {
-			t.Fatalf("plan dir %s after record: %v, %v; want mode %04o", planDir, fi, err, want)
-		}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.skip != "" {
+				t.Skip(tc.skip)
+			}
+			ResetForTest()
+			t.Cleanup(ResetForTest)
+			ran := planDirProbe("probe")
+			if _, err := RecordPlan("x", tc.dir, "probe"); err != nil {
+				t.Fatalf("RecordPlan(%s): %v", tc.dir, err)
+			}
+			if !*ran {
+				t.Fatalf("RecordPlan(%s): body did not run", tc.dir)
+			}
+			if fi, err := os.Stat(tc.dir); err != nil || fi.Mode().Perm() != tc.want {
+				t.Fatalf("plan dir %s after record: %v, %v; want mode %04o", tc.dir, fi, err, tc.want)
+			}
+		})
 	}
-	ResetForTest()
 }
 
 // TestRecordPlanLeavesExistingDirModeAlone is the m62 regression at the API:
 // RecordPlan into an existing plan directory, blobs included, keeps the
-// directory's mode (0755 and the read-only-for-others 0750/0555 cases) while
-// the blobs directory it creates inside is 0700.
+// directory's mode (0755, the read-only-for-others 0750 and the private 0700)
+// while the blobs directory it creates inside is 0700. A read-only directory
+// (0555, 0500) is not part of this table: the api refuses it up front, before
+// any body runs (TestRecordPlanReadOnlyPlanDirSaysHowToFixIt).
 func TestRecordPlanLeavesExistingDirModeAlone(t *testing.T) {
 	src := t.TempDir()
 	mustWrite(t, filepath.Join(src, "f"), []byte("payload"))

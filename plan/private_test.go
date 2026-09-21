@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -276,9 +277,8 @@ func TestStoreWriteFileBlobsDirPolicy(t *testing.T) {
 	t.Run("refuses a writable blobs dir", func(t *testing.T) {
 		root := t.TempDir()
 		mkdirMode(t, filepath.Join(root, "blobs"), 0o777)
-		if _, err := NewStore(root).WriteFile("b", []byte("x")); err == nil {
-			t.Fatal("WriteFile into a world-writable blobs dir = nil, want a refusal")
-		}
+		_, err := NewStore(root).WriteFile("b", []byte("x"))
+		requireBlobRefusal(t, err, `write blob "blobs/b": open private directory: `, filepath.Join(root, "blobs"), "world-writable")
 		requireEntries(t, filepath.Join(root, "blobs"))
 		if got := modeOf(t, filepath.Join(root, "blobs")); got != 0o777 {
 			t.Fatalf("blobs mode = %v, want 0777 untouched", got)
@@ -321,10 +321,7 @@ func TestStoreTreeBlobsDirPolicy(t *testing.T) {
 		t.Run(name+" refuses a writable blobs dir", func(t *testing.T) {
 			root := t.TempDir()
 			mkdirMode(t, filepath.Join(root, "blobs"), 0o777)
-			err := write(NewStore(root))
-			if err == nil || !strings.Contains(err.Error(), "world-writable") {
-				t.Fatalf("write into a world-writable blobs dir = %v, want a refusal", err)
-			}
+			requireBlobRefusal(t, write(NewStore(root)), filepath.Join(root, "blobs"), "world-writable")
 			requireEntries(t, filepath.Join(root, "blobs"))
 		})
 	}
@@ -332,44 +329,46 @@ func TestStoreTreeBlobsDirPolicy(t *testing.T) {
 
 // TestCheckExistingDirMatchesSecureDir: the FileInfo-based pre-check accepts
 // and refuses exactly what SecureDir does for the same directories (own group
-// and, where the caller has a supplementary group, a foreign one), and words the
-// refusal the same way (sticky bit included), so an up-front refusal cannot
-// disagree with the enforcement.
+// and a foreign one), and words the refusal the same way (sticky bit
+// included), so an up-front refusal cannot disagree with the enforcement. Every
+// (group, mode) pair is its own subtest; the foreign-group ones skip, with a
+// reason, where the runner has no group it can chgrp to, and the symlink case
+// always runs.
 func TestCheckExistingDirMatchesSecureDir(t *testing.T) {
 	modes := []os.FileMode{0o700, 0o755, 0o555, 0o775, 0o757, 0o777 | os.ModeSticky, os.ModeSetgid | 0o770}
-	_, haveForeign := testutil.FindForeignGroup()
 	for _, foreign := range []bool{false, true} {
-		if foreign && !haveForeign {
-			continue
-		}
 		for _, mode := range modes {
-			dir := filepath.Join(t.TempDir(), "d")
-			mkdirMode(t, dir, mode)
-			if foreign {
-				testutil.ChgrpForeign(t, dir)
-			}
-			info, err := os.Lstat(dir)
-			if err != nil {
-				t.Fatal(err)
-			}
-			checkErr, secureErr := CheckExistingDir(dir, info), SecureDir(dir)
-			if (checkErr == nil) != (secureErr == nil) {
-				t.Fatalf("mode %v foreign group %v: CheckExistingDir = %v, SecureDir = %v; want the same verdict", mode, foreign, checkErr, secureErr)
-			}
-			if checkErr != nil && checkErr.Error() != secureErr.Error() {
-				t.Fatalf("mode %v foreign group %v: messages differ:\n  check:  %v\n  secure: %v", mode, foreign, checkErr, secureErr)
-			}
+			t.Run(fmt.Sprintf("foreign group %v mode %v", foreign, mode), func(t *testing.T) {
+				dir := filepath.Join(t.TempDir(), "d")
+				mkdirMode(t, dir, mode)
+				if foreign {
+					testutil.ChgrpForeign(t, dir) // skips this subtest only
+				}
+				info, err := os.Lstat(dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				checkErr, secureErr := CheckExistingDir(dir, info), SecureDir(dir)
+				if (checkErr == nil) != (secureErr == nil) {
+					t.Fatalf("CheckExistingDir = %v, SecureDir = %v; want the same verdict", checkErr, secureErr)
+				}
+				if checkErr != nil && checkErr.Error() != secureErr.Error() {
+					t.Fatalf("messages differ:\n  check:  %v\n  secure: %v", checkErr, secureErr)
+				}
+			})
 		}
 	}
-	link := filepath.Join(t.TempDir(), "link")
-	if err := os.Symlink(t.TempDir(), link); err != nil {
-		t.Fatal(err)
-	}
-	info, err := os.Lstat(link)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := CheckExistingDir(link, info); err == nil || !strings.Contains(err.Error(), "not a directory") {
-		t.Fatalf("CheckExistingDir(symlink) = %v, want a refusal", err)
-	}
+	t.Run("symlink is not a directory", func(t *testing.T) {
+		link := filepath.Join(t.TempDir(), "link")
+		if err := os.Symlink(t.TempDir(), link); err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Lstat(link)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := CheckExistingDir(link, info); err == nil || !strings.Contains(err.Error(), "not a directory") {
+			t.Fatalf("CheckExistingDir(symlink) = %v, want a refusal", err)
+		}
+	})
 }
