@@ -14,8 +14,11 @@
 //   - plan.SecureDir and plan.WritePrivateFile walk the whole plan directory
 //     from "/" or ".", create missing components 0700 and verify only the
 //     final directory (Walk with Create and a Check on the last component);
-//   - the plan blob store opens the plan directory following symlinks ($TMPDIR
-//     may be a symlinked path) and walks only blobs/ below it (Walk.OpenAt);
+//   - the plan blob store walks only blobs/ (Walk.OpenAt), below either the
+//     descriptor plan.OpenSecureStore kept from SecureDir's walk (the plan
+//     directory an operator names) or a private $TMPDIR plan directory opened
+//     following symlinks ($TMPDIR may be a symlinked path), and writes tree
+//     blobs below blobs/ with Walk.OpenAt and Create too;
 //   - plan.ReadPrivateFile opens the plan file with OpenRegularAt below a
 //     directory reached the normal way;
 //   - api secrets walk the directories below secrets/ without creating or

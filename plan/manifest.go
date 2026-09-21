@@ -165,37 +165,6 @@ func sortEntries(entries []BlobEntry) {
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Rel < entries[j].Rel })
 }
 
-// materializeEntries writes manifest entries under dstRoot: files by
-// content (0600), directories 0700, symlinks raw (exactly what the source
-// tree carries, dangling included). Parent directories are created as
-// needed, though sorted manifests list parents before children.
-func materializeEntries(dstRoot string, entries []BlobEntry) error {
-	for _, e := range entries {
-		dst := filepath.Join(dstRoot, filepath.FromSlash(e.Rel))
-		switch e.Kind {
-		case BlobDir:
-			if err := os.MkdirAll(dst, 0o700); err != nil {
-				return err
-			}
-		case BlobSymlink:
-			if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-				return err
-			}
-			if err := os.Symlink(e.Target, dst); err != nil {
-				return err
-			}
-		default:
-			if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-				return err
-			}
-			if err := os.WriteFile(dst, e.Data, 0o600); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 // slashParent returns the slash-separated parent path of rel, or "." for
 // top-level entries (used to synthesize parent dir headers on the wire).
 func slashParent(rel string) string {

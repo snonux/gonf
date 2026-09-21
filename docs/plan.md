@@ -62,12 +62,16 @@ applies. What is guaranteed, and what is not:
   re-checks `dir` before the first blob is written: the same directory rule
   (type, no symlinked component, owner, group/world write) through a
   no-follow open, plus the "writable by you" check, which is not part of that
-  rule. Either refusal writes nothing. Later writes check again: a blob write
-  reaches `dir` following symlinks, opens only `blobs/` without following one
-  and checks it against the rule, then writes a single-file blob through that
-  verified descriptor or a tree/glob blob by path; `plan.jsonl` re-checks
-  `dir` itself through a no-follow walk of its whole path (see "The output
-  directory"). Errors during those writes
+  rule and is asked of the directory the no-follow open verified (through its
+  descriptor), not of whatever the path names by then. Either refusal writes
+  nothing. The commit keeps the descriptor of the
+  `dir` it verified and writes every blob relative to it, never through the
+  path again: it opens `blobs/` below that descriptor without following a
+  symlink, checks it against the rule, and writes single-file and tree/glob
+  blobs through the verified `blobs/` descriptor, so swapping `dir` or
+  `blobs/` for a symlink after the check cannot redirect a blob.
+  `plan.jsonl` re-checks `dir` itself through a no-follow walk of its whole
+  path (see "The output directory"). Errors during those writes
   (for example a leftover `blobs/` or blob tree you cannot write or replace,
   a full disk, or a change after the re-check) are plain I/O errors with the
   non-atomic caveat of the next point. `-o ''` is treated as `-o .`.
@@ -491,24 +495,40 @@ through it; a `plan.jsonl` that is a symlink is replaced by the new file, never
 written through). That check is not part of the up-front pre-check: a plan that
 packages no blob never touches `blobs/`, so an unsafe leftover `blobs/` is
 refused only when the blobs are committed, after the task bodies ran but before
-anything is written. What is checked and guaranteed differs by blob kind:
+anything is written. What is guaranteed:
 
-- A single-file blob (larger than the inline limit) is written through the
-  descriptor of the `blobs/` directory that was verified, so check and write are
-  on the same directory. Like tree blobs, only `blobs/` itself is opened
-  without following symlinks; the ancestors of the plan directory are
-  followed, so a symlinked `$TMPDIR` works.
-- A tree or glob blob (`SyncDir`, `WithSourceGlob`) has only `blobs/` itself
-  verified, then is cleared and filled **by path**: it is a check of `blobs/` as
-  it was at that moment, not protection against `blobs/` being swapped in
-  between, and the ancestors of the plan directory are not looked at, so a
-  plan directory or `$TMPDIR` that is reached through a symlink (macOS's
-  `/var/folders`, a symlinked home) works. The plan directory that `gonf plan
-  -o` names is verified in full (no symlink anywhere in its path) before
-  anything is committed to it.
+- `dir` is verified in full (no symlink anywhere in its path) once, and the
+  descriptor of exactly that directory is kept for the whole commit. `blobs/`
+  is opened below it without following a symlink and verified; every blob is
+  then written relative to the verified `blobs/` descriptor: a single-file
+  blob (larger than the inline limit) as a `0600` file by atomic rename, a
+  tree or glob blob (`SyncDir`, `WithSourceGlob`) by removing the old tree
+  and creating the new one (directories `0700`, files `0600`, symlinks with
+  their raw target) without following any symlink on the way. Swapping `dir`,
+  `blobs/` or anything below it for a symlink after the check therefore
+  cannot redirect a blob into the link's target; a leftover symlink in place
+  of a blob tree (or inside one) is removed as the link itself, never
+  descended into. A tree directory that reappears between the removal of the
+  old tree and the creation of the new one (someone with write access to
+  `blobs/`, i.e. you, recreated it) is refused, not filled: the commit fails
+  with "reappeared after it was cleared" and leaves that directory as it is.
+  A failure to clear an old tree names the path below `blobs/` and its real
+  cause (for example permission denied on a subdirectory you cannot list).
+- The staging directory and the temporary plan directories of `Run` and
+  `Apply` are private directories gonf makes in `$TMPDIR` itself. They are
+  reached following symlinks, so a `$TMPDIR` behind a symlink (macOS's
+  `/var/folders`, a symlinked home) works; within them `blobs/` gets the same
+  no-follow check and descriptor-relative writes.
+- `plan.jsonl` is written after the blobs, by a separate no-follow walk of the
+  whole path of `dir` (it re-verifies `dir`, but through the path: if `dir`
+  was swapped for another directory of yours that passes the rule between the
+  blob commit and that write, `plan.jsonl` lands in the new one).
 
-This guards against an unsafe or pre-planted `blobs/`, not against a concurrent
-attacker with write access to `dir`'s parent. **Behaviour change:**
+This guards against an unsafe or pre-planted `blobs/` and against `dir` or
+`blobs/` being replaced by a symlink while gonf writes. It does not guard
+against another account that can write `dir` itself (the directory rule
+refuses such a `dir` up front) or against your own processes changing it
+concurrently. **Behaviour change:**
 earlier versions chmod'ed `dir` to `0700` on every run (breaking a served or
 shared directory, and changing the mode of the checkout for the default
 `-o .`); an unsafe directory that used to be silently narrowed is now refused.

@@ -126,9 +126,9 @@ func (l *lazyStage) WriteGlob(name, pattern string) (string, error) {
 }
 
 // checkPlanDirUsable is the cheap up-front counterpart of commitStagedBlobs's
-// plan.SecureDir. It runs before any task body so the common unusable
-// destinations fail early, without creating or changing anything. It looks at
-// the same things SecureDir would trip over:
+// plan.OpenSecureStore (SecureDir's walk). It runs before any task body so
+// the common unusable destinations fail early, without creating or changing
+// anything. It looks at the same things SecureDir would trip over:
 //
 //   - planDir or any of its ancestors is a symlink (SecureDir opens every path
 //     component with O_NOFOLLOW; filepath.Clean first, so "link/" is the
@@ -155,20 +155,22 @@ func (l *lazyStage) WriteGlob(name, pattern string) (string, error) {
 // up front would reject plans that would have worked. An unsafe blobs/ (a
 // symlink, foreign-owned, world- or shared-group-writable) is therefore
 // refused at commit time, by the same directory rule applied to blobs/ (see
-// plan.Store.WriteTree: blobs/ itself is checked, its ancestors are not),
-// before any blob is written.
+// plan.Store: blobs/ is opened without following a symlink below the plan
+// directory descriptor that plan.OpenSecureStore verified), before any blob
+// is written.
 //
 // It is a best-effort pre-check, not a guarantee: it inspects the path with
 // Lstat/access(2) before any task body runs, and the path can change before
 // the commit. commitStagedBlobs therefore re-checks at commit time, before the
-// first blob is written: plan.SecureDir applies the shared directory rule (a
-// real directory, no symlinked component, owned by the caller, no unsafe
-// group/world write) and requireWritableDir re-checks the caller's write
-// permission, which is not part of that rule. Either refusal writes nothing.
-// Errors during the writes themselves (for example a leftover blobs/ or blob
-// tree the caller cannot write or replace, a full disk, or a change after the
-// re-check) surface as plain I/O errors with the non-atomic commit caveat
-// documented on RecordPlan.
+// first blob is written: plan.OpenSecureStore applies the shared directory
+// rule (a real directory, no symlinked component, owned by the caller, no
+// unsafe group/world write) and keeps the verified directory's descriptor for
+// the writes, and requireWritableStore re-checks the caller's write
+// permission, which is not part of that rule, on that same held directory.
+// Either refusal writes nothing. Errors during the writes themselves (for
+// example a leftover blobs/ or blob tree the caller cannot write or replace,
+// a full disk, or the directory made read-only after the re-check) surface as
+// plain I/O errors with the non-atomic commit caveat documented on RecordPlan.
 func checkPlanDirUsable(planDir string) error {
 	planDir = filepath.Clean(planDir)
 	if err := refuseSymlinkedPath(planDir); err != nil {
@@ -229,28 +231,49 @@ func checkExistingPlanDir(path string, info os.FileInfo) error {
 }
 
 // requireWritableDir refuses a directory the caller cannot create entries in,
-// with an actionable message. It is used both up front (checkExistingPlanDir)
-// and at commit time (commitStagedBlobs), because writability is not part of
-// the shared directory rule that plan.SecureDir enforces.
+// with an actionable message. It is the up-front check (checkExistingPlanDir)
+// and looks at the path; the commit-time re-check (requireWritableStore) asks
+// about the directory it holds instead. Both exist because writability is not
+// part of the shared directory rule that plan.SecureDir enforces.
 func requireWritableDir(path string) error {
-	if err := unix.Access(path, unix.W_OK|unix.X_OK); err != nil {
-		// plan.DirLabel, like every other refusal of the shared rule, so the
-		// default "-o ." reads as the working directory, not as "cannot write to .".
-		return fmt.Errorf("cannot write to %s: %w; run chmod u+w on it, "+
-			"or choose a writable private directory you own (-o <private dir>)", plan.DirLabel(path), err)
+	return writableRefusal(path, unix.Access(path, unix.W_OK|unix.X_OK))
+}
+
+// requireWritableStore is requireWritableDir for the plan directory
+// commitStagedBlobs holds: dest.CheckWritable asks about the verified
+// directory through its descriptor, so a path swapped for a symlink (to a
+// writable directory) after OpenSecureStore cannot make a read-only held
+// directory pass and leave it half-updated. path only names it in the message.
+func requireWritableStore(dest *plan.Store, path string) error {
+	return writableRefusal(path, dest.CheckWritable())
+}
+
+// writableRefusal words a failed write-permission check of path (err nil:
+// no refusal).
+func writableRefusal(path string, err error) error {
+	if err == nil {
+		return nil
 	}
-	return nil
+	// plan.DirLabel, like every other refusal of the shared rule, so the
+	// default "-o ." reads as the working directory, not as "cannot write to .".
+	return fmt.Errorf("cannot write to %s: %w; run chmod u+w on it, "+
+		"or choose a writable private directory you own (-o <private dir>)", plan.DirLabel(path), err)
 }
 
 // commitStagedBlobs makes planDir exist (created 0700 when missing, an existing
-// one is verified by plan.SecureDir and never chmod'ed) and copies every blob the
-// recorded ops reference from the staging directory into it. Blobs of earlier
-// plans that this plan does not reference stay untouched; a blob with the same
-// ref is replaced (the store's own write semantics: files atomically, trees
-// cleared and recreated). It is the only step that writes planDir. It runs after
-// the plan validations, but refuses too: plan.SecureDir and requireWritableDir
-// re-check planDir before the first blob is written (a refusal writes
-// nothing), and every blob write checks blobs/ against the directory rule.
+// one is verified by SecureDir's rule and never chmod'ed) and copies every blob
+// the recorded ops reference from the staging directory into it. Blobs of
+// earlier plans that this plan does not reference stay untouched; a blob with
+// the same ref is replaced (the store's own write semantics: files atomically,
+// trees cleared and recreated). It is the only step that writes blobs into
+// planDir. It runs after the plan validations, but refuses too:
+// plan.OpenSecureStore and requireWritableStore re-check planDir (the latter
+// through the held descriptor) before the first blob is written (a refusal
+// writes nothing), and every blob write checks
+// blobs/ against the directory rule. All writes go through the descriptor of
+// the planDir that OpenSecureStore verified and the blobs/ descriptor opened
+// below it without following symlinks, never through the path, so swapping
+// planDir or blobs/ after the checks cannot redirect a blob.
 // Beyond those refusals, what can fail here is I/O on the destination itself
 // (permissions of leftovers, full disk); such errors may leave some blobs
 // copied, which is unavoidable without transactional directories.
@@ -261,17 +284,23 @@ func requireWritableDir(path string) error {
 // with the store's own "plan: " prefix dropped (recordCommitError), so the
 // message has one package prefix, not a "plan dir: ... plan: ..." chain.
 func commitStagedBlobs(ops []plan.Op, stage, planDir string) error {
-	if err := plan.SecureDir(planDir); err != nil {
+	// OpenSecureStore runs SecureDir's no-follow walk and keeps the descriptor
+	// of the directory it verified: every blob is written relative to it, so a
+	// planDir swapped for a symlink after this check cannot redirect them.
+	dest, err := plan.OpenSecureStore(planDir)
+	if err != nil {
 		return fmt.Errorf("RecordPlan: plan dir: %w", err)
 	}
+	defer func() { _ = dest.Close() }()
+	planDirVerified(planDir, dest)
 	// SecureDir's shared rule does not cover the caller's write permission, so
 	// a directory made read-only after the up-front pre-check would pass it and
 	// an existing writable blobs/ inside it would be updated before plan.jsonl
-	// fails. Re-check writability here, before the first blob is written.
-	if err := requireWritableDir(planDir); err != nil {
+	// fails. Re-check writability here, before the first blob is written, of
+	// the directory dest holds (not of whatever the path names by now).
+	if err := requireWritableStore(dest, planDir); err != nil {
 		return fmt.Errorf("RecordPlan: plan dir: %w", err)
 	}
-	dest := plan.NewStore(planDir)
 	copied := make(map[string]bool)
 	for _, op := range ops {
 		if op.Blob == "" || copied[op.Blob] {
@@ -284,6 +313,13 @@ func commitStagedBlobs(ops []plan.Op, stage, planDir string) error {
 	}
 	return nil
 }
+
+// planDirVerified is a test seam, called after OpenSecureStore verified
+// planDir and before the writability re-check and the first blob write, with
+// the held store, so a test can swap planDir (or its blobs/) for a symlink at
+// exactly that point (TestCommitStagedBlobsIgnoresPlanDirSwappedAfterCheck)
+// and check that the store is closed afterwards.
+var planDirVerified = func(planDir string, dest *plan.Store) {}
 
 // recordCommitError words a failure to copy a staged blob as "RecordPlan: ...".
 // The blob store's write errors are plan.Refusals whose Reason is the message

@@ -43,12 +43,14 @@ import (
 //     so a symlink anywhere in the path is refused (and reported as a
 //     symlink, not as "not a directory").
 //
-// SecureDir is for a directory the operator names (the plan directory).
-// The blob store (Store.WriteFile, WriteTree, WriteGlob) applies the same rule
-// to blobs/ alone, through openSecureChildDir, and does NOT refuse a symlinked
-// ancestor of the plan directory: the staging store and the local-run
-// directory live under $TMPDIR, whose path may legitimately pass through a
-// symlink (macOS: /var -> /private/var).
+// SecureDir is for a directory the operator names (the plan directory);
+// OpenSecureStore runs the same walk and keeps the descriptor so the blobs are
+// written into exactly the directory that was verified. The blob store applies
+// the same rule to blobs/ alone (openSecureChildAt). Only a path-mode store
+// (NewStore: the staging store, Run's and Apply's temp dirs, all private
+// directories below $TMPDIR, whose path may legitimately pass through a
+// symlink such as macOS's /var -> /private/var) reaches its plan directory
+// following symlinks, through openSecureChildDir.
 //
 // This replaced an unconditional chmod 0700 of the final component, which
 // silently changed the mode of whatever directory the operator named (the
@@ -261,16 +263,12 @@ func walkError(dir string, err error) error {
 // it to safepath.OpenOrCreateDirAt.
 var mkdirChild safepath.MkdirFunc = unix.Mkdirat
 
-// openSecureChildDir applies SecureDir's policy to the single directory name
-// below parent, and to nothing above it, and returns a descriptor of it that
-// the caller must close. It is what the blob store uses for blobs/: parent (the
-// plan directory) is created when missing and opened the way os.MkdirAll and
-// os.Open would, following symlinks, since how the operator (or $TMPDIR)
-// reaches the plan directory is not gonf's business and was never checked for
-// blobs; name itself goes through the same safepath walk as SecureDir's
-// components: opened O_NOFOLLOW, created 0700 when missing, and otherwise
-// verified by finishSecureDir (a symlink, a file, foreign ownership, world- or
-// shared-group write are refused; a pre-existing directory is not modified).
+// openSecureChildDir is openSecureChildAt below a parent reached BY PATH, for
+// the path-mode blob store (NewStore): parent (a private plan directory below
+// $TMPDIR) is created when missing and opened the way os.MkdirAll and os.Open
+// would, following symlinks, because $TMPDIR may be a symlinked path (macOS:
+// /var -> /private/var). It must not be used for a directory the operator
+// names; that one is opened by openSecureDir and kept (OpenSecureStore).
 func openSecureChildDir(parent, name string) (int, error) {
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return -1, fmt.Errorf("create %s: %w", DirLabel(parent), err)
@@ -280,22 +278,24 @@ func openSecureChildDir(parent, name string) (int, error) {
 		return -1, fmt.Errorf("open %s: %w", DirLabel(parent), err)
 	}
 	defer func() { _ = unix.Close(pfd) }()
+	return openSecureChildAt(pfd, parent, name)
+}
+
+// openSecureChildAt applies SecureDir's policy to the single directory name
+// below the open directory pfd (whose path is parent, used only in messages),
+// and to nothing above it, and returns a descriptor of it that the caller
+// must close. name goes through the same safepath walk as SecureDir's
+// components: opened O_NOFOLLOW, created exactly 0700 when missing, and
+// otherwise verified by finishSecureDir (a symlink, a file, foreign
+// ownership, world- or shared-group write are refused; a pre-existing
+// directory is not modified). It is what the blob store uses for blobs/.
+func openSecureChildAt(pfd int, parent, name string) (int, error) {
 	child := filepath.Join(parent, name)
 	fd, err := secureDirWalk(child).OpenAt(pfd, parent, []string{name})
 	if err != nil {
 		return -1, walkError(child, err)
 	}
 	return fd, nil
-}
-
-// secureChildDir is openSecureChildDir for callers that then write by path
-// (Store.WriteTree, WriteGlob): it only checks, and closes the descriptor.
-func secureChildDir(parent, name string) error {
-	fd, err := openSecureChildDir(parent, name)
-	if err != nil {
-		return err
-	}
-	return unix.Close(fd)
 }
 
 // finishSecureDir applies the final-component policy to a directory that
@@ -339,8 +339,9 @@ func currentIDs() procIDs {
 }
 
 // checkDirAttrs is the single acceptance rule for a pre-existing plan output
-// directory. finishSecureDir (so SecureDir, WritePrivateFile, and the blobs/
-// policy of Store.WriteFile/WriteTree/WriteGlob through openSecureChildDir) and
+// directory. finishSecureDir (so SecureDir, OpenSecureStore, WritePrivateFile,
+// and the blobs/ policy of Store.WriteFile/WriteTree/WriteGlob through
+// openSecureChildAt) and
 // CheckExistingDir (and through it the api pre-check) all use it, so the
 // up-front check cannot drift from the enforcement. me is the process the
 // directory is judged for. The directory must be

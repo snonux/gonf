@@ -155,8 +155,8 @@ func (s *recordingSession) reset() {
 //     caller cannot write to, no writable ancestor): a best-effort pre-check
 //     (checkPlanDirUsable) catches those before any task body runs, and since
 //     the path can change afterwards the commit re-checks the same things
-//     (plan.SecureDir plus the writability check) before the first blob is
-//     written, after the task bodies ran. An unsafe existing planDir/blobs (a
+//     (plan.OpenSecureStore, then the writability check on the directory it
+//     holds open) before the first blob is written, after the task bodies ran. An unsafe existing planDir/blobs (a
 //     symlink, or one others or a shared group can write) is only ever caught
 //     at commit time, because a plan without blobs never touches it; it too
 //     is refused before any blob is written.
@@ -164,7 +164,7 @@ func (s *recordingSession) reset() {
 //     blob path that cannot be replaced) is reported but is not atomic: some
 //     blobs may already be copied, so a partially updated blob store is
 //     possible. A missing planDir is created (0700) at that step; an existing
-//     one is verified and keeps its mode (plan.SecureDir never chmods a
+//     one is verified and keeps its mode (plan.OpenSecureStore never chmods a
 //     directory it did not create).
 //   - The staging directory (in $TMPDIR, created only when a blob is written)
 //     is removed on every return path and when a task body calls logger.Fatal.
