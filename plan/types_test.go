@@ -22,6 +22,19 @@ func TestSupportsVersion(t *testing.T) {
 	}
 }
 
+// TestConfigSetVersionIsCurrent pins the config_set bump: a merge that loses
+// it would let an older destination accept a plan whose config_set op it only
+// discovers mid-apply, after earlier ops already mutated the host. Every
+// version 1..CurrentVersion staying supported is pinned by
+// TestWhenRequireVersionPinned (require_test.go).
+func TestConfigSetVersionIsCurrent(t *testing.T) {
+	t.Parallel()
+	if VersionUserManageHome != 19 || VersionWhenRequire != 20 || VersionConfigSet != 21 || CurrentVersion != VersionConfigSet {
+		t.Fatalf("versions: manage_home=%d require=%d config_set=%d current=%d, want 19/20/21/21",
+			VersionUserManageHome, VersionWhenRequire, VersionConfigSet, CurrentVersion)
+	}
+}
+
 func TestAllKindsExhaustiveAndUnique(t *testing.T) {
 	t.Parallel()
 	want := map[Kind]string{
@@ -43,6 +56,9 @@ func TestAllKindsExhaustiveAndUnique(t *testing.T) {
 		KindService:      "service",
 		KindSystemdTimer: "systemd_timer",
 		KindUser:         "user",
+		// Schema v21 (VersionConfigSet).
+		KindConfigSet:       "config_set",
+		KindConfigSetMember: "config_set_member",
 	}
 	kinds := AllKinds()
 	if len(kinds) != len(want) {

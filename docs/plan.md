@@ -890,6 +890,16 @@ chunk, so a mixed-privilege plan refuses before its first chunk writes.
 `LoginClass` is the first user (`goos == openbsd`). An older binary would
 silently skip the block, so it must refuse v20 plans before any mutation.
 
+Plan schema **version 21** adds the `config_set` and `config_set_member` kinds
+(see [config-set.md](config-set.md)). A `config_set` line carries `members`
+(key, path, `content_b64`, mode, owner, group), argv `validators`, and the
+optional `chroot` and `staging_dir`; a `config_set_member` line is the
+report-only handle of one member (`name` = set, `member` = key) that
+`OnChange` can watch. An older binary would reach the unknown kind only
+mid-apply, after earlier operations already ran, so it must refuse v21 at the
+header gate. Plans without a config set encode every other operation exactly
+as in v20.
+
 ### Secret material
 
 `MustSecret(path)` reads a required non-empty file below the controller

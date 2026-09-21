@@ -43,9 +43,10 @@ var (
 // RunWithStdin, and RunWith when Opts.Timeout is left at its zero value. It
 // bounds every resource backend's package-manager/systemctl/crontab/rcctl
 // invocation that goes through this package, so a hung local or remote
-// command cannot block gonf forever. File WithValidation validators run
-// outside this package (resource/file's runValidatorCommand, which caps their
-// output) but read DefaultTimeout, so the same bound applies to them. d <= 0
+// command cannot block gonf forever. File WithValidation and ConfigSet
+// WithSetValidation validators run outside this package (internal/validator,
+// which caps their output) but read DefaultTimeout, so the same bound applies
+// to them. d <= 0
 // is rejected (callers that want no timeout at all use Opts.Timeout < 0 for
 // that one call, not a process-wide unlimited default).
 func SetDefaultTimeout(d time.Duration) {

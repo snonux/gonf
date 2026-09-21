@@ -41,6 +41,7 @@ var allFamilies = []family{
 	familyOf[DaemonReloadOption]("DaemonReload"),
 	familyOf[CommandOption]("Command"),
 	familyOf[LocalUserOption]("LocalUser"),
+	familyOf[ConfigSetOption]("ConfigSet"),
 }
 
 // Family sets shared by several options; named after the unexported option
@@ -55,6 +56,10 @@ var (
 	famChangeGate   = []string{"Service", "Timer", "DaemonReload", "Command"}
 	famEnableOnly   = []string{"Timer", "SystemdTimer"}
 	famCronTimer    = []string{"Cron", "SystemdTimer"}
+	// famDependsOn is famAll plus ConfigSet: DependsOn's allResourceOption
+	// also implements the config-set family (resource/options/configset.go),
+	// which AllResourceOption itself does not list.
+	famDependsOn = append(slices.Clone(famAll), "ConfigSet")
 )
 
 // one builds the expected single-setter call list.
@@ -76,7 +81,7 @@ var fileA = resource.Resource{Type: "File", Name: "a"}
 // optionCases covers every exported option. Values are distinct per option
 // so a closure that forwards the wrong argument is caught.
 var optionCases = []optionCase{
-	{"DependsOn", DependsOn(fileA), famAll, one("AddDependency", "File[a]")},
+	{"DependsOn", DependsOn(fileA), famDependsOn, one("AddDependency", "File[a]")},
 	{"WithOwner", WithOwner("paul"), famFileDir, one("SetOwner", "paul")},
 	{"WithGroup", WithGroup("wheel"), famGroup, one("SetGroup", "wheel")},
 	{"WithHome", WithHome("/var/lib/svc"), []string{"LocalUser"}, one("SetHome", "/var/lib/svc")},
@@ -138,6 +143,12 @@ var optionCases = []optionCase{
 	{"Creates", Creates("/marker"), []string{"Command"}, one("SetCreates", "/marker")},
 	{"Unless", Unless("test", []string{"-e", "/x"}), []string{"Command"}, one("SetUnless", &Guard{Name: "test", Args: []string{"-e", "/x"}})},
 	{"OnlyIf", OnlyIf("probe", nil, ExpectExit(2), ExpectStdout("ok")), []string{"Command"}, one("SetOnlyIf", &Guard{Name: "probe", ExpectExit: 2, ExpectStdout: "ok"})},
+	{"ConfigFile", ConfigFile("aliases", "/etc/mail/aliases", WithContent("x"), WithMode(0o644)), []string{"ConfigSet"},
+		one("AddMember", []any{"aliases", "/etc/mail/aliases", 2})},
+	{"WithSetValidation", WithSetValidation("smtpd", []string{"-n", "-f", MemberPath("smtpd.conf")}), []string{"ConfigSet"},
+		one("AddSetValidator", []any{"smtpd", []string{"-n", "-f", MemberPath("smtpd.conf")}})},
+	{"WithChroot", WithChroot("/var/nsd"), []string{"ConfigSet"}, one("SetChroot", "/var/nsd")},
+	{"WithStagingDir", WithStagingDir("/etc/mail"), []string{"ConfigSet"}, one("SetStagingDir", "/etc/mail")},
 	{"OnChange", OnChange(fileA), famChangeGate, []setterCall{
 		{method: "SetChangeWatch", value: []string{"File[a]"}},
 		{method: "AddDependency", value: "File[a]"},

@@ -5,6 +5,7 @@
 | [plan.md](plan.md) | **Plan → JSONL → apply** (local one-shot and remote) |
 | [tasks.md](tasks.md) | `Task`, body-vs-options concept, `RegisterMethods`, Facts/`When*`, `CLI`, `Aggregate` / `AggregateTasks`, `Alias`, `Operational` |
 | [file-dir-link.md](file-dir-link.md) | `File` / `Dir` / `Link` (+ multi-path, lines, sources) |
+| [config-set.md](config-set.md) | `ConfigSet`: validate a multi-file config as one staged set, member change handles |
 | [command.md](command.md) | `Command` with `Unless` / `OnlyIf` / `Creates` |
 | [package.md](package.md) | `Package` / `NoPackage` (dnf, pkg_add, pkg, pkgin) |
 | [user.md](user.md) | additive-only local `User` accounts |

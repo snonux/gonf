@@ -90,12 +90,28 @@ func (r *recorder) SetServiceDescription(v string) {
 	r.record("SetServiceDescription", v)
 }
 
+// Config-set setters. AddMember records the key, path and the number of file
+// options (option funcs are not comparable, the member options themselves are
+// covered by the File rows).
+func (r *recorder) AddMember(key, path string, opts []FileOption) {
+	r.record("AddMember", []any{key, path, len(opts)})
+}
+func (r *recorder) AddSetValidator(bin string, args []string) {
+	r.record("AddSetValidator", []any{bin, args})
+}
+func (r *recorder) SetChroot(v string)     { r.record("SetChroot", v) }
+func (r *recorder) SetStagingDir(v string) { r.record("SetStagingDir", v) }
+
 // Compile-time proof that recorder implements each capability listed here: a
 // listed capability whose setter changes signature fails to build. A NEW
 // capability missing from both this list and the recorder is caught instead
 // by TestRecorderImplementsEveryCapability (capability_test.go).
 var (
 	_ Owner                  = (*recorder)(nil)
+	_ MemberAddable          = (*recorder)(nil)
+	_ SetValidatable         = (*recorder)(nil)
+	_ Chrootable             = (*recorder)(nil)
+	_ StagingDirable         = (*recorder)(nil)
 	_ Grouped                = (*recorder)(nil)
 	_ Moded                  = (*recorder)(nil)
 	_ Sourced                = (*recorder)(nil)

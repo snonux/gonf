@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/snonux/gonf/resource/cmd"
+	"github.com/snonux/gonf/resource/configset"
 	"github.com/snonux/gonf/resource/cron"
 	"github.com/snonux/gonf/resource/dir"
 	"github.com/snonux/gonf/resource/file"
@@ -34,6 +35,7 @@ var realResources = map[string]any{
 	"DaemonReload": &systemd.DaemonReloadResource{},
 	"Command":      &cmd.Cmd{},
 	"LocalUser":    &user.User{},
+	"ConfigSet":    &configset.ConfigSet{},
 }
 
 // TestRealResourcesImplementTheirFamilies closes the gap between the

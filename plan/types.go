@@ -52,7 +52,16 @@ import "encoding/json"
 // Version 20 adds require to when_begin: a failed predicate then refuses the
 // whole apply (and dry run) instead of skipping the body. An older binary
 // would silently skip a required block, so it must refuse v20 up-front.
-const CurrentVersion = 20
+// Version 21 adds the config_set and config_set_member kinds and their
+// members/validators/chroot/staging_dir/member fields: an older destination
+// would reach the unknown kind mid-plan, after earlier ops had already
+// mutated the host, so it must refuse v21 at the header gate instead.
+const CurrentVersion = 21
+
+// VersionConfigSet is the plan schema version that introduced the config_set
+// and config_set_member kinds. Tests pin it so a merge that loses the bump
+// fails loudly instead of letting older destinations fail mid-apply.
+const VersionConfigSet = 21
 
 // VersionUserManageHome is the plan schema version that introduced the user
 // op's manage_home field. Tests pin it so a merge that loses the bump (and so
@@ -86,6 +95,7 @@ var supportedVersions = map[int]struct{}{
 	17:             {},
 	18:             {},
 	19:             {},
+	20:             {},
 	CurrentVersion: {},
 }
 
@@ -117,6 +127,12 @@ const (
 	KindService      Kind = "service"
 	KindSystemdTimer Kind = "systemd_timer"
 	KindUser         Kind = "user"
+	// KindConfigSet validates a complete staged multi-file configuration and
+	// then publishes its members (see resource/configset).
+	KindConfigSet Kind = "config_set"
+	// KindConfigSetMember is a report-only handle for one config_set member:
+	// it gives the member its own op ID so OnChange can watch it.
+	KindConfigSetMember Kind = "config_set_member"
 )
 
 // allKinds lists every Kind constant in stable declaration order.
@@ -139,6 +155,8 @@ var allKinds = []Kind{
 	KindService,
 	KindSystemdTimer,
 	KindUser,
+	KindConfigSet,
+	KindConfigSetMember,
 }
 
 // AllKinds returns a copy of every Kind constant in stable declaration order.
@@ -385,6 +403,24 @@ type Op struct {
 	// Elevate marks ops from a Privileged() task (or WithElevate command).
 	// Controllers use this to split apply into user vs sudo/doas gonf invocations.
 	Elevate bool `json:"elevate,omitempty"`
+
+	// Members are the files of a KindConfigSet op, in declaration order
+	// (schema v21). Content may reference other members' staged or live
+	// paths through gonf-owned tokens; see ConfigMember.
+	Members []ConfigMember `json:"members,omitempty"`
+	// Validators are the argv commands a KindConfigSet op runs, in order,
+	// against the complete staged candidate set before any live write.
+	Validators []Argv `json:"validators,omitempty"`
+	// Chroot is the optional chroot directory every KindConfigSet member and
+	// its staging directory must live under; chroot-relative member tokens
+	// are rendered relative to it.
+	Chroot string `json:"chroot,omitempty"`
+	// StagingDir is the KindConfigSet directory that receives the private
+	// staging directory. Empty means the members' deepest common directory.
+	StagingDir string `json:"staging_dir,omitempty"`
+	// Member is the member key of a KindConfigSetMember op; its Name is the
+	// owning set's name.
+	Member string `json:"member,omitempty"`
 
 	// Deps lists the resource IDs (op IDs such as "File[/etc/foo]") this op
 	// depends on, recorded from the resource DependsOn option. Plan apply

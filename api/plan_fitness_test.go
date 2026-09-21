@@ -8,6 +8,7 @@ import (
 
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
+	"github.com/snonux/gonf/resource/options"
 )
 
 // kindFitness pins one fixture per plan.Kind: every declared kind must lower
@@ -151,6 +152,27 @@ func kindFitnessTable() map[plan.Kind]kindFixture {
 			System:              true,
 			ManageHome:          true,
 			Deps:                []string{"Package[fit-base]"},
+		}},
+		plan.KindConfigSet: {draft: &resource.PlanDraft{
+			Kind: "config_set",
+			ID:   "ConfigSet[fit]",
+			Name: "fit",
+			ConfigMembers: []resource.PlanConfigMember{
+				{Key: "main.conf", Path: "/etc/fit/main.conf", Content: []byte("include " + options.MemberPath("keys") + "\n"), Mode: "0640", Owner: "root", Group: "wheel"},
+				{Key: "keys", Path: "/etc/fit/keys", Content: []byte("secret\n"), Mode: "0600"},
+			},
+			Validators: []resource.PlanArgv{{Bin: "fitcheck", Args: []string{"-f", options.MemberPath("main.conf")}}},
+			Chroot:     "/etc",
+			StagingDir: "/etc/fit",
+			Deps:       []string{"Package[fit-base]"},
+		}},
+		plan.KindConfigSetMember: {draft: &resource.PlanDraft{
+			Kind:   "config_set_member",
+			ID:     "ConfigSetMember[fit/keys]",
+			Name:   "fit",
+			Member: "keys",
+			Path:   "/etc/fit/keys",
+			Deps:   []string{"ConfigSet[fit]"},
 		}},
 	}
 }

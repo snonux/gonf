@@ -49,8 +49,8 @@ The requirement block may only sit under host-fact conditions (`goos`,
 plan is recorded, because a filesystem condition can change during an apply
 and would make "refused before any mutation" untrue.
 
-A plan containing `LoginClass` carries schema version 20; destinations need a
-gonf binary that supports it (older ones refuse the plan up-front).
+A plan containing `LoginClass` needs a destination gonf that supports plan
+version 20 or later (older ones refuse the plan up-front).
 
 ## Why there is no `cap_mkdb` step
 

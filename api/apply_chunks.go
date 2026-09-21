@@ -123,8 +123,9 @@ func defaultElevatedApply(ctx context.Context, mode privilege.Mode, ops []plan.O
 // part of a local apply this context does not currently reach (see
 // internal/exec's own process-wide default timeout for why that gap is
 // still safe: every resource backend's actual command execution is bounded
-// there regardless of ctx threading, and File validators, which run outside
-// internal/exec, read the same default timeout; see resource/file).
+// there regardless of ctx threading, and File and ConfigSet validators, which
+// run outside internal/exec, read the same default timeout; see
+// internal/validator).
 func ApplyChunks(ops []plan.Op, planDir string, mode privilege.Mode) error {
 	return ApplyChunksContext(context.Background(), ops, planDir, mode)
 }

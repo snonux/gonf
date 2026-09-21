@@ -191,6 +191,18 @@ type PlanDraft struct {
 	// Watch lists resource ids for IfChanged (the OnChange targets; usually
 	// also DependsOn targets for daemon_reload).
 	Watch []string
+	// ConfigMembers, Validators, Chroot, and StagingDir describe a
+	// "config_set" draft: every member file of the set, the argv validators
+	// run against the complete staged set, and the optional chroot/staging
+	// placement (see resource/configset).
+	ConfigMembers []PlanConfigMember
+	Validators    []PlanArgv
+	Chroot        string
+	StagingDir    string
+	// Member is the member key of a "config_set_member" handle draft; Name
+	// then carries the owning set's name.
+	Member string
+
 	// Deps lists the sorted resource IDs this draft's resource depends on
 	// (the DependsOn targets). draftToOp copies them into plan.Op.Deps so
 	// plan apply orders ops like the repository path does.
