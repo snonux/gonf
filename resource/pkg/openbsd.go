@@ -1,65 +1,30 @@
 package pkg
 
-import (
-	"fmt"
+// openbsdBackend manages packages with pkg_add/pkg_delete, probing with
+// pkg_info.
+type openbsdBackend struct{ checkedExec }
 
-	"github.com/snonux/gonf/internal/logger"
-	"github.com/snonux/gonf/resource"
-)
+var _ backend = openbsdBackend{}
 
-func applyOpenBSD(p *Package) error {
-	id := fmt.Sprintf("Package[%s]", p.name)
-	installed, err := openbsdInstalled(p)
-	if err != nil {
-		return err
-	}
-
-	var args []string
-	switch {
-	case p.Absent:
-		if !installed {
-			resource.NoteResult(id, false)
-			return nil
-		}
-		args = []string{p.name}
-		if resource.DryRun() {
-			logger.Info("dry-run: would run pkg_delete %v", args)
-			resource.NoteResult(id, true)
-			return nil
-		}
-		if err := runOrErr(p, "pkg_delete", args...); err != nil {
-			return err
-		}
-		logger.Info("pkg_delete %v", args)
-		resource.NoteResult(id, true)
-		return nil
-	case p.latest && installed:
-		args = []string{"-u", p.name}
-	case installed:
-		resource.NoteResult(id, false)
-		return nil
-	default:
-		args = []string{p.name}
-	}
-
-	if resource.DryRun() {
-		logger.Info("dry-run: would run pkg_add %v", args)
-		resource.NoteResult(id, true)
-		return nil
-	}
-	if err := runOrErr(p, "pkg_add", args...); err != nil {
-		return err
-	}
-	logger.Info("pkg_add %v", args)
-	resource.NoteResult(id, true)
-	return nil
+// installed probes with the pkgspec stem-*, which matches any version of the
+// package.
+func (openbsdBackend) installed(run runner, name string) (bool, error) {
+	return probeExitZero(run, "pkg_info -e "+name+"-*", "pkg_info", "-e", name+"-*")
 }
 
-func openbsdInstalled(p *Package) (bool, error) {
-	// pkgspec stem-* matches any version of the package.
-	_, _, code, err := p.run("pkg_info", "-e", p.name+"-*")
-	if err != nil {
-		return false, fmt.Errorf("pkg_info -e %s-*: %w", p.name, err)
+func (openbsdBackend) installCmd(name string) command { return openbsdCmd("pkg_add", name) }
+
+// upgradeCmd uses pkg_add -u for an installed package; a missing package is
+// installed with plain pkg_add instead.
+func (b openbsdBackend) upgradeCmd(name string, installed bool) command {
+	if !installed {
+		return b.installCmd(name)
 	}
-	return code == 0, nil
+	return openbsdCmd("pkg_add", "-u", name)
+}
+
+func (openbsdBackend) removeCmd(name string) command { return openbsdCmd("pkg_delete", name) }
+
+func openbsdCmd(bin string, args ...string) command {
+	return command{bin: bin, label: bin, args: args}
 }

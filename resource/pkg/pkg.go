@@ -71,30 +71,23 @@ func ResetRunCmdWithEnvForTest() {
 	}
 }
 
-// detectPkgManager is swapped in unit tests (CI runners are often Ubuntu).
+// detectPkgManager names the host's package manager; selectBackend maps the
+// name to a backend. It is swapped by SetDetectPackageManagerForTest (CI
+// runners are often Ubuntu); in-package tests instead hand a backend to
+// applyWith directly.
 var detectPkgManager = detectPackageManager
 
 // Apply runs the package reconciliation directly for the legacy resource path.
 func (p *Package) Apply() error { return p.apply() }
 
+// apply selects the host's backend and converges p through it with p's own
+// runner (which carries WithEnv). The shared policy lives in applyWith.
 func (p *Package) apply() error {
-	pkgMan, err := detectPkgManager()
+	b, err := selectBackend()
 	if err != nil {
 		return err
 	}
-
-	switch pkgMan {
-	case "dnf":
-		return applyDNF(p)
-	case "openbsd":
-		return applyOpenBSD(p)
-	case "freebsd":
-		return applyFreeBSDPkg(p)
-	case "netbsd":
-		return applyNetBSD(p)
-	}
-
-	return errors.New("unsupported package manager")
+	return p.applyWith(b, p.run)
 }
 
 // Present registers a package resource ensuring name is installed; IsLatest
@@ -166,22 +159,14 @@ func detectPackageManager() (string, error) {
 	}
 }
 
+// run is p's runner: the legacy seam when no WithEnv is set, otherwise the
+// environment-aware seam with p's variables overlaid on the inherited
+// environment. It satisfies the runner type the backends are handed.
 func (p *Package) run(bin string, args ...string) (string, string, int, error) {
 	if p.env == nil {
 		return runCmd(bin, args...)
 	}
 	return runCmdWithEnv(exec.MergeEnv(p.env), bin, args...)
-}
-
-func runOrErr(p *Package, bin string, args ...string) error {
-	stdout, stderr, code, err := p.run(bin, args...)
-	if err != nil {
-		return fmt.Errorf("%s %v: %w", bin, args, err)
-	}
-	if code != 0 {
-		return fmt.Errorf("%s %v failed (exit %d): %s%s", bin, args, code, stdout, stderr)
-	}
-	return nil
 }
 
 // SetDetectPackageManagerForTest stubs OS package-manager detection (tests only).

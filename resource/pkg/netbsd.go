@@ -1,58 +1,32 @@
 package pkg
 
-import (
-	"fmt"
-
-	"github.com/snonux/gonf/internal/logger"
-	"github.com/snonux/gonf/resource"
-)
-
 const (
 	netbsdPkgin   = "/usr/pkg/bin/pkgin"
 	netbsdPkgInfo = "/usr/sbin/pkg_info"
 )
 
-func applyNetBSD(p *Package) error {
-	id := fmt.Sprintf("Package[%s]", p.name)
-	installed, err := netbsdInstalled(p)
-	if err != nil {
-		return err
-	}
+// netbsdBackend manages packages with pkgin, probing with pkg_info. Both are
+// invoked by absolute path so the backend does not depend on /usr/pkg/bin
+// being on the applying user's PATH.
+type netbsdBackend struct{ checkedExec }
 
-	var args []string
-	switch {
-	case p.Absent:
-		if !installed {
-			resource.NoteResult(id, false)
-			return nil
-		}
-		args = []string{"-y", "remove", p.name}
-	case p.latest:
-		args = []string{"-y", "install", p.name} // pkgin install upgrades when newer available
-	case installed:
-		resource.NoteResult(id, false)
-		return nil
-	default:
-		args = []string{"-y", "install", p.name}
-	}
+var _ backend = netbsdBackend{}
 
-	if resource.DryRun() {
-		logger.Info("dry-run: would run pkgin %v", args)
-		resource.NoteResult(id, true)
-		return nil
-	}
-	if err := runOrErr(p, netbsdPkgin, args...); err != nil {
-		return err
-	}
-	logger.Info("pkgin %v", args)
-	resource.NoteResult(id, true)
-	return nil
+// installed probes with pkg_info -e, which exits 0 only when installed.
+func (netbsdBackend) installed(run runner, name string) (bool, error) {
+	return probeExitZero(run, "pkg_info -e "+name, netbsdPkgInfo, "-e", name)
 }
 
-func netbsdInstalled(p *Package) (bool, error) {
-	_, _, code, err := p.run(netbsdPkgInfo, "-e", p.name)
-	if err != nil {
-		return false, fmt.Errorf("pkg_info -e %s: %w", p.name, err)
-	}
-	return code == 0, nil
+func (netbsdBackend) installCmd(name string) command { return pkginCmd("-y", "install", name) }
+
+// upgradeCmd reuses pkgin install, which upgrades when a newer version is
+// available (and installs when the package is missing).
+func (netbsdBackend) upgradeCmd(name string, _ bool) command {
+	return pkginCmd("-y", "install", name)
+}
+
+func (netbsdBackend) removeCmd(name string) command { return pkginCmd("-y", "remove", name) }
+
+func pkginCmd(args ...string) command {
+	return command{bin: netbsdPkgin, label: "pkgin", args: args}
 }

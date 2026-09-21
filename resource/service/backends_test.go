@@ -303,16 +303,16 @@ func TestApplySystemdFake(t *testing.T) {
 			var calls []svcCall
 			SetRunCmdForTest(fakeSystemdCtl(tt.state.running, tt.state.enabled, tt.state.probeErr, tt.state.enabledErr, tt.state.failAction, tt.state.actionErr, &calls))
 
-			err := applySystemd(&tt.svc)
+			err := tt.svc.applyWith(systemdBackend{})
 
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("applySystemd err = %v, want substring %q", err, tt.wantErr)
+					t.Fatalf("systemd applyWith err = %v, want substring %q", err, tt.wantErr)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("applySystemd: %v", err)
+				t.Fatalf("systemd applyWith: %v", err)
 			}
 
 			assertSvcActions(t, calls, tt.wantSystem, func(args []string) bool {
@@ -324,11 +324,11 @@ func TestApplySystemdFake(t *testing.T) {
 }
 
 // TestApplyFreeBSDFake pins the FreeBSD service(8) backend: status/enabled
-// probes gate enable/start or stop/disable, and reload precedes restart.
+// probes gate enable/start or stop/disable, and reload precedes restart. The
+// fake runner is handed to the backend itself; no package seam is patched.
 func TestApplyFreeBSDFake(t *testing.T) {
 	oldDry := resource.DryRun()
 	defer resource.SetDryRun(oldDry)
-	defer ResetRunCmdForTest()
 
 	tests := []struct {
 		name     string
@@ -436,18 +436,18 @@ func TestApplyFreeBSDFake(t *testing.T) {
 			resource.SetDryRun(tt.state.dryRun)
 
 			var calls []svcCall
-			SetRunCmdForTest(fakeFreeBSDSvc(tt.state.running, tt.state.enabled, tt.state.probeErr, tt.state.enabledErr, tt.state.failAction, tt.state.actionErr, &calls))
+			run := fakeFreeBSDSvc(tt.state.running, tt.state.enabled, tt.state.probeErr, tt.state.enabledErr, tt.state.failAction, tt.state.actionErr, &calls)
 
-			err := applyFreeBSD(&tt.svc)
+			err := tt.svc.applyWith(freebsdBackend{run: run})
 
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("applyFreeBSD err = %v, want substring %q", err, tt.wantErr)
+					t.Fatalf("freebsd applyWith err = %v, want substring %q", err, tt.wantErr)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("applyFreeBSD: %v", err)
+				t.Fatalf("freebsd applyWith: %v", err)
 			}
 
 			assertSvcActions(t, calls, tt.wantSvc, func(args []string) bool {
@@ -463,14 +463,11 @@ func TestApplyFreeBSDFake(t *testing.T) {
 func TestApplyNetBSDFake(t *testing.T) {
 	oldDry := resource.DryRun()
 	defer resource.SetDryRun(oldDry)
-	defer ResetRunCmdForTest()
 
-	// Redirect the rc.conf.d override directory to a temp dir so enable and
-	// disable can run without touching /etc.
+	// The backend under test gets a temp rc.conf.d override directory and
+	// the fake runner as fields, so enable and disable run without touching
+	// /etc and without patching any package-level variable.
 	rcConfD := t.TempDir()
-	oldRcConfD := netbsdRcConfD
-	netbsdRcConfD = rcConfD
-	defer func() { netbsdRcConfD = oldRcConfD }()
 
 	tests := []struct {
 		name     string
@@ -582,18 +579,18 @@ func TestApplyNetBSDFake(t *testing.T) {
 			_ = os.Remove(filepath.Join(rcConfD, tt.svc.name))
 
 			var calls []svcCall
-			SetRunCmdForTest(fakeNetBSDSvc(tt.state.running, tt.state.enabled, tt.state.probeErr, tt.state.enabledErr, tt.state.failAction, tt.state.actionErr, &calls))
+			run := fakeNetBSDSvc(tt.state.running, tt.state.enabled, tt.state.probeErr, tt.state.enabledErr, tt.state.failAction, tt.state.actionErr, &calls)
 
-			err := applyNetBSD(&tt.svc)
+			err := tt.svc.applyWith(netbsdBackend{run: run, rcConfD: rcConfD})
 
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("applyNetBSD err = %v, want substring %q", err, tt.wantErr)
+					t.Fatalf("netbsd applyWith err = %v, want substring %q", err, tt.wantErr)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("applyNetBSD: %v", err)
+				t.Fatalf("netbsd applyWith: %v", err)
 			}
 
 			assertSvcActions(t, calls, tt.wantSvc, func(args []string) bool {
@@ -616,11 +613,11 @@ func TestApplyNetBSDFake(t *testing.T) {
 }
 
 // TestApplyRcctlFake pins the OpenBSD rcctl backend: check/get probes gate
-// enable/start/stop/disable and reload precedes restart.
+// enable/start/stop/disable and reload precedes restart. The fake runner is
+// handed to the backend itself; no package seam is patched.
 func TestApplyRcctlFake(t *testing.T) {
 	oldDry := resource.DryRun()
 	defer resource.SetDryRun(oldDry)
-	defer ResetRunCmdForTest()
 
 	tests := []struct {
 		name     string
@@ -728,18 +725,18 @@ func TestApplyRcctlFake(t *testing.T) {
 			resource.SetDryRun(tt.state.dryRun)
 
 			var calls []svcCall
-			SetRunCmdForTest(fakeRcctl(tt.state.running, tt.state.enabled, tt.state.probeErr, tt.state.enabledErr, tt.state.failAction, tt.state.actionErr, &calls))
+			run := fakeRcctl(tt.state.running, tt.state.enabled, tt.state.probeErr, tt.state.enabledErr, tt.state.failAction, tt.state.actionErr, &calls)
 
-			err := applyRcctl(&tt.svc)
+			err := tt.svc.applyWith(rcctlBackend{run: run})
 
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("applyRcctl err = %v, want substring %q", err, tt.wantErr)
+					t.Fatalf("rcctl applyWith err = %v, want substring %q", err, tt.wantErr)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("applyRcctl: %v", err)
+				t.Fatalf("rcctl applyWith: %v", err)
 			}
 
 			assertSvcActions(t, calls, tt.wantRc, func(args []string) bool {

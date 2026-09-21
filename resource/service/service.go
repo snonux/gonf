@@ -38,10 +38,12 @@ var (
 	_ opt.ChangeWatchable = (*Service)(nil)
 )
 
-// detectSvcManager is swapped in unit tests (mirrors resource/pkg's
-// detectPkgManager), so the fitness test can force the BSD/rcctl backends
-// (freebsd/netbsd/rcctl) on any single host instead of only ever reaching
-// whichever backend runtime.GOOS happens to select.
+// detectSvcManager names the host's service manager; selectBackend maps the
+// name to a backend. It is swapped by SetDetectServiceManagerForTest
+// (mirrors resource/pkg's detectPkgManager), so the fitness test can force
+// the BSD/rcctl backends on any single host instead of only ever reaching
+// whichever backend runtime.GOOS happens to select. In-package tests instead
+// hand a backend to applyWith directly.
 var detectSvcManager = detectServiceManager
 
 // gateHolds reports whether the change gate suppresses the restart/reload
@@ -55,27 +57,14 @@ func (s *Service) gateHolds() bool {
 // Apply runs the service reconciliation directly for the legacy resource path.
 func (s *Service) Apply() error { return s.apply() }
 
+// apply selects the host's backend and converges s through it. The shared
+// policy lives in applyWith (converge.go); backends are in backend.go.
 func (s *Service) apply() error {
-	mgr, err := detectSvcManager()
+	b, err := selectBackend()
 	if err != nil {
 		return err
 	}
-	if s.user && mgr != "systemd" {
-		return fmt.Errorf("service[%s]: WithUser is only supported on systemd", s.name)
-	}
-
-	switch mgr {
-	case "systemd":
-		return applySystemd(s)
-	case "rcctl":
-		return applyRcctl(s)
-	case "freebsd":
-		return applyFreeBSD(s)
-	case "netbsd":
-		return applyNetBSD(s)
-	default:
-		return errors.New("unsupported service manager")
-	}
+	return s.applyWith(b)
 }
 
 // newService builds a Service with opts applied.

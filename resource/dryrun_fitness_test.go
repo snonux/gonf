@@ -38,14 +38,18 @@ import (
 // whichever service manager the CI host actually has). That left several
 // real, independently-guarded "if resource.DryRun()" checks structurally
 // unreachable: file/checksum.go's and dir/dir.go's "already matches /
-// already exists, but reapply attributes" branches, and the freebsd/netbsd/
-// openbsd pkg backends and freebsd/netbsd/rcctl service backends. The
+// already exists, but reapply attributes" branches, and (at the time) the
+// freebsd/netbsd/openbsd pkg backends and freebsd/netbsd/rcctl service
+// backends, which then each carried their own guard. The
 // dedicated *ReapplyAttrs subtests below now pre-create their target so that
 // branch is the one exercised, and the *FreeBSD/*NetBSD/*OpenBSD/*Rcctl
 // subtests force backend selection via SetDetectPackageManagerForTest (pkg,
 // pre-existing) and SetDetectServiceManagerForTest (service, added for this
-// fix) so every backend's own guard runs on a single host regardless of its
-// actual GOOS. This only proves each backend's dry-run gate itself holds;
+// fix) so every backend is driven on a single host regardless of its actual
+// GOOS. Since x62 the dry-run guard is no longer per backend: each family
+// has one guard in its shared converge.go (pkg: in applyWith; service: in
+// runActions, which applyWith calls), and these subtests prove that guard holds
+// for the commands every backend builds. This only proves the dry-run gate;
 // it stubs the manager-detection and command-runner seams, so it cannot
 // catch a bug specific to a real BSD binary's behavior that only that OS
 // would exhibit.
@@ -53,12 +57,15 @@ import (
 // A THIRD round found 7 more structurally-unreachable "if resource.DryRun()"
 // guards, all sharing the same root cause as the first two rounds: no
 // subtest ever drove the specific branch the guard sits in. Fixed here:
-//  1. pkg/openbsd.go's Absent-branch guard (line ~25): openbsd.go, alone
-//     among the pkg backends, has TWO independent guards (its p.Absent case
-//     returns early before reaching the shared install/upgrade guard other
-//     backends fall through to) — dryRunPkgOpenBSD only ever built a
-//     present package. dryRunPkgOpenBSDAbsent answers the pkg_info probe as
-//     "installed" so pkg.Absent's removal path is the one taken.
+//  1. pkg/openbsd.go's then Absent-branch guard: before x62, openbsd.go,
+//     alone among the pkg backends, had TWO independent guards (its
+//     p.Absent case returned early before reaching the install/upgrade
+//     guard) — dryRunPkgOpenBSD only ever built a present package.
+//     dryRunPkgOpenBSDAbsent answers the pkg_info probe as "installed" so
+//     pkg.Absent's removal path is the one taken. Since x62 no backend has
+//     a guard of its own (the only pkg guard is in resource/pkg/converge.go's
+//     applyWith); the fixture still pins that the pkg_delete removal command
+//     never runs in dry-run.
 //  2. link/hardlink.go's two guards (create ~line 67, replace ~line 49): no
 //     prior subtest ever called opt.WithHardlink at all. dryRunHardlinkCreate
 //     and dryRunHardlinkReplace cover both.
@@ -89,14 +96,17 @@ import (
 // "if false && resource.DryRun()", confirming ONLY that guard's subtest
 // failed (siblings stayed green), and reverting before moving to the next.
 //
-// Some resource/*.go files share ONE "if resource.DryRun()" line between
-// their Absent and Present code paths (pkg's dnf/freebsd/netbsd backends,
-// all four service backends, and timer.go) rather than openbsd.go's two
-// independent guards; for those, exercising the line via the existing
-// Present-path subtest already proves that exact guard holds, so no
-// separate Absent-path subtest was added for them. See the exhaustive
-// call-site inventory in this task's final `ask annotate t5` note for the
-// full call-site-to-subtest mapping.
+// The pkg and service backends carry no dry-run guard at all since x62: each
+// family has exactly one "if resource.DryRun()" line, in its shared
+// converge.go (pkg: applyWith; service: runActions, called from applyWith),
+// which
+// every backend's Absent and Present paths go through. timer.go likewise
+// shares one guard between its Absent and Present paths. For these, the
+// existing Present-path subtests already prove that exact guard holds, so
+// no separate Absent-path subtest is needed (the OpenBSD Absent fixture is
+// kept to pin that pkg_delete never runs). See the call-site inventory in
+// the t5 task's final `ask annotate` note for the historical call-site-to-
+// subtest mapping.
 //
 // Each kind is its own subtest so a regression names exactly which kind (or
 // which branch/backend of a kind) broke, and so kinds that require systemd
@@ -719,10 +729,10 @@ func dryRunPkg(t *testing.T, tmp string) {
 // (via the existing SetDetectPackageManagerForTest seam) and runs the same
 // fixture as dryRunPkg against it, flagging a mutation the moment the
 // backend issues a command isProbe does not recognize as its own read-only
-// "is it installed" check. dryRunPkg above only ever forces "dnf", so the
-// freebsd/netbsd/openbsd backends' own "if resource.DryRun()" guards
-// (freebsd.go, netbsd.go, openbsd.go) were never reached by the fitness
-// test even though the seam to reach them already existed.
+// "is it installed" check. dryRunPkg above only ever forces "dnf"; these
+// subtests route the freebsd/netbsd/openbsd backends through the single
+// "if resource.DryRun()" guard in resource/pkg's applyWith (converge.go),
+// proving no backend's command slips past it.
 func dryRunPkgBackend(t *testing.T, mgr string, isProbe func(name string, args []string) bool) {
 	t.Helper()
 	t.Cleanup(func() {
@@ -776,12 +786,13 @@ func dryRunPkgOpenBSD(t *testing.T, tmp string) {
 	})
 }
 
-// dryRunPkgOpenBSDAbsent exercises openbsd.go's Absent-branch guard
-// (~line 25): dryRunPkgOpenBSD above only ever calls pkg.Present (install
-// path), which takes the SEPARATE dry-run guard further down applyOpenBSD
-// (the one shared by the p.latest/default install branches). This fixture
-// answers the pkg_info probe as "installed" so pkg.Absent's removal path
-// decides a real pkg_delete is needed, and asserts it never runs.
+// dryRunPkgOpenBSDAbsent exercises the OpenBSD removal path: dryRunPkgOpenBSD
+// above only ever calls pkg.Present (the pkg_add install command). Since x62
+// every backend shares one dry-run guard in resource/pkg's applyWith, but
+// the removal command (pkg_delete, a different binary) is still chosen by a
+// separate branch, so it keeps its own fixture. This one answers the
+// pkg_info probe as "installed" so pkg.Absent's removal path decides a real
+// pkg_delete is needed, and asserts it never runs.
 func dryRunPkgOpenBSDAbsent(t *testing.T, tmp string) {
 	t.Cleanup(func() {
 		pkg.ResetRunCmdForTest()
@@ -826,11 +837,11 @@ func dryRunService(t *testing.T, tmp string) {
 // "start" action and a broken guard would actually run it. classify
 // inspects a runner call's args and reports "running" or "enabled" for a
 // probe (answered not-running / enabled respectively) or "" for anything
-// else, which flags a mutation. Before SetDetectServiceManagerForTest
-// existed, the freebsd/netbsd/rcctl backends (each with their own "if
-// resource.DryRun()" guard) were only reachable by actually running the
-// fitness test on that OS, so this seam and these subtests are what makes
-// them testable on a single Linux CI host.
+// else, which flags a mutation. The freebsd/netbsd/rcctl backends share the
+// single "if resource.DryRun()" guard in resource/service's runActions
+// (converge.go, called from applyWith); SetDetectServiceManagerForTest lets these subtests drive
+// each backend's actions through that guard on a single Linux CI host
+// instead of only on the backend's own OS.
 func dryRunServiceBackend(t *testing.T, mgr string, classify func(args []string) string) {
 	t.Helper()
 	t.Cleanup(func() {

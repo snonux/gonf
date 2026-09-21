@@ -4,122 +4,61 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	"github.com/snonux/gonf/internal/logger"
-	"github.com/snonux/gonf/resource"
 )
 
 const netbsdService = "/usr/sbin/service"
 
-type netbsdAction struct {
-	desc string
-	run  func() error
+// netbsdRcConfD is the production rc.conf.d override directory the NetBSD
+// backend writes enable/disable overrides into. Tests build a netbsdBackend
+// with a temporary rcConfD instead of touching /etc.
+const netbsdRcConfD = "/etc/rc.conf.d"
+
+// netbsdBackend converges services with NetBSD service(8). NetBSD's
+// service(8) has no enable/disable verbs, so those write an rc.conf.d
+// override (NAME=YES|NO) instead of running a command.
+type netbsdBackend struct {
+	run     runner
+	rcConfD string // override directory, netbsdRcConfD in production
 }
 
-// netbsdRcConfD is the rc.conf.d override directory written by
-// netbsdSetEnabled. A variable so tests can redirect it to a temporary
-// directory instead of touching /etc.
-var netbsdRcConfD = "/etc/rc.conf.d"
+var _ backend = netbsdBackend{}
 
-func applyNetBSD(s *Service) error {
-	id := fmt.Sprintf("Service[%s]", s.name)
+// userSupport refuses WithUser: service(8) has no per-user services.
+func (netbsdBackend) userSupport() error { return errUserNeedsSystemd }
 
-	running, err := netbsdRunning(s.name)
-	if err != nil {
-		return err
-	}
-	enabled, err := netbsdEnabled(s.name)
-	if err != nil {
-		return err
-	}
-
-	actions, held := netbsdActions(s, running, enabled)
-
-	if len(actions) == 0 {
-		if held {
-			resource.Note(id, resource.StatusSkipped)
-			return nil
-		}
-		resource.NoteResult(id, false)
-		return nil
-	}
-
-	return runNetBSDActions(id, actions)
+// running asks service NAME status, which exits 0 while the daemon runs.
+func (b netbsdBackend) running(u unit) (bool, error) {
+	return probeExitZero(b.run, "service "+u.name+" status", netbsdService, u.name, "status")
 }
 
-func netbsdActions(s *Service, running, enabled bool) ([]netbsdAction, bool) {
-	var actions []netbsdAction
-	held := false // change gate suppressed the restart/reload action
-	add := func(desc string, run func() error) {
-		actions = append(actions, netbsdAction{desc: desc, run: run})
-	}
-	if s.Absent {
-		if running {
-			add("service "+s.name+" stop", func() error { return netbsdSvcRun(s.name, "stop") })
-		}
-		if enabled {
-			add("disable "+s.name, func() error { return netbsdSetEnabled(s.name, false) })
-		}
-		return actions, held
-	}
-	if !enabled {
-		add("enable "+s.name, func() error { return netbsdSetEnabled(s.name, true) })
-	}
-	if !running {
-		add("service "+s.name+" start", func() error { return netbsdSvcRun(s.name, "start") })
-	} else if s.reload || s.restart {
-		// The gated action only fires after a watched resource changed. When
-		// the gate holds, no action is added: with the unit already running
-		// and enabled that leaves zero actions, which applyNetBSD reports as
-		// skipped (the gated restart was requested but held).
-		if s.gateHolds() {
-			logger.Debug("Service[%s]: restart/reload held by change gate (no watched dependency changed)", s.name)
-			held = true
-		} else if s.reload {
-			add("service "+s.name+" reload", func() error { return netbsdSvcRun(s.name, "reload") })
-		} else {
-			add("service "+s.name+" restart", func() error { return netbsdSvcRun(s.name, "restart") })
-		}
-	}
-	return actions, held
+// enabled asks service -e NAME, which exits 0 when the service is enabled.
+func (b netbsdBackend) enabled(u unit) (bool, error) {
+	return probeExitZero(b.run, "service -e "+u.name, netbsdService, "-e", u.name)
 }
 
-func runNetBSDActions(id string, actions []netbsdAction) error {
-	if resource.DryRun() {
-		for _, a := range actions {
-			logger.Info("dry-run: would %s", a.desc)
-		}
-		resource.NoteResult(id, true)
-		return nil
+func (b netbsdBackend) do(u unit, v verb) error {
+	switch v {
+	case verbEnable:
+		return b.setEnabled(u.name, true)
+	case verbDisable:
+		return b.setEnabled(u.name, false)
+	default:
+		return b.svcRun(u.name, string(v))
 	}
-	for _, a := range actions {
-		if err := a.run(); err != nil {
-			return err
-		}
-		logger.Info("%s", a.desc)
-	}
-	resource.NoteResult(id, true)
-	return nil
 }
 
-func netbsdRunning(name string) (bool, error) {
-	_, _, code, err := runCmd(netbsdService, name, "status")
-	if err != nil {
-		return false, fmt.Errorf("service %s status: %w", name, err)
+// describe names rc.conf.d edits as "enable NAME"/"disable NAME" and
+// service(8) calls as "service NAME VERB", in both dry-run and apply logs.
+func (netbsdBackend) describe(u unit, v verb) (would, did string) {
+	desc := "service " + u.name + " " + string(v)
+	if v == verbEnable || v == verbDisable {
+		desc = string(v) + " " + u.name
 	}
-	return code == 0, nil
+	return desc, desc
 }
 
-func netbsdEnabled(name string) (bool, error) {
-	_, _, code, err := runCmd(netbsdService, "-e", name)
-	if err != nil {
-		return false, fmt.Errorf("service -e %s: %w", name, err)
-	}
-	return code == 0, nil
-}
-
-func netbsdSvcRun(name, action string) error {
-	stdout, stderr, code, err := runCmd(netbsdService, name, action)
+func (b netbsdBackend) svcRun(name, action string) error {
+	stdout, stderr, code, err := b.run(netbsdService, name, action)
 	if err != nil {
 		return fmt.Errorf("service %s %s: %w", name, action, err)
 	}
@@ -129,18 +68,17 @@ func netbsdSvcRun(name, action string) error {
 	return nil
 }
 
-// netbsdSetEnabled writes $netbsdRcConfD/NAME with NAME=YES|NO (overrides rc.conf).
-func netbsdSetEnabled(name string, enabled bool) error {
-	dir := netbsdRcConfD
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("mkdir %s: %w", dir, err)
+// setEnabled writes rcConfD/NAME with NAME=YES|NO (overrides rc.conf).
+func (b netbsdBackend) setEnabled(name string, enabled bool) error {
+	if err := os.MkdirAll(b.rcConfD, 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", b.rcConfD, err)
 	}
 	val := "NO"
 	if enabled {
 		val = "YES"
 	}
 	content := name + "=" + val + "\n"
-	path := filepath.Join(dir, name)
+	path := filepath.Join(b.rcConfD, name)
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}

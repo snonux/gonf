@@ -1,53 +1,25 @@
 package pkg
 
-import (
-	"fmt"
+// freebsdBackend manages packages with FreeBSD pkg(8).
+type freebsdBackend struct{ checkedExec }
 
-	"github.com/snonux/gonf/internal/logger"
-	"github.com/snonux/gonf/resource"
-)
+var _ backend = freebsdBackend{}
 
-func applyFreeBSDPkg(p *Package) error {
-	id := fmt.Sprintf("Package[%s]", p.name)
-	installed, err := freebsdPkgInstalled(p)
-	if err != nil {
-		return err
-	}
-
-	var args []string
-	switch {
-	case p.Absent:
-		if !installed {
-			resource.NoteResult(id, false)
-			return nil
-		}
-		args = []string{"remove", "-y", p.name}
-	case p.latest:
-		args = []string{"upgrade", "-y", p.name}
-	case installed:
-		resource.NoteResult(id, false)
-		return nil
-	default:
-		args = []string{"install", "-y", p.name}
-	}
-
-	if resource.DryRun() {
-		logger.Info("dry-run: would run pkg %v", args)
-		resource.NoteResult(id, true)
-		return nil
-	}
-	if err := runOrErr(p, "pkg", args...); err != nil {
-		return err
-	}
-	logger.Info("pkg %v", args)
-	resource.NoteResult(id, true)
-	return nil
+// installed probes with pkg info -e, which exits 0 only when installed.
+func (freebsdBackend) installed(run runner, name string) (bool, error) {
+	return probeExitZero(run, "pkg info -e "+name, "pkg", "info", "-e", name)
 }
 
-func freebsdPkgInstalled(p *Package) (bool, error) {
-	_, _, code, err := p.run("pkg", "info", "-e", p.name)
-	if err != nil {
-		return false, fmt.Errorf("pkg info -e %s: %w", p.name, err)
-	}
-	return code == 0, nil
+func (freebsdBackend) installCmd(name string) command { return freebsdCmd("install", "-y", name) }
+
+// upgradeCmd runs pkg upgrade regardless of the probe; pkg upgrade of an
+// up-to-date package is a no-op that is still reported as a change.
+func (freebsdBackend) upgradeCmd(name string, _ bool) command {
+	return freebsdCmd("upgrade", "-y", name)
+}
+
+func (freebsdBackend) removeCmd(name string) command { return freebsdCmd("remove", "-y", name) }
+
+func freebsdCmd(args ...string) command {
+	return command{bin: "pkg", label: "pkg", args: args}
 }

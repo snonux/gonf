@@ -30,24 +30,24 @@ func TestApplyDNF(t *testing.T) {
 	t.Run("Present", func(t *testing.T) {
 		p.Absent = false
 		p.latest = false
-		if err := applyDNF(p); err != nil {
-			t.Errorf("applyDNF Present failed: %v", err)
+		if err := applyVia(dnfBackend{})(p); err != nil {
+			t.Errorf("dnf apply Present failed: %v", err)
 		}
 	})
 
 	t.Run("Latest", func(t *testing.T) {
 		p.Absent = false
 		p.latest = true
-		if err := applyDNF(p); err != nil {
-			t.Errorf("applyDNF Latest failed: %v", err)
+		if err := applyVia(dnfBackend{})(p); err != nil {
+			t.Errorf("dnf apply Latest failed: %v", err)
 		}
 	})
 
 	t.Run("Absent", func(t *testing.T) {
 		p.Absent = true
 		p.latest = false
-		if err := applyDNF(p); err != nil {
-			t.Errorf("applyDNF Absent failed: %v", err)
+		if err := applyVia(dnfBackend{})(p); err != nil {
+			t.Errorf("dnf apply Absent failed: %v", err)
 		}
 	})
 
@@ -57,8 +57,8 @@ func TestApplyDNF(t *testing.T) {
 			Absence: embed.Absence{Absent: false},
 			latest:  false,
 		}
-		if err := applyDNF(pErr); err == nil {
-			t.Error("applyDNF Present should have failed for non-existent package")
+		if err := applyVia(dnfBackend{})(pErr); err == nil {
+			t.Error("dnf apply Present should have failed for non-existent package")
 		}
 	})
 
@@ -68,8 +68,8 @@ func TestApplyDNF(t *testing.T) {
 			Absence: embed.Absence{Absent: false},
 			latest:  true,
 		}
-		if err := applyDNF(pErr); err == nil {
-			t.Error("applyDNF Latest should have failed for non-existent package")
+		if err := applyVia(dnfBackend{})(pErr); err == nil {
+			t.Error("dnf apply Latest should have failed for non-existent package")
 		}
 	})
 
@@ -79,10 +79,10 @@ func TestApplyDNF(t *testing.T) {
 			Absence: embed.Absence{Absent: true},
 			latest:  false,
 		}
-		// The rpm -q probe reports the package as not installed, so applyDNF
+		// The rpm -q probe reports the package as not installed, so dnf apply
 		// converges without ever running dnf remove (which is idempotent anyway).
-		if err := applyDNF(pErr); err != nil {
-			t.Errorf("applyDNF Absent should be idempotent for non-existent package, but got error: %v", err)
+		if err := applyVia(dnfBackend{})(pErr); err != nil {
+			t.Errorf("dnf apply Absent should be idempotent for non-existent package, but got error: %v", err)
 		}
 	})
 }
@@ -199,8 +199,8 @@ func TestApplyDNFFake(t *testing.T) {
 			var calls []dnfInvocation
 			runCmd = fakeDNFRunner(tt.installed, &calls)
 
-			if err := applyDNF(&tt.pkg); err != nil {
-				t.Fatalf("applyDNF: %v", err)
+			if err := applyVia(dnfBackend{})(&tt.pkg); err != nil {
+				t.Fatalf("dnf apply: %v", err)
 			}
 
 			var dnfCalls []dnfInvocation
@@ -276,9 +276,9 @@ func TestApplyDNFActionStartError(t *testing.T) {
 
 	resource.ResetReport()
 	p := Package{name: "rsync"}
-	err := applyDNF(&p)
+	err := applyVia(dnfBackend{})(&p)
 	if err == nil || !strings.Contains(err.Error(), "failed to execute dnf") {
-		t.Errorf("applyDNF should wrap the dnf start failure, got: %v", err)
+		t.Errorf("dnf apply should wrap the dnf start failure, got: %v", err)
 	}
 }
 
@@ -294,8 +294,8 @@ func TestApplyDNFProbeStartError(t *testing.T) {
 
 	resource.ResetReport()
 	p := Package{name: "rsync"}
-	if err := applyDNF(&p); err == nil {
-		t.Error("applyDNF should fail when the rpm probe fails to start")
+	if err := applyVia(dnfBackend{})(&p); err == nil {
+		t.Error("dnf apply should fail when the rpm probe fails to start")
 	}
 }
 
@@ -314,9 +314,9 @@ func TestApplyDNFActionFailure(t *testing.T) {
 
 	resource.ResetReport()
 	p := Package{name: "rsync"}
-	err := applyDNF(&p)
+	err := applyVia(dnfBackend{})(&p)
 	if err == nil {
-		t.Fatal("applyDNF should fail when dnf exits non-zero")
+		t.Fatal("dnf apply should fail when dnf exits non-zero")
 	}
 	if !strings.Contains(err.Error(), "dnf failed with exit code 3") {
 		t.Errorf("unexpected error: %v", err)

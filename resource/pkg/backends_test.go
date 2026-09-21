@@ -162,16 +162,16 @@ func TestApplyFreeBSDPkgFake(t *testing.T) {
 			var calls []pkgCall
 			runCmd = fakePkgRunner(tt.installed, tt.probeErr, tt.failAction, &calls)
 
-			err := applyFreeBSDPkg(&tt.pkg)
+			err := applyVia(freebsdBackend{})(&tt.pkg)
 
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("applyFreeBSDPkg err = %v, want substring %q", err, tt.wantErr)
+					t.Fatalf("freebsd apply err = %v, want substring %q", err, tt.wantErr)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("applyFreeBSDPkg: %v", err)
+				t.Fatalf("freebsd apply: %v", err)
 			}
 
 			probe := pkgCall{bin: "pkg", args: []string{"info", "-e", tt.pkg.name}}
@@ -278,16 +278,16 @@ func TestApplyNetBSDFake(t *testing.T) {
 			var calls []pkgCall
 			runCmd = fakePkgRunner(tt.installed, tt.probeErr, tt.failAction, &calls)
 
-			err := applyNetBSD(&tt.pkg)
+			err := applyVia(netbsdBackend{})(&tt.pkg)
 
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("applyNetBSD err = %v, want substring %q", err, tt.wantErr)
+					t.Fatalf("netbsd apply err = %v, want substring %q", err, tt.wantErr)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("applyNetBSD: %v", err)
+				t.Fatalf("netbsd apply: %v", err)
 			}
 
 			probe := pkgCall{bin: netbsdPkgInfo, args: []string{"-e", tt.pkg.name}}
@@ -409,16 +409,16 @@ func TestApplyOpenBSDFake(t *testing.T) {
 			var calls []pkgCall
 			runCmd = fakePkgRunner(tt.installed, tt.probeErr, tt.failAction, &calls)
 
-			err := applyOpenBSD(&tt.pkg)
+			err := applyVia(openbsdBackend{})(&tt.pkg)
 
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("applyOpenBSD err = %v, want substring %q", err, tt.wantErr)
+					t.Fatalf("openbsd apply err = %v, want substring %q", err, tt.wantErr)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("applyOpenBSD: %v", err)
+				t.Fatalf("openbsd apply: %v", err)
 			}
 
 			probe := pkgCall{bin: "pkg_info", args: []string{"-e", tt.pkg.name + "-*"}}
@@ -493,15 +493,13 @@ func TestApplyErrorsWithoutPackageManager(t *testing.T) {
 	}
 }
 
-// TestRunOrErrPinsRunOrErr pins the three outcomes of runOrErr: start errors
-// are wrapped, non-zero exits carry stdout/stderr, and success returns nil.
+// TestRunOrErr pins the three outcomes of runOrErr: start errors are
+// wrapped, non-zero exits carry stdout/stderr, and success returns nil. The
+// runner is passed in, so no package-level seam is patched.
 func TestRunOrErr(t *testing.T) {
-	oldRun := runCmd
-	defer func() { runCmd = oldRun }()
-
 	tests := []struct {
 		name    string
-		run     func(string, ...string) (string, string, int, error)
+		run     runner
 		wantErr string
 	}{
 		{
@@ -522,8 +520,7 @@ func TestRunOrErr(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			runCmd = tt.run
-			err := runOrErr(&Package{}, "pkg", "install", "rsync")
+			err := runOrErr(tt.run, "pkg", "install", "rsync")
 			if tt.wantErr == "" {
 				if err != nil {
 					t.Fatalf("runOrErr err = %v, want nil", err)

@@ -5,10 +5,12 @@ import (
 	"github.com/snonux/gonf/resource/systemd"
 )
 
-// runCmd executes an external command for the BSD backends (rcctl and
-// service(8)). Swapped in unit tests. The systemctl backend does not use it:
-// it routes through the shared runner in resource/systemd, which
-// SetRunCmdForTest swaps alongside this one.
+// runCmd is the default runner the BSD backends (rcctl and service(8)) are
+// constructed with when selectBackend picks them. Swapped by
+// SetRunCmdForTest for cross-package tests; in-package tests give a backend
+// its own runner instead. The systemctl backend does not use it: it routes
+// through the shared runner in resource/systemd, which SetRunCmdForTest
+// swaps alongside this one.
 var runCmd = exec.Run
 
 // SetRunCmdForTest swaps the service manager command runner (tests only).

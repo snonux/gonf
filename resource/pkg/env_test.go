@@ -29,11 +29,11 @@ func TestPackageWithEnvReachesEveryBackendProbeAndAction(t *testing.T) {
 		latest bool
 		want   []string
 	}{
-		{"dnf install", applyDNF, false, []string{"dnf", "install", "-y", "dtail"}},
-		{"openbsd PKG_PATH install", applyOpenBSD, false, []string{"pkg_add", "dtail"}},
-		{"openbsd PKG_PATH latest installs when absent", applyOpenBSD, true, []string{"pkg_add", "dtail"}},
-		{"freebsd install", applyFreeBSDPkg, false, []string{"pkg", "install", "-y", "dtail"}},
-		{"netbsd install", applyNetBSD, false, []string{netbsdPkgin, "-y", "install", "dtail"}},
+		{"dnf install", applyVia(dnfBackend{}), false, []string{"dnf", "install", "-y", "dtail"}},
+		{"openbsd PKG_PATH install", applyVia(openbsdBackend{}), false, []string{"pkg_add", "dtail"}},
+		{"openbsd PKG_PATH latest installs when absent", applyVia(openbsdBackend{}), true, []string{"pkg_add", "dtail"}},
+		{"freebsd install", applyVia(freebsdBackend{}), false, []string{"pkg", "install", "-y", "dtail"}},
+		{"netbsd install", applyVia(netbsdBackend{}), false, []string{netbsdPkgin, "-y", "install", "dtail"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -93,7 +93,7 @@ func TestPackageWithoutEnvUsesLegacyRunner(t *testing.T) {
 		return "", "", 1, nil
 	}
 
-	if err := applyOpenBSD(&Package{name: "dtail"}); err != nil {
+	if err := applyVia(openbsdBackend{})(&Package{name: "dtail"}); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if legacyCalls != 2 {
