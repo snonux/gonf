@@ -3,16 +3,19 @@ package plan
 import "fmt"
 
 // Chunk is a consecutive run of ops that share the same elevate flag
-// (after when-block promotion). Header KindPlan is duplicated into each chunk.
+// (after when-block promotion). Header KindPlan is duplicated into each chunk,
+// and each chunk starts with empty stubs of every requirement block recorded
+// in a later chunk (see hoistRequirements), so it refuses before mutating.
 type Chunk struct {
 	Elevate bool
 	Ops     []Op
 }
 
-// Refusal is implemented by every error ValidateChunkDeps and
-// ValidateChangeGates return, and by every "plan: "-prefixed error of the blob
-// store's write path (blobError: Store.WriteFile, WriteTree and WriteGlob, their
-// packaging scans, BlobRefFor and the missing-plan-directory error). Reason is
+// Refusal is implemented by every error ValidateChunkDeps,
+// ValidateChangeGates and ValidateRequirementScopes return, and by every
+// "plan: "-prefixed error of the blob store's write path (blobError:
+// Store.WriteFile, WriteTree and WriteGlob, their packaging scans, BlobRefFor
+// and the missing-plan-directory error). Reason is
 // the refusal without the plan engine's "plan: " prefix, so a caller that adds
 // its own prefix (RecordPlanTo's "RecordPlan: ...", api.Apply's "Apply: ...")
 // can show one prefix instead of "plan: plan: ..." or "record: plan: ...".
@@ -119,10 +122,12 @@ func ValidateChunkDeps(chunks [][]Op) error {
 
 // ValidateChunks is the whole-plan pre-flight every controller-side entry
 // point runs over the split privilege chunks: ValidateChunkDeps (dangling and
-// forward cross-chunk dependencies) followed by ValidateChangeGates (watches
-// must live in the gated op's own chunk). api.RecordPlanTo, api.ApplyChunks,
+// forward cross-chunk dependencies), ValidateChangeGates (watches must live
+// in the gated op's own chunk) and ValidateRequirementScopes (requirement
+// blocks may only use and sit under host-fact conditions; this is the
+// record-time refusal of that rule). api.RecordPlanTo, api.ApplyChunks,
 // api.Apply and remote.PushChunks all call this one helper instead of each
-// composing the two checks, so a check added here reaches all of them at once.
+// composing the three checks, so a check added here reaches all of them at once.
 // The error is a Refusal (see there for the exact concrete types).
 func ValidateChunks(chunks []Chunk) error {
 	bodies := make([][]Op, len(chunks))
@@ -132,7 +137,10 @@ func ValidateChunks(chunks []Chunk) error {
 	if err := ValidateChunkDeps(bodies); err != nil {
 		return err
 	}
-	return ValidateChangeGates(bodies)
+	if err := ValidateChangeGates(bodies); err != nil {
+		return err
+	}
+	return ValidateRequirementScopes(bodies)
 }
 
 // firstChunkOf maps an op ID to the first chunk index carrying it.
@@ -196,7 +204,12 @@ func ValidateChangeGates(chunks [][]Op) error {
 
 // SplitPrivilegeChunks splits ops into ordered chunks by Elevate.
 // when_begin/when_end blocks are never split; if any op inside is elevate,
-// the whole block is treated as elevate.
+// the whole block is treated as elevate. Every requirement block (schema 20)
+// is then copied, as an empty stub inside its host-fact openers, to the front
+// of each earlier chunk (hoistRequirements), because chunks apply as separate
+// processes and an earlier one must not mutate before a later one refuses.
+// Requirements with a non-host-fact scope are not copied; ValidateChunks,
+// which every caller runs on the result, refuses them.
 func SplitPrivilegeChunks(ops []Op) []Chunk {
 	if len(ops) == 0 {
 		return nil
@@ -232,7 +245,7 @@ func SplitPrivilegeChunks(ops []Op) []Chunk {
 			cur = eff[i]
 		}
 	}
-	return chunks
+	return hoistRequirements(chunks)
 }
 
 func effectiveElevate(body []Op) []bool {

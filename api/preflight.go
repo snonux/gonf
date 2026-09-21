@@ -39,8 +39,9 @@ func (e *refusedError) Unwrap() error { return e.cause }
 // The refusal is re-worded as "<caller>: <reason>" with exactly one prefix.
 // Dangling dependency and watch IDs are re-phrased in terms of registered
 // resources (what api callers know); every other refusal (forward cross-chunk
-// dependency, cross-chunk watch, gate without a watch) keeps the engine's
-// reason text minus its "plan: " prefix.
+// dependency, cross-chunk watch, gate without a watch, requirement block with
+// a non-host-fact scope) keeps the engine's reason text minus its "plan: "
+// prefix.
 func preflightChunks(caller, fixHint string, chunks []plan.Chunk) error {
 	err := plan.ValidateChunks(chunks)
 	if err == nil {

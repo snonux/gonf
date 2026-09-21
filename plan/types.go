@@ -49,12 +49,20 @@ import "encoding/json"
 // Version 19 adds manage_home to user operations: an older destination would
 // ignore it and silently leave an existing account's home field unmanaged
 // while reporting success, so it must refuse v19 at the header gate instead.
-const CurrentVersion = 19
+// Version 20 adds require to when_begin: a failed predicate then refuses the
+// whole apply (and dry run) instead of skipping the body. An older binary
+// would silently skip a required block, so it must refuse v20 up-front.
+const CurrentVersion = 20
 
 // VersionUserManageHome is the plan schema version that introduced the user
 // op's manage_home field. Tests pin it so a merge that loses the bump (and so
 // lets an older destination silently ignore manage_home) fails loudly.
 const VersionUserManageHome = 19
+
+// VersionWhenRequire is the plan schema version that introduced when_begin's
+// require field (the LoginClass OpenBSD requirement). Pinned by tests for the
+// same reason as VersionUserManageHome.
+const VersionWhenRequire = 20
 
 // supportedVersions is the set of plan schema versions this binary can apply.
 // Apply must refuse plans whose version is not in this set before any mutation.
@@ -77,6 +85,7 @@ var supportedVersions = map[int]struct{}{
 	16:             {},
 	17:             {},
 	18:             {},
+	19:             {},
 	CurrentVersion: {},
 }
 
@@ -386,4 +395,15 @@ type Op struct {
 
 	// All is the conjunctive predicate list for KindWhenBegin.
 	All []Predicate `json:"all,omitempty"`
+	// Require, on KindWhenBegin, turns the block into a requirement: when
+	// the block's enclosing scope is active but All does not hold, Apply
+	// refuses with this human-readable requirement (plus the host GOOS)
+	// instead of skipping the body. A requirement's own predicates and every
+	// when_begin enclosing it must be host facts (goos, profile,
+	// hostname_contains); a requirement under path_exists or any other
+	// condition is refused at record time (ValidateChunks) and by Apply's
+	// pre-check. Because host facts cannot change during an apply, Apply
+	// decides every requirement before the first mutation, so a refused plan
+	// — dry run included — writes and predicts nothing. Schema version 20.
+	Require string `json:"require,omitempty"`
 }

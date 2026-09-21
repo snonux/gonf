@@ -8,6 +8,7 @@
 | [command.md](command.md) | `Command` with `Unless` / `OnlyIf` / `Creates` |
 | [package.md](package.md) | `Package` / `NoPackage` (dnf, pkg_add, pkg, pkgin) |
 | [user.md](user.md) | additive-only local `User` accounts |
+| [login-class.md](login-class.md) | `LoginClass` / `NoLoginClass` (OpenBSD `/etc/login.conf.d` fragments, OpenBSD-only requirement) |
 | [service.md](service.md) | `Service` / `NoService` (systemd, rcctl, FreeBSD/NetBSD) |
 | [timer.md](timer.md) | `Timer` / `NoTimer` (systemd `.timer`, Linux) |
 | [systemdtimer.md](systemdtimer.md) | `SystemdTimer` / `NoSystemdTimer` (install + enable) |

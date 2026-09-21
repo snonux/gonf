@@ -19,7 +19,11 @@ type Facts struct {
 
 // Apply interprets ops against live host facts and the local filesystem.
 // ops[0] must be a plan header that passes ValidateHeader. Stackable
-// when_begin/when_end blocks skip inactive bodies without mutation.
+// when_begin/when_end blocks skip inactive bodies without mutation, except
+// requirement blocks (when_begin with Require, schema 20): before the first
+// mutation — in dry runs too — Apply refuses the whole plan when a
+// requirement's scope uses a non-host-fact condition, or when its enclosing
+// scope is active but its predicates fail (see require.go).
 // Resource ops are topologically sorted by their deps within each contiguous
 // run between control ops (plan header, when_begin, when_end), mirroring the
 // repository path's dependency order; dep-free plans keep recorded order.
@@ -78,6 +82,12 @@ func Apply(ops []Op, facts Facts, planDir string) error {
 	// refused plan leaves the destination untouched.
 	body, err := sortedApplyOrder(ops[1:])
 	if err != nil {
+		return err
+	}
+	// Requirement blocks (when_begin with require) refuse before any
+	// mutation and regardless of dry-run, so an unsupported destination
+	// never gets a partial apply or a misleading "would change" preview.
+	if err := checkRequirements(body, facts); err != nil {
 		return err
 	}
 
@@ -263,6 +273,12 @@ func applyLine(op Op, facts Facts, planDir string, stack *[]bool) error {
 			ok, err = evalAll(op.All, facts)
 			if err != nil {
 				return err
+			}
+			// checkRequirements already refused this before any mutation
+			// (requirement scopes are host-fact only, so the outcome cannot
+			// change mid-apply); this is a defensive second check.
+			if !ok && op.Require != "" {
+				return requirementError(op, facts)
 			}
 		}
 		*stack = append(*stack, active && ok)

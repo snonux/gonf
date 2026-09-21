@@ -244,6 +244,7 @@ ops, err := RecordPlan("my-plan", planDir, "home_helix", "home_tmux")
 | `WhenLinux` / `WhenProfile` / `WhenHostnameContains` | `when_begin` with fact predicates |
 | `WhenPathExists(path, fn)` | `when_begin` with `path_exists` around `fn` |
 | `WhenHostname(substr\|List(...), fn)` | `when_begin` with `hostname_contains` around `fn` (`List` → one block per entry) |
+| `LoginClass` / `NoLoginClass` | `when_begin` with `goos` and `require` (v20) around the fragment `file` ops |
 | `EnsureDir` | `ensure_dir` |
 | `EnsureFile` | `ensure_file` |
 | `LinkIfExists` / `SymlinkMap` | `link_if_exists` |
@@ -309,6 +310,12 @@ if err := ApplyPlan(ops, planDir); err != nil { /* … */ }
   the dangling ones: a dep recorded later in that chunk is simply sorted).
 - Stackable `when_begin` / `when_end`: failed predicates skip the body
   without touching the filesystem.
+- A `when_begin` carrying `require` (v20) is a requirement: a failed
+  predicate in an active scope refuses the whole apply (and dry run) before
+  any mutation instead of skipping the body. A requirement and every block
+  enclosing it may only use host facts (`goos`, `profile`,
+  `hostname_contains`); one nested under `path_exists` (or any other
+  condition) is refused by the pre-check, before anything is applied.
 - Expands `${HOME}` on the destination; unknown `${…}` is a hard error.
 - Maps ops to existing resource `Ensure` helpers (`file`, `dir`, `link`,
   `cmd`, `pkg`, …) — same semantics as direct resource APIs.
@@ -783,6 +790,25 @@ would ignore the field and report the account as converged while leaving the
 old home in place, so it must reject v19 plans at the header gate before any
 mutation. Plans without the opt-in encode the `user` operation exactly as in
 v13–v18.
+
+Plan schema **version 20** adds `require` to `when_begin`. A requirement block
+refuses instead of skipping: when its enclosing scope is active but its
+predicates do not hold, `Apply` fails with
+`<id>: requirement not met on this host (goos=<destination GOOS>): <require>`.
+A requirement's own predicates and every `when_begin` enclosing it must be
+host facts (`goos`, `profile`, `hostname_contains`): they evaluate the same in
+every privilege chunk and cannot change while ops run. A requirement nested
+under `path_exists` (filesystem state, which can change mid-apply or differ
+for the elevated user) or any other condition is refused when the plan is
+recorded (`ValidateChunks`, so `gonf plan`, run, push, cluster and fleet
+never produce one) and again by `Apply`'s pre-check for hand-written plans,
+with an error naming the requirement and the offending condition. Given that
+rule, all requirements of a plan (or chunk) are decided before the first
+mutation, in dry runs too, and `SplitPrivilegeChunks` copies each requirement
+as an empty stub (inside its host-fact openers) to the front of every earlier
+chunk, so a mixed-privilege plan refuses before its first chunk writes.
+`LoginClass` is the first user (`goos == openbsd`). An older binary would
+silently skip the block, so it must refuse v20 plans before any mutation.
 
 ### Secret material
 

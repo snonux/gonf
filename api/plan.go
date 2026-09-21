@@ -231,7 +231,9 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 // resources recorded in a different privilege chunk — change reports are
 // chunk-local: each privilege chunk applies as its own plan.Apply invocation,
 // and an elevated chunk is a separate sudo/doas process with a report of its
-// own, so such a watch could never fire) over a freshly recorded plan.
+// own, so such a watch could never fire — and schema-20 requirement blocks
+// nested under, or using, a condition other than a host fact, whose outcome
+// could change during an apply) over a freshly recorded plan.
 //
 // It lives here, in the single place every recorded plan passes through, for
 // two reasons. (1) It is the earliest point all ops and their elevate flags
