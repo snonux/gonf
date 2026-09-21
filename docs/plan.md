@@ -194,9 +194,10 @@ if err := ApplyPlan(ops, planDir); err != nil { /* … */ }
   earlier, or in an earlier privilege chunk → satisfied; later in this body
   (a later when-block) → refused before any mutation; nowhere in this body →
   satisfied at chunk level (an earlier chunk or invocation applied it).
-  Controller-side pre-flight (`plan.ValidateChunkDeps`, wired into
-  `ApplyChunks` and `remote.PushChunks`) refuses forward cross-chunk and dangling
-  deps before any chunk is applied.
+  `plan.Apply` itself cannot tell a dep applied by an earlier chunk from a
+  typo'd one; the controller-side pre-flight (`plan.ValidateChunkDeps`, wired
+  into `ApplyChunks`, `remote.PushChunks` and `api.Apply`) refuses forward
+  cross-chunk and dangling deps before anything is applied.
 - Stackable `when_begin` / `when_end`: failed predicates skip the body
   without touching the filesystem.
 - Expands `${HOME}` on the destination; unknown `${…}` is a hard error.
@@ -664,9 +665,9 @@ order and never reorder, so a dep naming an op from an EARLIER chunk is
 satisfied (the earlier chunk applied it first). A dependency recorded AFTER
 its dependent crosses the privilege boundary — apply cannot reorder across
 chunks — and is rejected before anything is applied by a controller-side
-pre-flight (`plan.ValidateChunkDeps`, wired into `ApplyChunks` and
-`remote.PushChunks`); on push the refusal happens before any SSH traffic. The same
-pre-flight refuses dangling deps (recorded in no chunk). Elevation ordering
+pre-flight (`plan.ValidateChunkDeps`, wired into `ApplyChunks`,
+`remote.PushChunks` and `api.Apply`); on push the refusal happens before any SSH
+traffic. The same pre-flight refuses dangling deps (recorded in no chunk). Elevation ordering
 stays fixed by recorded order; reordering across chunks would defeat the
 privilege split.
 
@@ -689,6 +690,9 @@ when ops/fields change meaning; old apply binaries reject newer plans cleanly.
 
 `api.Apply()` snapshots registered resource drafts and uses the same plan
 engine as `Run`, including dependency ordering and source/blob packaging.
+Because it applies the whole plan, it first runs the dangling-dependency
+pre-flight (the plan as one chunk): a `DependsOn` naming a resource that is not
+registered fails before anything is applied.
 The lower-level `resource.Apply()` path remains for resource-package unit tests
 and ad-hoc compatibility use; new application code should prefer `Run` or
 `api.Apply` so local and remote execution share the plan engine.
