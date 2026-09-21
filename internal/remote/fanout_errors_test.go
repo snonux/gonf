@@ -72,7 +72,8 @@ func TestFanoutPreservesPerHostErrorChains(t *testing.T) {
 	})
 	ops, targets, labels := fanoutErrorFixture(2)
 
-	err := Fanout(context.Background(), "demo", "p", ops, nil, targets, labels, 2, 0)
+	err := Fanout(context.Background(), Delivery{Mode: Push, PlanID: "p", Ops: ops},
+		Group{Name: "demo", Targets: targets, Labels: labels, Limit: 2, HostTimeout: 0})
 	if err == nil {
 		t.Fatal("expected an aggregate error")
 	}
@@ -103,7 +104,8 @@ func TestFanoutHostTimeoutKeepsDeadlineChain(t *testing.T) {
 	})
 	ops, targets, labels := fanoutErrorFixture(1)
 
-	err := Fanout(context.Background(), "slow", "p", ops, nil, targets, labels, 1, 20*time.Millisecond)
+	err := Fanout(context.Background(), Delivery{Mode: Push, PlanID: "p", Ops: ops},
+		Group{Name: "slow", Targets: targets, Labels: labels, Limit: 1, HostTimeout: 20 * time.Millisecond})
 	want := `cluster "slow": h1: chunk 0 (elevate=false): context deadline exceeded (host timeout after 20ms)`
 	if err == nil || err.Error() != want {
 		t.Fatalf("err = %v, want %q", err, want)
@@ -124,7 +126,8 @@ func TestFanoutCanceledContextReportsAbort(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := Fanout(ctx, "gone", "p", ops, nil, targets, labels, 2, 0)
+	err := Fanout(ctx, Delivery{Mode: Push, PlanID: "p", Ops: ops},
+		Group{Name: "gone", Targets: targets, Labels: labels, Limit: 2, HostTimeout: 0})
 	want := `cluster "gone": aborted: chunk 0 (elevate=false): context canceled`
 	if err == nil || err.Error() != want {
 		t.Fatalf("err = %v, want %q", err, want)

@@ -10,7 +10,6 @@ import (
 	"github.com/snonux/gonf/internal/orchestrate"
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/internal/remote"
-	"github.com/snonux/gonf/plan"
 )
 
 // HostRef is an opaque inventory handle for one SSH destination.
@@ -263,27 +262,29 @@ func (h HostRef) pushTarget() (PushTarget, error) {
 }
 
 // PushHost records and pushes tasks to one HostRef. Thin wrapper: the
-// transport half lives in internal/remote (PushTo → remote.PushChunks). It is
-// PushTo with a ForHosts host selection of this host plus every inventory name
-// that could match the same machine (aliases, substrings), so other cluster
-// members' ForHosts bodies (and their inputs) are skipped.
+// transport half lives in internal/remote (PushTo → remote.Delivery.ToHost).
+// It is PushTo with a ForHosts host selection of this host plus every
+// inventory name that could match the same machine (aliases, substrings), so
+// other cluster members' ForHosts bodies (and their inputs) are skipped.
 func PushHost(h HostRef, tasks ...string) error {
-	t, err := h.pushTarget()
-	if err != nil {
-		return err
-	}
-	return recordAndPush(context.Background(), t, "push-"+h.name, false, inventory.SelectionForHosts([]string{h.name}), tasks...)
+	return runHost(remote.Push, h, "push-"+h.name, tasks)
 }
 
 // PreviewHost performs a strict non-mutating remote preview for one host.
 // The host must already have a compatible gonf runtime; no binary bootstrap
 // occurs. It uses the same ForHosts host selection as PushHost.
 func PreviewHost(h HostRef, tasks ...string) error {
+	return runHost(remote.Preview, h, "preview-"+h.name, tasks)
+}
+
+// runHost is PushHost/PreviewHost's shared body: resolve h, then record and
+// deliver in mode with h's ForHosts host selection.
+func runHost(mode remote.Mode, h HostRef, planID string, tasks []string) error {
 	t, err := h.pushTarget()
 	if err != nil {
 		return err
 	}
-	return recordAndPush(context.Background(), t, "preview-"+h.name, true, inventory.SelectionForHosts([]string{h.name}), tasks...)
+	return recordAndPush(context.Background(), mode, t, planID, inventory.SelectionForHosts([]string{h.name}), tasks...)
 }
 
 // PushCluster records once and fans out the same push payload to every host in
@@ -300,59 +301,78 @@ func PushCluster(name string, tasks ...string) error {
 // overrides the cluster's parallelism), and hostTimeout (per-host push bound;
 // <= 0 means unlimited). The per-host transport fan-out itself lives in
 // internal/remote (remote.Fanout); the record-once-then-fan-out plumbing is
-// shared with PushFleetRun via internal/orchestrate.Push.
+// shared with PushFleetRun via internal/orchestrate.Deliver.
 func PushClusterRun(ctx context.Context, name, planID string, parallelOverride int, hostTimeout time.Duration, tasks ...string) error {
-	return runCluster(ctx, name, planID, parallelOverride, hostTimeout, false, tasks...)
+	return groupRun{mode: remote.Push, name: name, planID: planID,
+		parallelOverride: parallelOverride, hostTimeout: hostTimeout, tasks: tasks}.cluster(ctx)
 }
 
 // PreviewClusterRun records tasks once and performs strict non-mutating
-// remote previews across a cluster. Missing or stale remote gonf binaries
-// fail instead of being installed or updated.
+// remote previews across a cluster (planID "" → preview-cluster-<name>).
+// Missing or stale remote gonf binaries fail instead of being installed or
+// updated.
 func PreviewClusterRun(ctx context.Context, name, planID string, parallelOverride int, hostTimeout time.Duration, tasks ...string) error {
-	return runCluster(ctx, name, planID, parallelOverride, hostTimeout, true, tasks...)
+	return groupRun{mode: remote.Preview, name: name, planID: planID,
+		parallelOverride: parallelOverride, hostTimeout: hostTimeout, tasks: tasks}.cluster(ctx)
 }
 
-func runCluster(ctx context.Context, name, planID string, parallelOverride int, hostTimeout time.Duration, strictPreview bool, tasks ...string) error {
-	if len(tasks) == 0 {
-		if strictPreview {
-			return fmt.Errorf("cluster preview %q: no tasks", name)
-		}
-		return fmt.Errorf("cluster %q: no tasks", name)
-	}
-	rec, ok := inventory.LookupCluster(name)
-	if !ok {
-		return fmt.Errorf("cluster %q is not registered", name)
-	}
-	limit := inventory.ClusterParallelism(rec)
+// groupRun is one cluster or fleet run request: the remote.Mode chosen by
+// the exported entry point (PushClusterRun vs PreviewClusterRun, PushFleetRun
+// vs PreviewFleetRun) plus the per-run parameters they all share, carried as
+// one value instead of a strictPreview bool among positional parameters.
+type groupRun struct {
+	mode             remote.Mode
+	name             string
+	planID           string // "" → groupPlanID(mode, scope, name)
+	parallelOverride int    // > 0 overrides every group's parallelism (-j)
+	hostTimeout      time.Duration
+	tasks            []string
+}
 
-	if parallelOverride > 0 {
-		limit = parallelOverride
+// checkTasks rejects a run without tasks before any inventory lookup.
+func (r groupRun) checkTasks(scope string) error {
+	if len(r.tasks) == 0 {
+		return fmt.Errorf("%s: no tasks", groupLabel(r.mode, scope, r.name))
 	}
+	return nil
+}
+
+// record resolves the run's plan ID and records the plan once, with
+// selected as the ForHosts host selection (see recordDelivery).
+func (r groupRun) record(scope string, selected []string) (remote.Delivery, error) {
+	planID := r.planID
 	if planID == "" {
-		if strictPreview {
-			planID = "preview-cluster-" + name
-		} else {
-			planID = "cluster-" + name
-		}
+		planID = groupPlanID(r.mode, scope, r.name)
 	}
+	return recordDelivery(r.mode, planID, groupLabel(r.mode, scope, r.name), selected, r.tasks)
+}
 
-	// Record once with the cluster's members (plus any inventory name that
-	// could match one of them) selected, so ForHosts bodies of hosts the push
-	// cannot reach are not resolved.
-	mem := plan.NewMemoryStore()
-	ops, err := recordPlanForHosts(inventory.SelectionForHosts(rec.Hosts), planID, mem, tasks...)
-	if err != nil {
-		return fmt.Errorf("record: %w", err)
+// limit is one group's concurrency: the -j override when set, otherwise the
+// cluster's own configured parallelism.
+func (r groupRun) limit(rec inventory.Cluster) int {
+	if r.parallelOverride > 0 {
+		return r.parallelOverride
 	}
-	label := fmt.Sprintf("cluster %q", name)
-	if strictPreview {
-		label = fmt.Sprintf("cluster preview %q", name)
-	}
-	if err := RefuseOpaqueOnlyPush(label); err != nil {
+	return inventory.ClusterParallelism(rec)
+}
+
+// cluster records the run once for the named cluster and delivers it to
+// every member host in r.mode.
+func (r groupRun) cluster(ctx context.Context) error {
+	if err := r.checkTasks("cluster"); err != nil {
 		return err
 	}
-	if strictPreview {
-		return orchestrate.Preview(ctx, name, planID, rec.Hosts, limit, hostTimeout, ops, mem)
+	rec, ok := inventory.LookupCluster(r.name)
+	if !ok {
+		return fmt.Errorf("cluster %q is not registered", r.name)
 	}
-	return orchestrate.Push(ctx, name, planID, rec.Hosts, limit, hostTimeout, ops, mem)
+	// Record once with the cluster's members (plus any inventory name that
+	// could match one of them) selected, so ForHosts bodies of hosts the run
+	// cannot reach are not resolved.
+	d, err := r.record("cluster", inventory.SelectionForHosts(rec.Hosts))
+	if err != nil {
+		return err
+	}
+	return orchestrate.Deliver(ctx, d, orchestrate.Group{Name: r.name,
+		HostNames: rec.Hosts, Limit: r.limit(rec), HostTimeout: r.hostTimeout})
 }

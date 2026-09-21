@@ -47,7 +47,7 @@ func TestRequireRemoteGonfRefusesMissingAndStaleRuntimes(t *testing.T) {
 	}
 }
 
-func TestPreviewChunksNeverBootstrapsAndUsesStrictDryRun(t *testing.T) {
+func TestPreviewDeliveryNeverBootstrapsAndUsesStrictDryRun(t *testing.T) {
 	oldPlan := defaultPusher.PlanVersionProber
 	oldStrictPreview := defaultPusher.StrictPreviewProber
 	oldRelease := defaultPusher.ReleaseVersionProber
@@ -89,15 +89,15 @@ func TestPreviewChunksNeverBootstrapsAndUsesStrictDryRun(t *testing.T) {
 	}
 
 	ops := []plan.Op{{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "preview"}}
-	if err := PreviewChunks(context.Background(), PushTarget{Host: "preview.example"}, "preview", ops, nil); err != nil {
-		t.Fatalf("PreviewChunks() = %v", err)
+	if err := previewChunks(context.Background(), PushTarget{Host: "preview.example"}, "preview", ops, nil); err != nil {
+		t.Fatalf("previewChunks() = %v", err)
 	}
 	if remoteCmd != "gonf apply -n -strict-preview -" {
 		t.Fatalf("remote command = %q", remoteCmd)
 	}
 }
 
-func TestPreviewChunksProbesEveryAppliedPrivilegeContext(t *testing.T) {
+func TestPreviewDeliveryProbesEveryAppliedPrivilegeContext(t *testing.T) {
 	oldPlan := defaultPusher.PlanVersionProber
 	oldStrictPreview := defaultPusher.StrictPreviewProber
 	oldRelease := defaultPusher.ReleaseVersionProber
@@ -144,15 +144,15 @@ func TestPreviewChunksProbesEveryAppliedPrivilegeContext(t *testing.T) {
 		{Op: plan.KindCommand, ID: "unprivileged", Bin: "true"},
 		{Op: plan.KindCommand, ID: "elevated", Bin: "true", Elevate: true},
 	}
-	if err := PreviewChunks(context.Background(), PushTarget{Host: "preview.example", Privilege: privilege.Sudo}, "preview", ops, nil); err != nil {
-		t.Fatalf("PreviewChunks() = %v", err)
+	if err := previewChunks(context.Background(), PushTarget{Host: "preview.example", Privilege: privilege.Sudo}, "preview", ops, nil); err != nil {
+		t.Fatalf("previewChunks() = %v", err)
 	}
 	if !probedUnprivileged || !probedElevated {
 		t.Fatalf("probed unprivileged=%v elevated=%v, want both privilege contexts", probedUnprivileged, probedElevated)
 	}
 }
 
-func TestPreviewChunksRefusesBlobsBeforeAnyRemoteProbe(t *testing.T) {
+func TestPreviewDeliveryRefusesBlobsBeforeAnyRemoteProbe(t *testing.T) {
 	mem := plan.NewMemoryStore()
 	if _, err := mem.WriteFile("preview.txt", []byte("secret")); err != nil {
 		t.Fatal(err)
@@ -176,9 +176,9 @@ func TestPreviewChunksRefusesBlobsBeforeAnyRemoteProbe(t *testing.T) {
 	}
 
 	ops := []plan.Op{{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "preview"}}
-	err := PreviewChunks(context.Background(), PushTarget{Host: "preview.example"}, "preview", ops, mem)
+	err := previewChunks(context.Background(), PushTarget{Host: "preview.example"}, "preview", ops, mem)
 	if err == nil || !strings.Contains(err.Error(), "has blobs") {
-		t.Fatalf("PreviewChunks() = %v, want blob refusal", err)
+		t.Fatalf("previewChunks() = %v, want blob refusal", err)
 	}
 }
 

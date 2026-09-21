@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -12,29 +13,30 @@ import (
 	"github.com/snonux/gonf/plan"
 )
 
-// TestPushUnregisteredHostReturnsError confirms Push resolves each host name
+// TestDeliverUnregisteredHostReturnsError confirms Deliver resolves each host name
 // via internal/inventory itself (no api.HostRef needed) and fails without
 // dialing out when a name is not registered.
-func TestPushUnregisteredHostReturnsError(t *testing.T) {
+func TestDeliverUnregisteredHostReturnsError(t *testing.T) {
 	inventory.Reset()
 	t.Cleanup(inventory.Reset)
 
 	mem := plan.NewMemoryStore()
-	err := Push(context.Background(), "grp", "plan-id", []string{"ghost"}, 1, remote.DefaultHostTimeout, nil, mem)
+	err := Deliver(context.Background(), remote.Delivery{Mode: remote.Push, PlanID: "plan-id", Mem: mem},
+		Group{Name: "grp", HostNames: []string{"ghost"}, Limit: 1, HostTimeout: remote.DefaultHostTimeout})
 	if err == nil {
-		t.Fatal("Push with an unregistered host: want error, got nil")
+		t.Fatal("Deliver with an unregistered host: want error, got nil")
 	}
 	if !strings.Contains(err.Error(), "ghost") {
-		t.Fatalf("Push error = %q, want it to name the unregistered host", err.Error())
+		t.Fatalf("Deliver error = %q, want it to name the unregistered host", err.Error())
 	}
 }
 
-// TestPushFansOutToEachRegisteredHost is a smoke test that Push resolves
+// TestDeliverFansOutToEachRegisteredHost is a smoke test that Deliver resolves
 // every host name to a target via inventory.PushTargetFor and fans the
-// (empty, here) plan out to each one via remote.Fanout -- proving Push has
+// (empty, here) plan out to each one via remote.Fanout -- proving Deliver has
 // everything it needs (inventory + remote) without any api-package
 // dependency.
-func TestPushFansOutToEachRegisteredHost(t *testing.T) {
+func TestDeliverFansOutToEachRegisteredHost(t *testing.T) {
 	inventory.Reset()
 	t.Cleanup(inventory.Reset)
 	inventory.AddHost("h1", func(h *inventory.Host) { h.SSHHost = "h1.example" })
@@ -55,10 +57,75 @@ func TestPushFansOutToEachRegisteredHost(t *testing.T) {
 
 	mem := plan.NewMemoryStore()
 	ops := []plan.Op{{Op: plan.KindEnsureDir, ID: "1", Path: "/tmp/orchestrate-test-dir"}}
-	if err := Push(context.Background(), "grp", "plan-id", []string{"h1", "h2"}, 2, remote.DefaultHostTimeout, ops, mem); err != nil {
+	d := remote.Delivery{Mode: remote.Push, PlanID: "plan-id", Ops: ops, Mem: mem}
+	g := Group{Name: "grp", HostNames: []string{"h1", "h2"}, Limit: 2, HostTimeout: remote.DefaultHostTimeout}
+	if err := Deliver(context.Background(), d, g); err != nil {
 		t.Fatal(err)
 	}
 	if got := calls.Load(); got != 2 {
 		t.Fatalf("SSHRunner calls = %d, want 2", got)
 	}
+}
+
+// TestDeliverModeDecidesBootstrap pins that Deliver forwards the Delivery's
+// Mode unchanged to every host: a Push may bootstrap gonf on each host, a
+// Preview never does and runs the strict remote preview instead.
+func TestDeliverModeDecidesBootstrap(t *testing.T) {
+	tests := []struct {
+		mode           remote.Mode
+		wantBootstraps int32
+		wantCmd        string
+	}{
+		{remote.Push, 2, "gonf apply -"},
+		{remote.Preview, 0, "gonf apply -n -strict-preview -"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.mode.String(), func(t *testing.T) {
+			inventory.Reset()
+			t.Cleanup(inventory.Reset)
+			inventory.AddHost("h1", func(h *inventory.Host) { h.SSHHost = "h1.example" })
+			inventory.AddHost("h2", func(h *inventory.Host) { h.SSHHost = "h2.example" })
+			bootstraps, cmds := observeDelivery(t)
+
+			ops := []plan.Op{{Op: plan.KindEnsureDir, ID: "1", Path: "/tmp/orchestrate-test-dir"}}
+			d := remote.Delivery{Mode: tc.mode, PlanID: "plan-id", Ops: ops, Mem: plan.NewMemoryStore()}
+			g := Group{Name: "grp", HostNames: []string{"h1", "h2"}, Limit: 2}
+			if err := Deliver(context.Background(), d, g); err != nil {
+				t.Fatal(err)
+			}
+			if got := bootstraps.Load(); got != tc.wantBootstraps {
+				t.Fatalf("bootstraps = %d, want %d", got, tc.wantBootstraps)
+			}
+			if len(*cmds) != 2 || (*cmds)[0] != tc.wantCmd || (*cmds)[1] != tc.wantCmd {
+				t.Fatalf("remote cmds = %q, want two %q", *cmds, tc.wantCmd)
+			}
+		})
+	}
+}
+
+// observeDelivery fakes SSH and every remote gonf probe for the test and
+// returns the Push-mode bootstrap counter plus the remote commands run. The
+// commands are appended under a mutex (Fanout runs hosts concurrently) and
+// read only after Deliver has returned.
+func observeDelivery(t *testing.T) (*atomic.Int32, *[]string) {
+	t.Helper()
+	bootstraps := &atomic.Int32{}
+	var mu sync.Mutex
+	cmds := &[]string{}
+	oldRunner := remote.SSHRunner
+	restoreProbes := remote.AssumeRemoteGonfCurrent()
+	restoreBootstrap := remote.ObserveBootstrapForTest(func(remote.PushTarget) { bootstraps.Add(1) })
+	t.Cleanup(func() {
+		remote.SSHRunner = oldRunner
+		restoreBootstrap()
+		restoreProbes()
+	})
+	remote.SSHRunner = func(_ context.Context, stdin io.Reader, argv []string) error {
+		_, _ = io.Copy(io.Discard, stdin)
+		mu.Lock()
+		defer mu.Unlock()
+		*cmds = append(*cmds, argv[len(argv)-1])
+		return nil
+	}
+	return bootstraps, cmds
 }

@@ -461,7 +461,7 @@ func TestPushClusterDryRun(t *testing.T) {
 }
 
 // TestPushHostsSharedByClusterAndFleet confirms PushClusterRun and
-// PushFleetRun bottom out in the exact same orchestrate.Push helper: calling
+// PushFleetRun bottom out in the exact same orchestrate.Deliver helper: calling
 // it directly, once per "path", must push to every host exactly once either
 // way. This is the (a) requirement from task n5 — proving the two entry
 // points share one push pipeline instead of each carrying its own copy of
@@ -495,23 +495,24 @@ func TestPushHostsSharedByClusterAndFleet(t *testing.T) {
 	}
 
 	hostNames := []string{h1.Name(), h2.Name()}
+	d := remote.Delivery{Mode: remote.Push, PlanID: "shared-test", Ops: ops, Mem: mem}
 
 	// "cluster-shaped" call.
-	if err := orchestrate.Push(context.Background(), "cluster-label", "shared-test", hostNames, 2, remote.DefaultHostTimeout, ops, mem); err != nil {
+	if err := orchestrate.Deliver(context.Background(), d, orchestrate.Group{Name: "cluster-label", HostNames: hostNames, Limit: 2, HostTimeout: remote.DefaultHostTimeout}); err != nil {
 		t.Fatal(err)
 	}
 	if calls.Load() != 2 {
-		t.Fatalf("cluster-shaped orchestrate.Push calls=%d, want 2", calls.Load())
+		t.Fatalf("cluster-shaped orchestrate.Deliver calls=%d, want 2", calls.Load())
 	}
 
 	// "fleet-group-shaped" call: same helper, same hosts, different label —
 	// exactly how PushFleetRun invokes it once per member cluster group.
 	calls.Store(0)
-	if err := orchestrate.Push(context.Background(), "fleet-group-label", "shared-test", hostNames, 2, remote.DefaultHostTimeout, ops, mem); err != nil {
+	if err := orchestrate.Deliver(context.Background(), d, orchestrate.Group{Name: "fleet-group-label", HostNames: hostNames, Limit: 2, HostTimeout: remote.DefaultHostTimeout}); err != nil {
 		t.Fatal(err)
 	}
 	if calls.Load() != 2 {
-		t.Fatalf("fleet-group-shaped orchestrate.Push calls=%d, want 2", calls.Load())
+		t.Fatalf("fleet-group-shaped orchestrate.Deliver calls=%d, want 2", calls.Load())
 	}
 }
 

@@ -55,7 +55,7 @@ func PushPayloadContext(ctx context.Context, t PushTarget, payload []byte, eleva
 // even this "uncancelable" entry point cannot hang forever; only a
 // caller-driven cancellation (SIGINT via the CLI's signal context) requires
 // the *Context variant. The recording half lives here (api task registry);
-// the chunk streaming lives in remote.PushChunks.
+// the chunk streaming lives in remote.Delivery.ToHost (Push mode).
 func PushTo(t PushTarget, planID string, tasks ...string) error {
 	return PushToContext(context.Background(), t, planID, tasks...)
 }
@@ -64,7 +64,7 @@ func PushTo(t PushTarget, planID string, tasks ...string) error {
 // CLI's SIGINT/SIGTERM context) kills the in-flight ssh push. When ctx has no
 // deadline of its own, remote.DefaultHostTimeout is applied.
 func PushToContext(ctx context.Context, t PushTarget, planID string, tasks ...string) error {
-	return recordAndPush(ctx, t, planID, false, destinationHosts(t), tasks...)
+	return recordAndPush(ctx, remote.Push, t, planID, destinationHosts(t), tasks...)
 }
 
 // PreviewTo records tasks and performs a strict non-mutating remote preview.
@@ -80,7 +80,7 @@ func PreviewTo(t PushTarget, planID string, tasks ...string) error {
 // remote strict-preview apply mode, which rejects blob-backed plans instead
 // of staging remote data and runs resource probes under dry-run semantics.
 func PreviewToContext(ctx context.Context, t PushTarget, planID string, tasks ...string) error {
-	return recordAndPush(ctx, t, planID, true, destinationHosts(t), tasks...)
+	return recordAndPush(ctx, remote.Preview, t, planID, destinationHosts(t), tasks...)
 }
 
 // destinationHosts maps a raw push target (e.g. `gonf push user@host`) to the
@@ -93,27 +93,21 @@ func destinationHosts(t PushTarget) []string {
 }
 
 // recordAndPush records tasks with selected as the ForHosts host selection
-// (nil → every host), refuses opaque-only plans, and streams the chunks to t.
-func recordAndPush(ctx context.Context, t PushTarget, planID string, strictPreview bool, selected []string, tasks ...string) error {
+// (nil → every host), refuses opaque-only plans, and delivers the chunks to t
+// in mode: remote.Push may bootstrap gonf on t, remote.Preview never does.
+// It is the single implementation behind PushTo/PreviewTo (and their
+// *Context forms) and PushHost/PreviewHost; the exported pairs only choose
+// the mode, the plan ID and the host selection.
+func recordAndPush(ctx context.Context, mode remote.Mode, t PushTarget, planID string, selected []string, tasks ...string) error {
+	label := targetLabel(mode)
 	if len(tasks) == 0 {
-		if strictPreview {
-			return fmt.Errorf("remote preview: no tasks")
-		}
-		return fmt.Errorf("push: no tasks")
+		return fmt.Errorf("%s: no tasks", label)
 	}
 	if planID == "" {
 		planID = "push"
 	}
-	mem := plan.NewMemoryStore()
-	ops, err := recordPlanForHosts(selected, planID, mem, tasks...)
+	d, err := recordDelivery(mode, planID, label, selected, tasks)
 	if err != nil {
-		return fmt.Errorf("record: %w", err)
-	}
-	label := "push"
-	if strictPreview {
-		label = "remote preview"
-	}
-	if err := RefuseOpaqueOnlyPush(label); err != nil {
 		return err
 	}
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
@@ -121,19 +115,61 @@ func recordAndPush(ctx context.Context, t PushTarget, planID string, strictPrevi
 		ctx, cancel = context.WithTimeout(ctx, remote.DefaultHostTimeout)
 		defer cancel()
 	}
-	var pushErr error
-	if strictPreview {
-		pushErr = remote.PreviewChunks(ctx, t, planID, ops, mem)
-	} else {
-		pushErr = remote.PushChunks(ctx, t, planID, ops, mem)
+	if err := d.ToHost(ctx, t); err != nil {
+		return err
 	}
-	if pushErr != nil {
-		return pushErr
+	// "pushed ... to host" but "previewed ... on host": the wording predates
+	// Mode and is kept byte-identical for anyone reading stderr.
+	preposition := "to"
+	if mode == remote.Preview {
+		preposition = "on"
 	}
-	if strictPreview {
-		fmt.Fprintf(os.Stderr, "previewed %s (%d ops) on %s\n", planID, len(ops), t.Destination())
-	} else {
-		fmt.Fprintf(os.Stderr, "pushed %s (%d ops) to %s\n", planID, len(ops), t.Destination())
-	}
+	fmt.Fprintf(os.Stderr, "%s %s (%d ops) %s %s\n", mode.Verb(), planID, len(d.Ops), preposition, t.Destination())
 	return nil
+}
+
+// recordDelivery records tasks once with selected as the ForHosts host
+// selection, refuses an opaque-only plan (label prefixes that refusal), and
+// returns the recorded plan as a remote.Delivery in mode. Every push and
+// preview entry point (single target, cluster, fleet) records through it, so
+// the Delivery — and with it the mode — is built exactly once per run and
+// then carried unchanged down to each host.
+func recordDelivery(mode remote.Mode, planID, label string, selected, tasks []string) (remote.Delivery, error) {
+	mem := plan.NewMemoryStore()
+	ops, err := recordPlanForHosts(selected, planID, mem, tasks...)
+	if err != nil {
+		return remote.Delivery{}, fmt.Errorf("record: %w", err)
+	}
+	if err := RefuseOpaqueOnlyPush(label); err != nil {
+		return remote.Delivery{}, err
+	}
+	return remote.Delivery{Mode: mode, PlanID: planID, Ops: ops, Mem: mem}, nil
+}
+
+// targetLabel is a single-target run's error prefix: "push" or
+// "remote preview".
+func targetLabel(mode remote.Mode) string {
+	if mode == remote.Preview {
+		return "remote preview"
+	}
+	return "push"
+}
+
+// groupLabel is a cluster or fleet run's error prefix: `cluster "web"` for a
+// push, `cluster preview "web"` for a strict preview (scope is "cluster" or
+// "fleet").
+func groupLabel(mode remote.Mode, scope, name string) string {
+	if mode == remote.Preview {
+		return fmt.Sprintf("%s preview %q", scope, name)
+	}
+	return fmt.Sprintf("%s %q", scope, name)
+}
+
+// groupPlanID is a cluster or fleet run's default plan ID: "cluster-web" for
+// a push, "preview-cluster-web" for a strict preview.
+func groupPlanID(mode remote.Mode, scope, name string) string {
+	if mode == remote.Preview {
+		return "preview-" + scope + "-" + name
+	}
+	return scope + "-" + name
 }

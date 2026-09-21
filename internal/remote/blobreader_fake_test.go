@@ -112,7 +112,7 @@ func TestPushChunksWithFakeBlobReader(t *testing.T) {
 // TestFanoutWithFakeBlobReader covers the Fanout (fleet) entry point with
 // the same fake, proving the decoupling holds through the fan-out path too:
 // Fanout just forwards mem (now plan.BlobReader, not *plan.MemoryStore) to
-// PushChunks per target.
+// Push-mode Delivery.ToHost per target.
 func TestFanoutWithFakeBlobReader(t *testing.T) {
 	restoreProbe := AssumeRemotePlanCurrent()
 	t.Cleanup(restoreProbe)
@@ -120,7 +120,7 @@ func TestFanoutWithFakeBlobReader(t *testing.T) {
 	old := SSHRunner
 	t.Cleanup(func() { SSHRunner = old })
 
-	// Fanout runs one PushChunks per target concurrently (errgroup), so the
+	// Fanout runs one Delivery.ToHost per target concurrently (errgroup), so the
 	// fake SSHRunner is called from multiple goroutines: guard the counter.
 	var mu sync.Mutex
 	calls := 0
@@ -145,7 +145,8 @@ func TestFanoutWithFakeBlobReader(t *testing.T) {
 	}
 	labels := []string{"h1", "h2"}
 
-	err := Fanout(context.Background(), "demo-cluster", "demo", ops, mem, targets, labels, 2, 0)
+	err := Fanout(context.Background(), Delivery{Mode: Push, PlanID: "demo", Ops: ops, Mem: mem},
+		Group{Name: "demo-cluster", Targets: targets, Labels: labels, Limit: 2, HostTimeout: 0})
 	if err != nil {
 		t.Fatalf("Fanout: %v", err)
 	}

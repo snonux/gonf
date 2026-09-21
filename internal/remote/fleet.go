@@ -11,7 +11,6 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/snonux/gonf/internal/multierr"
-	"github.com/snonux/gonf/plan"
 )
 
 // DefaultHostTimeout bounds one host's whole push (all chunks: blob upload,
@@ -30,49 +29,53 @@ func hostTimeoutCtx(fleetCtx context.Context, hostTimeout time.Duration) (contex
 	return context.WithCancel(fleetCtx)
 }
 
-// Fanout pushes one already-recorded plan to every target in parallel. It is
-// the per-host transport half of the fleet push: the caller (api.PushClusterRun)
-// resolves the fleet inventory and records the plan once, then hands the
-// resolved targets here. name labels the summary line and error messages;
-// labels[i] names targets[i]. The ctx (the CLI signal context for the fleet
-// fan-out) is thread through errgroup.WithContext: SIGINT/SIGTERM kill the
-// in-flight ssh pushes, and a failing host cancels its in-flight siblings.
-// Each host's push is bounded by hostTimeout (DefaultHostTimeout for library
-// callers, the CLI -host-timeout flag otherwise; <= 0 means unlimited).
+// Group is the set of hosts one fan-out delivers to, and how many at once.
+// It is the per-group half of a fan-out; the plan and its Mode travel
+// separately in a Delivery, so the same Group shape serves push and preview.
+type Group struct {
+	// Name labels the summary line and error messages (a cluster name, for
+	// both a whole-cluster run and each of a fleet run's per-cluster groups).
+	Name string
+	// Targets are the resolved SSH destinations; Labels[i] names Targets[i]
+	// (its inventory host name) in errors and suffixes its plan ID.
+	Targets []PushTarget
+	Labels  []string
+	// Limit bounds the concurrent per-host deliveries.
+	Limit int
+	// HostTimeout bounds each host's whole delivery (DefaultHostTimeout for
+	// library callers, the CLI -host-timeout flag otherwise; <= 0 means
+	// unlimited).
+	HostTimeout time.Duration
+}
+
+// Fanout delivers one already-recorded plan to every target of g in
+// parallel, in d.Mode (Push may bootstrap gonf on a host; Preview never
+// does). It is the per-host transport half of the cluster and fleet runs:
+// the caller (internal/orchestrate, for api.PushClusterRun and friends)
+// resolves the inventory and records the plan once, then hands the resolved
+// targets here. The ctx (the CLI signal context for the fan-out) is threaded
+// through errgroup.WithContext: SIGINT/SIGTERM kill the in-flight ssh
+// sessions, and a failing host cancels its in-flight siblings.
 //
 // The returned error keeps every per-host cause inspectable: errors.Is /
 // errors.As reach a host's plan.Refusal, context.DeadlineExceeded, etc.
 // through it (see fanoutTally.err for its shape).
-func Fanout(ctx context.Context, name, planID string, ops []plan.Op, mem plan.BlobReader, targets []PushTarget, labels []string, limit int, hostTimeout time.Duration) error {
-	return fanout(ctx, name, planID, ops, mem, targets, labels, limit, hostTimeout, false)
-}
-
-// PreviewFanout is Fanout's strict-preview variant. Each target must already
-// have a compatible gonf runtime; unlike Fanout it never bootstraps it.
-func PreviewFanout(ctx context.Context, name, planID string, ops []plan.Op, mem plan.BlobReader, targets []PushTarget, labels []string, limit int, hostTimeout time.Duration) error {
-	return fanout(ctx, name, planID, ops, mem, targets, labels, limit, hostTimeout, true)
-}
-
-// fanout runs one PushChunks (or PreviewChunks) per target under an errgroup
-// bounded by limit, prints the summary line and returns the aggregate error.
-func fanout(ctx context.Context, name, planID string, ops []plan.Op, mem plan.BlobReader, targets []PushTarget, labels []string, limit int, hostTimeout time.Duration, strictPreview bool) error {
-	tally := &fanoutTally{hostTimeout: hostTimeout}
+func Fanout(ctx context.Context, d Delivery, g Group) error {
+	if err := d.Mode.validate(); err != nil {
+		return err
+	}
+	tally := &fanoutTally{hostTimeout: g.HostTimeout}
 	// WithContext ties the fan-out to ctx (the CLI signal context) and makes
 	// a failing host cancel its in-flight siblings: their ssh processes are
 	// killed instead of holding errgroup slots forever.
 	eg, egCtx := errgroup.WithContext(ctx)
-	eg.SetLimit(limit)
-	for i := range targets {
+	eg.SetLimit(g.Limit)
+	for i := range g.Targets {
 		eg.Go(func() error {
-			hostCtx, cancel := hostTimeoutCtx(egCtx, hostTimeout)
+			hostCtx, cancel := hostTimeoutCtx(egCtx, g.HostTimeout)
 			defer cancel()
-			var err error
-			if strictPreview {
-				err = PreviewChunks(hostCtx, targets[i], planID+"-"+labels[i], ops, mem)
-			} else {
-				err = PushChunks(hostCtx, targets[i], planID+"-"+labels[i], ops, mem)
-			}
-			tally.record(labels[i], err)
+			err := d.forHost(g.Labels[i]).ToHost(hostCtx, g.Targets[i])
+			tally.record(g.Labels[i], err)
 			// A non-nil return cancels egCtx, aborting the in-flight siblings.
 			return err
 		})
@@ -81,13 +84,9 @@ func fanout(ctx context.Context, name, planID string, ops []plan.Op, mem plan.Bl
 	// for aborts); Wait's own first error would be redundant.
 	_ = eg.Wait()
 
-	verb := "pushed"
-	if strictPreview {
-		verb = "previewed"
-	}
 	fmt.Fprintf(os.Stderr, "%s %s (%d ops) to %s (%d/%d hosts)\n",
-		verb, planID, len(ops), name, tally.okCount, len(targets))
-	return tally.err(name)
+		d.Mode.Verb(), d.PlanID, len(d.Ops), g.Name, tally.okCount, len(g.Targets))
+	return tally.err(g.Name)
 }
 
 // fanoutTally collects the per-host outcomes of one fan-out. record is called

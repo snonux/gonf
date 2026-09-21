@@ -11,7 +11,6 @@ import (
 	"github.com/snonux/gonf/internal/multierr"
 	"github.com/snonux/gonf/internal/orchestrate"
 	"github.com/snonux/gonf/internal/remote"
-	"github.com/snonux/gonf/plan"
 )
 
 // FleetRef is an opaque handle for a named set of clusters.
@@ -139,10 +138,10 @@ func PushFleet(name string, tasks ...string) error {
 // Each cluster's group still gets its own remote.Fanout call (so its own
 // Parallel(n)/-j limit governs only that group's concurrency), but all
 // groups share one cancelable context derived from ctx: as soon as any
-// group's orchestrate.Push call returns an error, PushFleetRun cancels that shared
-// context, which propagates into every other group's still-running
-// errgroup (each group's errgroup.WithContext derives from the shared
-// context, not from ctx directly) and aborts their in-flight — and
+// group's orchestrate.Deliver call returns an error, PushFleetRun cancels
+// that shared context, which propagates into every other group's
+// still-running errgroup (each group's errgroup.WithContext derives from the
+// shared context, not from ctx directly) and aborts their in-flight — and
 // not-yet-started — hosts too. This restores the pre-existing whole-fleet
 // fail-fast contract ("a failing host cancels its in-flight siblings ... the
 // fleet error reports the abort reason once", docs/plan.md "Timeouts and
@@ -151,85 +150,59 @@ func PushFleet(name string, tasks ...string) error {
 // "Fleet parallelism semantics" and TestPushFleetFailureCancelsOtherClusters
 // (api/cluster_test.go).
 func PushFleetRun(ctx context.Context, name, planID string, parallelOverride int, hostTimeout time.Duration, tasks ...string) error {
-	return runFleet(ctx, name, planID, parallelOverride, hostTimeout, false, tasks...)
+	return groupRun{mode: remote.Push, name: name, planID: planID,
+		parallelOverride: parallelOverride, hostTimeout: hostTimeout, tasks: tasks}.fleet(ctx)
 }
 
 // PreviewFleetRun records tasks once and performs strict non-mutating remote
-// previews across every host in a fleet. Missing or stale remote gonf
-// binaries fail instead of being installed or updated.
+// previews across every host in a fleet (planID "" → preview-fleet-<name>),
+// with the same parallelism and cancellation contract as PushFleetRun.
+// Missing or stale remote gonf binaries fail instead of being installed or
+// updated.
 func PreviewFleetRun(ctx context.Context, name, planID string, parallelOverride int, hostTimeout time.Duration, tasks ...string) error {
-	return runFleet(ctx, name, planID, parallelOverride, hostTimeout, true, tasks...)
+	return groupRun{mode: remote.Preview, name: name, planID: planID,
+		parallelOverride: parallelOverride, hostTimeout: hostTimeout, tasks: tasks}.fleet(ctx)
 }
 
-// runFleet records tasks once for the fleet and delivers the plan to every
-// cluster group (push or strict preview); see PushFleetRun for the
-// parallelism and cancellation contract.
-func runFleet(ctx context.Context, name, planID string, parallelOverride int, hostTimeout time.Duration, strictPreview bool, tasks ...string) error {
-	if len(tasks) == 0 {
-		if strictPreview {
-			return fmt.Errorf("fleet preview %q: no tasks", name)
-		}
-		return fmt.Errorf("fleet %q: no tasks", name)
+// fleet records the run once for the named fleet and delivers it, in
+// r.mode, to every cluster group; see PushFleetRun for the parallelism and
+// cancellation contract.
+func (r groupRun) fleet(ctx context.Context) error {
+	if err := r.checkTasks("fleet"); err != nil {
+		return err
 	}
-	entries, err := inventory.CollectFleetHosts(name)
+	entries, err := inventory.CollectFleetHosts(r.name)
 	if err != nil {
 		return err
 	}
-	if planID == "" {
-		planID = "fleet-" + name
-		if strictPreview {
-			planID = "preview-fleet-" + name
-		}
-	}
-
 	// Record once with the fleet's deduplicated hosts (plus any inventory
 	// name that could match one of them) selected, so ForHosts bodies of
 	// hosts the fleet cannot reach are not resolved.
-	mem := plan.NewMemoryStore()
-	ops, err := recordPlanForHosts(inventory.SelectionForHosts(fleetHostNames(entries)), planID, mem, tasks...)
+	d, err := r.record("fleet", inventory.SelectionForHosts(fleetHostNames(entries)))
 	if err != nil {
-		return fmt.Errorf("record: %w", err)
-	}
-	label := fmt.Sprintf("fleet %q", name)
-	if strictPreview {
-		label = fmt.Sprintf("fleet preview %q", name)
-	}
-	if err := RefuseOpaqueOnlyPush(label); err != nil {
 		return err
 	}
-	d := fleetDelivery{planID: planID, parallelOverride: parallelOverride,
-		hostTimeout: hostTimeout, strictPreview: strictPreview, ops: ops, mem: mem}
-	// One single-line `fleet "<name>": <group err>; <group err>` error with the
-	// groups sorted by message; it unwraps to every group's error (and so to
-	// every per-host cause) for errors.Is / errors.As. nil when all succeeded.
-	return multierr.JoinSorted(fmt.Sprintf("fleet %q", name), d.deliver(ctx, inventory.GroupFleetHostsByCluster(entries)))
+	// One single-line `fleet "<name>": <group err>; <group err>` error with
+	// the groups sorted by message; it unwraps to every group's error (and so
+	// to every per-host cause) for errors.Is / errors.As. nil when all
+	// succeeded. The prefix stays `fleet "<name>"` in preview mode too.
+	errs := r.deliverGroups(ctx, d, inventory.GroupFleetHostsByCluster(entries))
+	return multierr.JoinSorted(fmt.Sprintf("fleet %q", r.name), errs)
 }
 
-// fleetDelivery carries one recorded fleet plan and the per-run delivery
-// settings shared by every host group.
-type fleetDelivery struct {
-	planID           string
-	parallelOverride int
-	hostTimeout      time.Duration
-	strictPreview    bool
-	ops              []plan.Op
-	mem              *plan.MemoryStore
-}
-
-// deliver pushes (or strictly previews) the plan to every cluster group
-// concurrently and returns the groups' errors, unsorted. The errors are kept
-// as values (not flattened to strings) so runFleet's aggregate still unwraps
-// to every per-host cause.
+// deliverGroups delivers d to every cluster group concurrently and returns
+// the groups' errors, unsorted. The errors are kept as values (not flattened
+// to strings) so the fleet aggregate still unwraps to every per-host cause.
 //
 // fleetCtx is shared by every group's call: canceling it (the instant any
 // group fails) propagates into every OTHER group's errgroup-derived context
 // too, restoring the whole-fleet fail-fast contract. Each group still applies
 // its own limit independently via its own errgroup.SetLimit inside
-// orchestrate.Push/remote.Fanout, so this does not undo the per-cluster
+// orchestrate.Deliver/remote.Fanout, so this does not undo the per-cluster
 // parallelism fix. context.CancelFunc is safe to call concurrently and more
 // than once (only the first call has effect), so no extra synchronization
 // (e.g. sync.Once) is needed around cancel().
-func (d fleetDelivery) deliver(ctx context.Context, groups []inventory.FleetHostGroup) []error {
+func (r groupRun) deliverGroups(ctx context.Context, d remote.Delivery, groups []inventory.FleetHostGroup) []error {
 	fleetCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -237,31 +210,19 @@ func (d fleetDelivery) deliver(ctx context.Context, groups []inventory.FleetHost
 	var errMu sync.Mutex
 	var errs []error
 	for _, g := range groups {
-		limit := inventory.ClusterParallelism(g.Cluster)
-		if d.parallelOverride > 0 {
-			limit = d.parallelOverride
-		}
-		wg.Add(1)
-		go func(g inventory.FleetHostGroup, limit int) {
-			defer wg.Done()
-			if err := d.deliverGroup(fleetCtx, g, limit); err != nil {
+		og := orchestrate.Group{Name: g.Cluster.Name, HostNames: g.HostNames,
+			Limit: r.limit(g.Cluster), HostTimeout: r.hostTimeout}
+		wg.Go(func() {
+			if err := orchestrate.Deliver(fleetCtx, d, og); err != nil {
 				errMu.Lock()
 				errs = append(errs, err)
 				errMu.Unlock()
 				cancel()
 			}
-		}(g, limit)
+		})
 	}
 	wg.Wait()
 	return errs
-}
-
-// deliverGroup pushes or strictly previews the plan on one cluster's group.
-func (d fleetDelivery) deliverGroup(ctx context.Context, g inventory.FleetHostGroup, limit int) error {
-	if d.strictPreview {
-		return orchestrate.Preview(ctx, g.Cluster.Name, d.planID, g.HostNames, limit, d.hostTimeout, d.ops, d.mem)
-	}
-	return orchestrate.Push(ctx, g.Cluster.Name, d.planID, g.HostNames, limit, d.hostTimeout, d.ops, d.mem)
 }
 
 // fleetHostNames returns the inventory host names of a fleet's collected
