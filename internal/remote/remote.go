@@ -164,30 +164,13 @@ func PushPayloadContext(ctx context.Context, t PushTarget, payload []byte, eleva
 	return SSHRunner(ctx, bytes.NewReader(payload), t.sshArgv(remote))
 }
 
-// PushChunks splits ops into privilege chunks and streams each chunk to one
-// SSH target. The ctx (Background for direct api.PushTo calls; the per-host
-// timeout context in the fleet fan-out) kills the in-flight ssh when
-// canceled. A plan.ValidateChunks pre-flight runs before any SSH traffic: a
-// dep recorded in a later privilege chunk (or dangling) fails the push
-// without sending anything, mirroring the privilege pre-flight. Multi-chunk
-// plans with blobs first upload all blobs to a sticky dir in a dedicated
-// always-unprivileged session (pushBlobs); every chunk then applies
-// plan-only with -apply-dir and no embedded blobs. This keeps blob
-// extraction owned by the SSH login user even when the first chunk is
-// elevated: root could read the blobs anyway, but the login user could not.
-//
-// The sticky dir's path is deterministic and reused across pushes to the
-// same host (a caching benefit: no fresh mkdir/ownership dance every run).
-// Reuse only stays safe because cliApplyStdin (internal/cli) wipes the dir's
-// CONTENTS before extracting into it — PushChunks itself does not need to
-// know or care whether the dir was empty, freshly created, or left over from
-// an interrupted prior run; the remote side guarantees a clean extraction
-// target either way.
-//
-// PushChunks is Delivery.ToHost in Push mode. It stays a named entry point
-// because it is the documented push-side reference for the pre-flight and
-// sticky-dir contract across the plan and api packages; the strict preview
-// has no counterpart of its own — callers build a Delivery with Mode Preview.
+// PushChunks is a compatibility wrapper: exactly Delivery{Mode: Push, ...}
+// .ToHost(ctx, t). No production code calls it any more — the api entry
+// points and Fanout build a Delivery instead — but it is kept as the
+// single-target push shorthand that tests in this package and in api use,
+// and as the name comments in plan/ and api/ (and docs/plan.md) use for the
+// push-side pre-flight. The behaviour it stands for is documented on
+// Delivery.ToHost.
 func PushChunks(ctx context.Context, t PushTarget, planID string, ops []plan.Op, mem plan.BlobReader) error {
 	return Delivery{Mode: Push, PlanID: planID, Ops: ops, Mem: mem}.ToHost(ctx, t)
 }

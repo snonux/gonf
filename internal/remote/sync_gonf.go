@@ -468,11 +468,11 @@ func AssumeRemoteGonfCurrent() func() {
 // When an upgrade runs, installedPath is the remote binary path to use for
 // subsequent apply commands; otherwise it is empty (keep PATH "gonf").
 //
-// This is a thin wrapper over defaultPusher.EnsureRemoteGonf: every existing
-// caller (api.PushTo via remote.PushChunks, Fanout) and every test that
-// stubs SCPRunner/GoBuildRunner/PlanVersionProber via a Pusher, or calls
-// AssumeRemotePlanCurrent, keeps working against this same package-level
-// function.
+// This is a thin wrapper over defaultPusher.EnsureRemoteGonf: its caller,
+// the Push-mode Delivery.ToHost (via ensureRuntime, for api.PushTo and
+// Fanout), and every test that stubs SCPRunner/GoBuildRunner/
+// PlanVersionProber via a Pusher, or calls AssumeRemotePlanCurrent, keeps
+// working against this same package-level function.
 func EnsureRemoteGonf(ctx context.Context, t PushTarget) (installedPath string, err error) {
 	return defaultPusher.EnsureRemoteGonf(ctx, t)
 }

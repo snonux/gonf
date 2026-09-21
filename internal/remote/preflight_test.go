@@ -28,9 +28,10 @@ func preflightOps(dep string, depElevated bool) []plan.Op {
 // TestPushChunksRunsItsOwnDependencyPreflight pins the last-line guard inside
 // PushChunks and a Preview-mode Delivery.ToHost: plans that reach them
 // without having been recorded by this gonf (hand-built or recorded by an
-// older release) are refused before a single SSH call is made. Every push test that goes through the api layer
-// is refused earlier, at record time, so without this test dropping the
-// pre-flight line in Delivery.ToHost would go unnoticed.
+// older release) are refused before a single SSH call is made. Every push
+// test that goes through the api layer is refused earlier, at record time,
+// so without this test dropping the pre-flight line in Delivery.ToHost
+// would go unnoticed.
 func TestPushChunksRunsItsOwnDependencyPreflight(t *testing.T) {
 	restoreProbe := AssumeRemotePlanCurrent()
 	t.Cleanup(restoreProbe)

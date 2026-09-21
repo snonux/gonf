@@ -99,11 +99,28 @@ func (d Delivery) forHost(label string) Delivery {
 }
 
 // ToHost splits the plan into privilege chunks and streams each chunk to
-// one SSH target, in d.Mode. See PushChunks for the push-side contract
-// (pre-flight, sticky blob dir, partial-apply reporting); in Preview mode a
-// blob-backed plan is refused before any remote probe and the remote gonf is
-// only verified (every privilege context that will apply a chunk), never
-// installed.
+// one SSH target, in d.Mode. The ctx (Background-rooted with
+// DefaultHostTimeout for api.PushTo/PreviewTo; the per-host timeout context
+// in Fanout) kills the in-flight ssh when canceled.
+//
+// A plan.ValidateChunks pre-flight runs before any SSH traffic: a dep
+// recorded in a later privilege chunk (or dangling) fails the delivery
+// without sending anything, mirroring the privilege pre-flight.
+//
+// Push mode: multi-chunk plans with blobs first upload all blobs to a sticky
+// dir in a dedicated always-unprivileged session (pushBlobs); every chunk
+// then applies plan-only with -apply-dir and no embedded blobs. This keeps
+// blob extraction owned by the SSH login user even when the first chunk is
+// elevated: root could read the blobs anyway, but the login user could not.
+// The sticky dir's path is deterministic per plan ID (Fanout suffixes it per
+// host, see forHost) and reused across pushes to the same host. Reuse only
+// stays safe because cliApplyStdin (internal/cli) wipes the dir's CONTENTS
+// before extracting into it, so ToHost does not care whether the dir was
+// empty, fresh, or left over from an interrupted run.
+//
+// Preview mode: a blob-backed plan is refused before any remote probe, and
+// the remote gonf is only verified (every privilege context that will apply
+// a chunk), never installed.
 func (d Delivery) ToHost(ctx context.Context, t PushTarget) error {
 	if err := d.Mode.validate(); err != nil {
 		return err

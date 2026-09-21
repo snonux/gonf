@@ -41,7 +41,7 @@ func PushPayload(t PushTarget, payload []byte, elevate bool, applyDir string) er
 // PushPayloadContext is PushPayload bounded/cancelable by ctx: when ctx has
 // no deadline of its own, remote.DefaultHostTimeout is applied so a wedged
 // remote command cannot hang the push forever (mirroring the per-host
-// timeout the fleet fan-out already applies to remote.PushChunks).
+// timeout the fleet fan-out already applies to remote.Delivery.ToHost).
 func PushPayloadContext(ctx context.Context, t PushTarget, payload []byte, elevate bool, applyDir string) error {
 	return remote.PushPayloadContext(ctx, t, payload, elevate, applyDir)
 }
