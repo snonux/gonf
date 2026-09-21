@@ -1,8 +1,10 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/snonux/gonf/plan"
@@ -29,7 +31,9 @@ type Resource interface {
 // (validateApplyDeps) before anything is applied. plan.Apply and ApplyPlan do
 // not, because they also execute single privilege chunks whose deps
 // legitimately live in an earlier chunk; without this check a typo'd
-// DependsOn ID would be silently treated as already satisfied.
+// DependsOn ID would be silently treated as already satisfied. Apply never
+// records through RecordPlanTo (it lowers the registered drafts directly), so
+// the record-time pre-flight does not cover it either.
 func Apply() error {
 	if plan.Recording() || resource.PlanDraftRecording() {
 		return fmt.Errorf("Apply: cannot apply while plan recording is active")
@@ -60,23 +64,44 @@ func Apply() error {
 	return ApplyPlan(ops, planDir)
 }
 
-// requireDraftsForAll refuses the apply when any registered resource has no
-// plan draft: such a resource (e.g. registered through the low-level
-// resource.Register without a draft) cannot be expressed as a plan op, so
-// applying the rest would silently skip it.
+// requireDraftsForAll refuses the apply when the registered resources and
+// their plan drafts do not line up one to one:
+//
+//   - a registered resource without a draft (e.g. registered through the
+//     low-level resource.Register without a draft) cannot be expressed as a
+//     plan op, so applying the rest would silently skip it;
+//   - a draft whose ID is not registered would be applied although no
+//     resource owns it. The repository never produces such a draft (it only
+//     keeps drafts of registered IDs), so this guards the invariant the
+//     snapshot relies on rather than a reachable user error.
+//
+// Both lists are named in the error, so the message is never empty. Duplicate
+// registered IDs are harmless (each still has its draft) and are not an error.
 func requireDraftsForAll(drafts []resource.PlanDraft, registered []string) error {
 	draftIDs := make(map[string]struct{}, len(drafts))
 	for _, draft := range drafts {
 		draftIDs[draft.ID] = struct{}{}
 	}
+	registeredIDs := make(map[string]struct{}, len(registered))
 	var missing []string
 	for _, id := range registered {
+		registeredIDs[id] = struct{}{}
 		if _, ok := draftIDs[id]; !ok {
 			missing = append(missing, id)
 		}
 	}
-	if len(missing) > 0 || len(draftIDs) != len(registered) {
+	if len(missing) > 0 {
 		return fmt.Errorf("Apply: registered resources without plan drafts: %s", strings.Join(missing, ", "))
+	}
+	var orphans []string
+	for id := range draftIDs {
+		if _, ok := registeredIDs[id]; !ok {
+			orphans = append(orphans, id)
+		}
+	}
+	if len(orphans) > 0 {
+		sort.Strings(orphans)
+		return fmt.Errorf("Apply: plan drafts for unregistered resources: %s", strings.Join(orphans, ", "))
 	}
 	return nil
 }
@@ -84,6 +109,15 @@ func requireDraftsForAll(drafts []resource.PlanDraft, registered []string) error
 // packageApplyOps converts the registered drafts into the plan ops Apply
 // executes, behind a fresh plan header. Blobs too large for inline content are
 // staged in store, whose directory the caller owns.
+//
+// Side effect: it resets two process-wide recording-session fields,
+// recSession.recordedBlobRefs and recSession.recordingElevate. packageDraft
+// (shared with the record path) consults both — the first to detect blob-ref
+// collisions between different resources, the second to fold a Privileged()
+// task's elevate flag into every op — and Apply is not a recording session, so
+// without this reset a blob ref or elevate flag left behind by an earlier
+// RecordPlan in the same process would leak into (and could falsely collide
+// with, or elevate) the Apply's ops.
 func packageApplyOps(drafts []resource.PlanDraft, store plan.BlobStore) ([]plan.Op, error) {
 	recSession.recordedBlobRefs = make(map[string]string)
 	recSession.recordingElevate = false
@@ -107,9 +141,19 @@ func packageApplyOps(drafts []resource.PlanDraft, store plan.BlobStore) ([]plan.
 // path reported as "depended upon but not registered". A dep recorded LATER
 // in the plan is fine here — plan.Apply's dependency sort reorders it — so
 // only the dangling case can fail.
+//
+// The plan engine's error speaks of a "plan"; Apply users only know their
+// registered resources, so a *plan.DanglingDepError is re-worded in those
+// terms (op, missing dependency, how to fix) instead of being wrapped, which
+// would double the prefix ("Apply: plan: ...").
 func validateApplyDeps(ops []plan.Op) error {
-	if err := plan.ValidateChunkDeps([][]plan.Op{ops}); err != nil {
-		return fmt.Errorf("Apply: %w", err)
+	err := plan.ValidateChunkDeps([][]plan.Op{ops})
+	var dangling *plan.DanglingDepError
+	if errors.As(err, &dangling) {
+		return fmt.Errorf(
+			"Apply: %s depends on %s, which is not a registered resource (dangling dependency); "+
+				"check the spelling of the ID passed to DependsOn and register that resource before calling Apply",
+			dangling.Op, dangling.Dep)
 	}
-	return nil
+	return err
 }

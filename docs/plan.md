@@ -16,6 +16,28 @@ gonf hosts | fleets                               # list inventory
 Tasks marked `Privileged()` are applied via a separate `sudo -n` / `doas` `gonf apply`
 invocation (see Host `WithPrivilege`). Unprivileged tasks use plain `gonf apply`.
 
+### Where dependencies are checked
+
+A `DependsOn` naming an ID no recorded op carries (a typo, or a resource that
+was never registered) is a *dangling dependency*. The plan applier itself
+cannot detect it: `gonf apply <plan.jsonl|->` and the elevated re-exec child
+execute **single privilege chunks**, whose deps legitimately live in an earlier
+chunk, so a dep missing from the body must count as satisfied there. The check
+(`plan.ValidateChunkDeps`) therefore runs wherever the **whole plan** is in
+hand, before anything is applied or uploaded:
+
+| Where | Covers |
+|-------|--------|
+| record time (`api.RecordPlanTo`) | `gonf <task>`, `gonf plan`, push, cluster, fleet — the plan never gets written, shipped or applied |
+| `api.ApplyChunks` | local apply of an already-recorded plan |
+| `remote.PushChunks` | SSH push, before any SSH traffic |
+| `api.Apply` | registered resources (the whole plan as one chunk) |
+
+It does **not** run when a single chunk or plan file is executed: `api.ApplyPlan`,
+`plan.Apply` and `gonf apply <plan.jsonl|->`. A plan recorded by a current gonf
+was already checked; a hand-written or older plan file applied that way gets no
+dangling-dependency protection.
+
 ## Why
 
 Tasks are Go code. Shipping whole Go task trees to every host is awkward.
@@ -38,7 +60,8 @@ gonf separates **registration-time** misuse from **runtime** failures:
   These are programmer errors in the recipe; nothing has been recorded or
   applied yet, so aborting immediately is the honest outcome.
 - **Record-time failures return errors**: unknown tasks, recursion cycles,
-  packaging failures, registered resources without plan drafts, and a failing
+  packaging failures, registered resources without plan drafts, dangling or
+  cross-privilege-chunk `DependsOn` / `OnChange` targets, and a failing
   child task inside an `Aggregate` all fail `RecordPlan` / `Run` with a
   returned error. Task bodies cannot return errors, so Aggregate stashes the
   failure (`stashBodyError` in `api/plan.go`, same mechanism as the cycle
@@ -195,9 +218,10 @@ if err := ApplyPlan(ops, planDir); err != nil { /* … */ }
   (a later when-block) → refused before any mutation; nowhere in this body →
   satisfied at chunk level (an earlier chunk or invocation applied it).
   `plan.Apply` itself cannot tell a dep applied by an earlier chunk from a
-  typo'd one; the controller-side pre-flight (`plan.ValidateChunkDeps`, wired
-  into `ApplyChunks`, `remote.PushChunks` and `api.Apply`) refuses forward
-  cross-chunk and dangling deps before anything is applied.
+  typo'd one; the controller-side pre-flight (`plan.ValidateChunkDeps`, run at
+  record time and by `ApplyChunks`, `remote.PushChunks` and `api.Apply`, but
+  not when a single chunk is executed — see "Where dependencies are checked")
+  refuses forward cross-chunk and dangling deps before anything is applied.
 - Stackable `when_begin` / `when_end`: failed predicates skip the body
   without touching the filesystem.
 - Expands `${HOME}` on the destination; unknown `${…}` is a hard error.
@@ -665,11 +689,12 @@ order and never reorder, so a dep naming an op from an EARLIER chunk is
 satisfied (the earlier chunk applied it first). A dependency recorded AFTER
 its dependent crosses the privilege boundary — apply cannot reorder across
 chunks — and is rejected before anything is applied by a controller-side
-pre-flight (`plan.ValidateChunkDeps`, wired into `ApplyChunks`,
+pre-flight (`plan.ValidateChunkDeps`, run at record time and by `ApplyChunks`,
 `remote.PushChunks` and `api.Apply`); on push the refusal happens before any SSH
-traffic. The same pre-flight refuses dangling deps (recorded in no chunk). Elevation ordering
-stays fixed by recorded order; reordering across chunks would defeat the
-privilege split.
+traffic. The same pre-flight refuses dangling deps (recorded in no chunk).
+Executing a single chunk (`api.ApplyPlan`, `gonf apply <plan.jsonl|->`) does not
+re-run it. Elevation ordering stays fixed by recorded order; reordering across
+chunks would defeat the privilege split.
 
 ## JSONL sketch
 
@@ -691,8 +716,10 @@ when ops/fields change meaning; old apply binaries reject newer plans cleanly.
 `api.Apply()` snapshots registered resource drafts and uses the same plan
 engine as `Run`, including dependency ordering and source/blob packaging.
 Because it applies the whole plan, it first runs the dangling-dependency
-pre-flight (the plan as one chunk): a `DependsOn` naming a resource that is not
-registered fails before anything is applied.
+pre-flight itself (the plan as one chunk; it does not record through
+`RecordPlanTo`, so the record-time check does not cover it): a `DependsOn`
+naming a resource that is not registered fails with an `Apply:` error naming the
+op and the missing ID before anything is applied.
 The lower-level `resource.Apply()` path remains for resource-package unit tests
 and ad-hoc compatibility use; new application code should prefer `Run` or
 `api.Apply` so local and remote execution share the plan engine.

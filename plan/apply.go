@@ -31,11 +31,17 @@ type Facts struct {
 // deps legitimately live in an earlier chunk, and chunk boundaries are
 // invisible to it. Apply therefore does NOT catch typo'd/dangling deps
 // itself; that is the job of the callers that see the whole plan and run the
-// ValidateChunkDeps pre-flight before applying anything: api.ApplyChunks
-// (local apply), remote.PushChunks (SSH push), and api.Apply (registered
-// resources, as a single chunk). Callers applying an already-split chunk, or
-// calling Apply/api.ApplyPlan directly, get no dangling-dep protection unless
-// they run that pre-flight themselves.
+// ValidateChunkDeps pre-flight before anything is applied or uploaded:
+// api.RecordPlanTo at record time (so Run, `gonf plan`, push, cluster and
+// fleet never produce such a plan), api.ApplyChunks (local apply),
+// remote.PushChunks (SSH push) and api.Apply (registered resources, as a
+// single chunk). Entries that execute an already-recorded chunk or file
+// unprotected are api.ApplyPlan and `gonf apply <plan.jsonl|->` (which
+// cannot tell a whole plan from one chunk of a mixed-privilege plan): they
+// rely on the plan having been recorded — and thus checked — by a current
+// gonf. A hand-written or older plan file applied that way gets no
+// dangling-dependency protection.
+//
 // planDir is the directory containing blobs/ sidecars (usually next to the
 // plan JSONL). Pass "" when the plan only uses content_b64 and no blobs.
 // After applying (or refusing) the ops, the collected resource summary is
@@ -103,8 +109,9 @@ type planLine struct {
 // this body → satisfied (an earlier privilege chunk or invocation may have
 // applied it, and chunk boundaries are invisible to a chunk-level Apply).
 // Whether such a dep is legitimate or dangling cannot be decided from one
-// chunk; only callers holding the whole plan (api.ApplyChunks,
-// remote.PushChunks, api.Apply) can, via the ValidateChunkDeps pre-flight.
+// chunk; only callers holding the whole plan (api.RecordPlanTo,
+// api.ApplyChunks, remote.PushChunks, api.Apply) can, via the
+// ValidateChunkDeps pre-flight.
 func sortedApplyOrder(body []Op) ([]planLine, error) {
 	// bodyIDs maps an op ID to its first recorded index in the body, so an
 	// unmatched dep can be classified as later-in-body or absent entirely.
@@ -168,8 +175,8 @@ func sortedApplyOrder(body []Op) ([]planLine, error) {
 // chunk or invocation may have applied it, and chunk boundaries are invisible
 // to a chunk-level Apply. This function cannot tell that case from a typo'd
 // dep; the ValidateChunkDeps pre-flight of the whole-plan callers
-// (api.ApplyChunks, remote.PushChunks, api.Apply) is what refuses dangling
-// deps before anything is applied.
+// (api.RecordPlanTo, api.ApplyChunks, remote.PushChunks, api.Apply) is what
+// refuses dangling deps before anything is applied.
 func sortRunByDeps(run []planLine, placed map[string]bool, bodyIDs map[string]int, runEnd int) ([]planLine, error) {
 	// inRun maps an op ID to every run position carrying it (IDs repeat when
 	// a diamond include records the same resource twice).

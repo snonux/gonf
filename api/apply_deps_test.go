@@ -20,34 +20,110 @@ type unregisteredDep string
 
 func (d unregisteredDep) Dependencies() []string { return []string{string(d)} }
 
+// danglingApplyCase describes one way a DependsOn target can be dangling.
+type danglingApplyCase struct {
+	name string
+	// dangling returns the typo'd dep ID the error must name; valid is the
+	// valid resource registered before the offender.
+	dangling func(valid Resource) string
+	// withReal also lists the valid resource as a dep, so the pre-flight
+	// must single out the dangling member of a mixed dep list.
+	withReal bool
+}
+
+var danglingApplyCases = []danglingApplyCase{
+	{
+		name:     "unknown id",
+		dangling: func(Resource) string { return "File[/typo/never-registered]" },
+	},
+	{
+		name:     "near miss of a valid id",
+		dangling: func(valid Resource) string { return valid.ID() + "x" },
+	},
+	{
+		name:     "dangling member next to a valid one",
+		dangling: func(Resource) string { return "File[/typo/second]" },
+		withReal: true,
+	},
+}
+
+// registerDanglingApply registers an unrelated valid file and then a command
+// whose DependsOn holds the case's dangling ID. It returns the dangling ID and
+// the two paths that must stay absent: were the plan applied partially, the
+// independent file (registered BEFORE the offender) would be created.
+func registerDanglingApply(t *testing.T, tc danglingApplyCase) (dangling, independent, marker string) {
+	t.Helper()
+	ResetTasks()
+	resource.ResetForTest()
+	dir := t.TempDir()
+	independent = filepath.Join(dir, "independent")
+	marker = filepath.Join(dir, "marker")
+
+	valid := File(independent, options.WithContent("x"))
+	dangling = tc.dangling(valid)
+	deps := []resource.Dependency{unregisteredDep(dangling)}
+	if tc.withReal {
+		deps = append(deps, valid)
+	}
+	Command("touch", []string{marker}, options.DependsOn(deps...))
+	return dangling, independent, marker
+}
+
+// requireApplyDanglingMessage pins the api.Apply wording: it names the op and
+// the missing dependency, hints at the fix, and neither leaks plan-engine
+// bookkeeping (chunk numbers) nor doubles the "Apply:" prefix.
+func requireApplyDanglingMessage(t *testing.T, err error, dangling string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("Apply() = nil, want a dangling-dependency error")
+	}
+	msg := err.Error()
+	for _, want := range []string{"Command[touch", dangling, "dangling dependency", "spelling", "register"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("Apply() error = %q, want it to contain %q", msg, want)
+		}
+	}
+	for _, leak := range []string{"chunk", "Apply: plan:", "Apply: Apply:"} {
+		if strings.Contains(msg, leak) {
+			t.Fatalf("Apply() error = %q must not contain %q", msg, leak)
+		}
+	}
+	if !strings.HasPrefix(msg, "Apply: ") {
+		t.Fatalf("Apply() error = %q, want the Apply: prefix", msg)
+	}
+}
+
 // TestApplyRejectsDanglingDependency is the o62 regression: a DependsOn ID
 // matching no registered resource must fail api.Apply BEFORE anything is
 // applied. plan.Apply alone treats such a dep as satisfied by an earlier
 // privilege chunk, so without the pre-flight in Apply the typo was a silent
 // no-op and the dependent ran unordered.
 func TestApplyRejectsDanglingDependency(t *testing.T) {
+	for _, tc := range danglingApplyCases {
+		t.Run(tc.name, func(t *testing.T) {
+			dangling, independent, marker := registerDanglingApply(t, tc)
+			requireApplyDanglingMessage(t, Apply(), dangling)
+			requireNoFiles(t, independent, marker)
+		})
+	}
+}
+
+// TestApplyRejectsDanglingChangeWatch covers the change-gate half of the
+// dependency contract through api.Apply. A typo'd OnChange target is also a
+// dependency, so the dependency pre-flight refuses it first with the same
+// wording; a WatchChanges id (a watch without a dependency) reaches
+// plan.Apply's change-gate validation instead, which refuses it before any
+// mutation. Either way nothing is applied and the error names the ID.
+func TestApplyRejectsDanglingChangeWatch(t *testing.T) {
 	cases := []struct {
 		name string
-		// dangling returns the typo'd dep ID the error must name; valid is the
-		// valid resource registered before the offender.
-		dangling func(valid Resource) string
-		// withReal also lists the valid resource as a dep, so the pre-flight
-		// must single out the dangling member of a mixed dep list.
-		withReal bool
+		gate func(id string) options.CommandOption
+		want []string
 	}{
-		{
-			name:     "unknown id",
-			dangling: func(Resource) string { return "File[/typo/never-registered]" },
-		},
-		{
-			name:     "near miss of a valid id",
-			dangling: func(valid Resource) string { return valid.ID() + "x" },
-		},
-		{
-			name:     "dangling member next to a valid one",
-			dangling: func(Resource) string { return "File[/typo/second]" },
-			withReal: true,
-		},
+		{"OnChange", func(id string) options.CommandOption { return options.OnChange(unregisteredDep(id)) },
+			[]string{"dangling dependency", "spelling"}},
+		{"WatchChanges", func(id string) options.CommandOption { return options.WatchChanges(id) },
+			[]string{"dangling watch", "spelling"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -56,30 +132,23 @@ func TestApplyRejectsDanglingDependency(t *testing.T) {
 			dir := t.TempDir()
 			independent := filepath.Join(dir, "independent")
 			marker := filepath.Join(dir, "marker")
-
-			// An unrelated resource registered BEFORE the offender: were the
-			// plan applied partially, it would be created.
-			valid := File(independent, options.WithContent("x"))
-			deps := []resource.Dependency{unregisteredDep(tc.dangling(valid))}
-			if tc.withReal {
-				deps = append(deps, valid)
-			}
-			Command("touch", []string{marker}, options.DependsOn(deps...))
+			const id = "File[/typo/watched]"
+			File(independent, options.WithContent("x"))
+			Command("touch", []string{marker}, tc.gate(id))
 
 			err := Apply()
 			if err == nil {
-				t.Fatal("Apply() = nil, want a dangling-dependency error")
+				t.Fatal("Apply() = nil, want a dangling refusal")
 			}
-			for _, want := range []string{"dangling dependency", tc.dangling(valid)} {
+			for _, want := range append(tc.want, id) {
 				if !strings.Contains(err.Error(), want) {
 					t.Fatalf("Apply() error = %q, want it to contain %q", err, want)
 				}
 			}
-			for _, path := range []string{independent, marker} {
-				if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
-					t.Fatalf("%s exists (stat err %v): nothing may be applied when the pre-flight refuses", path, statErr)
-				}
+			if strings.Contains(err.Error(), "no chunk") {
+				t.Fatalf("Apply() error = %q leaks plan-engine chunk wording", err)
 			}
+			requireNoFiles(t, independent, marker)
 		})
 	}
 }
@@ -118,14 +187,15 @@ func TestApplyAcceptsValidDependencyGraphs(t *testing.T) {
 	}
 }
 
-// TestApplyChunkLevelEntryPointsKeepAcceptingEarlierChunkDeps pins the
-// intentional asymmetry behind the fix. plan.Apply/ApplyPlan execute a single
-// privilege chunk, e.g. the elevated re-exec child that receives only the
-// elevated chunk: a dep recorded in an EARLIER chunk is legitimately absent
-// from the body and must keep applying. A pre-flight there would break every
-// mixed privileged/unprivileged plan; the guarantee lives in the whole-plan
-// entry points (Apply, ApplyChunks, PushChunks) instead.
-func TestApplyChunkLevelEntryPointsKeepAcceptingEarlierChunkDeps(t *testing.T) {
+// TestApplyPlanKeepsAcceptingEarlierChunkDeps pins the intentional asymmetry
+// behind the fix, for ApplyPlan (and the plan.Apply it wraps). ApplyPlan
+// executes a single privilege chunk, e.g. the elevated re-exec child or a
+// `gonf apply <chunk>` that receives only one chunk: a dep recorded in an
+// EARLIER chunk is legitimately absent from the body and must keep applying. A
+// pre-flight there would break every mixed privileged/unprivileged plan; the
+// guarantee lives where the whole plan is in hand (record time, ApplyChunks,
+// PushChunks, api.Apply) instead.
+func TestApplyPlanKeepsAcceptingEarlierChunkDeps(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "marker")
 	chunk := []plan.Op{
@@ -175,9 +245,11 @@ func TestApplyChunksMixedPrivilegeDepsStillApply(t *testing.T) {
 }
 
 // TestApplyChunksRefusesDanglingDependencyBeforeAnyChunk pins that the
-// existing whole-plan pre-flight in ApplyChunks also refuses a dangling dep
-// (not only a forward cross-chunk one) before ANY chunk is applied, mirroring
-// the api.Apply behaviour for the recorded-plan path.
+// whole-plan pre-flight in ApplyChunks refuses a dangling dep (not only a
+// forward cross-chunk one) before ANY chunk is applied. ApplyChunks is
+// reachable with an already-recorded plan (ops decoded from elsewhere, or
+// recorded by an older gonf), which the record-time check has not seen, so it
+// keeps its own pre-flight next to api.Apply's.
 func TestApplyChunksRefusesDanglingDependencyBeforeAnyChunk(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "marker")
@@ -203,8 +275,10 @@ func TestApplyChunksRefusesDanglingDependencyBeforeAnyChunk(t *testing.T) {
 
 // TestValidateApplyDeps pins the exact semantics Apply relies on: the whole
 // plan is one chunk, so a dep recorded anywhere in it (before OR after its
-// dependent — plan.Apply's sort orders it, or refuses it across a when_*
-// boundary later on) passes, and only a dep recorded nowhere is refused.
+// dependent — plan.Apply's sort orders it) passes, and only a dep recorded
+// nowhere is refused. Apply records no when_begin/when_end blocks (registered
+// resources lower to a flat op list), so when-block plans are covered by the
+// record-time tests in record_deps_test.go instead.
 func TestValidateApplyDeps(t *testing.T) {
 	hdr := plan.Op{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "apply"}
 	cmd := func(id string, deps ...string) plan.Op {
@@ -218,13 +292,6 @@ func TestValidateApplyDeps(t *testing.T) {
 		{name: "no deps", ops: []plan.Op{hdr, cmd("a"), cmd("b")}},
 		{name: "backward dep", ops: []plan.Op{hdr, cmd("a"), cmd("b", "a")}},
 		{name: "forward dep within the plan", ops: []plan.Op{hdr, cmd("b", "a"), cmd("a")}},
-		{name: "dep on a resource inside a when block", ops: []plan.Op{
-			hdr,
-			{Op: plan.KindWhenBegin, All: []plan.Predicate{{Fact: "goos", Eq: "linux"}}},
-			cmd("a"),
-			{Op: plan.KindWhenEnd},
-			cmd("b", "a"),
-		}},
 		{name: "dangling dep", ops: []plan.Op{hdr, cmd("a", "Command[typo]")}, wantErr: "Command[typo]"},
 	}
 	for _, tc := range cases {
@@ -236,8 +303,52 @@ func TestValidateApplyDeps(t *testing.T) {
 				}
 				return
 			}
-			if err == nil || !strings.Contains(err.Error(), tc.wantErr) || !strings.HasPrefix(err.Error(), "Apply: ") {
-				t.Fatalf("validateApplyDeps() = %v, want an Apply-prefixed error naming %q", err, tc.wantErr)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) || !strings.HasPrefix(err.Error(), "Apply: ") ||
+				strings.Contains(err.Error(), "Apply: plan:") {
+				t.Fatalf("validateApplyDeps() = %v, want a single Apply-prefixed error naming %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestRequireDraftsForAll pins the draft/registration pairing check Apply
+// runs first. The failure message must always name what is wrong: a
+// registered resource without a draft, or a draft for an unregistered
+// resource (an invariant the repository normally upholds, so it is exercised
+// with hand-built inputs). Duplicate registered IDs are harmless and pass.
+func TestRequireDraftsForAll(t *testing.T) {
+	drafts := func(ids ...string) []resource.PlanDraft {
+		out := make([]resource.PlanDraft, len(ids))
+		for i, id := range ids {
+			out[i] = resource.PlanDraft{ID: id}
+		}
+		return out
+	}
+	cases := []struct {
+		name       string
+		drafts     []resource.PlanDraft
+		registered []string
+		wantErr    string // "" = valid
+	}{
+		{name: "one to one", drafts: drafts("a", "b"), registered: []string{"a", "b"}},
+		{name: "duplicate registered id is harmless", drafts: drafts("a"), registered: []string{"a", "a"}},
+		{name: "registered without draft", drafts: drafts("a"), registered: []string{"a", "b"},
+			wantErr: "registered resources without plan drafts: b"},
+		{name: "draft for unregistered resource", drafts: drafts("a", "ghost"), registered: []string{"a"},
+			wantErr: "plan drafts for unregistered resources: ghost"},
+		{name: "several orphans are all named and sorted", drafts: drafts("z-ghost", "a-ghost"), registered: nil,
+			wantErr: "plan drafts for unregistered resources: a-ghost, z-ghost"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := requireDraftsForAll(tc.drafts, tc.registered)
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Fatalf("requireDraftsForAll() = %v, want nil", err)
+			case tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)):
+				t.Fatalf("requireDraftsForAll() = %v, want it to contain %q", err, tc.wantErr)
+			case err != nil && strings.HasSuffix(err.Error(), ": "):
+				t.Fatalf("requireDraftsForAll() = %q ends with an empty list", err)
 			}
 		})
 	}

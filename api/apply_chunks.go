@@ -165,8 +165,8 @@ func ApplyChunksContext(ctx context.Context, ops []plan.Op, planDir string, mode
 // dangling deps fail before any chunk is applied or uploaded) and
 // plan.ValidateChangeGates (change-gated watches must live in the gated
 // op's own chunk — change reports are chunk-local). Shared by ApplyChunks
-// (api, local apply) and remote.PushChunks (internal/remote, SSH push);
-// RecordPlanTo additionally runs the change-gate check at record time.
+// (api, local apply) and, through validateRecordedPlan, RecordPlanTo (record
+// time); remote.PushChunks (internal/remote, SSH push) runs its own copy.
 func validateChunkDeps(chunks []plan.Chunk) error {
 	bodies := make([][]plan.Op, len(chunks))
 	for i, ch := range chunks {

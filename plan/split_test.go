@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -8,7 +9,9 @@ import (
 // TestValidateChunkDeps pins the cross-chunk dependency pre-flight: a dep
 // recorded in the dependent's own chunk (sorted within it) or in an earlier
 // chunk (applies first) is fine; a dep recorded in a later privilege chunk
-// or nowhere at all is refused, with the error naming both chunk numbers.
+// or nowhere at all is refused. A forward dep names both chunk numbers; a
+// dangling dep is a *DanglingDepError naming the op and the missing dep and
+// deliberately no chunk (the dep is in no chunk, so an index would mislead).
 func TestValidateChunkDeps(t *testing.T) {
 	hdr := func(id string) Op { return Op{Op: KindPlan, Version: CurrentVersion, ID: id} }
 	cmd := func(id string, deps ...string) Op {
@@ -18,6 +21,8 @@ func TestValidateChunkDeps(t *testing.T) {
 		name    string
 		chunks  [][]Op
 		wantErr string // "" = valid
+		// dangling marks the refusal as a typed *DanglingDepError.
+		dangling bool
 	}{
 		{
 			name:   "dep in same chunk is fine (sorted within it)",
@@ -35,7 +40,7 @@ func TestValidateChunkDeps(t *testing.T) {
 		{
 			name:    "dangling dep is refused",
 			chunks:  [][]Op{[]Op{hdr("p"), cmd("a", "File[missing]")}},
-			wantErr: "dangling dependency",
+			wantErr: "dangling dependency", dangling: true,
 		},
 	}
 	for _, tc := range cases {
@@ -50,7 +55,16 @@ func TestValidateChunkDeps(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("want error containing %q, got %v", tc.wantErr, err)
 			}
-			if !strings.Contains(err.Error(), "chunk 0") {
+			var dangling *DanglingDepError
+			isDangling := errors.As(err, &dangling)
+			switch {
+			case tc.dangling && (!isDangling || dangling.Op != "a" || dangling.Dep != "File[missing]"):
+				t.Fatalf("error %#v, want a *DanglingDepError for a -> File[missing]", err)
+			case tc.dangling && strings.Contains(err.Error(), "chunk"):
+				t.Fatalf("dangling error %q must not mention chunks", err.Error())
+			case !tc.dangling && isDangling:
+				t.Fatalf("error %q must not be a dangling-dependency error", err.Error())
+			case !tc.dangling && !strings.Contains(err.Error(), "chunk 0"):
 				t.Fatalf("error %q must name the dependent's chunk 0", err.Error())
 			}
 		})

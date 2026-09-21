@@ -149,6 +149,112 @@ func TestCLIPlanReplacesOutputSymlinkWithoutFollowingIt(t *testing.T) {
 	}
 }
 
+// unregisteredDep is a resource.Dependency naming an ID no resource carries:
+// what a typo'd DependsOn target looks like once options.DependsOn has
+// flattened it into a dep ID.
+type unregisteredDep string
+
+func (d unregisteredDep) Dependencies() []string { return []string{string(d)} }
+
+// captureStderr runs fn with os.Stderr redirected into a pipe and returns
+// what fn wrote to it.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stderr
+	os.Stderr = w
+	t.Cleanup(func() { os.Stderr = old })
+	fn()
+	_ = w.Close()
+	os.Stderr = old
+	out, err := io.ReadAll(r)
+	_ = r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
+}
+
+// TestCLIPlanRefusesDanglingDependency pins the o62 record-time guard on the
+// documented `gonf plan` -> `gonf apply plan.jsonl` workflow: `gonf apply`
+// cannot tell a whole plan from a single privilege chunk, so a typo'd
+// DependsOn must fail when the plan is written. Nothing may be written (no
+// plan.jsonl, on stdout neither) and nothing applied.
+func TestCLIPlanRefusesDanglingDependency(t *testing.T) {
+	for _, stdout := range []bool{false, true} {
+		name := "file"
+		if stdout {
+			name = "stdout"
+		}
+		t.Run(name, func(t *testing.T) {
+			api.ResetTasks()
+			resource.ResetRepository()
+			root := t.TempDir()
+			marker := filepath.Join(root, "marker")
+			api.Task("cli_dangling", "", func() {
+				api.File(filepath.Join(root, "independent"), options.WithContent("x"))
+				api.Command("touch", []string{marker}, options.DependsOn(unregisteredDep("File[/typo/never-registered]")))
+			})
+			planDir := filepath.Join(root, "planout")
+
+			oldArgs := os.Args
+			t.Cleanup(func() { os.Args = oldArgs })
+			os.Args = []string{"gonf", "plan", "-o", planDir, "cli_dangling"}
+			if stdout {
+				os.Args = []string{"gonf", "plan", "-stdout", "cli_dangling"}
+			}
+			var code int
+			stderr := captureStderr(t, func() { code = CLI() })
+			if code != 1 {
+				t.Fatalf("plan exit %d, want 1; stderr: %s", code, stderr)
+			}
+			for _, want := range []string{"File[/typo/never-registered]", "dangling dependency"} {
+				if !strings.Contains(stderr, want) {
+					t.Fatalf("stderr %q must contain %q", stderr, want)
+				}
+			}
+			for _, p := range []string{filepath.Join(planDir, "plan.jsonl"), marker, filepath.Join(root, "independent")} {
+				if _, err := os.Stat(p); !os.IsNotExist(err) {
+					t.Fatalf("%s exists (stat err %v); a refused plan writes and applies nothing", p, err)
+				}
+			}
+		})
+	}
+}
+
+// TestCLIPlanWithValidDependenciesStillAppliesInOrder is the positive
+// counterpart: a dependent recorded BEFORE its dependency (so ordering
+// matters) records, is written and applies correctly via `gonf apply`.
+func TestCLIPlanWithValidDependenciesStillAppliesInOrder(t *testing.T) {
+	api.ResetTasks()
+	resource.ResetRepository()
+	root := t.TempDir()
+	dep := filepath.Join(root, "dep")
+	out := filepath.Join(root, "out")
+	api.Task("cli_valid_deps", "", func() {
+		base := api.File(dep, options.WithContent("d"))
+		api.Command("sh", []string{"-c", "test -f " + dep + " && touch " + out}, options.DependsOn(base))
+	})
+	planDir := filepath.Join(root, "planout")
+
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+	os.Args = []string{"gonf", "plan", "-o", planDir, "cli_valid_deps"}
+	if code := CLI(); code != 0 {
+		t.Fatalf("plan exit %d", code)
+	}
+	os.Args = []string{"gonf", "apply", filepath.Join(planDir, "plan.jsonl")}
+	if code := CLI(); code != 0 {
+		t.Fatalf("apply exit %d", code)
+	}
+	if _, err := os.Stat(out); err != nil {
+		t.Fatalf("dependent was not applied after its dependency: %v", err)
+	}
+}
+
 func TestCLIApplyStdinFramedNoBlobs(t *testing.T) {
 	api.ResetTasks()
 	resource.ResetRepository()

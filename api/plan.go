@@ -134,6 +134,13 @@ func RecordPlan(planID, planDir string, taskNames ...string) ([]plan.Op, error) 
 
 // RecordPlanTo is like RecordPlan but packages blobs into store (disk or memory).
 // Pass a nil store only when tasks need no blob packaging.
+//
+// Before returning, the finished plan passes validateRecordedPlan: dangling
+// or forward cross-chunk dependencies and cross-chunk change watches fail the
+// record, so no plan that ApplyChunks or remote.PushChunks would refuse is
+// ever written (`gonf plan`), shipped (push, cluster, fleet) or applied (Run).
+// Blobs already packaged into store before the refusal are left there; the
+// callers own that storage (a temp dir or memory store) and discard it.
 func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]plan.Op, error) {
 	if planID == "" {
 		return nil, fmt.Errorf("RecordPlan: plan id must not be empty")
@@ -176,30 +183,33 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 
 	ops := plan.FinishRecord(planID)
 	plan.ResetRecord()
-	if err := validateRecordedChangeGates(ops); err != nil {
+	if err := validateRecordedPlan(ops); err != nil {
 		return nil, err
 	}
 	return ops, nil
 }
 
-// validateRecordedChangeGates refuses plans whose change-gated ops (OnChange
-// / IfChanged) watch resources recorded in a different privilege chunk:
-// change reports are chunk-local (each privilege chunk applies as its own
-// plan.Apply invocation, and an elevated chunk is a separate sudo/doas
-// process with a report of its own), so such a watch could never fire. The
-// check runs at record time — the earliest point all ops and their elevate
-// flags are known — so Run, gonf plan, and every push path fail before the
-// plan is written, shipped, or applied. plan.ValidateChangeGates is the
-// sibling of the cross-chunk dependency pre-flight and reuses its
-// chunk-locality logic; the apply/push side re-runs it on received plans
-// (api.ApplyChunks / remote.PushChunks).
-func validateRecordedChangeGates(ops []plan.Op) error {
-	chunks := plan.SplitPrivilegeChunks(ops)
-	bodies := make([][]plan.Op, len(chunks))
-	for i, ch := range chunks {
-		bodies[i] = ch.Ops
-	}
-	return plan.ValidateChangeGates(bodies)
+// validateRecordedPlan runs the whole-plan pre-flights over a freshly
+// recorded plan: dangling and forward cross-chunk dependencies
+// (plan.ValidateChunkDeps) and change-gated ops watching resources recorded
+// in a different privilege chunk (plan.ValidateChangeGates — change reports
+// are chunk-local: each privilege chunk applies as its own plan.Apply
+// invocation, and an elevated chunk is a separate sudo/doas process with a
+// report of its own, so such a watch could never fire).
+//
+// It lives here, in the single place every recorded plan passes through, for
+// two reasons. (1) It is the earliest point all ops and their elevate flags
+// are known, so Run, `gonf plan`, push, cluster and fleet all fail before the
+// plan is written, shipped, or applied. (2) It is the only point that can
+// protect `gonf plan` -> `gonf apply plan.jsonl`: the apply side cannot
+// distinguish a whole plan from a single privilege chunk (the elevated
+// re-exec child and remote pushes use the same `gonf apply <file|->` entry),
+// so it cannot run the dangling-dependency check itself. The apply/push side
+// re-runs the same checks on the split plan (api.ApplyChunks /
+// remote.PushChunks) through the shared validateChunkDeps, so nothing that
+// records here is refused later.
+func validateRecordedPlan(ops []plan.Op) error {
+	return validateChunkDeps(plan.SplitPrivilegeChunks(ops))
 }
 
 // RefuseOpaqueOnlyPush errors when the RecordPlanTo call that just returned
@@ -378,6 +388,17 @@ func checkUnrecordedDrafts(taskName string) error {
 }
 
 // ApplyPlan applies ops using DetectFacts(). planDir is the blob sidecar root.
+//
+// ApplyPlan runs NO dangling-dependency pre-flight (plan.ValidateChunkDeps),
+// on purpose: it executes single privilege chunks too — the elevated re-exec
+// child, one chunk of a remote push, `gonf apply <plan.jsonl|->` — and from
+// one chunk it cannot tell a dep applied by an earlier chunk from a typo'd
+// one, so such a dep is treated as satisfied. The guarantee lives where the
+// whole plan is in hand: RecordPlanTo (record time: Run, `gonf plan`, push,
+// cluster, fleet), ApplyChunks, remote.PushChunks and Apply. A caller feeding
+// ApplyPlan a whole plan from elsewhere (a hand-written or older plan file)
+// must run plan.ValidateChunkDeps over plan.SplitPrivilegeChunks itself, or
+// use ApplyChunks, which does.
 func ApplyPlan(ops []plan.Op, planDir string) error {
 	f := DetectFacts()
 	return plan.Apply(ops, plan.Facts{

@@ -9,22 +9,48 @@ type Chunk struct {
 	Ops     []Op
 }
 
+// DanglingDepError reports an op whose dependency is recorded by no op of the
+// validated plan: a typo'd or never-registered DependsOn ID. It is a typed
+// error so callers that hold a friendlier vocabulary than the plan engine
+// (api.Apply speaks of registered resources) can re-word it via errors.As
+// without parsing strings. The message deliberately avoids the privilege-chunk
+// bookkeeping: for a dangling dependency the chunk index carries no
+// information (the dep is in no chunk at all) and only confuses users.
+type DanglingDepError struct {
+	Op  string // ID of the dependent op
+	Dep string // dependency ID that no op in the plan carries
+}
+
+// Error names the op, the missing dependency and how to fix it.
+func (e *DanglingDepError) Error() string {
+	return fmt.Sprintf(
+		"plan: op %s depends on %s, which no resource in the plan provides (dangling dependency); "+
+			"check the spelling of the ID passed to DependsOn and make sure that resource is registered in the same plan",
+		e.Op, e.Dep)
+}
+
 // ValidateChunkDeps checks dependency direction across privilege chunks
 // before any chunk is applied: every dep must be recorded in the dependent's
 // own chunk (the apply-side sort reorders within a chunk body) or in an
 // earlier chunk (chunks apply in recorded order and never reorder, so the
 // earlier chunk satisfies the dep). A dep recorded in a LATER chunk crosses
 // the elevation boundary and is refused, as is a dep recorded in no chunk at
-// all (dangling — the repository path refuses "depended upon but not
-// registered" the same way). chunks holds one op body per privilege chunk in
-// apply order (SplitPrivilegeChunks output, headers included); for a
+// all (a *DanglingDepError — the repository path refuses "depended upon but
+// not registered" the same way). chunks holds one op body per privilege chunk
+// in apply order (SplitPrivilegeChunks output, headers included); for a
 // single-chunk plan it reduces to "every dep is recorded in the chunk".
-// Wiring: api.ApplyChunks (local apply), remote.PushChunks (SSH push) and
-// api.Apply (registered resources; the whole plan as a single chunk) run this
-// pre-flight before applying or uploading anything, so a rejected plan
-// mutates no destination and, on push, sends zero SSH traffic. plan.Apply and
+//
+// Wiring: the check runs wherever the WHOLE plan is in hand, before anything
+// is applied or uploaded — api.RecordPlanTo (record time: Run, `gonf plan`,
+// push, cluster and fleet all record through it), api.ApplyChunks (local
+// apply), remote.PushChunks (SSH push) and api.Apply (registered resources;
+// the whole plan as a single chunk) — so a rejected plan mutates no
+// destination and, on push, sends zero SSH traffic. plan.Apply and
 // api.ApplyPlan deliberately do NOT run it: they execute one already-split
-// chunk, where a dep recorded in an earlier chunk is legitimately absent.
+// chunk (the elevated re-exec child, a pushed chunk, `gonf apply <file|->`),
+// where a dep recorded in an earlier chunk is legitimately absent. A plan
+// file written by an older gonf, or edited by hand, and then applied with
+// `gonf apply` therefore gets no dangling-dependency protection.
 func ValidateChunkDeps(chunks [][]Op) error {
 	firstChunk := firstChunkOf(chunks)
 	for i, chunk := range chunks {
@@ -32,9 +58,7 @@ func ValidateChunkDeps(chunks [][]Op) error {
 			for _, dep := range op.Deps {
 				j, ok := firstChunk[dep]
 				if !ok {
-					return fmt.Errorf(
-						"plan: chunk %d: op %s depends on %s which is recorded in no chunk (dangling dependency)",
-						i, op.ID, dep)
+					return &DanglingDepError{Op: op.ID, Dep: dep}
 				}
 				if j > i {
 					return fmt.Errorf(
@@ -69,8 +93,9 @@ func firstChunkOf(chunks [][]Op) map[string]int {
 // report of its own — so a gated op can only see change reports from
 // resources recorded in its OWN chunk. A watch crossing the privilege
 // boundary (earlier or later chunk) can never fire and is refused; so is a
-// watch recorded in no chunk at all (dangling) and a gated op with no watch
-// ids at all (its gate could never fire). Like ValidateChunkDeps, this is a
+// watch recorded in no chunk at all (dangling; worded without chunk indexes,
+// which would only leak bookkeeping) and a gated op with no watch ids at all
+// (its gate could never fire). Like ValidateChunkDeps, this is a
 // controller-side pre-flight: api.ApplyChunks, remote.PushChunks, and
 // RecordPlanTo (record time) all run it, so a rejected plan mutates no
 // destination and, on push, sends zero SSH traffic.
@@ -89,9 +114,12 @@ func ValidateChangeGates(chunks [][]Op) error {
 			for _, watch := range op.Watch {
 				j, ok := firstChunk[watch]
 				if !ok {
+					// No chunk index: the watch is in no chunk at all, so an
+					// index would only leak the engine's bookkeeping.
 					return fmt.Errorf(
-						"plan: chunk %d: op %s watches %s which is recorded in no chunk (dangling watch); change reports are chunk-local",
-						i, op.ID, watch)
+						"plan: op %s watches %s, which no resource in the plan provides (dangling watch); "+
+							"check the spelling of the ID passed to OnChange/WatchChanges and make sure that resource is registered in the same plan",
+						op.ID, watch)
 				}
 				if j != i {
 					return fmt.Errorf(
