@@ -184,14 +184,23 @@ func TestStoreTreeAndGlobFollowSymlinkedAncestors(t *testing.T) {
 	}
 }
 
-// TestStoreWriteFileStillRefusesSymlinkedAncestors pins what did NOT change:
-// WriteFile opens every component of the path down to blobs/ without following
-// symlinks (SecureDir's walk, as before m62), so a store rooted below a symlinked
-// ancestor refuses a single-file blob, names the symlink, and writes nothing.
-// (Tree and glob blobs work there, see the test above.)
-func TestStoreWriteFileStillRefusesSymlinkedAncestors(t *testing.T) {
+// TestStoreWriteFileFollowsSymlinkedAncestors pins that a single-file blob,
+// like a tree or glob blob, works in a store reached through a symlinked
+// ancestor (the staging store under a symlinked $TMPDIR, macOS's default): only
+// blobs/ itself is opened without following symlinks. Before this, `gonf plan`
+// of any recipe with a blob over the inline limit failed there.
+func TestStoreWriteFileFollowsSymlinkedAncestors(t *testing.T) {
 	link, realDir := testutil.SymlinkedDir(t)
-	_, err := NewStore(filepath.Join(link, "plan")).WriteFile("b", []byte("x"))
-	requireBlobRefusal(t, err, `component "lnk"`, "is a symlink")
-	requireEntries(t, realDir)
+	store := NewStore(filepath.Join(link, "plan"))
+	ref, err := store.WriteFile("b", []byte("payload"))
+	if err != nil {
+		t.Fatalf("WriteFile through a symlinked ancestor: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(realDir, "plan", filepath.FromSlash(ref)))
+	if err != nil || string(got) != "payload" {
+		t.Fatalf("blob = %q, %v; want payload", got, err)
+	}
+	if mode := modeOf(t, filepath.Join(realDir, "plan", filepath.FromSlash(ref))); mode != 0o600 {
+		t.Fatalf("blob mode = %04o, want 0600", mode)
+	}
 }

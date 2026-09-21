@@ -2,6 +2,7 @@ package plan
 
 import (
 	"fmt"
+	"golang.org/x/sys/unix"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,15 +63,15 @@ func ReadFile(planDir, blobRef string) ([]byte, error) {
 }
 
 // WriteFile writes data as blobs/<name> (a single file) and returns the ref.
-// The blobs directory is created 0700 when missing; one that already exists is
-// verified, not rewritten (WritePrivateFile, see SecureDir): it must be ours and
-// not writable by others or by a shared group (SecureDir's rule; your private
-// group may write), so a blob never lands in a directory somebody else can
-// modify, but a mode such as 0755 that the operator chose is kept. The blob
-// file itself is always 0600. Every component of the path down to blobs/ is
-// opened without following symlinks, so a store whose Root is reached through
-// a symlinked ancestor is refused here (WriteTree and WriteGlob are more
-// lenient about that, see secureBlobsDir).
+// blobs/ gets the same treatment as for WriteTree and WriteGlob
+// (openSecureChildDir): created 0700 when missing; one that already exists is
+// verified, not rewritten — it must be a real directory (not a symlink), ours,
+// and not writable by others or by a shared group (SecureDir's rule; your
+// private group may write), but a mode such as 0755 that the operator chose is
+// kept. The store root is reached following symlinks (the staging store lives
+// under $TMPDIR, which may be a symlinked path). Unlike tree blobs, the file is
+// then written through the verified blobs/ descriptor (0600, atomic rename), so
+// swapping blobs/ after the check cannot redirect the write.
 func (s *Store) WriteFile(name string, data []byte) (string, error) {
 	if err := s.usable(); err != nil {
 		return "", err
@@ -79,7 +80,13 @@ func (s *Store) WriteFile(name string, data []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := writePrivateFile(filepath.Dir(abs), filepath.Base(abs), data); err != nil {
+	blobsDir := filepath.Dir(abs)
+	dirFD, err := openSecureChildDir(filepath.Dir(blobsDir), filepath.Base(blobsDir))
+	if err != nil {
+		return "", blobErrorf("write blob %q: open private directory: %w", ref, err)
+	}
+	defer func() { _ = unix.Close(dirFD) }()
+	if err := writePrivateFileAt(dirFD, filepath.Base(abs), data); err != nil {
 		return "", blobErrorf("write blob %q: %w", ref, err)
 	}
 	return ref, nil
@@ -171,13 +178,12 @@ func (s *Store) WriteGlob(name, pattern string) (string, error) {
 //     /private/var) is normal; the plan directory the operator names is
 //     verified in full by SecureDir before anything is committed to it.
 //
-// WriteFile is stricter and unchanged: it writes through a descriptor of its
-// directory that SecureDir opened by walking every component O_NOFOLLOW, so a
-// symlinked ancestor of the store root is refused there.
+// WriteFile uses the same blobs/-only check (openSecureChildDir), so a store
+// reached through a symlinked $TMPDIR works for every blob kind.
 //
 // The guarantee is also weaker than WriteFile's in another respect, and
 // deliberately stated as such: WriteFile writes through the descriptor of the
-// directory it verified, so the check and the write are on the same
+// blobs/ directory it verified, so the check and the write are on the same
 // directory. secureChildDir closes its descriptor when it returns, and
 // WriteTree/WriteGlob then clear, create and fill the tree BY PATH
 // (os.RemoveAll, os.MkdirAll, materializeEntries). It is therefore a check of

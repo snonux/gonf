@@ -247,10 +247,13 @@ func requireWritableDir(path string) error {
 // recorded ops reference from the staging directory into it. Blobs of earlier
 // plans that this plan does not reference stay untouched; a blob with the same
 // ref is replaced (the store's own write semantics: files atomically, trees
-// cleared and recreated). It is the only step that writes planDir, and it runs
-// after every validation, so what can still fail here is I/O on the destination
-// itself (permissions, full disk); those errors may leave some blobs copied,
-// which is unavoidable without transactional directories.
+// cleared and recreated). It is the only step that writes planDir. It runs after
+// the plan validations, but refuses too: plan.SecureDir and requireWritableDir
+// re-check planDir before the first blob is written (a refusal writes
+// nothing), and every blob write checks blobs/ against the directory rule.
+// Beyond those refusals, what can fail here is I/O on the destination itself
+// (permissions of leftovers, full disk); such errors may leave some blobs
+// copied, which is unavoidable without transactional directories.
 //
 // Error prefixes: a refused planDir is reported as "RecordPlan: plan dir: ...".
 // A blob write error (for example an unsafe existing blobs/ directory) is a

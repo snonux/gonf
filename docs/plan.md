@@ -62,13 +62,12 @@ applies. What is guaranteed, and what is not:
   re-checks `dir` before the first blob is written: the same directory rule
   (type, no symlinked component, owner, group/world write) through a
   no-follow open, plus the "writable by you" check, which is not part of that
-  rule. Either refusal writes nothing. Later writes check again: a
-  single-file blob write walks the path without following symlinks and
-  re-checks `blobs/` against the rule (`dir` is then only an ancestor, checked
-  for being a real directory); `plan.jsonl` re-checks `dir` itself the same
-  way; a tree or glob blob write reaches `dir` following symlinks, opens only
-  `blobs/` without following one and checks it against the rule, then writes
-  the tree by path (see "The output directory"). Errors during those writes
+  rule. Either refusal writes nothing. Later writes check again: a blob write
+  reaches `dir` following symlinks, opens only `blobs/` without following one
+  and checks it against the rule, then writes a single-file blob through that
+  verified descriptor or a tree/glob blob by path; `plan.jsonl` re-checks
+  `dir` itself through a no-follow walk of its whole path (see "The output
+  directory"). Errors during those writes
   (for example a leftover `blobs/` or blob tree you cannot write or replace,
   a full disk, or a change after the re-check) are plain I/O errors with the
   non-atomic caveat of the next point. `-o ''` is treated as `-o .`.
@@ -470,9 +469,9 @@ anything is written. What is checked and guaranteed differs by blob kind:
 
 - A single-file blob (larger than the inline limit) is written through the
   descriptor of the `blobs/` directory that was verified, so check and write are
-  on the same directory. Every component of the path down to it is opened
-  without following symlinks, so a symlinked ancestor of the store root is
-  refused too.
+  on the same directory. Like tree blobs, only `blobs/` itself is opened
+  without following symlinks; the ancestors of the plan directory are
+  followed, so a symlinked `$TMPDIR` works.
 - A tree or glob blob (`SyncDir`, `WithSourceGlob`) has only `blobs/` itself
   verified, then is cleared and filled **by path**: it is a check of `blobs/` as
   it was at that moment, not protection against `blobs/` being swapped in

@@ -319,8 +319,9 @@ func planToStdout(planID string, tasks []string) int {
 // group: on user-private-group systems a fresh 0775 checkout is fine) can
 // write, because plan.jsonl carries secret material and a later apply trusts
 // it. The refusal says why and what to do (chmod go-w it, or pass -o <private
-// dir>). Only plan.jsonl (0600) and the blobs/ directory (0700) gonf writes
-// are private, whatever the mode of outDir.
+// dir>). plan.jsonl is always 0600 and a blobs/ directory gonf creates is 0700,
+// whatever the mode of outDir; an existing blobs/ that passes the directory
+// rule keeps its own mode.
 //
 // Which prefixes the error carries depends on where it came from: pre-flight
 // refusals and a few packaging errors start with "RecordPlan: ", while an

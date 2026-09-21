@@ -99,7 +99,7 @@ func TestSecureDirCurrentDirectory(t *testing.T) {
 // exactly 0700 under any umask, while the pre-existing prefix is not touched.
 // A umask can only narrow the 0700 that mkdir is asked for, never widen it, so
 // the cases that matter are the restrictive ones: under 0277 or 0377 mkdir alone
-// leaves an unusable 0400 or 0000 directory that nothing can be created in, and
+// leaves an unusable 0500 or 0400 directory that nothing can be created in, and
 // only the fchmod after creation makes it 0700 (without it this test fails, and
 // the nested components could not even be created). The default 022 and the
 // permissive 0 are there to show the mode is the same everywhere.
