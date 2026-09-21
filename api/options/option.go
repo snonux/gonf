@@ -2,15 +2,31 @@
 // gonf recipes. New code may import github.com/snonux/gonf/resource/options.
 // Resource constructors now require family-specific option types; callers
 // retaining erased []Option slices can use the matching To*Options adapter.
+//
+// Every declaration here is an alias of the same-named resource/options
+// identifier, whose doc comment is authoritative; the comments below only
+// describe each group. The list is hand-maintained, and
+// TestAliasSurfaceIsExhaustive (alias_fitness_test.go) fails when a
+// resource/options export has no alias here and is not explicitly allowlisted;
+// TestAliasesPointAtSameNamedSource (alias_target_test.go) fails when a
+// declaration here is not a true `Name = resourceoptions.Name` alias.
 package options
 
 import resourceoptions "github.com/snonux/gonf/resource/options"
 
+// Core option types: the erased Option function and the Guard used by the
+// command guards Unless and OnlyIf.
 type (
 	Option      = resourceoptions.Option
 	Guard       = resourceoptions.Guard
 	GuardOption = resourceoptions.GuardOption
+)
 
+// Capability interfaces. A resource implements one small setter interface per
+// option it accepts. The family types below normally stop a mismatch at
+// compile time; an erased Option applied to a resource lacking the capability
+// aborts via logger.Fatal when the option is applied.
+type (
 	Owner                  = resourceoptions.Owner
 	Grouped                = resourceoptions.Grouped
 	Moded                  = resourceoptions.Moded
@@ -67,7 +83,13 @@ type (
 	ServiceDescriptionable = resourceoptions.ServiceDescriptionable
 	Afterable              = resourceoptions.Afterable
 	Wantsable              = resourceoptions.Wantsable
+)
 
+// Resource-family option types. Each constructor accepts only its family
+// (e.g. api.File takes FileOption), so a mismatched option is a compile-time
+// error; the shared families (AllResourceOption, FileDirOption, ...) are the
+// types of options valid on several resources at once.
+type (
 	FileOption             = resourceoptions.FileOption
 	DirOption              = resourceoptions.DirOption
 	LinkOption             = resourceoptions.LinkOption
@@ -89,10 +111,15 @@ type (
 	ChangeGateOption       = resourceoptions.ChangeGateOption
 )
 
+// Dependency ordering (every resource) and the command guard matchers.
 var (
-	ExpectExit              = resourceoptions.ExpectExit
-	ExpectStdout            = resourceoptions.ExpectStdout
-	DependsOn               = resourceoptions.DependsOn
+	DependsOn    = resourceoptions.DependsOn
+	ExpectExit   = resourceoptions.ExpectExit
+	ExpectStdout = resourceoptions.ExpectStdout
+)
+
+// Ownership and user-account options (files, directories, local users).
+var (
 	WithOwner               = resourceoptions.WithOwner
 	WithGroup               = resourceoptions.WithGroup
 	WithHome                = resourceoptions.WithHome
@@ -104,67 +131,100 @@ var (
 	WithUserGroup           = resourceoptions.WithUserGroup
 	WithSystem              = resourceoptions.WithSystem
 	WithSupplementaryGroups = resourceoptions.WithSupplementaryGroups
-	WithMode                = resourceoptions.WithMode
-	WithSource              = resourceoptions.WithSource
-	WithSourceGlob          = resourceoptions.WithSourceGlob
-	WithParam               = resourceoptions.WithParam
-	WithTemplate            = resourceoptions.WithTemplate
-	WithTemplateData        = resourceoptions.WithTemplateData
-	WithValidation          = resourceoptions.WithValidation
-	WithSourceBase          = resourceoptions.WithSourceBase
-	WithContent             = resourceoptions.WithContent
-	WithLines               = resourceoptions.WithLines
-	WithoutLines            = resourceoptions.WithoutLines
-	WithLine                = resourceoptions.WithLine
-	WithoutLine             = resourceoptions.WithoutLine
-	WithFileMode            = resourceoptions.WithFileMode
-	WithPrune               = resourceoptions.WithPrune
-	IsAbsent                = resourceoptions.IsAbsent
-	IsLatest                = resourceoptions.IsLatest
-	WithRestart             = resourceoptions.WithRestart
-	WithReload              = resourceoptions.WithReload
-	WithUser                = resourceoptions.WithUser
-	WithElevate             = resourceoptions.WithElevate
-	WithEnableOnly          = resourceoptions.WithEnableOnly
-	IfChanged               = resourceoptions.IfChanged
-	WithWatch               = resourceoptions.WithWatch
-	OnChange                = resourceoptions.OnChange
-	WatchChanges            = resourceoptions.WatchChanges
-	WithCronUser            = resourceoptions.WithCronUser
-	WithLegacyCommand       = resourceoptions.WithLegacyCommand
-	WithCommand             = resourceoptions.WithCommand
-	WithMinute              = resourceoptions.WithMinute
-	WithHour                = resourceoptions.WithHour
-	WithMonthday            = resourceoptions.WithMonthday
-	WithMonth               = resourceoptions.WithMonth
-	WithWeekday             = resourceoptions.WithWeekday
-	WithCronEnv             = resourceoptions.WithCronEnv
-	WithOnCalendar          = resourceoptions.WithOnCalendar
-	WithOnBootSec           = resourceoptions.WithOnBootSec
-	WithPersistent          = resourceoptions.WithPersistent
-	WithDescription         = resourceoptions.WithDescription
-	WithServiceDescription  = resourceoptions.WithServiceDescription
-	WithAfter               = resourceoptions.WithAfter
-	WithWants               = resourceoptions.WithWants
-	WithSymlink             = resourceoptions.WithSymlink
-	WithHardlink            = resourceoptions.WithHardlink
-	WithName                = resourceoptions.WithName
-	WithDir                 = resourceoptions.WithDir
-	WithEnv                 = resourceoptions.WithEnv
-	Creates                 = resourceoptions.Creates
-	Unless                  = resourceoptions.Unless
-	OnlyIf                  = resourceoptions.OnlyIf
-	ToFileOptions           = resourceoptions.ToFileOptions
-	ToDirOptions            = resourceoptions.ToDirOptions
-	ToLinkOptions           = resourceoptions.ToLinkOptions
-	ToPackageOptions        = resourceoptions.ToPackageOptions
-	ToServiceOptions        = resourceoptions.ToServiceOptions
-	ToCronOptions           = resourceoptions.ToCronOptions
-	ToTimerOptions          = resourceoptions.ToTimerOptions
-	ToSystemdTimerOptions   = resourceoptions.ToSystemdTimerOptions
-	ToDaemonReloadOptions   = resourceoptions.ToDaemonReloadOptions
-	ToCommandOptions        = resourceoptions.ToCommandOptions
-	ToLocalUserOptions      = resourceoptions.ToLocalUserOptions
 )
 
+// File and directory content options: mode, sources, templates, validation,
+// inline content, line edits and directory pruning.
+var (
+	WithMode         = resourceoptions.WithMode
+	WithSource       = resourceoptions.WithSource
+	WithSourceGlob   = resourceoptions.WithSourceGlob
+	WithParam        = resourceoptions.WithParam
+	WithTemplate     = resourceoptions.WithTemplate
+	WithTemplateData = resourceoptions.WithTemplateData
+	WithValidation   = resourceoptions.WithValidation
+	WithSourceBase   = resourceoptions.WithSourceBase
+	WithContent      = resourceoptions.WithContent
+	WithLines        = resourceoptions.WithLines
+	WithoutLines     = resourceoptions.WithoutLines
+	WithLine         = resourceoptions.WithLine
+	WithoutLine      = resourceoptions.WithoutLine
+	WithFileMode     = resourceoptions.WithFileMode
+	WithPrune        = resourceoptions.WithPrune
+)
+
+// State options (absence, latest package), service/timer behaviour, the
+// change gate (OnChange/WatchChanges, also accepted by commands) and the
+// daemon-reload IfChanged/WithWatch pair.
+var (
+	IsAbsent       = resourceoptions.IsAbsent
+	IsLatest       = resourceoptions.IsLatest
+	WithRestart    = resourceoptions.WithRestart
+	WithReload     = resourceoptions.WithReload
+	WithUser       = resourceoptions.WithUser
+	WithEnableOnly = resourceoptions.WithEnableOnly
+	IfChanged      = resourceoptions.IfChanged
+	WithWatch      = resourceoptions.WithWatch
+	OnChange       = resourceoptions.OnChange
+	WatchChanges   = resourceoptions.WatchChanges
+)
+
+// Cron schedule and environment options (WithCommand is shared with systemd
+// timers).
+var (
+	WithCronUser      = resourceoptions.WithCronUser
+	WithLegacyCommand = resourceoptions.WithLegacyCommand
+	WithCommand       = resourceoptions.WithCommand
+	WithMinute        = resourceoptions.WithMinute
+	WithHour          = resourceoptions.WithHour
+	WithMonthday      = resourceoptions.WithMonthday
+	WithMonth         = resourceoptions.WithMonth
+	WithWeekday       = resourceoptions.WithWeekday
+	WithCronEnv       = resourceoptions.WithCronEnv
+)
+
+// Systemd timer unit options.
+var (
+	WithOnCalendar         = resourceoptions.WithOnCalendar
+	WithOnBootSec          = resourceoptions.WithOnBootSec
+	WithPersistent         = resourceoptions.WithPersistent
+	WithDescription        = resourceoptions.WithDescription
+	WithServiceDescription = resourceoptions.WithServiceDescription
+	WithAfter              = resourceoptions.WithAfter
+	WithWants              = resourceoptions.WithWants
+)
+
+// Link targets, and command options: privilege elevation, name (also a
+// File's registry identity), working directory, environment (also accepted by
+// packages), and the Creates/Unless/OnlyIf guards.
+var (
+	WithSymlink  = resourceoptions.WithSymlink
+	WithHardlink = resourceoptions.WithHardlink
+	WithElevate  = resourceoptions.WithElevate
+	WithName     = resourceoptions.WithName
+	WithDir      = resourceoptions.WithDir
+	WithEnv      = resourceoptions.WithEnv
+	Creates      = resourceoptions.Creates
+	Unless       = resourceoptions.Unless
+	OnlyIf       = resourceoptions.OnlyIf
+)
+
+// Adapters from an erased []Option slice to one resource family's option
+// slice, for callers that still build options generically.
+var (
+	ToFileOptions         = resourceoptions.ToFileOptions
+	ToDirOptions          = resourceoptions.ToDirOptions
+	ToLinkOptions         = resourceoptions.ToLinkOptions
+	ToPackageOptions      = resourceoptions.ToPackageOptions
+	ToServiceOptions      = resourceoptions.ToServiceOptions
+	ToCronOptions         = resourceoptions.ToCronOptions
+	ToTimerOptions        = resourceoptions.ToTimerOptions
+	ToSystemdTimerOptions = resourceoptions.ToSystemdTimerOptions
+	ToDaemonReloadOptions = resourceoptions.ToDaemonReloadOptions
+	ToCommandOptions      = resourceoptions.ToCommandOptions
+	ToLocalUserOptions    = resourceoptions.ToLocalUserOptions
+)
+
+// CandidatePath is the sole placeholder allowed in WithValidation arguments;
+// it is replaced at apply time with the private staged candidate's path.
 const CandidatePath = resourceoptions.CandidatePath
