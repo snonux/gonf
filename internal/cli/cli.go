@@ -53,9 +53,10 @@ var cleanupRemoteBuilds = remote.CleanupBuilds
 //	gonf apply [-n] <plan.jsonl|->               # apply file or GONF-PUSH/1 stdin
 //	gonf <task> [task...]                            # RecordPlan + Apply locally
 func CLI() int {
-	// Signal-derived context for the fleet fan-out: SIGINT/SIGTERM cancel
-	// in-flight ssh pushes. Only the fleet path is context-aware (bounded
-	// decision); local apply and single-host push are not.
+	// Signal-derived context: SIGINT/SIGTERM cancel in-flight work. It
+	// reaches local task runs (api.RunContext), single-host push
+	// (PushToContext) and the cluster/fleet fan-out, which kill their ssh
+	// pushes on cancel.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	// Remove the private dir the gonf binary was cross-compiled into for
@@ -140,20 +141,14 @@ func configureCLI(options cliOptions) error {
 	return nil
 }
 
+// runCLI dispatches one configured invocation, in precedence order: an
+// informational version flag, -list, a named subcommand, and finally the
+// positional arguments as task names to record and apply locally. It
+// returns the process exit code (2 for missing arguments/usage).
 func runCLI(ctx context.Context, options cliOptions) int {
-	if options.version {
-		fmt.Println(internal.Version)
+	if printVersionInfo(options) {
 		return 0
 	}
-	if options.planVersion {
-		fmt.Println(plan.CurrentVersion)
-		return 0
-	}
-	if options.strictPreviewVersion {
-		fmt.Println(internal.StrictPreviewVersion)
-		return 0
-	}
-
 	if options.list {
 		return cliList()
 	}
@@ -163,34 +158,67 @@ func runCLI(ctx context.Context, options cliOptions) int {
 		printUsage()
 		return 2
 	}
-
-	switch names[0] {
-	case "dns-zone-equivalent":
-		return cliDNSZoneEquivalent(names[1:])
-	case "dns-zone-serial":
-		return cliDNSZoneSerial(names[1:])
-	case "plan":
-		return cliPlan(names[1:])
-	case "apply":
-		return cliApply(names[1:])
-	case "push":
-		return cliPush(ctx, names[1:])
-	case "cluster":
-		return cliCluster(ctx, names[1:])
-	case "fleet":
-		return cliFleet(ctx, names[1:])
-	case "hosts":
-		return cliHosts()
-	case "clusters":
-		return cliClusters()
-	case "fleets":
-		return cliFleets()
+	if code, ok := runSubcommand(ctx, names[0], names[1:]); ok {
+		return code
 	}
+	return runTasks(ctx, names)
+}
 
-	// RunContext (not Run): this is the CLI process entry point, so a local
-	// apply's elevated sudo/doas re-exec should be killed by SIGINT/SIGTERM
-	// like the fleet fan-out already is, instead of only ever timing out via
-	// ApplyChunksContext's DefaultChunkTimeout.
+// printVersionInfo prints the value of the first set informational flag
+// (-version, then -plan-version, then -strict-preview-version) to stdout and
+// reports whether one was set. Those flags short-circuit everything else and
+// always exit 0.
+func printVersionInfo(options cliOptions) bool {
+	switch {
+	case options.version:
+		fmt.Println(internal.Version)
+	case options.planVersion:
+		fmt.Println(plan.CurrentVersion)
+	case options.strictPreviewVersion:
+		fmt.Println(internal.StrictPreviewVersion)
+	default:
+		return false
+	}
+	return true
+}
+
+// runSubcommand runs the subcommand called name with its remaining args and
+// returns its exit code. ok is false when name is not a subcommand, so the
+// caller treats it as a task name instead.
+func runSubcommand(ctx context.Context, name string, args []string) (code int, ok bool) {
+	switch name {
+	case "dns-zone-equivalent":
+		return cliDNSZoneEquivalent(args), true
+	case "dns-zone-serial":
+		return cliDNSZoneSerial(args), true
+	case "plan":
+		return cliPlan(args), true
+	case "apply":
+		return cliApply(args), true
+	case "push":
+		return cliPush(ctx, args), true
+	case "cluster":
+		return cliCluster(ctx, args), true
+	case "fleet":
+		return cliFleet(ctx, args), true
+	case "hosts":
+		return cliHosts(), true
+	case "clusters":
+		return cliClusters(), true
+	case "fleets":
+		return cliFleets(), true
+	}
+	return 0, false
+}
+
+// runTasks records and applies the named tasks on this host: exit 0 on
+// success, 1 (with "error: ..." on stderr) on any failure.
+//
+// RunContext (not Run): this is the CLI process entry point, so a local
+// apply's elevated sudo/doas re-exec should be killed by SIGINT/SIGTERM like
+// the fleet fan-out already is, instead of only ever timing out via
+// ApplyChunksContext's DefaultChunkTimeout.
+func runTasks(ctx context.Context, names []string) int {
 	if err := api.RunContext(ctx, names...); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
