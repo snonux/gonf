@@ -167,7 +167,10 @@ func (l *lazyStage) WriteGlob(name, pattern string) (string, error) {
 // Writability by the caller is NOT part of that rule: it is only checked here
 // (access(2)), so a directory that becomes read-only after this check fails at
 // commit time with a plain permission error instead of the actionable
-// "chmod u+w" message below — still refused, nothing written.
+// "chmod u+w" message below. That failure is not atomic: blobs may already
+// have been replaced inside an existing (still writable) blobs/ before
+// plan.jsonl cannot be written — the same caveat as any commit-time I/O error
+// (see RecordPlan).
 func checkPlanDirUsable(planDir string) error {
 	planDir = filepath.Clean(planDir)
 	if err := refuseSymlinkedPath(planDir); err != nil {
