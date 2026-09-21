@@ -31,6 +31,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/snonux/gonf/internal/dirperm"
 )
 
 // lockSetup tracks one acquisition attempt: the directory descriptors to
@@ -153,12 +155,12 @@ type lockIDs struct {
 	euid, egid uint32
 }
 
-// isPrivateGroup mirrors plan's user-private-group convention (plan
-// procIDs.isPrivateGroup, unexported there): a group is the caller's private
-// group only when gid == egid == euid and it is not gid 0 ("wheel" on the
-// BSDs), so root never accepts a group-writable parent.
+// isPrivateGroup applies gonf's shared user-private-group convention
+// (dirperm.IDs.IsPrivateGroup): a group is the caller's private group only
+// when gid == egid == euid and it is not gid 0 ("wheel" on the BSDs), so
+// root never accepts a group-writable parent.
 func (ids lockIDs) isPrivateGroup(gid uint32) bool {
-	return gid == ids.egid && ids.egid == ids.euid && ids.egid != 0
+	return dirperm.IDs{EUID: ids.euid, EGID: ids.egid}.IsPrivateGroup(gid)
 }
 
 // checkLockParent requires a directory owned by the applying account (root

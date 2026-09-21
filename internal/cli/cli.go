@@ -15,6 +15,7 @@ import (
 	"github.com/snonux/gonf/internal/exec"
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/internal/privilege"
+	"github.com/snonux/gonf/internal/remote"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/dnszone"
@@ -35,6 +36,10 @@ type cliOptions struct {
 	args                 []string
 }
 
+// cleanupRemoteBuilds is remote.CleanupBuilds; a variable only so a test can
+// prove CLI calls it on return (TestCLICleansUpRemoteBuilds).
+var cleanupRemoteBuilds = remote.CleanupBuilds
+
 // CLI parses flags and runs or lists tasks. Returns a process exit code.
 //
 //	gonf -version
@@ -53,6 +58,9 @@ func CLI() int {
 	// decision); local apply and single-host push are not.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// Remove the private dir the gonf binary was cross-compiled into for
+	// remote hosts (if any push needed one) once this run is over.
+	defer func() { _ = cleanupRemoteBuilds() }()
 
 	options, err := parseCLIFlags(os.Args[0], os.Args[1:])
 	if err != nil {

@@ -689,6 +689,37 @@ or `uname` when unset), `scp`s it, and installs to `/usr/local/bin/gonf`
 commands on that push use the installed path so PATH cannot hide an older
 binary.
 
+Each gonf run normally cross-compiles once per target platform, into its own
+private temp directory (`$TMPDIR/gonf-cross-<random>`, mode 0700), and reuses
+that binary for every host of the same platform in the run (it rebuilds only
+if one of the checks below fails). Nothing is shared
+between runs, so concurrent gonf processes never ship or delete each other's
+binary. Before the directory is reused, after each build into it, and before
+a cached binary is handed to `scp`, gonf re-checks that the directory is still
+the one it created (same inode, a real directory rather than a symlink, owned
+by you, mode 0700) and that the binary is a regular file you own with the
+SHA-256 recorded at build time. If not (for example a temp cleaner removed the
+directory and someone planted a replacement), it logs a warning and rebuilds
+in a new directory. A symlinked `$TMPDIR` (such as macOS `/var` ->
+`/private/var`) is followed: gonf checks the resolved directory and creates
+the build directory under it (a relative `TMPDIR` is made absolute first). gonf
+refuses the build if the resolved `$TMPDIR`, or any directory above it up to
+`/`, is not owned by you or root, is world-writable without the sticky bit, or
+is group-writable without the sticky bit by a group other than your
+user-private group (gid equal to your uid, as with the umask-002 default of
+Fedora and most Linux distributions; the same rule as for `gonf plan -o`
+directories), since others could swap a directory on that path. So `/tmp`,
+macOS `/private/var/folders/.../T`, and home directories that are 0700, 0755,
+or 0775 with your private group pass. In a rootless container, directories
+from outside the user namespace show up owned by the unmapped uid 65534
+(`nobody`) and are refused; point `TMPDIR` at a directory you own inside the
+container. If gonf refuses, create a private directory (`mkdir -p -m 700
+"$HOME/tmp"`) and export `TMPDIR=$HOME/tmp`. The directory is removed when `cli.CLI` returns
+(including after SIGINT/SIGTERM) or on a fail-fast exit, but only while it is
+still the directory gonf created, so a planted replacement is never deleted. A
+crash, SIGKILL, an uncaught signal such as SIGHUP or SIGQUIT, or a program that
+pushes via `api` without `cli.CLI` leaves it for the OS temp cleaner.
+
 `gonf -plan-version` prints the plan schema integer (distinct from
 `gonf -version`, which prints the release string). `gonf
 -strict-preview-version` prints the strict-preview capability version. The

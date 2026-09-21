@@ -343,34 +343,62 @@ func TestSCPArgvErrorNotDoublePrefixed(t *testing.T) {
 	}
 }
 
-// removeGonfCrossBuildDirs removes any real gonf-cross-* directories a
-// test's fake GoBuildRunner created under os.TempDir(), for every
-// goos/goarch pair the test used. Registered via t.Cleanup so a test never
-// leaks its own scratch state into the developer's real /tmp. Unlike the
-// pre-Pusher version of this helper, it never touches package-level state:
-// each test below constructs its own *Pusher (via NewPusher), so there is no
-// shared build cache/lock map left to reset.
-func removeGonfCrossBuildDirs(t *testing.T, keys ...[2]string) {
+// TestMain points defaultPusher's build dirs at a private, per-process temp
+// dir, so no test in this package (including ones in other files that
+// exercise the package-level EnsureRemoteGonf) leaves anything in the real
+// temp dir, and concurrently running `go test` processes never share a
+// directory with each other.
+func TestMain(m *testing.M) {
+	// A fatal-exit helper child (TestCrossBuildFatalHelper) never returns
+	// from m.Run, so it must not create a root that only we would remove.
+	if root := os.Getenv(crossBuildFatalRootEnv); root != "" {
+		defaultPusher.CrossBuildRoot = root
+		os.Exit(m.Run())
+	}
+	root, err := os.MkdirTemp("", "gonf-remote-test-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defaultPusher.CrossBuildRoot = root
+	code := m.Run()
+	_ = os.RemoveAll(root)
+	os.Exit(code)
+}
+
+// newBuildTestPusher returns a NewPusher whose private build dir is created
+// under the test's own t.TempDir() and closed when the test ends, so a test
+// can never observe or delete another test's or another test process's
+// builds. Every test that reaches buildGonf must use it (or set
+// CrossBuildRoot itself).
+func newBuildTestPusher(t *testing.T) *Pusher {
 	t.Helper()
-	for _, k := range keys {
-		_ = os.RemoveAll(gonfCrossBuildDir(k[0], k[1]))
+	p := NewPusher()
+	p.CrossBuildRoot = t.TempDir()
+	t.Cleanup(func() { _ = p.Close() })
+	return p
+}
+
+// fakeBuild returns a GoBuildRunner that writes content.
+func fakeBuild(content string) func(context.Context, string, string, string, string) error {
+	return func(_ context.Context, _, _, out, _ string) error {
+		return os.WriteFile(out, []byte(content), 0o755)
 	}
 }
 
 // TestBuildGonfCache and the tests below construct their own *Pusher
-// (NewPusher) and call its buildGonf/GoBuildRunner directly, instead of
-// swapping a package-level GoBuildRunner var: this is the concrete
-// demonstration that Pusher's injected runners work with no global mutable
-// state to race on (mirroring how the l5 task's fake BlobReader proved the
-// same kind of decoupling for plan.BlobReader). Each test uses its own
-// goos/arch key(s) so their on-disk gonfCrossBuildDir never collides with a
-// sibling test's, which is what makes t.Parallel() safe here.
+// (newBuildTestPusher) and call its buildGonf/GoBuildRunner directly,
+// instead of swapping a package-level GoBuildRunner var: this is the
+// concrete demonstration that Pusher's injected runners work with no global
+// mutable state to race on (mirroring how the l5 task's fake BlobReader
+// proved the same kind of decoupling for plan.BlobReader). Each Pusher also
+// has its own private build dir, which is what makes t.Parallel() — and
+// concurrent `go test` processes — safe here.
 
 func TestBuildGonfCache(t *testing.T) {
 	t.Parallel()
-	t.Cleanup(func() { removeGonfCrossBuildDirs(t, [2]string{"gonftest1", "amd64"}) })
 
-	p := NewPusher()
+	p := newBuildTestPusher(t)
 	var builds int
 	p.GoBuildRunner = func(ctx context.Context, goos, goarch, out, pkg string) error {
 		builds++
@@ -390,74 +418,35 @@ func TestBuildGonfCache(t *testing.T) {
 	if p1 != p2 {
 		t.Fatalf("cache paths differ: %q vs %q", p1, p2)
 	}
-	if filepath.Base(p1) != "gonf" {
+	if filepath.Base(p1) != "gonf-gonftest1-amd64" {
 		t.Fatalf("path = %q", p1)
 	}
 }
 
-// TestBuildGonfNoLeakedScratchDir is the regression test for the leak half of
-// the buildGonf bug: os.MkdirTemp("", "gonf-cross-*") used to hand back a
-// fresh, uniquely-named directory on every cache-missed build, and nothing
-// ever removed it. After a successful build, only the one canonical, bounded
-// baseDir (gonfCrossBuildDir) may exist — its "build-*" scratch subdirectory
-// (created fresh per build attempt) must always be gone.
-func TestBuildGonfNoLeakedScratchDir(t *testing.T) {
+// TestBuildGonfFailedBuildLeavesNoPartialBinary: a failed build must not
+// leave a partial binary behind that a later call could reuse.
+func TestBuildGonfFailedBuildLeavesNoPartialBinary(t *testing.T) {
 	t.Parallel()
-	t.Cleanup(func() { removeGonfCrossBuildDirs(t, [2]string{"gonftest2", "amd64"}) })
 
-	p := NewPusher()
+	p := newBuildTestPusher(t)
 	p.GoBuildRunner = func(ctx context.Context, goos, goarch, out, pkg string) error {
-		return os.WriteFile(out, []byte("fake"), 0o755)
-	}
-
-	if _, err := p.buildGonf(context.Background(), "gonftest2", "amd64"); err != nil {
-		t.Fatal(err)
-	}
-
-	baseDir := gonfCrossBuildDir("gonftest2", "amd64")
-	entries, err := os.ReadDir(baseDir)
-	if err != nil {
-		t.Fatalf("ReadDir(%s): %v", baseDir, err)
-	}
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), "build-") {
-			t.Fatalf("scratch dir %q leaked in %s after a successful build", e.Name(), baseDir)
-		}
-	}
-	if _, err := os.Stat(filepath.Join(baseDir, "gonf")); err != nil {
-		t.Fatalf("canonical binary missing after build: %v", err)
-	}
-}
-
-// TestBuildGonfFailedBuildLeavesNoScratchDir is the same regression, on the
-// build-failure path: the old code removed the whole (uniquely-named)
-// directory on failure, which happened to work only because that directory
-// was never shared with anything else. The scratch dir must still be
-// removed even when GoBuildRunner fails, without touching the (possibly
-// still valid, from an earlier successful build) canonical baseDir.
-func TestBuildGonfFailedBuildLeavesNoScratchDir(t *testing.T) {
-	t.Parallel()
-	t.Cleanup(func() { removeGonfCrossBuildDirs(t, [2]string{"gonftest3", "arm64"}) })
-
-	p := NewPusher()
-	wantErr := fmt.Errorf("boom")
-	p.GoBuildRunner = func(ctx context.Context, goos, goarch, out, pkg string) error {
-		return wantErr
+		_ = os.WriteFile(out, []byte("partial"), 0o755)
+		return fmt.Errorf("boom")
 	}
 
 	if _, err := p.buildGonf(context.Background(), "gonftest3", "arm64"); err == nil {
 		t.Fatal("expected build error")
 	}
-
-	baseDir := gonfCrossBuildDir("gonftest3", "arm64")
-	entries, err := os.ReadDir(baseDir)
-	if err != nil && !os.IsNotExist(err) {
-		t.Fatalf("ReadDir(%s): %v", baseDir, err)
+	dir, err := p.privateBuildDir()
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), "build-") {
-			t.Fatalf("scratch dir %q leaked in %s after a failed build", e.Name(), baseDir)
-		}
+	entries, err := os.ReadDir(dir.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("build dir %s holds %v after a failed build, want nothing", dir.path, entries)
 	}
 }
 
@@ -475,11 +464,8 @@ func TestBuildGonfFailedBuildLeavesNoScratchDir(t *testing.T) {
 // inside of).
 func TestBuildGonfDifferentTargetsDoNotSerialize(t *testing.T) {
 	t.Parallel()
-	t.Cleanup(func() {
-		removeGonfCrossBuildDirs(t, [2]string{"gonftest4a", "amd64"}, [2]string{"gonftest4b", "arm64"})
-	})
 
-	p := NewPusher()
+	p := newBuildTestPusher(t)
 	var (
 		mu       sync.Mutex
 		inFlight = map[string]bool{}
@@ -565,27 +551,49 @@ type gonfSyncStub struct {
 // exercises the package-level EnsureRemoteGonf function, i.e. production
 // code's real entry point, which always runs against defaultPusher) plus the
 // still-package-level SSHRunner/sshCaptureExec vars, and restores all of them
-// (plus the build cache) on test cleanup.
+// (plus the build cache and build dir) on test cleanup.
 func (s *gonfSyncStub) install(t *testing.T) {
 	t.Helper()
+	s.installPusherFakes(t)
+	s.installSSHFakes(t)
+}
 
+// installPusherFakes replaces defaultPusher's prober, build and scp seams.
+// Cleanup closes defaultPusher (removing its private build dir under
+// TestMain's per-process root) so its build cache cannot leak into a later
+// test: gonfSyncTarget always builds for linux/amd64. Besides this stub,
+// only TestCleanupBuildsRemovesDefaultPusherDir (crossbuild_test.go, which
+// closes it too) builds with defaultPusher; every other build-related test
+// uses its own private *Pusher. Both are non-parallel tests.
+func (s *gonfSyncStub) installPusherFakes(t *testing.T) {
+	t.Helper()
 	oldProber := defaultPusher.PlanVersionProber
-	defaultPusher.PlanVersionProber = func(context.Context, PushTarget) (int, error) { return 0, nil }
-
 	oldBuild := defaultPusher.GoBuildRunner
-	defaultPusher.GoBuildRunner = func(ctx context.Context, goos, goarch, out, pkg string) error {
-		return os.WriteFile(out, []byte("fake"), 0o755)
-	}
-
 	oldSCP := defaultPusher.SCPRunner
+	defaultPusher.PlanVersionProber = func(context.Context, PushTarget) (int, error) { return 0, nil }
+	defaultPusher.GoBuildRunner = fakeBuild("fake")
 	defaultPusher.SCPRunner = func(ctx context.Context, localPath string, t PushTarget, remotePath string) error {
 		s.mu.Lock()
 		s.scpCalls = append(s.scpCalls, remotePath)
 		s.mu.Unlock()
 		return s.scpErr
 	}
+	t.Cleanup(func() {
+		defaultPusher.PlanVersionProber = oldProber
+		defaultPusher.GoBuildRunner = oldBuild
+		defaultPusher.SCPRunner = oldSCP
+		_ = defaultPusher.Close()
+		defaultPusher.buildMu.Lock()
+		defaultPusher.buildKeyLocks = map[string]*sync.Mutex{}
+		defaultPusher.buildMu.Unlock()
+	})
+}
 
+// installSSHFakes replaces the package-level SSHRunner and sshCaptureExec.
+func (s *gonfSyncStub) installSSHFakes(t *testing.T) {
+	t.Helper()
 	oldSSH := SSHRunner
+	oldCapture := sshCaptureExec
 	SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		remoteCmd := argv[len(argv)-1]
 		s.mu.Lock()
@@ -596,8 +604,6 @@ func (s *gonfSyncStub) install(t *testing.T) {
 		}
 		return nil
 	}
-
-	oldCapture := sshCaptureExec
 	sshCaptureExec = func(ctx context.Context, argv []string) (string, string, error) {
 		remoteCmd := argv[len(argv)-1]
 		s.mu.Lock()
@@ -615,23 +621,9 @@ func (s *gonfSyncStub) install(t *testing.T) {
 			return "", "", fmt.Errorf("gonfSyncStub: unexpected remote command %q", remoteCmd)
 		}
 	}
-
 	t.Cleanup(func() {
-		defaultPusher.PlanVersionProber = oldProber
-		defaultPusher.GoBuildRunner = oldBuild
-		defaultPusher.SCPRunner = oldSCP
 		SSHRunner = oldSSH
 		sshCaptureExec = oldCapture
-		// gonfSyncTarget always builds for linux/amd64; this stub is the only
-		// place still exercising defaultPusher's shared build cache (every
-		// other build-related test above uses its own private *Pusher), so
-		// clearing it here is enough to keep defaultPusher's cache from
-		// leaking into a later test.
-		defaultPusher.buildMu.Lock()
-		defaultPusher.buildCache = map[string]string{}
-		defaultPusher.buildKeyLocks = map[string]*sync.Mutex{}
-		defaultPusher.buildMu.Unlock()
-		removeGonfCrossBuildDirs(t, [2]string{"linux", "amd64"})
 	})
 }
 
@@ -994,7 +986,6 @@ func TestEnsureRemoteGonfUpgradesWhenReleaseVersionStale(t *testing.T) {
 		SSHRunner = oldSSH
 		sshCaptureExec = oldCapture
 	})
-	t.Cleanup(func() { removeGonfCrossBuildDirs(t, [2]string{"linux", "amd64"}) })
 
 	SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
 		return nil
@@ -1015,7 +1006,7 @@ func TestEnsureRemoteGonfUpgradesWhenReleaseVersionStale(t *testing.T) {
 		}
 	}
 
-	p := NewPusher()
+	p := newBuildTestPusher(t)
 	p.PlanVersionProber = func(context.Context, PushTarget) (int, error) {
 		return plan.CurrentVersion, nil
 	}
@@ -1053,7 +1044,6 @@ func TestEnsureRemoteGonfUpgradesReleasedV014WithoutStrictPreview(t *testing.T) 
 		SSHRunner = oldSSH
 		sshCaptureExec = oldCapture
 	})
-	t.Cleanup(func() { removeGonfCrossBuildDirs(t, [2]string{"linux", "amd64"}) })
 
 	SSHRunner = func(context.Context, io.Reader, []string) error { return nil }
 	sshCaptureExec = func(_ context.Context, argv []string) (string, string, error) {
@@ -1066,7 +1056,7 @@ func TestEnsureRemoteGonfUpgradesReleasedV014WithoutStrictPreview(t *testing.T) 
 		return "", "", fmt.Errorf("unexpected remote command %q", argv[len(argv)-1])
 	}
 
-	p := NewPusher()
+	p := newBuildTestPusher(t)
 	p.PlanVersionProber = func(context.Context, PushTarget) (int, error) { return plan.CurrentVersion, nil }
 	p.ReleaseVersionProber = func(context.Context, PushTarget) (string, error) { return "0.14.0", nil }
 	p.GoBuildRunner = func(_ context.Context, _, _, out, _ string) error {
@@ -1092,7 +1082,7 @@ func TestEnsureRemoteGonfUpgradesReleasedV014WithoutStrictPreview(t *testing.T) 
 // the release version is stale, no build/scp should happen at all.
 func TestEnsureRemoteGonfSkipsUpgradeWhenReleaseVersionCurrentAndSchemaCurrent(t *testing.T) {
 	t.Parallel()
-	p := NewPusher()
+	p := newBuildTestPusher(t)
 	p.PlanVersionProber = func(context.Context, PushTarget) (int, error) {
 		return plan.CurrentVersion, nil
 	}
@@ -1130,7 +1120,7 @@ func TestEnsureRemoteGonfSkipsUpgradeWhenReleaseVersionCurrentAndSchemaCurrent(t
 // the release-version check is a secondary safety net layered on top of it).
 func TestEnsureRemoteGonfUnparseableReleaseVersionSkipsCheckWithoutFailing(t *testing.T) {
 	t.Parallel()
-	p := NewPusher()
+	p := newBuildTestPusher(t)
 	p.PlanVersionProber = func(context.Context, PushTarget) (int, error) {
 		return plan.CurrentVersion, nil
 	}
@@ -1196,7 +1186,7 @@ func TestEnsureRemoteGonfUnparseablePlanVersionProbeFailsWithRawOutput(t *testin
 		return banner + "\n", "", nil
 	}
 
-	p := NewPusher() // real probePlanVersion via the default-wired PlanVersionProber
+	p := newBuildTestPusher(t) // real probePlanVersion via the default-wired PlanVersionProber
 	_, err := p.EnsureRemoteGonf(context.Background(), gonfSyncTarget())
 	if err == nil {
 		t.Fatal("expected an error")

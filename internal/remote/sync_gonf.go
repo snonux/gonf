@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -72,13 +71,21 @@ type Pusher struct {
 	// authoritative either way.
 	ReleaseVersionProber func(ctx context.Context, t PushTarget) (string, error)
 
-	// buildMu protects only the two maps below (a quick map read/write),
-	// never the build itself — see buildKeyLock's doc comment for why a
-	// single lock held across the whole struct/package used to serialize
-	// every cross-compile.
+	// CrossBuildRoot is the parent directory in which this Pusher creates its
+	// private build dir (see crossbuild.go). Empty means os.TempDir(). It is
+	// a test seam: tests point it at t.TempDir() so nothing lands in the
+	// real temp dir.
+	CrossBuildRoot string
+
+	// buildMu protects only the fields below (quick reads/writes), never
+	// the build itself — see buildKeyLock's doc comment for why a single
+	// lock held across the whole struct/package used to serialize every
+	// cross-compile.
 	buildMu       sync.Mutex
-	buildCache    map[string]string      // "goos/goarch" → local binary path
+	buildCache    map[string]cachedBuild // "goos/goarch" → built binary (crossbuild.go)
 	buildKeyLocks map[string]*sync.Mutex // "goos/goarch" → that key's build lock
+	buildDir      *buildDirState         // current private build dir; nil until first build
+	retiredDirs   []*buildDirState       // earlier dirs of ours, removed by Close
 }
 
 // NewPusher returns a Pusher wired to the real ssh/scp/go-build
@@ -90,7 +97,7 @@ func NewPusher() *Pusher {
 		PlanVersionProber:    probePlanVersion,
 		StrictPreviewProber:  probeStrictPreviewVersion,
 		ReleaseVersionProber: probeReleaseVersion,
-		buildCache:           map[string]string{},
+		buildCache:           map[string]cachedBuild{},
 		buildKeyLocks:        map[string]*sync.Mutex{},
 	}
 }
@@ -120,46 +127,17 @@ func (p *Pusher) buildKeyLock(key string) *sync.Mutex {
 	return mu
 }
 
-func (p *Pusher) buildCacheGet(key string) (string, bool) {
+func (p *Pusher) buildCacheGet(key string) (cachedBuild, bool) {
 	p.buildMu.Lock()
 	defer p.buildMu.Unlock()
-	path, ok := p.buildCache[key]
-	return path, ok
+	c, ok := p.buildCache[key]
+	return c, ok
 }
 
-func (p *Pusher) buildCacheSet(key, path string) {
+func (p *Pusher) buildCacheSet(key string, c cachedBuild) {
 	p.buildMu.Lock()
 	defer p.buildMu.Unlock()
-	p.buildCache[key] = path
-}
-
-// gonfCrossBuildDir returns the one, bounded, reused local directory that
-// holds the cross-compiled gonf binary for a given goos/goarch pair.
-//
-// The previous implementation called os.MkdirTemp("", "gonf-cross-*") on
-// every cache miss: a fresh, uniquely-named directory every time. Because
-// gonfBuildCache only lives for one process's lifetime, every single `gonf`
-// invocation that needed a cross-compile left its directory behind under
-// os.TempDir() forever — nothing ever removed it, so a host running fleet
-// pushes regularly (e.g. from cron) would accumulate one leaked directory
-// per invocation indefinitely.
-//
-// Keying the directory name itself by goos/goarch bounds the total count to
-// the number of distinct platforms gonf has ever cross-built for on this
-// host (in practice a handful), and lets both this process and later `gonf`
-// invocations reuse the already-built binary instead of paying for another
-// full static cross-compile. If something outside gonf sweeps os.TempDir()
-// (systemd-tmpfiles, a reboot), the directory is simply recreated and the
-// binary rebuilt on next use — see the os.Stat cache-hit check in
-// buildGonf — so this is self-healing, not fragile.
-//
-// goos/goarch are sanitized (sanitizeID, from remote.go) before use in a
-// filesystem path: they usually come from a fixed, validated vocabulary
-// (mapUnameGOOS / mapUnameGOARCH), but PushTarget.GOOS/GOARCH can also be
-// set directly by a caller/config, so this must not assume the value is
-// already path-safe.
-func gonfCrossBuildDir(goos, goarch string) string {
-	return filepath.Join(os.TempDir(), "gonf-cross-"+sanitizeID(goos)+"-"+sanitizeID(goarch))
+	p.buildCache[key] = c
 }
 
 // defaultSCPRunner copies a local file to a remote path via scp. It is
@@ -873,56 +851,6 @@ func mapUnameGOARCH(s string) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported uname -m %q (set Host WithGOARCH)", s)
 	}
-}
-
-func (p *Pusher) buildGonf(ctx context.Context, goos, goarch string) (string, error) {
-	key := goos + "/" + goarch
-
-	// Serialize only same-key builds (see buildKeyLock's doc comment):
-	// unrelated goos/goarch pairs never wait on each other here.
-	keyMu := p.buildKeyLock(key)
-	keyMu.Lock()
-	defer keyMu.Unlock()
-
-	if path, ok := p.buildCacheGet(key); ok {
-		if _, err := os.Stat(path); err == nil {
-			return path, nil
-		}
-	}
-
-	baseDir := gonfCrossBuildDir(goos, goarch)
-	if err := os.MkdirAll(baseDir, 0o700); err != nil {
-		return "", err
-	}
-
-	// Build into a freshly created, uniquely-named scratch subdirectory of
-	// baseDir, then atomically publish it to the canonical "gonf" path with
-	// a single os.Rename. This scratch dir is ALWAYS removed before
-	// returning (success or failure, via defer) — it never lingers, which
-	// is the actual "temp directory" cleanup this fix owes. Only the one
-	// canonical, bounded, reused baseDir persists across calls (and across
-	// separate `gonf` process invocations) — that is deliberate caching,
-	// not a leak, and it also means a concurrent second `gonf` process
-	// racing to build the same key can never observe a half-written binary
-	// at the canonical path: readers only ever see the old complete binary
-	// or the new one, never a partial one.
-	scratch, err := os.MkdirTemp(baseDir, "build-*")
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = os.RemoveAll(scratch) }()
-
-	scratchOut := filepath.Join(scratch, "gonf")
-	if err := p.GoBuildRunner(ctx, goos, goarch, scratchOut, gonfCmdPackage); err != nil {
-		return "", err
-	}
-
-	out := filepath.Join(baseDir, "gonf")
-	if err := os.Rename(scratchOut, out); err != nil {
-		return "", err
-	}
-	p.buildCacheSet(key, out)
-	return out, nil
 }
 
 // remoteStagingPrefix names the mktemp template for the remote staging
