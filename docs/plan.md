@@ -68,9 +68,10 @@ applies. What is guaranteed, and what is not:
   for being a real directory); `plan.jsonl` re-checks `dir` itself the same
   way; a tree or glob blob write reaches `dir` following symlinks, opens only
   `blobs/` without following one and checks it against the rule, then writes
-  the tree by path (see "The output directory"). Only a change in the small window
-  between the commit-time re-check and the writes can surface as a plain I/O
-  error, with the non-atomic caveat of the next point.
+  the tree by path (see "The output directory"). Errors during those writes
+  (for example a leftover `blobs/` or blob tree you cannot write or replace,
+  a full disk, or a change after the re-check) are plain I/O errors with the
+  non-atomic caveat of the next point. `-o ''` is treated as `-o .`.
 - An I/O error while COMMITTING the blobs into `dir` after a successful record
   (full disk, permissions, a blob path that cannot be replaced) is reported but
   not atomic: some blobs may already be copied, so a partially updated blob

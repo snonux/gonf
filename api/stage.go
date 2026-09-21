@@ -165,9 +165,10 @@ func (l *lazyStage) WriteGlob(name, pattern string) (string, error) {
 // real directory, no symlinked component, owned by the caller, no unsafe
 // group/world write) and requireWritableDir re-checks the caller's write
 // permission, which is not part of that rule. Either refusal writes nothing.
-// Only a change in the small window between that re-check and the writes
-// themselves can surface as a plain I/O error, with the non-atomic commit
-// caveat documented on RecordPlan.
+// Errors during the writes themselves (for example a leftover blobs/ or blob
+// tree the caller cannot write or replace, a full disk, or a change after the
+// re-check) surface as plain I/O errors with the non-atomic commit caveat
+// documented on RecordPlan.
 func checkPlanDirUsable(planDir string) error {
 	planDir = filepath.Clean(planDir)
 	if err := refuseSymlinkedPath(planDir); err != nil {

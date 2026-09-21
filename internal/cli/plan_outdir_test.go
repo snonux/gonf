@@ -377,3 +377,27 @@ func TestCLIWithSymlinkedTempDir(t *testing.T) {
 		t.Fatalf("temp dir %s after both runs: %v, %v; want it empty", realTmp, entries, err)
 	}
 }
+
+// TestCLIPlanEmptyOutDirMeansCurrentDirectory pins that `-o ”` is the current
+// directory with every output-directory check, like the default "-o .": an
+// unusable (here read-only) working directory is refused before any task
+// body runs and gets the actionable message, instead of RecordPlan treating
+// the empty path as "no plan directory" and skipping the checks.
+func TestCLIPlanEmptyOutDirMeansCurrentDirectory(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses write permission checks")
+	}
+	ran := registerOutDirProbe(t)
+	dir := outDirWithMode(t, filepath.Join(t.TempDir(), "ro"), 0o500)
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	t.Chdir(dir)
+	var code int
+	var stderr string
+	_ = captureStdout(t, func() { code, stderr = runGonf(t, "plan", "-o", "", "cli_outdir") })
+	if code == 0 || *ran {
+		t.Fatalf("exit %d (body ran: %v); want a refusal before any task body", code, *ran)
+	}
+	if !strings.Contains(stderr, "chmod u+w") {
+		t.Fatalf("stderr = %q, want the actionable read-only refusal", stderr)
+	}
+}

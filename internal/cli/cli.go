@@ -327,6 +327,12 @@ func planToStdout(planID string, tasks []string) int {
 // unknown task ("unknown task ...") or a cycle/body error does not; this
 // command only adds its own "plan: " in front of whatever it got.
 func planToDir(outDir, planID string, tasks []string) int {
+	// An empty -o means the current directory, like the default ".". It must
+	// be spelled "." for RecordPlan: its empty planDir means "no plan
+	// directory" and would skip the output-directory checks and staging.
+	if outDir == "" {
+		outDir = "."
+	}
 	ops, err := api.RecordPlan(planID, outDir, tasks...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "plan: %v\n", err)
