@@ -78,10 +78,7 @@ func (t *Timer) planDraft(id string) resource.PlanDraft {
 		EnableOnly: t.enableOnly,
 		Deps:       t.DependsOn.SortedIDs(),
 	}
-	d.IfChanged = t.Gated
-	if d.IfChanged {
-		d.Watch = append([]string(nil), t.Watch...)
-	}
+	d.IfChanged, d.Watch = t.DraftGate()
 	return d
 }
 
@@ -99,6 +96,8 @@ func normalizeUnit(name string) string {
 // Apply runs the timer reconciliation directly for the legacy resource path.
 func (t *Timer) Apply() error { return t.apply() }
 
+// apply probes the timer, derives the systemctl actions that converge it,
+// and runs them (or only logs them under dry-run) via converge.
 func (t *Timer) apply() error {
 	id := fmt.Sprintf("Timer[%s]", t.name)
 	if err := t.validate(); err != nil {
@@ -117,8 +116,15 @@ func (t *Timer) apply() error {
 		return err
 	}
 
-	var actions [][]string
-	held := false // change gate suppressed the restart action
+	actions, held := t.actions(id, active, enabled)
+	return converge(id, actions, held)
+}
+
+// actions returns the ordered systemctl argv lists that move t from the
+// probed state to its desired state. Absent stops (unless enable-only)
+// before disabling; present enables before starting. held reports that the
+// change gate suppressed the restart.
+func (t *Timer) actions(id string, active, enabled bool) (actions [][]string, held bool) {
 	if t.Absent {
 		if !t.enableOnly && active {
 			actions = append(actions, systemd.Args(t.user, "stop", t.name))
@@ -126,31 +132,39 @@ func (t *Timer) apply() error {
 		if enabled {
 			actions = append(actions, systemd.Args(t.user, "disable", t.name))
 		}
-	} else {
-		if !enabled {
-			actions = append(actions, systemd.Args(t.user, "enable", t.name))
-		}
-		if !t.enableOnly {
-			if !active {
-				actions = append(actions, systemd.Args(t.user, "start", t.name))
-			} else if t.restart {
-				// The gated restart only fires after a watched resource changed.
-				if t.Gated && !resource.AnyChanged(t.Watch...) {
-					logger.Debug("%s: restart held by change gate (no watched dependency changed)", id)
-					held = true
-				} else {
-					actions = append(actions, systemd.Args(t.user, "restart", t.name))
-				}
-			}
-		}
+		return actions, false
 	}
+	if !enabled {
+		actions = append(actions, systemd.Args(t.user, "enable", t.name))
+	}
+	if t.enableOnly {
+		return actions, false
+	}
+	switch {
+	case !active:
+		actions = append(actions, systemd.Args(t.user, "start", t.name))
+	case !t.restart:
+		// Active and no restart requested: nothing more to do. Checked
+		// before the gate so an armed gate without WithRestart reports ok,
+		// not skipped.
+	case t.Holds(resource.AnyChanged):
+		// The gated restart only fires after a watched resource changed
+		// (embed.ChangeGate.Holds); convergence above is never gated.
+		t.LogHeld(id, "restart")
+		held = true
+	default:
+		actions = append(actions, systemd.Args(t.user, "restart", t.name))
+	}
+	return actions, held
+}
 
+// converge runs actions in order (or only logs them in a dry run) and notes
+// the result. With nothing to do, a gate-held restart is reported skipped
+// rather than ok. The first failing action aborts the rest and is returned;
+// nothing is noted in that case.
+func converge(id string, actions [][]string, held bool) error {
 	if len(actions) == 0 {
-		if held {
-			resource.Note(id, resource.StatusSkipped)
-			return nil
-		}
-		resource.NoteResult(id, false)
+		resource.NoteIdle(id, held)
 		return nil
 	}
 

@@ -35,13 +35,9 @@ func (s *Service) applyWith(b backend) error {
 	id := fmt.Sprintf("Service[%s]", s.name)
 	verbs, held := s.actions(id, running, enabled)
 	if len(verbs) == 0 {
-		if held {
-			// A restart/reload was requested but the gate held it and
-			// nothing else needed doing: report skipped, not ok.
-			resource.Note(id, resource.StatusSkipped)
-			return nil
-		}
-		resource.NoteResult(id, false)
+		// Nothing to do: skipped when the gate held a requested
+		// restart/reload, ok when already converged.
+		resource.NoteIdle(id, held)
 		return nil
 	}
 	return runActions(id, b, u, verbs)
@@ -50,8 +46,10 @@ func (s *Service) applyWith(b backend) error {
 // actions returns the ordered verbs that move s from the probed state to
 // its desired state. Absent stops before disabling; present enables before
 // starting. A running present service gets its restart/reload (reload wins
-// when both are set) unless the change gate holds it, which is reported via
-// held. State convergence (enable/start/stop/disable) is never gated.
+// when both are set) unless the change gate holds it (embed.ChangeGate.Holds:
+// armed by OnChange and no watched resource changed this apply), which is
+// reported via held. State convergence (enable/start/stop/disable) is never
+// gated — only the once-per-change action is.
 func (s *Service) actions(id string, running, enabled bool) (verbs []verb, held bool) {
 	if s.Absent {
 		if running {
@@ -70,8 +68,8 @@ func (s *Service) actions(id string, running, enabled bool) (verbs []verb, held 
 		verbs = append(verbs, verbStart)
 	case !s.reload && !s.restart:
 		// Running and no restart/reload requested: nothing more to do.
-	case s.gateHolds():
-		logger.Debug("%s: restart/reload held by change gate (no watched dependency changed)", id)
+	case s.Holds(resource.AnyChanged):
+		s.LogHeld(id, "restart/reload")
 		held = true
 	case s.reload:
 		verbs = append(verbs, verbReload)

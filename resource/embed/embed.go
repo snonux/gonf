@@ -3,7 +3,11 @@
 // redeclared.
 package embed
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/snonux/gonf/internal/logger"
+)
 
 // DependsOn is embedded into concrete resource types to give them the ability
 // to accumulate dependency IDs supplied via the DependsOn option.
@@ -54,10 +58,17 @@ func (a *Absence) SetAbsent() { a.Absent = true }
 
 // ChangeGate is embedded into concrete resource types whose mutating action
 // can be gated on watched resources' change reports (the OnChange option).
-// The gate arms at registration time and is consulted at apply time via
-// resource.AnyChanged: a gated action runs only when one of the watched
-// resources reported a change (or would change, under dry-run) during the
-// current apply.
+// The gate arms at registration time and is consulted at apply time (Holds):
+// a gated action runs only when one of the watched resources reported a
+// change (or would change, under dry-run) during the current apply.
+//
+// Besides the state, the embed owns the gate's behaviour (arming, the hold
+// predicate, the held-action log line, and the plan-draft wiring) so every
+// gated resource shares one copy. It stays a leaf package: the change oracle (resource.AnyChanged) is
+// passed in and draft values are returned rather than written into a
+// resource.PlanDraft, so embed never imports resource (only the leaf
+// internal/logger, for LogHeld) and resource may use embed without an import
+// cycle.
 type ChangeGate struct {
 	// Gated arms the change gate. Unarmed (false) means the resource's
 	// mutating action runs unconditionally.
@@ -75,4 +86,52 @@ type ChangeGate struct {
 func (c *ChangeGate) SetChangeWatch(ids []string) {
 	c.Gated = true
 	c.Watch = append(c.Watch, ids...)
+}
+
+// Arm arms the gate without adding watched ids. Daemon-reload's own
+// SetIfChanged (the legacy IfChanged option, opt.ChangeGated) delegates to
+// it; its watch list then comes from WithWatch or, failing that, from the
+// DependsOn ids. The embed deliberately does not provide SetIfChanged
+// itself: that would make every embedder satisfy opt.ChangeGated, so an
+// IfChanged option passed through the type-erased opt.Option path would
+// silently arm a Service, Timer or Command (with nothing to watch, holding
+// its action forever) instead of being rejected as unsupported.
+func (c *ChangeGate) Arm() { c.Gated = true }
+
+// LogHeld logs, at debug level, that the gate held the named action of the
+// resource id this apply. It is the single copy of the operator-visible
+// wording shared by every resource whose gated action is part of a larger
+// convergence (Service's restart/reload, Timer's restart).
+func (c *ChangeGate) LogHeld(id, action string) {
+	logger.Debug("%s: %s held by change gate (no watched dependency changed)", id, action)
+}
+
+// ChangeOracle reports whether any of ids changed (or would change, under
+// dry-run) during the current apply. resource.AnyChanged is the production
+// oracle; tests may pass a stub.
+type ChangeOracle func(ids ...string) bool
+
+// Holds reports whether the gate suppresses the gated action this apply:
+// it is armed and none of the watched ids changed according to changed. An
+// armed gate whose watched ids never reported (unknown ids) holds too.
+func (c *ChangeGate) Holds(changed ChangeOracle) bool {
+	return c.HoldsWatching(changed, c.Watch)
+}
+
+// HoldsWatching is Holds for a resource that derives its effective watch
+// list itself (daemon-reload merges legacy WithWatch ids and falls back to
+// its DependsOn ids) instead of watching exactly Watch.
+func (c *ChangeGate) HoldsWatching(changed ChangeOracle, watch []string) bool {
+	return c.Gated && !changed(watch...)
+}
+
+// DraftGate returns the plan-draft change-gate fields (PlanDraft.IfChanged
+// and PlanDraft.Watch): whether the gate is armed, and a copy of the watched
+// ids when it is (nil otherwise, so the wire field stays omitted). The copy
+// keeps a recorded draft from aliasing the resource's slice.
+func (c *ChangeGate) DraftGate() (ifChanged bool, watch []string) {
+	if !c.Gated {
+		return false, nil
+	}
+	return true, append([]string(nil), c.Watch...)
 }

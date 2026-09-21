@@ -98,6 +98,20 @@ func NoteResult(id string, changed bool) {
 	Note(id, st)
 }
 
+// NoteIdle notes a resource that had no action to perform this apply. held
+// reports that a change gate suppressed its gated action (e.g. a
+// restart/reload armed by OnChange with no watched change): that is noted
+// StatusSkipped so the summary shows the held action, otherwise the resource
+// was simply already converged and is noted StatusOK. Service and Timer share
+// it so both report a held gate identically.
+func NoteIdle(id string, held bool) {
+	if held {
+		Note(id, StatusSkipped)
+		return
+	}
+	NoteResult(id, false)
+}
+
 // AnyChanged reports whether any of ids was noted as StatusChanged or
 // StatusWouldChange. For a Directory[path] id, File notes under that path
 // also count (so SyncDir file updates gate daemon-reload).

@@ -13,6 +13,9 @@ import (
 )
 
 // DaemonReloadResource runs systemctl daemon-reload (optionally --user).
+// The embedded ChangeGate supplies OnChange arming (SetChangeWatch); the
+// legacy IfChanged option arms it through SetIfChanged below, which only
+// daemon-reload implements.
 type DaemonReloadResource struct {
 	embed.DependsOn
 	embed.ChangeGate
@@ -20,8 +23,12 @@ type DaemonReloadResource struct {
 	legacyWatch []string // WithWatch target ids; merged with OnChange watches
 }
 
-func (d *DaemonReloadResource) SetUser()      { d.user = true }
-func (d *DaemonReloadResource) SetIfChanged() { d.Gated = true }
+func (d *DaemonReloadResource) SetUser() { d.user = true }
+
+// SetIfChanged implements opt.ChangeGated (the legacy IfChanged option) by
+// arming the embedded gate. It lives here rather than on embed.ChangeGate so
+// that only daemon-reload accepts IfChanged; other gated resources reject it.
+func (d *DaemonReloadResource) SetIfChanged() { d.Arm() }
 
 // SetWatch sets the explicit legacy IfChanged watch ids. They are merged with
 // OnChange targets so composing legacy WithWatch and OnChange is order
@@ -62,6 +69,12 @@ func Ensure(opts ...opt.DaemonReloadOption) error {
 	return d.apply()
 }
 
+// planDraft records the daemon-reload op. Unlike the other gated kinds it
+// does not use ChangeGate.DraftGate: Watch is the effective merged list
+// (watchIDs) and is recorded even when the gate is unarmed. Recorded plans
+// already carry that shape, so it is kept for byte-stable plans, but the
+// unarmed Watch is inert: destination apply (planHandler.Apply) reads
+// op.Watch only when op.IfChanged is set and ignores it otherwise.
 func (d *DaemonReloadResource) planDraft(id string) resource.PlanDraft {
 	watch := d.watchIDs()
 	return resource.PlanDraft{
@@ -83,13 +96,12 @@ func (d *DaemonReloadResource) apply() error {
 		return fmt.Errorf("%s: %w", id, err)
 	}
 
-	if d.Gated {
-		watch := d.watchIDs()
-		if !resource.AnyChanged(watch...) {
-			resource.Note(id, resource.StatusSkipped)
-			logger.Debug("%s: skipped (no watched dependency changed)", id)
-			return nil
-		}
+	// The gate consults the effective watch list (watchIDs), not only the
+	// embed's OnChange ids, hence HoldsWatching rather than Holds.
+	if d.HoldsWatching(resource.AnyChanged, d.watchIDs()) {
+		resource.Note(id, resource.StatusSkipped)
+		logger.Debug("%s: skipped (no watched dependency changed)", id)
+		return nil
 	}
 
 	args := Args(d.user, "daemon-reload")

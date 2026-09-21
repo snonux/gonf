@@ -5,6 +5,28 @@ import (
 	"testing"
 )
 
+// TestCaptureForTest pins the test seam: output is captured without
+// timestamps at the requested level, lines above it are dropped, and
+// restore reinstates the previous level.
+func TestCaptureForTest(t *testing.T) {
+	SetLevel(LevelWarn)
+	t.Cleanup(func() { SetLevel(LevelInfo) })
+	output, restore := CaptureForTest(LevelInfo)
+	Info("hello %s", "world")
+	Debug("dropped")
+	restore()
+	if got := output(); got != "hello world\n" {
+		t.Errorf("captured %q, want %q", got, "hello world\n")
+	}
+	if GetLevel() != LevelWarn {
+		t.Errorf("level after restore = %v, want LevelWarn", GetLevel())
+	}
+	Info("after restore")
+	if got := output(); got != "hello world\n" {
+		t.Errorf("capture kept writing after restore: %q", got)
+	}
+}
+
 // TestOnFatalHooksRunNewestFirstOnce pins the hook contract Fatal relies on
 // (Fatal itself calls os.Exit, so runFatalHooks is exercised directly; the
 // end-to-end exit is covered by api's TestRecordPlanFatalRemovesStaging).

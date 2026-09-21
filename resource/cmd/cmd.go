@@ -129,10 +129,7 @@ func (c *Cmd) planDraft(id string) resource.PlanDraft {
 	d.Unless = planGuardDraft(c.unless)
 	d.OnlyIf = planGuardDraft(c.onlyIf)
 	d.Elevate = c.elevate
-	d.IfChanged = c.Gated
-	if d.IfChanged {
-		d.Watch = append([]string(nil), c.Watch...)
-	}
+	d.IfChanged, d.Watch = c.DraftGate()
 	return d
 }
 
@@ -163,7 +160,9 @@ func defaultName(bin string, args []string) string {
 func (c *Cmd) Apply() error { return c.apply() }
 
 func (c *Cmd) apply() error {
-	if c.Gated && !resource.AnyChanged(c.Watch...) {
+	// The change gate (OnChange) is checked first: a held command is skipped
+	// entirely, before any Creates/Unless/OnlyIf probe runs.
+	if c.Holds(resource.AnyChanged) {
 		logger.Info("skipping %s: no watched dependency changed", c.id())
 		resource.Note(c.id(), resource.StatusSkipped)
 		return nil

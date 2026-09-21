@@ -149,20 +149,43 @@ func (t *SystemdTimer) apply() error {
 	timerFileID := fmt.Sprintf("File[%s]", timerPath)
 
 	if t.Absent {
-		if err := t.applyAbsent(svcPath, timerPath, svcID, timerFileID); err != nil {
-			return fmt.Errorf("%s: %w", id, err)
-		}
-		resource.NoteResult(id, resource.AnyChanged(svcID, timerFileID,
-			daemonReloadID(t.user), fmt.Sprintf("Timer[%s]", t.name)))
-		return nil
+		err = t.applyAbsent(svcPath, timerPath, svcID, timerFileID)
+	} else {
+		err = t.applyPresent(dir, svcPath, timerPath, svcID, timerFileID)
 	}
-
-	if err := t.applyPresent(dir, svcPath, timerPath, svcID, timerFileID); err != nil {
+	if err != nil {
 		return fmt.Errorf("%s: %w", id, err)
 	}
+	// The composite changed when any of its parts (unit files, the
+	// daemon-reload, the timer unit) noted a change during this apply.
 	resource.NoteResult(id, resource.AnyChanged(svcID, timerFileID,
 		daemonReloadID(t.user), fmt.Sprintf("Timer[%s]", t.name)))
 	return nil
+}
+
+// ensureReload applies a daemon-reload; tests swap it to observe the options
+// both apply paths hand it without running systemctl.
+var ensureReload = systemd.Ensure
+
+// ensureDaemonReload reloads the systemd manager only when one of the unit
+// files changed. Shared by the present and absent paths so both gate the
+// reload identically.
+func (t *SystemdTimer) ensureDaemonReload(svcID, timerFileID string) error {
+	return ensureReload(t.daemonReloadOpts(svcID, timerFileID)...)
+}
+
+// daemonReloadOpts is the daemon-reload configuration for t's unit files:
+// the legacy IfChanged gate (embed.ChangeGate on the daemon-reload resource)
+// watching exactly the two unit files, on the user bus for WithUser timers.
+func (t *SystemdTimer) daemonReloadOpts(svcID, timerFileID string) []opt.DaemonReloadOption {
+	reloadOpts := []opt.DaemonReloadOption{
+		opt.IfChanged,
+		opt.WithWatch(svcID, timerFileID),
+	}
+	if t.user {
+		reloadOpts = append(reloadOpts, opt.WithUser)
+	}
+	return reloadOpts
 }
 
 func (t *SystemdTimer) applyPresent(dir, svcPath, timerPath, svcID, timerFileID string) error {
@@ -185,14 +208,7 @@ func (t *SystemdTimer) applyPresent(dir, svcPath, timerPath, svcID, timerFileID 
 		return err
 	}
 
-	reloadOpts := []opt.DaemonReloadOption{
-		opt.IfChanged,
-		opt.WithWatch(svcID, timerFileID),
-	}
-	if t.user {
-		reloadOpts = append(reloadOpts, opt.WithUser)
-	}
-	if err := systemd.Ensure(reloadOpts...); err != nil {
+	if err := t.ensureDaemonReload(svcID, timerFileID); err != nil {
 		return err
 	}
 
@@ -228,15 +244,7 @@ func (t *SystemdTimer) applyAbsent(svcPath, timerPath, svcID, timerFileID string
 	if err := file.Ensure(timerPath, opt.IsAbsent); err != nil {
 		return err
 	}
-
-	reloadOpts := []opt.DaemonReloadOption{
-		opt.IfChanged,
-		opt.WithWatch(svcID, timerFileID),
-	}
-	if t.user {
-		reloadOpts = append(reloadOpts, opt.WithUser)
-	}
-	return systemd.Ensure(reloadOpts...)
+	return t.ensureDaemonReload(svcID, timerFileID)
 }
 
 func (t *SystemdTimer) unitDir() (string, error) {

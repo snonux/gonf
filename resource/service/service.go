@@ -46,14 +46,6 @@ var (
 // hand a backend to applyWith directly.
 var detectSvcManager = detectServiceManager
 
-// gateHolds reports whether the change gate suppresses the restart/reload
-// action this apply: the gate is armed (OnChange) and none of the watched
-// resources reported a change. State convergence (enable/start/stop) is
-// never gated — only the once-per-change action is.
-func (s *Service) gateHolds() bool {
-	return s.Gated && !resource.AnyChanged(s.Watch...)
-}
-
 // Apply runs the service reconciliation directly for the legacy resource path.
 func (s *Service) Apply() error { return s.apply() }
 
@@ -106,10 +98,7 @@ func (s *Service) planDraft(id string) resource.PlanDraft {
 		User:    s.user,
 		Deps:    s.DependsOn.SortedIDs(),
 	}
-	d.IfChanged = s.Gated
-	if d.IfChanged {
-		d.Watch = append([]string(nil), s.Watch...)
-	}
+	d.IfChanged, d.Watch = s.DraftGate()
 	return d
 }
 

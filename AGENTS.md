@@ -19,6 +19,17 @@ embedded rather than redeclared:
 - `embed.DependsOn` — dependency IDs (`IDs` field) plus the `AddDependency` method.
 - `embed.Absence` — the `Absent` field plus the `SetAbsent` method (implements
   `opt.Absentable`).
+- `embed.ChangeGate` — the OnChange gate (`Gated`, `Watch`) and its behaviour:
+  arming (`SetChangeWatch`, implements `opt.ChangeWatchable`; `Arm`), the hold
+  predicate (`Holds(resource.AnyChanged)`, or `HoldsWatching` for a resource
+  that derives its own watch list), the held-action debug log (`LogHeld`) and
+  the plan-draft wiring (`DraftGate`). Gated resources call these instead of
+  re-implementing the checks; `resource.NoteIdle` reports a gate-held action
+  as skipped. Exceptions: the embed must not provide `SetIfChanged`
+  (`opt.ChangeGated`) — only daemon-reload implements it (delegating to
+  `Arm`), so the legacy `IfChanged` option stays rejected on other resources;
+  and daemon-reload keeps its own draft wiring (its merged watch list is
+  recorded even when unarmed) instead of `DraftGate`.
 
 When adding a field or capability shared by every resource type, prefer a new
 embed type here instead of duplicating the field and its setter in each resource.
