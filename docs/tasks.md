@@ -294,5 +294,7 @@ afterwards). `Activate` only filters the list for display /
 matching — it does not apply configuration by itself.
 
 Low-level `resource.Apply()` remains for tests and ad-hoc compatibility use;
-`api.Apply()` now snapshots registered drafts and uses the plan engine. See
-[plan.md](plan.md).
+`api.Apply()` now snapshots registered drafts and uses the plan engine,
+including the privilege split: a `WithElevate` command runs through the
+configured `-privilege` helper like a `Privileged()` task under `Run`. See
+[plan.md](plan.md) ("Low-level `Apply()`").

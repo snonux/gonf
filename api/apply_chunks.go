@@ -3,11 +3,14 @@ package api
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
+	"github.com/snonux/gonf/internal/clihost"
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -98,6 +101,61 @@ func defaultElevatedApply(ctx context.Context, mode privilege.Mode, ops []plan.O
 	return err
 }
 
+// processEUID is os.Geteuid; a variable so tests can pin the mode-none
+// refusal (and the in-process root branch) whatever user runs them.
+var processEUID = os.Geteuid
+
+// errNoCLIHost refuses the elevated re-exec in a process that does not run
+// gonf's CLI (see internal/clihost): re-executing such a program as
+// `<binary> apply <chunk>` would run its own main again as root.
+var errNoCLIHost = errors.New("privileged apply re-executes this binary as `<binary> apply <chunk>`, " +
+	"which only works in a program whose main calls cli.CLI(); run the tasks through the gonf CLI " +
+	"(e.g. `gonf <task>`), or drop WithElevate/Privileged()")
+
+// preflightElevation refuses, before ANY chunk is applied, a plan whose
+// elevated chunks could not run: with privilege mode none a non-root process
+// has no way to elevate (the re-exec would fail only after the unprivileged
+// chunks before it had mutated the host), and the sudo/doas re-exec needs a
+// binary built on gonf's CLI (errNoCLIHost). Mode none as root needs neither:
+// its elevated chunks apply in-process. A plan without elevated chunks is
+// never refused here.
+func preflightElevation(chunks []plan.Chunk, mode privilege.Mode) error {
+	ids := elevatedIDs(chunks)
+	if len(ids) == 0 {
+		return nil
+	}
+	if mode == privilege.None {
+		if processEUID() == 0 {
+			return nil
+		}
+		return fmt.Errorf("privileged ops %s need elevation, but the privilege mode is none and "+
+			"this process is not root: set -privilege sudo|doas (api.SetPrivilege) or run as root",
+			strings.Join(ids, ", "))
+	}
+	if !clihost.Active() {
+		return fmt.Errorf("privileged ops %s: %w", strings.Join(ids, ", "), errNoCLIHost)
+	}
+	return nil
+}
+
+// elevatedIDs lists the op IDs of the elevated chunks, in chunk order, for a
+// refusal message. Control ops (the chunk header, when_* markers) carry no ID
+// worth naming and are skipped.
+func elevatedIDs(chunks []plan.Chunk) []string {
+	var ids []string
+	for _, ch := range chunks {
+		if !ch.Elevate {
+			continue
+		}
+		for _, op := range ch.Ops {
+			if op.ID != "" && !plan.IsControlKind(op.Op) {
+				ids = append(ids, op.ID)
+			}
+		}
+	}
+	return ids
+}
+
 // ApplyChunks splits ops by elevate and applies each chunk: user chunks
 // in-process, privileged chunks via sudo/doas re-exec (or in-process if
 // root). Under resource.DryRun(), the elevated re-exec (built by
@@ -110,7 +168,10 @@ func defaultElevatedApply(ctx context.Context, mode privilege.Mode, ops []plan.O
 // plan, instead of the child re-detecting the profile from the actual host.
 // A plan.ValidateChunks pre-flight runs first: a dep recorded in a later chunk
 // (or dangling) fails before any chunk is applied, so a rejected plan
-// mutates nothing.
+// mutates nothing. preflightElevation then refuses, also before any chunk,
+// elevated chunks that could not run: mode none in a non-root process, or a
+// process not running gonf's CLI (whose re-exec would re-run its own main as
+// root). This covers Run, which applies through ApplyChunksContext.
 //
 // ApplyChunks itself runs without a caller-supplied context (equivalent to
 // ApplyChunksContext(context.Background(), ...)): this is the signature
@@ -139,6 +200,9 @@ func ApplyChunksContext(ctx context.Context, ops []plan.Op, planDir string, mode
 	if err := plan.ValidateChunks(chunks); err != nil {
 		return err
 	}
+	if err := preflightElevation(chunks, mode); err != nil {
+		return err
+	}
 	for i, ch := range chunks {
 		if !ch.Elevate {
 			if err := ApplyPlan(ch.Ops, planDir); err != nil {
@@ -149,7 +213,7 @@ func ApplyChunksContext(ctx context.Context, ops []plan.Op, planDir string, mode
 		// LOCAL apply re-exec: this process's euid is the correct authority
 		// here. Remote pushes must NEVER make this decision from the
 		// controller's euid — see privilege.WrapApplyCmd's doc comment.
-		if mode == privilege.None && os.Geteuid() == 0 {
+		if mode == privilege.None && processEUID() == 0 {
 			if err := ApplyPlan(ch.Ops, planDir); err != nil {
 				return fmt.Errorf("chunk %d: %w", i, err)
 			}

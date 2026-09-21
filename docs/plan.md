@@ -34,7 +34,7 @@ wherever the **whole plan** is in hand, before anything is applied or uploaded:
 | record time (`api.RecordPlanTo`) | `gonf <task>`, `gonf plan`, push, cluster, fleet — dangling and forward cross-chunk deps, and cross-chunk change watches; the refused plan is never shipped or applied, and `gonf plan -o dir` writes nothing (see below) |
 | `api.ApplyChunks` | local apply of an already-recorded plan (same checks) |
 | `remote.Delivery.ToHost` | every SSH push and strict preview (single target, cluster, fleet), before any SSH traffic (same checks) |
-| `api.Apply` | registered resources, split into privilege chunks like `Run` after a dependency sort (see "Low-level `Apply()`"); without elevated ops the plan is one chunk, so only dangling deps and watches can fail, and with them a watch crossing the privilege boundary is refused too |
+| `api.Apply` | registered resources, split into privilege chunks like `Run` after a dependency sort (see "Low-level `Apply()`"); without elevated ops the plan is one chunk, so only dangling deps and watches can fail; with them a dependency cycle and a watch crossing the privilege boundary are refused too |
 
 All four run the one helper `plan.ValidateChunks` (dependency direction, then
 change-gate locality), so the checks cannot drift apart. `Run` therefore
@@ -335,11 +335,12 @@ if err := ApplyPlan(ops, planDir); err != nil { /* … */ }
   satisfied at chunk level (an earlier chunk or invocation applied it).
   `plan.Apply` itself cannot tell a dep applied by an earlier chunk from a
   typo'd one; the controller-side pre-flight (`plan.ValidateChunks`, run at
-  record time and by `ApplyChunks`, `remote.Delivery.ToHost` and `api.Apply`, but
-  not when a single chunk is executed — see "Where dependencies are checked")
+  record time and by `ApplyChunks`, `remote.Delivery.ToHost` and
+  `api.Apply`, but not when a single chunk is executed — see "Where dependencies are checked")
   refuses dangling deps and forward cross-chunk deps before anything is
-  applied (`api.Apply` dependency-sorts its ops before splitting them, so
-  forward deps cannot arise there and it only sees the dangling ones).
+  applied. `api.Apply` with elevated ops sorts its ops by dependency before
+  splitting them, so for it a forward cross-chunk dep can only come from a
+  dependency cycle, which the sort itself refuses first.
 - Stackable `when_begin` / `when_end`: failed predicates skip the body
   without touching the filesystem.
 - A `when_begin` carrying `require` (v20) is a requirement: a failed
@@ -993,16 +994,18 @@ its dependent crosses the privilege boundary — apply cannot reorder across
 chunks — and is rejected before anything is applied by a controller-side
 pre-flight (`plan.ValidateChunks`, run at record time and by `ApplyChunks` and
 `remote.Delivery.ToHost`); on push or preview the refusal happens before any
-SSH traffic. The
-same pre-flight refuses dangling deps (naming no recorded resource at all).
-`api.Apply` has no meaningful recorded order (its drafts are sorted by
-resource ID), so it puts its ops into dependency order before splitting; a
-forward dep never reaches its pre-flight, which only refuses dangling deps
-and change watches that cross the privilege boundary.
+SSH traffic. The same pre-flight refuses dangling deps (naming no recorded
+resource at all).
 Executing or pushing a single chunk (`api.ApplyPlan`, `api.PushPayload`,
 `api.PushPayloadContext`, `gonf apply <plan.jsonl|->`) does not re-run it.
-Elevation ordering stays fixed by recorded order; reordering across chunks
-would defeat the privilege split.
+For recorded plans (`Run`, `gonf plan`, push, cluster, fleet, `gonf apply`)
+the chunk order stays fixed by recorded order: chunks are never reordered
+after the split. `api.Apply` is the exception: its ops have no meaningful
+recorded order (its drafts are sorted by resource ID), so when an op is
+elevated it chooses the order itself BEFORE splitting: a dependency sort
+with as few chunks as the graph allows (see "Low-level `Apply()`"). After
+that sort a forward cross-chunk dep can only come from a dependency cycle,
+which Apply refuses, naming the cycle, before any chunk applies.
 
 ## JSONL sketch
 
@@ -1026,17 +1029,34 @@ engine as `Run`, including dependency ordering and source/blob packaging.
 
 It also honours the privilege split like `Run` and `gonf apply`. When an op
 is elevated (a `Command` with `WithElevate`), Apply sorts the ops by
-dependency, keeping each privilege class together where the dependencies
-allow it, and splits them with `plan.SplitPrivilegeChunks`. `api.ApplyChunks`
-then applies the chunks in order under the process-wide privilege mode
-(`api.SetPrivilege`, the CLI `-privilege` flag). An elevated chunk is
-re-executed as `<this binary> apply <chunk>` through sudo/doas, or runs
-in-process when the mode is `none` and the process is already root. The
-re-exec needs a binary whose command line understands `apply`, which any
-program built on gonf's CLI does, as for `Run`. Before this, an elevated op
+dependency, keeping each privilege class together. It tries the sort
+starting with each class and keeps the one with fewer chunks, which is the
+fewest the dependency graph allows. It then splits the ops with
+`plan.SplitPrivilegeChunks`, and `api.ApplyChunks` applies the chunks in
+order under the process-wide privilege mode (`api.SetPrivilege`, the CLI
+`-privilege` flag). An elevated chunk is re-executed as
+`<this binary> apply <chunk>` through sudo/doas, or runs in-process when the
+mode is `none` and the process is already root. Before this, an elevated op
 under `api.Apply` silently ran in-process as the calling user. A plan with
-no elevated op is one unprivileged chunk and applies exactly as before, with
-a single `api.ApplyPlan` call and the same error wording.
+no elevated op is not sorted: it is one unprivileged chunk and applies
+exactly as before, with a single `api.ApplyPlan` call and the same error
+wording.
+
+With an elevated op, Apply refuses the plan before ANY chunk applies (so
+nothing runs as root, and no unprivileged chunk mutates first) when:
+
+- the ops have a dependency cycle. The error names it, e.g.
+  `Apply: circular dependency: Command[x] -> Command[y] -> Command[x]`;
+- the privilege mode is `none` and the process is not root;
+- the process does not run gonf's CLI (`cli.CLI()`). The re-exec runs
+  `<this binary> apply <chunk>`, and in a program with its own `main` that
+  would run the program again as root, which would apply and re-exec again.
+  The CLI sets an internal marker (`internal/clihost`) and the elevated path
+  refuses without it.
+
+The last two checks live in `api.ApplyChunksContext`, so `Run` (and anything
+else applying recorded chunks locally) refuses the same way before its first
+chunk.
 
 Because it applies the whole plan, Apply first runs the dependency and
 change-gate pre-flight itself over those chunks. It does not record through

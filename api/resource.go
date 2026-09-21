@@ -20,9 +20,9 @@ type Resource interface {
 }
 
 // Apply applies every resource registered so far through the same plan engine
-// and the same privilege split used by Run: the lowered ops are put into
-// dependency order (orderForPrivilegeSplit) and cut into privilege chunks
-// (plan.SplitPrivilegeChunks), and an op marked elevate (a
+// and the same privilege split used by Run: when an op is marked elevate,
+// the lowered ops are put into dependency order (orderForPrivilegeSplit) and
+// cut into privilege chunks (plan.SplitPrivilegeChunks), and the elevated op (a
 // command with WithElevate) runs in its own chunk through the process-wide
 // privilege mode (SetPrivilege, the CLI -privilege flag) exactly as
 // ApplyChunks runs it for Run and `gonf apply`: a sudo/doas re-exec of this
@@ -33,9 +33,12 @@ type Resource interface {
 //
 // A plan without any elevated op forms one unprivileged chunk and takes
 // exactly the pre-split path (one ApplyPlan call, unprefixed errors), so
-// ordinary recipes behave as before. The elevated re-exec needs a binary
-// whose command line understands `apply` (a program built on gonf's CLI),
-// as for Run.
+// ordinary recipes behave as before. A plan with one is refused before
+// anything is applied when it has a dependency cycle, when the privilege
+// mode is none and the process is not root, or when the process does not
+// run gonf's CLI (the re-exec runs `<this binary> apply <chunk>`, which in
+// any other program would re-run its own main as root; Run refuses the same
+// way, see preflightElevation).
 //
 // Apply holds the WHOLE registered plan, so it is a controller-side entry
 // point in the same sense as ApplyChunks and remote.Delivery.ToHost: it runs
@@ -150,24 +153,49 @@ func packageApplyOps(drafts []resource.PlanDraft, store plan.BlobStore) ([]plan.
 // applies them.
 //
 // Without an elevated op the whole plan is one unprivileged chunk whose ops
-// are ops itself, so it is validated as that chunk and goes straight to
-// ApplyPlan: the pre-split behaviour and error wording of Apply, byte for
-// byte. With an elevated op the ops are first put into dependency order
-// grouped by privilege class (orderForPrivilegeSplit; Apply's draft order is
-// only a sort by resource ID), then split, validated and applied by
-// ApplyChunks under processPrivilege. ApplyChunks repeats the
-// plan.ValidateChunks pre-flight on purpose (it also serves already-recorded
-// plans); it cannot fail here, since both validate the same split.
+// are ops itself: it is validated as that chunk and goes straight to
+// ApplyPlan, unsorted — the pre-split behaviour and error wording of Apply,
+// byte for byte (a dependency cycle is still reported by the engine, before
+// it applies anything). With an elevated op, applyElevatedOps takes over.
 func applyPackagedOps(ops []plan.Op, planDir string) error {
-	elevated := anyElevated(ops)
-	if elevated {
-		ops = orderForPrivilegeSplit(ops)
+	if anyElevated(ops) {
+		return applyElevatedOps(ops, planDir)
 	}
 	if err := validateApplyDeps(plan.SplitPrivilegeChunks(ops)); err != nil {
 		return err
 	}
-	if !elevated {
-		return ApplyPlan(ops, planDir)
+	return ApplyPlan(ops, planDir)
+}
+
+// applyElevatedOps applies a plan with elevated ops as privilege chunks.
+// Everything that can refuse it runs before the first chunk applies, because
+// chunks are separate plan.Apply runs (the elevated one a separate root
+// process) and a refusal from a later chunk would come after earlier chunks
+// had mutated the host:
+//
+//   - orderForPrivilegeSplit puts the ops into dependency order with as few
+//     chunks as possible (Apply's draft order is only a sort by resource ID)
+//     and refuses a dependency cycle, naming it;
+//   - validateApplyDeps refuses dangling deps and watches crossing the
+//     privilege boundary;
+//   - preflightElevation refuses elevated chunks that could not run: mode
+//     none in a non-root process, or a process not running gonf's CLI, whose
+//     sudo/doas re-exec would run its own main again as root.
+//
+// ApplyChunks then repeats the last two checks on purpose (it also serves
+// already-recorded plans and Run); they cannot fail there, since both run
+// over the same split.
+func applyElevatedOps(ops []plan.Op, planDir string) error {
+	ops, err := orderForPrivilegeSplit(ops)
+	if err != nil {
+		return err
+	}
+	chunks := plan.SplitPrivilegeChunks(ops)
+	if err := validateApplyDeps(chunks); err != nil {
+		return err
+	}
+	if err := preflightElevation(chunks, processPrivilege); err != nil {
+		return fmt.Errorf("Apply: %w", err)
 	}
 	return ApplyChunks(ops, planDir, processPrivilege)
 }
@@ -194,8 +222,8 @@ func anyElevated(ops []plan.Op) bool {
 // elevated ops, chunks apply in order as separate plan.Apply runs, so the
 // same rules as for Run and push hold: a watch across chunks is refused (the
 // gate could never see the other process's change report), and so is a dep
-// on a LATER chunk, which orderForPrivilegeSplit rules out except for a
-// dependency cycle, left in place for the pre-flight or engine to report.
+// on a LATER chunk, which orderForPrivilegeSplit's sort rules out for Apply
+// (it refuses a dependency cycle itself, before this check).
 //
 // The refusal is re-worded in registered-resource terms with a single "Apply:"
 // prefix (preflightChunks), while errors.As still finds the typed

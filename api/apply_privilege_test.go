@@ -212,31 +212,48 @@ func TestApplyStopsAtFailedElevatedChunk(t *testing.T) {
 }
 
 // TestOrderForPrivilegeSplit pins the ordering Apply splits: deps first,
-// privilege classes kept together while the graph allows (fewest chunks),
-// ties in incoming order, and a cycle left untouched for the engine to
-// report.
+// privilege classes kept together, the fewer-chunk order of the two starting
+// classes, ties in incoming order, and a cycle refused with the cycle named.
 func TestOrderForPrivilegeSplit(t *testing.T) {
 	hdr := plan.Op{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "apply"}
 	op := func(id string, elevate bool, deps ...string) plan.Op {
 		return plan.Op{Op: plan.KindCommand, Bin: "true", ID: id, Elevate: elevate, Deps: deps}
 	}
 	cases := []struct {
-		name string
-		ops  []plan.Op
-		want []string
+		name    string
+		ops     []plan.Op
+		want    []string
+		wantErr string
 	}{
 		{name: "dependency before dependent", ops: []plan.Op{hdr, op("a", false, "c"), op("b", true, "c"), op("c", false)},
 			want: []string{"c", "a", "b"}},
 		{name: "classes grouped", ops: []plan.Op{hdr, op("a", true), op("b", false), op("c", true), op("d", false)},
 			want: []string{"a", "c", "b", "d"}},
+		// Starting with a's class gives a|b|c (3 chunks); starting with the
+		// elevated class gives b|a,c (2 chunks), which must win.
+		{name: "fewest chunks over both starting classes", ops: []plan.Op{hdr, op("a", false), op("b", true), op("c", false, "b")},
+			want: []string{"b", "a", "c"}},
+		{name: "equal chunk counts keep the lowest-index start", ops: []plan.Op{hdr, op("a", false), op("b", true)},
+			want: []string{"a", "b"}},
 		{name: "dangling dep ignored", ops: []plan.Op{hdr, op("a", true, "typo"), op("b", false)},
 			want: []string{"a", "b"}},
-		{name: "cycle unchanged", ops: []plan.Op{hdr, op("a", true, "b"), op("b", false, "a")},
-			want: []string{"a", "b"}},
+		{name: "cycle refused", ops: []plan.Op{hdr, op("a", true, "b"), op("b", false, "a")},
+			wantErr: "Apply: circular dependency: a -> b -> a"},
+		{name: "cycle behind an acyclic prefix", ops: []plan.Op{hdr, op("e", true), op("x", false, "y"), op("y", false, "x"), op("z", false, "x")},
+			wantErr: "Apply: circular dependency: x -> y -> x"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := orderForPrivilegeSplit(tc.ops)
+			got, err := orderForPrivilegeSplit(tc.ops)
+			if tc.wantErr != "" {
+				if err == nil || !strings.HasPrefix(err.Error(), tc.wantErr) {
+					t.Fatalf("orderForPrivilegeSplit() error = %v, want prefix %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("orderForPrivilegeSplit() error = %v", err)
+			}
 			if got[0].Op != plan.KindPlan {
 				t.Fatalf("header moved: %+v", got[0])
 			}
