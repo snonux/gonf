@@ -37,7 +37,12 @@ func (d *DaemonReloadResource) SetWatch(ids []string) {
 	d.legacyWatch = append([]string(nil), ids...)
 }
 
+// Interface assertions. resource.Register takes a DaemonReloadResource as a
+// resource.Applier, so that contract is pinned here too: a renamed or
+// re-signed Apply is reported at the declaration rather than at the Register
+// call.
 var (
+	_ resource.Applier    = (*DaemonReloadResource)(nil)
 	_ opt.UserService     = (*DaemonReloadResource)(nil)
 	_ opt.Dependable      = (*DaemonReloadResource)(nil)
 	_ opt.ChangeGated     = (*DaemonReloadResource)(nil)
@@ -45,11 +50,20 @@ var (
 	_ opt.ChangeWatchable = (*DaemonReloadResource)(nil)
 )
 
-// Present registers a daemon-reload resource.
+// Present registers a daemon-reload resource. The resource is a singleton
+// per systemd bus and recipe scope (its ID is DaemonReload[system] or
+// DaemonReload[user]): when the scope already registered a reload on the
+// same bus — a second SystemdUnits composition, or an explicit DaemonReload
+// next to one — the new declaration merges into the existing one (see
+// mergeInto) and the existing resource is returned, so every caller depends
+// on the one reload that watches all of their inputs.
 func Present(opts ...opt.DaemonReloadOption) resource.Resource {
 	d := &DaemonReloadResource{}
 	for _, o := range opts {
 		o.Apply(d)
+	}
+	if r, prev, ok := registeredReload(d.id()); ok {
+		return prev.mergeInto(r, d)
 	}
 	name := "system"
 	if d.user {

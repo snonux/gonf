@@ -33,6 +33,21 @@ import (
 //
 // FanIn is required: a unit set with nothing to watch can never gate its
 // reload, so calling without watchable inputs is registration-time misuse.
+//
+// The composed daemon-reload is the per-bus singleton DaemonReload[system]
+// or DaemonReload[user] (see systemd.Present), so SystemdUnits composes
+// safely more than once per recipe scope: a second composition on the same
+// bus, or an explicit DaemonReload there, merges into the reload already
+// registered, which then watches and depends on the union of every FanIn.
+// Each composition's activations still watch only their own FanIn, so a
+// changed input restarts only the units that declared it. Compositions on
+// different buses keep separate reloads. The merge amends the recorded
+// reload op in place, which is refused (fail-fast, naming both watch lists)
+// when a when-block boundary or privilege change separates the two
+// declarations, or when the new declaration's inputs already depend on the
+// reload (an input declared with DependsOn(an earlier composition), or that
+// composition passed to FanIn), which would form a dependency cycle. A
+// single composition records exactly what it did before.
 func SystemdUnits(opts ...SystemdUnitsOption) Resource {
 	cfg := &systemdUnitsConfig{}
 	for _, o := range opts {
@@ -40,47 +55,67 @@ func SystemdUnits(opts ...SystemdUnitsOption) Resource {
 	}
 	watch := cfg.watchedIDs()
 	deps := cfg.watchedDeps()
-	for _, a := range cfg.timers {
+	cfg.checkActivationNames()
+
+	reload := cfg.composedReload(watch, deps)
+	members := make([]resource.Resource, 0, 1+len(cfg.timers)+len(cfg.services))
+	members = append(members, reload)
+	return resource.Multi(cfg.activate(members, reload, watch, deps))
+}
+
+// checkActivationNames fails fast on an empty ActivateTimer/ActivateService
+// name before anything of the composition is registered.
+func (c *systemdUnitsConfig) checkActivationNames() {
+	for _, a := range c.timers {
 		if a.name == "" {
 			logger.Fatal("SystemdUnits: ActivateTimer name must not be empty")
 		}
 	}
-	for _, a := range cfg.services {
+	for _, a := range c.services {
 		if a.name == "" {
 			logger.Fatal("SystemdUnits: ActivateService name must not be empty")
 		}
 	}
+}
 
+// composedReload declares the bus's daemon-reload, change-gated on and
+// ordered after the FanIn inputs. systemd.Present returns the scope's
+// existing reload on this bus when one is already registered, after merging
+// this composition's watches and deps into it.
+func (c *systemdUnitsConfig) composedReload(watch []string, deps []resource.Dependency) resource.Resource {
 	reloadOpts := []options.DaemonReloadOption{
 		options.WatchChanges(watch...),
 		options.DependsOn(deps...),
 	}
-	if cfg.user {
+	if c.user {
 		reloadOpts = append(reloadOpts, options.WithUser)
 	}
-	reload := systemd.Present(reloadOpts...)
+	return systemd.Present(reloadOpts...)
+}
 
-	members := make([]resource.Resource, 0, 1+len(cfg.timers)+len(cfg.services))
-	members = append(members, reload)
-	for _, a := range cfg.timers {
+// activate registers the timer and service activations (in that order),
+// each after the reload and the FanIn inputs and gated on this
+// composition's own inputs only, and appends them to members.
+func (c *systemdUnitsConfig) activate(members []resource.Resource, reload resource.Resource, watch []string, deps []resource.Dependency) []resource.Resource {
+	for _, a := range c.timers {
 		timerOpts := slices.Clone(a.opts)
-		if cfg.user {
+		if c.user {
 			timerOpts = append(timerOpts, options.WithUser)
 		}
 		timerOpts = append(timerOpts,
 			options.DependsOn(reload), options.DependsOn(deps...), options.WatchChanges(watch...))
 		members = append(members, timer.Present(a.name, timerOpts...))
 	}
-	for _, a := range cfg.services {
+	for _, a := range c.services {
 		svcOpts := slices.Clone(a.opts)
-		if cfg.user {
+		if c.user {
 			svcOpts = append(svcOpts, options.WithUser)
 		}
 		svcOpts = append(svcOpts,
 			options.DependsOn(reload), options.DependsOn(deps...), options.WatchChanges(watch...))
 		members = append(members, svc.Present(a.name, svcOpts...))
 	}
-	return resource.Multi(members)
+	return members
 }
 
 // SystemdUnitsOption configures a SystemdUnits composition.
@@ -138,10 +173,11 @@ func (c *systemdUnitsConfig) watchedDeps() []resource.Dependency {
 
 // FanIn declares the managed inputs of a SystemdUnits set: unit files,
 // drop-ins, and the scripts or defaults those units run. Every input fans
-// into the single composed daemon-reload and into every activation's change
-// gate, so one changed file reloads systemd once and restarts only the units
-// whose activation requested a restart policy. Multi resources (for example
-// SyncDir results) expand to their members.
+// into the bus's single daemon-reload (shared with any other composition on
+// that bus in the same recipe scope) and into every activation's change
+// gate of this composition, so one changed file reloads systemd once and
+// restarts only the units whose activation requested a restart policy.
+// Multi resources (for example SyncDir results) expand to their members.
 func FanIn(inputs ...Resource) SystemdUnitsOption {
 	return func(c *systemdUnitsConfig) {
 		c.inputs = append(c.inputs, inputs...)

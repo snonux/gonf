@@ -122,19 +122,33 @@ func AnyChanged(ids ...string) bool {
 		if noteChangedLocked(id) {
 			return true
 		}
-		if dirPath, ok := directoryNotePath(id); ok {
-			prefix := idPrefix("File") + dirPath
-			for _, n := range notes {
-				if !isChangeStatus(n.st) {
-					continue
-				}
-				if n.id == prefix+"]" || strings.HasPrefix(n.id, prefix+"/") || strings.HasPrefix(n.id, prefix+"\\") {
-					return true
-				}
+		if _, ok := directoryNotePath(id); !ok {
+			continue
+		}
+		for _, n := range notes {
+			if isChangeStatus(n.st) && watchCovers(id, n.id) {
+				return true
 			}
 		}
 	}
 	return false
+}
+
+// watchCovers reports whether a change of id fires a gate watching watch:
+// id is watch itself, or watch is Directory[p] and id is File[p] or a
+// File[…] under p. It is the single copy of that rule, shared by AnyChanged
+// (apply time) and RegisteredWatchTargets (merge-time ordering), so a merged
+// daemon-reload is ordered after exactly the resources that can fire it.
+func watchCovers(watch, id string) bool {
+	if id == watch {
+		return true
+	}
+	dirPath, ok := directoryNotePath(watch)
+	if !ok {
+		return false
+	}
+	prefix := idPrefix("File") + dirPath
+	return id == prefix+"]" || strings.HasPrefix(id, prefix+"/") || strings.HasPrefix(id, prefix+"\\")
 }
 
 func noteChangedLocked(id string) bool {

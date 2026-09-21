@@ -19,9 +19,10 @@ import (
 // It deliberately replaces six loose package globals with one struct so the
 // fields stay together and reset in a single place (reset). Recording is
 // single-goroutine (fleet records centrally before fan-out), so no mutex
-// guards it. The other two members of the record-mode trio — plan
-// recording and the resource draft recorder — are set together with this
-// session by RecordPlanTo; see plan/record.go and resource/draft.go.
+// guards it. The other members of the record-mode set — plan recording,
+// the resource draft recorder and the resource draft amender — are set
+// together with this session by RecordPlanTo and cleared when it returns;
+// see plan/record.go and resource/draft.go.
 type recordingSession struct {
 	// recordingElevate is set while recording a Privileged() task body.
 	recordingElevate bool
@@ -210,21 +211,14 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 	// keeps running, so reset here to keep later sessions truthful.
 	recSession.reset()
 	resource.SetPlanDraftRecorder(func(d resource.PlanDraft) {
-		if recSession.recordingPackErr != nil {
-			return
-		}
-		if d.ID != "" {
-			recSession.recordedDraftIDs[d.ID] = true
-		}
-		op, err := packageDraft(d, store)
-		if err != nil {
-			recSession.recordingPackErr = err
-			return
-		}
-		plan.Record(op)
+		recordSessionDraft(d, store)
+	})
+	resource.SetPlanDraftAmender(func(d resource.PlanDraft) error {
+		return amendRecordedDraft(d, store)
 	})
 	defer func() {
 		resource.SetPlanDraftRecorder(nil)
+		resource.SetPlanDraftAmender(nil)
 		plan.SetRecording(false)
 	}()
 
@@ -241,6 +235,43 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 		return nil, err
 	}
 	return ops, nil
+}
+
+// recordSessionDraft is the session's draft recorder: it notes d.ID as
+// recorded for this task body, lowers d through packageDraft and appends the
+// op. The first packaging failure is stashed in recordingPackErr, and the
+// session records nothing more after it.
+func recordSessionDraft(d resource.PlanDraft, store plan.BlobStore) {
+	if recSession.recordingPackErr != nil {
+		return
+	}
+	if d.ID != "" {
+		recSession.recordedDraftIDs[d.ID] = true
+	}
+	op, err := packageDraft(d, store)
+	if err != nil {
+		recSession.recordingPackErr = err
+		return
+	}
+	plan.Record(op)
+}
+
+// amendRecordedDraft is the session's amend sink (resource.AmendRegistered):
+// it lowers d through packageDraft — the same draftToOp path, known-kind
+// check and privilege derivation as a freshly recorded draft — and replaces
+// the op recorded earlier under d.ID via plan.AmendRecorded, which refuses
+// across a when-block or privilege boundary and when the privilege it
+// derives here differs from the recorded op's. After a packaging failure the
+// session records nothing more, so there is nothing to amend either.
+func amendRecordedDraft(d resource.PlanDraft, store plan.BlobStore) error {
+	if recSession.recordingPackErr != nil {
+		return nil
+	}
+	op, err := packageDraft(d, store)
+	if err != nil {
+		return err
+	}
+	return plan.AmendRecorded(d.ID, func(plan.Op) (plan.Op, error) { return op, nil })
 }
 
 // validateRecordedPlan runs the whole-plan pre-flights (plan.ValidateChunks:

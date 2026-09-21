@@ -219,6 +219,12 @@ func NoTimer[T Path](name T, opts ...options.TimerOption) Resource {
 // DaemonReload runs systemctl daemon-reload (or --user). Prefer OnChange(unitFiles)
 // to reload only when unit files changed; the legacy DependsOn + IfChanged form
 // remains supported.
+//
+// There is one daemon-reload per systemd bus and recipe scope: a second
+// DaemonReload (or a SystemdUnits composition) on the same bus in the same
+// task body or when-fragment merges into the first (union of watches and
+// deps, change-gated only if every declaration is) and returns that same
+// resource. See docs/service.md for when a merge is refused.
 func DaemonReload(opts ...options.DaemonReloadOption) Resource {
 	return systemd.Present(opts...)
 }
