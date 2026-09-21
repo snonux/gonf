@@ -841,3 +841,145 @@ func TestVerifyStickyDirOwned(t *testing.T) {
 		t.Log("running as root: foreign-owned dirs are accepted by design (elevated-chunk flow)")
 	}
 }
+
+// captureStdout runs fn with os.Stdout redirected and returns what it wrote.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdout
+	os.Stdout = w
+	t.Cleanup(func() { os.Stdout = old })
+	fn()
+	_ = w.Close()
+	os.Stdout = old
+	out, err := io.ReadAll(r)
+	_ = r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
+}
+
+// TestCLIPlanBlobLessNeedsNoTempDir is the o62 review regression for the extra
+// failure modes staging added to `gonf plan`: a plan without blobs must not
+// depend on $TMPDIR, with -o (lazy staging) and with -stdout (no temp dir at
+// all), exactly as on the core before staging existed.
+func TestCLIPlanBlobLessNeedsNoTempDir(t *testing.T) {
+	api.ResetTasks()
+	resource.ResetRepository()
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "does-not-exist"))
+	root := t.TempDir()
+	api.Task("cli_blob_less", "", func() {
+		api.File(filepath.Join(root, "x"), options.WithContent("inline"))
+	})
+
+	planDir := filepath.Join(root, "out")
+	if code, stderr := runGonf(t, "plan", "-o", planDir, "cli_blob_less"); code != 0 {
+		t.Fatalf("plan -o exit %d with an unusable TMPDIR; stderr: %s", code, stderr)
+	}
+	raw, err := os.ReadFile(filepath.Join(planDir, "plan.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ops, err := plan.DecodePlanBytes(raw); err != nil || len(ops) < 2 {
+		t.Fatalf("plan.jsonl decode: %v, %d ops", err, len(ops))
+	}
+
+	var code int
+	out := captureStdout(t, func() { code, _ = runGonf(t, "plan", "-stdout", "cli_blob_less") })
+	if code != 0 {
+		t.Fatalf("plan -stdout exit %d with an unusable TMPDIR", code)
+	}
+	if !bytes.Equal([]byte(out), raw) {
+		t.Fatalf("-stdout output differs from the plan.jsonl of -o:\n%s\nvs\n%s", out, raw)
+	}
+}
+
+// TestCLIPlanStdoutWithBlobsStagesNothing: -stdout cannot print a plan that
+// needs blobs; it must say so, and it records in memory: with $TMPDIR pointing
+// at nothing it still reaches that message (a temp dir, or a second staging
+// pass, would fail on the missing $TMPDIR first).
+func TestCLIPlanStdoutWithBlobsStagesNothing(t *testing.T) {
+	api.ResetTasks()
+	resource.ResetRepository()
+	tmp := filepath.Join(t.TempDir(), "does-not-exist")
+	t.Setenv("TMPDIR", tmp)
+	root := t.TempDir()
+	big := filepath.Join(root, "big")
+	if err := os.WriteFile(big, bytes.Repeat([]byte("B"), plan.MaxInlineContent+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	api.Task("cli_big", "", func() { api.InstallFile(filepath.Join(root, "dst"), big) })
+
+	var code int
+	var stderr string
+	out := captureStdout(t, func() { code, stderr = runGonf(t, "plan", "-stdout", "cli_big") })
+	if code != 1 || !strings.Contains(stderr, "-stdout cannot emit plans that need blobs/") {
+		t.Fatalf("exit %d, stderr %q; want exit 1 and the blobs/ refusal", code, stderr)
+	}
+	if out != "" {
+		t.Fatalf("stdout = %q, a refused plan prints nothing", out)
+	}
+	if _, err := os.Lstat(tmp); !os.IsNotExist(err) {
+		t.Fatalf("$TMPDIR path exists (%v), -stdout must not write to disk", err)
+	}
+}
+
+// TestCLIPlanRefusesUnusableOutputUpFront: an unusable -o path fails BEFORE
+// any task body runs (it did on the core before staging: SecureDir came
+// first), creates nothing, and a usable absent path still works.
+func TestCLIPlanRefusesUnusableOutputUpFront(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "a-file")
+	if err := os.WriteFile(file, []byte("not a dir"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ran := false
+	register := func() {
+		api.ResetTasks()
+		resource.ResetRepository()
+		ran = false
+		api.Task("cli_probe", "", func() { ran = true })
+	}
+	for name, out := range map[string]string{
+		"output is a file":           file,
+		"parent of output is a file": filepath.Join(file, "sub"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			register()
+			before := testutil.Snapshot(t, root)
+			code, stderr := runGonf(t, "plan", "-o", out, "cli_probe")
+			if code != 1 || !strings.HasPrefix(stderr, "plan: RecordPlan: plan dir: ") {
+				t.Fatalf("exit %d, stderr %q; want exit 1 and a \"plan: RecordPlan: plan dir: \" error", code, stderr)
+			}
+			if ran {
+				t.Fatal("the task body ran; an unusable -o must fail before any body")
+			}
+			testutil.RequireUnchanged(t, before, root)
+		})
+	}
+
+	register()
+	good := filepath.Join(root, "new", "nested")
+	if code, stderr := runGonf(t, "plan", "-o", good, "cli_probe"); code != 0 || !ran {
+		t.Fatalf("usable absent -o: exit %d (body ran: %v), stderr: %s", code, ran, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(good, "plan.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestCLIPlanErrorPrefixes documents which prefixes a failed `gonf plan` shows
+// (see planToDir): a pre-flight refusal carries "RecordPlan: ", an unknown task
+// does not - the command only adds its own "plan: ".
+func TestCLIPlanErrorPrefixes(t *testing.T) {
+	api.ResetTasks()
+	resource.ResetRepository()
+	code, stderr := runGonf(t, "plan", "-o", filepath.Join(t.TempDir(), "o"), "pkg_no_such_task")
+	if code != 1 || !strings.HasPrefix(stderr, `plan: unknown task "pkg_no_such_task"`) || strings.Contains(stderr, "RecordPlan:") {
+		t.Fatalf("exit %d, stderr %q; want exit 1 and `plan: unknown task ...` without a RecordPlan prefix", code, stderr)
+	}
+}

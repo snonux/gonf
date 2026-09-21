@@ -120,16 +120,28 @@ func (s *recordingSession) reset() {
 // planDir/blobs/. planDir may be empty when no SyncDir or large-file packaging
 // is needed.
 //
-// planDir is written only when the WHOLE record succeeds. Blob names are
-// deterministic (basename plus a hash of the resource ID), so a refused record
-// that wrote straight into a directory holding an earlier good plan would
-// overwrite that plan's blobs — the older plan.jsonl would then apply content
-// it was never recorded with — and would leave stray blobs (or create an empty
-// directory) even though no plan came out. RecordPlan therefore records into a
-// private staging directory (stageBlobs) and copies the referenced blobs into
-// planDir only after RecordPlanTo, including its dependency and change-gate
-// pre-flight, returned a plan. On any error planDir is exactly as it was and
-// is not created.
+// What RecordPlan guarantees about planDir. Blob names are deterministic
+// (basename plus a hash of the resource ID), so a refused record that wrote
+// straight into a directory holding an earlier good plan would overwrite that
+// plan's blobs — the older plan.jsonl would then apply content it was never
+// recorded with — and would leave stray blobs (or create an empty directory)
+// even though no plan came out. RecordPlan therefore records into a private
+// staging directory (stageBlobs) and copies the referenced blobs into planDir
+// only after RecordPlanTo, including its dependency and change-gate
+// pre-flight, returned a plan:
+//
+//   - Every error that arises while recording or validating (task-body,
+//     cycle, packaging and pre-flight refusals, and a planDir the up-front
+//     usability check refuses before any task body runs) leaves planDir
+//     exactly as it was, and an absent planDir is not created.
+//   - An I/O failure while COMMITTING the blobs (full disk, permissions, a
+//     blob path that cannot be replaced) is reported but is not atomic: some
+//     blobs may already be copied, so a partially updated blob store is
+//     possible. planDir is created (owner-only) at that step.
+//   - The staging directory (in $TMPDIR, created only when a blob is written)
+//     is removed on every return path and when a task body calls logger.Fatal.
+//     A process killed by a signal it does not handle, or by SIGKILL, leaves
+//     it behind.
 //
 // Nested Run calls while recording append into the same plan (used by Aggregate).
 func RecordPlan(planID, planDir string, taskNames ...string) ([]plan.Op, error) {
@@ -414,12 +426,14 @@ func checkUnrecordedDrafts(taskName string) error {
 // on purpose: it executes single privilege chunks too — the elevated re-exec
 // child, one chunk of a remote push, `gonf apply <plan.jsonl|->` — and from
 // one chunk it cannot tell a dep applied by an earlier chunk from a typo'd
-// one, so such a dep is treated as satisfied. The guarantee lives where the
-// whole plan is in hand: RecordPlanTo (record time: Run, `gonf plan`, push,
-// cluster, fleet), ApplyChunks, remote.PushChunks and Apply. A caller feeding
-// ApplyPlan a whole plan from elsewhere (a hand-written or older plan file)
-// must run plan.ValidateChunks over plan.SplitPrivilegeChunks itself, or
-// use ApplyChunks, which does.
+// one, so such a dep is treated as satisfied. The same holds for the other
+// chunk-level entry points, PushPayload and PushPayloadContext, which stream
+// one already-encoded payload with an elevate flag. The guarantee lives where
+// the whole plan is in hand: RecordPlanTo (record time: Run, `gonf plan`,
+// push, cluster, fleet), ApplyChunks, remote.PushChunks and Apply. A caller
+// feeding ApplyPlan (or PushPayload) a whole plan from elsewhere (a
+// hand-written or older plan file) must run plan.ValidateChunks over
+// plan.SplitPrivilegeChunks itself, or use ApplyChunks (PushTo), which does.
 func ApplyPlan(ops []plan.Op, planDir string) error {
 	f := DetectFacts()
 	return plan.Apply(ops, plan.Facts{

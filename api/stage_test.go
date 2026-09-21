@@ -3,12 +3,15 @@ package api
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
@@ -310,4 +313,268 @@ func TestRunRecordsWithoutStagingAndCleansTemp(t *testing.T) {
 		t.Fatal("want a refusal")
 	}
 	assertNoStagingLeft(t, tmp)
+}
+
+// TestRecordPlanBlobLessNeverTouchesTempDir pins the lazy staging directory:
+// a plan that packages no blob must not need $TMPDIR at all, exactly as before
+// staging existed. With TMPDIR pointing at nothing, eager staging failed
+// `gonf plan -o dir` for every blob-less task.
+func TestRecordPlanBlobLessNeverTouchesTempDir(t *testing.T) {
+	ResetForTest()
+	t.Cleanup(ResetForTest)
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "does-not-exist"))
+	Task("blob_less", "", func() {
+		File(filepath.Join(t.TempDir(), "x"), options.WithContent("inline"))
+	})
+	planDir := filepath.Join(t.TempDir(), "out")
+	ops, err := RecordPlan("blobless", planDir, "blob_less")
+	if err != nil {
+		t.Fatalf("RecordPlan must not need $TMPDIR without blobs: %v", err)
+	}
+	if len(ops) < 2 {
+		t.Fatalf("ops = %v, want header plus one resource", ops)
+	}
+	if fi, err := os.Stat(planDir); err != nil || !fi.IsDir() || fi.Mode().Perm() != 0o700 {
+		t.Fatalf("plan dir after a successful record: %v, %v; want an owner-only directory", fi, err)
+	}
+}
+
+// TestRecordPlanWithBlobsStillNeedsTempDir is the negative twin: a plan that
+// does package a blob has to stage, so an unusable $TMPDIR is reported as a
+// staging error - and planDir stays untouched.
+func TestRecordPlanWithBlobsStillNeedsTempDir(t *testing.T) {
+	ResetForTest()
+	t.Cleanup(ResetForTest)
+	src := newStagedSources(t)
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "does-not-exist"))
+	src.register("needs_stage", nil)
+	planDir := filepath.Join(t.TempDir(), "out")
+	_, err := RecordPlan("x", planDir, "needs_stage")
+	if err == nil || !strings.Contains(err.Error(), "staging dir") {
+		t.Fatalf("RecordPlan error = %v, want a staging dir error", err)
+	}
+	testutil.RequireUnchanged(t, testutil.DirSnapshot{Absent: true}, planDir)
+}
+
+const (
+	stageFatalEnv    = "GONF_STAGE_FATAL_HELPER" // plan dir; also marks the child
+	stageFatalBigEnv = "GONF_STAGE_FATAL_BIG"    // large source file to package
+)
+
+// TestStageFatalHelperProcess is the child of TestRecordPlanFatalRemovesStaging,
+// not a test of its own: it packages a large blob into the staging directory
+// and then hits a fail-fast logger.Fatal inside the task body (os.Exit, no
+// deferred cleanup).
+func TestStageFatalHelperProcess(t *testing.T) {
+	planDir := os.Getenv(stageFatalEnv)
+	if planDir == "" {
+		t.Skip("helper process only")
+	}
+	big := os.Getenv(stageFatalBigEnv)
+	Task("fatal_after_blob", "", func() {
+		InstallFile(filepath.Join(filepath.Dir(big), "dst-big"), big)
+		logger.Fatal("fail-fast DSL misuse after packaging a blob")
+	})
+	_, _ = RecordPlan("x", planDir, "fatal_after_blob")
+	t.Fatal("logger.Fatal returned")
+}
+
+// TestRecordPlanFatalRemovesStaging reproduces the reviewer's leak: a task body
+// that hits logger.Fatal after a large InstallFile was packaged used to leave
+// $TMPDIR/gonf-plan-stage-*/blobs/... behind, a full copy of the source
+// (possibly a rendered secret). The staging directory is now removed by the
+// logger's fatal hook, and planDir is not created either.
+func TestRecordPlanFatalRemovesStaging(t *testing.T) {
+	tmp := t.TempDir() // the child's $TMPDIR: must end up empty
+	src := newStagedSources(t)
+	planDir := filepath.Join(t.TempDir(), "out")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestStageFatalHelperProcess$")
+	cmd.Env = append(os.Environ(), stageFatalEnv+"="+planDir, stageFatalBigEnv+"="+src.big, "TMPDIR="+tmp)
+	out, err := cmd.CombinedOutput()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+		t.Fatalf("helper: %v, want exit status 1 from logger.Fatal; output:\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "fail-fast DSL misuse") {
+		t.Fatalf("helper did not reach logger.Fatal; output:\n%s", out)
+	}
+	assertNoStagingLeft(t, tmp)
+	testutil.RequireUnchanged(t, testutil.DirSnapshot{Absent: true}, planDir)
+}
+
+// TestRecordPlanCommitFailureIsReportedAndPartial pins the honest half of the
+// contract: a failure while COMMITTING blobs is reported, returns no ops, and
+// may leave the blob store partially updated. The second blob's destination is
+// a non-empty directory, so the atomic file replace fails after the first blob
+// (already validated and staged) was copied.
+func TestRecordPlanCommitFailureIsReportedAndPartial(t *testing.T) {
+	ResetForTest()
+	t.Cleanup(ResetForTest)
+	src := newStagedSources(t)
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	src.register("commit_fail", nil)
+
+	// Learn the deterministic refs by recording once into a scratch dir.
+	probe, err := RecordPlan("x", filepath.Join(t.TempDir(), "probe"), "commit_fail")
+	if err != nil {
+		t.Fatalf("probe record: %v", err)
+	}
+	var glob, big string
+	for _, op := range probe {
+		switch {
+		case strings.HasPrefix(op.Blob, "blobs/synced-"):
+			glob = op.Blob
+		case strings.HasPrefix(op.Blob, "blobs/big-"):
+			big = op.Blob
+		}
+	}
+	if glob == "" || big == "" {
+		t.Fatalf("probe refs glob=%q big=%q", glob, big)
+	}
+
+	planDir := filepath.Join(t.TempDir(), "out")
+	blocker := filepath.Join(planDir, filepath.FromSlash(big), "keep")
+	if err := os.MkdirAll(filepath.Dir(blocker), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, blocker, []byte("blocks the replace"))
+
+	ResetForTest()
+	src.register("commit_fail", nil)
+	ops, err := RecordPlan("x", planDir, "commit_fail")
+	if err == nil || !strings.Contains(err.Error(), "RecordPlan: plan dir") {
+		t.Fatalf("RecordPlan error = %v, want a \"RecordPlan: plan dir\" commit error", err)
+	}
+	if ops != nil {
+		t.Fatalf("ops = %v, want nil on a commit failure", ops)
+	}
+	// The real on-disk state: the blob copied before the failure is in place
+	// (partial update, as documented), the blocker is untouched, no plan.jsonl.
+	if got := mustRead(t, filepath.Join(planDir, filepath.FromSlash(glob), "f1")); got != "glob version one\n" {
+		t.Fatalf("blob copied before the failure = %q", got)
+	}
+	if got := mustRead(t, blocker); got != "blocks the replace" {
+		t.Fatalf("blocking directory content = %q, must be untouched", got)
+	}
+	if _, err := os.Lstat(filepath.Join(planDir, "plan.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("plan.jsonl exists (%v); RecordPlan never writes it", err)
+	}
+	assertNoStagingLeft(t, tmp)
+}
+
+// TestCopyStagedBlobRefMismatch covers the defensive got != ref branch: a
+// staged name the destination store would sanitize differently is an error, not
+// a silently different ref (the ops would then point at a blob that is not
+// where the plan says).
+func TestCopyStagedBlobRefMismatch(t *testing.T) {
+	stage := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(stage, "blobs"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(stage, "blobs", "has space"), []byte("x"))
+	dest := t.TempDir()
+	err := copyStagedBlob(stage, plan.NewStore(dest), "blobs/has space")
+	if err == nil || !strings.Contains(err.Error(), `was written as "blobs/has-space"`) {
+		t.Fatalf("copyStagedBlob error = %v, want a ref mismatch error", err)
+	}
+	// The blob landed under the sanitized name; the error is what protects the
+	// caller from returning ops that reference "blobs/has space".
+	if got := mustRead(t, filepath.Join(dest, "blobs", "has-space")); got != "x" {
+		t.Fatalf("blob under the sanitized ref = %q", got)
+	}
+}
+
+// TestCommitStagedBlobsMissingStagedBlob: an op referencing a blob the staging
+// directory does not hold (or no staging directory at all) is reported, never
+// skipped.
+func TestCommitStagedBlobsMissingStagedBlob(t *testing.T) {
+	planDir := filepath.Join(t.TempDir(), "out")
+	for _, stage := range []string{t.TempDir(), ""} {
+		err := commitStagedBlobs([]plan.Op{{Blob: "blobs/gone"}}, stage, planDir)
+		if err == nil {
+			t.Fatalf("stage %q: want an error for a missing staged blob", stage)
+		}
+	}
+}
+
+// planDirProbe registers a task that records whether its body ran, so a test
+// can tell an up-front refusal (body never ran) from a late one.
+func planDirProbe(name string) *bool {
+	ran := new(bool)
+	Task(name, "", func() { *ran = true })
+	return ran
+}
+
+// TestRecordPlanRefusesUnusablePlanDirUpFront pins the early failure the old
+// SecureDir-first order gave: a planDir SecureDir would refuse fails BEFORE any
+// task body runs, and the check itself creates nothing.
+func TestRecordPlanRefusesUnusablePlanDirUpFront(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission checks are not enforced for root")
+	}
+	root := t.TempDir()
+	file := filepath.Join(root, "a-file")
+	mustWrite(t, file, []byte("not a dir"))
+	readonly := filepath.Join(root, "readonly")
+	if err := os.Mkdir(readonly, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(readonly, 0o700) })
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(root, link); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]string{
+		"target is a file":                  file,
+		"target is a symlink":               link,
+		"parent of an absent dir is a file": filepath.Join(file, "sub"),
+		"absent dir in a read-only parent":  filepath.Join(readonly, "sub", "deeper"),
+	}
+	for name, planDir := range cases {
+		t.Run(name, func(t *testing.T) {
+			ResetForTest()
+			t.Cleanup(ResetForTest)
+			ran := planDirProbe("probe")
+			before := testutil.Snapshot(t, root)
+			_, err := RecordPlan("x", planDir, "probe")
+			if err == nil || !strings.Contains(err.Error(), "RecordPlan: plan dir") {
+				t.Fatalf("RecordPlan error = %v, want a \"RecordPlan: plan dir\" error", err)
+			}
+			if *ran {
+				t.Fatal("the task body ran; an unusable plan dir must fail before any body")
+			}
+			testutil.RequireUnchanged(t, before, root)
+		})
+	}
+}
+
+// TestRecordPlanAcceptsUsablePlanDirs is the negative twin of the up-front
+// check: existing directories we own (also a read-only one, which SecureDir
+// has always chmod'ed to 0700 - the check must not turn that into a new
+// refusal) and absent ones (nested, under a writable ancestor) pass and record
+// normally.
+func TestRecordPlanAcceptsUsablePlanDirs(t *testing.T) {
+	root := t.TempDir()
+	existing := filepath.Join(root, "existing")
+	readonly := filepath.Join(root, "readonly")
+	for dir, mode := range map[string]os.FileMode{existing: 0o700, readonly: 0o500} {
+		if err := os.Mkdir(dir, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, planDir := range []string{existing, readonly, filepath.Join(root, "absent"), filepath.Join(root, "a", "b", "c")} {
+		ResetForTest()
+		ran := planDirProbe("probe")
+		if _, err := RecordPlan("x", planDir, "probe"); err != nil {
+			t.Fatalf("RecordPlan(%s): %v", planDir, err)
+		}
+		if !*ran {
+			t.Fatalf("RecordPlan(%s): body did not run", planDir)
+		}
+		if fi, err := os.Stat(planDir); err != nil || fi.Mode().Perm() != 0o700 {
+			t.Fatalf("plan dir %s after record: %v, %v; want mode 0700", planDir, fi, err)
+		}
+	}
+	ResetForTest()
 }

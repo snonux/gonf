@@ -30,6 +30,9 @@ func Privilege() privilege.Mode { return processPrivilege }
 // Kept context.Background()-rooted (equivalent to
 // PushPayloadContext(context.Background(), ...)) for API stability; new
 // callers that can supply a context should use PushPayloadContext instead.
+// The payload is one chunk already encoded by the caller, so no
+// dangling-dependency pre-flight runs here (see ApplyPlan); PushTo, which
+// records the whole plan, does run it.
 func PushPayload(t PushTarget, payload []byte, elevate bool, applyDir string) error {
 	return remote.PushPayloadContext(context.Background(), t, payload, elevate, applyDir)
 }

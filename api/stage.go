@@ -1,11 +1,17 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 
+	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/plan"
+	"golang.org/x/sys/unix"
 )
 
 // stageBlobs is RecordPlan's persistent-directory path: it records into a
@@ -17,23 +23,155 @@ import (
 // exists to be validated, and a record can also fail late for reasons that have
 // nothing to do with dependencies (a cycle, a packaging error, a body error).
 // Staging closes that whole class at once: whatever makes the record fail, the
-// destination was never touched. The staging directory is temporary storage
-// removed on return, so a failed record leaves nothing behind either.
+// destination was never touched.
+//
+// The staging directory is created lazily (lazyStage), on the first blob
+// write, so a plan without blobs never touches $TMPDIR. It is removed on every
+// return path (refusal, error, success) and, through logger.OnFatal, when a
+// task body ends the process with logger.Fatal. It is NOT removed when the
+// process is killed (SIGKILL, SIGINT with no handler, a crash): the staging
+// directory (owner-only, 0700, like its blobs) then stays in $TMPDIR until the
+// operating system cleans it. Blob-less plans, the common case, never create
+// one.
 func stageBlobs(planID, planDir string, taskNames []string) ([]plan.Op, error) {
-	stage, err := os.MkdirTemp("", "gonf-plan-stage-*")
-	if err != nil {
-		return nil, fmt.Errorf("RecordPlan: staging dir: %w", err)
+	if err := checkPlanDirUsable(planDir); err != nil {
+		return nil, fmt.Errorf("RecordPlan: plan dir: %w", err)
 	}
-	defer func() { _ = os.RemoveAll(stage) }()
+	stage := &lazyStage{}
+	defer stage.remove()
+	defer logger.OnFatal(stage.remove)()
 
-	ops, err := RecordPlanTo(planID, plan.NewStore(stage), taskNames...)
+	ops, err := RecordPlanTo(planID, stage, taskNames...)
 	if err != nil {
 		return nil, err
 	}
-	if err := commitStagedBlobs(ops, stage, planDir); err != nil {
+	if err := commitStagedBlobs(ops, stage.path(), planDir); err != nil {
 		return nil, fmt.Errorf("RecordPlan: plan dir: %w", err)
 	}
 	return ops, nil
+}
+
+// lazyStage is the staging blob store of stageBlobs: a plan.BlobStore that
+// creates its private temporary directory only when the first blob is
+// written, then delegates to a plan.Store rooted there. Recording is
+// single-goroutine and the logger's fatal hook runs on the goroutine that
+// called Fatal, so the mutex is cheap insurance that the directory name and
+// its removal stay consistent, not a concurrency feature.
+type lazyStage struct {
+	mu    sync.Mutex
+	dir   string
+	store *plan.Store
+}
+
+var _ plan.BlobStore = (*lazyStage)(nil)
+
+// open returns the underlying store, creating the staging directory first when
+// this is the first write. os.MkdirTemp makes it 0700.
+func (l *lazyStage) open() (*plan.Store, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.store == nil {
+		dir, err := os.MkdirTemp("", "gonf-plan-stage-*")
+		if err != nil {
+			return nil, fmt.Errorf("RecordPlan: staging dir: %w", err)
+		}
+		l.dir, l.store = dir, plan.NewStore(dir)
+	}
+	return l.store, nil
+}
+
+// path is the staging directory, or "" when no blob was ever written.
+func (l *lazyStage) path() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.dir
+}
+
+// remove deletes the staging directory if one was created; it is idempotent
+// (the deferred call after a successful run finds nothing left to do).
+func (l *lazyStage) remove() {
+	l.mu.Lock()
+	dir := l.dir
+	l.dir, l.store = "", nil
+	l.mu.Unlock()
+	if dir != "" {
+		_ = os.RemoveAll(dir)
+	}
+}
+
+// WriteFile implements plan.BlobStore.
+func (l *lazyStage) WriteFile(name string, data []byte) (string, error) {
+	s, err := l.open()
+	if err != nil {
+		return "", err
+	}
+	return s.WriteFile(name, data)
+}
+
+// WriteTree implements plan.BlobStore.
+func (l *lazyStage) WriteTree(name, srcDir string) (string, error) {
+	s, err := l.open()
+	if err != nil {
+		return "", err
+	}
+	return s.WriteTree(name, srcDir)
+}
+
+// WriteGlob implements plan.BlobStore.
+func (l *lazyStage) WriteGlob(name, pattern string) (string, error) {
+	s, err := l.open()
+	if err != nil {
+		return "", err
+	}
+	return s.WriteGlob(name, pattern)
+}
+
+// checkPlanDirUsable is the cheap up-front counterpart of commitStagedBlobs's
+// plan.SecureDir, run before any task body so an unusable destination fails as
+// early as it did when RecordPlan called SecureDir first, without creating or
+// changing anything. It mirrors what SecureDir needs: an existing planDir must
+// be a real directory (SecureDir opens every component with O_NOFOLLOW, so a
+// symlink is refused) that we own (SecureDir chmods it to 0700, so a read-only
+// directory of ours is fine); an absent planDir needs its nearest existing
+// ancestor to be a directory we can create entries in. It is a pre-check, not
+// a guarantee: SecureDir at commit time still has the last word.
+func checkPlanDirUsable(planDir string) error {
+	info, err := os.Lstat(planDir)
+	switch {
+	case err == nil:
+		return checkOwnedDir(planDir, info)
+	case !errors.Is(err, os.ErrNotExist):
+		return err
+	}
+	for parent := filepath.Dir(planDir); ; parent = filepath.Dir(parent) {
+		info, err := os.Stat(parent)
+		if errors.Is(err, os.ErrNotExist) && parent != filepath.Dir(parent) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("%s is not a directory", parent)
+		}
+		if err := unix.Access(parent, unix.W_OK|unix.X_OK); err != nil {
+			return fmt.Errorf("cannot create %s: %w", planDir, err)
+		}
+		return nil
+	}
+}
+
+// checkOwnedDir reports whether path (already Lstat'ed as info) is a directory
+// that plan.SecureDir can take over: not a symlink, owned by the effective user
+// (or we are root), since SecureDir has to chmod it.
+func checkOwnedDir(path string, info os.FileInfo) error {
+	if !info.IsDir() {
+		return fmt.Errorf("%s exists and is not a directory", path)
+	}
+	if st, ok := info.Sys().(*syscall.Stat_t); ok && os.Geteuid() != 0 && int(st.Uid) != os.Geteuid() {
+		return fmt.Errorf("%s is owned by another user", path)
+	}
+	return nil
 }
 
 // commitStagedBlobs makes planDir exist (owner-only) and copies every blob the

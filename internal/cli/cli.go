@@ -266,32 +266,26 @@ func cliPlan(args []string) int {
 		return 2
 	}
 
-	planDir := *outDir
 	if *stdout {
-		dir, err := os.MkdirTemp("", "gonf-plan-*")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "plan: temp dir: %v\n", err)
-			return 1
-		}
-		defer func() { _ = os.RemoveAll(dir) }()
-		planDir = dir
+		return planToStdout(*planID, tasks)
 	}
+	return planToDir(*outDir, *planID, tasks)
+}
 
-	// RecordPlan writes planDir (blobs) only after the whole record succeeded,
-	// so a refused plan leaves -o <dir> exactly as it was and does not create
-	// it; the error already carries its own "RecordPlan: " prefix, so only this
-	// command's "plan: " is added.
-	ops, err := api.RecordPlan(*planID, planDir, tasks...)
+// planToStdout records into memory (as push does) and prints the plan JSONL.
+// A plan that needs blobs cannot be printed, so nothing needs to reach the disk:
+// no temp directory is created, and blobs a task packages are simply discarded
+// with the refusal.
+func planToStdout(planID string, tasks []string) int {
+	ops, err := api.RecordPlanTo(planID, plan.NewMemoryStore(), tasks...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "plan: %v\n", err)
 		return 1
 	}
-	if *stdout {
-		for _, op := range ops {
-			if op.Blob != "" {
-				fmt.Fprintln(os.Stderr, "plan: -stdout cannot emit plans that need blobs/; use -o <dir>")
-				return 1
-			}
+	for _, op := range ops {
+		if op.Blob != "" {
+			fmt.Fprintln(os.Stderr, "plan: -stdout cannot emit plans that need blobs/; use -o <dir>")
+			return 1
 		}
 	}
 	raw, err := plan.EncodePlan(ops)
@@ -299,23 +293,42 @@ func cliPlan(args []string) int {
 		fmt.Fprintf(os.Stderr, "plan: encode: %v\n", err)
 		return 1
 	}
-	if *stdout {
-		if _, err := os.Stdout.Write(raw); err != nil {
-			fmt.Fprintf(os.Stderr, "plan: write stdout: %v\n", err)
-			return 1
-		}
-		fmt.Fprintf(os.Stderr, "wrote stdout (%d ops)\n", len(ops))
-		return 0
+	if _, err := os.Stdout.Write(raw); err != nil {
+		fmt.Fprintf(os.Stderr, "plan: write stdout: %v\n", err)
+		return 1
 	}
-	if err := plan.SecureDir(*outDir); err != nil {
+	fmt.Fprintf(os.Stderr, "wrote stdout (%d ops)\n", len(ops))
+	return 0
+}
+
+// planToDir records into outDir. RecordPlan checks up front that outDir is
+// usable (before any task body runs, creating nothing) and writes outDir's
+// blobs only after the whole record succeeded, so a refused plan leaves an
+// existing outDir exactly as it was and does not create an absent one. Which
+// prefixes the error carries depends on where it came from: pre-flight
+// refusals and a few packaging errors start with "RecordPlan: ", while an
+// unknown task ("unknown task ...") or a cycle/body error does not; this
+// command only adds its own "plan: " in front of whatever it got.
+func planToDir(outDir, planID string, tasks []string) int {
+	ops, err := api.RecordPlan(planID, outDir, tasks...)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "plan: %v\n", err)
+		return 1
+	}
+	raw, err := plan.EncodePlan(ops)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "plan: encode: %v\n", err)
+		return 1
+	}
+	if err := plan.SecureDir(outDir); err != nil {
 		fmt.Fprintf(os.Stderr, "plan: secure output directory: %v\n", err)
 		return 1
 	}
-	if err := plan.WritePrivateFile(*outDir, "plan.jsonl", raw); err != nil {
-		fmt.Fprintf(os.Stderr, "plan: write %s: %v\n", filepath.Join(*outDir, "plan.jsonl"), err)
+	if err := plan.WritePrivateFile(outDir, "plan.jsonl", raw); err != nil {
+		fmt.Fprintf(os.Stderr, "plan: write %s: %v\n", filepath.Join(outDir, "plan.jsonl"), err)
 		return 1
 	}
-	outPath := filepath.Join(*outDir, "plan.jsonl")
+	outPath := filepath.Join(outDir, "plan.jsonl")
 	fmt.Printf("wrote %s (%d ops)\n", outPath, len(ops))
 	return 0
 }

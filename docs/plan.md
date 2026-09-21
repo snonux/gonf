@@ -22,7 +22,10 @@ A `DependsOn` naming an ID no recorded op carries (a typo, or a resource that
 was never registered) is a *dangling dependency*. The plan applier itself
 cannot detect it: `gonf apply <plan.jsonl|->` and the elevated re-exec child
 execute **single privilege chunks**, whose deps legitimately live in an earlier
-chunk, so a dep missing from the body must count as satisfied there. The check
+chunk, so a dep missing from the body must count as satisfied there. The same
+is true of every chunk-level entry point: `api.ApplyPlan`, `api.PushPayload`
+and `api.PushPayloadContext` (an already-encoded payload plus an elevate flag)
+run no pre-flight at all. The check
 (`plan.ValidateChunks`, built on `plan.ValidateChunkDeps`) therefore runs
 wherever the **whole plan** is in hand, before anything is applied or uploaded:
 
@@ -40,24 +43,44 @@ is a public entry point that cannot assume its ops came from a record in this
 process (they may be decoded from a file or written by an older gonf). Both
 passes run the same function on the same plan, so the second never disagrees.
 
-A refused record leaves no trace. `RecordPlan` (and so `gonf plan -o dir`)
-records into a private staging directory and copies the blobs into `dir` only
-after the whole record, pre-flight included, succeeded. Blob names are
-deterministic, so packaging straight into `dir` would let a refused run
-overwrite the blobs of an earlier good plan in the same directory and change
-what that plan's `plan.jsonl` applies. After any record error `dir` is exactly
-as it was (byte for byte and mtime for mtime), and a `dir` that did not exist is
-not created. Only I/O errors while copying the blobs into `dir` after a
-successful record (full disk, permissions) can leave some blobs behind.
+`RecordPlan` (and so `gonf plan -o dir`) records into a private staging
+directory and copies the blobs into `dir` only after the whole record,
+pre-flight included, succeeded. Blob names are deterministic, so packaging
+straight into `dir` would let a refused run overwrite the blobs of an earlier
+good plan in the same directory and change what that plan's `plan.jsonl`
+applies. What is guaranteed, and what is not:
+
+- After any error while recording or validating (a refusal, a task-body,
+  cycle or packaging error, an unusable `dir` that the up-front check rejects
+  before any task body runs) `dir` is exactly as it was (byte for byte and
+  mtime for mtime), and a `dir` that did not exist is not created. The
+  up-front check is cheap and best-effort: it only looks at `dir` (or, when
+  absent, its nearest existing ancestor) and creates nothing.
+- An I/O error while COMMITTING the blobs into `dir` after a successful record
+  (full disk, permissions, a blob path that cannot be replaced) is reported but
+  not atomic: some blobs may already be copied, so a partially updated blob
+  store is possible.
+- The staging directory lives in `$TMPDIR` (owner-only) and is created lazily,
+  on the first blob write, so a plan without blobs never touches `$TMPDIR`.
+  It is removed on every return path and when a task body ends the process
+  with `logger.Fatal` (the logger runs `logger.OnFatal` hooks before exiting).
+  It is NOT removed when the process dies without running Go code (SIGKILL, a
+  crash) or is interrupted by a signal nothing handles: the staging directory,
+  with copies of the packaged sources, then stays in `$TMPDIR`.
+- `gonf plan -stdout` records in memory and stages nothing.
+
 `RecordPlanTo`, which writes into a caller-supplied store, gives no such
 guarantee: it is for storage the caller discards (`Run`'s temp dir, push's
 in-memory store).
 
-Record-time refusals read `RecordPlan: <reason>` with a single prefix — the
+A pre-flight refusal reads `RecordPlan: <reason>` with a single prefix — the
 `plan:` engine prefix is stripped, and dangling IDs are described in terms of
 registered resources — and callers add their own context in front
 (`plan: RecordPlan: ...` at `gonf plan`, `record: RecordPlan: ...` at push,
-cluster and fleet). The typed errors (`*plan.DanglingDepError`,
+cluster and fleet). That single prefix is true of refusals (and of the few
+packaging and plan-dir errors that carry it) only: an unknown task prints
+`plan: unknown task "..."`, and cycle and task-body errors have no
+`RecordPlan:` prefix at all. The typed errors (`*plan.DanglingDepError`,
 `*plan.DanglingWatchError`, `plan.Refusal`) stay reachable through
 `errors.As`, also through `api.Apply`.
 
@@ -122,7 +145,11 @@ gonf separates **registration-time** misuse from **runtime** failures:
 
 Residual: a registration-time Fatal fired from *inside* a task body still
 skips `Run`'s deferred temp-plan-dir cleanup (the directory lives under
-`$TMPDIR`). That is the accepted cost of the fail-fast DSL contract.
+`$TMPDIR`). That is the accepted cost of the fail-fast DSL contract. The one
+exception is `RecordPlan`'s staging directory (`gonf plan -o`), which is
+removed by a `logger.OnFatal` hook; a process killed by SIGKILL or a crash
+leaves it, and `Run`'s temp dir, behind. (`Run`'s temp dir could register the
+same hook; it is left as is here to keep the change small.)
 
 ## Recording (`RecordPlan`)
 
@@ -729,8 +756,8 @@ pre-flight (`plan.ValidateChunks`, run at record time and by `ApplyChunks` and
 same pre-flight refuses dangling deps (naming no recorded resource at all); a
 forward dep inside `api.Apply`'s single chunk is not a cross-chunk case and is
 reordered, so `api.Apply` only refuses the dangling ones.
-Executing a single chunk (`api.ApplyPlan`, `gonf apply <plan.jsonl|->`) does not
-re-run it. Elevation ordering stays fixed by recorded order; reordering across
+Executing or pushing a single chunk (`api.ApplyPlan`, `api.PushPayload`,
+`api.PushPayloadContext`, `gonf apply <plan.jsonl|->`) does not re-run it. Elevation ordering stays fixed by recorded order; reordering across
 chunks would defeat the privilege split.
 
 ## JSONL sketch

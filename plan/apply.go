@@ -35,11 +35,13 @@ type Facts struct {
 // api.RecordPlanTo at record time (so Run, `gonf plan`, push, cluster and
 // fleet never produce such a plan), api.ApplyChunks (local apply),
 // remote.PushChunks (SSH push) and api.Apply (registered resources, as a
-// single chunk). Entries that execute an already-recorded chunk or file
-// unprotected are api.ApplyPlan and `gonf apply <plan.jsonl|->` (which
-// cannot tell a whole plan from one chunk of a mixed-privilege plan): they
-// rely on the plan having been recorded — and thus checked — by a current
-// gonf. A hand-written or older plan file applied that way gets no
+// single chunk). Entries that execute or ship an already-recorded chunk or
+// file unprotected are api.ApplyPlan, `gonf apply <plan.jsonl|->` (which
+// cannot tell a whole plan from one chunk of a mixed-privilege plan) and
+// api.PushPayload / api.PushPayloadContext (they stream one already-encoded
+// payload with an elevate flag, so they too are chunk-level): they rely on
+// the plan having been recorded — and thus checked — by a current gonf. A
+// hand-written or older plan file applied or pushed that way gets no
 // dangling-dependency protection.
 //
 // planDir is the directory containing blobs/ sidecars (usually next to the
