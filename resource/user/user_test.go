@@ -2,7 +2,10 @@ package user
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -51,13 +54,11 @@ func TestPresentRecordsCompleteAdditiveUserDraft(t *testing.T) {
 }
 
 func TestHandlerRoundTripAndApplyPreserveCreationIntent(t *testing.T) {
-	original := ensureCurrent
-	t.Cleanup(func() { ensureCurrent = original })
 	var got internaluser.DesiredUser
-	ensureCurrent = func(want internaluser.DesiredUser) error {
+	handler := planHandler{backend: fakeBackend(func(_ string, want internaluser.DesiredUser) error {
 		got = want
 		return nil
-	}
+	})}
 	draft := resource.PlanDraft{
 		Kind:                "user",
 		ID:                  "User[svc]",
@@ -78,7 +79,7 @@ func TestHandlerRoundTripAndApplyPreserveCreationIntent(t *testing.T) {
 	if op.Op != plan.KindUser || !reflect.DeepEqual(op.Deps, draft.Deps) {
 		t.Fatalf("ToOp() = %#v", op)
 	}
-	if err := (planHandler{}).Apply(op, plan.ApplyContext{}); err != nil {
+	if err := handler.Apply(op, plan.ApplyContext{}); err != nil {
 		t.Fatalf("Apply() = %v", err)
 	}
 	want := internaluser.DesiredUser{
@@ -97,11 +98,10 @@ func TestHandlerRoundTripAndApplyPreserveCreationIntent(t *testing.T) {
 }
 
 func TestHandlerRejectsAbsenceBeforeBackend(t *testing.T) {
-	original := ensureCurrent
-	t.Cleanup(func() { ensureCurrent = original })
+	t.Parallel()
 	called := false
-	ensureCurrent = func(internaluser.DesiredUser) error { called = true; return nil }
-	err := (planHandler{}).Apply(plan.Op{Op: plan.KindUser, Name: "svc", Absent: true}, plan.ApplyContext{})
+	handler := planHandler{backend: fakeBackend(func(string, internaluser.DesiredUser) error { called = true; return nil })}
+	err := handler.Apply(plan.Op{Op: plan.KindUser, Name: "svc", Absent: true}, plan.ApplyContext{})
 	if err == nil || !strings.Contains(err.Error(), "absence is not supported") {
 		t.Fatalf("Apply() = %v", err)
 	}
@@ -111,15 +111,11 @@ func TestHandlerRejectsAbsenceBeforeBackend(t *testing.T) {
 }
 
 func TestEnsureValidatesBeforeBackendInDryRun(t *testing.T) {
-	originalEnsure, originalDryRun := ensureCurrent, resource.DryRun()
+	originalDryRun := resource.DryRun()
 	resource.SetDryRun(true)
-	t.Cleanup(func() {
-		ensureCurrent = originalEnsure
-		resource.SetDryRun(originalDryRun)
-	})
+	t.Cleanup(func() { resource.SetDryRun(originalDryRun) })
 	called := false
-	ensureCurrent = func(internaluser.DesiredUser) error { called = true; return nil }
-	err := Ensure("-unsafe")
+	err := newUserWith(fakeBackend(func(string, internaluser.DesiredUser) error { called = true; return nil }), "-unsafe", nil).apply()
 	if err == nil || !strings.Contains(err.Error(), "starts with -") {
 		t.Fatalf("Ensure() = %v", err)
 	}
@@ -129,11 +125,10 @@ func TestEnsureValidatesBeforeBackendInDryRun(t *testing.T) {
 }
 
 func TestEnsureReportsConvergedUserAsOK(t *testing.T) {
-	original := ensureCurrent
-	ensureCurrent = func(internaluser.DesiredUser) error { return nil }
-	t.Cleanup(func() { ensureCurrent = original })
 	resource.ResetReport()
-	if err := Ensure("svc"); err != nil {
+	t.Cleanup(resource.ResetReport)
+	converged := func(string, internaluser.DesiredUser) error { return nil }
+	if err := newUserWith(fakeBackend(converged), "svc", nil).apply(); err != nil {
 		t.Fatalf("Ensure() = %v", err)
 	}
 	var report bytes.Buffer
@@ -143,31 +138,63 @@ func TestEnsureReportsConvergedUserAsOK(t *testing.T) {
 	}
 }
 
-func TestEnsureForGOOSSelectsEverySupportedBackend(t *testing.T) {
-	originals := []func(internaluser.DesiredUser) error{ensureRocky, ensureOpenBSD, ensureFreeBSD, ensureNetBSD}
-	t.Cleanup(func() {
-		ensureRocky, ensureOpenBSD, ensureFreeBSD, ensureNetBSD = originals[0], originals[1], originals[2], originals[3]
-	})
-	var selected []string
-	set := func(name string) func(internaluser.DesiredUser) error {
-		return func(want internaluser.DesiredUser) error {
-			if want.Name != "svc" {
-				t.Errorf("backend %s received %q", name, want.Name)
-			}
-			selected = append(selected, name)
-			return nil
+// TestBackendForGOOSSelectsEverySupportedBackend pins the GOOS dispatch: each
+// supported GOOS gets its own backend type, which is wired to the injected
+// runner (observed through the first probe it runs), and an unsupported one
+// reports its GOOS only when applied.
+func TestBackendForGOOSSelectsEverySupportedBackend(t *testing.T) {
+	t.Parallel()
+	errStop := errors.New("stop after the first probe")
+	for goos, want := range map[string]struct{ typ, probe string }{
+		"linux":   {"user.Linux", "getent passwd svc"},
+		"openbsd": {"user.OpenBSD", "getent passwd svc"},
+		"netbsd":  {"user.NetBSD", "getent passwd svc"},
+		"freebsd": {"user.FreeBSD", "pw usershow -n svc"},
+	} {
+		var got string
+		run := func(command string, args ...string) (string, string, int, error) {
+			got = strings.Join(append([]string{command}, args...), " ")
+			return "", "", 0, errStop
+		}
+		backend := backendForGOOS(goos, run)
+		if typ := fmt.Sprintf("%T", backend); typ != want.typ {
+			t.Errorf("backendForGOOS(%q) = %s, want %s", goos, typ, want.typ)
+		}
+		if err := backend.Ensure("User[svc]", internaluser.DesiredUser{Name: "svc"}); !errors.Is(err, errStop) || got != want.probe {
+			t.Errorf("backendForGOOS(%q) probed %q (err %v), want %q", goos, got, err, want.probe)
 		}
 	}
-	ensureRocky, ensureOpenBSD, ensureFreeBSD, ensureNetBSD = set("rocky"), set("openbsd"), set("freebsd"), set("netbsd")
-	for _, goos := range []string{"linux", "openbsd", "freebsd", "netbsd"} {
-		if err := ensureForGOOS(goos, internaluser.DesiredUser{Name: "svc"}); err != nil {
-			t.Fatalf("ensureForGOOS(%q) = %v", goos, err)
-		}
-	}
-	if want := []string{"rocky", "openbsd", "freebsd", "netbsd"}; !reflect.DeepEqual(selected, want) {
-		t.Fatalf("selected = %v, want %v", selected, want)
-	}
-	if err := ensureForGOOS("darwin", internaluser.DesiredUser{Name: "svc"}); err == nil || !strings.Contains(err.Error(), "unsupported") {
-		t.Fatalf("unsupported ensureForGOOS() = %v", err)
+	unsupported := backendForGOOS("darwin", nil)
+	if err := unsupported.Ensure("User[svc]", internaluser.DesiredUser{Name: "svc"}); err == nil || err.Error() != `user "svc": unsupported operating system darwin` {
+		t.Fatalf("unsupported backendForGOOS() = %v", err)
 	}
 }
+
+// TestNewUserUsesTheRunningPlatformBackend pins that the production
+// constructor wires the running GOOS's backend by type: the Linux backend on
+// linux, the matching BSD backend on a BSD, and the refusing stand-in
+// elsewhere.
+func TestNewUserUsesTheRunningPlatformBackend(t *testing.T) {
+	t.Parallel()
+	backend := newUser("svc", nil).backend
+	want, ok := internaluser.ForGOOS(runtime.GOOS, nil)
+	if !ok {
+		want = unsupportedBackend{goos: runtime.GOOS}
+	}
+	if got, wantType := fmt.Sprintf("%T", backend), fmt.Sprintf("%T", want); got != wantType {
+		t.Fatalf("newUser on %s wired %s, want %s", runtime.GOOS, got, wantType)
+	}
+	if runtime.GOOS == "linux" {
+		if _, isLinux := backend.(internaluser.Linux); !isLinux {
+			t.Fatalf("newUser on linux wired %T, want internaluser.Linux", backend)
+		}
+	}
+}
+
+// fakeBackend adapts a function to internaluser.Backend for tests that only
+// observe what reaches the backend. It declares no capabilities.
+type fakeBackend func(id string, want internaluser.DesiredUser) error
+
+func (f fakeBackend) Ensure(id string, want internaluser.DesiredUser) error { return f(id, want) }
+
+func (fakeBackend) Capabilities() internaluser.Capabilities { return internaluser.Capabilities{} }

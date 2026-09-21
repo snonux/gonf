@@ -334,14 +334,17 @@ func recordTaskName(name string) error {
 	if err != nil {
 		return err
 	}
+	// The pop is deferred so a panicking task body (recovered by a caller,
+	// e.g. a test) cannot leave its name on the stack, where it would be
+	// blamed by later errors such as draftError's task prefix.
 	recSession.recordingStack = append(recSession.recordingStack, name)
+	defer func() {
+		recSession.recordingStack = recSession.recordingStack[:len(recSession.recordingStack)-1]
+	}()
 	if isAlias {
-		err = recordTaskName(target)
-	} else {
-		err = recordSingleTaskBody(name)
+		return recordTaskName(target)
 	}
-	recSession.recordingStack = recSession.recordingStack[:len(recSession.recordingStack)-1]
-	return err
+	return recordSingleTaskBody(name)
 }
 
 // recordNestedRun is Run's nested-session path: a task body running other
@@ -712,6 +715,20 @@ func guardBlobRef(name string, d resource.PlanDraft) error {
 	return nil
 }
 
+// draftError points a handler's record-time rejection at the recipe: the
+// task being recorded (when a recording session is active; a local
+// api.Apply has none) and the draft's resource ID, as
+// "RecordPlan: [task %q: ]draft %q: <handler error>". The "RecordPlan:
+// draft %q:" part matches draftToOp's own errors, which name no task; the
+// task part mirrors checkUnrecordedDrafts. The handler's error is wrapped, so
+// errors.Is/As still see it, and handlers must not add their own ID prefix.
+func draftError(d resource.PlanDraft, err error) error {
+	if len(recSession.recordingStack) == 0 {
+		return fmt.Errorf("RecordPlan: draft %q: %w", d.ID, err)
+	}
+	return fmt.Errorf("RecordPlan: task %q: draft %q: %w", currentRecordingName(), d.ID, err)
+}
+
 // draftToOp lowers a resource draft to a plan op line by delegating to the
 // draft kind's registered plan.Handler (see plan/handler.go): the resource
 // package owns its own wire form and this function only folds in the
@@ -729,7 +746,7 @@ func draftToOp(d resource.PlanDraft) (plan.Op, error) {
 	}
 	op, err := h.ToOp(d)
 	if err != nil {
-		return plan.Op{}, err
+		return plan.Op{}, draftError(d, err)
 	}
 	op.Elevate = d.Elevate || recSession.recordingElevate
 	if !plan.IsKnownKind(op.Op) {

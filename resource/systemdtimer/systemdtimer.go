@@ -131,7 +131,7 @@ func normalizeName(name string) (base, unit string) {
 func (t *SystemdTimer) Apply() error { return t.apply() }
 
 func (t *SystemdTimer) apply() error {
-	id := fmt.Sprintf("SystemdTimer[%s]", t.base)
+	id := resource.FormatID("SystemdTimer", t.base)
 	if err := t.validate(); err != nil {
 		return fmt.Errorf("%s: %w", id, err)
 	}
@@ -145,8 +145,8 @@ func (t *SystemdTimer) apply() error {
 	}
 	svcPath := filepath.Join(dir, t.base+".service")
 	timerPath := filepath.Join(dir, t.base+".timer")
-	svcID := fmt.Sprintf("File[%s]", svcPath)
-	timerFileID := fmt.Sprintf("File[%s]", timerPath)
+	svcID := resource.FormatID("File", svcPath)
+	timerFileID := resource.FormatID("File", timerPath)
 
 	if t.Absent {
 		err = t.applyAbsent(svcPath, timerPath, svcID, timerFileID)
@@ -159,7 +159,7 @@ func (t *SystemdTimer) apply() error {
 	// The composite changed when any of its parts (unit files, the
 	// daemon-reload, the timer unit) noted a change during this apply.
 	resource.NoteResult(id, resource.AnyChanged(svcID, timerFileID,
-		daemonReloadID(t.user), fmt.Sprintf("Timer[%s]", t.name)))
+		daemonReloadID(t.user), timerUnitID(t.name)))
 	return nil
 }
 
@@ -258,12 +258,18 @@ func (t *SystemdTimer) unitDir() (string, error) {
 	return filepath.Join(home, ".config/systemd/user"), nil
 }
 
+// timerUnitID is the ID the Timer resource (resource/timer) registers and
+// reports its unit under; the composite watches it for changes.
+func timerUnitID(name string) string { return resource.FormatID("Timer", name) }
+
+// daemonReloadID is the ID the DaemonReload resource (resource/systemd)
+// registers and reports under for the system or user manager.
 func daemonReloadID(user bool) string {
 	name := "system"
 	if user {
 		name = "user"
 	}
-	return fmt.Sprintf("DaemonReload[%s]", name)
+	return resource.FormatID("DaemonReload", name)
 }
 
 func (t *SystemdTimer) serviceUnit() string {

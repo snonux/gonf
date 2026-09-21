@@ -10,18 +10,16 @@ import (
 	opt "github.com/snonux/gonf/resource/options"
 )
 
-// stubBackend replaces the platform backend for one test and returns a
-// pointer to the last DesiredUser it received (nil when never called).
-func stubBackend(t *testing.T) **internaluser.DesiredUser {
-	t.Helper()
-	original := ensureCurrent
-	t.Cleanup(func() { ensureCurrent = original })
+// recordingBackend returns a fake backend and a pointer to the last
+// DesiredUser it received (nil when never called). Tests inject it through
+// newUserWith or planHandler.backend; no package state is swapped, so tests
+// using it do not interfere with each other.
+func recordingBackend() (fakeBackend, **internaluser.DesiredUser) {
 	var got *internaluser.DesiredUser
-	ensureCurrent = func(want internaluser.DesiredUser) error {
+	return func(_ string, want internaluser.DesiredUser) error {
 		got = &want
 		return nil
-	}
-	return &got
+	}, &got
 }
 
 func TestPresentRecordsManageHomeOptIn(t *testing.T) {
@@ -38,7 +36,7 @@ func TestPresentRecordsManageHomeOptIn(t *testing.T) {
 // applies an opted-in user, proving the destination backend receives the same
 // ManageHome intent as a direct apply.
 func TestManageHomeSurvivesTheRecordedPlanWire(t *testing.T) {
-	got := stubBackend(t)
+	backend, got := recordingBackend()
 	draft := resource.PlanDraft{Kind: "user", ID: "User[_dserver]", Name: "_dserver", Home: "/var/run/dserver", ManageHome: true}
 	op, err := (planHandler{}).ToOp(draft)
 	if err != nil {
@@ -55,7 +53,7 @@ func TestManageHomeSurvivesTheRecordedPlanWire(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeOp() = %v", err)
 	}
-	if err := (planHandler{}).Apply(decoded, plan.ApplyContext{}); err != nil {
+	if err := (planHandler{backend: backend}).Apply(decoded, plan.ApplyContext{}); err != nil {
 		t.Fatalf("Apply() = %v", err)
 	}
 	if *got == nil || !(*got).ManageHome || (*got).Home != "/var/run/dserver" {
@@ -106,8 +104,9 @@ func TestToOpKeepsNonOptInValidationAtApplyTime(t *testing.T) {
 }
 
 func TestEnsureRejectsManageHomeWithoutHomeBeforeBackend(t *testing.T) {
-	got := stubBackend(t)
-	err := Ensure("svc", opt.WithManageHome)
+	t.Parallel()
+	backend, got := recordingBackend()
+	err := newUserWith(backend, "svc", []opt.LocalUserOption{opt.WithManageHome}).apply()
 	if err == nil || !strings.Contains(err.Error(), "requires a home directory") {
 		t.Fatalf("Ensure() = %v", err)
 	}

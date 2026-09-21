@@ -118,7 +118,7 @@ func Absent(path string, opts ...opt.LinkOption) resource.Resource {
 }
 
 func ensureAbsent(path string) error {
-	id := fmt.Sprintf("Link[%s]", path)
+	id := resource.FormatID("Link", path)
 	logger.Debug("ensuring link absent: %s", path)
 
 	if _, err := os.Lstat(path); os.IsNotExist(err) {

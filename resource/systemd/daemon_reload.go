@@ -148,5 +148,5 @@ func (d *DaemonReloadResource) id() string {
 	if d.user {
 		name = "user"
 	}
-	return fmt.Sprintf("DaemonReload[%s]", name)
+	return resource.FormatID("DaemonReload", name)
 }

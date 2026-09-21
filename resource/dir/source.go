@@ -58,7 +58,7 @@ func copySourceTree(d *Dir) error {
 }
 
 func copySourceDir(d *Dir, target string) error {
-	id := fmt.Sprintf("Directory[%s]", target)
+	id := resource.FormatID("Directory", target)
 
 	if resource.DryRun() {
 		return noteSourceDirDryRun(id, target)
@@ -194,7 +194,7 @@ func sourceSymlinkTargetExists(sourcePath, rawTarget string) bool {
 // pre-fix dry run mis-reported that scenario too (as a broken-link
 // refusal), and the real run's refusal stays authoritative.
 func noteSourceSymlinkDryRun(target, rawTarget string) error {
-	id := fmt.Sprintf("Symlink[%s]", target)
+	id := resource.FormatID("Symlink", target)
 	info, err := os.Lstat(target)
 	switch {
 	case err == nil && info.Mode()&os.ModeSymlink != 0:
@@ -308,7 +308,7 @@ func pruneTree(d *Dir) error {
 		}
 
 		if resource.DryRun() {
-			resource.Note(fmt.Sprintf("File[%s]", path), resource.StatusWouldChange)
+			resource.Note(resource.FormatID("File", path), resource.StatusWouldChange)
 			logger.Info("dry-run: would prune %s", path)
 			return nil // keep walking: nothing may be removed
 		}
@@ -325,7 +325,7 @@ func pruneTree(d *Dir) error {
 		// dry-run additionally previews inner entries, which RemoveAll
 		// removes in one operation); AnyChanged's Directory[<root>]
 		// matching works through the File[<root>/...] convention regardless.
-		resource.Note(fmt.Sprintf("File[%s]", path), resource.StatusChanged)
+		resource.Note(resource.FormatID("File", path), resource.StatusChanged)
 		logger.Info("pruned %s", path)
 		if entry.IsDir() {
 			return filepath.SkipDir // already removed
@@ -433,7 +433,7 @@ func pruneGlob(d *Dir) error {
 		}
 		path := filepath.Join(d.path, name)
 		if resource.DryRun() {
-			resource.Note(fmt.Sprintf("File[%s]", path), resource.StatusWouldChange)
+			resource.Note(resource.FormatID("File", path), resource.StatusWouldChange)
 			logger.Info("dry-run: would prune %s", path)
 			continue
 		}
@@ -441,7 +441,7 @@ func pruneGlob(d *Dir) error {
 		if err := os.Remove(path); err != nil {
 			return fmt.Errorf("failed to prune %s: %w", path, err)
 		}
-		resource.Note(fmt.Sprintf("File[%s]", path), resource.StatusChanged)
+		resource.Note(resource.FormatID("File", path), resource.StatusChanged)
 		logger.Info("pruned %s", path)
 	}
 	return nil

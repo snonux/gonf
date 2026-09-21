@@ -99,7 +99,11 @@ registered resources — and callers add their own context in front
 cluster and fleet). That single prefix is true of refusals (and of the few
 packaging and plan-dir errors that carry it) only: an unknown task prints
 `plan: unknown task "..."`, and cycle and task-body errors have no
-`RecordPlan:` prefix at all. The typed errors (`*plan.DanglingDepError`,
+`RecordPlan:` prefix at all. A resource kind's own record-time rejection
+(its handler's `ToOp` error) is wrapped as
+`RecordPlan: task "<task>": draft "<ID>": <reason>`, or without the task
+part from `api.Apply`, which records no task; handlers therefore never add
+their own ID prefix. The typed errors (`*plan.DanglingDepError`,
 `*plan.DanglingWatchError`, `plan.Refusal`) stay reachable through
 `errors.As`, also through `api.Apply`.
 
@@ -418,6 +422,10 @@ class of bug that motivated task j5.
    the new `plan.Op`. `api/plan.go`'s `draftToOp` only ever calls
    `HandlerFor(d.Kind)`; an unmapped kind errors at record time — there is
    deliberately no silent default and no per-kind case left to add there.
+   An error `ToOp` returns comes back wrapped (with `%w`) as
+   `RecordPlan: [task "<task>": ]draft "<ID>": <your error>`, so a handler
+   must not add its own resource-ID prefix; start the message with what is
+   wrong.
 6. **Options capability** — `resource/options`: add the task-level knobs
    (`With*` options + the interface the resource implements), following the
    existing small-interface pattern.

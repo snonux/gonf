@@ -5,7 +5,6 @@
 package resource
 
 import (
-	"fmt"
 	"sort"
 
 	"github.com/snonux/gonf/internal/logger"
@@ -79,8 +78,24 @@ func (r Resource) String() string {
 // ID returns the unique "Type[Name]" identifier used for dependency edges
 // and report notes.
 func (r Resource) ID() string {
-	return fmt.Sprintf("%s[%s]", r.Type, r.Name)
+	return FormatID(r.Type, r.Name)
 }
+
+// FormatID is the single definition of the "Type[Name]" identifier format.
+// Resource.ID uses it, and so does every other place in gonf that builds a
+// full ID to report, gate, or reference a resource before (or without)
+// registering it (a backend's Mutate notes, dependency and watch IDs, an
+// ID-only requirement block), so that AnyChanged and NoteResult always match
+// the registered spelling. The report's directory matching parses IDs back
+// apart; it builds its prefixes with idPrefix, the other half of this
+// format. Tests keep literal IDs on purpose: they pin the wire spelling.
+func FormatID(typeName, name string) string {
+	return idPrefix(typeName) + name + "]"
+}
+
+// idPrefix is the "Type[" start of every ID of typeName, for prefix matching
+// and parsing IDs built by FormatID.
+func idPrefix(typeName string) string { return typeName + "[" }
 
 // Dependencies returns this resource's own ID. It lets a single Resource be
 // used as a DependsOn target, mirroring Multi.Dependencies.

@@ -1,8 +1,13 @@
 # User resource
 
-`User` ensures a local account exists on Rocky Linux, OpenBSD, FreeBSD, or
-NetBSD. It is intentionally additive by default: gonf never deletes an account
-or a group, removes a supplementary membership, or rewrites an existing
+`User` ensures a local account exists on Linux, OpenBSD, FreeBSD, or NetBSD.
+Every Linux destination uses the same backend, which needs shadow-utils
+compatible tools (`getent`, `id`, and `groupadd`/`useradd`/`usermod` with GNU
+long options); the stock tools of Rocky, Fedora, and Debian qualify. Notes
+below that name Rocky describe its stock configuration.
+
+It is intentionally additive by default: gonf never deletes an account or a
+group, removes a supplementary membership, or rewrites an existing
 account's primary group, shell, login class, or system-account setting. An
 existing account's home field is rewritten only when the recipe explicitly
 opts in with `WithManageHome` (see below).
@@ -25,10 +30,37 @@ are retained.
 `WithHome`, `WithCreateHome`, `WithShell`, `WithLoginClass`, and `WithSystem`
 are creation-time settings. `WithHome` alone does not create a directory; add
 `WithCreateHome` to create the configured (or platform-default) home directory.
-Rocky Linux rejects login classes. The BSD backends reject `WithSystem`, since
-their portable user-management mode has no supported system-account flag.
+The Linux backend rejects login classes. The BSD backends reject
+`WithSystem`, since their portable user-management mode has no supported
+system-account flag.
 Linux system accounts and BSD login classes are different concepts; gonf never
 translates one into the other.
+
+Each platform backend declares these differences as a capability set (login
+classes, system accounts, the supplementary-group limit, and FreeBSD's
+created-home check; see the table below), and one shared code path enforces
+it, so every refusal happens before any mutating command. A recorded plan does
+not know its destination's platform, so `gonf plan` rejects only requests
+that no platform accepts: malformed account or group names, NUL bytes, a
+`WithManageHome` home that breaks its contract (see
+[Managing an existing account's home field](#managing-an-existing-accounts-home-field)),
+or a combination every platform refuses. Every other refusal is reported by
+the destination. The error names the task and the resource, for example
+`RecordPlan: task "svc": draft "User[-bad]": user name "-bad" starts with -`.
+
+Two consequences follow from checking this while recording rather than on
+the destination:
+
+- The rejection fires for every recorded `User`, including one inside a task
+  whose `When` guard would never match any destination, or a task that is
+  recorded but never applied. Such a user could not be applied anywhere, so
+  fix or remove it rather than guarding it.
+- A local `api.Apply` lowers every registered resource before applying any
+  of them, so one such user aborts the whole apply: nothing is changed, not
+  even resources registered before it.
+
+A unit test drives every backend over every `User` field and fails when a
+backend's behaviour and its declared capabilities disagree.
 
 `WithGroup` remains accepted as a compatibility spelling for the creation-time
 primary group, and `WithClass` aliases `WithLoginClass`; prefer the explicit
@@ -44,7 +76,7 @@ been run natively by gonf's test suite on any of these systems.
 
 Commands issued for a missing account (verified in gonf's unit tests):
 
-| | Rocky Linux | OpenBSD / NetBSD | FreeBSD |
+| | Linux (shadow-utils) | OpenBSD / NetBSD | FreeBSD |
 |---|---|---|---|
 | Missing requested groups (primary and supplementary) | `groupadd -- G` each, before `useradd` | `groupadd G` each, before `useradd` | `pw groupadd -n G` each, before `pw useradd` |
 | No `WithPrimaryGroup` | no `--gid`: the tool picks the group | no `-g`: the tool picks the group | gonf passes `-g NAME` and creates group `NAME` if missing |
@@ -52,6 +84,7 @@ Commands issued for a missing account (verified in gonf's unit tests):
 | `WithLoginClass` | rejected before any command | `-L CLASS` | `-L CLASS` |
 | `WithSystem` | `--system` | rejected after the account probe, before any mutation | rejected after the account probe, before any mutation |
 | More than 16 supplementary groups | allowed | rejected before any command | allowed |
+| `WithCreateHome` with a relative or root `WithHome` | passed as given | passed as given | rejected before any command |
 
 What the tools then do (per platform documentation, not verified natively):
 
@@ -90,26 +123,27 @@ What the tools then do (per platform documentation, not verified natively):
 
 For an account that already exists, gonf probes the current memberships,
 creates any missing requested group, and issues one membership command only
-when a requested group is missing (on Rocky the missing group is created
-before the probes; the order does not change the result there). A second run with the same recipe issues no
-membership command. Existing memberships the recipe does not mention are
-kept. On OpenBSD and NetBSD the membership probes (and NetBSD's checks below)
-run before the first `groupadd`, so a refused update creates no group.
+when a requested group is missing (on Linux the missing group is created
+before the probes; the order does not change the result there). A second
+run with the same recipe issues no membership command. Existing memberships
+the recipe does not mention are kept. On OpenBSD and NetBSD the membership
+probes (and NetBSD's checks below) run before the first `groupadd`, so a
+refused update creates no group.
 Commands issued (verified in gonf's unit tests; they model OpenBSD `-G` as
 appending only, per its manual, and NetBSD `-G` both as appending and as
 replacing):
 
 | Platform | Probe | Membership command | Groups passed |
 |---|---|---|---|
-| Rocky Linux | `id --groups --name NAME` | `usermod --append --groups G1,G2 -- NAME` | only the missing groups |
+| Linux (shadow-utils) | `id --groups --name NAME` | `usermod --append --groups G1,G2 -- NAME` | only the missing groups |
 | OpenBSD | `id -Gn NAME` | `usermod -G G1,G2 NAME` | only the missing groups |
 | NetBSD | `id -Gn NAME`, then `getent group` when something is missing | `usermod -G G1,G2,... NAME` | every group that already lists the account, plus the missing groups |
 | FreeBSD | `pw usershow -n NAME`, `pw groupshow -a` | `pw usermod -n NAME -G G1,G2,...` | every current secondary group, plus the missing groups (primary group excluded) |
 
 Why the argument differs (per platform documentation, not verified natively):
 
-- Rocky Linux `usermod --append` adds to the list; without it `--groups`
-  would replace the list.
+- Linux (shadow-utils) `usermod --append` adds to the list; without it
+  `--groups` would replace the list.
 - OpenBSD `usermod(8)` documents `-G` as appending to the secondary groups
   (its `-S` option replaces them), so passing only the missing groups keeps
   the rest.
@@ -180,13 +214,13 @@ Per-platform commands (probe, then field update):
 
 | Platform | Probe | Update |
 |----------|-------|--------|
-| Rocky Linux | `getent passwd NAME` (6th field) | `usermod --home HOME -- NAME` |
+| Linux (shadow-utils) | `getent passwd NAME` (6th field) | `usermod --home HOME -- NAME` |
 | OpenBSD | `getent passwd NAME` (6th field) | `usermod -d HOME NAME` |
 | NetBSD | `getent passwd NAME` (6th field) | `usermod -d HOME NAME` |
 | FreeBSD | `pw usershow -n NAME` (9th, master.passwd field) | `pw usermod -n NAME -d HOME` |
 
 According to the platform documentation, these updates (without the move
-flag) change only the passwd field. On Rocky Linux, shadow-utils `usermod`
+flag) change only the passwd field. On Linux, shadow-utils `usermod`
 may refuse to change the home of an account that has running processes. gonf
 returns that error rather than stopping anything. Dry runs probe the account
 and report the update as a would-change without running it.

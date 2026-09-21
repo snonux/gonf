@@ -13,7 +13,7 @@ import (
 // it, and note the result. Tests call it directly with a fake backend or a
 // fake runner, so no package-level seam has to be patched to exercise it.
 func (p *Package) applyWith(b backend, run runner) error {
-	id := fmt.Sprintf("Package[%s]", p.name)
+	id := resource.FormatID("Package", p.name)
 	installed, err := b.installed(run, p.name)
 	if err != nil {
 		return err

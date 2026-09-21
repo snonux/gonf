@@ -111,4 +111,8 @@ func loginClassStaleDB(class string) resource.Resource {
 	return file.Present(filepath.Join(loginClassDir, class+".db"), options.IsAbsent)
 }
 
-func loginClassID(class string) string { return "LoginClass[" + class + "]" }
+// loginClassID names a LoginClass composition in its requirement block and
+// refusal text. LoginClass is not a registered resource (it composes File
+// resources), but it uses the shared resource.FormatID spelling so every
+// Type[Name] identifier gonf prints has one definition.
+func loginClassID(class string) string { return resource.FormatID("LoginClass", class) }

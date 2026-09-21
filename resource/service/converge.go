@@ -32,7 +32,7 @@ func (s *Service) applyWith(b backend) error {
 		return err
 	}
 
-	id := fmt.Sprintf("Service[%s]", s.name)
+	id := resource.FormatID("Service", s.name)
 	verbs, held := s.actions(id, running, enabled)
 	if len(verbs) == 0 {
 		// Nothing to do: skipped when the gate held a requested

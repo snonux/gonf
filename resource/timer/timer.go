@@ -99,7 +99,7 @@ func (t *Timer) Apply() error { return t.apply() }
 // apply probes the timer, derives the systemctl actions that converge it,
 // and runs them (or only logs them under dry-run) via converge.
 func (t *Timer) apply() error {
-	id := fmt.Sprintf("Timer[%s]", t.name)
+	id := resource.FormatID("Timer", t.name)
 	if err := t.validate(); err != nil {
 		return fmt.Errorf("%s: %w", id, err)
 	}

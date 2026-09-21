@@ -243,14 +243,14 @@ func (f *File) lineEdit() bool {
 func (f *File) reportID(path string) string {
 	if f.name != "" {
 		if f.preserveContent {
-			return fmt.Sprintf("EnsureFile[%s]", f.name)
+			return resource.FormatID("EnsureFile", f.name)
 		}
-		return fmt.Sprintf("File[%s]", f.name)
+		return resource.FormatID("File", f.name)
 	}
 	if f.preserveContent {
-		return fmt.Sprintf("EnsureFile[%s]", path)
+		return resource.FormatID("EnsureFile", path)
 	}
-	return fmt.Sprintf("File[%s]", path)
+	return resource.FormatID("File", path)
 }
 
 func (f *File) resourceName() string {
@@ -858,7 +858,7 @@ func resolveGroupID(group string) (int, error) {
 }
 
 func ensureAbsent(path string) error {
-	return ensureAbsentWithID(path, fmt.Sprintf("File[%s]", path))
+	return ensureAbsentWithID(path, resource.FormatID("File", path))
 }
 
 func ensureAbsentWithID(path, id string) error {

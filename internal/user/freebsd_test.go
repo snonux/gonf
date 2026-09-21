@@ -20,7 +20,7 @@ func TestFreeBSDEnsureCommandMatrix(t *testing.T) {
 		Shell:               "/sbin/nologin",
 		LoginClass:          "daemon",
 	}
-	calls := []bsdCall{
+	calls := []scriptedCall{
 		{command: "pw", args: []string{"usershow", "-n", "svc"}, code: freeBSDNoUserExit},
 		{command: "pw", args: []string{"groupshow", "-n", "audio"}, code: freeBSDNoUserExit},
 		{command: "pw", args: []string{"groupadd", "-n", "audio"}},
@@ -29,31 +29,31 @@ func TestFreeBSDEnsureCommandMatrix(t *testing.T) {
 		{command: "pw", args: []string{"groupshow", "-n", "wheel"}},
 		{command: "pw", args: []string{"useradd", "-n", "svc", "-m", "-g", "svc", "-G", "audio,wheel", "-d", "/var/lib/svc", "-s", "/sbin/nologin", "-L", "daemon"}},
 	}
-	if err := NewFreeBSD(scriptedBSDRunner(t, calls)).Ensure(want); err != nil {
+	if err := ensureAs(NewFreeBSD(scriptedRunner(t, calls)), want); err != nil {
 		t.Fatalf("Ensure() = %v", err)
 	}
 }
 
 func TestFreeBSDEnsureCreatesPrivateGroupByDefault(t *testing.T) {
-	calls := []bsdCall{
+	calls := []scriptedCall{
 		{command: "pw", args: []string{"usershow", "-n", "svc"}, code: freeBSDNoUserExit},
 		{command: "pw", args: []string{"groupshow", "-n", "svc"}, code: freeBSDNoUserExit},
 		{command: "pw", args: []string{"groupadd", "-n", "svc"}},
 		{command: "pw", args: []string{"useradd", "-n", "svc", "-g", "svc"}},
 	}
-	if err := NewFreeBSD(scriptedBSDRunner(t, calls)).Ensure(DesiredUser{Name: "svc"}); err != nil {
+	if err := ensureAs(NewFreeBSD(scriptedRunner(t, calls)), DesiredUser{Name: "svc"}); err != nil {
 		t.Fatalf("Ensure() = %v", err)
 	}
 }
 
 func TestFreeBSDEnsureNoOp(t *testing.T) {
-	calls := []bsdCall{
+	calls := []scriptedCall{
 		{command: "pw", args: []string{"usershow", "-n", "svc"}, stdout: "svc:*:1001:1001::0:0::/var/lib/svc:/sbin/nologin\n"},
 		{command: "pw", args: []string{"groupshow", "-a"}, stdout: "svc:*:1001:\naudio:*:1002:svc\nwheel:*:1003:svc\n"},
 		{command: "pw", args: []string{"groupshow", "-n", "audio"}},
 		{command: "pw", args: []string{"groupshow", "-n", "wheel"}},
 	}
-	if err := NewFreeBSD(scriptedBSDRunner(t, calls)).Ensure(DesiredUser{
+	if err := ensureAs(NewFreeBSD(scriptedRunner(t, calls)), DesiredUser{
 		Name:                "svc",
 		PrimaryGroup:        "different-primary-is-creation-only",
 		SupplementaryGroups: []string{"wheel", "audio"},
@@ -76,7 +76,7 @@ func TestFreeBSDEnsureUpdatePreservesExistingSecondaryGroups(t *testing.T) {
 	}
 	wantGroups := append(append([]string(nil), existing...), "audio", "wheel")
 	sort.Strings(wantGroups)
-	calls := []bsdCall{
+	calls := []scriptedCall{
 		{command: "pw", args: []string{"usershow", "-n", "svc"}, stdout: "svc:*:1001:1001::0:0::/var/empty:/sbin/nologin\n"},
 		{command: "pw", args: []string{"groupshow", "-a"}, stdout: groupDatabase.String()},
 		{command: "pw", args: []string{"groupshow", "-n", "audio"}, code: freeBSDNoUserExit},
@@ -85,9 +85,28 @@ func TestFreeBSDEnsureUpdatePreservesExistingSecondaryGroups(t *testing.T) {
 		{command: "pw", args: []string{"groupadd", "-n", "wheel"}},
 		{command: "pw", args: []string{"usermod", "-n", "svc", "-G", strings.Join(wantGroups, ",")}},
 	}
-	if err := NewFreeBSD(scriptedBSDRunner(t, calls)).Ensure(DesiredUser{
+	if err := ensureAs(NewFreeBSD(scriptedRunner(t, calls)), DesiredUser{
 		Name:                "svc",
 		SupplementaryGroups: []string{"wheel", "audio", "wheel"},
+	}); err != nil {
+		t.Fatalf("Ensure() = %v", err)
+	}
+}
+
+// TestFreeBSDEnsureSkipsTheRealPrimaryGroupListedAsSupplementary pins that a
+// requested supplementary group which is the account's real primary group
+// (by gid) is neither probed nor created nor passed to pw usermod -G, which
+// must exclude the primary group.
+func TestFreeBSDEnsureSkipsTheRealPrimaryGroupListedAsSupplementary(t *testing.T) {
+	calls := []scriptedCall{
+		{command: "pw", args: []string{"usershow", "-n", "svc"}, stdout: "svc:*:1001:1001::0:0::/var/empty:/sbin/nologin\n"},
+		{command: "pw", args: []string{"groupshow", "-a"}, stdout: "svc:*:1001:\naudio:*:1002:\n"},
+		{command: "pw", args: []string{"groupshow", "-n", "audio"}},
+		{command: "pw", args: []string{"usermod", "-n", "svc", "-G", "audio"}},
+	}
+	if err := ensureAs(NewFreeBSD(scriptedRunner(t, calls)), DesiredUser{
+		Name:                "svc",
+		SupplementaryGroups: []string{"svc", "audio"},
 	}); err != nil {
 		t.Fatalf("Ensure() = %v", err)
 	}
@@ -96,22 +115,22 @@ func TestFreeBSDEnsureUpdatePreservesExistingSecondaryGroups(t *testing.T) {
 func TestFreeBSDEnsureInvalidStateStopsBeforeMutation(t *testing.T) {
 	tests := []struct {
 		name  string
-		calls []bsdCall
+		calls []scriptedCall
 		match string
 	}{
 		{
 			name:  "usershow reports unexpected exit",
-			calls: []bsdCall{{command: "pw", args: []string{"usershow", "-n", "svc"}, code: 70, stderr: "database unavailable"}},
+			calls: []scriptedCall{{command: "pw", args: []string{"usershow", "-n", "svc"}, code: 70, stderr: "database unavailable"}},
 			match: "pw usershow -n svc failed (exit 70)",
 		},
 		{
 			name:  "usershow emits malformed record",
-			calls: []bsdCall{{command: "pw", args: []string{"usershow", "-n", "svc"}, stdout: "broken\n"}},
+			calls: []scriptedCall{{command: "pw", args: []string{"usershow", "-n", "svc"}, stdout: "broken\n"}},
 			match: "returned malformed passwd entry",
 		},
 		{
 			name: "group lookup start failure",
-			calls: []bsdCall{
+			calls: []scriptedCall{
 				{command: "pw", args: []string{"usershow", "-n", "svc"}, code: freeBSDNoUserExit},
 				{command: "pw", args: []string{"groupshow", "-n", "svc"}},
 				{command: "pw", args: []string{"groupshow", "-n", "wheel"}, err: errors.New("unavailable")},
@@ -121,7 +140,7 @@ func TestFreeBSDEnsureInvalidStateStopsBeforeMutation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := NewFreeBSD(scriptedBSDRunner(t, tt.calls)).Ensure(DesiredUser{Name: "svc", SupplementaryGroups: []string{"wheel"}})
+			err := ensureAs(NewFreeBSD(scriptedRunner(t, tt.calls)), DesiredUser{Name: "svc", SupplementaryGroups: []string{"wheel"}})
 			if err == nil || !strings.Contains(err.Error(), tt.match) {
 				t.Fatalf("Ensure() = %v, want %q", err, tt.match)
 			}
@@ -132,11 +151,12 @@ func TestFreeBSDEnsureInvalidStateStopsBeforeMutation(t *testing.T) {
 func TestFreeBSDEnsureRejectsUnsafeRequestedHomeBeforeProbing(t *testing.T) {
 	for _, home := range []string{"relative", "/", "//"} {
 		t.Run(home, func(t *testing.T) {
-			err := NewFreeBSD(scriptedBSDRunner(t, nil)).Ensure(DesiredUser{
+			err := ensureAs(NewFreeBSD(scriptedRunner(t, nil)), DesiredUser{
 				Name:       "svc",
 				Home:       home,
 				CreateHome: true,
 			})
+
 			if err == nil || !strings.Contains(err.Error(), "home must") {
 				t.Fatalf("Ensure() = %v", err)
 			}
@@ -145,9 +165,10 @@ func TestFreeBSDEnsureRejectsUnsafeRequestedHomeBeforeProbing(t *testing.T) {
 }
 
 func TestFreeBSDEnsureRejectsUnsupportedSystemAccount(t *testing.T) {
-	err := NewFreeBSD(scriptedBSDRunner(t, []bsdCall{
+	err := ensureAs(NewFreeBSD(scriptedRunner(t, []scriptedCall{
 		{command: "pw", args: []string{"usershow", "-n", "svc"}, code: freeBSDNoUserExit},
-	})).Ensure(DesiredUser{Name: "svc", System: true})
+	})), DesiredUser{Name: "svc", System: true})
+
 	if err == nil || !strings.Contains(err.Error(), "system accounts are not supported") {
 		t.Fatalf("Ensure() = %v", err)
 	}
@@ -162,15 +183,16 @@ func TestFreeBSDEnsureDryRunProbesWithoutMutating(t *testing.T) {
 		resource.ResetReport()
 	})
 
-	calls := []bsdCall{
+	calls := []scriptedCall{
 		{command: "pw", args: []string{"usershow", "-n", "svc"}, code: freeBSDNoUserExit},
 		{command: "pw", args: []string{"groupshow", "-n", "svc"}, code: freeBSDNoUserExit},
 	}
-	err := NewFreeBSD(scriptedBSDRunner(t, calls)).Ensure(DesiredUser{
+	err := ensureAs(NewFreeBSD(scriptedRunner(t, calls)), DesiredUser{
 		Name:         "svc",
 		PrimaryGroup: "svc",
 		CreateHome:   true,
 	})
+
 	if err != nil {
 		t.Fatalf("Ensure() = %v", err)
 	}

@@ -54,7 +54,8 @@ type DesiredUser struct {
 // Validate reports malformed account or group names before a backend executes
 // any command. Home and Shell are passed as individual argv values and may
 // contain spaces; names cannot because group membership probes are
-// whitespace-delimited and Rocky's group option is comma-delimited.
+// whitespace-delimited and the Linux (shadow-utils) group option is
+// comma-delimited.
 func (u DesiredUser) Validate() error {
 	if err := validateName("user", u.Name); err != nil {
 		return err

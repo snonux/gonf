@@ -123,18 +123,18 @@ func TestBSDMembershipsNeverDropExistingGroups(t *testing.T) {
 	cases := []struct {
 		name    string
 		replace bool
-		backend func(Runner) interface{ Ensure(DesiredUser) error }
+		backend func(Runner) Backend
 		usermod string
 	}{
-		{"openbsd append", false, func(r Runner) interface{ Ensure(DesiredUser) error } { return NewOpenBSD(r) }, "usermod -G audio,games svc"},
-		{"netbsd append", false, func(r Runner) interface{ Ensure(DesiredUser) error } { return NewNetBSD(r) }, "usermod -G audio,games,video,wheel svc"},
-		{"netbsd replace", true, func(r Runner) interface{ Ensure(DesiredUser) error } { return NewNetBSD(r) }, "usermod -G audio,games,video,wheel svc"},
+		{"openbsd append", false, func(r Runner) Backend { return NewOpenBSD(r) }, "usermod -G audio,games svc"},
+		{"netbsd append", false, func(r Runner) Backend { return NewNetBSD(r) }, "usermod -G audio,games,video,wheel svc"},
+		{"netbsd replace", true, func(r Runner) Backend { return NewNetBSD(r) }, "usermod -G audio,games,video,wheel svc"},
 	}
 	want := DesiredUser{Name: "svc", SupplementaryGroups: []string{"wheel", "audio", "games"}}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			db := newFakeBSDGroupDB(t, tc.replace)
-			if err := tc.backend(db.run).Ensure(want); err != nil {
+			if err := ensureAs(tc.backend(db.run), want); err != nil {
 				t.Fatalf("first Ensure() = %v", err)
 			}
 			wantMutations := []string{"groupadd games", tc.usermod}
@@ -149,7 +149,7 @@ func TestBSDMembershipsNeverDropExistingGroups(t *testing.T) {
 				t.Fatalf("unrelated group staff changed: %v", db.members["staff"])
 			}
 
-			if err := tc.backend(db.run).Ensure(want); err != nil {
+			if err := ensureAs(tc.backend(db.run), want); err != nil {
 				t.Fatalf("second Ensure() = %v", err)
 			}
 			if len(db.mutations) != len(wantMutations) {
@@ -173,19 +173,19 @@ func assertNoDuplicateMembers(t *testing.T, db *fakeBSDGroupDB) {
 // enumeration) but never usermod, and still reports the account as changed.
 func TestBSDMembershipDryRunProbesWithoutMutating(t *testing.T) {
 	cases := map[string]struct {
-		backend func(Runner) interface{ Ensure(DesiredUser) error }
-		union   []bsdCall
+		backend func(Runner) Backend
+		union   []scriptedCall
 	}{
-		"openbsd": {func(r Runner) interface{ Ensure(DesiredUser) error } { return NewOpenBSD(r) }, nil},
-		"netbsd": {func(r Runner) interface{ Ensure(DesiredUser) error } { return NewNetBSD(r) },
-			[]bsdCall{{command: "getent", args: []string{"group"}, stdout: "wheel:*:0:svc\n"}}},
+		"openbsd": {func(r Runner) Backend { return NewOpenBSD(r) }, nil},
+		"netbsd": {func(r Runner) Backend { return NewNetBSD(r) },
+			[]scriptedCall{{command: "getent", args: []string{"group"}, stdout: "wheel:*:0:svc\n"}}},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			withDryRun(t)
 			calls := membershipProbeCalls(tc.union)
-			calls = append(calls, bsdCall{command: "getent", args: []string{"group", "audio"}})
-			err := tc.backend(scriptedBSDRunner(t, calls)).Ensure(DesiredUser{Name: "svc", SupplementaryGroups: []string{"audio"}})
+			calls = append(calls, scriptedCall{command: "getent", args: []string{"group", "audio"}})
+			err := ensureAs(tc.backend(scriptedRunner(t, calls)), DesiredUser{Name: "svc", SupplementaryGroups: []string{"audio"}})
 			if err != nil {
 				t.Fatalf("Ensure() = %v", err)
 			}
@@ -211,21 +211,21 @@ func withDryRun(t *testing.T) {
 // returned with its argv on both platforms rather than swallowed.
 func TestBSDMembershipUsermodFailureSurfaces(t *testing.T) {
 	cases := map[string]struct {
-		backend func(Runner) interface{ Ensure(DesiredUser) error }
-		extra   []bsdCall
+		backend func(Runner) Backend
+		extra   []scriptedCall
 		argv    string
 	}{
-		"openbsd": {func(r Runner) interface{ Ensure(DesiredUser) error } { return NewOpenBSD(r) }, nil, "usermod -G audio svc"},
-		"netbsd": {func(r Runner) interface{ Ensure(DesiredUser) error } { return NewNetBSD(r) },
-			[]bsdCall{{command: "getent", args: []string{"group"}, stdout: "wheel:*:0:svc\n"}}, "usermod -G audio,wheel svc"},
+		"openbsd": {func(r Runner) Backend { return NewOpenBSD(r) }, nil, "usermod -G audio svc"},
+		"netbsd": {func(r Runner) Backend { return NewNetBSD(r) },
+			[]scriptedCall{{command: "getent", args: []string{"group"}, stdout: "wheel:*:0:svc\n"}}, "usermod -G audio,wheel svc"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			calls := membershipProbeCalls(tc.extra)
-			calls = append(calls, bsdCall{command: "getent", args: []string{"group", "audio"}})
+			calls = append(calls, scriptedCall{command: "getent", args: []string{"group", "audio"}})
 			args := strings.Fields(tc.argv)[1:]
-			calls = append(calls, bsdCall{command: "usermod", args: args, code: 1, stderr: "usermod: can't change"})
-			err := tc.backend(scriptedBSDRunner(t, calls)).Ensure(DesiredUser{Name: "svc", SupplementaryGroups: []string{"audio"}})
+			calls = append(calls, scriptedCall{command: "usermod", args: args, code: 1, stderr: "usermod: can't change"})
+			err := ensureAs(tc.backend(scriptedRunner(t, calls)), DesiredUser{Name: "svc", SupplementaryGroups: []string{"audio"}})
 			if err == nil || !strings.Contains(err.Error(), tc.argv+" failed (exit 1)") {
 				t.Fatalf("Ensure() = %v", err)
 			}
@@ -239,24 +239,25 @@ func TestBSDMembershipUsermodFailureSurfaces(t *testing.T) {
 // left behind by a refused update.
 func TestNetBSDMembershipUnionErrorsStopBeforeMutation(t *testing.T) {
 	cases := map[string]struct {
-		enumerate bsdCall
+		enumerate scriptedCall
 		errText   string
 	}{
-		"enumeration fails": {bsdCall{command: "getent", args: []string{"group"}, code: 1, stderr: "boom"}, "getent group failed (exit 1)"},
-		"runner error":      {bsdCall{command: "getent", args: []string{"group"}, err: fmt.Errorf("timeout")}, "getent group: timeout"},
-		"malformed entry":   {bsdCall{command: "getent", args: []string{"group"}, stdout: "wheel:*:0\n"}, "malformed group entry"},
-		"odd group name":    {bsdCall{command: "getent", args: []string{"group"}, stdout: "bad name:*:5:svc\n"}, `"bad name" contains whitespace`},
-		"union over limit":  {bsdCall{command: "getent", args: []string{"group"}, stdout: explicitGroupLines(maxBSDSupplementaryGroups)}, "needs 17 supplementary groups; at most 16"},
+		"enumeration fails": {scriptedCall{command: "getent", args: []string{"group"}, code: 1, stderr: "boom"}, "getent group failed (exit 1)"},
+		"runner error":      {scriptedCall{command: "getent", args: []string{"group"}, err: fmt.Errorf("timeout")}, "getent group: timeout"},
+		"malformed entry":   {scriptedCall{command: "getent", args: []string{"group"}, stdout: "wheel:*:0\n"}, "malformed group entry"},
+		"odd group name":    {scriptedCall{command: "getent", args: []string{"group"}, stdout: "bad name:*:5:svc\n"}, `"bad name" contains whitespace`},
+		"union over limit":  {scriptedCall{command: "getent", args: []string{"group"}, stdout: explicitGroupLines(maxBSDSupplementaryGroups)}, "needs 17 supplementary groups; at most 16"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			// The scripted runner fails on any further command, so neither
 			// the audio group probe nor groupadd nor usermod may follow.
-			err := NewNetBSD(scriptedBSDRunner(t, []bsdCall{
+			err := ensureAs(NewNetBSD(scriptedRunner(t, []scriptedCall{
 				{command: "getent", args: []string{"passwd", "svc"}},
 				{command: "id", args: []string{"-Gn", "svc"}, stdout: "svc\n"},
 				tc.enumerate,
-			})).Ensure(DesiredUser{Name: "svc", SupplementaryGroups: []string{"audio"}})
+			})), DesiredUser{Name: "svc", SupplementaryGroups: []string{"audio"}})
+
 			if err == nil || !strings.Contains(err.Error(), tc.errText) {
 				t.Fatalf("Ensure() = %v, want error containing %q", err, tc.errText)
 			}
@@ -276,14 +277,14 @@ func explicitGroupLines(count int) string {
 // TestBSDMembershipRejectsOddGroupNamesBeforeAnyCommand keeps the existing
 // name validation in front of the membership path on both platforms.
 func TestBSDMembershipRejectsOddGroupNamesBeforeAnyCommand(t *testing.T) {
-	backends := map[string]func(Runner) interface{ Ensure(DesiredUser) error }{
-		"openbsd": func(r Runner) interface{ Ensure(DesiredUser) error } { return NewOpenBSD(r) },
-		"netbsd":  func(r Runner) interface{ Ensure(DesiredUser) error } { return NewNetBSD(r) },
+	backends := map[string]func(Runner) Backend{
+		"openbsd": func(r Runner) Backend { return NewOpenBSD(r) },
+		"netbsd":  func(r Runner) Backend { return NewNetBSD(r) },
 	}
 	for name, backend := range backends {
 		for _, group := range []string{"a,b", "a b", "-G", "a\tb", ""} {
 			t.Run(name+"/"+group, func(t *testing.T) {
-				err := backend(scriptedBSDRunner(t, nil)).Ensure(DesiredUser{Name: "svc", SupplementaryGroups: []string{group}})
+				err := ensureAs(backend(scriptedRunner(t, nil)), DesiredUser{Name: "svc", SupplementaryGroups: []string{group}})
 				if err == nil || !strings.Contains(err.Error(), "supplementary group name") {
 					t.Fatalf("Ensure() = %v", err)
 				}
@@ -295,8 +296,8 @@ func TestBSDMembershipRejectsOddGroupNamesBeforeAnyCommand(t *testing.T) {
 // membershipProbeCalls is the probe prefix of an existing-account update of
 // svc (currently in wheel): the account probe, id -Gn, then any union probes.
 // Every probe runs before the first group probe or groupadd.
-func membershipProbeCalls(unionProbes []bsdCall) []bsdCall {
-	calls := []bsdCall{
+func membershipProbeCalls(unionProbes []scriptedCall) []scriptedCall {
+	calls := []scriptedCall{
 		{command: "getent", args: []string{"passwd", "svc"}},
 		{command: "id", args: []string{"-Gn", "svc"}, stdout: "svc wheel\n"},
 	}
@@ -326,7 +327,7 @@ func TestNetBSDRefusedUnionCreatesNoGroup(t *testing.T) {
 			if _, ok := db.members["games"]; ok {
 				t.Fatal("fixture: games must not exist yet")
 			}
-			err := NewNetBSD(db.run).Ensure(DesiredUser{Name: "svc", SupplementaryGroups: []string{"games"}})
+			err := ensureAs(NewNetBSD(db.run), DesiredUser{Name: "svc", SupplementaryGroups: []string{"games"}})
 			if err == nil || !strings.Contains(err.Error(), tc.errText) {
 				t.Fatalf("Ensure() = %v, want error containing %q", err, tc.errText)
 			}

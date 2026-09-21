@@ -12,7 +12,7 @@ import (
 
 // ensureHardlink ensures l.path is a hard link to l.target.
 func ensureHardlink(l *Link) error {
-	id := fmt.Sprintf("Hardlink[%s]", l.path)
+	id := resource.FormatID("Hardlink", l.path)
 	logger.Debug("processing hardlink: %s -> %s", l.path, l.target)
 
 	if l.target == "" {

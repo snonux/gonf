@@ -2,68 +2,35 @@ package user
 
 import (
 	"fmt"
-	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/snonux/gonf/resource"
 )
 
-type bsdCall struct {
-	command string
-	args    []string
-	stdout  string
-	stderr  string
-	code    int
-	err     error
-}
-
-type bsdBackend func(Runner) interface {
-	Ensure(DesiredUser) error
-}
-
-func scriptedBSDRunner(t *testing.T, calls []bsdCall) Runner {
-	t.Helper()
-	index := 0
-	t.Cleanup(func() {
-		if index != len(calls) {
-			t.Errorf("ran %d commands, want %d (unconsumed: %v)", index, len(calls), calls[index:])
-		}
-	})
-	return func(command string, args ...string) (string, string, int, error) {
-		t.Helper()
-		if index == len(calls) {
-			t.Fatalf("unexpected command %s %v", command, args)
-		}
-		want := calls[index]
-		index++
-		if command != want.command || !reflect.DeepEqual(args, want.args) {
-			t.Fatalf("command %s %v, want %s %v", command, args, want.command, want.args)
-		}
-		return want.stdout, want.stderr, want.code, want.err
-	}
-}
+// bsdBackend constructs the OpenBSD or NetBSD backend under test.
+type bsdBackend func(Runner) Backend
 
 func TestOpenBSDEnsureCommandMatrix(t *testing.T) {
-	testBSDEnsureCommandMatrix(t, func(runner Runner) interface{ Ensure(DesiredUser) error } {
+	testBSDEnsureCommandMatrix(t, func(runner Runner) Backend {
 		return NewOpenBSD(runner)
 	})
 }
 
 func TestNetBSDEnsureCommandMatrix(t *testing.T) {
-	testBSDEnsureCommandMatrix(t, func(runner Runner) interface{ Ensure(DesiredUser) error } {
+	testBSDEnsureCommandMatrix(t, func(runner Runner) Backend {
 		return NewNetBSD(runner)
 	})
 }
 
 func TestOpenBSDEnsureNoOp(t *testing.T) {
-	testBSDEnsureNoOp(t, func(runner Runner) interface{ Ensure(DesiredUser) error } {
+	testBSDEnsureNoOp(t, func(runner Runner) Backend {
 		return NewOpenBSD(runner)
 	})
 }
 
 func TestNetBSDEnsureNoOp(t *testing.T) {
-	testBSDEnsureNoOp(t, func(runner Runner) interface{ Ensure(DesiredUser) error } {
+	testBSDEnsureNoOp(t, func(runner Runner) Backend {
 		return NewNetBSD(runner)
 	})
 }
@@ -71,8 +38,8 @@ func TestNetBSDEnsureNoOp(t *testing.T) {
 // TestOpenBSDEnsureUpdate pins the OpenBSD argv: usermod -G receives only the
 // missing group because OpenBSD documents -G as appending.
 func TestOpenBSDEnsureUpdate(t *testing.T) {
-	calls := bsdUpdateCalls(nil, bsdCall{command: "usermod", args: []string{"-G", "audio", "svc"}})
-	if err := NewOpenBSD(scriptedBSDRunner(t, calls)).Ensure(bsdUpdateWant()); err != nil {
+	calls := bsdUpdateCalls(nil, scriptedCall{command: "usermod", args: []string{"-G", "audio", "svc"}})
+	if err := ensureAs(NewOpenBSD(scriptedRunner(t, calls)), bsdUpdateWant()); err != nil {
 		t.Fatalf("Ensure() = %v", err)
 	}
 }
@@ -84,10 +51,10 @@ func TestOpenBSDEnsureUpdate(t *testing.T) {
 // does not list the account, are not included.
 func TestNetBSDEnsureUpdate(t *testing.T) {
 	calls := bsdUpdateCalls(
-		[]bsdCall{{command: "getent", args: []string{"group"}, stdout: bsdGroupDB}},
-		bsdCall{command: "usermod", args: []string{"-G", "audio,video,wheel", "svc"}},
+		[]scriptedCall{{command: "getent", args: []string{"group"}, stdout: bsdGroupDB}},
+		scriptedCall{command: "usermod", args: []string{"-G", "audio,video,wheel", "svc"}},
 	)
-	if err := NewNetBSD(scriptedBSDRunner(t, calls)).Ensure(bsdUpdateWant()); err != nil {
+	if err := ensureAs(NewNetBSD(scriptedRunner(t, calls)), bsdUpdateWant()); err != nil {
 		t.Fatalf("Ensure() = %v", err)
 	}
 }
@@ -105,61 +72,62 @@ func bsdUpdateWant() DesiredUser {
 // membership to an existing svc account: the account and membership probes
 // (id -Gn, then any platform union probes) run before the missing audio
 // group is created, and usermod runs last.
-func bsdUpdateCalls(unionProbes []bsdCall, usermod bsdCall) []bsdCall {
-	calls := []bsdCall{
+func bsdUpdateCalls(unionProbes []scriptedCall, usermod scriptedCall) []scriptedCall {
+	calls := []scriptedCall{
 		{command: "getent", args: []string{"passwd", "svc"}},
 		{command: "id", args: []string{"-Gn", "svc"}, stdout: "svc wheel video\n"},
 	}
 	calls = append(calls, unionProbes...)
 	return append(calls,
-		bsdCall{command: "getent", args: []string{"group", "audio"}, code: 2},
-		bsdCall{command: "groupadd", args: []string{"audio"}},
-		bsdCall{command: "getent", args: []string{"group", "wheel"}},
+		scriptedCall{command: "getent", args: []string{"group", "audio"}, code: 2},
+		scriptedCall{command: "groupadd", args: []string{"audio"}},
+		scriptedCall{command: "getent", args: []string{"group", "wheel"}},
 		usermod,
 	)
 }
 
 func TestOpenBSDEnsureInvalidLoginClass(t *testing.T) {
-	testBSDEnsureInvalidLoginClass(t, func(runner Runner) interface{ Ensure(DesiredUser) error } {
+	testBSDEnsureInvalidLoginClass(t, func(runner Runner) Backend {
 		return NewOpenBSD(runner)
 	})
 }
 
 func TestNetBSDEnsureInvalidLoginClass(t *testing.T) {
-	testBSDEnsureInvalidLoginClass(t, func(runner Runner) interface{ Ensure(DesiredUser) error } {
+	testBSDEnsureInvalidLoginClass(t, func(runner Runner) Backend {
 		return NewNetBSD(runner)
 	})
 }
 
 func TestOpenBSDEnsureDryRun(t *testing.T) {
-	testBSDEnsureDryRun(t, func(runner Runner) interface{ Ensure(DesiredUser) error } {
+	testBSDEnsureDryRun(t, func(runner Runner) Backend {
 		return NewOpenBSD(runner)
 	})
 }
 
 func TestNetBSDEnsureDryRun(t *testing.T) {
-	testBSDEnsureDryRun(t, func(runner Runner) interface{ Ensure(DesiredUser) error } {
+	testBSDEnsureDryRun(t, func(runner Runner) Backend {
 		return NewNetBSD(runner)
 	})
 }
 
 func TestOpenBSDEnsureSupplementaryGroupLimit(t *testing.T) {
-	testBSDEnsureSupplementaryGroupLimit(t, func(runner Runner) interface{ Ensure(DesiredUser) error } {
+	testBSDEnsureSupplementaryGroupLimit(t, func(runner Runner) Backend {
 		return NewOpenBSD(runner)
 	}, nil)
 }
 
 func TestNetBSDEnsureSupplementaryGroupLimit(t *testing.T) {
-	testBSDEnsureSupplementaryGroupLimit(t, func(runner Runner) interface{ Ensure(DesiredUser) error } {
+	testBSDEnsureSupplementaryGroupLimit(t, func(runner Runner) Backend {
 		return NewNetBSD(runner)
-	}, []bsdCall{{command: "getent", args: []string{"group"}, stdout: "svc:*:1001:\n"}})
+	}, []scriptedCall{{command: "getent", args: []string{"group"}, stdout: "svc:*:1001:\n"}})
 }
 
 func TestNetBSDEnsureSurfacesUnavailableLoginClassOption(t *testing.T) {
-	err := NewNetBSD(scriptedBSDRunner(t, []bsdCall{
+	err := ensureAs(NewNetBSD(scriptedRunner(t, []scriptedCall{
 		{command: "getent", args: []string{"passwd", "svc"}, code: 2},
 		{command: "useradd", args: []string{"-L", "daemon", "svc"}, code: 1, stderr: "illegal option -- L"},
-	})).Ensure(DesiredUser{Name: "svc", LoginClass: "daemon"})
+	})), DesiredUser{Name: "svc", LoginClass: "daemon"})
+
 	if err == nil || !strings.Contains(err.Error(), "useradd -L daemon svc failed (exit 1)") {
 		t.Fatalf("Ensure() = %v", err)
 	}
@@ -167,13 +135,14 @@ func TestNetBSDEnsureSurfacesUnavailableLoginClassOption(t *testing.T) {
 
 func TestBSDEnsureRejectsUnsupportedSystemAccount(t *testing.T) {
 	for name, newBackend := range map[string]bsdBackend{
-		"openbsd": func(runner Runner) interface{ Ensure(DesiredUser) error } { return NewOpenBSD(runner) },
-		"netbsd":  func(runner Runner) interface{ Ensure(DesiredUser) error } { return NewNetBSD(runner) },
+		"openbsd": func(runner Runner) Backend { return NewOpenBSD(runner) },
+		"netbsd":  func(runner Runner) Backend { return NewNetBSD(runner) },
 	} {
 		t.Run(name, func(t *testing.T) {
-			err := newBackend(scriptedBSDRunner(t, []bsdCall{
+			err := ensureAs(newBackend(scriptedRunner(t, []scriptedCall{
 				{command: "getent", args: []string{"passwd", "svc"}, code: 2},
-			})).Ensure(DesiredUser{Name: "svc", System: true})
+			})), DesiredUser{Name: "svc", System: true})
+
 			if err == nil || !strings.Contains(err.Error(), "system accounts are not supported") {
 				t.Fatalf("Ensure() = %v", err)
 			}
@@ -205,7 +174,7 @@ func testBSDEnsureCommandMatrix(t *testing.T, newBackend bsdBackend) {
 		Shell:               "/sbin/nologin",
 		LoginClass:          "daemon",
 	}
-	calls := []bsdCall{
+	calls := []scriptedCall{
 		{command: "getent", args: []string{"passwd", "svc"}, code: 2},
 		{command: "getent", args: []string{"group", "audio"}, code: 2},
 		{command: "groupadd", args: []string{"audio"}},
@@ -214,20 +183,20 @@ func testBSDEnsureCommandMatrix(t *testing.T, newBackend bsdBackend) {
 		{command: "getent", args: []string{"group", "wheel"}},
 		{command: "useradd", args: []string{"-m", "-g", "svc", "-G", "audio,wheel", "-d", "/var/lib/svc", "-s", "/sbin/nologin", "-L", "daemon", "svc"}},
 	}
-	if err := newBackend(scriptedBSDRunner(t, calls)).Ensure(want); err != nil {
+	if err := ensureAs(newBackend(scriptedRunner(t, calls)), want); err != nil {
 		t.Fatalf("Ensure() = %v", err)
 	}
 }
 
 func testBSDEnsureNoOp(t *testing.T, newBackend bsdBackend) {
 	t.Helper()
-	calls := []bsdCall{
+	calls := []scriptedCall{
 		{command: "getent", args: []string{"passwd", "svc"}},
 		{command: "id", args: []string{"-Gn", "svc"}, stdout: "svc audio wheel\n"},
 		{command: "getent", args: []string{"group", "audio"}},
 		{command: "getent", args: []string{"group", "wheel"}},
 	}
-	if err := newBackend(scriptedBSDRunner(t, calls)).Ensure(DesiredUser{
+	if err := ensureAs(newBackend(scriptedRunner(t, calls)), DesiredUser{
 		Name:                "svc",
 		PrimaryGroup:        "svc",
 		SupplementaryGroups: []string{"wheel", "audio"},
@@ -243,10 +212,11 @@ func testBSDEnsureNoOp(t *testing.T, newBackend bsdBackend) {
 
 func testBSDEnsureInvalidLoginClass(t *testing.T, newBackend bsdBackend) {
 	t.Helper()
-	err := newBackend(scriptedBSDRunner(t, []bsdCall{
+	err := ensureAs(newBackend(scriptedRunner(t, []scriptedCall{
 		{command: "getent", args: []string{"passwd", "svc"}, code: 2},
 		{command: "useradd", args: []string{"-L", "not-a-class", "svc"}, code: 1, stderr: "unknown login class"},
-	})).Ensure(DesiredUser{Name: "svc", LoginClass: "not-a-class"})
+	})), DesiredUser{Name: "svc", LoginClass: "not-a-class"})
+
 	if err == nil || !strings.Contains(err.Error(), "useradd -L not-a-class svc failed (exit 1)") {
 		t.Fatalf("Ensure() = %v", err)
 	}
@@ -262,10 +232,11 @@ func testBSDEnsureDryRun(t *testing.T, newBackend bsdBackend) {
 		resource.ResetReport()
 	})
 
-	err := newBackend(scriptedBSDRunner(t, []bsdCall{
+	err := ensureAs(newBackend(scriptedRunner(t, []scriptedCall{
 		{command: "getent", args: []string{"passwd", "svc"}, code: 2},
 		{command: "getent", args: []string{"group", "svc"}, code: 2},
-	})).Ensure(DesiredUser{Name: "svc", PrimaryGroup: "svc", CreateHome: true})
+	})), DesiredUser{Name: "svc", PrimaryGroup: "svc", CreateHome: true})
+
 	if err != nil {
 		t.Fatalf("Ensure() = %v", err)
 	}
@@ -277,19 +248,19 @@ func testBSDEnsureDryRun(t *testing.T, newBackend bsdBackend) {
 // testBSDEnsureSupplementaryGroupLimit checks the desired-set limit on both
 // BSDs. unionProbe is the extra group-database probe NetBSD issues before a
 // membership update (nil on OpenBSD).
-func testBSDEnsureSupplementaryGroupLimit(t *testing.T, newBackend bsdBackend, unionProbe []bsdCall) {
+func testBSDEnsureSupplementaryGroupLimit(t *testing.T, newBackend bsdBackend, unionProbe []scriptedCall) {
 	t.Helper()
 	groups := bsdGroupNames(maxBSDSupplementaryGroups)
 	joined := strings.Join(groups, ",")
 
 	t.Run("creation accepts the portable limit without truncation", func(t *testing.T) {
-		calls := make([]bsdCall, 0, len(groups)+2)
-		calls = append(calls, bsdCall{command: "getent", args: []string{"passwd", "svc"}, code: 2})
+		calls := make([]scriptedCall, 0, len(groups)+2)
+		calls = append(calls, scriptedCall{command: "getent", args: []string{"passwd", "svc"}, code: 2})
 		for _, group := range groups {
-			calls = append(calls, bsdCall{command: "getent", args: []string{"group", group}})
+			calls = append(calls, scriptedCall{command: "getent", args: []string{"group", group}})
 		}
-		calls = append(calls, bsdCall{command: "useradd", args: []string{"-G", joined, "svc"}})
-		if err := newBackend(scriptedBSDRunner(t, calls)).Ensure(DesiredUser{
+		calls = append(calls, scriptedCall{command: "useradd", args: []string{"-G", joined, "svc"}})
+		if err := ensureAs(newBackend(scriptedRunner(t, calls)), DesiredUser{
 			Name:                "svc",
 			SupplementaryGroups: groups,
 		}); err != nil {
@@ -298,15 +269,15 @@ func testBSDEnsureSupplementaryGroupLimit(t *testing.T, newBackend bsdBackend, u
 	})
 
 	t.Run("update accepts the portable limit without truncation", func(t *testing.T) {
-		calls := make([]bsdCall, 0, len(groups)+3)
-		calls = append(calls, bsdCall{command: "getent", args: []string{"passwd", "svc"}})
-		calls = append(calls, bsdCall{command: "id", args: []string{"-Gn", "svc"}, stdout: "svc\n"})
+		calls := make([]scriptedCall, 0, len(groups)+3)
+		calls = append(calls, scriptedCall{command: "getent", args: []string{"passwd", "svc"}})
+		calls = append(calls, scriptedCall{command: "id", args: []string{"-Gn", "svc"}, stdout: "svc\n"})
 		calls = append(calls, unionProbe...)
 		for _, group := range groups {
-			calls = append(calls, bsdCall{command: "getent", args: []string{"group", group}})
+			calls = append(calls, scriptedCall{command: "getent", args: []string{"group", group}})
 		}
-		calls = append(calls, bsdCall{command: "usermod", args: []string{"-G", joined, "svc"}})
-		if err := newBackend(scriptedBSDRunner(t, calls)).Ensure(DesiredUser{
+		calls = append(calls, scriptedCall{command: "usermod", args: []string{"-G", joined, "svc"}})
+		if err := ensureAs(newBackend(scriptedRunner(t, calls)), DesiredUser{
 			Name:                "svc",
 			SupplementaryGroups: groups,
 		}); err != nil {
@@ -315,10 +286,11 @@ func testBSDEnsureSupplementaryGroupLimit(t *testing.T, newBackend bsdBackend, u
 	})
 
 	t.Run("rejects more than the portable limit before probing", func(t *testing.T) {
-		err := newBackend(scriptedBSDRunner(t, nil)).Ensure(DesiredUser{
+		err := ensureAs(newBackend(scriptedRunner(t, nil)), DesiredUser{
 			Name:                "svc",
 			SupplementaryGroups: bsdGroupNames(maxBSDSupplementaryGroups + 1),
 		})
+
 		if err == nil || !strings.Contains(err.Error(), "at most 16 supplementary groups") {
 			t.Fatalf("Ensure() = %v", err)
 		}

@@ -5,7 +5,6 @@ package dir
 import (
 	"errors"
 	"fmt"
-	"github.com/snonux/gonf/internal/logger"
 	"io/fs"
 	"os"
 	"os/user"
@@ -14,6 +13,7 @@ import (
 	"strconv"
 	"syscall"
 
+	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
@@ -164,7 +164,7 @@ func (d *Dir) apply() error {
 // in the configuration itself. The kernel-side backstop for the Lstat →
 // attribute window is applyAttributesTo's O_NOFOLLOW|O_DIRECTORY open.
 func ensureDirectorySelf(d *Dir) error {
-	id := fmt.Sprintf("Directory[%s]", d.path)
+	id := resource.FormatID("Directory", d.path)
 	logger.Debug("processing directory: %s", d.path)
 
 	info, err := os.Lstat(d.path)
@@ -213,7 +213,7 @@ func ensureDirectorySelf(d *Dir) error {
 // combine with WithPrune() to remove a directory and its contents
 // recursively.
 func ensureAbsent(d *Dir) error {
-	id := fmt.Sprintf("Directory[%s]", d.path)
+	id := resource.FormatID("Directory", d.path)
 	logger.Debug("ensuring absent: %s", d.path)
 
 	if _, err := os.Lstat(d.path); os.IsNotExist(err) {
@@ -519,7 +519,7 @@ func EnsurePlanDraft(path string, opts ...opt.DirOption) (resource.PlanDraft, er
 		Kind: "ensure_dir",
 		Path: d.path,
 		Mode: opt.ModeToWire(d.mode),
-		ID:   fmt.Sprintf("EnsureDir[%s]", d.path),
+		ID:   resource.FormatID("EnsureDir", d.path),
 		Deps: d.DependsOn.SortedIDs(),
 	}
 	// Same rule as planDraft: only explicitly configured ownership is

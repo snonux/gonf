@@ -430,7 +430,7 @@ func WithShell(shell string) userAccountOption {
 }
 
 // WithLoginClass sets a user's platform login class when creating a missing
-// account. Rocky Linux rejects this option because it has no login classes.
+// account. Linux rejects this option because it has no login classes.
 func WithLoginClass(class string) userAccountOption {
 	return userAccountOption(func(target any) {
 		requires(target, "WithLoginClass", func(r Classable) { r.SetLoginClass(class) })

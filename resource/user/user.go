@@ -27,7 +27,15 @@ type User struct {
 	loginClass          string
 	system              bool
 	manageHome          bool
+	// backend converges the desired account on this host. newUser selects
+	// the backend for the running GOOS; tests inject a fake through
+	// newUserWith instead of swapping package-level variables.
+	backend internaluser.Backend
 }
+
+// resourceType is the User resource's type label: the one input, with the
+// account name, to its resource.FormatID identifier.
+const resourceType = "User"
 
 var (
 	_ opt.Dependable             = (*User)(nil)
@@ -41,21 +49,10 @@ var (
 	_ opt.HomeManageable         = (*User)(nil)
 )
 
-// ensureCurrent is a variable only so this package can verify the public
-// resource and plan handler without accessing a host account database.
-var ensureCurrent = ensureForPlatform
-
-var (
-	ensureRocky   = internaluser.EnsureRocky
-	ensureOpenBSD = internaluser.EnsureOpenBSD
-	ensureFreeBSD = internaluser.EnsureFreeBSD
-	ensureNetBSD  = internaluser.EnsureNetBSD
-)
-
 // Present registers a local user that should exist.
 func Present(name string, opts ...opt.LocalUserOption) resource.Resource {
 	u := newUser(name, opts)
-	r := resource.Register("User", u.name, u, u.DependsOn.IDs...)
+	r := resource.Register(resourceType, u.name, u, u.DependsOn.IDs...)
 	resource.RecordPlanDraft(u.planDraft(r.ID()))
 	return r
 }
@@ -96,8 +93,15 @@ func (u *User) AddSupplementaryGroups(groups ...string) {
 // Apply runs user reconciliation directly for the legacy resource path.
 func (u *User) Apply() error { return u.apply() }
 
+// newUser builds a User that converges through the backend for the running
+// GOOS.
 func newUser(name string, opts []opt.LocalUserOption) *User {
-	u := &User{name: name}
+	return newUserWith(backendForGOOS(runtime.GOOS, nil), name, opts)
+}
+
+// newUserWith builds a User that converges through backend.
+func newUserWith(backend internaluser.Backend, name string, opts []opt.LocalUserOption) *User {
+	u := &User{name: name, backend: backend}
 	for _, option := range opts {
 		option.Apply(u)
 	}
@@ -126,15 +130,16 @@ func (u *User) apply() error {
 	if err := want.Validate(); err != nil {
 		return err
 	}
-	if err := ensureCurrent(want); err != nil {
+	// id is the same identifier Present registered (Resource.ID uses
+	// resource.FormatID too). The backend reports every account creation,
+	// membership update and opted-in home-field update under it via Mutate.
+	id := resource.FormatID(resourceType, want.Name)
+	if err := u.backend.Ensure(id, want); err != nil {
 		return err
 	}
-	// The backend uses Mutate for every account creation, membership update
-	// and opted-in home-field update, which records User[name] as changed. A
-	// converged account has no mutation to report, so add the standard
+	// A converged account has no mutation to report, so add the standard
 	// StatusOK outcome expected from a managed resource without duplicating a
 	// changed note.
-	id := "User[" + want.Name + "]"
 	if !resource.AnyChanged(id) {
 		resource.NoteResult(id, false)
 	}
@@ -155,21 +160,29 @@ func (u *User) desired() internaluser.DesiredUser {
 	}
 }
 
-func ensureForPlatform(want internaluser.DesiredUser) error {
-	return ensureForGOOS(runtime.GOOS, want)
+// backendForGOOS returns the backend that converges an account on goos:
+// internaluser.ForGOOS's backend, running commands through run (nil selects
+// the normal bounded runner). An unsupported goos still yields a backend,
+// which reports the operating system when applied, so a recipe can be
+// recorded on any controller.
+func backendForGOOS(goos string, run internaluser.Runner) internaluser.Backend {
+	if backend, ok := internaluser.ForGOOS(goos, run); ok {
+		return backend
+	}
+	return unsupportedBackend{goos: goos}
 }
 
-func ensureForGOOS(goos string, want internaluser.DesiredUser) error {
-	switch goos {
-	case "linux":
-		return ensureRocky(want)
-	case "openbsd":
-		return ensureOpenBSD(want)
-	case "freebsd":
-		return ensureFreeBSD(want)
-	case "netbsd":
-		return ensureNetBSD(want)
-	default:
-		return fmt.Errorf("user %q: unsupported operating system %s", want.Name, goos)
-	}
+// unsupportedBackend stands in for a GOOS without a user backend: it
+// declares no capabilities and refuses every Ensure, naming the GOOS.
+type unsupportedBackend struct{ goos string }
+
+// Ensure reports that goos has no user backend.
+func (b unsupportedBackend) Ensure(_ string, want internaluser.DesiredUser) error {
+	return fmt.Errorf("user %q: unsupported operating system %s", want.Name, b.goos)
+}
+
+// Capabilities returns zero capabilities (only Platform names the GOOS);
+// Ensure refuses everything regardless.
+func (b unsupportedBackend) Capabilities() internaluser.Capabilities {
+	return internaluser.Capabilities{Platform: b.goos}
 }

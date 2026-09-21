@@ -2,13 +2,10 @@ package user
 
 import (
 	"fmt"
-	"path"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/snonux/gonf/resource"
 )
 
 // freeBSDNoUserExit is sysexits.h's EX_NOUSER. pw(8) uses it when usershow or
@@ -22,118 +19,98 @@ const freeBSDNoUserExit = 67
 // existing account's home field changes only when DesiredUser.ManageHome opts
 // in, and then only via pw usermod -d without -m.
 type FreeBSD struct {
-	run Runner
-}
-
-type freeBSDUser struct {
-	name   string
-	record string
+	commands
 }
 
 // NewFreeBSD constructs a FreeBSD backend with runner. A nil runner uses the
 // normal bounded command runner.
 func NewFreeBSD(runner Runner) FreeBSD {
-	return FreeBSD{run: defaultRunner(runner)}
+	return FreeBSD{commands{run: defaultRunner(runner)}}
 }
 
-// Ensure converges want without destructive account operations.
-func (b FreeBSD) Ensure(want DesiredUser) error {
-	if err := want.Validate(); err != nil {
-		return err
-	}
-	if err := validateFreeBSDHome(want); err != nil {
-		return err
-	}
-	user, exists, err := b.user(want.Name)
-	if err != nil {
-		return err
-	}
-	if exists {
-		return b.ensureExistingUser(user, want)
-	}
-	if want.System {
-		return fmt.Errorf("user %q: system accounts are not supported on FreeBSD", want.Name)
-	}
-	return b.ensureMissingUser(want)
+// Ensure converges want without destructive account operations, reporting
+// account mutations under id. b is a value copy, so setting userID here
+// never leaks into another call.
+func (b FreeBSD) Ensure(id string, want DesiredUser) error {
+	b.userID = id
+	return ensure(b, want)
 }
 
-// EnsureFreeBSD reconciles want with the default bounded command runner.
-func EnsureFreeBSD(want DesiredUser) error {
-	return NewFreeBSD(nil).Ensure(want)
+// Capabilities declares the pw(8) contract: -L sets a login class, there is
+// no system-account flag, the supplementary-group list has no gonf-side
+// limit, and pw useradd -m must not be pointed at a relative or root home.
+func (FreeBSD) Capabilities() Capabilities {
+	return Capabilities{Platform: "FreeBSD", LoginClass: true, CreateHomeNeedsSafeHome: true}
+}
+
+// lookupUser reads the account's pw usershow record (master.passwd layout).
+func (b FreeBSD) lookupUser(name string) (string, bool, error) {
+	return b.pwShow("usershow", name)
 }
 
 // ensureExistingUser adds missing memberships and then, only when opted in,
-// converges the passwd home field. user.record is the pw usershow line read
+// converges the passwd home field. record is the pw usershow line read
 // before any mutation; a membership update never alters the home field.
-func (b FreeBSD) ensureExistingUser(user freeBSDUser, want DesiredUser) error {
-	if err := b.addMissingMemberships(user, want); err != nil {
+func (b FreeBSD) ensureExistingUser(record string, want DesiredUser) error {
+	if err := b.addMissingMemberships(record, want); err != nil {
 		return err
 	}
-	return b.ensureHomeField(user, want)
+	return b.ensureHomeField(record, want)
 }
 
 // ensureHomeField rewrites only the passwd home field. pw usermod -d without
 // -m neither creates, moves, nor chowns the directory, and leaves the
 // password, lock state, shell, and login class untouched.
-func (b FreeBSD) ensureHomeField(user freeBSDUser, want DesiredUser) error {
+func (b FreeBSD) ensureHomeField(record string, want DesiredUser) error {
 	if !want.ManageHome {
 		return nil
 	}
-	current, err := passwdHome(user.record, want.Name, freeBSDHomeField)
+	current, err := passwdHome(record, want.Name, freeBSDHomeField)
 	if err != nil || current == want.Home {
 		return err
 	}
-	return b.runMutation("User["+want.Name+"]", "pw", "usermod", "-n", want.Name, "-d", want.Home)
+	return b.mutateUser("pw", "usermod", "-n", want.Name, "-d", want.Home)
 }
 
-func (b FreeBSD) addMissingMemberships(user freeBSDUser, want DesiredUser) error {
+// addMissingMemberships rewrites the secondary-group list only when a
+// requested group is missing from it.
+//
+// pw usermod -G replaces every secondary membership. groupshow -a is the
+// complete local group database that pw will rewrite, unlike id -Gn whose
+// output is bounded by the platform's supplementary-group limit. It is read
+// before any mutation so the replacement list retains every local secondary
+// membership while excluding the real primary group as pw(8) requires.
+func (b FreeBSD) addMissingMemberships(record string, want DesiredUser) error {
 	desired := want.Supplementary()
 	if len(desired) == 0 {
 		return nil
 	}
-
-	// pw usermod -G replaces every secondary membership. groupshow -a is the
-	// complete local group database that pw will rewrite, unlike id -Gn whose
-	// output is bounded by the platform's supplementary-group limit. Read it
-	// before any mutation so the replacement list retains every local secondary
-	// membership while excluding the real primary group as pw(8) requires.
-	primary, current, err := b.secondaryGroups(user)
+	primary, current, err := b.secondaryGroups(want.Name, record)
 	if err != nil {
 		return err
 	}
-	for _, group := range desired {
-		if group == primary {
-			continue
-		}
-		if err := b.ensureGroup(group); err != nil {
-			return err
-		}
+	notPrimary := slices.DeleteFunc(slices.Clone(desired), func(group string) bool { return group == primary })
+	if err := ensureEach(notPrimary, b.ensureGroup); err != nil {
+		return err
 	}
 	groups := addSecondaryGroups(current, desired, primary)
 	if slices.Equal(groups, current) {
 		return nil
 	}
-	return b.runMutation("User["+want.Name+"]", "pw", "usermod", "-n", want.Name, "-G", strings.Join(groups, ","))
+	return b.mutateUser("pw", "usermod", "-n", want.Name, "-G", strings.Join(groups, ","))
 }
 
+// ensureMissingUser creates every missing creation group, then the account.
+// converge has already refused a system account (see Capabilities).
 func (b FreeBSD) ensureMissingUser(want DesiredUser) error {
-	for _, group := range creationGroups(want) {
-		if err := b.ensureGroup(group); err != nil {
-			return err
-		}
+	if err := ensureEach(creationGroups(want), b.ensureGroup); err != nil {
+		return err
 	}
 	return b.addUser(want)
 }
 
 func (b FreeBSD) ensureGroup(group string) error {
-	exists, err := b.groupExists(group)
-	if err != nil {
-		return err
-	}
-	if exists {
-		return nil
-	}
-	return b.runMutation("Group["+group+"]", "pw", "groupadd", "-n", group)
+	return b.ensureGroupWith(b.groupExists, group, "pw", "groupadd", "-n", group)
 }
 
 func (b FreeBSD) addUser(want DesiredUser) error {
@@ -155,115 +132,96 @@ func (b FreeBSD) addUser(want DesiredUser) error {
 	if want.LoginClass != "" {
 		args = append(args, "-L", want.LoginClass)
 	}
-	return b.runMutation("User["+want.Name+"]", "pw", args...)
+	return b.mutateUser("pw", args...)
 }
 
-func (b FreeBSD) user(name string) (freeBSDUser, bool, error) {
-	stdout, stderr, code, err := b.run("pw", "usershow", "-n", name)
+// pwShow runs pw <show> -n name (usershow or groupshow) and returns the
+// record it printed. EX_NOUSER means the entry does not exist.
+func (b FreeBSD) pwShow(show, name string) (string, bool, error) {
+	stdout, stderr, code, err := b.run("pw", show, "-n", name)
 	if err != nil {
-		return freeBSDUser{}, false, fmt.Errorf("pw usershow -n %s: %w", name, err)
+		return "", false, fmt.Errorf("pw %s -n %s: %w", show, name, err)
 	}
 	switch code {
 	case 0:
-		return freeBSDUser{name: name, record: stdout}, true, nil
+		return stdout, true, nil
 	case freeBSDNoUserExit:
-		return freeBSDUser{}, false, nil
+		return "", false, nil
 	default:
-		return freeBSDUser{}, false, commandError("pw", []string{"usershow", "-n", name}, code, stdout, stderr)
+		return "", false, commandError("pw", []string{show, "-n", name}, code, stdout, stderr)
 	}
 }
 
 func (b FreeBSD) groupExists(group string) (bool, error) {
-	stdout, stderr, code, err := b.run("pw", "groupshow", "-n", group)
-	if err != nil {
-		return false, fmt.Errorf("pw groupshow -n %s: %w", group, err)
-	}
-	switch code {
-	case 0:
-		return true, nil
-	case freeBSDNoUserExit:
-		return false, nil
-	default:
-		return false, commandError("pw", []string{"groupshow", "-n", group}, code, stdout, stderr)
-	}
+	_, exists, err := b.pwShow("groupshow", group)
+	return exists, err
 }
 
-func (b FreeBSD) secondaryGroups(user freeBSDUser) (string, []string, error) {
-	fields := strings.Split(strings.TrimSpace(user.record), ":")
-	if len(fields) < 4 || fields[0] != user.name {
-		return "", nil, fmt.Errorf("pw usershow -n %s returned malformed passwd entry", user.name)
-	}
-	gid, err := strconv.ParseUint(fields[3], 10, 32)
+// secondaryGroups returns the name of the account's primary group and the
+// sorted groups (other than the primary) whose member list names it, read
+// from pw groupshow -a.
+func (b FreeBSD) secondaryGroups(name, record string) (string, []string, error) {
+	gid, err := primaryGID(name, record)
 	if err != nil {
-		return "", nil, fmt.Errorf("pw usershow -n %s returned invalid primary gid %q: %w", user.name, fields[3], err)
+		return "", nil, err
 	}
-	stdout, stderr, code, runErr := b.run("pw", "groupshow", "-a")
-	if runErr != nil {
-		return "", nil, fmt.Errorf("pw groupshow -a: %w", runErr)
+	stdout, err := b.probe("pw", "groupshow", "-a")
+	if err != nil {
+		return "", nil, err
 	}
-	if code != 0 {
-		return "", nil, commandError("pw", []string{"groupshow", "-a"}, code, stdout, stderr)
-	}
-
 	var primary string
 	groups := make(map[string]struct{})
 	for _, line := range strings.Split(strings.TrimSpace(stdout), "\n") {
 		if line == "" {
 			continue
 		}
-		groupFields := strings.SplitN(line, ":", 4)
-		if len(groupFields) != 4 {
-			return "", nil, fmt.Errorf("pw groupshow -a returned malformed group entry %q", line)
-		}
-		if err := validateName("group returned by pw groupshow", groupFields[0]); err != nil {
+		group, groupID, members, err := parseFreeBSDGroup(line)
+		if err != nil {
 			return "", nil, err
 		}
-		groupID, parseErr := strconv.ParseUint(groupFields[2], 10, 32)
-		if parseErr != nil {
-			return "", nil, fmt.Errorf("pw groupshow -a returned invalid gid %q: %w", groupFields[2], parseErr)
-		}
 		if groupID == gid {
-			primary = groupFields[0]
+			primary = group
 			continue
 		}
-		if slices.Contains(strings.Split(groupFields[3], ","), user.name) {
-			groups[groupFields[0]] = struct{}{}
+		if slices.Contains(members, name) {
+			groups[group] = struct{}{}
 		}
 	}
 	if primary == "" {
-		return "", nil, fmt.Errorf("pw groupshow -a did not contain primary gid %d for user %q", gid, user.name)
+		return "", nil, fmt.Errorf("pw groupshow -a did not contain primary gid %d for user %q", gid, name)
 	}
 	return primary, sortedGroups(groups), nil
 }
 
-func (b FreeBSD) runAction(command string, args ...string) error {
-	stdout, stderr, code, err := b.run(command, args...)
+// primaryGID parses the gid column of name's pw usershow record.
+func primaryGID(name, record string) (uint64, error) {
+	fields := strings.Split(strings.TrimSpace(record), ":")
+	if len(fields) < 4 || fields[0] != name {
+		return 0, fmt.Errorf("pw usershow -n %s returned malformed passwd entry", name)
+	}
+	gid, err := strconv.ParseUint(fields[3], 10, 32)
 	if err != nil {
-		return fmt.Errorf("%s %s: %w", command, strings.Join(args, " "), err)
+		return 0, fmt.Errorf("pw usershow -n %s returned invalid primary gid %q: %w", name, fields[3], err)
 	}
-	if code != 0 {
-		return commandError(command, args, code, stdout, stderr)
-	}
-	return nil
+	return gid, nil
 }
 
-func (b FreeBSD) runMutation(id, command string, args ...string) error {
-	return resource.Mutate(id, "run "+command+" "+strings.Join(args, " "), func() error {
-		return b.runAction(command, args...)
-	})
-}
-
-func validateFreeBSDHome(want DesiredUser) error {
-	if !want.CreateHome || want.Home == "" {
-		return nil
+// parseFreeBSDGroup splits one pw groupshow -a line (name:pw:gid:members).
+// The name is validated so a surprising entry cannot inject a comma or
+// whitespace into the -G value built from it.
+func parseFreeBSDGroup(line string) (string, uint64, []string, error) {
+	fields := strings.SplitN(line, ":", 4)
+	if len(fields) != 4 {
+		return "", 0, nil, fmt.Errorf("pw groupshow -a returned malformed group entry %q", line)
 	}
-	if !path.IsAbs(want.Home) {
-		return fmt.Errorf("user %q: home must be absolute when CreateHome is set", want.Name)
+	if err := validateName("group returned by pw groupshow", fields[0]); err != nil {
+		return "", 0, nil, err
 	}
-	if path.Clean(want.Home) == "/" {
-		return fmt.Errorf("user %q: home must not be the root directory when CreateHome is set", want.Name)
+	gid, err := strconv.ParseUint(fields[2], 10, 32)
+	if err != nil {
+		return "", 0, nil, fmt.Errorf("pw groupshow -a returned invalid gid %q: %w", fields[2], err)
 	}
-	return nil
+	return fields[0], gid, strings.Split(fields[3], ","), nil
 }
 
 func creationPrimaryGroup(want DesiredUser) string {

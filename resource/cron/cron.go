@@ -85,8 +85,7 @@ func newCron(name string, opts []opt.CronOption) *Cron {
 // Present registers a cron job that should exist in the user's crontab.
 func Present(name string, opts ...opt.CronOption) resource.Resource {
 	c := newCron(name, opts)
-	regName := c.user + "/" + c.name
-	r := resource.Register("Cron", regName, c, c.DependsOn.IDs...)
+	r := resource.Register(cronType, c.regName(), c, c.DependsOn.IDs...)
 	resource.RecordPlanDraft(c.planDraft(r.ID()))
 	return r
 }
@@ -141,11 +140,22 @@ func (c *Cron) planDraft(id string) resource.PlanDraft {
 	}
 }
 
+// cronType is the Cron resource's type label.
+const cronType = "Cron"
+
+// regName is the Cron resource's registered name, "<user>/<name>": one cron
+// job name may exist once per crontab.
+func (c *Cron) regName() string { return c.user + "/" + c.name }
+
+// id is the Cron resource's ID, the same value Present registers, so apply
+// reports under exactly the registered ID.
+func (c *Cron) id() string { return resource.FormatID(cronType, c.regName()) }
+
 // Apply runs the cron reconciliation directly for the legacy resource path.
 func (c *Cron) Apply() error { return c.apply() }
 
 func (c *Cron) apply() error {
-	id := fmt.Sprintf("Cron[%s/%s]", c.user, c.name)
+	id := c.id()
 	if err := c.validate(); err != nil {
 		return fmt.Errorf("%s: %w", id, err)
 	}

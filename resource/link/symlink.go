@@ -13,7 +13,7 @@ import (
 // It refuses to create or keep a symlink whose target path does not exist
 // (dangling / broken links are treated as apply failures).
 func ensureSymlink(l *Link) error {
-	id := fmt.Sprintf("Symlink[%s]", l.path)
+	id := resource.FormatID("Symlink", l.path)
 	logger.Debug("processing symlink: %s -> %s", l.path, l.target)
 
 	if l.target == "" {

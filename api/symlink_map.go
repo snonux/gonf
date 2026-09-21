@@ -1,7 +1,6 @@
 package api
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -25,7 +24,7 @@ func LinkIfExists(path, target string, opts ...options.LinkOption) Resource {
 			Kind:   "link_if_exists",
 			Path:   p,
 			Target: t,
-			ID:     fmt.Sprintf("LinkIfExists[%s]", p),
+			ID:     resource.FormatID("LinkIfExists", p),
 		})
 		return resource.Multi(nil)
 	}

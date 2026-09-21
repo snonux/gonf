@@ -4,16 +4,16 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-
-	gonfexec "github.com/snonux/gonf/internal/exec"
-	"github.com/snonux/gonf/resource"
 )
 
-// maxBSDSupplementaryGroups is the portable useradd/usermod -G limit. NetBSD
-// documents a maximum of 16 groups; rejecting a larger desired set prevents a
-// platform utility from silently truncating it. On NetBSD the limit also
-// applies to the full union gonf passes to usermod -G for an existing account
-// (see membershipUnion).
+// maxBSDSupplementaryGroups is the portable useradd/usermod -G limit,
+// declared as Capabilities.MaxSupplementaryGroups. NetBSD documents a maximum
+// of 16 groups; rejecting a larger desired set prevents a platform utility
+// from silently truncating it. On NetBSD the limit also applies to the full
+// union gonf passes to usermod -G for an existing account (see
+// membershipUnion). It counts supplementary groups only: whether NGROUPS_MAX
+// also counts the primary group (16 + 1) is unverified without a native BSD
+// host (task y42), so the value is kept as it was.
 const maxBSDSupplementaryGroups = 16
 
 // membershipMode selects how a BSD backend adds supplementary memberships to
@@ -48,7 +48,7 @@ const (
 // Missing memberships are passed alone to usermod -G, which OpenBSD
 // documents as appending (see appendMissing).
 type OpenBSD struct {
-	run Runner
+	bsd
 }
 
 // NetBSD reconciles DesiredUser values using NetBSD's user-management
@@ -61,73 +61,50 @@ type OpenBSD struct {
 // missing memberships are added by passing the full union of the existing
 // explicit memberships and the missing groups (see membershipUnion).
 type NetBSD struct {
-	run Runner
+	bsd
 }
 
-// bsd is the shared OpenBSD/NetBSD implementation. membership is the only
-// behavioural difference between the two platforms.
+// bsd is the shared OpenBSD/NetBSD implementation, embedded by both exported
+// backends. membership is the only behavioural difference between the two
+// platforms.
 type bsd struct {
-	run        Runner
+	commands
 	membership membershipMode
 }
 
 // NewOpenBSD constructs an OpenBSD backend with runner. A nil runner uses the
 // normal bounded command runner.
 func NewOpenBSD(runner Runner) OpenBSD {
-	return OpenBSD{run: defaultRunner(runner)}
+	return OpenBSD{bsd{commands: commands{run: defaultRunner(runner)}, membership: appendMissing}}
 }
 
 // NewNetBSD constructs a NetBSD backend with runner. A nil runner uses the
 // normal bounded command runner.
 func NewNetBSD(runner Runner) NetBSD {
-	return NetBSD{run: defaultRunner(runner)}
+	return NetBSD{bsd{commands: commands{run: defaultRunner(runner)}, membership: membershipUnion}}
 }
 
-// Ensure converges want without destructive account operations.
-func (b OpenBSD) Ensure(want DesiredUser) error {
-	return bsd{run: b.run, membership: appendMissing}.Ensure(want)
+// Ensure converges want without destructive account operations, reporting
+// account mutations under id. OpenBSD and NetBSD expose it through
+// embedding; b is a value copy, so setting userID never leaks into another
+// call.
+func (b bsd) Ensure(id string, want DesiredUser) error {
+	b.userID = id
+	return ensure(b, want)
 }
 
-// Ensure converges want without destructive account operations.
-func (b NetBSD) Ensure(want DesiredUser) error {
-	return bsd{run: b.run, membership: membershipUnion}.Ensure(want)
+// Capabilities declares the portable OpenBSD/NetBSD useradd contract: -L sets
+// a login class (NetBSD only when useradd is built with EXTENSIONS; a tool
+// without it fails loudly rather than dropping the class), there is no
+// system-account flag, and at most maxBSDSupplementaryGroups supplementary
+// groups are accepted. OpenBSD and NetBSD expose it through embedding.
+func (bsd) Capabilities() Capabilities {
+	return Capabilities{Platform: "BSD", LoginClass: true, MaxSupplementaryGroups: maxBSDSupplementaryGroups}
 }
 
-// EnsureOpenBSD reconciles want with the default bounded command runner.
-func EnsureOpenBSD(want DesiredUser) error {
-	return NewOpenBSD(nil).Ensure(want)
-}
-
-// EnsureNetBSD reconciles want with the default bounded command runner.
-func EnsureNetBSD(want DesiredUser) error {
-	return NewNetBSD(nil).Ensure(want)
-}
-
-func defaultRunner(runner Runner) Runner {
-	if runner == nil {
-		return gonfexec.Run
-	}
-	return runner
-}
-
-func (b bsd) Ensure(want DesiredUser) error {
-	if err := want.Validate(); err != nil {
-		return err
-	}
-	if len(want.Supplementary()) > maxBSDSupplementaryGroups {
-		return fmt.Errorf("user %q: at most %d supplementary groups are supported on BSD", want.Name, maxBSDSupplementaryGroups)
-	}
-	record, exists, err := getent(b.run, "passwd", want.Name)
-	if err != nil {
-		return err
-	}
-	if exists {
-		return b.ensureExistingUser(record, want)
-	}
-	if want.System {
-		return fmt.Errorf("user %q: system accounts are not supported on BSD", want.Name)
-	}
-	return b.ensureMissingUser(want)
+// lookupUser reads the account's getent passwd record.
+func (b bsd) lookupUser(name string) (string, bool, error) {
+	return b.getent("passwd", name)
 }
 
 // ensureExistingUser adds missing memberships and then, only when opted in,
@@ -143,13 +120,11 @@ func (b bsd) ensureExistingUser(record string, want DesiredUser) error {
 	if err != nil {
 		return err
 	}
-	for _, group := range want.Supplementary() {
-		if err := b.ensureGroup(group); err != nil {
-			return err
-		}
+	if err := ensureEach(want.Supplementary(), b.ensureGroup); err != nil {
+		return err
 	}
 	if len(groups) > 0 {
-		if err := b.runMutation("User["+want.Name+"]", "usermod", "-G", strings.Join(groups, ","), want.Name); err != nil {
+		if err := b.mutateUser("usermod", "-G", strings.Join(groups, ","), want.Name); err != nil {
 			return err
 		}
 	}
@@ -167,27 +142,20 @@ func (b bsd) ensureHomeField(record string, want DesiredUser) error {
 	if err != nil || current == want.Home {
 		return err
 	}
-	return b.runMutation("User["+want.Name+"]", "usermod", "-d", want.Home, want.Name)
+	return b.mutateUser("usermod", "-d", want.Home, want.Name)
 }
 
+// ensureMissingUser creates every missing requested group, then the account.
+// converge has already refused a system account (see Capabilities).
 func (b bsd) ensureMissingUser(want DesiredUser) error {
-	for _, group := range want.Groups() {
-		if err := b.ensureGroup(group); err != nil {
-			return err
-		}
+	if err := ensureEach(want.Groups(), b.ensureGroup); err != nil {
+		return err
 	}
 	return b.addUser(want)
 }
 
 func (b bsd) ensureGroup(group string) error {
-	exists, err := b.groupExists(group)
-	if err != nil {
-		return err
-	}
-	if exists {
-		return nil
-	}
-	return b.runMutation("Group["+group+"]", "groupadd", group)
+	return b.ensureGroupWith(b.getentGroupExists, group, "groupadd", group)
 }
 
 func (b bsd) addUser(want DesiredUser) error {
@@ -214,7 +182,7 @@ func (b bsd) addUser(want DesiredUser) error {
 		args = append(args, "-L", want.LoginClass)
 	}
 	args = append(args, want.Name)
-	return b.runMutation("User["+want.Name+"]", "useradd", args...)
+	return b.mutateUser("useradd", args...)
 }
 
 // membershipArgument returns the groups to pass to usermod -G, or nil when
@@ -230,16 +198,11 @@ func (b bsd) membershipArgument(want DesiredUser) ([]string, error) {
 	if len(desired) == 0 {
 		return nil, nil
 	}
-	current, err := b.userGroups(want.Name)
+	current, err := b.idGroups("-Gn", want.Name)
 	if err != nil {
 		return nil, err
 	}
-	missing := make([]string, 0, len(desired))
-	for _, group := range desired {
-		if !current[group] {
-			missing = append(missing, group)
-		}
-	}
+	missing := missingGroups(desired, current)
 	if len(missing) == 0 || b.membership == appendMissing {
 		return missing, nil
 	}
@@ -249,7 +212,8 @@ func (b bsd) membershipArgument(want DesiredUser) ([]string, error) {
 // unionWithExplicitGroups returns the sorted union of missing and every group
 // that lists name as an explicit member in the group database: the set a
 // replacing usermod -G must receive to keep existing memberships. The union
-// is checked against maxBSDSupplementaryGroups here, before ensureExistingUser
+// is checked against the declared Capabilities().MaxSupplementaryGroups
+// here (the same limit the request check enforces), before ensureExistingUser
 // creates any group or runs usermod, so a refusal mutates nothing and the
 // platform tool can neither truncate the list nor fail half-way through.
 func (b bsd) unionWithExplicitGroups(name string, missing []string) ([]string, error) {
@@ -261,9 +225,9 @@ func (b bsd) unionWithExplicitGroups(name string, missing []string) ([]string, e
 		groups[group] = struct{}{}
 	}
 	union := sortedGroups(groups)
-	if len(union) > maxBSDSupplementaryGroups {
-		return nil, fmt.Errorf("user %q: adding %s while keeping existing memberships needs %d supplementary groups; at most %d are supported on BSD",
-			name, strings.Join(missing, ","), len(union), maxBSDSupplementaryGroups)
+	if caps := b.Capabilities(); caps.exceedsGroupLimit(len(union)) {
+		return nil, fmt.Errorf("user %q: adding %s while keeping existing memberships needs %d supplementary groups; at most %d are supported on %s",
+			name, strings.Join(missing, ","), len(union), caps.MaxSupplementaryGroups, caps.Platform)
 	}
 	return union, nil
 }
@@ -276,12 +240,9 @@ func (b bsd) unionWithExplicitGroups(name string, missing []string) ([]string, e
 // is kept, so that listing survives a replacing -G. Group names are validated
 // so a surprising entry cannot inject a comma or whitespace into the -G value.
 func (b bsd) explicitGroups(name string) (map[string]struct{}, error) {
-	stdout, stderr, code, err := b.run("getent", "group")
+	stdout, err := b.probe("getent", "group")
 	if err != nil {
-		return nil, fmt.Errorf("getent group: %w", err)
-	}
-	if code != 0 {
-		return nil, commandError("getent", []string{"group"}, code, stdout, stderr)
+		return nil, err
 	}
 	groups := make(map[string]struct{})
 	for _, line := range strings.Split(strings.TrimSpace(stdout), "\n") {
@@ -301,41 +262,4 @@ func (b bsd) explicitGroups(name string) (map[string]struct{}, error) {
 		groups[fields[0]] = struct{}{}
 	}
 	return groups, nil
-}
-
-func (b bsd) groupExists(group string) (bool, error) {
-	_, exists, err := getent(b.run, "group", group)
-	return exists, err
-}
-
-func (b bsd) userGroups(name string) (map[string]bool, error) {
-	stdout, stderr, code, err := b.run("id", "-Gn", name)
-	if err != nil {
-		return nil, fmt.Errorf("id -Gn %s: %w", name, err)
-	}
-	if code != 0 {
-		return nil, commandError("id", []string{"-Gn", name}, code, stdout, stderr)
-	}
-	groups := make(map[string]bool)
-	for _, group := range strings.Fields(stdout) {
-		groups[group] = true
-	}
-	return groups, nil
-}
-
-func (b bsd) runAction(command string, args ...string) error {
-	stdout, stderr, code, err := b.run(command, args...)
-	if err != nil {
-		return fmt.Errorf("%s %s: %w", command, strings.Join(args, " "), err)
-	}
-	if code != 0 {
-		return commandError(command, args, code, stdout, stderr)
-	}
-	return nil
-}
-
-func (b bsd) runMutation(id, command string, args ...string) error {
-	return resource.Mutate(id, "run "+command+" "+strings.Join(args, " "), func() error {
-		return b.runAction(command, args...)
-	})
 }

@@ -206,7 +206,7 @@ func (c *Cmd) apply() error {
 }
 
 func (c *Cmd) id() string {
-	return fmt.Sprintf("Command[%s]", c.name)
+	return resource.FormatID("Command", c.name)
 }
 
 func (c *Cmd) run() error {

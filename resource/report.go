@@ -123,7 +123,7 @@ func AnyChanged(ids ...string) bool {
 			return true
 		}
 		if dirPath, ok := directoryNotePath(id); ok {
-			prefix := "File[" + dirPath
+			prefix := idPrefix("File") + dirPath
 			for _, n := range notes {
 				if !isChangeStatus(n.st) {
 					continue
@@ -151,7 +151,7 @@ func isChangeStatus(st Status) bool {
 }
 
 func directoryNotePath(id string) (string, bool) {
-	const prefix = "Directory["
+	prefix := idPrefix("Directory")
 	if !strings.HasPrefix(id, prefix) || !strings.HasSuffix(id, "]") {
 		return "", false
 	}
