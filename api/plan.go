@@ -131,9 +131,14 @@ func (s *recordingSession) reset() {
 // pre-flight, returned a plan:
 //
 //   - Every error that arises while recording or validating (task-body,
-//     cycle, packaging and pre-flight refusals, and a planDir the up-front
-//     usability check refuses before any task body runs) leaves planDir
-//     exactly as it was, and an absent planDir is not created.
+//     cycle, packaging and pre-flight refusals) leaves planDir exactly as it
+//     was, and an absent planDir is not created. So does the refusal of a
+//     planDir that plan.SecureDir cannot take over (a symlink or a symlinked
+//     ancestor, a file, another user's directory, no writable ancestor): a
+//     best-effort pre-check (checkPlanDirUsable) catches the common cases
+//     before any task body runs, and whatever it misses (a path that changed
+//     in between, ACLs) is refused by SecureDir at commit time, after the
+//     task bodies ran but before anything is written to planDir.
 //   - An I/O failure while COMMITTING the blobs (full disk, permissions, a
 //     blob path that cannot be replaced) is reported but is not atomic: some
 //     blobs may already be copied, so a partially updated blob store is

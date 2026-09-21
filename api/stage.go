@@ -127,15 +127,28 @@ func (l *lazyStage) WriteGlob(name, pattern string) (string, error) {
 }
 
 // checkPlanDirUsable is the cheap up-front counterpart of commitStagedBlobs's
-// plan.SecureDir, run before any task body so an unusable destination fails as
-// early as it did when RecordPlan called SecureDir first, without creating or
-// changing anything. It mirrors what SecureDir needs: an existing planDir must
-// be a real directory (SecureDir opens every component with O_NOFOLLOW, so a
-// symlink is refused) that we own (SecureDir chmods it to 0700, so a read-only
-// directory of ours is fine); an absent planDir needs its nearest existing
-// ancestor to be a directory we can create entries in. It is a pre-check, not
-// a guarantee: SecureDir at commit time still has the last word.
+// plan.SecureDir. It runs before any task body so the common unusable
+// destinations fail early, without creating or changing anything, as they did
+// when RecordPlan called SecureDir first. It looks at the same things SecureDir
+// would trip over:
+//
+//   - planDir or any of its ancestors is a symlink (SecureDir opens every path
+//     component with O_NOFOLLOW; filepath.Clean first, so "link/" is the
+//     symlink "link", which a plain Lstat of "link/" would follow);
+//   - an existing planDir is not a directory, or is owned by another user
+//     (SecureDir must chmod it; a read-only directory of ours is fine);
+//   - an absent planDir has no existing ancestor we can create entries in.
+//
+// It is a best-effort pre-check, not a guarantee: it inspects the path with
+// Lstat/access(2) while SecureDir opens it component by component, so the
+// answers can differ when the path changes in between or on exotic setups
+// (security modules, unusual ACLs). SecureDir at commit time always has the last word
+// and refuses safely, writing nothing to a directory it cannot take over.
 func checkPlanDirUsable(planDir string) error {
+	planDir = filepath.Clean(planDir)
+	if err := refuseSymlinkedPath(planDir); err != nil {
+		return err
+	}
 	info, err := os.Lstat(planDir)
 	switch {
 	case err == nil:
@@ -161,9 +174,28 @@ func checkPlanDirUsable(planDir string) error {
 	}
 }
 
-// checkOwnedDir reports whether path (already Lstat'ed as info) is a directory
-// that plan.SecureDir can take over: not a symlink, owned by the effective user
-// (or we are root), since SecureDir has to chmod it.
+// refuseSymlinkedPath walks path (already cleaned) and every ancestor up to the
+// root, or up to "." for a relative path, without following symlinks, and
+// refuses the first one that is a symlink. plan.SecureDir refuses such paths
+// too (O_NOFOLLOW on each component), so a symlinked plan directory or ancestor
+// is reported as what it is, before any task body runs, instead of as a
+// generic "not a directory". Components that do not exist or cannot be
+// examined are skipped here; the checks after this one report those.
+func refuseSymlinkedPath(path string) error {
+	for p := path; ; p = filepath.Dir(p) {
+		if info, err := os.Lstat(p); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%s is a symlink; symlinked plan directories are refused", p)
+		}
+		if filepath.Dir(p) == p {
+			return nil
+		}
+	}
+}
+
+// checkOwnedDir reports whether path (already Lstat'ed as info, and known not
+// to be a symlink: refuseSymlinkedPath ran first) is a directory that
+// plan.SecureDir can take over: owned by the effective user (or we are root),
+// since SecureDir has to chmod it.
 func checkOwnedDir(path string, info os.FileInfo) error {
 	if !info.IsDir() {
 		return fmt.Errorf("%s exists and is not a directory", path)

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
@@ -102,7 +103,29 @@ func TestRecordPlanStagesBlobsIntoPlanDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecordPlan: %v", err)
 	}
-	// Blob refs are "blobs/<destination basename>-<hash>".
+	assertCommittedBlobs(t, planDir, blobRefsByBase(t, ops))
+	if got := mustRead(t, filepath.Join(stale, "keep")); got != "earlier" {
+		t.Fatalf("blob of an earlier plan = %q, must be kept", got)
+	}
+	assertNoStagingLeft(t, tmp)
+
+	// The plan applies from the committed blobs (proves refs and layout).
+	if err := ApplyChunks(ops, planDir, privilege.Sudo); err != nil {
+		t.Fatalf("ApplyChunks: %v", err)
+	}
+	if got := mustRead(t, filepath.Join(src.dst, "synced", "f1")); got != "glob version one\n" {
+		t.Fatalf("applied glob content = %q", got)
+	}
+	if got := mustRead(t, filepath.Join(src.dst, "tree", "file")); got != "tree file\n" {
+		t.Fatalf("applied tree content = %q", got)
+	}
+}
+
+// blobRefsByBase maps the destination basename of each staged source ("synced",
+// "tree", "big") to the blob ref the recorded ops carry for it. Blob refs are
+// "blobs/<destination basename>-<hash>".
+func blobRefsByBase(t *testing.T, ops []plan.Op) map[string]string {
+	t.Helper()
 	blobs := map[string]string{}
 	for _, op := range ops {
 		for _, base := range []string{"synced", "tree", "big"} {
@@ -114,6 +137,14 @@ func TestRecordPlanStagesBlobsIntoPlanDir(t *testing.T) {
 	if len(blobs) != 3 {
 		t.Fatalf("blob refs = %v, want glob, tree and big-file blobs", blobs)
 	}
+	return blobs
+}
+
+// assertCommittedBlobs checks the three blob kinds in planDir: the glob blob's
+// file, the tree blob's file, empty directory and raw symlink target, and the
+// big single-file blob's size.
+func assertCommittedBlobs(t *testing.T, planDir string, blobs map[string]string) {
+	t.Helper()
 	at := func(ref string, rel ...string) string {
 		return filepath.Join(append([]string{planDir, filepath.FromSlash(ref)}, rel...)...)
 	}
@@ -132,21 +163,6 @@ func TestRecordPlanStagesBlobsIntoPlanDir(t *testing.T) {
 	}
 	if got := mustRead(t, at(blobs["big"])); len(got) != plan.MaxInlineContent+1 {
 		t.Fatalf("big file blob has %d bytes, want %d", len(got), plan.MaxInlineContent+1)
-	}
-	if got := mustRead(t, filepath.Join(stale, "keep")); got != "earlier" {
-		t.Fatalf("blob of an earlier plan = %q, must be kept", got)
-	}
-	assertNoStagingLeft(t, tmp)
-
-	// The plan applies from the committed blobs (proves refs and layout).
-	if err := ApplyChunks(ops, planDir, privilege.Sudo); err != nil {
-		t.Fatalf("ApplyChunks: %v", err)
-	}
-	if got := mustRead(t, filepath.Join(src.dst, "synced", "f1")); got != "glob version one\n" {
-		t.Fatalf("applied glob content = %q", got)
-	}
-	if got := mustRead(t, filepath.Join(src.dst, "tree", "file")); got != "tree file\n" {
-		t.Fatalf("applied tree content = %q", got)
 	}
 }
 
@@ -224,48 +240,61 @@ func TestRecordPlanRefusalLeavesPlanDirUntouched(t *testing.T) {
 			tmp := t.TempDir()
 			t.Setenv("TMPDIR", tmp)
 
-			// (a) absent directory stays absent.
-			absent := filepath.Join(t.TempDir(), "not-yet")
-			src.register("refused_absent", tc.bad)
-			_, err := RecordPlan("refused", absent, "refused_absent")
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("RecordPlan error = %v, want it to contain %q", err, tc.want)
-			}
-			testutil.RequireUnchanged(t, testutil.DirSnapshot{Absent: true}, absent)
-
-			// (b) an earlier good plan survives byte for byte.
-			ResetForTest()
-			planDir := filepath.Join(t.TempDir(), "o3")
-			src.register("good", nil)
-			goodOps, err := RecordPlan("good", planDir, "good")
-			if err != nil {
-				t.Fatalf("recording the good plan: %v", err)
-			}
-			raw, err := plan.EncodePlan(goodOps)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := plan.WritePrivateFile(planDir, "plan.jsonl", raw); err != nil {
-				t.Fatal(err)
-			}
-			before := testutil.Snapshot(t, planDir)
-
-			mustWrite(t, src.glob, []byte("glob version TWO\n")) // edit the source between runs
-			ResetForTest()
-			src.register("refused_existing", tc.bad)
-			if _, err := RecordPlan("refused", planDir, "refused_existing"); err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("second RecordPlan error = %v, want it to contain %q", err, tc.want)
-			}
-			testutil.RequireUnchanged(t, before, planDir)
-
-			if err := ApplyChunks(goodOps, planDir, privilege.Sudo); err != nil {
-				t.Fatalf("applying the earlier plan: %v", err)
-			}
-			if got := mustRead(t, filepath.Join(src.dst, "synced", "f1")); got != "glob version one\n" {
-				t.Fatalf("earlier plan applied %q, want the content it was recorded with", got)
-			}
+			requireRefusalLeavesAbsentDirAbsent(t, src, tc)
+			requireRefusalKeepsEarlierPlan(t, src, tc)
 			assertNoStagingLeft(t, tmp)
 		})
+	}
+}
+
+// requireRefusalLeavesAbsentDirAbsent: a refused record into a directory that
+// does not exist must not create it.
+func requireRefusalLeavesAbsentDirAbsent(t *testing.T, src stagedSources, tc refusedRecordCause) {
+	t.Helper()
+	absent := filepath.Join(t.TempDir(), "not-yet")
+	src.register("refused_absent", tc.bad)
+	_, err := RecordPlan("refused", absent, "refused_absent")
+	if err == nil || !strings.Contains(err.Error(), tc.want) {
+		t.Fatalf("RecordPlan error = %v, want it to contain %q", err, tc.want)
+	}
+	testutil.RequireUnchanged(t, testutil.DirSnapshot{Absent: true}, absent)
+}
+
+// requireRefusalKeepsEarlierPlan records a good plan (plan.jsonl included),
+// edits the source, and checks that a refused re-record into the same
+// directory leaves it byte for byte as it was and that the earlier plan still
+// applies the content it was recorded with.
+func requireRefusalKeepsEarlierPlan(t *testing.T, src stagedSources, tc refusedRecordCause) {
+	t.Helper()
+	ResetForTest()
+	planDir := filepath.Join(t.TempDir(), "o3")
+	src.register("good", nil)
+	goodOps, err := RecordPlan("good", planDir, "good")
+	if err != nil {
+		t.Fatalf("recording the good plan: %v", err)
+	}
+	raw, err := plan.EncodePlan(goodOps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.WritePrivateFile(planDir, "plan.jsonl", raw); err != nil {
+		t.Fatal(err)
+	}
+	before := testutil.Snapshot(t, planDir)
+
+	mustWrite(t, src.glob, []byte("glob version TWO\n")) // edit the source between runs
+	ResetForTest()
+	src.register("refused_existing", tc.bad)
+	if _, err := RecordPlan("refused", planDir, "refused_existing"); err == nil || !strings.Contains(err.Error(), tc.want) {
+		t.Fatalf("second RecordPlan error = %v, want it to contain %q", err, tc.want)
+	}
+	testutil.RequireUnchanged(t, before, planDir)
+
+	if err := ApplyChunks(goodOps, planDir, privilege.Sudo); err != nil {
+		t.Fatalf("applying the earlier plan: %v", err)
+	}
+	if got := mustRead(t, filepath.Join(src.dst, "synced", "f1")); got != "glob version one\n" {
+		t.Fatalf("earlier plan applied %q, want the content it was recorded with", got)
 	}
 }
 
@@ -414,24 +443,7 @@ func TestRecordPlanCommitFailureIsReportedAndPartial(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)
 	src.register("commit_fail", nil)
-
-	// Learn the deterministic refs by recording once into a scratch dir.
-	probe, err := RecordPlan("x", filepath.Join(t.TempDir(), "probe"), "commit_fail")
-	if err != nil {
-		t.Fatalf("probe record: %v", err)
-	}
-	var glob, big string
-	for _, op := range probe {
-		switch {
-		case strings.HasPrefix(op.Blob, "blobs/synced-"):
-			glob = op.Blob
-		case strings.HasPrefix(op.Blob, "blobs/big-"):
-			big = op.Blob
-		}
-	}
-	if glob == "" || big == "" {
-		t.Fatalf("probe refs glob=%q big=%q", glob, big)
-	}
+	glob, big := probeGlobAndBigRefs(t)
 
 	planDir := filepath.Join(t.TempDir(), "out")
 	blocker := filepath.Join(planDir, filepath.FromSlash(big), "keep")
@@ -461,6 +473,29 @@ func TestRecordPlanCommitFailureIsReportedAndPartial(t *testing.T) {
 		t.Fatalf("plan.jsonl exists (%v); RecordPlan never writes it", err)
 	}
 	assertNoStagingLeft(t, tmp)
+}
+
+// probeGlobAndBigRefs learns the deterministic blob refs of the glob and the
+// big-file blob of the currently registered plan by recording it once into a
+// scratch directory.
+func probeGlobAndBigRefs(t *testing.T) (glob, big string) {
+	t.Helper()
+	probe, err := RecordPlan("x", filepath.Join(t.TempDir(), "probe"), "commit_fail")
+	if err != nil {
+		t.Fatalf("probe record: %v", err)
+	}
+	for _, op := range probe {
+		switch {
+		case strings.HasPrefix(op.Blob, "blobs/synced-"):
+			glob = op.Blob
+		case strings.HasPrefix(op.Blob, "blobs/big-"):
+			big = op.Blob
+		}
+	}
+	if glob == "" || big == "" {
+		t.Fatalf("probe refs glob=%q big=%q", glob, big)
+	}
+	return glob, big
 }
 
 // TestCopyStagedBlobRefMismatch covers the defensive got != ref branch: a
@@ -506,14 +541,20 @@ func planDirProbe(name string) *bool {
 	return ran
 }
 
-// TestRecordPlanRefusesUnusablePlanDirUpFront pins the early failure the old
-// SecureDir-first order gave: a planDir SecureDir would refuse fails BEFORE any
-// task body runs, and the check itself creates nothing.
-func TestRecordPlanRefusesUnusablePlanDirUpFront(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("permission checks are not enforced for root")
-	}
-	root := t.TempDir()
+// unusablePlanDir is one plan directory checkPlanDirUsable must refuse before
+// any task body runs.
+type unusablePlanDir struct {
+	name    string
+	path    string
+	want    string // substring of the refusal
+	nonRoot bool   // only refused for an unprivileged user (access(2) is not enforced for root)
+}
+
+// unusablePlanDirs builds the up-front refusal table below root. Every case
+// lives inside root, and link points at root itself, so an attempt to create
+// anything through the symlink shows up as a change of root's snapshot.
+func unusablePlanDirs(t *testing.T, root string) []unusablePlanDir {
+	t.Helper()
 	file := filepath.Join(root, "a-file")
 	mustWrite(t, file, []byte("not a dir"))
 	readonly := filepath.Join(root, "readonly")
@@ -525,27 +566,111 @@ func TestRecordPlanRefusesUnusablePlanDirUpFront(t *testing.T) {
 	if err := os.Symlink(root, link); err != nil {
 		t.Fatal(err)
 	}
-	cases := map[string]string{
-		"target is a file":                  file,
-		"target is a symlink":               link,
-		"parent of an absent dir is a file": filepath.Join(file, "sub"),
-		"absent dir in a read-only parent":  filepath.Join(readonly, "sub", "deeper"),
+	const symlinkRefusal = "is a symlink; symlinked plan directories are refused"
+	return []unusablePlanDir{
+		{"target is a file", file, "exists and is not a directory", false},
+		{"target is a symlink", link, symlinkRefusal, false},
+		{"target is a symlink with a trailing slash", link + "/", symlinkRefusal, false},
+		{"parent of an absent dir is a symlink", filepath.Join(link, "newsub"), symlinkRefusal, false},
+		{"ancestor of an absent dir is a symlink", filepath.Join(link, "newsub", "deeper"), symlinkRefusal, false},
+		{"parent of an absent dir is a file", filepath.Join(file, "sub"), "not a directory", false},
+		{"absent dir in a read-only parent", filepath.Join(readonly, "sub", "deeper"), "cannot create", true},
 	}
-	for name, planDir := range cases {
-		t.Run(name, func(t *testing.T) {
+}
+
+// TestRecordPlanRefusesUnusablePlanDirUpFront pins the early failure the old
+// SecureDir-first order gave for the common mistakes: a planDir SecureDir would
+// refuse (a symlink, a symlinked ancestor, a file below which nothing can be
+// created, an unwritable location) fails BEFORE any task body runs, with a
+// message that says what is wrong, and the check itself creates nothing. Only
+// the read-only case needs an unprivileged user; the others run as root too.
+func TestRecordPlanRefusesUnusablePlanDirUpFront(t *testing.T) {
+	root := t.TempDir()
+	for _, tc := range unusablePlanDirs(t, root) {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.nonRoot && os.Geteuid() == 0 {
+				t.Skip("permission checks are not enforced for root")
+			}
 			ResetForTest()
 			t.Cleanup(ResetForTest)
 			ran := planDirProbe("probe")
 			before := testutil.Snapshot(t, root)
-			_, err := RecordPlan("x", planDir, "probe")
-			if err == nil || !strings.Contains(err.Error(), "RecordPlan: plan dir") {
-				t.Fatalf("RecordPlan error = %v, want a \"RecordPlan: plan dir\" error", err)
+			_, err := RecordPlan("x", tc.path, "probe")
+			if err == nil || !strings.Contains(err.Error(), "RecordPlan: plan dir") || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("RecordPlan error = %v, want a \"RecordPlan: plan dir\" error containing %q", err, tc.want)
 			}
 			if *ran {
 				t.Fatal("the task body ran; an unusable plan dir must fail before any body")
 			}
 			testutil.RequireUnchanged(t, before, root)
 		})
+	}
+}
+
+// TestCommitStagedBlobsRefusesSymlinkedPlanDir pins the backstop behind the
+// best-effort pre-check: even when a symlinked plan directory or ancestor gets
+// past checkPlanDirUsable (a path swapped after the check), SecureDir refuses
+// it at commit time and nothing is written through the link. commitStagedBlobs
+// is called directly, so the pre-check cannot mask the result.
+func TestCommitStagedBlobsRefusesSymlinkedPlanDir(t *testing.T) {
+	root := t.TempDir()
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(root, link); err != nil {
+		t.Fatal(err)
+	}
+	stage := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(stage, "blobs"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(stage, "blobs", "b"), []byte("blob"))
+	ops := []plan.Op{{Blob: "blobs/b"}}
+	for name, planDir := range map[string]string{
+		"symlink":                   link,
+		"symlink with a slash":      link + "/",
+		"symlinked ancestor":        filepath.Join(link, "newsub"),
+		"deeper symlinked ancestor": filepath.Join(link, "newsub", "deeper"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			before := testutil.Snapshot(t, root)
+			if err := commitStagedBlobs(ops, stage, planDir); err == nil {
+				t.Fatal("want SecureDir to refuse a symlinked plan directory")
+			}
+			testutil.RequireUnchanged(t, before, root)
+		})
+	}
+}
+
+// foreignOwnedDir returns a real (non-symlink) system directory that the
+// current user does not own, or skips the test. System directories are
+// root-owned everywhere gonf runs, so no chown (and no privilege) is needed.
+func foreignOwnedDir(t *testing.T) string {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root may take over any directory, so nothing is foreign to it")
+	}
+	for _, dir := range []string{"/usr", "/etc", "/opt"} {
+		info, err := os.Lstat(dir)
+		if err != nil || !info.IsDir() {
+			continue // missing, or a symlink on this system
+		}
+		if st, ok := info.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Geteuid() {
+			return dir
+		}
+	}
+	t.Skip("no root-owned system directory found")
+	return ""
+}
+
+// TestCheckPlanDirUsableRefusesForeignOwner covers the "owned by another user"
+// refusal: SecureDir has to chmod an existing plan directory, which fails for
+// one we do not own, so it is refused up front. checkPlanDirUsable is called
+// directly (it only inspects the path) so the test can never modify the system
+// directory it uses as the example.
+func TestCheckPlanDirUsableRefusesForeignOwner(t *testing.T) {
+	dir := foreignOwnedDir(t)
+	err := checkPlanDirUsable(dir)
+	if err == nil || !strings.Contains(err.Error(), dir+" is owned by another user") {
+		t.Fatalf("checkPlanDirUsable(%s) = %v, want an \"owned by another user\" refusal", dir, err)
 	}
 }
 

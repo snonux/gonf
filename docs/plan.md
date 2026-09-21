@@ -51,11 +51,15 @@ good plan in the same directory and change what that plan's `plan.jsonl`
 applies. What is guaranteed, and what is not:
 
 - After any error while recording or validating (a refusal, a task-body,
-  cycle or packaging error, an unusable `dir` that the up-front check rejects
-  before any task body runs) `dir` is exactly as it was (byte for byte and
-  mtime for mtime), and a `dir` that did not exist is not created. The
-  up-front check is cheap and best-effort: it only looks at `dir` (or, when
-  absent, its nearest existing ancestor) and creates nothing.
+  cycle or packaging error) `dir` is exactly as it was (byte for byte and
+  mtime for mtime), and a `dir` that did not exist is not created. The same
+  holds when `dir` itself is unusable (a symlink, or below a symlinked
+  directory; a file; owned by another user; nowhere writable to create it):
+  a cheap best-effort check rejects those before any task body runs, creating
+  nothing. It is a pre-check, not a guarantee: whatever it misses (the path
+  changed in between, ACLs) is still refused by the same no-follow directory
+  open that writes the blobs, at commit time, after the task bodies ran but
+  before anything is written to `dir`.
 - An I/O error while COMMITTING the blobs into `dir` after a successful record
   (full disk, permissions, a blob path that cannot be replaced) is reported but
   not atomic: some blobs may already be copied, so a partially updated blob

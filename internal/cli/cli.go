@@ -301,11 +301,16 @@ func planToStdout(planID string, tasks []string) int {
 	return 0
 }
 
-// planToDir records into outDir. RecordPlan checks up front that outDir is
-// usable (before any task body runs, creating nothing) and writes outDir's
-// blobs only after the whole record succeeded, so a refused plan leaves an
-// existing outDir exactly as it was and does not create an absent one. Which
-// prefixes the error carries depends on where it came from: pre-flight
+// planToDir records into outDir. RecordPlan makes a best-effort check that
+// outDir is usable (a symlink or symlinked ancestor, a file, another user's
+// directory and an unwritable location are refused before any task body runs,
+// creating nothing) and writes outDir's blobs only after the whole record
+// succeeded, so a refused plan leaves an existing outDir exactly as it was and
+// does not create an absent one. What the check misses is still refused when
+// the blobs are committed, after the task bodies ran but before anything is
+// written to outDir.
+//
+// Which prefixes the error carries depends on where it came from: pre-flight
 // refusals and a few packaging errors start with "RecordPlan: ", while an
 // unknown task ("unknown task ...") or a cycle/body error does not; this
 // command only adds its own "plan: " in front of whatever it got.

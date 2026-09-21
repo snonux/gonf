@@ -259,30 +259,12 @@ func TestCLIPlanRefusalLeavesOutputDirUntouched(t *testing.T) {
 	api.ResetTasks()
 	resource.ResetRepository()
 	root := t.TempDir()
-	srcDir := filepath.Join(root, "src")
-	dst := filepath.Join(root, "dst")
-	if err := os.MkdirAll(srcDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	src := filepath.Join(srcDir, "f1")
-	if err := os.WriteFile(src, []byte("version one\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	syncSrc := func() { api.SyncDir(dst, filepath.Join(srcDir, "*")) }
-	api.Task("cli_good", "", syncSrc)
-	api.Task("cli_refused", "", func() {
-		syncSrc()
-		api.Command("true", nil, options.DependsOn(unregisteredDep("File[/typo/never-registered]")))
-	})
+	src, dst := registerCLISyncTasks(t, root)
 
 	// (1) The absent directory of a refused run is not created (the reviewer's
 	// stray "o2/blobs/sync-<hash>/f1" and empty "o1/").
 	absent := filepath.Join(root, "o2")
-	code, stderr := runGonf(t, "plan", "-o", absent, "cli_refused")
-	if code != 1 {
-		t.Fatalf("refused plan exit %d, want 1; stderr: %s", code, stderr)
-	}
-	requireCLIRecordRefusal(t, stderr, "dangling dependency")
+	requireCLIPlanRefused(t, absent, "cli_refused")
 	testutil.RequireUnchanged(t, testutil.DirSnapshot{Absent: true}, absent)
 
 	// (2) A directory holding an earlier good plan survives a refused re-run.
@@ -294,11 +276,7 @@ func TestCLIPlanRefusalLeavesOutputDirUntouched(t *testing.T) {
 	if err := os.WriteFile(src, []byte("version TWO\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	code, stderr = runGonf(t, "plan", "-o", o3, "cli_refused")
-	if code != 1 {
-		t.Fatalf("refused re-run exit %d, want 1; stderr: %s", code, stderr)
-	}
-	requireCLIRecordRefusal(t, stderr, "dangling dependency")
+	requireCLIPlanRefused(t, o3, "cli_refused")
 	testutil.RequireUnchanged(t, before, o3)
 
 	if code, stderr := runGonf(t, "apply", filepath.Join(o3, "plan.jsonl")); code != 0 {
@@ -311,6 +289,42 @@ func TestCLIPlanRefusalLeavesOutputDirUntouched(t *testing.T) {
 	if string(got) != "version one\n" {
 		t.Fatalf("the earlier plan applied %q, want the content it was recorded with", got)
 	}
+}
+
+// registerCLISyncTasks creates a SyncDir source below root (one file, "version
+// one") and registers two tasks that sync it into the returned dst: cli_good
+// records it as is, cli_refused adds a dangling dependency so the record is
+// refused after the blob was packaged. It returns the source file (edit it to
+// change what a re-recorded blob would contain) and dst.
+func registerCLISyncTasks(t *testing.T, root string) (srcFile, dst string) {
+	t.Helper()
+	srcDir := filepath.Join(root, "src")
+	dst = filepath.Join(root, "dst")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	srcFile = filepath.Join(srcDir, "f1")
+	if err := os.WriteFile(srcFile, []byte("version one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	syncSrc := func() { api.SyncDir(dst, filepath.Join(srcDir, "*")) }
+	api.Task("cli_good", "", syncSrc)
+	api.Task("cli_refused", "", func() {
+		syncSrc()
+		api.Command("true", nil, options.DependsOn(unregisteredDep("File[/typo/never-registered]")))
+	})
+	return srcFile, dst
+}
+
+// requireCLIPlanRefused runs `gonf plan -o outDir task` and requires exit 1
+// with the dangling-dependency refusal.
+func requireCLIPlanRefused(t *testing.T, outDir, task string) {
+	t.Helper()
+	code, stderr := runGonf(t, "plan", "-o", outDir, task)
+	if code != 1 {
+		t.Fatalf("refused plan exit %d, want 1; stderr: %s", code, stderr)
+	}
+	requireCLIRecordRefusal(t, stderr, "dangling dependency")
 }
 
 // TestCLIPlanRefusesDependencyOnLaterPrivilegeChunk documents the small
@@ -928,9 +942,11 @@ func TestCLIPlanStdoutWithBlobsStagesNothing(t *testing.T) {
 	}
 }
 
-// TestCLIPlanRefusesUnusableOutputUpFront: an unusable -o path fails BEFORE
-// any task body runs (it did on the core before staging: SecureDir came
-// first), creates nothing, and a usable absent path still works.
+// TestCLIPlanRefusesUnusableOutputUpFront: the common unusable -o paths (a
+// file, a symlink or a symlinked ancestor, a file as a parent) fail BEFORE any
+// task body runs, as they did on the core before staging when SecureDir came
+// first; nothing is created, and a usable absent path still works. link points
+// at root, so anything created through it would change root's snapshot.
 func TestCLIPlanRefusesUnusableOutputUpFront(t *testing.T) {
 	root := t.TempDir()
 	file := filepath.Join(root, "a-file")
@@ -944,9 +960,17 @@ func TestCLIPlanRefusesUnusableOutputUpFront(t *testing.T) {
 		ran = false
 		api.Task("cli_probe", "", func() { ran = true })
 	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(root, link); err != nil {
+		t.Fatal(err)
+	}
 	for name, out := range map[string]string{
-		"output is a file":           file,
-		"parent of output is a file": filepath.Join(file, "sub"),
+		"output is a file":                   file,
+		"parent of output is a file":         filepath.Join(file, "sub"),
+		"output is a symlink":                link,
+		"output is a symlink with a slash":   link + "/",
+		"ancestor of output is a symlink":    filepath.Join(link, "newsub"),
+		"grandparent of output is a symlink": filepath.Join(link, "newsub", "deeper"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			register()
