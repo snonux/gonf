@@ -2,9 +2,11 @@ package api
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
@@ -384,5 +386,71 @@ func TestSystemdUnitsRecordedPlanApplies(t *testing.T) {
 	}
 	if !restarted {
 		t.Fatalf("changed inputs did not fan into the timer restart: %v", invoked)
+	}
+
+	// A second apply of unchanged inputs must hold the gate: no reload, no
+	// restart, no enable/start.
+	invoked = nil
+	if err := plan.Apply(ops, plan.Facts{GOOS: runtime.GOOS}, ""); err != nil {
+		t.Fatalf("second plan.Apply: %v", err)
+	}
+	for _, args := range invoked {
+		switch args[0] {
+		case "daemon-reload", "restart", "enable", "start", "stop", "disable":
+			t.Fatalf("unchanged second apply must not mutate, got systemctl %v", args)
+		}
+	}
+}
+
+// TestSystemdUnitsRegistrationMisuseFailsFast runs the composition's
+// registration-time Fatal paths in a helper process: logger.Fatal exits the
+// process, so the parent asserts a non-zero exit and the specific message
+// instead of an unrelated one.
+func TestSystemdUnitsRegistrationMisuseFailsFast(t *testing.T) {
+	cases := []struct {
+		caseName string
+		want     string
+	}{
+		{"no-inputs", "no watchable managed inputs"},
+		{"empty-timer-name", "ActivateTimer name must not be empty"},
+		{"empty-service-name", "ActivateService name must not be empty"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.caseName, func(t *testing.T) {
+			cmd := exec.Command(os.Args[0], "-test.run=^TestSystemdUnitsFatalHelperProcess$", "-test.timeout=60s")
+			cmd.Env = append(os.Environ(),
+				"GONF_API_UNITS_MISUSE=1",
+				"GONF_API_UNITS_MISUSE_CASE="+tc.caseName)
+			out, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("misuse case %q exited 0, want fail-fast; output:\n%s", tc.caseName, out)
+			}
+			if !strings.Contains(string(out), tc.want) {
+				t.Fatalf("misuse case %q output misses %q:\n%s", tc.caseName, tc.want, out)
+			}
+		})
+	}
+}
+
+// TestSystemdUnitsFatalHelperProcess is the helper process for
+// TestSystemdUnitsRegistrationMisuseFailsFast: it triggers one registration-
+// time Fatal per misuse case and must never exit 0.
+func TestSystemdUnitsFatalHelperProcess(t *testing.T) {
+	if os.Getenv("GONF_API_UNITS_MISUSE") != "1" {
+		return
+	}
+	switch os.Getenv("GONF_API_UNITS_MISUSE_CASE") {
+	case "no-inputs":
+		SystemdUnits()
+	case "empty-timer-name":
+		dir := t.TempDir()
+		writeFixtureFile(t, filepath.Join(dir, "a.service"), "[Unit]\n")
+		unit := InstallFile("/etc/systemd/system/a.service", filepath.Join(dir, "a.service"), options.WithMode(0o644))
+		SystemdUnits(FanIn(unit), ActivateTimer(""))
+	case "empty-service-name":
+		dir := t.TempDir()
+		writeFixtureFile(t, filepath.Join(dir, "a.service"), "[Unit]\n")
+		unit := InstallFile("/etc/systemd/system/a.service", filepath.Join(dir, "a.service"), options.WithMode(0o644))
+		SystemdUnits(FanIn(unit), ActivateService(""))
 	}
 }
