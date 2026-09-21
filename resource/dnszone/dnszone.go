@@ -16,33 +16,25 @@ import (
 func Successor(serial uint32) uint32 { return serial + 1 }
 
 // Serial returns the serial from the sole apex SOA in zone. The same strict
-// SOA invariant used by Equivalent prevents a publisher from advancing a
-// serial picked from an unrelated record or comment.
+// SOA invariant used by Equivalent (enforced by the shared parseZone) prevents
+// a publisher from advancing a serial picked from an unrelated record or
+// comment. Non-SOA records are parsed for syntax but never packed.
 func Serial(zone []byte, origin string) (uint32, error) {
-	origin = dns.Fqdn(origin)
-	if _, ok := dns.IsDomainName(origin); !ok {
-		return 0, fmt.Errorf("invalid origin %q", origin)
-	}
-
-	parser := dns.NewZoneParser(bytes.NewReader(zone), origin, "")
-	var serial uint32
-	soaCount := 0
-	for rr, ok := parser.Next(); ok; rr, ok = parser.Next() {
-		soa, ok := rr.(*dns.SOA)
-		if !ok {
-			continue
-		}
-		if !dns.IsSubDomain(origin, soa.Hdr.Name) || !dns.IsSubDomain(soa.Hdr.Name, origin) {
-			return 0, fmt.Errorf("SOA owner %q is not apex %q", soa.Hdr.Name, origin)
-		}
-		soaCount++
-		serial = soa.Serial
-	}
-	if err := parser.Err(); err != nil {
+	origin, err := normalizeOrigin(origin)
+	if err != nil {
 		return 0, err
 	}
-	if soaCount != 1 {
-		return 0, fmt.Errorf("want exactly one apex SOA, got %d", soaCount)
+	var serial uint32
+	err = parseZone(zone, origin, func(rr dns.RR) error {
+		// parseZone guarantees exactly one apex SOA, so the last (and only)
+		// SOA seen is the answer.
+		if soa, isSOA := rr.(*dns.SOA); isSOA {
+			serial = soa.Serial
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
 	}
 	return serial, nil
 }
@@ -56,6 +48,13 @@ func Serial(zone []byte, origin string) (uint32, error) {
 // opaque fields (such as TXT) for domain names and suppress a real change.
 // Callers must therefore render stable owner and RDATA spelling in templates.
 func Equivalent(candidate, committed []byte, origin string) (bool, error) {
+	// The origin is validated once for both zones. An invalid origin used to
+	// surface from the candidate parse first, so it keeps the "candidate
+	// zone:" prefix to leave the CLI's error text unchanged.
+	origin, err := normalizeOrigin(origin)
+	if err != nil {
+		return false, fmt.Errorf("candidate zone: %w", err)
+	}
 	candidateRecords, err := canonical(candidate, origin)
 	if err != nil {
 		return false, fmt.Errorf("candidate zone: %w", err)
@@ -75,37 +74,80 @@ func Equivalent(candidate, committed []byte, origin string) (bool, error) {
 	return true, nil
 }
 
-func canonical(zone []byte, origin string) ([][]byte, error) {
+// normalizeOrigin returns origin as a fully qualified domain name, or an error
+// when it is not a valid domain name.
+func normalizeOrigin(origin string) (string, error) {
 	origin = dns.Fqdn(origin)
 	if _, ok := dns.IsDomainName(origin); !ok {
-		return nil, fmt.Errorf("invalid origin %q", origin)
+		return "", fmt.Errorf("invalid origin %q", origin)
 	}
+	return origin, nil
+}
 
+// parseZone parses zone relative to the already normalized origin and calls
+// visit for every RR in file order. It owns the invariants Serial and
+// Equivalent share: every SOA must sit at the apex (checked before visit sees
+// it), there must be exactly one of them, and any parse error fails the zone.
+// A visit error stops parsing and is returned unchanged.
+func parseZone(zone []byte, origin string, visit func(dns.RR) error) error {
 	parser := dns.NewZoneParser(bytes.NewReader(zone), origin, "")
-	var records [][]byte
 	soaCount := 0
-	for rr, ok := parser.Next(); ok; rr, ok = parser.Next() {
-		copy := dns.Copy(rr)
-		header := copy.Header()
-		if header.Rrtype == dns.TypeSOA {
-			if !dns.IsSubDomain(origin, header.Name) || !dns.IsSubDomain(header.Name, origin) {
-				return nil, fmt.Errorf("SOA owner %q is not apex %q", header.Name, origin)
+	for rr, more := parser.Next(); more; rr, more = parser.Next() {
+		// The zone parser converts RFC 3597 generic syntax for known types
+		// into the concrete type, so every SOA arrives as *dns.SOA.
+		if soa, isSOA := rr.(*dns.SOA); isSOA {
+			if !isApex(soa.Hdr.Name, origin) {
+				return fmt.Errorf("SOA owner %q is not apex %q", soa.Hdr.Name, origin)
 			}
 			soaCount++
-			copy.(*dns.SOA).Serial = 0
 		}
-		wire := make([]byte, 65535)
-		n, err := dns.PackRR(copy, wire, 0, nil, false)
-		if err != nil {
-			return nil, fmt.Errorf("pack %s: %w", header.Name, err)
+		if err := visit(rr); err != nil {
+			return err
 		}
-		records = append(records, wire[:n])
 	}
 	if err := parser.Err(); err != nil {
-		return nil, err
+		return err
 	}
 	if soaCount != 1 {
-		return nil, fmt.Errorf("want exactly one apex SOA, got %d", soaCount)
+		return fmt.Errorf("want exactly one apex SOA, got %d", soaCount)
+	}
+	return nil
+}
+
+// isApex reports whether name and origin are the same domain (case-insensitive,
+// as dns.IsSubDomain compares), i.e. each is a subdomain of the other.
+func isApex(name, origin string) bool {
+	return dns.IsSubDomain(origin, name) && dns.IsSubDomain(name, origin)
+}
+
+// canonical returns the sorted wire renderings of every RR in zone, with the
+// apex SOA serial zeroed so that serial bumps alone never count as a change.
+// origin must already be normalized by normalizeOrigin.
+//
+// One scratch buffer of the largest possible RR size is reused for packing and
+// each record gets a right-sized copy of its bytes. Slicing a per-record 64 KiB
+// buffer instead would keep every whole buffer reachable, so a 1000-record zone
+// would retain about 64 MB (twice that while Equivalent holds both zones).
+func canonical(zone []byte, origin string) ([][]byte, error) {
+	scratch := make([]byte, dns.MaxMsgSize)
+	var records [][]byte
+	err := parseZone(zone, origin, func(rr dns.RR) error {
+		rrCopy := dns.Copy(rr)
+		if soa, isSOA := rrCopy.(*dns.SOA); isSOA {
+			soa.Serial = 0
+		}
+		n, err := dns.PackRR(rrCopy, scratch, 0, nil, false)
+		if err != nil {
+			return fmt.Errorf("pack %s: %w", rrCopy.Header().Name, err)
+		}
+		// Clone rather than keep scratch[:n]: a record must neither alias the
+		// scratch buffer (the next PackRR would overwrite it) nor keep the
+		// 64 KiB scratch array alive after canonical returns.
+		records = append(records, bytes.Clone(scratch[:n]))
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	sort.Slice(records, func(i, j int) bool { return bytes.Compare(records[i], records[j]) < 0 })
 	return records, nil
