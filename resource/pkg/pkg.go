@@ -28,8 +28,10 @@ type Package struct {
 func (p *Package) SetLatest() { p.latest = true }
 
 // SetEnv configures extra environment variables for package-manager probes
-// and mutations. Copy the caller's map so a recipe cannot alter a registered
-// resource after construction.
+// and mutations. It copies the caller's map (nil stays nil) so a recipe that
+// mutates or reuses the map after WithEnv cannot alter the registered
+// resource, its plan draft or its recorded plan op. Cmd.SetEnv follows the
+// same contract, since both are reached through the one shared WithEnv option.
 func (p *Package) SetEnv(env map[string]string) {
 	p.env = maps.Clone(env)
 }
@@ -120,9 +122,9 @@ func (p *Package) planDraft(id string) resource.PlanDraft {
 		Latest: p.latest,
 		Deps:   p.DependsOn.SortedIDs(),
 	}
-	if p.env != nil {
-		d.Env = maps.Clone(p.env)
-	}
+	// The draft gets its own copy: stored drafts outlive this Package and
+	// must not share mutable state with it. maps.Clone keeps nil as nil.
+	d.Env = maps.Clone(p.env)
 	return d
 }
 

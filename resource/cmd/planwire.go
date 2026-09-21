@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"maps"
 
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -27,7 +28,7 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		Bin:     d.Bin,
 		Args:    d.Args,
 		Dir:     d.Dir,
-		Env:     d.Env,
+		Env:     maps.Clone(d.Env), // op must not alias the stored draft's map
 		Creates: d.Creates,
 		Unless:  planGuard(d.Unless),
 		OnlyIf:  planGuard(d.OnlyIf),

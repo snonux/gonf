@@ -4,6 +4,7 @@ package cmd
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"strings"
 
@@ -39,13 +40,19 @@ type Cmd struct {
 	elevate bool
 }
 
-func (c *Cmd) SetName(name string)          { c.name = name }
-func (c *Cmd) SetDir(dir string)            { c.dir = dir }
-func (c *Cmd) SetEnv(env map[string]string) { c.env = env }
-func (c *Cmd) SetCreates(path string)       { c.creates = path }
-func (c *Cmd) SetUnless(g *opt.Guard)       { c.unless = g }
-func (c *Cmd) SetOnlyIf(g *opt.Guard)       { c.onlyIf = g }
-func (c *Cmd) SetElevate()                  { c.elevate = true }
+func (c *Cmd) SetName(name string)    { c.name = name }
+func (c *Cmd) SetDir(dir string)      { c.dir = dir }
+func (c *Cmd) SetCreates(path string) { c.creates = path }
+func (c *Cmd) SetUnless(g *opt.Guard) { c.unless = g }
+func (c *Cmd) SetOnlyIf(g *opt.Guard) { c.onlyIf = g }
+func (c *Cmd) SetElevate()            { c.elevate = true }
+
+// SetEnv configures extra environment variables for the main command. It
+// copies the caller's map (nil stays nil) so a recipe that mutates or reuses
+// the map after WithEnv cannot alter the registered resource, its plan draft
+// or its recorded plan op. Package.SetEnv follows the same contract, since
+// both are reached through the one shared WithEnv option.
+func (c *Cmd) SetEnv(env map[string]string) { c.env = maps.Clone(env) }
 
 var (
 	// Register takes the value as a resource.Applier; asserting it here reports a
@@ -123,12 +130,9 @@ func (c *Cmd) planDraft(id string) resource.PlanDraft {
 		Creates: c.creates,
 		Deps:    c.DependsOn.SortedIDs(),
 	}
-	if c.env != nil {
-		d.Env = make(map[string]string, len(c.env))
-		for k, v := range c.env {
-			d.Env[k] = v
-		}
-	}
+	// The draft gets its own copy: stored drafts outlive this Cmd and must
+	// not share mutable state with it. maps.Clone keeps nil as nil.
+	d.Env = maps.Clone(c.env)
 	d.Unless = planGuardDraft(c.unless)
 	d.OnlyIf = planGuardDraft(c.onlyIf)
 	d.Elevate = c.elevate

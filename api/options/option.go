@@ -196,7 +196,9 @@ var (
 
 // Link targets, and command options: privilege elevation, name (also a
 // File's registry identity), working directory, environment (also accepted by
-// packages), and the Creates/Unless/OnlyIf guards.
+// packages; WithEnv copies its map when the option is applied to a
+// resource, so mutations after that have no effect), and the
+// Creates/Unless/OnlyIf guards.
 var (
 	WithSymlink  = resourceoptions.WithSymlink
 	WithHardlink = resourceoptions.WithHardlink

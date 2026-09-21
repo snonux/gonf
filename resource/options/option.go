@@ -825,6 +825,10 @@ func WithDir(dir string) commandOption {
 // operation. Package managers receive the variables for both state probes and
 // mutations, which allows declarative custom repository configuration such as
 // PKG_PATH for OpenBSD pkg_add.
+//
+// The map is copied when the option is applied to a resource, so mutating or
+// reusing it afterwards has no effect on that resource, its plan draft or its
+// recorded plan op. Every Envable setter must honour this copy contract.
 func WithEnv(env map[string]string) packageCommandOption {
 	return packageCommandOption(func(target any) {
 		requires(target, "WithEnv", func(r Envable) { r.SetEnv(env) })
