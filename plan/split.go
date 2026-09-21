@@ -93,8 +93,9 @@ func (e *DanglingWatchError) Reason() string {
 // applied or uploaded — api.RecordPlanTo (record time: Run, `gonf plan`, push,
 // cluster and fleet all record through it), api.ApplyChunks (local apply),
 // remote.Delivery.ToHost (SSH push and strict preview) and api.Apply
-// (registered resources; the whole plan as a single chunk) — so a rejected plan
-// mutates no destination and, on push or preview, sends zero SSH traffic.
+// (registered resources, dependency-sorted and then privilege-split) — so a
+// rejected plan mutates no destination and, on push or preview, sends zero
+// SSH traffic.
 // plan.Apply and api.ApplyPlan deliberately do NOT run it: they execute one
 // already-split chunk (the elevated re-exec child, a pushed chunk, `gonf apply
 // <file|->`), where a dep recorded in an earlier chunk is legitimately absent.

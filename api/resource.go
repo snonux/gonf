@@ -20,13 +20,27 @@ type Resource interface {
 }
 
 // Apply applies every resource registered so far through the same plan engine
-// used by Run, push, and fleet. Source data that cannot fit inline is staged
-// in a temporary plan directory and removed after apply.
+// and the same privilege split used by Run: the lowered ops are put into
+// dependency order (orderForPrivilegeSplit) and cut into privilege chunks
+// (plan.SplitPrivilegeChunks), and an op marked elevate (a
+// command with WithElevate) runs in its own chunk through the process-wide
+// privilege mode (SetPrivilege, the CLI -privilege flag) exactly as
+// ApplyChunks runs it for Run and `gonf apply`: a sudo/doas re-exec of this
+// binary's `apply` subcommand, or in-process when the mode is none and the
+// process already runs as root. Before this split, an elevated op silently
+// ran in-process as the calling user. Source data that cannot fit inline is
+// staged in a temporary plan directory and removed after apply.
 //
-// Apply hands the WHOLE registered plan to the engine as one unit, so it is a
-// controller-side entry point in the same sense as ApplyChunks and
-// remote.Delivery.ToHost: it runs the dangling-dependency pre-flight itself
-// (validateApplyDeps) before anything is applied. plan.Apply and ApplyPlan do
+// A plan without any elevated op forms one unprivileged chunk and takes
+// exactly the pre-split path (one ApplyPlan call, unprefixed errors), so
+// ordinary recipes behave as before. The elevated re-exec needs a binary
+// whose command line understands `apply` (a program built on gonf's CLI),
+// as for Run.
+//
+// Apply holds the WHOLE registered plan, so it is a controller-side entry
+// point in the same sense as ApplyChunks and remote.Delivery.ToHost: it runs
+// the dependency and change-gate pre-flight itself (validateApplyDeps) over
+// the privilege chunks before anything is applied. plan.Apply and ApplyPlan do
 // not, because they also execute single privilege chunks whose deps
 // legitimately live in an earlier chunk; without this check a typo'd
 // DependsOn ID would be silently treated as already satisfied. Apply never
@@ -58,10 +72,7 @@ func Apply() error {
 	if err != nil {
 		return err
 	}
-	if err := validateApplyDeps(ops); err != nil {
-		return err
-	}
-	return ApplyPlan(ops, planDir)
+	return applyPackagedOps(ops, planDir)
 }
 
 // requireDraftsForAll refuses the apply when the registered resources and
@@ -135,15 +146,56 @@ func packageApplyOps(drafts []resource.PlanDraft, store plan.BlobStore) ([]plan.
 	return ops, nil
 }
 
-// validateApplyDeps is the dependency and change-gate pre-flight for Apply.
-// The whole registered plan is applied by a single plan.Apply, i.e. it forms
-// exactly one privilege chunk, so plan.ValidateChunks over that one chunk
-// reduces to "every dependency and every watch is recorded somewhere in the
-// plan": a dep or watch naming no registered resource (a typo, or a resource
-// that was never registered) is refused before any resource is applied,
-// matching what the legacy repository path reported as "depended upon but not
-// registered". A dep recorded LATER in the plan is fine here — plan.Apply's
-// dependency sort reorders it — so only the dangling cases can fail.
+// applyPackagedOps runs the pre-flight over the privilege chunks of ops and
+// applies them.
+//
+// Without an elevated op the whole plan is one unprivileged chunk whose ops
+// are ops itself, so it is validated as that chunk and goes straight to
+// ApplyPlan: the pre-split behaviour and error wording of Apply, byte for
+// byte. With an elevated op the ops are first put into dependency order
+// grouped by privilege class (orderForPrivilegeSplit; Apply's draft order is
+// only a sort by resource ID), then split, validated and applied by
+// ApplyChunks under processPrivilege. ApplyChunks repeats the
+// plan.ValidateChunks pre-flight on purpose (it also serves already-recorded
+// plans); it cannot fail here, since both validate the same split.
+func applyPackagedOps(ops []plan.Op, planDir string) error {
+	elevated := anyElevated(ops)
+	if elevated {
+		ops = orderForPrivilegeSplit(ops)
+	}
+	if err := validateApplyDeps(plan.SplitPrivilegeChunks(ops)); err != nil {
+		return err
+	}
+	if !elevated {
+		return ApplyPlan(ops, planDir)
+	}
+	return ApplyChunks(ops, planDir, processPrivilege)
+}
+
+// anyElevated reports whether an op of the plan must run elevated.
+func anyElevated(ops []plan.Op) bool {
+	for _, op := range ops {
+		if op.Elevate {
+			return true
+		}
+	}
+	return false
+}
+
+// validateApplyDeps is the dependency and change-gate pre-flight for Apply,
+// run over the privilege chunks Apply is about to apply (the same split
+// ApplyChunks uses). For a plan without elevated ops that is exactly one
+// chunk, so plan.ValidateChunks reduces to "every dependency and every watch
+// is recorded somewhere in the plan": a dep or watch naming no registered
+// resource (a typo, or a resource that was never registered) is refused
+// before any resource is applied, matching what the legacy repository path
+// reported as "depended upon but not registered". A dep recorded LATER in the
+// same chunk is fine — plan.Apply's dependency sort reorders it. With
+// elevated ops, chunks apply in order as separate plan.Apply runs, so the
+// same rules as for Run and push hold: a watch across chunks is refused (the
+// gate could never see the other process's change report), and so is a dep
+// on a LATER chunk, which orderForPrivilegeSplit rules out except for a
+// dependency cycle, left in place for the pre-flight or engine to report.
 //
 // The refusal is re-worded in registered-resource terms with a single "Apply:"
 // prefix (preflightChunks), while errors.As still finds the typed
@@ -151,6 +203,6 @@ func packageApplyOps(drafts []resource.PlanDraft, store plan.BlobStore) ([]plan.
 // half here, before anything is applied, also means a dangling WatchChanges
 // gets the same wording as a dangling OnChange instead of the plan engine's raw
 // "plan: op ... watches ..." message from plan.Apply's own gate check.
-func validateApplyDeps(ops []plan.Op) error {
-	return preflightChunks("Apply", fixHintApply, []plan.Chunk{{Ops: ops}})
+func validateApplyDeps(chunks []plan.Chunk) error {
+	return preflightChunks("Apply", fixHintApply, chunks)
 }

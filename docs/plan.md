@@ -34,7 +34,7 @@ wherever the **whole plan** is in hand, before anything is applied or uploaded:
 | record time (`api.RecordPlanTo`) | `gonf <task>`, `gonf plan`, push, cluster, fleet — dangling and forward cross-chunk deps, and cross-chunk change watches; the refused plan is never shipped or applied, and `gonf plan -o dir` writes nothing (see below) |
 | `api.ApplyChunks` | local apply of an already-recorded plan (same checks) |
 | `remote.Delivery.ToHost` | every SSH push and strict preview (single target, cluster, fleet), before any SSH traffic (same checks) |
-| `api.Apply` | registered resources (the whole plan as one chunk, so only dangling deps and watches can fail: a dep recorded later in that single chunk is reordered, not refused) |
+| `api.Apply` | registered resources, split into privilege chunks like `Run` after a dependency sort (see "Low-level `Apply()`"); without elevated ops the plan is one chunk, so only dangling deps and watches can fail, and with them a watch crossing the privilege boundary is refused too |
 
 All four run the one helper `plan.ValidateChunks` (dependency direction, then
 change-gate locality), so the checks cannot drift apart. `Run` therefore
@@ -338,8 +338,8 @@ if err := ApplyPlan(ops, planDir); err != nil { /* … */ }
   record time and by `ApplyChunks`, `remote.Delivery.ToHost` and `api.Apply`, but
   not when a single chunk is executed — see "Where dependencies are checked")
   refuses dangling deps and forward cross-chunk deps before anything is
-  applied (`api.Apply` holds the whole plan as ONE chunk, so it can only see
-  the dangling ones: a dep recorded later in that chunk is simply sorted).
+  applied (`api.Apply` dependency-sorts its ops before splitting them, so
+  forward deps cannot arise there and it only sees the dangling ones).
 - Stackable `when_begin` / `when_end`: failed predicates skip the body
   without touching the filesystem.
 - A `when_begin` carrying `require` (v20) is a requirement: a failed
@@ -988,15 +988,18 @@ recorded; empty fields leave ownership to the apply side). Version 3 added
 Privilege-chunked plans (mixed privileged/unprivileged ops) carry deps
 across the chunk boundary in dependency order: chunks apply in recorded
 order and never reorder, so a dep naming an op from an EARLIER chunk is
-satisfied (the earlier chunk applied it first). A dependency recorded AFTER its
-dependent crosses the privilege boundary — apply cannot reorder across chunks —
-and is rejected before anything is applied by a controller-side pre-flight
-(`plan.ValidateChunks`, run at record time and by `ApplyChunks` and
+satisfied (the earlier chunk applied it first). A dependency recorded AFTER
+its dependent crosses the privilege boundary — apply cannot reorder across
+chunks — and is rejected before anything is applied by a controller-side
+pre-flight (`plan.ValidateChunks`, run at record time and by `ApplyChunks` and
 `remote.Delivery.ToHost`); on push or preview the refusal happens before any
-SSH traffic. The same pre-flight refuses dangling deps (naming no recorded
-resource at all); a forward dep inside `api.Apply`'s single chunk is not a
-cross-chunk case and is reordered, so `api.Apply` only refuses the dangling
-ones. Executing or pushing a single chunk (`api.ApplyPlan`, `api.PushPayload`,
+SSH traffic. The
+same pre-flight refuses dangling deps (naming no recorded resource at all).
+`api.Apply` has no meaningful recorded order (its drafts are sorted by
+resource ID), so it puts its ops into dependency order before splitting; a
+forward dep never reaches its pre-flight, which only refuses dangling deps
+and change watches that cross the privilege boundary.
+Executing or pushing a single chunk (`api.ApplyPlan`, `api.PushPayload`,
 `api.PushPayloadContext`, `gonf apply <plan.jsonl|->`) does not re-run it.
 Elevation ordering stays fixed by recorded order; reordering across chunks
 would defeat the privilege split.
@@ -1020,12 +1023,31 @@ when ops/fields change meaning; old apply binaries reject newer plans cleanly.
 
 `api.Apply()` snapshots registered resource drafts and uses the same plan
 engine as `Run`, including dependency ordering and source/blob packaging.
-Because it applies the whole plan, it first runs the dangling-dependency
-pre-flight itself (the plan as one chunk; it does not record through
-`RecordPlanTo`, so the record-time check does not cover it): a `DependsOn`
+
+It also honours the privilege split like `Run` and `gonf apply`. When an op
+is elevated (a `Command` with `WithElevate`), Apply sorts the ops by
+dependency, keeping each privilege class together where the dependencies
+allow it, and splits them with `plan.SplitPrivilegeChunks`. `api.ApplyChunks`
+then applies the chunks in order under the process-wide privilege mode
+(`api.SetPrivilege`, the CLI `-privilege` flag). An elevated chunk is
+re-executed as `<this binary> apply <chunk>` through sudo/doas, or runs
+in-process when the mode is `none` and the process is already root. The
+re-exec needs a binary whose command line understands `apply`, which any
+program built on gonf's CLI does, as for `Run`. Before this, an elevated op
+under `api.Apply` silently ran in-process as the calling user. A plan with
+no elevated op is one unprivileged chunk and applies exactly as before, with
+a single `api.ApplyPlan` call and the same error wording.
+
+Because it applies the whole plan, Apply first runs the dependency and
+change-gate pre-flight itself over those chunks. It does not record through
+`RecordPlanTo`, so the record-time check does not cover it. A `DependsOn`
 (or `OnChange` / `WatchChanges`) naming a resource that is not registered fails
 with an `Apply:` error naming the op and the missing ID before anything is
 applied. The error unwraps to `*plan.DanglingDepError` / `*plan.DanglingWatchError`.
+With elevated ops, a change watch that crosses the privilege boundary is
+refused the same way: an unprivileged resource gated `OnChange` of an
+elevated one could never see its change report, because the elevated chunk
+runs as a separate process.
 The lower-level `resource.Apply()` path remains for resource-package unit tests
 and ad-hoc compatibility use; new application code should prefer `Run` or
 `api.Apply` so local and remote execution share the plan engine.

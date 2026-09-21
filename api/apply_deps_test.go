@@ -287,16 +287,23 @@ func TestApplyChunksRefusesDanglingDependencyBeforeAnyChunk(t *testing.T) {
 	}
 }
 
-// TestValidateApplyDeps pins the exact semantics Apply relies on: the whole
-// plan is one chunk, so a dep recorded anywhere in it (before OR after its
-// dependent — plan.Apply's sort orders it) passes, and only a dep recorded
-// nowhere is refused. Apply records no when_begin/when_end blocks (registered
-// resources lower to a flat op list), so when-block plans are covered by the
-// record-time tests in record_deps_test.go instead.
+// TestValidateApplyDeps pins the exact semantics Apply relies on. Without
+// elevated ops the whole plan is one chunk, so a dep recorded anywhere in it
+// (before OR after its dependent — plan.Apply's sort orders it) passes, and
+// only a dep recorded nowhere is refused. With elevated ops the plan is
+// validated as the privilege chunks Apply applies: a dep on an EARLIER chunk
+// passes, a dep on a LATER chunk is refused. Apply records no
+// when_begin/when_end blocks (registered resources lower to a flat op list),
+// so when-block plans are covered by the record-time tests in
+// record_deps_test.go instead.
 func TestValidateApplyDeps(t *testing.T) {
 	hdr := plan.Op{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "apply"}
 	cmd := func(id string, deps ...string) plan.Op {
 		return plan.Op{Op: plan.KindCommand, Bin: "true", ID: id, Deps: deps}
+	}
+	elevated := func(op plan.Op) plan.Op {
+		op.Elevate = true
+		return op
 	}
 	cases := []struct {
 		name    string
@@ -307,10 +314,12 @@ func TestValidateApplyDeps(t *testing.T) {
 		{name: "backward dep", ops: []plan.Op{hdr, cmd("a"), cmd("b", "a")}},
 		{name: "forward dep within the plan", ops: []plan.Op{hdr, cmd("b", "a"), cmd("a")}},
 		{name: "dangling dep", ops: []plan.Op{hdr, cmd("a", "Command[typo]")}, wantErr: "Command[typo]"},
+		{name: "dep on earlier elevated chunk", ops: []plan.Op{hdr, elevated(cmd("a")), cmd("b", "a")}},
+		{name: "dep on later elevated chunk", ops: []plan.Op{hdr, cmd("b", "a"), elevated(cmd("a"))}, wantErr: "later chunk 1"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateApplyDeps(tc.ops)
+			err := validateApplyDeps(plan.SplitPrivilegeChunks(tc.ops))
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("validateApplyDeps() = %v, want nil", err)
