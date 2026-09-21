@@ -137,18 +137,15 @@ func TestStoreBlobsDirGroupRule(t *testing.T) {
 	}
 }
 
-// TestStoreTreeAndGlobFollowSymlinkedAncestors is the regression for the
-// $TMPDIR bug: the blobs/ policy applies to blobs/ ALONE, so a plan directory
-// that is reached through a symlinked ancestor (macOS's $TMPDIR below /var, a
-// symlinked home) keeps working for tree and glob blobs, present or still to be
-// created, exactly as it did with MkdirAll before the policy existed. The blobs
-// are written into the directory the link leads to, and blobs/ is still created
-// 0700.
-func TestStoreTreeAndGlobFollowSymlinkedAncestors(t *testing.T) {
+// TestStoreBlobsFollowSymlinkedAncestors is the regression for the $TMPDIR
+// bug: the blobs/ policy applies to blobs/ ALONE, so a plan directory that is
+// reached through a symlinked ancestor (macOS's $TMPDIR below /var, a
+// symlinked home) keeps working for every blob kind (single file, tree, glob),
+// present or still to be created. The blobs are written into the directory
+// the link leads to, blobs/ is still created 0700, and an unsafe or symlinked
+// blobs/ is still refused.
+func TestStoreBlobsFollowSymlinkedAncestors(t *testing.T) {
 	for name, write := range blobWriters(t) {
-		if name == "WriteFile" {
-			continue // stricter by design, see TestStoreWriteFileStillRefusesSymlinkedAncestors
-		}
 		t.Run(name+" existing plan dir", func(t *testing.T) {
 			link, realDir := testutil.SymlinkedDir(t)
 			plan := testutil.MkdirMode(t, filepath.Join(realDir, "plan"), 0o700)

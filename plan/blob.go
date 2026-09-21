@@ -2,11 +2,12 @@ package plan
 
 import (
 	"fmt"
-	"golang.org/x/sys/unix"
 	"os"
 	"path/filepath"
 	"strings"
 	"unicode"
+
+	"golang.org/x/sys/unix"
 )
 
 // Store writes and resolves blob sidecars under Root/blobs/.
@@ -181,8 +182,7 @@ func (s *Store) WriteGlob(name, pattern string) (string, error) {
 // WriteFile uses the same blobs/-only check (openSecureChildDir), so a store
 // reached through a symlinked $TMPDIR works for every blob kind.
 //
-// The guarantee is also weaker than WriteFile's in another respect, and
-// deliberately stated as such: WriteFile writes through the descriptor of the
+// The one difference, deliberately stated as such: WriteFile writes through the descriptor of the
 // blobs/ directory it verified, so the check and the write are on the same
 // directory. secureChildDir closes its descriptor when it returns, and
 // WriteTree/WriteGlob then clear, create and fill the tree BY PATH
