@@ -57,10 +57,12 @@ var (
 )
 
 // runCmd reads a crontab (crontab -l) and runCmdWithStdin writes one (crontab
-// -, fed via stdin); both are swapped in unit tests.
+// -, fed via stdin); both are swapped in unit tests. acquireCrontabLock takes
+// the write lock and is swapped together with them (see SetRunnersForTest).
 var (
-	runCmd          = exec.Run
-	runCmdWithStdin = exec.RunWithStdin
+	runCmd             = exec.Run
+	runCmdWithStdin    = exec.RunWithStdin
+	acquireCrontabLock = lockCrontab
 )
 
 // newCron builds a Cron with defaults applied, then applies opts.
@@ -101,7 +103,10 @@ func Absent(name string, opts ...opt.CronOption) resource.Resource {
 }
 
 // SetRunnersForTest swaps the crontab command runners (tests only). A nil
-// argument keeps the current runner for that slot.
+// argument keeps the current runner for that slot. It also replaces the
+// cross-process crontab lock with an in-process one: a faked crontab is not
+// shared with other processes, and the real lock would create state in the
+// test user's home directory (lock.go) from every package that fakes cron.
 func SetRunnersForTest(run func(name string, args ...string) (string, string, int, error), runWithStdin func(stdin string, name string, args ...string) (string, string, int, error)) {
 	if run != nil {
 		runCmd = run
@@ -109,12 +114,14 @@ func SetRunnersForTest(run func(name string, args ...string) (string, string, in
 	if runWithStdin != nil {
 		runCmdWithStdin = runWithStdin
 	}
+	acquireCrontabLock = lockCrontabInProcess
 }
 
-// ResetRunnersForTest restores the real crontab command runners.
+// ResetRunnersForTest restores the real crontab command runners and lock.
 func ResetRunnersForTest() {
 	runCmd = exec.Run
 	runCmdWithStdin = exec.RunWithStdin
+	acquireCrontabLock = lockCrontab
 }
 
 func (c *Cron) planDraft(id string) resource.PlanDraft {
@@ -150,10 +157,11 @@ func (c *Cron) apply() error {
 		return c.reconcile(id)
 	}
 
-	// crontab has no compare-and-swap write. Hold a per-user advisory lock
+	// crontab has no compare-and-swap write. Hold a per-crontab advisory lock
 	// across the read/merge/write transaction so separate Gonf processes cannot
-	// discard each other's changes.
-	unlock, err := lockCrontab(c.user)
+	// discard each other's changes. lock.go documents where the lock lives and
+	// why a non-root apply for another account is refused here.
+	unlock, err := acquireCrontabLock(c.user)
 	if err != nil {
 		return err
 	}

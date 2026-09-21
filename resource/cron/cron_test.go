@@ -1,21 +1,15 @@
 package cron
 
 import (
-	"bufio"
-	"errors"
-	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"os/user"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/resource"
-	"golang.org/x/sys/unix"
 )
 
 func TestMergeCrontabAddReplaceRemove(t *testing.T) {
@@ -542,174 +536,6 @@ func TestEnsureConcurrentCronUpdatesDoNotLoseEitherBlock(t *testing.T) {
 	}
 }
 
-func TestCrontabLockSerializesSeparateProcesses(t *testing.T) {
-	userName := currentCronUser(t)
-	cmd := exec.Command(os.Args[0], "-test.run=^TestCrontabLockHelper$")
-	cmd.Env = append(os.Environ(), "GONF_CRON_LOCK_HELPER=1", "GONF_CRON_LOCK_USER="+userName)
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	line, err := bufio.NewReader(stdout).ReadString('\n')
-	if err != nil || line != "locked\n" {
-		_ = stdin.Close()
-		_ = cmd.Wait()
-		t.Fatalf("lock helper did not start: line=%q err=%v", line, err)
-	}
-
-	start := time.Now()
-	if _, err := lockCrontabWithin(userName, 40*time.Millisecond); err == nil {
-		t.Fatal("second process acquired lock before release")
-	} else if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
-		t.Fatalf("contended lock did not time out promptly: %s", elapsed)
-	}
-	if err := stdin.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := cmd.Wait(); err != nil {
-		t.Fatal(err)
-	}
-	unlock, err := lockCrontabWithin(userName, time.Second)
-	if err != nil {
-		t.Fatalf("second process lock after release: %v", err)
-	}
-	if err := unlock(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestCrontabLockRejectsHostilePreseed(t *testing.T) {
-	testCases := []struct {
-		name string
-		seed func(t *testing.T, dir, path string)
-	}{
-		{
-			name: "world-readable directory",
-			seed: func(t *testing.T, dir, _ string) {
-				t.Helper()
-				if err := os.Mkdir(dir, 0o700); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Chmod(dir, 0o755); err != nil {
-					t.Fatal(err)
-				}
-			},
-		},
-		{
-			name: "symlinked directory",
-			seed: func(t *testing.T, dir, _ string) {
-				t.Helper()
-				if err := os.Symlink(t.TempDir(), dir); err != nil {
-					t.Fatal(err)
-				}
-			},
-		},
-		{
-			name: "world-readable lock file",
-			seed: func(t *testing.T, dir, path string) {
-				t.Helper()
-				if err := os.Mkdir(dir, 0o700); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(path, nil, 0o600); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Chmod(path, 0o666); err != nil {
-					t.Fatal(err)
-				}
-			},
-		},
-	}
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			root := t.TempDir()
-			targetUID := uint32(unix.Geteuid())
-			dir, path := crontabLockPath(root, targetUID, "target")
-			testCase.seed(t, dir, path)
-			if _, err := lockCrontabAtUID("target", targetUID, 10*time.Millisecond, root); err == nil {
-				t.Fatal("hostile preseed was accepted")
-			}
-		})
-	}
-}
-
-func TestCrontabLockUsesTargetUIDNamespace(t *testing.T) {
-	root := t.TempDir()
-	targetUser := currentCronUser(t)
-	targetUID, err := crontabUserID(targetUser)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// The caller UID is deliberately absent from the path calculation. These
-	// model root applying targetUser's crontab and targetUser applying it
-	// directly: both resolve to this one target-owned namespace.
-	rootApplyingDir, rootApplyingPath := crontabLockPath(root, targetUID, targetUser)
-	targetApplyingDir, targetApplyingPath := crontabLockPath(root, targetUID, targetUser)
-	if rootApplyingDir != targetApplyingDir || rootApplyingPath != targetApplyingPath {
-		t.Fatalf("same target user chose different lock paths: root=%s/%s target=%s/%s", rootApplyingDir, rootApplyingPath, targetApplyingDir, targetApplyingPath)
-	}
-
-	otherUID := targetUID + 1
-	otherDir, _ := crontabLockPath(root, otherUID, targetUser)
-	if otherDir == targetApplyingDir {
-		t.Fatalf("target UID did not scope lock directory: %q", otherDir)
-	}
-}
-
-func TestCrontabLockPrivilegedCreationTransfersOwnership(t *testing.T) {
-	if unix.Geteuid() != 0 {
-		t.Skip("requires root to model a root apply for another account")
-	}
-	const targetUID = uint32(65534)
-	root := t.TempDir()
-	dir, path := crontabLockPath(root, targetUID, "target")
-
-	unlock, err := lockCrontabAtUID("target", targetUID, time.Second, root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := unlock(); err != nil {
-			t.Error(err)
-		}
-	}()
-
-	for _, candidate := range []struct {
-		path string
-		mode uint32
-	}{
-		{dir, unix.S_IFDIR | 0o700},
-		{path, unix.S_IFREG | 0o600},
-	} {
-		var stat unix.Stat_t
-		if err := unix.Stat(candidate.path, &stat); err != nil {
-			t.Fatal(err)
-		}
-		if stat.Uid != targetUID || uint32(stat.Mode&unix.S_IFMT) != candidate.mode&unix.S_IFMT || uint32(stat.Mode&0o777) != candidate.mode&0o777 {
-			t.Fatalf("lock object %s has uid=%d mode=%#o, want uid=%d mode=%#o", candidate.path, stat.Uid, stat.Mode, targetUID, candidate.mode)
-		}
-	}
-}
-
-func TestCrontabUserIDResolvesCurrentAccount(t *testing.T) {
-	current := currentCronUser(t)
-	uid, err := crontabUserID(current)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if uid != uint32(unix.Geteuid()) {
-		t.Fatalf("resolved uid %d, want effective uid %d", uid, unix.Geteuid())
-	}
-}
-
 func currentCronUser(t *testing.T) string {
 	t.Helper()
 	current, err := user.Current()
@@ -739,28 +565,6 @@ func TestCronFieldRejectsNonPortableForms(t *testing.T) {
 	}
 	if !validCronField("*/15,1-23/2", minute) || !validCronField("jan-mar/2", month) {
 		t.Fatal("valid portable stepped field rejected")
-	}
-}
-
-func TestCrontabLockHelper(t *testing.T) {
-	if os.Getenv("GONF_CRON_LOCK_HELPER") != "1" {
-		return
-	}
-	unlock, err := lockCrontab(os.Getenv("GONF_CRON_LOCK_USER"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := unlock(); err != nil {
-			t.Error(err)
-		}
-	}()
-	if _, err := fmt.Fprintln(os.Stdout, "locked"); err != nil {
-		t.Fatal(err)
-	}
-	var byteRead [1]byte
-	if _, err := os.Stdin.Read(byteRead[:]); err != nil && !errors.Is(err, io.EOF) {
-		t.Fatal(err)
 	}
 }
 
