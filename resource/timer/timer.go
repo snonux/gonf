@@ -32,6 +32,9 @@ func (t *Timer) SetUser()       { t.user = true }
 func (t *Timer) SetEnableOnly() { t.enableOnly = true }
 
 var (
+	// Register takes the value as a resource.Applier; asserting it here reports a
+	// renamed or re-signed Apply at the declaration, not at the Register call.
+	_ resource.Applier    = (*Timer)(nil)
 	_ opt.Absentable      = (*Timer)(nil)
 	_ opt.Restartable     = (*Timer)(nil)
 	_ opt.UserService     = (*Timer)(nil)

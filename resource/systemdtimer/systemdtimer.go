@@ -52,6 +52,9 @@ func (t *SystemdTimer) SetRestart()                    { t.restart = true }
 func (t *SystemdTimer) SetEnableOnly()                 { t.enableOnly = true }
 
 var (
+	// Register takes the value as a resource.Applier; asserting it here reports a
+	// renamed or re-signed Apply at the declaration, not at the Register call.
+	_ resource.Applier           = (*SystemdTimer)(nil)
 	_ opt.Absentable             = (*SystemdTimer)(nil)
 	_ opt.Dependable             = (*SystemdTimer)(nil)
 	_ opt.Commandable            = (*SystemdTimer)(nil)

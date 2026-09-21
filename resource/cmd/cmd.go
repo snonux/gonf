@@ -48,6 +48,9 @@ func (c *Cmd) SetOnlyIf(g *opt.Guard)       { c.onlyIf = g }
 func (c *Cmd) SetElevate()                  { c.elevate = true }
 
 var (
+	// Register takes the value as a resource.Applier; asserting it here reports a
+	// renamed or re-signed Apply at the declaration, not at the Register call.
+	_ resource.Applier    = (*Cmd)(nil)
 	_ opt.Named           = (*Cmd)(nil)
 	_ opt.Dirable         = (*Cmd)(nil)
 	_ opt.Envable         = (*Cmd)(nil)

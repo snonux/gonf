@@ -43,6 +43,9 @@ func (c *Cron) SetWeekday(v string)         { c.weekday = v }
 func (c *Cron) AddCronEnv(kv string) { c.env = append(c.env, kv) }
 
 var (
+	// Register takes the value as a resource.Applier; asserting it here reports a
+	// renamed or re-signed Apply at the declaration, not at the Register call.
+	_ resource.Applier          = (*Cron)(nil)
 	_ opt.Absentable            = (*Cron)(nil)
 	_ opt.Dependable            = (*Cron)(nil)
 	_ opt.CronUserable          = (*Cron)(nil)

@@ -80,6 +80,11 @@ var detectPkgManager = detectPackageManager
 // Apply runs the package reconciliation directly for the legacy resource path.
 func (p *Package) Apply() error { return p.apply() }
 
+// resource.Register takes this value as a resource.Applier. The assertion
+// pins that contract at the declaration, so a renamed or re-signed Apply is
+// reported here rather than at the Register call.
+var _ resource.Applier = (*Package)(nil)
+
 // apply selects the host's backend and converges p through it with p's own
 // runner (which carries WithEnv). The shared policy lives in applyWith.
 func (p *Package) apply() error {

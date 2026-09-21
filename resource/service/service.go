@@ -30,6 +30,9 @@ func (s *Service) SetReload()  { s.reload = true }
 func (s *Service) SetUser()    { s.user = true }
 
 var (
+	// Register takes the value as a resource.Applier; asserting it here reports a
+	// renamed or re-signed Apply at the declaration, not at the Register call.
+	_ resource.Applier    = (*Service)(nil)
 	_ opt.Absentable      = (*Service)(nil)
 	_ opt.Restartable     = (*Service)(nil)
 	_ opt.Reloadable      = (*Service)(nil)

@@ -163,6 +163,9 @@ func (f *File) SetMode(mode os.FileMode) {
 }
 
 var (
+	// Register takes the value as a resource.Applier; asserting it here reports a
+	// renamed or re-signed Apply at the declaration, not at the Register call.
+	_ resource.Applier     = (*File)(nil)
 	_ opt.LineAddable      = (*File)(nil)
 	_ opt.LineRemovable    = (*File)(nil)
 	_ opt.LinesAddable     = (*File)(nil)

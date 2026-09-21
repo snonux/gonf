@@ -54,6 +54,11 @@ func build(path string, opts ...opt.LinkOption) *Link {
 // Apply runs the link reconciliation directly for the legacy resource path.
 func (l *Link) Apply() error { return l.apply() }
 
+// resource.Register takes this value as a resource.Applier. The assertion
+// pins that contract at the declaration, so a renamed or re-signed Apply is
+// reported here rather than at the Register call.
+var _ resource.Applier = (*Link)(nil)
+
 func (l *Link) apply() error {
 	switch {
 	case l.Absent:
