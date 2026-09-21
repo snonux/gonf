@@ -161,9 +161,13 @@ func (l *lazyStage) WriteGlob(name, pattern string) (string, error) {
 // It is a best-effort pre-check, not a guarantee: it inspects the path with
 // Lstat/access(2) while SecureDir opens it component by component, so the
 // answers can differ when the path changes in between or on exotic setups
-// (security modules, unusual ACLs). SecureDir at commit time always has the
-// last word and refuses safely, writing nothing to a directory it cannot take
-// over.
+// (security modules, unusual ACLs). SecureDir at commit time still refuses
+// what the shared directory rule covers (not a directory, a symlink, foreign
+// owner, unsafe group/world write) and writes nothing to such a directory.
+// Writability by the caller is NOT part of that rule: it is only checked here
+// (access(2)), so a directory that becomes read-only after this check fails at
+// commit time with a plain permission error instead of the actionable
+// "chmod u+w" message below — still refused, nothing written.
 func checkPlanDirUsable(planDir string) error {
 	planDir = filepath.Clean(planDir)
 	if err := refuseSymlinkedPath(planDir); err != nil {

@@ -60,7 +60,10 @@ applies. What is guaranteed, and what is not:
   is a pre-check, not a guarantee: whatever it misses (the path changed in
   between, ACLs) is still refused at commit time, after the task bodies ran
   but before anything is written to `dir`, by the same directory rule applied
-  through a no-follow open of `dir` (single-file blobs and `plan.jsonl` are
+  through a no-follow open of `dir` (that rule covers type, symlinks, owner and
+  group/world write; "not writable by you" is only detected by the pre-check,
+  so a directory made read-only in between fails at commit time with a plain
+  permission error rather than the actionable message, still writing nothing) (single-file blobs and `plan.jsonl` are
   then written through that very descriptor; tree and glob blobs are checked
   the same way but written by path, see "The output directory").
 - An I/O error while COMMITTING the blobs into `dir` after a successful record
