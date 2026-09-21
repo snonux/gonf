@@ -3,6 +3,7 @@ package secret
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -113,6 +114,10 @@ func TestFileProviderMissingRootIsUnavailable(t *testing.T) {
 		wantFileErr(t, ref, ErrUnavailable,
 			`secret "`+string(ref)+`": secrets directory "secrets" not found in the working directory`)
 	}
+	// No ENOENT cause: an unavailable store must not match fs.ErrNotExist.
+	if _, err := (FileProvider{}).Resolve(context.Background(), "key"); errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("missing root matches fs.ErrNotExist: %v", err)
+	}
 	data, err := FileProvider{Dir: "vault"}.Resolve(context.Background(), "key")
 	if KindOf(err) != ErrUnavailable || data != nil || !strings.Contains(err.Error(), `"vault"`) {
 		t.Fatalf("Resolve with missing custom dir = (%q, %v), want ErrUnavailable naming vault", data, err)
@@ -136,6 +141,24 @@ func TestFileProviderPermissionDeniedIsUnreadable(t *testing.T) {
 	if _, err := (FileProvider{}).Resolve(context.Background(), "locked/key"); !errors.Is(err, unix.EACCES) {
 		t.Fatalf("permission error does not wrap EACCES: %v", err)
 	}
+}
+
+// A secrets directory that cannot be searched is the store failing, not one
+// unreadable secret: ErrUnavailable, with the historical wording, for a
+// secret directly below it and one further down.
+func TestFileProviderUnreadableRootIsUnavailable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	useWorkDir(t)
+	writeFile(t, "key", neverReport)
+	writeFile(t, "sub/key", neverReport)
+	if err := os.Chmod(DefaultDir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(DefaultDir, 0o700) })
+	wantFileErr(t, "key", ErrUnavailable, `open secret "key": permission denied`)
+	wantFileErr(t, "sub/key", ErrUnavailable, `open secret "sub/key": permission denied`)
 }
 
 // The last component is opened without following a symlink even when the
@@ -242,8 +265,11 @@ func TestFileProviderHonoursCancellation(t *testing.T) {
 		t.Fatalf("pre-cancelled Resolve = (%d bytes, %v), want context.Canceled only", len(data), err)
 	}
 
-	// Cancelled after the first chunk was read.
-	mid := &flakyCtx{Context: context.Background(), okCalls: 1}
+	// Cancelled in the middle of the read: the entry check and readAll's
+	// first loop check consume the two ok calls, so the third check lands
+	// after the first chunk was read and the partially-read buffer is
+	// dropped.
+	mid := &flakyCtx{Context: context.Background(), okCalls: 2}
 	data, err = FileProvider{}.Resolve(mid, "big")
 	if !errors.Is(err, context.Canceled) || data != nil || IsNotFound(err) {
 		t.Fatalf("mid-read cancel = (%d bytes, %v), want context.Canceled", len(data), err)

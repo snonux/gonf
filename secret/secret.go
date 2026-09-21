@@ -24,6 +24,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
+	"slices"
 )
 
 // Ref is a provider-neutral logical secret reference, e.g.
@@ -35,8 +37,12 @@ type Ref string
 // Provider resolves a reference to the exact secret bytes (no trimming, no
 // re-encoding). Implementations must
 //   - return promptly once ctx is done, with an error wrapping ctx.Err();
-//   - report failures as *Error with one of the Err* kinds (an unclassified
-//     error is treated as ErrUnavailable by Resolve, never as not-found);
+//   - report failures as an unwrapped *Error with one of the Err* kinds and
+//     Ref set to the requested ref (anything else — an unclassified error, a
+//     wrapped *Error, one about another reference — is treated as
+//     ErrUnavailable by Resolve, never as not-found);
+//   - be safe for concurrent use when api.ResolveSecret or a Snapshot may
+//     call it from several goroutines;
 //   - never put secret bytes into an error, log line or panic value.
 //
 // Empty values are returned as they are; the policy that a secret must not be
@@ -52,8 +58,26 @@ type ProviderFunc func(ctx context.Context, ref Ref) ([]byte, error)
 // Resolve calls f.
 func (f ProviderFunc) Resolve(ctx context.Context, ref Ref) ([]byte, error) { return f(ctx, ref) }
 
-// The error kinds. Match them with errors.Is (an *Error unwraps to its kind)
-// or read Error.Kind; KindOf returns the kind of the outermost *Error.
+// IsNilProvider reports a nil provider, including one held in a typed nil
+// pointer, map, channel, slice or function (e.g. (*adapter)(nil)), which the
+// plain p == nil interface check misses; such a provider would panic only
+// at the first resolution. Composition roots (api.SetSecretProvider,
+// NewSnapshot) use it to fail fast on a nil provider.
+func IsNilProvider(p Provider) bool {
+	if p == nil {
+		return true
+	}
+	switch v := reflect.ValueOf(p); v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Map, reflect.Pointer, reflect.Slice, reflect.UnsafePointer:
+		return v.IsNil()
+	}
+	return false
+}
+
+// The error kinds. KindOf/IsNotFound read the kind of a top-level *Error and
+// are what decisions (such as an optional lookup) must use; errors.Is also
+// finds kinds in causes (an *Error unwraps to its kind and its cause), which
+// is fine for matching in logs and tests but not for deciding.
 var (
 	// ErrNotFound: the reference is well-formed and the store is usable, but
 	// holds no such secret. The only kind an optional lookup may suppress.
@@ -106,28 +130,36 @@ func (e *Error) Unwrap() []error {
 	return out
 }
 
-// KindOf returns the Kind of the outermost *Error in err's chain, or nil when
-// there is none. Unlike errors.Is(err, ErrNotFound) it cannot be fooled by a
-// cause further down the chain (an unreadable store whose cause happens to
-// wrap a not-found), so it is what optional lookups use.
+// KindOf returns the Kind of err when err itself — not a cause further down
+// its chain — is an *Error, and nil otherwise. Wrapping a typed error in
+// another error therefore hides its kind on purpose: an unreadable store
+// whose cause happens to wrap a not-found, or a caller that added context
+// with fmt.Errorf, must never look like an absent secret. Resolve and
+// api.ResolveSecret return the *Error unwrapped, so apply KindOf and
+// IsNotFound directly to their result.
 func KindOf(err error) error {
-	var e *Error
-	if errors.As(err, &e) {
+	if e, ok := err.(*Error); ok {
 		return e.Kind
 	}
 	return nil
 }
 
 // IsNotFound reports whether err is an absent secret, the only failure an
-// optional lookup may suppress.
+// optional lookup may suppress. It is the one test to base that decision on:
+// errors.Is(err, ErrNotFound) also matches a not-found buried in the cause of
+// another failure (see KindOf).
 func IsNotFound(err error) bool { return KindOf(err) == ErrNotFound }
 
 // Resolve resolves ref with p and enforces the contract around it:
 //   - a context that is already done, or becomes done while p runs, yields
 //     an error wrapping ctx.Err() and no bytes, even if p returned some
 //     (or a typed error);
-//   - an error that is not a correctly typed *Error becomes ErrUnavailable,
-//     so a provider bug can never read as "not found".
+//   - only a top-level *Error with a known kind that names ref itself is
+//     passed through; anything else — an unclassified error, a typed error
+//     wrapped in another one or naming a different reference (e.g. the
+//     store's unlock file), or a context error of the provider's own while
+//     the caller's ctx is still live — becomes ErrUnavailable, so a provider
+//     can never make a broken store read as "this secret is not found".
 //
 // Callers should use Resolve rather than calling p.Resolve directly.
 func Resolve(ctx context.Context, p Provider, ref Ref) ([]byte, error) {
@@ -144,25 +176,19 @@ func Resolve(ctx context.Context, p Provider, ref Ref) ([]byte, error) {
 	return data, nil
 }
 
-// canceled wraps a context error; it is deliberately not an *Error, so
-// KindOf reports no kind and an optional lookup does not suppress it.
+// canceled wraps a context error of the caller; it is deliberately not an
+// *Error, so KindOf reports no kind and an optional lookup does not suppress
+// it.
 func canceled(ref Ref, err error) error {
 	return fmt.Errorf("resolve secret %q: %w", string(ref), err)
 }
 
-// classify returns err unchanged when it is a context error or an *Error with
-// a known kind, and wraps everything else as ErrUnavailable.
+// classify returns err unchanged when it is a top-level *Error about ref with
+// a known kind, and wraps everything else as ErrUnavailable (keeping it as
+// the cause). Resolve has already handled the caller's own cancellation.
 func classify(ref Ref, err error) error {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if e, ok := err.(*Error); ok && e.Ref == ref && slices.Contains(kinds, e.Kind) {
 		return err
-	}
-	var e *Error
-	if errors.As(err, &e) {
-		for _, k := range kinds {
-			if e.Kind == k {
-				return err
-			}
-		}
 	}
 	return &Error{Kind: ErrUnavailable, Ref: ref, Err: err}
 }

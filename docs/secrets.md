@@ -33,18 +33,30 @@ A provider returns `*secret.Error`, whose `Kind` is one of:
 | `secret.ErrNotFound` | the store is usable but holds no such secret | the file, or a directory below `secrets/` on its way, is absent |
 | `secret.ErrInvalid` | the reference or what it names is unacceptable | empty or escaping path; symlink; non-directory on the way; not a regular file; an empty value (refused by the api helpers) |
 | `secret.ErrUnreadable` | the secret exists but cannot be read | permission denied; read I/O error |
-| `secret.ErrUnavailable` | the store itself is unusable | the `secrets/` directory itself is missing; misconfigured `Dir`; for other providers: locked, unauthenticated, corrupt, crashed |
+| `secret.ErrUnavailable` | the store itself is unusable | the `secrets/` directory itself is missing or cannot be searched (permission denied); misconfigured `Dir` (more than one component, or `..`); for other providers: locked, unauthenticated, corrupt, crashed, timed out |
 
-Decide optional lookups with `secret.IsNotFound(err)` (`KindOf` reads only
-the outermost `*secret.Error`, so a cause further down cannot make a broken
-store look like an absent secret). Plain `errors.Is(err, secret.ErrNotFound)`
-also traverses into causes; it is for matching and logging, not for the
-suppress decision.
-A cancelled or expired context yields an error wrapping `ctx.Err()` and no
-`*secret.Error`. `secret.Resolve` wraps every provider call: it refuses to
-start on a done context, drops bytes a provider returns after cancellation,
-and turns any error that is not a correctly typed `*secret.Error` into
-`ErrUnavailable` — an adapter bug is never read as "not found".
+**Decide with `secret.IsNotFound(err)` only**, applied directly to the error
+`ResolveSecret` / `secret.Resolve` returned. `IsNotFound` and `KindOf` read
+the kind of a top-level `*secret.Error` and nothing else: a typed error
+wrapped in another error has no kind for them, so neither a caller's own
+`fmt.Errorf` wrapping nor a not-found buried in the cause of another failure
+can make a broken store look like an absent secret. Do not use
+`errors.Is(err, secret.ErrNotFound)` for that decision: it also matches
+causes. The missing-`secrets/` error carries no `ENOENT` cause, so it does
+not match `fs.ErrNotExist` either.
+
+`secret.Resolve` wraps every provider call:
+
+- it refuses to start on a done context and drops bytes (or a typed error) a
+  provider returns once the caller's context is done; that yields an error
+  wrapping `ctx.Err()` and no `*secret.Error`;
+- it passes through only a top-level `*secret.Error` with a known kind whose
+  `Ref` is the requested reference. Everything else becomes `ErrUnavailable`
+  with the original error as cause: an unclassified error, a typed error
+  wrapped by the provider, a typed error about another reference (e.g.
+  `ErrNotFound` for the store's own unlock file), and a context error of
+  the provider's own (its subprocess timeout) while the caller's context is
+  still live. An adapter bug is never read as "not found".
 
 **Optional means not-found only.** `OptionalSecret` returns `("", false)` for
 `ErrNotFound` and nothing else; every other kind, an empty value and a
@@ -57,7 +69,10 @@ secret-backed fragment when gonf ran from the wrong working directory, and
 `ErrUnavailable` (`secret "<path>": secrets directory "secrets" not found in
 the working directory`) for both helpers. A missing file or subdirectory below
 an existing `secrets/` is still "missing", with the same message as before.
-All other messages are unchanged.
+All other messages are unchanged; a `secrets/` directory that cannot be
+searched keeps its `open secret "<path>": permission denied` message but is
+now `ErrUnavailable` (a store failure) rather than `ErrUnreadable`. Both
+helpers failed on it before as well.
 
 ## Configuring another provider
 
@@ -76,11 +91,21 @@ func main() {
   `ctx`, returns typed errors and never puts secret bytes into errors or logs.
   Keep adapters (e.g. an argv-invoked foostore) out of recipe and resource
   packages; `secret.ProviderFunc` adapts a plain function.
-- `secret.NewSnapshot(p)` resolves each reference at most once per process
-  and caches successes and not-found, so every task, host and privilege chunk
-  of one invocation sees the same value even if the store rotates meanwhile.
-  Transient failures are retried. The default file provider is deliberately
-  not wrapped, to keep its read-on-every-call behaviour.
+- `secret.NewSnapshot(p)` resolves each reference at most once and caches
+  successes and not-found; installed with `SetSecretProvider` it lasts for the
+  rest of the process, so every task, host and privilege chunk of one
+  invocation sees the same value even if the store rotates meanwhile.
+  Transient failures are retried. References are cached in canonical form
+  (cleaned, no leading slash — `"/a/b"` and `"a/b"` share one entry), so a
+  provider behind a Snapshot must treat those spellings alike. Each reference
+  resolves independently: a slow one does not block others, and a caller
+  waiting for someone else's resolution of the same reference stops when its
+  own context is done. Every returned slice is a copy. The default file
+  provider is deliberately not wrapped, to keep its read-on-every-call
+  behaviour.
+- `ResolveSecret` may be called from several goroutines; the provider
+  configuration is locked. Providers themselves must then be safe for
+  concurrent use (`Snapshot` and `FileProvider` are).
 - `ResolveSecret(ctx, ref)` returns the error instead of stashing it and works
   outside recording too. `MustSecret` / `OptionalSecret` resolve with
   `context.Background()`: plan recording carries no context yet.

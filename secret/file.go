@@ -33,12 +33,13 @@ const readChunk = 32 << 10
 // Errors:
 //   - ErrNotFound: the secret, or a directory on its way below Dir, is absent;
 //   - ErrUnavailable: Dir itself is absent (gonf run from the wrong working
-//     directory, the tree renamed or unmounted) — never "not found", so an
-//     optional lookup cannot silently drop every secret;
+//     directory, the tree renamed or unmounted) or cannot be searched, or
+//     Dir is misconfigured — never "not found", so an optional lookup cannot
+//     silently drop every secret;
 //   - ErrInvalid: empty or escaping reference, a symlink or a non-directory
 //     on the path, or a final component that is not a regular file;
-//   - ErrUnreadable: any other open failure (permission denied) or a read
-//     failure.
+//   - ErrUnreadable: any other open failure below Dir (permission denied) or
+//     a read failure.
 //
 // A context that is already done is refused before anything is opened; a
 // context that becomes done is re-checked between read chunks.
@@ -54,22 +55,9 @@ func (p FileProvider) Resolve(ctx context.Context, ref Ref) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, canceled(ref, err)
 	}
-	dir := p.Dir
-	if dir == "" {
-		dir = DefaultDir
-	}
-	if strings.ContainsAny(dir, `/\`) {
-		// OpenBase would refuse it anyway; say it is a configuration error
-		// rather than a per-secret one.
-		return nil, &Error{Kind: ErrUnavailable, Ref: ref,
-			Msg: fmt.Sprintf("secret %q: file provider directory %q must be a single path component", string(ref), dir)}
-	}
-	if dir == ".." {
-		// Also a configuration error: the store must stay inside the
-		// checkout ("." is allowed; the operator chose the whole working
-		// directory as the root).
-		return nil, &Error{Kind: ErrUnavailable, Ref: ref,
-			Msg: fmt.Sprintf("secret %q: file provider directory must not be %q", string(ref), dir)}
+	dir, err := p.dir(ref)
+	if err != nil {
+		return nil, err
 	}
 	clean, err := cleanRef(ref)
 	if err != nil {
@@ -92,6 +80,27 @@ func (p FileProvider) Resolve(ctx context.Context, ref Ref) ([]byte, error) {
 	return data, nil
 }
 
+// dir returns the effective directory, refusing a misconfigured one as
+// ErrUnavailable: a configuration error of the store, not of one secret.
+// Only a single component or "." is accepted — "." means the operator chose
+// the whole working directory — and ".." is refused so the store stays
+// inside the checkout. (OpenBase would refuse a multi-component Dir anyway.)
+func (p FileProvider) dir(ref Ref) (string, error) {
+	dir := p.Dir
+	if dir == "" {
+		dir = DefaultDir
+	}
+	if strings.ContainsAny(dir, `/\`) {
+		return "", &Error{Kind: ErrUnavailable, Ref: ref,
+			Msg: fmt.Sprintf("secret %q: file provider directory %q must be a single path component", string(ref), dir)}
+	}
+	if dir == ".." {
+		return "", &Error{Kind: ErrUnavailable, Ref: ref,
+			Msg: fmt.Sprintf("secret %q: file provider directory must not be %q", string(ref), dir)}
+	}
+	return dir, nil
+}
+
 // cleanRef strips leading slashes (the Rex convention) and cleans the path,
 // refusing an empty reference and anything that would leave the directory.
 func cleanRef(ref Ref) (string, error) {
@@ -110,6 +119,33 @@ func cleanRef(ref Ref) (string, error) {
 // missing secret below it.
 var errRootMissing = errors.New("secrets directory missing")
 
+// rootError marks any other failure of Dir itself (as opposed to a secret or
+// directory below it), so openError can report it as a store-level failure.
+type rootError struct{ err error }
+
+func (e rootError) Error() string { return e.err.Error() }
+func (e rootError) Unwrap() error { return e.err }
+
+// openRoot opens dir and checks that it can be searched. On Linux OpenBase
+// uses O_PATH, which succeeds on a directory without any permission, so the
+// explicit faccessat(X_OK) is what turns an unsearchable secrets/ into a
+// root failure instead of an "unreadable secret" at its first child; on the
+// BSDs and macOS OpenBase itself already fails with EACCES.
+func openRoot(dir string) (int, error) {
+	rootFD, err := safepath.OpenBase(dir)
+	if errors.Is(err, unix.ENOENT) {
+		return -1, errRootMissing
+	}
+	if err != nil {
+		return -1, rootError{err}
+	}
+	if err := unix.Faccessat(rootFD, ".", unix.X_OK, 0); err != nil {
+		_ = unix.Close(rootFD)
+		return -1, rootError{err}
+	}
+	return rootFD, nil
+}
+
 // openFile opens dir/clean with the shared descriptor walk of
 // internal/safepath: dir is opened relative to the working directory without
 // following it, every directory below it relative to its parent's descriptor
@@ -123,10 +159,7 @@ var errRootMissing = errors.New("secrets directory missing")
 func openFile(dir, clean string) (*os.File, error) {
 	parts := strings.Split(clean, string(filepath.Separator))
 	dirs, name := parts[:len(parts)-1], parts[len(parts)-1]
-	rootFD, err := safepath.OpenBase(dir)
-	if errors.Is(err, unix.ENOENT) {
-		return nil, errRootMissing
-	}
+	rootFD, err := openRoot(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -146,11 +179,18 @@ func openFile(dir, clean string) (*os.File, error) {
 // O_NOFOLLOW, is kept for safety although safepath already diagnoses it as
 // safepath.ErrSymlink). Other errors keep the bare cause after the secret's
 // name, without the path the walk adds. These are the messages MustSecret
-// and OptionalSecret reported before providers existed, kept verbatim.
+// and OptionalSecret reported before providers existed, kept verbatim; only
+// their kind depends on where the failure happened. A missing Dir carries no
+// cause on purpose: wrapping ENOENT would make errors.Is(err, fs.ErrNotExist)
+// true for an unavailable store. Any other failure of Dir itself (permission
+// denied) is ErrUnavailable, a store-level failure, with the historical
+// "open secret" wording.
 func openError(ref Ref, dir, fullPath string, err error) error {
+	var root rootError
+	isRoot := errors.As(err, &root)
 	switch {
 	case errors.Is(err, errRootMissing):
-		return &Error{Kind: ErrUnavailable, Ref: ref, Err: unix.ENOENT,
+		return &Error{Kind: ErrUnavailable, Ref: ref,
 			Msg: fmt.Sprintf("secret %q: secrets directory %q not found in the working directory", string(ref), dir)}
 	case errors.Is(err, unix.ENOENT):
 		return &Error{Kind: ErrNotFound, Ref: ref, Msg: fmt.Sprintf("secret %q is missing", string(ref))}
@@ -159,11 +199,15 @@ func openError(ref Ref, dir, fullPath string, err error) error {
 	case errors.Is(err, safepath.ErrNotRegular):
 		return &Error{Kind: ErrInvalid, Ref: ref, Err: err, Msg: fmt.Sprintf("secret %q is not a regular file", string(ref))}
 	}
+	kind := ErrUnreadable
+	if isRoot {
+		kind, err = ErrUnavailable, root.err
+	}
 	var ce *safepath.ComponentError
 	if errors.As(err, &ce) {
 		err = ce.Err
 	}
-	return &Error{Kind: ErrUnreadable, Ref: ref, Err: err, Msg: fmt.Sprintf("open secret %q: %v", string(ref), err)}
+	return &Error{Kind: kind, Ref: ref, Err: err, Msg: fmt.Sprintf("open secret %q: %v", string(ref), err)}
 }
 
 // readAll reads file to EOF, checking ctx between chunks so a cancelled

@@ -5,7 +5,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
@@ -84,7 +86,15 @@ func TestOptionalSecretRefusesEveryOtherFailure(t *testing.T) {
 		"unreadable":   &secret.Error{Kind: secret.ErrUnreadable, Ref: "k", Msg: "io failed"},
 		"invalid":      &secret.Error{Kind: secret.ErrInvalid, Ref: "k", Msg: "bad reference"},
 		"unclassified": errors.New("adapter crashed"),
-		"cancelled":    context.Canceled,
+		"cancelled":    context.Canceled, // the provider's own; the caller's ctx is live
+		// Review probe: a typed not-found about the store's unlock file,
+		// wrapped by the provider, is not "this secret is not found".
+		"foreign not-found": fmt.Errorf("unlock store: %w",
+			&secret.Error{Kind: secret.ErrNotFound, Ref: "unlock/password-file"}),
+		// An unreadable error whose cause is a not-found of the same ref.
+		"unreadable wrapping not-found": &secret.Error{Kind: secret.ErrUnreadable, Ref: "k", Msg: "decrypt failed",
+			Err: &secret.Error{Kind: secret.ErrNotFound, Ref: "k"}},
+		"wrapped own not-found": fmt.Errorf("lookup: %w", &secret.Error{Kind: secret.ErrNotFound, Ref: "k"}),
 	} {
 		t.Run(name, func(t *testing.T) {
 			useFakeSecrets(t, &fakeSecrets{fail: fail})
@@ -152,6 +162,28 @@ func TestSetSecretProviderIsConfiguredOnce(t *testing.T) {
 	if err := setSecretProvider(&fakeSecrets{}); err == nil || !strings.Contains(err.Error(), "before the first secret") {
 		t.Fatalf("after use: %v", err)
 	}
+}
+
+// ResolveSecret is public and may run on a consumer's goroutines; the
+// configuration it reads and marks as used is locked (checked by -race).
+func TestResolveSecretIsSafeForConcurrentUse(t *testing.T) {
+	ResetForTest()
+	t.Cleanup(ResetForTest)
+	if err := setSecretProvider(secret.ProviderFunc(func(context.Context, secret.Ref) ([]byte, error) {
+		return []byte(syntheticSecret), nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			if _, err := ResolveSecret(context.Background(), "k"); err != nil {
+				t.Errorf("ResolveSecret: %v", err)
+			}
+			_ = setSecretProvider(&fakeSecrets{}) // refused concurrently, never racing
+		})
+	}
+	wg.Wait()
 }
 
 func TestSetSecretProviderRefusedInsideTaskBody(t *testing.T) {

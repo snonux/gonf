@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
+	"sync"
 
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/plan"
@@ -12,8 +12,12 @@ import (
 )
 
 // secretProviders is the process-wide secret provider configuration. The
-// DSL is single-goroutine (see ResetForTest), so it is not locked.
+// DSL itself is single-goroutine, but ResolveSecret is a public function a
+// consumer may call from its own goroutines, so every field is guarded by mu.
+// The lock covers only reading/updating the configuration, never a
+// resolution itself.
 type secretProviders struct {
+	mu         sync.Mutex
 	provider   secret.Provider // nil: the default secret.FileProvider{}
 	configured bool            // SetSecretProvider has been called
 	used       bool            // a secret has been resolved
@@ -43,8 +47,10 @@ func SetSecretProvider(p secret.Provider) {
 // setSecretProvider is SetSecretProvider's checked core; it returns the
 // misuse instead of exiting, so tests can pin every refusal.
 func setSecretProvider(p secret.Provider) error {
+	secretConfig.mu.Lock()
+	defer secretConfig.mu.Unlock()
 	switch {
-	case providerIsNil(p):
+	case secret.IsNilProvider(p):
 		return errors.New("provider must not be nil")
 	case secretConfig.configured:
 		return errors.New("provider already configured; call it once at the composition root")
@@ -58,27 +64,20 @@ func setSecretProvider(p secret.Provider) error {
 	return nil
 }
 
-// providerIsNil reports a nil provider, including one held in a typed nil
-// pointer (e.g. (*adapter)(nil)), which the p == nil interface check misses;
-// such a provider would panic only at the first resolution.
-func providerIsNil(p secret.Provider) bool {
-	if p == nil {
-		return true
-	}
-	switch v := reflect.ValueOf(p); v.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Map, reflect.Pointer, reflect.Slice, reflect.UnsafePointer:
-		return v.IsNil()
-	}
-	return false
-}
-
 // resetSecretProviderForTest restores the default file provider (see
 // ResetForTest).
-func resetSecretProviderForTest() { secretConfig = secretProviders{} }
+func resetSecretProviderForTest() {
+	secretConfig.mu.Lock()
+	defer secretConfig.mu.Unlock()
+	secretConfig.provider, secretConfig.configured, secretConfig.used = nil, false, false
+}
 
-// currentSecretProvider returns the configured provider or the default file
-// provider.
-func currentSecretProvider() secret.Provider {
+// useSecretProvider marks the configuration as used (so it can no longer be
+// changed) and returns the configured provider or the default file provider.
+func useSecretProvider() secret.Provider {
+	secretConfig.mu.Lock()
+	defer secretConfig.mu.Unlock()
+	secretConfig.used = true
 	if secretConfig.provider == nil {
 		return secret.FileProvider{}
 	}
@@ -86,17 +85,17 @@ func currentSecretProvider() secret.Provider {
 }
 
 // ResolveSecret resolves ref through the configured provider and returns its
-// exact, non-empty bytes. Failures are typed (see package secret): match
-// them with errors.Is(err, secret.ErrNotFound) and friends, or
-// secret.IsNotFound for the one kind an optional lookup may ignore. ctx
-// bounds the resolution; a done context yields an error wrapping ctx.Err().
-// An empty value is refused as secret.ErrInvalid, the rule MustSecret has
-// always applied. Unlike MustSecret it returns the error instead of stashing
-// it, so it also works outside plan recording. Errors never contain secret
-// bytes; the returned slice is the caller's.
+// exact, non-empty bytes. Failures are typed (see package secret). Decide
+// "may this be skipped?" only with secret.IsNotFound(err) on the returned
+// error, as OptionalSecret does: errors.Is(err, secret.ErrNotFound) also
+// matches a not-found buried in the cause of another failure. ctx bounds the
+// resolution; a done context yields an error wrapping ctx.Err(). An empty
+// value is refused as secret.ErrInvalid, the rule MustSecret has always
+// applied. Unlike MustSecret it returns the error instead of stashing it, so
+// it also works outside plan recording. Errors never contain secret bytes;
+// the returned slice is the caller's.
 func ResolveSecret(ctx context.Context, ref secret.Ref) ([]byte, error) {
-	secretConfig.used = true
-	data, err := secret.Resolve(ctx, currentSecretProvider(), ref)
+	data, err := secret.Resolve(ctx, useSecretProvider(), ref)
 	if err != nil {
 		return nil, err
 	}
