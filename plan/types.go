@@ -327,7 +327,9 @@ type Op struct {
 	AddLines []string `json:"add_lines,omitempty"`
 	// RemoveLines removes matching lines from a file, in order.
 	RemoveLines []string `json:"remove_lines,omitempty"`
-	// AddLine and RemoveLine are accepted when applying pre-v14 plans.
+	// AddLine and RemoveLine are accepted when applying pre-v14 plans. Current
+	// recording never sets them (resource.PlanDraft has no singular fields);
+	// they stay on the wire type only so old recorded plans decode and apply.
 	AddLine    string `json:"add_line,omitempty"`
 	RemoveLine string `json:"remove_line,omitempty"`
 

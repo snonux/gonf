@@ -123,12 +123,11 @@ type PlanDraft struct {
 
 	// AddLines appends lines to a file when missing (line-in-file).
 	AddLines []string
-	// RemoveLines removes matching lines from a file.
+	// RemoveLines removes matching lines from a file. There are no singular
+	// AddLine/RemoveLine draft fields: drafts are only produced in-repo and
+	// always use the arrays. The singular wire fields on plan.Op exist solely
+	// so pre-v14 recorded plans still apply.
 	RemoveLines []string
-	// AddLine and RemoveLine are retained for compatibility with older draft
-	// producers. New file resources use AddLines and RemoveLines.
-	AddLine    string
-	RemoveLine string
 
 	// Name is a package name, command registry name, file resource identity,
 	// or similar label. A named file keeps its identity independently of Path.

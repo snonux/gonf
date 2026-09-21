@@ -41,8 +41,6 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		ValidationArgs: slices.Clone(d.ValidationArgs),
 		AddLines:       d.AddLines,
 		RemoveLines:    d.RemoveLines,
-		AddLine:        d.AddLine,
-		RemoveLine:     d.RemoveLine,
 		Absent:         d.Absent,
 		Deps:           d.Deps,
 	}
@@ -110,14 +108,7 @@ func validatePlanValidation(path string, op plan.Op) error {
 	if op.ValidationBin == "" && len(op.ValidationArgs) == 0 {
 		return nil
 	}
-	addLines := slices.Clone(op.AddLines)
-	if op.AddLine != "" {
-		addLines = append(addLines, op.AddLine)
-	}
-	removeLines := slices.Clone(op.RemoveLines)
-	if op.RemoveLine != "" {
-		removeLines = append(removeLines, op.RemoveLine)
-	}
+	addLines, removeLines := planLines(op)
 	f := File{
 		path:           path,
 		contentSet:     op.HasContent,
@@ -158,6 +149,23 @@ func (ensureFileHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	return EnsurePresent(path, opts...)
 }
 
+// planLines returns a file op's line edits in apply order: the v14+ arrays,
+// then the singular add_line/remove_line wire fields that pre-v14 plans carry
+// (current recording never sets them). An unset singular field is skipped
+// rather than appended as "", so a v14+ op with no removals yields an empty
+// removeLines and the len() checks in applyFileLines mean what they say.
+func planLines(op plan.Op) (addLines, removeLines []string) {
+	addLines = slices.Clone(op.AddLines)
+	if op.AddLine != "" {
+		addLines = append(addLines, op.AddLine)
+	}
+	removeLines = slices.Clone(op.RemoveLines)
+	if op.RemoveLine != "" {
+		removeLines = append(removeLines, op.RemoveLine)
+	}
+	return addLines, removeLines
+}
+
 func applyFileLines(path string, op plan.Op, ownership []opt.FileDirOption) error {
 	if op.ContentB64 != "" || op.Blob != "" {
 		return fmt.Errorf("file: add_line/remove_line cannot combine with content_b64/blob")
@@ -166,8 +174,7 @@ func applyFileLines(path string, op plan.Op, ownership []opt.FileDirOption) erro
 	if op.Name != "" {
 		opts = append(opts, opt.WithName(op.Name))
 	}
-	removeLines := append(slices.Clone(op.RemoveLines), op.RemoveLine)
-	addLines := append(slices.Clone(op.AddLines), op.AddLine)
+	addLines, removeLines := planLines(op)
 	if len(removeLines) != 0 {
 		opts = append(opts, opt.WithoutLines(removeLines...))
 	}
