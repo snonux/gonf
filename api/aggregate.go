@@ -1,36 +1,236 @@
 package api
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/snonux/gonf/internal/logger"
+)
 
 // Aggregate registers a task that runs every activated task whose name matches
-// pattern (via Matching).
+// pattern (via Matching), in sorted name order.
+//
+// Membership rules, applied when the aggregate is recorded:
+//   - the aggregate itself is excluded, whether matched by its own name or
+//     through an Alias of it (a pattern such as ".*" would otherwise recurse
+//     into itself);
+//   - operational work is never included: an Operational task, an Alias of
+//     one, or an AggregateTasks that transitively lists one (a pattern
+//     aggregate is itself free of operational work by the same rule);
+//   - an Alias is recorded as its target, and a target is recorded at most
+//     once per aggregate tree (see recordAggregate).
+//
+// For a setup aggregate whose membership is a safety decision, prefer
+// AggregateTasks and list the members instead of growing a regex.
 //
 // Error handling: a Task fn cannot return errors, so a failure inside the
 // body — the pattern matching no tasks, or a child task failing to record —
-// is stashed (stashBodyError) and fails the surrounding RecordPlan session
-// with a returned error naming the aggregate and the underlying child error.
-// Nothing is applied in that case: the abort happens during recording, before
-// plan apply runs. This mirrors the plan recorder's cycle-stash mechanism and
-// keeps Run's deferred temp-dir cleanup intact (no process exit).
+// is stashed (stashAggregateError) and fails the surrounding RecordPlan
+// session with a returned error naming the aggregate and the underlying child
+// error. Nothing is applied in that case: the abort happens during recording,
+// before plan apply runs. This mirrors the plan recorder's cycle-stash
+// mechanism and keeps Run's deferred temp-dir cleanup intact (no process
+// exit).
 func Aggregate(name, description, pattern string) {
 	Task(name, description, func() {
-		// Exclude the aggregate's own name: a pattern that matches it (e.g.
-		// ".*") would otherwise make the aggregate recurse into itself. The
-		// plan recorder's cycle detector still catches deeper recursion.
-		var names []string
-		for _, n := range Matching(pattern) {
-			if n != name {
-				names = append(names, n)
-			}
-		}
-		if len(names) == 0 {
-			stashBodyError(fmt.Errorf(
-				"aggregate %s: pattern %q matched no tasks (after excluding itself)",
-				name, pattern))
+		recordAggregate(name, patternMembers(name, pattern),
+			fmt.Sprintf("pattern %q matched no tasks (after excluding itself and operational tasks)", pattern))
+	}, asAggregate(nil))
+}
+
+// AggregateTasks registers a task that runs the listed member tasks in the
+// given order — explicit membership for setup aggregates, so which tasks run
+// (and which operational actions stay out) is visible in one list instead of
+// being encoded in a regex. Members may be tasks, other aggregates, or
+// aliases; an alias is recorded as its target and a target is recorded at
+// most once per aggregate tree (see recordAggregate). An Operational member
+// is included, because listing it is explicit — but that makes this
+// aggregate operational work for pattern aggregates, which then skip it.
+//
+// A member whose When predicates exclude it on the controller is skipped,
+// exactly as a pattern Aggregate would skip it; a member name that is not
+// registered at all, or a broken alias, fails the record (a typo must not
+// shrink a setup run silently), as does a list whose members are all
+// inactive. The list itself is checked at registration: no members, an empty
+// member name, a duplicate member, or a member that is the aggregate itself —
+// by name or through an already registered Alias — fail fast (logger.Fatal).
+// Alias applies the same check from the other side, so registration order
+// does not matter.
+func AggregateTasks(name, description string, members ...string) {
+	checkAggregateMembers(name, members)
+	list := append([]string(nil), members...)
+	Task(name, description, func() {
+		names, err := activeMembers(list)
+		if err != nil {
+			stashAggregateError(name, err)
 			return
 		}
-		if err := Run(names...); err != nil {
-			stashBodyError(fmt.Errorf("aggregate %s: %w", name, err))
+		recordAggregate(name, names, "no member task is active for these facts")
+	}, asAggregate(list))
+}
+
+// asAggregate marks a candidate as an aggregate (members is nil for a
+// pattern Aggregate). It is internal: only the two constructors set it.
+func asAggregate(members []string) TaskOption {
+	return func(c *taskCandidate) {
+		c.aggregate = true
+		c.members = members
+	}
+}
+
+// checkAggregateMembers enforces AggregateTasks' registration-time contract.
+func checkAggregateMembers(name string, members []string) {
+	if len(members) == 0 {
+		logger.Fatal("AggregateTasks %q: at least one member task is required", name)
+	}
+	seen := make(map[string]bool, len(members))
+	for _, m := range members {
+		switch {
+		case m == "":
+			logger.Fatal("AggregateTasks %q: member name must not be empty", name)
+		case m == name:
+			logger.Fatal("AggregateTasks %q: must not list itself as a member", name)
+		case seen[m]:
+			logger.Fatal("AggregateTasks %q: member %q listed twice", name, m)
 		}
-	})
+		if c, ok := findCandidate(m); ok && c.aliasOf == name {
+			logger.Fatal("AggregateTasks %q: member %q is an alias of the aggregate itself", name, m)
+		}
+		seen[m] = true
+	}
+}
+
+// patternMembers returns the activated tasks matching pattern, minus the
+// aggregate itself (directly or through an alias) and all operational work
+// (see Aggregate).
+func patternMembers(name, pattern string) []string {
+	var names []string
+	for _, n := range Matching(pattern) {
+		if n == name {
+			continue
+		}
+		if t, ok := activeTask(n); ok && t.aliasOf == name {
+			continue
+		}
+		if containsOperational(n, map[string]bool{}) {
+			// Dropping an aggregate that merely contains operational work is
+			// silent by design; the debug line (-verbose) explains why a
+			// matched name did not run.
+			logger.Debug("aggregate %s: skipping %q: it is or contains an Operational task", name, n)
+			continue
+		}
+		names = append(names, n)
+	}
+	return names
+}
+
+// containsOperational reports whether recording name could record an
+// Operational task: name is operational itself, an alias of operational
+// work, or an AggregateTasks listing operational work at any depth. Every
+// listed member counts, active or not, so the answer does not depend on the
+// controller's facts. A pattern Aggregate needs no descent: it applies this
+// same filter to its own members. visited guards against registration
+// cycles, which recording reports separately.
+func containsOperational(name string, visited map[string]bool) bool {
+	if visited[name] {
+		return false
+	}
+	visited[name] = true
+	c, ok := findCandidate(name)
+	if !ok {
+		return false
+	}
+	if c.operational {
+		return true
+	}
+	if c.aliasOf != "" {
+		return containsOperational(c.aliasOf, visited)
+	}
+	for _, m := range c.members {
+		if containsOperational(m, visited) {
+			return true
+		}
+	}
+	return false
+}
+
+// activeMembers returns the explicitly listed members that are active for
+// the controller's facts, in list order. A member with no registration at
+// all, or a broken alias (which is never active and so would otherwise be
+// skipped quietly), is an error rather than a skip.
+func activeMembers(members []string) ([]string, error) {
+	var names []string
+	for _, m := range members {
+		if _, ok := findCandidate(m); !ok {
+			return nil, fmt.Errorf("unknown member task %q", m)
+		}
+		if _, _, err := resolveAlias(m); err != nil {
+			return nil, err
+		}
+		if _, ok := activeTask(m); ok {
+			names = append(names, m)
+		}
+	}
+	return names, nil
+}
+
+// recordAggregate records names in order into the current plan session,
+// deduplicating across the whole aggregate tree: a member whose target (an
+// alias resolved to the task it names) was already recorded by this
+// aggregate or by any aggregate nested in the same tree is skipped, so it is
+// recorded once, at its first position. Members are recorded under their
+// public names, so an alias stays on the recursion stack and a cycle error
+// names it. A target counts as recorded only once its recording finished;
+// a member that is still being recorded is a cycle, which the recorder
+// reports instead of skipping. Failures are stashed with the aggregate's
+// name because a Task body cannot return them; emptyReason explains an empty
+// member set.
+func recordAggregate(name string, names []string, emptyReason string) {
+	if len(names) == 0 {
+		stashAggregateError(name, fmt.Errorf("%s", emptyReason))
+		return
+	}
+	if recSession.aggregateSeen == nil {
+		recSession.aggregateSeen = map[string]bool{}
+		defer func() { recSession.aggregateSeen = nil }()
+	}
+	for _, n := range names {
+		target, _, err := resolveAlias(n)
+		if err != nil {
+			stashAggregateError(name, err)
+			return
+		}
+		if recSession.aggregateSeen[target] {
+			continue
+		}
+		if err := recordTaskName(n); err != nil {
+			stashAggregateError(name, err)
+			return
+		}
+		recSession.aggregateSeen[target] = true
+	}
+}
+
+// enterAggregateScope prepares the aggregate dedupe scope for one task body
+// and returns the function restoring the previous scope. An aggregate body
+// keeps the enclosing scope, so nested aggregates deduplicate together. Any
+// other body gets a fresh (nil) scope: it may carry its own When/Privileged
+// envelope, so an aggregate it runs must not skip a member merely because an
+// outer aggregate recorded that member under different guards.
+func enterAggregateScope(isAggregate bool) (restore func()) {
+	if isAggregate {
+		return func() {}
+	}
+	saved := recSession.aggregateSeen
+	recSession.aggregateSeen = nil
+	return func() { recSession.aggregateSeen = saved }
+}
+
+// activeTask returns the activated entry for name, activating the registry
+// with DetectFacts first when nothing has activated it yet (as Matching does).
+func activeTask(name string) (task, bool) {
+	ensureActivated()
+	tasksMu.Lock()
+	defer tasksMu.Unlock()
+	t, ok := tasks[name]
+	return t, ok
 }

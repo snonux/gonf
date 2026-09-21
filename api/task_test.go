@@ -446,10 +446,12 @@ func TestAggregateChildFailureFailsRecord(t *testing.T) {
 	}
 }
 
-// TestNestedAggregateChainVisibleInError pins that nested aggregate failures
-// keep the include chain in the error: A includes B, B's child fails, and the
-// top-level error must mention both aggregates (wrap-the-existing-stash in
-// stashBodyError), not only the innermost one.
+// TestNestedAggregateChainVisibleInBodyError pins that nested aggregate
+// failures keep the include chain in the error: A includes B, B's child
+// fails, and the top-level error must mention both aggregates, not only the
+// innermost one. stashAggregateError builds that chain by re-wrapping the
+// already stashed error with each enclosing aggregate's name (stashBodyError
+// itself only keeps the first error).
 func TestNestedAggregateChainVisibleInBodyError(t *testing.T) {
 	ResetTasks()
 	resource.ResetRepository()

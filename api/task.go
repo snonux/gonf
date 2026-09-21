@@ -18,12 +18,19 @@ import (
 type TaskInfo struct {
 	Name        string
 	Description string
+	// AliasOf is the target task name when Name was registered with Alias,
+	// and empty for ordinary tasks and aggregates.
+	AliasOf string
 }
 
+// task is one activated entry of the public task map. Aliases are activated
+// too (they are public names) but carry no body: aliasOf names the task they
+// record instead.
 type task struct {
 	name        string
 	description string
 	fn          func()
+	aliasOf     string
 }
 
 type taskCandidate struct {
@@ -40,6 +47,18 @@ type taskCandidate struct {
 	privileged bool
 	// cluster is the inventory cluster name for ClusterHosts() (WithCluster).
 	cluster string
+	// operational marks an explicit operational action (Operational) that
+	// pattern aggregates must never pick up automatically.
+	operational bool
+	// aliasOf is set only for Alias registrations: the candidate has no fn
+	// and records the named target task instead (see resolveAlias).
+	aliasOf string
+	// aggregate is set for Aggregate and AggregateTasks registrations; their
+	// bodies share the aggregate dedupe scope (enterAggregateScope).
+	aggregate bool
+	// members is AggregateTasks' explicit member list (nil for a pattern
+	// Aggregate), used by the registration checks and containsOperational.
+	members []string
 }
 
 // TaskOption configures a deferred task candidate.
@@ -82,6 +101,22 @@ func Privileged() TaskOption {
 // WithCluster so every method on a struct shares one fleet.
 func WithTaskCluster(name string) TaskOption {
 	return func(c *taskCandidate) { c.cluster = name }
+}
+
+// Operational marks the task as an explicit operational action — for example
+// requesting certificates, a one-shot invocation, or a diagnostic — rather
+// than part of converging a host's configuration. A pattern Aggregate never
+// includes an operational task, an Alias of one, or an AggregateTasks that
+// (transitively) lists one, so a broad pattern such as "^frontends_" cannot
+// pick such an action up by name. The check covers registrations only: task
+// bodies are Go code and are not inspected, so an ordinary task whose body
+// calls Run("op") still records op wherever that task is recorded, pattern
+// aggregates included — do not wrap an operational action in a plain task
+// that a setup pattern matches. The task stays callable by its own name, and
+// AggregateTasks may still list it: explicit membership is a deliberate
+// decision, not an accident of naming.
+func Operational() TaskOption {
+	return func(c *taskCandidate) { c.operational = true }
 }
 
 // When skips activating the task unless pred(facts) is true.
@@ -143,9 +178,10 @@ func WhenHostnameContains(substr string) TaskOption {
 }
 
 // Task queues a named unit of work for activation. Call from init() or
-// RegisterMethods. Duplicate candidate names fail fast (logger.Fatal):
-// registration-time misuse is always a recipe bug. Activation (When
-// filtering) happens in Activate / CLI / Run.
+// RegisterMethods. Duplicate names fail fast (logger.Fatal) — tasks,
+// aggregates and aliases share one namespace — because registration-time
+// misuse is always a recipe bug. Activation (When filtering) happens in
+// Activate / CLI / Run.
 func Task(name, description string, fn func(), opts ...TaskOption) {
 	if name == "" {
 		logger.Fatal("Task: name must not be empty")
@@ -167,18 +203,23 @@ func Task(name, description string, fn func(), opts ...TaskOption) {
 			inner()
 		}
 	}
+	queueCandidate(c)
+}
 
+// queueCandidate appends c to the candidate list after the duplicate-name
+// check shared by Task and Alias, and marks the registry for re-activation.
+func queueCandidate(c taskCandidate) {
 	tasksMu.Lock()
 	defer tasksMu.Unlock()
 
 	for _, existing := range candidates {
-		if existing.name == name {
-			logger.Fatal("Task %q already queued", name)
+		if existing.name == c.name {
+			logger.Fatal("Task %q already queued", c.name)
 		}
 	}
 	if activated {
-		if _, exists := tasks[name]; exists {
-			logger.Fatal("Task %q already registered", name)
+		if _, exists := tasks[c.name]; exists {
+			logger.Fatal("Task %q already registered", c.name)
 		}
 	}
 	candidates = append(candidates, c)
@@ -225,7 +266,7 @@ func Tasks() []TaskInfo {
 
 	out := make([]TaskInfo, 0, len(tasks))
 	for _, t := range tasks {
-		out = append(out, TaskInfo{Name: t.name, Description: t.description})
+		out = append(out, TaskInfo{Name: t.name, Description: t.description, AliasOf: t.aliasOf})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
@@ -234,8 +275,13 @@ func Tasks() []TaskInfo {
 // Run records the named tasks into a plan and applies it locally in one shot.
 // This is the same engine as remote plan→JSONL→apply; local just skips shipping.
 //
-// Nested Run while a RecordPlan session is active (e.g. Aggregate) only appends
-// child task ops into the current plan — it does not apply mid-flight.
+// Nested Run while a RecordPlan session is active (a task body that runs
+// other tasks) only appends child task ops into the current plan — it does
+// not apply mid-flight. A nested failure (unknown task, a child's record
+// error, a cycle) is returned AND fails the enclosing record, so ignoring the
+// returned error (`_ = Run("x")`) cannot silently drop the child's ops. To
+// expose a task under a second public name, prefer Alias over a body that
+// only calls Run: aggregates then record the target once.
 //
 // Run itself is not context-aware (equivalent to RunContext(context.Background(),
 // ...)): task bodies call Run directly (e.g. a task that fans out to other
@@ -256,8 +302,9 @@ func RunContext(ctx context.Context, names ...string) error {
 	if plan.Recording() || resource.PlanDraftRecording() {
 		// Nested session: bodies append into the current plan. Packaging
 		// failures are shared through recordingPackErr, so the nested Run
-		// surfaces the real error (not a misleading secondary one).
-		return recordTaskBodies(names)
+		// surfaces the real error (not a misleading secondary one), and
+		// recordNestedRun stashes any other failure for the enclosing body.
+		return recordNestedRun(names)
 	}
 
 	planDir, err := os.MkdirTemp("", "gonf-plan-*")
@@ -294,13 +341,34 @@ func ResetTasks() {
 	resetTaskCluster()
 }
 
+// activateLocked rebuilds the active task map. Real tasks are activated by
+// their own When predicates. An alias has none of its own: it is active
+// exactly when its target is an active real task, so -list and Matching never
+// offer an alias that could not record. A broken alias (unknown target, or an
+// alias of an alias) is therefore absent from the list, and naming it
+// explicitly fails the record with the reason (resolveAlias).
 func activateLocked(facts Facts) {
 	tasks = map[string]task{}
+	var aliases []taskCandidate
 	for _, c := range candidates {
+		if c.aliasOf != "" {
+			aliases = append(aliases, c)
+			continue
+		}
 		if !whenPasses(c.when, facts) {
 			continue
 		}
 		tasks[c.name] = task{name: c.name, description: c.description, fn: c.fn}
+	}
+	// Aliases go in only after every real task so registration order does
+	// not matter. They are inserted as this loop runs, so the aliasOf check
+	// is what keeps an alias of an (earlier) alias from being activated.
+	for _, c := range aliases {
+		target, ok := tasks[c.aliasOf]
+		if !ok || target.aliasOf != "" {
+			continue
+		}
+		tasks[c.name] = task{name: c.name, description: c.description, aliasOf: c.aliasOf}
 	}
 	activated = true
 }

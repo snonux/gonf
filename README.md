@@ -8,7 +8,7 @@ Pure-Go syntax KISS configuration management system for personal use. Built with
 
 - **One apply engine:** tasks are recorded into a versioned JSONL plan, then applied — locally in one shot or remotely after shipping the plan. See [docs/plan.md](docs/plan.md).
 - `List(...)` builds a `[]string` for multi-path resources, `Command` args, and `EachKV` pairs (formerly `Elems`).
-- Task registration: `Task`, `RegisterMethods`, `Aggregate`, `CLI` — see [docs/tasks.md](docs/tasks.md).
+- Task registration: `Task`, `RegisterMethods`, `Aggregate`, `AggregateTasks`, `Alias`, `CLI` — see [docs/tasks.md](docs/tasks.md).
 - Path helpers: `Home`, `Expand`, `SyncDir`, `InstallFile`, `SymlinkMap`, … — see [docs/helpers.md](docs/helpers.md).
 
 ## CLI cheatsheet

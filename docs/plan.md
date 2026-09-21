@@ -123,20 +123,28 @@ blobs, then apply, then cleanup) so local and remote cannot diverge.
 gonf separates **registration-time** misuse from **runtime** failures:
 
 - **Registration-time DSL misuse fails fast** via `internal/logger.Fatal`
-  (process exit 1): duplicate `Task` / `Host` / `Fleet` registration, an
-  option applied to a resource that does not support it (`options.requires`,
-  e.g. `*file.File does not support WithRestart`), invalid option combinations
-  (`WithLine` + `WithContent`, `WithSource` + `WithSourceGlob`), an invalid
+  (process exit 1): duplicate `Task` / `Alias` / aggregate / `Host` / `Fleet`
+  registration, an `Alias` with an empty name or target or naming itself, an
+  `AggregateTasks` with no members, an empty or duplicate member, or a member
+  that is the aggregate itself (by name or through an `Alias`, in either
+  registration order), an option applied to a resource that does not support
+  it (`options.requires`, e.g. `*file.File does not support WithRestart`),
+  invalid option combinations (`WithLine` + `WithContent`, `WithSource` +
+  `WithSourceGlob`), an invalid
   `Matching` pattern, or `MustHost` / `MustCluster` lookups of unknown names.
   These are programmer errors in the recipe; nothing has been recorded or
   applied yet, so aborting immediately is the honest outcome.
 - **Record-time failures return errors**: unknown tasks, recursion cycles,
   packaging failures, registered resources without plan drafts, dangling or
-  cross-privilege-chunk `DependsOn` / `OnChange` targets, and a failing
-  child task inside an `Aggregate` all fail `RecordPlan` / `Run` with a
-  returned error. Task bodies cannot return errors, so Aggregate stashes the
-  failure (`stashBodyError` in `api/plan.go`, same mechanism as the cycle
-  stash) and the enclosing record fails with `aggregate <name>: <cause>`.
+  cross-privilege-chunk `DependsOn` / `OnChange` targets, an `Alias` with an
+  unknown target or naming another alias, an unknown `AggregateTasks`
+  member, a failing child task inside an `Aggregate` / `AggregateTasks`, and
+  a failing nested `Run` inside any task body all fail `RecordPlan` / `Run`
+  with a returned error. Task bodies cannot return errors, so aggregates
+  stash the failure (`stashAggregateError` in `api/plan.go`, same mechanism
+  as the cycle stash) and the enclosing record fails with `aggregate <name>:
+  <cause>`; a nested `Run` stashes `task <body>: <cause>` even when the body
+  ignores the error it returned.
   Nothing is applied in that case: the abort happens during recording, before
   plan apply runs.
 - **Secret failures return record-time errors**: `MustSecret` and
@@ -234,8 +242,11 @@ ops, err := RecordPlan("my-plan", planDir, "home_helix", "home_tmux")
   `fleet`) therefore package trees identically, and the destination
   reproduces the source tree 1:1 — a symlink in a source TREE is a symlink
   at the destination.
-- Nested `Run` while recording (e.g. `Aggregate`) appends into the **same**
-  plan; apply happens once at the top level.
+- Nested recording — a task body calling `Run`, an `Aggregate` /
+  `AggregateTasks` recording its members, an `Alias` recording its target —
+  appends into the **same** plan; apply happens once at the top level.
+  Within one aggregate tree each task is recorded once (see
+  [tasks.md](tasks.md#aggregates) for the exact rule).
 
 ### Helpers that emit recipes (not controller Stat)
 

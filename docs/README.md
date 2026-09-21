@@ -3,7 +3,7 @@
 | Doc | Topic |
 |-----|--------|
 | [plan.md](plan.md) | **Plan → JSONL → apply** (local one-shot and remote) |
-| [tasks.md](tasks.md) | `Task`, body-vs-options concept, `RegisterMethods`, Facts/`When*`, `CLI`, `Aggregate` |
+| [tasks.md](tasks.md) | `Task`, body-vs-options concept, `RegisterMethods`, Facts/`When*`, `CLI`, `Aggregate` / `AggregateTasks`, `Alias`, `Operational` |
 | [file-dir-link.md](file-dir-link.md) | `File` / `Dir` / `Link` (+ multi-path, lines, sources) |
 | [command.md](command.md) | `Command` with `Unless` / `OnlyIf` / `Creates` |
 | [package.md](package.md) | `Package` / `NoPackage` (dnf, pkg_add, pkg, pkgin) |

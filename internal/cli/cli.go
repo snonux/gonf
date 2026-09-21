@@ -242,13 +242,25 @@ func cliList() int {
 		return 1
 	}
 	for _, t := range infos {
-		if t.Description != "" {
-			fmt.Printf("%s\t%s\n", t.Name, t.Description)
-		} else {
-			fmt.Println(t.Name)
-		}
+		fmt.Println(listLine(t))
 	}
 	return 0
+}
+
+// listLine formats one -list row: "name<TAB>description", or just the name
+// when there is no description. An alias keeps its own description verbatim
+// (a migrated legacy alias lists exactly as the task it replaces did); only
+// an alias without one gets "alias of <target>", so it never shows as an
+// unexplained bare name.
+func listLine(t api.TaskInfo) string {
+	desc := t.Description
+	if desc == "" && t.AliasOf != "" {
+		desc = "alias of " + t.AliasOf
+	}
+	if desc == "" {
+		return t.Name
+	}
+	return t.Name + "\t" + desc
 }
 
 func cliPlan(args []string) int {

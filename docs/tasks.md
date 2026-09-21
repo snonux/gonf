@@ -136,14 +136,109 @@ such as `WhenLinux()` / `WhenProfile(...)` so plan recording can emit
 `when_begin` recipes; `OptsFoo` companions add per-method `TaskOption`s
 without falling back to explicit `Task(...)` registration.
 
-## Aggregate
+## Aggregates
 
 ```go
-Aggregate("all", "Everything matching home.*", "home\\..*")
+// Pattern membership: every activated task matching the regex, sorted by name.
+Aggregate("home", "Install all home_* configuration", "^home_")
+
+// Explicit membership: the listed tasks, in the listed order.
+AggregateTasks("frontends", "Install all frontend configuration",
+    "frontends_base", "frontends_httpd", "frontends_relayd")
 ```
 
-Registers a task that `Run`s every activated task whose name matches the regex.
-Nested `Run` while recording merges child ops into the same plan.
+An aggregate is a task that records its members into the same plan (nested
+recording merges child ops; nothing is applied mid-flight). Both forms share
+these rules:
+
+- **Deduplication** is per *aggregate tree*: an aggregate, the aggregates
+  nested in it, and the aliases they list. Within one tree a task is recorded
+  **once**, at the first position it is reached — whether it is reached by
+  name, through an alias, or through two nested aggregates. The tree stops at
+  an ordinary task body: an aggregate that a plain task runs (`Run("inner")`)
+  starts a fresh tree, because that task may add its own `When*` or
+  `Privileged()` envelope, so its members are recorded again inside it.
+  Separate top-level names (`gonf plan a b`) and diamonds between plain task
+  bodies are not deduplicated, as before. A member that is still being
+  recorded is a cycle and fails the record instead of being skipped.
+- **Aliases** stay visible: members are recorded under their public names,
+  so a cycle error names the alias in the chain.
+- **Conditions** stay the members' own: a member whose `When*` options exclude
+  it on the controller is skipped (the same activation filter as `-list`),
+  and serializable guards still become `when_begin` recipes. Privilege chunks
+  (`Privileged()`) are per member, as for a direct run.
+- **Errors propagate**: a member that fails to record, a broken alias, or an
+  empty member set fails the whole record with the aggregate chain in the
+  message (`aggregate outer: aggregate inner: …`). Cycles are detected across
+  aggregates and aliases.
+
+`Aggregate` excludes itself (by name or through an alias of it) and all
+*operational work*: an `Operational()` task, an alias of one, and an
+`AggregateTasks` that lists one at any depth (whether or not that member is
+active on the controller). A broad pattern therefore cannot pick an explicit
+operational action up by its registration, not even wrapped in another
+aggregate. Such an `AggregateTasks` is dropped from the pattern silently (run
+with `-verbose` to see a debug line naming it); list it explicitly if the
+pattern aggregate should run it. Task *bodies* are not inspected: an ordinary
+task whose body calls `Run("op")` records `op` wherever that task is
+recorded, pattern aggregates included, so never wrap an operational action in
+a plain task that a setup pattern matches.
+
+Prefer `AggregateTasks` when membership is a safety decision — a setup
+aggregate that must leave certificate requests, one-shot invocations and
+diagnostics out — instead of encoding that policy in a growing regex. Members
+may be tasks, aliases or other aggregates; an `Operational()` member is
+allowed because listing it is explicit (which makes the aggregate operational
+work for pattern aggregates). A member name that is not registered fails the
+record (a typo must not shrink a setup run silently); an empty list, an empty
+or duplicate member, or the aggregate listing itself — by name or through an
+alias of it, in either registration order — fail fast at registration.
+
+## Alias
+
+```go
+Alias("home_prompts", "Legacy alias for home_agents", "home_agents")
+```
+
+Registers a second public name for a task — typically a legacy name kept for
+compatibility. The alias is accepted everywhere a task name is (`Run`, the CLI,
+`plan`, `push`, `cluster`, `fleet`) and records exactly the target's ops,
+with the target's conditions, privilege and cluster; it has no options of its
+own. It is listed under its own name and description (or `alias of <target>`
+when the description is empty) whenever the target is active. Unlike a task
+whose body only calls `Run(target)`, an alias does not make an aggregate tree
+record the target twice.
+
+The target may be registered before or after the alias; it is resolved when a
+plan is recorded. An unknown target, or a target that is itself an alias, fails
+that record (and such an alias is never listed). Duplicate names, empty names
+or targets, self-aliases, and an alias of an `AggregateTasks` that lists the
+alias fail fast at registration.
+
+## Operational tasks
+
+```go
+Task("frontends_acme_invoke", "Request certificates now", requestCerts, Operational())
+```
+
+`Operational()` marks an explicit action — certificate issuance, a one-shot
+invocation, a diagnostic — as opposed to configuration convergence. It never
+joins a pattern `Aggregate`, directly, through an alias, or inside an
+`AggregateTasks`; run it by name or list it in an `AggregateTasks`. The
+marker is checked on registrations only, not on what task bodies `Run` (see
+above).
+
+## Nested Run
+
+A task body may call `Run("other")` while a plan is being recorded; the other
+task's ops are appended to the same plan. A nested failure is returned to the
+body **and** fails the enclosing record (`task <body>: …`), so `_ = Run(...)`
+cannot silently drop ops. This holds even when the body inspects and handles
+the returned error (for example to fall back to another task): a nested
+failure is never recoverable inside a recording, so optional work must be
+decided before calling `Run` (e.g. with a serializable `When*` option on the
+child), not by trying and ignoring the error. Use `Alias` instead of a body
+that only runs another task.
 
 ## Facts
 
@@ -193,8 +288,9 @@ if err != nil { /* … */ }
 if err := ApplyPlan(ops, planDir); err != nil { /* … */ }
 ```
 
-`Matching("home\\..*")` returns activated task names matching a regex
-(used by `Aggregate`). `Activate` only filters the list for display /
+`Matching("home\\..*")` returns activated task names matching a regex,
+aliases and operational tasks included (`Aggregate` filters and resolves them
+afterwards). `Activate` only filters the list for display /
 matching — it does not apply configuration by itself.
 
 Low-level `resource.Apply()` remains for tests and ad-hoc compatibility use;

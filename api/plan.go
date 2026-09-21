@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -57,9 +58,12 @@ type recordingSession struct {
 	// package-level value is safe.
 	recordingPackErr error
 
-	// recordingBodyErr holds a task-body failure stashed by Aggregate
-	// (whose Task fn cannot return errors): a child Run error, or a pattern
-	// that matched no tasks. Like the cycle stash, every enclosing body
+	// recordingBodyErr holds a task-body failure stashed because a Task fn
+	// cannot return errors: an aggregate's child failure, empty member set
+	// or broken alias (Aggregate/AggregateTasks), a failed nested Run from
+	// any task body (propagateNestedRunError), a secret lookup failure
+	// (stashSecretError), or a ForHosts misuse or missing/mistyped host
+	// value (failForHosts). Like the cycle stash, every enclosing body
 	// fails its record after its fn returns, and the top-level
 	// RecordPlanTo returns it — so Run's deferred temp-dir cleanup runs and
 	// embedded callers get an error instead of a process exit. Cleared at
@@ -92,6 +96,18 @@ type recordingSession struct {
 	// this list and refuse to ship the plan — shipping it would silently
 	// drop the guard and apply the task unconditionally on the destination.
 	recordedOpaqueOnlyTasks []string
+
+	// aggregateSeen holds the task names (alias targets, never alias names)
+	// already recorded by the aggregate tree currently being recorded, so a
+	// member reachable twice — through an alias, or through two nested
+	// aggregates — records once, at its first position. It is nil outside an
+	// aggregate. The outermost aggregate creates it and clears it when done;
+	// a non-aggregate task body recorded inside the tree runs with its own
+	// nil scope (enterAggregateScope), because such a body may add a When or
+	// Privileged envelope that the outer occurrence does not share. Aggregates
+	// and aliases have no options of their own, so everything inside one
+	// scope is recorded under the same guards and deduplication is exact.
+	aggregateSeen map[string]bool
 }
 
 // recSession is the process-wide plan recording session. Single-goroutine
@@ -110,6 +126,7 @@ func (s *recordingSession) reset() {
 	s.recordingBodyErr = nil
 	s.recordedBlobRefs = map[string]string{}
 	s.recordedOpaqueOnlyTasks = nil
+	s.aggregateSeen = nil
 }
 
 // RecordPlan runs the named tasks in plan-record mode: resource registration
@@ -295,20 +312,66 @@ func RefuseOpaqueOnlyPush(action string) error {
 // recordingPackErr, so nested Run bodies see the real error too.
 func recordTaskBodies(taskNames []string) error {
 	for _, name := range taskNames {
-		if err := checkRecordingCycle(name); err != nil {
-			// Task bodies cannot return errors; stash the cycle so every
-			// enclosing body fails its record too.
-			recSession.recordingCycleErr = err
-			return err
-		}
-		recSession.recordingStack = append(recSession.recordingStack, name)
-		err := recordSingleTaskBody(name)
-		recSession.recordingStack = recSession.recordingStack[:len(recSession.recordingStack)-1]
-		if err != nil {
+		if err := recordTaskName(name); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// recordTaskName records one public task name. An Alias is pushed on the
+// recording stack under its own name and then records its target, so a cycle
+// that passes through an alias (t -> a -> t) is detected and named with the
+// alias in the chain, while the ops are exactly the target's.
+func recordTaskName(name string) error {
+	if err := checkRecordingCycle(name); err != nil {
+		// Task bodies cannot return errors; stash the cycle so every
+		// enclosing body fails its record too.
+		recSession.recordingCycleErr = err
+		return err
+	}
+	target, isAlias, err := resolveAlias(name)
+	if err != nil {
+		return err
+	}
+	recSession.recordingStack = append(recSession.recordingStack, name)
+	if isAlias {
+		err = recordTaskName(target)
+	} else {
+		err = recordSingleTaskBody(name)
+	}
+	recSession.recordingStack = recSession.recordingStack[:len(recSession.recordingStack)-1]
+	return err
+}
+
+// recordNestedRun is Run's nested-session path: a task body running other
+// tasks while a plan is being recorded. A failure is returned to the body
+// and also stashed (propagateNestedRunError), so the enclosing record fails
+// even when the body ignores the returned error — the silent `_ = Run(...)`
+// pattern would otherwise drop the child's ops from the plan.
+func recordNestedRun(names []string) error {
+	err := recordTaskBodies(names)
+	if err != nil {
+		propagateNestedRunError(err)
+	}
+	return err
+}
+
+// propagateNestedRunError stashes a nested Run failure as the session's body
+// error, naming the task body that ran it. Errors that already travel through
+// a session stash (a cycle, a packaging failure, an earlier body error) are
+// left alone: every enclosing body fails with them anyway, and re-wrapping
+// would repeat the same context. The first failure wins, like stashBodyError.
+func propagateNestedRunError(err error) {
+	for _, stashed := range []error{recSession.recordingCycleErr, recSession.recordingPackErr, recSession.recordingBodyErr} {
+		if stashed != nil && errors.Is(err, stashed) {
+			return
+		}
+	}
+	if recSession.recordingBodyErr != nil {
+		return
+	}
+	recSession.recordingBodyErr = fmt.Errorf("task %s: %w", currentRecordingName(), err)
 }
 
 // recordSingleTaskBody records one task body into the current plan session.
@@ -330,6 +393,7 @@ func recordSingleTaskBody(name string) error {
 	}
 
 	prevElevate := recSession.recordingElevate
+	defer func() { recSession.recordingElevate = prevElevate }()
 	recSession.recordingElevate = c.privileged
 	if len(wrapWhen) > 0 {
 		plan.Record(plan.Op{
@@ -340,34 +404,33 @@ func recordSingleTaskBody(name string) error {
 		})
 	}
 
-	resource.ResetRepository()
-	resetRecordedDrafts()
-	c.fn()
-	if recSession.recordingCycleErr != nil {
-		recSession.recordingElevate = prevElevate
-		// Keep the stash set: enclosing bodies fail with the same cycle.
-		return recSession.recordingCycleErr
-	}
-	if recSession.recordingBodyErr != nil {
-		recSession.recordingElevate = prevElevate
-		// Keep the stash set: enclosing bodies fail with the same error.
-		return recSession.recordingBodyErr
-	}
-	if recSession.recordingPackErr != nil {
-		recSession.recordingElevate = prevElevate
-		// Keep the stash set: enclosing bodies fail with the same error.
-		return recSession.recordingPackErr
-	}
-	if err := checkUnrecordedDrafts(c.name); err != nil {
-		recSession.recordingElevate = prevElevate
+	if err := runTaskBody(c); err != nil {
 		return err
 	}
-
 	if len(wrapWhen) > 0 {
 		plan.Record(plan.Op{Op: plan.KindWhenEnd, Elevate: recSession.recordingElevate})
 	}
-	recSession.recordingElevate = prevElevate
 	return nil
+}
+
+// runTaskBody runs c's body against a fresh resource repository and draft
+// set, inside the aggregate dedupe scope that fits it (enterAggregateScope),
+// and returns the session's stashed failure, if any, or the check for
+// registered resources that produced no draft. Stashes stay set so every
+// enclosing body fails with the same error.
+func runTaskBody(c taskCandidate) error {
+	resource.ResetRepository()
+	resetRecordedDrafts()
+	func() {
+		defer enterAggregateScope(c.aggregate)()
+		c.fn()
+	}()
+	for _, stashed := range []error{recSession.recordingCycleErr, recSession.recordingBodyErr, recSession.recordingPackErr} {
+		if stashed != nil {
+			return stashed
+		}
+	}
+	return checkUnrecordedDrafts(c.name)
 }
 
 // checkRecordingCycle fails when name is already on the active recording
@@ -394,16 +457,33 @@ func resetRecordedDrafts() {
 }
 
 // stashBodyError records a task-body failure for the current recording
-// session. Task bodies cannot return errors, so bodies that fail (Aggregate
-// stashes its child Run error there) record it; every enclosing body fails
-// its record after its fn returns. The first error wins, and later stashes
-// wrap it so the aggregate include chain stays visible to the operator.
+// session. Task bodies cannot return errors, so bodies that fail record it
+// here (secret lookups, ForHosts; a failed nested Run is stashed by
+// propagateNestedRunError instead); every enclosing body fails its
+// record after its fn returns. The first error wins: a later one in the same
+// session is a consequence or a second, independent failure, and the
+// operator fixes the first one first. Aggregates use stashAggregateError,
+// which adds their name to the chain instead.
 func stashBodyError(err error) {
 	if recSession.recordingBodyErr == nil {
 		recSession.recordingBodyErr = err
-		return
 	}
-	recSession.recordingBodyErr = fmt.Errorf("aggregate %s: %w", currentRecordingName(), recSession.recordingBodyErr)
+}
+
+// stashAggregateError records an aggregate's failure as
+// "aggregate <name>: <cause>". When cause is (or wraps) the error already
+// stashed — a child body's failure propagating up — the stash is re-wrapped
+// with the aggregate's name, so nested aggregates build the whole include
+// chain (aggregate outer: aggregate inner: …). An unrelated later failure
+// does not replace the first one.
+func stashAggregateError(name string, cause error) {
+	stashed := recSession.recordingBodyErr
+	switch {
+	case stashed == nil:
+		recSession.recordingBodyErr = fmt.Errorf("aggregate %s: %w", name, cause)
+	case errors.Is(cause, stashed):
+		recSession.recordingBodyErr = fmt.Errorf("aggregate %s: %w", name, stashed)
+	}
 }
 
 // currentRecordingName returns the innermost task body being recorded, for
