@@ -156,11 +156,14 @@ gonf separates **registration-time** misuse from **runtime** failures:
   Nothing is applied in that case: the abort happens during recording, before
   plan apply runs.
 - **Secret failures return record-time errors**: `MustSecret` and
-  `OptionalSecret` load controller-local `secrets/<path>` files while a task is
-  recorded. Required missing secrets, empty secrets, unreadable files, and
-  unsafe paths fail before local apply or SSH push; an optional missing file
-  simply lets the recipe omit that host's fragment. This preserves deferred
-  plan-directory cleanup and prevents a partial plan from reaching a host.
+  `OptionalSecret` resolve secrets through the configured provider (by default
+  controller-local `secrets/<path>` files) while a task is recorded. Required
+  missing secrets, empty secrets, unreadable files, unsafe paths and an
+  unavailable provider (e.g. no `secrets/` directory at all) fail before local
+  apply or SSH push; only a secret the provider reports as not found
+  (`secret.ErrNotFound`) lets an optional lookup omit that host's fragment.
+  This preserves deferred plan-directory cleanup and prevents a partial plan
+  from reaching a host. See [secrets.md](secrets.md).
 - **Apply-time failures return errors**: `plan.Apply`, the resource `Ensure`
   helpers, and `ApplyChunks` never exit the process. The error travels up to
   the CLI (or the embedding caller), which prints it and exits 1 — so deferred
@@ -918,7 +921,12 @@ when that file is absent, which is useful for optional per-host plan fragments.
 Both preserve bytes exactly (including newlines), reject paths that escape the
 secrets directory and any symlink in the secret path, and report only the path
 and failure class—never secret contents. A leading `/` remains below `secrets/` for Rex compatibility, so
-`MustSecret("/var/nsd/key")` reads `secrets/var/nsd/key`.
+`MustSecret("/var/nsd/key")` reads `secrets/var/nsd/key`. That file reading is
+the default `secret.FileProvider`; a consumer may configure another provider
+once with `SetSecretProvider`, and `ResolveSecret` returns bytes with a typed
+error. The provider contract, its error kinds and the optional-means-not-found
+rule are in [secrets.md](secrets.md). No provider changes what is recorded:
+only what a recipe places into a resource reaches the plan.
 
 When secret bytes are passed to `WithContent`, they are managed material:
 they are present in clear text in the owner-only (`0600`) `plan.jsonl` output

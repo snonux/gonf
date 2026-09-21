@@ -555,6 +555,12 @@ Garage cluster's shared RPC identity or revoke other credentials.
 
 ### Gonf side
 
+Status (z52): the resolver contract exists — package `secret` (`Provider`,
+typed `*secret.Error` kinds, the compatible `FileProvider`, `Snapshot`) with
+`api.SetSecretProvider` / `api.ResolveSecret`; see `docs/secrets.md`. Typed
+references in file content and template data, sensitivity in plans, and the
+foostore adapter remain open (062, 162).
+
 Configure a provider once at the consumer composition root. Use a small
 context-aware resolver contract returning bytes and typed errors. Integrate
 foostore through argv-based subprocess execution first; its current implementation

@@ -7,10 +7,10 @@ import (
 
 // ResetForTest is the single canonical test seam for api package ambient
 // state. It clears the task registry (ResetTasks), the profile override, the
-// plan recording session (api/plan.go), plan record mode (plan.ResetForTest),
-// and the resource package state (repository, report, dry-run; via
-// resource.ResetForTest). Individual reset functions remain available so
-// existing tests keep working.
+// configured secret provider, the plan recording session (api/plan.go),
+// plan record mode (plan.ResetForTest), and the resource package state
+// (repository, report, dry-run; via resource.ResetForTest). Individual
+// reset functions remain available so existing tests keep working.
 //
 // Like the DSL itself this is deliberately single-goroutine: call it only
 // while no registration, recording, or apply is in flight. It does not touch
@@ -19,9 +19,10 @@ import (
 // (internal/remote.SSHRunner); tests that override those restore them with
 // t.Cleanup.
 func ResetForTest() {
-	ResetTasks()           // task registry (see ResetTasks)
-	SetProfileOverride("") // CLI -profile must not leak between tests
-	recSession.reset()     // plan recording session (api/plan.go)
+	ResetTasks()                 // task registry (see ResetTasks)
+	SetProfileOverride("")       // CLI -profile must not leak between tests
+	resetSecretProviderForTest() // back to the default file provider (api/secret_provider.go)
+	recSession.reset()           // plan recording session (api/plan.go)
 	plan.ResetForTest()
 	resource.ResetForTest()
 }

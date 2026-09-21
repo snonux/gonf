@@ -16,4 +16,5 @@
 | [cron.md](cron.md) | `Cron` / `NoCron` (per-user + root crontab) |
 | [helpers.md](helpers.md) | Paths, sync, symlinks, predicates, `GitGlobal`, `List` |
 | [options.md](options.md) | Shared options cheat-sheet |
+| [secrets.md](secrets.md) | `MustSecret` / `OptionalSecret` / `ResolveSecret`, the file provider, typed errors, `SetSecretProvider` |
 | [conf-rex-gaps.md](conf-rex-gaps.md) | Gaps vs `~/git/conf` Rex (remote fleet) |

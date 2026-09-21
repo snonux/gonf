@@ -1,0 +1,251 @@
+package secret
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"golang.org/x/sys/unix"
+)
+
+// These tests pin FileProvider, the provider MustSecret and OptionalSecret
+// have always used: exact bytes, the historical error wording (moved here
+// from api/secret_traversal_test.go, which called the old api loadSecret
+// directly) and, new with the provider contract, the error kind of each
+// failure. All values are synthetic and live in t.TempDir.
+
+const neverReport = "never-report-this-secret"
+
+// useWorkDir makes a fresh temp dir the working directory for this test.
+func useWorkDir(t *testing.T) {
+	t.Helper()
+	t.Chdir(t.TempDir())
+}
+
+// writeFile writes value to secrets/path, creating directories 0700.
+func writeFile(t *testing.T, path, value string) {
+	t.Helper()
+	path = filepath.Join(DefaultDir, path)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// wantFileErr fails unless FileProvider resolves ref to exactly the error
+// want of kind kind, without bytes and without leaking neverReport.
+func wantFileErr(t *testing.T, ref Ref, kind error, want string) {
+	t.Helper()
+	data, err := FileProvider{}.Resolve(context.Background(), ref)
+	if err == nil || err.Error() != want {
+		t.Fatalf("Resolve(%q) = (%q, %v), want error %q", ref, data, err, want)
+	}
+	if data != nil {
+		t.Fatalf("Resolve(%q) returned bytes with an error: %q", ref, data)
+	}
+	if KindOf(err) != kind || !errors.Is(err, kind) {
+		t.Fatalf("Resolve(%q) kind = %v, want %v", ref, KindOf(err), kind)
+	}
+	if strings.Contains(err.Error(), neverReport) {
+		t.Fatalf("error leaked a secret value: %v", err)
+	}
+}
+
+func TestFileProviderReturnsExactBytes(t *testing.T) {
+	useWorkDir(t)
+	const value = " leading\ntrailing \x00bytes\n"
+	writeFile(t, "var/key", value)
+	for _, ref := range []Ref{"var/key", "/var/key", `\var/key`, "var/./key"} {
+		data, err := FileProvider{}.Resolve(context.Background(), ref)
+		if err != nil || string(data) != value {
+			t.Fatalf("Resolve(%q) = (%q, %v), want %q", ref, data, err, value)
+		}
+	}
+	// A large value spans several read chunks and still comes back intact.
+	big := strings.Repeat("0123456789abcdef", readChunk/8)
+	writeFile(t, "big", big)
+	if data, err := (FileProvider{}).Resolve(context.Background(), "big"); err != nil || string(data) != big {
+		t.Fatalf("Resolve(big) = (%d bytes, %v), want %d bytes", len(data), err, len(big))
+	}
+}
+
+// An empty file is returned as empty bytes: the non-empty rule belongs to
+// the api helpers, not to the provider.
+func TestFileProviderReturnsEmptyFileAsIs(t *testing.T) {
+	useWorkDir(t)
+	writeFile(t, "empty", "")
+	data, err := FileProvider{}.Resolve(context.Background(), "empty")
+	if err != nil || len(data) != 0 {
+		t.Fatalf("Resolve(empty) = (%q, %v), want empty bytes", data, err)
+	}
+}
+
+// A component that is a regular file where a directory is needed has always
+// been reported with the symlink wording (the walk sees ENOTDIR for both).
+func TestFileProviderRegularFileIntermediateIsReportedAsSymlink(t *testing.T) {
+	useWorkDir(t)
+	writeFile(t, "file", "x")
+	wantFileErr(t, "file/key", ErrInvalid, `secret path "secrets/file/key" contains a symlink`)
+}
+
+// Missing below the secrets directory — the file itself or a directory on
+// its way — is ErrNotFound, with the message MustSecret has always used.
+func TestFileProviderMissingBelowRootIsNotFound(t *testing.T) {
+	useWorkDir(t)
+	writeFile(t, "a/present", "x")
+	wantFileErr(t, "key", ErrNotFound, `secret "key" is missing`)
+	wantFileErr(t, "a/missing", ErrNotFound, `secret "a/missing" is missing`)
+	wantFileErr(t, "a/missing/key", ErrNotFound, `secret "a/missing/key" is missing`)
+}
+
+// A missing secrets directory is the store being unavailable (wrong working
+// directory, renamed or unmounted tree), not every secret being absent — an
+// optional lookup must not silently drop them all. (Before the provider
+// contract it read as "missing".)
+func TestFileProviderMissingRootIsUnavailable(t *testing.T) {
+	useWorkDir(t)
+	for _, ref := range []Ref{"key", "a/b/key"} {
+		wantFileErr(t, ref, ErrUnavailable,
+			`secret "`+string(ref)+`": secrets directory "secrets" not found in the working directory`)
+	}
+	data, err := FileProvider{Dir: "vault"}.Resolve(context.Background(), "key")
+	if KindOf(err) != ErrUnavailable || data != nil || !strings.Contains(err.Error(), `"vault"`) {
+		t.Fatalf("Resolve with missing custom dir = (%q, %v), want ErrUnavailable naming vault", data, err)
+	}
+}
+
+// Other open failures keep the bare errno after the secret's name and are
+// ErrUnreadable; the errno stays matchable.
+func TestFileProviderPermissionDeniedIsUnreadable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	useWorkDir(t)
+	writeFile(t, "locked/key", neverReport)
+	locked := filepath.Join(DefaultDir, "locked")
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+	wantFileErr(t, "locked/key", ErrUnreadable, `open secret "locked/key": permission denied`)
+	if _, err := (FileProvider{}).Resolve(context.Background(), "locked/key"); !errors.Is(err, unix.EACCES) {
+		t.Fatalf("permission error does not wrap EACCES: %v", err)
+	}
+}
+
+// The last component is opened without following a symlink even when the
+// link points at a regular file inside secrets/, and a directory or FIFO
+// there is not a secret.
+func TestFileProviderFinalComponentRules(t *testing.T) {
+	useWorkDir(t)
+	writeFile(t, "dir/key", "x")
+	if err := os.Symlink("key", filepath.Join(DefaultDir, "dir", "alias")); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Mkfifo(filepath.Join(DefaultDir, "fifo"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wantFileErr(t, "dir/alias", ErrInvalid, `secret path "secrets/dir/alias" contains a symlink`)
+	wantFileErr(t, "dir", ErrInvalid, `secret "dir" is not a regular file`)
+	wantFileErr(t, "fifo", ErrInvalid, `secret "fifo" is not a regular file`)
+}
+
+// Symlinks anywhere — the root, an intermediate directory, a dangling
+// final link — are refused as ErrInvalid, never followed and never
+// reported as not found.
+func TestFileProviderRefusesSymlinks(t *testing.T) {
+	t.Run("root", func(t *testing.T) {
+		useWorkDir(t)
+		if err := os.MkdirAll("external", 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join("external", "key"), []byte(neverReport), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("external", DefaultDir); err != nil {
+			t.Fatal(err)
+		}
+		wantFileErr(t, "key", ErrInvalid, `secret path "secrets/key" contains a symlink`)
+	})
+	t.Run("intermediate", func(t *testing.T) {
+		useWorkDir(t)
+		writeFile(t, "actual/key", neverReport)
+		if err := os.Symlink("actual", filepath.Join(DefaultDir, "nested")); err != nil {
+			t.Fatal(err)
+		}
+		wantFileErr(t, "nested/key", ErrInvalid, `secret path "secrets/nested/key" contains a symlink`)
+	})
+	t.Run("dangling", func(t *testing.T) {
+		useWorkDir(t)
+		if err := os.MkdirAll(DefaultDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("../outside-not-yet-created", filepath.Join(DefaultDir, "link")); err != nil {
+			t.Fatal(err)
+		}
+		wantFileErr(t, "link", ErrInvalid, `secret path "secrets/link" contains a symlink`)
+	})
+}
+
+// Negative: references that are empty or leave the directory are refused
+// before anything is opened, as ErrInvalid; so is a misconfigured Dir, as
+// ErrUnavailable.
+func TestFileProviderRefusesInvalidReferences(t *testing.T) {
+	useWorkDir(t)
+	if err := os.WriteFile("outside", []byte(neverReport), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, "key", "x")
+	wantFileErr(t, "", ErrInvalid, "secret path must not be empty")
+	wantFileErr(t, "///", ErrInvalid, "secret path must not be empty")
+	wantFileErr(t, "nested/../../outside", ErrInvalid, `invalid secret path "nested/../../outside"`)
+	wantFileErr(t, "..", ErrInvalid, `invalid secret path ".."`)
+	wantFileErr(t, ".", ErrInvalid, `invalid secret path "."`)
+	_, err := FileProvider{Dir: "a/b"}.Resolve(context.Background(), "key")
+	if KindOf(err) != ErrUnavailable {
+		t.Fatalf("multi-component Dir: err = %v, want ErrUnavailable", err)
+	}
+	if _, err := (FileProvider{Dir: ".."}).Resolve(context.Background(), "key"); KindOf(err) != ErrUnavailable ||
+		err.Error() != `secret "key": file provider directory must not be ".."` {
+		t.Fatalf(`FileProvider{Dir: ".."} = %v, want the ErrUnavailable refusal`, err)
+	}
+}
+
+// flakyCtx is a context whose Err turns to Canceled after okCalls calls: it
+// cancels deterministically in the middle of a FileProvider read.
+type flakyCtx struct {
+	context.Context
+	okCalls int
+}
+
+func (c *flakyCtx) Err() error {
+	if c.okCalls > 0 {
+		c.okCalls--
+		return nil
+	}
+	return context.Canceled
+}
+
+func TestFileProviderHonoursCancellation(t *testing.T) {
+	useWorkDir(t)
+	writeFile(t, "big", strings.Repeat("x", 3*readChunk))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	data, err := FileProvider{}.Resolve(ctx, "big")
+	if !errors.Is(err, context.Canceled) || data != nil || KindOf(err) != nil {
+		t.Fatalf("pre-cancelled Resolve = (%d bytes, %v), want context.Canceled only", len(data), err)
+	}
+
+	// Cancelled after the first chunk was read.
+	mid := &flakyCtx{Context: context.Background(), okCalls: 1}
+	data, err = FileProvider{}.Resolve(mid, "big")
+	if !errors.Is(err, context.Canceled) || data != nil || IsNotFound(err) {
+		t.Fatalf("mid-read cancel = (%d bytes, %v), want context.Canceled", len(data), err)
+	}
+}

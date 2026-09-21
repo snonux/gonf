@@ -90,7 +90,7 @@ Status against every conf Rex primitive in v0.14.0 (plan schema 16):
 | `service x, ensure => started` (rcctl / systemd / FreeBSD+NetBSD `service`) | `Service` / `NoService` auto-detect, `WithRestart` (restart once when already active), `WithReload`, `WithUser` (systemd) | **Done** |
 | `on_change => sub { service 'x' => 'restart' }` (restart only when a file changed) | `OnChange(res…)`: Command runs only on a watched change; Service/Timer preserve state convergence but gate requested restart/reload; DaemonReload is gated too | **Done** (plan v11) |
 | `template(...)` with arrays/loops/closures/per-server data | `.tmpl` sources render at destination apply with environment, `.Param`, structured `WithTemplateData`, and `.Gonf` host facts; Go still computes closures | **Done** |
-| `$secrets->('path')` (`read_file './secrets/…'`) | `MustSecret` / `OptionalSecret` controller helpers | Covered |
+| `$secrets->('path')` (`read_file './secrets/…'`) | `MustSecret` / `OptionalSecret` controller helpers over the default file provider; `SetSecretProvider` / `ResolveSecret` for another store ([secrets.md](secrets.md)) | Covered |
 | `append_if_no_such_line` | `WithLine` / `WithoutLine` (idempotent, mode-aware) | **Done** |
 | `file …, ensure => 'absent'` | `NoFile` | **Done** |
 | Rex `cron add => user, {…}` | `Cron` / `NoCron`: marker-managed per-user crontabs, full schedule fields, `WithCronEnv`, `WithCronUser` | **Done** (`@reboot` nice-to-have) |
@@ -156,6 +156,14 @@ inside the plan JSONL** (temp dir locally, `GONF-PUSH/1` over SSH remotely) —
 the same exposure Rex has shipping file content over SSH. No secret material
 belongs in task names, descriptions, or host values (`WithValue` rows print in
 `gonf hosts` listings).
+
+The helpers now resolve through a typed secret-provider contract (package
+`secret`, see [secrets.md](secrets.md)): the default `secret.FileProvider`
+keeps this `./secrets/` convention byte for byte, another store is configured
+once with `SetSecretProvider`, and `OptionalSecret` suppresses only a
+not-found secret. A missing `secrets/` directory itself is an error for both
+helpers, no longer "every secret is missing". The provider does not change
+what reaches the plan.
 
 ### Implemented: custom package repos (`PKG_PATH`)
 

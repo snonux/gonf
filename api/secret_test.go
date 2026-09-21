@@ -74,7 +74,9 @@ func TestSecretFailuresAreRecordErrorsWithoutValues(t *testing.T) {
 		optional bool
 		want     string
 	}{
-		{name: "required missing", path: "missing", want: "missing"},
+		{name: "required missing", path: "missing", setup: func(t *testing.T) { writeSecret(t, "other", "x") }, want: `secret "missing" is missing`},
+		{name: "required secrets root missing", path: "missing", want: `secrets directory "secrets" not found`},
+		{name: "optional secrets root missing", path: "missing", optional: true, want: `secrets directory "secrets" not found`},
 		{name: "required empty", path: "empty", setup: func(t *testing.T) { writeSecret(t, "empty", "") }, want: "empty"},
 		{name: "optional empty", path: "empty", setup: func(t *testing.T) { writeSecret(t, "empty", "") }, optional: true, want: "empty"},
 		{name: "unreadable directory", path: "directory", setup: func(t *testing.T) {
