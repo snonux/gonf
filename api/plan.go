@@ -237,6 +237,25 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 		return nil, err
 	}
 
+	ops, err := recordPlanBody(planID, store, taskNames)
+	if err != nil {
+		// A task body that failed this record (declared misuse, a
+		// packaging error, a plan-level pre-flight refusal) may already
+		// have registered resources before failing. Leaving them
+		// registered would let a later api.Apply in this process silently
+		// apply that half-declared set (task fc2). declerr.CapturedAny is
+		// the other half of this guard, for a caller that skips straight
+		// to Apply without going through this RecordPlanTo call at all.
+		resource.ResetRepository()
+	}
+	return ops, err
+}
+
+// recordPlanBody is RecordPlanTo's actual recording, split out so
+// RecordPlanTo has one place to react to its error return (resetting the
+// resource repository — see there) instead of a reset at every return
+// statement here.
+func recordPlanBody(planID string, store plan.BlobStore, taskNames []string) ([]plan.Op, error) {
 	defer enterRecordMode(store)()
 	if err := recordTaskBodies(taskNames); err != nil {
 		return nil, err

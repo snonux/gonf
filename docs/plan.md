@@ -163,14 +163,23 @@ binary's `main` exits, with the code `cli.CLI` returns.
     a task body) fails that record like any stashed task-body error:
     `RecordPlan` / `Run` / push / cluster / fleet return it, nothing is
     applied or pushed, and temporary directories are removed by the normal
-    deferred cleanup. A misuse reported outside a recording (top-level
+    deferred cleanup. `RecordPlanTo` also resets the registered resource
+    repository on that failure (task fc2), so a failed body's own partial
+    registrations (whatever it registered before the misuse) do not survive
+    it either — a later `api.Apply` call in the same process, made without
+    checking the failed call's returned error, therefore finds nothing left
+    to (mis)apply. As a second, process-wide guard for that same case,
+    `api.Apply` additionally refuses outright once any recording session has
+    ever failed this way (`declerr.CapturedAny`), rather than silently
+    applying an empty registration set and looking identical to "there was
+    nothing to do." A misuse reported outside a recording (top-level
     registration in `main`, resources declared for a direct `api.Apply`) is
-    kept for the process: `RecordPlanTo`, `Run`, `api.Apply` and
-    `resource.Apply` refuse with it before any task body runs, and `cli.CLI`
-    refuses every invocation (`-list` and `-version` included) with it, exit
-    status 1, printing the message and `declared at <file:line>`. From the
-    CLI a broken recipe therefore still exits non-zero with the same message
-    as before; an embedding program gets it as an error.
+    kept for the process: `RecordPlanTo`, `Run` and `api.Apply` refuse with
+    it before any task body runs, and `cli.CLI` refuses every invocation
+    (`-list` and `-version` included) with it, exit status 1, printing the
+    message and `declared at <file:line>`. From the CLI a broken recipe
+    therefore still exits non-zero with the same message as before; an
+    embedding program gets it as an error.
   - **Apply side.** A resource rebuilt on the destination from a plan op
     (the `Ensure*` helpers the plan handlers use) collects option misuse in
     its `embed.Misuse` and returns it as its apply error, so an apply never

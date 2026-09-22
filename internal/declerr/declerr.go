@@ -14,10 +14,18 @@
 //
 //   - while a plan is recorded (RecordPlanTo installs a sink with Capture), the
 //     report fails that recording session like any other stashed task-body
-//     error;
+//     error; RecordPlanTo also resets the registered resource repository on
+//     that failure, so nothing the failed body registered survives it;
 //   - otherwise (top-level registration in main, direct api.Apply use) the
-//     FIRST report is kept and api.RecordPlanTo, api.Run, api.Apply,
-//     resource.Apply and the CLI refuse to proceed with it.
+//     FIRST report is kept and api.RecordPlanTo, api.Run, api.Apply and the
+//     CLI refuse to proceed with it.
+//
+// A sink swallows a report for First's purposes (the recording session
+// handles it, not the process-wide sticky error), but CapturedAny stays a
+// process-wide sticky trace that SOME session, at some point, failed this
+// way — api.Apply checks it too, so a caller that ignores a prior
+// RecordPlanTo/Run's returned error is still refused rather than silently
+// applying (or no-op'ing on) whatever that failed body left registered.
 //
 // Reports are first-error-wins: a later misuse is usually a consequence of the
 // first one, and the operator fixes the first one first. Each report carries
@@ -58,6 +66,15 @@ var (
 	first error
 	// sink, when set, receives every report instead of first (Capture).
 	sink func(error)
+	// capturedAny is set the first time Report runs with a sink installed,
+	// and stays set for the life of the process (like first). It is the
+	// only trace, outside the sink's own session, that a task body ever
+	// failed a record: the sink routes the report to that session (fixing
+	// the current RecordPlanTo call) and First stays nil, so nothing else
+	// would otherwise know a resource repository built by a failed
+	// recording may hold a half-declared, refused body's leftover
+	// registrations. See CapturedAny.
+	capturedAny bool
 )
 
 // Error returns the wrapped error's message.
@@ -80,7 +97,10 @@ func Report(err error) {
 	}
 	mu.Lock()
 	s := sink
-	if s == nil && first == nil {
+	switch {
+	case s != nil:
+		capturedAny = true
+	case first == nil:
 		first = err
 	}
 	mu.Unlock()
@@ -101,6 +121,23 @@ func First() error {
 	mu.Lock()
 	defer mu.Unlock()
 	return first
+}
+
+// CapturedAny reports whether Report has ever run with a sink installed
+// (Capture) — i.e. whether some task body, at some point in this process,
+// failed a recording session with a declaration error. It stays true for
+// the life of the process once set (like First); tests clear it with
+// Reset. api.Apply checks it alongside First so a caller that applies the
+// registered resource repository without checking a prior
+// RecordPlanTo/Run's returned error still gets refused, instead of
+// silently applying (or silently no-op'ing on) whatever a failed body left
+// registered. RecordPlanTo's own failure paths additionally reset the
+// repository itself (see enterRecordMode's exit), so this is defense in
+// depth, not the only guard.
+func CapturedAny() bool {
+	mu.Lock()
+	defer mu.Unlock()
+	return capturedAny
 }
 
 // Capture routes every Report to fn until restore is called, which reinstates
@@ -127,6 +164,7 @@ func Reset() {
 	defer mu.Unlock()
 	first = nil
 	sink = nil
+	capturedAny = false
 }
 
 // Location returns the recipe location recorded with err, or "" when err is

@@ -144,6 +144,46 @@ func TestApplyRefusesCronExplicitEmptyUser(t *testing.T) {
 	}
 }
 
+// task fc2: a task body that fails partway through (Run captures the
+// misuse into that recording session, so it never becomes declerr.First)
+// must not leave what it registered before failing sitting in the
+// repository for a later, separate Apply call to silently apply. Run's own
+// temp-dir record already refuses to apply anything itself on a record
+// error; this pins the two guards a caller reaches only by calling Apply
+// directly afterward, ignoring Run's returned error: RecordPlanTo resets
+// the repository on that failure (so there is nothing left to apply), and
+// declerr.CapturedAny makes Apply refuse outright rather than silently
+// no-op on an empty repository, which would look identical to "there was
+// nothing to do" from the caller's side.
+func TestApplyRefusesAfterARunFailedMidBody(t *testing.T) {
+	ResetForTest()
+	ResetInventory()
+	t.Cleanup(func() {
+		ResetForTest()
+		ResetInventory()
+	})
+	leftover := filepath.Join(t.TempDir(), "leftover")
+	Task("bad", "", func() {
+		Cron("x", options.WithCommand("/bin/true"), options.WithCronUser("")) // refused mid-body
+		Dir(leftover)                                                         // registers fine afterward
+	})
+	if err := Run("bad"); err == nil || !strings.Contains(err.Error(), "WithCronUser must not be empty") {
+		t.Fatalf("Run(bad) = %v, want the cron misuse refusal", err)
+	}
+	if ids := resource.RegisteredIDs(); len(ids) != 0 {
+		t.Fatalf("a failed record left %v registered, want none", ids)
+	}
+	if !declerr.CapturedAny() {
+		t.Fatal("CapturedAny() = false after a record-time misuse was captured into Run's session")
+	}
+	if err := Apply(); err == nil {
+		t.Fatal("Apply() after Run failed mid-body = nil, want a refusal")
+	}
+	if _, err := os.Stat(leftover); !os.IsNotExist(err) {
+		t.Fatalf("the leftover directory exists despite the refused record: %v", err)
+	}
+}
+
 // TestValidRecipeReportsNoDeclarationError is the negative control: correct
 // declarations, including the Must* lookups of registered names, report
 // nothing and record normally.

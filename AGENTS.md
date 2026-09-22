@@ -136,8 +136,13 @@ inventory and resources is a declaration error (`internal/declerr`):
 - The first report wins and carries the recipe line (`declerr.Location`).
   While `RecordPlanTo` records, reports are captured into the session and
   fail that record; outside a recording the first one is kept for the
-  process, and `RecordPlanTo`, `Run`, `api.Apply`, `resource.Apply` and
-  `cli.CLI` refuse with it (the CLI prints it and exits 1).
+  process, and `RecordPlanTo`, `Run`, `api.Apply` and `cli.CLI` refuse with
+  it (the CLI prints it and exits 1). A capture that fails a record also
+  resets the registered resource repository (so a failed body's partial
+  registrations cannot outlive it), and `declerr.CapturedAny` stays true for
+  the rest of the process once any capture has failed a record, so
+  `api.Apply` still refuses a later, separate call that skipped checking
+  that record's returned error (task fc2).
 - Code below the DSL (internal packages such as `internal/inventory`, check
   helpers) returns errors; only the DSL entry point reports them.
 - Keep a `panic` only for a genuine, documented programmer-bug invariant that

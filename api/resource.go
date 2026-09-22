@@ -62,6 +62,15 @@ func Apply() error {
 	if err := declerr.First(); err != nil {
 		return err
 	}
+	if declerr.CapturedAny() {
+		// Some earlier RecordPlanTo/Run call in this process failed a task
+		// body's record (its own registrations are already gone —
+		// RecordPlanTo resets the repository on that failure — but a
+		// caller that applies without checking that call's returned error
+		// should still learn something went wrong, rather than silently
+		// applying whatever it left registered or silently doing nothing).
+		return fmt.Errorf("Apply: refusing: an earlier record failed a task body's declaration")
+	}
 
 	drafts := resource.RegisteredPlanDrafts()
 	registered := resource.RegisteredIDs()
