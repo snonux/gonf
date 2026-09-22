@@ -196,12 +196,11 @@ func chunkResourceIDs(ch plan.Chunk) []string {
 // stability. New callers that can supply a cancelable/timeout-bound context
 // (the CLI entry point, in particular) should use ApplyChunksContext
 // instead — its elevated chunks still get DefaultChunkTimeout even when the
-// given ctx has no deadline, so an unprivileged in-process chunk is the only
-// part of a local apply this context does not currently reach (see
-// internal/exec's own process-wide default timeout for why that gap is
-// still safe: every resource backend's actual command execution is bounded
-// there regardless of ctx threading, and File and ConfigSet validators, which
-// run outside internal/exec, read the same default timeout; see
+// given ctx has no deadline, and its in-process chunks run through
+// ApplyPlanContext, whose ctx kills the backend command in flight (via
+// internal/exec). File and ConfigSet validators, which run outside
+// internal/exec, are the one part ctx does not reach; they read the same
+// process-wide default timeout, so they stay bounded (see
 // internal/validator).
 func ApplyChunks(ops []plan.Op, planDir string, mode privilege.Mode) error {
 	return ApplyChunksContext(context.Background(), ops, planDir, mode)
@@ -209,7 +208,7 @@ func ApplyChunks(ops []plan.Op, planDir string, mode privilege.Mode) error {
 
 // ApplyChunksContext is ApplyChunks bounded/cancelable by ctx: canceling ctx
 // (e.g. the CLI's SIGINT/SIGTERM context) kills an in-flight elevated
-// sudo/doas re-exec. See ApplyChunks's doc comment for why ApplyChunks itself
+// sudo/doas re-exec or the backend command of an in-process chunk. See ApplyChunks's doc comment for why ApplyChunks itself
 // keeps the old context.Background() behavior instead of taking ctx directly.
 func ApplyChunksContext(ctx context.Context, ops []plan.Op, planDir string, mode privilege.Mode) error {
 	chunks := plan.SplitPrivilegeChunks(ops)
@@ -242,7 +241,7 @@ func applySplitChunks(ctx context.Context, chunks []plan.Chunk, planDir string, 
 		// controller's euid — see privilege.WrapApplyCmd's doc comment.
 		var err error
 		if !ch.Elevate || (mode == privilege.None && processEUID() == 0) {
-			err = ApplyPlan(ch.Ops, planDir)
+			err = ApplyPlanContext(ctx, ch.Ops, planDir)
 		} else {
 			err = elevatedApplyRunner(ctx, mode, ch.Ops, planDir)
 		}

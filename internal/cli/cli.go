@@ -63,7 +63,9 @@ func CLI() int {
 	// CLI() and then api.Apply itself cannot re-exec its own main as root.
 	defer clihost.MarkActive()()
 	// Signal-derived context: SIGINT/SIGTERM cancel in-flight work. It
-	// reaches local task runs (api.RunContext), single-host push
+	// reaches local task runs (api.RunContext), `gonf apply`
+	// (api.ApplyPlanContext), which kill the backend command or elevated
+	// sudo/doas re-exec in flight, single-host push
 	// (PushToContext) and the cluster/fleet fan-out, which kill their ssh
 	// pushes on cancel.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -203,7 +205,7 @@ func runSubcommand(ctx context.Context, name string, args []string) (code int, o
 	case "plan":
 		return cliPlan(args), true
 	case "apply":
-		return cliApply(args), true
+		return cliApply(ctx, args), true
 	case "push":
 		return cliPush(ctx, args), true
 	case "cluster":
@@ -224,11 +226,17 @@ func runSubcommand(ctx context.Context, name string, args []string) (code int, o
 // success, 1 (with "error: ..." on stderr) on any failure.
 //
 // RunContext (not Run): this is the CLI process entry point, so a local
-// apply's elevated sudo/doas re-exec should be killed by SIGINT/SIGTERM like
-// the fleet fan-out already is, instead of only ever timing out via
-// ApplyChunksContext's DefaultChunkTimeout.
+// apply's elevated sudo/doas re-exec and the backend command of an
+// in-process chunk are killed by SIGINT/SIGTERM like the fleet fan-out
+// already is, instead of only ever timing out via ApplyChunksContext's
+// DefaultChunkTimeout or the command timeout. A failure after such a signal
+// is reported as interrupted.
 func runTasks(ctx context.Context, names []string) int {
 	if err := api.RunContext(ctx, names...); err != nil {
+		if ctx.Err() != nil {
+			eprintf("error: interrupted (%v): %v\n", ctx.Err(), err)
+			return 1
+		}
 		eprintf("error: %v\n", err)
 		return 1
 	}
@@ -493,7 +501,12 @@ func warnSensitivePlan(outPath string, ops []plan.Op) {
 		outPath, strings.Join(names, ", "))
 }
 
-func cliApply(args []string) int {
+// cliApply runs `gonf apply [flags] <plan.jsonl|->` under ctx, the CLI's
+// SIGINT/SIGTERM context: a signal kills the backend command in flight
+// (api.ApplyPlanContext) and the apply fails with exit 1. This is also the
+// receiving end of a push and the elevated re-exec child, so a signal
+// reaching either of those processes stops their apply the same way.
+func cliApply(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	dryRun := fs.Bool("dry-run", false, "Preview changes without applying them")
@@ -514,10 +527,15 @@ func cliApply(args []string) int {
 		eprintln("usage: gonf apply [-n|-dry-run] [-strict-preview] [-apply-dir dir] <plan.jsonl|->")
 		return 2
 	}
-	planPath := rest[0]
-	if planPath == "-" {
-		return cliApplyStdin(*applyDir, *strictPreview)
+	if rest[0] == "-" {
+		return cliApplyStdin(ctx, *applyDir, *strictPreview)
 	}
+	return cliApplyFile(ctx, rest[0])
+}
+
+// cliApplyFile applies the plan file planPath, with its blobs/ sidecars next
+// to it.
+func cliApplyFile(ctx context.Context, planPath string) int {
 	// Read the plan file the way planToDir wrote it: plan.ReadPrivateFilePath
 	// refuses a path that names a directory ("out/"), and a plan.jsonl that is
 	// a symlink or not a regular file (a FIFO), instead of following it as
@@ -533,35 +551,35 @@ func cliApply(args []string) int {
 		eprintf("apply: %v\n", err)
 		return 1
 	}
-	planDir := filepath.Dir(planPath)
-	if err := api.ApplyPlan(ops, planDir); err != nil {
-		eprintf("apply: %v\n", err)
+	if err := applyPlanOps(ctx, ops, filepath.Dir(planPath)); err != nil {
 		return 1
 	}
 	fmt.Printf("applied %s (%d ops)\n", planPath, len(ops))
 	return 0
 }
 
-func cliApplyStdin(applyDir string, strictPreview bool) int {
+// applyPlanOps applies ops under ctx and reports a failure on stderr. A
+// failure after ctx was canceled (SIGINT/SIGTERM) is named as such, so the
+// operator can tell an interrupted apply from a failing resource; the
+// returned error is only a signal for the caller to exit 1.
+func applyPlanOps(ctx context.Context, ops []plan.Op, planDir string) error {
+	err := api.ApplyPlanContext(ctx, ops, planDir)
+	switch {
+	case err == nil:
+		return nil
+	case ctx.Err() != nil:
+		eprintf("apply: interrupted (%v): %v\n", ctx.Err(), err)
+	default:
+		eprintf("apply: %v\n", err)
+	}
+	return err
+}
+
+// cliApplyStdin applies a push payload (plan plus blobs) read from stdin,
+// or only previews it with strictPreview.
+func cliApplyStdin(ctx context.Context, applyDir string, strictPreview bool) int {
 	if strictPreview {
-		if applyDir != "" {
-			eprintln("apply: -strict-preview cannot use -apply-dir")
-			return 2
-		}
-		// DecodePush refuses blobs without a plan directory. This deliberately
-		// avoids NewApplyRunDir, so strict remote preview does not create a
-		// staging directory merely to inspect a plan.
-		payload, err := plan.DecodePush(os.Stdin, "")
-		if err != nil {
-			eprintf("apply: %v\n", err)
-			return 1
-		}
-		if err := api.ApplyPlan(payload.Ops, ""); err != nil {
-			eprintf("apply: %v\n", err)
-			return 1
-		}
-		eprintf("previewed stdin (%d ops)\n", len(payload.Ops))
-		return 0
+		return cliPreviewStdin(ctx, applyDir)
 	}
 	runDir, cleanup, err := prepareApplyRunDir(applyDir)
 	if err != nil {
@@ -579,8 +597,7 @@ func cliApplyStdin(applyDir string, strictPreview bool) int {
 	if planDir == "" && applyDir != "" {
 		planDir = applyDir
 	}
-	if err := api.ApplyPlan(payload.Ops, planDir); err != nil {
-		eprintf("apply: %v\n", err)
+	if err := applyPlanOps(ctx, payload.Ops, planDir); err != nil {
 		return 1
 	}
 	src := "stdin"
@@ -588,6 +605,28 @@ func cliApplyStdin(applyDir string, strictPreview bool) int {
 		src = "stdin+blobs"
 	}
 	eprintf("applied %s (%d ops)\n", src, len(payload.Ops))
+	return 0
+}
+
+// cliPreviewStdin is the -strict-preview form of cliApplyStdin: it previews
+// (dry-runs, see cliApply) a blob-free push payload from stdin.
+func cliPreviewStdin(ctx context.Context, applyDir string) int {
+	if applyDir != "" {
+		eprintln("apply: -strict-preview cannot use -apply-dir")
+		return 2
+	}
+	// DecodePush refuses blobs without a plan directory. This deliberately
+	// avoids NewApplyRunDir, so strict remote preview does not create a
+	// staging directory merely to inspect a plan.
+	payload, err := plan.DecodePush(os.Stdin, "")
+	if err != nil {
+		eprintf("apply: %v\n", err)
+		return 1
+	}
+	if err := applyPlanOps(ctx, payload.Ops, ""); err != nil {
+		return 1
+	}
+	eprintf("previewed stdin (%d ops)\n", len(payload.Ops))
 	return 0
 }
 

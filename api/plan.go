@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -584,9 +585,21 @@ func checkUnrecordedDrafts(taskName string) error {
 // caller feeding ApplyPlan (or PushPayload) a whole plan from elsewhere (a
 // hand-written or older plan file) must run plan.ValidateChunks over
 // plan.SplitPrivilegeChunks itself, or use ApplyChunks (PushTo), which does.
+//
+// ApplyPlan is not cancelable (ApplyPlanContext with context.Background());
+// its signature is kept for API stability.
 func ApplyPlan(ops []plan.Op, planDir string) error {
+	return ApplyPlanContext(context.Background(), ops, planDir)
+}
+
+// ApplyPlanContext is ApplyPlan canceled by ctx (plan.ApplyWithContext):
+// canceling ctx, e.g. the CLI's SIGINT/SIGTERM context, kills the backend
+// command in flight and starts no further op; the error wraps ctx.Err(). It
+// is what `gonf apply <plan.jsonl|->` (also the receiving end of a push)
+// and the in-process chunks of ApplyChunksContext run.
+func ApplyPlanContext(ctx context.Context, ops []plan.Op, planDir string) error {
 	f := DetectFacts()
-	return plan.Apply(ops, plan.Facts{
+	return plan.ApplyWithContext(ctx, ops, plan.Facts{
 		GOOS:     f.GOOS,
 		Profile:  f.Profile,
 		Hostname: f.Hostname,

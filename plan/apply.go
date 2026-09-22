@@ -1,11 +1,13 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"sort"
 	"strings"
 
+	gexec "github.com/snonux/gonf/internal/exec"
 	"github.com/snonux/gonf/resource"
 	opt "github.com/snonux/gonf/resource/options"
 )
@@ -53,7 +55,23 @@ type Facts struct {
 // After applying (or refusing) the ops, the collected resource summary is
 // printed to stderr — one summary per Apply invocation, mirroring the legacy
 // repository path; chunked applies therefore print one summary per chunk.
+//
+// Apply is not cancelable (ApplyWithContext with context.Background()); its
+// signature is kept for API stability.
 func Apply(ops []Op, facts Facts, planDir string) error {
+	return ApplyWithContext(context.Background(), ops, facts, planDir)
+}
+
+// ApplyWithContext is Apply canceled by ctx. For the duration of the apply
+// ctx is bound as the parent of every backend command (internal/exec
+// BindContext), so canceling it (the CLI's SIGINT/SIGTERM context) kills the
+// command in flight; ctx is also checked before each plan line, so no
+// further op starts once it is done. Either way the apply stops with an
+// error wrapping ctx.Err() (context.Canceled or DeadlineExceeded), and the
+// summary of what did apply is still printed. File and ConfigSet validators
+// (internal/validator) are not bound to ctx: they stay limited by the
+// process-wide command timeout, which also kills their process tree.
+func ApplyWithContext(ctx context.Context, ops []Op, facts Facts, planDir string) error {
 	if len(ops) == 0 {
 		return fmt.Errorf("plan: apply: empty plan")
 	}
@@ -91,8 +109,20 @@ func Apply(ops []Op, facts Facts, planDir string) error {
 		return err
 	}
 
+	defer gexec.BindContext(ctx)()
+	return applyBody(ctx, body, facts, planDir)
+}
+
+// applyBody applies the sorted, pre-flighted plan body line by line. ctx is
+// checked before each line so a canceled apply starts no further op; a
+// command already running is killed through the internal/exec binding set
+// up by ApplyWithContext.
+func applyBody(ctx context.Context, body []planLine, facts Facts, planDir string) error {
 	var stack []bool
 	for _, l := range body {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("plan: apply canceled before line %d: %w", l.line, err)
+		}
 		if err := applyLine(l.op, facts, planDir, &stack); err != nil {
 			return fmt.Errorf("plan: apply line %d: %w", l.line, err)
 		}

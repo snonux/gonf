@@ -3,6 +3,7 @@ package exec
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -39,6 +40,19 @@ var (
 	defaultTimeout = 5 * time.Minute
 )
 
+// The bound context is the parent of every command Run, RunWith and
+// RunWithStdin start (context.Background() unless BindContext installed
+// one). It is process-wide for the same reason as the default timeout: the
+// resource backends call Run/RunWith directly, deep below plan.Apply, and
+// threading a ctx parameter through every backend and plan handler would
+// change all of their signatures. A plan apply binds its caller's ctx here
+// for its duration (plan.ApplyWithContext), so canceling it (the CLI's
+// SIGINT/SIGTERM context) kills the command in flight.
+var (
+	boundMu  sync.Mutex
+	boundCtx = context.Background()
+)
+
 // SetDefaultTimeout overrides the default timeout applied by Run,
 // RunWithStdin, and RunWith when Opts.Timeout is left at its zero value. It
 // bounds every resource backend's package-manager/systemctl/crontab/rcctl
@@ -65,6 +79,36 @@ func DefaultTimeout() time.Duration {
 	return defaultTimeout
 }
 
+// BindContext makes ctx the parent context of every command Run, RunWith and
+// RunWithStdin start from now on, until the returned restore func reinstates
+// the previously bound context. Canceling ctx kills a command in flight
+// (exec.CommandContext) and refuses to start new ones; either surfaces as a
+// "canceled" error with exit code -1. The per-call timeout still applies on
+// top of ctx. A nil ctx binds context.Background(). Like SetDefaultTimeout
+// it is process-wide state for a sequential apply: bind/restore pairs must
+// nest (defer restore()), not interleave from concurrent goroutines.
+func BindContext(ctx context.Context) (restore func()) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	boundMu.Lock()
+	defer boundMu.Unlock()
+	prev := boundCtx
+	boundCtx = ctx
+	return func() {
+		boundMu.Lock()
+		defer boundMu.Unlock()
+		boundCtx = prev
+	}
+}
+
+// boundContext returns the context installed by BindContext.
+func boundContext() context.Context {
+	boundMu.Lock()
+	defer boundMu.Unlock()
+	return boundCtx
+}
+
 // Run executes a command with the given arguments and returns stdout, stderr,
 // exit code, and any error encountered starting the process. It is bounded by
 // the process-wide default timeout (DefaultTimeout/SetDefaultTimeout).
@@ -77,13 +121,14 @@ func RunWith(opts Opts, name string, args ...string) (stdout, stderr string, exi
 	timeout := effectiveTimeout(opts.Timeout)
 
 	var cancel context.CancelFunc
-	ctx := context.Background()
+	ctx := boundContext()
 	if timeout > 0 {
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	// With a plain Background context CommandContext behaves like Command, so
-	// the (opt-in, Opts.Timeout < 0) no-timeout path is unchanged.
+	// With a plain Background context (nothing bound) CommandContext behaves
+	// like Command, so the (opt-in, Opts.Timeout < 0) no-timeout path is
+	// unchanged; a bound context can still cancel it.
 	cmd := exec.CommandContext(ctx, name, args...)
 	if opts.Dir != "" {
 		cmd.Dir = opts.Dir
@@ -116,7 +161,7 @@ func effectiveTimeout(t time.Duration) time.Duration {
 // than err.
 func RunWithStdin(stdin string, name string, args ...string) (stdout, stderr string, exitCode int, err error) {
 	timeout := DefaultTimeout()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(boundContext(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdin = strings.NewReader(stdin)
@@ -124,8 +169,8 @@ func RunWithStdin(stdin string, name string, args ...string) (stdout, stderr str
 }
 
 // runCollecting runs cmd, collects stdout and stderr, and maps errors to the
-// shared contract: a deadline kill (ctx.Err() != nil after cmd.Run) surfaces
-// as an error with exit code -1, a completed non-zero exit is reported via
+// shared contract: a deadline or cancellation kill (ctx.Err() != nil after
+// cmd.Run) surfaces as an error with exit code -1, a completed non-zero exit is reported via
 // exitCode with a nil error, and any other failure returns exit code -1 with
 // the error.
 func runCollecting(ctx context.Context, timeout time.Duration, cmd *exec.Cmd) (stdout, stderr string, exitCode int, err error) {
@@ -142,13 +187,13 @@ func runCollecting(ctx context.Context, timeout time.Duration, cmd *exec.Cmd) (s
 		return stdout, stderr, 0, nil
 	}
 
-	// A deadline kill surfaces as *exec.ExitError ("signal: killed"), which
-	// would otherwise be mistaken for a completed non-zero run: the command
-	// never finished, so report the timeout as an error instead. With no
-	// deadline in effect (timeout == 0, an explicit Opts.Timeout < 0) the
-	// context is Background and ctx.Err() is always nil.
+	// A deadline or cancellation kill surfaces as *exec.ExitError ("signal:
+	// killed"), which would otherwise be mistaken for a completed non-zero
+	// run: the command never finished, so report it as an error instead.
+	// With no deadline in effect (timeout == 0, an explicit Opts.Timeout < 0)
+	// and nothing bound, the context is Background and ctx.Err() is nil.
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return stdout, stderr, -1, fmt.Errorf("timed out after %v: %w", timeout, ctxErr)
+		return stdout, stderr, -1, contextError(timeout, ctxErr)
 	}
 	if exitError, ok := err.(*exec.ExitError); ok {
 		// The command ran and exited non-zero; surface that via exitCode
@@ -156,6 +201,17 @@ func runCollecting(ctx context.Context, timeout time.Duration, cmd *exec.Cmd) (s
 		return stdout, stderr, exitError.ExitCode(), nil
 	}
 	return stdout, stderr, -1, err
+}
+
+// contextError words a command's context failure: a cancellation of the
+// bound context (BindContext, e.g. SIGINT/SIGTERM) as "canceled", anything
+// else (the per-call timeout, or a deadline carried by the bound context) as
+// the timeout it historically was.
+func contextError(timeout time.Duration, ctxErr error) error {
+	if errors.Is(ctxErr, context.Canceled) {
+		return fmt.Errorf("canceled: %w", ctxErr)
+	}
+	return fmt.Errorf("timed out after %v: %w", timeout, ctxErr)
 }
 
 // MergeEnv returns a full environment slice: the current process environment

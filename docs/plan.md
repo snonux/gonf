@@ -823,11 +823,15 @@ Design decisions:
   group fails, so a failing host in one member cluster still cancels
   in-flight (and not-yet-started) hosts in every *other* member cluster of
   the same fleet push too.
-- **What is not context-aware (yet).** Local apply and single-host `push` run
-  without a signal context, and `exec.Run` / the resource packages have no
-  timeouts: a wedged local `dnf`/`systemctl` still blocks. The
-  `exec.Opts.Timeout` field exists for opt-in callers; wiring it globally was
-  deliberately deferred (it would change apply semantics).
+- **Local apply cancellation.** `gonf <task>` and `gonf apply <plan.jsonl|->`
+  (also the receiving end of a push and the elevated re-exec child) run under
+  the CLI's SIGINT/SIGTERM context (`api.RunContext`,
+  `api.ApplyPlanContext`). `plan.ApplyWithContext` binds that context to
+  `internal/exec` for the duration of the apply, so a signal kills the backend
+  command in flight (and the elevated sudo/doas re-exec), no further op
+  starts, and the command fails with `interrupted (context canceled)` and exit
+  1. File and ConfigSet validators are not bound to it; they stay limited by
+  the process-wide command timeout (`-cmd-timeout`).
 
 Plan schema **version 11** extends `if_changed` / `watch` from
 `daemon_reload` to `command`, `service`, and `timer` ops. `OnChange(res…)`
