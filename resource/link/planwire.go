@@ -14,7 +14,7 @@ import (
 // by api.LinkIfExists since it has no standalone resource.Present path).
 // They are separate types, one per Kind; see resource/pkg/planwire.go for
 // why record-time ToOp and apply-time Apply live together in the resource
-// package instead of api/plan.go's draftToOp and plan/apply.go's
+// package instead of api/packager.go's draftToOp and plan/apply.go's
 // applyLink/applyLinkIfExists.
 type linkHandler struct{}
 type linkIfExistsHandler struct{}

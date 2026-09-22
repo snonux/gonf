@@ -14,7 +14,7 @@ import (
 // and EnsurePlanDraft). They are separate types, one per Kind, because
 // RegisterHandler keys a single Handler per Kind; see
 // resource/pkg/planwire.go for why record-time ToOp and apply-time Apply
-// live together in the resource package instead of api/plan.go's draftToOp
+// live together in the resource package instead of api/packager.go's draftToOp
 // and plan/apply.go's applyDir/applySyncDir/applyEnsureDir.
 type dirHandler struct{}
 type syncDirHandler struct{}

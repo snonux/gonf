@@ -13,7 +13,7 @@ import (
 
 // planHandler is the file kind's plan.Handler: see resource/pkg/planwire.go
 // for why record-time ToOp and apply-time Apply live together in the
-// resource package instead of api/plan.go's draftToOp and plan/apply.go's
+// resource package instead of api/packager.go's draftToOp and plan/apply.go's
 // applyFile.
 type planHandler struct{}
 type ensureFileHandler struct{}

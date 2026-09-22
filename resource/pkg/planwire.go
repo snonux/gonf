@@ -13,7 +13,7 @@ import (
 // the wire form (record-time ToOp, apply-time Apply) in one place, so a new
 // Package option (like the IsLatest field this replaces the drift risk for
 // — see task m5) is wired end to end by editing this one file instead of
-// draftToOp in api/plan.go plus a separate applyPackage in plan/apply.go.
+// draftToOp in api/packager.go plus a separate applyPackage in plan/apply.go.
 type planHandler struct{}
 
 func init() {

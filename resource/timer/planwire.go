@@ -10,7 +10,7 @@ import (
 
 // planHandler is the timer kind's plan.Handler: see resource/pkg/planwire.go
 // for why record-time ToOp and apply-time Apply live together in the
-// resource package instead of api/plan.go's draftToOp and plan/apply.go's
+// resource package instead of api/packager.go's draftToOp and plan/apply.go's
 // applyTimer.
 type planHandler struct{}
 

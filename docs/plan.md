@@ -367,7 +367,7 @@ defines a `Handler` interface (`ToOp` + `Apply`) and a `map[Kind]Handler`
 registry (`RegisterHandler`/`HandlerFor`). A resource package can implement
 `Handler` for its kind in one file (see `resource/pkg/planwire.go`,
 `resource/cron/planwire.go`, `resource/service/planwire.go`) and register it
-from an `init()`; `api/plan.go`'s `draftToOp` and `plan/apply.go`'s
+from an `init()`; `api/packager.go`'s `draftToOp` and `plan/apply.go`'s
 `applyActive` both consult the registry first and only fall back to their
 explicit switch cases for kinds that have not migrated yet. The handler
 registry change itself was a Go-internal ownership/dispatch change; later
@@ -380,7 +380,7 @@ As of task i5, **every** resource kind uses the `Handler` pattern: `package`,
 `systemd_timer` migrated in task i5; `user` owns its handler in
 `resource/user/planwire.go` (see `resource/{file,dir,link,cmd,timer,
 systemd,systemdtimer,user}/planwire.go` — `dir` registers three Handlers for its
-three kinds, `link` registers two). `api/plan.go`'s `draftToOp` and
+three kinds, `link` registers two). `api/packager.go`'s `draftToOp` and
 `plan/apply.go`'s `applyActive` are now pure `HandlerFor` dispatch with no
 fallback switch cases and no `resource/<kind>` imports of their own — this is
 also what lets `plan` be a pure types/codec/split/pushwire/blob-store
@@ -429,7 +429,7 @@ class of bug that motivated task j5.
    must never import a `resource/<kind>` package back (see the cycle note
    below).
 5. **Lowering** — implement `Handler.ToOp`, mapping the draft's fields onto
-   the new `plan.Op`. `api/plan.go`'s `draftToOp` only ever calls
+   the new `plan.Op`. `api/packager.go`'s `draftToOp` only ever calls
    `HandlerFor(d.Kind)`; an unmapped kind errors at record time — there is
    deliberately no silent default and no per-kind case left to add there.
    An error `ToOp` returns comes back wrapped (with `%w`) as
