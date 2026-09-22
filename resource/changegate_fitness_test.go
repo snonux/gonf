@@ -44,9 +44,7 @@ func catchFatal(t *testing.T, register func()) (fataled bool) {
 // would otherwise give the gate something to watch). IfChanged arms through
 // the one SetChangeWatch capability but requires opt.ChangeGated, and
 // WithWatch requires opt.Watchable (SetWatch); only daemon-reload
-// implements those. DaemonReload accepts them (IfChanged needs a DependsOn
-// fallback or watched ids; alone it is refused as a gate with nothing to
-// watch, the b72 correction).
+// implements those. DaemonReload accepts them.
 func TestLegacyGateOptionsRejectedOutsideDaemonReload(t *testing.T) {
 	unit := resource.Resource{Type: "File", Name: "/etc/unit"}
 	for _, legacy := range []struct {
@@ -86,21 +84,6 @@ func TestLegacyGateOptionsRejectedOutsideDaemonReload(t *testing.T) {
 				}
 			})
 		}
-	}
-}
-
-// TestIfChangedReloadWithNothingToWatchRefused pins the b72 correction on
-// the registering path: a DaemonReload armed by IfChanged with neither
-// WithWatch ids nor DependsOn could never reload, so Present aborts
-// (formerly it was registered and skipped on every apply).
-func TestIfChangedReloadWithNothingToWatchRefused(t *testing.T) {
-	resource.ResetRepository()
-	t.Cleanup(resource.ResetRepository)
-	if !catchFatal(t, func() { systemd.Present(opt.IfChanged) }) {
-		t.Fatal("DaemonReload(IfChanged) with nothing to watch registered")
-	}
-	if !catchFatal(t, func() { systemd.Present(opt.IfChanged, opt.WithWatch()) }) {
-		t.Fatal("DaemonReload(IfChanged, WithWatch()) with nothing to watch registered")
 	}
 }
 

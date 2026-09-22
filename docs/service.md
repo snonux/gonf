@@ -45,8 +45,9 @@ DaemonReload(WithUser, OnChange(units))              // preferred change gate + 
 
 `IfChanged` watches `DependsOn` targets (it records the same op as
 `OnChange(units)`); a `Directory[path]` dependency also sees `File[path/…]`
-notes from `SyncDir` / file installs. `IfChanged` with neither `DependsOn`
-nor `WithWatch` ids could never reload and aborts the recipe.
+notes from `SyncDir` / file installs. A reload left with `IfChanged` but
+neither `DependsOn` nor `WithWatch` ids (and no same-bus declaration to
+merge with) could never reload; the plan pre-flight refuses it.
 
 There is one daemon-reload per bus and recipe scope (a task body or a
 when-fragment): its ID is `DaemonReload[system]` or `DaemonReload[user]`. A

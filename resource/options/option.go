@@ -145,9 +145,10 @@ type (
 	Reloadable     interface{ SetReload() }
 	UserService    interface{ SetUser() }
 	EnableOnlyable interface{ SetEnableOnly() }
-	// ChangeWatchable is the one capability every change-gate option
-	// (OnChange, WatchChanges, IfChanged, WithWatch) lowers to: arm the gate
-	// and add the watched ids (embed.ChangeGate implements it).
+	// ChangeWatchable is the one arming capability of the change-gate
+	// options OnChange, WatchChanges and IfChanged: arm the gate and add the
+	// watched ids (embed.ChangeGate implements it). The legacy WithWatch
+	// goes through Watchable (SetWatch) instead.
 	ChangeWatchable interface{ SetChangeWatch([]string) }
 	// Watchable is the capability of the legacy WithWatch option: it sets
 	// daemon-reload's legacy watch ids, which replace any earlier WithWatch
@@ -932,9 +933,10 @@ func cronValue[T any](label, value string, set func(T, string)) cronOption {
 	return cronOption(func(target any) { requires(target, label, func(r T) { set(r, value) }) })
 }
 
-// changeGate is the single lowering of every change-gate option: it arms
-// target's gate and adds ids (nil arms only) through the one
-// ChangeWatchable capability. label names the option in misuse errors. The
+// changeGate is the shared lowering of OnChange and WatchChanges: it arms
+// target's gate and adds ids through the one ChangeWatchable capability
+// (IfChanged calls SetChangeWatch(nil) itself, after requiring ChangeGated;
+// the legacy WithWatch uses Watchable). label names the option in misuse errors. The
 // ids are copied once, so a recipe mutating its slice afterwards cannot
 // change what the option records.
 func changeGate(label string, ids []string) func(any) {

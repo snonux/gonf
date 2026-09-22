@@ -96,8 +96,8 @@ type ChangeGate struct {
 // resources. Multiple calls accumulate; an id already watched is not added
 // again, so callers never need to de-duplicate their watch lists. An empty
 // ids arms the gate without adding a watch (the legacy IfChanged option,
-// which only daemon-reload accepts: it derives a watch list from its
-// DependsOn ids and then runs CheckWatch). It uses a pointer receiver
+// which only daemon-reload accepts: it then watches its WithWatch ids or,
+// without any, its DependsOn ids). It uses a pointer receiver
 // so the mutation is visible to the embedding value, and implements
 // opt.ChangeWatchable.
 func (c *ChangeGate) SetChangeWatch(ids []string) {
@@ -118,9 +118,11 @@ func (c *ChangeGate) AddWatch(ids []string) {
 }
 
 // CheckWatch reports an armed gate with nothing to watch: it could never
-// fire, so the gated action would be held forever. Daemon-reload runs it
-// after filling its DependsOn fallback (Present aborts, Ensure returns the
-// error). The other gated kinds cannot be armed without ids through any
+// fire, so the gated action would be held forever. Daemon-reload's Ensure
+// runs it after resolving its watch list and returns the error; its
+// Present does not (a bare IfChanged may still merge with a same-bus
+// declaration that names ids; one that stays unwatchable is refused by the
+// plan pre-flight). The other gated kinds cannot be armed without ids through any
 // option (OnChange and WatchChanges abort on an empty list, and the legacy
 // IfChanged/WithWatch are daemon-reload-only), so they need no check. The
 // embed must not implement SetWatch: that would make every embedder

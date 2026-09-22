@@ -65,16 +65,19 @@ embedded rather than redeclared:
   so both legacy spellings stay rejected on Service, Timer and Command even
   through the type-erased `Option` path; the embed must therefore not
   implement `SetWatch`. The embed owns watch de-duplication (callers never
-  dedupe), `AddWatch` (add ids without arming; daemon-reload's fallback and
-  merge only), the nothing-to-watch check (`CheckWatch`), the hold predicate
+  dedupe), `AddWatch` (add ids without arming; daemon-reload only, for its
+  `WithWatch` ids, its `DependsOn` fallback and merging), the
+  nothing-to-watch check (`CheckWatch`), the hold predicate
   (`Holds(resource.AnyChanged)`), the held-action debug log (`LogHeld`) and
   the plan-draft wiring (`DraftGate`). Gated resources call these instead of
   re-implementing the checks; `resource.NoteIdle` reports a gate-held
   action as skipped. Plan handlers rebuild a recorded gate with
   `opt.RecordedChangeGate`. Daemon-reload is the one exception: it resolves
   its watch list once after its options ran (gate ids, then `WithWatch`
-  ids, else its `DependsOn` ids, then `CheckWatch`), and it keeps its own
-  draft wiring (`Watch` is recorded even when unarmed) instead of
+  ids, else its `DependsOn` ids; only `Ensure` then runs `CheckWatch`, since
+  a registered bare `IfChanged` may still merge with a same-bus declaration
+  and the plan pre-flight refuses one that stays unwatchable), and it keeps
+  its own draft wiring (`Watch` is recorded even when unarmed) instead of
   `DraftGate`.
 
 When adding a field or capability shared by every resource type, prefer a new

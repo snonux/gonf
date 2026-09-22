@@ -46,11 +46,15 @@ type DaemonReloadResource struct {
 // next to one — the new declaration merges into the existing one (see
 // mergeInto) and the existing resource is returned, so every caller depends
 // on the one reload that watches all of their inputs.
+//
+// Present does not run CheckWatch: a declaration armed with nothing to
+// watch (a bare IfChanged) is valid while it can still merge with a
+// same-bus declaration that names watched ids, before or after it. A
+// reload that stays unwatchable is refused before anything is applied by
+// the plan pre-flight (plan.ValidateChangeGates: "change-gated but
+// watches nothing"), as it always was.
 func Present(opts ...opt.DaemonReloadOption) resource.Resource {
-	d, err := newReload(opts)
-	if err != nil {
-		logger.Fatal("%s: %v", d.id(), err)
-	}
+	d := newReload(opts)
 	if r, prev, ok := registeredReload(d.id()); ok {
 		return prev.mergeInto(r, d)
 	}
@@ -63,10 +67,13 @@ func Present(opts ...opt.DaemonReloadOption) resource.Resource {
 	return r
 }
 
-// Ensure applies daemon-reload without registering or recording a plan draft.
+// Ensure applies daemon-reload without registering or recording a plan
+// draft. Nothing can merge into it, so a reload armed with nothing to watch
+// (IfChanged with no WithWatch ids and no DependsOn) could never reload and
+// is refused (CheckWatch) instead of being skipped.
 func Ensure(opts ...opt.DaemonReloadOption) error {
-	d, err := newReload(opts)
-	if err != nil {
+	d := newReload(opts)
+	if err := d.CheckWatch(); err != nil {
 		return fmt.Errorf("%s: %w", d.id(), err)
 	}
 	return d.apply()
@@ -77,10 +84,8 @@ func Ensure(opts ...opt.DaemonReloadOption) error {
 // OnChange/WatchChanges ids first, then the legacy WithWatch ids, and when
 // neither named any, the DependsOn ids (first seen first), armed or not.
 // Resolving once, after every option ran, makes the list independent of
-// option order and lets apply, planDraft and merging read one list. An
-// armed reload that still watches nothing (IfChanged with no WithWatch ids
-// and no DependsOn) could never reload and is refused.
-func newReload(opts []opt.DaemonReloadOption) (*DaemonReloadResource, error) {
+// option order and lets apply, planDraft and merging read one list.
+func newReload(opts []opt.DaemonReloadOption) *DaemonReloadResource {
 	d := &DaemonReloadResource{}
 	for _, o := range opts {
 		o.Apply(d)
@@ -90,7 +95,7 @@ func newReload(opts []opt.DaemonReloadOption) (*DaemonReloadResource, error) {
 	if len(d.Watch) == 0 {
 		d.AddWatch(d.DependsOn.IDs)
 	}
-	return d, d.CheckWatch()
+	return d
 }
 
 // SetUser implements opt.UserService (the WithUser option): the reload runs

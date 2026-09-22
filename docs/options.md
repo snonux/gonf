@@ -77,9 +77,16 @@ Unreleased, pre-1.0 (task b72). The recipe DSL is unchanged: `OnChange`,
 `WatchChanges`, `IfChanged` and `WithWatch` keep their names, types and
 recorded plans (no plan schema change). Deliberate changes:
 
-- A `DaemonReload` armed by `IfChanged` with neither `WithWatch` ids nor
-  `DependsOn` (a reload that could never fire) aborts at registration
-  (`Ensure` returns the error) instead of being skipped on every apply.
+- A daemon-reload applied directly through `systemd.Ensure` while armed by
+  `IfChanged` with neither `WithWatch` ids nor `DependsOn` (a reload that
+  could never fire) returns an error instead of being skipped. Registered
+  declarations (`DaemonReload`) are unchanged: they may still merge with a
+  same-bus declaration, and one that stays unwatchable is refused by the
+  plan pre-flight as before.
+- A change-gate option applied through the type-erased `Option` path to a
+  resource without a change gate names itself in the error:
+  `WatchChanges` now says "does not support WatchChanges" (it said
+  "OnChange").
 - `Service`, `Timer` and `Command` watch lists are de-duplicated.
 - Exported Go API below the DSL (no known users): `embed.ChangeGate.Arm`
   and `embed.ChangeGate.HoldsWatching` are removed (use

@@ -114,10 +114,7 @@ func TestMergedGateSemantics(t *testing.T) {
 	addDep := opt.ToDaemonReloadOptions(func(target any) {
 		target.(*DaemonReloadResource).AddDependency("File[/legacy]")
 	})
-	legacy, err := newReload(append(addDep, opt.IfChanged))
-	if err != nil {
-		t.Fatal(err)
-	}
+	legacy := newReload(append(addDep, opt.IfChanged))
 	m := legacy.merged(gated)
 	if !m.Gated || !reflect.DeepEqual(m.Watch, []string{"File[/legacy]", "File[/u]"}) {
 		t.Fatalf("legacy+OnChange merge = gated %v watch %v, want armed on both", m.Gated, m.Watch)
@@ -154,5 +151,48 @@ func TestPresentMergedReloadAppliesOnSecondInput(t *testing.T) {
 	}
 	if len(saw) != 1 || saw[0] != "systemctl daemon-reload" {
 		t.Fatalf("systemctl calls = %v, want one daemon-reload fired by the second input", saw)
+	}
+}
+
+// TestPresentMergesBareIfChangedLikeBase pins that a bare DaemonReload
+// (IfChanged) — armed with nothing to watch — merges with a same-bus
+// declaration in either order, as it did before b72, instead of aborting:
+// only a reload that stays unwatchable is refused, by the plan pre-flight.
+// The expected drafts are the ones the pre-b72 code records.
+func TestPresentMergesBareIfChangedLikeBase(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		declare   func()
+		wantGated bool
+		wantWatch []string
+		wantDeps  []string
+	}{
+		{name: "WatchChanges then IfChanged", declare: func() {
+			Present(opt.WatchChanges("Dummy[a]"))
+			Present(opt.IfChanged)
+		}, wantGated: true, wantWatch: []string{"Dummy[a]"}},
+		{name: "IfChanged then WatchChanges", declare: func() {
+			Present(opt.IfChanged)
+			Present(opt.WatchChanges("Dummy[a]"))
+		}, wantGated: true, wantWatch: []string{"Dummy[a]"}, wantDeps: []string{"Dummy[a]"}},
+		{name: "plain then IfChanged", declare: func() {
+			Present()
+			Present(opt.IfChanged)
+		}},
+		{name: "bare IfChanged alone registers", declare: func() {
+			Present(opt.IfChanged)
+		}, wantGated: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resource.ResetRepository()
+			t.Cleanup(resource.ResetRepository)
+			dummy("a")
+			tc.declare()
+			d := registeredDraft(t, "DaemonReload[system]")
+			if d.IfChanged != tc.wantGated || !reflect.DeepEqual(d.Watch, tc.wantWatch) || !reflect.DeepEqual(d.Deps, tc.wantDeps) {
+				t.Fatalf("draft IfChanged=%t Watch=%#v Deps=%#v, want %t/%#v/%#v",
+					d.IfChanged, d.Watch, d.Deps, tc.wantGated, tc.wantWatch, tc.wantDeps)
+			}
+		})
 	}
 }

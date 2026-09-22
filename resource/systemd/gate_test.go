@@ -60,10 +60,7 @@ var draftWatchCases = []draftWatchCase{
 func TestDaemonReloadDraftWatch(t *testing.T) {
 	for _, tc := range draftWatchCases {
 		t.Run(tc.name, func(t *testing.T) {
-			d, err := newReload(tc.opts)
-			if err != nil {
-				t.Fatal(err)
-			}
+			d := newReload(tc.opts)
 			got := d.planDraft("DaemonReload[system]")
 			if got.IfChanged != tc.wantGated || !reflect.DeepEqual(got.Watch, tc.wantWatch) {
 				t.Errorf("draft IfChanged=%t Watch=%#v, want %t/%#v",
@@ -116,10 +113,7 @@ func TestLegacyGateOptionsLowerToUnifiedOp(t *testing.T) {
 // the kind's plan handler, the path a recorded plan takes.
 func lowerReload(t *testing.T, opts []opt.DaemonReloadOption) plan.Op {
 	t.Helper()
-	d, err := newReload(opts)
-	if err != nil {
-		t.Fatal(err)
-	}
+	d := newReload(opts)
 	op, err := planHandler{}.ToOp(d.planDraft(d.id()))
 	if err != nil {
 		t.Fatal(err)
@@ -146,9 +140,10 @@ func TestEmptyWithWatchReloadsUnconditionally(t *testing.T) {
 }
 
 // TestReloadArmedWithNothingToWatchRefused pins the behaviour correction of
-// b72: a reload armed by IfChanged with no WithWatch ids and no DependsOn
-// fallback could never reload, so it is refused (Ensure errors, Present
-// aborts) instead of being silently skipped on every apply.
+// b72: a reload applied through Ensure while armed by IfChanged with no
+// WithWatch ids and no DependsOn fallback could never reload, so Ensure
+// errors instead of silently skipping it. (Present keeps registering such a
+// declaration: see TestPresentMergesBareIfChangedLikeBase.)
 func TestReloadArmedWithNothingToWatchRefused(t *testing.T) {
 	err := Ensure(opt.IfChanged)
 	if err == nil || !strings.Contains(err.Error(), "DaemonReload[system]: change gate armed with nothing to watch") {
