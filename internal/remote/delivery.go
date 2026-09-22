@@ -8,20 +8,6 @@ import (
 	"github.com/snonux/gonf/resource"
 )
 
-// Mode selects how a recorded plan is delivered to a remote host. It is the
-// one value that distinguishes a push from a strict preview; it is chosen once
-// by the public api entry point (PushTo vs PreviewTo, PushClusterRun vs
-// PreviewClusterRun, ...) and carried unchanged, inside a Delivery, through
-// internal/orchestrate and Fanout down to each host's chunk stream. It
-// replaces a strictPreview bool that used to be threaded through five layers
-// as a positional parameter, next to a pair of near-identical functions at
-// every layer.
-//
-// The zero Mode is deliberately invalid: a caller that forgets to set it gets
-// an error instead of silently falling back to Push, the mode that may
-// install a gonf binary and mutate the host.
-type Mode uint8
-
 const (
 	// Push is the compatibility delivery: it installs or upgrades the remote
 	// gonf binary when needed (EnsureRemoteGonf), stages blobs, and applies
@@ -34,17 +20,6 @@ const (
 	// needs remote staging writes, and runs "apply -n -strict-preview -".
 	Preview
 )
-
-// Delivery is one recorded plan together with the Mode it is delivered in.
-// It is built once, right after recording, and passed by value through every
-// layer below the api entry point, so no layer needs its own push/preview
-// variant.
-type Delivery struct {
-	Mode   Mode
-	PlanID string
-	Ops    []plan.Op
-	Mem    plan.BlobReader
-}
 
 // ensureRuntime is the Push-mode bootstrap step (EnsureRemoteGonf). It is a
 // variable only so ObserveBootstrapForTest (and this package's tests) can
@@ -59,6 +34,31 @@ var ensureRuntime = EnsureRemoteGonf
 // guards a future path check. It is a variable only so this package's tests
 // can drive that branch; production code never reassigns it.
 var rebuildRemoteCmds = buildRemoteCmds
+
+// Mode selects how a recorded plan is delivered to a remote host. It is the
+// one value that distinguishes a push from a strict preview; it is chosen once
+// by the public api entry point (PushTo vs PreviewTo, PushClusterRun vs
+// PreviewClusterRun, ...) and carried unchanged, inside a Delivery, through
+// internal/orchestrate and Fanout down to each host's chunk stream. It
+// replaces a strictPreview bool that used to be threaded through five layers
+// as a positional parameter, next to a pair of near-identical functions at
+// every layer.
+//
+// The zero Mode is deliberately invalid: a caller that forgets to set it gets
+// an error instead of silently falling back to Push, the mode that may
+// install a gonf binary and mutate the host.
+type Mode uint8
+
+// Delivery is one recorded plan together with the Mode it is delivered in.
+// It is built once, right after recording, and passed by value through every
+// layer below the api entry point, so no layer needs its own push/preview
+// variant.
+type Delivery struct {
+	Mode   Mode
+	PlanID string
+	Ops    []plan.Op
+	Mem    plan.BlobReader
+}
 
 // String names the mode for diagnostics ("push", "preview").
 func (m Mode) String() string {

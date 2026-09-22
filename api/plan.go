@@ -293,11 +293,11 @@ func amendRecordedDraft(d resource.PlanDraft, store plan.BlobStore) error {
 // so it cannot run the dangling-dependency check itself.
 //
 // The apply, push and preview side deliberately re-run the same check on the
-// split plan (ApplyChunksContext, remote.Delivery.ToHost): a public entry
-// point cannot assume its ops came from a record in this process (they may
-// be decoded from a file or recorded by an older gonf), and the check is a
-// cheap linear pass. For Run the second pass is therefore redundant by construction, never conflicting —
-// the very same plan.ValidateChunks accepts both times.
+// split plan (ApplyChunksContext, remote.Delivery.ToHost): a public entry point
+// cannot assume its ops came from a record in this process (they may be decoded
+// from a file or recorded by an older gonf), and the check is a cheap linear
+// pass. For Run the second pass is therefore redundant by construction, never
+// conflicting — the very same plan.ValidateChunks accepts both times.
 //
 // The refusal reads "RecordPlan: <reason>" with one prefix, worded in terms of
 // registered resources (see preflightChunks); callers add their own context

@@ -33,20 +33,20 @@ type Facts struct {
 // in this body is deliberately NOT an error here: Apply also executes single
 // privilege chunks (the elevated re-exec child, `gonf apply <chunk>`), whose
 // deps legitimately live in an earlier chunk, and chunk boundaries are
-// invisible to it. Apply therefore does NOT catch typo'd/dangling deps
-// itself; that is the job of the callers that see the whole plan and run the
+// invisible to it. Apply therefore does NOT catch typo'd/dangling deps itself;
+// that is the job of the callers that see the whole plan and run the
 // ValidateChunks pre-flight before anything is applied or uploaded:
-// api.RecordPlanTo at record time (so Run, `gonf plan`, push, cluster and
-// fleet never produce such a plan), api.ApplyChunks (local apply),
+// api.RecordPlanTo at record time (so Run, `gonf plan`, push, cluster and fleet
+// never produce such a plan), api.ApplyChunks (local apply),
 // remote.Delivery.ToHost (SSH push and strict preview) and api.Apply
-// (registered resources, as a single chunk). Entries that execute or ship an already-recorded chunk or
-// file unprotected are api.ApplyPlan, `gonf apply <plan.jsonl|->` (which
-// cannot tell a whole plan from one chunk of a mixed-privilege plan) and
-// api.PushPayload / api.PushPayloadContext (they stream one already-encoded
-// payload with an elevate flag, so they too are chunk-level): they rely on
-// the plan having been recorded — and thus checked — by a current gonf. A
-// hand-written or older plan file applied or pushed that way gets no
-// dangling-dependency protection.
+// (registered resources, as a single chunk). Entries that execute or ship an
+// already-recorded chunk or file unprotected are api.ApplyPlan, `gonf apply
+// <plan.jsonl|->` (which cannot tell a whole plan from one chunk of a
+// mixed-privilege plan) and api.PushPayload / api.PushPayloadContext (they
+// stream one already-encoded payload with an elevate flag, so they too are
+// chunk-level): they rely on the plan having been recorded — and thus checked —
+// by a current gonf. A hand-written or older plan file applied or pushed that
+// way gets no dangling-dependency protection.
 //
 // planDir is the directory containing blobs/ sidecars (usually next to the
 // plan JSONL). Pass "" when the plan only uses content_b64 and no blobs.

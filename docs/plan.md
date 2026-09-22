@@ -980,18 +980,18 @@ recorded; empty fields leave ownership to the apply side). Version 3 added
 Privilege-chunked plans (mixed privileged/unprivileged ops) carry deps
 across the chunk boundary in dependency order: chunks apply in recorded
 order and never reorder, so a dep naming an op from an EARLIER chunk is
-satisfied (the earlier chunk applied it first). A dependency recorded AFTER
-its dependent crosses the privilege boundary — apply cannot reorder across
-chunks — and is rejected before anything is applied by a controller-side
-pre-flight (`plan.ValidateChunks`, run at record time and by `ApplyChunks` and
+satisfied (the earlier chunk applied it first). A dependency recorded AFTER its
+dependent crosses the privilege boundary — apply cannot reorder across chunks —
+and is rejected before anything is applied by a controller-side pre-flight
+(`plan.ValidateChunks`, run at record time and by `ApplyChunks` and
 `remote.Delivery.ToHost`); on push or preview the refusal happens before any
-SSH traffic. The
-same pre-flight refuses dangling deps (naming no recorded resource at all); a
-forward dep inside `api.Apply`'s single chunk is not a cross-chunk case and is
-reordered, so `api.Apply` only refuses the dangling ones.
-Executing or pushing a single chunk (`api.ApplyPlan`, `api.PushPayload`,
-`api.PushPayloadContext`, `gonf apply <plan.jsonl|->`) does not re-run it. Elevation ordering stays fixed by recorded order; reordering across
-chunks would defeat the privilege split.
+SSH traffic. The same pre-flight refuses dangling deps (naming no recorded
+resource at all); a forward dep inside `api.Apply`'s single chunk is not a
+cross-chunk case and is reordered, so `api.Apply` only refuses the dangling
+ones. Executing or pushing a single chunk (`api.ApplyPlan`, `api.PushPayload`,
+`api.PushPayloadContext`, `gonf apply <plan.jsonl|->`) does not re-run it.
+Elevation ordering stays fixed by recorded order; reordering across chunks
+would defeat the privilege split.
 
 ## JSONL sketch
 
