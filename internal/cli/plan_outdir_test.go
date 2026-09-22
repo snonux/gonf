@@ -375,6 +375,15 @@ func TestCLIWithSymlinkedTempDir(t *testing.T) {
 		t.Fatalf("blobs mode = %04o, want 0700", got)
 	}
 	*ran = false
+	// gonf -n leaves resource's process-wide dry-run flag set: CLI()'s own
+	// configureCLI always resets it on its next call, but cliApply and the
+	// other subcommand handlers are escalate-only (so a top-level -n survives
+	// their own flag parsing, see cliApply) and never turn it back off. A
+	// test calling a subcommand handler directly afterward (bypassing CLI(),
+	// e.g. cli_cancel_test.go's TestCLIApplyFileCanceledByContext) would
+	// otherwise inherit dry-run true under -shuffle=on, so this test resets
+	// it itself, like every other dry-run test in this package does.
+	t.Cleanup(func() { resource.SetDryRun(false) })
 	_ = captureStdout(t, func() { code, stderr = runGonf(t, "-n", "cli_outdir") })
 	if code != 0 || !*ran {
 		t.Fatalf("gonf -n: exit %d (body ran: %v), stderr: %s", code, *ran, stderr)
