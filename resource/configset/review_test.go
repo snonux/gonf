@@ -14,9 +14,10 @@ import (
 	opt "github.com/snonux/gonf/resource/options"
 )
 
-// lockWithin runs lockDirs in a goroutine and fails the test if it neither
-// returns nor errors within limit (the deadlock the (dev, ino) dedupe fixes).
-func lockWithin(t *testing.T, limit time.Duration, dirs ...string) (func(), error) {
+// lockWithin runs sys.lockDirs in a goroutine and fails the test if it
+// neither returns nor errors within limit (the deadlock the (dev, ino) dedupe
+// fixes).
+func lockWithin(t *testing.T, sys *system, limit time.Duration, dirs ...string) (func(), error) {
 	t.Helper()
 	type result struct {
 		unlock func()
@@ -24,7 +25,7 @@ func lockWithin(t *testing.T, limit time.Duration, dirs ...string) (func(), erro
 	}
 	done := make(chan result, 1)
 	go func() {
-		unlock, err := lockDirs(dirs)
+		unlock, err := sys.lockDirs(dirs)
 		done <- result{unlock, err}
 	}()
 	select {
@@ -37,8 +38,9 @@ func lockWithin(t *testing.T, limit time.Duration, dirs ...string) (func(), erro
 }
 
 func TestLockDirsDedupesOneDirectoryLockedTwice(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
-	unlock, err := lockWithin(t, 5*time.Second, dir, dir)
+	unlock, err := lockWithin(t, newSystem(), 5*time.Second, dir, dir)
 	if err != nil {
 		t.Fatalf("lockDirs: %v", err)
 	}
@@ -46,6 +48,8 @@ func TestLockDirsDedupesOneDirectoryLockedTwice(t *testing.T) {
 }
 
 func TestLockDirsRefusesSymlinkedDirectory(t *testing.T) {
+	t.Parallel()
+	sys := newSystem()
 	root := t.TempDir()
 	real := filepath.Join(root, "real")
 	link := filepath.Join(root, "link")
@@ -55,36 +59,36 @@ func TestLockDirsRefusesSymlinkedDirectory(t *testing.T) {
 	if err := os.Symlink(real, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lockWithin(t, 5*time.Second, filepath.Join(link)); err == nil || !strings.Contains(err.Error(), "not a real directory") {
+	if _, err := lockWithin(t, sys, 5*time.Second, filepath.Join(link)); err == nil || !strings.Contains(err.Error(), "not a real directory") {
 		t.Fatalf("lockDirs through a symlink: err = %v, want refusal", err)
 	}
-	if _, err := lockWithin(t, 5*time.Second, real, filepath.Join(link, "")); err == nil {
+	if _, err := lockWithin(t, sys, 5*time.Second, real, filepath.Join(link, "")); err == nil {
 		t.Fatal("a symlinked spelling of a locked directory must be refused, not deadlock")
 	}
 }
 
 func TestLockDirsTimesOutWithClearError(t *testing.T) {
-	orig := lockTimeout
-	t.Cleanup(func() { lockTimeout = orig })
-	lockTimeout = 200 * time.Millisecond
+	t.Parallel()
+	sys := newSystem()
+	sys.lockTimeout = 200 * time.Millisecond
 	dir := t.TempDir()
-	unlock, err := lockDirs([]string{dir})
+	unlock, err := sys.lockDirs([]string{dir})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer unlock()
-	if _, err := lockWithin(t, 5*time.Second, dir); err == nil || !strings.Contains(err.Error(), "still holds it after") {
+	if _, err := lockWithin(t, sys, 5*time.Second, dir); err == nil || !strings.Contains(err.Error(), "still holds it after") {
 		t.Fatalf("contended lock: err = %v, want the bounded-wait timeout", err)
 	}
 }
 
 func TestSymlinkedMemberDirectoryIsRefusedBeforeAnyWrite(t *testing.T) {
-	f := newFixture(t)
+	f := newParallelFixture(t)
 	link := filepath.Join(f.root, "maillink")
 	if err := os.Symlink(filepath.Join(f.etc, "mail"), link); err != nil {
 		t.Fatal(err)
 	}
-	err := Ensure("mail",
+	err := f.ensure("mail",
 		opt.ConfigFile("aliases", filepath.Join(link, "aliases"), opt.WithContent("x\n")),
 		opt.WithSetValidation("true", nil))
 	if err == nil || !strings.Contains(err.Error(), "not a real directory") {
@@ -94,15 +98,13 @@ func TestSymlinkedMemberDirectoryIsRefusedBeforeAnyWrite(t *testing.T) {
 }
 
 func TestCopyBackupStaysOnDiskWhenRestoreFails(t *testing.T) {
-	f := newFixture(t)
+	f := newParallelFixture(t)
 	if err := os.WriteFile(f.aliasesPath(), []byte("old aliases\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	origLink, origRestore := linkBackup, restoreCopyFile
-	t.Cleanup(func() { linkBackup, restoreCopyFile = origLink, origRestore })
-	linkBackup = func(int, string, string) error { return errors.New("EXDEV (injected)") }
-	restoreCopyFile = func(string, *copiedFile) error { return errors.New("injected restore failure") }
-	failSecondWrite(t, nil)
+	f.sys.linkBackup = func(int, string, string) error { return errors.New("EXDEV (injected)") }
+	f.sys.restoreCopy = func(string, *copiedFile) error { return errors.New("injected restore failure") }
+	failSecondWrite(f.sys, nil)
 
 	err := f.apply("root: paul\n")
 	if err == nil || !strings.Contains(err.Error(), "ROLLBACK INCOMPLETE") {
@@ -176,7 +178,7 @@ func TestBackupMemberRechecksEntryType(t *testing.T) {
 	if err := os.Symlink("/etc/passwd", path); err != nil {
 		t.Fatal(err)
 	}
-	p := &publication{set: &spec{members: []memberSpec{{key: "conf", path: path}}}}
+	p := &publication{set: &spec{members: []memberSpec{{key: "conf", path: path}}, sys: newSystem()}}
 	if _, err := p.backupMember(0, filepath.Join(dir, "backup")); err == nil || !strings.Contains(err.Error(), "no longer a regular file") {
 		t.Fatalf("backupMember on a symlink: %v", err)
 	}

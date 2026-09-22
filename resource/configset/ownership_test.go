@@ -46,11 +46,10 @@ func TestDryRunWithMissingAccountReportsWouldChange(t *testing.T) {
 			f := newFixture(t)
 			resource.SetDryRun(true)
 			t.Cleanup(func() { resource.SetDryRun(false) })
-			resource.ResetReport()
-			if err := Ensure("mail", f.accountOptions(acct[0], acct[1])...); err != nil {
+			if err := f.ensure("mail", f.accountOptions(acct[0], acct[1])...); err != nil {
 				t.Fatalf("dry-run with a not-yet-existing account failed: %v", err)
 			}
-			if !outcomeOf(t, "aliases") || !resource.AnyChanged(setID("mail")) {
+			if !f.outcomeOf("aliases") || !resource.AnyChanged(setID("mail")) {
 				t.Fatal("dry-run must report would-change for the set and its members")
 			}
 			mustNotExist(t, f.aliasesPath())
@@ -83,11 +82,16 @@ func TestPlanDryRunWithMissingAccount(t *testing.T) {
 	resource.SetDryRun(true)
 	t.Cleanup(func() { resource.SetDryRun(false) })
 	resource.ResetReport()
-	if err := (setHandler{}).Apply(op, plan.ApplyContext{}); err != nil {
+	set, member := newHandlers(f.sys)
+	if err := set.Apply(op, plan.ApplyContext{}); err != nil {
 		t.Fatalf("plan dry-run with a not-yet-existing account failed: %v", err)
 	}
 	if !resource.AnyChanged(setID("mail")) {
 		t.Fatal("plan dry-run must report would-change for the set")
+	}
+	memberOp := plan.Op{Op: plan.KindConfigSetMember, Name: "mail", Member: "aliases"}
+	if err := member.Apply(memberOp, plan.ApplyContext{}); err != nil || !resource.AnyChanged(memberID("mail", "aliases")) {
+		t.Fatalf("the paired member handler must report would-change for aliases (err=%v)", err)
 	}
 	mustNotExist(t, f.aliasesPath())
 	f.noStagingLeft()
@@ -101,8 +105,7 @@ func TestApplyWithMissingAccountFailsBeforeAnyWrite(t *testing.T) {
 	for name, acct := range accountCases {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t)
-			resource.ResetReport()
-			err := Ensure("mail", f.accountOptions(acct[0], acct[1])...)
+			err := f.ensure("mail", f.accountOptions(acct[0], acct[1])...)
 			if err == nil {
 				t.Fatal("apply with a missing account must fail")
 			}

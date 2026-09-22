@@ -11,15 +11,32 @@ import (
 )
 
 // setHandler owns the config_set wire form; memberHandler owns the
-// report-only config_set_member handle.
+// report-only config_set_member handle. Applying a set op records the member
+// outcomes in outcomes, and applying a member op reads them from there, so a
+// pair works only when both share one store (newHandlers). sys is the system
+// operations a set op is applied with. ToOp needs neither field.
 type (
-	setHandler    struct{}
-	memberHandler struct{}
+	setHandler struct {
+		sys      *system
+		outcomes *outcomeStore
+	}
+	memberHandler struct {
+		outcomes *outcomeStore
+	}
 )
 
 func init() {
-	plan.RegisterHandler(plan.KindConfigSet, setHandler{})
-	plan.RegisterHandler(plan.KindConfigSetMember, memberHandler{})
+	set, member := newHandlers(newSystem())
+	plan.RegisterHandler(plan.KindConfigSet, set)
+	plan.RegisterHandler(plan.KindConfigSetMember, member)
+}
+
+// newHandlers returns a set and a member handler sharing a new outcome store.
+// init registers the production pair; tests build their own with an injected
+// system.
+func newHandlers(sys *system) (setHandler, memberHandler) {
+	outcomes := newOutcomeStore()
+	return setHandler{sys: sys, outcomes: outcomes}, memberHandler{outcomes: outcomes}
 }
 
 // planDraft is the package-neutral record of the set.
@@ -84,12 +101,14 @@ func (setHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 }
 
 // Apply rebuilds the spec from the op, validates it before any mutation, and
-// runs the same apply as a direct recipe.
-func (setHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
+// runs the same apply as a direct recipe, with the handler's system and
+// outcome store.
+func (h setHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	s, err := specFromOp(op)
 	if err != nil {
 		return err
 	}
+	s.sys, s.outcomes = h.sys, h.outcomes
 	return s.apply()
 }
 
@@ -141,10 +160,11 @@ func (memberHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 	}, nil
 }
 
-// Apply notes the member handle's result from its set's apply.
-func (memberHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
+// Apply notes the member handle's result from its set's apply, read from the
+// store the paired setHandler recorded it in.
+func (h memberHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if op.Name == "" || op.Member == "" {
 		return fmt.Errorf("config_set_member: missing set name or member key")
 	}
-	return applyMember(op.Name, op.Member)
+	return applyMember(h.outcomes, op.Name, op.Member)
 }

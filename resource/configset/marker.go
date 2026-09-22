@@ -61,18 +61,6 @@ type markerBody struct {
 	Path   string `json:"path"`
 }
 
-// syncDirFD fsyncs an open directory with the policy of fsyncDir (see
-// fsdir.go). It is a variable only so tests can observe (and
-// fail) the directory syncs of marker creation and removal; production code
-// never reassigns it.
-var syncDirFD = func(fd int, dir string) error {
-	return fsyncDir(fd, dir)
-}
-
-// unlinkAt is unlinkat(2); a variable only so tests can make a marker
-// unlink fail. Production code never reassigns it.
-var unlinkAt = unix.Unlinkat
-
 // markerName is the marker file name of member m of set name.
 func markerName(name string, m memberSpec) string {
 	sum := sha256.Sum256([]byte(name + "\x00" + m.key + "\x00" + m.path))
@@ -81,9 +69,10 @@ func markerName(name string, m memberSpec) string {
 
 // hasMarker reports whether member m of set name has a pending marker. The
 // marker is opened without following a symlink and without blocking, and must
-// be a regular file owned by the applying uid; anything else is refused
-// rather than trusted or ignored. A missing member directory means no marker.
-func hasMarker(name string, m memberSpec) (bool, error) {
+// be a regular file owned by the applying uid (sys.euid); anything else is
+// refused rather than trusted or ignored. A missing member directory means no
+// marker.
+func (sys *system) hasMarker(name string, m memberSpec) (bool, error) {
 	dir := filepath.Dir(m.path)
 	dfd, err := openDir(dir, safepath.Walk{})
 	if errors.Is(err, unix.ENOENT) {
@@ -106,7 +95,7 @@ func hasMarker(name string, m memberSpec) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if info.UID != uint32(euid()) {
+	if info.UID != uint32(sys.euid()) {
 		return false, fmt.Errorf("pending marker %s is not owned by the applying user", filepath.Join(dir, marker))
 	}
 	return true, nil
@@ -114,8 +103,9 @@ func hasMarker(name string, m memberSpec) (bool, error) {
 
 // createMarker creates member m's marker unless one exists already (from an
 // earlier, unsignalled publication), and makes it durable: file fsync, then
-// directory fsync. Called right before the member's live rename.
-func createMarker(name string, m memberSpec) (err error) {
+// directory fsync (sys.syncDirFD). Called right before the member's live
+// rename.
+func (sys *system) createMarker(name string, m memberSpec) (err error) {
 	dir := filepath.Dir(m.path)
 	dfd, err := openDir(dir, safepath.Walk{})
 	if err != nil {
@@ -136,10 +126,10 @@ func createMarker(name string, m memberSpec) (err error) {
 	// member this apply never renamed.
 	err = writeMarkerBody(fd, markerBody{Set: name, Member: m.key, Path: m.path})
 	if err == nil {
-		err = syncDirFD(dfd, dir)
+		err = sys.syncDirFD(dfd, dir)
 	}
 	if err != nil {
-		if uerr := unlinkAt(dfd, marker, 0); uerr != nil {
+		if uerr := sys.unlinkAt(dfd, marker, 0); uerr != nil {
 			err = errors.Join(err, fmt.Errorf("unlink the unused marker (a later apply may signal member %s once): %w", m.key, uerr))
 		}
 		return fmt.Errorf("create pending marker %s: %w", filepath.Join(dir, marker), err)
@@ -186,10 +176,10 @@ func (e *markerRemovalError) Error() string {
 
 func (e *markerRemovalError) Unwrap() error { return e.err }
 
-// removeMarker deletes member m's marker, if any, and fsyncs the directory
-// (with the policy of fsyncDir) so the removal is durable once it returns.
-// A failure is a *markerRemovalError.
-func removeMarker(name string, m memberSpec) error {
+// removeMarker deletes member m's marker, if any (sys.unlinkAt), and fsyncs
+// the directory (sys.syncDirFD, by default with the policy of fsyncDir) so
+// the removal is durable once it returns. A failure is a *markerRemovalError.
+func (sys *system) removeMarker(name string, m memberSpec) error {
 	dir := filepath.Dir(m.path)
 	dfd, err := openDir(dir, safepath.Walk{})
 	if errors.Is(err, unix.ENOENT) {
@@ -200,14 +190,14 @@ func removeMarker(name string, m memberSpec) error {
 	}
 	defer func() { _ = unix.Close(dfd) }()
 	marker := markerName(name, m)
-	err = unlinkAt(dfd, marker, 0)
+	err = sys.unlinkAt(dfd, marker, 0)
 	if errors.Is(err, unix.ENOENT) {
 		return nil
 	}
 	if err != nil {
 		return &markerRemovalError{key: m.key, err: fmt.Errorf("remove pending marker %s: %w", filepath.Join(dir, marker), err)}
 	}
-	if err := syncDirFD(dfd, dir); err != nil {
+	if err := sys.syncDirFD(dfd, dir); err != nil {
 		return &markerRemovalError{key: m.key, unlinked: true, err: err}
 	}
 	return nil
@@ -217,7 +207,7 @@ func removeMarker(name string, m memberSpec) error {
 func (s *spec) pendingMembers() (map[string]bool, error) {
 	pending := map[string]bool{}
 	for _, m := range s.members {
-		ok, err := hasMarker(s.name, m)
+		ok, err := s.sys.hasMarker(s.name, m)
 		if err != nil {
 			return nil, fmt.Errorf("config set %s: %w", s.name, err)
 		}
@@ -238,7 +228,7 @@ func (s *spec) removeMarkers(keys map[string]bool) {
 		if !keys[m.key] {
 			continue
 		}
-		if err := removeMarker(s.name, m); err != nil {
+		if err := s.sys.removeMarker(s.name, m); err != nil {
 			logger.Warn("config set %s: %v", s.name, err)
 		}
 	}

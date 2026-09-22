@@ -62,27 +62,12 @@ type copiedFile struct {
 	uid, gid int
 }
 
-// writeMember, linkBackup and restoreCopyFile are the live-write, backup and
-// copy-restore primitives of a publication. They are variables solely so
-// tests can inject a failure after some members were replaced (to exercise
-// rollback), refuse hard links (to exercise the copy fallback) or fail a
-// restore; production code never reassigns them.
-var (
-	writeMember = func(t *file.Target, content []byte) error { return t.Write(content) }
-	linkBackup  = func(dirfd int, name, dst string) error {
-		return unix.Linkat(dirfd, name, unix.AT_FDCWD, dst, 0)
-	}
-	restoreCopyFile = restoreCopy
-	// chownFile and chmodFile set the numeric owner and the mode of a backup
-	// copy and of a restored copy, in that order (a chown may clear
-	// setuid/setgid, so the chmod must come last). Tests record their calls
-	// to pin both the carried-over values and the order.
-	chownFile = func(f *os.File, uid, gid int) error { return f.Chown(uid, gid) }
-	chmodFile = func(f *os.File, mode os.FileMode) error { return f.Chmod(mode) }
-)
-
 // run backs up the changed members and then, in declaration order, creates
-// each member's pending marker and replaces it.
+// each member's pending marker and replaces it. The live-write, backup and
+// restore primitives come from the set's system (p.set.sys), which is how
+// tests inject a failure after some members were replaced (to exercise
+// rollback), refuse hard links (to exercise the copy fallback) or fail a
+// restore.
 func (p *publication) run(changed map[string]bool) error {
 	var order []int
 	for i, m := range p.set.members {
@@ -96,10 +81,10 @@ func (p *publication) run(changed map[string]bool) error {
 	}
 	for n, i := range order {
 		m := p.set.members[i]
-		if err := createMarker(p.set.name, m); err != nil {
+		if err := p.set.sys.createMarker(p.set.name, m); err != nil {
 			return p.rollback(backups[:n], m.key, err)
 		}
-		if err := writeMember(p.targets[i], p.live[i]); err != nil {
+		if err := p.set.sys.writeMember(p.targets[i], p.live[i]); err != nil {
 			return p.rollback(backups[:n+1], m.key, err)
 		}
 	}
@@ -143,14 +128,14 @@ func (p *publication) backupMember(i int, dst string) (backup, error) {
 		_ = unix.Close(dirfd)
 		_ = f.Close()
 	}()
-	if err := linkBackup(dirfd, filepath.Base(path), dst); err == nil {
+	if err := p.set.sys.linkBackup(dirfd, filepath.Base(path), dst); err == nil {
 		return backup{index: i, existed: true, path: dst}, nil
 	}
 	copied, err := copyForBackup(f)
 	if err != nil {
 		return backup{}, err
 	}
-	if err := writeBackupCopy(dst, copied); err != nil {
+	if err := p.set.sys.writeBackupCopy(dst, copied); err != nil {
 		return backup{}, fmt.Errorf("write backup copy of %s: %w", path, err)
 	}
 	return backup{index: i, existed: true, path: dst, copied: copied}, nil
@@ -189,7 +174,7 @@ func unixModeToGo(perm uint32) os.FileMode {
 // writeBackupCopy writes the copy fallback to dst: created exclusively and
 // without following links (0600 while being written), then given the
 // original owner and mode and fsynced, so an operator can restore it by hand.
-func writeBackupCopy(dst string, c *copiedFile) (err error) {
+func (sys *system) writeBackupCopy(dst string, c *copiedFile) (err error) {
 	f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return err
@@ -202,10 +187,10 @@ func writeBackupCopy(dst string, c *copiedFile) (err error) {
 	if _, err := f.Write(c.data); err != nil {
 		return err
 	}
-	if err := chownFile(f, c.uid, c.gid); err != nil {
+	if err := sys.chownFile(f, c.uid, c.gid); err != nil {
 		return err
 	}
-	if err := chmodFile(f, c.mode); err != nil {
+	if err := sys.chmodFile(f, c.mode); err != nil {
 		return err
 	}
 	return f.Sync()
@@ -260,13 +245,13 @@ func (p *publication) undo(b backup) error {
 	if err := p.restore(b); err != nil {
 		return err
 	}
-	if err := syncDirectory(filepath.Dir(m.path)); err != nil {
+	if err := p.set.sys.syncDirectory(filepath.Dir(m.path)); err != nil {
 		return fmt.Errorf("make the restore durable: %w", err)
 	}
 	if p.pending[m.key] {
 		return nil
 	}
-	if err := removeMarker(p.set.name, m); err != nil {
+	if err := p.set.sys.removeMarker(p.set.name, m); err != nil {
 		return &staleMarkerError{err: err}
 	}
 	return nil
@@ -284,14 +269,15 @@ func (p *publication) restore(b backup) error {
 	case b.copied == nil:
 		return os.Rename(b.path, path)
 	default:
-		return restoreCopyFile(path, b.copied)
+		return p.set.sys.restoreCopy(path, b.copied)
 	}
 }
 
-// restoreCopy atomically writes a copied backup back: private temp file
+// writeRestoredCopy atomically writes a copied backup back: private temp file
 // beside path, bytes, numeric owner, mode (after chown, which may clear
-// setuid/setgid), fsync, rename.
-func restoreCopy(path string, c *copiedFile) (err error) {
+// setuid/setgid), fsync, rename. It is the production default of
+// sys.restoreCopy.
+func (sys *system) writeRestoredCopy(path string, c *copiedFile) (err error) {
 	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".gonfrestore*")
 	if err != nil {
 		return err
@@ -305,10 +291,10 @@ func restoreCopy(path string, c *copiedFile) (err error) {
 	if _, err = tmp.Write(c.data); err != nil {
 		return err
 	}
-	if err = chownFile(tmp, c.uid, c.gid); err != nil {
+	if err = sys.chownFile(tmp, c.uid, c.gid); err != nil {
 		return err
 	}
-	if err = chmodFile(tmp, c.mode); err != nil {
+	if err = sys.chmodFile(tmp, c.mode); err != nil {
 		return err
 	}
 	if err = tmp.Sync(); err != nil {

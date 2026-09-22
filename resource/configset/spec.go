@@ -24,12 +24,21 @@ var keyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 // path (Present) and the plan path (the config_set handler) both build one and
 // run the same validate and apply code, so a crafted or stale plan line gets
 // exactly the checks a recipe gets.
+//
+// sys and outcomes are not part of the description but what an apply runs
+// with: the operating-system operations (see system) and the store its member
+// handles read their results from (see outcomeStore). The code that applies
+// the spec sets both first (Present, ensure, setHandler.Apply); a spec that is
+// only validated or lowered to a plan op leaves them nil.
 type spec struct {
 	name       string
 	members    []memberSpec
 	validators []resource.PlanArgv
 	chroot     string
 	stagingDir string // explicit WithStagingDir, "" for the default
+
+	sys      *system
+	outcomes *outcomeStore
 }
 
 // memberSpec is one member file. owner and group are only non-empty when

@@ -20,24 +20,23 @@ import (
 // rename (so no change is stranded unsignalled), and the next apply
 // publishes and signals the change.
 func TestAttributeRepairFailureThenReapplySignals(t *testing.T) {
-	f := newFixture(t)
+	f := newParallelFixture(t)
 	if err := f.apply("root: paul\n"); err != nil {
 		t.Fatal(err)
 	}
-	orig := applyAttributes
-	t.Cleanup(func() { applyAttributes = orig })
-	applyAttributes = func(*file.Target) error { return errors.New("injected chown failure") }
+	orig := f.sys.applyAttributes
+	f.sys.applyAttributes = func(*file.Target) error { return errors.New("injected chown failure") }
 	if err := f.apply("root: paul\npostmaster: root\n"); err == nil || !strings.Contains(err.Error(), "injected chown failure") {
 		t.Fatalf("apply error = %v, want the repair failure", err)
 	}
 	if got := readFile(t, f.aliasesPath()); got != "root: paul\n" {
 		t.Fatalf("aliases = %q: a failed attribute repair must come before any live rename", got)
 	}
-	applyAttributes = orig
+	f.sys.applyAttributes = orig
 	if err := f.apply("root: paul\npostmaster: root\n"); err != nil {
 		t.Fatal(err)
 	}
-	if !outcomeOf(t, "aliases") {
+	if !f.outcomeOf("aliases") {
 		t.Fatal("the re-apply must signal the aliases change")
 	}
 }
@@ -45,7 +44,7 @@ func TestAttributeRepairFailureThenReapplySignals(t *testing.T) {
 // A publication also repairs the mode of an unchanged member, without
 // reporting that member as changed.
 func TestChangedSetRepairsModeOfUnchangedMember(t *testing.T) {
-	f := newFixture(t)
+	f := newParallelFixture(t)
 	if err := f.apply("root: paul\n"); err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +58,7 @@ func TestChangedSetRepairsModeOfUnchangedMember(t *testing.T) {
 	if err != nil || info.Mode().Perm() != 0o640 {
 		t.Fatalf("smtpd.conf mode = %v (%v), want repaired 0640", info.Mode().Perm(), err)
 	}
-	if !outcomeOf(t, "aliases") || outcomeOf(t, "smtpd.conf") {
+	if !f.outcomeOf("aliases") || f.outcomeOf("smtpd.conf") {
 		t.Fatal("only aliases may report a change; the mode repair is silent")
 	}
 }
@@ -68,7 +67,7 @@ func TestChangedSetRepairsModeOfUnchangedMember(t *testing.T) {
 // copy and the restored file, chown before chmod each time (a chown may clear
 // setuid/setgid bits, so the chmod must be last).
 func TestRollbackCopyCarriesOwnerAndModeInOrder(t *testing.T) {
-	f := newFixture(t)
+	f := newParallelFixture(t)
 	if err := os.WriteFile(f.aliasesPath(), []byte("old aliases\n"), 0o604); err != nil {
 		t.Fatal(err)
 	}
@@ -81,18 +80,17 @@ func TestRollbackCopyCarriesOwnerAndModeInOrder(t *testing.T) {
 	}
 	st := info.Sys().(*syscall.Stat_t)
 	var calls []string
-	origLink, origChown, origChmod := linkBackup, chownFile, chmodFile
-	t.Cleanup(func() { linkBackup, chownFile, chmodFile = origLink, origChown, origChmod })
-	linkBackup = func(int, string, string) error { return errors.New("EXDEV (injected)") }
-	chownFile = func(fh *os.File, uid, gid int) error {
+	origChown, origChmod := f.sys.chownFile, f.sys.chmodFile
+	f.sys.linkBackup = func(int, string, string) error { return errors.New("EXDEV (injected)") }
+	f.sys.chownFile = func(fh *os.File, uid, gid int) error {
 		calls = append(calls, "chown "+strconv.Itoa(uid)+":"+strconv.Itoa(gid))
 		return origChown(fh, uid, gid)
 	}
-	chmodFile = func(fh *os.File, mode os.FileMode) error {
+	f.sys.chmodFile = func(fh *os.File, mode os.FileMode) error {
 		calls = append(calls, "chmod "+mode.String())
 		return origChmod(fh, mode)
 	}
-	failSecondWrite(t, nil)
+	failSecondWrite(f.sys, nil)
 	if err := f.apply("root: paul\n"); err == nil || !strings.Contains(err.Error(), "rolled back 2 member(s)") {
 		t.Fatalf("apply error = %v, want a completed rollback", err)
 	}
@@ -110,11 +108,10 @@ func TestRollbackCopyCarriesOwnerAndModeInOrder(t *testing.T) {
 // Every validator runs: a set whose first validator passes and second fails
 // publishes nothing.
 func TestSecondValidatorFailureStopsPublication(t *testing.T) {
-	f := newFixture(t)
+	f := newParallelFixture(t)
 	opts := append(f.options("root: paul\n"),
 		opt.WithSetValidation("sh", []string{"-c", "echo second validator rejects >&2; exit 1"}))
-	resource.ResetReport()
-	err := Ensure("mail", opts...)
+	err := f.ensure("mail", opts...)
 	if err == nil || !strings.Contains(err.Error(), "second validator rejects") {
 		t.Fatalf("apply error = %v, want the second validator's failure", err)
 	}
@@ -170,11 +167,10 @@ func TestInlineContentBoundary(t *testing.T) {
 // validator.OutputLimit),
 // and the working directory is the staged candidate mirror.
 func TestSetValidatorUsesSharedBoundedRunner(t *testing.T) {
-	f := newFixture(t)
+	f := newParallelFixture(t)
 	opts := append(f.options("root: paul\n"),
 		opt.WithSetValidation("sh", []string{"-c", "head -c 20000 /dev/zero; exit 3"}))
-	resource.ResetReport()
-	err := Ensure("mail", opts...)
+	err := f.ensure("mail", opts...)
 	if err == nil || !strings.Contains(err.Error(), "validator output: ????") || !strings.Contains(err.Error(), "[output truncated, 20000 bytes in total]") {
 		t.Fatalf("apply error = %v, want the capped shared-runner output", err)
 	}
@@ -183,9 +179,8 @@ func TestSetValidatorUsesSharedBoundedRunner(t *testing.T) {
 	}
 
 	var dirs []string
-	orig := runValidator
-	t.Cleanup(func() { runValidator = orig })
-	runValidator = func(dir, bin string, args []string) error {
+	orig := f.sys.runValidator
+	f.sys.runValidator = func(dir, bin string, args []string) error {
 		dirs = append(dirs, dir)
 		return orig(dir, bin, args)
 	}
@@ -200,14 +195,13 @@ func TestSetValidatorUsesSharedBoundedRunner(t *testing.T) {
 // When creating the second member's marker fails, only the first member
 // (already replaced) is rolled back.
 func TestMarkerFailureRollsBackOnlyReplacedMembers(t *testing.T) {
-	f := newFixture(t)
+	f := newParallelFixture(t)
 	if err := os.WriteFile(f.aliasesPath(), []byte("old aliases\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	orig := syncDirFD
-	t.Cleanup(func() { syncDirFD = orig })
+	orig := f.sys.syncDirFD
 	calls := 0
-	syncDirFD = func(fd int, dir string) error {
+	f.sys.syncDirFD = func(fd int, dir string) error {
 		calls++
 		if calls == 2 { // the second marker creation
 			return errors.New("injected fsync failure")

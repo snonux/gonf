@@ -15,11 +15,6 @@ import (
 // descriptor (O_PATH on Linux) does not support: flock(2) and fsync(2).
 const readableDirFlags = unix.O_RDONLY | unix.O_DIRECTORY | unix.O_CLOEXEC
 
-// euid is the applying uid used by the ownership check of pending markers.
-// It is a variable only so tests can simulate a foreign owner; production
-// code never reassigns it.
-var euid = os.Geteuid
-
 // openDir walks the clean absolute path from "/" with internal/safepath (no
 // component is ever resolved through a symlink) and returns a readable
 // descriptor of the final directory, which the caller closes. walk carries
@@ -79,10 +74,6 @@ func openMember(path string) (dirfd int, f *os.File, err error) {
 	return dirfd, f, nil
 }
 
-// fsyncFD is fsync(2); a variable only so tests can simulate a filesystem
-// that refuses directory fsync. Production code never reassigns it.
-var fsyncFD = unix.Fsync
-
 // fsyncDir fsyncs an open directory for the marker and restore handling. It
 // is stricter than the File resource's atomic write, which ignores every
 // directory fsync error: only a filesystem that does not support directory
@@ -92,8 +83,10 @@ var fsyncFD = unix.Fsync
 // make the set alternate between failing and half-succeeding. Every other
 // error (EIO, ...) is returned. The member rename's own directory fsync is
 // done by the File write path (atomicWrite) and follows its ignore-all rule.
-func fsyncDir(fd int, dir string) error {
-	err := fsyncFD(fd)
+// The fsync itself is sys.fsyncFD, so a test can simulate either kind of
+// filesystem.
+func (sys *system) fsyncDir(fd int, dir string) error {
+	err := sys.fsyncFD(fd)
 	switch {
 	case err == nil:
 		return nil
@@ -104,15 +97,15 @@ func fsyncDir(fd int, dir string) error {
 	return fmt.Errorf("sync %s: %w", dir, err)
 }
 
-// syncDirectory fsyncs a directory so renames, links and unlinks inside it
-// are durable (best-effort as in fsyncDir). It is a variable only so tests
-// can observe which directories a rollback made durable; production code
-// never reassigns it.
-var syncDirectory = func(dir string) error {
+// syncDir fsyncs a directory so renames, links and unlinks inside it are
+// durable (best-effort as in fsyncDir). It is the production default of
+// sys.syncDirectory, which a test can wrap to observe which directories a
+// rollback made durable.
+func (sys *system) syncDir(dir string) error {
 	fd, err := openDir(dir, safepath.Walk{})
 	if err != nil {
 		return err
 	}
 	defer func() { _ = unix.Close(fd) }()
-	return fsyncDir(fd, dir)
+	return sys.fsyncDir(fd, dir)
 }

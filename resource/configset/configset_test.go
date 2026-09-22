@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/file"
 	opt "github.com/snonux/gonf/resource/options"
@@ -14,20 +15,49 @@ import (
 
 // fixture is a temp "system": etc is the staging parent holding a mail-like
 // set whose main config references its table through a member placeholder.
+// Every fixture has its own system operations (sys, which a test overrides
+// field by field to inject failures) and its own outcome store, so no test
+// changes state another test sees.
 type fixture struct {
 	t        *testing.T
 	root     string
 	etc      string
 	log      string // validator invocation log
 	failFlag string // validator fails while this file exists
+	sys      *system
+	outcomes *outcomeStore
+	// parallel fixtures leave the process-wide report and dry-run flag of
+	// package resource alone; their tests must not assert on them.
+	parallel bool
 }
 
+// newFixture returns a fixture for a serial test that may use the
+// process-wide report (resource.AnyChanged) or dry-run flag: it resets them
+// now and after the test.
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	resource.ResetForTest()
 	t.Cleanup(resource.ResetForTest)
+	return makeFixture(t, false)
+}
+
+// newParallelFixture marks the test parallel and returns a fixture that never
+// touches the process-wide report: everything such a test checks lives in its
+// temp directory, its system and its outcome store.
+func newParallelFixture(t *testing.T) *fixture {
+	t.Helper()
+	t.Parallel()
+	return makeFixture(t, true)
+}
+
+func makeFixture(t *testing.T, parallel bool) *fixture {
+	t.Helper()
 	root := t.TempDir()
-	f := &fixture{t: t, root: root, etc: filepath.Join(root, "etc"), log: filepath.Join(root, "validator.log"), failFlag: filepath.Join(root, "fail")}
+	f := &fixture{
+		t: t, root: root, etc: filepath.Join(root, "etc"),
+		log: filepath.Join(root, "validator.log"), failFlag: filepath.Join(root, "fail"),
+		sys: newSystem(), outcomes: newOutcomeStore(), parallel: parallel,
+	}
 	if err := os.MkdirAll(filepath.Join(f.etc, "mail"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -59,8 +89,17 @@ func (f *fixture) options(aliases string) []opt.ConfigSetOption {
 
 func (f *fixture) apply(aliases string) error {
 	f.t.Helper()
-	resource.ResetReport()
-	return Ensure("mail", f.options(aliases)...)
+	return f.ensure("mail", f.options(aliases)...)
+}
+
+// ensure applies set name with the fixture's system and outcome store,
+// starting from an empty process-wide report unless the fixture is parallel.
+func (f *fixture) ensure(name string, opts ...opt.ConfigSetOption) error {
+	f.t.Helper()
+	if !f.parallel {
+		resource.ResetReport()
+	}
+	return ensure(name, f.sys, f.outcomes, opts)
 }
 
 func (f *fixture) validatorRuns() []string {
@@ -104,11 +143,12 @@ func (f *fixture) noStagingLeft() {
 	}
 }
 
-func outcomeOf(t *testing.T, key string) bool {
-	t.Helper()
-	changed, ok := memberOutcome("mail", key)
+// outcomeOf returns the recorded outcome of member key of the mail set.
+func (f *fixture) outcomeOf(key string) bool {
+	f.t.Helper()
+	changed, ok := f.outcomes.member("mail", key)
 	if !ok {
-		t.Fatalf("no outcome recorded for member %s", key)
+		f.t.Fatalf("no outcome recorded for member %s", key)
 	}
 	return changed
 }
@@ -134,7 +174,7 @@ func TestApplyStagesValidatesAndPublishesCompleteSet(t *testing.T) {
 		t.Fatalf("aliases mode = %v, %v; want 0644", info.Mode().Perm(), err)
 	}
 	f.noStagingLeft()
-	if !outcomeOf(t, "aliases") || !outcomeOf(t, "smtpd.conf") || !resource.AnyChanged(setID("mail")) {
+	if !f.outcomeOf("aliases") || !f.outcomeOf("smtpd.conf") || !resource.AnyChanged(setID("mail")) {
 		t.Fatal("first apply must report the set and both members as changed")
 	}
 }
@@ -150,7 +190,7 @@ func TestReplayIsNoOpWithoutValidatorRun(t *testing.T) {
 	if runs := f.validatorRuns(); len(runs) != 1 {
 		t.Fatalf("validator ran %d times, want only on the first apply", len(runs))
 	}
-	if outcomeOf(t, "aliases") || outcomeOf(t, "smtpd.conf") || resource.AnyChanged(setID("mail")) {
+	if f.outcomeOf("aliases") || f.outcomeOf("smtpd.conf") || resource.AnyChanged(setID("mail")) {
 		t.Fatal("replay must report nothing changed")
 	}
 }
@@ -163,7 +203,7 @@ func TestMemberLevelChangeReports(t *testing.T) {
 	if err := f.apply("root: paul\npostmaster: root\n"); err != nil {
 		t.Fatal(err)
 	}
-	if !outcomeOf(t, "aliases") || outcomeOf(t, "smtpd.conf") {
+	if !f.outcomeOf("aliases") || f.outcomeOf("smtpd.conf") {
 		t.Fatal("only the aliases member may report a change")
 	}
 	if !resource.AnyChanged(setID("mail")) {
@@ -175,7 +215,7 @@ func TestMemberLevelChangeReports(t *testing.T) {
 }
 
 func TestLiveDriftIsValidatedAndRepaired(t *testing.T) {
-	f := newFixture(t)
+	f := newParallelFixture(t)
 	if err := f.apply("root: paul\n"); err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +228,7 @@ func TestLiveDriftIsValidatedAndRepaired(t *testing.T) {
 	if got := readFile(t, f.confPath()); !strings.HasPrefix(got, "table aliases") {
 		t.Fatalf("drift not repaired: %q", got)
 	}
-	if !outcomeOf(t, "smtpd.conf") || outcomeOf(t, "aliases") {
+	if !f.outcomeOf("smtpd.conf") || f.outcomeOf("aliases") {
 		t.Fatal("drift repair must report exactly the repaired member")
 	}
 	if runs := f.validatorRuns(); len(runs) != 2 {
@@ -197,7 +237,7 @@ func TestLiveDriftIsValidatedAndRepaired(t *testing.T) {
 }
 
 func TestValidationFailureLeavesLiveUntouched(t *testing.T) {
-	f := newFixture(t)
+	f := newParallelFixture(t)
 	if err := f.apply("root: paul\n"); err != nil {
 		t.Fatal(err)
 	}
@@ -213,16 +253,16 @@ func TestValidationFailureLeavesLiveUntouched(t *testing.T) {
 		t.Fatalf("live aliases changed to %q after failed validation", got)
 	}
 	f.noStagingLeft()
-	if _, ok := memberOutcome("mail", "aliases"); ok {
+	if _, ok := f.outcomes.member("mail", "aliases"); ok {
 		t.Fatal("a failed set must not record member outcomes")
 	}
-	if err := applyMember("mail", "aliases"); err == nil {
+	if err := applyMember(f.outcomes, "mail", "aliases"); err == nil {
 		t.Fatal("a member handle must fail when its set did not apply")
 	}
 }
 
 func TestValidationFailureOnFirstApplyCreatesNothing(t *testing.T) {
-	f := newFixture(t)
+	f := newParallelFixture(t)
 	if err := os.WriteFile(f.failFlag, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -245,14 +285,14 @@ func TestDryRunReportsWithoutStagingOrWriting(t *testing.T) {
 	if runs := f.validatorRuns(); len(runs) != 0 {
 		t.Fatalf("dry-run ran the validator: %q", runs)
 	}
-	if !outcomeOf(t, "aliases") || !resource.AnyChanged(setID("mail")) {
+	if !f.outcomeOf("aliases") || !resource.AnyChanged(setID("mail")) {
 		t.Fatal("dry-run must report would-change for the set and its members")
 	}
 	f.noStagingLeft()
 }
 
 func TestNonRegularLivePathIsRefusedBeforeAnyWrite(t *testing.T) {
-	f := newFixture(t)
+	f := newParallelFixture(t)
 	if err := os.Symlink("/etc/passwd", f.confPath()); err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +307,7 @@ func TestNonRegularLivePathIsRefusedBeforeAnyWrite(t *testing.T) {
 }
 
 func TestMetadataDriftRepairedWithoutChangeReport(t *testing.T) {
-	f := newFixture(t)
+	f := newParallelFixture(t)
 	if err := f.apply("root: paul\n"); err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +321,7 @@ func TestMetadataDriftRepairedWithoutChangeReport(t *testing.T) {
 	if err != nil || info.Mode().Perm() != 0o644 {
 		t.Fatalf("mode = %v, %v; want repaired 0644", info.Mode().Perm(), err)
 	}
-	if outcomeOf(t, "aliases") {
+	if f.outcomeOf("aliases") {
 		t.Fatal("a metadata-only repair must not arm member change gates (same as File)")
 	}
 }
@@ -289,5 +329,69 @@ func TestMetadataDriftRepairedWithoutChangeReport(t *testing.T) {
 func TestTargetRefusesContentOptions(t *testing.T) {
 	if _, err := file.NewTarget("/etc/x", opt.WithContent("x")); err == nil {
 		t.Fatal("NewTarget must refuse content options")
+	}
+}
+
+// Member outcomes live in the store of the apply that recorded them, not in
+// package state: a member handle reading another store fails as if its set
+// had never applied, while the set's own store serves it.
+func TestOutcomesAreScopedToTheirStore(t *testing.T) {
+	f := newParallelFixture(t)
+	if err := f.apply("root: paul\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := newOutcomeStore().member("mail", "aliases"); ok {
+		t.Fatal("a fresh store must not see another apply's outcomes")
+	}
+	if err := applyMember(newOutcomeStore(), "mail", "aliases"); err == nil || !strings.Contains(err.Error(), "has not been applied") {
+		t.Fatalf("member handle on a foreign store: err = %v, want the not-applied failure", err)
+	}
+	if !f.outcomeOf("aliases") {
+		t.Fatal("the set's own store must hold the aliases change")
+	}
+	if _, ok := f.outcomes.member("mail", "no-such-member"); ok {
+		t.Fatal("an unknown member must have no outcome")
+	}
+}
+
+// Only a set handler and the member handler created with it (newHandlers)
+// share outcomes; the member handler of another pair fails.
+func TestPlanHandlerPairsShareOnlyTheirOwnStore(t *testing.T) {
+	f := newParallelFixture(t)
+	c, err := build("mail", f.options("root: paul\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, member := newHandlers(f.sys)
+	op, err := set.ToOp(c.spec.planDraft(setID("mail"), nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := set.Apply(op, plan.ApplyContext{}); err != nil {
+		t.Fatal(err)
+	}
+	memberOp := plan.Op{Op: plan.KindConfigSetMember, Name: "mail", Member: "aliases"}
+	if err := member.Apply(memberOp, plan.ApplyContext{}); err != nil {
+		t.Fatalf("paired member handler: %v", err)
+	}
+	_, otherMember := newHandlers(f.sys)
+	if err := otherMember.Apply(memberOp, plan.ApplyContext{}); err == nil {
+		t.Fatal("a member handler of another pair must not see this set's outcomes")
+	}
+}
+
+// Present wires the set's applier and its member appliers to one store of
+// their own, so the legacy resource.Apply path reports each member handle.
+func TestPresentMemberHandlesReadTheirSetsOutcomes(t *testing.T) {
+	f := newFixture(t)
+	h := Present("mail", f.options("root: paul\n")...)
+	if err := resource.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	if !resource.AnyChanged(h.Member("aliases").ID()) || !resource.AnyChanged(h.Member("smtpd.conf").ID()) {
+		t.Fatal("both member handles must report the first publication")
+	}
+	if got := readFile(t, f.aliasesPath()); got != "root: paul\n" {
+		t.Fatalf("aliases = %q", got)
 	}
 }

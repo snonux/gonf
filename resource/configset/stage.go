@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/snonux/gonf/internal/logger"
-	"github.com/snonux/gonf/internal/validator"
 	"github.com/snonux/gonf/resource/file"
 )
 
@@ -102,10 +101,12 @@ func writePrivate(path string, content []byte) (err error) {
 
 // validate runs every validator in order with placeholders rendered as staged
 // paths and the working directory set to the candidate mirror of the staging
-// parent. Each one goes through the shared internal/validator runner, exactly
-// like File's WithValidation: argv only (no shell), stdin from /dev/null,
-// bounded by the command timeout (-cmd-timeout), and a failure carries a
-// capped, sanitized copy of the validator's output. The first failure aborts.
+// parent. Each one goes through the shared internal/validator runner
+// (s.sys.runValidator, so tests can observe the working directory and argv),
+// exactly like File's WithValidation: argv only (no shell), stdin from
+// /dev/null, bounded by the command timeout (-cmd-timeout), and a failure
+// carries a capped, sanitized copy of the validator's output. The first
+// failure aborts.
 func (st *stage) validate(s *spec) error {
 	resolve := s.pathResolver(func(m memberSpec) string { return st.paths[m.key] })
 	for i, v := range s.validators {
@@ -113,18 +114,13 @@ func (st *stage) validate(s *spec) error {
 		if err != nil {
 			return fmt.Errorf("config set %s: validator %d (%s): %w", s.name, i+1, v.Bin, err)
 		}
-		if err := runValidator(st.candidates, v.Bin, args); err != nil {
+		if err := s.sys.runValidator(st.candidates, v.Bin, args); err != nil {
 			return fmt.Errorf("config set %s: validation by %s failed, nothing published: %w", s.name, v.Bin, err)
 		}
 		logger.Debug("config set %s: validator %s accepted the staged set", s.name, v.Bin)
 	}
 	return nil
 }
-
-// runValidator is internal/validator.RunIn; a variable only so tests can
-// check which working directory and argv the set passes. Production code
-// never reassigns it.
-var runValidator = validator.RunIn
 
 // remove deletes the staging directory including any backups in it.
 func (st *stage) remove() {

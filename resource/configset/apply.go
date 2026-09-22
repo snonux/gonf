@@ -35,7 +35,7 @@ import (
 // same run (a User before a set owned by it), and while the run is only
 // previewed that account does not exist yet. A File behaves the same way.
 func (s *spec) apply() error {
-	forgetOutcome(s.name)
+	s.outcomes.forget(s.name)
 	targets, err := s.targets()
 	if err != nil {
 		return err
@@ -50,7 +50,7 @@ func (s *spec) apply() error {
 	if err := s.resolveOwnership(targets); err != nil {
 		return err
 	}
-	unlock, err := lockDirs(s.memberDirs())
+	unlock, err := s.sys.lockDirs(s.memberDirs())
 	if err != nil {
 		return fmt.Errorf("config set %s: %w", s.name, err)
 	}
@@ -132,19 +132,16 @@ func (s *spec) stageValidatePublish(targets []*file.Target, live [][]byte, chang
 	return err
 }
 
-// applyAttributes re-applies a Target's mode and ownership in place. It is a
-// variable only so tests can make the repair of an unchanged member fail
-// deterministically; production code never reassigns it.
-var applyAttributes = func(t *file.Target) error { return t.ApplyAttributes() }
-
 // repairUnchanged re-applies mode and ownership to the members that are not
-// about to be replaced, like the File resource's silent metadata repair.
+// about to be replaced, like the File resource's silent metadata repair. The
+// repair goes through s.sys.applyAttributes, so tests can make it fail
+// deterministically.
 func (s *spec) repairUnchanged(targets []*file.Target, changed map[string]bool) error {
 	for i, t := range targets {
 		if changed[s.members[i].key] {
 			continue
 		}
-		if err := applyAttributes(t); err != nil {
+		if err := s.sys.applyAttributes(t); err != nil {
 			return fmt.Errorf("config set %s: member %s: %w", s.name, s.members[i].key, err)
 		}
 	}
@@ -200,7 +197,7 @@ func (s *spec) finish(changed, pending map[string]bool) {
 		}
 	}
 	resource.NoteResult(setID(s.name), changedAny)
-	recordOutcome(s.name, outcome)
+	s.outcomes.record(s.name, outcome)
 }
 
 // renderAll renders every member's content through resolve.

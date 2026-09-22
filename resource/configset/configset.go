@@ -175,19 +175,23 @@ func (h Handle) Members(keys ...string) []resource.Dependency {
 }
 
 // Present registers the config set and one handle resource per member, and
-// records their plan drafts. A misconfigured set fails the record.
+// records their plan drafts. A misconfigured set fails the record. The set's
+// applier and its member appliers (the legacy resource.Apply path) share one
+// outcome store of their own; the plan path uses the plan handlers' store
+// instead (see newHandlers).
 func Present(name string, opts ...opt.ConfigSetOption) Handle {
 	c, err := build(name, opts)
 	if err != nil {
 		logger.Fatal("%v", err)
 	}
 	sp := c.spec
+	sp.sys, sp.outcomes = newSystem(), newOutcomeStore()
 	set := resource.Register("ConfigSet", name, resource.ApplierFunc(sp.apply), c.DependsOn.IDs...)
 	resource.RecordPlanDraft(sp.planDraft(set.ID(), c.DependsOn.SortedIDs()))
 
 	h := Handle{Resource: set, name: name, members: map[string]resource.Resource{}}
 	for _, m := range sp.members {
-		r := resource.Register("ConfigSetMember", memberName(name, m.key), memberApplier(name, m.key), set.ID())
+		r := resource.Register("ConfigSetMember", memberName(name, m.key), memberApplier(sp.outcomes, name, m.key), set.ID())
 		resource.RecordPlanDraft(memberDraft(r.ID(), name, m, set.ID()))
 		h.members[m.key] = r
 		h.keys = append(h.keys, m.key)
@@ -197,11 +201,19 @@ func Present(name string, opts ...opt.ConfigSetOption) Handle {
 
 // Ensure builds and applies a config set without registering it or its
 // member handles (the direct counterpart of Present, used by tests and by
-// callers composing their own resources).
+// callers composing their own resources). It runs with the production system
+// operations and a throwaway outcome store, since no member handle reads it.
 func Ensure(name string, opts ...opt.ConfigSetOption) error {
+	return ensure(name, newSystem(), newOutcomeStore(), opts)
+}
+
+// ensure is Ensure with the system operations and the outcome store passed in,
+// so tests can inject failures and read the member outcomes of the apply.
+func ensure(name string, sys *system, outcomes *outcomeStore, opts []opt.ConfigSetOption) error {
 	c, err := build(name, opts)
 	if err != nil {
 		return err
 	}
+	c.spec.sys, c.spec.outcomes = sys, outcomes
 	return c.spec.apply()
 }

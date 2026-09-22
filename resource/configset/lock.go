@@ -11,18 +11,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// lockTimeout bounds how long an apply waits for a concurrent publication,
-// and lockPoll is how often it retries meanwhile. They are variables only so
-// tests can shorten them; production code never reassigns them.
-var (
-	lockTimeout = 5 * time.Minute
-	lockPoll    = 50 * time.Millisecond
-)
-
-// flockFD is flock(2); a variable only so tests can simulate filesystems
-// that refuse it. Production code never reassigns it.
-var flockFD = unix.Flock
-
 // heldDir is one opened directory and the identity used to order and
 // deduplicate the locks.
 type heldDir struct {
@@ -49,12 +37,14 @@ type heldDir struct {
 // the same acquisition order, which rules out lock-order deadlocks between
 // sets with overlapping directories.
 //
-// A lock held by another publication is waited for, polling, for at most
-// lockTimeout (5 minutes); then the apply fails with a timeout error. The
+// A lock held by another publication is waited for, polling every
+// sys.lockPoll, for at most sys.lockTimeout (5 minutes in production); then
+// the apply fails with a timeout error. The flock(2) call itself is
+// sys.flock, so tests can simulate filesystems that refuse it. The
 // locks are advisory: plain File resources, package scripts and editors do
 // not take them. Locking the directories themselves, rather than lock files
 // beside the configuration, leaves nothing behind in /etc.
-func lockDirs(dirs []string) (func(), error) {
+func (sys *system) lockDirs(dirs []string) (func(), error) {
 	held, err := openLockDirs(dirs)
 	if err != nil {
 		return nil, err
@@ -65,9 +55,9 @@ func lockDirs(dirs []string) (func(), error) {
 			_ = unix.Close(h.fd)
 		}
 	}
-	deadline := time.Now().Add(lockTimeout)
+	deadline := time.Now().Add(sys.lockTimeout)
 	for _, h := range held {
-		if err := lockDir(h, deadline); err != nil {
+		if err := sys.lockDir(h, deadline); err != nil {
 			release()
 			return nil, err
 		}
@@ -117,10 +107,10 @@ func openLockDirs(dirs []string) ([]heldDir, error) {
 
 // lockDir takes h's exclusive lock, polling until deadline when another
 // publication holds it.
-func lockDir(h heldDir, deadline time.Time) error {
+func (sys *system) lockDir(h heldDir, deadline time.Time) error {
 	waiting := false
 	for {
-		err := flockFD(h.fd, unix.LOCK_EX|unix.LOCK_NB)
+		err := sys.flock(h.fd, unix.LOCK_EX|unix.LOCK_NB)
 		switch {
 		case err == nil:
 			return nil
@@ -142,8 +132,8 @@ func lockDir(h heldDir, deadline time.Time) error {
 			waiting = true
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("lock %s: another config-set publication still holds it after %s; retry later", h.path, lockTimeout)
+			return fmt.Errorf("lock %s: another config-set publication still holds it after %s; retry later", h.path, sys.lockTimeout)
 		}
-		time.Sleep(lockPoll)
+		time.Sleep(sys.lockPoll)
 	}
 }

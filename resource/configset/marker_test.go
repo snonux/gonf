@@ -38,7 +38,7 @@ func (f *fixture) markerPath(key string) string {
 // leaves: the new aliases content is live and its marker exists.
 func (f *fixture) simulateCrash(aliases string) {
 	f.t.Helper()
-	if err := createMarker("mail", f.memberOf("aliases")); err != nil {
+	if err := f.sys.createMarker("mail", f.memberOf("aliases")); err != nil {
 		f.t.Fatal(err)
 	}
 	if err := os.WriteFile(f.aliasesPath(), []byte(aliases), 0o644); err != nil {
@@ -58,7 +58,7 @@ func TestCrashBetweenRenamesFiresGatesOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	resource.SetDryRun(false)
-	if !outcomeOf(t, "aliases") {
+	if !f.outcomeOf("aliases") {
 		t.Fatal("dry-run must report the pending member")
 	}
 	if _, err := os.Stat(f.markerPath("aliases")); err != nil {
@@ -68,7 +68,7 @@ func TestCrashBetweenRenamesFiresGatesOnce(t *testing.T) {
 	if err := f.apply("root: paul\npostmaster: root\n"); err != nil {
 		t.Fatal(err)
 	}
-	if !outcomeOf(t, "aliases") || outcomeOf(t, "smtpd.conf") || !resource.AnyChanged(setID("mail")) {
+	if !f.outcomeOf("aliases") || f.outcomeOf("smtpd.conf") || !resource.AnyChanged(setID("mail")) {
 		t.Fatal("the crashed member (only) must be signalled")
 	}
 	mustNotExist(t, f.markerPath("aliases"))
@@ -78,21 +78,20 @@ func TestCrashBetweenRenamesFiresGatesOnce(t *testing.T) {
 	if err := f.apply("root: paul\npostmaster: root\n"); err != nil {
 		t.Fatal(err)
 	}
-	if outcomeOf(t, "aliases") {
+	if f.outcomeOf("aliases") {
 		t.Fatal("a pending member must be signalled once")
 	}
 }
 
 func TestMarkerIsDurableBeforeEachRename(t *testing.T) {
-	f := newFixture(t)
+	f := newParallelFixture(t)
 	var synced []string
-	origSync, origWrite := syncDirFD, writeMember
-	t.Cleanup(func() { syncDirFD, writeMember = origSync, origWrite })
-	syncDirFD = func(fd int, dir string) error {
+	origSync, origWrite := f.sys.syncDirFD, f.sys.writeMember
+	f.sys.syncDirFD = func(fd int, dir string) error {
 		synced = append(synced, dir)
 		return origSync(fd, dir)
 	}
-	writeMember = func(target *file.Target, content []byte) error {
+	f.sys.writeMember = func(target *file.Target, content []byte) error {
 		for _, key := range []string{"aliases", "smtpd.conf"} {
 			if _, err := os.Stat(f.markerPath(key)); err == nil && len(synced) == 0 {
 				t.Errorf("marker %s exists but its directory was never synced", key)
@@ -112,13 +111,12 @@ func TestMarkerIsDurableBeforeEachRename(t *testing.T) {
 }
 
 func TestMarkerExistsWhileMemberIsRenamed(t *testing.T) {
-	f := newFixture(t)
-	orig := writeMember
-	t.Cleanup(func() { writeMember = orig })
+	f := newParallelFixture(t)
+	orig := f.sys.writeMember
 	seen := map[string]bool{}
-	writeMember = func(target *file.Target, content []byte) error {
+	f.sys.writeMember = func(target *file.Target, content []byte) error {
 		for _, key := range []string{"aliases", "smtpd.conf"} {
-			if ok, err := hasMarker("mail", f.memberOf(key)); err == nil && ok {
+			if ok, err := f.sys.hasMarker("mail", f.memberOf(key)); err == nil && ok {
 				seen[key] = true
 			}
 		}
@@ -133,10 +131,8 @@ func TestMarkerExistsWhileMemberIsRenamed(t *testing.T) {
 }
 
 func TestFailedMarkerSyncPublishesNothing(t *testing.T) {
-	f := newFixture(t)
-	orig := syncDirFD
-	t.Cleanup(func() { syncDirFD = orig })
-	syncDirFD = func(int, string) error { return errors.New("injected fsync failure") }
+	f := newParallelFixture(t)
+	f.sys.syncDirFD = func(int, string) error { return errors.New("injected fsync failure") }
 	if err := f.apply("root: paul\n"); err == nil || !strings.Contains(err.Error(), "injected fsync failure") {
 		t.Fatalf("apply error = %v, want the fsync failure", err)
 	}
@@ -145,7 +141,7 @@ func TestFailedMarkerSyncPublishesNothing(t *testing.T) {
 }
 
 func TestRollbackRemovesMarkersOnlyAfterDurableRestore(t *testing.T) {
-	f := newFixture(t)
+	f := newParallelFixture(t)
 	if err := os.WriteFile(f.aliasesPath(), []byte("old aliases\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -153,9 +149,8 @@ func TestRollbackRemovesMarkersOnlyAfterDurableRestore(t *testing.T) {
 	// restore is made durable, that member's marker must still exist, so
 	// the markers present at the two syncs are 2 and then 1.
 	var present []int
-	orig := syncDirectory
-	t.Cleanup(func() { syncDirectory = orig })
-	syncDirectory = func(dir string) error {
+	orig := f.sys.syncDirectory
+	f.sys.syncDirectory = func(dir string) error {
 		n := 0
 		for _, key := range []string{"aliases", "smtpd.conf"} {
 			if _, err := os.Stat(f.markerPath(key)); err == nil {
@@ -165,7 +160,7 @@ func TestRollbackRemovesMarkersOnlyAfterDurableRestore(t *testing.T) {
 		present = append(present, n)
 		return orig(dir)
 	}
-	failSecondWrite(t, nil)
+	failSecondWrite(f.sys, nil)
 	if err := f.apply("root: paul\n"); err == nil || !strings.Contains(err.Error(), "rolled back 2 member(s)") {
 		t.Fatalf("apply error = %v, want a completed rollback", err)
 	}
@@ -177,11 +172,9 @@ func TestRollbackRemovesMarkersOnlyAfterDurableRestore(t *testing.T) {
 }
 
 func TestFailedRestoreKeepsMarker(t *testing.T) {
-	f := newFixture(t)
-	orig := syncDirectory
-	t.Cleanup(func() { syncDirectory = orig })
-	syncDirectory = func(string) error { return errors.New("injected fsync failure") }
-	failSecondWrite(t, nil)
+	f := newParallelFixture(t)
+	f.sys.syncDirectory = func(string) error { return errors.New("injected fsync failure") }
+	failSecondWrite(f.sys, nil)
 	if err := f.apply("root: paul\n"); err == nil || !strings.Contains(err.Error(), "ROLLBACK INCOMPLETE") {
 		t.Fatalf("apply error = %v, want an incomplete rollback", err)
 	}
@@ -196,14 +189,13 @@ func TestFailedRestoreKeepsMarker(t *testing.T) {
 // keeps its marker when this publication rolls it back: the restored live
 // file is the crashed publication's content, which was never signalled.
 func TestRollbackKeepsMarkerOfEarlierPendingMember(t *testing.T) {
-	f := newFixture(t)
+	f := newParallelFixture(t)
 	if err := f.apply("root: paul\n"); err != nil {
 		t.Fatal(err)
 	}
 	f.simulateCrash("crashed publication\n")
-	orig := writeMember
-	t.Cleanup(func() { writeMember = orig })
-	writeMember = func(*file.Target, []byte) error { return errors.New("injected write failure") }
+	orig := f.sys.writeMember
+	f.sys.writeMember = func(*file.Target, []byte) error { return errors.New("injected write failure") }
 	if err := f.apply("root: paul\n"); err == nil || !strings.Contains(err.Error(), "rolled back 1 member(s)") {
 		t.Fatalf("apply error = %v, want a rollback of aliases", err)
 	}
@@ -213,19 +205,19 @@ func TestRollbackKeepsMarkerOfEarlierPendingMember(t *testing.T) {
 	if _, err := os.Stat(f.markerPath("aliases")); err != nil {
 		t.Fatalf("the earlier pending marker must survive the rollback: %v", err)
 	}
-	writeMember = orig
+	f.sys.writeMember = orig
 	if err := f.apply("root: paul\n"); err != nil {
 		t.Fatal(err)
 	}
-	if !outcomeOf(t, "aliases") {
+	if !f.outcomeOf("aliases") {
 		t.Fatal("the re-apply must signal aliases")
 	}
 	mustNotExist(t, f.markerPath("aliases"))
 }
 
 func TestSameSetNameInDifferentRecipesKeepsMarkersApart(t *testing.T) {
-	resource.ResetForTest()
-	t.Cleanup(resource.ResetForTest)
+	t.Parallel()
+	sys, outcomes := newSystem(), newOutcomeStore()
 	root := t.TempDir()
 	recipe := func(dir string) []opt.ConfigSetOption {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -238,27 +230,27 @@ func TestSameSetNameInDifferentRecipesKeepsMarkersApart(t *testing.T) {
 	}
 	a, b := recipe(filepath.Join(root, "a")), recipe(filepath.Join(root, "b"))
 	for _, opts := range [][]opt.ConfigSetOption{a, b} {
-		if err := Ensure("nsd", opts...); err != nil {
+		if err := ensure("nsd", sys, outcomes, opts); err != nil {
 			t.Fatal(err)
 		}
 	}
 	memberA := memberSpec{key: "conf", path: filepath.Join(root, "a", "x.conf")}
-	if err := createMarker("nsd", memberA); err != nil {
+	if err := sys.createMarker("nsd", memberA); err != nil {
 		t.Fatal(err)
 	}
-	if err := Ensure("nsd", b...); err != nil {
+	if err := ensure("nsd", sys, outcomes, b); err != nil {
 		t.Fatal(err)
 	}
-	if changed, _ := memberOutcome("nsd", "conf"); changed {
+	if changed, _ := outcomes.member("nsd", "conf"); changed {
 		t.Fatal("recipe b must not consume recipe a's marker")
 	}
-	if ok, err := hasMarker("nsd", memberA); err != nil || !ok {
+	if ok, err := sys.hasMarker("nsd", memberA); err != nil || !ok {
 		t.Fatalf("recipe a's marker must survive recipe b's apply (ok=%v, err=%v)", ok, err)
 	}
-	if err := Ensure("nsd", a...); err != nil {
+	if err := ensure("nsd", sys, outcomes, a); err != nil {
 		t.Fatal(err)
 	}
-	if changed, _ := memberOutcome("nsd", "conf"); !changed {
+	if changed, _ := outcomes.member("nsd", "conf"); !changed {
 		t.Fatal("recipe a must signal its own pending member")
 	}
 }
@@ -282,7 +274,7 @@ func TestMarkerNamesSeparateSetKeyAndPath(t *testing.T) {
 }
 
 func TestSymlinkedMarkerIsRefusedEvenToValidOwnedMarker(t *testing.T) {
-	f := newFixture(t)
+	f := newParallelFixture(t)
 	if err := f.apply("root: paul\n"); err != nil {
 		t.Fatal(err)
 	}
@@ -302,15 +294,17 @@ func TestSymlinkedMarkerIsRefusedEvenToValidOwnedMarker(t *testing.T) {
 }
 
 func TestMarkerOwnerIsChecked(t *testing.T) {
-	f := newFixture(t)
+	f := newParallelFixture(t)
 	if err := f.apply("root: paul\n"); err != nil {
 		t.Fatal(err)
 	}
 	f.simulateCrash("root: paul\n")
-	orig := euid
-	t.Cleanup(func() { euid = orig })
-	euid = func() int { return orig() + 4242 }
-	if _, err := hasMarker("mail", f.memberOf("aliases")); err == nil || !strings.Contains(err.Error(), "not owned by the applying user") {
+	if ok, err := f.sys.hasMarker("mail", f.memberOf("aliases")); err != nil || !ok {
+		t.Fatalf("a marker owned by the applying user must be accepted (ok=%v, err=%v)", ok, err)
+	}
+	orig := f.sys.euid
+	f.sys.euid = func() int { return orig() + 4242 }
+	if _, err := f.sys.hasMarker("mail", f.memberOf("aliases")); err == nil || !strings.Contains(err.Error(), "not owned by the applying user") {
 		t.Fatalf("marker owned by another uid: err = %v, want refusal", err)
 	}
 }
@@ -326,7 +320,7 @@ func TestMarkersDoNotDependOnHomeOrStateEnvironment(t *testing.T) {
 	if err := f.apply("root: paul\n"); err != nil {
 		t.Fatal(err)
 	}
-	if !outcomeOf(t, "aliases") {
+	if !f.outcomeOf("aliases") {
 		t.Fatal("the pending member must be signalled without HOME or XDG_STATE_HOME")
 	}
 }
@@ -347,20 +341,19 @@ func TestLeftoverStageDetectionIsNotFooledBySetNames(t *testing.T) {
 // A marker whose directory fsync fails is unlinked again: its member was
 // never published, so no later apply may signal it.
 func TestFailedMarkerCreationLeavesNoMarker(t *testing.T) {
-	f := newFixture(t)
-	orig := syncDirFD
-	t.Cleanup(func() { syncDirFD = orig })
-	syncDirFD = func(int, string) error { return errors.New("injected fsync failure") }
+	f := newParallelFixture(t)
+	orig := f.sys.syncDirFD
+	f.sys.syncDirFD = func(int, string) error { return errors.New("injected fsync failure") }
 	if err := f.apply("root: paul\n"); err == nil {
 		t.Fatal("apply must fail")
 	}
 	mustNotExist(t, f.markerPath("aliases"))
-	syncDirFD = orig
+	f.sys.syncDirFD = orig
 	if err := f.apply("root: paul\n"); err != nil {
 		t.Fatal(err)
 	}
 	// The retry publishes and signals; no marker survives it.
-	if !outcomeOf(t, "aliases") {
+	if !f.outcomeOf("aliases") {
 		t.Fatal("the retry must publish aliases")
 	}
 	mustNotExist(t, f.markerPath("aliases"))
@@ -370,18 +363,16 @@ func TestFailedMarkerCreationLeavesNoMarker(t *testing.T) {
 // (EINVAL/ENOTSUP), like the File resource's atomic write, but a real I/O
 // error fails the apply.
 func TestUnsupportedDirectoryFsyncIsBestEffort(t *testing.T) {
-	f := newFixture(t)
-	orig := fsyncFD
-	t.Cleanup(func() { fsyncFD = orig })
-	fsyncFD = func(int) error { return unix.EINVAL }
+	f := newParallelFixture(t)
+	f.sys.fsyncFD = func(int) error { return unix.EINVAL }
 	if err := f.apply("root: paul\n"); err != nil {
 		t.Fatalf("EINVAL from directory fsync must not fail the apply: %v", err)
 	}
-	if !outcomeOf(t, "aliases") {
+	if !f.outcomeOf("aliases") {
 		t.Fatal("aliases must be published")
 	}
 	mustNotExist(t, f.markerPath("aliases"))
-	fsyncFD = func(int) error { return unix.EIO }
+	f.sys.fsyncFD = func(int) error { return unix.EIO }
 	if err := f.apply("root: paul\npostmaster: root\n"); err == nil || !strings.Contains(err.Error(), "input/output error") {
 		t.Fatalf("EIO from directory fsync must fail the apply: %v", err)
 	}
@@ -392,11 +383,10 @@ func TestUnsupportedDirectoryFsyncIsBestEffort(t *testing.T) {
 // the directory fsync failed, so the marker is gone (a later apply may
 // signal once more only after a power loss).
 func TestMarkerRemovalFailureIsAWarning(t *testing.T) {
-	f := newFixture(t)
-	orig := syncDirFD
-	t.Cleanup(func() { syncDirFD = orig })
+	f := newParallelFixture(t)
+	orig := f.sys.syncDirFD
 	calls := 0
-	syncDirFD = func(fd int, dir string) error {
+	f.sys.syncDirFD = func(fd int, dir string) error {
 		calls++
 		if calls > 2 { // the two creations succeed, the removals fail
 			return errors.New("injected fsync failure")
@@ -406,7 +396,7 @@ func TestMarkerRemovalFailureIsAWarning(t *testing.T) {
 	if err := f.apply("root: paul\n"); err != nil {
 		t.Fatalf("a failed marker removal must not fail the apply: %v", err)
 	}
-	if !outcomeOf(t, "aliases") || !outcomeOf(t, "smtpd.conf") {
+	if !f.outcomeOf("aliases") || !f.outcomeOf("smtpd.conf") {
 		t.Fatal("the published members must be reported")
 	}
 }
@@ -416,17 +406,16 @@ func TestMarkerRemovalFailureIsAWarning(t *testing.T) {
 // error says the marker is removed but not durably, so a later apply may
 // signal once more.
 func TestRollbackWithStaleMarkerIsComplete(t *testing.T) {
-	f := newFixture(t)
-	orig := syncDirFD
-	t.Cleanup(func() { syncDirFD = orig })
+	f := newParallelFixture(t)
+	orig := f.sys.syncDirFD
 	failing := false
-	syncDirFD = func(fd int, dir string) error {
+	f.sys.syncDirFD = func(fd int, dir string) error {
 		if failing {
 			return errors.New("injected fsync failure")
 		}
 		return orig(fd, dir)
 	}
-	failSecondWrite(t, func() { failing = true })
+	failSecondWrite(f.sys, func() { failing = true })
 	err := f.apply("root: paul\n")
 	if err == nil || strings.Contains(err.Error(), "ROLLBACK INCOMPLETE") || !strings.Contains(err.Error(), "may signal member") {
 		t.Fatalf("apply error = %v, want a complete rollback that names the stale markers", err)
@@ -438,15 +427,13 @@ func TestRollbackWithStaleMarkerIsComplete(t *testing.T) {
 
 // A member whose restore itself fails keeps its marker.
 func TestFailedRestoreItselfKeepsMarker(t *testing.T) {
-	f := newFixture(t)
+	f := newParallelFixture(t)
 	if err := os.WriteFile(f.aliasesPath(), []byte("old aliases\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	origLink, origRestore := linkBackup, restoreCopyFile
-	t.Cleanup(func() { linkBackup, restoreCopyFile = origLink, origRestore })
-	linkBackup = func(int, string, string) error { return errors.New("EXDEV (injected)") }
-	restoreCopyFile = func(string, *copiedFile) error { return errors.New("injected restore failure") }
-	failSecondWrite(t, nil)
+	f.sys.linkBackup = func(int, string, string) error { return errors.New("EXDEV (injected)") }
+	f.sys.restoreCopy = func(string, *copiedFile) error { return errors.New("injected restore failure") }
+	failSecondWrite(f.sys, nil)
 	if err := f.apply("root: paul\n"); err == nil || !strings.Contains(err.Error(), "ROLLBACK INCOMPLETE") {
 		t.Fatalf("apply error = %v, want an incomplete rollback", err)
 	}
@@ -498,27 +485,26 @@ func TestOpenLockDirsOrdersByDeviceAndInode(t *testing.T) {
 // apply signals its member once more; this is the certain case of
 // markerRemovalError, unlike the fsync-only failure above.
 func TestFailedMarkerUnlinkReSignalsOnce(t *testing.T) {
-	f := newFixture(t)
-	orig := unlinkAt
-	t.Cleanup(func() { unlinkAt = orig })
-	unlinkAt = func(int, string, int) error { return unix.EACCES }
+	f := newParallelFixture(t)
+	orig := f.sys.unlinkAt
+	f.sys.unlinkAt = func(int, string, int) error { return unix.EACCES }
 	if err := f.apply("root: paul\n"); err != nil {
 		t.Fatalf("a failed marker unlink must not fail the apply: %v", err)
 	}
 	if _, err := os.Stat(f.markerPath("aliases")); err != nil {
 		t.Fatalf("the marker must stay when its unlink fails: %v", err)
 	}
-	unlinkAt = orig
+	f.sys.unlinkAt = orig
 	if err := f.apply("root: paul\n"); err != nil {
 		t.Fatal(err)
 	}
-	if !outcomeOf(t, "aliases") {
+	if !f.outcomeOf("aliases") {
 		t.Fatal("the next apply must signal the member once more")
 	}
 	if err := f.apply("root: paul\n"); err != nil {
 		t.Fatal(err)
 	}
-	if outcomeOf(t, "aliases") {
+	if f.outcomeOf("aliases") {
 		t.Fatal("only once more")
 	}
 }
@@ -537,11 +523,9 @@ func TestMarkerRemovalErrorWording(t *testing.T) {
 // When a failed marker creation cannot even unlink the marker, the error says
 // so instead of hiding it.
 func TestFailedCreationUnlinkErrorIsReported(t *testing.T) {
-	f := newFixture(t)
-	origSync, origUnlink := syncDirFD, unlinkAt
-	t.Cleanup(func() { syncDirFD, unlinkAt = origSync, origUnlink })
-	syncDirFD = func(int, string) error { return errors.New("injected fsync failure") }
-	unlinkAt = func(int, string, int) error { return unix.EACCES }
+	f := newParallelFixture(t)
+	f.sys.syncDirFD = func(int, string) error { return errors.New("injected fsync failure") }
+	f.sys.unlinkAt = func(int, string, int) error { return unix.EACCES }
 	err := f.apply("root: paul\n")
 	if err == nil || !strings.Contains(err.Error(), "unlink the unused marker") || !strings.Contains(err.Error(), "injected fsync failure") {
 		t.Fatalf("apply error = %v, want both the fsync and the unlink failure", err)
@@ -550,33 +534,33 @@ func TestFailedCreationUnlinkErrorIsReported(t *testing.T) {
 }
 
 func TestUnsupportedDirectoryFsyncErrnosAreBestEffort(t *testing.T) {
-	orig := fsyncFD
-	t.Cleanup(func() { fsyncFD = orig })
+	t.Parallel()
+	sys := newSystem()
 	for _, errno := range []error{unix.EINVAL, unix.ENOTSUP, unix.EOPNOTSUPP} {
-		fsyncFD = func(int) error { return errno }
-		if err := fsyncDir(-1, "/x"); err != nil {
+		sys.fsyncFD = func(int) error { return errno }
+		if err := sys.fsyncDir(-1, "/x"); err != nil {
 			t.Errorf("fsyncDir with %v: %v, want best-effort nil", errno, err)
 		}
 	}
-	fsyncFD = func(int) error { return unix.EIO }
-	if err := fsyncDir(-1, "/x"); err == nil {
+	sys.fsyncFD = func(int) error { return unix.EIO }
+	if err := sys.fsyncDir(-1, "/x"); err == nil {
 		t.Error("fsyncDir with EIO must fail")
 	}
 }
 
 func TestUnsupportedFlockHasClearError(t *testing.T) {
-	orig := flockFD
-	t.Cleanup(func() { flockFD = orig })
+	t.Parallel()
+	sys := newSystem()
 	dir := t.TempDir()
 	for _, errno := range []error{unix.EBADF, unix.ENOTSUP, unix.EOPNOTSUPP} {
-		flockFD = func(int, int) error { return errno }
-		_, err := lockDirs([]string{dir})
+		sys.flock = func(int, int) error { return errno }
+		_, err := sys.lockDirs([]string{dir})
 		if err == nil || !strings.Contains(err.Error(), "does not support flock(2) on a directory") {
 			t.Errorf("flock %v: err = %v, want the unsupported-filesystem error", errno, err)
 		}
 	}
-	flockFD = func(int, int) error { return unix.ENOLCK }
-	_, err := lockDirs([]string{dir})
+	sys.flock = func(int, int) error { return unix.ENOLCK }
+	_, err := sys.lockDirs([]string{dir})
 	if err == nil || strings.Contains(err.Error(), "NFS") || !strings.Contains(err.Error(), "no locks available right now; retry later") {
 		t.Errorf("flock ENOLCK: err = %v, want a neutral transient error", err)
 	}

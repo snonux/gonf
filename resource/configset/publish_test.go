@@ -14,15 +14,14 @@ import (
 	opt "github.com/snonux/gonf/resource/options"
 )
 
-// failSecondWrite replaces writeMember so the second member write performs the
-// real write and then fails, like an atomic rename followed by a failed chown:
-// the worst case for rollback, because the failing member IS already live.
-func failSecondWrite(t *testing.T, afterFailure func()) {
-	t.Helper()
-	orig := writeMember
-	t.Cleanup(func() { writeMember = orig })
+// failSecondWrite replaces sys.writeMember so the second member write
+// performs the real write and then fails, like an atomic rename followed by a
+// failed chown: the worst case for rollback, because the failing member IS
+// already live.
+func failSecondWrite(sys *system, afterFailure func()) {
+	orig := sys.writeMember
 	n := 0
-	writeMember = func(target *file.Target, content []byte) error {
+	sys.writeMember = func(target *file.Target, content []byte) error {
 		n++
 		if err := orig(target, content); err != nil {
 			return err
@@ -38,7 +37,7 @@ func failSecondWrite(t *testing.T, afterFailure func()) {
 }
 
 func TestPartialPublicationIsRolledBack(t *testing.T) {
-	f := newFixture(t)
+	f := newParallelFixture(t)
 	if err := os.WriteFile(f.aliasesPath(), []byte("old aliases\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +45,7 @@ func TestPartialPublicationIsRolledBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	failSecondWrite(t, nil)
+	failSecondWrite(f.sys, nil)
 
 	err = f.apply("root: paul\n")
 	if err == nil || !strings.Contains(err.Error(), "rolled back 2 member(s)") {
@@ -63,32 +62,30 @@ func TestPartialPublicationIsRolledBack(t *testing.T) {
 	// smtpd.conf did not exist: rollback removed the published file again.
 	mustNotExist(t, f.confPath())
 	f.noStagingLeft()
-	if _, ok := memberOutcome("mail", "aliases"); ok {
+	if _, ok := f.outcomes.member("mail", "aliases"); ok {
 		t.Fatal("a rolled-back set must not record member outcomes")
 	}
 
 	// Replay after the failure converges forward.
-	writeMember = func(target *file.Target, content []byte) error { return target.Write(content) }
+	f.sys.writeMember = newSystem().writeMember
 	if err := f.apply("root: paul\n"); err != nil {
 		t.Fatalf("replay after rollback: %v", err)
 	}
-	if readFile(t, f.aliasesPath()) != "root: paul\n" || !outcomeOf(t, "aliases") {
+	if readFile(t, f.aliasesPath()) != "root: paul\n" || !f.outcomeOf("aliases") {
 		t.Fatal("replay must publish and report the set")
 	}
 }
 
 func TestRollbackUsesCopyWhenHardLinkIsRefused(t *testing.T) {
-	f := newFixture(t)
+	f := newParallelFixture(t)
 	if err := os.WriteFile(f.aliasesPath(), []byte("old aliases\n"), 0o604); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chmod(f.aliasesPath(), 0o604); err != nil {
 		t.Fatal(err)
 	}
-	origLink := linkBackup
-	t.Cleanup(func() { linkBackup = origLink })
-	linkBackup = func(int, string, string) error { return errors.New("EXDEV (injected)") }
-	failSecondWrite(t, nil)
+	f.sys.linkBackup = func(int, string, string) error { return errors.New("EXDEV (injected)") }
+	failSecondWrite(f.sys, nil)
 
 	if err := f.apply("root: paul\n"); err == nil || !strings.Contains(err.Error(), "rolled back") {
 		t.Fatalf("apply error = %v, want a completed rollback", err)
@@ -104,12 +101,12 @@ func TestRollbackUsesCopyWhenHardLinkIsRefused(t *testing.T) {
 }
 
 func TestFailedRollbackKeepsBackupsAndSaysSo(t *testing.T) {
-	f := newFixture(t)
+	f := newParallelFixture(t)
 	if err := os.WriteFile(f.aliasesPath(), []byte("old aliases\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// Destroy the aliases backup before rollback so restoring it must fail.
-	failSecondWrite(t, func() {
+	failSecondWrite(f.sys, func() {
 		matches, _ := filepath.Glob(filepath.Join(f.etc, "mail", stagePrefix+"mail+*", "backups", "0"))
 		for _, m := range matches {
 			_ = os.Remove(m)
@@ -167,14 +164,16 @@ func TestOverlappingPublicationsAreSerialized(t *testing.T) {
 }
 
 func TestLockDirsBlocksUntilReleased(t *testing.T) {
+	t.Parallel()
+	sys := newSystem()
 	dir := t.TempDir()
-	unlock, err := lockDirs([]string{dir})
+	unlock, err := sys.lockDirs([]string{dir})
 	if err != nil {
 		t.Fatal(err)
 	}
 	acquired := make(chan struct{})
 	go func() {
-		second, err := lockDirs([]string{dir})
+		second, err := sys.lockDirs([]string{dir})
 		if err == nil {
 			second()
 		}
@@ -194,7 +193,8 @@ func TestLockDirsBlocksUntilReleased(t *testing.T) {
 }
 
 func TestLockDirsMissingDirectoryFails(t *testing.T) {
-	if _, err := lockDirs([]string{filepath.Join(t.TempDir(), "missing")}); err == nil {
+	t.Parallel()
+	if _, err := newSystem().lockDirs([]string{filepath.Join(t.TempDir(), "missing")}); err == nil {
 		t.Fatal("locking a missing directory must fail")
 	}
 }
