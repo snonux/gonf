@@ -744,10 +744,12 @@ from outside the user namespace show up owned by the unmapped uid 65534
 (`nobody`) and are refused; point `TMPDIR` at a directory you own inside the
 container. If gonf refuses, create a private directory (`mkdir -p -m 700
 "$HOME/tmp"`) and export `TMPDIR=$HOME/tmp`. The directory is removed when `cli.CLI` returns
-(including after SIGINT/SIGTERM) or on a fail-fast exit, but only while it is
+(including after SIGINT/SIGTERM/SIGHUP) or on a fail-fast exit, but only while it is
 still the directory gonf created, so a planted replacement is never deleted. A
-crash, SIGKILL, an uncaught signal such as SIGHUP or SIGQUIT, or a program that
-pushes via `api` without `cli.CLI` leaves it for the OS temp cleaner.
+crash, SIGKILL, an uncaught signal such as SIGQUIT, a second SIGINT/SIGTERM
+that force-exits the outer gonf (see "Local apply cancellation" below), or a
+program that pushes via `api` without `cli.CLI` leaves it for the OS temp
+cleaner.
 
 `gonf -plan-version` prints the plan schema integer (distinct from
 `gonf -version`, which prints the release string). `gonf
@@ -825,7 +827,8 @@ Design decisions:
   the same fleet push too.
 - **Local apply cancellation.** `gonf <task>` and `gonf apply <plan.jsonl|->`
   (also the receiving end of a push and the elevated re-exec child) run under
-  the CLI's signal context (SIGINT, SIGTERM, SIGHUP; `api.RunContext`,
+  the CLI's signal context (SIGINT, SIGTERM, and SIGHUP unless it is ignored,
+  so `nohup gonf …` survives a logout; `api.RunContext`,
   `api.ApplyPlanContext`). `plan.ApplyWithContext` binds that context to
   `internal/exec` for the duration of the apply, so a signal stops the
   backend command in flight, no further op starts, and the command fails
@@ -835,7 +838,12 @@ Design decisions:
   finish its own clean shutdown; the same grace bounds how long a grandchild
   that still holds the command's output pipes can delay the return (the
   pipes are then closed, so such a daemon gets SIGPIPE on its next write).
-  A second signal force-exits gonf with the default action.
+  In the outer (interactive) gonf a second signal force-exits it with the
+  default action; that skips its deferred cleanup, so temp plan and build
+  dirs (and, if an in-process chunk was mid-op, a ConfigSet lock or staging
+  dir) are left behind. A `gonf apply` process (the elevated child, the push
+  destination) ignores every signal after the first, since sudo routinely
+  relays two, so its graceful stop and cleanup always complete.
 - **Validators and interrupts.** File and ConfigSet validators are not
   stopped by the signal; they stay limited by the command timeout
   (`-cmd-timeout`), and an interrupt during one prints a one-line notice that

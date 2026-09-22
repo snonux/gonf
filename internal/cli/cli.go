@@ -63,15 +63,6 @@ func CLI() int {
 	// calls and this call's mark is released on return, so a main that calls
 	// CLI() and then api.Apply itself cannot re-exec its own main as root.
 	defer clihost.MarkActive()()
-	// Signal-derived context (signalContext): SIGINT/SIGTERM/SIGHUP cancel
-	// in-flight work. It reaches local task runs (api.RunContext), `gonf
-	// apply` (api.ApplyPlanContext), which stop the backend command or
-	// elevated sudo/doas re-exec in flight (SIGTERM, SIGKILL after a grace),
-	// single-host push (PushToContext) and the cluster/fleet fan-out, which
-	// kill their local ssh on cancel (the remote gonf is not signalled; see
-	// cliApply).
-	ctx, stop := signalContext()
-	defer stop()
 	// Remove the private dir the gonf binary was cross-compiled into for
 	// remote hosts (if any push needed one) once this run is over.
 	defer func() { _ = cleanupRemoteBuilds() }()
@@ -84,22 +75,57 @@ func CLI() int {
 		eprintf("%v\n", err)
 		return 2
 	}
+	// Signal-derived context (signalContext): SIGINT/SIGTERM (and SIGHUP
+	// unless ignored) cancel in-flight work. It reaches local task runs
+	// (api.RunContext), `gonf apply` (api.ApplyPlanContext), which stop the
+	// backend command or elevated sudo/doas re-exec in flight (SIGTERM,
+	// SIGKILL after a grace), single-host push (PushToContext) and the
+	// cluster/fleet fan-out, which kill their local ssh on cancel (the
+	// remote gonf is not signalled; see cliApply). Installed after flag
+	// parsing only because whether a repeated signal force-exits depends on
+	// the subcommand (forceExitOnRepeat).
+	ctx, stop := signalContext(forceExitOnRepeat(options))
+	defer stop()
 	api.Activate(api.DetectFacts())
 	return runCLI(ctx, options)
 }
 
 // signalContext returns the CLI's signal context: canceled by the first
-// SIGINT, SIGTERM or SIGHUP. SIGHUP is included because the elevated child
-// under sudo's use_pty gets it when its pty goes away (sudo killed), and
-// would otherwise die mid-op instead of stopping between ops. After that
-// first signal the handler is removed again (context.AfterFunc(ctx, stop)),
-// so a second Ctrl-C or SIGTERM gets the default action and force-exits a
-// gonf that is still waiting for a graceful stop. The returned stop must be
-// called (deferred) once the CLI returns.
-func signalContext() (context.Context, context.CancelFunc) {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
-	context.AfterFunc(ctx, stop)
+// SIGINT, SIGTERM or SIGHUP.
+//
+// SIGHUP is included because the elevated child under sudo's use_pty gets
+// it when its pty goes away (sudo killed), and would otherwise die mid-op
+// instead of stopping between ops; but only when it is not ignored: Notify
+// un-ignores a signal, which would make `nohup gonf ...` stop on logout, so
+// signal.Ignored is checked first, before this process calls Notify for it.
+//
+// With forceOnRepeat the handler is removed after the first signal
+// (context.AfterFunc(ctx, stop)), so a second Ctrl-C or SIGTERM gets the
+// default action and force-exits a gonf that is still waiting for a
+// graceful stop, skipping deferred cleanup. Without it every later signal
+// is swallowed, so the graceful stop and its cleanup always complete. The
+// returned stop must be called (deferred) once the CLI returns.
+func signalContext(forceOnRepeat bool) (context.Context, context.CancelFunc) {
+	sigs := []os.Signal{os.Interrupt, syscall.SIGTERM}
+	if !signal.Ignored(syscall.SIGHUP) {
+		sigs = append(sigs, syscall.SIGHUP)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), sigs...)
+	if forceOnRepeat {
+		context.AfterFunc(ctx, stop)
+	}
 	return ctx, stop
+}
+
+// forceExitOnRepeat reports whether a second signal may force-exit this
+// invocation: yes for the interactive outer process, no for `gonf apply`.
+// That covers the elevated child (sudo relays both the terminal's SIGINT and
+// the outer gonf's SIGTERM to it, so it routinely gets two signals) and the
+// destination side of a push (`gonf apply -`). Killing either mid-stop
+// would skip deferred cleanup: ConfigSet lock release, staging and run-dir
+// removal.
+func forceExitOnRepeat(options cliOptions) bool {
+	return len(options.args) == 0 || options.args[0] != "apply"
 }
 
 func parseCLIFlags(program string, args []string) (cliOptions, error) {
