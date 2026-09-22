@@ -69,8 +69,9 @@ const (
 //     a validator run through sudo/doas by a non-root gonf) cannot bound it:
 //     Wait then lasts until it exits, though exec closes the output pipe
 //     WaitDelay after the failed kill, so its next write may end it with
-//     SIGPIPE ("signal: broken pipe"). Finding the descendants may delay
-//     the kill by up to freezeBudget. Descendants are killed on timeout
+//     SIGPIPE ("signal: broken pipe"). Finding the descendants and
+//     re-checking them before the kill may delay it by up to freezeBudget
+//     plus verifyBudget. Descendants are killed on timeout
 //     only; one that survives (it escaped killTree, or the validator exited
 //     on its own) and still holds the output pipe is cut off after
 //     WaitDelay, after which RunIn returns without waiting for it. The
