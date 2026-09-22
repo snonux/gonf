@@ -116,10 +116,12 @@ func (s *lockSetup) acquire(loc lockLocation, name string, timeout time.Duration
 
 // openParent opens and verifies the directory holding the lock directory.
 // With create it may create that one level (~/.cache) inside its existing
-// parent (the home directory); without, a missing parent (/var/run) is an
-// error. An existing parent may be reached through a symlink (/var/run ->
-// /run, a relocated ~/.cache): what matters is the directory it resolves to,
-// which verifyLockParent checks through the descriptor.
+// parent (the home directory); without, the parent is root's system
+// directory (/var/run, or /var/db on macOS), and a missing one is an error.
+// An existing parent may be reached through a symlink (/var/run -> /run,
+// macOS /var -> /private/var, a relocated ~/.cache): what matters is the
+// directory it resolves to, which verifyLockParent checks through the
+// descriptor.
 func (s *lockSetup) openParent(parent string, create bool) (int, error) {
 	if !create {
 		fd, err := unix.Open(parent, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
@@ -127,7 +129,7 @@ func (s *lockSetup) openParent(parent string, create bool) (int, error) {
 			return -1, fmt.Errorf("open crontab lock parent %s: %w", parent, err)
 		}
 		s.track(fd)
-		return fd, verifyLockParent(fd, parent)
+		return fd, verifyLockParent(fd, parent, true)
 	}
 	grandparent := filepath.Dir(parent)
 	gpFD, err := unix.Open(grandparent, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
@@ -139,18 +141,23 @@ func (s *lockSetup) openParent(parent string, create bool) (int, error) {
 	if err != nil {
 		return -1, err
 	}
-	return fd, verifyLockParent(fd, parent)
+	return fd, verifyLockParent(fd, parent, false)
 }
 
 // verifyLockParent checks, through its descriptor, the directory holding
-// the lock directory; see checkLockParent for the rule.
-func verifyLockParent(fd int, path string) error {
+// the lock directory; see checkLockParent for the rule. system marks root's
+// system parent, whose refusal checkSystemLockParent words.
+func verifyLockParent(fd int, path string, system bool) error {
 	var stat unix.Stat_t
 	if err := unix.Fstat(fd, &stat); err != nil {
 		return fmt.Errorf("inspect crontab lock parent %s: %w", path, err)
 	}
+	attrs := lockParentAttrs{uid: stat.Uid, gid: stat.Gid, mode: uint32(stat.Mode)}
 	ids := lockIDs{euid: uint32(unix.Geteuid()), egid: uint32(unix.Getegid())}
-	return checkLockParent(path, lockParentAttrs{uid: stat.Uid, gid: stat.Gid, mode: uint32(stat.Mode)}, ids)
+	if system {
+		return checkSystemLockParent(path, attrs, ids)
+	}
+	return checkLockParent(path, attrs, ids)
 }
 
 // lockParentAttrs are the fstat fields checkLockParent looks at.
@@ -172,25 +179,56 @@ func (ids lockIDs) isPrivateGroup(gid uint32) bool {
 }
 
 // checkLockParent requires a directory owned by the applying account (root
-// for /var/run; a ~/.cache owned by root or anyone else is refused, as a
-// non-root apply could not create its lock there anyway). It must not be
+// for its system parent; a ~/.cache owned by root or anyone else is refused,
+// as a non-root apply could not create its lock there anyway). It must not be
 // world-writable, and group write is accepted only for the account's private
 // group: Go and umask-002 systems create ~/.cache as 0775 that way. Only then
 // can no other account create, rename or replace the lock directory inside
 // it, which rules out preseeding it or swapping it for a symlink. Shared
-// directories such as /tmp are therefore refused outright.
+// directories such as /tmp are therefore refused outright. The error ends
+// with the fix for the account's own directory; root's system parent gets
+// checkSystemLockParent's wording instead.
 func checkLockParent(path string, a lockParentAttrs, ids lockIDs) error {
+	fault, remedy := lockParentFault(path, a, ids)
+	if fault == "" {
+		return nil
+	}
+	if remedy == "" {
+		return errors.New(fault)
+	}
+	return fmt.Errorf("%s; %s", fault, remedy)
+}
+
+// checkSystemLockParent applies checkLockParent's rule, unrelaxed, to root's
+// system parent (/var/run, or /var/db on macOS), but never advises a chown or
+// chmod: other software relies on that directory's owner and mode, so a
+// refusal means Gonf picked the wrong directory for this platform (as it did
+// with macOS's root:daemon 0775 /var/run), not that the system should be
+// changed to suit Gonf.
+func checkSystemLockParent(path string, a lockParentAttrs, ids lockIDs) error {
+	fault, _ := lockParentFault(path, a, ids)
+	if fault == "" {
+		return nil
+	}
+	return fmt.Errorf("%s; it is a system directory, so do not change it to suit Gonf: report the OS and this directory's owner, group and mode (uid %d, gid %d, mode %#o) as a Gonf bug, since Gonf needs a root-only lock directory there", fault, a.uid, a.gid, a.mode&0o7777)
+}
+
+// lockParentFault states which part of the parent rule a violates ("" when
+// none) and the remedy for an account's own directory ("" when there is no
+// simple one). It is the one place the rule lives, shared by checkLockParent
+// and checkSystemLockParent.
+func lockParentFault(path string, a lockParentAttrs, ids lockIDs) (fault, remedy string) {
 	switch {
 	case a.mode&unix.S_IFMT != unix.S_IFDIR:
-		return fmt.Errorf("crontab lock parent %s is not a directory", path)
+		return fmt.Sprintf("crontab lock parent %s is not a directory", path), ""
 	case a.uid != ids.euid:
-		return fmt.Errorf("crontab lock parent %s is owned by uid %d, not by the applying uid %d, so Gonf cannot keep its lock there; chown it back to uid %d", path, a.uid, ids.euid, ids.euid)
+		return fmt.Sprintf("crontab lock parent %s is owned by uid %d, not by the applying uid %d, so Gonf cannot keep its lock there", path, a.uid, ids.euid), fmt.Sprintf("chown it back to uid %d", ids.euid)
 	case a.mode&0o002 != 0:
-		return fmt.Errorf("crontab lock parent %s is world-writable (mode %#o), so other accounts could preseed the lock; chmod o-w it", path, a.mode&0o7777)
+		return fmt.Sprintf("crontab lock parent %s is world-writable (mode %#o), so other accounts could preseed the lock", path, a.mode&0o7777), "chmod o-w it"
 	case a.mode&0o020 != 0 && !ids.isPrivateGroup(a.gid):
-		return fmt.Errorf("crontab lock parent %s is writable by group %d, which is not your private group (mode %#o); chmod g-w it", path, a.gid, a.mode&0o7777)
+		return fmt.Sprintf("crontab lock parent %s is writable by group %d, which is not your private group (mode %#o)", path, a.gid, a.mode&0o7777), "chmod g-w it"
 	}
-	return nil
+	return "", ""
 }
 
 // openLockDir opens (creating if needed) the lock directory below the

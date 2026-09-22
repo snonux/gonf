@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,7 +16,7 @@ import (
 )
 
 // TestMain keeps every real (flock) lock taken by this package's tests away
-// from /var/run and the real home directory.
+// from root's system parent (/var/run, /var/db) and the real home directory.
 //
 // In the helper process of TestCrontabLockSerializesSeparateProcesses the
 // parent test hands over its lock directory and host name (see
@@ -263,7 +264,7 @@ func TestCrontabLockCreatesMissingCacheDirUmaskProof(t *testing.T) {
 	}
 }
 
-// TestCrontabLockNeverCreatesSystemParent: root's parent (/var/run) must
+// TestCrontabLockNeverCreatesSystemParent: root's system parent must
 // exist; a location without createParent reports a missing parent instead
 // of creating it.
 func TestCrontabLockNeverCreatesSystemParent(t *testing.T) {
@@ -371,7 +372,7 @@ func TestCrontabLockReportsNoLocksWithoutRollback(t *testing.T) {
 	assertLockObject(t, filepath.Join(dir, lockFileName(t, "target")), unix.S_IFREG, 0o600)
 }
 
-// TestCrontabLockRootLockIsHostIndependent: root's /var/run lock never
+// TestCrontabLockRootLockIsHostIndependent: root's system lock never
 // includes the host name (a run may rename the host), so the host lookup is
 // not even consulted; ~/.cache locks are host-scoped.
 func TestCrontabLockRootLockIsHostIndependent(t *testing.T) {
@@ -454,7 +455,7 @@ func TestCheckLockParentRule(t *testing.T) {
 		{"world-writable", lockParentAttrs{1001, 1001, dir | 0o777}, user, "world-writable"},
 		{"root-owned ~/.cache", lockParentAttrs{0, 0, dir | 0o755}, user, "chown it back to uid 1001"},
 		{"foreign owner", lockParentAttrs{1002, 1002, dir | 0o700}, user, "owned by uid 1002"},
-		{"root /var/run", lockParentAttrs{0, 0, dir | 0o755}, lockIDs{}, ""},
+		{"root system parent 0755", lockParentAttrs{0, 0, dir | 0o755}, lockIDs{}, ""},
 		{"root never trusts group 0", lockParentAttrs{0, 0, dir | 0o775}, lockIDs{}, "not your private group"},
 		{"not a directory", lockParentAttrs{1001, 1001, unix.S_IFREG | 0o700}, user, "not a directory"},
 	}
@@ -520,16 +521,16 @@ func sharedGroup(t *testing.T, private uint32) int {
 
 // TestCrontabLockRefusesForeignOwnedParent: a parent owned by someone else
 // (here "/", owned by root, for a non-root run) is refused before anything
-// is created in it, with the chown remedy.
+// is created in it. Without createParent it is verified as a system parent,
+// so the refusal carries no chown remedy (the ~/.cache chown advice is
+// pinned by TestCheckLockParentRule and lock_parent_test.go).
 func TestCrontabLockRefusesForeignOwnedParent(t *testing.T) {
 	if euid() == 0 {
 		t.Skip("needs a non-root euid")
 	}
 	dir := "/gonf-crontab-test-must-not-exist"
 	_, err := lockCrontabIn(lockLocation{dir: dir}, euid(), "target", time.Second)
-	if err == nil || !strings.Contains(err.Error(), "chown it back") {
-		t.Fatalf("root-owned parent: err=%v", err)
-	}
+	assertSystemParentRefusal(t, err, "/", "owned by uid 0")
 	assertAbsent(t, dir)
 }
 
@@ -614,15 +615,16 @@ func TestCrontabLockRejectsOtherAccountEarly(t *testing.T) {
 }
 
 // TestCrontabLockLocationIsPrivateToApplyingAccount pins the namespace
-// choice: root uses /var/run (never created), other accounts their passwd
-// home (~/.cache may be created), never a shared temporary directory.
+// choice: root uses its system parent (never created; see
+// TestPrivilegedCrontabLockDirPerPlatform), other accounts their passwd home
+// (~/.cache may be created), never a shared temporary directory.
 func TestCrontabLockLocationIsPrivateToApplyingAccount(t *testing.T) {
 	saved := crontabLockDirOverride
 	crontabLockDirOverride = ""
 	t.Cleanup(func() { crontabLockDirOverride = saved })
 
 	rootLoc, err := crontabLockLocation(0)
-	if err != nil || rootLoc != (lockLocation{dir: "/var/run/gonf-crontab"}) {
+	if err != nil || rootLoc != (lockLocation{dir: privilegedCrontabLockDir(runtime.GOOS)}) {
 		t.Fatalf("root lock location = %+v, %v", rootLoc, err)
 	}
 	current, err := user.Current()

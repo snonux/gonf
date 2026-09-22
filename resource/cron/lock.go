@@ -15,20 +15,29 @@ package cron
 //
 // The lock now lives in a private namespace of the APPLYING effective user:
 //
-//   - root: /var/run/gonf-crontab. /var/run is root-owned mode 0755 on Linux
-//     (a /run symlink), FreeBSD, OpenBSD and NetBSD and is emptied at boot.
-//     Gonf never creates it: a missing /var/run is reported, not invented.
+//   - root: /var/run/gonf-crontab, except /var/db/gonf-crontab on macOS
+//     (see privilegedCrontabLockDir). /var/run is root-owned mode 0755 on
+//     Linux (a /run symlink), FreeBSD, OpenBSD and NetBSD and is emptied at
+//     boot. On macOS /var/run (/private/var/run) is root:daemon mode 0775,
+//     which the parent rule below refuses for root, so root's lock lives in
+//     /var/db (/private/var/db, root:wheel mode 0755) there instead. /var/db
+//     is not emptied at boot; a stale lock file is harmless because only a
+//     live flock excludes. Gonf never creates either parent: a missing one is
+//     reported, not invented.
 //   - any other account: <passwd home>/.cache/gonf-crontab. The home comes
 //     from the passwd database, not $HOME, so every session of the account
 //     agrees on one path. A missing ~/.cache is created with mode 0700 (the
 //     XDG default) and kept.
 //
 // The directory holding gonf-crontab must belong to the applying account
-// (root for /var/run; a root-owned ~/.cache is refused because a non-root
-// apply could never create its lock there). It must not be world-writable,
-// and it may be group-writable only through the account's user-private group
-// (gid == egid == euid != 0, gonf's shared rule in internal/dirperm), since
-// Go and umask-002 systems create ~/.cache as 0775 that way. That is what
+// (root for /var/run or /var/db; a root-owned ~/.cache is refused because a
+// non-root apply could never create its lock there). It must not be
+// world-writable, and it may be group-writable only through the account's
+// user-private group (gid == egid == euid != 0, gonf's shared rule in
+// internal/dirperm), since Go and umask-002 systems create ~/.cache as 0775
+// that way. Root's system parent follows the same rule unrelaxed, and a
+// refusal there never advises changing the system directory (see
+// checkSystemLockParent in lock_setup.go). That is what
 // makes the lock directory impossible for another account to preseed or
 // swap: only the applying account (and root) can create, rename or replace
 // entries in it. lock_setup.go creates and verifies every object through
@@ -52,7 +61,7 @@ package cron
 // is read once per process and cached, because a run may rename the host
 // (frontends_myname does, as root). Remaining edge: a non-root self apply
 // started before a rename and one started after it use different lock
-// files until both finish. Root's /var/run lock is host-local by nature and
+// files until both finish. Root's system-directory lock is host-local and
 // has no host part, so a rename never splits root's applies. A filesystem
 // that cannot flock (EOPNOTSUPP/ENOTSUP) or has run out of locks (ENOLCK,
 // e.g. an NFS server without lockd, or a transient lock-table shortage)
@@ -65,6 +74,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -77,17 +87,30 @@ const (
 	crontabLockTimeout = 5 * time.Second
 	crontabLockRetry   = 10 * time.Millisecond
 
-	// privilegedCrontabLockDir is root's lock namespace (see the file comment).
-	privilegedCrontabLockDir = "/var/run/gonf-crontab"
 	// userCrontabLockSubdir is an unprivileged account's lock namespace,
 	// relative to its passwd home directory.
 	userCrontabLockSubdir = ".cache/gonf-crontab"
 )
 
+// privilegedCrontabLockDir is root's lock namespace on goos (see the file
+// comment). It takes goos as a parameter, rather than reading runtime.GOOS,
+// so the darwin choice is testable on every build host.
+//
+// macOS gets /var/db instead of relaxing the parent rule for its root:daemon
+// 0775 /var/run: accepting that group would let any process running with gid
+// daemon (group members or setgid programs) preseed or swap root's lock
+// directory, which is the attack the rule exists to stop.
+func privilegedCrontabLockDir(goos string) string {
+	if goos == "darwin" {
+		return "/var/db/gonf-crontab"
+	}
+	return "/var/run/gonf-crontab"
+}
+
 // Seams swapped by tests only: crontabLockDirOverride replaces the lock
-// directory (so tests never touch /var/run or the real home), lockHostName
-// supplies the (per-process cached) host part of the lock file name,
-// osHostname is shortHostName's source, and flock is flock(2).
+// directory (so tests never touch /var/run, /var/db or the real home),
+// lockHostName supplies the (per-process cached) host part of the lock file
+// name, osHostname is shortHostName's source, and flock is flock(2).
 //
 // Tests must never fill the process-wide lockHostName cache through a faked
 // osHostname: the cache outlives the test, so every later lock in the test
@@ -109,9 +132,11 @@ func newLockHostName() func() (string, error) {
 
 // lockLocation is where one acquisition takes its lock: dir is the lock
 // directory; createParent says whether its parent may be created (one level
-// only) when missing (/var/run is never created, ~/.cache may be); and
+// only) when missing (root's system parent, /var/run or /var/db, is never
+// created, ~/.cache may be; a location that may not create its parent is
+// also one whose parent is a system directory, see openParent); and
 // hostScoped puts the host name into the lock file name (for homes that may
-// be NFS-shared, not for /var/run).
+// be NFS-shared, not for root's host-local system directory).
 type lockLocation struct {
 	dir          string
 	createParent bool
@@ -175,7 +200,7 @@ func crontabLockLocation(euid uint32) (lockLocation, error) {
 		return lockLocation{dir: crontabLockDirOverride, createParent: true, hostScoped: true}, nil
 	}
 	if euid == 0 {
-		return lockLocation{dir: privilegedCrontabLockDir}, nil
+		return lockLocation{dir: privilegedCrontabLockDir(runtime.GOOS)}, nil
 	}
 	account, err := user.LookupId(strconv.FormatUint(uint64(euid), 10))
 	if err != nil {
