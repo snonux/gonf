@@ -31,6 +31,17 @@ const DefaultChunkTimeout = 10 * time.Minute
 // elevatedApplyRunner runs a privileged local apply chunk. Overridable in tests.
 var elevatedApplyRunner = defaultElevatedApply
 
+// processEUID is os.Geteuid; a variable so tests can pin the mode-none
+// refusal (and the in-process root branch) whatever user runs them.
+var processEUID = os.Geteuid
+
+// errNoCLIHost refuses the elevated re-exec in a process that does not run
+// gonf's CLI (see internal/clihost): re-executing such a program as
+// `<binary> apply <chunk>` would run its own main again as root.
+var errNoCLIHost = errors.New("privileged apply re-executes this binary as `<binary> apply <chunk>`, " +
+	"which only works in a program whose main calls cli.CLI(); run the tasks through the gonf CLI " +
+	"(e.g. `gonf <task>`), or drop WithElevate/Privileged()")
+
 // chunkLabel names chunk i in a chunk's apply error.
 type chunkLabel func(i int, ch plan.Chunk) string
 
@@ -110,17 +121,6 @@ func defaultElevatedApply(ctx context.Context, mode privilege.Mode, ops []plan.O
 	}
 	return err
 }
-
-// processEUID is os.Geteuid; a variable so tests can pin the mode-none
-// refusal (and the in-process root branch) whatever user runs them.
-var processEUID = os.Geteuid
-
-// errNoCLIHost refuses the elevated re-exec in a process that does not run
-// gonf's CLI (see internal/clihost): re-executing such a program as
-// `<binary> apply <chunk>` would run its own main again as root.
-var errNoCLIHost = errors.New("privileged apply re-executes this binary as `<binary> apply <chunk>`, " +
-	"which only works in a program whose main calls cli.CLI(); run the tasks through the gonf CLI " +
-	"(e.g. `gonf <task>`), or drop WithElevate/Privileged()")
 
 // preflightElevation refuses, before ANY chunk is applied, a plan whose
 // elevated chunks could not run: with privilege mode none a non-root process
