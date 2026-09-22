@@ -1041,13 +1041,13 @@ those rules. It then splits the ops with `plan.SplitPrivilegeChunks` and
 applies the chunks in order, as `api.ApplyChunks` does, under the
 process-wide privilege mode (`api.SetPrivilege`, the CLI `-privilege` flag).
 A chunk that fails is named by its class and resources, e.g.
-`Apply: elevated resources Command[e]: ...`, not by a chunk index. An elevated chunk is re-executed as
-`<this binary> apply <chunk>` through sudo/doas, or runs in-process when the
-mode is `none` and the process is already root. Before this, an elevated op
-under `api.Apply` silently ran in-process as the calling user. A plan with
-no elevated op is not sorted: it is one unprivileged chunk and applies
-exactly as before, with a single `api.ApplyPlan` call and the same error
-wording.
+`Apply: elevated resources Command[e]: ...`, not by a chunk index. An
+elevated chunk is re-executed as `<this binary> apply <chunk>` through
+sudo/doas, or runs in-process when the mode is `none` and the process is
+already root. Before this, an elevated op under `api.Apply` silently ran
+in-process as the calling user. A plan with no elevated op is not sorted:
+it is one unprivileged chunk and applies exactly as before, with a single
+`api.ApplyPlan` call and the same error wording.
 
 With an elevated op, Apply refuses the plan before ANY chunk applies (so
 nothing runs as root, and no unprivileged chunk mutates first) when:

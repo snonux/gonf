@@ -217,6 +217,55 @@ func TestOrderForPrivilegeSplitLargeRefusedPlanIsFast(t *testing.T) {
 	}
 }
 
+// watchChainPlan is the round-7 review's adversarial shape: a chain of n
+// unprivileged ops, u(i) watching u(i+1) (all kept), and k pairs where the
+// elevated e(d) needs u(d) and w(d) needs e(d) while watching u(n-1-d). Each
+// w(d) watch fits alone but not with the chain, and its minimal conflict is
+// the whole chain segment between u(d) and u(n-1-d).
+func watchChainPlan(n, k int) []plan.Op {
+	ops := []plan.Op{orderHdr}
+	u := func(i int) string { return fmt.Sprint("u", i) }
+	for i := range n {
+		var watch []string
+		if i+1 < n {
+			watch = []string{u(i + 1)}
+		}
+		op := orderOp(u(i), false)
+		op.IfChanged, op.Watch = len(watch) > 0, watch
+		ops = append(ops, op)
+	}
+	for d := range k {
+		e := fmt.Sprint("e", d)
+		ops = append(ops, orderOp(e, true, u(d)), watchOp(fmt.Sprint("w", d), false, []string{u(n - 1 - d)}, e))
+	}
+	return ops
+}
+
+// TestOrderForPrivilegeSplitLongWatchChainIsFast bounds the minimal conflict
+// search on long watch chains: 5000 chain ops with 50 dropped watches took
+// 5m32s when every watch was a separate deletion trial rebuilding the watch
+// graph. A chain of plain watches is one run for shrinkConflict, so this now
+// takes milliseconds. The refusal still names the chain segment.
+func TestOrderForPrivilegeSplitLongWatchChainIsFast(t *testing.T) {
+	ops := watchChainPlan(5000, 50)
+	bound := time.Second
+	if raceEnabled {
+		bound *= 10
+	}
+	start := time.Now()
+	_, conflicts, err := orderForPrivilegeSplit(ops)
+	if elapsed := time.Since(start); elapsed > bound {
+		t.Fatalf("orderForPrivilegeSplit took %v for a 5000-op watch chain with 50 dropped watches, want < %v", elapsed, bound)
+	}
+	if err != nil || len(conflicts) != 50 {
+		t.Fatalf("orderForPrivilegeSplit() = %v, %d together-conflicts; want 50", err, len(conflicts))
+	}
+	// w0 watches u4999 while e0 needs u0: every chain watch in between.
+	if got := len(conflicts[watchKey{"w0", "u4999"}]); got != 4999 {
+		t.Fatalf("conflict of w0 lists %d chain watches, want all 4999", got)
+	}
+}
+
 func BenchmarkOrderForPrivilegeSplitRefusedWatches(b *testing.B) {
 	ops := refusedWatchPlan(10000, 3000)
 	for b.Loop() {
