@@ -63,7 +63,8 @@ const (
 //     a validator run through sudo/doas by a non-root gonf) cannot bound it:
 //     Wait then lasts until it exits, though exec closes the output pipe
 //     WaitDelay after the failed kill, so its next write may end it with
-//     SIGPIPE ("signal: broken pipe"). Descendants are killed on timeout
+//     SIGPIPE ("signal: broken pipe"). Finding the descendants may delay
+//     the kill by up to freezeBudget. Descendants are killed on timeout
 //     only; one that survives (it escaped killTree, or the validator exited
 //     on its own) and still holds the output pipe is cut off after
 //     WaitDelay, after which RunIn returns without waiting for it. The
@@ -94,9 +95,10 @@ func RunIn(dir, bin string, args []string) error {
 	// coincide, Cancel may still run just after the reap: killTree then
 	// returns os.ErrProcessDone and nothing is recorded. It may also run
 	// just before the reap, on a validator that already exited (a zombie):
-	// killTree then kills the descendants still in its tree, the kill of the
-	// zombie itself succeeds without effect and the flag is set anyway. The
-	// flag therefore only says "we signalled it"; validatorTimedOut decides.
+	// its children were reparented when it exited, so killTree finds no
+	// descendants, the kill of the zombie itself succeeds without effect and
+	// the flag is set anyway. The flag therefore only says "we signalled
+	// it"; validatorTimedOut decides.
 	var killedByTimeout atomic.Bool
 	cmd.Cancel = func() error {
 		return killForTimeout(func() error { return killTree(cmd.Process) }, &killedByTimeout)

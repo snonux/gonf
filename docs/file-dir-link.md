@@ -69,11 +69,12 @@ validator is killed (`SIGKILL`) together with the processes it started, so a
 wrapper script dies with the hung checker it runs, and validation fails with
 `... failed: timed out after 5m0s: context deadline exceeded`. gonf finds
 those processes by walking the process tree (`/proc` on Linux, `ps`
-elsewhere) after stopping them, so a process that was already detached from
-the validator (e.g. by a double fork) is not killed; if the process table
-cannot be read, only the validator itself is. Processes started by a
-validator that exits on its own before the timeout keep running. If gonf is not allowed to kill it (`EPERM`, e.g. a non-root gonf
-running the validator through `sudo`/`doas`), the timeout cannot bound it and
+elsewhere) after stopping them, spending at most 2 seconds on the search. A
+process that was already detached from the validator (e.g. by a double fork)
+or not found within those 2 seconds is not killed; if the process table cannot
+be read, only the validator itself is. Processes started by a validator that
+exits on its own before the timeout keep running. If gonf is not allowed to
+kill the validator (`EPERM`, e.g. a non-root gonf running the validator through `sudo`/`doas`), the timeout cannot bound it and
 gonf waits until it exits; 2 seconds after the failed kill gonf also stops
 reading its output, so its next write may kill it with `SIGPIPE`, reported as
 `... failed: signal: broken pipe`. If a process it started still holds the

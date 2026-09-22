@@ -23,6 +23,14 @@ import (
 // end to end through RunIn with real processes, and the process-tree pieces
 // (table readers, tree walk, freeze rounds) in isolation.
 
+// trackedPid is a pid a validator script recorded; gone is set once the
+// test confirmed the process no longer exists, so cleanup never signals a
+// pid that may since have been recycled.
+type trackedPid struct {
+	pid  int
+	gone bool
+}
+
 // setTimeout sets the process-wide command timeout for one test.
 func setTimeout(t *testing.T, d time.Duration) {
 	t.Helper()
@@ -32,8 +40,9 @@ func setTimeout(t *testing.T, d time.Duration) {
 }
 
 // readPid reads the pid a validator script wrote to path and registers a
-// cleanup that SIGKILLs it, so a regression never leaves the process behind.
-func readPid(t *testing.T, path string) int {
+// cleanup that SIGKILLs it unless waitGone confirmed it gone, so a
+// regression never leaves the process behind.
+func readPid(t *testing.T, path string) *trackedPid {
 	t.Helper()
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -43,22 +52,29 @@ func readPid(t *testing.T, path string) int {
 	if err != nil || pid <= 0 {
 		t.Fatalf("bad pid %q: %v", raw, err)
 	}
-	t.Cleanup(func() { _ = unix.Kill(pid, unix.SIGKILL) })
-	return pid
+	tracked := &trackedPid{pid: pid}
+	t.Cleanup(func() {
+		if !tracked.gone {
+			_ = unix.Kill(pid, unix.SIGKILL)
+		}
+	})
+	return tracked
 }
 
-// waitGone polls until pid no longer exists (the killed process was reaped
-// by whichever process it was reparented to) or fails after 10 seconds.
-func waitGone(t *testing.T, pid int) {
+// waitGone polls until the process no longer exists (the killed process
+// was reaped by whichever process it was reparented to), marking it gone,
+// or fails after 10 seconds.
+func waitGone(t *testing.T, p *trackedPid) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if err := unix.Kill(pid, 0); errors.Is(err, unix.ESRCH) {
+		if err := unix.Kill(p.pid, 0); errors.Is(err, unix.ESRCH) {
+			p.gone = true
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("validator descendant %d still exists after the timeout", pid)
+	t.Fatalf("validator descendant %d still exists after the timeout", p.pid)
 }
 
 // A timed-out wrapper is killed together with its child and grandchild (the
@@ -100,7 +116,7 @@ exit 0`
 	if err := RunIn("", "sh", []string{"-c", script}); err != nil {
 		t.Fatalf("err = %v, want success", err)
 	}
-	if err := unix.Kill(readPid(t, pidFile), 0); err != nil {
+	if err := unix.Kill(readPid(t, pidFile).pid, 0); err != nil {
 		t.Fatalf("background child of a finished validator was killed: %v", err)
 	}
 }
@@ -182,7 +198,7 @@ func TestFreezeDescendants(t *testing.T) {
 		{10: 1, 11: 10, 12: 11},
 	}
 	call := 0
-	table := func() (map[int]int, error) {
+	table := func(context.Context) (map[int]int, error) {
 		if call == len(tables) {
 			return nil, errors.New("unexpected extra round")
 		}
@@ -190,16 +206,44 @@ func TestFreezeDescendants(t *testing.T) {
 		return tables[call-1], nil
 	}
 	var stops []int
-	got := freezeDescendants(10, table, func(pid int) { stops = append(stops, pid) })
+	got := freezeDescendants(context.Background(), 10, table, func(pid int) { stops = append(stops, pid) })
 	if want := []int{11, 12}; !reflect.DeepEqual(got, want) || !reflect.DeepEqual(stops, want) {
 		t.Fatalf("stopped %v (calls %v), want %v", got, stops, want)
 	}
 	if call != 3 {
 		t.Fatalf("read the table %d times, want 3 (until nothing new)", call)
 	}
-	failing := func() (map[int]int, error) { return nil, errors.New("no table") }
-	if got := freezeDescendants(10, failing, func(int) { t.Fatal("stopped without a table") }); got != nil {
+	failing := func(context.Context) (map[int]int, error) { return nil, errors.New("no table") }
+	if got := freezeDescendants(context.Background(), 10, failing, func(int) { t.Fatal("stopped without a table") }); got != nil {
 		t.Fatalf("stopped %v without a table, want nothing", got)
+	}
+}
+
+// One deadline bounds the whole search: a table reader that hangs until ctx
+// ends (like a stuck ps) stops it at the deadline, keeping what earlier
+// rounds found, and no round starts once ctx has ended.
+func TestFreezeDescendantsHonoursBudget(t *testing.T) {
+	calls := 0
+	slow := func(ctx context.Context) (map[int]int, error) {
+		calls++
+		if calls == 1 {
+			return map[int]int{11: 10}, nil
+		}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	got := freezeDescendants(ctx, 10, slow, func(int) {})
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("search took %v, want it cut at the 100ms deadline", elapsed)
+	}
+	if want := []int{11}; !reflect.DeepEqual(got, want) || calls != 2 {
+		t.Fatalf("stopped %v after %d reads, want %v after 2", got, calls, want)
+	}
+	if got := freezeDescendants(ctx, 10, slow, func(int) {}); got != nil || calls != 2 {
+		t.Fatalf("expired search stopped %v after %d reads, want nothing and no read", got, calls)
 	}
 }
 
@@ -240,15 +284,15 @@ func TestParsePsTable(t *testing.T) {
 // Both real table readers see this test process with its real parent: /proc
 // on Linux, ps everywhere it is installed.
 func TestProcessTablesSeeThisProcess(t *testing.T) {
-	readers := map[string]func() (map[int]int, error){"processTable": processTable}
+	readers := map[string]func(context.Context) (map[int]int, error){"processTable": processTable}
 	if runtime.GOOS == "linux" {
-		readers["procTable"] = func() (map[int]int, error) { return procTable("/proc") }
+		readers["procTable"] = func(context.Context) (map[int]int, error) { return procTable("/proc") }
 	}
 	if _, err := exec.LookPath("ps"); err == nil {
 		readers["psTable"] = psTable
 	}
 	for name, read := range readers {
-		parents, err := read()
+		parents, err := read(context.Background())
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}

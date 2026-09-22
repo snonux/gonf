@@ -24,6 +24,15 @@ import (
 // and a bounded, sanitized copy of the combined stdout/stderr is appended to
 // the error. internal/validator/proctree_test.go covers the descendant kill.
 
+// lingeringChild is the background child a lingeringChildScript validator
+// starts: pidFile is where the script records its pid, and gone is set once
+// assertGone confirmed the process no longer exists, so cleanup never
+// signals a pid that may since have been recycled.
+type lingeringChild struct {
+	pidFile string
+	gone    bool
+}
+
 // setValidationCommandTimeout sets the process-wide command timeout the
 // validator inherits (the knob behind api.SetCommandTimeout and -cmd-timeout)
 // for one test and restores the previous value afterwards.
@@ -48,24 +57,51 @@ func assertNoLiveTarget(t *testing.T, target string) {
 
 // lingeringChildScript returns a validator script prefix that starts a
 // background `sleep 30` inheriting the validator's stdout/stderr (so it holds
-// the output pipe open) and records its pid. Gonf kills validator
-// descendants only on a timeout, so the test kills it on cleanup to leave no
-// process behind.
-func lingeringChildScript(t *testing.T) string {
+// the output pipe open) and records its pid, plus the handle to that child.
+// Gonf kills validator descendants only on a timeout, so unless assertGone
+// confirmed it gone the test kills it on cleanup to leave no process behind.
+func lingeringChildScript(t *testing.T) (string, *lingeringChild) {
 	t.Helper()
-	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	child := &lingeringChild{pidFile: filepath.Join(t.TempDir(), "child.pid")}
 	t.Cleanup(func() {
-		raw, err := os.ReadFile(pidFile)
-		if err != nil {
-			return
-		}
-		if pid, err := strconv.Atoi(strings.TrimSpace(string(raw))); err == nil && pid > 0 {
+		if pid, err := child.pid(); err == nil && !child.gone {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 		}
 	})
 	return `sleep 30 &
-echo $! > "` + pidFile + `"
-`
+echo $! > "` + child.pidFile + `"
+`, child
+}
+
+// pid returns the child's recorded pid.
+func (c *lingeringChild) pid() (int, error) {
+	raw, err := os.ReadFile(c.pidFile)
+	if err != nil {
+		return 0, err
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err == nil && pid <= 0 {
+		err = errors.New("invalid pid " + strconv.Itoa(pid))
+	}
+	return pid, err
+}
+
+// assertGone checks the child was killed: its process disappears (once
+// reaped by whichever process it was reparented to) within 10 seconds.
+func (c *lingeringChild) assertGone(t *testing.T) {
+	t.Helper()
+	pid, err := c.pid()
+	if err != nil {
+		t.Fatalf("lingering child pid: %v", err)
+	}
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
+		if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+			c.gone = true
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("lingering child %d survived the timeout kill", pid)
 }
 
 // validateTimed runs a validated Ensure and returns its duration and error.
@@ -150,13 +186,15 @@ exit 0`)
 // A timed-out validator whose child keeps the output pipe open returns as a
 // timeout: the timeout kill takes the child too, and even a child that
 // escaped it could only delay the return to timeout + ivalidator.WaitDelay.
-// The 1s timeout leaves the shell time to record the child's pid, so cleanup
-// can kill it should the descendant kill regress.
+// The 1s timeout leaves the shell time to record the child's pid, which the
+// test uses to check the child is gone (and cleanup to kill it should the
+// descendant kill regress).
 func TestValidationTimeoutNotBlockedByLingeringChild(t *testing.T) {
 	resource.ResetRepository()
 	setValidationCommandTimeout(t, time.Second)
 	target := filepath.Join(privateValidationDir(t), "service.conf")
-	validator := writeValidationScript(t, lingeringChildScript(t)+`exec sleep 60`)
+	script, child := lingeringChildScript(t)
+	validator := writeValidationScript(t, script+`exec sleep 60`)
 
 	elapsed, err := validateTimed(target, validator)
 	if limit := time.Second + ivalidator.WaitDelay + 2*time.Second; elapsed > limit {
@@ -166,6 +204,7 @@ func TestValidationTimeoutNotBlockedByLingeringChild(t *testing.T) {
 		t.Fatalf("error = %v, want a timeout", err)
 	}
 	assertNoLiveTarget(t, target)
+	child.assertGone(t)
 }
 
 // The verdict is the validator's own exit status when it exits before the
@@ -178,7 +217,8 @@ func TestValidationDeadlineDuringWaitDelayKeepsVerdict(t *testing.T) {
 			resource.ResetRepository()
 			setValidationCommandTimeout(t, time.Second)
 			target := filepath.Join(privateValidationDir(t), "service.conf")
-			validator := writeValidationScript(t, lingeringChildScript(t)+`sleep 0.3
+			script, _ := lingeringChildScript(t)
+			validator := writeValidationScript(t, script+`sleep 0.3
 echo done
 exit `+strconv.Itoa(code))
 
@@ -206,7 +246,8 @@ exit `+strconv.Itoa(code))
 func TestValidationSuccessNotBlockedByLingeringChild(t *testing.T) {
 	resource.ResetRepository()
 	target := filepath.Join(privateValidationDir(t), "service.conf")
-	validator := writeValidationScript(t, lingeringChildScript(t)+`echo "syntax OK"
+	script, _ := lingeringChildScript(t)
+	validator := writeValidationScript(t, script+`echo "syntax OK"
 exit 0`)
 
 	elapsed, err := validateTimed(target, validator)

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -39,15 +40,24 @@ const (
 	// tree still growing after the last round (a fork bomb) keeps the
 	// processes no round found; they are neither stopped nor killed.
 	maxFreezeRounds = 8
-	// psTimeout bounds the ps call that lists processes where /proc does not.
-	psTimeout = 5 * time.Second
+	// freezeBudget bounds the whole descendant search of one timeout kill
+	// (all rounds, including every ps call), so the validator is never kept
+	// stopped for long: when it runs out, killTree kills what it found so
+	// far. A /proc or ps read takes milliseconds, so the budget only matters
+	// on a hung ps or an overloaded host; it adds at most this much to a
+	// timed-out RunIn.
+	freezeBudget = 2 * time.Second
 )
 
 // killTree is the timeout kill: it SIGSTOPs the validator (leader) and then
-// every descendant it finds in the process table, so none of them can fork
-// or reparent a child out of reach while the tree is collected, SIGKILLs the
-// stopped descendants and finally SIGKILLs the leader, whose result it
-// returns (the verdict logic in killForTimeout only cares about the leader).
+// every descendant it finds in the process table within freezeBudget, so
+// none of them can fork or reparent a child out of reach while the tree is
+// collected. It then SIGKILLs the stopped descendants children first and
+// finally the leader, whose result it returns (the verdict logic in
+// killForTimeout only cares about the leader). Killing children first keeps
+// each parent stopped, so a killed child stays its zombie, and its pid stays
+// taken, until the parent itself is killed after it: no pid in the list can
+// be recycled before its SIGKILL.
 //
 // A leader that Wait already reaped yields os.ErrProcessDone without
 // signalling anything: its pid may already name an unrelated process, and
@@ -57,11 +67,12 @@ const (
 // killing the leader alone.
 //
 // Not reached: descendants that were already reparented away from the tree
-// before the timeout (a double fork, a daemonizing child), and descendants
-// gonf may not signal (EPERM). Pids come from a snapshot, so a descendant
-// that exits and has its pid reused between the snapshot and the signal
-// could be hit instead; the window is the time between reading the table
-// and signalling, as for any pid-based kill.
+// before the timeout (a double fork, a daemonizing child), descendants found
+// only after freezeBudget ran out, and descendants gonf may not signal
+// (EPERM; a root gonf may signal every process). Pids come from a snapshot,
+// so a descendant that exits on its own and has its pid reused between the
+// snapshot and its SIGSTOP could be hit instead; the window is the time
+// between reading the table and signalling, as for any pid-based kill.
 func killTree(leader *os.Process) error {
 	switch err := leader.Signal(syscall.SIGSTOP); {
 	case errors.Is(err, os.ErrProcessDone):
@@ -69,7 +80,10 @@ func killTree(leader *os.Process) error {
 	case err != nil:
 		return leader.Kill()
 	}
-	for _, pid := range freezeDescendants(leader.Pid, processTable, sigstop) {
+	ctx, cancel := context.WithTimeout(context.Background(), freezeBudget)
+	defer cancel()
+	stopped := freezeDescendants(ctx, leader.Pid, processTable, sigstop)
+	for _, pid := range slices.Backward(stopped) {
 		_ = unix.Kill(pid, unix.SIGKILL)
 	}
 	return leader.Kill()
@@ -78,13 +92,17 @@ func killTree(leader *os.Process) error {
 // freezeDescendants stops (stop, SIGSTOP in killTree) every descendant of
 // root found in the process table read by table, rereading it until a round
 // finds nothing new (or maxFreezeRounds), and returns the stopped pids in the
-// order stopped. A table that cannot be read ends the search with what was
-// found so far.
-func freezeDescendants(root int, table func() (map[int]int, error), stop func(pid int)) []int {
+// order stopped, every parent before its children. A table that cannot be
+// read, or ctx ending (the freezeBudget), ends the search with what was found
+// so far; table must honour ctx.
+func freezeDescendants(ctx context.Context, root int, table func(context.Context) (map[int]int, error), stop func(pid int)) []int {
 	seen := map[int]bool{}
 	var stopped []int
 	for range maxFreezeRounds {
-		parents, err := table()
+		if ctx.Err() != nil {
+			break
+		}
+		parents, err := table(ctx)
 		if err != nil {
 			break
 		}
@@ -133,14 +151,15 @@ func descendants(parents map[int]int, root int) []int {
 // processTable returns every process's parent pid, keyed by pid. On Linux it
 // reads /proc (no external tool needed, e.g. in minimal containers) and
 // falls back to ps when that fails; elsewhere (the BSDs, macOS), whose /proc
-// is absent or differently formatted, it asks ps.
-func processTable() (map[int]int, error) {
+// is absent or differently formatted, it asks ps. The /proc read is local
+// and fast, so only the ps call is bounded by ctx.
+func processTable(ctx context.Context) (map[int]int, error) {
 	if runtime.GOOS == "linux" {
 		if parents, err := procTable("/proc"); err == nil {
 			return parents, nil
 		}
 	}
-	return psTable()
+	return psTable(ctx)
 }
 
 // procTable reads the parent pid of every process from the Linux procfs
@@ -187,10 +206,9 @@ func parseProcStatPPID(stat []byte) (int, bool) {
 }
 
 // psTable lists every process's parent pid with ps, whose "-A -o pid= -o
-// ppid=" form is understood by procps (Linux), the BSDs and macOS.
-func psTable() (map[int]int, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), psTimeout)
-	defer cancel()
+// ppid=" form is understood by procps (Linux), the BSDs and macOS. ps is
+// killed when ctx ends.
+func psTable(ctx context.Context) (map[int]int, error) {
 	out, err := exec.CommandContext(ctx, "ps", "-A", "-o", "pid=", "-o", "ppid=").Output()
 	if err != nil {
 		return nil, fmt.Errorf("list processes with ps: %w", err)
