@@ -17,11 +17,12 @@ import (
 	"github.com/snonux/gonf/resource"
 )
 
-// These tests pin how the validator process is executed (task l62): it is
-// bounded by the process-wide command timeout of internal/exec (the validator
-// process itself is killed when it expires), a descendant holding the output
-// pipe cannot block the call beyond validator.WaitDelay, and a bounded,
-// sanitized copy of the combined stdout/stderr is appended to the error.
+// These tests pin how the validator process is executed (tasks l62, b82): it
+// is bounded by the process-wide command timeout of internal/exec (the
+// validator's whole process group is killed when it expires), a descendant
+// holding the output pipe cannot block the call beyond validator.WaitDelay,
+// and a bounded, sanitized copy of the combined stdout/stderr is appended to
+// the error. internal/validator/procgroup_test.go covers the process group.
 
 // setValidationCommandTimeout sets the process-wide command timeout the
 // validator inherits (the knob behind api.SetCommandTimeout and -cmd-timeout)
@@ -47,9 +48,9 @@ func assertNoLiveTarget(t *testing.T, target string) {
 
 // lingeringChildScript returns a validator script prefix that starts a
 // background `sleep 30` inheriting the validator's stdout/stderr (so it holds
-// the output pipe open) and records its pid. Gonf deliberately does not kill
-// validator descendants, so the test kills it on cleanup to leave no process
-// behind.
+// the output pipe open) and records its pid. Gonf kills validator
+// descendants only on a timeout, so the test kills it on cleanup to leave no
+// process behind.
 func lingeringChildScript(t *testing.T) string {
 	t.Helper()
 	pidFile := filepath.Join(t.TempDir(), "child.pid")
@@ -146,9 +147,11 @@ exit 0`)
 	}
 }
 
-// A timed-out validator whose child keeps the output pipe open still returns
-// within timeout + ivalidator.WaitDelay, as a timeout. The 1s timeout leaves
-// the shell time to record the child's pid, so cleanup can kill it.
+// A timed-out validator whose child keeps the output pipe open returns as a
+// timeout: the group kill takes the child too, and even a child that
+// escaped it could only delay the return to timeout + ivalidator.WaitDelay.
+// The 1s timeout leaves the shell time to record the child's pid, so cleanup
+// can kill it should the group kill regress.
 func TestValidationTimeoutNotBlockedByLingeringChild(t *testing.T) {
 	resource.ResetRepository()
 	setValidationCommandTimeout(t, time.Second)
