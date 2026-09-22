@@ -746,10 +746,23 @@ func RecordedChangeGate(kind string, ifChanged bool, watch []string) (ChangeGate
 	return WatchChanges(watch...), nil
 }
 
-// WithCronUser sets the account whose crontab is managed.
+// WithCronUser sets the account whose crontab is managed. An empty user is
+// declaration-time misuse (task vb2), not "unset": leaving WithCronUser out
+// already defaults the job to root, so an explicit empty string can only be
+// a recipe mistake. It is refused here, before the resource ever lowers to a
+// plan op, because the wire representation has no way to tell "never called"
+// apart from "called with an empty string" — a plan handler rebuilding the
+// resource on the destination host would otherwise fall back to the default
+// and silently install the job into root's crontab.
 func WithCronUser(user string) cronOption {
 	return cronOption(func(target any) {
-		requires(target, "WithCronUser", func(r CronUserable) { r.SetCronUser(user) })
+		requires(target, "WithCronUser", func(r CronUserable) {
+			if user == "" {
+				misuse(target, errors.New("WithCronUser must not be empty"))
+				return
+			}
+			r.SetCronUser(user)
+		})
 	})
 }
 

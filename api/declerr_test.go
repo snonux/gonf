@@ -129,6 +129,21 @@ func TestApplyRefusesDirectDeclarationError(t *testing.T) {
 	assertNoStagingLeft(t, tmp)
 }
 
+// TestApplyRefusesCronExplicitEmptyUser pins the push-side invariant behind
+// task vb2: an explicit WithCronUser("") must never reach a plan op and be
+// silently rebuilt as root's job on the destination. Present (through Cron)
+// refuses it as a declaration error, so Apply refuses the whole run before
+// anything is applied — the cron plan handler's Apply never runs and no
+// crontab write happens.
+func TestApplyRefusesCronExplicitEmptyUser(t *testing.T) {
+	requireDeclErr(t, "WithCronUser must not be empty", func() {
+		Cron("x", options.WithCommand("/bin/true"), options.WithCronUser(""))
+	})
+	if err := Apply(); err == nil || !strings.Contains(err.Error(), "WithCronUser must not be empty") {
+		t.Fatalf("Apply = %v, want the empty cron user refusal", err)
+	}
+}
+
 // TestValidRecipeReportsNoDeclarationError is the negative control: correct
 // declarations, including the Must* lookups of registered names, report
 // nothing and record normally.

@@ -38,6 +38,7 @@ var misuseCases = []struct {
 	{"OnChange with an empty Multi", func() any { return &recorder{} }, func(t any) { OnChange(resource.Multi(nil)).Apply(t) }, "OnChange requires at least one resource to watch"},
 	{"OnChange on a target without dependencies", func() any { return &watchOnly{} }, func(t any) { OnChange(fileA).Apply(t) }, "*options.watchOnly does not support OnChange"},
 	{"WatchChanges without ids", func() any { return &recorder{} }, func(t any) { WatchChanges().Apply(t) }, "WatchChanges requires at least one resource id"},
+	{"WithCronUser empty", func() any { return &recorder{} }, func(t any) { WithCronUser("").Apply(t) }, "WithCronUser must not be empty"},
 	{"IfChanged outside daemon-reload", func() any { return &watchOnly{} }, func(t any) { IfChanged.Apply(t) }, "*options.watchOnly does not support IfChanged"},
 	{"WithWatch outside daemon-reload", func() any { return &watchOnly{} }, func(t any) { WithWatch("File[a]").Apply(t) }, "*options.watchOnly does not support WithWatch"},
 	{"empty WithWatch outside daemon-reload", func() any { return &watchOnly{} }, func(t any) { WithWatch().Apply(t) }, "*options.watchOnly does not support WithWatch"},

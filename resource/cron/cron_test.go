@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/internal/testapply"
 	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
@@ -234,14 +235,22 @@ func TestPresentRejectsBadEnvAndBlankCommand(t *testing.T) {
 	if err := testapply.Apply(); err == nil {
 		t.Fatal("expected error for blank command")
 	}
-	// Direct path on purpose (task vb2): the cron op does not carry an
-	// explicitly empty user, so the plan engine applies it as root's job
-	// instead of refusing it.
-	if err := Ensure("x", opt.WithCommand("/bin/true"), opt.WithCronUser("")); err == nil ||
-		!strings.Contains(err.Error(), "WithCronUser must not be empty") {
-		t.Fatalf("Ensure with an empty cron user = %v, want the empty-user refusal", err)
+	// Declaration-time refusal (task vb2): WithCronUser("") is explicit
+	// misuse, not "unset" (which defaults to root). It must be refused by
+	// Present itself, before it ever lowers to a plan op — otherwise the
+	// plan engine's destination-side rebuild cannot tell "never called"
+	// apart from "called with an empty string" and falls back to root,
+	// silently installing the job into root's crontab. Tested per
+	// AGENTS.md's misuse convention: reset, declare, assert declerr.First().
+	resource.ResetForTest()
+	Present("x", opt.WithCommand("/bin/true"), opt.WithCronUser(""))
+	if err := declerr.First(); err == nil || !strings.Contains(err.Error(), "WithCronUser must not be empty") {
+		t.Fatalf("Present with an empty cron user reported %v, want the empty-user refusal", err)
 	}
-	resource.ResetRepository()
+	if ids := resource.RegisteredIDs(); len(ids) != 0 {
+		t.Fatalf("misuse must not register anything, got %v", ids)
+	}
+	resource.ResetForTest()
 	Present("x", opt.WithCommand("/bin/true"), opt.WithLegacyCommand("\n"))
 	if err := testapply.Apply(); err == nil {
 		t.Fatal("expected error for invalid legacy command")
