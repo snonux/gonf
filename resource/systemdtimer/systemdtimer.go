@@ -122,7 +122,9 @@ func (t *SystemdTimer) SetEnableOnly() { t.enableOnly = true }
 // the bus reloads once for them. The timer is then converged before the
 // composition's reload, so the join is refused when the companion service's
 // After=/Wants= name a unit the composition may install (it could be
-// started from a stale definition). The timer's op is unchanged, and
+// started from a stale definition). A same-bus declaration after the
+// timer that would add such a unit to the joined reload's inputs is then
+// refused fail-fast when it merges. The timer's op is unchanged, and
 // without such a reload (or when joining it is refused) the timer behaves
 // exactly as a standalone one.
 func Present(name string, opts ...opt.SystemdTimerOption) resource.Resource {

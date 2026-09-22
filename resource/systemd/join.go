@@ -35,7 +35,11 @@ import (
 // After= and Wants=). Starting the joiner before the registered reload
 // could otherwise start such a unit from a stale definition: e.g. a
 // Persistent timer that fires on start, whose service wants a composition
-// service whose changed unit file is only loaded by the later reload.
+// service whose changed unit file is only loaded by the later reload. The
+// check sees the reload's inputs at join time only, so a successful join is
+// remembered (DaemonReloadResource.joiners) and a later same-bus declaration
+// whose inputs may define one of the joiner's related units is refused when
+// it merges (see mergeInto): the joiner's edge cannot be removed again.
 //
 // It returns false, and leaves everything as it was (the joiner then keeps
 // its private reload after the registered one, two reloads at worst, as
@@ -67,6 +71,7 @@ func JoinRegisteredReload(user bool, joinerID string, related ...string) bool {
 	}
 	m := *d
 	m.DependsOn.IDs = append(slices.Clone(d.DependsOn.IDs), joinerID)
+	m.joiners = append(slices.Clone(d.joiners), reloadJoiner{id: joinerID, related: slices.Clone(related)})
 	if err := resource.AmendRegistered(m.planDraft(r.ID()), joinerID); err != nil {
 		logger.Debug("%s: %s keeps its own daemon-reload, not ordered before this bus's registered one: %v", id, joinerID, err)
 		return false
@@ -74,6 +79,19 @@ func JoinRegisteredReload(user bool, joinerID string, related ...string) bool {
 	*d = m
 	logger.Debug("%s: ordered after %s, which shares this bus's reload", id, joinerID)
 	return true
+}
+
+// joinerRelatedInput returns the first joiner of d, and its related unit,
+// that one of d's inputs may define (relatedInput), and whether there is
+// one. mergeInto calls it on the merged reload, whose inputs include the
+// new declaration's.
+func (d *DaemonReloadResource) joinerRelatedInput() (reloadJoiner, string, bool) {
+	for _, j := range d.joiners {
+		if unit, ok := d.relatedInput(j.related); ok {
+			return j, unit, true
+		}
+	}
+	return reloadJoiner{}, "", false
 }
 
 // relatedInput returns the first of units that one of d's inputs (its

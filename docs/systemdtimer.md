@@ -52,7 +52,11 @@ another when-block or privilege scope, when it depends on the composition
 unit's (or its template's) name or drop-in directory, or any input that is
 not a single file, such as a `SyncDir` directory. Starting the timer first
 could otherwise start such a unit from its stale definition (e.g. a
-`Persistent` timer firing on start).
+`Persistent` timer firing on start). The check sees the reload's inputs when
+the timer is declared; a later same-bus `SystemdUnits` or `DaemonReload` whose
+inputs may install such a unit would merge into the reload the timer already
+joined, so that declaration is refused with a `cannot merge` error naming the
+timer and the unit. Declare the timer after every same-bus composition instead.
 
 ## Options
 

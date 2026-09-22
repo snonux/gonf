@@ -32,11 +32,24 @@ var (
 // WithWatch ids (legacyWatch, only an option-time slot) are appended after
 // the gate's ids, and a reload that still watches nothing watches its
 // DependsOn ids. Every later reader sees the one resolved Watch list.
+//
+// joiners are the resources ordered before this registered reload by
+// JoinRegisteredReload (SystemdTimers), each with the units it references.
+// They are registration-time bookkeeping only (never recorded in the plan):
+// mergeInto re-checks them against every later declaration's inputs.
 type DaemonReloadResource struct {
 	embed.DependsOn
 	embed.ChangeGate
 	user        bool
 	legacyWatch []string // WithWatch ids until newReload folds them into Watch
+	joiners     []reloadJoiner
+}
+
+// reloadJoiner is one successful JoinRegisteredReload: the joiner's ID and
+// the related units (After=/Wants= entries) it passed.
+type reloadJoiner struct {
+	id      string
+	related []string
 }
 
 // Present registers a daemon-reload resource. The resource is a singleton

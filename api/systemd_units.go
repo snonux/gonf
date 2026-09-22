@@ -49,8 +49,10 @@ import (
 // when a when-block boundary or privilege change separates the two
 // declarations, or when the new declaration's inputs already depend on the
 // reload (an input declared with DependsOn(an earlier composition), or that
-// composition passed to FanIn), which would form a dependency cycle. A
-// single composition records exactly what it did before.
+// composition passed to FanIn), which would form a dependency cycle, or
+// when a SystemdTimer declared in between joined the reload and its
+// WithAfter/WithWants name a unit the new FanIn may install. A single
+// composition records exactly what it did before.
 func SystemdUnits(opts ...SystemdUnitsOption) Resource {
 	cfg := &systemdUnitsConfig{}
 	for _, o := range opts {
