@@ -102,8 +102,9 @@ func NoteResult(id string, changed bool) {
 // reports that a change gate suppressed its gated action (e.g. a
 // restart/reload armed by OnChange with no watched change): that is noted
 // StatusSkipped so the summary shows the held action, otherwise the resource
-// was simply already converged and is noted StatusOK. Service and Timer share
-// it so both report a held gate identically.
+// was simply already converged and is noted StatusOK. Converge calls it for
+// every idle resource, so Service, Timer and Package (which is never gated and
+// always passes held=false) report an idle or held run identically.
 func NoteIdle(id string, held bool) {
 	if held {
 		Note(id, StatusSkipped)
