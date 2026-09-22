@@ -105,10 +105,11 @@ func main() {
   (cleaned, without leading slashes or backslashes — `"/a/b"`, `"\a/b"` and
   `"a/b"` share one entry, as `FileProvider` and the pre-provider helpers
   read the same file for all three; a backslash elsewhere, as in `"a\b"`, is
-  an ordinary name character), so a
-  provider behind a Snapshot must treat those spellings alike; a cached
-  not-found served for another spelling names that spelling in its `Ref` and
-  message. Build it only with `NewSnapshot`: a zero `secret.Snapshot{}` is
+  an ordinary name character). The provider behind a Snapshot is asked for
+  the canonical form only (`"a/b"` for all three, `"b"` for `"x/../b"`), so
+  it never sees another spelling and cannot cache a not-found that depends
+  on one; every error, cached or fresh, names the caller's own spelling in
+  its `Ref` and message. Build it only with `NewSnapshot`: a zero `secret.Snapshot{}` is
   refused by `SetSecretProvider` like a nil provider. Each reference
   resolves independently: a slow one does not block others, and a caller
   waiting for someone else's resolution of the same reference stops when its

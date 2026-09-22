@@ -30,8 +30,9 @@ import (
 // FileProvider applies — so "/garage/rpc_secret", `\garage/rpc_secret` and
 // "garage/rpc_secret" share one entry. A backslash that is not leading is
 // part of the name, so `garage\rpc_secret` is a different reference.
-// Providers used behind a Snapshot must therefore treat such spellings as
-// the same secret. A reference with no canonical form (empty, or escaping
+// The provider is asked for the canonical form only, whatever the caller
+// wrote, so it never sees a spelling such as "x/../b"; results and errors
+// are returned naming the caller's own spelling. A reference with no canonical form (empty, or escaping
 // with "..") is passed to the provider uncached, which refuses it.
 //
 // Each reference is resolved by one caller at a time without holding a
@@ -152,9 +153,16 @@ func (s *Snapshot) entry(key Ref) (e *snapshotEntry, leader bool) {
 	return e, true
 }
 
-// lead resolves ref for entry e (keyed key) outside the lock. A transient
-// failure — or a panicking provider — drops the entry again so the next
-// caller retries; done is closed in every case so waiters never hang.
+// lead resolves entry e outside the lock. A transient failure — or a
+// panicking provider — drops the entry again so the next caller retries;
+// done is closed in every case so waiters never hang.
+//
+// The provider is asked for the canonical key, not the caller's spelling
+// ref: the entry is shared by every spelling, so what it caches must not
+// depend on which spelling happened to arrive first (a provider that does
+// not clean paths lexically would otherwise answer "x/../b" with a
+// not-found that later "b" lookups inherit). The cached error names key;
+// every caller, this one included, gets it rewritten to name its own ref.
 func (s *Snapshot) lead(ctx context.Context, key, ref Ref, e *snapshotEntry) ([]byte, error) {
 	defer func() {
 		if !e.kept {
@@ -164,12 +172,12 @@ func (s *Snapshot) lead(ctx context.Context, key, ref Ref, e *snapshotEntry) ([]
 		}
 		close(e.done)
 	}()
-	data, err := Resolve(ctx, s.provider, ref)
+	data, err := Resolve(ctx, s.provider, key)
 	if err == nil || IsNotFound(err) {
 		e.data, e.err, e.kept = bytes.Clone(data), err, true
 	}
 	if err != nil {
-		return nil, err
+		return nil, callerError(ctx, err, ref)
 	}
 	// A copy on the miss too, so this caller cannot reach the provider's
 	// own buffer (which the provider may keep and hand out again).
@@ -186,11 +194,23 @@ func canonicalRef(ref Ref) (Ref, bool) {
 	return Ref(filepath.ToSlash(clean)), true
 }
 
-// withRef returns err naming ref: a cached *Error recorded for another
-// spelling of the same reference is copied with Ref replaced, so Resolve's
-// classification (which requires the error to name the requested ref)
-// still passes it through. Where its Msg quotes the first spelling (as the
-// file provider's `secret "/a" is missing` does), that quote is replaced by
+// callerError turns a failure of Resolve for the canonical key into the one
+// a direct lookup of ref would report. Resolve returns either a typed *Error
+// (rewritten by withRef) or, only once ctx is done, an untyped cancellation
+// error, which is rebuilt to name ref.
+func callerError(ctx context.Context, err error, ref Ref) error {
+	if KindOf(err) == nil && ctx.Err() != nil {
+		return canceled(ref, ctx.Err())
+	}
+	return withRef(err, ref)
+}
+
+// withRef returns err naming ref: an *Error recorded for another spelling of
+// the same reference (the canonical key the provider was asked for) is
+// copied with Ref replaced, so Resolve's classification (which requires the
+// error to name the requested ref) still passes it through. Where its Msg
+// quotes that spelling (as the file provider's `secret "a" is missing`
+// does), that quote is replaced by
 // the requested one, so the message is the one a direct lookup of ref would
 // give and never names a reference other than Ref.
 func withRef(err error, ref Ref) error {
