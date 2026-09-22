@@ -37,10 +37,20 @@ func TestSystemdUnitsMergeRefusalsFailFast(t *testing.T) {
 		"self-fanin":        "make DaemonReload[system] depend on itself",
 		"self-dependson":    "make DaemonReload[system] depend on itself",
 	}
+	before := countFatalHelperTempDirs(t)
 	for name, reason := range cases {
 		t.Run(name, func(t *testing.T) {
 			cmd := exec.Command(os.Args[0], "-test.run=^TestSystemdUnitsMergeFatalHelperProcess$", "-test.timeout=60s")
-			cmd.Env = append(os.Environ(), "GONF_API_UNITS_MERGE_FATAL="+name)
+			// The helper builds fixtures with twoUnitSources/systemdUnitsFixture,
+			// both of which call t.TempDir(), and then exits via logger.Fatal
+			// (os.Exit), which skips its own deferred cleanup. t.TempDir()
+			// creates its directory under $GOTMPDIR (see
+			// testing.common.makeTempDir), so pointing the child's GOTMPDIR at
+			// a directory this (surviving) test owns means that directory -
+			// and whatever the child created below it - is removed by this
+			// test's own t.TempDir() cleanup instead of leaking under the
+			// real $GOTMPDIR/temp root.
+			cmd.Env = append(os.Environ(), "GONF_API_UNITS_MERGE_FATAL="+name, "GOTMPDIR="+t.TempDir())
 			out, err := cmd.CombinedOutput()
 			if err == nil {
 				t.Fatalf("case %s exited 0; output:\n%s", name, out)
@@ -60,6 +70,7 @@ func TestSystemdUnitsMergeRefusalsFailFast(t *testing.T) {
 			}
 		})
 	}
+	assertNoNewFatalHelperTempDirs(t, before)
 }
 
 // TestSystemdUnitsMergeFatalHelperProcess is the helper process for

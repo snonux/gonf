@@ -483,10 +483,20 @@ func TestLoginClassRegistrationMisuseFailsFast(t *testing.T) {
 	if runtime.GOOS != "openbsd" {
 		cases = append(cases, struct{ caseName, want string }{"direct", "requirement not met on this host (goos=" + runtime.GOOS + ")"})
 	}
+	before := countFatalHelperTempDirs(t)
 	for _, tc := range cases {
 		t.Run(tc.caseName, func(t *testing.T) {
 			c := exec.Command(os.Args[0], "-test.run=^TestLoginClassFatalHelperProcess$", "-test.timeout=60s")
-			c.Env = append(os.Environ(), "GONF_API_LOGINCLASS_MISUSE="+tc.caseName)
+			// The helper calls t.TempDir() itself and then exits via
+			// logger.Fatal (os.Exit), which skips its own deferred cleanup
+			// (t.TempDir()'s directory is removed via t.Cleanup, which never
+			// runs). t.TempDir() creates its directory under $GOTMPDIR (see
+			// testing.common.makeTempDir), so pointing the child's GOTMPDIR at
+			// a directory this (surviving) test owns means that directory -
+			// and whatever the child created below it - is removed by this
+			// test's own t.TempDir() cleanup instead of leaking under the
+			// real $GOTMPDIR/temp root.
+			c.Env = append(os.Environ(), "GONF_API_LOGINCLASS_MISUSE="+tc.caseName, "GOTMPDIR="+t.TempDir())
 			out, err := c.CombinedOutput()
 			if err == nil {
 				t.Fatalf("misuse %q exited 0; output:\n%s", tc.caseName, out)
@@ -496,6 +506,7 @@ func TestLoginClassRegistrationMisuseFailsFast(t *testing.T) {
 			}
 		})
 	}
+	assertNoNewFatalHelperTempDirs(t, before)
 }
 
 // TestLoginClassFatalHelperProcess triggers one misuse per invocation for
