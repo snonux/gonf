@@ -25,7 +25,7 @@ type Resource interface {
 //
 // Apply hands the WHOLE registered plan to the engine as one unit, so it is a
 // controller-side entry point in the same sense as ApplyChunks and
-// remote.PushChunks: it runs the dangling-dependency pre-flight itself
+// remote.Delivery.ToHost: it runs the dangling-dependency pre-flight itself
 // (validateApplyDeps) before anything is applied. plan.Apply and ApplyPlan do
 // not, because they also execute single privilege chunks whose deps
 // legitimately live in an earlier chunk; without this check a typo'd

@@ -32,8 +32,9 @@ func (e *refusedError) Unwrap() error { return e.cause }
 // preflightChunks is the single api-side wrapper around plan.ValidateChunks,
 // used by every api entry point that holds a whole plan: RecordPlanTo
 // (caller "RecordPlan"), Apply (caller "Apply"). ApplyChunks and
-// remote.PushChunks call plan.ValidateChunks directly and keep the plan
-// engine's own wording, because their input is an already-recorded plan (ops
+// remote.Delivery.ToHost (every push and strict preview, single target or
+// fan-out) call plan.ValidateChunks directly and keep the plan engine's own
+// wording, because their input is an already-recorded plan (ops
 // from a file or a previous record), not registered resources.
 //
 // The refusal is re-worded as "<caller>: <reason>" with exactly one prefix.

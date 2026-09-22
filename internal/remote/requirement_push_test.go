@@ -25,11 +25,11 @@ func requirementPushPlan(dir string, reqPreds []plan.Predicate) []plan.Op {
 	}
 }
 
-// TestPushChunksRequirementRefusedInFirstChunk: the fake SSH runner plays a
+// TestPushToHostRequirementRefusedInFirstChunk: the fake SSH runner plays a
 // FreeBSD destination by decoding each streamed chunk and applying it with
 // the plan engine. Chunk 0 must carry the requirement stub and refuse before
 // writing its user file, so the elevated chunk is never sent.
-func TestPushChunksRequirementRefusedInFirstChunk(t *testing.T) {
+func TestPushToHostRequirementRefusedInFirstChunk(t *testing.T) {
 	old := SSHRunner
 	restoreProbe := AssumeRemotePlanCurrent()
 	t.Cleanup(func() { SSHRunner = old; restoreProbe() })
@@ -49,9 +49,9 @@ func TestPushChunksRequirementRefusedInFirstChunk(t *testing.T) {
 	}
 
 	ops := requirementPushPlan(dir, []plan.Predicate{{Fact: "goos", Eq: "openbsd"}})
-	err := PushChunks(context.Background(), PushTarget{Host: "h.example", Privilege: privilege.Sudo}, "demo", ops, nil)
+	err := pushToHost(context.Background(), PushTarget{Host: "h.example", Privilege: privilege.Sudo}, "demo", ops, nil)
 	if err == nil || !strings.Contains(err.Error(), "chunk 0") || !strings.Contains(err.Error(), "goos=freebsd") {
-		t.Fatalf("PushChunks = %v, want chunk 0 refused for goos=freebsd", err)
+		t.Fatalf("push = %v, want chunk 0 refused for goos=freebsd", err)
 	}
 	if applyCalls != 1 || elevatedCalls != 0 {
 		t.Fatalf("remote apply calls = %d (elevated %d); want only chunk 0, never the elevated chunk", applyCalls, elevatedCalls)
@@ -63,10 +63,10 @@ func TestPushChunksRequirementRefusedInFirstChunk(t *testing.T) {
 	}
 }
 
-// TestPushChunksBadRequirementScopeSendsNothing: a requirement whose own
+// TestPushToHostBadRequirementScopeSendsNothing: a requirement whose own
 // predicate is path_exists is refused by the controller pre-flight, before
 // any SSH traffic at all.
-func TestPushChunksBadRequirementScopeSendsNothing(t *testing.T) {
+func TestPushToHostBadRequirementScopeSendsNothing(t *testing.T) {
 	old := SSHRunner
 	restoreProbe := AssumeRemotePlanCurrent()
 	t.Cleanup(func() { SSHRunner = old; restoreProbe() })
@@ -75,9 +75,9 @@ func TestPushChunksBadRequirementScopeSendsNothing(t *testing.T) {
 	SSHRunner = func(context.Context, io.Reader, []string) error { calls++; return nil }
 	dir := t.TempDir()
 	ops := requirementPushPlan(dir, []plan.Predicate{{PathExists: filepath.Join(dir, "marker")}})
-	err := PushChunks(context.Background(), PushTarget{Host: "h.example", Privilege: privilege.Sudo}, "demo", ops, nil)
+	err := pushToHost(context.Background(), PushTarget{Host: "h.example", Privilege: privilege.Sudo}, "demo", ops, nil)
 	if err == nil || !strings.Contains(err.Error(), "requirement req itself uses (path_exists") {
-		t.Fatalf("PushChunks = %v, want the requirement-scope refusal", err)
+		t.Fatalf("push = %v, want the requirement-scope refusal", err)
 	}
 	if calls != 0 {
 		t.Fatalf("SSH runner called %d times for a refused plan", calls)

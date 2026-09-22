@@ -2,14 +2,10 @@ package api
 
 import (
 	"context"
-	"fmt"
-	"sync"
 	"time"
 
 	"github.com/snonux/gonf/internal/inventory"
 	"github.com/snonux/gonf/internal/logger"
-	"github.com/snonux/gonf/internal/multierr"
-	"github.com/snonux/gonf/internal/orchestrate"
 	"github.com/snonux/gonf/internal/remote"
 )
 
@@ -162,67 +158,6 @@ func PushFleetRun(ctx context.Context, name, planID string, parallelOverride int
 func PreviewFleetRun(ctx context.Context, name, planID string, parallelOverride int, hostTimeout time.Duration, tasks ...string) error {
 	return groupRun{mode: remote.Preview, name: name, planID: planID,
 		parallelOverride: parallelOverride, hostTimeout: hostTimeout, tasks: tasks}.fleet(ctx)
-}
-
-// fleet records the run once for the named fleet and delivers it, in
-// r.mode, to every cluster group; see PushFleetRun for the parallelism and
-// cancellation contract.
-func (r groupRun) fleet(ctx context.Context) error {
-	if err := r.checkTasks("fleet"); err != nil {
-		return err
-	}
-	entries, err := inventory.CollectFleetHosts(r.name)
-	if err != nil {
-		return err
-	}
-	// Record once with the fleet's deduplicated hosts (plus any inventory
-	// name that could match one of them) selected, so ForHosts bodies of
-	// hosts the fleet cannot reach are not resolved.
-	d, err := r.record("fleet", inventory.SelectionForHosts(fleetHostNames(entries)))
-	if err != nil {
-		return err
-	}
-	// One single-line `fleet "<name>": <group err>; <group err>` error with
-	// the groups sorted by message; it unwraps to every group's error (and so
-	// to every per-host cause) for errors.Is / errors.As. nil when all
-	// succeeded. The prefix stays `fleet "<name>"` in preview mode too.
-	errs := r.deliverGroups(ctx, d, inventory.GroupFleetHostsByCluster(entries))
-	return multierr.JoinSorted(fmt.Sprintf("fleet %q", r.name), errs)
-}
-
-// deliverGroups delivers d to every cluster group concurrently and returns
-// the groups' errors, unsorted. The errors are kept as values (not flattened
-// to strings) so the fleet aggregate still unwraps to every per-host cause.
-//
-// fleetCtx is shared by every group's call: canceling it (the instant any
-// group fails) propagates into every OTHER group's errgroup-derived context
-// too, restoring the whole-fleet fail-fast contract. Each group still applies
-// its own limit independently via its own errgroup.SetLimit inside
-// orchestrate.Deliver/remote.Fanout, so this does not undo the per-cluster
-// parallelism fix. context.CancelFunc is safe to call concurrently and more
-// than once (only the first call has effect), so no extra synchronization
-// (e.g. sync.Once) is needed around cancel().
-func (r groupRun) deliverGroups(ctx context.Context, d remote.Delivery, groups []inventory.FleetHostGroup) []error {
-	fleetCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	var wg sync.WaitGroup
-	var errMu sync.Mutex
-	var errs []error
-	for _, g := range groups {
-		og := orchestrate.Group{Name: g.Cluster.Name, HostNames: g.HostNames,
-			Limit: r.limit(g.Cluster), HostTimeout: r.hostTimeout}
-		wg.Go(func() {
-			if err := orchestrate.Deliver(fleetCtx, d, og); err != nil {
-				errMu.Lock()
-				errs = append(errs, err)
-				errMu.Unlock()
-				cancel()
-			}
-		})
-	}
-	wg.Wait()
-	return errs
 }
 
 // fleetHostNames returns the inventory host names of a fleet's collected

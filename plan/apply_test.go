@@ -499,7 +499,7 @@ func TestApplyDependencyCycle(t *testing.T) {
 // boundaries are invisible to chunk-level Apply). Truly dangling deps are
 // refused controller-side, before anything is applied, by the
 // plan.ValidateChunkDeps pre-flight wired into api.RecordPlanTo (record
-// time), api.ApplyChunks, remote.PushChunks and api.Apply (see
+// time), api.ApplyChunks, remote.Delivery.ToHost and api.Apply (see
 // api.TestApplyRejectsDanglingDependency and api.TestRecordPlanRefusesDanglingDependency).
 func TestApplyDependencyDanglingSatisfiedAtChunkLevel(t *testing.T) {
 	root := t.TempDir()

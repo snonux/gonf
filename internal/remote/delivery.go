@@ -35,6 +35,31 @@ const (
 	Preview
 )
 
+// Delivery is one recorded plan together with the Mode it is delivered in.
+// It is built once, right after recording, and passed by value through every
+// layer below the api entry point, so no layer needs its own push/preview
+// variant.
+type Delivery struct {
+	Mode   Mode
+	PlanID string
+	Ops    []plan.Op
+	Mem    plan.BlobReader
+}
+
+// ensureRuntime is the Push-mode bootstrap step (EnsureRemoteGonf). It is a
+// variable only so ObserveBootstrapForTest (and this package's tests) can
+// observe which deliveries reach it or make it fail; production code never
+// reassigns it.
+var ensureRuntime = EnsureRemoteGonf
+
+// rebuildRemoteCmds is buildRemoteCmds as prepareRemote's post-install
+// rebuild calls it. Only the binary path differs from the pre-flight build,
+// and privilege.WrapApplyBinCmd does not check the path today, so the rebuild
+// cannot currently fail once the pre-flight passed; its error branch still
+// guards a future path check. It is a variable only so this package's tests
+// can drive that branch; production code never reassigns it.
+var rebuildRemoteCmds = buildRemoteCmds
+
 // String names the mode for diagnostics ("push", "preview").
 func (m Mode) String() string {
 	switch m {
@@ -56,52 +81,24 @@ func (m Mode) Verb() string {
 	return "pushed"
 }
 
-// validate rejects the zero (and any unknown) Mode before any SSH traffic.
-func (m Mode) validate() error {
+// Validate rejects the zero (and any unknown) Mode. Delivery.ToHost and
+// Fanout call it before any SSH traffic; the api entry points call it before
+// recording, so an invalid mode neither records the plan (under a plan ID and
+// labels that would silently read as a push) nor reaches a host.
+func (m Mode) Validate() error {
 	if m != Push && m != Preview {
 		return fmt.Errorf("remote: invalid delivery mode %s", m)
 	}
 	return nil
 }
 
-// applyStdinArg is the "gonf apply" argument tail that reads the plan from
-// stdin for this mode: Preview always asks for the strict no-staging dry
-// run; Push asks for a plain dry run only when resource.DryRun is set
-// (push -n) and for a real apply otherwise.
-func (m Mode) applyStdinArg() string {
-	switch {
-	case m == Preview:
-		return "-n -strict-preview -"
-	case resource.DryRun():
-		return "-n -"
-	default:
-		return "-"
-	}
-}
-
-// Delivery is one recorded plan together with the Mode it is delivered in.
-// It is built once, right after recording, and passed by value through every
-// layer below the api entry point, so no layer needs its own push/preview
-// variant.
-type Delivery struct {
-	Mode   Mode
-	PlanID string
-	Ops    []plan.Op
-	Mem    plan.BlobReader
-}
-
-// forHost is the Delivery of one fan-out member: the same plan and mode,
-// with the plan ID suffixed by the host's label so every host's remote
-// staging (e.g. the sticky dir) gets its own name.
-func (d Delivery) forHost(label string) Delivery {
-	d.PlanID += "-" + label
-	return d
-}
-
 // ToHost splits the plan into privilege chunks and streams each chunk to
-// one SSH target, in d.Mode. The ctx (Background-rooted with
-// DefaultHostTimeout for api.PushTo/PreviewTo; the per-host timeout context
-// in Fanout) kills the in-flight ssh when canceled.
+// one SSH target, in d.Mode. Canceling ctx kills the in-flight ssh. ToHost
+// adds no timeout of its own: the single-target api entry points
+// (PushToContext, PreviewToContext and the Background-rooted PushTo,
+// PreviewTo, PushHost, PreviewHost) pass their caller's ctx and add
+// DefaultHostTimeout only when it has no deadline yet, and Fanout passes
+// each host its per-host timeout context.
 //
 // A plan.ValidateChunks pre-flight runs before any SSH traffic: a dep
 // recorded in a later privilege chunk (or dangling) fails the delivery
@@ -122,7 +119,7 @@ func (d Delivery) forHost(label string) Delivery {
 // the remote gonf is only verified (every privilege context that will apply
 // a chunk), never installed.
 func (d Delivery) ToHost(ctx context.Context, t PushTarget) error {
-	if err := d.Mode.validate(); err != nil {
+	if err := d.Mode.Validate(); err != nil {
 		return err
 	}
 	chunks := plan.SplitPrivilegeChunks(d.Ops)
@@ -146,11 +143,6 @@ func (d Delivery) ToHost(ctx context.Context, t PushTarget) error {
 	return d.stream(ctx, t, chunks, remotes, sticky)
 }
 
-// ensureRuntime is the Push-mode bootstrap step (EnsureRemoteGonf). It is a
-// variable only so ObserveBootstrapForTest can observe which deliveries
-// reach it; production code never reassigns it.
-var ensureRuntime = EnsureRemoteGonf
-
 // ObserveBootstrapForTest is a test seam: until the returned restore func
 // runs, every Push-mode delivery reports its gonf bootstrap step
 // (EnsureRemoteGonf) to seen instead of probing or installing anything, as if
@@ -166,6 +158,29 @@ func ObserveBootstrapForTest(seen func(PushTarget)) (restore func()) {
 		return "", nil
 	}
 	return func() { ensureRuntime = old }
+}
+
+// applyStdinArg is the "gonf apply" argument tail that reads the plan from
+// stdin for this mode: Preview always asks for the strict no-staging dry
+// run; Push asks for a plain dry run only when resource.DryRun is set
+// (push -n) and for a real apply otherwise.
+func (m Mode) applyStdinArg() string {
+	switch {
+	case m == Preview:
+		return "-n -strict-preview -"
+	case resource.DryRun():
+		return "-n -"
+	default:
+		return "-"
+	}
+}
+
+// forHost is the Delivery of one fan-out member: the same plan and mode,
+// with the plan ID suffixed by the host's label so every host's remote
+// staging (e.g. the sticky dir) gets its own name.
+func (d Delivery) forHost(label string) Delivery {
+	d.PlanID += "-" + label
+	return d
 }
 
 // prepareRemote builds every chunk's remote apply command and makes sure the
@@ -192,9 +207,9 @@ func (d Delivery) prepareRemote(ctx context.Context, t PushTarget, chunks []plan
 	}
 	if installed != "" && t.GonfPath == "" {
 		t.GonfPath = installed
-		remotes, err = buildRemoteCmds(chunks, t, sticky, d.Mode)
+		remotes, err = rebuildRemoteCmds(chunks, t, sticky, d.Mode)
 		if err != nil {
-			return t, nil, err
+			return t, nil, fmt.Errorf("rebuild remote commands for %s: %w", installed, err)
 		}
 	}
 	return t, remotes, nil

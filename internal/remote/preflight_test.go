@@ -25,14 +25,14 @@ func preflightOps(dep string, depElevated bool) []plan.Op {
 	return ops
 }
 
-// TestPushChunksRunsItsOwnDependencyPreflight pins the last-line guard inside
-// PushChunks and a Preview-mode Delivery.ToHost: plans that reach them
+// TestPushToHostRunsItsOwnDependencyPreflight pins the last-line guard inside
+// a Push-mode and a Preview-mode Delivery.ToHost: plans that reach them
 // without having been recorded by this gonf (hand-built or recorded by an
 // older release) are refused before a single SSH call is made. Every push
 // test that goes through the api layer is refused earlier, at record time,
 // so without this test dropping the pre-flight line in Delivery.ToHost
 // would go unnoticed.
-func TestPushChunksRunsItsOwnDependencyPreflight(t *testing.T) {
+func TestPushToHostRunsItsOwnDependencyPreflight(t *testing.T) {
 	restoreProbe := AssumeRemotePlanCurrent()
 	t.Cleanup(restoreProbe)
 	old := SSHRunner
@@ -55,8 +55,8 @@ func TestPushChunksRunsItsOwnDependencyPreflight(t *testing.T) {
 		{name: "dependency in a later privilege chunk", ops: preflightOps("Command[a]", true), want: "later chunk"},
 	}
 	entryPoints := map[string]func(context.Context, PushTarget, string, []plan.Op, plan.BlobReader) error{
-		"PushChunks":               PushChunks,
-		"Delivery(Preview).ToHost": previewChunks,
+		"Delivery(Push).ToHost":    pushToHost,
+		"Delivery(Preview).ToHost": previewToHost,
 	}
 	for _, tc := range tests {
 		for name, push := range entryPoints {
@@ -77,9 +77,9 @@ func TestPushChunksRunsItsOwnDependencyPreflight(t *testing.T) {
 	}
 }
 
-// TestPushChunksAcceptsBackwardDependencies is the positive counterpart: a
+// TestPushToHostAcceptsBackwardDependencies is the positive counterpart: a
 // dependency recorded in an EARLIER chunk (or the same one) still pushes.
-func TestPushChunksAcceptsBackwardDependencies(t *testing.T) {
+func TestPushToHostAcceptsBackwardDependencies(t *testing.T) {
 	restoreProbe := AssumeRemotePlanCurrent()
 	t.Cleanup(restoreProbe)
 	old := SSHRunner
@@ -96,9 +96,9 @@ func TestPushChunksAcceptsBackwardDependencies(t *testing.T) {
 		{Op: plan.KindCommand, Bin: "true", ID: "Command[a]"},
 		{Op: plan.KindCommand, Bin: "true", ID: "Command[b]", Deps: []string{"Command[a]"}},
 	}
-	err := PushChunks(context.Background(), PushTarget{Host: "h.example", Privilege: privilege.None}, "demo", ops, nil)
+	err := pushToHost(context.Background(), PushTarget{Host: "h.example", Privilege: privilege.None}, "demo", ops, nil)
 	if err != nil {
-		t.Fatalf("PushChunks with a satisfiable dependency: %v", err)
+		t.Fatalf("push with a satisfiable dependency: %v", err)
 	}
 	if calls == 0 {
 		t.Fatal("a valid plan must reach the SSH transport")

@@ -92,9 +92,10 @@ func (e *DanglingWatchError) Reason() string {
 // Wiring: the check runs wherever the WHOLE plan is in hand, before anything
 // is applied or uploaded — api.RecordPlanTo (record time: Run, `gonf plan`,
 // push, cluster and fleet all record through it), api.ApplyChunks (local
-// apply), remote.PushChunks (SSH push) and api.Apply (registered resources;
-// the whole plan as a single chunk) — so a rejected plan mutates no
-// destination and, on push, sends zero SSH traffic. plan.Apply and
+// apply), remote.Delivery.ToHost (SSH push and strict preview) and api.Apply
+// (registered resources; the whole plan as a single chunk) — so a rejected
+// plan mutates no destination and, on push or preview, sends zero SSH
+// traffic. plan.Apply and
 // api.ApplyPlan deliberately do NOT run it: they execute one already-split
 // chunk (the elevated re-exec child, a pushed chunk, `gonf apply <file|->`),
 // where a dep recorded in an earlier chunk is legitimately absent. A plan
@@ -126,8 +127,8 @@ func ValidateChunkDeps(chunks [][]Op) error {
 // in the gated op's own chunk) and ValidateRequirementScopes (requirement
 // blocks may only use and sit under host-fact conditions; this is the
 // record-time refusal of that rule). api.RecordPlanTo, api.ApplyChunks,
-// api.Apply and remote.PushChunks all call this one helper instead of each
-// composing the three checks, so a check added here reaches all of them at once.
+// api.Apply and remote.Delivery.ToHost all call this one helper instead of
+// each composing the three checks, so a check added here reaches all of them at once.
 // The error is a Refusal (see there for the exact concrete types).
 func ValidateChunks(chunks []Chunk) error {
 	bodies := make([][]Op, len(chunks))
@@ -170,8 +171,8 @@ func firstChunkOf(chunks [][]Op) map[string]int {
 // watch ids at all (its gate could never fire). Like ValidateChunkDeps, this is
 // a controller-side pre-flight, run through ValidateChunks by
 // api.RecordPlanTo (record time), api.ApplyChunks, api.Apply and
-// remote.PushChunks, so a rejected plan mutates no destination and, on push,
-// sends zero SSH traffic.
+// remote.Delivery.ToHost, so a rejected plan mutates no destination and, on
+// push or preview, sends zero SSH traffic.
 func ValidateChangeGates(chunks [][]Op) error {
 	firstChunk := firstChunkOf(chunks)
 	for i, chunk := range chunks {

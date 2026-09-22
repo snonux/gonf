@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/remote"
+	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 )
 
@@ -124,7 +124,7 @@ func TestEntryPointsPinDeliveryMode(t *testing.T) {
 			registerForHostsTask("iter", "all")
 			r := installModeRecorder(t)
 			var err error
-			stderr := captureStderr(t, func() { err = tc.run("iter") })
+			stderr := testutil.CaptureStderr(t, func() { err = tc.run("iter") })
 			if err != nil {
 				t.Fatalf("%s: %v", tc.name, err)
 			}
@@ -213,7 +213,7 @@ func TestEntryPointsKeepFailurePrefix(t *testing.T) {
 				return errors.New("boom")
 			}
 			var err error
-			captureStderr(t, func() { err = tc.run("iter") })
+			testutil.CaptureStderr(t, func() { err = tc.run("iter") })
 			if err == nil {
 				t.Fatalf("%s() succeeded, want the ssh failure", tc.name)
 			}
@@ -248,25 +248,43 @@ func checkSummary(t *testing.T, tc modeCase, stderr string) {
 	}
 }
 
-// captureStderr runs fn with os.Stderr redirected to a pipe and returns what
-// was written: the summary lines under test are printed to os.Stderr
-// directly. Tests using it must not run in parallel.
-func captureStderr(t *testing.T, fn func()) string {
-	t.Helper()
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
+// TestZeroModeRecordsNothing pins that the zero (invalid) remote.Mode is
+// refused at the top of every run shape — single target, cluster and fleet —
+// before recording: the task body never runs (so nothing is recorded under a
+// plan ID or label that would read as a push), and nothing reaches SSH or
+// the gonf bootstrap step.
+func TestZeroModeRecordsNothing(t *testing.T) {
+	ctx := context.Background()
+	runs := map[string]func(tasks ...string) error{
+		"recordAndPush": func(ts ...string) error {
+			return recordAndPush(ctx, 0, PushTarget{Host: "rex@h2.example"}, "", nil, ts...)
+		},
+		"cluster": func(ts ...string) error { return groupRun{name: "edge", tasks: ts}.cluster(ctx) },
+		"fleet":   func(ts ...string) error { return groupRun{name: "edge-fleet", tasks: ts}.fleet(ctx) },
 	}
-	old := os.Stderr
-	os.Stderr = w
-	done := make(chan string)
-	go func() {
-		b, _ := io.ReadAll(r)
-		done <- string(b)
-	}()
-	defer func() { os.Stderr = old }()
-	fn()
-	os.Stderr = old
-	_ = w.Close()
-	return <-done
+	for name, run := range runs {
+		t.Run(name, func(t *testing.T) {
+			setupForHostsInventory(t)
+			bodies := 0
+			Task("counted", "", func() {
+				bodies++
+				File("/tmp/zero-mode", options.WithContent("x\n"))
+			})
+			r := installModeRecorder(t)
+			// With and without tasks: the mode check comes before the
+			// "no tasks" check, whose label would otherwise read as a push.
+			for _, tasks := range [][]string{{"counted"}, nil} {
+				err := run(tasks...)
+				if err == nil || !strings.Contains(err.Error(), "invalid delivery mode") {
+					t.Fatalf("%s(%v) = %v, want invalid delivery mode", name, tasks, err)
+				}
+				if bodies != 0 {
+					t.Fatalf("%s(%v) recorded the plan: task body ran %d time(s)", name, tasks, bodies)
+				}
+			}
+			if len(r.remoteCmds) != 0 || r.bootstraps.Load() != 0 {
+				t.Fatalf("%s with the zero mode reached the remote", name)
+			}
+		})
+	}
 }

@@ -38,8 +38,8 @@ type Facts struct {
 // ValidateChunks pre-flight before anything is applied or uploaded:
 // api.RecordPlanTo at record time (so Run, `gonf plan`, push, cluster and
 // fleet never produce such a plan), api.ApplyChunks (local apply),
-// remote.PushChunks (SSH push) and api.Apply (registered resources, as a
-// single chunk). Entries that execute or ship an already-recorded chunk or
+// remote.Delivery.ToHost (SSH push and strict preview) and api.Apply
+// (registered resources, as a single chunk). Entries that execute or ship an already-recorded chunk or
 // file unprotected are api.ApplyPlan, `gonf apply <plan.jsonl|->` (which
 // cannot tell a whole plan from one chunk of a mixed-privilege plan) and
 // api.PushPayload / api.PushPayloadContext (they stream one already-encoded
@@ -122,7 +122,7 @@ type planLine struct {
 // applied it, and chunk boundaries are invisible to a chunk-level Apply).
 // Whether such a dep is legitimate or dangling cannot be decided from one
 // chunk; only callers holding the whole plan (api.RecordPlanTo,
-// api.ApplyChunks, remote.PushChunks, api.Apply) can, via the
+// api.ApplyChunks, remote.Delivery.ToHost, api.Apply) can, via the
 // ValidateChunks pre-flight.
 func sortedApplyOrder(body []Op) ([]planLine, error) {
 	// bodyIDs maps an op ID to its first recorded index in the body, so an
@@ -187,8 +187,8 @@ func sortedApplyOrder(body []Op) ([]planLine, error) {
 // chunk or invocation may have applied it, and chunk boundaries are invisible
 // to a chunk-level Apply. This function cannot tell that case from a typo'd
 // dep; the ValidateChunks pre-flight of the whole-plan callers
-// (api.RecordPlanTo, api.ApplyChunks, remote.PushChunks, api.Apply) is what
-// refuses dangling deps before anything is applied.
+// (api.RecordPlanTo, api.ApplyChunks, remote.Delivery.ToHost, api.Apply) is
+// what refuses dangling deps before anything is applied.
 func sortRunByDeps(run []planLine, placed map[string]bool, bodyIDs map[string]int, runEnd int) ([]planLine, error) {
 	// inRun maps an op ID to every run position carrying it (IDs repeat when
 	// a diamond include records the same resource twice).

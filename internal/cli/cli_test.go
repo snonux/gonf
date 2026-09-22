@@ -186,28 +186,6 @@ type unregisteredDep string
 
 func (d unregisteredDep) Dependencies() []string { return []string{string(d)} }
 
-// captureStderr runs fn with os.Stderr redirected into a pipe and returns
-// what fn wrote to it.
-func captureStderr(t *testing.T, fn func()) string {
-	t.Helper()
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	old := os.Stderr
-	os.Stderr = w
-	t.Cleanup(func() { os.Stderr = old })
-	fn()
-	_ = w.Close()
-	os.Stderr = old
-	out, err := io.ReadAll(r)
-	_ = r.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(out)
-}
-
 // runGonf runs `gonf <args...>` in-process and returns the exit code and
 // everything written to stderr.
 func runGonf(t *testing.T, args ...string) (int, string) {
@@ -216,7 +194,7 @@ func runGonf(t *testing.T, args ...string) (int, string) {
 	t.Cleanup(func() { os.Args = oldArgs })
 	os.Args = append([]string{"gonf"}, args...)
 	var code int
-	stderr := captureStderr(t, func() { code = CLI() })
+	stderr := testutil.CaptureStderr(t, func() { code = CLI() })
 	return code, stderr
 }
 

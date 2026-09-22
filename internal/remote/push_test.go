@@ -163,11 +163,11 @@ func TestPushRemoveStickyRunsAfterContextCanceled(t *testing.T) {
 	}
 }
 
-// TestPushChunksRemovesStickyOnBlobUploadFailure covers the pushBlobs-failure
+// TestPushToHostRemovesStickyOnBlobUploadFailure covers the pushBlobs-failure
 // half of root cause 2: previously a pushBlobs error returned immediately
 // with no cleanup attempt at all, leaking any partial upload under the
 // sticky dir until the next push happened to reuse (and now wipe) it.
-func TestPushChunksRemovesStickyOnBlobUploadFailure(t *testing.T) {
+func TestPushToHostRemovesStickyOnBlobUploadFailure(t *testing.T) {
 	old := SSHRunner
 	restoreProbe := AssumeRemotePlanCurrent()
 	t.Cleanup(func() {
@@ -196,7 +196,7 @@ func TestPushChunksRemovesStickyOnBlobUploadFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := PushChunks(context.Background(),
+	err := pushToHost(context.Background(),
 		PushTarget{Host: "h.example", Privilege: privilege.Sudo}, "demo", ops, mem)
 	if err == nil {
 		t.Fatal("expected the simulated blob upload failure to propagate")

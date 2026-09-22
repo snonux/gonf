@@ -15,7 +15,7 @@ import (
 )
 
 // fakeBlobReader is a minimal plan.BlobReader implementation that is
-// deliberately NOT *plan.MemoryStore. It exists to prove that PushChunks
+// deliberately NOT *plan.MemoryStore. It exists to prove that Delivery.ToHost
 // and Fanout depend only on the plan.BlobReader interface (DIP): any type
 // satisfying it — not just the concrete in-memory store recording writes
 // through — works as the mem argument, including a hypothetical disk-backed
@@ -46,14 +46,14 @@ func (f *fakeBlobReader) TreeBlob(ref string) ([]plan.BlobEntry, bool) {
 
 var _ plan.BlobReader = (*fakeBlobReader)(nil)
 
-// TestPushChunksWithFakeBlobReader pushes a single (non-elevated, no
-// sticky-dir) chunk through PushChunks using fakeBlobReader instead of
-// *plan.MemoryStore, then decodes the captured SSH payload with
+// TestPushToHostWithFakeBlobReader pushes a single (non-elevated, no
+// sticky-dir) chunk through a Push-mode Delivery.ToHost using fakeBlobReader
+// instead of *plan.MemoryStore, then decodes the captured SSH payload with
 // plan.DecodePush to confirm the fake's blob content really made the round
-// trip through EncodePush. Had PushChunks still required the concrete
+// trip through EncodePush. Had Delivery.ToHost still required the concrete
 // *plan.MemoryStore, fakeBlobReader would not satisfy its parameter type
 // and this test would fail to compile.
-func TestPushChunksWithFakeBlobReader(t *testing.T) {
+func TestPushToHostWithFakeBlobReader(t *testing.T) {
 	restoreProbe := AssumeRemotePlanCurrent()
 	t.Cleanup(restoreProbe)
 
@@ -80,10 +80,10 @@ func TestPushChunksWithFakeBlobReader(t *testing.T) {
 		"blobs/demo.txt": []byte("fake-blob-content"),
 	}}
 
-	err := PushChunks(context.Background(),
+	err := pushToHost(context.Background(),
 		PushTarget{Host: "h.example", Privilege: privilege.None}, "demo", ops, mem)
 	if err != nil {
-		t.Fatalf("PushChunks: %v", err)
+		t.Fatalf("push: %v", err)
 	}
 	if calls != 1 {
 		t.Fatalf("calls = %d, want 1 (single chunk, no sticky dir)", calls)

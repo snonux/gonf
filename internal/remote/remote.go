@@ -164,17 +164,6 @@ func PushPayloadContext(ctx context.Context, t PushTarget, payload []byte, eleva
 	return SSHRunner(ctx, bytes.NewReader(payload), t.sshArgv(remote))
 }
 
-// PushChunks is a compatibility wrapper: exactly Delivery{Mode: Push, ...}
-// .ToHost(ctx, t). No production code calls it any more — the api entry
-// points and Fanout build a Delivery instead — but it is kept as the
-// single-target push shorthand that tests in this package and in api use,
-// and as the name comments in plan/ and api/ (and docs/plan.md) use for the
-// push-side pre-flight. The behaviour it stands for is documented on
-// Delivery.ToHost.
-func PushChunks(ctx context.Context, t PushTarget, planID string, ops []plan.Op, mem plan.BlobReader) error {
-	return Delivery{Mode: Push, PlanID: planID, Ops: ops, Mem: mem}.ToHost(ctx, t)
-}
-
 // requireRemoteGonfForChunks verifies every privilege context that will run a
 // strict-preview apply. The same path can resolve to different binaries for
 // the SSH user and sudo/doas, so mixed plans require both probes.

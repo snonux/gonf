@@ -13,8 +13,8 @@ type BlobStore interface {
 }
 
 // BlobReader is the read-back half of a blob store: everything EncodePush
-// (and the remote push path built on it — internal/remote's PushChunks and
-// Fanout) needs to stream a previously-recorded set of blobs back out,
+// (and the remote push path built on it — internal/remote's Delivery.ToHost
+// and Fanout) needs to stream a previously-recorded set of blobs back out,
 // without depending on how or where they are held. Recording writes
 // through the full BlobStore; push only ever reads, so it depends on this
 // narrower interface instead of the concrete MemoryStore — a disk-backed or

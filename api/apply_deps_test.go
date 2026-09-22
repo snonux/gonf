@@ -208,7 +208,7 @@ func TestApplyAcceptsValidDependencyGraphs(t *testing.T) {
 // EARLIER chunk is legitimately absent from the body and must keep applying. A
 // pre-flight there would break every mixed privileged/unprivileged plan; the
 // guarantee lives where the whole plan is in hand (record time, ApplyChunks,
-// PushChunks, api.Apply) instead.
+// remote.Delivery.ToHost, api.Apply) instead.
 func TestApplyPlanKeepsAcceptingEarlierChunkDeps(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "marker")

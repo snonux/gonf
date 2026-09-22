@@ -186,8 +186,8 @@ func RecordPlan(planID, planDir string, taskNames ...string) ([]plan.Op, error) 
 //
 // Before returning, the finished plan passes validateRecordedPlan: dangling
 // or forward cross-chunk dependencies and cross-chunk change watches fail the
-// record, so no plan that ApplyChunks or remote.PushChunks would refuse is
-// ever written (`gonf plan`), shipped (push, cluster, fleet) or applied (Run).
+// record, so no plan that ApplyChunks or remote.Delivery.ToHost would refuse
+// is ever written (`gonf plan`), shipped (push, cluster, fleet) or applied (Run).
 //
 // RecordPlanTo does NOT undo blob writes: a record that fails (the
 // pre-flight refusal, a task-body error, a packaging error) may already have
@@ -292,11 +292,11 @@ func amendRecordedDraft(d resource.PlanDraft, store plan.BlobStore) error {
 // re-exec child and remote pushes use the same `gonf apply <file|->` entry),
 // so it cannot run the dangling-dependency check itself.
 //
-// The apply and push side deliberately re-run the same check on the split plan
-// (ApplyChunksContext, remote.PushChunks): a public entry point cannot assume
-// its ops came from a record in this process (they may be decoded from a file
-// or recorded by an older gonf), and the check is a cheap linear pass. For Run
-// the second pass is therefore redundant by construction, never conflicting —
+// The apply, push and preview side deliberately re-run the same check on the
+// split plan (ApplyChunksContext, remote.Delivery.ToHost): a public entry
+// point cannot assume its ops came from a record in this process (they may
+// be decoded from a file or recorded by an older gonf), and the check is a
+// cheap linear pass. For Run the second pass is therefore redundant by construction, never conflicting —
 // the very same plan.ValidateChunks accepts both times.
 //
 // The refusal reads "RecordPlan: <reason>" with one prefix, worded in terms of
@@ -557,8 +557,8 @@ func checkUnrecordedDrafts(taskName string) error {
 // chunk-level entry points, PushPayload and PushPayloadContext, which stream
 // one already-encoded payload with an elevate flag. The guarantee lives where
 // the whole plan is in hand: RecordPlanTo (record time: Run, `gonf plan`,
-// push, cluster, fleet), ApplyChunks, remote.PushChunks and Apply. A caller
-// feeding ApplyPlan (or PushPayload) a whole plan from elsewhere (a
+// push, cluster, fleet), ApplyChunks, remote.Delivery.ToHost and Apply. A
+// caller feeding ApplyPlan (or PushPayload) a whole plan from elsewhere (a
 // hand-written or older plan file) must run plan.ValidateChunks over
 // plan.SplitPrivilegeChunks itself, or use ApplyChunks (PushTo), which does.
 func ApplyPlan(ops []plan.Op, planDir string) error {

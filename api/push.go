@@ -2,13 +2,10 @@ package api
 
 import (
 	"context"
-	"fmt"
-	"os"
 
 	"github.com/snonux/gonf/internal/inventory"
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/internal/remote"
-	"github.com/snonux/gonf/plan"
 )
 
 // PushTarget is one SSH destination (inventory optional). It is an alias for
@@ -90,86 +87,4 @@ func PreviewToContext(ctx context.Context, t PushTarget, planID string, tasks ..
 // inventory.SelectionForDestination).
 func destinationHosts(t PushTarget) []string {
 	return inventory.SelectionForDestination(t.User, t.Host, t.Port, len(t.ExtraSSH) > 0)
-}
-
-// recordAndPush records tasks with selected as the ForHosts host selection
-// (nil → every host), refuses opaque-only plans, and delivers the chunks to t
-// in mode: remote.Push may bootstrap gonf on t, remote.Preview never does.
-// It is the single implementation behind PushTo/PreviewTo (and their
-// *Context forms) and PushHost/PreviewHost; the exported pairs only choose
-// the mode, the plan ID and the host selection.
-func recordAndPush(ctx context.Context, mode remote.Mode, t PushTarget, planID string, selected []string, tasks ...string) error {
-	label := targetLabel(mode)
-	if len(tasks) == 0 {
-		return fmt.Errorf("%s: no tasks", label)
-	}
-	if planID == "" {
-		planID = "push"
-	}
-	d, err := recordDelivery(mode, planID, label, selected, tasks)
-	if err != nil {
-		return err
-	}
-	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, remote.DefaultHostTimeout)
-		defer cancel()
-	}
-	if err := d.ToHost(ctx, t); err != nil {
-		return err
-	}
-	// "pushed ... to host" but "previewed ... on host": the wording predates
-	// Mode and is kept byte-identical for anyone reading stderr.
-	preposition := "to"
-	if mode == remote.Preview {
-		preposition = "on"
-	}
-	fmt.Fprintf(os.Stderr, "%s %s (%d ops) %s %s\n", mode.Verb(), planID, len(d.Ops), preposition, t.Destination())
-	return nil
-}
-
-// recordDelivery records tasks once with selected as the ForHosts host
-// selection, refuses an opaque-only plan (label prefixes that refusal), and
-// returns the recorded plan as a remote.Delivery in mode. Every push and
-// preview entry point (single target, cluster, fleet) records through it, so
-// the Delivery — and with it the mode — is built exactly once per run and
-// then carried unchanged down to each host.
-func recordDelivery(mode remote.Mode, planID, label string, selected, tasks []string) (remote.Delivery, error) {
-	mem := plan.NewMemoryStore()
-	ops, err := recordPlanForHosts(selected, planID, mem, tasks...)
-	if err != nil {
-		return remote.Delivery{}, fmt.Errorf("record: %w", err)
-	}
-	if err := RefuseOpaqueOnlyPush(label); err != nil {
-		return remote.Delivery{}, err
-	}
-	return remote.Delivery{Mode: mode, PlanID: planID, Ops: ops, Mem: mem}, nil
-}
-
-// targetLabel is a single-target run's error prefix: "push" or
-// "remote preview".
-func targetLabel(mode remote.Mode) string {
-	if mode == remote.Preview {
-		return "remote preview"
-	}
-	return "push"
-}
-
-// groupLabel is a cluster or fleet run's error prefix: `cluster "web"` for a
-// push, `cluster preview "web"` for a strict preview (scope is "cluster" or
-// "fleet").
-func groupLabel(mode remote.Mode, scope, name string) string {
-	if mode == remote.Preview {
-		return fmt.Sprintf("%s preview %q", scope, name)
-	}
-	return fmt.Sprintf("%s %q", scope, name)
-}
-
-// groupPlanID is a cluster or fleet run's default plan ID: "cluster-web" for
-// a push, "preview-cluster-web" for a strict preview.
-func groupPlanID(mode remote.Mode, scope, name string) string {
-	if mode == remote.Preview {
-		return "preview-" + scope + "-" + name
-	}
-	return scope + "-" + name
 }

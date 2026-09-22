@@ -8,6 +8,7 @@ import (
 
 	"github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/internal"
+	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 )
 
@@ -54,7 +55,7 @@ func TestRunSubcommandAcceptsSubcommands(t *testing.T) {
 	for _, name := range []string{"dns-zone-serial", "dns-zone-equivalent"} {
 		var code int
 		var ok bool
-		_ = captureStderr(t, func() { code, ok = runSubcommand(context.Background(), name, nil) })
+		_ = testutil.CaptureStderr(t, func() { code, ok = runSubcommand(context.Background(), name, nil) })
 		if !ok || code != 2 {
 			t.Fatalf("runSubcommand(%q, nil) = %d, %v; want 2, true (usage)", name, code, ok)
 		}

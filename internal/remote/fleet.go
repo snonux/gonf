@@ -61,7 +61,7 @@ type Group struct {
 // errors.As reach a host's plan.Refusal, context.DeadlineExceeded, etc.
 // through it (see fanoutTally.err for its shape).
 func Fanout(ctx context.Context, d Delivery, g Group) error {
-	if err := d.Mode.validate(); err != nil {
+	if err := d.Mode.Validate(); err != nil {
 		return err
 	}
 	tally := &fanoutTally{hostTimeout: g.HostTimeout}

@@ -33,7 +33,7 @@ wherever the **whole plan** is in hand, before anything is applied or uploaded:
 |-------|--------|
 | record time (`api.RecordPlanTo`) | `gonf <task>`, `gonf plan`, push, cluster, fleet — dangling and forward cross-chunk deps, and cross-chunk change watches; the refused plan is never shipped or applied, and `gonf plan -o dir` writes nothing (see below) |
 | `api.ApplyChunks` | local apply of an already-recorded plan (same checks) |
-| `remote.PushChunks` | SSH push, before any SSH traffic (same checks) |
+| `remote.Delivery.ToHost` | every SSH push and strict preview (single target, cluster, fleet), before any SSH traffic (same checks) |
 | `api.Apply` | registered resources (the whole plan as one chunk, so only dangling deps and watches can fail: a dep recorded later in that single chunk is reordered, not refused) |
 
 All four run the one helper `plan.ValidateChunks` (dependency direction, then
@@ -332,7 +332,7 @@ if err := ApplyPlan(ops, planDir); err != nil { /* … */ }
   satisfied at chunk level (an earlier chunk or invocation applied it).
   `plan.Apply` itself cannot tell a dep applied by an earlier chunk from a
   typo'd one; the controller-side pre-flight (`plan.ValidateChunks`, run at
-  record time and by `ApplyChunks`, `remote.PushChunks` and `api.Apply`, but
+  record time and by `ApplyChunks`, `remote.Delivery.ToHost` and `api.Apply`, but
   not when a single chunk is executed — see "Where dependencies are checked")
   refuses dangling deps and forward cross-chunk deps before anything is
   applied (`api.Apply` holds the whole plan as ONE chunk, so it can only see
@@ -693,9 +693,13 @@ rather than once for the whole fleet.
 
 ### Remote gonf binary sync and strict preview
 
-Before the first SSH apply chunk, `PushChunks` probes `gonf -plan-version` on
-the target. If the remote binary is missing or reports a plan schema older
-than this controller's `CurrentVersion`, gonf cross-compiles
+Before the first SSH apply chunk, every delivery to a host
+(`remote.Delivery.ToHost`, used by push, cluster and fleet alike) probes the
+remote gonf, in one of two modes. A strict preview (`-preview`) only verifies
+it (`RequireRemoteGonf`, see below) and never changes it. A push
+(`EnsureRemoteGonf`) probes `gonf -plan-version` on the target; if the remote
+binary is missing or reports a plan schema older than this controller's
+`CurrentVersion`, gonf cross-compiles
 `github.com/snonux/gonf/cmd/gonf` for the host (via `WithGOOS` / `WithGOARCH`,
 or `uname` when unset), `scp`s it, and installs to `/usr/local/bin/gonf`
 (override with `WithGonfPath`). Privilege for the install follows the host's
@@ -980,7 +984,8 @@ satisfied (the earlier chunk applied it first). A dependency recorded AFTER
 its dependent crosses the privilege boundary — apply cannot reorder across
 chunks — and is rejected before anything is applied by a controller-side
 pre-flight (`plan.ValidateChunks`, run at record time and by `ApplyChunks` and
-`remote.PushChunks`); on push the refusal happens before any SSH traffic. The
+`remote.Delivery.ToHost`); on push or preview the refusal happens before any
+SSH traffic. The
 same pre-flight refuses dangling deps (naming no recorded resource at all); a
 forward dep inside `api.Apply`'s single chunk is not a cross-chunk case and is
 reordered, so `api.Apply` only refuses the dangling ones.

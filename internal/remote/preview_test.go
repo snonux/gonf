@@ -89,8 +89,8 @@ func TestPreviewDeliveryNeverBootstrapsAndUsesStrictDryRun(t *testing.T) {
 	}
 
 	ops := []plan.Op{{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "preview"}}
-	if err := previewChunks(context.Background(), PushTarget{Host: "preview.example"}, "preview", ops, nil); err != nil {
-		t.Fatalf("previewChunks() = %v", err)
+	if err := previewToHost(context.Background(), PushTarget{Host: "preview.example"}, "preview", ops, nil); err != nil {
+		t.Fatalf("previewToHost() = %v", err)
 	}
 	if remoteCmd != "gonf apply -n -strict-preview -" {
 		t.Fatalf("remote command = %q", remoteCmd)
@@ -144,8 +144,8 @@ func TestPreviewDeliveryProbesEveryAppliedPrivilegeContext(t *testing.T) {
 		{Op: plan.KindCommand, ID: "unprivileged", Bin: "true"},
 		{Op: plan.KindCommand, ID: "elevated", Bin: "true", Elevate: true},
 	}
-	if err := previewChunks(context.Background(), PushTarget{Host: "preview.example", Privilege: privilege.Sudo}, "preview", ops, nil); err != nil {
-		t.Fatalf("previewChunks() = %v", err)
+	if err := previewToHost(context.Background(), PushTarget{Host: "preview.example", Privilege: privilege.Sudo}, "preview", ops, nil); err != nil {
+		t.Fatalf("previewToHost() = %v", err)
 	}
 	if !probedUnprivileged || !probedElevated {
 		t.Fatalf("probed unprivileged=%v elevated=%v, want both privilege contexts", probedUnprivileged, probedElevated)
@@ -176,9 +176,9 @@ func TestPreviewDeliveryRefusesBlobsBeforeAnyRemoteProbe(t *testing.T) {
 	}
 
 	ops := []plan.Op{{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "preview"}}
-	err := previewChunks(context.Background(), PushTarget{Host: "preview.example"}, "preview", ops, mem)
+	err := previewToHost(context.Background(), PushTarget{Host: "preview.example"}, "preview", ops, mem)
 	if err == nil || !strings.Contains(err.Error(), "has blobs") {
-		t.Fatalf("previewChunks() = %v, want blob refusal", err)
+		t.Fatalf("previewToHost() = %v, want blob refusal", err)
 	}
 }
 

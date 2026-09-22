@@ -172,8 +172,9 @@ func TestApplyChunksRefusesForwardCrossChunkDep(t *testing.T) {
 }
 
 // TestPushRefusesForwardCrossChunkDepsWithZeroSSH pins the push-side
-// pre-flight: the same forward cross-chunk dep fails remote.PushChunks before any
-// SSH traffic (no chunk upload, no blob upload).
+// pre-flight: the same forward cross-chunk dep fails a Push-mode
+// remote.Delivery.ToHost before any SSH traffic (no chunk upload, no blob
+// upload).
 func TestPushRefusesForwardCrossChunkDepsWithZeroSSH(t *testing.T) {
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "chunks"},
@@ -190,7 +191,8 @@ func TestPushRefusesForwardCrossChunkDepsWithZeroSSH(t *testing.T) {
 		t.Error("ssh must not be invoked for a plan that fails the dep pre-flight")
 		return nil
 	}
-	err := remote.PushChunks(context.Background(), PushTarget{Host: "h.example", Privilege: privilege.Doas}, "demo", ops, nil)
+	d := remote.Delivery{Mode: remote.Push, PlanID: "demo", Ops: ops}
+	err := d.ToHost(context.Background(), PushTarget{Host: "h.example", Privilege: privilege.Doas})
 	if err == nil || !strings.Contains(err.Error(), "later chunk 1") {
 		t.Fatalf("want forward cross-chunk dep refusal, got %v", err)
 	}
@@ -251,9 +253,10 @@ func TestChangeGatePreflightsRefuseBeforeApplyOrPush(t *testing.T) {
 				t.Error("SSH must not run before change-gate preflight")
 				return nil
 			}
-			err = remote.PushChunks(context.Background(), PushTarget{Host: "h.example", Privilege: privilege.Doas}, "demo", tc.ops, nil)
+			d := remote.Delivery{Mode: remote.Push, PlanID: "demo", Ops: tc.ops}
+			err = d.ToHost(context.Background(), PushTarget{Host: "h.example", Privilege: privilege.Doas})
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("PushChunks error = %v, want %q", err, tc.want)
+				t.Fatalf("push error = %v, want %q", err, tc.want)
 			}
 		})
 	}

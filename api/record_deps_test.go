@@ -54,7 +54,7 @@ func requireNoFiles(t *testing.T, paths ...string) {
 // (what the caller adds in front, "" for RecordPlan itself) the message starts
 // with exactly one "RecordPlan: " and names the op, the missing dependency and
 // how to fix it. It never leaks the plan engine's own "plan: " prefix or chunk
-// bookkeeping, and never doubles a prefix. The ApplyChunks/PushChunks copy of
+// bookkeeping, and never doubles a prefix. The ApplyChunks/Delivery.ToHost copy of
 // the check words the same refusal "plan: op ...", so this assertion fails
 // when only their (later) pre-flight catches the plan.
 func requireDanglingMessage(t *testing.T, err error, dep, wrapPrefix string) {
@@ -177,8 +177,8 @@ func TestRecordPlanRefusesDanglingDependencyInsideWhenBlock(t *testing.T) {
 }
 
 // TestRecordPlanRefusesDependencyOnLaterPrivilegeChunk pins that the record
-// time check is the full cross-chunk pre-flight ApplyChunks and PushChunks
-// already run, not only the dangling half: a dep recorded after its
+// time check is the full cross-chunk pre-flight ApplyChunks and
+// remote.Delivery.ToHost already run, not only the dangling half: a dep recorded after its
 // dependent in a later chunk crosses the privilege boundary.
 func TestRecordPlanRefusesDependencyOnLaterPrivilegeChunk(t *testing.T) {
 	ResetForTest()

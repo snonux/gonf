@@ -2,8 +2,8 @@ package remote
 
 import (
 	"context"
+	"errors"
 	"io"
-	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -11,14 +11,21 @@ import (
 	"testing"
 
 	"github.com/snonux/gonf/internal/privilege"
+	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
 
-// previewChunks is a strict preview of one target: Delivery.ToHost in
+// pushToHost is a push to one target: Delivery.ToHost in Push mode. The
+// push tests use it where they once called the removed PushChunks wrapper.
+func pushToHost(ctx context.Context, t PushTarget, planID string, ops []plan.Op, mem plan.BlobReader) error {
+	return Delivery{Mode: Push, PlanID: planID, Ops: ops, Mem: mem}.ToHost(ctx, t)
+}
+
+// previewToHost is a strict preview of one target: Delivery.ToHost in
 // Preview mode. The preview tests use it where they once called the removed
 // PreviewChunks wrapper.
-func previewChunks(ctx context.Context, t PushTarget, planID string, ops []plan.Op, mem plan.BlobReader) error {
+func previewToHost(ctx context.Context, t PushTarget, planID string, ops []plan.Op, mem plan.BlobReader) error {
 	return Delivery{Mode: Preview, PlanID: planID, Ops: ops, Mem: mem}.ToHost(ctx, t)
 }
 
@@ -140,7 +147,7 @@ func TestFanoutModeDecidesBootstrap(t *testing.T) {
 			d := Delivery{Mode: tc.mode, PlanID: "p", Ops: deliveryOps()}
 			g := Group{Name: "c", Targets: targets, Labels: labels, Limit: 2}
 			var err error
-			stderr := captureStderr(t, func() { err = Fanout(context.Background(), d, g) })
+			stderr := testutil.CaptureStderr(t, func() { err = Fanout(context.Background(), d, g) })
 			if err != nil {
 				t.Fatalf("Fanout: %v", err)
 			}
@@ -163,18 +170,18 @@ func TestFanoutModeDecidesBootstrap(t *testing.T) {
 	}
 }
 
-// PushChunks stays the Push-mode single-target entry point: it reaches the
-// bootstrap step, while a Preview Delivery to the same target does not.
-func TestPushChunksIsPushModeToHost(t *testing.T) {
+// A Push-mode ToHost reaches the bootstrap step, while a Preview Delivery to
+// the same target does not.
+func TestToHostModeDecidesBootstrap(t *testing.T) {
 	r := installDeliveryRecorder(t)
 	target := PushTarget{Host: "h.example", Privilege: privilege.None}
-	if err := PushChunks(context.Background(), target, "demo", deliveryOps(), nil); err != nil {
-		t.Fatalf("PushChunks: %v", err)
+	if err := pushToHost(context.Background(), target, "demo", deliveryOps(), nil); err != nil {
+		t.Fatalf("push: %v", err)
 	}
 	if got := r.bootstraps.Load(); got != 1 {
-		t.Fatalf("PushChunks bootstraps = %d, want 1", got)
+		t.Fatalf("push bootstraps = %d, want 1", got)
 	}
-	if err := previewChunks(context.Background(), target, "demo", deliveryOps(), nil); err != nil {
+	if err := previewToHost(context.Background(), target, "demo", deliveryOps(), nil); err != nil {
 		t.Fatalf("preview: %v", err)
 	}
 	if got := r.bootstraps.Load(); got != 1 {
@@ -242,8 +249,8 @@ func TestToHostRebuildsCommandsAfterInstall(t *testing.T) {
 
 	ops, mem := stickyOps(t)
 	target := PushTarget{Host: "h.example", Privilege: privilege.Sudo}
-	if err := PushChunks(context.Background(), target, "p", ops, mem); err != nil {
-		t.Fatalf("PushChunks: %v", err)
+	if err := pushToHost(context.Background(), target, "p", ops, mem); err != nil {
+		t.Fatalf("push: %v", err)
 	}
 	applies := 0
 	for _, c := range r.cmds() {
@@ -260,26 +267,42 @@ func TestToHostRebuildsCommandsAfterInstall(t *testing.T) {
 	}
 }
 
-// captureStderr runs fn with os.Stderr redirected to a pipe and returns what
-// was written. The summary lines under test are printed to os.Stderr
-// directly, so swapping the file is the only seam; tests using it must not
-// run in parallel.
-func captureStderr(t *testing.T, fn func()) string {
-	t.Helper()
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
+// A failing Push-mode bootstrap (EnsureRemoteGonf) fails the delivery with
+// its own error, before any chunk's SSH apply session is opened.
+func TestToHostBootstrapFailureSendsNoChunk(t *testing.T) {
+	r := installDeliveryRecorder(t)
+	old := ensureRuntime
+	t.Cleanup(func() { ensureRuntime = old })
+	boom := errors.New("bootstrap boom")
+	ensureRuntime = func(context.Context, PushTarget) (string, error) { return "", boom }
+
+	target := PushTarget{Host: "h.example", Privilege: privilege.None}
+	if err := pushToHost(context.Background(), target, "demo", deliveryOps(), nil); !errors.Is(err, boom) {
+		t.Fatalf("push = %v, want the bootstrap error", err)
 	}
-	old := os.Stderr
-	os.Stderr = w
-	done := make(chan string)
-	go func() {
-		b, _ := io.ReadAll(r)
-		done <- string(b)
-	}()
-	defer func() { os.Stderr = old }()
-	fn()
-	os.Stderr = old
-	_ = w.Close()
-	return <-done
+	if got := r.cmds(); len(got) != 0 {
+		t.Fatalf("remote cmds after a failed bootstrap = %v, want none", got)
+	}
+}
+
+// A failing rebuild of the remote commands after the bootstrap installed
+// gonf at a new path fails the delivery (wrapping the rebuild error and
+// naming the path), before any blob upload or chunk apply is sent.
+func TestToHostRebuildFailureSendsNoChunk(t *testing.T) {
+	r := installDeliveryRecorder(t)
+	oldEnsure, oldRebuild := ensureRuntime, rebuildRemoteCmds
+	t.Cleanup(func() { ensureRuntime, rebuildRemoteCmds = oldEnsure, oldRebuild })
+	ensureRuntime = func(context.Context, PushTarget) (string, error) { return "/opt/fresh/gonf", nil }
+	boom := errors.New("rebuild boom")
+	rebuildRemoteCmds = func([]plan.Chunk, PushTarget, string, Mode) ([]string, error) { return nil, boom }
+
+	ops, mem := stickyOps(t)
+	target := PushTarget{Host: "h.example", Privilege: privilege.Sudo}
+	err := pushToHost(context.Background(), target, "p", ops, mem)
+	if !errors.Is(err, boom) || !strings.Contains(err.Error(), "/opt/fresh/gonf") {
+		t.Fatalf("push = %v, want the wrapped rebuild error naming the installed path", err)
+	}
+	if got := r.cmds(); len(got) != 0 {
+		t.Fatalf("remote cmds after a failed rebuild = %v, want none", got)
+	}
 }
