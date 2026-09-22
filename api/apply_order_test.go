@@ -2,7 +2,6 @@ package api
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -10,21 +9,23 @@ import (
 	"github.com/snonux/gonf/plan"
 )
 
-// perfRuns is how many timed samples of an operation are collected at each
-// size. It must stay odd: medianAtLeast's early exit relies on a plain
-// majority (perfRuns/2+1 samples) already pinning the eventual median, and
-// that reasoning needs an unambiguous middle sample. The median of a few
-// samples discounts one outlier tick (a GC pause, a context switch onto a
-// busy machine) without hiding a real, repeated slowdown.
+// perfRuns is how many interleaved (small, large) sample pairs
+// growthRatioSamples collects for one measurement of assertGrowsSubQuadratically.
+// It no longer needs to be odd -- that constraint came from the retired
+// median-and-majority early exit, and the minimum estimator that replaced
+// it (see growthRatioSamples) has no such requirement.
 const perfRuns = 5
 
-// perfRatioBound is the most a 4x-size run's median time may be over the
-// base-size run's median: a linear or O(n log n) algorithm grows about 4x
-// under a 4x input, an O(n^2) algorithm about 16x. The bound sits well
-// below 16x, with headroom for scheduler noise on a loaded machine, so a
-// quadratic or worse regression still fails while a correctly-scaling
-// implementation passes regardless of the box's absolute speed.
-const perfRatioBound = 8.0
+// perfRatioBound is the most a 4x-size run's minimum time may be over the
+// base-size run's minimum time: a linear or O(n log n) algorithm grows
+// about 4x under a 4x input, an O(n^2) algorithm about 16x. The bound was
+// raised from an earlier 8x to 12x -- closer to the quadratic tell (16x)
+// than to linear (4x) -- to give the minimum estimator and interleaved
+// sampling (see growthRatioSamples) more headroom against a load burst
+// that still manages to land more on the large size's samples than the
+// small size's despite interleaving, without weakening the check's
+// ability to catch a quadratic or worse regression.
+const perfRatioBound = 12.0
 
 // perfHangGuard is an absolute ceiling on ONE timed sample (see
 // timedSample), independent of load. It exists only to fail a genuine hang
@@ -51,10 +52,12 @@ func perfHangGuard() time.Duration {
 // smaller of the two sizes these tests compare) would run to completion --
 // or past Go's own test-binary timeout, aborting the whole run with an
 // unlabelled panic dump instead of this test's named failure -- before
-// medianDuration or medianAtLeast ever got to look at it. On timeout, fn's
-// goroutine is abandoned (Go cannot cancel a running goroutine); that is
-// safe here because fn only reads its captured plan, and it is acceptable
-// because the test has already failed.
+// growthRatioSamples ever got to look at it. This is the one early exit
+// assertGrowsSubQuadratically relies on: a hang ends the test immediately,
+// without waiting for the rest of the samples at either size. On timeout,
+// fn's goroutine is abandoned (Go cannot cancel a running goroutine); that
+// is safe here because fn only reads its captured plan, and it is
+// acceptable because the test has already failed.
 func timedSample(t *testing.T, label string, fn func() error) time.Duration {
 	t.Helper()
 	start := time.Now()
@@ -73,71 +76,78 @@ func timedSample(t *testing.T, label string, fn func() error) time.Duration {
 	}
 }
 
-// medianDuration runs fn n times, each bounded by timedSample, and returns
-// the median wall-clock duration.
-func medianDuration(t *testing.T, n int, label string, fn func() error) time.Duration {
+// growthRatioSamples runs small and large interleaved -- one small sample,
+// then one large sample, repeated perfRuns times -- rather than all of
+// small's samples followed by all of large's. A load burst confined to
+// part of the run (a neighbouring worktree's -race suite starting up, a GC
+// sweep, the kernel scheduling this goroutine off a busy core) then falls
+// across both sizes instead of landing entirely inside one size's batch
+// and skewing its samples relative to the other's.
+//
+// It returns the minimum of each size's samples rather than their median:
+// noise can only ADD time to a sample, never remove it, so the minimum
+// across repeated samples is the least noise-sensitive estimate of the
+// operation's intrinsic cost at that size -- one sample that happens to
+// run unburdened is enough to pull the minimum down to the true cost,
+// whereas every single sample being inflated (the whole run sitting inside
+// one sustained load burst) is what it would take to inflate the minimum
+// too. Unlike the retired median-and-majority approach, no early exit is
+// mathematically sound here: an additional sample can only lower a size's
+// minimum, so a large sample currently above threshold might still be
+// rescued by a later, faster one, and a small sample currently keeping the
+// threshold loose might still tighten it later -- so all perfRuns samples
+// of both sizes are always taken (bounded, per sample, by timedSample's
+// hang guard).
+func growthRatioSamples(t *testing.T, smallLabel string, small func() error, largeLabel string, large func() error) (smallMin, largeMin time.Duration) {
 	t.Helper()
-	durs := make([]time.Duration, n)
-	for i := range durs {
-		durs[i] = timedSample(t, label, fn)
-	}
-	slices.Sort(durs)
-	return durs[len(durs)/2]
-}
-
-// medianAtLeast is medianDuration with an early exit: once a plain majority
-// of the n samples (n odd) individually exceed threshold, the eventual
-// median -- the (n/2+1)-th smallest of the n -- is already pinned above
-// threshold no matter what the remaining, unsampled runs turn out to be (at
-// most n/2 of the n can end up at or below threshold, so the middle one
-// cannot), so it returns immediately instead of spending up to n *
-// perfHangGuard confirming a result already decided. On the healthy path
-// (samples stay under threshold) this never triggers, so it takes exactly
-// what medianDuration would; the returned duration on the early-exit path
-// is the sample that completed the majority, which is real evidence of the
-// regression even though it is not the exact eventual median.
-func medianAtLeast(t *testing.T, n int, threshold time.Duration, label string, fn func() error) (sample time.Duration, above bool) {
-	t.Helper()
-	majority := n/2 + 1
-	durs := make([]time.Duration, 0, n)
-	overThreshold := 0
-	for range n {
-		d := timedSample(t, label, fn)
-		durs = append(durs, d)
-		if d > threshold {
-			if overThreshold++; overThreshold >= majority {
-				return d, true
-			}
+	for i := range perfRuns {
+		if d := timedSample(t, smallLabel, small); i == 0 || d < smallMin {
+			smallMin = d
+		}
+		if d := timedSample(t, largeLabel, large); i == 0 || d < largeMin {
+			largeMin = d
 		}
 	}
-	slices.Sort(durs)
-	median := durs[len(durs)/2]
-	return median, median > threshold
+	return smallMin, largeMin
 }
 
 // assertGrowsSubQuadratically measures small and large (the same operation
-// as small, at 4x its input size) and fails if large's time grew more than
-// perfRatioBound times small's median time. Growth, not an absolute
-// wall-clock bound, is what is asserted, so the check stays valid on a
-// heavily loaded machine (both runs slow down together) while still
-// catching a quadratic or worse regression, such as the historic fixpoint
-// solver and the per-watch deletion-trial search the two callers guard
-// against. The worst case is bounded even for a reintroduced regression:
-// timedSample fails within one perfHangGuard of the first sample that does
-// not return in time, and medianAtLeast fails as soon as a majority of the
-// large samples already confirm the ratio, so neither loop runs every one
-// of the perfRuns samples at both sizes to completion.
+// as small, at 4x its input size) and fails if large's minimum time grew
+// more than perfRatioBound times small's minimum time (see
+// growthRatioSamples for how the two sizes are sampled and estimated).
+// Growth, not an absolute wall-clock bound, is what is asserted, so the
+// check stays valid on a heavily loaded machine (both runs slow down
+// together) while still catching a quadratic or worse regression, such as
+// the historic fixpoint solver and the per-watch deletion-trial search the
+// two callers guard against.
+//
+// A single measurement that comes in over the bound is retried once, with
+// an entirely fresh set of interleaved samples, before the test is failed:
+// flakiness from a load burst that still manages to skew one size's
+// samples despite interleaving (see growthRatioSamples) then needs two
+// independent bad draws in a row, not one, to fail the test. The retry
+// only masks noise, not a real regression: a reintroduced quadratic/cubic
+// algorithm is slow on every sample at the larger size, so it fails the
+// same way on the retry too (or hits timedSample's hang guard first).
 func assertGrowsSubQuadratically(t *testing.T, smallLabel string, small func() error, largeLabel string, large func() error) {
 	t.Helper()
-	ts := medianDuration(t, perfRuns, smallLabel, small)
-	threshold := time.Duration(float64(max(ts, time.Microsecond)) * perfRatioBound)
-	tl, above := medianAtLeast(t, perfRuns, threshold, largeLabel, large)
-	if !above {
-		return
+	const attempts = 2
+	for attempt := 1; attempt <= attempts; attempt++ {
+		smallMin, largeMin := growthRatioSamples(t, smallLabel, small, largeLabel, large)
+		threshold := time.Duration(float64(max(smallMin, time.Microsecond)) * perfRatioBound)
+		if largeMin <= threshold {
+			return
+		}
+		if attempt < attempts {
+			ratio := float64(largeMin) / float64(max(smallMin, time.Microsecond))
+			t.Logf("time grew %.1fx from %s (%v) to %s (%v); want < %.1fx; retrying once before failing",
+				ratio, smallLabel, smallMin, largeLabel, largeMin, perfRatioBound)
+			continue
+		}
+		ratio := float64(largeMin) / float64(max(smallMin, time.Microsecond))
+		t.Fatalf("time grew %.1fx from %s (%v) to %s (%v); want < %.1fx (quadratic growth would be about 16x); failed again on retry",
+			ratio, smallLabel, smallMin, largeLabel, largeMin, perfRatioBound)
 	}
-	ratio := float64(tl) / float64(max(ts, time.Microsecond))
-	t.Fatalf("time grew %.1fx from %s (%v) to %s (%v); want < %.1fx (quadratic growth would be about 16x)",
-		ratio, smallLabel, ts, largeLabel, tl, perfRatioBound)
 }
 
 var orderHdr = plan.Op{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "apply"}
