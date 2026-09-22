@@ -73,7 +73,9 @@ func Apply(ops []Op, facts Facts, planDir string) error {
 // File and ConfigSet validators (internal/validator) are not bound to ctx:
 // they stay limited by the process-wide command timeout, which also kills
 // their process tree (api.ApplyPlanContext tells the operator it waits for
-// one).
+// one). Once ctx is done no validator starts, and one that finishes
+// afterwards fails its op, so no candidate is published after an interrupt
+// (internal/validator reads the binding via internal/exec BoundErr).
 func ApplyWithContext(ctx context.Context, ops []Op, facts Facts, planDir string) error {
 	if len(ops) == 0 {
 		return fmt.Errorf("plan: apply: empty plan")

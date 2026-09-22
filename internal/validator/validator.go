@@ -110,7 +110,26 @@ func RunInWithheld(dir, bin string, args []string) error {
 
 // runIn is RunIn and RunInWithheld; withhold selects how a failure reports
 // the captured output (withValidatorOutput).
+//
+// A validator is not stopped by an interrupt (it is bound only by the
+// command timeout), but its verdict must not publish a candidate after one:
+// once the apply's bound context (internal/exec BoundErr) is done, no
+// validator starts, and a validator that finishes afterwards fails whatever
+// its exit status, so File and ConfigSet abort the op instead of writing
+// the live file after the operator interrupted the apply.
 func runIn(dir, bin string, args []string, withhold bool) error {
+	if err := gexec.BoundErr(); err != nil {
+		return fmt.Errorf("apply stopped before the validator started (%w); candidate not published", err)
+	}
+	err := execValidator(dir, bin, args, withhold)
+	if ctxErr := gexec.BoundErr(); ctxErr != nil {
+		return fmt.Errorf("apply stopped while validating (%w); verdict discarded, candidate not published", ctxErr)
+	}
+	return err
+}
+
+// execValidator runs one validator process for runIn.
+func execValidator(dir, bin string, args []string, withhold bool) error {
 	running.Add(1)
 	defer running.Add(-1)
 	timeout := gexec.DefaultTimeout()

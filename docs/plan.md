@@ -802,7 +802,7 @@ Three resilience knobs bound the push/fleet path; each has a narrow scope:
 |------|-------|--------|---------|
 | `-host-timeout` (fleet) | per-host context | one host's **whole push** (all chunks: blob upload, applies, sticky removal) | `10m`, `0` = unlimited |
 | `-o ConnectTimeout=15` (generated argv) | every `ssh` invocation | only the **TCP/SSH handshake** | 15s; an explicit `ConnectTimeout` in `ExtraSSH` / `-- ssh-args` wins (ssh uses the first option) |
-| `exec.Opts.Timeout` | `internal/exec` `RunWith` | one external command (opt-in per call) | `0` = no timeout (historical behavior) |
+| `-cmd-timeout` / `exec.Opts.Timeout` | `internal/exec` `Run`/`RunWith`/`RunWithStdin`, validators | one backend command or validator; an expired command gets SIGTERM, then SIGKILL `CancelGrace` (10s) later, so it may take timeout + 10s | `5m` process-wide; `Opts.Timeout` overrides per call (`< 0` = none) |
 
 Design decisions:
 
@@ -825,20 +825,33 @@ Design decisions:
   the same fleet push too.
 - **Local apply cancellation.** `gonf <task>` and `gonf apply <plan.jsonl|->`
   (also the receiving end of a push and the elevated re-exec child) run under
-  the CLI's SIGINT/SIGTERM context (`api.RunContext`,
+  the CLI's signal context (SIGINT, SIGTERM, SIGHUP; `api.RunContext`,
   `api.ApplyPlanContext`). `plan.ApplyWithContext` binds that context to
   `internal/exec` for the duration of the apply, so a signal stops the
-  backend command in flight (and the elevated sudo/doas re-exec, whose sudo
-  relays the signal to the elevated gonf), no further op starts, and the
-  command fails with `interrupted: … context canceled` and exit 1. Stopping
-  is graceful: the command gets SIGTERM and is SIGKILLed only after a grace
-  period (`internal/exec.CancelGrace`, 10s; twice that for the sudo/doas
-  wrapper), so an interrupted package manager can finish its own clean
-  shutdown; the same grace bounds how long a grandchild that still holds the
-  command's output pipes can delay the return. File and ConfigSet validators
-  are not bound to the context; they stay limited by the process-wide
-  command timeout (`-cmd-timeout`), and an interrupt during one prints a
-  one-line notice that gonf waits for it.
+  backend command in flight, no further op starts, and the command fails
+  with `interrupted: … context canceled` and exit 1. Stopping is graceful:
+  the command gets SIGTERM and is SIGKILLed only after a grace period
+  (`internal/exec.CancelGrace`, 10s), so an interrupted package manager can
+  finish its own clean shutdown; the same grace bounds how long a grandchild
+  that still holds the command's output pipes can delay the return (the
+  pipes are then closed, so such a daemon gets SIGPIPE on its next write).
+  A second signal force-exits gonf with the default action.
+- **Validators and interrupts.** File and ConfigSet validators are not
+  stopped by the signal; they stay limited by the command timeout
+  (`-cmd-timeout`), and an interrupt during one prints a one-line notice that
+  gonf waits for it. After an interrupt no validator starts, and the verdict
+  of one that finishes later is discarded: the op fails and the candidate is
+  never published to the live file.
+- **Elevated re-exec.** sudo gets SIGTERM and relays it to the elevated
+  `gonf apply`, which stops like a local apply (SIGHUP too, which it gets
+  when sudo's `use_pty` pty goes away). gonf prints that it waits and allows
+  the command timeout plus 20s before it SIGKILLs sudo, so a validator
+  running in the child can finish and its op be aborted cleanly instead of
+  an orphaned root child writing the file afterwards. doas sets the real,
+  effective and saved uid to root, so an unprivileged gonf can neither
+  SIGTERM nor SIGKILL a doas child: only a signal the terminal sends to the
+  whole foreground process group (Ctrl-C) reaches it, and a SIGTERM sent to
+  gonf alone leaves gonf waiting for the doas child to finish.
 - **No end-to-end remote cancel.** Canceling a push (`push`, `cluster`,
   `fleet`) kills only the local `ssh`. Nothing signals the remote `gonf
   apply`: it keeps applying until its next write to the now closed stdout

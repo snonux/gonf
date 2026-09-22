@@ -598,8 +598,10 @@ func ApplyPlan(ops []plan.Op, planDir string) error {
 // canceling ctx, e.g. the CLI's SIGINT/SIGTERM context, stops the backend
 // command in flight (SIGTERM, SIGKILL after its grace) and starts no further
 // op; the error wraps ctx.Err(). A validator running at the interrupt is not
-// stopped (it stays bounded by the command timeout); a one-line notice on
-// stderr says the apply waits for it (noteValidatorWait). It is what `gonf
+// stopped (it stays bounded by the command timeout), but its verdict is
+// discarded and the candidate not published (internal/validator runIn); a
+// one-line notice on stderr says the apply waits for it
+// (noteValidatorWait). It is what `gonf
 // apply <plan.jsonl|->` (also the receiving end of a push) and the
 // in-process chunks of ApplyChunksContext run.
 func ApplyPlanContext(ctx context.Context, ops []plan.Op, planDir string) error {

@@ -123,7 +123,9 @@ func BindContext(ctx context.Context) (restore func()) {
 // later is it killed. The same WaitDelay also bounds how long Wait drains
 // output pipes (the goroutine-copied ones, not an *os.File) that a
 // grandchild holds after the command itself exited, so such a pipe holder
-// can delay the return by at most grace. Only the command itself is
+// can delay the return by at most grace; closing them means a daemon
+// grandchild that later writes to its inherited stdout or stderr gets
+// SIGPIPE (or EPIPE if it ignores that signal). Only the command itself is
 // signalled, not its descendants: it shares gonf's process group, so a
 // group signal would hit gonf too, and a terminal Ctrl-C already reached the
 // whole foreground group. A command that exits 0 while a grandchild still
@@ -132,6 +134,16 @@ func BindContext(ctx context.Context) (restore func()) {
 func SetGracefulCancel(cmd *exec.Cmd, grace time.Duration) {
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = grace
+}
+
+// BoundErr returns the error of the context installed by BindContext (nil
+// while it is live or nothing is bound): context.Canceled once an
+// interrupted apply canceled it. Code that runs outside this package's
+// commands but must not act after an interrupt (internal/validator, before
+// and after a validator, so a candidate is never published once the apply
+// was interrupted) checks it.
+func BoundErr() error {
+	return boundContext().Err()
 }
 
 // boundContext returns the context installed by BindContext.

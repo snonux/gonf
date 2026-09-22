@@ -63,14 +63,14 @@ func CLI() int {
 	// calls and this call's mark is released on return, so a main that calls
 	// CLI() and then api.Apply itself cannot re-exec its own main as root.
 	defer clihost.MarkActive()()
-	// Signal-derived context: SIGINT/SIGTERM cancel in-flight work. It
-	// reaches local task runs (api.RunContext), `gonf apply`
-	// (api.ApplyPlanContext), which stop the backend command or elevated
-	// sudo/doas re-exec in flight (SIGTERM, SIGKILL after a grace),
+	// Signal-derived context (signalContext): SIGINT/SIGTERM/SIGHUP cancel
+	// in-flight work. It reaches local task runs (api.RunContext), `gonf
+	// apply` (api.ApplyPlanContext), which stop the backend command or
+	// elevated sudo/doas re-exec in flight (SIGTERM, SIGKILL after a grace),
 	// single-host push (PushToContext) and the cluster/fleet fan-out, which
 	// kill their local ssh on cancel (the remote gonf is not signalled; see
 	// cliApply).
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signalContext()
 	defer stop()
 	// Remove the private dir the gonf binary was cross-compiled into for
 	// remote hosts (if any push needed one) once this run is over.
@@ -88,6 +88,20 @@ func CLI() int {
 	return runCLI(ctx, options)
 }
 
+// signalContext returns the CLI's signal context: canceled by the first
+// SIGINT, SIGTERM or SIGHUP. SIGHUP is included because the elevated child
+// under sudo's use_pty gets it when its pty goes away (sudo killed), and
+// would otherwise die mid-op instead of stopping between ops. After that
+// first signal the handler is removed again (context.AfterFunc(ctx, stop)),
+// so a second Ctrl-C or SIGTERM gets the default action and force-exits a
+// gonf that is still waiting for a graceful stop. The returned stop must be
+// called (deferred) once the CLI returns.
+func signalContext() (context.Context, context.CancelFunc) {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	context.AfterFunc(ctx, stop)
+	return ctx, stop
+}
+
 func parseCLIFlags(program string, args []string) (cliOptions, error) {
 	fs := flag.NewFlagSet(program, flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -102,7 +116,9 @@ func parseCLIFlags(program string, args []string) (cliOptions, error) {
 	dryRun := fs.Bool("dry-run", false, "Preview changes without applying them")
 	dryRunShort := fs.Bool("n", false, "Alias for -dry-run")
 	privFlag := fs.String("privilege", "none", "Privilege helper for Privileged() tasks: none|sudo|doas")
-	cmdTimeout := fs.Duration("cmd-timeout", exec.DefaultTimeout(), "default per-command timeout for backend execs (package manager, systemctl, crontab, ...) and File/ConfigSet validators; 0 or negative keeps the current default")
+	cmdTimeout := fs.Duration("cmd-timeout", exec.DefaultTimeout(), fmt.Sprintf("default per-command timeout for backend execs "+
+		"(package manager, systemctl, crontab, ...) and File/ConfigSet validators; a backend exec that outlives it "+
+		"gets SIGTERM and, %v later, SIGKILL; 0 or negative keeps the current default", exec.CancelGrace))
 	if err := fs.Parse(args); err != nil {
 		return cliOptions{}, err
 	}

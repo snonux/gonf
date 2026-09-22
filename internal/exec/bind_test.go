@@ -162,6 +162,20 @@ func TestPipeHolderAfterCleanExitSucceeds(t *testing.T) {
 	}
 }
 
+// A non-zero exit with a pipe-holding grandchild still reports that exit
+// code (Wait returns the ExitError, not ErrWaitDelay), after about the grace.
+func TestPipeHolderAfterFailingExitReportsCode(t *testing.T) {
+	withCancelGrace(t, 300*time.Millisecond)
+	start := time.Now()
+	_, _, exitCode, err := Run("sh", "-c", `sleep 5 & exit 4`)
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("returned after %v, want about the grace", elapsed)
+	}
+	if err != nil || exitCode != 4 {
+		t.Fatalf("(%d, %v), want exit 4 and no error", exitCode, err)
+	}
+}
+
 // A deadline the bound (caller) context carries itself is not reported as
 // the per-call timeout, whose duration would be wrong.
 func TestCallerDeadlineWording(t *testing.T) {

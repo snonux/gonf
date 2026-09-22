@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	gexec "github.com/snonux/gonf/internal/exec"
 )
 
 // lockedBuffer is a bytes.Buffer safe for the AfterFunc goroutine writing
@@ -80,5 +82,17 @@ func TestNoteValidatorWait(t *testing.T) {
 				t.Fatalf("notice printed = %v, want %v (output %q)", got, tc.want, out.String())
 			}
 		})
+	}
+}
+
+// The elevated wrapper's grace covers the command timeout (a validator the
+// elevated child waits for) plus the child's own graceful stop, and follows
+// a changed -cmd-timeout.
+func TestElevatedCancelGraceCoversCommandTimeout(t *testing.T) {
+	orig := CommandTimeout()
+	t.Cleanup(func() { SetCommandTimeout(orig) })
+	SetCommandTimeout(90 * time.Second)
+	if got, want := elevatedCancelGrace(), 90*time.Second+2*gexec.CancelGrace; got != want {
+		t.Fatalf("elevatedCancelGrace() = %v, want %v", got, want)
 	}
 }

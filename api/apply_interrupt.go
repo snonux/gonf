@@ -9,10 +9,13 @@ import (
 	gexec "github.com/snonux/gonf/internal/exec"
 )
 
-// validatorWaitNotice is the line printed when an interrupt arrives while a
+// validatorWaitNotice is the line printed, by the process running it (the
+// elevated child for a privileged op), when an interrupt arrives while a
 // File or ConfigSet validator runs; %v is the command timeout bounding it.
+// The verdict is discarded and the candidate not published either way (see
+// internal/validator runIn).
 const validatorWaitNotice = "gonf: interrupt received; waiting for the running validator to finish " +
-	"(validators are bounded by the command timeout, %v)\n"
+	"(bounded by the command timeout, %v); its candidate will not be published\n"
 
 // noteValidatorWait arranges that, once ctx is canceled (SIGINT/SIGTERM),
 // the operator is told on w when a validator (running reports one) is still

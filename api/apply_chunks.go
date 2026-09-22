@@ -23,17 +23,16 @@ import (
 // own. A privileged chunk can legitimately run for a while (package installs,
 // service restarts across many resources), so the default is generous;
 // mirrors remote.DefaultHostTimeout's role for the SSH push path. A chunk
-// that outlives it is killed and reported as an apply failure instead of
-// hanging the whole process forever (the resilience gap this constant
-// closes: previously the re-exec'd child had no timeout and no context at
-// all).
+// that outlives it is stopped (SIGTERM, SIGKILL elevatedCancelGrace() later)
+// and reported as an apply failure instead of hanging the whole process
+// forever (the resilience gap this constant closes: previously the
+// re-exec'd child had no timeout and no context at all).
 const DefaultChunkTimeout = 10 * time.Minute
 
-// elevatedCancelGrace is how long a canceled elevated re-exec (sudo/doas)
-// gets between its SIGTERM and the SIGKILL: twice the elevated child's own
-// command grace, so the child can stop its backend command gracefully and
-// exit before the wrapper is killed.
-const elevatedCancelGrace = 2 * gexec.CancelGrace
+// elevatedStopNotice is printed when an interrupt arrives while an elevated
+// re-exec runs; %v is elevatedCancelGrace().
+const elevatedStopNotice = "gonf: interrupt received; waiting up to %v for the elevated apply to stop " +
+	"(interrupt again to force exit)\n"
 
 // elevatedApplyRunner runs a privileged local apply chunk. Overridable in tests.
 var elevatedApplyRunner = defaultElevatedApply
@@ -84,10 +83,11 @@ func elevatedApplyArgv(exe, path string, dryRun bool, profileOverride string) []
 
 // defaultElevatedApply runs the elevated re-exec under ctx: canceling ctx
 // (e.g. the CLI's SIGINT/SIGTERM context) stops the in-flight sudo/doas
-// child: SIGTERM first, SIGKILL only elevatedCancelGrace later. When ctx carries no deadline of its own, DefaultChunkTimeout is
-// applied so a wedged privileged command (a hung package manager, a
-// systemctl call waiting on a broken unit) cannot block the whole apply
-// forever — previously this used plain exec.Command with no context at all.
+// child (runElevatedCmd). When ctx carries no deadline of its own,
+// DefaultChunkTimeout is applied so a wedged privileged command (a hung
+// package manager, a systemctl call waiting on a broken unit) cannot block
+// the whole apply forever — previously this used plain exec.Command with no
+// context at all.
 func defaultElevatedApply(ctx context.Context, mode privilege.Mode, ops []plan.Op, planDir string) error {
 	exe, err := os.Executable()
 	if err != nil {
@@ -112,14 +112,39 @@ func defaultElevatedApply(ctx context.Context, mode privilege.Mode, ops []plan.O
 		ctx, cancel = context.WithTimeout(ctx, DefaultChunkTimeout)
 		defer cancel()
 	}
+	return runElevatedCmd(ctx, argv)
+}
+
+// elevatedCancelGrace is how long a canceled elevated re-exec gets between
+// its SIGTERM and the SIGKILL: the command timeout (a validator running in
+// the child is bound by nothing shorter, and the child waits for it) plus
+// twice the child's own command grace, so the child can stop its backend
+// command or finish its validator, discard its verdict and exit before the
+// wrapper is killed. Killing sudo earlier would orphan the root child (sudo
+// without use_pty) or hang it up mid-op (use_pty). A second interrupt
+// force-exits gonf instead of waiting (see internal/cli signalContext).
+func elevatedCancelGrace() time.Duration {
+	return gexec.DefaultTimeout() + 2*gexec.CancelGrace
+}
+
+// runElevatedCmd runs the wrapped re-exec argv under ctx and relays its
+// output. On cancel, sudo gets SIGTERM, which it relays to the elevated gonf
+// apply, whose own signal context then stops its backend command gracefully;
+// SIGKILL follows only elevatedCancelGrace() later, and an interrupt prints
+// that the stop is awaited. doas is different: it sets the real, effective
+// and saved uid to root, so this unprivileged gonf can neither SIGTERM nor
+// SIGKILL it (both fail with EPERM) and waits for it to finish; only a
+// signal the terminal sends to the whole foreground process group (Ctrl-C)
+// reaches a doas child.
+func runElevatedCmd(ctx context.Context, argv []string) error {
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	// Stop sudo gracefully: sudo relays the SIGTERM to the elevated gonf
-	// apply, whose own signal context then stops its backend command
-	// gracefully (up to gexec.CancelGrace). elevatedCancelGrace leaves room
-	// for that before sudo is SIGKILLed. doas execs in place, so the SIGTERM
-	// reaches the child directly (or fails with EPERM and the kill after the
-	// grace is the fallback, as it was before).
-	gexec.SetGracefulCancel(cmd, elevatedCancelGrace)
+	grace := elevatedCancelGrace()
+	gexec.SetGracefulCancel(cmd, grace)
+	defer context.AfterFunc(ctx, func() {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			_, _ = fmt.Fprintf(os.Stderr, elevatedStopNotice, grace)
+		}
+	})()
 	cmd.Stdin = bytes.NewReader(nil)
 	// The elevated child has no secret registry of its own: its log lines
 	// and summary reach the operator's terminal through the controller's
@@ -129,7 +154,7 @@ func defaultElevatedApply(ctx context.Context, mode privilege.Mode, ops []plan.O
 	// then its output is handed, unredacted, to a detached cat writing to
 	// stderr, so it keeps a reader even after gonf exits and is never killed
 	// by SIGPIPE mid-apply (logger.RunRelayed).
-	err = logger.RunRelayed(cmd, os.Stderr)
+	err := logger.RunRelayed(cmd, os.Stderr)
 	if err != nil && ctx.Err() != nil {
 		return fmt.Errorf("%w (elevated apply stopped by context: %v)", ctx.Err(), err)
 	}
@@ -213,9 +238,9 @@ func chunkResourceIDs(ch plan.Chunk) []string {
 // given ctx has no deadline, and its in-process chunks run through
 // ApplyPlanContext, whose ctx kills the backend command in flight (via
 // internal/exec). File and ConfigSet validators, which run outside
-// internal/exec, are the one part ctx does not reach; they read the same
-// process-wide default timeout, so they stay bounded (see
-// internal/validator).
+// internal/exec, are the one part ctx does not stop; they read the same
+// process-wide default timeout, so they stay bounded, and a verdict that
+// arrives after ctx is done is discarded (see internal/validator).
 func ApplyChunks(ops []plan.Op, planDir string, mode privilege.Mode) error {
 	return ApplyChunksContext(context.Background(), ops, planDir, mode)
 }
