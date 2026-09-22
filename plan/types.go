@@ -423,17 +423,20 @@ type Op struct {
 	// content_b64 or its blob, template_data, member content, lines, argv,
 	// environment — holds secret material. The controller sets it while
 	// recording, when the op contains a value resolved through the secret
-	// provider (api.ResolveSecret, MustSecret, OptionalSecret, SecretFile).
+	// provider (api.ResolveSecret, MustSecret, OptionalSecret, SecretFile),
+	// or when the recipe declared the payload secret with
+	// options.WithSensitive (transformed values, synced trees).
 	// It is not protection by itself: the payload stays in clear text (base64
 	// is an encoding, not encryption). What it changes: `gonf plan -stdout`
 	// refuses the plan unless explicitly asked, the redacted preview hides
 	// the payload, a failing file or config_set validator's output and a
-	// file's template error details are withheld, a command's argv is
-	// withheld from its log lines and dry-run description and its output
-	// from its failure, and a push refuses to stage the op's blob where a
-	// less privileged user could read it. It does not hide argv from the
-	// destination's process list, a package manager's own failure output,
-	// or content the op writes (a crontab line, a file). Recording refuses a
+	// file's (or synced tree entry's) template error details are withheld, a
+	// command's argv is withheld from its log lines and dry-run description
+	// and its output from its failure, a failing package-manager or crontab
+	// run reports only its output sizes, and a push refuses to stage the
+	// op's blob where a less privileged user could read it. It does not hide
+	// argv from the destination's process list, or content the op writes (a
+	// crontab line, a file). Recording refuses a
 	// strong secret (8+ bytes, not word-like) in the op's identity; a weak
 	// one there only marks the op and stays visible in destination logs.
 	Sensitive bool `json:"sensitive,omitempty"`

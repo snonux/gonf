@@ -1,6 +1,6 @@
-// Package embed holds state common to all concrete resource types (dependency
-// tracking, absence marking, and change gating), embedded rather than
-// redeclared.
+// Package embed holds state common to concrete resource types (dependency
+// tracking, absence marking, change gating, and payload sensitivity),
+// embedded rather than redeclared.
 package embed
 
 import (
@@ -63,6 +63,29 @@ type Absence struct {
 // SetAbsent implements opt.Absentable, marking the resource for removal. It
 // uses a pointer receiver so the mutation is visible to the embedding value.
 func (a *Absence) SetAbsent() { a.Absent = true }
+
+// Sensitivity is embedded into concrete resource types whose recorded op
+// carries a payload that can hold secret material (file content, a synced
+// tree, config-set members, a command's argv and environment, a package
+// operation's environment, a cron line, a systemd timer's command). It
+// promotes a Sensitive field and a SetSensitive method (implements
+// opt.Sensitivable, the WithSensitive option) to the embedding type.
+//
+// Sensitive has two readers: the resource's planDraft copies it onto
+// resource.PlanDraft.Sensitive, which api's draft packager folds into
+// plan.Op.Sensitive next to what the secret scan detected; and the
+// resource's own apply reads it to withhold secret-bearing details from
+// logs and errors. Plan handlers rebuild it from a sensitive op by passing
+// WithSensitive, so the direct and the plan path behave alike.
+type Sensitivity struct {
+	// Sensitive marks the payload as secret material.
+	Sensitive bool
+}
+
+// SetSensitive implements opt.Sensitivable. It uses a pointer receiver so
+// the mutation is visible to the embedding value. Sensitivity is only ever
+// added, never cleared.
+func (s *Sensitivity) SetSensitive() { s.Sensitive = true }
 
 // ChangeGate is embedded into concrete resource types whose mutating action
 // can be gated on watched resources' change reports. It holds the one

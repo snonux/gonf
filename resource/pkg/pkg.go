@@ -33,14 +33,24 @@ var detectPkgManager = detectPackageManager
 // resource.Register takes this value as a resource.Applier. The assertion
 // pins that contract at the declaration, so a renamed or re-signed Apply is
 // reported here rather than at the Register call.
-var _ resource.Applier = (*Package)(nil)
+var (
+	_ resource.Applier = (*Package)(nil)
+	_ opt.Sensitivable = (*Package)(nil)
+)
 
 // Package reconciles an OS package's presence or absence using the
 // platform package manager (dnf on Linux, pkg on FreeBSD, pkgin on
 // NetBSD, pkg_add on OpenBSD).
+//
+// The Sensitivity embed backs WithSensitive: the package operation's
+// environment (WithEnv, e.g. a PKG_PATH with credentials) holds secret
+// material, so a failing package-manager command reports only the sizes of
+// its output, not the output (run). Plan apply sets it from a sensitive
+// package op.
 type Package struct {
 	embed.DependsOn
 	embed.Absence
+	embed.Sensitivity
 	name   string
 	latest bool
 	env    map[string]string
@@ -144,12 +154,13 @@ func (p *Package) apply() error {
 // planDraft records p as a "package" plan draft under id.
 func (p *Package) planDraft(id string) resource.PlanDraft {
 	d := resource.PlanDraft{
-		Kind:   "package",
-		ID:     id,
-		Name:   p.name,
-		Absent: p.Absent,
-		Latest: p.latest,
-		Deps:   p.DependsOn.SortedIDs(),
+		Kind:      "package",
+		ID:        id,
+		Name:      p.name,
+		Absent:    p.Absent,
+		Latest:    p.latest,
+		Deps:      p.DependsOn.SortedIDs(),
+		Sensitive: p.Sensitive,
 	}
 	// The draft gets its own copy: stored drafts outlive this Package and
 	// must not share mutable state with it. maps.Clone keeps nil as nil.
@@ -182,9 +193,31 @@ func detectPackageManager() (string, error) {
 // run is p's runner: the legacy seam when no WithEnv is set, otherwise the
 // environment-aware seam with p's variables overlaid on the inherited
 // environment. It satisfies the runner type the backends are handed.
+//
+// For a sensitive package (WithSensitive) a failed command's output is
+// replaced by a note of its sizes before any backend sees it: every backend
+// quotes stdout and stderr in its failure error (runOrErr, dnf's execute),
+// and a package manager may echo its environment (a repository URL with
+// credentials). Probes only read the exit code, so they are unaffected.
 func (p *Package) run(bin string, args ...string) (string, string, int, error) {
+	stdout, stderr, code, err := p.runRaw(bin, args...)
+	if p.Sensitive && code != 0 {
+		stdout, stderr = "", withheldOutput(stdout, stderr)
+	}
+	return stdout, stderr, code, err
+}
+
+// runRaw runs bin through the seam p's environment selects (see run).
+func (p *Package) runRaw(bin string, args ...string) (string, string, int, error) {
 	if p.env == nil {
 		return runCmd(bin, args...)
 	}
 	return runCmdWithEnv(exec.MergeEnv(p.env), bin, args...)
+}
+
+// withheldOutput is the stand-in for a sensitive package command's failure
+// output: its sizes only, and why it is withheld.
+func withheldOutput(stdout, stderr string) string {
+	return fmt.Sprintf("(output withheld: %d bytes stdout, %d bytes stderr; the package operation carries secret material)",
+		len(stdout), len(stderr))
 }

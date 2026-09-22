@@ -8,6 +8,7 @@ import (
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
+	opt "github.com/snonux/gonf/resource/options"
 )
 
 // fakeCmdSecret is synthetic secret material passed as an argument.
@@ -45,5 +46,29 @@ func TestSensitiveCommandWithholdsArgvAndOutput(t *testing.T) {
 	err = planHandler{}.Apply(op, plan.ApplyContext{})
 	if err == nil || !strings.Contains(err.Error(), "denied "+fakeCmdSecret) {
 		t.Fatalf("plain command: err = %v, want its output", err)
+	}
+}
+
+// WithSensitive gives a direct command (no plan involved) the same
+// withholding as a sensitive op, and records a sensitive draft.
+func TestWithSensitiveCommandWithholdsArgvDirectly(t *testing.T) {
+	resource.ResetForTest()
+	t.Cleanup(resource.ResetForTest)
+	SetRunnersForTest(func(exec.Opts, string, ...string) (string, string, int, error) {
+		return "", "denied " + fakeCmdSecret, 7, nil
+	}, nil)
+	t.Cleanup(ResetRunnersForTest)
+	output, restore := logger.CaptureForTest(logger.LevelDebug)
+	t.Cleanup(restore)
+
+	args := []string{"-H", "Authorization: Bearer " + fakeCmdSecret}
+	err := Ensure("/usr/bin/curl", args, opt.WithName("upload"), opt.WithSensitive)
+	if err == nil || strings.Contains(err.Error(), fakeCmdSecret) || strings.Contains(output(), fakeCmdSecret) {
+		t.Fatalf("direct sensitive command leaks: err = %v, log:\n%s", err, output())
+	}
+	c := &Cmd{bin: "/usr/bin/curl", args: args}
+	opt.WithSensitive.Apply(c)
+	if !c.planDraft("Command[upload]").Sensitive {
+		t.Fatal("WithSensitive did not reach the command's plan draft")
 	}
 }

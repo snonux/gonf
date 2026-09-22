@@ -202,7 +202,7 @@ func applyFileContent(path string, op plan.Op, ownership []opt.FileDirOption, ct
 	if err != nil {
 		return err
 	}
-	return ensureWithFacts(path, templateFacts(ctx.Facts), op.Sensitive, opts...)
+	return ensureWithFacts(path, templateFacts(ctx.Facts), opts...)
 }
 
 // EnsureWithPlanFacts is Ensure for plan apply: {{.Gonf.GOOS/.Profile/
@@ -211,12 +211,13 @@ func applyFileContent(path string, op plan.Op, ownership []opt.FileDirOption, ct
 // and the CLI -profile flag) instead of Ensure's own local re-detection,
 // which knows nothing about that override. Every plan handler that writes a
 // possibly-templated file must render with the plan's facts — the file
-// handler above (through ensureWithFacts directly, to also pass the op's
-// sensitivity) and dir's sync_dir handler for each entry of a synced tree,
-// through here — so identical template text renders identically within one
-// apply. Synced tree entries are never marked sensitive.
+// handler above (through ensureWithFacts directly) and dir's sync_dir
+// handler for each entry of a synced tree, through here — so identical
+// template text renders identically within one apply. The entries of a
+// sensitive sync_dir op arrive with WithSensitive among opts, like the
+// content of a sensitive file op.
 func EnsureWithPlanFacts(path string, facts plan.Facts, opts ...opt.FileOption) error {
-	return ensureWithFacts(path, templateFacts(facts), false, opts...)
+	return ensureWithFacts(path, templateFacts(facts), opts...)
 }
 
 func fileContent(op plan.Op, planDir string) ([]byte, error) {
@@ -282,9 +283,17 @@ func fileContentOptions(op plan.Op, content []byte, ownership []opt.FileDirOptio
 	for _, ownerOpt := range ownership {
 		opts = append(opts, ownerOpt)
 	}
+	// A sensitive op (scan-detected or WithSensitive at record time) rebuilds
+	// a sensitive File, which withholds validator and template details.
+	if op.Sensitive {
+		opts = append(opts, opt.WithSensitive)
+	}
 	return opts, nil
 }
 
+// planDraft records f as a "file" (or, for EnsureFile, "ensure_file") plan
+// draft: identity, attributes, line edits, validation, dependencies and the
+// explicit sensitivity here, the content through draftContent.
 func (f *File) planDraft() resource.PlanDraft {
 	d := resource.PlanDraft{
 		Kind:           "file",
@@ -298,6 +307,7 @@ func (f *File) planDraft() resource.PlanDraft {
 		ValidationBin:  f.validationBin,
 		ValidationArgs: slices.Clone(f.validationArgs),
 		Deps:           f.DependsOn.SortedIDs(),
+		Sensitive:      f.Sensitive,
 	}
 	if f.preserveContent {
 		d.Kind = "ensure_file"
@@ -317,6 +327,13 @@ func (f *File) planDraft() resource.PlanDraft {
 			d.Group = f.group
 		}
 	}
+	f.draftContent(&d)
+	return d
+}
+
+// draftContent records f's content half on d: the literal content or the
+// source to package, and the template intent and data.
+func (f *File) draftContent(d *resource.PlanDraft) {
 	// HasContent flags that WithContent/WithSource was configured at all, so
 	// packageDraft/applyFile can tell a legitimately empty file (content or
 	// source resolving to zero bytes, which base64-encodes as "") apart from
@@ -345,5 +362,4 @@ func (f *File) planDraft() resource.PlanDraft {
 		d.TemplateDataErr = f.templateDataErr
 		d.TemplateDataSet = true
 	}
-	return d
 }

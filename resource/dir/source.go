@@ -243,12 +243,19 @@ func noteSourceSymlinkDryRun(target, rawTarget string) error {
 // single-file op of the same apply renders from — instead of file.Ensure's
 // local re-detection, which ignores the override. The direct path keeps
 // file.Ensure.
+//
+// A sensitive Dir (WithSensitive, or a sensitive sync_dir op on the plan
+// path) writes every entry as a sensitive File, so a template or validator
+// failure of one entry does not quote the tree's secret material.
 func copySourceFile(d *Dir, sourcePath, target string) error {
 	opts := []opt.FileOption{
 		opt.WithSource(sourcePath),
 		opt.WithMode(d.fileMode),
 		opt.WithOwner(d.user),
 		opt.WithGroup(d.group),
+	}
+	if d.Sensitive {
+		opts = append(opts, opt.WithSensitive)
 	}
 	if d.sourceBase != "" && d.source != "" && strings.HasSuffix(sourcePath, ".tmpl") {
 		rel, err := filepath.Rel(d.source, sourcePath)

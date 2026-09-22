@@ -58,6 +58,15 @@ embedded rather than redeclared:
 - `embed.DependsOn` — dependency IDs (`IDs` field) plus the `AddDependency` method.
 - `embed.Absence` — the `Absent` field plus the `SetAbsent` method (implements
   `opt.Absentable`).
+- `embed.Sensitivity` — the `Sensitive` field plus the `SetSensitive` method
+  (implements `opt.Sensitivable`, the `WithSensitive` option), embedded only
+  by the payload-carrying kinds (File, Dir, ConfigSet, Command, Package, Cron,
+  SystemdTimer; a ConfigSet member implements `SetSensitive` itself and marks
+  its set). The resource copies it to `PlanDraft.Sensitive`, which
+  `api`'s `draftToOp` ORs into `plan.Op.Sensitive`; its plan handler passes
+  `WithSensitive` back for a sensitive op, and its apply reads the field to
+  withhold secret-bearing details. The option family is
+  `opt.SensitiveOption`; a new payload kind adds its marker there.
 - `embed.ChangeGate` — the change gate (`Gated`, `Watch`) and its behaviour.
   It holds the one watch list of the change-gate option family: `OnChange`,
   `WatchChanges` and the legacy daemon-reload `IfChanged` (arm only) all

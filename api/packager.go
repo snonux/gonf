@@ -39,9 +39,10 @@ func newDraftPackager(store plan.BlobStore) draftPackager {
 	return draftPackager{store: store, blobRefs: map[string]string{}}
 }
 
-// packageDraft lowers d to its plan op (draftToOp), packages its source
-// data (packageContent) and marks the op sensitive when it carries a
-// resolved secret — or refuses it when a strong secret sits in one of its
+// packageDraft lowers d to its plan op (draftToOp, which also carries an
+// explicit WithSensitive), packages its source data (packageContent) and
+// marks the op sensitive when it carries a resolved secret — or refuses it
+// when a strong secret sits in one of its
 // identities (markSensitive; a packaged file source is scanned from the
 // bytes read here, since a blob-backed op no longer carries them).
 func (p draftPackager) packageDraft(d resource.PlanDraft) (plan.Op, error) {
@@ -178,8 +179,9 @@ func (p draftPackager) draftError(d resource.PlanDraft, err error) error {
 // draftToOp lowers a resource draft to a plan op line by delegating to the
 // draft kind's registered plan.Handler (see plan/handler.go): the resource
 // package owns its own wire form and this method only folds in the
-// packager's elevate flag. Every resource kind registers a Handler (see
-// docs/plan.md, "Adding a resource kind"), so an unmapped kind is always a
+// packager's elevate flag and the draft's explicit sensitivity. Every
+// resource kind registers a Handler (see docs/plan.md, "Adding a resource
+// kind"), so an unmapped kind is always a
 // programming error (typo, or a new resource kind that forgot to register)
 // and fails the record loudly here instead of silently forwarding an unknown
 // op to the wire, where it would only blow up at remote apply time.
@@ -194,6 +196,11 @@ func (p draftPackager) draftToOp(d resource.PlanDraft) (plan.Op, error) {
 		return plan.Op{}, p.draftError(d, err)
 	}
 	op.Elevate = d.Elevate || p.elevate
+	// An explicit WithSensitive (d.Sensitive) marks the op like a secret the
+	// scan found (markSensitive, later in packageDraft); handlers never set
+	// Sensitive themselves, so the flag is folded in here once for every
+	// kind. It only ever adds: an unmarked draft lowers exactly as before.
+	op.Sensitive = op.Sensitive || d.Sensitive
 	if !plan.IsKnownKind(op.Op) {
 		return op, fmt.Errorf("RecordPlan: draft %q: kind %q lowers to undeclared plan kind %q (missing from plan.AllKinds)",
 			d.ID, d.Kind, op.Op)

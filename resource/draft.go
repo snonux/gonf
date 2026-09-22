@@ -226,6 +226,12 @@ type PlanDraft struct {
 
 	// Elevate forces elevate=true on this draft (e.g. options.WithElevate).
 	Elevate bool
+	// Sensitive declares the draft's payload secret material
+	// (options.WithSensitive, embed.Sensitivity). api's draft packager ORs
+	// it into plan.Op.Sensitive next to what the secret scan detects, so it
+	// can only add sensitivity; false leaves the op exactly as the scan
+	// decides.
+	Sensitive bool
 }
 
 var (

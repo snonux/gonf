@@ -23,9 +23,16 @@ import (
 // Dir reconciles a directory's existence, mode, and ownership, and
 // optionally mirrors a controller-local WithSource tree or WithSourceGlob
 // pattern into it.
+//
+// The Sensitivity embed backs WithSensitive: the plan's secret scan never
+// reads a synced tree, so a tree holding secret material is declared with
+// it. The recorded op is then sensitive, and every copied entry is written
+// as a sensitive File (template and validator details withheld). On a
+// directory without a source it only marks the op.
 type Dir struct {
 	embed.DependsOn
 	embed.Absence
+	embed.Sensitivity
 	resource   resource.Resource
 	path       string
 	source     string
@@ -94,6 +101,7 @@ var (
 	_ opt.Sourced        = (*Dir)(nil)
 	_ opt.SourceGlobable = (*Dir)(nil)
 	_ opt.SourceBaseable = (*Dir)(nil)
+	_ opt.Sensitivable   = (*Dir)(nil)
 )
 
 func build(path string, opts ...opt.DirOption) (*Dir, error) {
@@ -467,6 +475,9 @@ func (d *Dir) planDraft() resource.PlanDraft {
 		Absent: d.Absent,
 		Prune:  d.prune,
 		Deps:   d.DependsOn.SortedIDs(),
+		// Sensitive is the explicit WithSensitive: the scan does not read
+		// a synced tree's blob, so only the recipe can mark it.
+		Sensitive: d.Sensitive,
 	}
 	// Only explicitly configured ownership is recorded: build()'s
 	// user.Current() default must not be pushed to remote hosts. Absent
@@ -524,6 +535,9 @@ func EnsurePlanDraft(path string, opts ...opt.DirOption) (resource.PlanDraft, er
 		Mode: opt.ModeToWire(d.mode),
 		ID:   resource.FormatID("EnsureDir", d.path),
 		Deps: d.DependsOn.SortedIDs(),
+		// ensure_dir carries no payload; an explicit WithSensitive still
+		// marks the op, as on every kind that accepts the option.
+		Sensitive: d.Sensitive,
 	}
 	// Same rule as planDraft: only explicitly configured ownership is
 	// recorded, never build()'s user.Current() default.

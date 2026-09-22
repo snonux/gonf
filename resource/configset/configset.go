@@ -23,15 +23,19 @@ import (
 )
 
 // ConfigSet collects a set's options at record time. It embeds
-// embed.DependsOn for the DependsOn option; removal is not supported, so it
-// deliberately does not embed embed.Absence.
+// embed.DependsOn for the DependsOn option and embed.Sensitivity for
+// WithSensitive; removal is not supported, so it deliberately does not
+// embed embed.Absence.
 type ConfigSet struct {
 	embed.DependsOn
+	embed.Sensitivity
 	spec    spec
 	members []*member
 }
 
-// member collects one ConfigFile's file options.
+// member collects one ConfigFile's file options. sensitive is WithSensitive
+// given to the member: one op carries every member, so it marks the whole
+// set (build).
 type member struct {
 	key, path    string
 	content      []byte
@@ -39,6 +43,7 @@ type member struct {
 	source       string
 	mode         os.FileMode
 	owner, group string
+	sensitive    bool
 }
 
 var (
@@ -52,6 +57,8 @@ var (
 	_ opt.Moded          = (*member)(nil)
 	_ opt.Owner          = (*member)(nil)
 	_ opt.Grouped        = (*member)(nil)
+	_ opt.Sensitivable   = (*ConfigSet)(nil)
+	_ opt.Sensitivable   = (*member)(nil)
 )
 
 // AddMember implements opt.MemberAddable (the ConfigFile option). Only
@@ -95,6 +102,10 @@ func (m *member) SetOwner(owner string) { m.owner = owner }
 // SetGroup implements opt.Grouped for a member.
 func (m *member) SetGroup(group string) { m.group = group }
 
+// SetSensitive implements opt.Sensitivable for a member (WithSensitive on a
+// ConfigFile); build makes the whole set sensitive.
+func (m *member) SetSensitive() { m.sensitive = true }
+
 // build applies opts and turns the collected members into a validated spec,
 // reading WithSource members from the controller.
 func build(name string, opts []opt.ConfigSetOption) (*ConfigSet, error) {
@@ -102,12 +113,16 @@ func build(name string, opts []opt.ConfigSetOption) (*ConfigSet, error) {
 	for _, o := range opts {
 		o.Apply(c)
 	}
+	// WithSensitive on the set or on any member marks the set: its one op
+	// carries every member, and a failing validator sees them all.
+	c.spec.sensitive = c.Sensitive
 	for _, m := range c.members {
 		ms, err := m.resolve()
 		if err != nil {
 			return nil, fmt.Errorf("config set %s: member %s: %w", name, m.key, err)
 		}
 		c.spec.members = append(c.spec.members, ms)
+		c.spec.sensitive = c.spec.sensitive || m.sensitive
 	}
 	if err := c.spec.validate(); err != nil {
 		return nil, err

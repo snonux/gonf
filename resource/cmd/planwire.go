@@ -85,7 +85,12 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if op.OnlyIf != nil {
 		opts = append(opts, plan.GuardOptions(op.OnlyIf, false)...)
 	}
-	return ensure(op.Bin, append([]string(nil), op.Args...), op.Sensitive, opts...)
+	// A sensitive op (scan-detected or WithSensitive at record time)
+	// rebuilds a sensitive command, which withholds argv and output.
+	if op.Sensitive {
+		opts = append(opts, opt.WithSensitive)
+	}
+	return Ensure(op.Bin, append([]string(nil), op.Args...), opts...)
 }
 
 // planGuard converts a package-neutral guard draft to the plan wire Guard,

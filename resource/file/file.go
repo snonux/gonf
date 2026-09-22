@@ -28,9 +28,16 @@ import (
 
 // File reconciles a regular file's existence, content (literal, source
 // file, or rendered template), mode, ownership, and optional line edits.
+//
+// It embeds embed.Sensitivity (the WithSensitive option): sensitive content
+// is secret material, so a failing validator's output and template
+// parse/execute details are withheld from errors, since either can quote
+// the content. Plan apply sets it from a sensitive file op
+// (plan.Op.Sensitive) by passing WithSensitive.
 type File struct {
 	embed.DependsOn
 	embed.Absence
+	embed.Sensitivity
 	resource resource.Resource
 	name     string
 	path     string
@@ -79,11 +86,6 @@ type File struct {
 	validationBin   string
 	validationArgs  []string
 	validationSet   bool
-	// sensitive marks content holding secret material: plan apply sets it
-	// from a sensitive file op (plan.Op.Sensitive). A failing validator's
-	// output and template parse/execute details are then withheld from
-	// errors, since either can quote the content.
-	sensitive bool
 }
 
 // SetName implements opt.Named. It overrides this resource's identity but
@@ -186,6 +188,7 @@ var (
 	_ opt.Templateable     = (*File)(nil)
 	_ opt.TemplateDataable = (*File)(nil)
 	_ opt.Validatable      = (*File)(nil)
+	_ opt.Sensitivable     = (*File)(nil)
 )
 
 func build(path string, opts ...opt.FileOption) (*File, error) {
@@ -347,15 +350,13 @@ func EnsurePresent(path string, opts ...opt.FileOption) error {
 
 // ensureWithFacts is Ensure with build()'s locally detected template facts
 // replaced by facts; EnsureWithPlanFacts is its exported plan-apply wrapper.
-// sensitive marks the content as secret material (a sensitive plan op, see
-// File.sensitive); only the file handler's own apply sets it.
-func ensureWithFacts(path string, facts templateFacts, sensitive bool, opts ...opt.FileOption) error {
+// A sensitive op's content arrives with WithSensitive among opts.
+func ensureWithFacts(path string, facts templateFacts, opts ...opt.FileOption) error {
 	f, err := build(path, opts...)
 	if err != nil {
 		return err
 	}
 	f.templateFacts = facts
-	f.sensitive = sensitive
 	return f.apply()
 }
 
@@ -411,6 +412,10 @@ func buildSecret(path string, content []byte, opts ...opt.FileOption) (*File, er
 	if !f.modeSet {
 		f.mode = 0o600
 	}
+	// The content is a resolved secret: the scan marks the recorded op
+	// anyway, and marking the File itself also withholds validator output
+	// on the direct (non-plan) path.
+	f.SetSensitive()
 	return f, nil
 }
 

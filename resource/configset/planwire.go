@@ -48,6 +48,7 @@ func (s *spec) planDraft(id string, deps []string) resource.PlanDraft {
 		Chroot:     s.chroot,
 		StagingDir: s.stagingDir,
 		Deps:       deps,
+		Sensitive:  s.sensitive,
 	}
 	for _, m := range s.members {
 		pm := resource.PlanConfigMember{

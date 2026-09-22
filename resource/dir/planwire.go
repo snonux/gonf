@@ -170,6 +170,12 @@ func syncDirOptions(op plan.Op, src string) ([]opt.DirOption, error) {
 	if op.Prune {
 		opts = append(opts, opt.WithPrune)
 	}
+	// A sensitive sync_dir op (WithSensitive at record time; the scan never
+	// reads the tree) rebuilds a sensitive Dir, whose entries are written as
+	// sensitive files (copySourceFile).
+	if op.Sensitive {
+		opts = append(opts, opt.WithSensitive)
+	}
 	return opts, nil
 }
 

@@ -28,8 +28,9 @@ func SensitiveOpNames(ops []plan.Op) []string {
 // op.Sensitive when it carries a resolved secret, or refuses the op when a
 // strong secret sits in one of its identity fields. source is
 // the raw bytes of a packaged file source (nil otherwise): a blob-backed op
-// no longer carries them itself. It never clears the flag. Synced directory
-// trees (sync_dir blobs) are not scanned.
+// no longer carries them itself. It never clears the flag, including one
+// an explicit WithSensitive set (draftToOp). Synced directory trees
+// (sync_dir blobs) are not scanned: WithSensitive is how a recipe marks one.
 func markSensitive(op *plan.Op, source []byte, task string) error {
 	if secretConfig.values.Empty() {
 		return nil

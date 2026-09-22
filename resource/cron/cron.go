@@ -39,6 +39,7 @@ var (
 	_ opt.Monthable             = (*Cron)(nil)
 	_ opt.Weekdayable           = (*Cron)(nil)
 	_ opt.CronEnvable           = (*Cron)(nil)
+	_ opt.Sensitivable          = (*Cron)(nil)
 )
 
 // runCmd reads a crontab (crontab -l) and runCmdWithStdin writes one (crontab
@@ -51,9 +52,15 @@ var (
 )
 
 // Cron manages a named crontab entry for a user (default root).
+//
+// The Sensitivity embed backs WithSensitive: the job's command or
+// environment lines hold secret material, so a failing crontab run reports
+// only the sizes of its output (crontabFailure). Plan apply sets it from a
+// sensitive cron op.
 type Cron struct {
 	embed.DependsOn
 	embed.Absence
+	embed.Sensitivity
 	name     string
 	user     string
 	legacy   string
@@ -167,9 +174,10 @@ func (c *Cron) planDraft(id string) resource.PlanDraft {
 		Schedule: strings.Join([]string{
 			c.minute, c.hour, c.monthday, c.month, c.weekday,
 		}, " "),
-		CronEnv: append([]string(nil), c.env...),
-		Absent:  c.Absent,
-		Deps:    c.DependsOn.SortedIDs(),
+		CronEnv:   append([]string(nil), c.env...),
+		Absent:    c.Absent,
+		Deps:      c.DependsOn.SortedIDs(),
+		Sensitive: c.Sensitive,
 	}
 }
 
@@ -208,7 +216,7 @@ func (c *Cron) apply() error {
 }
 
 func (c *Cron) reconcile(id string) error {
-	current, err := readCrontab(c.user)
+	current, err := readCrontab(c.user, c.Sensitive)
 	if err != nil {
 		return err
 	}
@@ -228,7 +236,7 @@ func (c *Cron) reconcile(id string) error {
 
 	desc := fmt.Sprintf("update crontab for %s (job %s)", c.user, c.name)
 	return resource.Mutate(id, desc, func() error {
-		if err := writeCrontab(c.user, newTab); err != nil {
+		if err := writeCrontab(c.user, newTab, c.Sensitive); err != nil {
 			return err
 		}
 		logger.Info("updated crontab for %s (job %s)", c.user, c.name)

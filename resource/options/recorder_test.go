@@ -101,6 +101,9 @@ func (r *recorder) AddSetValidator(bin string, args []string) {
 func (r *recorder) SetChroot(v string)     { r.record("SetChroot", v) }
 func (r *recorder) SetStagingDir(v string) { r.record("SetStagingDir", v) }
 
+// SetSensitive is the WithSensitive setter (sensitive.go).
+func (r *recorder) SetSensitive() { r.record("SetSensitive", nil) }
+
 // Compile-time proof that recorder implements each capability listed here: a
 // listed capability whose setter changes signature fails to build. A NEW
 // capability missing from both this list and the recorder is caught instead
@@ -167,4 +170,5 @@ var (
 	_ ServiceDescriptionable = (*recorder)(nil)
 	_ Afterable              = (*recorder)(nil)
 	_ Wantsable              = (*recorder)(nil)
+	_ Sensitivable           = (*recorder)(nil)
 )

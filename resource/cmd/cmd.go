@@ -34,15 +34,25 @@ var (
 	_ opt.Dependable      = (*Cmd)(nil)
 	_ opt.Elevatable      = (*Cmd)(nil)
 	_ opt.ChangeWatchable = (*Cmd)(nil)
+	_ opt.Sensitivable    = (*Cmd)(nil)
 )
 
 // Cmd is a command resource. It embeds DependsOn but not Absence: there is no
 // meaningful "absent" state for a one-shot command. The ChangeGate embed backs
 // the OnChange option: a gated command is skipped unless a watched resource
 // changed during this apply.
+//
+// The Sensitivity embed backs WithSensitive: a sensitive command's argv or
+// environment holds secret material, so run withholds the argv from logs
+// and the dry-run description and the output from a failure. Plan apply
+// sets it from a sensitive command op (plan.Op.Sensitive, whether the scan
+// detected the secret or the recipe passed WithSensitive). The ID is still
+// logged: recording refuses a strong secret in it (an unnamed command's ID
+// is its argv), not a short one; give such a command WithName.
 type Cmd struct {
 	embed.DependsOn
 	embed.ChangeGate
+	embed.Sensitivity
 	name    string // registry name; defaults to "name args..."
 	bin     string
 	args    []string
@@ -52,13 +62,6 @@ type Cmd struct {
 	unless  *opt.Guard
 	onlyIf  *opt.Guard
 	elevate bool
-	// sensitive is set by plan apply from a sensitive command op
-	// (plan.Op.Sensitive): its argv or environment holds secret material,
-	// so run withholds the argv from logs and the dry-run description and
-	// the output from a failure. The ID is still logged: recording refuses a
-	// strong secret in it (an unnamed command's ID is its argv), not a short
-	// one.
-	sensitive bool
 }
 
 // SetName overrides the registry name, which otherwise defaults to the
@@ -109,16 +112,9 @@ func Present(bin string, args []string, opts ...opt.CommandOption) resource.Reso
 // Ensure builds and applies a command resource without registering it or
 // recording a plan draft.
 func Ensure(bin string, args []string, opts ...opt.CommandOption) error {
-	return ensure(bin, args, false, opts...)
-}
-
-// ensure is Ensure with the op's sensitivity (Cmd.sensitive); only the plan
-// handler passes true.
-func ensure(bin string, args []string, sensitive bool, opts ...opt.CommandOption) error {
 	c := &Cmd{
-		bin:       bin,
-		args:      append([]string(nil), args...),
-		sensitive: sensitive,
+		bin:  bin,
+		args: append([]string(nil), args...),
 	}
 	for _, o := range opts {
 		o.Apply(c)
@@ -168,6 +164,7 @@ func (c *Cmd) planDraft(id string) resource.PlanDraft {
 	d.Unless = planGuardDraft(c.unless)
 	d.OnlyIf = planGuardDraft(c.onlyIf)
 	d.Elevate = c.elevate
+	d.Sensitive = c.Sensitive
 	d.IfChanged, d.Watch = c.DraftGate()
 	return d
 }
@@ -270,7 +267,7 @@ func (c *Cmd) run() error {
 		if err != nil {
 			return fmt.Errorf("failed to execute %s: %w", c.bin, err)
 		}
-		if exitCode != 0 && c.sensitive {
+		if exitCode != 0 && c.Sensitive {
 			return fmt.Errorf("%s exited %d (output withheld: %d bytes stdout, %d bytes stderr; the command carries secret material)",
 				c.bin, exitCode, len(stdout), len(stderr))
 		}
@@ -278,7 +275,7 @@ func (c *Cmd) run() error {
 			return fmt.Errorf("%s exited %d\nstdout: %s\nstderr: %s",
 				c.bin, exitCode, stdout, stderr)
 		}
-		if stdout != "" && !c.sensitive {
+		if stdout != "" && !c.Sensitive {
 			logger.Debug("%s stdout: %s", c.id(), strings.TrimSpace(stdout))
 		}
 		return nil
@@ -288,7 +285,7 @@ func (c *Cmd) run() error {
 // commandLine is the command as logs and descriptions show it: bin and
 // argv, or for a sensitive command bin only, with the argv withheld.
 func (c *Cmd) commandLine() string {
-	if c.sensitive {
+	if c.Sensitive {
 		return c.bin + " [argv withheld: secret material]"
 	}
 	if len(c.args) == 0 {

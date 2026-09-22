@@ -74,5 +74,10 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	for _, kv := range op.CronEnv {
 		opts = append(opts, opt.WithCronEnv(kv))
 	}
+	// A sensitive op (scan-detected or WithSensitive at record time)
+	// rebuilds a sensitive Cron, which withholds crontab failure output.
+	if op.Sensitive {
+		opts = append(opts, opt.WithSensitive)
+	}
 	return Ensure(op.Name, opts...)
 }

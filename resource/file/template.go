@@ -126,10 +126,10 @@ func (f *File) applyTemplateToContent(content []byte, param string) ([]byte, err
 
 // templateError reports a failed template step. text/template errors quote
 // the offending template text (a parse error names the unexpected token),
-// so for sensitive content (File.sensitive) the details are withheld and
+// so for sensitive content (File.Sensitive, the WithSensitive option) the details are withheld and
 // only the step is reported.
 func (f *File) templateError(step string, err error) error {
-	if f.sensitive {
+	if f.Sensitive {
 		return fmt.Errorf("template %s error (details withheld: the file holds secret material)", step)
 	}
 	return fmt.Errorf("template %s error: %w", step, err)

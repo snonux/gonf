@@ -137,7 +137,7 @@ func removeValidationCandidate(path, candidatePath string, err error) error {
 func (f *File) runValidation(path, candidatePath string) error {
 	args := substituteCandidatePath(f.validationArgs, candidatePath)
 	run := validator.Run
-	if f.sensitive {
+	if f.Sensitive {
 		run = validator.RunWithheld
 	}
 	if err := run(f.validationBin, args); err != nil {

@@ -25,6 +25,7 @@ failures return errors.
 |--------|---------|
 | `DependsOn(res…)` | Topological apply order (in-process via `Apply`, and on the plan path — deps are carried on the wire since plan schema 5) |
 | `IsAbsent` | Ensure a resource family that supports absence is gone (`NoFile` / `NoService` / …) |
+| `WithSensitive` | Declare the payload secret material the secret scan cannot recognise (transformed values, synced trees): the op is recorded `"sensitive": true` (plan schema 22). File, Dir/SyncDir, ConfigSet and its `ConfigFile` members, Command, Package, Cron and SystemdTimer only; Link, Service, Timer, DaemonReload and User carry no payload and refuse it at compile time. See [secrets.md](secrets.md#explicit-sensitivity-withsensitive) |
 
 ## Filesystem
 

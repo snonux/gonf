@@ -325,6 +325,43 @@ it escapes). So existing recipes need no change: a secret concatenated into
 rendered configuration (`WithContent(renderKey(key))`) or placed into
 `WithTemplateData` is still found.
 
+### Explicit sensitivity: `WithSensitive`
+
+The scan finds what it can recognise; for everything else a recipe
+declares the payload secret itself:
+
+```go
+token := strings.TrimSpace(MustSecret("svc/token"))
+derived := base64.StdEncoding.EncodeToString([]byte("svc:" + token)) // the scan cannot see this
+File("/etc/svc/auth", WithContent("Authorization: Basic "+derived+"\n"), WithSensitive)
+SyncDir("/etc/svc/keys", "assets/svc-keys/*", WithSensitive)
+Command("/usr/local/bin/register", List("--auth", derived), WithName("register"), WithSensitive)
+ConfigSet("svc", ConfigFile("auth", "/etc/svc/auth.conf", WithContent(derived), WithSensitive),
+    WithSetValidation("/usr/sbin/svc", []string{"-t", MemberPath("auth")}))
+```
+
+- The recorded op is marked sensitive exactly like a detected one, with
+  every consequence above and below: schema 22 header, `-stdout` refused,
+  `-redacted` withholds its payload, the elevated-blob refusal, and the
+  destination withholding (validator output, template details, command
+  argv and output, package-manager and crontab failure output).
+- It only ever adds sensitivity: an op the scan matched is sensitive
+  without it, and nothing else about the op changes, so a recipe without
+  `WithSensitive` records byte for byte what it recorded before the option
+  existed. It works without any resolved secret too (a secret that came
+  from elsewhere).
+- It is typed (`options.SensitiveOption`): File, Dir/`SyncDir` (the only
+  way to mark a synced tree, which the scan never reads; every copied
+  entry is then written as a sensitive file), `ConfigSet` (on the set or on
+  any `ConfigFile` member, either marks the whole set, whose one op carries
+  every member), Command, Package, Cron and SystemdTimer (whose unit files
+  are then written as sensitive files). Link, Service, Timer, DaemonReload
+  and User ops carry only identities and metadata, so `WithSensitive` on
+  them is a compile-time error, not a silent no-op.
+- It hides nothing that is not payload: identities (IDs, paths, names,
+  binaries) are still logged, so keep secrets out of them (`WithName` for a
+  command), and content still lands on the destination in clear text.
+
 For a file whose content is exactly one secret, the typed entry point is:
 
 ```go
@@ -352,10 +389,12 @@ Limits of the scan, by design:
   marked, though those lines are still redacted in relayed output and the
   preview.
 - A transformation beyond trimming — base64, hashing, splitting, case
-  changes — hides the value. Keep such derived material out of plans, or
-  resolve the derived form through the provider itself.
+  changes — hides the value. Mark such an op with `WithSensitive` (above),
+  keep the derived material out of plans, or resolve the derived form
+  through the provider itself.
 - Synced directory trees (`SyncDir`, `Dir` with a source) are not scanned; a
-  secret belongs in `SecretFile`/`File`, not in a synced asset tree.
+  secret belongs in `SecretFile`/`File`, or the tree is marked with
+  `WithSensitive`.
 - A secret that is not valid UTF-8, placed as a Go string into template
   data, is recorded with its invalid bytes replaced (`json.Marshal` writes
   U+FFFD), so the recorded value no longer equals the secret and is not
@@ -363,10 +402,11 @@ Limits of the scan, by design:
 - Short secrets in identities: marked, not refused (see above).
 - Command argv/environment: a sensitive command's log lines and dry-run
   description show only its binary (`[argv withheld: secret material]`),
-  and its failure reports the output sizes, not the output. argv is still
-  visible in the destination's process list to every local user, and a
-  package manager's own failure output is not withheld. Pass secrets to
-  programs through a managed `0600` file instead.
+  and its failure reports the output sizes, not the output; a sensitive
+  package op's failing package-manager command and a sensitive cron op's
+  failing `crontab` run report the output sizes too. argv is still
+  visible in the destination's process list to every local user. Pass
+  secrets to programs through a managed `0600` file instead.
 - Content an op writes (a file, a crontab line) is on the destination in
   clear text by design.
 
@@ -378,7 +418,7 @@ Limits of the scan, by design:
 | `gonf plan -stdout` | Refused, naming the sensitive ops (never their values; `SensitiveOpNames` redacts every resolved secret in the names, a short one an identity equals included). `-stdout -with-secrets` is the explicit export; the operator then owns wherever stdout goes. |
 | `gonf plan -redacted` | A human preview on stdout: JSONL headed by a `plan_preview` op, which no gonf version accepts as a plan, with the payload of every sensitive op (content and template data wholesale) and every remembered value in every payload and identity string replaced by `[redacted]`; metadata strings (op kind, owner, mode, ...) only for strong secrets, so a weak secret equal to `file` or `root` does not garble them. Strings are redacted as decoded values and re-encoded, so every line is valid JSON. It is not replayable and must not be labelled as a plan. It cannot be combined with `-stdout`, `-with-secrets` or `-o`. |
 | `gonf <task>`, `push`, `cluster`, `fleet` | The plan stays in memory on the controller and travels over SSH stdin (`GONF-PUSH/1`), as before. |
-| Destination apply (`gonf apply`) | A failing file (`WithValidation`) or `ConfigSet` validator reports its exit status and only the size of its output ("validator output withheld (N bytes)"), because a validator that quotes the offending line would echo the secret; template parse/execute errors of a sensitive file report the step only. Debug logs never print content digests (for any file: an unsalted sha256 of a low-entropy secret can be confirmed offline). |
+| Destination apply (`gonf apply`) | A failing file (`WithValidation`) or `ConfigSet` validator reports its exit status and only the size of its output ("validator output withheld (N bytes)"), because a validator that quotes the offending line would echo the secret; template parse/execute errors of a sensitive file (or of an entry of a sensitive synced tree) report the step only; a failing command, package-manager or `crontab` run of a sensitive op reports only its output sizes. Debug logs never print content digests (for any file: an unsalted sha256 of a low-entropy secret can be confirmed offline). |
 | Validation candidates | Unchanged and already private: a file candidate is a `0600` temp file in a parent that only root and the applying user can write; a config set stages below a private staging directory. Both are removed after validation. |
 
 ### Transport, privilege and remote versions

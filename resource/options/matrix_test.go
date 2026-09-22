@@ -56,6 +56,9 @@ var (
 	famChangeGate   = []string{"Service", "Timer", "DaemonReload", "Command"}
 	famEnableOnly   = []string{"Timer", "SystemdTimer"}
 	famCronTimer    = []string{"Cron", "SystemdTimer"}
+	// famSensitive lists the payload-carrying kinds WithSensitive accepts;
+	// Link, Service, Timer, DaemonReload and LocalUser carry no payload.
+	famSensitive = []string{"File", "Dir", "Package", "Cron", "SystemdTimer", "Command", "ConfigSet"}
 	// famDependsOn is famAll plus ConfigSet: DependsOn's allResourceOption
 	// also implements the config-set family (resource/options/configset.go),
 	// which AllResourceOption itself does not list.
@@ -149,6 +152,7 @@ var optionCases = []optionCase{
 		one("AddSetValidator", []any{"smtpd", []string{"-n", "-f", MemberPath("smtpd.conf")}})},
 	{"WithChroot", WithChroot("/var/nsd"), []string{"ConfigSet"}, one("SetChroot", "/var/nsd")},
 	{"WithStagingDir", WithStagingDir("/etc/mail"), []string{"ConfigSet"}, one("SetStagingDir", "/etc/mail")},
+	{"WithSensitive", WithSensitive, famSensitive, one("SetSensitive", nil)},
 	{"OnChange", OnChange(fileA), famChangeGate, []setterCall{
 		{method: "SetChangeWatch", value: []string{"File[a]"}},
 		{method: "AddDependency", value: "File[a]"},

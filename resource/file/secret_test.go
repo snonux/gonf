@@ -60,3 +60,34 @@ func TestBuildSecretRefusesContentOptions(t *testing.T) {
 		}
 	}
 }
+
+// fakeTemplateSecret is synthetic secret material spelled so a
+// text/template parse error quotes it.
+const fakeTemplateSecret = "fakeTemplateSecret8b2d"
+
+// WithSensitive marks a File (its draft, and the details its errors carry)
+// exactly like a sensitive plan op; SecretFile's File is marked by itself.
+func TestWithSensitiveMarksFileAndWithholdsTemplateDetails(t *testing.T) {
+	content := opt.WithContent("key {{" + fakeTemplateSecret + "}}\n")
+	for _, sensitive := range []bool{true, false} {
+		opts := []opt.FileOption{content, opt.WithTemplate}
+		if sensitive {
+			opts = append(opts, opt.WithSensitive)
+		}
+		f, err := build(t.TempDir()+"/conf", opts...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f.Sensitive != sensitive {
+			t.Fatalf("File.Sensitive = %v, want %v", f.Sensitive, sensitive)
+		}
+		err = f.apply()
+		if err == nil || strings.Contains(err.Error(), fakeTemplateSecret) == sensitive {
+			t.Fatalf("sensitive=%v: err = %v", sensitive, err)
+		}
+	}
+	f, err := buildSecret("/etc/secret", []byte(fakeSecretContent))
+	if err != nil || !f.Sensitive {
+		t.Fatalf("buildSecret: sensitive = %v, err = %v; want a sensitive File", f != nil && f.Sensitive, err)
+	}
+}

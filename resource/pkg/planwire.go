@@ -51,5 +51,10 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if op.Env != nil {
 		opts = append(opts, opt.WithEnv(op.Env))
 	}
+	// A sensitive op (scan-detected or WithSensitive at record time)
+	// rebuilds a sensitive Package, which withholds failure output.
+	if op.Sensitive {
+		opts = append(opts, opt.WithSensitive)
+	}
 	return Ensure(op.Name, opts...)
 }

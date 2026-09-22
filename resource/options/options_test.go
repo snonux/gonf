@@ -1,12 +1,9 @@
 package options
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/snonux/gonf/resource"
-	"golang.org/x/tools/go/packages"
 )
 
 // These helpers intentionally accept the concrete family interfaces. The
@@ -255,12 +252,6 @@ func TestLegacyOptionAdapters(t *testing.T) {
 }
 
 func TestInvalidOptionResourcePairDoesNotCompile(t *testing.T) {
-	root, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd: %v", err)
-	}
-	root = filepath.Dir(filepath.Dir(root))
-	tmp := t.TempDir()
 	const source = `package invalid
 
 import (
@@ -272,30 +263,14 @@ func invalid() {
 	file.Present("/tmp/file", options.WithCommand("true"))
 }
 `
-	goMod := "module invalid\n\ngo 1.26.4\n\nrequire github.com/snonux/gonf v0.0.0\n\nreplace github.com/snonux/gonf => " + root + "\n"
-	if err := os.WriteFile(filepath.Join(tmp, "go.mod"), []byte(goMod), 0o600); err != nil {
-		t.Fatalf("write go.mod: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(tmp, "invalid.go"), []byte(source), 0o600); err != nil {
-		t.Fatalf("write invalid.go: %v", err)
-	}
-	loaded, err := packages.Load(&packages.Config{
-		Mode: packages.NeedTypes | packages.NeedTypesInfo | packages.NeedDeps,
-		Dir:  tmp,
-	}, ".")
-	if err != nil {
-		t.Fatalf("packages.Load: %v", err)
-	}
-	if len(loaded) != 1 {
-		t.Fatalf("loaded %d packages, want 1", len(loaded))
-	}
-	if len(loaded[0].Errors) == 0 {
+	errs := typeErrors(t, source) // sensitive_test.go
+	if len(errs) == 0 {
 		t.Fatal("invalid file option was accepted by the compiler")
 	}
-	for _, loadErr := range loaded[0].Errors {
+	for _, loadErr := range errs {
 		if loadErr.Pos != "" && loadErr.Msg != "" {
 			return
 		}
 	}
-	t.Fatalf("unexpected package errors: %v", loaded[0].Errors)
+	t.Fatalf("unexpected package errors: %v", errs)
 }

@@ -48,34 +48,11 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if op.Name == "" {
 		return fmt.Errorf("systemd_timer: missing name")
 	}
-	var opts []opt.SystemdTimerOption
-	if op.Absent {
-		opts = append(opts, opt.IsAbsent)
-	} else {
-		if op.Command == "" {
-			return fmt.Errorf("systemd_timer: missing command")
-		}
-		if op.OnCalendar == "" {
-			return fmt.Errorf("systemd_timer: missing on_calendar")
-		}
-		opts = append(opts, opt.WithCommand(op.Command), opt.WithOnCalendar(op.OnCalendar))
-		if op.OnBootSec != "" {
-			opts = append(opts, opt.WithOnBootSec(op.OnBootSec))
-		}
-		if op.Persistent {
-			opts = append(opts, opt.WithPersistent)
-		}
-		if op.Description != "" {
-			opts = append(opts, opt.WithDescription(op.Description))
-		}
-		if op.ServiceDescription != "" {
-			opts = append(opts, opt.WithServiceDescription(op.ServiceDescription))
-		}
-		if len(op.After) > 0 {
-			opts = append(opts, opt.WithAfter(op.After...))
-		}
-		if len(op.Wants) > 0 {
-			opts = append(opts, opt.WithWants(op.Wants...))
+	opts := []opt.SystemdTimerOption{opt.IsAbsent}
+	if !op.Absent {
+		var err error
+		if opts, err = presentOptions(op); err != nil {
+			return err
 		}
 	}
 	if op.User {
@@ -87,5 +64,43 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if op.EnableOnly {
 		opts = append(opts, opt.WithEnableOnly)
 	}
+	// A sensitive op (scan-detected or WithSensitive at record time)
+	// rebuilds a sensitive timer, whose unit files are written as
+	// sensitive files.
+	if op.Sensitive {
+		opts = append(opts, opt.WithSensitive)
+	}
 	return Ensure(op.Name, opts...)
+}
+
+// presentOptions translates a present systemd_timer op's unit fields into
+// the options a direct recipe would pass, requiring the command and
+// calendar a present timer needs.
+func presentOptions(op plan.Op) ([]opt.SystemdTimerOption, error) {
+	if op.Command == "" {
+		return nil, fmt.Errorf("systemd_timer: missing command")
+	}
+	if op.OnCalendar == "" {
+		return nil, fmt.Errorf("systemd_timer: missing on_calendar")
+	}
+	opts := []opt.SystemdTimerOption{opt.WithCommand(op.Command), opt.WithOnCalendar(op.OnCalendar)}
+	if op.OnBootSec != "" {
+		opts = append(opts, opt.WithOnBootSec(op.OnBootSec))
+	}
+	if op.Persistent {
+		opts = append(opts, opt.WithPersistent)
+	}
+	if op.Description != "" {
+		opts = append(opts, opt.WithDescription(op.Description))
+	}
+	if op.ServiceDescription != "" {
+		opts = append(opts, opt.WithServiceDescription(op.ServiceDescription))
+	}
+	if len(op.After) > 0 {
+		opts = append(opts, opt.WithAfter(op.After...))
+	}
+	if len(op.Wants) > 0 {
+		opts = append(opts, opt.WithWants(op.Wants...))
+	}
+	return opts, nil
 }

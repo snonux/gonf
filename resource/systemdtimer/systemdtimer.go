@@ -37,6 +37,7 @@ var (
 	_ opt.UserService            = (*SystemdTimer)(nil)
 	_ opt.Restartable            = (*SystemdTimer)(nil)
 	_ opt.EnableOnlyable         = (*SystemdTimer)(nil)
+	_ opt.Sensitivable           = (*SystemdTimer)(nil)
 )
 
 // ensureReload applies a daemon-reload; tests swap it to observe the options
@@ -44,9 +45,16 @@ var (
 var ensureReload = systemd.Ensure
 
 // SystemdTimer manages a named systemd .timer with a companion oneshot .service.
+//
+// The Sensitivity embed backs WithSensitive: the ExecStart command holds
+// secret material, so the recorded op is sensitive and both unit files are
+// written as sensitive Files (unitFileOptions). The command still ends up
+// in the service unit (mode 0644) and in systemd's own status output; keep
+// secrets in a 0600 file the command reads.
 type SystemdTimer struct {
 	embed.DependsOn
 	embed.Absence
+	embed.Sensitivity
 	name               string // unit name ending in .timer
 	base               string // name without .timer
 	command            string
@@ -168,6 +176,7 @@ func (t *SystemdTimer) planDraft(id string) resource.PlanDraft {
 		After:              append([]string(nil), t.after...),
 		Wants:              append([]string(nil), t.wants...),
 		Deps:               t.DependsOn.SortedIDs(),
+		Sensitive:          t.Sensitive,
 	}
 }
 
@@ -248,16 +257,10 @@ func (t *SystemdTimer) applyPresent(dir, svcPath, timerPath, svcID, timerFileID 
 		return fmt.Errorf("mkdir %s: %w", dir, err)
 	}
 
-	if err := file.Ensure(svcPath,
-		opt.WithContent(t.serviceUnit()),
-		opt.WithMode(0o644),
-	); err != nil {
+	if err := file.Ensure(svcPath, t.unitFileOptions(t.serviceUnit())...); err != nil {
 		return err
 	}
-	if err := file.Ensure(timerPath,
-		opt.WithContent(t.timerUnit()),
-		opt.WithMode(0o644),
-	); err != nil {
+	if err := file.Ensure(timerPath, t.unitFileOptions(t.timerUnit())...); err != nil {
 		return err
 	}
 
@@ -300,6 +303,16 @@ func (t *SystemdTimer) applyAbsent(svcPath, timerPath, svcID, timerFileID string
 		return err
 	}
 	return t.ensureDaemonReload(svcID, timerFileID)
+}
+
+// unitFileOptions are the File options a unit file with content is written
+// with: mode 0644, and WithSensitive for a sensitive timer.
+func (t *SystemdTimer) unitFileOptions(content string) []opt.FileOption {
+	opts := []opt.FileOption{opt.WithContent(content), opt.WithMode(0o644)}
+	if t.Sensitive {
+		opts = append(opts, opt.WithSensitive)
+	}
+	return opts
 }
 
 // unitDir is the directory the unit files live in: /etc/systemd/system, or
