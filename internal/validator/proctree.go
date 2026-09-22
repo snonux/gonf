@@ -54,10 +54,14 @@ const (
 // none of them can fork or reparent a child out of reach while the tree is
 // collected. It then SIGKILLs the stopped descendants children first and
 // finally the leader, whose result it returns (the verdict logic in
-// killForTimeout only cares about the leader). Killing children first keeps
-// each parent stopped, so a killed child stays its zombie, and its pid stays
+// killForTimeout only cares about the leader). Only descendants whose SIGSTOP
+// succeeded are in the kill list, so each of them is held in place: a stopped
+// process cannot exit on its own, and killing children first keeps each
+// parent stopped, so a killed child stays its zombie, and its pid stays
 // taken, until the parent itself is killed after it: no pid in the list can
-// be recycled before its SIGKILL.
+// be recycled before its SIGKILL. A descendant whose SIGSTOP failed (it
+// exited meanwhile, or EPERM) is not killed, since its pid may already name
+// another process by then.
 //
 // A leader that Wait already reaped yields os.ErrProcessDone without
 // signalling anything: its pid may already name an unrelated process, and
@@ -68,11 +72,12 @@ const (
 //
 // Not reached: descendants that were already reparented away from the tree
 // before the timeout (a double fork, a daemonizing child), descendants found
-// only after freezeBudget ran out, and descendants gonf may not signal
-// (EPERM; a root gonf may signal every process). Pids come from a snapshot,
-// so a descendant that exits on its own and has its pid reused between the
-// snapshot and its SIGSTOP could be hit instead; the window is the time
-// between reading the table and signalling, as for any pid-based kill.
+// only after freezeBudget ran out, and descendants whose SIGSTOP failed
+// (EPERM, gonf may not signal them; a root gonf may signal every process;
+// or ESRCH, they exited). Pids come from a snapshot, so a descendant that
+// exits on its own and has its pid reused between the snapshot and its
+// SIGSTOP could be hit instead; the window is the time between reading the
+// table and signalling, as for any pid-based kill.
 func killTree(leader *os.Process) error {
 	switch err := leader.Signal(syscall.SIGSTOP); {
 	case errors.Is(err, os.ErrProcessDone):
@@ -92,10 +97,14 @@ func killTree(leader *os.Process) error {
 // freezeDescendants stops (stop, SIGSTOP in killTree) every descendant of
 // root found in the process table read by table, rereading it until a round
 // finds nothing new (or maxFreezeRounds), and returns the stopped pids in the
-// order stopped, every parent before its children. A table that cannot be
+// order stopped, every parent before its children. A pid whose stop fails is
+// tried once and left out of the result: it is not held in place (ESRCH: it
+// exited, so its number may be reused; EPERM: gonf may not signal it), so a
+// later SIGKILL of that number could hit an unrelated process (task t82).
+// Its children are still looked for and stopped. A table that cannot be
 // read, or ctx ending (the freezeBudget), ends the search with what was found
 // so far; table must honour ctx.
-func freezeDescendants(ctx context.Context, root int, table func(context.Context) (map[int]int, error), stop func(pid int)) []int {
+func freezeDescendants(ctx context.Context, root int, table func(context.Context) (map[int]int, error), stop func(pid int) error) []int {
 	seen := map[int]bool{}
 	var stopped []int
 	for range maxFreezeRounds {
@@ -111,10 +120,14 @@ func freezeDescendants(ctx context.Context, root int, table func(context.Context
 			if seen[pid] {
 				continue
 			}
+			// seen even when the stop fails, so a later round neither
+			// retries it nor counts it as new; only a pid that was really
+			// stopped goes into the kill list (see killTree).
 			seen[pid] = true
 			fresh = true
-			stopped = append(stopped, pid)
-			stop(pid)
+			if stop(pid) == nil {
+				stopped = append(stopped, pid)
+			}
 		}
 		if !fresh {
 			break
@@ -123,9 +136,10 @@ func freezeDescendants(ctx context.Context, root int, table func(context.Context
 	return stopped
 }
 
-// sigstop stops pid; a failure (it exited, EPERM) leaves it to its fate.
-func sigstop(pid int) {
-	_ = unix.Kill(pid, unix.SIGSTOP)
+// sigstop stops pid and returns the kill error; a failure (it exited, EPERM)
+// leaves the process to its fate, and freezeDescendants then does not kill it.
+func sigstop(pid int) error {
+	return unix.Kill(pid, unix.SIGSTOP)
 }
 
 // descendants returns the descendants of root (not root itself) in the

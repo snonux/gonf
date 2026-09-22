@@ -71,8 +71,9 @@ wrapper script dies with the hung checker it runs, and validation fails with
 the validator (`SIGSTOP`), then finds and stops its descendants by walking the
 process tree (`/proc` on Linux, `ps` elsewhere), spending at most 2 seconds on
 the search, and finally kills them children first and the validator last. A
-process that was already detached from the validator (e.g. by a double fork) or
-not found within those 2 seconds is not killed; if the process table cannot be
+process that was already detached from the validator (e.g. by a double fork),
+not found within those 2 seconds, or that could not be stopped (it exited
+meanwhile, so its pid may be reused, or gonf may not signal it) is not killed; if the process table cannot be
 read, only the validator itself is. Processes started by a validator that exits
 on its own before the timeout keep running. If gonf is not allowed to kill the
 validator (`EPERM`, e.g. a non-root gonf running the validator through

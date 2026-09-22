@@ -206,7 +206,7 @@ func TestFreezeDescendants(t *testing.T) {
 		return tables[call-1], nil
 	}
 	var stops []int
-	got := freezeDescendants(context.Background(), 10, table, func(pid int) { stops = append(stops, pid) })
+	got := freezeDescendants(context.Background(), 10, table, func(pid int) error { stops = append(stops, pid); return nil })
 	if want := []int{11, 12}; !reflect.DeepEqual(got, want) || !reflect.DeepEqual(stops, want) {
 		t.Fatalf("stopped %v (calls %v), want %v", got, stops, want)
 	}
@@ -214,8 +214,56 @@ func TestFreezeDescendants(t *testing.T) {
 		t.Fatalf("read the table %d times, want 3 (until nothing new)", call)
 	}
 	failing := func(context.Context) (map[int]int, error) { return nil, errors.New("no table") }
-	if got := freezeDescendants(context.Background(), 10, failing, func(int) { t.Fatal("stopped without a table") }); got != nil {
+	if got := freezeDescendants(context.Background(), 10, failing, func(int) error { t.Fatal("stopped without a table"); return nil }); got != nil {
 		t.Fatalf("stopped %v without a table, want nothing", got)
+	}
+}
+
+// Only descendants whose stop succeeded are returned for the SIGKILL: a pid
+// whose SIGSTOP failed (ESRCH, it exited and may be reused; EPERM, gonf may
+// not signal it) is not held in place, so killing that number later could hit
+// an unrelated process. It is still not stopped again in a later round, and
+// the search goes on with its (stoppable) children.
+func TestFreezeDescendantsSkipsFailedStops(t *testing.T) {
+	tests := []struct {
+		name string
+		fail map[int]error
+		want []int
+	}{
+		{"none fails", nil, []int{11, 12, 13}},
+		{"exited (ESRCH)", map[int]error{12: unix.ESRCH}, []int{11, 13}},
+		{"not permitted (EPERM)", map[int]error{11: unix.EPERM}, []int{12, 13}},
+		{"all fail", map[int]error{11: unix.ESRCH, 12: unix.EPERM, 13: unix.ESRCH}, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tables := []map[int]int{
+				// A chain, so the order is fixed (siblings come in map
+				// order): 13 appears only in the second round.
+				{11: 10, 12: 11},
+				{11: 10, 12: 11, 13: 12},
+				{11: 10, 12: 11, 13: 12},
+			}
+			call := 0
+			table := func(context.Context) (map[int]int, error) {
+				call++
+				return tables[min(call, len(tables))-1], nil
+			}
+			attempts := map[int]int{}
+			stop := func(pid int) error {
+				attempts[pid]++
+				return tt.fail[pid]
+			}
+			got := freezeDescendants(context.Background(), 10, table, stop)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("returned %v for the kill, want only the stopped %v", got, tt.want)
+			}
+			for _, pid := range []int{11, 12, 13} {
+				if attempts[pid] != 1 {
+					t.Errorf("stop(%d) called %d times, want once", pid, attempts[pid])
+				}
+			}
+		})
 	}
 }
 
@@ -235,14 +283,14 @@ func TestFreezeDescendantsHonoursBudget(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	got := freezeDescendants(ctx, 10, slow, func(int) {})
+	got := freezeDescendants(ctx, 10, slow, func(int) error { return nil })
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("search took %v, want it cut at the 100ms deadline", elapsed)
 	}
 	if want := []int{11}; !reflect.DeepEqual(got, want) || calls != 2 {
 		t.Fatalf("stopped %v after %d reads, want %v after 2", got, calls, want)
 	}
-	if got := freezeDescendants(ctx, 10, slow, func(int) {}); got != nil || calls != 2 {
+	if got := freezeDescendants(ctx, 10, slow, func(int) error { return nil }); got != nil || calls != 2 {
 		t.Fatalf("expired search stopped %v after %d reads, want nothing and no read", got, calls)
 	}
 }
