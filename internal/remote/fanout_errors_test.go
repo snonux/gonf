@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/snonux/gonf/internal/privilege"
+	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 )
 
@@ -154,6 +156,54 @@ func TestSSHRunnerContextKillKeepsExitErrorChain(t *testing.T) {
 	want := "context deadline exceeded (ssh killed by context: " + exitErr.Error() + ")"
 	if err.Error() != want {
 		t.Fatalf("message changed:\n got %q\nwant %q", err.Error(), want)
+	}
+}
+
+// A Group left at its zero value (Writer unset, every production caller
+// today) still writes its summary line to os.Stderr: the default must stay
+// byte-identical to the pre-injection behavior, so nothing downstream that
+// parses or greps that stream breaks.
+func TestFanoutNilWriterDefaultsToStderr(t *testing.T) {
+	installFanoutRunner(t, func(context.Context, []string) error { return nil })
+	ops, targets, labels := fanoutErrorFixture(1)
+
+	var err error
+	stderr := testutil.CaptureStderr(t, func() {
+		err = Fanout(context.Background(), Delivery{Mode: Push, PlanID: "p", Ops: ops},
+			Group{Name: "demo", Targets: targets, Labels: labels, Limit: 1})
+	})
+	if err != nil {
+		t.Fatalf("Fanout: %v", err)
+	}
+	want := "pushed p (2 ops) to demo (1/1 hosts)\n"
+	if stderr != want {
+		t.Fatalf("stderr = %q, want %q", stderr, want)
+	}
+}
+
+// A Group with Writer set sends the summary line there instead of
+// os.Stderr: setting Writer must fully opt out of the process-wide stream,
+// not merely add a copy, so a caller that wants quiet library use (or a test
+// that wants to assert on the line without redirecting os.Stderr) gets it.
+func TestFanoutWriterReplacesStderr(t *testing.T) {
+	installFanoutRunner(t, func(context.Context, []string) error { return nil })
+	ops, targets, labels := fanoutErrorFixture(1)
+
+	var buf bytes.Buffer
+	var err error
+	stderr := testutil.CaptureStderr(t, func() {
+		err = Fanout(context.Background(), Delivery{Mode: Preview, PlanID: "p", Ops: ops},
+			Group{Name: "demo", Targets: targets, Labels: labels, Limit: 1, Writer: &buf})
+	})
+	if err != nil {
+		t.Fatalf("Fanout: %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty: the injected Writer should have taken the summary instead", stderr)
+	}
+	want := "previewed p (2 ops) to demo (1/1 hosts)\n"
+	if buf.String() != want {
+		t.Fatalf("buf = %q, want %q", buf.String(), want)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 	"time"
@@ -46,6 +47,21 @@ type Group struct {
 	// library callers, the CLI -host-timeout flag otherwise; <= 0 means
 	// unlimited).
 	HostTimeout time.Duration
+	// Writer receives Fanout's per-group summary line ("pushed ... to ...
+	// (n/m hosts)"). Nil (the zero Group, every production caller today)
+	// means os.Stderr, keeping the line byte-identical to before this field
+	// existed; tests inject a buffer to assert on the summary without
+	// redirecting the process-wide os.Stderr.
+	Writer io.Writer
+}
+
+// summaryWriter is g's resolved Fanout destination: g.Writer when set,
+// os.Stderr otherwise (see Group.Writer).
+func (g Group) summaryWriter() io.Writer {
+	if g.Writer != nil {
+		return g.Writer
+	}
+	return os.Stderr
 }
 
 // Fanout delivers one already-recorded plan to every target of g in
@@ -84,7 +100,10 @@ func Fanout(ctx context.Context, d Delivery, g Group) error {
 	// for aborts); Wait's own first error would be redundant.
 	_ = eg.Wait()
 
-	fmt.Fprintf(os.Stderr, "%s %s (%d ops) to %s (%d/%d hosts)\n",
+	// The summary line's own write failing (a closed pipe, a full disk on
+	// the default os.Stderr) must not turn a successful fan-out into an
+	// error, so its result is explicitly discarded rather than checked.
+	_, _ = fmt.Fprintf(g.summaryWriter(), "%s %s (%d ops) to %s (%d/%d hosts)\n",
 		d.Mode.Verb(), d.PlanID, len(d.Ops), g.Name, tally.okCount, len(g.Targets))
 	return tally.err(g.Name)
 }

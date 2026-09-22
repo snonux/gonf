@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -11,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/snonux/gonf/internal/privilege"
-	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
@@ -128,8 +128,11 @@ func TestModeStringAndVerb(t *testing.T) {
 
 // The Mode carried in the Delivery alone decides, per host, whether the
 // fan-out may bootstrap gonf (Push) or must not (Preview), and which remote
-// apply command runs. The stderr summary line (whose verb comes from the
-// Mode, and whose "to <cluster>" wording is the same for both) is pinned too.
+// apply command runs. The summary line (whose verb comes from the Mode, and
+// whose "to <cluster>" wording is the same for both) is pinned too; it is
+// read straight from Group.Writer (a bytes.Buffer here) rather than via
+// testutil.CaptureStderr, since Fanout writes to an injectable io.Writer now
+// instead of always writing os.Stderr directly.
 func TestFanoutModeDecidesBootstrap(t *testing.T) {
 	tests := []struct {
 		mode           Mode
@@ -145,14 +148,13 @@ func TestFanoutModeDecidesBootstrap(t *testing.T) {
 			r := installDeliveryRecorder(t)
 			_, targets, labels := fanoutErrorFixture(2)
 			d := Delivery{Mode: tc.mode, PlanID: "p", Ops: deliveryOps()}
-			g := Group{Name: "c", Targets: targets, Labels: labels, Limit: 2}
-			var err error
-			stderr := testutil.CaptureStderr(t, func() { err = Fanout(context.Background(), d, g) })
-			if err != nil {
+			var buf bytes.Buffer
+			g := Group{Name: "c", Targets: targets, Labels: labels, Limit: 2, Writer: &buf}
+			if err := Fanout(context.Background(), d, g); err != nil {
 				t.Fatalf("Fanout: %v", err)
 			}
-			if stderr != tc.wantSummary {
-				t.Fatalf("summary = %q, want %q", stderr, tc.wantSummary)
+			if buf.String() != tc.wantSummary {
+				t.Fatalf("summary = %q, want %q", buf.String(), tc.wantSummary)
 			}
 			if got := r.bootstraps.Load(); got != tc.wantBootstraps {
 				t.Fatalf("bootstraps = %d, want %d", got, tc.wantBootstraps)
