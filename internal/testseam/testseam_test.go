@@ -1,17 +1,36 @@
 package testseam
 
 import (
+	"os"
+	osexec "os/exec"
+	"strings"
 	"testing"
 
 	"github.com/snonux/gonf/internal/exec"
 )
 
-// fakeCleaner collects cleanups so a test decides when they run, the way
-// testing runs them: last registered first.
-type fakeCleaner struct{ fns []func() }
+// helperEnv makes the test binary run TestParallelFakeHelper for real; the
+// parent test (TestFakeRefusesParallelTest) re-executes itself with it set.
+const helperEnv = "GONF_TESTSEAM_PARALLEL_HELPER"
+
+// fakeCleaner collects cleanups so a test decides when (and in which order)
+// they run, and records Setenv calls.
+type fakeCleaner struct {
+	fns []func()
+	env map[string]string
+}
 
 func (c *fakeCleaner) Cleanup(fn func()) { c.fns = append(c.fns, fn) }
 
+func (c *fakeCleaner) Setenv(key, value string) {
+	if c.env == nil {
+		c.env = map[string]string{}
+	}
+	c.env[key] = value
+}
+
+// run runs the collected cleanups the way testing does: last registered
+// first.
 func (c *fakeCleaner) run() {
 	for i := len(c.fns) - 1; i >= 0; i-- {
 		c.fns[i]()
@@ -34,14 +53,18 @@ func stdout(run Run) string {
 }
 
 // TestFakeMergesAndRestoresInOrder pins the slot contract every Fake* call
-// relies on: a nil field keeps the runner in effect, and cleanups unwind
-// nested fakes back to the previous value and finally to none.
+// relies on: a nil field keeps the runner in effect, each call sets the
+// parallel guard, and cleanups unwind nested fakes back to the previous
+// value and finally to none.
 func TestFakeMergesAndRestoresInOrder(t *testing.T) {
 	var outer, inner fakeCleaner
 	FakeCommand(&outer, Command{Probe: named("probe-1")})
 	FakeCommand(&inner, Command{Run: func(exec.Opts, string, ...string) (string, string, int, error) {
 		return "run-2", "", 0, nil
 	}})
+	if outer.env[ParallelGuardEnv] != "1" || inner.env[ParallelGuardEnv] != "1" {
+		t.Fatalf("Fake* did not set the parallel guard: %v %v", outer.env, inner.env)
+	}
 	if got := stdout(CommandFakes().Probe); got != "probe-1" {
 		t.Fatalf("probe after a Run-only fake = %q, want the kept probe-1", got)
 	}
@@ -55,6 +78,23 @@ func TestFakeMergesAndRestoresInOrder(t *testing.T) {
 	outer.run()
 	if f := CommandFakes(); f.Run != nil || f.Probe != nil {
 		t.Fatal("outer cleanup did not restore the real runners")
+	}
+}
+
+// TestCleanupOutOfOrderRemovesOnlyItsLayer: a cleanup removes exactly its
+// own layer, so the older fake's cleanup running first neither drops the
+// newer fake nor lets it survive its own cleanup.
+func TestCleanupOutOfOrderRemovesOnlyItsLayer(t *testing.T) {
+	var first, second fakeCleaner
+	FakeSystemctl(&first, named("first"))
+	FakeSystemctl(&second, named("second"))
+	first.run()
+	if got := stdout(Systemctl()); got != "second" {
+		t.Fatalf("after the older cleanup: %q, want the newer fake kept", got)
+	}
+	second.run()
+	if got := stdout(Systemctl()); got != "real" {
+		t.Fatalf("after both cleanups: %q, want the real runner", got)
 	}
 }
 
@@ -92,24 +132,54 @@ func TestSingleSlotFakes(t *testing.T) {
 	}
 }
 
-// TestFakeCrontabLockFlag: any crontab fake reports faked (so resource/cron
-// takes its in-process lock) unless the latest call asked for the real lock.
-func TestFakeCrontabLockFlag(t *testing.T) {
+// TestCrontabLockChoice: a crontab fake selects the in-process lock unless a
+// FakeCrontabLock layer chose the real one, and a later FakeCrontab cannot
+// override that choice.
+func TestCrontabLockChoice(t *testing.T) {
 	var c fakeCleaner
-	if _, faked := CrontabFakes(); faked {
-		t.Fatal("crontab reported faked before any fake")
+	defer c.run()
+	if CrontabInProcessLock() {
+		t.Fatal("in-process lock chosen without any fake")
 	}
 	FakeCrontab(&c, Crontab{Read: named("tab")})
-	f, faked := CrontabFakes()
-	if !faked || f.RealLock || stdout(f.Read) != "tab" || f.Write != nil {
-		t.Fatalf("after Read fake: %+v faked=%t", f, faked)
+	if f := CrontabFakes(); !CrontabInProcessLock() || stdout(f.Read) != "tab" || f.Write != nil {
+		t.Fatalf("after a Read fake: %+v, in-process %t", f, CrontabInProcessLock())
 	}
-	FakeCrontab(&c, Crontab{RealLock: true})
-	if f, _ := CrontabFakes(); !f.RealLock || stdout(f.Read) != "tab" {
-		t.Fatalf("RealLock fake lost the kept Read or the flag: %+v", f)
+	FakeCrontabLock(&c, false)
+	FakeCrontab(&c, Crontab{Write: func(string, string, ...string) (string, string, int, error) { return "", "", 0, nil }})
+	if CrontabInProcessLock() {
+		t.Fatal("a nested FakeCrontab turned the chosen real lock off")
+	}
+	if stdout(CrontabFakes().Read) != "tab" {
+		t.Fatal("the nested FakeCrontab lost the kept Read fake")
 	}
 	c.run()
-	if _, faked := CrontabFakes(); faked {
+	if CrontabInProcessLock() || CrontabFakes().Read != nil {
 		t.Fatal("crontab still faked after cleanup")
 	}
+}
+
+// TestFakeRefusesParallelTest runs TestParallelFakeHelper in a child test
+// binary: a parallel test installing a fake must fail through testing's
+// Setenv check instead of racing other tests on the process-global slot.
+func TestFakeRefusesParallelTest(t *testing.T) {
+	cmd := osexec.Command(os.Args[0], "-test.run=^TestParallelFakeHelper$", "-test.count=1")
+	cmd.Env = append(os.Environ(), helperEnv+"=1")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("parallel test with a fake passed:\n%s", out)
+	}
+	if !strings.Contains(string(out), "t.Parallel") {
+		t.Fatalf("child failed for another reason:\n%s", out)
+	}
+}
+
+// TestParallelFakeHelper is the child half of TestFakeRefusesParallelTest;
+// it is skipped unless helperEnv is set.
+func TestParallelFakeHelper(t *testing.T) {
+	if os.Getenv(helperEnv) != "1" {
+		t.Skip("helper for TestFakeRefusesParallelTest")
+	}
+	t.Parallel()
+	FakeSystemctl(t, named("parallel"))
 }

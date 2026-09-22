@@ -291,7 +291,7 @@ func endMarker(name string) string   { return endMarkerPrefix + name + "]" }
 // runCmd reads a crontab (crontab -l): the real runner, or the fake a test in
 // this module installed with internal/testseam.FakeCrontab.
 func runCmd(name string, args ...string) (string, string, int, error) {
-	if fake, _ := testseam.CrontabFakes(); fake.Read != nil {
+	if fake := testseam.CrontabFakes(); fake.Read != nil {
 		return fake.Read(name, args...)
 	}
 	return exec.Run(name, args...)
@@ -300,17 +300,18 @@ func runCmd(name string, args ...string) (string, string, int, error) {
 // runCmdWithStdin writes a crontab (crontab -, fed via stdin): the real
 // runner, or a testseam.FakeCrontab fake.
 func runCmdWithStdin(stdin, name string, args ...string) (string, string, int, error) {
-	if fake, _ := testseam.CrontabFakes(); fake.Write != nil {
+	if fake := testseam.CrontabFakes(); fake.Write != nil {
 		return fake.Write(stdin, name, args...)
 	}
 	return exec.RunWithStdin(stdin, name, args...)
 }
 
 // acquireCrontabLock takes the write lock for userName's crontab: the
-// cross-process lock (lock.go), or while a testseam.FakeCrontab fake without
-// RealLock is in effect an in-process one (see lockCrontabInProcess).
+// cross-process lock (lock.go), or an in-process one (see
+// lockCrontabInProcess) while testseam.CrontabInProcessLock says so: a
+// FakeCrontab fake is installed and no FakeCrontabLock chose the real lock.
 func acquireCrontabLock(userName string) (func() error, error) {
-	if fake, faked := testseam.CrontabFakes(); faked && !fake.RealLock {
+	if testseam.CrontabInProcessLock() {
 		return lockCrontabInProcess(userName)
 	}
 	return lockCrontab(userName)

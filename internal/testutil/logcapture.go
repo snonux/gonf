@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/internal/testseam"
 )
 
 // logBuffer is the concurrency-safe sink CaptureLog redirects the logger to,
@@ -17,14 +18,17 @@ type logBuffer struct {
 }
 
 // CaptureLog redirects internal/logger output into memory at level l,
-// without timestamps so lines can be compared exactly (logger.Redirect),
-// until t's cleanup restores the previous destination and level. output
-// returns what was logged so far. The capture is process-global: tests using
-// it must not run in parallel with other tests that log or capture.
+// without timestamps so lines can be compared exactly
+// (logger.RedirectUnprefixed), until t's cleanup restores the previous
+// destination and level. output returns what was logged so far. The capture
+// is process-global, so a test using it must not run in parallel: like the
+// internal/testseam fakes it calls t.Setenv (testseam.ParallelGuardEnv), and
+// testing then panics in a parallel test.
 func CaptureLog(t testing.TB, l logger.Level) (output func() string) {
 	t.Helper()
+	t.Setenv(testseam.ParallelGuardEnv, "1")
 	b := &logBuffer{}
-	t.Cleanup(logger.Redirect(b, l))
+	t.Cleanup(logger.RedirectUnprefixed(b, l))
 	return b.String
 }
 

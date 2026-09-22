@@ -59,13 +59,14 @@ func GetLevel() Level {
 	return level
 }
 
-// Redirect sends log output to w at level l, without the timestamp prefix so
-// lines can be compared exactly, until restore reinstates the previous
-// destination and level. The redirect is process-global: callers (tests
-// capturing log lines, through internal/testutil.CaptureLog) must not run in
-// parallel with other code that logs or redirects. w must be safe for
-// concurrent use if anything logs from several goroutines.
-func Redirect(w io.Writer, l Level) (restore func()) {
+// RedirectUnprefixed sends log output to w at level l, with no timestamp or
+// other prefix, until restore reinstates the previous destination and level.
+// It is test-oriented: the missing prefix lets captured lines be compared
+// exactly, and its one caller is internal/testutil.CaptureLog. The redirect
+// is process-global, so callers must not run in parallel with other code
+// that logs or redirects. w must be safe for concurrent use if anything logs
+// from several goroutines.
+func RedirectUnprefixed(w io.Writer, l Level) (restore func()) {
 	mu.Lock()
 	prevStd, prevLevel := std, level
 	std, level = log.New(w, "", 0), l
@@ -77,9 +78,10 @@ func Redirect(w io.Writer, l Level) (restore func()) {
 	}
 }
 
-// logf reads the level and the destination logger under mu, so Redirect
-// (a test's log capture) can swap std without a data race; the write itself
-// happens outside the lock (log.Logger serialises its own output).
+// logf reads the level and the destination logger under mu, so
+// RedirectUnprefixed (a test's log capture) can swap std without a data race;
+// the write itself happens outside the lock (log.Logger serialises its own
+// output).
 func logf(msgLevel Level, format string, args ...any) {
 	mu.Lock()
 	cur, out, rewrite := level, std, redactor

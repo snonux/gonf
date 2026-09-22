@@ -346,8 +346,8 @@ func TestAbsentWithoutCommand(t *testing.T) {
 			wrote = stdin
 			return "", "", 0, nil
 		},
-		RealLock: true,
 	})
+	testseam.FakeCrontabLock(t, false)
 
 	resource.ResetRepository()
 	Absent("gone", opt.WithCronUser(currentCronUser(t)))
@@ -401,7 +401,7 @@ type fakeCrontab struct {
 
 // fakeCrontabRunners fakes the crontab runners (restored on cleanup) with an
 // in-memory crontab that starts empty ("no crontab"), keeping the real
-// cross-process lock (testseam.Crontab.RealLock).
+// cross-process lock (testseam.FakeCrontabLock).
 func fakeCrontabRunners(t *testing.T) *fakeCrontab {
 	t.Helper()
 	tab := &fakeCrontab{}
@@ -417,8 +417,8 @@ func fakeCrontabRunners(t *testing.T) *fakeCrontab {
 			tab.content = stdin
 			return "", "", 0, nil
 		},
-		RealLock: true,
 	})
+	testseam.FakeCrontabLock(t, false)
 	return tab
 }
 

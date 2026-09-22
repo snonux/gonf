@@ -106,7 +106,8 @@ resource packages (neither client module used them). Tests inside this module
 fake host commands through the module-internal `internal/testseam` package
 instead (`FakeCommand`, `FakeCrontab`, `FakePackageRunner`,
 `FakePackageManager`, `FakeServiceRunner`, `FakeServiceManager`,
-`FakeSystemctl`; each restores on the test's cleanup), and capture log lines
+`FakeSystemctl`, plus `FakeCrontabLock`; each restores on the test's cleanup
+and refuses a parallel test), and capture log lines
 with `internal/testutil.CaptureLog`. Removed:
 
 - `cmd.SetRunnersForTest`, `cmd.ResetRunnersForTest`
@@ -120,7 +121,7 @@ with `internal/testutil.CaptureLog`. Removed:
   `service.ResetDetectServiceManagerForTest`
 - `systemd.SetRunCmdForTest`, `systemd.ResetRunCmdForTest`
 - `internal/logger.CaptureForTest` (module-internal; replaced by
-  `logger.Redirect`, which `testutil.CaptureLog` builds on)
+  `logger.RedirectUnprefixed`, which `testutil.CaptureLog` builds on)
 
 The state resets (`api.ResetForTest`, `resource.ResetForTest`,
 `plan.ResetForTest`) stay.

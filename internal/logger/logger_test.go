@@ -6,14 +6,15 @@ import (
 	"testing"
 )
 
-// TestRedirect pins the redirect internal/testutil.CaptureLog builds on:
-// output is written without timestamps at the requested level, lines above
-// it are dropped, and restore reinstates the previous destination and level.
-func TestRedirect(t *testing.T) {
+// TestRedirectUnprefixed pins the redirect internal/testutil.CaptureLog
+// builds on: output is written without timestamps at the requested level,
+// lines above it are dropped, and restore reinstates the previous
+// destination and level.
+func TestRedirectUnprefixed(t *testing.T) {
 	SetLevel(LevelWarn)
 	t.Cleanup(func() { SetLevel(LevelInfo) })
 	var buf strings.Builder
-	restore := Redirect(&buf, LevelInfo)
+	restore := RedirectUnprefixed(&buf, LevelInfo)
 	output := buf.String
 	Info("hello %s", "world")
 	Debug("dropped")

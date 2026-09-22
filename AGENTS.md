@@ -102,13 +102,23 @@ When adding a field or capability shared by every resource type, prefer a new
 embed type here instead of duplicating the field and its setter in each resource.
 
 ## Test seams
-Public packages export no `*ForTest` setters. A backend's host-command runner
-or host detector is an unexported function that consults the module-internal
-`internal/testseam` fake first and otherwise calls the real `internal/exec`
-runner or detector (e.g. `resource/systemd`'s `runCmd`). Tests anywhere in the
-module install fakes with `testseam.Fake*(t, ...)`, which restore on `t`'s
-cleanup; in-package tests may instead hand a backend its runner directly (as
+Public (non-`internal`) packages export no `*ForTest` setters; the state
+resets `api.ResetForTest`, `resource.ResetForTest` and `plan.ResetForTest`
+are the one exception. Module-internal packages may keep a narrow test hook
+that clients cannot import (`internal/clihost.SetForTest`,
+`internal/remote.ObserveBootstrapForTest`).
+
+A backend's host-command runner or host detector is an unexported function
+that consults the module-internal `internal/testseam` fake first and
+otherwise calls the real `internal/exec` runner or detector (e.g.
+`resource/systemd`'s `runCmd`). Tests anywhere in the module install fakes
+with `testseam.Fake*(t, ...)`; each fake is one layer removed by `t`'s
+cleanup. In-package tests may instead hand a backend its runner directly (as
 `applyWith` in pkg and service, or `newUserWith` in resource/user). Log
 capture is `internal/testutil.CaptureLog`. A new backend runner follows the
-same pattern. State resets (`api.ResetForTest`, `resource.ResetForTest`,
-`plan.ResetForTest`) are the one exported exception.
+same pattern.
+
+The fakes and the log capture are process-global, so a test using them must
+not run in parallel. They enforce it: each calls `t.Setenv`
+(`testseam.ParallelGuardEnv`), so testing panics when that test or one of
+its ancestors calls `t.Parallel`.
