@@ -4,8 +4,35 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/snonux/gonf/resource/systemd"
+	"github.com/snonux/gonf/resource"
 )
+
+// The lifecycle verbs the convergence policy can ask for (see verb).
+const (
+	verbStart   verb = "start"
+	verbStop    verb = "stop"
+	verbEnable  verb = "enable"
+	verbDisable verb = "disable"
+	verbRestart verb = "restart"
+	verbReload  verb = "reload"
+)
+
+var _ resource.Action = backendAction{}
+
+// backends maps each detector name to a constructor for its backend. This
+// table is the single place a manager name becomes an implementation:
+// supporting another service manager is one new backend file plus one entry
+// here, with no change to the policy. The constructors read runCmd when the
+// backend is selected, so SetRunCmdForTest still reaches the BSD backends;
+// in-package tests build backends with their own runner instead. The name
+// indirection stays because the exported SetDetectServiceManagerForTest seam
+// (used by resource fitness tests) speaks in names.
+var backends = map[string]func() backend{
+	"systemd": func() backend { return systemdBackend{} },
+	"rcctl":   func() backend { return rcctlBackend{run: runCmd} },
+	"freebsd": func() backend { return freebsdBackend{run: runCmd} },
+	"netbsd":  func() backend { return netbsdBackend{run: runCmd, rcConfD: netbsdRcConfD} },
+}
 
 // unit identifies the service a backend acts on: its name and whether it
 // lives on the per-user manager (systemd --user; only backends whose
@@ -18,15 +45,6 @@ type unit struct {
 // verb is one lifecycle action the convergence policy can ask for.
 type verb string
 
-const (
-	verbStart   verb = "start"
-	verbStop    verb = "stop"
-	verbEnable  verb = "enable"
-	verbDisable verb = "disable"
-	verbRestart verb = "restart"
-	verbReload  verb = "reload"
-)
-
 // runner executes one external command and reports its output, exit code
 // and start error (the signature of internal/exec.Run).
 type runner func(name string, args ...string) (stdout, stderr string, code int, err error)
@@ -35,7 +53,7 @@ type runner func(name string, args ...string) (stdout, stderr string, code int, 
 // through. It only probes state and performs single verbs; the policy that
 // turns desired state plus probes into an ordered action list and the change
 // gate live once in Service.applyWith, and dry-run handling and result
-// reporting once in the shared runner systemd.Converge (see runActions), so
+// reporting once in the shared runner resource.Converge (see runActions), so
 // neither is copied into every backend.
 type backend interface {
 	// userSupport returns nil when WithUser (a per-user manager) works on
@@ -54,28 +72,11 @@ type backend interface {
 }
 
 // backendAction adapts one verb on a backend to the shared runner's
-// systemd.Action, so every backend's actions run through systemd.Converge.
+// resource.Action, so every backend's actions run through resource.Converge.
 type backendAction struct {
 	b backend
 	u unit
 	v verb
-}
-
-var _ systemd.Action = backendAction{}
-
-// backends maps each detector name to a constructor for its backend. This
-// table is the single place a manager name becomes an implementation:
-// supporting another service manager is one new backend file plus one entry
-// here, with no change to the policy. The constructors read runCmd when the
-// backend is selected, so SetRunCmdForTest still reaches the BSD backends;
-// in-package tests build backends with their own runner instead. The name
-// indirection stays because the exported SetDetectServiceManagerForTest seam
-// (used by resource fitness tests) speaks in names.
-var backends = map[string]func() backend{
-	"systemd": func() backend { return systemdBackend{} },
-	"rcctl":   func() backend { return rcctlBackend{run: runCmd} },
-	"freebsd": func() backend { return freebsdBackend{run: runCmd} },
-	"netbsd":  func() backend { return netbsdBackend{run: runCmd, rcConfD: netbsdRcConfD} },
 }
 
 // Do performs the verb through the backend.

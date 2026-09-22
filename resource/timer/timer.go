@@ -111,7 +111,7 @@ func normalizeUnit(name string) string {
 
 // apply probes the timer, derives the systemctl actions that converge it,
 // and runs them (or only logs them under dry-run) through the shared
-// systemd.Converge runner, which also notes the result.
+// resource.Converge runner, which also notes the result.
 func (t *Timer) apply() error {
 	id := resource.FormatID("Timer", t.name)
 	if err := t.validate(); err != nil {
@@ -131,14 +131,14 @@ func (t *Timer) apply() error {
 	}
 
 	actions, held := t.actions(id, active, enabled)
-	return systemd.Converge(id, actions, held)
+	return resource.Converge(id, actions, held)
 }
 
 // actions returns the ordered systemctl actions that move t from the
 // probed state to its desired state. Absent stops (unless enable-only)
 // before disabling; present enables before starting. held reports that the
 // change gate suppressed the restart.
-func (t *Timer) actions(id string, active, enabled bool) (actions []systemd.Action, held bool) {
+func (t *Timer) actions(id string, active, enabled bool) (actions []resource.Action, held bool) {
 	if t.Absent {
 		if !t.enableOnly && active {
 			actions = append(actions, t.command("stop"))
@@ -174,7 +174,7 @@ func (t *Timer) actions(id string, active, enabled bool) (actions []systemd.Acti
 
 // command returns the systemctl Action performing verb on t's unit, on the
 // --user bus when WithUser is set.
-func (t *Timer) command(verb string) systemd.Action {
+func (t *Timer) command(verb string) resource.Action {
 	return systemd.Command(systemd.Args(t.user, verb, t.name))
 }
 

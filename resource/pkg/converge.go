@@ -3,15 +3,39 @@ package pkg
 import (
 	"fmt"
 
-	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource"
 )
 
+var _ resource.Action = execution{}
+
+// execution is the command of p's transition as a resource.Action for the
+// shared runner: the backend performs it with the Package's runner.
+type execution struct {
+	b   backend
+	run runner
+	c   command
+}
+
+// Do runs the command through its backend.
+func (e execution) Do() error { return e.b.execute(e.run, e.c) }
+
+// Describe returns how the command is logged: would ("run <label> [args]")
+// follows the "dry-run: would " prefix in a dry run, did is logged after it
+// ran (plus the backend's doneSuffix, so dnf keeps its historical
+// "dnf [args] completed"). The wording is unchanged from before the backend
+// refactor; tests pin it per backend via logLines.
+func (e execution) Describe() (would, did string) {
+	return fmt.Sprintf("run %s %v", e.c.label, e.c.args),
+		fmt.Sprintf("%s %v%s", e.c.label, e.c.args, e.c.doneSuffix)
+}
+
 // applyWith converges p through backend b, running every command via run.
-// This is the one copy of the package policy shared by all OS backends:
-// probe, pick the transition the desired state needs, honour dry-run, run
-// it, and note the result. Tests call it directly with a fake backend or a
-// fake runner, so no package-level seam has to be patched to exercise it.
+// This is the one copy of the package policy shared by all OS backends: it
+// probes and picks the transition the desired state needs; dry-run handling,
+// running the command and noting the result belong to the shared runner
+// resource.Converge (the one Service and Timer use too), fed at most one
+// execution. Tests call it directly with a fake backend or a fake runner, so
+// no package-level seam has to be patched to exercise it.
 func (p *Package) applyWith(b backend, run runner) error {
 	id := resource.FormatID("Package", p.name)
 	installed, err := b.installed(run, p.name)
@@ -19,33 +43,20 @@ func (p *Package) applyWith(b backend, run runner) error {
 		return err
 	}
 
-	c, act := p.transition(b, installed)
-	if !act {
-		resource.NoteResult(id, false)
-		return nil
+	var actions []resource.Action
+	if c, act := p.transition(b, installed); act {
+		actions = append(actions, execution{b: b, run: run, c: c})
 	}
-
-	would, did := c.logLines()
-	if resource.DryRun() {
-		logger.Info("%s", would)
-		resource.NoteResult(id, true)
-		return nil
-	}
-	if err := b.execute(run, c); err != nil {
-		return err
-	}
-	logger.Info("%s", did)
-	resource.NoteResult(id, true)
-	return nil
+	// Packages have no change gate, so an idle package is noted ok, never
+	// skipped (held=false).
+	return resource.Converge(id, actions, false)
 }
 
-// logLines renders how c is logged: the dry-run line and the line logged
-// after it ran (plus the backend's doneSuffix, so dnf keeps its historical
-// "dnf [args] completed"). The wording is unchanged from before the backend
-// refactor; tests pin it per backend.
+// logLines renders the complete log lines resource.Converge emits for c.
+// execution.Describe reads only the command, so no backend or runner is
+// needed here.
 func (c command) logLines() (would, did string) {
-	return fmt.Sprintf("dry-run: would run %s %v", c.label, c.args),
-		fmt.Sprintf("%s %v%s", c.label, c.args, c.doneSuffix)
+	return resource.LogLines(execution{c: c})
 }
 
 // transition returns the command that moves p from the probed state to its

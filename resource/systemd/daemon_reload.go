@@ -122,8 +122,9 @@ func (d *DaemonReloadResource) apply() error {
 	}
 
 	// A single action with the id-wrapped error, so it goes through
-	// resource.Mutate rather than Converge; the log text still comes from
-	// the shared Describe, so it matches Timer's and Service's wording.
+	// resource.Mutate rather than resource.Converge. Its text still comes
+	// from the shared Describe, and Mutate and Converge share the dry-run
+	// prefix, so both log lines match Timer's and Service's wording.
 	args := Args(d.user, "daemon-reload")
 	would, did := Describe(args)
 	return resource.Mutate(id, would, func() error {

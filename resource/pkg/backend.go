@@ -24,8 +24,9 @@ type command struct {
 // backend is the OS-specific package-manager mechanism a Package converges
 // through. It only knows how to probe and which command performs each
 // transition; the policy that decides which transition a desired state needs
-// (absent/latest/installed), dry-run handling and result reporting lives once
-// in Package.applyWith, so the backends no longer each carry a copy of it.
+// (absent/latest/installed) lives once in Package.applyWith, and dry-run
+// handling and result reporting once in the shared runner resource.Converge,
+// so the backends no longer each carry a copy of either.
 type backend interface {
 	// installed reports whether name is currently installed.
 	installed(run runner, name string) (bool, error)

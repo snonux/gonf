@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/snonux/gonf/resource"
-	"github.com/snonux/gonf/resource/systemd"
 )
 
 // applyWith converges s through backend b. This is the one copy of the
@@ -74,18 +73,18 @@ func (s *Service) actions(id string, running, enabled bool) (verbs []verb, held 
 }
 
 // runActions performs verbs through b in order (or only logs them in a dry
-// run) and notes the result, via the shared runner systemd.Converge that
+// run) and notes the result, via the shared runner resource.Converge that
 // Timer uses too, so log wording and result reporting live in one place for
 // every backend. With no verbs the service is idle: skipped when held (the
 // gate held a requested restart/reload), ok when already converged. The
 // first failing action aborts the rest and is returned; nothing is noted in
 // that case.
 func runActions(id string, b backend, u unit, verbs []verb, held bool) error {
-	actions := make([]systemd.Action, len(verbs))
+	actions := make([]resource.Action, len(verbs))
 	for i, v := range verbs {
 		actions[i] = backendAction{b: b, u: u, v: v}
 	}
-	return systemd.Converge(id, actions, held)
+	return resource.Converge(id, actions, held)
 }
 
 // actionLogLines renders the complete log lines for v on b: the dry-run line
@@ -93,5 +92,5 @@ func runActions(id string, b backend, u unit, verbs []verb, held bool) error {
 // logs them. Kept separate so tests can pin every backend's
 // operator-visible wording.
 func actionLogLines(b backend, u unit, v verb) (would, did string) {
-	return systemd.LogLines(backendAction{b: b, u: u, v: v})
+	return resource.LogLines(backendAction{b: b, u: u, v: v})
 }
