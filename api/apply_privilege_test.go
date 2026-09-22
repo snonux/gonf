@@ -147,7 +147,8 @@ func TestApplyOrdersChunksByDependencyNotID(t *testing.T) {
 
 // TestApplyRefusesCrossChunkWatch is the negative case: an unprivileged
 // command gated OnChange of an elevated one cannot see its change report,
-// because the elevated chunk runs as a separate process. Apply refuses it
+// because the elevated chunk applies as its own plan.Apply run (here a
+// separate sudo process) with its own change report. Apply refuses it
 // with the Apply: wording before anything is applied — no in-process chunk,
 // no elevation — instead of silently never firing the gate.
 func TestApplyRefusesCrossChunkWatch(t *testing.T) {
@@ -278,4 +279,29 @@ func TestApplyRefusesElevatedWatcherOfUnprivilegedChange(t *testing.T) {
 	requireClassWatchRefusal(t, Apply(), "Apply: Command[reload] (elevated) watches "+f.ID()+
 		" (unprivileged); change reports are not carried across privilege classes")
 	requireNothingApplied(t, marker, calls)
+}
+
+// TestApplyNamesOnlyTheUnsatisfiableWatch pins that one watch no order can
+// satisfy does not cost the others their chunk: Command[a] watches File[b]
+// but needs the elevated Command[e], which needs File[b] (unsatisfiable),
+// while Command[c] watches File[d] (WatchChanges, no dep), which needs the
+// elevated Command[f] (satisfiable: c joins d's chunk). Dropping every watch
+// when one fails used to split c from d and name that innocent watch; the
+// refusal must name a/b and not c/d.
+func TestApplyNamesOnlyTheUnsatisfiableWatch(t *testing.T) {
+	calls := refuseElevation(t, privilege.Sudo)
+	dir := t.TempDir()
+	b := File(filepath.Join(dir, "b"), options.WithContent("b"))
+	e := Command("true", nil, options.WithName("e"), options.WithElevate, options.DependsOn(b))
+	Command("true", nil, options.WithName("a"), options.OnChange(b), options.DependsOn(e))
+	f := Command("true", nil, options.WithName("f"), options.WithElevate)
+	d := File(filepath.Join(dir, "d"), options.WithContent("d"), options.DependsOn(f))
+	Command("true", nil, options.WithName("c"), options.WatchChanges(d.ID()))
+
+	err := Apply()
+	requireClassWatchRefusal(t, err, "Apply: Command[a] (unprivileged) watches "+b.ID()+" (unprivileged), but")
+	if strings.Contains(err.Error(), "Command[c]") || strings.Contains(err.Error(), d.ID()) {
+		t.Fatalf("Apply() error = %v names the satisfiable watch c -> d", err)
+	}
+	requireNothingApplied(t, filepath.Join(dir, "b"), calls)
 }

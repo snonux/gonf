@@ -376,3 +376,31 @@ func TestRequireDraftsForAll(t *testing.T) {
 		})
 	}
 }
+
+// TestCrossChunkWatchRefusalYieldsToEmptyWatch pins that the class-worded
+// watch refusal steps aside when plan.ValidateChangeGates would first refuse
+// a gate without any watch: the Apply error must then be the empty-gate
+// refusal (message and cause agree), not the later cross-chunk watch.
+func TestCrossChunkWatchRefusalYieldsToEmptyWatch(t *testing.T) {
+	hdr := plan.Op{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "apply"}
+	cmd := func(id string, elevate bool) plan.Op {
+		return plan.Op{Op: plan.KindCommand, Bin: "true", ID: id, Elevate: elevate}
+	}
+	empty := cmd("Command[empty]", false)
+	empty.IfChanged = true
+	gated := cmd("Command[g]", false)
+	gated.IfChanged, gated.Watch = true, []string{"Command[e]"}
+	chunks := []plan.Chunk{
+		{Ops: []plan.Op{hdr, empty}},
+		{Elevate: true, Ops: []plan.Op{hdr, cmd("Command[e]", true)}},
+		{Ops: []plan.Op{hdr, gated}},
+	}
+	if err := crossChunkWatchRefusal("Apply", chunks); err != nil {
+		t.Fatalf("crossChunkWatchRefusal() = %v, want nil ahead of an empty gate", err)
+	}
+	err := validateApplyDeps(chunks)
+	if err == nil || !strings.Contains(err.Error(), "Command[empty] is change-gated (if_changed) but watches nothing") ||
+		strings.Contains(err.Error(), "Command[g]") {
+		t.Fatalf("validateApplyDeps() = %v, want the empty-gate refusal", err)
+	}
+}

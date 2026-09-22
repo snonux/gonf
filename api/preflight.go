@@ -99,8 +99,11 @@ func crossChunkWatchRefusal(caller string, chunks []plan.Chunk) error {
 	}
 	for i, ch := range chunks {
 		for _, op := range ch.Ops {
-			if !op.IfChanged || len(op.Watch) == 0 {
-				continue // an empty watch is refused by preflightChunks
+			if !op.IfChanged {
+				continue
+			}
+			if len(op.Watch) == 0 {
+				return nil // plan.ValidateChangeGates refuses this first: preflightChunks words it
 			}
 			for _, w := range op.Watch {
 				j, ok := chunkOf[w]
@@ -126,7 +129,7 @@ func watchAcrossChunks(gated string, gatedElevate bool, watched string, watchedE
 	head := fmt.Sprintf("%s (%s) watches %s (%s)", gated, privilegeClass(gatedElevate), watched, privilegeClass(watchedElevate))
 	if gatedElevate != watchedElevate {
 		return head + "; change reports are not carried across privilege classes (the elevated " +
-			"resources apply in a separate process), so a change-gated resource can only watch " +
+			"resources apply in a separate chunk), so a change-gated resource can only watch " +
 			"resources of its own class: gate on a resource of the same class, or elevate both or neither"
 	}
 	return head + ", but their dependencies need resources of the other privilege class applied " +

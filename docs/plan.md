@@ -1075,8 +1075,9 @@ with an `Apply:` error naming the op and the missing ID before anything is
 applied. The error unwraps to `*plan.DanglingDepError` / `*plan.DanglingWatchError`.
 
 Changed state is not carried across chunks: each chunk applies as its own
-`plan.Apply` run, the elevated one in a separate process, so a change gate
-only sees changes from its own chunk. With elevated ops, a watch that cannot
+`plan.Apply` run with a fresh change report (the elevated one usually in a
+separate sudo/doas process, in-process only when the mode is `none` and the
+process is root), so a change gate only sees changes from its own chunk. With elevated ops, a watch that cannot
 stay in one chunk is therefore refused before anything applies, as `Run`
 refuses it, and the error names both privilege classes instead of chunk
 indexes:

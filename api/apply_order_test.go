@@ -141,6 +141,11 @@ func TestOrderForPrivilegeSplitKeepsWatchesInOneChunk(t *testing.T) {
 		{"watch without a dep", []plan.Op{orderHdr, op("e", true, "x"), w("g", false, []string{"f"}, "e"), op("f", false), op("x", false)}, "x,e,g,f"},
 		{"no extra chunk when the watch already fits", []plan.Op{orderHdr, op("a", false), w("b", false, []string{"a"}, "a"), op("c", true, "b")}, "a,b,c"},
 		{"cross-class watch keeps the dependency order", []plan.Op{orderHdr, op("e", true), w("g", false, []string{"e"}, "e")}, "e,g"},
+		// The satisfiable watch (g on x) comes first and the unsatisfiable
+		// one (h on f, forced apart by e) second: g must still share x's
+		// chunk, only h's watch is dropped.
+		{"only the unsatisfiable watch is dropped", []plan.Op{orderHdr, op("e", true, "f"), op("f", false),
+			w("g", false, []string{"x"}), w("h", false, []string{"f"}, "e"), op("k", true), op("x", false, "k")}, "f,e,k,g,h,x"},
 		{"watch forced apart keeps the dependency order", []plan.Op{orderHdr, op("e", true, "f"), op("f", false), w("g", false, []string{"f"}, "e", "f")}, "f,e,g"},
 	}
 	for _, tc := range cases {

@@ -34,9 +34,11 @@ import (
 //
 // A watch across privilege classes can never share a chunk, and a watch
 // whose two ends are forced apart by dependencies on the other class (A
-// watches B, A needs an elevated E that needs B) cannot either; such watches
-// are left to the pre-flight, which refuses them (validateApplyDeps), and do
-// not change the order.
+// watches B, A needs an elevated E that needs B) cannot either. Only such
+// unsatisfiable watches are dropped from the assignment (chunkLevels keeps
+// every other one), so they are the ones that end up crossing chunks and the
+// pre-flight refusal (validateApplyDeps) names one of them, never a watch
+// that could have been kept.
 //
 // ops[0] is the plan header and stays first. Apply lowers registered
 // resources to a flat op list (no when_begin/when_end), so the whole body is
@@ -164,13 +166,24 @@ func (g depGraph) kahn(rank func(int) int) (order []int, ok bool) {
 // chunkLevels assigns every op the chunk level described at
 // orderForPrivilegeSplit, level 0 having class start (and odd levels the
 // other class). When the same-class watches cannot all be kept in one chunk,
-// it falls back to the assignment from the dependencies alone, and the
-// pre-flight names the watch it cannot satisfy.
+// it keeps them greedily in watch order: a watch is added only if the kept
+// set stays satisfiable. A subset of a satisfiable set is satisfiable, so
+// the result is a maximal satisfiable set, and each dropped watch conflicts
+// with the dependencies plus the kept watches; the pre-flight then names a
+// dropped one (the only kind that can cross chunks) instead of an innocent
+// watch that a drop-everything fallback would have split.
 func (g depGraph) chunkLevels(body []plan.Op, topo []int, start bool) []int {
-	if level, ok := g.solveLevels(body, topo, start, g.sameClassWatches(body)); ok {
+	watches := g.sameClassWatches(body)
+	if level, ok := g.solveLevels(body, topo, start, watches); ok {
 		return level
 	}
-	level, _ := g.solveLevels(body, topo, start, nil)
+	level, _ := g.solveLevels(body, topo, start, nil) // deps alone always solve
+	kept := make([][2]int, 0, len(watches))
+	for _, p := range watches {
+		if l, ok := g.solveLevels(body, topo, start, append(kept, p)); ok {
+			kept, level = append(kept, p), l
+		}
+	}
 	return level
 }
 
