@@ -449,7 +449,8 @@ the `plan` package itself (that would reintroduce the cycle the registry
 exists to break): as of task i5, `plan` imports no `resource/<kind>` package
 at all — only the resource-neutral `resource` core package, for
 `ResetReport`/`PrintSummary` and the `resource.PlanDraft` type `Handler.ToOp`
-takes. A resource package that adds a `planwire.go` also means any
+takes, and `resource/options`, for the owner/group and guard option
+constructors (`plan/layering_test.go` enforces this). A resource package that adds a `planwire.go` also means any
 internal-package (`package plan`) test that stubs that resource's runner
 directly must move into an external `plan_test` file instead (see
 `plan/apply_pkg_test.go`, `plan/apply_systemd_test.go`) — importing the
