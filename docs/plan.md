@@ -336,9 +336,9 @@ if err := ApplyPlan(ops, planDir); err != nil { /* … */ }
   `plan.Apply` itself cannot tell a dep applied by an earlier chunk from a
   typo'd one; the controller-side pre-flight (`plan.ValidateChunks`, run at
   record time and by `ApplyChunks`, `remote.Delivery.ToHost` and
-  `api.Apply`, but not when a single chunk is executed — see "Where dependencies are checked")
-  refuses dangling deps and forward cross-chunk deps before anything is
-  applied. `api.Apply` with elevated ops sorts its ops by dependency before
+  `api.Apply`, but not when a single chunk is executed — see "Where
+  dependencies are checked") refuses dangling deps and forward cross-chunk
+  deps before anything is applied. `api.Apply` with elevated ops sorts its ops by dependency before
   splitting them, so for it a forward cross-chunk dep can only come from a
   dependency cycle (a resource depending on itself included), which the sort
   itself refuses first.
