@@ -207,15 +207,23 @@ func syncDirSourceOption(op plan.Op, src string) opt.DirOption {
 
 // quoteGlob escapes the filepath.Match metacharacters in path so it matches
 // only itself when used as a glob prefix (backslash escaping; gonf only
-// targets Unix-like systems, where filepath.Match honors it).
+// targets Unix-like systems, where filepath.Match honors it). It walks BYTES,
+// not runes: a Unix path is an arbitrary byte string that need not be valid
+// UTF-8, and ranging over runes would rewrite every invalid byte as the
+// 3-byte utf8.RuneError replacement character, changing the byte length and
+// producing a pattern that no longer names the real blob directory —
+// filepath.Glob then matches nothing, WithSourceGlob installs nothing, and
+// WithPrune's keep-set is empty, so it removes every unmanaged destination
+// entry instead of leaving them alone (task kc2, a data-loss regression in
+// the fix task sb2 introduced this helper for).
 func quoteGlob(path string) string {
 	var b strings.Builder
-	for _, r := range path {
-		switch r {
+	for i := 0; i < len(path); i++ {
+		switch path[i] {
 		case '*', '?', '[', ']', '\\':
 			b.WriteByte('\\')
 		}
-		b.WriteRune(r)
+		b.WriteByte(path[i])
 	}
 	return b.String()
 }
