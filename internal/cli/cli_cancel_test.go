@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -23,13 +25,19 @@ import (
 // did not reach it.
 const promptReturn = 10 * time.Second
 
-// sleepThenTouchOps is a plan whose first op blocks for 30s and whose second
-// op touches marker, so a test can tell whether the apply stopped after the
-// canceled command.
-func sleepThenTouchOps(marker string) []plan.Op {
+// startedScript touches started, then becomes a 30s sleep: a test can wait
+// for started to know the long-running command is in flight.
+func startedScript(started string) []string {
+	return []string{"-c", "touch '" + started + "'; exec sleep 30"}
+}
+
+// sleepThenTouchOps is a plan whose first op blocks for 30s (after touching
+// started) and whose second op touches marker, so a test can tell whether
+// the apply stopped after the canceled command.
+func sleepThenTouchOps(started, marker string) []plan.Op {
 	return []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "cancel"},
-		{Op: plan.KindCommand, Bin: "sleep", Args: []string{"30"}, ID: "Command[sleep]"},
+		{Op: plan.KindCommand, Bin: "sh", Args: startedScript(started), ID: "Command[sleep]"},
 		{Op: plan.KindCommand, Bin: "touch", Args: []string{marker}, ID: "Command[touch]"},
 	}
 }
@@ -77,86 +85,103 @@ func requireInterrupted(t *testing.T, code int, elapsed time.Duration, stderr, w
 	if elapsed > promptReturn {
 		t.Fatalf("canceled apply returned after %v, want prompt return", elapsed)
 	}
-	if !strings.Contains(stderr, wantPrefix) || !strings.Contains(stderr, "canceled") {
+	if !strings.Contains(stderr, wantPrefix) || !strings.Contains(stderr, "context canceled") {
 		t.Fatalf("stderr %q lacks %q and the cancellation", stderr, wantPrefix)
 	}
 	requireNotTouched(t, marker)
 }
 
-// cancelSoon returns a ctx canceled 100ms from now (and at test cleanup).
-func cancelSoon(t *testing.T) context.Context {
+// whenStarted runs fn once the file started exists (the long-running
+// command is in flight), polling for up to promptReturn; t.Cleanup stops
+// the polling.
+func whenStarted(t *testing.T, started string, fn func()) {
+	t.Helper()
+	quit := make(chan struct{})
+	t.Cleanup(func() { close(quit) })
+	go func() {
+		deadline := time.Now().Add(promptReturn)
+		for time.Now().Before(deadline) {
+			select {
+			case <-quit:
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
+			if _, err := os.Stat(started); err == nil {
+				fn()
+				return
+			}
+		}
+	}()
+}
+
+// cancelWhenStarted returns a ctx canceled once started exists.
+func cancelWhenStarted(t *testing.T, started string) context.Context {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	time.AfterFunc(100*time.Millisecond, cancel)
+	whenStarted(t, started, cancel)
 	return ctx
 }
 
+// signalWhenStarted sends sig to this process once started exists, i.e.
+// while CLI() runs the long command (so its NotifyContext is installed). The
+// test also subscribes to sig for its duration, so the signal can never fall
+// back to its default action (killing the test binary).
+func signalWhenStarted(t *testing.T, sig syscall.Signal, started string) {
+	t.Helper()
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, sig)
+	t.Cleanup(func() { signal.Stop(ch) })
+	whenStarted(t, started, func() { _ = syscall.Kill(os.Getpid(), sig) })
+}
+
 // TestCLIApplyFileCanceledByContext: canceling the CLI context while
-// `gonf apply <plan.jsonl>` runs a long command kills it and fails the apply.
+// `gonf apply <plan.jsonl>` runs a long command stops it and fails the apply.
 func TestCLIApplyFileCanceledByContext(t *testing.T) {
 	root := t.TempDir()
-	marker := filepath.Join(root, "after")
-	path := writePlanFile(t, root, sleepThenTouchOps(marker))
-	ctx := cancelSoon(t)
+	started, marker := filepath.Join(root, "started"), filepath.Join(root, "after")
+	path := writePlanFile(t, root, sleepThenTouchOps(started, marker))
+	ctx := cancelWhenStarted(t, started)
 
 	var code int
 	start := time.Now()
 	stderr := testutil.CaptureStderr(t, func() { code = cliApply(ctx, []string{path}) })
-	requireInterrupted(t, code, time.Since(start), stderr, "apply: interrupted (context canceled)", marker)
+	requireInterrupted(t, code, time.Since(start), stderr, "apply: interrupted: ", marker)
 }
 
 // TestCLIApplyStdinCanceledByContext: the receiving end of a push (`gonf
 // apply -`) is canceled the same way.
 func TestCLIApplyStdinCanceledByContext(t *testing.T) {
-	marker := filepath.Join(t.TempDir(), "after")
+	root := t.TempDir()
+	started, marker := filepath.Join(root, "started"), filepath.Join(root, "after")
 	var buf bytes.Buffer
-	if err := plan.EncodePush(&buf, sleepThenTouchOps(marker), nil); err != nil {
+	if err := plan.EncodePush(&buf, sleepThenTouchOps(started, marker), nil); err != nil {
 		t.Fatal(err)
 	}
 	feedStdin(t, buf.Bytes())
-	ctx := cancelSoon(t)
+	ctx := cancelWhenStarted(t, started)
 
 	var code int
 	start := time.Now()
 	stderr := testutil.CaptureStderr(t, func() { code = cliApply(ctx, []string{"-"}) })
-	requireInterrupted(t, code, time.Since(start), stderr, "apply: interrupted (context canceled)", marker)
-}
-
-// guardSignal subscribes the test to sig for its duration, so a signal sent
-// to the test process can never fall back to its default action (killing
-// the test binary) even if CLI() already returned and stopped its own
-// NotifyContext.
-func guardSignal(t *testing.T, sig os.Signal) {
-	t.Helper()
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, sig)
-	t.Cleanup(func() { signal.Stop(ch) })
-}
-
-// signalSoon sends sig to this process after 300ms, while CLI() runs.
-func signalSoon(t *testing.T, sig syscall.Signal) {
-	t.Helper()
-	guardSignal(t, sig)
-	timer := time.AfterFunc(300*time.Millisecond, func() { _ = syscall.Kill(os.Getpid(), sig) })
-	t.Cleanup(func() { timer.Stop() })
+	requireInterrupted(t, code, time.Since(start), stderr, "apply: interrupted: ", marker)
 }
 
 // TestCLIApplyInterruptedBySIGINT runs the whole CLI: a SIGINT during
-// `gonf apply <plan.jsonl>` cancels its signal context and kills the command.
+// `gonf apply <plan.jsonl>` cancels its signal context and stops the command.
 func TestCLIApplyInterruptedBySIGINT(t *testing.T) {
 	root := t.TempDir()
-	marker := filepath.Join(root, "after")
-	path := writePlanFile(t, root, sleepThenTouchOps(marker))
-	signalSoon(t, syscall.SIGINT)
+	started, marker := filepath.Join(root, "started"), filepath.Join(root, "after")
+	path := writePlanFile(t, root, sleepThenTouchOps(started, marker))
+	signalWhenStarted(t, syscall.SIGINT, started)
 
 	start := time.Now()
 	code, stderr := runGonf(t, "apply", path)
-	requireInterrupted(t, code, time.Since(start), stderr, "apply: interrupted (context canceled)", marker)
+	requireInterrupted(t, code, time.Since(start), stderr, "apply: interrupted: ", marker)
 }
 
 // TestCLITaskInterruptedBySIGTERM: a SIGTERM during a local `gonf <task>`
-// run kills the task's in-process command and fails the run as interrupted.
+// run stops the task's in-process command and fails the run as interrupted.
 func TestCLITaskInterruptedBySIGTERM(t *testing.T) {
 	api.ResetTasks()
 	resource.ResetRepository()
@@ -164,16 +189,17 @@ func TestCLITaskInterruptedBySIGTERM(t *testing.T) {
 		api.ResetTasks()
 		resource.ResetRepository()
 	})
-	marker := filepath.Join(t.TempDir(), "after")
+	root := t.TempDir()
+	started, marker := filepath.Join(root, "started"), filepath.Join(root, "after")
 	api.Task("cli_cancel_sleep", "sleep then touch", func() {
-		sleep := api.Command("sleep", []string{"30"})
+		sleep := api.Command("sh", startedScript(started))
 		api.Command("touch", []string{marker}, options.DependsOn(sleep))
 	})
-	signalSoon(t, syscall.SIGTERM)
+	signalWhenStarted(t, syscall.SIGTERM, started)
 
 	start := time.Now()
 	code, stderr := runGonf(t, "cli_cancel_sleep")
-	requireInterrupted(t, code, time.Since(start), stderr, "error: interrupted (context canceled)", marker)
+	requireInterrupted(t, code, time.Since(start), stderr, "error: interrupted: ", marker)
 }
 
 // TestCLIApplyFailureNotInterrupted is the negative case: with a live ctx a
@@ -199,5 +225,24 @@ func TestCLIApplyFailureNotInterrupted(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); err != nil {
 		t.Fatalf("live-ctx apply must run the command: %v", err)
+	}
+}
+
+// TestInterruptedByCause pins that "interrupted" is decided by the error
+// chain: a cancellation is one, a timeout or an unrelated failure is not,
+// whatever the ctx state when the error surfaced.
+func TestInterruptedByCause(t *testing.T) {
+	cases := []struct {
+		err  error
+		want bool
+	}{
+		{fmt.Errorf("plan: apply line 2: %w", context.Canceled), true},
+		{fmt.Errorf("timed out after 5m0s: %w", context.DeadlineExceeded), false},
+		{errors.New("false exited 1"), false},
+	}
+	for _, tc := range cases {
+		if got := interrupted(tc.err); got != tc.want {
+			t.Fatalf("interrupted(%v) = %v, want %v", tc.err, got, tc.want)
+		}
 	}
 }

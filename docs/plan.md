@@ -827,11 +827,22 @@ Design decisions:
   (also the receiving end of a push and the elevated re-exec child) run under
   the CLI's SIGINT/SIGTERM context (`api.RunContext`,
   `api.ApplyPlanContext`). `plan.ApplyWithContext` binds that context to
-  `internal/exec` for the duration of the apply, so a signal kills the backend
-  command in flight (and the elevated sudo/doas re-exec), no further op
-  starts, and the command fails with `interrupted (context canceled)` and exit
-  1. File and ConfigSet validators are not bound to it; they stay limited by
-  the process-wide command timeout (`-cmd-timeout`).
+  `internal/exec` for the duration of the apply, so a signal stops the
+  backend command in flight (and the elevated sudo/doas re-exec, whose sudo
+  relays the signal to the elevated gonf), no further op starts, and the
+  command fails with `interrupted: … context canceled` and exit 1. Stopping
+  is graceful: the command gets SIGTERM and is SIGKILLed only after a grace
+  period (`internal/exec.CancelGrace`, 10s; twice that for the sudo/doas
+  wrapper), so an interrupted package manager can finish its own clean
+  shutdown; the same grace bounds how long a grandchild that still holds the
+  command's output pipes can delay the return. File and ConfigSet validators
+  are not bound to the context; they stay limited by the process-wide
+  command timeout (`-cmd-timeout`), and an interrupt during one prints a
+  one-line notice that gonf waits for it.
+- **No end-to-end remote cancel.** Canceling a push (`push`, `cluster`,
+  `fleet`) kills only the local `ssh`. Nothing signals the remote `gonf
+  apply`: it keeps applying until its next write to the now closed stdout
+  fails.
 
 Plan schema **version 11** extends `if_changed` / `watch` from
 `daemon_reload` to `command`, `service`, and `timer` ops. `OnChange(res…)`

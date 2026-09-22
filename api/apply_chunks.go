@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/snonux/gonf/internal/clihost"
+	gexec "github.com/snonux/gonf/internal/exec"
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/plan"
@@ -27,6 +28,12 @@ import (
 // closes: previously the re-exec'd child had no timeout and no context at
 // all).
 const DefaultChunkTimeout = 10 * time.Minute
+
+// elevatedCancelGrace is how long a canceled elevated re-exec (sudo/doas)
+// gets between its SIGTERM and the SIGKILL: twice the elevated child's own
+// command grace, so the child can stop its backend command gracefully and
+// exit before the wrapper is killed.
+const elevatedCancelGrace = 2 * gexec.CancelGrace
 
 // elevatedApplyRunner runs a privileged local apply chunk. Overridable in tests.
 var elevatedApplyRunner = defaultElevatedApply
@@ -76,8 +83,8 @@ func elevatedApplyArgv(exe, path string, dryRun bool, profileOverride string) []
 }
 
 // defaultElevatedApply runs the elevated re-exec under ctx: canceling ctx
-// (e.g. the CLI's SIGINT/SIGTERM context) kills the in-flight sudo/doas
-// child. When ctx carries no deadline of its own, DefaultChunkTimeout is
+// (e.g. the CLI's SIGINT/SIGTERM context) stops the in-flight sudo/doas
+// child: SIGTERM first, SIGKILL only elevatedCancelGrace later. When ctx carries no deadline of its own, DefaultChunkTimeout is
 // applied so a wedged privileged command (a hung package manager, a
 // systemctl call waiting on a broken unit) cannot block the whole apply
 // forever — previously this used plain exec.Command with no context at all.
@@ -106,6 +113,13 @@ func defaultElevatedApply(ctx context.Context, mode privilege.Mode, ops []plan.O
 		defer cancel()
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	// Stop sudo gracefully: sudo relays the SIGTERM to the elevated gonf
+	// apply, whose own signal context then stops its backend command
+	// gracefully (up to gexec.CancelGrace). elevatedCancelGrace leaves room
+	// for that before sudo is SIGKILLed. doas execs in place, so the SIGTERM
+	// reaches the child directly (or fails with EPERM and the kill after the
+	// grace is the fallback, as it was before).
+	gexec.SetGracefulCancel(cmd, elevatedCancelGrace)
 	cmd.Stdin = bytes.NewReader(nil)
 	// The elevated child has no secret registry of its own: its log lines
 	// and summary reach the operator's terminal through the controller's
@@ -117,7 +131,7 @@ func defaultElevatedApply(ctx context.Context, mode privilege.Mode, ops []plan.O
 	// by SIGPIPE mid-apply (logger.RunRelayed).
 	err = logger.RunRelayed(cmd, os.Stderr)
 	if err != nil && ctx.Err() != nil {
-		return fmt.Errorf("%w (elevated apply killed by context: %v)", ctx.Err(), err)
+		return fmt.Errorf("%w (elevated apply stopped by context: %v)", ctx.Err(), err)
 	}
 	return err
 }
@@ -207,9 +221,12 @@ func ApplyChunks(ops []plan.Op, planDir string, mode privilege.Mode) error {
 }
 
 // ApplyChunksContext is ApplyChunks bounded/cancelable by ctx: canceling ctx
-// (e.g. the CLI's SIGINT/SIGTERM context) kills an in-flight elevated
-// sudo/doas re-exec or the backend command of an in-process chunk. See ApplyChunks's doc comment for why ApplyChunks itself
-// keeps the old context.Background() behavior instead of taking ctx directly.
+// (e.g. the CLI's SIGINT/SIGTERM context) stops an in-flight elevated
+// sudo/doas re-exec or the backend command of an in-process chunk, SIGTERM
+// first and SIGKILL only after a grace period (internal/exec
+// SetGracefulCancel). See ApplyChunks's doc comment for why ApplyChunks
+// itself keeps the old context.Background() behavior instead of taking ctx
+// directly.
 func ApplyChunksContext(ctx context.Context, ops []plan.Op, planDir string, mode privilege.Mode) error {
 	chunks := plan.SplitPrivilegeChunks(ops)
 	if err := plan.ValidateChunks(chunks); err != nil {

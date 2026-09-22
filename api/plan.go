@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/snonux/gonf/internal/validator"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
@@ -593,11 +595,15 @@ func ApplyPlan(ops []plan.Op, planDir string) error {
 }
 
 // ApplyPlanContext is ApplyPlan canceled by ctx (plan.ApplyWithContext):
-// canceling ctx, e.g. the CLI's SIGINT/SIGTERM context, kills the backend
-// command in flight and starts no further op; the error wraps ctx.Err(). It
-// is what `gonf apply <plan.jsonl|->` (also the receiving end of a push)
-// and the in-process chunks of ApplyChunksContext run.
+// canceling ctx, e.g. the CLI's SIGINT/SIGTERM context, stops the backend
+// command in flight (SIGTERM, SIGKILL after its grace) and starts no further
+// op; the error wraps ctx.Err(). A validator running at the interrupt is not
+// stopped (it stays bounded by the command timeout); a one-line notice on
+// stderr says the apply waits for it (noteValidatorWait). It is what `gonf
+// apply <plan.jsonl|->` (also the receiving end of a push) and the
+// in-process chunks of ApplyChunksContext run.
 func ApplyPlanContext(ctx context.Context, ops []plan.Op, planDir string) error {
+	defer noteValidatorWait(ctx, os.Stderr, validator.Running)()
 	f := DetectFacts()
 	return plan.ApplyWithContext(ctx, ops, plan.Facts{
 		GOOS:     f.GOOS,

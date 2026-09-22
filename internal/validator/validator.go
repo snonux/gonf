@@ -50,6 +50,17 @@ const (
 	WaitDelay = 2 * time.Second
 )
 
+// running counts the validators runIn is executing right now, so an
+// interrupted apply can tell the operator it is waiting for one (Running).
+var running atomic.Int32
+
+// Running reports whether a validator is executing right now. Validators are
+// not bound to the apply's signal context (only to the command timeout), so
+// api uses this to explain the wait after an interrupt.
+func Running() bool {
+	return running.Load() > 0
+}
+
 // RunIn runs one validator (argv only, never a shell) in the working
 // directory dir ("" keeps gonf's own) and returns nil when it exits 0. It is
 // the shared executor of every validator (File's WithValidation and
@@ -100,6 +111,8 @@ func RunInWithheld(dir, bin string, args []string) error {
 // runIn is RunIn and RunInWithheld; withhold selects how a failure reports
 // the captured output (withValidatorOutput).
 func runIn(dir, bin string, args []string, withhold bool) error {
+	running.Add(1)
+	defer running.Add(-1)
 	timeout := gexec.DefaultTimeout()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()

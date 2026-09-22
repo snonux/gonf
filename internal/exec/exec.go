@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -21,15 +22,29 @@ import (
 // positive value overrides it for this call only, and a negative value opts
 // out of any deadline (the historical no-timeout behavior, for the rare
 // caller that genuinely needs it). With a deadline in effect the process is
-// killed when it expires and the timeout is surfaced as an error (partial
-// stdout/stderr is still returned). Caveat: Wait also waits for the internal
-// stdout/stderr pipes to close, so a killed command that leaks pipe-holding
-// grandchildren (e.g. `sh -c 'cmd &'`) can still block past the deadline.
+// stopped when it expires (SIGTERM, then SIGKILL after CancelGrace; see
+// SetGracefulCancel) and the timeout is surfaced as an error (partial
+// stdout/stderr is still returned). A grandchild still holding the output
+// pipes after the command exited or was stopped (e.g. `sh -c 'cmd &'`, a
+// daemon that kept its fds) is cut off CancelGrace later instead of blocking
+// the call.
 type Opts struct {
 	Dir     string
 	Env     []string
 	Timeout time.Duration
 }
+
+// CancelGrace is how long a canceled or timed-out command gets between the
+// SIGTERM that asks it to stop and the SIGKILL that forces it, and how long
+// Wait keeps draining output pipes a lingering grandchild still holds (both
+// are exec.Cmd.WaitDelay). Package managers (dnf/rpm, apt/dpkg, pkg) that
+// were interrupted mid-transaction use it to shut down cleanly instead of
+// being killed outright.
+const CancelGrace = 10 * time.Second
+
+// cancelGrace is the grace RunWith and RunWithStdin use: CancelGrace,
+// shortened by tests only.
+var cancelGrace = CancelGrace
 
 // Like the resource package's dry-run flag, the default timeout is
 // process-wide DSL-style state: set once at startup (e.g. from the CLI's
@@ -47,7 +62,7 @@ var (
 // threading a ctx parameter through every backend and plan handler would
 // change all of their signatures. A plan apply binds its caller's ctx here
 // for its duration (plan.ApplyWithContext), so canceling it (the CLI's
-// SIGINT/SIGTERM context) kills the command in flight.
+// SIGINT/SIGTERM context) stops the command in flight.
 var (
 	boundMu  sync.Mutex
 	boundCtx = context.Background()
@@ -81,9 +96,9 @@ func DefaultTimeout() time.Duration {
 
 // BindContext makes ctx the parent context of every command Run, RunWith and
 // RunWithStdin start from now on, until the returned restore func reinstates
-// the previously bound context. Canceling ctx kills a command in flight
-// (exec.CommandContext) and refuses to start new ones; either surfaces as a
-// "canceled" error with exit code -1. The per-call timeout still applies on
+// the previously bound context. Canceling ctx stops a command in flight
+// (SIGTERM, SIGKILL after CancelGrace) and refuses to start new ones; either
+// surfaces as a "canceled" error with exit code -1. The per-call timeout still applies on
 // top of ctx. A nil ctx binds context.Background(). Like SetDefaultTimeout
 // it is process-wide state for a sequential apply: bind/restore pairs must
 // nest (defer restore()), not interleave from concurrent goroutines.
@@ -100,6 +115,23 @@ func BindContext(ctx context.Context) (restore func()) {
 		defer boundMu.Unlock()
 		boundCtx = prev
 	}
+}
+
+// SetGracefulCancel makes cmd, built with exec.CommandContext, stop
+// gracefully when its context is done: it is sent SIGTERM instead of
+// os/exec's default immediate SIGKILL, and only if it is still running grace
+// later is it killed. The same WaitDelay also bounds how long Wait drains
+// output pipes (the goroutine-copied ones, not an *os.File) that a
+// grandchild holds after the command itself exited, so such a pipe holder
+// can delay the return by at most grace. Only the command itself is
+// signalled, not its descendants: it shares gonf's process group, so a
+// group signal would hit gonf too, and a terminal Ctrl-C already reached the
+// whole foreground group. A command that exits 0 while a grandchild still
+// holds its pipes makes Wait return exec.ErrWaitDelay; RunWith treats that
+// as the success it is.
+func SetGracefulCancel(cmd *exec.Cmd, grace time.Duration) {
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	cmd.WaitDelay = grace
 }
 
 // boundContext returns the context installed by BindContext.
@@ -121,14 +153,15 @@ func RunWith(opts Opts, name string, args ...string) (stdout, stderr string, exi
 	timeout := effectiveTimeout(opts.Timeout)
 
 	var cancel context.CancelFunc
-	ctx := boundContext()
+	parent := boundContext()
+	ctx := parent
 	if timeout > 0 {
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	// With a plain Background context (nothing bound) CommandContext behaves
-	// like Command, so the (opt-in, Opts.Timeout < 0) no-timeout path is
-	// unchanged; a bound context can still cancel it.
+	// With a plain Background context (nothing bound) the (opt-in,
+	// Opts.Timeout < 0) no-timeout path is never canceled; a bound context
+	// can still cancel it.
 	cmd := exec.CommandContext(ctx, name, args...)
 	if opts.Dir != "" {
 		cmd.Dir = opts.Dir
@@ -136,7 +169,7 @@ func RunWith(opts Opts, name string, args ...string) (stdout, stderr string, exi
 	if opts.Env != nil {
 		cmd.Env = opts.Env
 	}
-	return runCollecting(ctx, timeout, cmd)
+	return runCollecting(parent, ctx, timeout, cmd)
 }
 
 // effectiveTimeout resolves an Opts.Timeout value against the process-wide
@@ -161,39 +194,45 @@ func effectiveTimeout(t time.Duration) time.Duration {
 // than err.
 func RunWithStdin(stdin string, name string, args ...string) (stdout, stderr string, exitCode int, err error) {
 	timeout := DefaultTimeout()
-	ctx, cancel := context.WithTimeout(boundContext(), timeout)
+	parent := boundContext()
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdin = strings.NewReader(stdin)
-	return runCollecting(ctx, timeout, cmd)
+	return runCollecting(parent, ctx, timeout, cmd)
 }
 
-// runCollecting runs cmd, collects stdout and stderr, and maps errors to the
-// shared contract: a deadline or cancellation kill (ctx.Err() != nil after
-// cmd.Run) surfaces as an error with exit code -1, a completed non-zero exit is reported via
-// exitCode with a nil error, and any other failure returns exit code -1 with
-// the error.
-func runCollecting(ctx context.Context, timeout time.Duration, cmd *exec.Cmd) (stdout, stderr string, exitCode int, err error) {
+// runCollecting runs cmd (built on ctx, a child of the bound context parent
+// carrying the per-call timeout) with graceful cancellation
+// (SetGracefulCancel), collects stdout and stderr, and maps errors to the
+// shared contract: a deadline or cancellation stop (ctx.Err() != nil after
+// cmd.Run) surfaces as an error with exit code -1, a completed non-zero exit
+// is reported via exitCode with a nil error, and any other failure returns
+// exit code -1 with the error.
+func runCollecting(parent, ctx context.Context, timeout time.Duration, cmd *exec.Cmd) (stdout, stderr string, exitCode int, err error) {
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
+	SetGracefulCancel(cmd, cancelGrace)
 
 	err = cmd.Run()
 
 	stdout = stdoutBuf.String()
 	stderr = stderrBuf.String()
 
-	if err == nil {
+	// ErrWaitDelay: the command exited 0 and only a grandchild kept the
+	// output pipes open until the grace ran out; the command succeeded.
+	if err == nil || errors.Is(err, exec.ErrWaitDelay) {
 		return stdout, stderr, 0, nil
 	}
 
-	// A deadline or cancellation kill surfaces as *exec.ExitError ("signal:
-	// killed"), which would otherwise be mistaken for a completed non-zero
-	// run: the command never finished, so report it as an error instead.
-	// With no deadline in effect (timeout == 0, an explicit Opts.Timeout < 0)
-	// and nothing bound, the context is Background and ctx.Err() is nil.
+	// A deadline or cancellation stop surfaces as *exec.ExitError ("signal:
+	// terminated" or "signal: killed"), which would otherwise be mistaken for
+	// a completed non-zero run: the command never finished, so report it as
+	// an error instead. With no deadline in effect (timeout == 0, an explicit
+	// Opts.Timeout < 0) and nothing bound, ctx is Background and never done.
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return stdout, stderr, -1, contextError(timeout, ctxErr)
+		return stdout, stderr, -1, contextError(parent, timeout, ctxErr)
 	}
 	if exitError, ok := err.(*exec.ExitError); ok {
 		// The command ran and exited non-zero; surface that via exitCode
@@ -203,15 +242,21 @@ func runCollecting(ctx context.Context, timeout time.Duration, cmd *exec.Cmd) (s
 	return stdout, stderr, -1, err
 }
 
-// contextError words a command's context failure: a cancellation of the
-// bound context (BindContext, e.g. SIGINT/SIGTERM) as "canceled", anything
-// else (the per-call timeout, or a deadline carried by the bound context) as
-// the timeout it historically was.
-func contextError(timeout time.Duration, ctxErr error) error {
-	if errors.Is(ctxErr, context.Canceled) {
+// contextError words a command's context failure by its cause: a
+// cancellation of the bound context (BindContext, e.g. SIGINT/SIGTERM) as
+// "canceled", a deadline the bound context carried itself (the caller's own,
+// possibly shorter than the per-call timeout) without naming a duration, and
+// the per-call timeout as the "timed out after <timeout>" it historically
+// was.
+func contextError(parent context.Context, timeout time.Duration, ctxErr error) error {
+	switch {
+	case errors.Is(ctxErr, context.Canceled):
 		return fmt.Errorf("canceled: %w", ctxErr)
+	case parent.Err() != nil:
+		return fmt.Errorf("caller deadline exceeded: %w", ctxErr)
+	default:
+		return fmt.Errorf("timed out after %v: %w", timeout, ctxErr)
 	}
-	return fmt.Errorf("timed out after %v: %w", timeout, ctxErr)
 }
 
 // MergeEnv returns a full environment slice: the current process environment

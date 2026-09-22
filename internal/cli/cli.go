@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -64,10 +65,11 @@ func CLI() int {
 	defer clihost.MarkActive()()
 	// Signal-derived context: SIGINT/SIGTERM cancel in-flight work. It
 	// reaches local task runs (api.RunContext), `gonf apply`
-	// (api.ApplyPlanContext), which kill the backend command or elevated
-	// sudo/doas re-exec in flight, single-host push
-	// (PushToContext) and the cluster/fleet fan-out, which kill their ssh
-	// pushes on cancel.
+	// (api.ApplyPlanContext), which stop the backend command or elevated
+	// sudo/doas re-exec in flight (SIGTERM, SIGKILL after a grace),
+	// single-host push (PushToContext) and the cluster/fleet fan-out, which
+	// kill their local ssh on cancel (the remote gonf is not signalled; see
+	// cliApply).
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	// Remove the private dir the gonf binary was cross-compiled into for
@@ -227,20 +229,28 @@ func runSubcommand(ctx context.Context, name string, args []string) (code int, o
 //
 // RunContext (not Run): this is the CLI process entry point, so a local
 // apply's elevated sudo/doas re-exec and the backend command of an
-// in-process chunk are killed by SIGINT/SIGTERM like the fleet fan-out
+// in-process chunk are stopped by SIGINT/SIGTERM like the fleet fan-out
 // already is, instead of only ever timing out via ApplyChunksContext's
-// DefaultChunkTimeout or the command timeout. A failure after such a signal
-// is reported as interrupted.
+// DefaultChunkTimeout or the command timeout. A failure caused by such a
+// signal is reported as interrupted (interrupted).
 func runTasks(ctx context.Context, names []string) int {
 	if err := api.RunContext(ctx, names...); err != nil {
-		if ctx.Err() != nil {
-			eprintf("error: interrupted (%v): %v\n", ctx.Err(), err)
+		if interrupted(err) {
+			eprintf("error: interrupted: %v\n", err)
 			return 1
 		}
 		eprintf("error: %v\n", err)
 		return 1
 	}
 	return 0
+}
+
+// interrupted reports whether err was caused by canceling the CLI's signal
+// context (SIGINT/SIGTERM): the cause travels in the error chain, so a
+// failure that merely happened to end after a signal (or a timeout, which
+// is context.DeadlineExceeded) is not mistaken for one.
+func interrupted(err error) bool {
+	return errors.Is(err, context.Canceled)
 }
 
 func cliDNSZoneEquivalent(args []string) int {
@@ -502,10 +512,14 @@ func warnSensitivePlan(outPath string, ops []plan.Op) {
 }
 
 // cliApply runs `gonf apply [flags] <plan.jsonl|->` under ctx, the CLI's
-// SIGINT/SIGTERM context: a signal kills the backend command in flight
-// (api.ApplyPlanContext) and the apply fails with exit 1. This is also the
-// receiving end of a push and the elevated re-exec child, so a signal
-// reaching either of those processes stops their apply the same way.
+// SIGINT/SIGTERM context: a signal stops the backend command in flight
+// (api.ApplyPlanContext; SIGTERM, SIGKILL after a grace) and the apply fails
+// with exit 1. This is also the elevated re-exec child (sudo relays the
+// parent's SIGTERM to it) and the receiving end of a push, so a signal
+// reaching either process stops its apply the same way. Canceling a push on
+// the controller, however, only kills the local ssh: nothing signals the
+// remote gonf, which keeps applying until its next write to the closed
+// stdout fails; there is no end-to-end remote cancel.
 func cliApply(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -559,16 +573,16 @@ func cliApplyFile(ctx context.Context, planPath string) int {
 }
 
 // applyPlanOps applies ops under ctx and reports a failure on stderr. A
-// failure after ctx was canceled (SIGINT/SIGTERM) is named as such, so the
-// operator can tell an interrupted apply from a failing resource; the
-// returned error is only a signal for the caller to exit 1.
+// failure caused by canceling ctx (SIGINT/SIGTERM, see interrupted) is named
+// as such, so the operator can tell an interrupted apply from a failing
+// resource; the returned error is only a signal for the caller to exit 1.
 func applyPlanOps(ctx context.Context, ops []plan.Op, planDir string) error {
 	err := api.ApplyPlanContext(ctx, ops, planDir)
 	switch {
 	case err == nil:
 		return nil
-	case ctx.Err() != nil:
-		eprintf("apply: interrupted (%v): %v\n", ctx.Err(), err)
+	case interrupted(err):
+		eprintf("apply: interrupted: %v\n", err)
 	default:
 		eprintf("apply: %v\n", err)
 	}

@@ -54,6 +54,18 @@ func TestApplyWithContextCanceledAppliesNothing(t *testing.T) {
 	}
 }
 
+// An expired deadline is worded as such, not as a cancellation.
+func TestApplyWithContextDeadlineWording(t *testing.T) {
+	ops := []Op{header(), {Op: KindEnsureDir, Path: filepath.Join(t.TempDir(), "d"), Mode: "0750"}}
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	err := ApplyWithContext(ctx, ops, Facts{}, "")
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "deadline exceeded before line 2") {
+		t.Fatalf("err = %v, want deadline exceeded before line 2", err)
+	}
+}
+
 // Negative cases: a live ctx applies normally, and once the apply returned
 // its ctx no longer governs later commands (the internal/exec binding is
 // restored), so a canceled apply ctx cannot break a subsequent plain Apply.

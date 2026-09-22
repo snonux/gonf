@@ -89,3 +89,88 @@ func TestBindContextLeavesNormalRunsAlone(t *testing.T) {
 		t.Fatalf("nil ctx: (%q, %d, %v)", out, code, err)
 	}
 }
+
+// withCancelGrace shortens the SIGTERM-to-SIGKILL / pipe-drain grace for
+// the rest of the test.
+func withCancelGrace(t *testing.T, d time.Duration) {
+	t.Helper()
+	orig := cancelGrace
+	cancelGrace = d
+	t.Cleanup(func() { cancelGrace = orig })
+}
+
+// runCanceledAfter binds a ctx canceled after delay and runs sh -c script,
+// returning its stdout, exit code, error and how long the call took.
+func runCanceledAfter(t *testing.T, delay time.Duration, script string) (string, int, time.Duration, error) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	bindForTest(t, ctx)
+	time.AfterFunc(delay, cancel)
+	start := time.Now()
+	stdout, _, exitCode, err := Run("sh", "-c", script)
+	return stdout, exitCode, time.Since(start), err
+}
+
+// A canceled command gets SIGTERM first, so a trap (a package manager's
+// clean-shutdown path) runs before any SIGKILL.
+func TestCancelSendsSIGTERMFirst(t *testing.T) {
+	withCancelGrace(t, 500*time.Millisecond)
+	stdout, exitCode, _, err := runCanceledAfter(t, 200*time.Millisecond,
+		`trap 'echo got-term; exit 3' TERM; sleep 30 & wait`)
+	if !strings.Contains(stdout, "got-term") {
+		t.Fatalf("stdout %q: the TERM trap did not run", stdout)
+	}
+	if !errors.Is(err, context.Canceled) || exitCode != -1 {
+		t.Fatalf("(%d, %v), want exit -1 and context.Canceled", exitCode, err)
+	}
+}
+
+// Grandchildren holding the output pipes, and a command ignoring SIGTERM,
+// delay a canceled call by about the grace at most, never until they exit.
+func TestCancelBoundedByGrace(t *testing.T) {
+	cases := map[string]string{
+		"grandchild holds pipes": `sleep 5; true`,
+		"ignores SIGTERM":        `trap '' TERM; sleep 5; true`,
+	}
+	for name, script := range cases {
+		t.Run(name, func(t *testing.T) {
+			withCancelGrace(t, 300*time.Millisecond)
+			_, _, elapsed, err := runCanceledAfter(t, 100*time.Millisecond, script)
+			if elapsed > 3*time.Second {
+				t.Fatalf("returned after %v, want about delay+grace", elapsed)
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("err = %v, want context.Canceled", err)
+			}
+		})
+	}
+}
+
+// Without any cancel, a command that exits 0 while a background grandchild
+// keeps its pipes open succeeds after the grace instead of blocking until
+// the grandchild exits (exec.ErrWaitDelay is treated as success).
+func TestPipeHolderAfterCleanExitSucceeds(t *testing.T) {
+	withCancelGrace(t, 300*time.Millisecond)
+	start := time.Now()
+	stdout, _, exitCode, err := Run("sh", "-c", `sleep 5 & echo done`)
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("returned after %v, want about the grace", elapsed)
+	}
+	if err != nil || exitCode != 0 || strings.TrimSpace(stdout) != "done" {
+		t.Fatalf("(%q, %d, %v), want done, 0, nil", stdout, exitCode, err)
+	}
+}
+
+// A deadline the bound (caller) context carries itself is not reported as
+// the per-call timeout, whose duration would be wrong.
+func TestCallerDeadlineWording(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	bindForTest(t, ctx)
+	_, _, _, err := Run("sleep", "5")
+	if err == nil || !strings.Contains(err.Error(), "caller deadline exceeded") ||
+		strings.Contains(err.Error(), "timed out after") || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want caller deadline exceeded", err)
+	}
+}
