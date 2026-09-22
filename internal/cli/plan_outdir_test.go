@@ -356,6 +356,13 @@ func TestCLIPlanRefusesForeignOutputDir(t *testing.T) {
 func TestCLIWithSymlinkedTempDir(t *testing.T) {
 	ran := registerOutDirProbe(t)
 	link, realTmp := testutil.SymlinkedDir(t)
+	// TestMain resolved the ambient TMPDIR, so link's own symlink must be the
+	// only one on the path: otherwise an ambient symlinked TMPDIR would mask
+	// what this test exercises.
+	parent := filepath.Dir(link)
+	if resolved, err := filepath.EvalSymlinks(parent); err != nil || resolved != parent {
+		t.Fatalf("parent %s of the test symlink resolves to %s (%v); want no ambient symlink", parent, resolved, err)
+	}
 	t.Setenv("TMPDIR", link)
 	out := filepath.Join(testutil.PrivateTempDir(t), "out")
 	var code int
