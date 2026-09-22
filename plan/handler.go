@@ -38,6 +38,13 @@ type ApplyContext struct {
 type Handler interface {
 	// ToOp lowers a resource draft to a plan Op line. The returned Op's Op
 	// field (the Kind discriminator) must be set by the implementation.
+	//
+	// The Op must not alias d: every slice, map or pointer the Op takes
+	// from d is copied (slices.Clone / maps.Clone, nil staying nil), so a
+	// later change to the draft cannot change the op or vice versa. This
+	// is the op half of the copy contract whose draft half is
+	// resource.PlanDraft.Clone; TestHandlersToOpDoNotAliasDraft (api)
+	// checks every registered kind.
 	ToOp(d resource.PlanDraft) (Op, error)
 	// Apply performs this op's kind-specific side effect. It must validate
 	// required fields itself (mirroring the hand-written applyX handlers)

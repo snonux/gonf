@@ -2,6 +2,7 @@ package systemdtimer
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -34,9 +35,9 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		Persistent:         d.Persistent,
 		Description:        d.Description,
 		ServiceDescription: d.ServiceDescription,
-		After:              d.After,
-		Wants:              d.Wants,
-		Deps:               d.Deps,
+		After:              slices.Clone(d.After),
+		Wants:              slices.Clone(d.Wants),
+		Deps:               slices.Clone(d.Deps),
 	}, nil
 }
 

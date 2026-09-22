@@ -1,6 +1,8 @@
 package systemd
 
 import (
+	"slices"
+
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 	opt "github.com/snonux/gonf/resource/options"
@@ -23,8 +25,8 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		ID:        d.ID,
 		User:      d.User,
 		IfChanged: d.IfChanged,
-		Watch:     d.Watch,
-		Deps:      d.Deps,
+		Watch:     slices.Clone(d.Watch),
+		Deps:      slices.Clone(d.Deps),
 	}, nil
 }
 

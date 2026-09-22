@@ -2,6 +2,7 @@ package cron
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/snonux/gonf/plan"
@@ -30,8 +31,8 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		Command:       d.Command,
 		LegacyCommand: d.LegacyCommand,
 		Schedule:      d.Schedule,
-		CronEnv:       d.CronEnv,
-		Deps:          d.Deps,
+		CronEnv:       slices.Clone(d.CronEnv),
+		Deps:          slices.Clone(d.Deps),
 	}, nil
 }
 

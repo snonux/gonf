@@ -3,6 +3,7 @@ package dir
 import (
 	"fmt"
 	"os"
+	"slices"
 
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -37,7 +38,7 @@ func (dirHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		Mode:   d.Mode,
 		Owner:  d.Owner,
 		Group:  d.Group,
-		Deps:   d.Deps,
+		Deps:   slices.Clone(d.Deps),
 	}, nil
 }
 
@@ -86,7 +87,7 @@ func (syncDirHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		Owner:     d.Owner,
 		Group:     d.Group,
 		Prune:     d.Prune,
-		Deps:      d.Deps,
+		Deps:      slices.Clone(d.Deps),
 	}, nil
 }
 
@@ -181,7 +182,7 @@ func (ensureDirHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		Mode:  d.Mode,
 		Owner: d.Owner,
 		Group: d.Group,
-		Deps:  d.Deps,
+		Deps:  slices.Clone(d.Deps),
 	}, nil
 }
 

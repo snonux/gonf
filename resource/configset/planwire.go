@@ -80,7 +80,7 @@ func memberDraft(id, name string, m memberSpec, set string) resource.PlanDraft {
 func (setHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 	op := plan.Op{
 		Op: plan.KindConfigSet, ID: d.ID, Name: d.Name,
-		Chroot: d.Chroot, StagingDir: d.StagingDir, Deps: d.Deps,
+		Chroot: d.Chroot, StagingDir: d.StagingDir, Deps: slices.Clone(d.Deps),
 	}
 	for _, m := range d.ConfigMembers {
 		if len(m.Content) > plan.MaxInlineContent {
@@ -156,7 +156,7 @@ func memberFromWire(m plan.ConfigMember) (memberSpec, error) {
 func (memberHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 	return plan.Op{
 		Op: plan.KindConfigSetMember, ID: d.ID, Name: d.Name,
-		Member: d.Member, Path: d.Path, Deps: d.Deps,
+		Member: d.Member, Path: d.Path, Deps: slices.Clone(d.Deps),
 	}, nil
 }
 

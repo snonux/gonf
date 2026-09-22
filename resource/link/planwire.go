@@ -3,6 +3,7 @@ package link
 import (
 	"fmt"
 	"os"
+	"slices"
 
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -33,7 +34,7 @@ func (linkHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		Symlink:  d.Symlink,
 		Hardlink: d.Hardlink,
 		Absent:   d.Absent,
-		Deps:     d.Deps,
+		Deps:     slices.Clone(d.Deps),
 	}, nil
 }
 
@@ -75,7 +76,7 @@ func (linkIfExistsHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		ID:     d.ID,
 		Path:   d.Path,
 		Target: d.Target,
-		Deps:   d.Deps,
+		Deps:   slices.Clone(d.Deps),
 	}, nil
 }
 

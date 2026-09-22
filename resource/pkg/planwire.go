@@ -3,6 +3,7 @@ package pkg
 import (
 	"fmt"
 	"maps"
+	"slices"
 
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -29,7 +30,7 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		Absent: d.Absent,
 		Latest: d.Latest,
 		Env:    maps.Clone(d.Env),
-		Deps:   d.Deps,
+		Deps:   slices.Clone(d.Deps),
 	}, nil
 }
 

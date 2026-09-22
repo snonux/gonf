@@ -40,10 +40,10 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		TemplateParam:  d.TemplateParam,
 		ValidationBin:  d.ValidationBin,
 		ValidationArgs: slices.Clone(d.ValidationArgs),
-		AddLines:       d.AddLines,
-		RemoveLines:    d.RemoveLines,
+		AddLines:       slices.Clone(d.AddLines),
+		RemoveLines:    slices.Clone(d.RemoveLines),
 		Absent:         d.Absent,
-		Deps:           d.Deps,
+		Deps:           slices.Clone(d.Deps),
 	}
 	if d.TemplateDataSet {
 		raw, err := json.Marshal(d.TemplateData)
@@ -65,7 +65,7 @@ func (ensureFileHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		Mode:  d.Mode,
 		Owner: d.Owner,
 		Group: d.Group,
-		Deps:  d.Deps,
+		Deps:  slices.Clone(d.Deps),
 	}, nil
 }
 

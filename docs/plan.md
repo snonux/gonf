@@ -414,7 +414,13 @@ class of bug that motivated task j5.
    (e.g. `name`, `path`, `schedule`) before any mutation, then delegates to
    the resource `Ensure`; `plan.OwnerGroupOptions`/`plan.GuardOptions`/
    `plan.ParseMode` are shared wire-decoding helpers worth reusing instead of
-   re-deriving `opt.Option`s from `Op` fields by hand.
+   re-deriving `opt.Option`s from `Op` fields by hand. `ToOp` copies every
+   slice, map and pointer it takes from the draft (`slices.Clone`,
+   `maps.Clone`), so the op never aliases the draft (task 882;
+   `TestHandlersToOpDoNotAliasDraft` in api checks every kind). A new
+   slice/map/pointer `PlanDraft` field also needs a line in
+   `PlanDraft.Clone` (`resource/draft_clone.go`), which
+   `TestFullDraftCoversEveryReferenceField` enforces.
 3. **Resource draft** — the resource package: set the new draft `Kind` string
    in its `planDraft()` and call `resource.RecordPlanDraft` from `Present`
    (the register-without-draft guard fails the record otherwise). Map absent

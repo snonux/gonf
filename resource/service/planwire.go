@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -28,7 +29,7 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		Restart: d.Restart,
 		Reload:  d.Reload,
 		User:    d.User,
-		Deps:    d.Deps,
+		Deps:    slices.Clone(d.Deps),
 	}
 	// Change gate (schema v11): OnChange arms IfChanged with the watched ids.
 	if d.IfChanged {

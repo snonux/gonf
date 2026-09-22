@@ -121,7 +121,9 @@ func AmendRegistered(draft PlanDraft, deps ...string) error {
 	amend := draftAmender
 	draftMu.Unlock()
 	if amend != nil {
-		if err := amend(draft); err != nil {
+		// Like RecordPlanDraft, the sink and the store each get their own
+		// deep copy, so neither aliases the caller's draft or the other.
+		if err := amend(draft.Clone()); err != nil {
 			return err
 		}
 	}
@@ -133,7 +135,7 @@ func AmendRegistered(draft PlanDraft, deps ...string) error {
 	for _, id := range deps {
 		res.dependsOn[id] = struct{}{}
 	}
-	r.drafts[draft.ID] = draft
+	r.drafts[draft.ID] = draft.Clone()
 	return nil
 }
 

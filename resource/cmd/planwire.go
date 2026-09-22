@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"maps"
+	"slices"
 
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -26,13 +27,13 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		ID:      d.ID,
 		Name:    d.Name,
 		Bin:     d.Bin,
-		Args:    d.Args,
+		Args:    slices.Clone(d.Args),
 		Dir:     d.Dir,
-		Env:     maps.Clone(d.Env), // op must not alias the stored draft's map
+		Env:     maps.Clone(d.Env),
 		Creates: d.Creates,
 		Unless:  planGuard(d.Unless),
 		OnlyIf:  planGuard(d.OnlyIf),
-		Deps:    d.Deps,
+		Deps:    slices.Clone(d.Deps),
 	}
 	// Change gate (schema v11): OnChange arms IfChanged with the watched ids.
 	if d.IfChanged {
@@ -93,10 +94,14 @@ func planGuard(g *resource.PlanGuardDraft) *plan.Guard {
 	if g == nil {
 		return nil
 	}
-	return &plan.Guard{
+	guard := &plan.Guard{
 		Bin:          g.Bin,
-		Args:         g.Args,
+		Args:         slices.Clone(g.Args),
 		ExpectStdout: g.ExpectStdout,
-		ExpectExit:   g.ExpectExit,
 	}
+	if g.ExpectExit != nil {
+		exit := *g.ExpectExit
+		guard.ExpectExit = &exit
+	}
+	return guard
 }

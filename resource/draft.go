@@ -245,22 +245,29 @@ func PlanDraftRecording() bool {
 	return draftRecorder != nil
 }
 
-// RecordPlanDraft forwards draft to the installed recorder when present.
+// RecordPlanDraft stores draft for its registered resource (the snapshot
+// RegisteredPlanDrafts returns) and forwards it to the installed recorder
+// when present. The store and the recorder each receive their own deep copy
+// (PlanDraft.Clone), so neither shares a slice, map or guard with the
+// caller's draft or with each other: a later mutation on any side cannot
+// change what the others lower to a plan op.
 func RecordPlanDraft(draft PlanDraft) {
-	getRepository().recordDraft(draft)
+	getRepository().recordDraft(draft.Clone())
 
 	draftMu.Lock()
 	fn := draftRecorder
 	draftMu.Unlock()
 	if fn != nil {
-		fn(draft)
+		fn(draft.Clone())
 	}
 }
 
 // RegisteredPlanDrafts returns the plan drafts emitted by the currently
-// registered resources, sorted by resource ID. The api package uses this
-// snapshot for its direct Apply compatibility path; plan recording sessions
-// continue to receive drafts through SetPlanDraftRecorder as before.
+// registered resources, sorted by resource ID. Each is a deep copy
+// (PlanDraft.Clone) the caller owns: mutating it changes neither the store
+// nor a later snapshot. The api package uses this snapshot for its direct
+// Apply compatibility path; plan recording sessions continue to receive
+// drafts through SetPlanDraftRecorder as before.
 func RegisteredPlanDrafts() []PlanDraft {
 	return getRepository().draftsSnapshot()
 }

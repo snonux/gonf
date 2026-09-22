@@ -183,6 +183,8 @@ func (r *repository) registeredIDs() []string {
 	return ids
 }
 
+// recordDraft stores draft for its registered resource. The caller hands
+// over ownership: RecordPlanDraft passes a fresh PlanDraft.Clone.
 func (r *repository) recordDraft(draft PlanDraft) {
 	if draft.ID == "" {
 		return
@@ -195,6 +197,9 @@ func (r *repository) recordDraft(draft PlanDraft) {
 	r.drafts[draft.ID] = draft
 }
 
+// draftsSnapshot returns deep copies (PlanDraft.Clone) of the stored drafts,
+// sorted by resource ID, so a caller mutating the snapshot cannot reach into
+// the store.
 func (r *repository) draftsSnapshot() []PlanDraft {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -206,7 +211,7 @@ func (r *repository) draftsSnapshot() []PlanDraft {
 	sort.Strings(ids)
 	drafts := make([]PlanDraft, 0, len(ids))
 	for _, id := range ids {
-		drafts = append(drafts, r.drafts[id])
+		drafts = append(drafts, r.drafts[id].Clone())
 	}
 	return drafts
 }

@@ -2,6 +2,7 @@ package user
 
 import (
 	"fmt"
+	"slices"
 
 	internaluser "github.com/snonux/gonf/internal/user"
 	"github.com/snonux/gonf/plan"
@@ -57,7 +58,7 @@ func draftOp(d resource.PlanDraft) plan.Op {
 		LoginClass:          d.LoginClass,
 		System:              d.System,
 		ManageHome:          d.ManageHome,
-		Deps:                d.Deps,
+		Deps:                slices.Clone(d.Deps),
 	}
 }
 
