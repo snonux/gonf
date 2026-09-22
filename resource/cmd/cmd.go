@@ -83,31 +83,6 @@ func (c *Cmd) SetEnv(env map[string]string) { c.env = maps.Clone(env) }
 
 // Present registers a command resource that runs bin with args on Apply.
 func Present(bin string, args []string, opts ...opt.CommandOption) resource.Resource {
-	c, err := newCmd(bin, args, opts)
-	if err != nil {
-		logger.Fatal("%v", err)
-	}
-	r := resource.Register("Command", c.name, c, c.DependsOn.IDs...)
-	resource.RecordPlanDraft(c.planDraft(r.ID()))
-	return r
-}
-
-// Ensure builds and applies a command resource without registering it or
-// recording a plan draft.
-func Ensure(bin string, args []string, opts ...opt.CommandOption) error {
-	c, err := newCmd(bin, args, opts)
-	if err != nil {
-		return err
-	}
-	return c.apply()
-}
-
-// newCmd builds a Cmd running bin with a copy of args, applies opts and
-// defaults the registry name. The error reports a change gate armed with
-// nothing to watch (the legacy IfChanged reaching a Command through the
-// type-erased Option path): it could never fire, so Present aborts and
-// Ensure fails instead of skipping the command forever.
-func newCmd(bin string, args []string, opts []opt.CommandOption) (*Cmd, error) {
 	c := &Cmd{
 		bin:  bin,
 		args: append([]string(nil), args...),
@@ -118,10 +93,26 @@ func newCmd(bin string, args []string, opts []opt.CommandOption) (*Cmd, error) {
 	if c.name == "" {
 		c.name = defaultName(bin, c.args)
 	}
-	if err := c.CheckWatch(); err != nil {
-		return c, fmt.Errorf("%s: %w", c.id(), err)
+
+	r := resource.Register("Command", c.name, c, c.DependsOn.IDs...)
+	resource.RecordPlanDraft(c.planDraft(r.ID()))
+	return r
+}
+
+// Ensure builds and applies a command resource without registering it or
+// recording a plan draft.
+func Ensure(bin string, args []string, opts ...opt.CommandOption) error {
+	c := &Cmd{
+		bin:  bin,
+		args: append([]string(nil), args...),
 	}
-	return c, nil
+	for _, o := range opts {
+		o.Apply(c)
+	}
+	if c.name == "" {
+		c.name = defaultName(bin, c.args)
+	}
+	return c.apply()
 }
 
 // SetRunnersForTest swaps the command runners (tests only). A nil argument

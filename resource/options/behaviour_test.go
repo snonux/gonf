@@ -221,3 +221,16 @@ func TestRecordedChangeGate(t *testing.T) {
 		}
 	}
 }
+
+// TestEmptyWithWatchIsANoOp pins WithWatch's one difference from
+// WatchChanges: without ids it makes no setter call (the reload's gate is
+// left as the other options set it, as before b72), where WatchChanges()
+// aborts. It still requires opt.ChangeGated, so a resource without the
+// DependsOn fallback keeps refusing it.
+func TestEmptyWithWatchIsANoOp(t *testing.T) {
+	target := &recorder{}
+	WithWatch().Apply(target)
+	if len(target.calls) != 0 {
+		t.Errorf("WithWatch() calls = %#v, want none", target.calls)
+	}
+}

@@ -37,92 +37,93 @@ func catchFatal(t *testing.T, register func()) (fataled bool) {
 	return false
 }
 
-// TestIfChangedRejectedOutsideDaemonReload pins that the legacy IfChanged
-// option, passed through the type-erased opt.Option path, is refused
-// (logger.Fatal "change gate armed with nothing to watch") by Service,
-// Timer and Command. Every change-gate option lowers to the one
-// SetChangeWatch capability, so the refusal is the embed's CheckWatch at
-// registration: IfChanged arms the gate without ids and only daemon-reload
-// can fall back to its DependsOn ids. Without the check these embedders
-// would silently hold their action forever. DaemonReload with a DependsOn
-// fallback accepts it; without one it is refused too (b72 correction).
-func TestIfChangedRejectedOutsideDaemonReload(t *testing.T) {
-	var erased opt.Option = opt.IfChanged
+// TestLegacyGateOptionsRejectedOutsideDaemonReload pins that the legacy
+// IfChanged and WithWatch options, passed through the type-erased
+// opt.Option path, are refused (logger.Fatal "does not support ...") by
+// Service, Timer and Command, also next to OnChange or WatchChanges (which
+// would otherwise give the gate something to watch). Both lower to the one
+// SetChangeWatch capability but require opt.ChangeGated, whose DependsOn
+// fallback marker only daemon-reload implements. DaemonReload accepts them
+// (IfChanged needs a DependsOn fallback or watched ids; alone it is refused
+// as a gate with nothing to watch, the b72 correction).
+func TestLegacyGateOptionsRejectedOutsideDaemonReload(t *testing.T) {
 	unit := resource.Resource{Type: "File", Name: "/etc/unit"}
-	for _, tc := range []struct {
-		name     string
-		register func()
-		wantFail bool
+	for _, legacy := range []struct {
+		name   string
+		erased opt.Option
 	}{
-		{name: "Service", wantFail: true, register: func() {
-			service.Present("gonf-s62-fitness", opt.ToServiceOptions(erased)...)
-		}},
-		{name: "Service with deps", wantFail: true, register: func() {
-			service.Present("gonf-s62-fitness", append(opt.ToServiceOptions(erased), opt.DependsOn(unit))...)
-		}},
-		{name: "Timer", wantFail: true, register: func() {
-			timer.Present("gonf-s62-fitness", opt.ToTimerOptions(erased)...)
-		}},
-		{name: "Command", wantFail: true, register: func() {
-			cmd.Present("true", nil, opt.ToCommandOptions(erased)...)
-		}},
-		{name: "DaemonReload without fallback", wantFail: true, register: func() {
-			systemd.Present(opt.ToDaemonReloadOptions(erased)...)
-		}},
-		{name: "DaemonReload", register: func() {
-			systemd.Present(append(opt.ToDaemonReloadOptions(erased), opt.DependsOn(unit))...)
-		}},
+		{"IfChanged", opt.IfChanged},
+		{"WithWatch", opt.WithWatch("File[/etc/unit]")},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			// Present only registers (no apply), so nothing touches the host.
-			resource.ResetRepository()
-			t.Cleanup(resource.ResetRepository)
-			if got := catchFatal(t, tc.register); got != tc.wantFail {
-				t.Fatalf("IfChanged via erased option fatal = %t, want %t", got, tc.wantFail)
-			}
-		})
+		for _, tc := range []struct {
+			name     string
+			register func(opt.Option)
+			wantFail bool
+		}{
+			{name: "Service", wantFail: true, register: func(o opt.Option) {
+				service.Present("gonf-s62-fitness", opt.ToServiceOptions(o)...)
+			}},
+			{name: "Service with OnChange", wantFail: true, register: func(o opt.Option) {
+				service.Present("gonf-s62-fitness", append(opt.ToServiceOptions(o), opt.OnChange(unit))...)
+			}},
+			{name: "Timer with WatchChanges", wantFail: true, register: func(o opt.Option) {
+				timer.Present("gonf-s62-fitness", append(opt.ToTimerOptions(o), opt.WatchChanges("File[/etc/unit]"))...)
+			}},
+			{name: "Command with OnChange", wantFail: true, register: func(o opt.Option) {
+				cmd.Present("true", nil, append(opt.ToCommandOptions(o), opt.OnChange(unit))...)
+			}},
+			{name: "DaemonReload", register: func(o opt.Option) {
+				systemd.Present(append(opt.ToDaemonReloadOptions(o), opt.DependsOn(unit))...)
+			}},
+		} {
+			t.Run(legacy.name+"/"+tc.name, func(t *testing.T) {
+				// Present only registers (no apply), so nothing touches the host.
+				resource.ResetRepository()
+				t.Cleanup(resource.ResetRepository)
+				if got := catchFatal(t, func() { tc.register(legacy.erased) }); got != tc.wantFail {
+					t.Fatalf("%s via erased option fatal = %t, want %t", legacy.name, got, tc.wantFail)
+				}
+			})
+		}
 	}
 }
 
-// TestEnsureRefusesGateWithNothingToWatch pins the Ensure-side twin of the
-// registration check: the non-registering constructors return the
-// nothing-to-watch error (naming the resource) instead of applying a gate
-// that could never fire.
-func TestEnsureRefusesGateWithNothingToWatch(t *testing.T) {
-	var erased opt.Option = opt.IfChanged
-	for _, tc := range []struct {
-		name   string
-		ensure func() error
-		wantID string
-	}{
-		{"Service", func() error { return service.Ensure("gonf-b72", opt.ToServiceOptions(erased)...) }, "Service[gonf-b72]"},
-		{"Timer", func() error { return timer.Ensure("gonf-b72", opt.ToTimerOptions(erased)...) }, "Timer[gonf-b72.timer]"},
-		{"Command", func() error { return cmd.Ensure("true", nil, opt.ToCommandOptions(erased)...) }, "Command[true]"},
-		{"DaemonReload", func() error { return systemd.Ensure(opt.ToDaemonReloadOptions(erased)...) }, "DaemonReload[system]"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			err := tc.ensure()
-			want := tc.wantID + ": change gate armed with nothing to watch"
-			if err == nil || !strings.HasPrefix(err.Error(), want) {
-				t.Fatalf("Ensure = %v, want an error starting %q", err, want)
-			}
-		})
+// TestIfChangedReloadWithNothingToWatchRefused pins the b72 correction on
+// the registering path: a DaemonReload armed by IfChanged with neither
+// WithWatch ids nor DependsOn could never reload, so Present aborts
+// (formerly it was registered and skipped on every apply).
+func TestIfChangedReloadWithNothingToWatchRefused(t *testing.T) {
+	resource.ResetRepository()
+	t.Cleanup(resource.ResetRepository)
+	if !catchFatal(t, func() { systemd.Present(opt.IfChanged) }) {
+		t.Fatal("DaemonReload(IfChanged) with nothing to watch registered")
+	}
+	if !catchFatal(t, func() { systemd.Present(opt.IfChanged, opt.WithWatch()) }) {
+		t.Fatal("DaemonReload(IfChanged, WithWatch()) with nothing to watch registered")
 	}
 }
 
 // TestEveryGatedKindImplementsTheOneCapability pins the single change-gate
-// family: every ChangeGate embedder satisfies opt.ChangeWatchable, and the
-// legacy capability names are aliases of it (so this compiles only while
-// they are).
+// family: every ChangeGate embedder satisfies opt.ChangeWatchable, and only
+// daemon-reload also satisfies opt.ChangeGated (the DependsOn fallback the
+// legacy spellings need); opt.Watchable is an alias of opt.ChangeGated.
 func TestEveryGatedKindImplementsTheOneCapability(t *testing.T) {
-	var (
-		_ opt.ChangeGated = opt.ChangeWatchable(nil)
-		_ opt.Watchable   = opt.ChangeWatchable(nil)
-	)
-	for _, target := range []any{&service.Service{}, &timer.Timer{}, &cmd.Cmd{}, &systemd.DaemonReloadResource{}} {
-		if _, ok := target.(opt.ChangeWatchable); !ok {
-			t.Errorf("%s does not implement opt.ChangeWatchable",
-				strings.TrimPrefix(fmt.Sprintf("%T", target), "*"))
+	var _ opt.Watchable = opt.ChangeGated(nil)
+	for _, tc := range []struct {
+		target any
+		gated  bool
+	}{
+		{&service.Service{}, false},
+		{&timer.Timer{}, false},
+		{&cmd.Cmd{}, false},
+		{&systemd.DaemonReloadResource{}, true},
+	} {
+		name := strings.TrimPrefix(fmt.Sprintf("%T", tc.target), "*")
+		if _, ok := tc.target.(opt.ChangeWatchable); !ok {
+			t.Errorf("%s does not implement opt.ChangeWatchable", name)
+		}
+		if _, ok := tc.target.(opt.ChangeGated); ok != tc.gated {
+			t.Errorf("%s implements opt.ChangeGated = %t, want %t", name, ok, tc.gated)
 		}
 	}
 }

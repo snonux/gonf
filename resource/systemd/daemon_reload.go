@@ -22,6 +22,7 @@ var (
 	_ opt.UserService     = (*DaemonReloadResource)(nil)
 	_ opt.Dependable      = (*DaemonReloadResource)(nil)
 	_ opt.ChangeWatchable = (*DaemonReloadResource)(nil)
+	_ opt.ChangeGated     = (*DaemonReloadResource)(nil)
 )
 
 // DaemonReloadResource runs systemctl daemon-reload (optionally --user).
@@ -91,6 +92,12 @@ func newReload(opts []opt.DaemonReloadOption) (*DaemonReloadResource, error) {
 // systemctl --user daemon-reload on the user manager instead of the system
 // one, and the resource ID becomes DaemonReload[user].
 func (d *DaemonReloadResource) SetUser() { d.user = true }
+
+// WatchesDependsOn implements opt.DependsOnWatcher (and so, with the
+// embedded SetChangeWatch, opt.ChangeGated): a reload armed without watched
+// ids watches its DependsOn ids (resolved by newReload). It is what admits
+// the legacy IfChanged and WithWatch options, which rely on that fallback.
+func (d *DaemonReloadResource) WatchesDependsOn() {}
 
 // Apply runs the daemon-reload reconciliation directly for the legacy resource path.
 func (d *DaemonReloadResource) Apply() error { return d.apply() }

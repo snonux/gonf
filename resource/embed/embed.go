@@ -14,7 +14,7 @@ import (
 // errNothingToWatch is CheckWatch's error: an armed change gate with an empty
 // watch list.
 var errNothingToWatch = errors.New("change gate armed with nothing to watch, so it could never fire " +
-	"(IfChanged without watched ids is only supported by DaemonReload, which falls back to its DependsOn ids); " +
+	"(a DaemonReload armed by IfChanged with neither WithWatch ids nor DependsOn to fall back to); " +
 	"use OnChange(resources...) or WatchChanges(ids...)")
 
 // DependsOn is embedded into concrete resource types to give them the ability
@@ -96,9 +96,9 @@ type ChangeGate struct {
 // SetChangeWatch arms the change gate and adds ids to the watched
 // resources. Multiple calls accumulate; an id already watched is not added
 // again, so callers never need to de-duplicate their watch lists. An empty
-// ids arms the gate without adding a watch (the legacy IfChanged option):
-// only daemon-reload can then derive a watch list (its DependsOn fallback),
-// every other embedder is refused by CheckWatch. It uses a pointer receiver
+// ids arms the gate without adding a watch (the legacy IfChanged option,
+// which only daemon-reload accepts: it derives a watch list from its
+// DependsOn ids and then runs CheckWatch). It uses a pointer receiver
 // so the mutation is visible to the embedding value, and implements
 // opt.ChangeWatchable.
 func (c *ChangeGate) SetChangeWatch(ids []string) {
@@ -119,9 +119,11 @@ func (c *ChangeGate) AddWatch(ids []string) {
 }
 
 // CheckWatch reports an armed gate with nothing to watch: it could never
-// fire, so the gated action would be held forever. Registering constructors
-// turn the error into a registration-time abort and Ensure paths return it.
-// Daemon-reload calls it only after filling its DependsOn fallback.
+// fire, so the gated action would be held forever. Daemon-reload runs it
+// after filling its DependsOn fallback (Present aborts, Ensure returns the
+// error). The other gated kinds cannot be armed without ids through any
+// option (OnChange and WatchChanges abort on an empty list, and the legacy
+// IfChanged/WithWatch require opt.ChangeGated), so they need no check.
 func (c *ChangeGate) CheckWatch() error {
 	if c.Gated && len(c.Watch) == 0 {
 		return errNothingToWatch

@@ -85,11 +85,11 @@ var WithEnableOnly = enableOnlyOption(func(target any) {
 // WithWatch ids or, failing those, its DependsOn ids. It lowers to the same
 // SetChangeWatch call as WatchChanges (IfChanged plus WithWatch(ids...) is
 // exactly WatchChanges(ids...), and IfChanged plus DependsOn(r) records the
-// same op as OnChange(r)). New recipes should use OnChange. A resource
-// without the DependsOn fallback (Service, Timer, Command, reached through
-// the type-erased Option path) refuses the resulting gate at registration:
-// it has nothing to watch.
-var IfChanged = daemonReloadOption(changeGate("IfChanged", nil))
+// same op as OnChange(r)). New recipes should use OnChange. Like WithWatch
+// it requires ChangeGated, so a Service, Timer or Command reached through
+// the type-erased Option path still refuses it ("does not support
+// IfChanged"), whatever other options come with it.
+var IfChanged = daemonReloadOption(legacyChangeGate("IfChanged", nil))
 
 // WithPersistent enables Persistent=true on a systemd timer.
 var WithPersistent = systemdTimerOption(func(target any) {
@@ -147,12 +147,22 @@ type (
 	// (OnChange, WatchChanges, IfChanged, WithWatch) lowers to: arm the gate
 	// and add the watched ids (embed.ChangeGate implements it).
 	ChangeWatchable interface{ SetChangeWatch([]string) }
-	// ChangeGated and Watchable are the capability names of the former
-	// legacy family (SetIfChanged, SetWatch). They are retained as aliases
-	// of ChangeWatchable for source compatibility now that IfChanged and
-	// WithWatch lower to SetChangeWatch too.
-	ChangeGated            = ChangeWatchable
-	Watchable              = ChangeWatchable
+	// DependsOnWatcher marks a change-gated resource that, armed without
+	// watched ids, watches its DependsOn ids instead (daemon-reload only).
+	// It is a marker, not a setter: it admits the legacy spellings.
+	DependsOnWatcher interface{ WatchesDependsOn() }
+	// ChangeGated is what the legacy daemon-reload spellings IfChanged and
+	// WithWatch require: the one change-gate capability plus the DependsOn
+	// fallback. Their meaning (arm without ids) relies on that fallback, so
+	// they stay daemon-reload-only at run time too, as they were when
+	// ChangeGated was the SetIfChanged setter.
+	ChangeGated interface {
+		ChangeWatchable
+		DependsOnWatcher
+	}
+	// Watchable is retained as an alias of ChangeGated: WithWatch, which
+	// once required a SetWatch setter, now requires ChangeGated.
+	Watchable              = ChangeGated
 	Elevatable             interface{ SetElevate() }
 	CronUserable           interface{ SetCronUser(string) }
 	LegacyCronCommandable  interface{ SetLegacyCommand(string) }
@@ -602,13 +612,22 @@ func WithFileMode(mode os.FileMode) dirOption {
 	})
 }
 
-// WithWatch is the legacy daemon-reload spelling of WatchChanges: it arms
-// the gate and adds ids to the watch list, exactly like WatchChanges(ids...)
-// (so IfChanged next to it is redundant but harmless). Calls accumulate, as
-// every change-gate option does. With no ids it arms only, like IfChanged.
-// New recipes should use OnChange.
+// WithWatch is the legacy daemon-reload spelling of WatchChanges: with ids
+// it arms the gate and adds them to the watch list, exactly like
+// WatchChanges(ids...) (so IfChanged next to it is redundant but harmless),
+// and calls accumulate, as every change-gate option does. It differs from
+// WatchChanges only without ids: WithWatch() stays what it always was, a
+// no-op (the reload's gate is left as the other options set it), where
+// WatchChanges() aborts. Like IfChanged it requires ChangeGated, so it is
+// refused on every resource but daemon-reload. New recipes should use
+// OnChange.
 func WithWatch(ids ...string) daemonReloadOption {
-	return daemonReloadOption(changeGate("WithWatch", ids))
+	if len(ids) == 0 {
+		return daemonReloadOption(func(target any) {
+			requires(target, "WithWatch", func(ChangeGated) {})
+		})
+	}
+	return daemonReloadOption(legacyChangeGate("WithWatch", ids))
 }
 
 // OnChange gates a resource's mutating action on the change reports of the
@@ -670,8 +689,9 @@ func WatchChanges(ids ...string) changeGateOption {
 // resource. It is the one apply-side rule shared by every gated kind's plan
 // handler: an ungated op yields a nil option (nothing to append), and a
 // gated op with no watch ids is an error naming kind, since its gate could
-// never fire. The record-side pre-flight refuses such plans before they get
-// here; a hand-written plan applied from a file may still carry one.
+// never fire. That error is defence in depth: plan.Apply (and every
+// controller-side pre-flight) refuses such ops earlier, in
+// ValidateChangeGates, so no plan reaches a handler with one.
 func RecordedChangeGate(kind string, ifChanged bool, watch []string) (ChangeGateOption, error) {
 	if !ifChanged {
 		return nil, nil
@@ -927,6 +947,18 @@ func changeGate(label string, ids []string) func(any) {
 	ids = slices.Clone(ids)
 	return func(target any) {
 		requires(target, label, func(r ChangeWatchable) { r.SetChangeWatch(ids) })
+	}
+}
+
+// legacyChangeGate is changeGate for the legacy daemon-reload spellings
+// (IfChanged, WithWatch): target must also be ChangeGated, so the
+// type-erased Option path refuses them on resources without the DependsOn
+// fallback exactly as before the families were collapsed.
+func legacyChangeGate(label string, ids []string) func(any) {
+	gate := changeGate(label, ids)
+	return func(target any) {
+		requires(target, label, func(ChangeGated) {})
+		gate(target)
 	}
 }
 

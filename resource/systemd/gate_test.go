@@ -44,6 +44,15 @@ func TestDaemonReloadDraftWatch(t *testing.T) {
 		{name: "WithWatch alone arms",
 			opts:      []opt.DaemonReloadOption{opt.WithWatch("File[b]")},
 			wantGated: true, wantWatch: []string{"File[b]"}},
+		// WithWatch() without ids keeps its old meaning: a no-op, so the
+		// reload stays unconditional (unarmed) and the DependsOn fallback is
+		// recorded as before; next to IfChanged it changes nothing either.
+		{name: "WithWatch without ids is a no-op",
+			opts:      []opt.DaemonReloadOption{opt.WithWatch(), opt.DependsOn(dep("File[a]"))},
+			wantWatch: []string{"File[a]"}},
+		{name: "IfChanged with empty WithWatch falls back to deps",
+			opts:      []opt.DaemonReloadOption{opt.IfChanged, opt.WithWatch(), opt.DependsOn(dep("File[a]"))},
+			wantGated: true, wantWatch: []string{"File[a]"}},
 		{name: "WithWatch calls accumulate",
 			opts:      []opt.DaemonReloadOption{opt.WithWatch("File[b]"), opt.WithWatch("File[c]", "File[b]")},
 			wantGated: true, wantWatch: []string{"File[b]", "File[c]"}},
@@ -116,6 +125,24 @@ func lowerReload(t *testing.T, opts []opt.DaemonReloadOption) plan.Op {
 	return op
 }
 
+// TestEmptyWithWatchReloadsUnconditionally runs a DaemonReload(WithWatch())
+// through Ensure: as before b72 it is an ungated reload, so it reloads
+// although nothing changed.
+func TestEmptyWithWatchReloadsUnconditionally(t *testing.T) {
+	resource.ResetReport()
+	t.Cleanup(resource.ResetReport)
+	old := runCmd
+	t.Cleanup(func() { runCmd = old })
+	called := false
+	runCmd = func(string, ...string) (string, string, int, error) {
+		called = true
+		return "", "", 0, nil
+	}
+	if err := Ensure(opt.WithWatch()); err != nil || !called {
+		t.Fatalf("Ensure(WithWatch()) = %v, reloaded %t, want an unconditional reload", err, called)
+	}
+}
+
 // TestReloadArmedWithNothingToWatchRefused pins the behaviour correction of
 // b72: a reload armed by IfChanged with no WithWatch ids and no DependsOn
 // fallback could never reload, so it is refused (Ensure errors, Present
@@ -129,9 +156,10 @@ func TestReloadArmedWithNothingToWatchRefused(t *testing.T) {
 
 // TestPlanHandlerRecordedGate pins the daemon_reload apply side against the
 // shared rule (opt.RecordedChangeGate): a gated op with no watch ids is an
-// error like for every other gated kind (formerly it applied as a reload
-// that was always skipped), a gated op fires on a watched change, and an
-// ungated op ignores its recorded watch ids.
+// error like for every other gated kind (defence in depth: plan.Apply's
+// ValidateChangeGates refuses such an op before any handler runs), a gated
+// op fires on a watched change, and an ungated op ignores its recorded
+// watch ids.
 func TestPlanHandlerRecordedGate(t *testing.T) {
 	resource.ResetReport()
 	t.Cleanup(resource.ResetReport)

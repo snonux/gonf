@@ -65,7 +65,7 @@ and backend limits.
 | `OnChange(res…)` | Command: run only when watched resources changed; Service/Timer: still converge state, but fire `WithRestart`/`WithReload` only on a watched change; DaemonReload: reload only on a watched change. It also records ordering dependencies. |
 | `WatchChanges(ids…)` | The ids-level `OnChange` (same gate, no ordering dependencies); used by plan handlers and compositions |
 | `IfChanged` | Legacy DaemonReload spelling: arms the gate, watching the reload's `DependsOn` ids unless ids are named; prefer `OnChange(res…)` in recipes |
-| `WithWatch(ids…)` | Legacy DaemonReload alias of `WatchChanges(ids…)` (arms the gate; calls accumulate) |
+| `WithWatch(ids…)` | Legacy DaemonReload spelling of `WatchChanges(ids…)` (arms the gate; calls accumulate); `WithWatch()` without ids is a no-op, where `WatchChanges()` aborts |
 | `WithCommand` | SystemdTimer: oneshot `ExecStart=` (also Cron) |
 | `WithOnCalendar` / `WithOnBootSec` / `WithPersistent` | SystemdTimer schedule |
 | `WithDescription` / `WithServiceDescription` | SystemdTimer unit descriptions |

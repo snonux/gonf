@@ -60,6 +60,7 @@ type (
 	ChangeGated            = resourceoptions.ChangeGated
 	Watchable              = resourceoptions.Watchable
 	ChangeWatchable        = resourceoptions.ChangeWatchable
+	DependsOnWatcher       = resourceoptions.DependsOnWatcher
 	Elevatable             = resourceoptions.Elevatable
 	CronUserable           = resourceoptions.CronUserable
 	LegacyCronCommandable  = resourceoptions.LegacyCronCommandable

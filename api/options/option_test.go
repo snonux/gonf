@@ -62,6 +62,7 @@ func (c *capTarget) SetUser()                   { c.record("SetUser", nil) }
 func (c *capTarget) SetElevate()                { c.record("SetElevate", nil) }
 func (c *capTarget) SetEnableOnly()             { c.record("SetEnableOnly", nil) }
 func (c *capTarget) SetChangeWatch(v []string)  { c.record("SetChangeWatch", v) }
+func (c *capTarget) WatchesDependsOn()          {}
 func (c *capTarget) AddDependency(v string)     { c.record("AddDependency", v) }
 func (c *capTarget) SetCronUser(v string)       { c.record("SetCronUser", v) }
 func (c *capTarget) SetLegacyCommand(v string)  { c.record("SetLegacyCommand", v) }
