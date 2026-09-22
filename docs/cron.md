@@ -51,6 +51,14 @@ read/merge/write transaction. This prevents two Gonf processes from losing
 each other's updates; other programs that write the same crontab must use the
 same operational serialization.
 
+## Failure output
+
+A failing `crontab` read or write reports its exit code and arguments but only
+the sizes of its stdout and stderr, for every job, sensitive or not: one table
+holds every job's lines, so its output may quote another job's secret (see
+[secrets.md](secrets.md)). To see the message itself, run `crontab -l` (or
+`crontab -`) as the same user by hand.
+
 ## Live tests
 
 ```bash
