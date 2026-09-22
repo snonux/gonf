@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
 	opt "github.com/snonux/gonf/resource/options"
@@ -111,7 +110,8 @@ func normalizeUnit(name string) string {
 }
 
 // apply probes the timer, derives the systemctl actions that converge it,
-// and runs them (or only logs them under dry-run) via converge.
+// and runs them (or only logs them under dry-run) through the shared
+// systemd.Converge runner, which also notes the result.
 func (t *Timer) apply() error {
 	id := resource.FormatID("Timer", t.name)
 	if err := t.validate(); err != nil {
@@ -131,32 +131,32 @@ func (t *Timer) apply() error {
 	}
 
 	actions, held := t.actions(id, active, enabled)
-	return converge(id, actions, held)
+	return systemd.Converge(id, actions, held)
 }
 
-// actions returns the ordered systemctl argv lists that move t from the
+// actions returns the ordered systemctl actions that move t from the
 // probed state to its desired state. Absent stops (unless enable-only)
 // before disabling; present enables before starting. held reports that the
 // change gate suppressed the restart.
-func (t *Timer) actions(id string, active, enabled bool) (actions [][]string, held bool) {
+func (t *Timer) actions(id string, active, enabled bool) (actions []systemd.Action, held bool) {
 	if t.Absent {
 		if !t.enableOnly && active {
-			actions = append(actions, systemd.Args(t.user, "stop", t.name))
+			actions = append(actions, t.command("stop"))
 		}
 		if enabled {
-			actions = append(actions, systemd.Args(t.user, "disable", t.name))
+			actions = append(actions, t.command("disable"))
 		}
 		return actions, false
 	}
 	if !enabled {
-		actions = append(actions, systemd.Args(t.user, "enable", t.name))
+		actions = append(actions, t.command("enable"))
 	}
 	if t.enableOnly {
 		return actions, false
 	}
 	switch {
 	case !active:
-		actions = append(actions, systemd.Args(t.user, "start", t.name))
+		actions = append(actions, t.command("start"))
 	case !t.restart:
 		// Active and no restart requested: nothing more to do. Checked
 		// before the gate so an armed gate without WithRestart reports ok,
@@ -167,37 +167,15 @@ func (t *Timer) actions(id string, active, enabled bool) (actions [][]string, he
 		t.LogHeld(id, "restart")
 		held = true
 	default:
-		actions = append(actions, systemd.Args(t.user, "restart", t.name))
+		actions = append(actions, t.command("restart"))
 	}
 	return actions, held
 }
 
-// converge runs actions in order (or only logs them in a dry run) and notes
-// the result. With nothing to do, a gate-held restart is reported skipped
-// rather than ok. The first failing action aborts the rest and is returned;
-// nothing is noted in that case.
-func converge(id string, actions [][]string, held bool) error {
-	if len(actions) == 0 {
-		resource.NoteIdle(id, held)
-		return nil
-	}
-
-	if resource.DryRun() {
-		for _, a := range actions {
-			logger.Info("dry-run: would run systemctl %v", a)
-		}
-		resource.NoteResult(id, true)
-		return nil
-	}
-
-	for _, a := range actions {
-		if err := systemd.Run(a...); err != nil {
-			return err
-		}
-		logger.Info("systemctl %v", a)
-	}
-	resource.NoteResult(id, true)
-	return nil
+// command returns the systemctl Action performing verb on t's unit, on the
+// --user bus when WithUser is set.
+func (t *Timer) command(verb string) systemd.Action {
+	return systemd.Command(systemd.Args(t.user, verb, t.name))
 }
 
 // validate is Timer-specific: unlike Service, timer unit names are checked

@@ -2,7 +2,6 @@ package service
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/snonux/gonf/resource/systemd"
 )
@@ -29,11 +28,13 @@ func (systemdBackend) running(u unit) (bool, error) { return systemd.IsActive(u.
 
 func (systemdBackend) enabled(u unit) (bool, error) { return systemd.IsEnabled(u.name, u.user) }
 
-func (systemdBackend) do(u unit, v verb) error {
-	return systemd.Run(systemd.Args(u.user, string(v), u.name)...)
-}
+func (systemdBackend) do(u unit, v verb) error { return command(u, v).Do() }
 
-func (systemdBackend) describe(u unit, v verb) (would, did string) {
-	args := systemd.Args(u.user, string(v), u.name)
-	return fmt.Sprintf("run systemctl %v", args), fmt.Sprintf("systemctl %v", args)
+func (systemdBackend) describe(u unit, v verb) (would, did string) { return command(u, v).Describe() }
+
+// command returns the systemctl invocation performing v on u (with --user
+// for a per-user unit). Timer builds its actions from the same
+// systemd.Command, so both render and run systemctl identically.
+func command(u unit, v verb) systemd.Command {
+	return systemd.Command(systemd.Args(u.user, string(v), u.name))
 }

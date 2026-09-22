@@ -121,13 +121,16 @@ func (d *DaemonReloadResource) apply() error {
 		return nil
 	}
 
+	// A single action with the id-wrapped error, so it goes through
+	// resource.Mutate rather than Converge; the log text still comes from
+	// the shared Describe, so it matches Timer's and Service's wording.
 	args := Args(d.user, "daemon-reload")
-
-	return resource.Mutate(id, fmt.Sprintf("run systemctl %v", args), func() error {
+	would, did := Describe(args)
+	return resource.Mutate(id, would, func() error {
 		if err := Run(args...); err != nil {
 			return fmt.Errorf("%s: %w", id, err)
 		}
-		logger.Info("systemctl %v", args)
+		logger.Info("%s", did)
 		return nil
 	})
 }

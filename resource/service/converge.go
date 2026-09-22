@@ -3,8 +3,8 @@ package service
 import (
 	"fmt"
 
-	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource"
+	"github.com/snonux/gonf/resource/systemd"
 )
 
 // applyWith converges s through backend b. This is the one copy of the
@@ -34,13 +34,7 @@ func (s *Service) applyWith(b backend) error {
 
 	id := resource.FormatID("Service", s.name)
 	verbs, held := s.actions(id, running, enabled)
-	if len(verbs) == 0 {
-		// Nothing to do: skipped when the gate held a requested
-		// restart/reload, ok when already converged.
-		resource.NoteIdle(id, held)
-		return nil
-	}
-	return runActions(id, b, u, verbs)
+	return runActions(id, b, u, verbs, held)
 }
 
 // actions returns the ordered verbs that move s from the probed state to
@@ -80,32 +74,24 @@ func (s *Service) actions(id string, running, enabled bool) (verbs []verb, held 
 }
 
 // runActions performs verbs through b in order (or only logs them in a dry
-// run) and notes the resource as changed. The first failing action aborts
-// the rest and is returned; nothing is noted in that case.
-func runActions(id string, b backend, u unit, verbs []verb) error {
-	if resource.DryRun() {
-		for _, v := range verbs {
-			would, _ := actionLogLines(b, u, v)
-			logger.Info("%s", would)
-		}
-		resource.NoteResult(id, true)
-		return nil
+// run) and notes the result, via the shared runner systemd.Converge that
+// Timer uses too, so log wording and result reporting live in one place for
+// every backend. With no verbs the service is idle: skipped when held (the
+// gate held a requested restart/reload), ok when already converged. The
+// first failing action aborts the rest and is returned; nothing is noted in
+// that case.
+func runActions(id string, b backend, u unit, verbs []verb, held bool) error {
+	actions := make([]systemd.Action, len(verbs))
+	for i, v := range verbs {
+		actions[i] = backendAction{b: b, u: u, v: v}
 	}
-	for _, v := range verbs {
-		if err := b.do(u, v); err != nil {
-			return err
-		}
-		_, did := actionLogLines(b, u, v)
-		logger.Info("%s", did)
-	}
-	resource.NoteResult(id, true)
-	return nil
+	return systemd.Converge(id, actions, held)
 }
 
 // actionLogLines renders the complete log lines for v on b: the dry-run line
-// and the line logged after the action succeeded. Kept separate from
-// runActions so tests can pin every backend's operator-visible wording.
+// and the line logged after the action succeeded, exactly as runActions
+// logs them. Kept separate so tests can pin every backend's
+// operator-visible wording.
 func actionLogLines(b backend, u unit, v verb) (would, did string) {
-	w, d := b.describe(u, v)
-	return "dry-run: would " + w, d
+	return systemd.LogLines(backendAction{b: b, u: u, v: v})
 }

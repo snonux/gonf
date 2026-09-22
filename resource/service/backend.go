@@ -3,6 +3,8 @@ package service
 import (
 	"errors"
 	"fmt"
+
+	"github.com/snonux/gonf/resource/systemd"
 )
 
 // unit identifies the service a backend acts on: its name and whether it
@@ -31,9 +33,10 @@ type runner func(name string, args ...string) (stdout, stderr string, code int, 
 
 // backend is the OS-specific service-manager mechanism a Service converges
 // through. It only probes state and performs single verbs; the policy that
-// turns desired state plus probes into an ordered action list, the change
-// gate, dry-run handling and result reporting lives once in
-// Service.applyWith, so it is no longer copied into every backend.
+// turns desired state plus probes into an ordered action list and the change
+// gate live once in Service.applyWith, and dry-run handling and result
+// reporting once in the shared runner systemd.Converge (see runActions), so
+// neither is copied into every backend.
 type backend interface {
 	// userSupport returns nil when WithUser (a per-user manager) works on
 	// this backend, otherwise the user-facing reason it does not. The
@@ -50,6 +53,16 @@ type backend interface {
 	describe(u unit, v verb) (would, did string)
 }
 
+// backendAction adapts one verb on a backend to the shared runner's
+// systemd.Action, so every backend's actions run through systemd.Converge.
+type backendAction struct {
+	b backend
+	u unit
+	v verb
+}
+
+var _ systemd.Action = backendAction{}
+
 // backends maps each detector name to a constructor for its backend. This
 // table is the single place a manager name becomes an implementation:
 // supporting another service manager is one new backend file plus one entry
@@ -64,6 +77,12 @@ var backends = map[string]func() backend{
 	"freebsd": func() backend { return freebsdBackend{run: runCmd} },
 	"netbsd":  func() backend { return netbsdBackend{run: runCmd, rcConfD: netbsdRcConfD} },
 }
+
+// Do performs the verb through the backend.
+func (a backendAction) Do() error { return a.b.do(a.u, a.v) }
+
+// Describe returns the backend's log text for the verb.
+func (a backendAction) Describe() (would, did string) { return a.b.describe(a.u, a.v) }
 
 // selectBackend detects the host's service manager and returns its backend.
 // Detection runs per apply (a GOOS switch plus, on Linux, one stat), which
