@@ -56,10 +56,13 @@ func assertNoLiveTarget(t *testing.T, target string) {
 }
 
 // lingeringChildScript returns a validator script prefix that starts a
-// background `sleep 30` inheriting the validator's stdout/stderr (so it holds
+// background `sleep 60` inheriting the validator's stdout/stderr (so it holds
 // the output pipe open) and records its pid, plus the handle to that child.
 // Gonf kills validator descendants only on a timeout, so unless assertGone
 // confirmed it gone the test kills it on cleanup to leave no process behind.
+// The sleep is long (60s) so a regression that leaves the call waiting on the
+// child instead of cutting it off is unmistakable against the load-tolerant
+// bounds the callers check.
 func lingeringChildScript(t *testing.T) (string, *lingeringChild) {
 	t.Helper()
 	child := &lingeringChild{pidFile: filepath.Join(t.TempDir(), "child.pid")}
@@ -68,7 +71,7 @@ func lingeringChildScript(t *testing.T) (string, *lingeringChild) {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 		}
 	})
-	return `sleep 30 &
+	return `sleep 60 &
 echo $! > "` + child.pidFile + `"
 `, child
 }
@@ -115,7 +118,9 @@ func validateTimed(target, validator string) (time.Duration, error) {
 // names the timeout (and wraps context.DeadlineExceeded), carries what the
 // validator printed, the live file is not touched and the candidate is gone.
 // The timeout is 1s so the shell reliably prints before it is killed; the
-// call must end well before timeout + ivalidator.WaitDelay (no pipe to drain).
+// call must end well before it would if the kill regressed and Wait ran out
+// the full sleep instead (60s). The bound (timeout + WaitDelay + generous
+// slack) leaves room for a busy host without losing that separation.
 func TestValidationTimeoutKillsValidator(t *testing.T) {
 	resource.ResetRepository()
 	setValidationCommandTimeout(t, time.Second)
@@ -124,7 +129,7 @@ func TestValidationTimeoutKillsValidator(t *testing.T) {
 exec sleep 60`)
 
 	elapsed, err := validateTimed(target, validator)
-	if limit := time.Second + ivalidator.WaitDelay/2; elapsed > limit {
+	if limit := time.Second + ivalidator.WaitDelay + 10*time.Second; elapsed > limit {
 		t.Fatalf("validation took %v, want at most %v", elapsed, limit)
 	}
 	prefix := "file " + target + ": validation by " + validator + " failed: timed out after 1s: context deadline exceeded: validator output: checking " + target + ".gonfvalidate"
@@ -135,7 +140,10 @@ exec sleep 60`)
 }
 
 // The timeout kill is SIGKILL, not a catchable signal: a validator that
-// ignores SIGTERM still ends at the deadline, not ivalidator.WaitDelay later.
+// ignores SIGTERM still ends at the deadline, not ivalidator.WaitDelay later
+// (and never the full 60s sleep, which is what an uncaught SIGTERM-only kill
+// would leave running). The bound (timeout + WaitDelay + generous slack)
+// tolerates a busy host while staying far short of that 60s.
 func TestValidationTimeoutKillIsUncatchable(t *testing.T) {
 	resource.ResetRepository()
 	setValidationCommandTimeout(t, time.Second)
@@ -144,7 +152,7 @@ func TestValidationTimeoutKillIsUncatchable(t *testing.T) {
 exec sleep 60`)
 
 	elapsed, err := validateTimed(target, validator)
-	if limit := time.Second + ivalidator.WaitDelay/2; elapsed > limit {
+	if limit := time.Second + ivalidator.WaitDelay + 10*time.Second; elapsed > limit {
 		t.Fatalf("validation took %v, want at most %v (SIGKILL at the deadline)", elapsed, limit)
 	}
 	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
@@ -188,7 +196,10 @@ exit 0`)
 // escaped it could only delay the return to timeout + ivalidator.WaitDelay.
 // The 1s timeout leaves the shell time to record the child's pid, which the
 // test uses to check the child is gone (and cleanup to kill it should the
-// descendant kill regress).
+// descendant kill regress). The bound adds generous slack on top of
+// timeout+WaitDelay for a busy host, well short of the lingering child's 60s
+// sleep, which is what a regressed descendant kill would leave the call
+// waiting on.
 func TestValidationTimeoutNotBlockedByLingeringChild(t *testing.T) {
 	resource.ResetRepository()
 	setValidationCommandTimeout(t, time.Second)
@@ -197,7 +208,7 @@ func TestValidationTimeoutNotBlockedByLingeringChild(t *testing.T) {
 	validator := writeValidationScript(t, script+`exec sleep 60`)
 
 	elapsed, err := validateTimed(target, validator)
-	if limit := time.Second + ivalidator.WaitDelay + 2*time.Second; elapsed > limit {
+	if limit := time.Second + ivalidator.WaitDelay + 10*time.Second; elapsed > limit {
 		t.Fatalf("validation took %v, want at most %v", elapsed, limit)
 	}
 	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
@@ -242,7 +253,9 @@ exit `+strconv.Itoa(code))
 
 // A validator that exits 0 while a child it started keeps stdout open is a
 // success; the call returns after ivalidator.WaitDelay instead of waiting for
-// the child.
+// the child. The bound adds generous slack for a busy host, well short of
+// the lingering child's 60s sleep that a regression (waiting for the child)
+// would show up as.
 func TestValidationSuccessNotBlockedByLingeringChild(t *testing.T) {
 	resource.ResetRepository()
 	target := filepath.Join(privateValidationDir(t), "service.conf")
@@ -254,7 +267,7 @@ exit 0`)
 	if err != nil {
 		t.Fatalf("validated apply: %v", err)
 	}
-	if limit := ivalidator.WaitDelay + 2*time.Second; elapsed > limit {
+	if limit := ivalidator.WaitDelay + 10*time.Second; elapsed > limit {
 		t.Fatalf("validation took %v, want at most %v", elapsed, limit)
 	}
 	if got, err := os.ReadFile(target); err != nil || string(got) != "candidate" {

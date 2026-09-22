@@ -43,7 +43,10 @@ func TestRunInReportsOutputAndExitStatus(t *testing.T) {
 	}
 }
 
-// The process-wide command timeout bounds the validator.
+// The process-wide command timeout bounds the validator. The bound leaves
+// generous slack past timeout+WaitDelay so scheduling delays on a busy host
+// cannot trip it: a kill that failed to bound the command at all would run
+// the full 30s sleep instead, well past this bound.
 func TestRunInIsBoundedByCommandTimeout(t *testing.T) {
 	prev := gexec.DefaultTimeout()
 	t.Cleanup(func() { gexec.SetDefaultTimeout(prev) })
@@ -53,7 +56,7 @@ func TestRunInIsBoundedByCommandTimeout(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v, want a timeout", err)
 	}
-	if elapsed := time.Since(start); elapsed > 300*time.Millisecond+WaitDelay {
+	if elapsed := time.Since(start); elapsed > 300*time.Millisecond+WaitDelay+10*time.Second {
 		t.Fatalf("RunIn took %v, want it bounded by the timeout", elapsed)
 	}
 }

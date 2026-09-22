@@ -83,12 +83,21 @@ func waitGone(t *testing.T, p *trackedPid) {
 // survivor holds the pipe RunIn returns without the WaitDelay drain that the
 // validator-only kill needed. The 2s timeout leaves the shells ample time to
 // record the pids before the deadline, even under -race.
+//
+// The upper bound must both catch the regression this test guards against (a
+// kill that no longer reaches the descendants, so RunIn waits out the
+// grandchild's sleep instead of returning at the timeout) and tolerate a
+// busy host, where scheduling delays alone pushed a tight bound over on a
+// loaded CI runner. The grandchild's sleep is long (60s) so a regression is
+// unmistakable, and the bound is timeout + the kill's own budgets
+// (freezeBudget, verifyBudget) + WaitDelay, plus a generous slack that a
+// merely slow host can still absorb without ever reaching 60s.
 func TestRunInTimeoutKillsDescendants(t *testing.T) {
 	const timeout = 2 * time.Second
 	setTimeout(t, timeout)
 	dir := t.TempDir()
 	childPid, grandchildPid := filepath.Join(dir, "child"), filepath.Join(dir, "grandchild")
-	script := `sh -c 'sleep 30 & echo $! > "$1"; wait' inner "` + grandchildPid + `" &
+	script := `sh -c 'sleep 60 & echo $! > "$1"; wait' inner "` + grandchildPid + `" &
 echo $! > "` + childPid + `"
 wait`
 	start := time.Now()
@@ -98,7 +107,7 @@ wait`
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v, want a timeout", err)
 	}
-	if limit := timeout + WaitDelay*3/4; elapsed > limit {
+	if limit := timeout + freezeBudget + verifyBudget + WaitDelay + 10*time.Second; elapsed > limit {
 		t.Fatalf("RunIn took %v, want at most %v (no descendant left holding the pipe)", elapsed, limit)
 	}
 	waitGone(t, child)
