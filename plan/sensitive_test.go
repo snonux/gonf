@@ -58,7 +58,7 @@ func TestRequiredVersion(t *testing.T) {
 	}
 	keyed := Op{Op: KindFile, Path: "/p", KeyedLines: []KeyedLine{{Key: "k=", Line: "k=v"}}}
 	for _, ops := range [][]Op{
-		append(slices.Clone(plain), keyed),
+		{plain, keyed},
 		{{Op: KindFile, Path: "/k", Sensitive: true}, keyed},
 		{keyed, {Op: KindFile, Path: "/k", Sensitive: true}},
 	} {
