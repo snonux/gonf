@@ -433,8 +433,10 @@ explicit `AggregateTasks` list (conf c5ed357). A registration-time check in
 conf's `gonf/tasks/tasks.go` panics when a `frontends_*` task is neither a
 member nor in the explicit exclusion list (`frontends_acme_invoke`,
 `frontends_irc_bouncer`, both marked `Operational()`), so a new frontend task
-cannot silently fall out of setup runs. `frontends_ping` (a push-pipeline
-diagnostic) is still a member, as it was under the regex.
+cannot silently fall out of setup runs. On the owner's decision of 2026-09-22
+the push-pipeline diagnostic `frontends_ping` left the aggregate as well: it
+is the third excluded task, marked `Operational()` and still unprivileged
+(conf 747d90b).
 
 ### Users and accounts on the four required systems
 
