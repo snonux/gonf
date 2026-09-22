@@ -205,9 +205,10 @@ func (h Handle) Members(keys ...string) []resource.Dependency {
 // Present registers the config set and one handle resource per member, and
 // records their plan drafts. A misconfigured set is reported as a declaration
 // error (resource.Refuse), which fails the record. The set's
-// applier and its member appliers (the legacy resource.Apply path) share one
-// outcome store of their own; the plan path uses the plan handlers' store
-// instead (see newHandlers).
+// registered value and its members' (resource.Applier) share one outcome
+// store of their own; nothing applies them through the repository since
+// task e72 retired that path. Applying goes through the plan handlers and
+// their store (see newHandlers).
 func Present(name string, opts ...opt.ConfigSetOption) Handle {
 	c, err := build(name, opts)
 	if err != nil {

@@ -61,7 +61,10 @@ func (s *Service) SetReload() { s.reload = true }
 // Backends without a user bus reject it at apply time.
 func (s *Service) SetUser() { s.user = true }
 
-// Apply runs the service reconciliation directly for the legacy resource path.
+// Apply runs the service reconciliation directly. It makes the value Present
+// registers a resource.Applier; since the repository apply was retired (task
+// e72) nothing calls it through the repository, and the plan engine applies
+// the kind through its plan handler instead.
 func (s *Service) Apply() error { return s.apply() }
 
 // Present registers a service that should be running and enabled at boot. An

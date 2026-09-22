@@ -73,7 +73,8 @@ func (d *DaemonReloadResource) orderingDeps() []string {
 // mergeInto folds the new declaration next into d, the reload registered as
 // r in this recipe scope, and returns r. resource.AmendRegistered checks the
 // merged draft first and only then applies it everywhere: the registered
-// draft and dependency edges (api.Apply and the legacy repository path) and,
+// draft (what api.Apply lowers) and dependency edges (what later
+// amendments' cycle check walks) and,
 // in plan-record mode, the op d already recorded, which the session's amend
 // sink re-lowers through the normal draft lowering and replaces in place
 // (plan.AmendRecorded) instead of recording a second reload. d itself is

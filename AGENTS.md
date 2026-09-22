@@ -45,12 +45,26 @@ records those IDs, and each `Present` function forwards them into
 via `Dependencies()` so each member is depended upon individually.
 
 The public `api.Apply()` snapshots registered drafts and uses the plan engine's
-dependency ordering. The lower-level `resource.Apply()` repository path is a
-legacy direct path kept for tests and compatibility; new code uses `api.Apply`
-or `api.Run`, as its doc comment says ("Prefer api.Apply or api.Run"). It is
-deliberately not marked `// Deprecated:` yet: its many in-repo test callers
-would then fail `go tool staticcheck` (SA1019). Add the marker only together
-with migrating or retiring those callers.
+dependency ordering; it (and `api.Run`) is the only apply path. The direct
+`resource.Apply()` repository path (with `Resource.Apply` and `Multi.Apply`)
+was retired in task e72: the repository only records registrations, their
+dependency edges and their plan drafts. Tests apply registered resources like
+this:
+- from `api` or an external test package: `api.Apply` (or `api.Run`);
+- from a `resource/<kind>` package's own tests (which cannot import `api`):
+  `internal/testapply.Apply`, which lowers the drafts with the same plan
+  handlers and applies them through `plan.Apply` after the same
+  `plan.ValidateChunks` pre-flight (`api`'s `TestTestapplyOpsMatchApply`
+  pins that it lowers the same ops). A stand-in resource that only notes a
+  status (e.g. a watched `File[unit]` reported changed) is
+  `testapply.Register(type, name, testapply.Noting(status, ids...))`,
+  never a bare `resource.Register` (it has no draft, so the apply refuses it);
+- behaviour the plan pre-flight makes unreachable (e.g. a change gate
+  watching an ID nothing notes) is tested on the direct `Ensure` path.
+
+`resource.Register` still takes a `resource.Applier`, so every kind keeps a
+one-line `Apply()` method that nothing calls through the repository; only
+`resource.Registered` hands the value back (daemon-reload merging).
 
 ## Shared embeds
 State common to all concrete resource types lives in the `embed` package and is

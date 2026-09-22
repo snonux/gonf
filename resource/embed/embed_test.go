@@ -21,7 +21,7 @@ func TestSortedIDsNilSafe(t *testing.T) {
 	}
 }
 
-// TestSortedIDsSortsAndDeduplicates mirrors the repository path's
+// TestSortedIDsSortsAndDeduplicates mirrors resource.Resource's
 // sortedDependsOn behaviour: IDs are unique and sorted for stable wire data,
 // regardless of insertion order.
 func TestSortedIDsSortsAndDedupes(t *testing.T) {

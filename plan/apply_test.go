@@ -396,8 +396,8 @@ func TestApplyCommandUnlessSkips(t *testing.T) {
 }
 
 // TestApplySortsDepsBeforeDependents pins the plan-path dependency contract:
-// an op recorded before its DependsOn target must apply after it, mirroring
-// the repository path's topological order. Both commands append to one log,
+// an op recorded before its DependsOn target must apply after it (a
+// topological order). Both commands append to one log,
 // so the file content is the apply-order assertion.
 func TestApplySortsDepsBeforeDependents(t *testing.T) {
 	root := t.TempDir()

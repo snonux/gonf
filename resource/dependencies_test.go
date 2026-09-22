@@ -35,7 +35,7 @@ func TestMultiDependencies(t *testing.T) {
 func TestRegisterWithDeps(t *testing.T) {
 	ResetRepository()
 
-	res := Register("File", "/tmp/a", &mockApplier{}, "File[b]", "File[c]", "File[b]")
+	res := Register("File", "/tmp/a", noopApplier, "File[b]", "File[c]", "File[b]")
 
 	if _, ok := res.dependsOn["File[b]"]; !ok {
 		t.Error("expected dependency File[b]")
@@ -51,7 +51,7 @@ func TestRegisterWithDeps(t *testing.T) {
 func TestRegisterNoDeps(t *testing.T) {
 	ResetRepository()
 
-	res := Register("File", "/tmp/a", &mockApplier{})
+	res := Register("File", "/tmp/a", noopApplier)
 	if res.dependsOn == nil {
 		t.Error("expected dependsOn to be initialized, got nil")
 	}
@@ -60,12 +60,12 @@ func TestRegisterNoDeps(t *testing.T) {
 	}
 }
 
-// TestSortedDependsOn ensures dependency IDs are returned sorted for stable log
-// output regardless of insertion/map order.
+// TestSortedDependsOn ensures dependency IDs are returned sorted for stable
+// comparison regardless of insertion/map order.
 func TestSortedDependsOn(t *testing.T) {
 	ResetRepository()
 
-	res := Register("File", "/tmp/a", &mockApplier{}, "File[c]", "File[a]", "File[b]")
+	res := Register("File", "/tmp/a", noopApplier, "File[c]", "File[a]", "File[b]")
 
 	got := res.sortedDependsOn()
 	want := []string{"File[a]", "File[b]", "File[c]"}

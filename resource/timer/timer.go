@@ -92,7 +92,10 @@ func Absent(name string, opts ...opt.TimerOption) resource.Resource {
 	return Present(name, opts...)
 }
 
-// Apply runs the timer reconciliation directly for the legacy resource path.
+// Apply runs the timer reconciliation directly. It makes the value Present
+// registers a resource.Applier; since the repository apply was retired (task
+// e72) nothing calls it through the repository, and the plan engine applies
+// the kind through its plan handler instead.
 func (t *Timer) Apply() error { return t.apply() }
 
 // planDraft records t as a "timer" plan draft under id, including its

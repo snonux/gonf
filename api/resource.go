@@ -243,8 +243,7 @@ func anyElevated(ops []plan.Op) bool {
 // chunk, so plan.ValidateChunks reduces to "every dependency and every watch
 // is recorded somewhere in the plan": a dep or watch naming no registered
 // resource (a typo, or a resource that was never registered) is refused
-// before any resource is applied, matching what the legacy repository path
-// reported as "depended upon but not registered". A dep recorded LATER in the
+// before any resource is applied. A dep recorded LATER in the
 // same chunk is fine — plan.Apply's dependency sort reorders it. With
 // elevated ops, chunks apply in order as separate plan.Apply runs, so the
 // same rules as for Run and push hold: a watch across chunks is refused (the

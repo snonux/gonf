@@ -4,9 +4,13 @@ import (
 	"testing"
 )
 
+// noopApplier is the registered value of resources these tests only
+// register; nothing applies them.
+var noopApplier = ApplierFunc(func() error { return nil })
+
 func TestResourceID(t *testing.T) {
 	ResetRepository()
-	res := Register("File", "/tmp/foo.txt", &mockApplier{})
+	res := Register("File", "/tmp/foo.txt", noopApplier)
 	expected := "File[/tmp/foo.txt]"
 	if res.ID() != expected {
 		t.Errorf("expected ID %s, got %s", expected, res.ID())
@@ -15,7 +19,7 @@ func TestResourceID(t *testing.T) {
 
 func TestResourceString(t *testing.T) {
 	ResetRepository()
-	res := Register("File", "/tmp/foo.txt", &mockApplier{})
+	res := Register("File", "/tmp/foo.txt", noopApplier)
 	expected := "File[/tmp/foo.txt]"
 	if res.String() != expected {
 		t.Errorf("expected String %s, got %s", expected, res.String())
@@ -26,7 +30,7 @@ func TestNew(t *testing.T) {
 	ResetRepository()
 	type_ := "File"
 	name := "/tmp/foo.txt"
-	res := Register(type_, name, &mockApplier{})
+	res := Register(type_, name, noopApplier)
 
 	if res.Type != type_ {
 		t.Errorf("expected type %s, got %s", type_, res.Type)
@@ -42,7 +46,7 @@ func TestNew(t *testing.T) {
 func TestRepositoryRegister(t *testing.T) {
 	ResetRepository()
 	repo := getRepository()
-	res := Register("File", "/tmp/foo.txt", &mockApplier{})
+	res := Register("File", "/tmp/foo.txt", noopApplier)
 
 	// First registration already happened in New()
 	// But we can try to register again via the repository directly
@@ -51,7 +55,7 @@ func TestRepositoryRegister(t *testing.T) {
 	}
 
 	// Registration of a different resource should succeed
-	res2 := Register("File", "/tmp/bar.txt", &mockApplier{})
+	res2 := Register("File", "/tmp/bar.txt", noopApplier)
 	if err := repo.register(res2); err == nil {
 		t.Error("expected error when registering the same resource twice, got nil")
 	}

@@ -295,8 +295,8 @@ aliases and operational tasks included (`Aggregate` filters and resolves them
 afterwards). `Activate` only filters the list for display /
 matching — it does not apply configuration by itself.
 
-Low-level `resource.Apply()` remains for tests and ad-hoc compatibility use;
-`api.Apply()` now snapshots registered drafts and uses the plan engine,
+`api.Apply()` snapshots registered drafts and uses the plan engine (the
+direct `resource.Apply()` repository path was retired in task e72),
 including the privilege split: a `WithElevate` command runs through the
 configured `-privilege` helper like a `Privileged()` task under `Run`. See
 [plan.md](plan.md) ("Low-level `Apply()`").

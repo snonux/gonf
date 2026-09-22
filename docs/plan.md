@@ -1112,8 +1112,8 @@ every run (the same intent-loss class) — so v5 binaries refuse v6 plans
 up-front at the header gate instead, while this binary keeps applying v1–5
 plans. Version 5 added the `deps` field to resource ops: the sorted
 resource IDs a resource depends on (its `DependsOn` targets, e.g.
-`File[/etc/foo]`). With deps present, remote apply order matches the
-repository's topological order; ops are never reordered across `when_*`
+`File[/etc/foo]`). With deps present, remote apply orders ops
+topologically by their dependencies; ops are never reordered across `when_*`
 boundaries. The bump follows the owner/group bump rationale: an old binary
 that understood a dep-free schema would silently DROP dep ordering — the same
 intent-loss bug class — so v4 binaries refuse v5 plans up-front at the header
@@ -1237,6 +1237,11 @@ both privilege classes instead of chunk indexes:
   resources of the other privilege class applied in between ...`, or
   `together with the change watches A watching B and C watching D, ...`.
 
-The lower-level `resource.Apply()` path remains for resource-package unit tests
-and ad-hoc compatibility use; new application code should prefer `Run` or
-`api.Apply` so local and remote execution share the plan engine.
+There is no other apply path: the direct `resource.Apply()` repository path
+was retired (task e72), so local and remote execution always share the plan
+engine. The `resource/<kind>` packages' own tests, which cannot import `api`,
+apply through `internal/testapply.Apply`: it lowers the registered drafts
+with the same plan handlers and applies them with `plan.Apply` after the
+same `plan.ValidateChunks` pre-flight (it refuses elevated ops, and
+`api`'s `TestTestapplyOpsMatchApply` pins that it lowers the same ops as
+`api.Apply`).

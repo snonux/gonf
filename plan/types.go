@@ -493,8 +493,8 @@ type Op struct {
 	// Deps lists the resource IDs (op IDs such as "File[/etc/foo]") this op
 	// depends on, recorded from the resource DependsOn option. Plan apply
 	// topologically sorts resource ops by deps within each contiguous run
-	// between control ops, mirroring the repository path; ops are never
-	// reordered across when_* boundaries.
+	// between control ops; ops are never reordered across when_*
+	// boundaries.
 	Deps []string `json:"deps,omitempty"`
 
 	// All is the conjunctive predicate list for KindWhenBegin.

@@ -28,8 +28,8 @@ type Facts struct {
 // requirement's scope uses a non-host-fact condition, or when its enclosing
 // scope is active but its predicates fail (see require.go).
 // Resource ops are topologically sorted by their deps within each contiguous
-// run between control ops (plan header, when_begin, when_end), mirroring the
-// repository path's dependency order; dep-free plans keep recorded order.
+// run between control ops (plan header, when_begin, when_end); dep-free
+// plans keep recorded order.
 // Deps recorded in this body earlier, or applied by an earlier privilege
 // chunk or invocation, count as satisfied; a dep recorded later in this body
 // (later when-block) is refused before any mutation. A dep recorded nowhere
@@ -54,8 +54,8 @@ type Facts struct {
 // planDir is the directory containing blobs/ sidecars (usually next to the
 // plan JSONL). Pass "" when the plan only uses content_b64 and no blobs.
 // After applying (or refusing) the ops, the collected resource summary is
-// printed to stderr — one summary per Apply invocation, mirroring the legacy
-// repository path; chunked applies therefore print one summary per chunk.
+// printed to stderr — one summary per Apply invocation; chunked applies
+// therefore print one summary per chunk.
 //
 // Apply is not cancelable (ApplyWithContext with context.Background()); its
 // signature is kept for API stability.
@@ -156,7 +156,7 @@ type planLine struct {
 
 // sortedApplyOrder returns the plan body in apply order: contiguous runs of
 // resource ops between control ops (plan header, when_begin, when_end) are
-// topologically sorted by their dep lists, mirroring the repository path.
+// topologically sorted by their dep lists.
 // Control ops keep their recorded position, so resource ops are never
 // reordered across when_* boundaries. A dep outside the current run is
 // classified: recorded earlier in this body → satisfied (placed); recorded
@@ -273,7 +273,7 @@ func sortRunByDeps(run []planLine, placed map[string]bool, bodyIDs map[string]in
 // kahnStable emits the run's ops in dependency order, breaking ties by
 // recorded position: among the currently ready ops, the earliest recorded one
 // always goes first. A leftover indegree at the end means the run has a
-// dependency cycle, mirroring the repository path's cycle error.
+// dependency cycle, reported as a circular dependency naming one of its ops.
 func kahnStable(run []planLine, indeg []int, waiters [][]int) ([]planLine, error) {
 	ready := make([]int, 0, len(run))
 	for pos, n := range indeg {

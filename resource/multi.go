@@ -1,7 +1,6 @@
 package resource
 
 import (
-	"errors"
 	"strings"
 )
 
@@ -48,16 +47,4 @@ func (m Multi) Dependencies() []string {
 	}
 
 	return ids
-}
-
-// Apply applies every member in order, joining any errors so one failure
-// does not mask the rest.
-func (m Multi) Apply() error {
-	var errs []error
-
-	for _, res := range m {
-		errs = append(errs, res.Apply())
-	}
-
-	return errors.Join(errs...)
 }

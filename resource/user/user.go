@@ -123,7 +123,10 @@ func (u *User) AddSupplementaryGroups(groups ...string) {
 	u.supplementaryGroups = append(u.supplementaryGroups, groups...)
 }
 
-// Apply runs user reconciliation directly for the legacy resource path.
+// Apply runs user reconciliation directly. It makes the value Present
+// registers a resource.Applier; since the repository apply was retired (task
+// e72) nothing calls it through the repository, and the plan engine applies
+// the kind through its plan handler instead.
 func (u *User) Apply() error { return u.apply() }
 
 // Ensure reports that goos has no user backend.

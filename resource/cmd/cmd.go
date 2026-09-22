@@ -157,7 +157,10 @@ func (c *Cmd) checkSensitiveName() error {
 	return nil
 }
 
-// Apply runs the command directly for the legacy resource path.
+// Apply runs the command directly. It makes the value Present registers a
+// resource.Applier; since the repository apply was retired (task e72) nothing
+// calls it through the repository, and the plan engine applies the kind
+// through its plan handler instead.
 func (c *Cmd) Apply() error { return c.apply() }
 
 // planDraft records c as a "command" plan draft under id, including its

@@ -168,7 +168,10 @@ func Absent(name string, opts ...opt.SystemdTimerOption) resource.Resource {
 	return Present(name, opts...)
 }
 
-// Apply runs the systemd timer reconciliation directly for the legacy resource path.
+// Apply runs the systemd timer reconciliation directly. It makes the value
+// Present registers a resource.Applier; since the repository apply was retired
+// (task e72) nothing calls it through the repository, and the plan engine
+// applies the kind through its plan handler instead.
 func (t *SystemdTimer) Apply() error { return t.apply() }
 
 // planDraft records t as a "systemd_timer" plan draft under id.

@@ -232,7 +232,7 @@ type PlanDraft struct {
 
 	// Deps lists the sorted resource IDs this draft's resource depends on
 	// (the DependsOn targets). draftToOp copies them into plan.Op.Deps so
-	// plan apply orders ops like the repository path does.
+	// plan apply orders ops by their dependencies.
 	Deps []string
 
 	// Elevate forces elevate=true on this draft (e.g. options.WithElevate).

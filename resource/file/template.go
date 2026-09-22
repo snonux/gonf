@@ -175,8 +175,8 @@ func decodeTemplateData(raw []byte) (any, error) {
 }
 
 // localTemplateFacts is the fallback {{.Gonf.*}} source for the direct
-// (non-plan) Ensure/Present path only, e.g. the deprecated resource.Apply
-// repository path and unit tests. It mirrors api.DetectFacts but cannot
+// (non-plan) Ensure path only, e.g. a composite resource converging a member
+// directly and unit tests. It mirrors api.DetectFacts but cannot
 // honor api.SetProfileOverride: this package sits below api (api imports
 // it), so it cannot call api.DetectFacts without an import cycle. Plan apply
 // therefore never renders from it: every plan handler that writes template

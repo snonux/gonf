@@ -56,7 +56,10 @@ func (p *Package) SetEnv(env map[string]string) {
 	p.env = maps.Clone(env)
 }
 
-// Apply runs the package reconciliation directly for the legacy resource path.
+// Apply runs the package reconciliation directly. It makes the value Present
+// registers a resource.Applier; since the repository apply was retired (task
+// e72) nothing calls it through the repository, and the plan engine applies
+// the kind through its plan handler instead.
 func (p *Package) Apply() error { return p.apply() }
 
 // Present registers a package resource ensuring name is installed; IsLatest

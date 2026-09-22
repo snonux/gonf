@@ -626,7 +626,7 @@ func TestRecordPlanLowersSystemdTimer(t *testing.T) {
 
 // TestRecordPlanLowersDependsOn pins the wire round-trip of dependency
 // intent: DependsOn targets must reach plan.Op.Deps with their stable
-// resource IDs so plan apply can order ops like the repository path does
+// resource IDs so plan apply can order ops by their dependencies
 // (task y12). A dep-free op must keep Deps nil so the field stays omitted.
 func TestRecordPlanLowersDependsOn(t *testing.T) {
 	ResetTasks()

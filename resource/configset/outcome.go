@@ -63,8 +63,9 @@ func (o *outcomeStore) member(name, key string) (changed, ok bool) {
 	return changed, ok
 }
 
-// memberApplier is the Applier of a member handle resource (legacy path). It
-// reads the result from outcomes, the store of the set it belongs to.
+// memberApplier is the registered value (resource.Applier) of a member handle
+// resource. It reads the result from outcomes, the store of the set it
+// belongs to; the plan path reports members through its handlers' store.
 func memberApplier(outcomes *outcomeStore, name, key string) resource.Applier {
 	return resource.ApplierFunc(func() error { return applyMember(outcomes, name, key) })
 }

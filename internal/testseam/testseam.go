@@ -8,9 +8,9 @@
 // the fakes are no longer part of the public API a recipe module sees. Each
 // backend resolves its runner here at call time (see e.g. resource/systemd's
 // runCmd), which is what lets a cross-package test (api, plan, internal/cli,
-// resource) reach a backend through a registered plan handler, the legacy
-// resource.Apply path or a direct Ensure without the package handing out a
-// setter.
+// resource) reach a backend through a registered plan handler (api.Apply,
+// internal/testapply.Apply) or a direct Ensure without the package handing
+// out a setter.
 //
 // In production nothing is ever installed and every accessor returns its
 // zero value, so the backends use the real internal/exec runners. A Fake*

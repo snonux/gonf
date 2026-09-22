@@ -109,8 +109,9 @@ func Registered(id string) (res Resource, applier Applier, ok bool) {
 //   - in record mode, the amend sink (SetPlanDraftAmender) must accept the
 //     draft; it re-lowers it and replaces the recorded op.
 //
-// Only then are the edges added (the legacy repository apply order) and the
-// stored draft replaced (the snapshot api.Apply lowers).
+// Only then are the edges added (the registered dependency graph the cycle
+// check above walks) and the stored draft replaced (the snapshot api.Apply
+// lowers).
 func AmendRegistered(draft PlanDraft, deps ...string) error {
 	r := getRepository()
 	res, err := r.checkAmendable(draft.ID, deps)

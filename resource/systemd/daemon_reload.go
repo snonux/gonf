@@ -136,7 +136,10 @@ func (d *DaemonReloadResource) SetWatch(ids []string) {
 	d.legacyWatch = slices.Clone(ids)
 }
 
-// Apply runs the daemon-reload reconciliation directly for the legacy resource path.
+// Apply runs the daemon-reload reconciliation directly. It makes the value
+// Present registers a resource.Applier; since the repository apply was retired
+// (task e72) nothing calls it through the repository, and the plan engine
+// applies the kind through its plan handler instead.
 func (d *DaemonReloadResource) Apply() error { return d.apply() }
 
 // planDraft records the daemon-reload op. Unlike the other gated kinds it

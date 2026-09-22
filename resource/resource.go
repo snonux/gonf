@@ -1,7 +1,8 @@
 // Package resource defines gonf's core resource abstraction: the Resource
-// type, the repository that applies registered resources in dependency
-// order, and shared helpers such as Multi. Concrete resource kinds (file,
-// dir, link, pkg, cmd) live in subpackages.
+// type, the repository that records registered resources and their plan
+// drafts (applied by the plan engine through api.Apply and api.Run), the
+// apply report, and shared helpers such as Multi. Concrete resource kinds
+// (file, dir, link, pkg, cmd, ...) live in subpackages.
 package resource
 
 import (
@@ -10,17 +11,18 @@ import (
 	"github.com/snonux/gonf/internal/declerr"
 )
 
-// Applier is the idempotent work a registered resource performs during the
-// legacy resource.Apply path.
-//
-// Prefer api.Apply or api.Run, which use the plan engine.
+// Applier is the contract of the value a resource kind passes to Register:
+// its idempotent direct apply (what the kind's Ensure runs). The repository
+// no longer calls it — the direct resource.Apply path was retired in task
+// e72 and every registered resource is applied from its plan draft by the
+// plan engine — but Registered hands the value back, so a per-scope
+// singleton kind (daemon-reload) can fold a later declaration into it.
 type Applier interface {
 	Apply() error
 }
 
-// ApplierFunc adapts a plain function to the legacy Applier interface.
-//
-// Prefer api.Apply or api.Run, which use the plan engine.
+// ApplierFunc adapts a plain function to the Applier interface, for a
+// registered value that is only a function (e.g. a ConfigSet member).
 type ApplierFunc func() error
 
 // Apply runs the wrapped function.
@@ -30,8 +32,9 @@ func (f ApplierFunc) Apply() error {
 
 // Resource is the value returned by the DSL constructors (api.File,
 // api.Dir, ...). It identifies the registered resource and can be passed to
-// the DependsOn option. The applier is retained for the legacy direct apply
-// path; api.Apply uses the registered plan draft instead.
+// the DependsOn option. It keeps the registered value (see Applier) for
+// Registered and its dependency edges for AmendRegistered's cycle check;
+// applying uses the registered plan draft instead.
 type Resource struct {
 	// Type is the resource kind label, e.g. "File" or "Directory".
 	Type string
@@ -41,14 +44,17 @@ type Resource struct {
 	dependsOn map[string]struct{}
 }
 
-// Register records a resource in the repository so Apply runs it after its
-// dependencies. type_ is the kind label, name the instance name, apply the
-// idempotent work, and deps the IDs of resources that must be applied first.
-// A duplicate ID (the same Type[Name] registered twice in one recipe scope)
-// is always a task bug: it is reported as a declaration error
-// (internal/declerr, surfaced by RecordPlan, Run, Apply and the CLI) and the
-// second declaration is not registered; its Resource value is still returned
-// so the recipe keeps running up to the point where the error surfaces.
+// Register records a resource in the repository. type_ is the kind label,
+// name the instance name, apply the kind's registered value (see Applier),
+// and deps the IDs of resources that must be applied first. Register records
+// no plan draft itself: the kind's Present records one with RecordPlanDraft,
+// and api.Apply refuses a registered resource without a draft (it would
+// otherwise be silently skipped). A duplicate ID (the same Type[Name]
+// registered twice in one recipe scope) is always a task bug: it is
+// reported as a declaration error (internal/declerr, surfaced by RecordPlan,
+// Run, Apply and the CLI) and the second declaration is not registered; its
+// Resource value is still returned so the recipe keeps running up to the
+// point where the error surfaces.
 //
 // Registration is deliberately single-goroutine: recipe construction happens
 // before fleet fan-out, so the repository is not safe for concurrent
@@ -118,8 +124,8 @@ func (r Resource) Dependencies() []string {
 	return []string{r.ID()}
 }
 
-// sortedDependsOn returns the IDs this resource depends on, sorted for stable
-// and readable log output.
+// sortedDependsOn returns the IDs this resource depends on, sorted, so tests
+// can compare the registered dependency edges.
 func (r Resource) sortedDependsOn() []string {
 	ids := make([]string, 0, len(r.dependsOn))
 	for id := range r.dependsOn {
@@ -127,12 +133,4 @@ func (r Resource) sortedDependsOn() []string {
 	}
 	sort.Strings(ids)
 	return ids
-}
-
-// Apply runs this resource's idempotent work through the legacy repository
-// path.
-//
-// Prefer api.Apply or api.Run, which use the plan engine.
-func (r Resource) Apply() error {
-	return r.applier.Apply()
 }

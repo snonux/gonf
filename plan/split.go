@@ -84,8 +84,7 @@ func (e *DanglingWatchError) Reason() string {
 // earlier chunk (chunks apply in recorded order and never reorder, so the
 // earlier chunk satisfies the dep). A dep recorded in a LATER chunk crosses
 // the elevation boundary and is refused, as is a dep recorded in no chunk at
-// all (a *DanglingDepError — the repository path refuses "depended upon but
-// not registered" the same way). chunks holds one op body per privilege chunk
+// all (a *DanglingDepError). chunks holds one op body per privilege chunk
 // in apply order (SplitPrivilegeChunks output, headers included); for a
 // single-chunk plan it reduces to "every dep is recorded in the chunk".
 //
