@@ -25,7 +25,7 @@ contract".
 
 | Option | Meaning |
 |--------|---------|
-| `DependsOn(res…)` | Topological apply order (in-process via `Apply`, and on the plan path — deps are carried on the wire since plan schema 5) |
+| `DependsOn(res…)` | Topological apply order via the plan engine (deps are carried on the wire since plan schema 5) |
 | `IsAbsent` | Ensure a resource family that supports absence is gone (`NoFile` / `NoService` / …) |
 | `WithSensitive` | Declare the payload secret material the secret scan cannot recognise (transformed values, synced trees): the op is recorded `"sensitive": true` (plan schema 22). File, Dir/SyncDir, ConfigSet and its `ConfigFile` members, Command (with `WithName`, else refused), Package, Cron and SystemdTimer only; Link, Service, Timer, DaemonReload and User carry no payload and refuse it at compile time. See [secrets.md](secrets.md#explicit-sensitivity-withsensitive) |
 
@@ -127,6 +127,26 @@ with `internal/testutil.CaptureLog`. Removed:
 
 The state resets (`api.ResetForTest`, `resource.ResetForTest`,
 `plan.ResetForTest`) stay.
+
+### Direct repository apply removed after v0.15.0
+
+Unreleased, pre-1.0 (task e72); no known users (neither client module called
+it). `api.Apply`/`api.Run` and the plan engine were already the sole apply
+path for recipes; this removes the legacy path they had superseded. Removed:
+
+- `resource.Apply` (the package-level function; use `api.Apply` or
+  `api.Run`)
+- `resource.Resource.Apply`
+- `resource.Multi.Apply`
+
+`resource.Register` still takes a `resource.Applier` and each resource kind
+still exposes a one-line `Apply` method on its concrete type (e.g.
+`file.File.Apply`), but nothing in this module calls it any more — only
+`resource.Registered` reads the stored value back (for daemon-reload
+merging). `resource.ApplierFunc` is unchanged. Tests inside this module that
+used to call `resource.Apply` now call `api.Apply` (from `api` or an external
+test package) or the new module-internal `internal/testapply.Apply` (from a
+`resource/<kind>` package's own tests, which cannot import `api`).
 
 ## Cron
 

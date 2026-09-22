@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snonux/gonf/internal/testapply"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/options"
 )
@@ -92,6 +93,35 @@ func TestEnsureTemplateDataUsesLocalFacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if want := wantFacts.GOOS + "|" + wantFacts.Profile + "|" + wantFacts.Hostname; string(got) != want {
+		t.Errorf("facts = %q, want %q", got, want)
+	}
+}
+
+// TestPlanApplyRendersLocalFactsIncludingProfile pins that a templated File
+// applied through the plan path (testapply.Apply, which resource/<kind>
+// tests use in place of the retired resource.Apply, e72) renders
+// {{.Gonf.Profile}} from a real detected profile, not an empty string.
+// internal/testapply's local plan.Facts detect Profile the same way
+// localTemplateFacts (used by the direct Ensure path, see
+// TestEnsureTemplateDataUsesLocalFacts above) does, so both paths must
+// render identically on this host.
+func TestPlanApplyRendersLocalFactsIncludingProfile(t *testing.T) {
+	resource.ResetRepository()
+	path := filepath.Join(t.TempDir(), "config")
+	wantFacts := localTemplateFacts()
+	Present(path, options.WithContent(`{{.Gonf.GOOS}}|{{.Gonf.Profile}}|{{.Gonf.Hostname}}`), options.WithTemplateData(map[string]any{}))
+	if err := testapply.Apply(); err != nil {
+		t.Fatalf("testapply.Apply: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// localTemplateProfile (what localTemplateFacts uses) never returns "":
+	// an empty /etc/os-release ID= is itself mapped to "unknown", so this
+	// comparison cannot pass by both sides coincidentally being empty and
+	// does catch testapply's Profile being left unfilled.
 	if want := wantFacts.GOOS + "|" + wantFacts.Profile + "|" + wantFacts.Hostname; string(got) != want {
 		t.Errorf("facts = %q, want %q", got, want)
 	}
