@@ -61,35 +61,34 @@ does not run. Candidates are unique per apply and cleaned after both success
 and failure; their private mode is independent of the final file mode.
 
 The validator runs without a shell, with stdin from `/dev/null`, in gonf's own
-process group (so a terminal's Ctrl-C, hangup or Ctrl-Z, and a `SIGKILL` of
-the whole group, reach it as they reach gonf), and is bounded by the same
+process group (so a terminal's Ctrl-C, hangup or Ctrl-Z, and a `SIGKILL` of the
+whole group, reach it as they reach gonf), and is bounded by the same
 per-command timeout as every other backend command (`-cmd-timeout` /
 `api.SetCommandTimeout`, 5 minutes by default). When the timeout expires, the
 validator is killed (`SIGKILL`) together with the processes it started, so a
 wrapper script dies with the hung checker it runs, and validation fails with
-`... failed: timed out after 5m0s: context deadline exceeded`. gonf first
-stops the validator (`SIGSTOP`), then finds and stops its descendants by
-walking the process tree (`/proc` on Linux, `ps` elsewhere), spending at most
-2 seconds on the search, and finally kills them children first. A process
-that was already detached from the validator (e.g. by a double fork) or not
-found within those 2 seconds is not killed; if the process table cannot be
-read, only the validator itself is. Processes started by a validator that
-exits on its own before the timeout keep running. If gonf is not allowed to
-kill the validator (`EPERM`, e.g. a non-root gonf running the validator
-through `sudo`/`doas`), the timeout cannot bound it and gonf waits until it exits; 2 seconds after the failed kill gonf also stops
-reading its output, so its next write may kill it with `SIGPIPE`, reported as
-`... failed: signal: broken pipe`. If a process it started still holds the
-validator's stdout/stderr, gonf stops reading that output 2 seconds after the
-validator exited or was killed and continues without waiting for it (a
-validator that exited 0 still counts as a success). The live file stays
-untouched and the candidate is removed on a timeout too. A failure includes
-the validator's combined stdout/stderr, with lines joined by ` | ` and
-control characters and invalid UTF-8 replaced by `?`. All output is read, but
-only the first 4 KiB are kept and the rendered text is cut to at most 4 KiB;
-when anything was cut, a note such as
-`[output truncated, 1000000 bytes in total]` follows (or
-`[no printable output; N bytes in total]` when what was kept is only
-whitespace):
+`... failed: timed out after 5m0s: context deadline exceeded`. gonf first stops
+the validator (`SIGSTOP`), then finds and stops its descendants by walking the
+process tree (`/proc` on Linux, `ps` elsewhere), spending at most 2 seconds on
+the search, and finally kills them children first and the validator last. A
+process that was already detached from the validator (e.g. by a double fork) or
+not found within those 2 seconds is not killed; if the process table cannot be
+read, only the validator itself is. Processes started by a validator that exits
+on its own before the timeout keep running. If gonf is not allowed to kill the
+validator (`EPERM`, e.g. a non-root gonf running the validator through
+`sudo`/`doas`), the timeout cannot bound it and gonf waits until it exits; 2
+seconds after the failed kill gonf also stops reading its output, so its next
+write may kill it with `SIGPIPE`, reported as `... failed: signal: broken
+pipe`. If a process it started still holds the validator's stdout/stderr, gonf
+stops reading that output 2 seconds after the validator exited or was killed
+and continues without waiting for it (a validator that exited 0 still counts as
+a success). The live file stays untouched and the candidate is removed on a
+timeout too. A failure includes the validator's combined stdout/stderr, with
+lines joined by ` | ` and control characters and invalid UTF-8 replaced by `?`.
+All output is read, but only the first 4 KiB are kept and the rendered text is
+cut to at most 4 KiB; when anything was cut, a note such as `[output truncated,
+1000000 bytes in total]` follows (or `[no printable output; N bytes in total]`
+when what was kept is only whitespace):
 
 ```
 file /etc/httpd.conf: validation by httpd failed: exit status 1: validator output: /etc/httpd.conf.gonfvalidate123:12: syntax error
