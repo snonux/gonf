@@ -70,7 +70,9 @@ func TestRemoteBeforeSensitiveSchemaIsRefusedOrUpgraded(t *testing.T) {
 	p := NewPusher()
 	p.PlanVersionProber = func(context.Context, PushTarget, ProbeContext) (int, error) { return old, nil }
 	p.ReleaseVersionProber = func(context.Context, PushTarget, ProbeContext) (string, error) { return internal.Version, nil }
-	p.StrictPreviewProber = func(context.Context, PushTarget, ProbeContext) (int, error) { return internal.StrictPreviewVersion, nil }
+	p.StrictPreviewProber = func(context.Context, PushTarget, ProbeContext) (int, error) {
+		return internal.StrictPreviewVersion, nil
+	}
 	err := p.RequireRemoteGonf(context.Background(), PushTarget{Host: "preview.example"}, ProbeLogin)
 	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("schema %d is older than controller schema %d", old, plan.CurrentVersion)) {
 		t.Fatalf("RequireRemoteGonf(v%d) = %v, want a refusal", old, err)

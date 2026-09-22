@@ -35,7 +35,7 @@ type secretProviders struct {
 // quotes it, e.g. an identity in a registration debug line or a Fatal.
 // With no secret resolved, Redact returns its input unchanged.
 func init() {
-	logger.SetRedactor(secretConfig.values.Redact)
+	logger.SetRedactor(&secretConfig.values)
 }
 
 // SetSecretProvider configures the provider that MustSecret, OptionalSecret

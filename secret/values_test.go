@@ -118,6 +118,69 @@ func TestValuesContainsStrong(t *testing.T) {
 	}
 }
 
+// FlushPoint keeps back the bytes the longest form could still start in and
+// never cuts through an occurrence.
+func TestValuesFlushPoint(t *testing.T) {
+	t.Parallel()
+	var v Values
+	if got := v.FlushPoint("abc"); got != 3 {
+		t.Fatalf("FlushPoint without values = %d, want 3", got)
+	}
+	v.Add([]byte("S3cr3tP@ss")) // 10 bytes: keep 9 back
+	s := strings.Repeat("x", 20) + "S3cr"
+	if got := v.FlushPoint(s); got != len(s)-9 {
+		t.Fatalf("FlushPoint = %d, want %d", got, len(s)-9)
+	}
+	// A complete occurrence crossing the cut moves the cut to its start.
+	s = strings.Repeat("x", 20) + "S3cr3tP@ss" + "yyyy"
+	if got := v.FlushPoint(s); got != 20 {
+		t.Fatalf("FlushPoint = %d, want 20 (the occurrence start)", got)
+	}
+}
+
+// Every strong line of a multi-line secret is a redact-only form of its own.
+func TestValuesTrackMultiLineSecretLines(t *testing.T) {
+	t.Parallel()
+	var v Values
+	v.Add([]byte("-----BEGIN KEY-----\nAAAAfakeline0123456789\napiVersion: v1\nshort\n-----END KEY-----\n"))
+	if got := v.Redact("log: AAAAfakeline0123456789 end"); got != "log: "+Redacted+" end" {
+		t.Fatalf("a strong line of a multi-line secret must be redacted on its own: %q", got)
+	}
+	// Line forms never mark or refuse: shared config-like lines, armour
+	// lines and even the key body line on its own are no evidence.
+	for _, payload := range []string{"AAAAfakeline0123456789", "apiVersion: v1", "-----BEGIN KEY-----", "a short line"} {
+		if v.Contains([]byte(payload)) || v.ContainsStrong([]byte(payload)) {
+			t.Errorf("line form %q must be redact-only", payload)
+		}
+	}
+	if got := v.Redact("-----BEGIN KEY-----"); got != "-----BEGIN KEY-----" {
+		t.Fatalf("PEM armour must not be a form: %q", got)
+	}
+}
+
+// The whole-secret forms share the trimmed secret's strength: the
+// TrimRight form of a whitespace-padded short secret stays weak.
+func TestValuesPaddedShortSecretStaysWeak(t *testing.T) {
+	t.Parallel()
+	var v Values
+	v.Add([]byte("       ab\n"))
+	if v.ContainsStrong([]byte("       ab")) || v.Contains([]byte("x       ab y")) {
+		t.Fatal("a padded 2-byte secret must stay a weak whole-payload form")
+	}
+}
+
+// A form longer than MaxSplitGuard does not make FlushPoint hold back the
+// whole buffer.
+func TestValuesFlushPointIgnoresHugeForms(t *testing.T) {
+	t.Parallel()
+	var v Values
+	v.Add([]byte(strings.Repeat("Z9", MaxSplitGuard))) // 128 KiB secret
+	s := strings.Repeat("x", 70<<10)
+	if got := v.FlushPoint(s); got != len(s) {
+		t.Fatalf("FlushPoint = %d, want %d (huge forms are not split-guarded)", got, len(s))
+	}
+}
+
 func TestValuesRedactLongestFirst(t *testing.T) {
 	t.Parallel()
 	var v Values

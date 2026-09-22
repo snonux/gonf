@@ -30,6 +30,11 @@ const MinStrongLen = 8
 // more than maxWordLen bytes or another character (a digit, punctuation).
 const maxWordLen = 12
 
+// MaxSplitGuard is the longest form FlushPoint protects from being split
+// across two forced flushes of a relayed unterminated line; it matches the
+// relay's 64 KiB flush window (logger.RedactingWriter).
+const MaxSplitGuard = 64 << 10
+
 // Redacted replaces every recognised secret occurrence in redacted output.
 // It is deliberately not valid base64, so a redacted content_b64 can never
 // be mistaken for (or decoded as) real content.
@@ -44,7 +49,9 @@ const Redacted = "[redacted]"
 //
 // Each added value is tracked in three forms: exactly, with surrounding
 // whitespace trimmed, and with trailing CR/LF trimmed, because recipes
-// routinely strip a secret file's final newline before using it. Contains
+// routinely strip a secret file's final newline before using it. Each strong
+// line of a multi-line secret (a PEM key body line) is tracked as a
+// redact-only form of its own: Redact hides it, Contains ignores it. Contains
 // and Redact also look for each form's JSON string escaping, so a value
 // inside encoded template data is found as well. A transformation beyond
 // that (base64, hashing, case changes, splitting) is not recognised.
@@ -67,8 +74,22 @@ type Values struct {
 // belongs to: contained forms are searched inside payloads (secret at least
 // MinContainedLen long), others only match a whole payload; strong forms
 // (see isStrong) are also reported by ContainsStrong and RedactStrong.
+// redactOnly forms — the lines of a multi-line secret — are used by Redact,
+// RedactStrong and FlushPoint but never by Contains or ContainsStrong: a
+// line such as "apiVersion: v1" or a shared certificate line is no evidence
+// that an op carries this secret, so it must not mark or refuse one.
 type formMode struct {
-	contained, strong bool
+	contained, strong, redactOnly bool
+}
+
+// merge combines the modes of two secrets sharing one form: the strongest
+// matching mode, and redact-only only when both are.
+func (m formMode) merge(o formMode) formMode {
+	return formMode{
+		contained:  m.contained || o.contained,
+		strong:     m.strong || o.strong,
+		redactOnly: m.redactOnly && o.redactOnly,
+	}
 }
 
 // formEntry is one tracked form and its matching mode.
@@ -94,16 +115,51 @@ func (v *Values) Add(data []byte) {
 	if v.forms == nil {
 		v.forms = map[string]formMode{}
 	}
-	for _, form := range []string{raw, strings.TrimSpace(raw), strings.TrimRight(raw, "\r\n")} {
-		if form == "" {
-			continue
-		}
-		for _, f := range []string{form, jsonEscaped(form)} {
-			old := v.forms[f]
-			v.forms[f] = formMode{contained: old.contained || mode.contained, strong: old.strong || mode.strong}
-		}
+	// The three whole-secret forms share the trimmed secret's mode (so the
+	// TrimRight form of "       ab\n" stays as weak as "ab"); only the lines
+	// of a multi-line secret are judged on their own, as redact-only forms.
+	for _, form := range []string{raw, trimmed, strings.TrimRight(raw, "\r\n")} {
+		v.addForm(form, mode)
+	}
+	for _, line := range strongLines(trimmed) {
+		v.addForm(line, formMode{contained: true, strong: true, redactOnly: true})
 	}
 	v.sorted = nil
+}
+
+// addForm tracks form and its JSON escaping with mode, merged with the mode
+// of any secret already sharing it. The caller holds v.mu.
+func (v *Values) addForm(form string, mode formMode) {
+	if form == "" {
+		return
+	}
+	for _, f := range []string{form, jsonEscaped(form)} {
+		if old, ok := v.forms[f]; ok {
+			v.forms[f] = old.merge(mode)
+		} else {
+			v.forms[f] = mode
+		}
+	}
+}
+
+// strongLines returns the strong lines (isStrong, surrounding whitespace
+// trimmed) of a multi-line secret such as a PEM private key, or nil for a
+// one-line one. Each becomes a redact-only form of its own, so output
+// redacted line by line (logger.RedactingWriter) still hides the key body.
+// PEM armour lines ("-----BEGIN PRIVATE KEY-----") are skipped: they are
+// shared by every key and certificate and hide nothing.
+func strongLines(trimmed string) []string {
+	if !strings.Contains(trimmed, "\n") {
+		return nil
+	}
+	var lines []string
+	for _, line := range strings.Split(trimmed, "\n") {
+		line = strings.TrimSpace(line)
+		if isStrong(line) && !isPEMArmour(line) {
+			lines = append(lines, line)
+		}
+	}
+	return lines
 }
 
 // Reset forgets every tracked value (tests; a process normally keeps them).
@@ -140,7 +196,7 @@ func (v *Values) match(payload []byte, strongOnly bool) bool {
 	}
 	for _, e := range v.snapshot() {
 		switch {
-		case strongOnly && !e.strong:
+		case e.redactOnly, strongOnly && !e.strong:
 		case e.contained && bytes.Contains(payload, []byte(e.form)):
 			return true
 		case !e.contained && string(payload) == e.form:
@@ -169,15 +225,55 @@ func (v *Values) Redact(s string) string {
 
 // redact is Redact (strongOnly false) and RedactStrong.
 func (v *Values) redact(s string, strongOnly bool) string {
-	var spans [][2]int
+	spans, whole := v.matchSpans(s, strongOnly)
+	if whole {
+		return Redacted
+	}
+	return replaceSpans(s, spans)
+}
+
+// FlushPoint returns how many leading bytes of s a relay may redact and
+// forward now when s is the start of output that continues later (see
+// logger.RedactingWriter): an occurrence of the longest tracked form could
+// still start in the last len-1 bytes, so those stay, and the cut moves back
+// to the start of any occurrence that crosses it, so no secret is split
+// between two redactions. Forms longer than MaxSplitGuard are left out of
+// the keep-back (they are still redacted wherever a flushed chunk holds
+// them whole), so a huge secret cannot make the relay buffer without
+// bound. It implements logger.Redactor with Redact.
+func (v *Values) FlushPoint(s string) int {
+	longest := 0
+	for _, e := range v.snapshot() {
+		if len(e.form) <= MaxSplitGuard {
+			longest = max(longest, len(e.form))
+		}
+	}
+	cut := len(s) - max(longest-1, 0)
+	if cut <= 0 {
+		return 0
+	}
+	spans, _ := v.matchSpans(s, false)
+	for moved := true; moved; {
+		moved = false
+		for _, sp := range spans {
+			if sp[0] < cut && cut < sp[1] {
+				cut, moved = sp[0], true
+			}
+		}
+	}
+	return cut
+}
+
+// matchSpans returns the byte ranges of every occurrence of every contained
+// form in s (strong ones only with strongOnly), overlaps included, and
+// whether s as a whole equals a whole-payload (short) form.
+func (v *Values) matchSpans(s string, strongOnly bool) (spans [][2]int, whole bool) {
 	for _, e := range v.snapshot() {
 		if strongOnly && !e.strong {
 			continue
 		}
 		if !e.contained {
-			if s == e.form {
-				return Redacted
-			}
+			whole = whole || s == e.form
 			continue
 		}
 		for from := 0; from < len(s); {
@@ -190,7 +286,14 @@ func (v *Values) redact(s string, strongOnly bool) string {
 			from = start + 1
 		}
 	}
-	return replaceSpans(s, spans)
+	return spans, whole
+}
+
+// isPEMArmour reports whether line is a PEM "-----BEGIN ...-----" or
+// "-----END ...-----" boundary.
+func isPEMArmour(line string) bool {
+	return strings.HasSuffix(line, "-----") &&
+		(strings.HasPrefix(line, "-----BEGIN ") || strings.HasPrefix(line, "-----END "))
 }
 
 // isStrong reports whether a trimmed secret is strong (MinStrongLen,

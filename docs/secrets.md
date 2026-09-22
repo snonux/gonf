@@ -168,13 +168,36 @@ an unnamed `Command`, whose ID is its whole argv: give it `WithName`. Task
 names, descriptions and host values are not ops and are not scanned; never
 put secret values there.
 
-Everything the controller prints passes through the registry: log lines
-(`logger.SetRedactor`, e.g. a `-verbose` registration line or a misuse
-message), the apply summary (`changed Command[...]`), CLI error messages,
-and the output of the processes it relays — a local elevated apply child
-(sudo/doas) and a remote gonf over ssh, neither of which has the registry —
-which is redacted line by line (`logger.RedactingWriter`). The
-destination's own logs, when read on the destination (or a remote's system
+On the controller these outputs pass through the registry:
+
+- log lines (`logger.SetRedactor`), e.g. a `-verbose` registration line or
+  a misuse message;
+- the apply summary (`changed Command[...]`), CLI error and warning
+  messages (every CLI write to stderr), and the push/preview summary lines
+  — single-host and cluster/fleet — which all go through one writer
+  (`api`'s `pushOutput` seam);
+- the output of the processes gonf relays that carry op IDs and values: a
+  local elevated apply child (sudo/doas) and a remote gonf over ssh, neither
+  of which has the registry. They are redacted line by line
+  (`logger.RunRelayed`, a `logger.RedactingWriter`). Every strong line of a
+  multi-line secret (a PEM key body line; not the shared `-----BEGIN/END
+  ...-----` armour) is a redact-only form of its own, so such a secret is
+  hidden line by line too; these line forms are used only to redact output,
+  never to mark or refuse an op, because a line such as `[Interface]`, a
+  path or a certificate line is no evidence that an op carries the secret.
+  An unterminated run longer than 64 KiB is forwarded only up to a point no
+  secret can still cross (`secret.MaxSplitGuard`; a secret longer than that
+  is redacted only where a forwarded chunk holds it whole).
+- When the relayed process has exited (or was killed by its context) but a
+  descendant still holds its output — an orphaned root `gonf apply` after
+  sudo was killed, under sudo without `use_pty` — gonf returns after at most
+  `logger.RelayWaitDelay` (2 s) and keeps draining that output in the
+  background, redacted: the descendant is never killed by SIGPIPE, and its
+  later lines may appear after gonf moved on. A clean exit stays a success.
+
+Not redacted, because they carry no op IDs or values: flag usage text and
+the output of the `scp` and `go build` runs that install the gonf binary.
+The destination's own logs, read on the destination (or a remote's system
 journal), are limited by the rules above.
 
 The scan recognises a value
@@ -207,6 +230,10 @@ Limits of the scan, by design:
   bytes inside every payload would mark everything. The rule is decided on
   the trimmed secret, so neither `"123\n"` nor a short secret's JSON
   escaping becomes a substring pattern.
+- A multi-line secret (a PEM key, a WireGuard config) marks an op only when
+  the op carries it whole; a payload holding only some of its lines is not
+  marked, though those lines are still redacted in relayed output and the
+  preview.
 - A transformation beyond trimming — base64, hashing, splitting, case
   changes — hides the value. Keep such derived material out of plans, or
   resolve the derived form through the provider itself.

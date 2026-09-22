@@ -92,15 +92,15 @@ func defaultElevatedApply(ctx context.Context, mode privilege.Mode, ops []plan.O
 		defer cancel()
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Stdin = bytes.NewReader(nil)
 	// The elevated child has no secret registry of its own: its log lines
 	// and summary reach the operator's terminal through the controller's
-	// redactor, line by line (logger.RedactingWriter).
-	out := logger.NewRedactingWriter(os.Stderr)
-	cmd.Stdout = out
-	cmd.Stderr = out
-	cmd.Stdin = bytes.NewReader(nil)
-	err = cmd.Run()
-	_ = out.Close()
+	// redactor, line by line. A descendant still holding the relay pipe after
+	// the child exited or was killed (an orphaned root gonf apply once the
+	// context killed sudo) delays the return by at most logger.RelayWaitDelay;
+	// its later output keeps being relayed in the background, so it is never
+	// killed by SIGPIPE (logger.RunRelayed).
+	err = logger.RunRelayed(cmd, os.Stderr)
 	if err != nil && ctx.Err() != nil {
 		return fmt.Errorf("%w (elevated apply killed by context: %v)", ctx.Err(), err)
 	}

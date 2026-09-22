@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/snonux/gonf/internal/inventory"
+	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/internal/orchestrate"
 	"github.com/snonux/gonf/internal/remote"
 	"github.com/snonux/gonf/plan"
@@ -26,17 +27,14 @@ import (
 // pushOutput overrides every push/preview summary line's destination when a
 // test sets it: recordAndPush's single-host line below, and groupRun's
 // cluster/fleet line via groupRun.writer/orchestrate.Group.Writer/
-// remote.Group.Writer. Left nil (every production run), each layer falls
-// back to the CURRENT os.Stderr instead of a value cached here at package
-// init — recordAndPush re-reads os.Stderr on every call, and a nil
-// groupRun.writer() result reaches remote.Fanout's own os.Stderr fallback —
-// so testutil.CaptureStderr's os.Stderr swap still works once this seam
-// exists, and every summary line stays byte-identical by default. Tests set
-// it (like the remote package's SSHRunner/ensureRuntime seams) to assert on
-// the summary text without redirecting the process-wide os.Stderr; tests
-// using it must not run in parallel. A future output policy (e.g. 062's
-// controller-side secret redaction) wraps this one variable instead of
-// touching every call site.
+// remote.Group.Writer. Left nil (every production run), summaryOutput falls
+// back to the CURRENT os.Stderr, read on every call instead of cached here
+// at package init, so testutil.CaptureStderr's os.Stderr swap still works.
+// Either way summaryOutput wraps the destination in the controller's secret
+// redactor; the lines stay byte-identical when they quote no secret. Tests
+// set it (like the remote package's SSHRunner/ensureRuntime seams) to
+// assert on the summary text without redirecting the process-wide
+// os.Stderr; tests using it must not run in parallel.
 var pushOutput io.Writer
 
 // groupRun is one cluster or fleet run request: the remote.Mode chosen by
@@ -53,9 +51,23 @@ type groupRun struct {
 }
 
 // writer is r's Fanout summary destination: the package-wide pushOutput
-// seam, shared with recordAndPush's single-host line.
+// seam, shared with recordAndPush's single-host line, through the
+// controller's secret redactor (summaryOutput).
 func (r groupRun) writer() io.Writer {
-	return pushOutput
+	return summaryOutput()
+}
+
+// summaryOutput is where every push/preview summary line goes: pushOutput
+// when a test set it, else the os.Stderr of the moment (read on every call,
+// so testutil.CaptureStderr's swap still reaches it), each write passed
+// through the controller's secret redactor (logger.NewRedactedWriter), so a
+// plan ID or destination that quotes a resolved secret is never printed.
+func summaryOutput() io.Writer {
+	w := pushOutput
+	if w == nil {
+		w = os.Stderr
+	}
+	return logger.NewRedactedWriter(w)
 }
 
 // recordAndPush validates mode, records tasks with selected as the ForHosts
@@ -98,11 +110,7 @@ func recordAndPush(ctx context.Context, mode remote.Mode, t PushTarget, planID s
 	if mode == remote.Preview {
 		preposition = "on"
 	}
-	w := pushOutput
-	if w == nil {
-		w = os.Stderr
-	}
-	_, _ = fmt.Fprintf(w, "%s %s (%d ops) %s %s\n", mode.Verb(), planID, len(d.Ops), preposition, t.Destination())
+	_, _ = fmt.Fprintf(summaryOutput(), "%s %s (%d ops) %s %s\n", mode.Verb(), planID, len(d.Ops), preposition, t.Destination())
 	return nil
 }
 
