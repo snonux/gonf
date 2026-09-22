@@ -110,31 +110,32 @@ type Option = func(any)
 // They remain small so resource types only implement the capabilities they
 // actually support.
 type (
-	Owner            interface{ SetOwner(string) }
-	Grouped          interface{ SetGroup(string) }
-	Moded            interface{ SetMode(os.FileMode) }
-	Sourced          interface{ SetSource(string) }
-	SourceGlobable   interface{ SetSourceGlob(string) }
-	SourceBaseable   interface{ SetSourceBase(string) }
-	Paramable        interface{ SetParam(string) }
-	Templateable     interface{ SetTemplate() }
-	TemplateDataable interface{ SetTemplateData(any) }
-	Validatable      interface{ SetValidation(string, []string) }
-	Contented        interface{ SetContent(string) }
-	LineAddable      interface{ SetAddLine(string) }
-	LineRemovable    interface{ SetRemoveLine(string) }
-	LinesAddable     interface{ AddLines(...string) }
-	LinesRemovable   interface{ RemoveLines(...string) }
-	FileModed        interface{ SetFileMode(os.FileMode) }
-	Prunable         interface{ SetPrune() }
-	Absentable       interface{ SetAbsent() }
-	Latestable       interface{ SetLatest() }
-	Dependable       interface{ AddDependency(string) }
-	Named            interface{ SetName(string) }
-	Dirable          interface{ SetDir(string) }
-	Envable          interface{ SetEnv(map[string]string) }
-	Creatable        interface{ SetCreates(string) }
-	Guardable        interface {
+	Owner             interface{ SetOwner(string) }
+	Grouped           interface{ SetGroup(string) }
+	Moded             interface{ SetMode(os.FileMode) }
+	Sourced           interface{ SetSource(string) }
+	SourceGlobable    interface{ SetSourceGlob(string) }
+	SourceBaseable    interface{ SetSourceBase(string) }
+	Paramable         interface{ SetParam(string) }
+	Templateable      interface{ SetTemplate() }
+	TemplateDataable  interface{ SetTemplateData(any) }
+	Validatable       interface{ SetValidation(string, []string) }
+	Contented         interface{ SetContent(string) }
+	LineAddable       interface{ SetAddLine(string) }
+	LineRemovable     interface{ SetRemoveLine(string) }
+	LinesAddable      interface{ AddLines(...string) }
+	LinesRemovable    interface{ RemoveLines(...string) }
+	KeyedLineSettable interface{ SetKeyedLine(key, line string) }
+	FileModed         interface{ SetFileMode(os.FileMode) }
+	Prunable          interface{ SetPrune() }
+	Absentable        interface{ SetAbsent() }
+	Latestable        interface{ SetLatest() }
+	Dependable        interface{ AddDependency(string) }
+	Named             interface{ SetName(string) }
+	Dirable           interface{ SetDir(string) }
+	Envable           interface{ SetEnv(map[string]string) }
+	Creatable         interface{ SetCreates(string) }
+	Guardable         interface {
 		SetUnless(*Guard)
 		SetOnlyIf(*Guard)
 	}
@@ -620,6 +621,25 @@ func WithLine(content string) fileOption {
 func WithoutLine(content string) fileOption {
 	return fileOption(func(target any) {
 		requires(target, "WithoutLine", func(r LineRemovable) { r.SetRemoveLine(content) })
+	})
+}
+
+// WithKeyedLine owns the one line of a shared file that starts with key (a
+// literal prefix such as `export PKG_PATH=`), where an exact WithLine cannot
+// express that ownership: a legacy variant (quoted where the recipe is
+// unquoted, or an older value) would otherwise stay beside the new line as a
+// duplicate, conflicting setting. The first existing line starting with key
+// is replaced in place by line, every further one is removed, and line is
+// appended when no line starts with key; all other lines, comments and their
+// order are preserved. line must itself start with key, so the edit
+// converges. Within one File, a key may be declared once (or repeated with
+// the same line), must not be a prefix of another key, and must not prefix a
+// WithLine/WithoutLine line: those overlaps are ownership conflicts and fail
+// when the resource is declared. Like the other line edits it cannot combine
+// with WithContent/WithSource or WithValidation.
+func WithKeyedLine(key, line string) fileOption {
+	return fileOption(func(target any) {
+		requires(target, "WithKeyedLine", func(r KeyedLineSettable) { r.SetKeyedLine(key, line) })
 	})
 }
 

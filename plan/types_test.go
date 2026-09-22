@@ -22,7 +22,7 @@ func TestSupportsVersion(t *testing.T) {
 	}
 }
 
-// TestSchemaBumpsArePinned pins the config_set and sensitive bumps: a merge
+// TestSchemaBumpsArePinned pins the config_set, sensitive and keyed_lines bumps: a merge
 // that loses one would let an older destination accept a plan whose
 // config_set op it only discovers mid-apply, after earlier ops already
 // mutated the host, or apply a secret-bearing op while echoing its
@@ -31,9 +31,9 @@ func TestSupportsVersion(t *testing.T) {
 func TestSchemaBumpsArePinned(t *testing.T) {
 	t.Parallel()
 	if VersionUserManageHome != 19 || VersionWhenRequire != 20 || VersionConfigSet != 21 ||
-		VersionSensitive != 22 || CurrentVersion != VersionSensitive {
-		t.Fatalf("versions: manage_home=%d require=%d config_set=%d sensitive=%d current=%d, want 19/20/21/22/22",
-			VersionUserManageHome, VersionWhenRequire, VersionConfigSet, VersionSensitive, CurrentVersion)
+		VersionSensitive != 22 || VersionKeyedLines != 23 || CurrentVersion != VersionKeyedLines {
+		t.Fatalf("versions: manage_home=%d require=%d config_set=%d sensitive=%d keyed_lines=%d current=%d, want 19/20/21/22/23/23",
+			VersionUserManageHome, VersionWhenRequire, VersionConfigSet, VersionSensitive, VersionKeyedLines, CurrentVersion)
 	}
 }
 

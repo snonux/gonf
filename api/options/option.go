@@ -43,6 +43,7 @@ type (
 	LineRemovable          = resourceoptions.LineRemovable
 	LinesAddable           = resourceoptions.LinesAddable
 	LinesRemovable         = resourceoptions.LinesRemovable
+	KeyedLineSettable      = resourceoptions.KeyedLineSettable
 	FileModed              = resourceoptions.FileModed
 	Prunable               = resourceoptions.Prunable
 	Absentable             = resourceoptions.Absentable
@@ -151,6 +152,7 @@ var (
 	WithoutLines     = resourceoptions.WithoutLines
 	WithLine         = resourceoptions.WithLine
 	WithoutLine      = resourceoptions.WithoutLine
+	WithKeyedLine    = resourceoptions.WithKeyedLine
 	WithFileMode     = resourceoptions.WithFileMode
 	WithPrune        = resourceoptions.WithPrune
 )

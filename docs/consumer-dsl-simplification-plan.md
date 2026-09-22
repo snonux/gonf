@@ -359,7 +359,7 @@ relayd (task t52, conf 7ec3015), `User` `WithManageHome` (task s52, conf
 | Install existing systemd units/drop-ins, reload once, activate selected units | Core `SystemdUnits` composition; reuse `SystemdTimer` for generated simple timers | Next |
 | Create local users/groups; opt into updating specific existing attributes | Extend core User deliberately; add standalone Group only with an explicit group-only use case | Next |
 | `/etc/login.conf.d` installation plus database rebuild | Small BSD login-class resource with real platform behavior checked | Next |
-| Config lines in shared rc/profile/daily files | Core keyed/block editing where exact-line edits are insufficient; explicit ownership, not whole-file replacement | Next |
+| Config lines in shared rc/profile/daily files | Core keyed/block editing where exact-line edits are insufficient; explicit ownership, not whole-file replacement. Status (r52): `WithKeyedLine(key, line)` on branch `r52-core` (plan schema 23, declared on demand); unreleased, conf adoption for the frontend PKG_PATH line waits for the release | Next |
 | Per-host typed data inside destination guards | API helper, e.g. `ForHosts[T](key, fn)` using current cluster inventory | Next |
 | Secrets from an external store | Provider interface plus sensitive references/content handling; foostore adapter outside recipe bodies | Parallel prerequisite track |
 | Zone publication and serial lifecycle | Frontend publisher wrapper; optional non-owning DNS-zone helper | `d52` contract; `e52` implementation |

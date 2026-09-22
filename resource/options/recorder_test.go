@@ -38,6 +38,7 @@ func (r *recorder) SetAddLine(v string)        { r.record("SetAddLine", v) }
 func (r *recorder) SetRemoveLine(v string)     { r.record("SetRemoveLine", v) }
 func (r *recorder) AddLines(v ...string)       { r.record("AddLines", v) }
 func (r *recorder) RemoveLines(v ...string)    { r.record("RemoveLines", v) }
+func (r *recorder) SetKeyedLine(k, v string)   { r.record("SetKeyedLine", []any{k, v}) }
 func (r *recorder) SetFileMode(v os.FileMode)  { r.record("SetFileMode", v) }
 func (r *recorder) SetPrune()                  { r.record("SetPrune", nil) }
 func (r *recorder) SetAbsent()                 { r.record("SetAbsent", nil) }

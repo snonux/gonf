@@ -4,10 +4,10 @@
 // Layout: file.go holds the File type, its option setters, build, identity,
 // the apply dispatch and the Present/Ensure constructors. The rest is split
 // by responsibility: template.go (content resolution and rendering),
-// lineedit.go (WithLine(s)/WithoutLine(s)), read.go (non-blocking reads of
-// existing and source content), checksum.go (atomic content writes),
-// validation.go (WithValidation candidates), attributes.go (mode and
-// ownership), ensure.go (absence and EnsureFile), planwire.go (plan draft,
+// lineedit.go (WithLine(s)/WithoutLine(s)/WithKeyedLine), read.go
+// (non-blocking reads of existing and source content), checksum.go (atomic
+// content writes), validation.go (WithValidation candidates), attributes.go
+// (mode and ownership), ensure.go (absence and EnsureFile), planwire.go (plan draft,
 // ToOp and plan apply) and target.go (unregistered Target for composites).
 package file
 
@@ -74,13 +74,16 @@ type File struct {
 	// templateFacts feeds {{.Gonf.*}}: build() seeds it from
 	// localTemplateFacts, and plan apply overrides it with the plan's
 	// facts (ensureWithFacts) so -profile is honored.
-	templateFacts   templateFacts
-	user            string
-	group           string
-	userSet         bool // WithOwner was called explicitly (build()'s default does not count)
-	groupSet        bool // WithGroup was called explicitly (build()'s default does not count)
-	addLines        []string
-	removeLines     []string
+	templateFacts templateFacts
+	user          string
+	group         string
+	userSet       bool // WithOwner was called explicitly (build()'s default does not count)
+	groupSet      bool // WithGroup was called explicitly (build()'s default does not count)
+	addLines      []string
+	removeLines   []string
+	// keyedLines are the WithKeyedLine edits in declaration order; exact
+	// repeats are dropped, conflicts are refused by validateKeyedLines.
+	keyedLines      []resource.KeyedLine
 	mode            os.FileMode
 	modeSet         bool
 	preserveContent bool
@@ -155,6 +158,16 @@ func (f *File) RemoveLines(lines ...string) {
 	f.removeLines = appendUniqueLines(f.removeLines, lines...)
 }
 
+// SetKeyedLine implements opt.KeyedLineSettable. An exact repeat of an
+// already declared key and line is dropped; any other overlap is left for
+// build (validateKeyedLines) to refuse, naming the path.
+func (f *File) SetKeyedLine(key, line string) {
+	edit := resource.KeyedLine{Key: key, Line: line}
+	if !slices.Contains(f.keyedLines, edit) {
+		f.keyedLines = append(f.keyedLines, edit)
+	}
+}
+
 // SetOwner implements opt.Owner. It marks ownership as explicitly configured
 // so plan recording carries it to the destination (build()'s user.Current()
 // default stays unrecorded to avoid churning remote hosts to the ssh user).
@@ -179,18 +192,19 @@ func (f *File) SetMode(mode os.FileMode) {
 var (
 	// Register takes the value as a resource.Applier; asserting it here reports a
 	// renamed or re-signed Apply at the declaration, not at the Register call.
-	_ resource.Applier     = (*File)(nil)
-	_ opt.LineAddable      = (*File)(nil)
-	_ opt.LineRemovable    = (*File)(nil)
-	_ opt.LinesAddable     = (*File)(nil)
-	_ opt.LinesRemovable   = (*File)(nil)
-	_ opt.Named            = (*File)(nil)
-	_ opt.Paramable        = (*File)(nil)
-	_ opt.Templateable     = (*File)(nil)
-	_ opt.TemplateDataable = (*File)(nil)
-	_ opt.Validatable      = (*File)(nil)
-	_ opt.Sensitivable     = (*File)(nil)
-	_ opt.MisuseReporter   = (*File)(nil)
+	_ resource.Applier      = (*File)(nil)
+	_ opt.LineAddable       = (*File)(nil)
+	_ opt.LineRemovable     = (*File)(nil)
+	_ opt.LinesAddable      = (*File)(nil)
+	_ opt.LinesRemovable    = (*File)(nil)
+	_ opt.KeyedLineSettable = (*File)(nil)
+	_ opt.Named             = (*File)(nil)
+	_ opt.Paramable         = (*File)(nil)
+	_ opt.Templateable      = (*File)(nil)
+	_ opt.TemplateDataable  = (*File)(nil)
+	_ opt.Validatable       = (*File)(nil)
+	_ opt.Sensitivable      = (*File)(nil)
+	_ opt.MisuseReporter    = (*File)(nil)
 )
 
 func build(path string, opts ...opt.FileOption) (*File, error) {
@@ -216,7 +230,10 @@ func build(path string, opts ...opt.FileOption) (*File, error) {
 	}
 
 	if f.lineEdit() && (f.contentSet || f.source != "") {
-		return nil, fmt.Errorf("file %s: WithLine(s)/WithoutLine(s) cannot be combined with WithContent/WithSource", path)
+		return nil, fmt.Errorf("file %s: WithLine(s)/WithoutLine(s)/WithKeyedLine cannot be combined with WithContent/WithSource", path)
+	}
+	if err := f.validateKeyedLines(path); err != nil {
+		return nil, err
 	}
 	if err := f.validateConfiguration(path); err != nil {
 		return nil, err
@@ -236,7 +253,7 @@ func (f *File) validateConfiguration(path string) error {
 		return fmt.Errorf("file %s: WithValidation cannot combine with IsAbsent", path)
 	}
 	if f.lineEdit() {
-		return fmt.Errorf("file %s: WithValidation cannot combine with WithLine(s)/WithoutLine(s)", path)
+		return fmt.Errorf("file %s: WithValidation cannot combine with WithLine(s)/WithoutLine(s)/WithKeyedLine", path)
 	}
 	if !f.contentSet {
 		return fmt.Errorf("file %s: WithValidation requires WithContent or WithSource", path)
@@ -348,7 +365,7 @@ func EnsurePresent(path string, opts ...opt.FileOption) error {
 		return err
 	}
 	if f.contentSet || f.lineEdit() || f.Absent || f.validationSet {
-		return fmt.Errorf("file %s: EnsureFile cannot combine WithContent/WithSource, WithLine(s)/WithoutLine(s), or IsAbsent", path)
+		return fmt.Errorf("file %s: EnsureFile cannot combine WithContent/WithSource, WithLine(s)/WithoutLine(s)/WithKeyedLine, or IsAbsent", path)
 	}
 	f.preserveContent = true
 	return f.apply()
@@ -414,7 +431,7 @@ func buildSecret(path string, content []byte, opts ...opt.FileOption) (*File, er
 	}
 	if probe.contentSet || probe.shouldRenderTemplate() || probe.lineEdit() || probe.Absent {
 		return nil, fmt.Errorf("file %s: SecretFile sets the content itself; it cannot combine WithContent/WithSource, "+
-			"WithTemplate/WithTemplateData or a .tmpl path, WithLine(s)/WithoutLine(s) or IsAbsent", path)
+			"WithTemplate/WithTemplateData or a .tmpl path, WithLine(s)/WithoutLine(s)/WithKeyedLine or IsAbsent", path)
 	}
 	f, err := build(path, append([]opt.FileOption{opt.WithContent(string(content))}, opts...)...)
 	if err != nil {
@@ -441,7 +458,7 @@ func PresentEnsure(path string, opts ...opt.FileOption) resource.Resource {
 	}
 	if f.contentSet || f.lineEdit() || f.Absent || f.validationSet {
 		return resource.Refuse("EnsureFile", path, fmt.Errorf(
-			"file %s: EnsureFile cannot combine WithContent/WithSource, WithLine(s)/WithoutLine(s), or IsAbsent", path))
+			"file %s: EnsureFile cannot combine WithContent/WithSource, WithLine(s)/WithoutLine(s)/WithKeyedLine, or IsAbsent", path))
 	}
 	f.preserveContent = true
 	f.resource = resource.Register("EnsureFile", f.resourceName(), f, f.DependsOn.IDs...)

@@ -30,6 +30,7 @@ func fullDraft(id string) resource.PlanDraft {
 		SupplementaryGroups: []string{"wheel"},
 		AddLines:            []string{"add"},
 		RemoveLines:         []string{"remove"},
+		KeyedLines:          []resource.KeyedLine{{Key: "k=", Line: "k=v"}},
 		Args:                []string{"arg"},
 		Env:                 map[string]string{"K": "v"},
 		Unless:              &resource.PlanGuardDraft{Bin: "test", Args: []string{"-e", "/x"}, ExpectExit: &exit},

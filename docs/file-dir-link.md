@@ -7,6 +7,7 @@ File("/etc/motd", WithContent("hello\n"), WithMode(0o644))
 File("/etc/app.conf", WithSource("assets/app.conf.tmpl"))
 File("/etc/lines.conf", WithLines("keep=1", "other=1"), WithoutLines("stale", "obsolete"))
 File("/etc/rc.conf.local", WithLine(`httpd_flags=""`), WithName("rc-conf-httpd-flags"))
+File("/root/.profile", WithKeyedLine("export PKG_PATH=", `export PKG_PATH="https://repo/"`))
 EnsureFile("/etc/daily.local", WithMode(0o644))
 NoFile("/tmp/old.txt")
 
@@ -29,6 +30,7 @@ NoLink("/tmp/stale-link")
 | `WithSource` | File / Dir | Copy from path or template |
 | `WithSourceGlob` | Dir | Install glob matches into the directory by basename |
 | `WithLines` / `WithoutLines` | File | Ensure / remove lines in declaration order (duplicates are ignored); singular `WithLine` / `WithoutLine` remain compatibility wrappers |
+| `WithKeyedLine(key, line)` | File | Own the one line starting with the literal prefix `key` in a shared file; see below |
 | `WithName` | File / Command | Explicit resource identity. A named File keeps managing its supplied path but is registered and reported as `File[name]`, allowing separate line edits to one file and precise `DependsOn` / `OnChange` wiring. Without it, file IDs remain `File[path]` and duplicate registrations still fail. |
 | `WithOwner` / `WithGroup` / `WithMode` | File / Dir | Ownership and mode. Recorded in plan ops (`owner`/`group`, schema v4) and enforced on apply; owner is a user name, group is a numeric gid or group name (resolved via `os/user`). Only explicitly set ownership is recorded — the build-time default (current user) is not pushed to remote hosts, and absent files carry no ownership. `WithMode` accepts setuid/setgid/sticky: either raw octal (e.g. `0o4755`) or Go flag form (`0o755\|os.ModeSetuid`); both normalize to the flag form, lower to a four-digit plan wire mode (`"04755"`), and land on disk (apply chowns before it chmods so unprivileged chown cannot clear the special bits). Bits above `0o7777` are rejected. Modes without owner-read (e.g. `0o000`) are applied on non-root runs too: the attribute step falls back to path-based `chmod`/`chown` when the descriptor-based open is denied (never through a symlink at the target). |
 | `WithFileMode` | Dir | Mode for files created from a source tree (same setuid/setgid/sticky handling as `WithMode`) |
@@ -38,6 +40,40 @@ NoLink("/tmp/stale-link")
 | `DependsOn` | all | Apply after other resources |
 
 Helpers that wrap these: [helpers.md](helpers.md) (`InstallFile`, `SyncDir`, `EnsureDir`, `EnsureFile`, `LinkIfExists`, `SymlinkMap`). `EnsureFile` creates an empty regular file only when absent; existing regular files retain their content while explicitly supplied mode, owner, and group converge.
+
+### Keyed lines in shared files
+
+`WithLine` matches whole lines byte for byte, so it cannot take over a
+setting whose existing line differs: a quoted legacy
+`export PKG_PATH="…"`, an older value, or an administrator's edit would stay
+beside the new line as a second, conflicting assignment. `WithKeyedLine(key,
+line)` owns the setting instead of the text: the first existing line starting
+with `key` (a literal prefix, not a pattern) is replaced **in place** by
+`line`, every further line starting with `key` is removed, and `line` is
+appended when no line starts with `key`. Every other line, comment and the
+file's order are left alone, so it is safe on shared rc/profile/daily files
+that are not owned whole. A replaced or dropped differing line is logged
+(key and counts only, not the old text), and the file change is reported
+like any other content change.
+
+Rules, checked when the resource is declared (misuse fails fast):
+
+- `line` must start with `key` and must not contain a line break;
+- within one File, a key is declared once (an exact repeat is ignored), and
+  no key may be a prefix of another (`"A"` and `"AB="` would both own
+  `AB=1`) — include the delimiter, e.g. `"export PKG_PATH="`;
+- no `WithLine`/`WithoutLine` line may start with a key: the keyed edit
+  already owns it;
+- like the other line edits it cannot combine with `WithContent`,
+  `WithSource`, `WithValidation`, `EnsureFile` or `SecretFile`.
+
+Edits apply in a fixed order: `WithoutLine(s)`, then `WithKeyedLine`, then
+`WithLine(s)`. Two separate File declarations of one path that key the same
+setting differently are not detected and would fight; keep one owner per
+setting. On the wire the edit is a file op's `keyed_lines` (plan schema 23).
+Only a plan containing a keyed edit declares v23, so older destinations
+refuse it at the header gate instead of silently ignoring the edit, while
+plans without one keep their earlier header.
 
 ### Single-file candidate validation
 

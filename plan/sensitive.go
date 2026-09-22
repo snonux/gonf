@@ -10,19 +10,25 @@ import "fmt"
 const PreviewKind Kind = "plan_preview"
 
 // RequiredVersion is the plan schema a recorded plan's header declares: the
-// lowest version whose destinations apply ops faithfully. Schema 22 only
-// adds the sensitive field, so a plan without a sensitive op is emitted as
-// v21 and still applies on a v0.15.0 destination; one with a sensitive op
-// needs v22, and an older destination refuses it at its header gate. Every
-// earlier bump was emitted unconditionally, so v21 is the floor. A future
-// bump must extend this (TestRequiredVersion pins it to CurrentVersion 22).
+// lowest version whose destinations apply ops faithfully. Schemas 22 and 23
+// are declared on demand: v22 only adds the sensitive field and v23 only the
+// file keyed_lines field, so a plan with neither is emitted as v21 and still
+// applies on a v0.15.0 destination; one with a keyed line edit needs v23 and
+// one with a sensitive op (but no keyed edit) v22, and an older destination
+// refuses it at its header gate. Every earlier bump was emitted
+// unconditionally, so v21 is the floor. A future bump must extend this
+// (TestRequiredVersion pins it to CurrentVersion).
 func RequiredVersion(ops []Op) int {
+	version := VersionSensitive - 1
 	for _, op := range ops {
+		if len(op.KeyedLines) != 0 {
+			return VersionKeyedLines
+		}
 		if op.Sensitive {
-			return VersionSensitive
+			version = VersionSensitive
 		}
 	}
-	return VersionSensitive - 1
+	return version
 }
 
 // SensitiveIDs returns the identity of every op marked Sensitive, in plan

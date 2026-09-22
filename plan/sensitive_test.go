@@ -23,11 +23,12 @@ func TestSensitiveIDs(t *testing.T) {
 }
 
 // TestRequiredVersion pins the on-demand header: v22 only with a sensitive
-// op. It also pins CurrentVersion, so a later bump must revisit
-// RequiredVersion instead of silently emitting too old a header.
+// op, v23 with a keyed line edit (sensitive or not). It also pins
+// CurrentVersion, so a later bump must revisit RequiredVersion instead of
+// silently emitting too old a header.
 func TestRequiredVersion(t *testing.T) {
 	t.Parallel()
-	if CurrentVersion != VersionSensitive {
+	if CurrentVersion != VersionKeyedLines {
 		t.Fatalf("CurrentVersion %d: extend RequiredVersion for the new schema", CurrentVersion)
 	}
 	plain := []Op{{Op: KindFile, Path: "/a"}}
@@ -36,6 +37,16 @@ func TestRequiredVersion(t *testing.T) {
 	}
 	if got := RequiredVersion(append(plain, Op{Op: KindFile, Path: "/k", Sensitive: true})); got != VersionSensitive {
 		t.Fatalf("RequiredVersion(sensitive) = %d, want %d", got, VersionSensitive)
+	}
+	keyed := Op{Op: KindFile, Path: "/p", KeyedLines: []KeyedLine{{Key: "k=", Line: "k=v"}}}
+	for _, ops := range [][]Op{
+		append(slices.Clone(plain), keyed),
+		{{Op: KindFile, Path: "/k", Sensitive: true}, keyed},
+		{keyed, {Op: KindFile, Path: "/k", Sensitive: true}},
+	} {
+		if got := RequiredVersion(ops); got != VersionKeyedLines {
+			t.Fatalf("RequiredVersion(%v) = %d, want %d", ops, got, VersionKeyedLines)
+		}
 	}
 }
 

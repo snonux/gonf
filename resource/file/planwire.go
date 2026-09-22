@@ -41,6 +41,7 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		ValidationArgs: slices.Clone(d.ValidationArgs),
 		AddLines:       slices.Clone(d.AddLines),
 		RemoveLines:    slices.Clone(d.RemoveLines),
+		KeyedLines:     wireKeyedLines(d.KeyedLines),
 		Absent:         d.Absent,
 		Deps:           slices.Clone(d.Deps),
 	}
@@ -93,7 +94,7 @@ func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	// build() defaults (apply-side user) identical to direct resource use.
 	ownership := plan.OwnerGroupOptions(op)
 
-	if len(op.AddLines) != 0 || len(op.RemoveLines) != 0 || op.AddLine != "" || op.RemoveLine != "" {
+	if len(op.AddLines) != 0 || len(op.RemoveLines) != 0 || len(op.KeyedLines) != 0 || op.AddLine != "" || op.RemoveLine != "" {
 		return applyFileLines(path, op, ownership)
 	}
 	return applyFileContent(path, op, ownership, ctx)
@@ -116,6 +117,7 @@ func validatePlanValidation(path string, op plan.Op) error {
 		validationSet:  true,
 		addLines:       addLines,
 		removeLines:    removeLines,
+		keyedLines:     draftKeyedLines(op.KeyedLines),
 	}
 	f.Absent = op.Absent
 	return f.validateConfiguration(path)
@@ -167,7 +169,7 @@ func planLines(op plan.Op) (addLines, removeLines []string) {
 
 func applyFileLines(path string, op plan.Op, ownership []opt.FileDirOption) error {
 	if op.ContentB64 != "" || op.Blob != "" {
-		return fmt.Errorf("file: add_line/remove_line cannot combine with content_b64/blob")
+		return fmt.Errorf("file: add_line/remove_line/keyed_lines cannot combine with content_b64/blob")
 	}
 	var opts []opt.FileOption
 	if op.Name != "" {
@@ -176,6 +178,9 @@ func applyFileLines(path string, op plan.Op, ownership []opt.FileDirOption) erro
 	addLines, removeLines := planLines(op)
 	if len(removeLines) != 0 {
 		opts = append(opts, opt.WithoutLines(removeLines...))
+	}
+	for _, edit := range op.KeyedLines {
+		opts = append(opts, opt.WithKeyedLine(edit.Key, edit.Line))
 	}
 	if len(addLines) != 0 {
 		opts = append(opts, opt.WithLines(addLines...))
@@ -291,6 +296,31 @@ func fileContentOptions(op plan.Op, content []byte, ownership []opt.FileDirOptio
 	return opts, nil
 }
 
+// wireKeyedLines and draftKeyedLines convert keyed line edits between the
+// draft and wire types (plan imports resource, so neither can be the other).
+// Both keep nil for no edits, so an op without keyed lines encodes as before.
+func wireKeyedLines(edits []resource.KeyedLine) []plan.KeyedLine {
+	if len(edits) == 0 {
+		return nil
+	}
+	out := make([]plan.KeyedLine, len(edits))
+	for i, edit := range edits {
+		out[i] = plan.KeyedLine{Key: edit.Key, Line: edit.Line}
+	}
+	return out
+}
+
+func draftKeyedLines(edits []plan.KeyedLine) []resource.KeyedLine {
+	if len(edits) == 0 {
+		return nil
+	}
+	out := make([]resource.KeyedLine, len(edits))
+	for i, edit := range edits {
+		out[i] = resource.KeyedLine{Key: edit.Key, Line: edit.Line}
+	}
+	return out
+}
+
 // planDraft records f as a "file" (or, for EnsureFile, "ensure_file") plan
 // draft: identity, attributes, line edits, validation, dependencies and the
 // explicit sensitivity here, the content through draftContent.
@@ -304,6 +334,7 @@ func (f *File) planDraft() resource.PlanDraft {
 		Absent:         f.Absent,
 		AddLines:       slices.Clone(f.addLines),
 		RemoveLines:    slices.Clone(f.removeLines),
+		KeyedLines:     slices.Clone(f.keyedLines),
 		ValidationBin:  f.validationBin,
 		ValidationArgs: slices.Clone(f.validationArgs),
 		Deps:           f.DependsOn.SortedIDs(),

@@ -30,6 +30,7 @@ func (d PlanDraft) Clone() PlanDraft {
 	c.SupplementaryGroups = slices.Clone(d.SupplementaryGroups)
 	c.AddLines = slices.Clone(d.AddLines)
 	c.RemoveLines = slices.Clone(d.RemoveLines)
+	c.KeyedLines = slices.Clone(d.KeyedLines)
 	c.Args = slices.Clone(d.Args)
 	c.Env = maps.Clone(d.Env)
 	c.Unless = cloneGuard(d.Unless)

@@ -65,6 +65,9 @@ func normalizeOp(op *Op) {
 	if len(op.RemoveLines) == 0 {
 		op.RemoveLines = nil
 	}
+	if len(op.KeyedLines) == 0 {
+		op.KeyedLines = nil
+	}
 	if len(op.ValidationArgs) == 0 {
 		op.ValidationArgs = nil
 	}

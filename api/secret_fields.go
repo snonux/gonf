@@ -64,6 +64,9 @@ var opFieldClasses = map[string]fieldClass{
 	// Payload: what the op writes, runs or compares.
 	"args[]": classPayload, "env{}": classPayload, "env{key}": classPayload,
 	"add_lines[]": classPayload, "remove_lines[]": classPayload,
+	// A keyed line is written content; its key is a literal prefix of it, so
+	// it is payload too (a secret scan must look at both).
+	"keyed_lines[].key": classPayload, "keyed_lines[].line": classPayload,
 	"add_line": classPayload, "remove_line": classPayload,
 	"command": classPayload, "legacy_command": classPayload, "schedule": classPayload,
 	"cron_env[]": classPayload, "on_calendar": classPayload, "on_boot_sec": classPayload,

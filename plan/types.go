@@ -63,7 +63,18 @@ import "encoding/json"
 // gonf first and strict preview refuses (remote.RequireRemoteGonf). A
 // recorded plan declares v22 only when it has a sensitive op
 // (RequiredVersion); otherwise its header stays v21.
-const CurrentVersion = 22
+// Version 23 adds keyed_lines to file operations (WithKeyedLine, see
+// VersionKeyedLines). An older destination would ignore them: it would
+// leave a legacy or conflicting line in place, or skip a keyed-only edit
+// entirely, while reporting success, so it must refuse v23 at the header
+// gate. Like v22 it is declared on demand: only a plan with a keyed line
+// edit needs v23.
+const CurrentVersion = 23
+
+// VersionKeyedLines is the plan schema version that introduced the file op
+// keyed_lines field. Tests pin it so a merge that loses the bump (and so
+// lets an older destination silently ignore a keyed edit) fails loudly.
+const VersionKeyedLines = 23
 
 // VersionSensitive is the plan schema version that introduced the op
 // sensitive field. Tests pin it so a merge that loses the bump (and so lets
@@ -85,6 +96,13 @@ const VersionUserManageHome = 19
 // require field (the LoginClass OpenBSD requirement). Pinned by tests for the
 // same reason as VersionUserManageHome.
 const VersionWhenRequire = 20
+
+// KeyedLine is one file-op keyed line edit on the wire: Line owns the one
+// line of the file starting with the literal prefix Key.
+type KeyedLine struct {
+	Key  string `json:"key"`
+	Line string `json:"line"`
+}
 
 // supportedVersions is the set of plan schema versions this binary can apply.
 // Apply must refuse plans whose version is not in this set before any mutation.
@@ -110,6 +128,7 @@ var supportedVersions = map[int]struct{}{
 	19:             {},
 	20:             {},
 	21:             {},
+	22:             {},
 	CurrentVersion: {},
 }
 
@@ -344,6 +363,13 @@ type Op struct {
 	AddLines []string `json:"add_lines,omitempty"`
 	// RemoveLines removes matching lines from a file, in order.
 	RemoveLines []string `json:"remove_lines,omitempty"`
+	// KeyedLines (schema v23, VersionKeyedLines) are WithKeyedLine edits,
+	// applied after RemoveLines and before AddLines: each replaces the first
+	// line starting with its key in place, drops every further one, and is
+	// appended when none exists. An older destination would ignore the field
+	// and leave the legacy line (or skip the whole edit), so it must refuse
+	// v23 at the header gate.
+	KeyedLines []KeyedLine `json:"keyed_lines,omitempty"`
 	// AddLine and RemoveLine are accepted when applying pre-v14 plans. Current
 	// recording never sets them (resource.PlanDraft has no singular fields);
 	// they stay on the wire type only so old recorded plans decode and apply.

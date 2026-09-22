@@ -32,8 +32,8 @@ contract".
 ## Filesystem
 
 See [file-dir-link.md](file-dir-link.md): `WithContent`, `WithSource`,
-`WithSourceGlob`, `WithLine`, `WithoutLine`, `WithOwner`, `WithGroup`,
-`WithMode`, `WithFileMode`, `WithPrune`, `WithSymlink`, `WithHardlink`, and
+`WithSourceGlob`, `WithLine`, `WithoutLine`, `WithKeyedLine`, `WithOwner`,
+`WithGroup`, `WithMode`, `WithFileMode`, `WithPrune`, `WithSymlink`, `WithHardlink`, and
 `WithName`. A named File keeps its target path but gets the explicit
 `File[name]` identity needed when several declarations edit one path.
 

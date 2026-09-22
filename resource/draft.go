@@ -17,6 +17,14 @@ type PlanGuardDraft struct {
 	ExpectExit *int
 }
 
+// KeyedLine is one WithKeyedLine edit in a plan draft: Line owns the file's
+// one line starting with the literal prefix Key. plan.KeyedLine is its wire
+// twin (plan imports this package, so the draft cannot use the wire type).
+type KeyedLine struct {
+	Key  string
+	Line string
+}
+
 // PlanDraft is a package-neutral snapshot of a registered resource for plan
 // recording. It lives in this core package, not in plan, because plan
 // imports this package (plan.Handler.ToOp takes a PlanDraft), so this
@@ -145,6 +153,9 @@ type PlanDraft struct {
 	// always use the arrays. The singular wire fields on plan.Op exist solely
 	// so pre-v14 recorded plans still apply.
 	RemoveLines []string
+	// KeyedLines are WithKeyedLine edits: each owns the one line of the file
+	// that starts with its Key (see resource/file/lineedit.go).
+	KeyedLines []KeyedLine
 
 	// Name is a package name, command registry name, file resource identity,
 	// or similar label. A named file keeps its identity independently of Path.

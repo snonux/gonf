@@ -36,7 +36,8 @@ Signatures:
 `opts` are appended after the defaults, so `WithMode`, `WithOwner`,
 `WithGroup`, `WithTemplateData`, `DependsOn`, `WithName`, and even
 `WithSource`/`WithContent` (which then replace `src`) refine the fragment.
-`WithLine(s)`/`WithoutLine(s)` are refused: the fragment is owned whole.
+`WithLine(s)`/`WithoutLine(s)`/`WithKeyedLine` are refused: the fragment is
+owned whole.
 
 The returned handle is the two file ops. `OnChange(class)` therefore restarts
 the daemon only when the fragment was written, repaired or removed, or when a
