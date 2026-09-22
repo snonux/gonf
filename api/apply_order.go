@@ -9,8 +9,10 @@ import (
 
 // orderForPrivilegeSplit returns the ops of an api.Apply plan that has
 // elevated ops in an order that plan.SplitPrivilegeChunks can cut into
-// privilege chunks without a dependency pointing into a later chunk, and
-// with as few chunks (elevation round trips) as the dependency graph allows.
+// privilege chunks without a dependency pointing into a later chunk and
+// without a change-gated op landing in another chunk than a resource it
+// watches, and with as few chunks (elevation round trips) as those two rules
+// allow.
 //
 // Apply's op order carries no meaning of its own: RegisteredPlanDrafts
 // returns the drafts sorted by resource ID, and within one chunk plan.Apply
@@ -18,13 +20,23 @@ import (
 // an elevated Command depends on could land in a later chunk merely because
 // "Command[" sorts before "File[", and the pre-flight would refuse a valid
 // recipe. So Apply, unlike Run (whose chunk order is the recorded task
-// order), chooses the chunk order itself: a dependency sort that keeps each
-// privilege class together (sameClassKahn), tried once starting with each
-// class, keeping the order with fewer chunks. For two classes this greedy is
-// optimal for its starting class: emitting every ready op of the current
-// class before switching only removes ops from what is left, which never
-// needs more chunks. Ties keep the order that starts with the class of the
-// lowest-indexed ready op, so the result is deterministic.
+// order), chooses the chunk order itself. It gives every op a chunk level
+// (chunkLevels): the lowest level of its privilege class that is not below
+// any dependency's level (strictly above it for a dependency of the other
+// class), with a change-gated op and each same-class op it watches raised to
+// one common level, since change reports do not cross chunks. That least
+// assignment is the pointwise lowest one satisfying all rules, so its highest
+// level, and with it the chunk count, is the minimum for its starting class
+// (the class of level 0). Both starting classes are tried and the order with
+// fewer chunks is kept; ties keep the class of the lowest-indexed op without
+// deps, so the result is deterministic. The ops are then emitted level by
+// level in dependency order (levelOrder).
+//
+// A watch across privilege classes can never share a chunk, and a watch
+// whose two ends are forced apart by dependencies on the other class (A
+// watches B, A needs an elevated E that needs B) cannot either; such watches
+// are left to the pre-flight, which refuses them (validateApplyDeps), and do
+// not change the order.
 //
 // ops[0] is the plan header and stays first. Apply lowers registered
 // resources to a flat op list (no when_begin/when_end), so the whole body is
@@ -40,16 +52,13 @@ func orderForPrivilegeSplit(ops []plan.Op) ([]plan.Op, error) {
 	}
 	body := ops[1:]
 	g := newDepGraph(body)
-	ready := g.firstReady()
-	if ready < 0 { // no op without deps: everything sits on a cycle
-		return nil, g.cycleError(body)
-	}
-	first := body[ready].Elevate
-	order, ok := sameClassKahn(body, g, first)
+	topo, ok := g.topoOrder()
 	if !ok {
 		return nil, g.cycleError(body)
 	}
-	if other, _ := sameClassKahn(body, g, !first); chunkCount(body, other) < chunkCount(body, order) {
+	first := body[g.firstReady()].Elevate
+	order := g.levelOrder(g.chunkLevels(body, topo, first))
+	if other := g.levelOrder(g.chunkLevels(body, topo, !first)); chunkCount(body, other) < chunkCount(body, order) {
 		order = other
 	}
 	out := make([]plan.Op, 0, len(ops))
@@ -66,21 +75,25 @@ func orderForPrivilegeSplit(ops []plan.Op) ([]plan.Op, error) {
 // plan engine refuses it as circular too, so dropping it here would let the
 // elevated chunk run as root before a later chunk hit that refusal.
 type depGraph struct {
-	deps    [][]int // op → the ops it depends on
-	waiters [][]int // op → the ops depending on it
+	byID    map[string]int // op ID → its first body index
+	deps    [][]int        // op → the ops it depends on
+	waiters [][]int        // op → the ops depending on it
 }
 
 func newDepGraph(body []plan.Op) depGraph {
-	byID := make(map[string]int, len(body))
+	g := depGraph{
+		byID:    make(map[string]int, len(body)),
+		deps:    make([][]int, len(body)),
+		waiters: make([][]int, len(body)),
+	}
 	for i, op := range body {
-		if op.ID != "" {
-			byID[op.ID] = i
+		if _, seen := g.byID[op.ID]; op.ID != "" && !seen {
+			g.byID[op.ID] = i
 		}
 	}
-	g := depGraph{deps: make([][]int, len(body)), waiters: make([][]int, len(body))}
 	for i, op := range body {
 		for _, dep := range op.Deps {
-			if at, found := byID[dep]; found {
+			if at, found := g.byID[dep]; found {
 				g.deps[i] = append(g.deps[i], at)
 				g.waiters[at] = append(g.waiters[at], i)
 			}
@@ -108,21 +121,38 @@ func (g depGraph) firstReady() int {
 	return -1
 }
 
-// sameClassKahn topologically orders body and returns the body indexes in
-// that order, or ok=false on a cycle. It starts with class (Elevate) and,
-// among the ready ops, takes the lowest-indexed one of the class emitted
-// last, switching class only when no op of that class is ready.
-func sameClassKahn(body []plan.Op, g depGraph, class bool) (order []int, ok bool) {
+// topoOrder returns the body indexes in a dependency order (Kahn, lowest
+// index first), or ok=false when a cycle leaves ops that never get ready.
+func (g depGraph) topoOrder() (order []int, ok bool) {
+	return g.kahn(func(int) int { return 0 })
+}
+
+// levelOrder emits the ops by ascending chunk level, in dependency order
+// within a level (ties by lowest index). Every dep sits at a level no higher
+// than its dependent, so taking the ready op of the lowest level never emits
+// a level before a lower one is complete.
+func (g depGraph) levelOrder(level []int) []int {
+	order, _ := g.kahn(func(i int) int { return level[i] })
+	return order
+}
+
+// kahn is a topological sort that always takes the ready op with the lowest
+// (rank, index). It returns ok=false on a cycle.
+func (g depGraph) kahn(rank func(int) int) (order []int, ok bool) {
 	indeg := g.indegrees()
-	emitted := make([]bool, len(body))
-	order = make([]int, 0, len(body))
-	for len(order) < len(body) {
-		next := pickReady(body, indeg, emitted, class)
+	emitted := make([]bool, len(g.deps))
+	order = make([]int, 0, len(g.deps))
+	for len(order) < len(g.deps) {
+		next := -1
+		for i := range g.deps {
+			if !emitted[i] && indeg[i] == 0 && (next < 0 || rank(i) < rank(next)) {
+				next = i
+			}
+		}
 		if next < 0 {
 			return nil, false // every remaining op waits on another: a cycle
 		}
 		emitted[next] = true
-		class = body[next].Elevate
 		order = append(order, next)
 		for _, w := range g.waiters[next] {
 			indeg[w]--
@@ -131,23 +161,87 @@ func sameClassKahn(body []plan.Op, g depGraph, class bool) (order []int, ok bool
 	return order, true
 }
 
-// pickReady returns the lowest-indexed ready op (no unmet deps, not yet
-// emitted) of class, falling back to the lowest-indexed ready op of the other
-// class when none of class is ready. It returns -1 when no op is ready.
-func pickReady(body []plan.Op, indeg []int, emitted []bool, class bool) int {
-	fallback := -1
-	for i := range body {
-		if emitted[i] || indeg[i] > 0 {
-			continue
+// chunkLevels assigns every op the chunk level described at
+// orderForPrivilegeSplit, level 0 having class start (and odd levels the
+// other class). When the same-class watches cannot all be kept in one chunk,
+// it falls back to the assignment from the dependencies alone, and the
+// pre-flight names the watch it cannot satisfy.
+func (g depGraph) chunkLevels(body []plan.Op, topo []int, start bool) []int {
+	if level, ok := g.solveLevels(body, topo, start, g.sameClassWatches(body)); ok {
+		return level
+	}
+	level, _ := g.solveLevels(body, topo, start, nil)
+	return level
+}
+
+// solveLevels raises levels until every rule holds: each op at or above the
+// level minLevel derives from its deps, and both ends of every watch pair at
+// one level. It starts at 0 and only ever raises, so it reaches the least
+// assignment. That one has no empty level between two used ones (dropping
+// such a gap by two keeps every rule), so no level exceeds len(body) + 1;
+// passing that bound means the watches contradict the dependencies
+// (ok=false). Without watches one pass in topo order is enough.
+func (g depGraph) solveLevels(body []plan.Op, topo []int, start bool, watches [][2]int) (level []int, ok bool) {
+	level = make([]int, len(body))
+	limit := len(body) + 1
+	for changed := true; changed; {
+		changed = false
+		for _, i := range topo {
+			if need := g.minLevel(body, level, i, start); need > level[i] {
+				level[i], changed = need, true
+			}
 		}
-		if body[i].Elevate == class {
-			return i
+		for _, p := range watches {
+			if top := max(level[p[0]], level[p[1]]); level[p[0]] != level[p[1]] {
+				level[p[0]], level[p[1]], changed = top, top, true
+			}
 		}
-		if fallback < 0 {
-			fallback = i
+		for _, l := range level {
+			if l > limit {
+				return nil, false
+			}
 		}
 	}
-	return fallback
+	return level, true
+}
+
+// minLevel is the lowest level op i may take given its deps' current levels:
+// not below a same-class dep, above an other-class dep, and of i's own class.
+func (g depGraph) minLevel(body []plan.Op, level []int, i int, start bool) int {
+	need := level[i]
+	for _, d := range g.deps[i] {
+		at := level[d]
+		if body[d].Elevate != body[i].Elevate {
+			at++
+		}
+		need = max(need, at)
+	}
+	if levelClass(need, start) != body[i].Elevate {
+		need++
+	}
+	return need
+}
+
+// levelClass is the privilege class (Elevate) of chunk level k.
+func levelClass(k int, start bool) bool { return start != (k%2 == 1) }
+
+// sameClassWatches pairs every change-gated op with each op of its own
+// privilege class that it watches. Watches across classes or naming no op of
+// the plan are not paired: no order can satisfy them, and the pre-flight
+// refuses them.
+func (g depGraph) sameClassWatches(body []plan.Op) [][2]int {
+	var pairs [][2]int
+	for i, op := range body {
+		if !op.IfChanged {
+			continue
+		}
+		for _, w := range op.Watch {
+			if j, found := g.byID[w]; found && j != i && body[j].Elevate == op.Elevate {
+				pairs = append(pairs, [2]int{i, j})
+			}
+		}
+	}
+	return pairs
 }
 
 // chunkCount is the number of privilege chunks order splits into: one plus

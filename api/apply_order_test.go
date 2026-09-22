@@ -86,22 +86,72 @@ func TestOrderForPrivilegeSplitRefusesCycles(t *testing.T) {
 	}
 }
 
-// TestSameClassKahnStaysWithSwitchedClass pins that after a forced class
-// switch the sort keeps taking the class it switched TO: with a(F),
-// b(T), c(F, needs b), d(T) and a start in F, the order is a | b d | c. A
+// TestChunkLevelsStayWithSwitchedClass pins that after a forced class
+// switch an op of the class switched TO joins that chunk: with a(F), b(T),
+// c(F, needs b), d(T) and level 0 unprivileged, the order is a | b d | c. A
 // sort that kept preferring the starting class after the switch would emit
-// a | b | c | d (four chunks).
-func TestSameClassKahnStaysWithSwitchedClass(t *testing.T) {
+// a | b | c | d (four chunks). (orderForPrivilegeSplit itself picks the
+// elevated start here, b d | a c, which needs only two.)
+func TestChunkLevelsStayWithSwitchedClass(t *testing.T) {
 	body := []plan.Op{orderOp("a", false), orderOp("b", true), orderOp("c", false, "b"), orderOp("d", true)}
-	order, ok := sameClassKahn(body, newDepGraph(body), false)
+	g := newDepGraph(body)
+	topo, ok := g.topoOrder()
 	if !ok {
-		t.Fatal("sameClassKahn reported a cycle in an acyclic body")
+		t.Fatal("topoOrder reported a cycle in an acyclic body")
 	}
 	var ids []string
-	for _, i := range order {
+	for _, i := range g.levelOrder(g.chunkLevels(body, topo, false)) {
 		ids = append(ids, body[i].ID)
 	}
 	if got := strings.Join(ids, ","); got != "a,b,d,c" {
 		t.Fatalf("order = %s, want a,b,d,c", got)
+	}
+	full, err := orderForPrivilegeSplit(append([]plan.Op{orderHdr}, body...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := bodyIDs(t, full); got != "b,d,a,c" {
+		t.Fatalf("orderForPrivilegeSplit = %s, want b,d,a,c", got)
+	}
+}
+
+// watchOp is orderOp with a change gate on watch.
+func watchOp(id string, elevate bool, watch []string, deps ...string) plan.Op {
+	op := orderOp(id, elevate, deps...)
+	op.IfChanged, op.Watch = true, watch
+	return op
+}
+
+// TestOrderForPrivilegeSplitKeepsWatchesInOneChunk pins that a change-gated
+// op and the same-class ops it watches land in one chunk. The first case is
+// the review repro: x(F); e(T, needs x); f(F); g(F, needs e and f, watches
+// f). A greedy class sort emits f,x | e | g and splits g from f; the valid
+// order x | e | f,g has the same three chunks. The other cases pin the
+// chunk count stays minimal and that a watch no order can satisfy (across
+// classes, or forced apart by an other-class dependency) leaves the order
+// alone for the pre-flight to refuse.
+func TestOrderForPrivilegeSplitKeepsWatchesInOneChunk(t *testing.T) {
+	op, w := orderOp, watchOp
+	cases := []struct {
+		name string
+		ops  []plan.Op
+		want string
+	}{
+		{"review repro", []plan.Op{orderHdr, op("e", true, "x"), w("g", false, []string{"f"}, "e", "f"), op("f", false), op("x", false)}, "x,e,f,g"},
+		{"watch without a dep", []plan.Op{orderHdr, op("e", true, "x"), w("g", false, []string{"f"}, "e"), op("f", false), op("x", false)}, "x,e,g,f"},
+		{"no extra chunk when the watch already fits", []plan.Op{orderHdr, op("a", false), w("b", false, []string{"a"}, "a"), op("c", true, "b")}, "a,b,c"},
+		{"cross-class watch keeps the dependency order", []plan.Op{orderHdr, op("e", true), w("g", false, []string{"e"}, "e")}, "e,g"},
+		{"watch forced apart keeps the dependency order", []plan.Op{orderHdr, op("e", true, "f"), op("f", false), w("g", false, []string{"f"}, "e", "f")}, "f,e,g"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := orderForPrivilegeSplit(tc.ops)
+			if err != nil {
+				t.Fatalf("orderForPrivilegeSplit() error = %v", err)
+			}
+			if ids := bodyIDs(t, got); ids != tc.want {
+				t.Fatalf("order = %s, want %s", ids, tc.want)
+			}
+		})
 	}
 }

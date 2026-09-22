@@ -14,29 +14,44 @@
 // The marker lives in an internal package so only gonf's own CLI can set it.
 package clihost
 
-import "sync/atomic"
+import (
+	"sync"
+	"sync/atomic"
+)
 
-var active atomic.Bool
+// depth counts the CLI() calls currently running in this process. A counter
+// rather than a flag, because CLI() calls may overlap (nested, or from
+// several goroutines): with a swap-and-restore flag, the call that started
+// first but returned first would restore "unset" while the other still ran.
+var depth atomic.Int64
 
-// MarkActive records that the gonf CLI is running in this process and
-// returns the function that restores the previous state. internal/cli.CLI
-// calls it first thing and defers the restore, so the marker is set exactly
-// while CLI() runs: the elevated child (which runs the same CLI) is marked
-// too, but a main that calls cli.CLI() and then api.Apply itself is not
-// marked any more by the time it applies.
-func MarkActive() (restore func()) { return set(true) }
+// MarkActive records that one more gonf CLI call is running in this process
+// and returns the function that ends that mark (idempotent: a second call
+// does nothing). internal/cli.CLI calls it first thing and defers the
+// release, so the marker is set exactly while at least one CLI() runs: the
+// elevated child (which runs the same CLI) is marked too, but a main that
+// calls cli.CLI() and then api.Apply itself is not marked any more by the
+// time it applies.
+func MarkActive() (release func()) {
+	depth.Add(1)
+	var once sync.Once
+	return func() { once.Do(func() { depth.Add(-1) }) }
+}
 
-// Active reports whether the gonf CLI is running in this process (MarkActive
-// called and not yet restored).
-func Active() bool { return active.Load() }
+// Active reports whether a gonf CLI call is running in this process (some
+// MarkActive not yet released).
+func Active() bool { return depth.Load() > 0 }
 
-// SetForTest sets the marker to v and returns a function restoring the
-// previous value. Tests only: api tests use it to exercise the elevated path
-// with a fake runner, and to pin the refusal when the marker is unset.
-func SetForTest(v bool) (restore func()) { return set(v) }
-
-// set swaps the marker to v and returns the restore of the previous value.
-func set(v bool) (restore func()) {
-	old := active.Swap(v)
-	return func() { active.Store(old) }
+// SetForTest forces the marker to v (one running CLI call, or none) and
+// returns a function restoring the previous count. Tests only: api tests use
+// it to exercise the elevated path with a fake runner, and to pin the
+// refusal when the marker is unset. It must not overlap real MarkActive
+// calls, whose releases it would otherwise miscount.
+func SetForTest(v bool) (restore func()) {
+	var n int64
+	if v {
+		n = 1
+	}
+	old := depth.Swap(n)
+	return func() { depth.Store(old) }
 }

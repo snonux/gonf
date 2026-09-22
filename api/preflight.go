@@ -73,3 +73,63 @@ func refusalReason(err error, fixHint string) string {
 		return err.Error()
 	}
 }
+
+// crossChunkWatchRefusal words the change-gate refusal for a watch crossing a
+// privilege chunk in the terms of an Apply caller, who registered resources
+// and never chose chunks: "Command[g] (unprivileged) watches Command[e]
+// (elevated); ...". It reports exactly the violation plan.ValidateChunks would
+// report, and keeps that plan refusal as the cause (errors.As still finds a
+// plan.Refusal). It returns nil, leaving preflightChunks to word the plan's
+// first problem, when that problem is not a cross-chunk watch: a dependency
+// refusal (checked first by plan.ValidateChunks), or a gate without a watch
+// or with a dangling one ahead of any cross-chunk watch.
+func crossChunkWatchRefusal(caller string, chunks []plan.Chunk) error {
+	bodies := make([][]plan.Op, len(chunks))
+	chunkOf := map[string]int{}
+	for i, ch := range chunks {
+		bodies[i] = ch.Ops
+		for _, op := range ch.Ops {
+			if _, seen := chunkOf[op.ID]; op.ID != "" && !plan.IsControlKind(op.Op) && !seen {
+				chunkOf[op.ID] = i
+			}
+		}
+	}
+	if plan.ValidateChunkDeps(bodies) != nil {
+		return nil
+	}
+	for i, ch := range chunks {
+		for _, op := range ch.Ops {
+			if !op.IfChanged || len(op.Watch) == 0 {
+				continue // an empty watch is refused by preflightChunks
+			}
+			for _, w := range op.Watch {
+				j, ok := chunkOf[w]
+				if !ok {
+					return nil // dangling: preflightChunks words it
+				}
+				if j != i {
+					return &refusedError{
+						msg:   caller + ": " + watchAcrossChunks(op.ID, ch.Elevate, w, chunks[j].Elevate),
+						cause: plan.ValidateChangeGates(bodies),
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// watchAcrossChunks explains why gated cannot watch watched: across privilege
+// classes, or within one class forced into separate chunks by dependencies
+// on the other class. Change reports are chunk-local either way.
+func watchAcrossChunks(gated string, gatedElevate bool, watched string, watchedElevate bool) string {
+	head := fmt.Sprintf("%s (%s) watches %s (%s)", gated, privilegeClass(gatedElevate), watched, privilegeClass(watchedElevate))
+	if gatedElevate != watchedElevate {
+		return head + "; change reports are not carried across privilege classes (the elevated " +
+			"resources apply in a separate process), so a change-gated resource can only watch " +
+			"resources of its own class: gate on a resource of the same class, or elevate both or neither"
+	}
+	return head + ", but their dependencies need resources of the other privilege class applied " +
+		"between the two, so they cannot share a privilege chunk and change reports are not carried " +
+		"across chunks: remove that dependency path or the change gate"
+}

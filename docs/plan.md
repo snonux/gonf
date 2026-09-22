@@ -338,10 +338,10 @@ if err := ApplyPlan(ops, planDir); err != nil { /* … */ }
   record time and by `ApplyChunks`, `remote.Delivery.ToHost` and
   `api.Apply`, but not when a single chunk is executed — see "Where
   dependencies are checked") refuses dangling deps and forward cross-chunk
-  deps before anything is applied. `api.Apply` with elevated ops sorts its ops by dependency before
-  splitting them, so for it a forward cross-chunk dep can only come from a
-  dependency cycle (a resource depending on itself included), which the sort
-  itself refuses first.
+  deps before anything is applied. `api.Apply` with elevated ops sorts its
+  ops by dependency before splitting them, so for it a forward cross-chunk
+  dep can only come from a dependency cycle (a resource depending on itself
+  included), which the sort itself refuses first.
 - Stackable `when_begin` / `when_end`: failed predicates skip the body
   without touching the filesystem.
 - A `when_begin` carrying `require` (v20) is a requirement: a failed
@@ -1004,7 +1004,8 @@ the chunk order stays fixed by recorded order: chunks are never reordered
 after the split. `api.Apply` is the exception: its ops have no meaningful
 recorded order (its drafts are sorted by resource ID), so when an op is
 elevated it chooses the order itself BEFORE splitting: a dependency sort
-with as few chunks as the graph allows (see "Low-level `Apply()`"). After
+with as few chunks as its dependencies and change watches allow (see
+"Low-level `Apply()`"). After
 that sort a forward cross-chunk dep can only come from a dependency cycle
 (a resource depending on itself included), which Apply refuses, naming the
 cycle, before any chunk applies.
@@ -1031,12 +1032,16 @@ engine as `Run`, including dependency ordering and source/blob packaging.
 
 It also honours the privilege split like `Run` and `gonf apply`. When an op
 is elevated (a `Command` with `WithElevate`), Apply sorts the ops by
-dependency, keeping each privilege class together. It tries the sort
-starting with each class and keeps the one with fewer chunks, which is the
-fewest the dependency graph allows. It then splits the ops with
-`plan.SplitPrivilegeChunks`, and `api.ApplyChunks` applies the chunks in
-order under the process-wide privilege mode (`api.SetPrivilege`, the CLI
-`-privilege` flag). An elevated chunk is re-executed as
+dependency, keeping each privilege class together and keeping a change-gated
+resource (`OnChange` / `WatchChanges`) in the same chunk as the resources of
+its class that it watches. Each resource gets the earliest chunk its
+dependencies and watches allow; Apply tries this starting with each class
+and keeps the result with fewer chunks, which is the fewest possible under
+those rules. It then splits the ops with `plan.SplitPrivilegeChunks` and
+applies the chunks in order, as `api.ApplyChunks` does, under the
+process-wide privilege mode (`api.SetPrivilege`, the CLI `-privilege` flag).
+A chunk that fails is named by its class and resources, e.g.
+`Apply: elevated resources Command[e]: ...`, not by a chunk index. An elevated chunk is re-executed as
 `<this binary> apply <chunk>` through sudo/doas, or runs in-process when the
 mode is `none` and the process is already root. Before this, an elevated op
 under `api.Apply` silently ran in-process as the calling user. A plan with
@@ -1068,10 +1073,24 @@ change-gate pre-flight itself over those chunks. It does not record through
 (or `OnChange` / `WatchChanges`) naming a resource that is not registered fails
 with an `Apply:` error naming the op and the missing ID before anything is
 applied. The error unwraps to `*plan.DanglingDepError` / `*plan.DanglingWatchError`.
-With elevated ops, a change watch that crosses the privilege boundary is
-refused the same way: an unprivileged resource gated `OnChange` of an
-elevated one could never see its change report, because the elevated chunk
-runs as a separate process.
+
+Changed state is not carried across chunks: each chunk applies as its own
+`plan.Apply` run, the elevated one in a separate process, so a change gate
+only sees changes from its own chunk. With elevated ops, a watch that cannot
+stay in one chunk is therefore refused before anything applies, as `Run`
+refuses it, and the error names both privilege classes instead of chunk
+indexes:
+
+- across classes, in either direction: an unprivileged command gated
+  `OnChange` of an elevated one, or an elevated one (such as an elevated
+  daemon-reload) watching an unprivileged user file, e.g.
+  `Apply: Command[reload] (elevated) watches File[...] (unprivileged); change
+  reports are not carried across privilege classes ...`;
+- within one class, when dependencies force an elevated resource between the
+  two (the gated resource needs an elevated one that itself needs the watched
+  resource): `... watches File[f] (unprivileged), but their dependencies
+  need resources of the other privilege class applied between the two ...`.
+
 The lower-level `resource.Apply()` path remains for resource-package unit tests
 and ad-hoc compatibility use; new application code should prefer `Run` or
 `api.Apply` so local and remote execution share the plan engine.

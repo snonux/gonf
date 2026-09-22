@@ -139,18 +139,24 @@ func preflightElevation(chunks []plan.Chunk, mode privilege.Mode) error {
 }
 
 // elevatedIDs lists the op IDs of the elevated chunks, in chunk order, for a
-// refusal message. Control ops (the chunk header, when_* markers) carry no ID
-// worth naming and are skipped.
+// refusal message.
 func elevatedIDs(chunks []plan.Chunk) []string {
 	var ids []string
 	for _, ch := range chunks {
-		if !ch.Elevate {
-			continue
+		if ch.Elevate {
+			ids = append(ids, chunkResourceIDs(ch)...)
 		}
-		for _, op := range ch.Ops {
-			if op.ID != "" && !plan.IsControlKind(op.Op) {
-				ids = append(ids, op.ID)
-			}
+	}
+	return ids
+}
+
+// chunkResourceIDs lists the resource op IDs of ch in order. Control ops (the
+// chunk header, when_* markers) carry no ID worth naming and are skipped.
+func chunkResourceIDs(ch plan.Chunk) []string {
+	var ids []string
+	for _, op := range ch.Ops {
+		if op.ID != "" && !plan.IsControlKind(op.Op) {
+			ids = append(ids, op.ID)
 		}
 	}
 	return ids
@@ -203,24 +209,38 @@ func ApplyChunksContext(ctx context.Context, ops []plan.Op, planDir string, mode
 	if err := preflightElevation(chunks, mode); err != nil {
 		return err
 	}
+	return applySplitChunks(ctx, chunks, planDir, mode, chunkIndexLabel)
+}
+
+// chunkLabel names chunk i in a chunk's apply error.
+type chunkLabel func(i int, ch plan.Chunk) string
+
+// chunkIndexLabel is ApplyChunks' wording: "chunk 1 (elevated)". Its input is
+// a recorded plan, whose chunk order the caller knows.
+func chunkIndexLabel(i int, ch plan.Chunk) string {
+	if ch.Elevate {
+		return fmt.Sprintf("chunk %d (elevated)", i)
+	}
+	return fmt.Sprintf("chunk %d", i)
+}
+
+// applySplitChunks applies already validated and pre-flighted chunks in
+// order: user chunks in-process, privileged chunks via the sudo/doas re-exec,
+// or in-process when mode is none and this process is root. The first
+// failure stops the apply and is prefixed with label's name for the chunk.
+func applySplitChunks(ctx context.Context, chunks []plan.Chunk, planDir string, mode privilege.Mode, label chunkLabel) error {
 	for i, ch := range chunks {
-		if !ch.Elevate {
-			if err := ApplyPlan(ch.Ops, planDir); err != nil {
-				return fmt.Errorf("chunk %d: %w", i, err)
-			}
-			continue
-		}
 		// LOCAL apply re-exec: this process's euid is the correct authority
 		// here. Remote pushes must NEVER make this decision from the
 		// controller's euid — see privilege.WrapApplyCmd's doc comment.
-		if mode == privilege.None && processEUID() == 0 {
-			if err := ApplyPlan(ch.Ops, planDir); err != nil {
-				return fmt.Errorf("chunk %d: %w", i, err)
-			}
-			continue
+		var err error
+		if !ch.Elevate || (mode == privilege.None && processEUID() == 0) {
+			err = ApplyPlan(ch.Ops, planDir)
+		} else {
+			err = elevatedApplyRunner(ctx, mode, ch.Ops, planDir)
 		}
-		if err := elevatedApplyRunner(ctx, mode, ch.Ops, planDir); err != nil {
-			return fmt.Errorf("chunk %d (elevated): %w", i, err)
+		if err != nil {
+			return fmt.Errorf("%s: %w", label(i, ch), err)
 		}
 	}
 	return nil

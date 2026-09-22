@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -174,17 +175,21 @@ func applyPackagedOps(ops []plan.Op, planDir string) error {
 // had mutated the host:
 //
 //   - orderForPrivilegeSplit puts the ops into dependency order with as few
-//     chunks as possible (Apply's draft order is only a sort by resource ID)
-//     and refuses a dependency cycle (a self-dependency included), naming it;
-//   - validateApplyDeps refuses dangling deps and watches crossing the
-//     privilege boundary;
+//     chunks as possible, keeping a change-gated resource in the chunk of the
+//     same-class resources it watches (Apply's draft order is only a sort by
+//     resource ID), and refuses a dependency cycle (a self-dependency
+//     included), naming it;
+//   - validateApplyDeps refuses dangling deps and watches that still cross
+//     the privilege boundary;
 //   - preflightElevation refuses elevated chunks that could not run: mode
 //     none in a non-root process, or a process not running gonf's CLI, whose
 //     sudo/doas re-exec would run its own main again as root.
 //
-// ApplyChunks then repeats the last two checks on purpose (it also serves
-// already-recorded plans and Run); they cannot fail there, since both run
-// over the same split.
+// The chunks are then applied by applySplitChunks, the loop ApplyChunks uses,
+// without repeating those checks. A chunk failure is reported as "Apply:
+// <class> resources <IDs>: ..." (resourceChunkLabel) rather than with
+// ApplyChunks' chunk index: Apply's caller never saw a chunk order, only the
+// resources it registered.
 func applyElevatedOps(ops []plan.Op, planDir string) error {
 	ops, err := orderForPrivilegeSplit(ops)
 	if err != nil {
@@ -197,7 +202,29 @@ func applyElevatedOps(ops []plan.Op, planDir string) error {
 	if err := preflightElevation(chunks, processPrivilege); err != nil {
 		return fmt.Errorf("Apply: %w", err)
 	}
-	return ApplyChunks(ops, planDir, processPrivilege)
+	if err := applySplitChunks(context.Background(), chunks, planDir, processPrivilege, resourceChunkLabel); err != nil {
+		return fmt.Errorf("Apply: %w", err)
+	}
+	return nil
+}
+
+// resourceChunkLabel names an Apply chunk by its privilege class and
+// resources: "elevated resources Command[a], File[b]", listing at most three
+// IDs and counting the rest.
+func resourceChunkLabel(_ int, ch plan.Chunk) string {
+	ids := chunkResourceIDs(ch)
+	if len(ids) > 3 {
+		ids = append(ids[:3:3], fmt.Sprintf("and %d more", len(ids)-3))
+	}
+	return privilegeClass(ch.Elevate) + " resources " + strings.Join(ids, ", ")
+}
+
+// privilegeClass is the user-facing name of a privilege class.
+func privilegeClass(elevate bool) string {
+	if elevate {
+		return "elevated"
+	}
+	return "unprivileged"
 }
 
 // anyElevated reports whether an op of the plan must run elevated.
@@ -227,10 +254,15 @@ func anyElevated(ops []plan.Op) bool {
 //
 // The refusal is re-worded in registered-resource terms with a single "Apply:"
 // prefix (preflightChunks), while errors.As still finds the typed
-// *plan.DanglingDepError / *plan.DanglingWatchError. Running the change-gate
-// half here, before anything is applied, also means a dangling WatchChanges
-// gets the same wording as a dangling OnChange instead of the plan engine's raw
-// "plan: op ... watches ..." message from plan.Apply's own gate check.
+// *plan.DanglingDepError / *plan.DanglingWatchError. A watch across chunks is
+// worded in privilege classes, not chunk indexes (crossChunkWatchRefusal),
+// since Apply chose the chunks itself. Running the change-gate half here,
+// before anything is applied, also means a dangling WatchChanges gets the
+// same wording as a dangling OnChange instead of the plan engine's raw "plan:
+// op ... watches ..." message from plan.Apply's own gate check.
 func validateApplyDeps(chunks []plan.Chunk) error {
+	if err := crossChunkWatchRefusal("Apply", chunks); err != nil {
+		return err
+	}
 	return preflightChunks("Apply", fixHintApply, chunks)
 }

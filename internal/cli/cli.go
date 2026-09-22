@@ -57,9 +57,9 @@ func CLI() int {
 	// This binary's main hands its arguments to the CLI, so the local
 	// elevated re-exec (`<this binary> apply <chunk>`) is safe while the CLI
 	// runs; api refuses it in any process (or phase of a process) that is not
-	// inside CLI() (see internal/clihost). The marker is cleared again on
-	// return, so a main that calls CLI() and then api.Apply itself cannot
-	// re-exec its own main as root.
+	// inside CLI() (see internal/clihost). The marker counts running CLI()
+	// calls and this call's mark is released on return, so a main that calls
+	// CLI() and then api.Apply itself cannot re-exec its own main as root.
 	defer clihost.MarkActive()()
 	// Signal-derived context: SIGINT/SIGTERM cancel in-flight work. It
 	// reaches local task runs (api.RunContext), single-host push

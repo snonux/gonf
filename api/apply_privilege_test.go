@@ -161,10 +161,8 @@ func TestApplyRefusesCrossChunkWatch(t *testing.T) {
 	Command("true", nil, options.WithName("gated"), options.OnChange(elev))
 
 	err := Apply()
-	if err == nil || !strings.HasPrefix(err.Error(), "Apply: ") || strings.Contains(err.Error(), "Apply: plan:") ||
-		!strings.Contains(err.Error(), "change reports are chunk-local") {
-		t.Fatalf("Apply() error = %v, want a single Apply: cross-chunk watch refusal", err)
-	}
+	requireClassWatchRefusal(t, err,
+		"Apply: Command[gated] (unprivileged) watches Command[elevated] (elevated); change reports are not carried across privilege classes")
 	var refusal plan.Refusal
 	if !errors.As(err, &refusal) {
 		t.Errorf("Apply() error %#v does not unwrap to a plan.Refusal", err)
@@ -191,7 +189,8 @@ func TestApplyRefusesDanglingDepWithElevatedOps(t *testing.T) {
 }
 
 // TestApplyStopsAtFailedElevatedChunk pins that an elevation failure is
-// reported (named as the elevated chunk) and later chunks are not applied.
+// reported in Apply's terms (the privilege class and resources of the failed
+// chunk, no chunk index) and later chunks are not applied.
 func TestApplyStopsAtFailedElevatedChunk(t *testing.T) {
 	denied := errors.New("sudo: a password is required")
 	calls := fakeElevation(t, privilege.Sudo, func([]plan.Op, string) error { return denied })
@@ -200,7 +199,8 @@ func TestApplyStopsAtFailedElevatedChunk(t *testing.T) {
 	File(after, options.WithContent("x"), options.DependsOn(elev))
 
 	err := Apply()
-	if !errors.Is(err, denied) || !strings.Contains(err.Error(), "(elevated)") {
+	want := "Apply: elevated resources " + elev.ID() + ": "
+	if !errors.Is(err, denied) || !strings.HasPrefix(err.Error(), want) {
 		t.Fatalf("Apply() error = %v, want the elevated chunk's failure", err)
 	}
 	if len(*calls) != 1 {
@@ -209,4 +209,73 @@ func TestApplyStopsAtFailedElevatedChunk(t *testing.T) {
 	if _, serr := os.Stat(after); !os.IsNotExist(serr) {
 		t.Fatal("a chunk after the failed elevated chunk was applied")
 	}
+}
+
+// requireClassWatchRefusal checks that err is a single-prefix Apply refusal
+// starting with want and worded without chunk bookkeeping.
+func requireClassWatchRefusal(t *testing.T, err error, want string) {
+	t.Helper()
+	if err == nil || !strings.HasPrefix(err.Error(), want) || strings.Contains(err.Error(), "Apply: plan:") ||
+		strings.Contains(err.Error(), "chunk 0") || strings.Contains(err.Error(), "chunk 1") {
+		t.Fatalf("Apply() error = %v, want prefix %q without chunk indexes", err, want)
+	}
+}
+
+// TestApplyKeepsWatcherWithWatchedAcrossElevation is the review repro:
+// File[x]; an elevated Command[e] that needs File[x]; File[f]; and an
+// unprivileged Command[g] gated OnChange(File[f]) that also needs Command[e].
+// The class-greedy sort used to emit File[f] and File[x] together before
+// Command[e], leaving the gate in a later chunk than File[f], and the
+// pre-flight refused a valid recipe. Apply must run it as File[x] |
+// Command[e] | File[f], Command[g] and fire the gate.
+func TestApplyKeepsWatcherWithWatchedAcrossElevation(t *testing.T) {
+	calls := fakeElevation(t, privilege.Sudo, ApplyPlan)
+	dir := t.TempDir()
+	x := File(filepath.Join(dir, "x"), options.WithContent("x"))
+	e := Command("true", nil, options.WithName("e"), options.WithElevate, options.DependsOn(x))
+	f := File(filepath.Join(dir, "f"), options.WithContent("f"))
+	fired := filepath.Join(dir, "fired")
+	Command("touch", []string{fired}, options.WithName("g"), options.OnChange(f), options.DependsOn(e))
+
+	if err := Apply(); err != nil {
+		t.Fatalf("Apply() = %v, want the watch kept in one chunk", err)
+	}
+	if len(*calls) != 1 || len((*calls)[0].ids) != 1 || (*calls)[0].ids[0] != e.ID() {
+		t.Fatalf("elevated calls = %+v, want one chunk with %s only", *calls, e.ID())
+	}
+	if _, err := os.Stat(fired); err != nil {
+		t.Fatalf("gate of Command[g] did not fire on the File[f] change: %v", err)
+	}
+}
+
+// TestApplyRefusesWatchForcedApartByElevation pins the negative case of the
+// same shape: Command[g] watches File[f] but needs an elevated Command[e]
+// that itself needs File[f], so File[f] must apply before the elevation and
+// Command[g] after it. No order can keep the gate with its watch, and the
+// refusal says so in privilege-class terms before anything applies.
+func TestApplyRefusesWatchForcedApartByElevation(t *testing.T) {
+	calls := refuseElevation(t, privilege.Sudo)
+	marker := filepath.Join(t.TempDir(), "f")
+	f := File(marker, options.WithContent("f"))
+	e := Command("true", nil, options.WithName("e"), options.WithElevate, options.DependsOn(f))
+	Command("true", nil, options.WithName("g"), options.OnChange(f), options.DependsOn(e))
+
+	requireClassWatchRefusal(t, Apply(), "Apply: Command[g] (unprivileged) watches "+f.ID()+
+		" (unprivileged), but their dependencies need resources of the other privilege class applied between the two")
+	requireNothingApplied(t, marker, calls)
+}
+
+// TestApplyRefusesElevatedWatcherOfUnprivilegedChange pins that change state
+// is not carried across chunks in the other direction either: an elevated
+// command gated on an unprivileged File (like an elevated daemon-reload
+// watching a user unit file) is refused, as Run refuses it.
+func TestApplyRefusesElevatedWatcherOfUnprivilegedChange(t *testing.T) {
+	calls := refuseElevation(t, privilege.Sudo)
+	marker := filepath.Join(t.TempDir(), "unit")
+	f := File(marker, options.WithContent("unit"))
+	Command("true", nil, options.WithName("reload"), options.WithElevate, options.OnChange(f))
+
+	requireClassWatchRefusal(t, Apply(), "Apply: Command[reload] (elevated) watches "+f.ID()+
+		" (unprivileged); change reports are not carried across privilege classes")
+	requireNothingApplied(t, marker, calls)
 }
