@@ -95,7 +95,9 @@ func main() {
 
 - `SetSecretProvider` must be called once, at the composition root: calling
   it twice, with `nil`, from a task body, or after any secret was resolved
-  fails fast (`logger.Fatal`), so one invocation never mixes secret sources.
+  is a declaration error that keeps the earlier provider and refuses the run
+  (see plan.md, "Error handling contract"), so one invocation never mixes
+  secret sources.
 - A provider implements `Resolve(ctx, secret.Ref) ([]byte, error)`, honours
   `ctx`, returns typed errors and never puts secret bytes into errors or logs.
   Keep adapters (such as the argv-invoked foostore adapter below) out of
@@ -117,7 +119,9 @@ func main() {
   `../x`) is refused as `ErrInvalid` by the Snapshot itself, with the file
   provider's message, so no provider behind it can report it as not-found.
   Build it only with `NewSnapshot`: a zero `secret.Snapshot{}` is
-  refused by `SetSecretProvider` like a nil provider. Each reference
+  refused by `SetSecretProvider` like a nil provider, and so is
+  `NewSnapshot(nil)`, which returns such a providerless Snapshot (its
+  `Resolve` fails with `ErrUnavailable`) instead of panicking. Each reference
   resolves independently: a slow one does not block others, and a caller
   waiting for someone else's resolution of the same reference stops when its
   own context is done. Every returned slice is a copy. Formatting a Snapshot

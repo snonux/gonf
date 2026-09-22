@@ -90,7 +90,7 @@ composition also wait for the inputs of every later composition on that bus.
 They converge in the same apply, just later in the order. A single
 composition records exactly the same plan as before.
 
-A merge is refused with a fail-fast `DaemonReload[…]: cannot merge …` error
+A merge is refused with a `DaemonReload[…]: cannot merge …` declaration error
 that names both watch lists, in these cases:
 
 - The earlier declaration sits on the other side of a when-block boundary

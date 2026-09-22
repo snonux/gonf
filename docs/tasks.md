@@ -105,9 +105,9 @@ Reflect over exported methods on a struct. Companion methods:
   or the serializable `WhenHostnameContains()` / `WhenProfile()`
   predicates; appended after any `WithGroupWhen` options of the same call.
   (`TaskOptions` is an alias for `[]TaskOption` — either form works.)
-  A wrong signature is registration-time misuse and panics (a silently
-  ignored companion could drop `Privileged()` and lower a task's
-  privileges).
+  A wrong signature is registration-time misuse: a declaration error is
+  reported and that method's task is not registered (a silently ignored
+  companion could drop `Privileged()` and lower a task's privileges).
 
 ```go
 type Home struct{}
@@ -192,7 +192,8 @@ allowed because listing it is explicit (which makes the aggregate operational
 work for pattern aggregates). A member name that is not registered fails the
 record (a typo must not shrink a setup run silently); an empty list, an empty
 or duplicate member, or the aggregate listing itself — by name or through an
-alias of it, in either registration order — fail fast at registration.
+alias of it, in either registration order — are declaration errors at
+registration (the aggregate is not registered; the run is refused).
 
 ## Alias
 
@@ -213,7 +214,8 @@ The target may be registered before or after the alias; it is resolved when a
 plan is recorded. An unknown target, or a target that is itself an alias, fails
 that record (and such an alias is never listed). Duplicate names, empty names
 or targets, self-aliases, and an alias of an `AggregateTasks` that lists the
-alias fail fast at registration.
+alias are declaration errors at registration (the alias is not registered; the
+run is refused).
 
 ## Operational tasks
 

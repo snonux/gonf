@@ -67,6 +67,11 @@ embedded rather than redeclared:
   `WithSensitive` back for a sensitive op, and its apply reads the field to
   withhold secret-bearing details. The option family is
   `opt.SensitiveOption`; a new payload kind adds its marker there.
+- `embed.Misuse` — collects option misuse (`ReportMisuse`, implements
+  `opt.MisuseReporter`; `MisuseErr`). Every concrete resource type embeds it
+  and checks `MisuseErr()` right after applying its options: `Present`
+  reports it through `resource.Refuse`, `Ensure*` returns it (see
+  "Registration-time contract").
 - `embed.ChangeGate` — the change gate (`Gated`, `Watch`) and its behaviour.
   It holds the one watch list of the change-gate option family: `OnChange`,
   `WatchChanges` and the legacy daemon-reload `IfChanged` (arm only) all
@@ -100,6 +105,33 @@ embedded rather than redeclared:
 
 When adding a field or capability shared by every resource type, prefer a new
 embed type here instead of duplicating the field and its setter in each resource.
+
+## Registration-time contract
+Library code never ends the process: there is no `logger.Fatal`, and no
+`os.Exit` or `panic` for recipe or input errors (only `cmd/gonf` exits, with
+`cli.CLI`'s code). DSL misuse detected while a recipe declares its tasks,
+inventory and resources is a declaration error (`internal/declerr`):
+- Report it with `declerr.Report` / `declerr.Reportf` (a resource package
+  uses `resource.Refuse(type, name, err)`, which reports and returns the
+  unregistered value) and return an inert value — an unregistered resource,
+  an empty `resource.Multi`, a zero handle, a nil list — so the recipe keeps
+  running and later declarations are still checked. Never register a refused
+  declaration.
+- An option reports misuse to its target (`misuse` in resource/options):
+  a target with `embed.Misuse` collects it, anything else goes to declerr.
+- The first report wins and carries the recipe line (`declerr.Location`).
+  While `RecordPlanTo` records, reports are captured into the session and
+  fail that record; outside a recording the first one is kept for the
+  process, and `RecordPlanTo`, `Run`, `api.Apply`, `resource.Apply` and
+  `cli.CLI` refuse with it (the CLI prints it and exits 1).
+- Code below the DSL (internal packages such as `internal/inventory`, check
+  helpers) returns errors; only the DSL entry point reports them.
+- Keep a `panic` only for a genuine, documented programmer-bug invariant that
+  no recipe or input can reach (the list is in docs/plan.md, "Error handling
+  contract").
+- Test misuse in-process: reset, declare, then assert `declerr.First()` (or
+  the `RecordPlan` error for misuse inside a task body); no helper
+  processes. `api` tests use `requireDeclErr`.
 
 ## Test seams
 Public (non-`internal`) packages export no `*ForTest` setters; the state

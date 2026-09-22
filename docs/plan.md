@@ -81,9 +81,9 @@ applies. What is guaranteed, and what is not:
   store is possible.
 - The staging directory lives in `$TMPDIR` (owner-only) and is created lazily,
   on the first blob write, so a plan without blobs never touches `$TMPDIR`.
-  It is removed on every return path and when a task body ends the process
-  with `logger.Fatal` (the logger runs `logger.OnFatal` hooks before exiting).
-  It is NOT removed when the process dies without running Go code (SIGKILL, a
+  It is removed on every return path; DSL misuse in a task body is a returned
+  record error (a declaration error, see "Error handling contract"), never a
+  process exit. It is NOT removed when the process dies without running Go code (SIGKILL, a
   crash) or is interrupted by a signal nothing handles: the staging directory,
   with copies of the packaged sources, then stays in `$TMPDIR`.
 - `gonf plan -stdout` records in memory and stages nothing.
@@ -128,20 +128,61 @@ blobs, then apply, then cleanup) so local and remote cannot diverge.
 
 ## Error handling contract
 
-gonf separates **registration-time** misuse from **runtime** failures:
+gonf separates **registration-time** misuse from **runtime** failures. No
+library code ends the process: `internal/logger` has no `Fatal`, and gonf
+calls neither `os.Exit` nor `panic` for recipe or input errors. Only the
+binary's `main` exits, with the code `cli.CLI` returns.
 
-- **Registration-time DSL misuse fails fast** via `internal/logger.Fatal`
-  (process exit 1): duplicate `Task` / `Alias` / aggregate / `Host` / `Fleet`
-  registration, an `Alias` with an empty name or target or naming itself, an
-  `AggregateTasks` with no members, an empty or duplicate member, or a member
-  that is the aggregate itself (by name or through an `Alias`, in either
-  registration order), an option applied to a resource that does not support
-  it (`options.requires`, e.g. `*file.File does not support WithRestart`),
-  invalid option combinations (`WithLine` + `WithContent`, `WithSource` +
-  `WithSourceGlob`), an invalid
-  `Matching` pattern, or `MustHost` / `MustCluster` lookups of unknown names.
-  These are programmer errors in the recipe; nothing has been recorded or
-  applied yet, so aborting immediately is the honest outcome.
+- **Registration-time DSL misuse is a declaration error**
+  (`internal/declerr`). The DSL constructors return resources and handles,
+  not errors, so misuse cannot be handed back to the recipe line; it is
+  reported instead, and the constructor returns an inert value (an
+  unregistered resource value, an empty `Multi`, a zero handle, a nil list)
+  so the recipe keeps running and later declarations are still checked.
+  Covered: duplicate `Task` / `Alias` / aggregate / `Host` / `Cluster` /
+  `Fleet` registration, an empty `Task` name or nil `fn`, an `Alias` with an
+  empty name or target or naming itself, an `AggregateTasks` with no members,
+  an empty or duplicate member, or a member that is the aggregate itself (by
+  name or through an `Alias`, in either registration order), an option
+  applied to a resource that does not support it (`options.requires`, e.g.
+  `*file.File does not support WithRestart`), invalid option values and
+  combinations (`WithMode` with bits outside `0o7777`, `OnChange()` with
+  nothing to watch, `WithLine` + `WithContent`, `WithSource` +
+  `WithSourceGlob`, `WithSensitive` without `WithName` on a `Command`), a
+  duplicate resource ID, a refused `SystemdUnits` / `DaemonReload` merge,
+  `SystemdUnits` / `LoginClass` / `SymlinkMap` / `EachKV` misuse, a
+  `RegisterMethods` receiver or companion with the wrong shape, an invalid
+  `Matching` pattern, `SetSecretProvider` misuse, `MustHost` / `MustCluster` /
+  `MustFleet` / `MustHostValue` lookups that fail, and `ForHosts` /
+  `ClusterHosts` misuse outside a recording.
+  - **First error wins.** Only the first report is kept (a later one is
+    usually a consequence of it); it keeps the message `logger.Fatal` used to
+    print and carries the recipe line it was declared at
+    (`declerr.Location`: the first stack frame outside gonf).
+  - **Where it surfaces.** A misuse reported while a plan is recorded (inside
+    a task body) fails that record like any stashed task-body error:
+    `RecordPlan` / `Run` / push / cluster / fleet return it, nothing is
+    applied or pushed, and temporary directories are removed by the normal
+    deferred cleanup. A misuse reported outside a recording (top-level
+    registration in `main`, resources declared for a direct `api.Apply`) is
+    kept for the process: `RecordPlanTo`, `Run`, `api.Apply` and
+    `resource.Apply` refuse with it before any task body runs, and `cli.CLI`
+    refuses every invocation (`-list` and `-version` included) with it, exit
+    status 1, printing the message and `declared at <file:line>`. From the
+    CLI a broken recipe therefore still exits non-zero with the same message
+    as before; an embedding program gets it as an error.
+  - **Apply side.** A resource rebuilt on the destination from a plan op
+    (the `Ensure*` helpers the plan handlers use) collects option misuse in
+    its `embed.Misuse` and returns it as its apply error, so an apply never
+    silently drops an option.
+- **Programmer-bug invariants may still panic**, each documented at its
+  site: an unreachable `default` of a `Path` (`string | []string`) type
+  switch in `api`, a duplicate `plan.RegisterHandler` for one op kind (two
+  gonf packages claiming one wire kind at `init`), an op field type the
+  secret walker does not classify (`walkOpStrings`, guarded by a fitness
+  test), the test-binary exec guard in `internal/remote` and misuse of the
+  test-only `internal/testutil` helpers. None of them is
+  reachable from a recipe or from input data.
 - **Record-time failures return errors**: unknown tasks, recursion cycles,
   packaging failures, registered resources without plan drafts, dangling or
   cross-privilege-chunk `DependsOn` / `OnChange` targets, an `Alias` with an
@@ -177,23 +218,12 @@ gonf separates **registration-time** misuse from **runtime** failures:
   SSH. There is no opt-in to silence this; the same recording still succeeds
   for local `Run` / `gonf plan`, where the refusal does not apply.
 
-Temporary plan directories are removed on a fail-fast exit too, with the
-exceptions described below (a `logger.Fatal` from another goroutine racing a
-blob write; an unhandled signal, SIGKILL or a crash). A registration-time
-`logger.Fatal` fired from *inside* a task body exits with `os.Exit`, which
-skips deferred calls, so every directory that
-holds packaged sources while task bodies or resources run registers its
-removal with `logger.OnFatal` (the logger runs those hooks before exiting)
-and unregisters it when it returns: `Run`'s `$TMPDIR/gonf-plan-*`,
-`Apply`'s `$TMPDIR/gonf-apply-*` and `RecordPlan`'s staging directory
-(`gonf plan -o`). The hook is cleanup, not a barrier: when `logger.Fatal` is
-called from the goroutine running the task body (the usual case) nothing
-else writes to the directory, but when it is called from ANOTHER goroutine,
-`Run`, `Apply` or the record keep running until `os.Exit`, and a blob
-written in that window recreates the directory (the `$TMPDIR` store creates
-its root when missing), which is then left behind. A process killed by a
-signal nothing handles, by SIGKILL or by a crash also leaves them behind in
-`$TMPDIR` (owner-only, `0700`).
+Temporary plan directories — `Run`'s `$TMPDIR/gonf-plan-*`, `Apply`'s
+`$TMPDIR/gonf-apply-*` and `RecordPlan`'s staging directory (`gonf plan -o`)
+— are removed by deferred calls on every return path, success or error,
+because no library code exits the process (a declaration error in a task
+body is a returned error). A process killed by a signal nothing handles, by
+SIGKILL or by a crash leaves them behind in `$TMPDIR` (owner-only, `0700`).
 
 ## Recording (`RecordPlan`)
 
@@ -744,7 +774,7 @@ from outside the user namespace show up owned by the unmapped uid 65534
 (`nobody`) and are refused; point `TMPDIR` at a directory you own inside the
 container. If gonf refuses, create a private directory (`mkdir -p -m 700
 "$HOME/tmp"`) and export `TMPDIR=$HOME/tmp`. The directory is removed when `cli.CLI` returns
-(including after SIGINT/SIGTERM/SIGHUP) or on a fail-fast exit, but only while it is
+(including after SIGINT/SIGTERM/SIGHUP, and on every error return), but only while it is
 still the directory gonf created, so a planted replacement is never deleted. A
 crash, SIGKILL, an uncaught signal such as SIGQUIT, a second SIGINT/SIGTERM
 that force-exits the outer gonf (see "Local apply cancellation" below), or a

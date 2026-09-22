@@ -14,10 +14,12 @@ adapter before passing the slice to a constructor. Because erasure loses the
 family marker, adapters cannot validate that a legacy value belongs to the
 selected family; use them only for known-compatible legacy slices. Applying an
 option the target resource does not support, or an invalid option combination (e.g.
-`WithLine` with `WithContent`), still aborts via `logger.Fatal` at registration
-time — the fail-fast DSL contract. See [plan.md](plan.md), "Error handling
-contract": registration-time misuse fails fast, record- and apply-time
-failures return errors.
+`WithLine` with `WithContent`), is registration-time misuse: the resource is
+not registered and a declaration error is reported, which `RecordPlan`, `Run`,
+`Apply` and the CLI return (the process is never ended from library code). A
+resource rebuilt on the destination from a plan op (`Ensure*`) returns the
+same misuse as its apply error. See [plan.md](plan.md), "Error handling
+contract".
 
 ## Shared resource options
 

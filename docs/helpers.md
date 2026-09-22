@@ -25,7 +25,7 @@ RegisterMethods(MyTasks{}, WithPrefix("edge_"), WithCluster("edge"))
 
 func (MyTasks) Cron() {
     for _, host := range ClusterHosts() {           // hosts of WithCluster
-        w := MustHostValue[[2]string](host, "cron") // Fatal if missing/wrong type
+        w := MustHostValue[[2]string](host, "cron") // declaration error if missing/wrong type
         WhenHostname(host, func() { /* … */ })
     }
 }
@@ -67,8 +67,9 @@ Semantics, in order:
    cluster, fleet), an empty key, a nil `fn`, a task without `WithCluster`,
    or a missing or mistyped value fails the record with an error, like
    `MustSecret`: nothing is applied or pushed, no SSH connection is opened,
-   and a local run removes its temporary plan directory. Only a direct call
-   outside any recording ends the process via `logger.Fatal`.
+   and a local run removes its temporary plan directory. A direct call
+   outside any recording reports the same declaration error, which `Apply`
+   and the CLI refuse to run with.
 5. **Selected-host inputs.** Entry points that know where the plan applies
    record with a host selection. `fn` is not called for members outside it,
    so their per-host secrets are never read:
@@ -184,7 +185,8 @@ EachKV(List("user.name", "Ada", "user.email", "ada@example.com"),
     func(k, v string) { /* … */ })
 ```
 
-`EachKV` fatals on odd-length lists; `ParseKV` returns an error.
+`EachKV` reports a declaration error on odd-length lists (and calls `fn` for
+none of them); `ParseKV` returns the error.
 
 ## Git
 
