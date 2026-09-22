@@ -45,7 +45,10 @@ type DaemonReloadResource struct {
 // same bus — a second SystemdUnits composition, or an explicit DaemonReload
 // next to one — the new declaration merges into the existing one (see
 // mergeInto) and the existing resource is returned, so every caller depends
-// on the one reload that watches all of their inputs.
+// on the one reload that watches all of their inputs. A SystemdTimer
+// declared later on the same bus does not merge (its reload is part of its
+// own op) but orders the registered reload after itself, so the two share
+// one reload at apply time (see JoinRegisteredReload).
 //
 // Present does not run CheckWatch: a declaration armed with nothing to
 // watch (a bare IfChanged) is valid while it can still merge with a
@@ -58,11 +61,7 @@ func Present(opts ...opt.DaemonReloadOption) resource.Resource {
 	if r, prev, ok := registeredReload(d.id()); ok {
 		return prev.mergeInto(r, d)
 	}
-	name := "system"
-	if d.user {
-		name = "user"
-	}
-	r := resource.Register("DaemonReload", name, d, d.DependsOn.IDs...)
+	r := resource.Register("DaemonReload", busName(d.user), d, d.DependsOn.IDs...)
 	resource.RecordPlanDraft(d.planDraft(r.ID()))
 	return r
 }
@@ -138,9 +137,9 @@ func (d *DaemonReloadResource) apply() error {
 		return fmt.Errorf("%s: %w", id, err)
 	}
 
-	if d.Holds(resource.AnyChanged) {
+	if d.Holds(d.changedSinceLastReload) {
 		resource.Note(id, resource.StatusSkipped)
-		logger.Debug("%s: skipped (no watched dependency changed)", id)
+		logger.Debug("%s: skipped (no watched dependency changed since the last reload on this bus)", id)
 		return nil
 	}
 
@@ -159,10 +158,32 @@ func (d *DaemonReloadResource) apply() error {
 	})
 }
 
-func (d *DaemonReloadResource) id() string {
-	name := "system"
-	if d.user {
-		name = "user"
+// changedSinceLastReload is the oracle of the reload's change gate: a
+// watched id changed after the last reload on this bus in this apply
+// (resource.ChangedSince, anchored on this bus's DaemonReload ID, which the
+// registered reload and every private one, e.g. SystemdTimer's, note
+// under). A change noted before that reload is already loaded by the
+// manager, so a gated reload whose inputs all changed earlier is redundant
+// and held: that is how a SystemdTimer ordered before a same-bus
+// SystemdUnits reload (see JoinRegisteredReload) shares one reload with
+// it. Without an earlier reload on the bus it is resource.AnyChanged. An
+// unarmed reload never consults the gate and always reloads.
+func (d *DaemonReloadResource) changedSinceLastReload(ids ...string) bool {
+	return resource.ChangedSince(d.id(), ids...)
+}
+
+func (d *DaemonReloadResource) id() string { return busReloadID(d.user) }
+
+// busReloadID is the per-bus singleton ID of the daemon-reload:
+// DaemonReload[user] for the user manager, DaemonReload[system] otherwise.
+func busReloadID(user bool) string {
+	return resource.FormatID("DaemonReload", busName(user))
+}
+
+// busName is the ID name of the system or user manager's reload.
+func busName(user bool) string {
+	if user {
+		return "user"
 	}
-	return resource.FormatID("DaemonReload", name)
+	return "system"
 }

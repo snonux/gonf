@@ -119,15 +119,41 @@ func NoteIdle(id string, held bool) {
 func AnyChanged(ids ...string) bool {
 	reportMu.Lock()
 	defer reportMu.Unlock()
+	return anyChangedIn(notes, ids)
+}
+
+// ChangedSince is AnyChanged restricted to the notes recorded after the
+// last change note of anchor in this apply; when anchor has not changed
+// yet it is exactly AnyChanged. Daemon-reload uses it with its own ID
+// (DaemonReload[system] or DaemonReload[user], which every reload on that
+// bus notes under): a change noted before the bus's latest reload is
+// already loaded by the manager, so only a later change needs another
+// reload. The notes are the apply's ordered outcome log, so "after" is
+// apply order.
+func ChangedSince(anchor string, ids ...string) bool {
+	reportMu.Lock()
+	defer reportMu.Unlock()
+	from := 0
+	for i := len(notes) - 1; i >= 0; i-- {
+		if notes[i].id == anchor && isChangeStatus(notes[i].st) {
+			from = i + 1
+			break
+		}
+	}
+	return anyChangedIn(notes[from:], ids)
+}
+
+// anyChangedIn reports whether any of ids changed according to log: a
+// change note of the id itself, or for a Directory[path] id also of a File
+// under that path (watchCovers). The caller holds reportMu.
+func anyChangedIn(log []note, ids []string) bool {
 	for _, id := range ids {
-		if noteChangedLocked(id) {
-			return true
-		}
-		if _, ok := directoryNotePath(id); !ok {
-			continue
-		}
-		for _, n := range notes {
-			if isChangeStatus(n.st) && watchCovers(id, n.id) {
+		_, isDir := directoryNotePath(id)
+		for _, n := range log {
+			if !isChangeStatus(n.st) {
+				continue
+			}
+			if n.id == id || (isDir && watchCovers(id, n.id)) {
 				return true
 			}
 		}
@@ -150,15 +176,6 @@ func watchCovers(watch, id string) bool {
 	}
 	prefix := idPrefix("File") + dirPath
 	return id == prefix+"]" || strings.HasPrefix(id, prefix+"/") || strings.HasPrefix(id, prefix+"\\")
-}
-
-func noteChangedLocked(id string) bool {
-	for _, n := range notes {
-		if n.id == id && isChangeStatus(n.st) {
-			return true
-		}
-	}
-	return false
 }
 
 func isChangeStatus(st Status) bool {

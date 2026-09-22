@@ -113,10 +113,20 @@ func (t *SystemdTimer) SetEnableOnly() { t.enableOnly = true }
 
 // Present registers a systemd timer that should be installed, enabled, and
 // started (or only enabled when WithEnableOnly is set).
+//
+// When this recipe scope already registered a daemon-reload on the timer's
+// bus (e.g. a SystemdUnits composition), Present orders that reload after
+// the timer (systemd.JoinRegisteredReload): the timer's own change-gated
+// reload then also loads the composition's earlier-written inputs, and the
+// registered reload is held unless one of its inputs changed after it, so
+// the bus reloads once per apply. The timer's op is unchanged, and without
+// such a reload (or when joining it is refused) the timer behaves exactly
+// as a standalone one.
 func Present(name string, opts ...opt.SystemdTimerOption) resource.Resource {
 	t := newTimer(name, opts...)
 	r := resource.Register("SystemdTimer", t.base, t, t.DependsOn.IDs...)
 	resource.RecordPlanDraft(t.planDraft(r.ID()))
+	systemd.JoinRegisteredReload(t.user, r.ID())
 	return r
 }
 

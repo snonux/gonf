@@ -29,7 +29,8 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 }
 
 // Apply runs systemctl daemon-reload, optionally gated on whether any
-// watched resource changed, mirroring the resource's own option handling
+// watched resource changed since the bus's last reload in this apply
+// (changedSinceLastReload), mirroring the resource's own option handling
 // exactly. The gate is rebuilt by opt.RecordedChangeGate, the rule every
 // gated kind shares: a gated op with no watch ids is an error (it could
 // never reload), and an ungated op's recorded watch ids are ignored. The

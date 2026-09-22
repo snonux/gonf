@@ -26,6 +26,24 @@ optional.
 `Run`, `push`, `apply`, and `fleet` record a `systemd_timer` plan op (schema
 v7+). See [plan.md](plan.md).
 
+## Sharing the bus's daemon-reload
+
+A `SystemdTimer` declared after a same-bus `SystemdUnits` composition (or an
+explicit `DaemonReload`) in the same task shares that bus's reload: the
+registered `DaemonReload[user]` / `DaemonReload[system]` op gains a dependency
+on the `SystemdTimer`, so the timer applies first and its own change-gated
+reload also loads the composition's already-written inputs. A change-gated
+reload only fires for a watched change noted after the bus's last reload in
+this apply, so the composition's reload is then held unless one of its
+inputs changed later. The bus reloads once per apply, after all unit files
+and before every activation. The `systemd_timer` op itself is unchanged, and
+no plan schema change is involved.
+
+The timer keeps reloading on its own (at most one extra reload, as before)
+when it is alone, on the other bus, declared before the composition, in
+another when-block or privilege scope, or when it depends on the composition
+(joining would close a dependency cycle).
+
 ## Options
 
 | Option | Meaning |

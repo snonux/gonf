@@ -41,7 +41,10 @@ import (
 // registered, which then watches and depends on the union of every FanIn.
 // Each composition's activations still watch only their own FanIn, so a
 // changed input restarts only the units that declared it. Compositions on
-// different buses keep separate reloads. The merge amends the recorded
+// different buses keep separate reloads. A SystemdTimer declared later on
+// the same bus shares the reload too: it orders the reload after itself
+// (systemd.JoinRegisteredReload), and its own gated reload then covers the
+// composition's inputs. The merge amends the recorded
 // reload op in place, which is refused (fail-fast, naming both watch lists)
 // when a when-block boundary or privilege change separates the two
 // declarations, or when the new declaration's inputs already depend on the
