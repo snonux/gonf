@@ -59,7 +59,10 @@ not match `fs.ErrNotExist` either.
   wrapped by the provider, a typed error about another reference (e.g.
   `ErrNotFound` for the store's own unlock file), and a context error of
   the provider's own (its subprocess timeout) while the caller's context is
-  still live. An adapter bug is never read as "not found".
+  still live. A nil `*secret.Error` returned as a non-nil `error` (the
+  nil-receiver mistake) also becomes `ErrUnavailable`, with a message saying
+  so instead of a cause, rather than a panic. An adapter bug is never read
+  as "not found".
 
 **Optional means not-found only.** `OptionalSecret` returns `("", false)` for
 `ErrNotFound` and nothing else; every other kind, an empty value and a

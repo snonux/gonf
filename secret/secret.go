@@ -113,8 +113,13 @@ func IsNilProvider(p Provider) bool {
 }
 
 // Error returns Msg when set, otherwise `secret "<ref>": <kind>[: <cause>]`.
-// Msg exists so the file provider keeps its historical messages exactly.
+// Msg exists so the file provider keeps its historical messages exactly. A
+// nil *Error (a provider's nil-receiver mistake) describes itself instead of
+// panicking.
 func (e *Error) Error() string {
+	if e == nil {
+		return "secret: nil *secret.Error"
+	}
 	if e.Msg != "" {
 		return e.Msg
 	}
@@ -125,8 +130,12 @@ func (e *Error) Error() string {
 	return msg
 }
 
-// Unwrap exposes both the kind and the cause to errors.Is/As.
+// Unwrap exposes both the kind and the cause to errors.Is/As; a nil *Error
+// has neither.
 func (e *Error) Unwrap() []error {
+	if e == nil {
+		return nil
+	}
 	var out []error
 	for _, err := range []error{e.Kind, e.Err} {
 		if err != nil {
@@ -142,9 +151,10 @@ func (e *Error) Unwrap() []error {
 // whose cause happens to wrap a not-found, or a caller that added context
 // with fmt.Errorf, must never look like an absent secret. Resolve and
 // api.ResolveSecret return the *Error unwrapped, so apply KindOf and
-// IsNotFound directly to their result.
+// IsNotFound directly to their result. A nil *Error held in a non-nil error
+// has no kind either.
 func KindOf(err error) error {
-	if e, ok := err.(*Error); ok {
+	if e, ok := err.(*Error); ok && e != nil {
 		return e.Kind
 	}
 	return nil
@@ -191,9 +201,17 @@ func canceled(ref Ref, err error) error {
 
 // classify returns err unchanged when it is a top-level *Error about ref with
 // a known kind, and wraps everything else as ErrUnavailable (keeping it as
-// the cause). Resolve has already handled the caller's own cancellation.
+// the cause). A nil *Error in a non-nil error — a provider returning its
+// nil *Error variable — is unclassified too; it is described in Msg rather
+// than kept as the cause, so nothing downstream calls methods on it.
+// Resolve has already handled the caller's own cancellation.
 func classify(ref Ref, err error) error {
-	if e, ok := err.(*Error); ok && e.Ref == ref && slices.Contains(kinds, e.Kind) {
+	e, ok := err.(*Error)
+	if ok && e == nil {
+		return &Error{Kind: ErrUnavailable, Ref: ref,
+			Msg: fmt.Sprintf("secret %q: %v: provider returned a nil *secret.Error", string(ref), ErrUnavailable)}
+	}
+	if ok && e.Ref == ref && slices.Contains(kinds, e.Kind) {
 		return err
 	}
 	return &Error{Kind: ErrUnavailable, Ref: ref, Err: err}

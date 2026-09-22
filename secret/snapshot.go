@@ -214,7 +214,7 @@ func callerError(ctx context.Context, err error, ref Ref) error {
 // the requested one, so the message is the one a direct lookup of ref would
 // give and never names a reference other than Ref.
 func withRef(err error, ref Ref) error {
-	if e, ok := err.(*Error); ok && e.Ref != ref {
+	if e, ok := err.(*Error); ok && e != nil && e.Ref != ref {
 		c := *e
 		c.Ref = ref
 		c.Msg = strings.ReplaceAll(e.Msg, strconv.Quote(string(e.Ref)), strconv.Quote(string(ref)))
