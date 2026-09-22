@@ -152,6 +152,63 @@ func TestResolveHasNoInteractivePath(t *testing.T) {
 	}
 }
 
+// TestChildEnvNeverNil guards the nil-Env-means-inherit-everything foot-gun
+// directly at the unit that builds it: os/exec treats a nil Cmd.Env as
+// "inherit the parent's whole environment" but a non-nil empty slice as "no
+// environment" (see os/exec's Cmd.Env doc). Before task 2c2's fix,
+// childEnv(false) returned nil whenever HOME was unset and there was
+// nothing else to append (no passphrase FD, no test seam extraEnv) -- the
+// exact production shape, since extraEnv is a package test seam that is
+// always empty outside this package's own tests.
+func TestChildEnvNeverNil(t *testing.T) {
+	if home, ok := os.LookupEnv("HOME"); ok {
+		os.Unsetenv("HOME")
+		t.Cleanup(func() { os.Setenv("HOME", home) })
+	}
+	p := &Provider{}
+	env := p.childEnv(false)
+	if env == nil {
+		t.Fatal("childEnv returned nil with nothing to append; exec.Cmd would inherit the whole parent environment")
+	}
+	if len(env) != 0 {
+		t.Fatalf("childEnv with nothing to append = %v, want empty", env)
+	}
+}
+
+// TestChildEnvExcludesParentEnvironment is the "probe" scenario task 2c2 was
+// filed from: with HOME unset and sensitive variables set in the test's own
+// environment (as under `env -i` or a systemd unit without User=), the real
+// child process must see none of them. It runs the actual env(1) binary
+// (rather than the package's fake foostore, whose test-seam extraEnv would
+// always keep Cmd.Env non-nil and so never exercise the bug) with the exact
+// Cmd the provider builds, and asserts it prints nothing -- not the parent's
+// environment.
+func TestChildEnvExcludesParentEnvironment(t *testing.T) {
+	envBin, err := exec.LookPath("env")
+	if err != nil {
+		t.Skip("no env(1) binary available")
+	}
+	if home, ok := os.LookupEnv("HOME"); ok {
+		os.Unsetenv("HOME")
+		t.Cleanup(func() { os.Setenv("HOME", home) })
+	}
+	t.Setenv("PIN", "pin-leak")
+	t.Setenv("FOOSTORE_SHELL", "1")
+	t.Setenv("FOOSTORE_READ_PASSPHRASE_FD", "0")
+	t.Setenv("GONF_TOKEN", "s3cr3t")
+
+	p := &Provider{cfg: Config{Binary: envBin}}
+	cmd := p.command(context.Background(), nil, false)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("child inherited the parent environment: %q", out.String())
+	}
+}
+
 func TestResolvePassphraseThroughInheritedPipe(t *testing.T) {
 	pass := "correct horse battery staple"
 	var handed []byte

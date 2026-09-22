@@ -308,8 +308,16 @@ func (p *Provider) checkContract(ctx context.Context, ref secret.Ref) error {
 // passed, and the test seam. Nothing else is inherited — in particular no
 // FOOSTORE_SHELL, PIN, inherited FOOSTORE_READ_PASSPHRASE_FD or terminal
 // settings that could steer foostore towards an interactive path.
+//
+// It always returns a non-nil slice, even when nothing ends up appended
+// (HOME unset, no passphrase FD, no test seam): exec.Cmd.Env treats a nil
+// slice as "inherit the whole parent environment" but a non-nil empty one as
+// "no environment", so returning nil here would silently hand the child
+// everything the parent has — including a leftover FOOSTORE_SHELL, PIN or
+// inherited FOOSTORE_READ_PASSPHRASE_FD the paragraph above promises never
+// to pass on (e.g. under `env -i`, or a systemd unit without User=).
 func (p *Provider) childEnv(withPassFD bool) []string {
-	var env []string
+	env := make([]string, 0, 2)
 	if home, ok := os.LookupEnv("HOME"); ok {
 		env = append(env, "HOME="+home)
 	}
