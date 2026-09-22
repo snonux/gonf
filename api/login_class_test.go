@@ -483,20 +483,19 @@ func TestLoginClassRegistrationMisuseFailsFast(t *testing.T) {
 	if runtime.GOOS != "openbsd" {
 		cases = append(cases, struct{ caseName, want string }{"direct", "requirement not met on this host (goos=" + runtime.GOOS + ")"})
 	}
-	before := countFatalHelperTempDirs(t)
+	// The helper calls t.TempDir() itself and then exits via logger.Fatal
+	// (os.Exit), which skips its own deferred cleanup (t.TempDir()'s
+	// directory is removed via t.Cleanup, which never runs). t.TempDir()
+	// creates its directory under $GOTMPDIR (see testing.common.makeTempDir),
+	// so every case below points its child's GOTMPDIR at this one directory
+	// this test owns; cleanFatalHelperTempDir then removes what the child
+	// left there and confirms it is empty again before the next case reuses
+	// it, so nothing accumulates and nothing leaks into the real temp root.
+	tmp := t.TempDir()
 	for _, tc := range cases {
 		t.Run(tc.caseName, func(t *testing.T) {
 			c := exec.Command(os.Args[0], "-test.run=^TestLoginClassFatalHelperProcess$", "-test.timeout=60s")
-			// The helper calls t.TempDir() itself and then exits via
-			// logger.Fatal (os.Exit), which skips its own deferred cleanup
-			// (t.TempDir()'s directory is removed via t.Cleanup, which never
-			// runs). t.TempDir() creates its directory under $GOTMPDIR (see
-			// testing.common.makeTempDir), so pointing the child's GOTMPDIR at
-			// a directory this (surviving) test owns means that directory -
-			// and whatever the child created below it - is removed by this
-			// test's own t.TempDir() cleanup instead of leaking under the
-			// real $GOTMPDIR/temp root.
-			c.Env = append(os.Environ(), "GONF_API_LOGINCLASS_MISUSE="+tc.caseName, "GOTMPDIR="+t.TempDir())
+			c.Env = append(os.Environ(), "GONF_API_LOGINCLASS_MISUSE="+tc.caseName, "GOTMPDIR="+tmp)
 			out, err := c.CombinedOutput()
 			if err == nil {
 				t.Fatalf("misuse %q exited 0; output:\n%s", tc.caseName, out)
@@ -504,9 +503,9 @@ func TestLoginClassRegistrationMisuseFailsFast(t *testing.T) {
 			if !strings.Contains(string(out), tc.want) {
 				t.Fatalf("misuse %q output misses %q:\n%s", tc.caseName, tc.want, out)
 			}
+			cleanFatalHelperTempDir(t, tmp)
 		})
 	}
-	assertNoNewFatalHelperTempDirs(t, before)
 }
 
 // TestLoginClassFatalHelperProcess triggers one misuse per invocation for

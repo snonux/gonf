@@ -416,22 +416,22 @@ func TestSystemdUnitsRegistrationMisuseFailsFast(t *testing.T) {
 		{"empty-timer-name", "ActivateTimer name must not be empty"},
 		{"empty-service-name", "ActivateService name must not be empty"},
 	}
-	before := countFatalHelperTempDirs(t)
+	// The helper calls t.TempDir() itself (empty-timer-name and
+	// empty-service-name) and then exits via logger.Fatal (os.Exit), which
+	// skips its own deferred cleanup. t.TempDir() creates its directory
+	// under $GOTMPDIR (see testing.common.makeTempDir), so every case below
+	// points its child's GOTMPDIR at this one directory this test owns;
+	// cleanFatalHelperTempDir then removes what the child left there (if
+	// anything - "no-inputs" creates nothing) and confirms it is empty again
+	// before the next case reuses it.
+	tmp := t.TempDir()
 	for _, tc := range cases {
 		t.Run(tc.caseName, func(t *testing.T) {
 			cmd := exec.Command(os.Args[0], "-test.run=^TestSystemdUnitsFatalHelperProcess$", "-test.timeout=60s")
-			// The helper calls t.TempDir() itself (empty-timer-name and
-			// empty-service-name) and then exits via logger.Fatal (os.Exit),
-			// which skips its own deferred cleanup. t.TempDir() creates its
-			// directory under $GOTMPDIR (see testing.common.makeTempDir), so
-			// pointing the child's GOTMPDIR at a directory this (surviving)
-			// test owns means that directory - and whatever the child created
-			// below it - is removed by this test's own t.TempDir() cleanup
-			// instead of leaking under the real $GOTMPDIR/temp root.
 			cmd.Env = append(os.Environ(),
 				"GONF_API_UNITS_MISUSE=1",
 				"GONF_API_UNITS_MISUSE_CASE="+tc.caseName,
-				"GOTMPDIR="+t.TempDir())
+				"GOTMPDIR="+tmp)
 			out, err := cmd.CombinedOutput()
 			if err == nil {
 				t.Fatalf("misuse case %q exited 0, want fail-fast; output:\n%s", tc.caseName, out)
@@ -439,9 +439,9 @@ func TestSystemdUnitsRegistrationMisuseFailsFast(t *testing.T) {
 			if !strings.Contains(string(out), tc.want) {
 				t.Fatalf("misuse case %q output misses %q:\n%s", tc.caseName, tc.want, out)
 			}
+			cleanFatalHelperTempDir(t, tmp)
 		})
 	}
-	assertNoNewFatalHelperTempDirs(t, before)
 }
 
 // TestSystemdUnitsFatalHelperProcess is the helper process for
