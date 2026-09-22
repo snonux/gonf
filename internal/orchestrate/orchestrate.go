@@ -38,7 +38,9 @@ type Group struct {
 	// Writer receives remote.Fanout's per-group summary line; nil means
 	// os.Stderr (see remote.Group.Writer). It is passed straight through to
 	// remote.Group so api's cluster and fleet entry points share one output
-	// seam with the single-host push/preview path.
+	// seam with the single-host push/preview path. Deliver writes it once,
+	// after g's hosts finish; a caller sharing one Writer between concurrent
+	// Deliver calls (api's fleet run) must make it safe for concurrent use.
 	Writer io.Writer
 }
 

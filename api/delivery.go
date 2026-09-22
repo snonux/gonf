@@ -31,7 +31,10 @@ import (
 // back to the CURRENT os.Stderr, read on every call instead of cached here
 // at package init, so testutil.CaptureStderr's os.Stderr swap still works.
 // Either way summaryOutput wraps the destination in the controller's secret
-// redactor; the lines stay byte-identical when they quote no secret. Tests
+// redactor; the lines stay byte-identical when they quote no secret. A
+// fleet run's concurrent groups share it through one lockedWriter (see
+// deliverGroups), so a test's bytes.Buffer here need not be safe for
+// concurrent use. Tests
 // set it (like the remote package's SSHRunner/ensureRuntime seams) to
 // assert on the summary text without redirecting the process-wide
 // os.Stderr; tests using it must not run in parallel.
@@ -52,7 +55,9 @@ type groupRun struct {
 
 // writer is r's Fanout summary destination: the package-wide pushOutput
 // seam, shared with recordAndPush's single-host line, through the
-// controller's secret redactor (summaryOutput).
+// controller's secret redactor (summaryOutput). It is not serialised: a
+// cluster run writes it from one goroutine, and deliverGroups wraps it in a
+// lockedWriter before sharing it between concurrent fleet groups.
 func (r groupRun) writer() io.Writer {
 	return summaryOutput()
 }
@@ -267,16 +272,22 @@ func (r groupRun) fleet(ctx context.Context) error {
 // parallelism fix. context.CancelFunc is safe to call concurrently and more
 // than once (only the first call has effect), so no extra synchronization
 // (e.g. sync.Once) is needed around cancel().
+//
+// Every group writes its summary line to the same destination (pushOutput
+// or os.Stderr), concurrently when groups finish together, so the groups
+// share ONE lockedWriter around it: an injected writer need not be safe for
+// concurrent use, and each line arrives whole.
 func (r groupRun) deliverGroups(ctx context.Context, d remote.Delivery, groups []inventory.FleetHostGroup) []error {
 	fleetCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	summary := newLockedWriter(r.writer())
 	var wg sync.WaitGroup
 	var errMu sync.Mutex
 	var errs []error
 	for _, g := range groups {
 		og := orchestrate.Group{Name: g.Cluster.Name, HostNames: g.HostNames,
-			Limit: r.limit(g.Cluster), HostTimeout: r.hostTimeout, Writer: r.writer()}
+			Limit: r.limit(g.Cluster), HostTimeout: r.hostTimeout, Writer: summary}
 		wg.Go(func() {
 			if err := orchestrate.Deliver(fleetCtx, d, og); err != nil {
 				errMu.Lock()

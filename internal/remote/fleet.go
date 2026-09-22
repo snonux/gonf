@@ -51,7 +51,11 @@ type Group struct {
 	// (n/m hosts)"). Nil (the zero Group, every production caller today)
 	// means os.Stderr, keeping the line byte-identical to before this field
 	// existed; tests inject a buffer to assert on the summary without
-	// redirecting the process-wide os.Stderr.
+	// redirecting the process-wide os.Stderr. Fanout writes the line with a
+	// single Write, once, after its hosts finish; Fanout itself never writes
+	// concurrently, so a Writer shared by concurrent Fanout calls (a fleet
+	// run's cluster groups) must be safe for concurrent use; api wraps it in
+	// a mutex-guarded writer for that.
 	Writer io.Writer
 }
 
