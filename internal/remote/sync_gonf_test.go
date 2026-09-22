@@ -570,7 +570,7 @@ func (s *gonfSyncStub) installPusherFakes(t *testing.T) {
 	oldProber := defaultPusher.PlanVersionProber
 	oldBuild := defaultPusher.GoBuildRunner
 	oldSCP := defaultPusher.SCPRunner
-	defaultPusher.PlanVersionProber = func(context.Context, PushTarget) (int, error) { return 0, nil }
+	defaultPusher.PlanVersionProber = func(context.Context, PushTarget, ProbeContext) (int, error) { return 0, nil }
 	defaultPusher.GoBuildRunner = fakeBuild("fake")
 	defaultPusher.SCPRunner = func(ctx context.Context, localPath string, t PushTarget, remotePath string) error {
 		s.mu.Lock()
@@ -1007,10 +1007,10 @@ func TestEnsureRemoteGonfUpgradesWhenReleaseVersionStale(t *testing.T) {
 	}
 
 	p := newBuildTestPusher(t)
-	p.PlanVersionProber = func(context.Context, PushTarget) (int, error) {
+	p.PlanVersionProber = func(context.Context, PushTarget, ProbeContext) (int, error) {
 		return plan.CurrentVersion, nil
 	}
-	p.ReleaseVersionProber = func(context.Context, PushTarget) (string, error) {
+	p.ReleaseVersionProber = func(context.Context, PushTarget, ProbeContext) (string, error) {
 		return "0.0.1", nil // far older than any real internal.Version
 	}
 	p.GoBuildRunner = func(ctx context.Context, goos, goarch, out, pkg string) error {
@@ -1057,8 +1057,8 @@ func TestEnsureRemoteGonfUpgradesReleasedV014WithoutStrictPreview(t *testing.T) 
 	}
 
 	p := newBuildTestPusher(t)
-	p.PlanVersionProber = func(context.Context, PushTarget) (int, error) { return plan.CurrentVersion, nil }
-	p.ReleaseVersionProber = func(context.Context, PushTarget) (string, error) { return "0.14.0", nil }
+	p.PlanVersionProber = func(context.Context, PushTarget, ProbeContext) (int, error) { return plan.CurrentVersion, nil }
+	p.ReleaseVersionProber = func(context.Context, PushTarget, ProbeContext) (string, error) { return "0.14.0", nil }
 	p.GoBuildRunner = func(_ context.Context, _, _, out, _ string) error {
 		return os.WriteFile(out, []byte("fake"), 0o755)
 	}
@@ -1083,10 +1083,10 @@ func TestEnsureRemoteGonfUpgradesReleasedV014WithoutStrictPreview(t *testing.T) 
 func TestEnsureRemoteGonfSkipsUpgradeWhenReleaseVersionCurrentAndSchemaCurrent(t *testing.T) {
 	t.Parallel()
 	p := newBuildTestPusher(t)
-	p.PlanVersionProber = func(context.Context, PushTarget) (int, error) {
+	p.PlanVersionProber = func(context.Context, PushTarget, ProbeContext) (int, error) {
 		return plan.CurrentVersion, nil
 	}
-	p.ReleaseVersionProber = func(context.Context, PushTarget) (string, error) {
+	p.ReleaseVersionProber = func(context.Context, PushTarget, ProbeContext) (string, error) {
 		return "999.0.0", nil // never older than the controller
 	}
 	var built, scped bool
@@ -1121,10 +1121,10 @@ func TestEnsureRemoteGonfSkipsUpgradeWhenReleaseVersionCurrentAndSchemaCurrent(t
 func TestEnsureRemoteGonfUnparseableReleaseVersionSkipsCheckWithoutFailing(t *testing.T) {
 	t.Parallel()
 	p := newBuildTestPusher(t)
-	p.PlanVersionProber = func(context.Context, PushTarget) (int, error) {
+	p.PlanVersionProber = func(context.Context, PushTarget, ProbeContext) (int, error) {
 		return plan.CurrentVersion, nil
 	}
-	p.ReleaseVersionProber = func(context.Context, PushTarget) (string, error) {
+	p.ReleaseVersionProber = func(context.Context, PushTarget, ProbeContext) (string, error) {
 		return "Welcome to Ubuntu 22.04.1 LTS", nil // banner/MOTD noise, not a version
 	}
 	var built, scped bool
@@ -1162,7 +1162,7 @@ func TestProbePlanVersionUnparseableOutputReturnsRawTextError(t *testing.T) {
 		return banner + "\n", "", nil
 	}
 
-	n, err := probePlanVersion(context.Background(), PushTarget{Host: "h.example"})
+	n, err := probePlanVersion(context.Background(), PushTarget{Host: "h.example"}, ProbeLogin)
 	if err == nil {
 		t.Fatalf("probePlanVersion returned (%d, nil); want an error for unparseable output", n)
 	}

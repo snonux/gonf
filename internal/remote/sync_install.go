@@ -65,7 +65,7 @@ func (p *Pusher) installRemoteBinary(ctx context.Context, t PushTarget, localBin
 	// Verify via the installed path so PATH order cannot hide an older binary.
 	verify := t
 	verify.GonfPath = installPath
-	got, err := probePlanVersion(ctx, verify)
+	got, err := probePlanVersion(ctx, verify, ProbeLogin)
 	if err != nil {
 		return fmt.Errorf("ensure gonf: verify: %w", err)
 	}

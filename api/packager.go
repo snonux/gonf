@@ -1,0 +1,182 @@
+package api
+
+import (
+	"encoding/base64"
+	"fmt"
+	"os"
+
+	"github.com/snonux/gonf/plan"
+	"github.com/snonux/gonf/resource"
+)
+
+// draftPackager is the explicit context one packaging pass lowers drafts in:
+// the blob store large sources go to, the blob refs the pass has already
+// claimed (guardBlobRef), whether an enclosing Privileged() task body elevates
+// every op (draftToOp), and the task being recorded, which names the recipe in
+// a draft error (draftError).
+//
+// It exists so packageDraft reads no hidden global state. A recording session
+// hands out a packager built from its live state (recordingSession.packager);
+// a local api.Apply, which is not a recording session, builds a fresh one
+// (newDraftPackager), so nothing an earlier RecordPlan in the same process
+// left in the session — a claimed blob ref, an elevate flag, a task name on
+// the stack — can leak into (falsely collide with, elevate or mislabel) the
+// Apply's ops, and Apply never has to reach into the session to reset it.
+//
+// Value semantics: a packager is copied freely. blobRefs is a map, so every
+// copy made for one pass shares (and extends) the same claimed-ref set.
+type draftPackager struct {
+	store    plan.BlobStore    // nil: no blob staging available
+	blobRefs map[string]string // blob ref → blobIdentityKey that claimed it
+	elevate  bool              // fold elevation into every op
+	task     string            // task body being recorded; "" outside one
+}
+
+// newDraftPackager returns the packager for a packaging pass outside any
+// recording session (api.Apply): a fresh claimed-ref set, no inherited
+// elevation and no task name. store may be nil when no draft needs blobs.
+func newDraftPackager(store plan.BlobStore) draftPackager {
+	return draftPackager{store: store, blobRefs: map[string]string{}}
+}
+
+// packageDraft lowers d to its plan op (draftToOp) and packages its source
+// data: a file source inline as content_b64 when it fits, otherwise — like a
+// sync_dir tree or glob — as a blob in p.store.
+func (p draftPackager) packageDraft(d resource.PlanDraft) (plan.Op, error) {
+	op, err := p.draftToOp(d)
+	if err != nil {
+		return plan.Op{}, err
+	}
+	name := blobName(d)
+	switch {
+	case d.SourcePath != "":
+		return p.packageSourceFile(op, d, name)
+	case d.SourceGlob != "":
+		return p.packageBlob(op, d, name, d.SourceGlob, p.writeGlob)
+	case d.SourceDir != "":
+		return p.packageBlob(op, d, name, d.SourceDir, p.writeTree)
+	}
+	return op, nil
+}
+
+// packageSourceFile packages a file source: inline as content_b64 up to
+// plan.MaxInlineContent, otherwise as a blob, which needs a store.
+func (p draftPackager) packageSourceFile(op plan.Op, d resource.PlanDraft, name string) (plan.Op, error) {
+	data, err := os.ReadFile(d.SourcePath)
+	if err != nil {
+		return op, fmt.Errorf("package file %s: %w", d.SourcePath, err)
+	}
+	if len(data) <= plan.MaxInlineContent {
+		op.ContentB64 = base64.StdEncoding.EncodeToString(data)
+		op.Blob = ""
+		return op, nil
+	}
+	if p.store == nil {
+		return op, fmt.Errorf("package file %s: exceeds inline limit and no plan dir for blobs", d.SourcePath)
+	}
+	if err := p.guardBlobRef(name, d); err != nil {
+		return op, err
+	}
+	ref, err := p.store.WriteFile(name, data)
+	if err != nil {
+		return op, err
+	}
+	op.Blob = ref
+	op.ContentB64 = ""
+	return op, nil
+}
+
+// packageBlob packages a sync_dir source (a tree or a glob, named by src) as
+// a blob through write; blob packaging always needs a store.
+func (p draftPackager) packageBlob(op plan.Op, d resource.PlanDraft, name, src string, write func(name, src string) (string, error)) (plan.Op, error) {
+	if p.store == nil {
+		return op, fmt.Errorf("package sync_dir %s: plan dir required for blob packaging", src)
+	}
+	if err := p.guardBlobRef(name, d); err != nil {
+		return op, err
+	}
+	ref, err := write(name, src)
+	if err != nil {
+		return op, err
+	}
+	op.Blob = ref
+	return op, nil
+}
+
+// writeGlob and writeTree adapt the store's two sync_dir writers to
+// packageBlob's write parameter. They are only called once packageBlob has
+// checked that p.store is set.
+func (p draftPackager) writeGlob(name, glob string) (string, error) {
+	return p.store.WriteGlob(name, glob)
+}
+
+func (p draftPackager) writeTree(name, dir string) (string, error) {
+	return p.store.WriteTree(name, dir)
+}
+
+// guardBlobRef predicts the blob ref that store.Write{File,Tree,Glob} will
+// produce for name and fails loudly if a *different* resource already
+// claimed that exact ref earlier in this packaging pass (for a recording
+// session: anywhere in the session). blobName's hash suffix should already
+// make that impossible; this is defense in depth so a regression here fails
+// RecordPlan instead of silently corrupting a blob (the data-loss failure
+// mode this whole fix exists to close). A resource recorded twice with the
+// same identity (e.g. a diamond-included task body running again in a
+// disjoint branch) legitimately reuses its own ref, so that case is not an
+// error.
+func (p draftPackager) guardBlobRef(name string, d resource.PlanDraft) error {
+	ref, err := plan.BlobRefFor(name)
+	if err != nil {
+		return err
+	}
+	identity := blobIdentityKey(d)
+	if prior, ok := p.blobRefs[ref]; ok {
+		if prior == identity {
+			return nil
+		}
+		return fmt.Errorf("RecordPlan: blob ref %q collision: already packaged for %q, now requested for %q (this should be impossible after blobName hashing; please report)",
+			ref, prior, identity)
+	}
+	p.blobRefs[ref] = identity
+	return nil
+}
+
+// draftError points a handler's record-time rejection at the recipe: the
+// task being recorded (p.task; a local api.Apply has none) and the draft's
+// resource ID, as "RecordPlan: [task %q: ]draft %q: <handler error>". The
+// "RecordPlan: draft %q:" part matches draftToOp's own errors, which name no
+// task; the task part mirrors checkUnrecordedDrafts. The handler's error is
+// wrapped, so errors.Is/As still see it, and handlers must not add their own
+// ID prefix.
+func (p draftPackager) draftError(d resource.PlanDraft, err error) error {
+	if p.task == "" {
+		return fmt.Errorf("RecordPlan: draft %q: %w", d.ID, err)
+	}
+	return fmt.Errorf("RecordPlan: task %q: draft %q: %w", p.task, d.ID, err)
+}
+
+// draftToOp lowers a resource draft to a plan op line by delegating to the
+// draft kind's registered plan.Handler (see plan/handler.go): the resource
+// package owns its own wire form and this method only folds in the
+// packager's elevate flag. Every resource kind registers a Handler (see
+// docs/plan.md, "Adding a resource kind"), so an unmapped kind is always a
+// programming error (typo, or a new resource kind that forgot to register)
+// and fails the record loudly here instead of silently forwarding an unknown
+// op to the wire, where it would only blow up at remote apply time.
+func (p draftPackager) draftToOp(d resource.PlanDraft) (plan.Op, error) {
+	h, ok := plan.HandlerFor(plan.Kind(d.Kind))
+	if !ok {
+		return plan.Op{}, fmt.Errorf("RecordPlan: draft %q: unknown draft kind %q (no registered plan.Handler; see docs/plan.md kind checklist)",
+			d.ID, d.Kind)
+	}
+	op, err := h.ToOp(d)
+	if err != nil {
+		return plan.Op{}, p.draftError(d, err)
+	}
+	op.Elevate = d.Elevate || p.elevate
+	if !plan.IsKnownKind(op.Op) {
+		return op, fmt.Errorf("RecordPlan: draft %q: kind %q lowers to undeclared plan kind %q (missing from plan.AllKinds)",
+			d.ID, d.Kind, op.Op)
+	}
+	return op, nil
+}

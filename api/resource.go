@@ -125,23 +125,16 @@ func requireDraftsForAll(drafts []resource.PlanDraft, registered []string) error
 // executes, behind a fresh plan header. Blobs too large for inline content are
 // staged in store, whose directory the caller owns.
 //
-// Side effect: it resets three process-wide recording-session fields,
-// recSession.recordedBlobRefs, recSession.recordingElevate and
-// recSession.recordingStack. packageDraft (shared with the record path)
-// consults all three — the first to detect blob-ref collisions between
-// different resources, the second to fold a Privileged() task's elevate flag
-// into every op, the third to name the task in a draft error (draftError) —
-// and Apply is not a recording session, so without this reset a blob ref,
-// elevate flag or task name left behind by an earlier RecordPlan in the same
-// process would leak into (falsely collide with, elevate, or mislabel) the
-// Apply's ops.
+// Apply is not a recording session, so it packages through its own fresh
+// draftPackager (newDraftPackager): blob-ref collisions are checked among
+// these drafts only, no Privileged() elevate flag is folded in, and a draft
+// error names no task. Nothing an earlier RecordPlan in the same process left
+// in the recording session is read, and the session is not touched.
 func packageApplyOps(drafts []resource.PlanDraft, store plan.BlobStore) ([]plan.Op, error) {
-	recSession.recordedBlobRefs = make(map[string]string)
-	recSession.recordingElevate = false
-	recSession.recordingStack = nil
+	packager := newDraftPackager(store)
 	ops := []plan.Op{{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "apply"}}
 	for _, draft := range drafts {
-		op, err := packageDraft(draft, store)
+		op, err := packager.packageDraft(draft)
 		if err != nil {
 			return nil, err
 		}

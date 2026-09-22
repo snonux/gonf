@@ -52,11 +52,11 @@ import (
 type Pusher struct {
 	SCPRunner         func(ctx context.Context, localPath string, t PushTarget, remotePath string) error
 	GoBuildRunner     func(ctx context.Context, goos, goarch, out, pkg string) error
-	PlanVersionProber func(ctx context.Context, t PushTarget) (int, error)
+	PlanVersionProber func(ctx context.Context, t PushTarget, pc ProbeContext) (int, error)
 	// StrictPreviewProber reports the target's strict-preview capability
 	// version. It is distinct from the plan schema because strict preview
 	// changes transport safety rather than plan encoding.
-	StrictPreviewProber func(ctx context.Context, t PushTarget) (int, error)
+	StrictPreviewProber func(ctx context.Context, t PushTarget, pc ProbeContext) (int, error)
 
 	// ReleaseVersionProber probes the remote gonf binary's own release
 	// version (internal.Version, e.g. "0.12.1", as printed by `gonf
@@ -72,7 +72,7 @@ type Pusher struct {
 	// (as in a hand-built *Pusher a test doesn't care about this field)
 	// simply skips the extra check — the plan-schema check above remains
 	// authoritative either way.
-	ReleaseVersionProber func(ctx context.Context, t PushTarget) (string, error)
+	ReleaseVersionProber func(ctx context.Context, t PushTarget, pc ProbeContext) (string, error)
 
 	// CrossBuildRoot is the parent directory in which this Pusher creates its
 	// private build dir (see crossbuild.go). Empty means os.TempDir(). It is
@@ -172,8 +172,11 @@ func EnsureRemoteGonf(ctx context.Context, t PushTarget) (installedPath string, 
 // probes; unlike EnsureRemoteGonf, it never cross-compiles, copies, or
 // installs a binary. Strict remote preview uses this check so an absent or
 // stale runtime fails clearly instead of turning a preview into provisioning.
-func RequireRemoteGonf(ctx context.Context, t PushTarget) error {
-	return defaultPusher.RequireRemoteGonf(ctx, t)
+// pc is the privilege context the probes run in: the one that will run the
+// previewed apply chunk (see requireRemoteGonfForChunks), because sudo/doas
+// can resolve a different gonf binary than the SSH login's PATH.
+func RequireRemoteGonf(ctx context.Context, t PushTarget, pc ProbeContext) error {
+	return defaultPusher.RequireRemoteGonf(ctx, t, pc)
 }
 
 // RequireRemoteGonf is the Pusher-scoped implementation of
@@ -181,11 +184,11 @@ func RequireRemoteGonf(ctx context.Context, t PushTarget) error {
 // release version as a refusal: strict preview must establish that the remote
 // runtime has the same behavior as the controller, whereas ordinary push can
 // repair a stale runtime through EnsureRemoteGonf.
-func (p *Pusher) RequireRemoteGonf(ctx context.Context, t PushTarget) error {
+func (p *Pusher) RequireRemoteGonf(ctx context.Context, t PushTarget, pc ProbeContext) error {
 	if t.Host == "" {
 		return fmt.Errorf("remote preview: empty host")
 	}
-	remotePlanVersion, err := p.PlanVersionProber(ctx, t)
+	remotePlanVersion, err := p.PlanVersionProber(ctx, t, pc)
 	if err != nil {
 		return fmt.Errorf("remote preview: probe gonf plan schema: %w", err)
 	}
@@ -195,7 +198,7 @@ func (p *Pusher) RequireRemoteGonf(ctx context.Context, t PushTarget) error {
 	if p.StrictPreviewProber == nil {
 		return fmt.Errorf("remote preview: cannot verify remote strict-preview capability; preview does not install or update gonf, run push first")
 	}
-	remoteStrictPreviewVersion, err := p.StrictPreviewProber(ctx, t)
+	remoteStrictPreviewVersion, err := p.StrictPreviewProber(ctx, t, pc)
 	if err != nil {
 		return fmt.Errorf("remote preview: probe gonf strict-preview capability: %w", err)
 	}
@@ -206,7 +209,7 @@ func (p *Pusher) RequireRemoteGonf(ctx context.Context, t PushTarget) error {
 		return fmt.Errorf("remote preview: cannot verify remote gonf release version; preview does not install or update gonf, run push first")
 	}
 
-	remoteRelease, err := p.ReleaseVersionProber(ctx, t)
+	remoteRelease, err := p.ReleaseVersionProber(ctx, t, pc)
 	if err != nil {
 		return fmt.Errorf("remote preview: probe gonf release version: %w", err)
 	}
@@ -237,7 +240,9 @@ func (p *Pusher) EnsureRemoteGonf(ctx context.Context, t PushTarget) (installedP
 	if t.Host == "" {
 		return "", fmt.Errorf("ensure gonf: empty host")
 	}
-	remoteVer, err := p.PlanVersionProber(ctx, t)
+	// The bootstrap installs gonf for, and verifies it as, the SSH login
+	// user, so it probes in that context (ProbeLogin).
+	remoteVer, err := p.PlanVersionProber(ctx, t, ProbeLogin)
 	if err != nil {
 		return "", fmt.Errorf("ensure gonf: %w", err)
 	}
@@ -266,15 +271,15 @@ func (p *Pusher) EnsureRemoteGonf(ctx context.Context, t PushTarget) (installedP
 // currentPlanVersion, currentReleaseVersion and currentStrictPreviewVersion
 // are the fake probes installed by the Assume* test seams: each reports the
 // controller's own value, i.e. "the remote gonf is up to date".
-func currentPlanVersion(context.Context, PushTarget) (int, error) {
+func currentPlanVersion(context.Context, PushTarget, ProbeContext) (int, error) {
 	return plan.CurrentVersion, nil
 }
 
-func currentReleaseVersion(context.Context, PushTarget) (string, error) {
+func currentReleaseVersion(context.Context, PushTarget, ProbeContext) (string, error) {
 	return internal.Version, nil
 }
 
-func currentStrictPreviewVersion(context.Context, PushTarget) (int, error) {
+func currentStrictPreviewVersion(context.Context, PushTarget, ProbeContext) (int, error) {
 	return internal.StrictPreviewVersion, nil
 }
 

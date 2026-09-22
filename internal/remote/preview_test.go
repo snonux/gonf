@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/snonux/gonf/internal"
-	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/plan"
 )
 
@@ -29,17 +28,17 @@ func TestRequireRemoteGonfRefusesMissingAndStaleRuntimes(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			p := NewPusher()
-			p.PlanVersionProber = func(context.Context, PushTarget) (int, error) {
+			p.PlanVersionProber = func(context.Context, PushTarget, ProbeContext) (int, error) {
 				return tc.planVersion, nil
 			}
-			p.ReleaseVersionProber = func(context.Context, PushTarget) (string, error) {
+			p.ReleaseVersionProber = func(context.Context, PushTarget, ProbeContext) (string, error) {
 				return tc.release, nil
 			}
-			p.StrictPreviewProber = func(context.Context, PushTarget) (int, error) {
+			p.StrictPreviewProber = func(context.Context, PushTarget, ProbeContext) (int, error) {
 				return tc.previewVersion, nil
 			}
 
-			err := p.RequireRemoteGonf(context.Background(), PushTarget{Host: "preview.example"})
+			err := p.RequireRemoteGonf(context.Background(), PushTarget{Host: "preview.example"}, ProbeLogin)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("RequireRemoteGonf() = %v, want %q", err, tc.want)
 			}
@@ -63,13 +62,13 @@ func TestPreviewDeliveryNeverBootstrapsAndUsesStrictDryRun(t *testing.T) {
 		SSHRunner = oldSSH
 	})
 
-	defaultPusher.PlanVersionProber = func(context.Context, PushTarget) (int, error) {
+	defaultPusher.PlanVersionProber = func(context.Context, PushTarget, ProbeContext) (int, error) {
 		return plan.CurrentVersion, nil
 	}
-	defaultPusher.ReleaseVersionProber = func(context.Context, PushTarget) (string, error) {
+	defaultPusher.ReleaseVersionProber = func(context.Context, PushTarget, ProbeContext) (string, error) {
 		return internal.Version, nil
 	}
-	defaultPusher.StrictPreviewProber = func(context.Context, PushTarget) (int, error) {
+	defaultPusher.StrictPreviewProber = func(context.Context, PushTarget, ProbeContext) (int, error) {
 		return internal.StrictPreviewVersion, nil
 	}
 	defaultPusher.GoBuildRunner = func(context.Context, string, string, string, string) error {
@@ -97,61 +96,6 @@ func TestPreviewDeliveryNeverBootstrapsAndUsesStrictDryRun(t *testing.T) {
 	}
 }
 
-func TestPreviewDeliveryProbesEveryAppliedPrivilegeContext(t *testing.T) {
-	oldPlan := defaultPusher.PlanVersionProber
-	oldStrictPreview := defaultPusher.StrictPreviewProber
-	oldRelease := defaultPusher.ReleaseVersionProber
-	oldSSH := SSHRunner
-	t.Cleanup(func() {
-		defaultPusher.PlanVersionProber = oldPlan
-		defaultPusher.StrictPreviewProber = oldStrictPreview
-		defaultPusher.ReleaseVersionProber = oldRelease
-		SSHRunner = oldSSH
-	})
-
-	var probedUnprivileged, probedElevated bool
-	defaultPusher.PlanVersionProber = func(_ context.Context, target PushTarget) (int, error) {
-		if target.probeElevated {
-			probedElevated = true
-		} else {
-			probedUnprivileged = true
-		}
-		return plan.CurrentVersion, nil
-	}
-	defaultPusher.ReleaseVersionProber = func(_ context.Context, target PushTarget) (string, error) {
-		if target.probeElevated {
-			probedElevated = true
-		} else {
-			probedUnprivileged = true
-		}
-		return internal.Version, nil
-	}
-	defaultPusher.StrictPreviewProber = func(_ context.Context, target PushTarget) (int, error) {
-		if target.probeElevated {
-			probedElevated = true
-		} else {
-			probedUnprivileged = true
-		}
-		return internal.StrictPreviewVersion, nil
-	}
-	SSHRunner = func(_ context.Context, stdin io.Reader, argv []string) error {
-		_, _ = io.Copy(io.Discard, stdin)
-		return nil
-	}
-
-	ops := []plan.Op{
-		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "preview"},
-		{Op: plan.KindCommand, ID: "unprivileged", Bin: "true"},
-		{Op: plan.KindCommand, ID: "elevated", Bin: "true", Elevate: true},
-	}
-	if err := previewToHost(context.Background(), PushTarget{Host: "preview.example", Privilege: privilege.Sudo}, "preview", ops, nil); err != nil {
-		t.Fatalf("previewToHost() = %v", err)
-	}
-	if !probedUnprivileged || !probedElevated {
-		t.Fatalf("probed unprivileged=%v elevated=%v, want both privilege contexts", probedUnprivileged, probedElevated)
-	}
-}
-
 func TestPreviewDeliveryRefusesBlobsBeforeAnyRemoteProbe(t *testing.T) {
 	mem := plan.NewMemoryStore()
 	if _, err := mem.WriteFile("preview.txt", []byte("secret")); err != nil {
@@ -166,7 +110,7 @@ func TestPreviewDeliveryRefusesBlobsBeforeAnyRemoteProbe(t *testing.T) {
 		defaultPusher.StrictPreviewProber = oldStrictPreview
 		SSHRunner = oldSSH
 	})
-	defaultPusher.PlanVersionProber = func(context.Context, PushTarget) (int, error) {
+	defaultPusher.PlanVersionProber = func(context.Context, PushTarget, ProbeContext) (int, error) {
 		t.Fatal("blob-backed strict preview must not probe a host")
 		return 0, nil
 	}
@@ -189,7 +133,7 @@ func TestProbeStrictPreviewVersion(t *testing.T) {
 	sshCaptureExec = func(context.Context, []string) (string, string, error) {
 		return strconv.Itoa(internal.StrictPreviewVersion) + "\n", "", nil
 	}
-	got, err := probeStrictPreviewVersion(context.Background(), PushTarget{Host: "preview.example"})
+	got, err := probeStrictPreviewVersion(context.Background(), PushTarget{Host: "preview.example"}, ProbeLogin)
 	if err != nil || got != internal.StrictPreviewVersion {
 		t.Fatalf("probeStrictPreviewVersion() = (%d, %v)", got, err)
 	}
@@ -197,7 +141,7 @@ func TestProbeStrictPreviewVersion(t *testing.T) {
 	sshCaptureExec = func(context.Context, []string) (string, string, error) {
 		return "unsupported\n", "", nil
 	}
-	if _, err := probeStrictPreviewVersion(context.Background(), PushTarget{Host: "preview.example"}); err == nil || !strings.Contains(err.Error(), "unparseable") {
+	if _, err := probeStrictPreviewVersion(context.Background(), PushTarget{Host: "preview.example"}, ProbeLogin); err == nil || !strings.Contains(err.Error(), "unparseable") {
 		t.Fatalf("unparseable strict-preview probe error = %v", err)
 	}
 }

@@ -96,13 +96,6 @@ type PushTarget struct {
 	// GonfPath is the remote install path for synced binaries (default
 	// /usr/local/bin/gonf).
 	GonfPath string
-
-	// probeElevated is internal-only state used while strict preview verifies
-	// the exact privilege context that will run an apply chunk. A sudo/doas
-	// secure_path can resolve a different gonf binary from the SSH login's
-	// PATH, so probing only the login command would not establish the applied
-	// binary's capabilities.
-	probeElevated bool
 }
 
 // Destination returns the user@host (or bare host) this target connects to.
@@ -166,7 +159,9 @@ func PushPayloadContext(ctx context.Context, t PushTarget, payload []byte, eleva
 
 // requireRemoteGonfForChunks verifies every privilege context that will run a
 // strict-preview apply. The same path can resolve to different binaries for
-// the SSH user and sudo/doas, so mixed plans require both probes.
+// the SSH user and sudo/doas, so mixed plans require both probes. The context
+// is passed to RequireRemoteGonf explicitly (ProbeLogin / ProbeElevated); t
+// itself stays the plain destination.
 func requireRemoteGonfForChunks(ctx context.Context, t PushTarget, chunks []plan.Chunk) error {
 	var needUnprivileged, needElevated bool
 	for _, chunk := range chunks {
@@ -177,14 +172,12 @@ func requireRemoteGonfForChunks(ctx context.Context, t PushTarget, chunks []plan
 		}
 	}
 	if needUnprivileged {
-		if err := RequireRemoteGonf(ctx, t); err != nil {
+		if err := RequireRemoteGonf(ctx, t, ProbeLogin); err != nil {
 			return err
 		}
 	}
 	if needElevated {
-		elevatedTarget := t
-		elevatedTarget.probeElevated = true
-		if err := RequireRemoteGonf(ctx, elevatedTarget); err != nil {
+		if err := RequireRemoteGonf(ctx, t, ProbeElevated); err != nil {
 			return err
 		}
 	}

@@ -36,7 +36,7 @@ func TestUserPublicDSLRecordsPlanBackedDraft(t *testing.T) {
 		drafts[0].LoginClass != "daemon" {
 		t.Fatalf("user draft = %#v", drafts[0])
 	}
-	op, err := draftToOp(drafts[0])
+	op, err := newDraftPackager(nil).draftToOp(drafts[0])
 	if err != nil {
 		t.Fatalf("draftToOp() = %v", err)
 	}

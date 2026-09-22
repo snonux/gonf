@@ -19,6 +19,25 @@ import (
 // and sshCapture, the stdout-capturing ssh runner they (and the staging
 // directory's mktemp) share.
 
+// ProbeContext names the privilege context a remote version/capability probe
+// runs in. It is an explicit argument of every probe (and of the Pusher's
+// prober seams) rather than state on PushTarget: a PushTarget describes where
+// to connect, while the probe context is an execution mode chosen per call —
+// by EnsureRemoteGonf (always the login user) and by strict preview for each
+// privilege chunk it will apply (requireRemoteGonfForChunks).
+type ProbeContext uint8
+
+const (
+	// ProbeLogin runs the probe as the SSH login user, with that user's PATH.
+	ProbeLogin ProbeContext = iota
+	// ProbeElevated runs the probe through the target's privilege wrapper
+	// (sudo/doas), exactly as an elevated apply chunk runs gonf. A sudo/doas
+	// secure_path can resolve a different gonf binary than the login PATH,
+	// so a login probe alone would not establish the applied binary's
+	// capabilities.
+	ProbeElevated
+)
+
 // sshCaptureExec runs argv and returns its combined stdout, stderr, and exec
 // error. It is the only part of sshCapture that touches a real process, so
 // tests override it to exercise createRemoteStagingDir / probePlanVersion /
@@ -43,8 +62,8 @@ var sshCaptureExec = defaultSSHCaptureExec
 // diagnose. Returning an error here instead — one that quotes the raw,
 // unparsed line — surfaces that cause directly instead of masking it behind
 // a misleading rebuild attempt.
-func probePlanVersion(ctx context.Context, t PushTarget) (int, error) {
-	cmd, err := remoteProbeCmd(t, "-plan-version")
+func probePlanVersion(ctx context.Context, t PushTarget, pc ProbeContext) (int, error) {
+	cmd, err := remoteProbeCmd(t, pc, "-plan-version")
 	if err != nil {
 		return 0, err
 	}
@@ -71,8 +90,8 @@ func probePlanVersion(ctx context.Context, t PushTarget) (int, error) {
 // capability version, or 0 with nil error when the binary does not support
 // the probe. RequireRemoteGonf turns that absence into a clear strict-preview
 // refusal; ordinary pushes do not need this capability.
-func probeStrictPreviewVersion(ctx context.Context, t PushTarget) (int, error) {
-	cmd, err := remoteProbeCmd(t, "-strict-preview-version")
+func probeStrictPreviewVersion(ctx context.Context, t PushTarget, pc ProbeContext) (int, error) {
+	cmd, err := remoteProbeCmd(t, pc, "-strict-preview-version")
 	if err != nil {
 		return 0, err
 	}
@@ -99,8 +118,8 @@ func probeStrictPreviewVersion(ctx context.Context, t PushTarget) (int, error) {
 // extra check" rather than failing the whole push, since the release-version
 // comparison is a best-effort safety net layered on top of the authoritative
 // plan-schema check.
-func probeReleaseVersion(ctx context.Context, t PushTarget) (string, error) {
-	cmd, err := remoteProbeCmd(t, "-version")
+func probeReleaseVersion(ctx context.Context, t PushTarget, pc ProbeContext) (string, error) {
+	cmd, err := remoteProbeCmd(t, pc, "-version")
 	if err != nil {
 		return "", err
 	}
@@ -111,10 +130,11 @@ func probeReleaseVersion(ctx context.Context, t PushTarget) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
-// remoteProbeCmd builds a version/capability probe in the same privilege
-// context that will run a strict-preview apply chunk.
-func remoteProbeCmd(t PushTarget, args string) (string, error) {
-	return privilege.WrapApplyBinCmd(t.privilegeMode(), t.probeElevated, remoteGonfBin(t), args)
+// remoteProbeCmd builds a version/capability probe of t's gonf binary in the
+// privilege context pc: ProbeElevated wraps it exactly as an elevated apply
+// chunk is wrapped (privilege.WrapApplyBinCmd), ProbeLogin runs it bare.
+func remoteProbeCmd(t PushTarget, pc ProbeContext, args string) (string, error) {
+	return privilege.WrapApplyBinCmd(t.privilegeMode(), pc == ProbeElevated, remoteGonfBin(t), args)
 }
 
 // remoteReleaseIsStale reports whether the remote's own release version
@@ -130,7 +150,7 @@ func remoteProbeCmd(t PushTarget, args string) (string, error) {
 // same hazard fixed for "-plan-version" in probePlanVersion) remains
 // diagnosable instead of being swallowed entirely.
 func (p *Pusher) remoteReleaseIsStale(ctx context.Context, t PushTarget) (bool, string) {
-	remoteRelease, err := p.ReleaseVersionProber(ctx, t)
+	remoteRelease, err := p.ReleaseVersionProber(ctx, t, ProbeLogin)
 	if err != nil {
 		logger.Warn("push %s: could not probe remote gonf release version: %v", t.Destination(), err)
 		return false, ""

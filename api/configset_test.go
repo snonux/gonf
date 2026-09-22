@@ -148,7 +148,7 @@ func TestConfigSetWireRejectsMisconfiguredSets(t *testing.T) {
 		ConfigMembers: []resource.PlanConfigMember{{Key: "x", Path: "relative/x.conf", Content: []byte("x")}},
 		Validators:    []resource.PlanArgv{{Bin: "true"}},
 	}
-	if _, err := draftToOp(draft); err == nil || !strings.Contains(err.Error(), "absolute") {
+	if _, err := newDraftPackager(nil).draftToOp(draft); err == nil || !strings.Contains(err.Error(), "absolute") {
 		t.Fatalf("draftToOp accepted a relative member path: %v", err)
 	}
 	crafted := []plan.Op{

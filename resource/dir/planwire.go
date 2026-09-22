@@ -72,7 +72,7 @@ func (dirHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 }
 
 // ToOp lowers a "sync_dir" resource draft to a plan.Op. The Blob field is
-// filled in later by api/plan.go's packageDraft, which packages
+// filled in later by api's packageDraft (api/packager.go), which packages
 // d.SourceDir/d.SourceGlob into the plan's blob store after ToOp returns.
 func (syncDirHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 	return plan.Op{

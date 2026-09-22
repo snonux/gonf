@@ -2,11 +2,9 @@ package api
 
 import (
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -130,6 +128,23 @@ func (s *recordingSession) reset() {
 	s.aggregateSeen = nil
 }
 
+// packager returns the draftPackager for a draft recorded right now in this
+// session: it packages into store, claims blob refs in the session-wide
+// recordedBlobRefs (so a ref collision is caught across every task body of
+// the session), and carries the session's current elevate flag and innermost
+// task name. It is built per draft, because both of those change as task
+// bodies are entered and left.
+func (s *recordingSession) packager(store plan.BlobStore) draftPackager {
+	if s.recordedBlobRefs == nil {
+		s.recordedBlobRefs = map[string]string{}
+	}
+	p := draftPackager{store: store, blobRefs: s.recordedBlobRefs, elevate: s.recordingElevate}
+	if len(s.recordingStack) > 0 {
+		p.task = s.recordingStack[len(s.recordingStack)-1]
+	}
+	return p
+}
+
 // RecordPlan runs the named tasks in plan-record mode: resource registration
 // emits plan.Op lines instead of applying. Tasks are looked up as candidates
 // (not Activate-filtered) so When* recipes become when_begin/when_end rather
@@ -251,7 +266,7 @@ func recordSessionDraft(d resource.PlanDraft, store plan.BlobStore) {
 	if d.ID != "" {
 		recSession.recordedDraftIDs[d.ID] = true
 	}
-	op, err := packageDraft(d, store)
+	op, err := recSession.packager(store).packageDraft(d)
 	if err != nil {
 		recSession.recordingPackErr = err
 		return
@@ -270,7 +285,7 @@ func amendRecordedDraft(d resource.PlanDraft, store plan.BlobStore) error {
 	if recSession.recordingPackErr != nil {
 		return nil
 	}
-	op, err := packageDraft(d, store)
+	op, err := recSession.packager(store).packageDraft(d)
 	if err != nil {
 		return err
 	}
@@ -599,63 +614,6 @@ func planWhenForCandidate(c taskCandidate) ([]plan.Predicate, error) {
 	return out, nil
 }
 
-func packageDraft(d resource.PlanDraft, store plan.BlobStore) (plan.Op, error) {
-	op, err := draftToOp(d)
-	if err != nil {
-		return plan.Op{}, err
-	}
-	name := blobName(d)
-	switch {
-	case d.SourcePath != "":
-		data, err := os.ReadFile(d.SourcePath)
-		if err != nil {
-			return op, fmt.Errorf("package file %s: %w", d.SourcePath, err)
-		}
-		if len(data) > plan.MaxInlineContent {
-			if store == nil {
-				return op, fmt.Errorf("package file %s: exceeds inline limit and no plan dir for blobs", d.SourcePath)
-			}
-			if err := guardBlobRef(name, d); err != nil {
-				return op, err
-			}
-			ref, err := store.WriteFile(name, data)
-			if err != nil {
-				return op, err
-			}
-			op.Blob = ref
-			op.ContentB64 = ""
-		} else {
-			op.ContentB64 = base64.StdEncoding.EncodeToString(data)
-			op.Blob = ""
-		}
-	case d.SourceGlob != "":
-		if store == nil {
-			return op, fmt.Errorf("package sync_dir %s: plan dir required for blob packaging", d.SourceGlob)
-		}
-		if err := guardBlobRef(name, d); err != nil {
-			return op, err
-		}
-		ref, err := store.WriteGlob(name, d.SourceGlob)
-		if err != nil {
-			return op, err
-		}
-		op.Blob = ref
-	case d.SourceDir != "":
-		if store == nil {
-			return op, fmt.Errorf("package sync_dir %s: plan dir required for blob packaging", d.SourceDir)
-		}
-		if err := guardBlobRef(name, d); err != nil {
-			return op, err
-		}
-		ref, err := store.WriteTree(name, d.SourceDir)
-		if err != nil {
-			return op, err
-		}
-		op.Blob = ref
-	}
-	return op, nil
-}
-
 // blobName returns the blob ref name for d: a human-readable basename (the
 // destination's last path segment, when there is one) followed by a short
 // hash of blobIdentityKey(d). The hash is what actually guarantees
@@ -663,8 +621,9 @@ func packageDraft(d resource.PlanDraft, store plan.BlobStore) (plan.Op, error) {
 // Dir(/x/conf.d, WithSource(a)) and Dir(/y/conf.d, WithSource(b)), or two
 // >512KiB Files with equal basenames) previously both packaged to
 // "blobs/conf.d", so the second store.Write* call silently overwrote the
-// first one's content; guardBlobRef below is the defense-in-depth backstop
-// in case a future change reintroduces a real collision anyway.
+// first one's content; draftPackager.guardBlobRef (api/packager.go) is the
+// defense-in-depth backstop in case a future change reintroduces a real
+// collision anyway.
 func blobName(d resource.PlanDraft) string {
 	return blobBaseName(d) + "-" + shortHash(blobIdentityKey(d))
 }
@@ -721,71 +680,4 @@ func blobIdentityKey(d resource.PlanDraft) string {
 func shortHash(key string) string {
 	sum := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(sum[:])[:8]
-}
-
-// guardBlobRef predicts the blob ref that store.Write{File,Tree,Glob} will
-// produce for name and fails loudly if a *different* resource already
-// claimed that exact ref earlier in this recording session. blobName's hash
-// suffix should already make that impossible; this is defense in depth so a
-// regression here fails RecordPlan instead of silently corrupting a blob
-// (the data-loss failure mode this whole fix exists to close). A resource
-// recorded twice with the same identity (e.g. a diamond-included task body
-// running again in a disjoint branch) legitimately reuses its own ref, so
-// that case is not an error.
-func guardBlobRef(name string, d resource.PlanDraft) error {
-	ref, err := plan.BlobRefFor(name)
-	if err != nil {
-		return err
-	}
-	identity := blobIdentityKey(d)
-	if prior, ok := recSession.recordedBlobRefs[ref]; ok {
-		if prior == identity {
-			return nil
-		}
-		return fmt.Errorf("RecordPlan: blob ref %q collision: already packaged for %q, now requested for %q (this should be impossible after blobName hashing; please report)",
-			ref, prior, identity)
-	}
-	recSession.recordedBlobRefs[ref] = identity
-	return nil
-}
-
-// draftError points a handler's record-time rejection at the recipe: the
-// task being recorded (when a recording session is active; a local
-// api.Apply has none) and the draft's resource ID, as
-// "RecordPlan: [task %q: ]draft %q: <handler error>". The "RecordPlan:
-// draft %q:" part matches draftToOp's own errors, which name no task; the
-// task part mirrors checkUnrecordedDrafts. The handler's error is wrapped, so
-// errors.Is/As still see it, and handlers must not add their own ID prefix.
-func draftError(d resource.PlanDraft, err error) error {
-	if len(recSession.recordingStack) == 0 {
-		return fmt.Errorf("RecordPlan: draft %q: %w", d.ID, err)
-	}
-	return fmt.Errorf("RecordPlan: task %q: draft %q: %w", currentRecordingName(), d.ID, err)
-}
-
-// draftToOp lowers a resource draft to a plan op line by delegating to the
-// draft kind's registered plan.Handler (see plan/handler.go): the resource
-// package owns its own wire form and this function only folds in the
-// recording session's Elevate flag. Every resource kind registers a Handler
-// (see docs/plan.md, "Adding a resource kind"), so an unmapped kind is
-// always a programming error (typo, or a new resource kind that forgot to
-// register) and fails the record loudly here instead of silently forwarding
-// an unknown op to the wire, where it would only blow up at remote apply
-// time.
-func draftToOp(d resource.PlanDraft) (plan.Op, error) {
-	h, ok := plan.HandlerFor(plan.Kind(d.Kind))
-	if !ok {
-		return plan.Op{}, fmt.Errorf("RecordPlan: draft %q: unknown draft kind %q (no registered plan.Handler; see docs/plan.md kind checklist)",
-			d.ID, d.Kind)
-	}
-	op, err := h.ToOp(d)
-	if err != nil {
-		return plan.Op{}, draftError(d, err)
-	}
-	op.Elevate = d.Elevate || recSession.recordingElevate
-	if !plan.IsKnownKind(op.Op) {
-		return op, fmt.Errorf("RecordPlan: draft %q: kind %q lowers to undeclared plan kind %q (missing from plan.AllKinds)",
-			d.ID, d.Kind, op.Op)
-	}
-	return op, nil
 }

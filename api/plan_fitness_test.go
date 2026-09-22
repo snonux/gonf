@@ -212,7 +212,7 @@ func TestPlanKindFitness(t *testing.T) {
 
 		op := f.op
 		if f.draft != nil {
-			got, err := draftToOp(*f.draft)
+			got, err := newDraftPackager(nil).draftToOp(*f.draft)
 			if err != nil {
 				t.Errorf("kind %q: draftToOp: %v", k, err)
 				continue
@@ -248,7 +248,7 @@ func TestDraftToOpRejectsUnknownKinds(t *testing.T) {
 	// Unknown draft kinds, control kinds used as drafts, and the empty kind
 	// must all fail the record loudly instead of reaching the wire.
 	for _, kind := range []string{"", "widget", "fli", "when_begin", "when_end", "plan"} {
-		op, err := draftToOp(resource.PlanDraft{Kind: kind, ID: "Fit[bad]"})
+		op, err := newDraftPackager(nil).draftToOp(resource.PlanDraft{Kind: kind, ID: "Fit[bad]"})
 		if err == nil {
 			t.Fatalf("draft kind %q must not lower (got op %v)", kind, op)
 		}
