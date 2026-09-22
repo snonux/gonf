@@ -10,9 +10,12 @@ import (
 	"github.com/snonux/gonf/plan"
 )
 
-// perfRuns is how many timed samples assertGrowsSubQuadratically takes at
-// each size; their median discounts a single stalled tick (GC, scheduler
-// contention on a loaded machine) without hiding a real, repeated slowdown.
+// perfRuns is how many timed samples of an operation are collected at each
+// size. It must stay odd: medianAtLeast's early exit relies on a plain
+// majority (perfRuns/2+1 samples) already pinning the eventual median, and
+// that reasoning needs an unambiguous middle sample. The median of a few
+// samples discounts one outlier tick (a GC pause, a context switch onto a
+// busy machine) without hiding a real, repeated slowdown.
 const perfRuns = 5
 
 // perfRatioBound is the most a 4x-size run's median time may be over the
@@ -23,11 +26,13 @@ const perfRuns = 5
 // implementation passes regardless of the box's absolute speed.
 const perfRatioBound = 8.0
 
-// perfHangGuard is an absolute ceiling on one timed run, independent of
-// load. It exists only to fail a genuine hang (an infinite loop or
-// deadlock), not to bound normal variance, so it is generous. The race
-// detector roughly tenfolds the algorithm's own cost on top of whatever the
-// machine is already doing, so it gets extra room.
+// perfHangGuard is an absolute ceiling on ONE timed sample (see
+// timedSample), independent of load. It exists only to fail a genuine hang
+// (an infinite loop, or an old quadratic/cubic implementation run against a
+// size large enough to take minutes) rather than bound normal variance, so
+// it is generous. The race detector roughly tenfolds the algorithm's own
+// cost on top of whatever the machine is already doing, so it gets extra
+// room.
 func perfHangGuard() time.Duration {
 	if raceEnabled {
 		return 120 * time.Second
@@ -35,43 +40,104 @@ func perfHangGuard() time.Duration {
 	return 60 * time.Second
 }
 
-// medianDuration runs fn n times and returns the median wall-clock
-// duration: the median of a few samples discounts one outlier tick (a GC
-// pause, a context switch onto a busy machine) without hiding a real,
-// repeated slowdown the way a single sample would.
-func medianDuration(n int, fn func()) time.Duration {
+// timedSample runs fn once, in its own goroutine, bounded by perfHangGuard,
+// and returns its wall-clock duration. If fn does not return within the
+// guard, or returns a non-nil error (a correctness check inside fn
+// failed), the test fails immediately naming label -- always on the test's
+// own goroutine, via t.Fatalf here, never inside fn's goroutine, since
+// FailNow must run on the goroutine executing the test. Without a
+// per-sample bound, a single catastrophically slow sample (a reintroduced
+// quadratic/cubic orderForPrivilegeSplit can take minutes even at the
+// smaller of the two sizes these tests compare) would run to completion --
+// or past Go's own test-binary timeout, aborting the whole run with an
+// unlabelled panic dump instead of this test's named failure -- before
+// medianDuration or medianAtLeast ever got to look at it. On timeout, fn's
+// goroutine is abandoned (Go cannot cancel a running goroutine); that is
+// safe here because fn only reads its captured plan, and it is acceptable
+// because the test has already failed.
+func timedSample(t *testing.T, label string, fn func() error) time.Duration {
+	t.Helper()
+	start := time.Now()
+	done := make(chan error, 1)
+	go func() { done <- fn() }()
+	guard := perfHangGuard()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		return time.Since(start)
+	case <-time.After(guard):
+		t.Fatalf("%s did not return within the %v hang guard (a hang, or a quadratic/cubic regression)", label, guard)
+		return 0 // unreached: t.Fatalf ends this goroutine
+	}
+}
+
+// medianDuration runs fn n times, each bounded by timedSample, and returns
+// the median wall-clock duration.
+func medianDuration(t *testing.T, n int, label string, fn func() error) time.Duration {
+	t.Helper()
 	durs := make([]time.Duration, n)
 	for i := range durs {
-		start := time.Now()
-		fn()
-		durs[i] = time.Since(start)
+		durs[i] = timedSample(t, label, fn)
 	}
 	slices.Sort(durs)
 	return durs[len(durs)/2]
 }
 
-// assertGrowsSubQuadratically measures small and large (large being the
-// same operation as small at 4x the input size) and fails if either exceeds
-// perfHangGuard (a hang) or if large's median time grew more than
+// medianAtLeast is medianDuration with an early exit: once a plain majority
+// of the n samples (n odd) individually exceed threshold, the eventual
+// median -- the (n/2+1)-th smallest of the n -- is already pinned above
+// threshold no matter what the remaining, unsampled runs turn out to be (at
+// most n/2 of the n can end up at or below threshold, so the middle one
+// cannot), so it returns immediately instead of spending up to n *
+// perfHangGuard confirming a result already decided. On the healthy path
+// (samples stay under threshold) this never triggers, so it takes exactly
+// what medianDuration would; the returned duration on the early-exit path
+// is the sample that completed the majority, which is real evidence of the
+// regression even though it is not the exact eventual median.
+func medianAtLeast(t *testing.T, n int, threshold time.Duration, label string, fn func() error) (sample time.Duration, above bool) {
+	t.Helper()
+	majority := n/2 + 1
+	durs := make([]time.Duration, 0, n)
+	overThreshold := 0
+	for range n {
+		d := timedSample(t, label, fn)
+		durs = append(durs, d)
+		if d > threshold {
+			if overThreshold++; overThreshold >= majority {
+				return d, true
+			}
+		}
+	}
+	slices.Sort(durs)
+	median := durs[len(durs)/2]
+	return median, median > threshold
+}
+
+// assertGrowsSubQuadratically measures small and large (the same operation
+// as small, at 4x its input size) and fails if large's time grew more than
 // perfRatioBound times small's median time. Growth, not an absolute
 // wall-clock bound, is what is asserted, so the check stays valid on a
 // heavily loaded machine (both runs slow down together) while still
 // catching a quadratic or worse regression, such as the historic fixpoint
 // solver and the per-watch deletion-trial search the two callers guard
-// against.
-func assertGrowsSubQuadratically(t *testing.T, small, large func()) {
+// against. The worst case is bounded even for a reintroduced regression:
+// timedSample fails within one perfHangGuard of the first sample that does
+// not return in time, and medianAtLeast fails as soon as a majority of the
+// large samples already confirm the ratio, so neither loop runs every one
+// of the perfRuns samples at both sizes to completion.
+func assertGrowsSubQuadratically(t *testing.T, smallLabel string, small func() error, largeLabel string, large func() error) {
 	t.Helper()
-	ts := medianDuration(perfRuns, small)
-	tl := medianDuration(perfRuns, large)
-	guard := perfHangGuard()
-	if ts > guard || tl > guard {
-		t.Fatalf("took %v (base size) / %v (4x size): exceeds the %v hang guard", ts, tl, guard)
+	ts := medianDuration(t, perfRuns, smallLabel, small)
+	threshold := time.Duration(float64(max(ts, time.Microsecond)) * perfRatioBound)
+	tl, above := medianAtLeast(t, perfRuns, threshold, largeLabel, large)
+	if !above {
+		return
 	}
-	base := max(ts, time.Microsecond) // guard against dividing by a measurement that rounded to 0
-	if ratio := float64(tl) / float64(base); ratio > perfRatioBound {
-		t.Fatalf("time grew %.1fx from the base size to 4x the size (%v -> %v); want < %.1fx (quadratic growth would be about 16x)",
-			ratio, ts, tl, perfRatioBound)
-	}
+	ratio := float64(tl) / float64(max(ts, time.Microsecond))
+	t.Fatalf("time grew %.1fx from %s (%v) to %s (%v); want < %.1fx (quadratic growth would be about 16x)",
+		ratio, smallLabel, ts, largeLabel, tl, perfRatioBound)
 }
 
 var orderHdr = plan.Op{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "apply"}
@@ -260,23 +326,29 @@ func refusedWatchPlan(n, w int) []plan.Op {
 // does not). An absolute wall-clock bound is flaky under machine load (it
 // failed twice at a load average of ~24), so this instead measures the same
 // plan shape at a base size and at 4x that size and asserts the time grows
-// well below quadratic (see assertGrowsSubQuadratically); a hang guard
-// still catches an outright hang. Two base sizes, a moderate one and one
-// four times larger, are checked to cover both regimes the old bounds did.
+// well below quadratic (see assertGrowsSubQuadratically). Both the
+// per-sample hang guard and the majority-based early exit it uses mean a
+// reintroduced regression fails within about one hang guard of its first
+// slow sample, not after running every sample at both sizes to completion.
+// Two base sizes, a moderate one and one four times larger, are checked to
+// cover both regimes the old bounds did.
 func TestOrderForPrivilegeSplitLargeRefusedPlanIsFast(t *testing.T) {
 	for _, base := range []struct{ ops, watches int }{{2000, 300}, {2500, 375}} {
-		check := func(ops, watches int) func() {
+		check := func(ops, watches int) func() error {
 			built := refusedWatchPlan(ops, watches)
 			want := watches / 2
-			return func() {
+			return func() error {
 				_, conflicts, err := orderForPrivilegeSplit(built)
 				if err != nil || len(conflicts) != want {
-					t.Fatalf("orderForPrivilegeSplit() = %v, %d together-conflicts; want no error and %d",
+					return fmt.Errorf("orderForPrivilegeSplit() = %v, %d together-conflicts; want no error and %d",
 						err, len(conflicts), want)
 				}
+				return nil
 			}
 		}
-		assertGrowsSubQuadratically(t, check(base.ops, base.watches), check(base.ops*4, base.watches*4))
+		assertGrowsSubQuadratically(t,
+			fmt.Sprintf("refusedWatchPlan(%d ops, %d watches)", base.ops, base.watches), check(base.ops, base.watches),
+			fmt.Sprintf("refusedWatchPlan(%d ops, %d watches)", base.ops*4, base.watches*4), check(base.ops*4, base.watches*4))
 	}
 }
 
@@ -316,26 +388,33 @@ func watchChainPlan(n, k int) []plan.Op {
 // it walks, so with a fixed number of dropped watches k the total cost is
 // linear in the chain length alone; scaling k along with it would make even
 // this correct, O(chain length x k) algorithm look quadratic in the chain
-// length, and wrongly fail the check.
+// length, and wrongly fail the check. The base size alone was observed to
+// take 10+ minutes per run on the pre-fix fixpoint solver, well past
+// assertGrowsSubQuadratically's per-sample hang guard, so that guard (not
+// Go's own test-binary timeout) is what catches a reintroduced regression
+// here.
 func TestOrderForPrivilegeSplitLongWatchChainIsFast(t *testing.T) {
 	const k = 50
-	check := func(n int) func() {
+	check := func(n int) func() error {
 		ops := watchChainPlan(n, k)
 		wantConflict := n - 1
 		wantKey := watchKey{"w0", fmt.Sprint("u", n-1)}
-		return func() {
+		return func() error {
 			_, conflicts, err := orderForPrivilegeSplit(ops)
 			if err != nil || len(conflicts) != k {
-				t.Fatalf("orderForPrivilegeSplit() = %v, %d together-conflicts; want %d", err, len(conflicts), k)
+				return fmt.Errorf("orderForPrivilegeSplit() = %v, %d together-conflicts; want %d", err, len(conflicts), k)
 			}
 			// w0 watches the far end of the chain while e0 needs the near
 			// end: the conflict must list every chain watch in between.
 			if got := len(conflicts[wantKey]); got != wantConflict {
-				t.Fatalf("conflict of w0 lists %d chain watches, want all %d", got, wantConflict)
+				return fmt.Errorf("conflict of w0 lists %d chain watches, want all %d", got, wantConflict)
 			}
+			return nil
 		}
 	}
-	assertGrowsSubQuadratically(t, check(1250), check(5000))
+	assertGrowsSubQuadratically(t,
+		fmt.Sprintf("watchChainPlan(%d ops, %d watches)", 1250, k), check(1250),
+		fmt.Sprintf("watchChainPlan(%d ops, %d watches)", 5000, k), check(5000))
 }
 
 func BenchmarkOrderForPrivilegeSplitRefusedWatches(b *testing.B) {
