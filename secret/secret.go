@@ -28,6 +28,30 @@ import (
 	"slices"
 )
 
+// The error kinds. KindOf/IsNotFound read the kind of a top-level *Error and
+// are what decisions (such as an optional lookup) must use; errors.Is also
+// finds kinds in causes (an *Error unwraps to its kind and its cause), which
+// is fine for matching in logs and tests but not for deciding.
+var (
+	// ErrNotFound: the reference is well-formed and the store is usable, but
+	// holds no such secret. The only kind an optional lookup may suppress.
+	ErrNotFound = errors.New("secret not found")
+	// ErrInvalid: the reference or what it names is unacceptable — an empty
+	// or escaping path, a symlink or non-regular file where a secret is
+	// expected, or an empty value where one is required.
+	ErrInvalid = errors.New("invalid secret")
+	// ErrUnreadable: the secret exists but could not be read (permission
+	// denied, I/O error).
+	ErrUnreadable = errors.New("secret unreadable")
+	// ErrUnavailable: the provider or store itself is unusable — its root is
+	// missing, it is locked or unauthenticated, corrupt, misconfigured, or
+	// failed in a way the provider did not classify.
+	ErrUnavailable = errors.New("secret provider unavailable")
+)
+
+// kinds lists the valid Error.Kind values.
+var kinds = []error{ErrNotFound, ErrInvalid, ErrUnreadable, ErrUnavailable}
+
 // Ref is a provider-neutral logical secret reference, e.g.
 // "garage/rpc_secret". Its meaning belongs to the provider: FileProvider
 // reads the path below its directory. A Ref names a secret; it never holds
@@ -55,6 +79,14 @@ type Provider interface {
 // adapters.
 type ProviderFunc func(ctx context.Context, ref Ref) ([]byte, error)
 
+// Error is a typed secret failure. It names the reference, never the value.
+type Error struct {
+	Kind error  // one of ErrNotFound, ErrInvalid, ErrUnreadable, ErrUnavailable
+	Ref  Ref    // the reference that failed
+	Msg  string // optional full message; replaces the generated one
+	Err  error  // optional cause (e.g. unix.EACCES); must not carry secret bytes
+}
+
 // Resolve calls f.
 func (f ProviderFunc) Resolve(ctx context.Context, ref Ref) ([]byte, error) { return f(ctx, ref) }
 
@@ -77,38 +109,6 @@ func IsNilProvider(p Provider) bool {
 		return v.IsNil()
 	}
 	return false
-}
-
-// The error kinds. KindOf/IsNotFound read the kind of a top-level *Error and
-// are what decisions (such as an optional lookup) must use; errors.Is also
-// finds kinds in causes (an *Error unwraps to its kind and its cause), which
-// is fine for matching in logs and tests but not for deciding.
-var (
-	// ErrNotFound: the reference is well-formed and the store is usable, but
-	// holds no such secret. The only kind an optional lookup may suppress.
-	ErrNotFound = errors.New("secret not found")
-	// ErrInvalid: the reference or what it names is unacceptable — an empty
-	// or escaping path, a symlink or non-regular file where a secret is
-	// expected, or an empty value where one is required.
-	ErrInvalid = errors.New("invalid secret")
-	// ErrUnreadable: the secret exists but could not be read (permission
-	// denied, I/O error).
-	ErrUnreadable = errors.New("secret unreadable")
-	// ErrUnavailable: the provider or store itself is unusable — its root is
-	// missing, it is locked or unauthenticated, corrupt, misconfigured, or
-	// failed in a way the provider did not classify.
-	ErrUnavailable = errors.New("secret provider unavailable")
-)
-
-// kinds lists the valid Error.Kind values.
-var kinds = []error{ErrNotFound, ErrInvalid, ErrUnreadable, ErrUnavailable}
-
-// Error is a typed secret failure. It names the reference, never the value.
-type Error struct {
-	Kind error  // one of ErrNotFound, ErrInvalid, ErrUnreadable, ErrUnavailable
-	Ref  Ref    // the reference that failed
-	Msg  string // optional full message; replaces the generated one
-	Err  error  // optional cause (e.g. unix.EACCES); must not carry secret bytes
 }
 
 // Error returns Msg when set, otherwise `secret "<ref>": <kind>[: <cause>]`.

@@ -25,8 +25,10 @@ import (
 // scrubs or edits its bytes cannot change what later callers get.
 //
 // References are cached under their canonical form — the path-cleaned
-// reference without leading slashes, the same normalisation FileProvider
-// applies — so "/garage/rpc_secret" and "garage/rpc_secret" share one entry.
+// reference without leading slashes or backslashes, the same normalisation
+// FileProvider applies — so "/garage/rpc_secret", `\garage/rpc_secret` and
+// "garage/rpc_secret" share one entry. A backslash that is not leading is
+// part of the name, so `garage\rpc_secret` is a different reference.
 // Providers used behind a Snapshot must therefore treat such spellings as
 // the same secret. A reference with no canonical form (empty, or escaping
 // with "..") is passed to the provider uncached, which refuses it.
@@ -138,7 +140,12 @@ func (s *Snapshot) lead(ctx context.Context, key, ref Ref, e *snapshotEntry) ([]
 	if err == nil || IsNotFound(err) {
 		e.data, e.err, e.kept = bytes.Clone(data), err, true
 	}
-	return data, err
+	if err != nil {
+		return nil, err
+	}
+	// A copy on the miss too, so this caller cannot reach the provider's
+	// own buffer (which the provider may keep and hand out again).
+	return bytes.Clone(data), nil
 }
 
 // canonicalRef returns the cache key of ref: cleaned, without leading

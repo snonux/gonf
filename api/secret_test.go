@@ -12,6 +12,20 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// neverReportSecret is the synthetic value no error may contain.
+const neverReportSecret = "never-report-this-secret"
+
+// secretFailure is one MustSecret/OptionalSecret failure that must fail plan
+// recording with an error containing want, without ops and without the
+// value.
+type secretFailure struct {
+	name     string
+	path     string
+	setup    func(t *testing.T)
+	optional bool
+	want     string
+}
+
 func useSecretWorkDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -67,96 +81,105 @@ func TestMustSecretRecordsExactBytes(t *testing.T) {
 }
 
 func TestSecretFailuresAreRecordErrorsWithoutValues(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		path     string
-		setup    func(t *testing.T)
-		optional bool
-		want     string
-	}{
+	cases := append(secretStoreFailures(), secretSymlinkFailures()...)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { requireSecretRecordFails(t, tc) })
+	}
+}
+
+// secretStoreFailures are missing, empty, non-regular and invalid secrets.
+func secretStoreFailures() []secretFailure {
+	return []secretFailure{
 		{name: "required missing", path: "missing", setup: func(t *testing.T) { writeSecret(t, "other", "x") }, want: `secret "missing" is missing`},
 		{name: "required secrets root missing", path: "missing", want: `secrets directory "secrets" not found`},
 		{name: "optional secrets root missing", path: "missing", optional: true, want: `secrets directory "secrets" not found`},
 		{name: "required empty", path: "empty", setup: func(t *testing.T) { writeSecret(t, "empty", "") }, want: "empty"},
 		{name: "optional empty", path: "empty", setup: func(t *testing.T) { writeSecret(t, "empty", "") }, optional: true, want: "empty"},
 		{name: "unreadable directory", path: "directory", setup: func(t *testing.T) {
-			if err := os.MkdirAll(filepath.Join("secrets", "directory"), 0o700); err != nil {
-				t.Fatal(err)
-			}
+			mustMkdirAll(t, filepath.Join("secrets", "directory"))
 		}, want: "not a regular file"},
 		{name: "empty path", path: "", want: "secret path must not be empty"},
 		{name: "root path", path: "///", want: "secret path must not be empty"},
 		{name: "escape", path: "nested/../../outside", want: "invalid secret path"},
-		{name: "symlink escape", path: "link", setup: func(t *testing.T) {
-			if err := os.WriteFile("outside", []byte("never-report-this-secret"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.MkdirAll("secrets", 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Symlink("../outside", filepath.Join("secrets", "link")); err != nil {
-				t.Fatal(err)
-			}
-		}, want: "contains a symlink"},
-		{name: "dangling symlink escape", path: "link", optional: true, setup: func(t *testing.T) {
-			if err := os.MkdirAll("secrets", 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Symlink("../outside-not-yet-created", filepath.Join("secrets", "link")); err != nil {
-				t.Fatal(err)
-			}
-		}, want: "contains a symlink"},
-		{name: "secrets root symlink", path: "key", setup: func(t *testing.T) {
-			if err := os.MkdirAll("external", 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join("external", "key"), []byte("never-report-this-secret"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Symlink("external", "secrets"); err != nil {
-				t.Fatal(err)
-			}
-		}, want: "contains a symlink"},
-		{name: "intermediate symlink", path: "nested/key", setup: func(t *testing.T) {
-			writeSecret(t, "actual/key", "never-report-this-secret")
-			if err := os.Symlink("actual", filepath.Join("secrets", "nested")); err != nil {
-				t.Fatal(err)
-			}
-		}, want: "contains a symlink"},
 		{name: "fifo", path: "fifo", setup: func(t *testing.T) {
-			if err := os.MkdirAll("secrets", 0o700); err != nil {
-				t.Fatal(err)
-			}
+			mustMkdirAll(t, "secrets")
 			if err := unix.Mkfifo(filepath.Join("secrets", "fifo"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 		}, want: "not a regular file"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ResetForTest()
-			useSecretWorkDir(t)
-			if tc.setup != nil {
-				tc.setup(t)
-			}
-			const secretValue = "never-report-this-secret"
-			Task("secret", "", func() {
-				if tc.optional {
-					OptionalSecret(tc.path)
-					return
-				}
-				MustSecret(tc.path)
-			})
-			ops, err := RecordPlan("secrets", "", "secret")
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("RecordPlan error = %v, want %q", err, tc.want)
-			}
-			if strings.Contains(err.Error(), secretValue) {
-				t.Fatalf("error leaked secret value: %v", err)
-			}
-			if len(ops) != 0 {
-				t.Fatalf("unsafe secret produced plan ops: %#v", ops)
-			}
-		})
+	}
+}
+
+// secretSymlinkFailures are symlinks at the root, in between and at the end.
+func secretSymlinkFailures() []secretFailure {
+	return []secretFailure{
+		{name: "symlink escape", path: "link", setup: func(t *testing.T) {
+			mustWriteFile(t, "outside", neverReportSecret)
+			mustMkdirAll(t, "secrets")
+			mustSymlink(t, "../outside", filepath.Join("secrets", "link"))
+		}, want: "contains a symlink"},
+		{name: "dangling symlink escape", path: "link", optional: true, setup: func(t *testing.T) {
+			mustMkdirAll(t, "secrets")
+			mustSymlink(t, "../outside-not-yet-created", filepath.Join("secrets", "link"))
+		}, want: "contains a symlink"},
+		{name: "secrets root symlink", path: "key", setup: func(t *testing.T) {
+			mustMkdirAll(t, "external")
+			mustWriteFile(t, filepath.Join("external", "key"), neverReportSecret)
+			mustSymlink(t, "external", "secrets")
+		}, want: "contains a symlink"},
+		{name: "intermediate symlink", path: "nested/key", setup: func(t *testing.T) {
+			writeSecret(t, "actual/key", neverReportSecret)
+			mustSymlink(t, "actual", filepath.Join("secrets", "nested"))
+		}, want: "contains a symlink"},
+	}
+}
+
+// requireSecretRecordFails records a task that resolves tc.path and requires
+// the refusal tc describes.
+func requireSecretRecordFails(t *testing.T, tc secretFailure) {
+	t.Helper()
+	ResetForTest()
+	useSecretWorkDir(t)
+	if tc.setup != nil {
+		tc.setup(t)
+	}
+	Task("secret", "", func() {
+		if tc.optional {
+			OptionalSecret(tc.path)
+			return
+		}
+		MustSecret(tc.path)
+	})
+	ops, err := RecordPlan("secrets", "", "secret")
+	if err == nil || !strings.Contains(err.Error(), tc.want) {
+		t.Fatalf("RecordPlan error = %v, want %q", err, tc.want)
+	}
+	if strings.Contains(err.Error(), neverReportSecret) {
+		t.Fatalf("error leaked secret value: %v", err)
+	}
+	if len(ops) != 0 {
+		t.Fatalf("unsafe secret produced plan ops: %#v", ops)
+	}
+}
+
+func mustMkdirAll(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustWriteFile(t *testing.T, path, value string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustSymlink(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
 	}
 }
 

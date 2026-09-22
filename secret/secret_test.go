@@ -223,13 +223,29 @@ func TestSnapshotCopiesOnHit(t *testing.T) {
 	}
 }
 
+// The miss result is a copy too: a caller editing it cannot reach the
+// provider's own buffer, which a provider may keep and hand out again.
+// (z52 review 4.)
+func TestSnapshotCopiesOnMiss(t *testing.T) {
+	buf := []byte("v1")
+	snap := NewSnapshot(ProviderFunc(func(context.Context, Ref) ([]byte, error) { return buf, nil }))
+	data, err := snap.Resolve(context.Background(), "a")
+	if err != nil || string(data) != "v1" {
+		t.Fatalf("miss = (%q, %v), want v1", data, err)
+	}
+	data[0] = 'X'
+	if string(buf) != "v1" {
+		t.Fatalf("provider buffer = %q after editing the miss result, want v1", buf)
+	}
+}
+
 // Spellings FileProvider treats alike share one entry, and a cached
 // not-found still reads as not-found through Resolve for another spelling
 // (its Ref is rewritten to the requested one).
 func TestSnapshotCanonicalisesRefs(t *testing.T) {
 	store := &fakeStore{values: map[Ref]string{"a/b": "v"}}
 	snap := NewSnapshot(store)
-	for _, ref := range []Ref{"a/b", "/a/b", "a//b", "./a/b", "a/x/../b"} {
+	for _, ref := range []Ref{"a/b", "/a/b", `\a/b`, `/\a/b`, "a//b", "./a/b", "a/x/../b"} {
 		if data, err := Resolve(context.Background(), snap, ref); err != nil || string(data) != "v" {
 			t.Fatalf("Resolve(%q) = (%q, %v)", ref, data, err)
 		}
@@ -243,12 +259,17 @@ func TestSnapshotCanonicalisesRefs(t *testing.T) {
 	if store.calls != 2 {
 		t.Fatalf("calls = %d, want 2 (one per canonical reference)", store.calls)
 	}
+	// Only leading backslashes are stripped: in `a\b` it is part of the
+	// name, a reference of its own (z52 review 4).
+	if _, err := Resolve(context.Background(), snap, `a\b`); !IsNotFound(err) || store.calls != 3 {
+		t.Fatalf(`Resolve("a\\b") = %v after %d calls, want its own not-found lookup`, err, store.calls)
+	}
 	// No canonical form: passed through uncached every time.
 	for range 2 {
 		_, _ = snap.Resolve(context.Background(), "")
 	}
-	if store.calls != 4 {
-		t.Fatalf("calls = %d, want 4 (empty reference uncached)", store.calls)
+	if store.calls != 5 {
+		t.Fatalf("calls = %d, want 5 (empty reference uncached)", store.calls)
 	}
 }
 

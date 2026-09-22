@@ -69,6 +69,11 @@ func TestFileProviderReturnsExactBytes(t *testing.T) {
 			t.Fatalf("Resolve(%q) = (%q, %v), want %q", ref, data, err, value)
 		}
 	}
+	// A backslash that is not leading is an ordinary name character.
+	writeFile(t, `var\key`, "bs")
+	if data, err := (FileProvider{}).Resolve(context.Background(), `\var\key`); err != nil || string(data) != "bs" {
+		t.Fatalf(`Resolve("\\var\\key") = (%q, %v), want the file named var\key`, data, err)
+	}
 	// A large value spans several read chunks and still comes back intact.
 	big := strings.Repeat("0123456789abcdef", readChunk/8)
 	writeFile(t, "big", big)

@@ -99,7 +99,10 @@ func main() {
   rest of the process, so every task, host and privilege chunk of one
   invocation sees the same value even if the store rotates meanwhile.
   Transient failures are retried. References are cached in canonical form
-  (cleaned, no leading slash — `"/a/b"` and `"a/b"` share one entry), so a
+  (cleaned, without leading slashes or backslashes — `"/a/b"`, `"\a/b"` and
+  `"a/b"` share one entry, as `FileProvider` and the pre-provider helpers
+  read the same file for all three; a backslash elsewhere, as in `"a\b"`, is
+  an ordinary name character), so a
   provider behind a Snapshot must treat those spellings alike; a cached
   not-found served for another spelling names that spelling in its `Ref` and
   message. Build it only with `NewSnapshot`: a zero `secret.Snapshot{}` is

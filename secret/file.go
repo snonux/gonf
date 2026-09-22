@@ -21,6 +21,15 @@ const DefaultDir = "secrets"
 // readChunk is how much FileProvider reads between context checks.
 const readChunk = 32 << 10
 
+// errRootMissing marks a missing Dir, so openError can tell it apart from a
+// missing secret below it.
+var errRootMissing = errors.New("secrets directory missing")
+
+// errRootVanished marks a Dir that was opened fine but was removed, renamed
+// or replaced before the lookup below it finished, so the resulting ENOENT
+// is a store failure and not a missing secret.
+var errRootVanished = errors.New("secrets directory vanished")
+
 // FileProvider reads each secret from the regular file <Dir>/<ref> and
 // returns its bytes exactly. It is the provider api.MustSecret and
 // api.OptionalSecret use unless the consumer configures another one, and its
@@ -28,7 +37,9 @@ const readChunk = 32 << 10
 //
 // A leading slash in the reference is accepted for compatibility with the Rex
 // convention: "/var/nsd/key" reads secrets/var/nsd/key, not /var/nsd/key.
-// References may not escape Dir.
+// Leading backslashes are stripped as well, as the api helpers always did
+// (`\var/nsd/key` reads the same file); a backslash anywhere else is an
+// ordinary name character, as it is in Dir. References may not escape Dir.
 //
 // Errors:
 //   - ErrNotFound: the secret, or a directory on its way below Dir, is absent
@@ -56,6 +67,10 @@ type FileProvider struct {
 	// ".." is refused so the store stays inside the checkout.
 	Dir string
 }
+
+// rootError marks any other failure of Dir itself (as opposed to a secret or
+// directory below it), so openError can report it as a store-level failure.
+type rootError struct{ err error }
 
 // Resolve implements Provider.
 func (p FileProvider) Resolve(ctx context.Context, ref Ref) ([]byte, error) {
@@ -87,6 +102,12 @@ func (p FileProvider) Resolve(ctx context.Context, ref Ref) ([]byte, error) {
 	return data, nil
 }
 
+// Error returns the underlying failure's message.
+func (e rootError) Error() string { return e.err.Error() }
+
+// Unwrap exposes the underlying failure to errors.Is/As.
+func (e rootError) Unwrap() error { return e.err }
+
 // dir returns the effective directory, refusing a misconfigured one as
 // ErrUnavailable: a configuration error of the store, not of one secret.
 // Only a single component (no filepath.Separator, the rule of
@@ -110,7 +131,8 @@ func (p FileProvider) dir(ref Ref) (string, error) {
 	return dir, nil
 }
 
-// cleanRef strips leading slashes (the Rex convention) and cleans the path,
+// cleanRef strips leading slashes (the Rex convention) and backslashes (as
+// the api helpers always have: `\a/b` reads secrets/a/b) and cleans the path,
 // refusing an empty reference and anything that would leave the directory.
 func cleanRef(ref Ref) (string, error) {
 	trimmed := strings.TrimLeft(string(ref), "/\\")
@@ -123,22 +145,6 @@ func cleanRef(ref Ref) (string, error) {
 	}
 	return clean, nil
 }
-
-// errRootMissing marks a missing Dir, so openError can tell it apart from a
-// missing secret below it.
-var errRootMissing = errors.New("secrets directory missing")
-
-// errRootVanished marks a Dir that was opened fine but was removed, renamed
-// or replaced before the lookup below it finished, so the resulting ENOENT
-// is a store failure and not a missing secret.
-var errRootVanished = errors.New("secrets directory vanished")
-
-// rootError marks any other failure of Dir itself (as opposed to a secret or
-// directory below it), so openError can report it as a store-level failure.
-type rootError struct{ err error }
-
-func (e rootError) Error() string { return e.err.Error() }
-func (e rootError) Unwrap() error { return e.err }
 
 // openRoot opens dir and checks that it can be searched, so a secrets/ the
 // operator cannot use is reported as a root (store) failure rather than as
@@ -217,8 +223,10 @@ func openWalk(rootFD int, dir string, dirs []string, name, fullPath string) (*os
 // directory dir in the working directory: it was removed (no links left),
 // or dir now names nothing or a different object (renamed or replaced).
 // It is checked after an ENOENT, so it catches a root that went away at any
-// point before that failure was observed. It cannot see an unmount of a
-// filesystem mounted on Dir (see FileProvider).
+// point before that failure was observed — including a lazy unmount of a
+// filesystem mounted on Dir during the lookup, since dir then names the
+// mount point, a different device. It cannot see an unmount that happened
+// before Dir was opened (see FileProvider).
 func rootVanished(rootFD int, dir string) bool {
 	var held, named unix.Stat_t
 	if err := unix.Fstat(rootFD, &held); err != nil || held.Nlink == 0 {

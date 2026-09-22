@@ -11,6 +11,8 @@ import (
 	"github.com/snonux/gonf/secret"
 )
 
+var secretConfig secretProviders
+
 // secretProviders is the process-wide secret provider configuration. The
 // DSL itself is single-goroutine, but ResolveSecret is a public function a
 // consumer may call from its own goroutines, so every field is guarded by mu.
@@ -22,8 +24,6 @@ type secretProviders struct {
 	configured bool            // SetSecretProvider has been called
 	used       bool            // a secret has been resolved
 }
-
-var secretConfig secretProviders
 
 // SetSecretProvider configures the provider that MustSecret, OptionalSecret
 // and ResolveSecret resolve through. Without it they use
@@ -42,6 +42,28 @@ func SetSecretProvider(p secret.Provider) {
 	if err := setSecretProvider(p); err != nil {
 		logger.Fatal("SetSecretProvider: %v", err)
 	}
+}
+
+// ResolveSecret resolves ref through the configured provider and returns its
+// exact, non-empty bytes. Failures are typed (see package secret). Decide
+// "may this be skipped?" only with secret.IsNotFound(err) on the returned
+// error, as OptionalSecret does: errors.Is(err, secret.ErrNotFound) also
+// matches a not-found buried in the cause of another failure. ctx bounds the
+// resolution; a done context yields an error wrapping ctx.Err(). An empty
+// value is refused as secret.ErrInvalid, the rule MustSecret has always
+// applied. Unlike MustSecret it returns the error instead of stashing it, so
+// it also works outside plan recording. Errors never contain secret bytes;
+// the returned slice is the caller's.
+func ResolveSecret(ctx context.Context, ref secret.Ref) ([]byte, error) {
+	data, err := secret.Resolve(ctx, useSecretProvider(), ref)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, &secret.Error{Kind: secret.ErrInvalid, Ref: ref,
+			Msg: fmt.Sprintf("secret %q is empty", string(ref))}
+	}
+	return data, nil
 }
 
 // setSecretProvider is SetSecretProvider's checked core; it returns the
@@ -82,26 +104,4 @@ func useSecretProvider() secret.Provider {
 		return secret.FileProvider{}
 	}
 	return secretConfig.provider
-}
-
-// ResolveSecret resolves ref through the configured provider and returns its
-// exact, non-empty bytes. Failures are typed (see package secret). Decide
-// "may this be skipped?" only with secret.IsNotFound(err) on the returned
-// error, as OptionalSecret does: errors.Is(err, secret.ErrNotFound) also
-// matches a not-found buried in the cause of another failure. ctx bounds the
-// resolution; a done context yields an error wrapping ctx.Err(). An empty
-// value is refused as secret.ErrInvalid, the rule MustSecret has always
-// applied. Unlike MustSecret it returns the error instead of stashing it, so
-// it also works outside plan recording. Errors never contain secret bytes;
-// the returned slice is the caller's.
-func ResolveSecret(ctx context.Context, ref secret.Ref) ([]byte, error) {
-	data, err := secret.Resolve(ctx, useSecretProvider(), ref)
-	if err != nil {
-		return nil, err
-	}
-	if len(data) == 0 {
-		return nil, &secret.Error{Kind: secret.ErrInvalid, Ref: ref,
-			Msg: fmt.Sprintf("secret %q is empty", string(ref))}
-	}
-	return data, nil
 }
