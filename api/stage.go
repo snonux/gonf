@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/plan"
 	"golang.org/x/sys/unix"
 )
@@ -26,9 +25,9 @@ import (
 //
 // The staging directory is created lazily (lazyStage), on the first blob
 // write, so a plan without blobs never touches $TMPDIR. It is removed on every
-// return path (refusal, error, success) and, through logger.OnFatal, when a
-// task body ends the process with logger.Fatal. It is NOT removed when the
-// process is killed (SIGKILL, SIGINT with no handler, a crash): the staging
+// return path (refusal, error, success); DSL misuse in a task body is a
+// returned record error (internal/declerr), never a process exit, so the
+// deferred removal always runs. It is NOT removed when the process is killed (SIGKILL, SIGINT with no handler, a crash): the staging
 // directory (owner-only, 0700, like its blobs) then stays in $TMPDIR until the
 // operating system cleans it. Blob-less plans, the common case, never create
 // one.
@@ -38,7 +37,6 @@ func stageBlobs(planID, planDir string, taskNames []string) ([]plan.Op, error) {
 	}
 	stage := &lazyStage{}
 	defer stage.remove()
-	defer logger.OnFatal(stage.remove)()
 
 	ops, err := RecordPlanTo(planID, stage, taskNames...)
 	if err != nil {
@@ -53,9 +51,8 @@ func stageBlobs(planID, planDir string, taskNames []string) ([]plan.Op, error) {
 // lazyStage is the staging blob store of stageBlobs: a plan.BlobStore that
 // creates its private temporary directory only when the first blob is
 // written, then delegates to a plan.Store rooted there. Recording is
-// single-goroutine and the logger's fatal hook runs on the goroutine that
-// called Fatal, so the mutex is cheap insurance that the directory name and
-// its removal stay consistent, not a concurrency feature.
+// single-goroutine, so the mutex is cheap insurance that the directory name
+// and its removal stay consistent, not a concurrency feature.
 type lazyStage struct {
 	mu    sync.Mutex
 	dir   string

@@ -356,12 +356,6 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	// A fatal-exit helper child (TestCrossBuildFatalHelper) never returns
-	// from m.Run, so it must not create a root that only we would remove.
-	if root := os.Getenv(crossBuildFatalRootEnv); root != "" {
-		defaultPusher.CrossBuildRoot = root
-		os.Exit(m.Run())
-	}
 	root, err := os.MkdirTemp("", "gonf-remote-test-")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

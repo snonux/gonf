@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/internal/testutil"
 )
 
@@ -365,64 +364,6 @@ func TestBuildGonfOneBuildPerPlatformUnderConcurrency(t *testing.T) {
 	if got, err := os.ReadFile(paths[0]); err != nil || string(got) != "same" {
 		t.Fatalf("binary = %q (%v)", got, err)
 	}
-}
-
-// TestCloseUnregistersFatalHook: every fatal-exit cleanup a Pusher
-// registers is unregistered again by Close, so closed Pushers do not pile
-// up hooks. Not parallel: it swaps the package-level onFatal seam.
-func TestCloseUnregistersFatalHook(t *testing.T) {
-	var registered, unregistered int
-	old := onFatal
-	t.Cleanup(func() { onFatal = old })
-	onFatal = func(fn func()) func() {
-		registered++
-		return func() { unregistered++ }
-	}
-
-	p := newBuildTestPusher(t)
-	p.GoBuildRunner = fakeBuild("fake")
-	first := mustBuild(t, p, "linux", "amd64")
-	mustDo(t, os.Chmod(filepath.Dir(first), 0o755)) // forces a second dir
-	mustBuild(t, p, "linux", "amd64")
-	mustDo(t, p.Close())
-	if registered != 2 || unregistered != 2 {
-		t.Fatalf("registered %d, unregistered %d; want 2 and 2", registered, unregistered)
-	}
-}
-
-// crossBuildFatalRootEnv turns TestCrossBuildFatalHelper into a helper for
-// TestFatalExitRemovesBuildDir.
-const crossBuildFatalRootEnv = "GONF_TEST_CROSSBUILD_FATAL_ROOT"
-
-// TestCrossBuildFatalHelper is not a real test: as a child process it
-// builds into the given root and then exits via logger.Fatal.
-func TestCrossBuildFatalHelper(t *testing.T) {
-	root := os.Getenv(crossBuildFatalRootEnv)
-	if root == "" {
-		t.Skip("helper process only")
-	}
-	p := NewPusher()
-	p.CrossBuildRoot = root
-	p.GoBuildRunner = fakeBuild("fake")
-	fmt.Println("built", mustBuild(t, p, "linux", "amd64"))
-	logger.Fatal("fatal exit after build")
-}
-
-// TestFatalExitRemovesBuildDir: os.Exit skips defers, so only the
-// logger.OnFatal hook can remove the build dir on a fail-fast exit.
-func TestFatalExitRemovesBuildDir(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-	cmd := exec.Command(os.Args[0], "-test.run=^TestCrossBuildFatalHelper$", "-test.count=1", "-test.v")
-	cmd.Env = append(os.Environ(), crossBuildFatalRootEnv+"="+root)
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("helper exited 0, want a fatal exit\n%s", out)
-	}
-	if !strings.Contains(string(out), "built "+resolvedDir(t, root)) {
-		t.Fatalf("helper did not build under %s:\n%s", root, out)
-	}
-	assertEmptyDir(t, root)
 }
 
 func mustDo(t *testing.T, err error) {

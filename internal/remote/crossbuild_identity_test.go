@@ -241,25 +241,6 @@ func TestLoosenedModeDirIsRetiredButStillRemoved(t *testing.T) {
 	}
 }
 
-// TestSwappedDirFatalHookDroppedAtOnce: a swapped (no longer ours) dir's
-// fatal hook is unregistered as soon as the swap is noticed, so a later
-// fatal exit cannot aim at the replacement. Not parallel: it swaps onFatal.
-func TestSwappedDirFatalHookDroppedAtOnce(t *testing.T) {
-	var unregistered int
-	old := onFatal
-	t.Cleanup(func() { onFatal = old })
-	onFatal = func(func()) func() { return func() { unregistered++ } }
-
-	p := newBuildTestPusher(t)
-	p.GoBuildRunner = fakeBuild("good")
-	swapped := filepath.Dir(mustBuild(t, p, "linux", "amd64"))
-	dirSwaps()[0].swap(t, swapped)
-	mustBuild(t, p, "openbsd", "arm64")
-	if unregistered != 1 {
-		t.Fatalf("unregistered = %d before Close, want 1 (the swapped dir's hook)", unregistered)
-	}
-}
-
 // TestBuildParentChecks: the parent is resolved through symlinks and the
 // RESOLVED path is checked, including every ancestor.
 func TestBuildParentChecks(t *testing.T) {

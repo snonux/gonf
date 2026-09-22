@@ -3,16 +3,13 @@ package api
 import (
 	"bytes"
 	"context"
-	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
-	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
@@ -220,6 +217,13 @@ func refusedRecordCauses() []refusedRecordCause {
 		{"packaging error of a later resource", func() {
 			InstallFile(filepath.Join(os.TempDir(), "gonf-stage-missing-dst"), "/nonexistent/gonf/stage/source")
 		}, "package file"},
+		// DSL misuse in the body used to end the process (logger.Fatal); it is
+		// now a declaration error that fails the record like the others, and
+		// the declaration after it still runs.
+		{"declaration error in the task body", func() {
+			File(filepath.Join(os.TempDir(), "gonf-stage-misuse-dst"), options.WithMode(os.ModeDir|0o644))
+			Command("true", nil, options.WithName("after-misuse"))
+		}, "outside 0o7777"},
 	}
 }
 
@@ -382,52 +386,6 @@ func TestRecordPlanWithBlobsStillNeedsTempDir(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "staging dir") {
 		t.Fatalf("RecordPlan error = %v, want a staging dir error", err)
 	}
-	testutil.RequireUnchanged(t, testutil.DirSnapshot{Absent: true}, planDir)
-}
-
-const (
-	stageFatalEnv    = "GONF_STAGE_FATAL_HELPER" // plan dir; also marks the child
-	stageFatalBigEnv = "GONF_STAGE_FATAL_BIG"    // large source file to package
-)
-
-// TestStageFatalHelperProcess is the child of TestRecordPlanFatalRemovesStaging,
-// not a test of its own: it packages a large blob into the staging directory
-// and then hits a fail-fast logger.Fatal inside the task body (os.Exit, no
-// deferred cleanup).
-func TestStageFatalHelperProcess(t *testing.T) {
-	planDir := os.Getenv(stageFatalEnv)
-	if planDir == "" {
-		t.Skip("helper process only")
-	}
-	big := os.Getenv(stageFatalBigEnv)
-	Task("fatal_after_blob", "", func() {
-		InstallFile(filepath.Join(filepath.Dir(big), "dst-big"), big)
-		logger.Fatal("fail-fast DSL misuse after packaging a blob")
-	})
-	_, _ = RecordPlan("x", planDir, "fatal_after_blob")
-	t.Fatal("logger.Fatal returned")
-}
-
-// TestRecordPlanFatalRemovesStaging reproduces the reviewer's leak: a task body
-// that hits logger.Fatal after a large InstallFile was packaged used to leave
-// $TMPDIR/gonf-plan-stage-*/blobs/... behind, a full copy of the source
-// (possibly a rendered secret). The staging directory is now removed by the
-// logger's fatal hook, and planDir is not created either.
-func TestRecordPlanFatalRemovesStaging(t *testing.T) {
-	tmp := t.TempDir() // the child's $TMPDIR: must end up empty
-	src := newStagedSources(t)
-	planDir := filepath.Join(t.TempDir(), "out")
-	cmd := exec.Command(os.Args[0], "-test.run=^TestStageFatalHelperProcess$")
-	cmd.Env = append(os.Environ(), stageFatalEnv+"="+planDir, stageFatalBigEnv+"="+src.big, "TMPDIR="+tmp)
-	out, err := cmd.CombinedOutput()
-	var exit *exec.ExitError
-	if !errors.As(err, &exit) || exit.ExitCode() != 1 {
-		t.Fatalf("helper: %v, want exit status 1 from logger.Fatal; output:\n%s", err, out)
-	}
-	if !strings.Contains(string(out), "fail-fast DSL misuse") {
-		t.Fatalf("helper did not reach logger.Fatal; output:\n%s", out)
-	}
-	assertNoStagingLeft(t, tmp)
 	testutil.RequireUnchanged(t, testutil.DirSnapshot{Absent: true}, planDir)
 }
 

@@ -56,8 +56,8 @@ import (
 // NEW directory is created and the binary rebuilt.
 //
 // Cleanup: Close removes the directories (the CLI calls CleanupBuilds when
-// it returns) and a logger.OnFatal hook covers exits via logger.Fatal. A
-// directory is only removed while it is still ours by identity (same inode,
+// it returns; gonf library code never ends the process, so that deferred
+// call always runs on a normal or error return). A directory is only removed while it is still ours by identity (same inode,
 // real directory, owned by us — see isOurDir), so a planted replacement or a
 // symlink's target is never touched, while one of ours whose mode was merely
 // loosened is still cleaned up. A crash, SIGKILL, an uncaught signal such as
@@ -70,17 +70,11 @@ import (
 // the shared dir under other test processes, and in world-writable /tmp
 // another local user could pre-create the dir and swap the binary.
 
-// onFatal registers a build dir's fatal-exit cleanup. It is
-// logger.OnFatal; a variable only so tests can observe that Close
-// unregisters what was registered.
-var onFatal = logger.OnFatal
-
 // buildDirState is one private build directory and the identity it had
 // when this Pusher created it.
 type buildDirState struct {
-	path       string
-	info       os.FileInfo // Lstat result right after creation
-	unregister func()      // drops this dir's logger.OnFatal cleanup; guarded by Pusher.buildMu
+	path string
+	info os.FileInfo // Lstat result right after creation
 }
 
 // cachedBuild is one built binary: where it is, which build dir holds it,
@@ -185,7 +179,7 @@ func (p *Pusher) retireBuildDir(d *buildDirState) {
 // identity (isOurDir: e.g. only its mode was loosened) is kept for Close to
 // remove, since another platform's build may still be using it; a dir that
 // is no longer ours (replaced or turned into a symlink) is never deleted by
-// us, so only its fatal hook is dropped. buildMu must be held.
+// us, so it is simply forgotten. buildMu must be held.
 func (p *Pusher) retireLocked(d *buildDirState) {
 	if d == nil {
 		return
@@ -198,22 +192,20 @@ func (p *Pusher) retireLocked(d *buildDirState) {
 			delete(p.buildCache, key)
 		}
 	}
-	if isOurDir(d) {
-		for _, r := range p.retiredDirs {
-			if r == d {
-				return
-			}
-		}
-		p.retiredDirs = append(p.retiredDirs, d)
-	} else if d.unregister != nil {
-		d.unregister()
-		d.unregister = nil
+	if !isOurDir(d) {
+		return
 	}
+	for _, r := range p.retiredDirs {
+		if r == d {
+			return
+		}
+	}
+	p.retiredDirs = append(p.retiredDirs, d)
 }
 
 // Close removes p's private build dirs (those still ours by identity) and
-// forgets its cached builds and their fatal hooks. Call it once every push
-// using p has finished; a later build simply creates a fresh dir.
+// forgets its cached builds. Call it once every push using p has finished; a
+// later build simply creates a fresh dir.
 func (p *Pusher) Close() error {
 	p.buildMu.Lock()
 	dirs := p.retiredDirs
@@ -222,18 +214,8 @@ func (p *Pusher) Close() error {
 	}
 	p.buildDir, p.retiredDirs = nil, nil
 	p.buildCache = map[string]cachedBuild{}
-	var unregister []func()
-	for _, d := range dirs {
-		if d.unregister != nil {
-			unregister = append(unregister, d.unregister)
-			d.unregister = nil
-		}
-	}
 	p.buildMu.Unlock()
 
-	for _, u := range unregister {
-		u()
-	}
 	var errs error
 	for _, d := range dirs {
 		errs = errors.Join(errs, removeBuildDir(d))
@@ -253,7 +235,7 @@ func CleanupBuilds() error {
 // newBuildDir creates a private build dir under the resolved, checked
 // parent (root, or os.TempDir() when empty), records its identity, checks
 // it came out private (a restrictive umask or a filesystem ignoring modes
-// could make it otherwise) and registers its fatal-exit cleanup.
+// could make it otherwise).
 func newBuildDir(root string) (*buildDirState, error) {
 	parent := root
 	if parent == "" {
@@ -278,7 +260,6 @@ func newBuildDir(root string) (*buildDirState, error) {
 		_ = os.Remove(path)
 		return nil, fmt.Errorf("%w; check your umask (it must leave the owner rwx, e.g. 022 or 077)", err)
 	}
-	d.unregister = onFatal(func() { _ = removeBuildDir(d) })
 	return d, nil
 }
 
