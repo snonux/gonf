@@ -192,10 +192,12 @@ On the controller these outputs pass through the registry:
   descendant still holds its output — an orphaned root `gonf apply` after
   sudo was killed, under sudo without `use_pty` — gonf returns after at most
   `logger.RelayWaitDelay` (2 s) and hands that output to a detached `cat`
-  writing to its stderr, in its own process group. The descendant thus
+  writing to its stderr, in a new session without a controlling terminal
+  (so neither Ctrl-C, a hangup nor `stty tostop` stops it). The descendant thus
   keeps a reader for as long as it writes, even after gonf has exited, and
   is never killed by SIGPIPE mid-apply, as before gonf relayed its output.
-  What it prints after the hand-off is **not redacted** (the controller's
+  What it prints after the hand-off (strictly: from the start of the line
+  that was unfinished at the hand-off) is **not redacted** (the controller's
   registry dies with gonf); destinations withhold validator output, command
   argv and failure output of sensitive ops themselves, and recording refuses
   strong secrets in identities, so what is left is limited by the rules

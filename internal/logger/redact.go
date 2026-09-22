@@ -212,14 +212,17 @@ func releaseOrphan(name string, pr *os.File, w io.Writer, stopped chan bool) {
 	Debug("%s exited but a process it started still holds its output; handed it to the terminal unredacted", name)
 }
 
-// handOff starts `cat` with pr as its input and f as its output, in its own
-// process group so a terminal Ctrl-C meant for gonf does not stop it, then
-// closes gonf's copy of pr and reaps cat in the background. cat exits when
-// the last writer of the pipe closes it.
+// handOff starts `cat` with pr as its input and f as its output, in a new
+// session without a controlling terminal, so a terminal Ctrl-C or hangup
+// meant for gonf does not reach it and `stty tostop` cannot stop it with
+// SIGTTOU (a background process group on gonf's terminal would be stopped,
+// then killed by the hangup once gonf exits, leaving the orphan to die of
+// SIGPIPE). It then closes gonf's copy of pr and reaps cat in the
+// background. cat exits when the last writer of the pipe closes it.
 func handOff(pr, f *os.File) error {
 	helper := exec.Command("cat")
 	helper.Stdin, helper.Stdout, helper.Stderr = pr, f, f
-	helper.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	helper.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := helper.Start(); err != nil {
 		return err
 	}
