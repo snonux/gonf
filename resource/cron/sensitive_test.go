@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
@@ -39,19 +40,18 @@ func stubFailingCrontab(t *testing.T, readFails bool) {
 	oldDry := resource.DryRun()
 	resource.SetDryRun(false)
 	table := beginMarker("upload") + "\n5 * * * * /bin/up " + fakeCronSecret + "\n# END GONF Cron[upload]\n"
-	SetRunnersForTest(
-		func(string, ...string) (string, string, int, error) {
+	testseam.FakeCrontab(t, testseam.Crontab{
+		Read: func(string, ...string) (string, string, int, error) {
 			if readFails {
 				return table, "crontab: bad line", 1, nil
 			}
 			return table, "", 0, nil
 		},
-		func(stdin string, _ string, _ ...string) (string, string, int, error) {
+		Write: func(stdin string, _ string, _ ...string) (string, string, int, error) {
 			return "", "crontab: rejected " + stdin, 1, nil
 		},
-	)
+	})
 	t.Cleanup(func() {
-		ResetRunnersForTest()
 		resource.SetDryRun(oldDry)
 		resource.ResetForTest()
 	})

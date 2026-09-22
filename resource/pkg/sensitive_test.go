@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
@@ -48,16 +49,14 @@ func stubFailingManager(t *testing.T, manager string) {
 	resource.ResetForTest()
 	oldDry := resource.DryRun()
 	resource.SetDryRun(false)
-	SetDetectPackageManagerForTest(func() (string, error) { return manager, nil })
-	SetRunCmdWithEnvForTest(func(env []string, bin string, args ...string) (string, string, int, error) {
+	testseam.FakePackageManager(t, func() (string, error) { return manager, nil })
+	testseam.FakePackageRunner(t, testseam.Package{RunEnv: func(env []string, bin string, args ...string) (string, string, int, error) {
 		if isPackageProbe(bin, args) {
 			return "", "", 1, nil
 		}
 		return "fetching " + strings.Join(env, " "), "auth failed for " + fakePkgSecret, 1, nil
-	})
+	}})
 	t.Cleanup(func() {
-		ResetRunCmdWithEnvForTest()
-		ResetDetectPackageManagerForTest()
 		resource.SetDryRun(oldDry)
 		resource.ResetForTest()
 	})

@@ -58,12 +58,10 @@ func TestSensitiveCommandWithholdsArgvAndOutput(t *testing.T) {
 func TestWithSensitiveCommandWithholdsArgvDirectly(t *testing.T) {
 	resource.ResetForTest()
 	t.Cleanup(resource.ResetForTest)
-	SetRunnersForTest(func(exec.Opts, string, ...string) (string, string, int, error) {
+	testseam.FakeCommand(t, testseam.Command{Run: func(exec.Opts, string, ...string) (string, string, int, error) {
 		return "", "denied " + fakeCmdSecret, 7, nil
-	}, nil)
-	t.Cleanup(ResetRunnersForTest)
-	output, restore := logger.CaptureForTest(logger.LevelDebug)
-	t.Cleanup(restore)
+	}})
+	output := testutil.CaptureLog(t, logger.LevelDebug)
 
 	args := []string{"-H", "Authorization: Bearer " + fakeCmdSecret}
 	err := Ensure("/usr/bin/curl", args, opt.WithName("upload"), opt.WithSensitive)

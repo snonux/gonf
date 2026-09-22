@@ -156,7 +156,8 @@ func (p *Package) run(bin string, args ...string) (string, string, int, error) {
 	return stdout, stderr, code, err
 }
 
-// runRaw runs bin through the seam p's environment selects (see run).
+// runRaw runs bin through the runner p's environment selects: runCmd, or
+// runCmdWithEnv for a package with WithEnv (see run).
 func (p *Package) runRaw(bin string, args ...string) (string, string, int, error) {
 	if p.env == nil {
 		return runCmd(bin, args...)
