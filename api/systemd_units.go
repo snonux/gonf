@@ -44,8 +44,8 @@ import (
 // different buses keep separate reloads. A SystemdTimer declared later on
 // the same bus usually shares the reload too: it orders the reload after
 // itself, and its own gated reload then covers the composition's inputs
-// (systemd.JoinRegisteredReload lists when the join is refused). The merge amends the recorded
-// reload op in place, which is refused (fail-fast, naming both watch lists)
+// (systemd.JoinRegisteredReload lists when the join is refused). The merge
+// amends the recorded reload op in place, which is refused (fail-fast, naming both watch lists)
 // when a when-block boundary or privilege change separates the two
 // declarations, or when the new declaration's inputs already depend on the
 // reload (an input declared with DependsOn(an earlier composition), or that
