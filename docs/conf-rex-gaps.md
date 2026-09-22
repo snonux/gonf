@@ -26,7 +26,9 @@ compute any content Perl closures could (see
 - **gonf is the configuration-management engine for conf going forward.** New
   fleet work lands as Go recipes under `~/git/conf/gonf/`, with SSH inventory in
   `gonf/cluster/cluster.go` and deploys via `./gonf.sh cluster <cluster> <tasks…>`
-  (wrapper = `cd ./gonf && go run ./cmd/gonf`).
+  (the wrapper resolves its own checkout, changes into `gonf/` so the
+  `gonf/secrets` root resolves, and passes its arguments through verbatim;
+  it works from any directory, conf 63e83a8).
 - **One consumer module per repository**, depending on `github.com/snonux/gonf`
   (dotfiles and conf both pin v0.15.0; any later consumer upgrade is a
   deliberate compatibility change). Multi-Rexfile composition maps to Go
@@ -55,7 +57,7 @@ compute any content Perl closures could (see
 | Path | Tasks | Role |
 |------|-------|------|
 | `Rexfile` | 0 | Aggregator: `require for <'*/Rexfile'>` + explicit `f3s/*` requires |
-| `frontends/Rexfile` | 27 + `commons` | Main OpenBSD frontend fleet (blowfish, fishfinger; port 2; user `rex`; `sudo TRUE`; `parallelism 5`) |
+| `frontends/Rexfile` | 27 + `commons` (legacy, not deployed) | Main OpenBSD frontend fleet (blowfish, fishfinger; port 2; user `rex`; `sudo TRUE`; `parallelism 5`) |
 | `f3s/garage/Rexfile` | retired | Garage S3 config now deploys through `gonf garage_config` to f0–f2 (user `paul`, doas, parallelism 1) |
 | `f3s/r-nodes/Rexfile` | 2 | Rocky k3s VMs r0–r2 (user `root`, `parallelism 3`): NFS-mount monitor units + persistent journal |
 | `playground/Rexfile` | 1 | Rex cron API canary (blowfish) |
@@ -256,16 +258,47 @@ large config loops and per-host values while keeping closures in Go.
 
 ## The conf/gonf consumer
 
-The unattended-upgrades migration is complete for all four OS groups and proves
-the composition pattern (`RegisterMethods` + `WithCluster` + per-host
-`WithValue`):
+Every operational conf Rex task now has a Gonf owner (see the mapping below);
+the consumer composes them with `RegisterMethods` + `WithCluster`, per-host
+`WithValue` rows read through `ForHosts`, and explicit aggregates in
+`gonf/tasks/tasks.go`:
 
 | Prefix / cluster | Tasks | Notes |
 |------------------|-------|-------|
-| `frontends_*` / `frontends` (blowfish, fishfinger; doas; openbsd/amd64) | ping, script, services, cron, newsyslog, DTail, Gogios, Foostats, package repo | `OptsPing` opts out of the struct-level `RequiresRoot` |
-| `pis_netbsd_*` / `netbsd-pis` (pi0, pi1; doas; netbsd/arm64) | script, services, cron, newsyslog | `WhenHostname(ClusterHosts())` fragments |
-| `rocky_*` / `rocky-all` (pi2, pi3, r0–r2; sudo; linux) | gonf_link, packages, script, stamp_dir, units, logrotate | `SystemdTimer` per-host `OnCalendar` |
+| `frontends_*` / `frontends` (blowfish, fishfinger; doas; openbsd/amd64) | unattended upgrades (script, services, cron, newsyslog), base, myname, WireGuard hosts, uptimed, goprecords, rsync, gemtexter, ACME, httpd, inetd, relayd, PF, SMTPD, NSD, DNS failover, DTail, Gogios, Foostats, package repo, service accounts; by name only: acme_invoke, irc_bouncer, ping | `AggregateTasks("frontends", …)` with a registration-time membership check; `OptsPing` opts out of the struct-level `RequiresRoot` |
+| `pis_netbsd_*` / `netbsd-pis` (pi0, pi1; doas; netbsd/arm64) | script, services, cron, newsyslog, vuln_audit_* | `WhenHostname(ClusterHosts())` fragments, per-host cron via `ForHosts` |
+| `rocky_*` / `rocky-all` (pi2, pi3, r0–r2; sudo; linux) | gonf_link, packages, script, stamp_dir, units, logrotate; `rocky_kernel_audit_*` on the Pis | `SystemdTimer` per-host `OnCalendar` |
 | `freebsd_*` / `freebsd-hosts` (f0–f3; doas; freebsd/amd64) | packages, script, services, stamp_dir, cron, newsyslog | hourly minute via `WithValue`; `@reboot` workaround |
+| `rnodes_*` / `rocky-k3s` (r0–r2; root) | nfs_mount_monitor, persistent_journal | ports of `f3s/r-nodes/Rexfile` |
+| `garage_*` / `garage` (f0–f2; doas) | config | configuration only, see below |
+| `debian_pis_*` / `debian-pis` (pi2, pi3) | unattended upgrades and base | registered for explicit runs only, no aggregate yet |
+
+### First-install prerequisites
+
+The aggregates converge hosts that are already provisioned; they are not
+first-host installers. Prerequisites a new host (or controller) needs:
+
+- **Garage**: `garage_config` deploys `/usr/local/etc/garage.toml` and
+  restarts Garage on a change. Installing the package, its `garage` group,
+  `/var/db/garage` storage and the cluster layout are provisioning steps
+  outside Gonf; the controller needs `gonf/secrets/garage/rpc_secret`
+  (`just -f f3s/garage/Justfile init-secrets`).
+- **Unattended upgrades**: cron jobs and timers call scripts installed by
+  the `*_script` tasks, which on FreeBSD and Rocky need the `*_packages`
+  interpreter (ksh); the task descriptions name these prerequisites, and the
+  pattern aggregates record them in a working order.
+- **Frontend certificates**: relayd and smtpd load keypairs from
+  `/etc/ssl`, which exist only after `frontends_acme` plus one explicit
+  `frontends_acme_invoke` (placeholders are copied from `foo.zone`), so a new
+  frontend runs those before `frontends_relayd`/`frontends_smtpd`.
+- **Controller inputs**: `gonf/secrets/frontends` (NSD TSIG key required,
+  goprecords tokens optional) and the checkouts `~/git/shuriken.sh`
+  (required by `frontends_gogios`) and `~/git/foostats` (optional, in-repo
+  fallback); `GONF_SHURIKEN_ROOT` / `GONF_FOOSTATS_ROOT` override them and a
+  missing plugin fails with the fix in the message (conf 63e83a8).
+
+Operator-facing versions of these lists: conf `frontends/README.md` and
+`f3s/garage/Justfile`.
 
 Inventory invariants (from `cluster.go`): pi/r/f hostnames are substrings of the
 live OS hostnames so `WhenHostname("piN")` / `WhenHostname("rN")` / `WhenHostname("fN")`
@@ -281,22 +314,30 @@ match; LAN hosts pin `WithSSHPort(22)` because `~/.ssh/config` maps
    nsd key.conf, and `garage_config`.
 3. **Complete: `WithEnv` on Package** — unblocks dtail_install, gogios_install,
    complements `pkgrepo_setup`.
-4. **Port mechanical frontends tasks** (no feature deps): base pkgs, hosts_wg,
-   uptimed, acme_invoke, pkgrepo_setup, foostats, ircbouncer, nsd_failover,
-   cron_test canary, gorum_install, gogios user/dirs/cron scaffolding.
-5. **Port template-heavy tasks** with record-time Go content or `WithTemplateData`:
-   base/myname,
-   gemtexter, acme, httpd, inetd, relayd, smtpd, nsd zones, gogios.json, pf —
-   each using the completed restart wiring where needed.
-6. **Complete Garage port; port remaining f3s tasks**: `garage_config` now
-   uses the completed secret/template/change-gate APIs; r-nodes
-   nfs_mount_monitor + persistent_journal remain separate ports.
+4. **Complete: mechanical frontends tasks** (base pkgs, hosts_wg, uptimed,
+   acme_invoke, pkgrepo_setup, foostats, ircbouncer, nsd_failover, gogios
+   user/dirs/cron scaffolding); `cron_test`, `gorum_install` and `gorum` are
+   excluded instead (see the mapping).
+5. **Complete: template-heavy tasks** with record-time Go content or
+   `WithTemplateData`: base/myname, gemtexter, acme, httpd, inetd, relayd,
+   smtpd, nsd zones, gogios.json, pf.
+6. **Complete: Garage and r-nodes ports** (`garage_config`,
+   `rnodes_nfs_mount_monitor`, `rnodes_persistent_journal`).
 7. **Nice-to-have** (only if consumers still feel the pain): cron `@reboot`.
 
 Steps 1–3 are gonf-library work (tests + plan bump + docs); steps 4–6 are
 conf-consumer work tagged to a gonf release; each port flips task ownership from
 Rex to gonf (comment out the Rex task or delete it once the live deploy
 converges).
+
+Retirement status (2026-09-22): the mapping has no operational Rex task left
+without a Gonf owner or an explicit exclusion, but the Rexfiles are not
+retired. `conf/Rexfile`, `frontends/Rexfile`, `f3s/r-nodes/Rexfile` and
+`playground/Rexfile` stay until authorized live rollout, a second
+idempotent apply and failover checks have passed (conf task v42); the
+frontends Rexfile is marked legacy and must not be run. dotfiles'
+`pkg_fedora` still installs the `Rex` package for them. Removing the Rexfiles
+and the Perl `.tpl` templates no Gonf recipe reads is the last step.
 
 ## Rex task mapping
 
@@ -315,15 +356,15 @@ so the plan has no login-owned `/tmp` secret staging step.
 
 | Rex task | gonf port | Status / needs |
 |----------|-----------|----------------|
-| `commons` (run_task aggregator) | `AggregateTasks("frontends", …, frontendSetupTasks()...)` | **Done** (consumer; task n52, conf c5ed357). The explicit list is still a superset of Rex `commons`' 18-task subset; `frontends_acme_invoke` and `frontends_irc_bouncer` are `Operational()` and listed as exclusions, and a registration-time check panics when a `frontends_*` task is in neither list, so a new task cannot silently fall out of setup runs |
+| `commons` (run_task aggregator) | `AggregateTasks("frontends", …, frontendSetupTasks()...)` | **Done** (consumer; task n52, conf c5ed357). The explicit list is still a superset of Rex `commons`' 18-task subset; `frontends_acme_invoke`, `frontends_irc_bouncer` and (owner decision 2026-09-22, conf 747d90b) the `frontends_ping` diagnostic are `Operational()` and listed as exclusions, and a registration-time check panics when a `frontends_*` task is in neither list, so a new task cannot silently fall out of setup runs |
 | `id`, `dump_info` | — | **Excluded** (interactive diagnostics; `Command("id", nil)` ad hoc) |
-| `base` (6× pkg present; `pkg_scripts="…"` append to `/etc/rc.conf.local` (znc added on the ircbouncer host); `touch /etc/rc.local`; `/etc/myname` from closure template; `tmux-edit-send` source file) | `Package` ×6 + `File(WithLine)` + `File` + Go-computed content + `InstallFile`; task split `frontends_base`, `frontends_myname` | Needs [templates] only for ergonomics; per-host `myname` via `WhenHostname` + record-time content. **To do** |
+| `base` (6× pkg present; `pkg_scripts="…"` append to `/etc/rc.conf.local` (znc added on the ircbouncer host); `touch /etc/rc.local`; `/etc/myname` from closure template; `tmux-edit-send` source file) | `frontends_base`: `Package` ×6, `/etc/rc.local` (0644 root:wheel), and the `pkg_scripts` line exactly as `rcctl` writes it (task i82); `frontends_myname`: `/etc/myname` from inventory via `ForHosts` | **Consumer** — tasks 44b2ee4, o52, i82. `tmux-edit-send` is **retired**, not ported: its source was removed in conf e4638ec, neither frontend has `/usr/local/bin/tmux-edit-send`, and the dangling Rex file block was dropped (task 462) |
 | `hosts_wg` (append `etc/hosts.wg.append` lines, skip comments/blanks) | `frontends_wire_guard_hosts`: `File("/etc/hosts", WithLines(...))` from shared inventory | **Consumer** — task 44b2ee4; local plan verified, live rollout remains explicit |
 | `uptimed` | `frontends_uptimed`: `Package("uptimed")` + `Service("uptimed")` | **Consumer** — task 44b2ee4; local plan verified, live rollout remains explicit |
 | `goprecords_upload` (token from secrets → `/etc/goprecords-upload.token` 0600; script; `daily.local` append; old script absent; old daily.local line stripped) | `frontends_goprecords`: `Package("curl")` + optional controller secret + `File` + `InstallFile` + `File(WithLine)` + `WithoutLine` + `NoFile` | **Consumer** — task 44b2ee4; local plan verified, live rollout remains explicit |
 | `rsync` (pkg; rsyncd.conf + rsync.sh templates; root crontab rebuilt via temp files + run) | `frontends_rsync`: `Package("rsync")` + 2× Go-computed template content + `Cron("frontend-rsync", WithCommand("-ns /usr/local/bin/rsync.sh"), WithLegacyCommand("-ns /usr/local/bin/rsync.sh"), WithMinute("*/5"))` | **Consumer** — task g52; the legacy root crontab line is adopted by exact command match (user defaults to root; OpenBSD `-ns` flags ride in the verbatim command field). Live rollout remains an explicit operator action |
-| `gemtexter` (template → `/usr/local/bin/gemtexter.sh`; daily.local append) | `InstallFile` + `File(WithLine)` | Needs [templates→Go]. **To do** |
-| `acme` (2 templates over `@acme_hosts`; daily.local append) | 2× `File`/`InstallFile` + `File(WithLine)` | Needs [templates→Go]. **To do** |
+| `gemtexter` (template → `/usr/local/bin/gemtexter.sh`; daily.local append) | `frontends_gemtexter`: `InstallFile` of the Perl-free script + `File(dailyLocal, WithLine)` | **Consumer** — task 44b2ee4; local plan verified, live rollout remains explicit |
+| `acme` (2 templates over `@acme_hosts`; daily.local append) | `frontends_acme`: `acme-client.conf.tmpl` and `acme.sh.tmpl` with `WithTemplateData` over one certificate list (sites, standby twins, host FQDN; relayd's keypairs share it) + `File(dailyLocal, WithLine)` | **Consumer** — tasks o52, m52 (conf 44fcc88: skip/unchanged/changed/failed outcomes, reload only for changed material, no separate ipv4./ipv6. requests). Certificates are requested only by `frontends_acme_invoke` |
 | `acme_invoke` (run acme.sh every deploy) | `frontends_acme_invoke`: `Command("/usr/local/bin/acme.sh", nil)` without guards (runs every explicit apply — matches Rex) | **Consumer** — task v42; intentionally excluded from `frontends` because certificate issuance is an operator action |
 | `httpd` (rc.conf.local flags append; httpd.conf template **restart-on-change**; htdocs dirs; fallback page + health-check `index.txt` template; service) | `frontends_httpd` controller-renders each host config and installs it with core `WithValidation("httpd", List("-n", "-f", CandidatePath))` (task j52, conf 122731f), then change-gates the live restart | **Consumer** — task s42; local plan verified, live rollout remains an explicit operator action |
 | `inetd` (flags append; login.conf.d/inetd; inetd.conf restart-on-change; service) | `frontends_inetd`: `File(WithLine)` + `InstallFile` + `LoginClass("inetd", …)` (task t52, conf 7ec3015) + `Service("inetd", WithRestart, OnChange(...))` | **Consumer** — task s42; local plan verified, live rollout remains an explicit operator action |
@@ -333,7 +374,7 @@ so the plan has no login-owned `/tmp` secret staging step.
 | `nsd_failover` (script + root crontab via run) | `frontends_dns_failover`: installs the script and creates marker-managed `Cron("frontend-nsd-failover", WithCommand("-ns /usr/local/bin/dns-failover.ksh"), WithLegacyCommand(...), WithMinute("*"))`, which adopts the legacy unmarked line by exact command match | **Consumer** — tasks t42 and g52 (exact-command adoption replaced the earlier cleanup command); local plan verified. Live rollout remains an explicit operator action |
 | `dtail_install` (remove stray binaries; `PKG_PATH=… pkg_add -u dtail ‖ pkg_add dtail`) | `frontends_d_tail` cleans only unpackaged legacy binaries and uses `Package("dtail", WithEnv(map[string]string{"PKG_PATH": …}), IsLatest)`; on an absent OpenBSD package `IsLatest` installs first, while installed packages use `pkg_add -u` | **Consumer** — task u42; local plan verified, live rollout remains an explicit operator action |
 | `dtail` (dtail_install + adduser `_dserver` + `usermod -d` + daily.local appends + service) | `frontends_d_tail` includes the no-login account with `WithManageHome` existing-home convergence (task s52), both daily hooks, and `Service("dserver")` | **Consumer** — task u42; individual task remains independently applicable |
-| `pkgrepo_setup` (`PKG_PATH` export appended to `/root/.profile`) | `frontends_pkg_repo` appends the signed repository export; package resources carry the same environment themselves | **Consumer** — task u42; no unsigned fallback |
+| `pkgrepo_setup` (`PKG_PATH` export appended to `/root/.profile`) | `frontends_pkg_repo` keeps the signed repository export in `/root/.profile`, byte for byte the quoted line Rex wrote (task hb2); package resources carry the same environment themselves | **Consumer** — tasks u42, hb2; no unsigned fallback. Adopting an unquoted or older-URL variant without a duplicate needs core `WithKeyedLine` (task r52, branch `r52-core`, unreleased) |
 | `gogios_install` (uname branch: OpenBSD custom-repo `pkg_add -u ‖ install`; FreeBSD branch is dead code) | `frontends_gogios` uses `Package("gogios", WithEnv(map[string]string{"PKG_PATH": …}), IsLatest)` (frontends are OpenBSD-only); absent packages install before later latest updates | **Consumer** — task u42; local plan verified, live rollout remains explicit |
 | `gogios` (pkg ×2; adduser `_gogios`; dirs; gogios.json template over 3 arrays; `check_shuriken_age` sourced from `~/git/shuriken.sh`; `_gogios` crontab from template; rc.local appends) | `frontends_gogios` creates `_gogios`, converges runtime/status directories, Go-renders `gogios.json`, installs the external plugin, adopts the three legacy unmarked Gogios cron commands by exact command match (`WithLegacyCommand`, task g52), and preserves boot-time runtime-directory setup | **Consumer** — task u42; Garage and virtual-hosted bucket checks retain task 642's expected HTTP 403 result |
 | `cron_test` (Rex cron canary, `_gogios` user) | — | **Excluded** — non-operational `/bin/ls` canary; `frontends_ping` and recorded-plan checks supersede it |
@@ -389,7 +430,8 @@ For this document:
 - Every capability row names the gonf API that exists today (verified against
   v0.15.0, plan schema 21) — no "fleet needs transport" or
   missing-feature claims survive.
-- All five Rexfiles are inventoried and every task appears exactly once in the
+- All Rexfiles (four tracked, plus the retired `f3s/garage` one) are
+  inventoried and every task appears exactly once in the
   mapping with a status (consumer / to do / excluded) and feature codes.
 - The gap list matches the proposed-API list and the implementation ordering.
 
