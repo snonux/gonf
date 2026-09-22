@@ -247,6 +247,12 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 		// the other half of this guard, for a caller that skips straight
 		// to Apply without going through this RecordPlanTo call at all.
 		resource.ResetRepository()
+	} else {
+		// A clean, complete record is itself evidence nothing is left
+		// over from an earlier failure: an embedding program that fixed a
+		// broken recipe must not stay refused by api.Apply forever over a
+		// mistake it already recovered from (see declerr.CapturedAny).
+		declerr.ClearCapturedAny()
 	}
 	return ops, err
 }

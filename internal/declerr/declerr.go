@@ -22,10 +22,12 @@
 //
 // A sink swallows a report for First's purposes (the recording session
 // handles it, not the process-wide sticky error), but CapturedAny stays a
-// process-wide sticky trace that SOME session, at some point, failed this
-// way — api.Apply checks it too, so a caller that ignores a prior
-// RecordPlanTo/Run's returned error is still refused rather than silently
-// applying (or no-op'ing on) whatever that failed body left registered.
+// trace that SOME session failed this way, until the next one completes
+// cleanly (RecordPlanTo clears it on success) or a test Resets — api.Apply
+// checks it too, so a caller that ignores a prior RecordPlanTo/Run's
+// returned error is still refused rather than silently applying (or
+// no-op'ing on) whatever that failed body left registered, without staying
+// refused forever once the recipe is fixed and recording cleanly again.
 //
 // Reports are first-error-wins: a later misuse is usually a consequence of the
 // first one, and the operator fixes the first one first. Each report carries
@@ -123,21 +125,36 @@ func First() error {
 	return first
 }
 
-// CapturedAny reports whether Report has ever run with a sink installed
-// (Capture) — i.e. whether some task body, at some point in this process,
-// failed a recording session with a declaration error. It stays true for
-// the life of the process once set (like First); tests clear it with
-// Reset. api.Apply checks it alongside First so a caller that applies the
-// registered resource repository without checking a prior
-// RecordPlanTo/Run's returned error still gets refused, instead of
-// silently applying (or silently no-op'ing on) whatever a failed body left
-// registered. RecordPlanTo's own failure paths additionally reset the
-// repository itself (see enterRecordMode's exit), so this is defense in
-// depth, not the only guard.
+// CapturedAny reports whether Report has run with a sink installed
+// (Capture) since the last ClearCapturedAny or Reset — i.e. whether some
+// task body failed a recording session with a declaration error, and no
+// later recording session has since completed cleanly. api.Apply checks it
+// alongside First so a caller that applies the registered resource
+// repository without checking a prior RecordPlanTo/Run's returned error
+// still gets refused, instead of silently applying (or silently no-op'ing
+// on) whatever a failed body left registered — RecordPlanTo's own failure
+// paths additionally reset the repository itself (see enterRecordMode's
+// exit), so this is defense in depth, not the only guard. It does NOT stay
+// true for the life of the process the way First does: RecordPlanTo clears
+// it after a record succeeds, since a clean, complete record is itself
+// evidence nothing is left over from an earlier failure, and an embedding
+// program that keeps running after fixing a broken recipe (t62's whole
+// reason to exist) must be able to call Apply again once RecordPlanTo/Run
+// says its recording is clean, not stay refused forever over a mistake it
+// already recovered from.
 func CapturedAny() bool {
 	mu.Lock()
 	defer mu.Unlock()
 	return capturedAny
+}
+
+// ClearCapturedAny clears the CapturedAny flag without touching First or
+// the installed sink. api.RecordPlanTo calls it once a record completes
+// without error.
+func ClearCapturedAny() {
+	mu.Lock()
+	defer mu.Unlock()
+	capturedAny = false
 }
 
 // Capture routes every Report to fn until restore is called, which reinstates
@@ -156,9 +173,9 @@ func Capture(fn func(error)) (restore func()) {
 	}
 }
 
-// Reset clears the sticky first error and any installed sink. It is a test
-// seam (api.ResetForTest calls it) and must not run concurrently with a
-// recording.
+// Reset clears the sticky first error, CapturedAny and any installed sink.
+// It is a test seam (api.ResetForTest calls it) and must not run
+// concurrently with a recording.
 func Reset() {
 	mu.Lock()
 	defer mu.Unlock()

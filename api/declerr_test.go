@@ -184,6 +184,48 @@ func TestApplyRefusesAfterARunFailedMidBody(t *testing.T) {
 	}
 }
 
+// TestApplyRecoversAfterALaterCleanRecord: CapturedAny must not refuse Apply
+// forever once a failed recipe is fixed. After a failed record (as above),
+// a later, unrelated RecordPlanTo/Run that completes cleanly clears it, and
+// Apply works normally again — an embedding program that keeps running
+// after fixing a broken recipe must not stay refused over a mistake it
+// already recovered from.
+func TestApplyRecoversAfterALaterCleanRecord(t *testing.T) {
+	ResetForTest()
+	ResetInventory()
+	t.Cleanup(func() {
+		ResetForTest()
+		ResetInventory()
+	})
+	Task("bad", "", func() {
+		Cron("x", options.WithCommand("/bin/true"), options.WithCronUser(""))
+	})
+	if err := Run("bad"); err == nil {
+		t.Fatalf("Run(bad) = nil, want the cron misuse refusal")
+	}
+	if !declerr.CapturedAny() {
+		t.Fatal("CapturedAny() = false after Run(bad) failed")
+	}
+
+	dst := filepath.Join(t.TempDir(), "recovered")
+	Task("good", "", func() { File(dst, options.WithContent("ok")) })
+	if err := Run("good"); err != nil {
+		t.Fatalf("Run(good) = %v, want a clean run", err)
+	}
+	if declerr.CapturedAny() {
+		t.Fatal("CapturedAny() = true after a later clean record, want it cleared")
+	}
+
+	direct := filepath.Join(t.TempDir(), "direct")
+	File(direct, options.WithContent("ok"))
+	if err := Apply(); err != nil {
+		t.Fatalf("Apply() after recovery = %v, want it to succeed", err)
+	}
+	if content, err := os.ReadFile(direct); err != nil || string(content) != "ok" {
+		t.Fatalf("direct = %q, %v; want Apply to have written it", content, err)
+	}
+}
+
 // TestValidRecipeReportsNoDeclarationError is the negative control: correct
 // declarations, including the Must* lookups of registered names, report
 // nothing and record normally.
