@@ -40,8 +40,9 @@ type Dir struct {
 	sourceGlob string
 	// sourceBase is the recipe's declared source directory passed by plan
 	// apply (opt.WithSourceBase): the stable {{.Param}} base for .tmpl
-	// entries copied from a synced tree. Empty on the direct path, which
-	// derives Param from the real source paths as before.
+	// entries copied from a synced tree or glob blob (glob entries use
+	// their basename below it). Empty on the direct path, which derives
+	// Param from the real source paths as before.
 	sourceBase string
 	// planFacts are the plan apply's destination facts
 	// (plan.ApplyContext.Facts), set only by the sync_dir handler via

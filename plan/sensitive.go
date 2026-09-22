@@ -10,21 +10,33 @@ import "fmt"
 const PreviewKind Kind = "plan_preview"
 
 // RequiredVersion is the plan schema a recorded plan's header declares: the
-// lowest version whose destinations apply ops faithfully. Schemas 22 and 23
-// are declared on demand: v22 only adds the sensitive field and v23 only the
-// file keyed_lines field, so a plan with neither is emitted as v21 and still
-// applies on a v0.15.0 destination; one with a keyed line edit needs v23 and
-// one with a sensitive op (but no keyed edit) v22, and an older destination
-// refuses it at its header gate. Every earlier bump was emitted
-// unconditionally, so v21 is the floor. A future bump must extend this
-// (TestRequiredVersion pins it to CurrentVersion).
+// lowest version whose destinations apply ops faithfully. Schemas 22, 23 and
+// 24 only add fields whose absence older destinations would silently
+// misinterpret, so each is declared only when a plan uses it:
+//   - v22 (sensitive) when an op is marked sensitive;
+//   - v23 (keyed_lines) when a file op has a keyed line edit (WithKeyedLine);
+//   - v24 (sync_dir glob) when a glob sync_dir op prunes — an older
+//     destination would tree-prune it and delete unmanaged subdirectories.
+//     A non-pruning glob sync_dir installs the same files under both
+//     semantics, so it does not raise the header.
+//
+// Otherwise the header stays v21 and the plan still applies on a v0.15.0
+// destination. Every earlier bump was emitted unconditionally, so v21 is the
+// floor. v24 is the highest on-demand schema, so an op that needs it ends
+// the scan early; the other two can only raise the version further (never
+// past v24), so the loop keeps checking every remaining op for them. A
+// future bump must extend this (TestRequiredVersion pins it to
+// CurrentVersion).
 func RequiredVersion(ops []Op) int {
-	version := VersionSensitive - 1
+	version := VersionConfigSet
 	for _, op := range ops {
-		if len(op.KeyedLines) != 0 {
-			return VersionKeyedLines
+		if op.Op == KindSyncDir && op.Glob && op.Prune {
+			return VersionSyncDirGlob // the highest on-demand schema
 		}
-		if op.Sensitive {
+		if len(op.KeyedLines) != 0 && version < VersionKeyedLines {
+			version = VersionKeyedLines
+		}
+		if op.Sensitive && version < VersionSensitive {
 			version = VersionSensitive
 		}
 	}

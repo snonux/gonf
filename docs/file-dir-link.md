@@ -34,7 +34,7 @@ NoLink("/tmp/stale-link")
 | `WithName` | File / Command | Explicit resource identity. A named File keeps managing its supplied path but is registered and reported as `File[name]`, allowing separate line edits to one file and precise `DependsOn` / `OnChange` wiring. Without it, file IDs remain `File[path]` and duplicate registrations still fail. |
 | `WithOwner` / `WithGroup` / `WithMode` | File / Dir | Ownership and mode. Recorded in plan ops (`owner`/`group`, schema v4) and enforced on apply; owner is a user name, group is a numeric gid or group name (resolved via `os/user`). Only explicitly set ownership is recorded — the build-time default (current user) is not pushed to remote hosts, and absent files carry no ownership. `WithMode` accepts setuid/setgid/sticky: either raw octal (e.g. `0o4755`) or Go flag form (`0o755\|os.ModeSetuid`); both normalize to the flag form, lower to a four-digit plan wire mode (`"04755"`), and land on disk (apply chowns before it chmods so unprivileged chown cannot clear the special bits). Bits above `0o7777` are rejected. Modes without owner-read (e.g. `0o000`) are applied on non-root runs too: the attribute step falls back to path-based `chmod`/`chown` when the descriptor-based open is denied (never through a symlink at the target). |
 | `WithFileMode` | Dir | Mode for files created from a source tree (same setuid/setgid/sticky handling as `WithMode`) |
-| `WithPrune` | Dir | Remove unexpected children when syncing / absent |
+| `WithPrune` | Dir | Remove unexpected children when syncing / absent; the two sync flavors prune differently, see below |
 | `WithSymlink` / `WithHardlink` | Link | Link target (Link does not take owner/mode options) |
 | `IsAbsent` / `No*` | all | Ensure missing |
 | `DependsOn` | all | Apply after other resources |
@@ -172,6 +172,28 @@ the same target are not serialized: each is atomic individually and the last
 successful rename wins. Several files are likewise not an atomic transaction;
 a failure after one publication requires a later apply or explicit recovery to
 converge the set.
+
+### Pruning a synced directory
+
+`WithPrune` reconciles the destination against the sync source, and what
+counts as "unexpected" follows the flavor of the sync:
+
+- **Tree sync** (`WithSource(dir)`): every destination entry without a
+  counterpart in the source tree is removed, subdirectories (recursively),
+  symlinks and other non-regular entries included. A destination entry also
+  counts as expected when the source holds the same relative path with a
+  `.tmpl` suffix, since that renders to the stripped name.
+- **Glob sync** (`WithSourceGlob(pattern)`, and therefore `SyncDir`): only
+  regular files directly under the destination are removed, and only when
+  their name is not the name a counting match installs (Rex `prune_dir`
+  semantics). Subdirectories, symlinks and other non-regular destination
+  entries are left alone, and nothing below a subdirectory is touched.
+
+Both flavors behave identically on the direct path and through a plan: the
+`sync_dir` op records the glob flavor as `glob` (schema v24) so the
+destination rebuilds the same sync from the flattened blob. Before that fix a
+glob sync applied through `gonf apply` / `push` pruned with tree semantics and
+deleted unmanaged subdirectories of the destination.
 
 ### Template `{{.Param}}` in synced trees
 

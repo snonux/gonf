@@ -58,6 +58,17 @@ func sampleOps() []Op {
 			Prune:    true,
 			FileMode: "0750",
 		},
+		{
+			// The glob flavor (schema v24): its prune must reach the
+			// destination as glob prune, so the flag has to survive the codec.
+			Op:        KindSyncDir,
+			Path:      "${HOME}/bin",
+			Blob:      "blobs/bin",
+			SourceDir: "/dotfiles/bin",
+			Glob:      true,
+			Prune:     true,
+			FileMode:  "0750",
+		},
 		{Op: KindPackage, Name: "fish"},
 		{Op: KindEnsureDir, Path: "${HOME}/.cursor", Mode: "0750"},
 		{Op: KindDir, Path: "${HOME}/data", Mode: "0700"},
@@ -97,7 +108,7 @@ func TestEncodeDecodeOpRoundTrip(t *testing.T) {
 	t.Parallel()
 	for _, op := range sampleOps() {
 		op := op
-		t.Run(string(op.Op), func(t *testing.T) {
+		t.Run(fmt.Sprintf("%s-%s", op.Op, op.Path), func(t *testing.T) {
 			t.Parallel()
 			b, err := EncodeOp(op)
 			if err != nil {

@@ -68,13 +68,28 @@ import "encoding/json"
 // leave a legacy or conflicting line in place, or skip a keyed-only edit
 // entirely, while reporting success, so it must refuse v23 at the header
 // gate. Like v22 it is declared on demand: only a plan with a keyed line
-// edit needs v23.
-const CurrentVersion = 23
+// edit needs v23. Version 24 adds glob to sync_dir ops (see
+// VersionSyncDirGlob): the op's blob is the flattened match set of a
+// WithSourceGlob, and destination apply must prune with glob semantics
+// (only non-matching regular files directly under the destination) instead
+// of tree semantics (every unmanaged entry, subdirectories included). An
+// older destination would ignore the field and tree-prune, deleting
+// unmanaged subdirectories, so it must refuse v24 at the header gate. A
+// recorded plan declares v24 only when it has a pruning glob sync_dir op
+// (RequiredVersion): without prune both semantics install the same files,
+// so an older destination still applies it faithfully.
+const CurrentVersion = 24
 
 // VersionKeyedLines is the plan schema version that introduced the file op
 // keyed_lines field. Tests pin it so a merge that loses the bump (and so
 // lets an older destination silently ignore a keyed edit) fails loudly.
 const VersionKeyedLines = 23
+
+// VersionSyncDirGlob is the plan schema version that introduced the sync_dir
+// glob field. Tests pin it so a merge that loses the bump (and so lets an
+// older destination tree-prune a glob sync, deleting unmanaged
+// subdirectories) fails loudly.
+const VersionSyncDirGlob = 24
 
 // VersionSensitive is the plan schema version that introduced the op
 // sensitive field. Tests pin it so a merge that loses the bump (and so lets
@@ -129,6 +144,7 @@ var supportedVersions = map[int]struct{}{
 	20:             {},
 	21:             {},
 	22:             {},
+	23:             {},
 	CurrentVersion: {},
 }
 
@@ -331,7 +347,18 @@ type Op struct {
 	// plan run. Empty on plans recorded before schema v6: apply then keeps
 	// the blob-path Param (pre-v6 behavior).
 	SourceDir string `json:"source_dir,omitempty"`
-	// Prune removes destination entries not present in the sync source.
+	// Glob (schema v24, VersionSyncDirGlob) marks a KindSyncDir op recorded
+	// from WithSourceGlob: its blob is the flat set of counting glob matches,
+	// not a tree. Apply then installs the blob's entries by basename and, with
+	// Prune, removes only regular files directly under Path that are not
+	// among them — subdirectories, symlinks and other non-regular entries are
+	// left alone, exactly like the direct WithSourceGlob path (Rex prune_dir).
+	// Without Glob, Prune has tree semantics and removes every entry with no
+	// counterpart in the blob. Plans recorded before v24 carry no glob field
+	// and keep tree semantics.
+	Glob bool `json:"glob,omitempty"`
+	// Prune removes destination entries not present in the sync source (glob
+	// semantics when Glob is set, tree semantics otherwise).
 	Prune bool `json:"prune,omitempty"`
 	// Absent marks NoFile / NoDir / NoLink / NoPackage style removal.
 	Absent bool `json:"absent,omitempty"`

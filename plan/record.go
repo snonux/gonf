@@ -138,8 +138,8 @@ func Recorded() []Op {
 
 // FinishRecord prepends a versioned plan header and returns the full op list.
 // The header carries RequiredVersion(body), not always CurrentVersion, so a
-// plan without secret material or keyed line edits still applies on a v21
-// destination.
+// plan that uses none of the on-demand schema fields (sensitive, a keyed
+// line edit, a pruning glob sync_dir) still applies on a v21 destination.
 func FinishRecord(id string) []Op {
 	body := Recorded()
 	out := make([]Op, 0, 1+len(body))

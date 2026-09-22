@@ -3,7 +3,9 @@ package dir
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -75,6 +77,9 @@ func (dirHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 // ToOp lowers a "sync_dir" resource draft to a plan.Op. The Blob field is
 // filled in later by api's packageDraft (api/packager.go), which packages
 // d.SourceDir/d.SourceGlob into the plan's blob store after ToOp returns.
+// Glob records the WithSourceGlob flavor (schema v24): its blob is a flat
+// match set, and apply must rebuild a glob sync, never a tree sync, so that
+// WithPrune keeps its glob semantics (see syncDirSourceOption).
 func (syncDirHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 	return plan.Op{
 		Op:        plan.KindSyncDir,
@@ -82,6 +87,7 @@ func (syncDirHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		Path:      d.Path,
 		Blob:      d.Blob,
 		SourceDir: d.SourceDir,
+		Glob:      d.SourceGlob != "",
 		Mode:      d.Mode,
 		FileMode:  d.FileMode,
 		Owner:     d.Owner,
@@ -137,10 +143,10 @@ func syncDirBlobTree(blob, planDir string) (string, error) {
 }
 
 // syncDirOptions translates a sync_dir op's recorded fields into the
-// DirOptions the direct WithSource path would use, sourcing from the
-// resolved blob tree src.
+// DirOptions the direct WithSource / WithSourceGlob path would use, sourcing
+// from the resolved blob tree src.
 func syncDirOptions(op plan.Op, src string) ([]opt.DirOption, error) {
-	opts := []opt.DirOption{opt.WithSource(src)}
+	opts := []opt.DirOption{syncDirSourceOption(op, src)}
 	// source_dir is the recipe's declared source directory (the glob
 	// pattern's directory for the glob flavor): .tmpl files inside the
 	// synced tree render {{.Param}} from it instead of the ephemeral blob
@@ -177,6 +183,41 @@ func syncDirOptions(op plan.Op, src string) ([]opt.DirOption, error) {
 		opts = append(opts, opt.WithSensitive)
 	}
 	return opts, nil
+}
+
+// syncDirSourceOption selects the sync flavor the op was recorded from. A
+// glob op (schema v24 glob field) rebuilds a WithSourceGlob over every entry
+// of its flat blob directory: the blob holds exactly the counting matches of
+// the recipe's pattern (plan.scanGlob, regular files only), so "<blob>/*"
+// selects the same basenames the direct path installs, and WithPrune then
+// runs pruneGlob — removing only non-matching regular files directly under
+// the destination and leaving subdirectories, symlinks and other entries
+// alone. Rebuilding it as a tree sync instead would run pruneTree and delete
+// every unmanaged destination entry, subdirectories included (task sb2).
+// Go's "*" matches dot-names too, as on the direct path. The blob path is
+// quoted so a glob metacharacter in it matches literally. Every other op —
+// and a glob op recorded before v24, which carries no glob field — keeps the
+// tree sync.
+func syncDirSourceOption(op plan.Op, src string) opt.DirOption {
+	if op.Glob {
+		return opt.WithSourceGlob(filepath.Join(quoteGlob(src), "*"))
+	}
+	return opt.WithSource(src)
+}
+
+// quoteGlob escapes the filepath.Match metacharacters in path so it matches
+// only itself when used as a glob prefix (backslash escaping; gonf only
+// targets Unix-like systems, where filepath.Match honors it).
+func quoteGlob(path string) string {
+	var b strings.Builder
+	for _, r := range path {
+		switch r {
+		case '*', '?', '[', ']', '\\':
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // ToOp lowers an "ensure_dir" resource draft to a plan.Op.

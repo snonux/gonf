@@ -237,6 +237,10 @@ func noteSourceSymlinkDryRun(target, rawTarget string) error {
 // synced root — exactly what the direct (non-plan) path derives from its
 // real source tree. Non-template entries are left untouched.
 //
+// For the glob flavor (a glob sync_dir op rebuilt over its flat blob, see
+// syncDirSourceOption) the entry's path relative to the synced root is its
+// basename (sourceEntryRel), matching the direct path's dir(glob)/basename.
+//
 // Likewise {{.Gonf.*}}: on the plan path (d.planFacts set by the sync_dir
 // handler) the entry renders from the apply's plan facts through
 // file.EnsureWithPlanFacts — the same facts, -profile override included, a
@@ -257,10 +261,10 @@ func copySourceFile(d *Dir, sourcePath, target string) error {
 	if d.Sensitive {
 		opts = append(opts, opt.WithSensitive)
 	}
-	if d.sourceBase != "" && d.source != "" && strings.HasSuffix(sourcePath, ".tmpl") {
-		rel, err := filepath.Rel(d.source, sourcePath)
+	if d.sourceBase != "" && strings.HasSuffix(sourcePath, ".tmpl") {
+		rel, err := sourceEntryRel(d, sourcePath)
 		if err != nil {
-			return fmt.Errorf("cannot derive template param for %s: %w", sourcePath, err)
+			return err
 		}
 		opts = append(opts, opt.WithParam(filepath.Join(d.sourceBase, rel)))
 	}
@@ -268,6 +272,20 @@ func copySourceFile(d *Dir, sourcePath, target string) error {
 		return file.EnsureWithPlanFacts(target, *d.planFacts, opts...)
 	}
 	return file.Ensure(target, opts...)
+}
+
+// sourceEntryRel returns sourcePath relative to the synced root: relative to
+// d.source for a tree sync, the basename for a glob sync (whose matches are
+// installed flat, by basename).
+func sourceEntryRel(d *Dir, sourcePath string) (string, error) {
+	if d.source == "" {
+		return filepath.Base(sourcePath), nil
+	}
+	rel, err := filepath.Rel(d.source, sourcePath)
+	if err != nil {
+		return "", fmt.Errorf("cannot derive template param for %s: %w", sourcePath, err)
+	}
+	return rel, nil
 }
 
 // pruneTree removes anything under d.path that has no counterpart in

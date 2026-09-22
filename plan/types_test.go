@@ -22,18 +22,21 @@ func TestSupportsVersion(t *testing.T) {
 	}
 }
 
-// TestSchemaBumpsArePinned pins the config_set, sensitive and keyed_lines bumps: a merge
-// that loses one would let an older destination accept a plan whose
-// config_set op it only discovers mid-apply, after earlier ops already
-// mutated the host, or apply a secret-bearing op while echoing its
-// validator's output. Every version 1..CurrentVersion staying supported is
-// pinned by TestWhenRequireVersionPinned (require_test.go).
+// TestSchemaBumpsArePinned pins the config_set, sensitive, keyed_lines and
+// sync_dir glob bumps: a merge that loses one would let an older destination
+// accept a plan whose config_set op it only discovers mid-apply, after
+// earlier ops already mutated the host, apply a secret-bearing op while
+// echoing its validator's output, silently ignore a keyed line edit, or
+// tree-prune a glob sync_dir and delete unmanaged subdirectories. Every
+// version 1..CurrentVersion staying supported is pinned by
+// TestWhenRequireVersionPinned (require_test.go).
 func TestSchemaBumpsArePinned(t *testing.T) {
 	t.Parallel()
 	if VersionUserManageHome != 19 || VersionWhenRequire != 20 || VersionConfigSet != 21 ||
-		VersionSensitive != 22 || VersionKeyedLines != 23 || CurrentVersion != VersionKeyedLines {
-		t.Fatalf("versions: manage_home=%d require=%d config_set=%d sensitive=%d keyed_lines=%d current=%d, want 19/20/21/22/23/23",
-			VersionUserManageHome, VersionWhenRequire, VersionConfigSet, VersionSensitive, VersionKeyedLines, CurrentVersion)
+		VersionSensitive != 22 || VersionKeyedLines != 23 || VersionSyncDirGlob != 24 ||
+		CurrentVersion != VersionSyncDirGlob {
+		t.Fatalf("versions: manage_home=%d require=%d config_set=%d sensitive=%d keyed_lines=%d sync_dir_glob=%d current=%d, want 19/20/21/22/23/24/24",
+			VersionUserManageHome, VersionWhenRequire, VersionConfigSet, VersionSensitive, VersionKeyedLines, VersionSyncDirGlob, CurrentVersion)
 	}
 }
 
@@ -142,6 +145,18 @@ func TestOpJSONTagsMatchPlanExamples(t *testing.T) {
 				SourceDir: "assets/testfiles",
 			},
 			want: `{"op":"sync_dir","path":"${HOME}/.config/app","blob":"blobs/app","source_dir":"assets/testfiles"}`,
+		},
+		{
+			name: "sync_dir glob prune",
+			op: Op{
+				Op:        KindSyncDir,
+				Path:      "${HOME}/scripts",
+				Blob:      "blobs/scripts",
+				SourceDir: "dotfiles/scripts",
+				Glob:      true,
+				Prune:     true,
+			},
+			want: `{"op":"sync_dir","path":"${HOME}/scripts","blob":"blobs/scripts","source_dir":"dotfiles/scripts","glob":true,"prune":true}`,
 		},
 		{
 			name: "path_exists predicate",

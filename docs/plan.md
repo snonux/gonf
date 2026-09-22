@@ -282,6 +282,15 @@ ops, err := RecordPlan("my-plan", planDir, "home_helix", "home_tmux")
   derives the same value from its real source tree — the Param would be the
   ephemeral blob-extraction path, which changes every plan run and would flap
   the rendered checksums (see [file-dir-link.md](file-dir-link.md)).
+- The `WithSourceGlob` flavor of a `sync_dir` op is recorded as `glob`
+  (schema v24). Its blob is the flat set of counting matches, not a tree, and
+  destination apply rebuilds a glob sync from it, so `prune` removes only
+  non-matching regular files directly under the destination and leaves
+  subdirectories, symlinks and other entries alone — exactly what the direct
+  `WithSourceGlob` path does (see
+  [file-dir-link.md](file-dir-link.md#pruning-a-synced-directory)). Without
+  `glob` the op keeps tree semantics, whose prune removes every unmanaged
+  entry.
 - `SyncDir` packaging is one shared function (`plan.scanTree`) for both blob
   stores: directories (empty ones included) and symlinks (raw target string,
   dangling included — never read through) are preserved as themselves,
@@ -1028,6 +1037,18 @@ exactly as in v21. `push` and strict preview keep comparing the remote
 runtime with the controller's own schema and release (`-plan-version`,
 `-version`), so push installs a current gonf and strict preview refuses an
 older remote either way.
+
+Plan schema **version 24** adds `glob` to `sync_dir` operations: the op was
+recorded from `WithSourceGlob`, so its blob is the flattened match set and
+its `prune` has glob semantics (only non-matching regular files directly
+under the destination). An older binary ignores the field, rebuilds the blob
+as a tree sync, and its prune deletes every unmanaged destination entry —
+subdirectories and their contents included — so it must refuse v24 at the
+header gate. Only a plan with a *pruning* glob `sync_dir` declares v24
+(`plan.RequiredVersion`): without `prune` both flavors install the same
+files, so such a plan keeps its older header and still applies unchanged on
+an older destination. This binary keeps applying v1–23 plans, whose
+`sync_dir` ops carry no `glob` field and therefore keep tree semantics.
 
 ### Secret material
 

@@ -23,20 +23,38 @@ func TestSensitiveIDs(t *testing.T) {
 }
 
 // TestRequiredVersion pins the on-demand header: v22 only with a sensitive
-// op, v23 with a keyed line edit (sensitive or not). It also pins
-// CurrentVersion, so a later bump must revisit RequiredVersion instead of
-// silently emitting too old a header.
+// op, v23 with a keyed line edit (sensitive or not), v24 only with a
+// pruning glob sync_dir op (the highest wins). It also pins CurrentVersion,
+// so a later bump must revisit RequiredVersion instead of silently emitting
+// too old a header.
 func TestRequiredVersion(t *testing.T) {
 	t.Parallel()
-	if CurrentVersion != VersionKeyedLines {
+	if CurrentVersion != VersionSyncDirGlob {
 		t.Fatalf("CurrentVersion %d: extend RequiredVersion for the new schema", CurrentVersion)
 	}
-	plain := []Op{{Op: KindFile, Path: "/a"}}
-	if got := RequiredVersion(plain); got != VersionConfigSet {
-		t.Fatalf("RequiredVersion(plain) = %d, want %d", got, VersionConfigSet)
+	plain := Op{Op: KindFile, Path: "/a"}
+	sensitive := Op{Op: KindFile, Path: "/k", Sensitive: true}
+	globPrune := Op{Op: KindSyncDir, Path: "/g", Blob: "blobs/g", Glob: true, Prune: true}
+	cases := []struct {
+		name string
+		ops  []Op
+		want int
+	}{
+		{"plain", []Op{plain}, VersionConfigSet},
+		{"sensitive", []Op{plain, sensitive}, VersionSensitive},
+		{"glob without prune", []Op{{Op: KindSyncDir, Path: "/g", Blob: "blobs/g", Glob: true}}, VersionConfigSet},
+		{"tree prune", []Op{{Op: KindSyncDir, Path: "/t", Blob: "blobs/t", Prune: true}}, VersionConfigSet},
+		{"glob prune", []Op{plain, globPrune}, VersionSyncDirGlob},
+		{"glob prune before sensitive", []Op{globPrune, sensitive}, VersionSyncDirGlob},
+		{"sensitive before glob prune", []Op{sensitive, globPrune}, VersionSyncDirGlob},
+		// glob is only meaningful on sync_dir; a stray flag elsewhere does
+		// not raise the header.
+		{"glob on dir", []Op{{Op: KindDir, Path: "/d", Glob: true, Prune: true}}, VersionConfigSet},
 	}
-	if got := RequiredVersion(append(plain, Op{Op: KindFile, Path: "/k", Sensitive: true})); got != VersionSensitive {
-		t.Fatalf("RequiredVersion(sensitive) = %d, want %d", got, VersionSensitive)
+	for _, tc := range cases {
+		if got := RequiredVersion(tc.ops); got != tc.want {
+			t.Errorf("RequiredVersion(%s) = %d, want %d", tc.name, got, tc.want)
+		}
 	}
 	keyed := Op{Op: KindFile, Path: "/p", KeyedLines: []KeyedLine{{Key: "k=", Line: "k=v"}}}
 	for _, ops := range [][]Op{
