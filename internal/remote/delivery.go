@@ -170,18 +170,26 @@ func refuseSensitiveStickyBlobs(planID string, chunks []plan.Chunk) error {
 // ObserveBootstrapForTest is a test seam: until the returned restore func
 // runs, every Push-mode delivery reports its gonf bootstrap step
 // (EnsureRemoteGonf) to seen instead of probing or installing anything, as if
-// the remote gonf were already current. A Preview-mode delivery never reaches
+// the remote gonf were already current. The -cmd-timeout capability probe is
+// faked as "accepted" for the same reason: a push reaches it (over real ssh)
+// whenever the test left a non-default command timeout active, and this seam
+// promises no remote traffic. A Preview-mode delivery never reaches
 // that step, which is what tests use this to pin at every layer (Fanout,
 // internal/orchestrate, the api entry points). seen may be called
 // concurrently by Fanout's goroutines. Like the Assume* seams it swaps
 // package state, so tests using it must not run in parallel.
 func ObserveBootstrapForTest(seen func(PushTarget)) (restore func()) {
 	old := ensureRuntime
+	oldCmdTimeout := defaultPusher.CmdTimeoutProber
+	defaultPusher.CmdTimeoutProber = acceptCmdTimeout
 	ensureRuntime = func(_ context.Context, t PushTarget) (string, error) {
 		seen(t)
 		return "", nil
 	}
-	return func() { ensureRuntime = old }
+	return func() {
+		ensureRuntime = old
+		defaultPusher.CmdTimeoutProber = oldCmdTimeout
+	}
 }
 
 // applyStdinArg is the "gonf apply" argument tail that reads the plan from

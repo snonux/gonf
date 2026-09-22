@@ -10,7 +10,9 @@ import (
 	"time"
 
 	gexec "github.com/snonux/gonf/internal/exec"
+	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/internal/privilege"
+	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 )
 
@@ -22,19 +24,32 @@ func setCmdTimeout(t *testing.T, d time.Duration) {
 	gexec.SetDefaultTimeout(d)
 }
 
-// fakeRemoteGonf fakes sshCaptureExec as a remote gonf binary for the real
-// probeCmdTimeoutSupport: a binary without the flag (knowsFlag false)
-// rejects "-cmd-timeout=..." the way flag parsing does (exit 2, nothing on
-// stdout); otherwise it prints its plan schema. It records every probe.
+// remoteKind is how the fake remote answers a -cmd-timeout capability probe.
+type remoteKind uint8
+
+const (
+	// remoteCurrent knows the flag and prints its plan schema.
+	remoteCurrent remoteKind = iota
+	// remoteOld runs gonf, which rejects the unknown flag the way Go's
+	// flag package does (exit 2, the message on stderr).
+	remoteOld
+	// remoteSudoRefuses never reaches gonf: the sudo/doas rule does not
+	// cover the probe command (restricted to "gonf apply *", or a password
+	// is required), so nothing can be learned about the binary.
+	remoteSudoRefuses
+)
+
+// fakeRemoteGonf fakes sshCaptureExec as a remote host for the real
+// probeCmdTimeoutSupport, and records every probe command it saw.
 type fakeRemoteGonf struct {
-	knowsFlag bool
-	mu        sync.Mutex
-	probes    []string
+	kind   remoteKind
+	mu     sync.Mutex
+	probes []string
 }
 
-func installFakeRemoteGonf(t *testing.T, knowsFlag bool) *fakeRemoteGonf {
+func installFakeRemoteGonf(t *testing.T, kind remoteKind) *fakeRemoteGonf {
 	t.Helper()
-	f := &fakeRemoteGonf{knowsFlag: knowsFlag}
+	f := &fakeRemoteGonf{kind: kind}
 	oldCapture, oldProber := sshCaptureExec, defaultPusher.CmdTimeoutProber
 	t.Cleanup(func() { sshCaptureExec, defaultPusher.CmdTimeoutProber = oldCapture, oldProber })
 	defaultPusher.CmdTimeoutProber = probeCmdTimeoutSupport
@@ -43,8 +58,16 @@ func installFakeRemoteGonf(t *testing.T, knowsFlag bool) *fakeRemoteGonf {
 		f.mu.Lock()
 		f.probes = append(f.probes, cmd)
 		f.mu.Unlock()
-		if strings.Contains(cmd, "-cmd-timeout=") && !f.knowsFlag {
-			return "", "flag provided but not defined: -cmd-timeout", errors.New("exit status 2")
+		if !strings.Contains(cmd, "-cmd-timeout=") {
+			return strconv.Itoa(plan.CurrentVersion) + "\n", "", nil
+		}
+		switch f.kind {
+		case remoteOld:
+			return "", unknownCmdTimeoutFlag + "\nUsage of gonf:\n", errors.New("exit status 2")
+		case remoteSudoRefuses:
+			if strings.HasPrefix(cmd, "sudo ") || strings.HasPrefix(cmd, "doas ") {
+				return "", "sudo: a password is required\n", errors.New("exit status 1")
+			}
 		}
 		return strconv.Itoa(plan.CurrentVersion) + "\n", "", nil
 	}
@@ -91,12 +114,15 @@ func TestRemoteApplyCmdCmdTimeoutForward(t *testing.T) {
 func TestResolveCmdTimeoutForward(t *testing.T) {
 	target := PushTarget{Host: "h.example", Privilege: privilege.Doas}
 	var seen []ProbeContext
-	p := &Pusher{CmdTimeoutProber: func(_ context.Context, _ PushTarget, pc ProbeContext, flag string) (bool, error) {
+	p := &Pusher{CmdTimeoutProber: func(_ context.Context, _ PushTarget, pc ProbeContext, flag string) (CmdTimeoutSupport, string, error) {
 		if flag != "-cmd-timeout=45s" {
 			t.Fatalf("probe flag = %q", flag)
 		}
 		seen = append(seen, pc)
-		return pc == ProbeLogin, nil
+		if pc == ProbeLogin {
+			return CmdTimeoutAccepted, "", nil
+		}
+		return CmdTimeoutUnknownFlag, "", nil
 	}}
 
 	setCmdTimeout(t, gexec.BuiltinDefaultTimeout)
@@ -115,7 +141,9 @@ func TestResolveCmdTimeoutForward(t *testing.T) {
 	}
 
 	boom := errors.New("ssh boom")
-	p.CmdTimeoutProber = func(context.Context, PushTarget, ProbeContext, string) (bool, error) { return false, boom }
+	p.CmdTimeoutProber = func(context.Context, PushTarget, ProbeContext, string) (CmdTimeoutSupport, string, error) {
+		return CmdTimeoutUnverified, "", boom
+	}
 	if _, err := p.resolveCmdTimeoutForward(context.Background(), target, true, false); !errors.Is(err, boom) {
 		t.Fatalf("probe failure = %v, want %v", err, boom)
 	}
@@ -125,18 +153,89 @@ func TestResolveCmdTimeoutForward(t *testing.T) {
 }
 
 // The real probe asks the binary itself, in the chunk's privilege context,
-// and treats a flag-parse failure as "not accepted" rather than an error.
+// and classifies the answer: accepted, too old, or (the case a plain
+// "supported / not supported" bool got wrong) not answered at all because
+// sudo/doas refused the probe command.
 func TestProbeCmdTimeoutSupport(t *testing.T) {
-	for _, knows := range []bool{true, false} {
-		f := installFakeRemoteGonf(t, knows)
-		target := PushTarget{Host: "h.example", Privilege: privilege.Sudo}
-		ok, err := probeCmdTimeoutSupport(context.Background(), target, ProbeElevated, "-cmd-timeout=30s")
-		if err != nil || ok != knows {
-			t.Fatalf("knowsFlag=%v: ok=%v err=%v", knows, ok, err)
-		}
-		if got := f.probeCmds(); len(got) != 1 || got[0] != "sudo -n gonf -cmd-timeout=30s -plan-version" {
-			t.Fatalf("probe cmds = %v", got)
-		}
+	tests := []struct {
+		name       string
+		kind       remoteKind
+		want       CmdTimeoutSupport
+		wantDetail string
+	}{
+		{"current", remoteCurrent, CmdTimeoutAccepted, ""},
+		{"old gonf", remoteOld, CmdTimeoutUnknownFlag, ""},
+		{"sudo refuses", remoteSudoRefuses, CmdTimeoutUnverified, "sudo: a password is required"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := installFakeRemoteGonf(t, tc.kind)
+			target := PushTarget{Host: "h.example", Privilege: privilege.Sudo}
+			got, detail, err := probeCmdTimeoutSupport(context.Background(), target, ProbeElevated, "-cmd-timeout=30s")
+			if err != nil || got != tc.want || detail != tc.wantDetail {
+				t.Fatalf("verdict=%v detail=%q err=%v, want %v %q", got, detail, err, tc.want, tc.wantDetail)
+			}
+			if got := f.probeCmds(); len(got) != 1 || got[0] != "sudo -n gonf -cmd-timeout=30s -plan-version" {
+				t.Fatalf("probe cmds = %v", got)
+			}
+		})
+	}
+}
+
+// classifyCmdTimeoutProbe reads the streams, not the exit status: a plan
+// schema means accepted, the flag package's message means an old gonf, and
+// everything else is unverified with a one-line reason for the warning.
+func TestClassifyCmdTimeoutProbe(t *testing.T) {
+	tests := []struct {
+		name       string
+		stdout     string
+		stderr     string
+		want       CmdTimeoutSupport
+		wantDetail string
+	}{
+		{"schema", "3\n", "", CmdTimeoutAccepted, ""},
+		{"unknown flag", "", unknownCmdTimeoutFlag + "\nUsage of gonf:\n", CmdTimeoutUnknownFlag, ""},
+		{"doas refusal", "", "\ndoas: Operation not permitted\n", CmdTimeoutUnverified, "doas: Operation not permitted"},
+		{"missing binary", "", "sh: gonf: not found\n", CmdTimeoutUnverified, "sh: gonf: not found"},
+		{"banner noise", "Welcome to host\n", "", CmdTimeoutUnverified, `unexpected output "Welcome to host"`},
+		{"silence", "", "", CmdTimeoutUnverified, "no output"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, detail := classifyCmdTimeoutProbe(tc.stdout, tc.stderr)
+			if got != tc.want || detail != tc.wantDetail {
+				t.Fatalf("verdict=%v detail=%q, want %v %q", got, detail, tc.want, tc.wantDetail)
+			}
+		})
+	}
+}
+
+// The two non-forwarding verdicts must be worded apart: an old gonf is
+// fixed by upgrading it, a refused probe was never about the binary.
+func TestCmdTimeoutWarningWording(t *testing.T) {
+	tests := []struct {
+		name    string
+		kind    remoteKind
+		want    string
+		notWant string
+	}{
+		{"old gonf", remoteOld, "too old for -cmd-timeout=30s", "could not run gonf"},
+		{"sudo refuses", remoteSudoRefuses, "could not run gonf in the elevated (sudo/doas) context", "too old"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			installFakeRemoteGonf(t, tc.kind)
+			setCmdTimeout(t, 30*time.Second)
+			out := testutil.CaptureLog(t, logger.LevelWarn)
+			target := PushTarget{Host: "h.example", Privilege: privilege.Sudo}
+			fwd, err := defaultPusher.resolveCmdTimeoutForward(context.Background(), target, false, true)
+			if err != nil || fwd.active() {
+				t.Fatalf("fwd=%+v err=%v, want nothing forwarded", fwd, err)
+			}
+			if got := out(); !strings.Contains(got, tc.want) || strings.Contains(got, tc.notWant) {
+				t.Fatalf("warning = %q, want it to contain %q and not %q", got, tc.want, tc.notWant)
+			}
+		})
 	}
 }
 
@@ -146,17 +245,18 @@ func TestProbeCmdTimeoutSupport(t *testing.T) {
 // an older remote gonf that would reject it (version skew).
 func TestToHostForwardsCmdTimeoutOnlyToCapableRemote(t *testing.T) {
 	tests := []struct {
-		name      string
-		knowsFlag bool
-		want      []string
+		name string
+		kind remoteKind
+		want []string
 	}{
-		{"capable remote", true, []string{"gonf -cmd-timeout=30s apply -", "sudo -n gonf -cmd-timeout=30s apply -"}},
-		{"old remote", false, []string{"gonf apply -", "sudo -n gonf apply -"}},
+		{"capable remote", remoteCurrent, []string{"gonf -cmd-timeout=30s apply -", "sudo -n gonf -cmd-timeout=30s apply -"}},
+		{"old remote", remoteOld, []string{"gonf apply -", "sudo -n gonf apply -"}},
+		{"sudo refuses the probe", remoteSudoRefuses, []string{"gonf -cmd-timeout=30s apply -", "sudo -n gonf apply -"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			r := installDeliveryRecorder(t)
-			f := installFakeRemoteGonf(t, tc.knowsFlag)
+			f := installFakeRemoteGonf(t, tc.kind)
 			setCmdTimeout(t, 30*time.Second)
 			ops := []plan.Op{
 				{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "p"},
@@ -181,7 +281,7 @@ func TestToHostForwardsCmdTimeoutOnlyToCapableRemote(t *testing.T) {
 // capability probe at all.
 func TestToHostDefaultCmdTimeoutNotForwarded(t *testing.T) {
 	r := installDeliveryRecorder(t)
-	f := installFakeRemoteGonf(t, true)
+	f := installFakeRemoteGonf(t, remoteCurrent)
 	setCmdTimeout(t, gexec.BuiltinDefaultTimeout)
 	if err := pushToHost(context.Background(), PushTarget{Host: "h.example"}, "demo", deliveryOps(), nil); err != nil {
 		t.Fatalf("push: %v", err)
@@ -197,20 +297,20 @@ func TestToHostDefaultCmdTimeoutNotForwarded(t *testing.T) {
 // PushPayloadContext (the raw-payload path, which never upgrades gonf) is
 // gated the same way.
 func TestPushPayloadForwardsCmdTimeoutOnlyToCapableRemote(t *testing.T) {
-	for _, knows := range []bool{true, false} {
+	for _, kind := range []remoteKind{remoteCurrent, remoteOld, remoteSudoRefuses} {
 		r := installDeliveryRecorder(t)
-		installFakeRemoteGonf(t, knows)
+		installFakeRemoteGonf(t, kind)
 		setCmdTimeout(t, 30*time.Second)
 		target := PushTarget{Host: "h.example", Privilege: privilege.Doas}
 		if err := PushPayloadContext(context.Background(), target, []byte("GONF-PUSH/1"), true, ""); err != nil {
-			t.Fatalf("knowsFlag=%v: push: %v", knows, err)
+			t.Fatalf("kind=%v: push: %v", kind, err)
 		}
 		want := "doas gonf apply -"
-		if knows {
+		if kind == remoteCurrent {
 			want = "doas gonf -cmd-timeout=30s apply -"
 		}
 		if got := r.cmds(); len(got) != 1 || got[0] != want {
-			t.Fatalf("knowsFlag=%v: remote cmds = %v, want %q", knows, got, want)
+			t.Fatalf("kind=%v: remote cmds = %v, want %q", kind, got, want)
 		}
 	}
 }

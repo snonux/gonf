@@ -800,13 +800,24 @@ chunk's backend commands and File/ConfigSet validators run under the
 controller's bound (the local elevated re-exec gets it the same way). An
 older remote gonf that does not know the flag would reject the whole
 command line, and neither the plan schema nor the release version tells
-(binaries reporting 0.15.0 exist with and without it), so the controller first probes the binary
-that will run each chunk, in its privilege context: `gonf -cmd-timeout=<d>
--plan-version` (`sudo -n`/`doas` wrapped for elevated chunks). Only a binary
-that answers gets the flag; otherwise the apply runs without it under the
-remote's own default, and a warning says so (an ordinary push upgrades a
-stale gonf; `-preview` and `api.PushPayload` never do). At the default no
-probe runs and the remote command is unchanged.
+(binaries reporting 0.15.0 exist with and without it), so the controller
+first probes the binary that will run each chunk, in its privilege context:
+`gonf -cmd-timeout=<d> -plan-version` (`sudo -n`/`doas` wrapped for elevated
+chunks). Only a binary that answers with its plan schema gets the flag.
+
+That probe costs one extra ssh round trip per host and per privilege context
+a chunk applies in, and for an elevated chunk one extra `sudo -n gonf …`
+(or `doas`) invocation besides the apply itself. A sudoers/doas rule
+restricted to `gonf apply *`, or one that requires a password, refuses it.
+Whatever the reason, the chunk is then applied without the flag, under the
+remote's own default, and the push is never failed by it; only the warning
+differs — a gonf too old for the flag (fixed by an ordinary push, which
+upgrades a stale gonf, or by reinstalling it) reads differently from a probe
+that could not run gonf at all, which quotes the refusal. The two contexts
+are decided separately, so an unprivileged chunk can carry the flag while
+the elevated one does not. At the default timeout no probe runs at all and
+the remote command is unchanged; `-preview` and `api.PushPayload` never
+upgrade gonf, so there an old remote simply keeps its own default.
 
 `gonf -list` lists **activated** tasks (After `When*` filtering for display);
 plan recording still uses the full candidate set.

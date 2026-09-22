@@ -81,9 +81,11 @@ type Pusher struct {
 	// CmdTimeoutProber reports whether the target's gonf binary in pc
 	// accepts the global flag (e.g. "-cmd-timeout=30s"), so a non-default
 	// controller -cmd-timeout is forwarded to the remote apply only where
-	// it cannot break the command line (see cmdtimeout.go). A nil value
-	// forwards nothing.
-	CmdTimeoutProber func(ctx context.Context, t PushTarget, pc ProbeContext, flag string) (bool, error)
+	// it cannot break the command line (see cmdtimeout.go). Besides the
+	// verdict it returns a one-line reason for the CmdTimeoutUnverified
+	// case (a sudo/doas refusal, a missing binary), which the warning
+	// quotes. A nil value forwards nothing.
+	CmdTimeoutProber func(ctx context.Context, t PushTarget, pc ProbeContext, flag string) (CmdTimeoutSupport, string, error)
 
 	// CrossBuildRoot is the parent directory in which this Pusher creates its
 	// private build dir (see crossbuild.go). Empty means os.TempDir(). It is

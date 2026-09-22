@@ -286,22 +286,34 @@ func defaultSSHCaptureExec(ctx context.Context, argv []string) (stdout, stderr s
 	return so.String(), se.String(), err
 }
 
-// sshCapture runs a remote command and returns combined stdout (stderr discarded
+// sshCapture runs a remote command and returns its stdout (stderr discarded
 // into the command string via redirects when callers want quiet probes).
+// Most probes only need to tell "an answer" from "no answer"; the
+// -cmd-timeout capability probe, which must tell an old gonf's flag
+// rejection from a sudo/doas refusal, uses sshCaptureWithStderr instead.
 func sshCapture(ctx context.Context, t PushTarget, remoteCmd string) (string, error) {
+	stdout, _, err := sshCaptureWithStderr(ctx, t, remoteCmd)
+	return stdout, err
+}
+
+// sshCaptureWithStderr is sshCapture with the remote command's stderr kept.
+// An ssh transport failure (exit 255) and a context kill are errors; a
+// remote command that merely failed (missing binary, refused sudo, rejected
+// flag) is not, so the caller can classify it from the returned streams.
+func sshCaptureWithStderr(ctx context.Context, t PushTarget, remoteCmd string) (stdout, stderr string, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	argv := t.sshArgv(remoteCmd)
-	stdout, stderr, err := sshCaptureExec(ctx, argv)
+	stdout, stderr, err = sshCaptureExec(ctx, argv)
 	if err != nil && ctx.Err() != nil {
-		return "", fmt.Errorf("%w (ssh killed by context: %v)", ctx.Err(), err)
+		return "", "", fmt.Errorf("%w (ssh killed by context: %v)", ctx.Err(), err)
 	}
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 255 {
-			return "", fmt.Errorf("ssh to %s: %w (%s)", t.Destination(), err, strings.TrimSpace(stderr))
+			return "", "", fmt.Errorf("ssh to %s: %w (%s)", t.Destination(), err, strings.TrimSpace(stderr))
 		}
 		// Remote command failed but the session worked (e.g. gonf missing).
 	}
-	return stdout, nil
+	return stdout, stderr, nil
 }
