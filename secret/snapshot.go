@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -40,7 +41,9 @@ import (
 //
 // The cached bytes live as long as the Snapshot. Installed with
 // api.SetSecretProvider, that is the rest of the process: the provider
-// cannot be replaced, so the snapshot spans the whole invocation.
+// cannot be replaced, so the snapshot spans the whole invocation. They are
+// never printed: formatting a Snapshot with any fmt verb yields only its
+// provider type and entry count (see Format).
 //
 // Create a Snapshot with NewSnapshot. The zero Snapshot{} wraps no provider:
 // IsNilProvider reports it (so api.SetSecretProvider refuses it), and its
@@ -109,6 +112,31 @@ func (s *Snapshot) Resolve(ctx context.Context, ref Ref) ([]byte, error) {
 		// The resolving caller failed transiently and dropped the entry:
 		// loop to resolve (or wait for a new resolution) with our own ctx.
 	}
+}
+
+// Format implements fmt.Formatter so a Snapshot never prints its cached
+// bytes. Without it fmt walks the struct, and for a verb that does not suit
+// a pointer (%s, %q) it reprints each nested *snapshotEntry at depth 0 —
+// secret bytes included. Every verb therefore yields the same description:
+// the wrapped provider's type and the number of entries (cached or still
+// being resolved); neither holds secret bytes. %T and %p are answered by
+// fmt itself before Format is consulted.
+func (s *Snapshot) Format(f fmt.State, _ rune) {
+	if s == nil {
+		_, _ = io.WriteString(f, "secret.Snapshot(nil)")
+		return
+	}
+	s.mu.Lock()
+	n := len(s.entries)
+	s.mu.Unlock()
+	_, _ = fmt.Fprintf(f, "secret.Snapshot{provider: %T, entries: %d}", s.provider, n)
+}
+
+// Format implements fmt.Formatter so an entry reached on its own (a map of
+// entries, a debugger-style dump) never prints its data either; see
+// Snapshot.Format.
+func (e *snapshotEntry) Format(f fmt.State, _ rune) {
+	_, _ = io.WriteString(f, "secret.snapshotEntry(redacted)")
 }
 
 // entry returns key's entry, creating it when absent; leader reports that

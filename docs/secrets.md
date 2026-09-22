@@ -112,7 +112,9 @@ func main() {
   refused by `SetSecretProvider` like a nil provider. Each reference
   resolves independently: a slow one does not block others, and a caller
   waiting for someone else's resolution of the same reference stops when its
-  own context is done. Every returned slice is a copy. The default file
+  own context is done. Every returned slice is a copy. Formatting a Snapshot
+  (`%v`, `%s`, `%#v`, ...) prints only its provider type and entry count,
+  never cached bytes. The default file
   provider is deliberately not wrapped, to keep its read-on-every-call
   behaviour.
 - `ResolveSecret` may be called from several goroutines; the provider
