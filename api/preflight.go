@@ -83,7 +83,7 @@ func refusalReason(err error, fixHint string) string {
 // first problem, when that problem is not a cross-chunk watch: a dependency
 // refusal (checked first by plan.ValidateChunks), or a gate without a watch
 // or with a dangling one ahead of any cross-chunk watch.
-func crossChunkWatchRefusal(caller string, chunks []plan.Chunk) error {
+func crossChunkWatchRefusal(caller string, chunks []plan.Chunk, conflicts watchConflicts) error {
 	bodies := make([][]plan.Op, len(chunks))
 	chunkOf := map[string]int{}
 	for i, ch := range chunks {
@@ -112,7 +112,8 @@ func crossChunkWatchRefusal(caller string, chunks []plan.Chunk) error {
 				}
 				if j != i {
 					return &refusedError{
-						msg:   caller + ": " + watchAcrossChunks(op.ID, ch.Elevate, w, chunks[j].Elevate),
+						msg: caller + ": " + watchAcrossChunks(op.ID, ch.Elevate, w, chunks[j].Elevate,
+							conflicts[watchKey{op.ID, w}]),
 						cause: plan.ValidateChangeGates(bodies),
 					}
 				}
@@ -123,14 +124,22 @@ func crossChunkWatchRefusal(caller string, chunks []plan.Chunk) error {
 }
 
 // watchAcrossChunks explains why gated cannot watch watched: across privilege
-// classes, or within one class forced into separate chunks by dependencies
-// on the other class. Change reports are chunk-local either way.
-func watchAcrossChunks(gated string, gatedElevate bool, watched string, watchedElevate bool) string {
+// classes; within one class forced into separate chunks by dependencies on
+// the other class; or, when together is non-empty, only in combination with
+// those kept change watches (the pair alone would fit, see keptWatches).
+// Change reports are chunk-local either way.
+func watchAcrossChunks(gated string, gatedElevate bool, watched string, watchedElevate bool, together []string) string {
 	head := fmt.Sprintf("%s (%s) watches %s (%s)", gated, privilegeClass(gatedElevate), watched, privilegeClass(watchedElevate))
 	if gatedElevate != watchedElevate {
 		return head + "; change reports are not carried across privilege classes (the elevated " +
 			"resources apply in a separate chunk), so a change-gated resource can only watch " +
 			"resources of its own class: gate on a resource of the same class, or elevate both or neither"
+	}
+	if len(together) > 0 {
+		return head + ", but together with the change watch " + conflictNote(together) +
+			" their dependencies need resources of the other privilege class applied in between, " +
+			"so these watches cannot all share a privilege chunk and change reports are not carried " +
+			"across chunks: remove one of these change gates or a dependency path"
 	}
 	return head + ", but their dependencies need resources of the other privilege class applied " +
 		"between the two, so they cannot share a privilege chunk and change reports are not carried " +

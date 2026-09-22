@@ -1,8 +1,10 @@
 package api
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/snonux/gonf/plan"
 )
@@ -47,7 +49,7 @@ func TestOrderForPrivilegeSplit(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := orderForPrivilegeSplit(tc.ops)
+			got, _, err := orderForPrivilegeSplit(tc.ops)
 			if err != nil {
 				t.Fatalf("orderForPrivilegeSplit() error = %v", err)
 			}
@@ -77,7 +79,7 @@ func TestOrderForPrivilegeSplitRefusesCycles(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := orderForPrivilegeSplit(tc.ops)
+			_, _, err := orderForPrivilegeSplit(tc.ops)
 			want := "Apply: circular dependency: " + tc.want + " (each depends on the next)"
 			if err == nil || !strings.HasPrefix(err.Error(), want) {
 				t.Fatalf("orderForPrivilegeSplit() error = %v, want prefix %q", err, want)
@@ -95,18 +97,14 @@ func TestOrderForPrivilegeSplitRefusesCycles(t *testing.T) {
 func TestChunkLevelsStayWithSwitchedClass(t *testing.T) {
 	body := []plan.Op{orderOp("a", false), orderOp("b", true), orderOp("c", false, "b"), orderOp("d", true)}
 	g := newDepGraph(body)
-	topo, ok := g.topoOrder()
-	if !ok {
-		t.Fatal("topoOrder reported a cycle in an acyclic body")
-	}
 	var ids []string
-	for _, i := range g.levelOrder(g.chunkLevels(body, topo, false)) {
+	for _, i := range g.levelOrder(g.chunkLevels(body, false, nil)) {
 		ids = append(ids, body[i].ID)
 	}
 	if got := strings.Join(ids, ","); got != "a,b,d,c" {
 		t.Fatalf("order = %s, want a,b,d,c", got)
 	}
-	full, err := orderForPrivilegeSplit(append([]plan.Op{orderHdr}, body...))
+	full, _, err := orderForPrivilegeSplit(append([]plan.Op{orderHdr}, body...))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +148,7 @@ func TestOrderForPrivilegeSplitKeepsWatchesInOneChunk(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := orderForPrivilegeSplit(tc.ops)
+			got, _, err := orderForPrivilegeSplit(tc.ops)
 			if err != nil {
 				t.Fatalf("orderForPrivilegeSplit() error = %v", err)
 			}
@@ -158,5 +156,54 @@ func TestOrderForPrivilegeSplitKeepsWatchesInOneChunk(t *testing.T) {
 				t.Fatalf("order = %s, want %s", ids, tc.want)
 			}
 		})
+	}
+}
+
+// refusedWatchPlan builds a plan of n ops with w watches that no order can
+// keep (each gated op needs an elevated op that needs what it watches),
+// padded with a dependency chain alternating privilege classes.
+func refusedWatchPlan(n, w int) []plan.Op {
+	ops := []plan.Op{orderHdr}
+	for k := range w {
+		b, e, a := fmt.Sprint("b", k), fmt.Sprint("e", k), fmt.Sprint("a", k)
+		ops = append(ops, orderOp(b, false), orderOp(e, true, b), watchOp(a, false, []string{b}, e, b))
+	}
+	for k := 0; len(ops) <= n; k++ {
+		var deps []string
+		if k > 0 {
+			deps = []string{fmt.Sprint("p", k-1)}
+		}
+		ops = append(ops, orderOp(fmt.Sprint("p", k), k%3 == 0, deps...))
+	}
+	return ops
+}
+
+// TestOrderForPrivilegeSplitLargeRefusedPlanIsFast bounds the time of the
+// worst case the review measured at 5.6s for the old fixpoint solver: 2000
+// ops with 300 watches that must all be dropped. Each satisfiability check
+// is linear now, so this takes tens of milliseconds; the race detector
+// slows it about tenfold, so the bound is scaled under -race.
+func TestOrderForPrivilegeSplitLargeRefusedPlanIsFast(t *testing.T) {
+	ops := refusedWatchPlan(2000, 300)
+	bound := 500 * time.Millisecond
+	if raceEnabled {
+		bound *= 10
+	}
+	start := time.Now()
+	_, conflicts, err := orderForPrivilegeSplit(ops)
+	if elapsed := time.Since(start); elapsed > bound {
+		t.Fatalf("orderForPrivilegeSplit took %v for 2000 ops / 300 refused watches, want < %v", elapsed, bound)
+	}
+	if err != nil || len(conflicts) != 0 {
+		t.Fatalf("orderForPrivilegeSplit() = %v, %v; want no error and no together-conflicts", err, conflicts)
+	}
+}
+
+func BenchmarkOrderForPrivilegeSplitRefusedWatches(b *testing.B) {
+	ops := refusedWatchPlan(2000, 300)
+	for b.Loop() {
+		if _, _, err := orderForPrivilegeSplit(ops); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

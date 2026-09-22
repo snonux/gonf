@@ -1077,10 +1077,10 @@ applied. The error unwraps to `*plan.DanglingDepError` / `*plan.DanglingWatchErr
 Changed state is not carried across chunks: each chunk applies as its own
 `plan.Apply` run with a fresh change report (the elevated one usually in a
 separate sudo/doas process, in-process only when the mode is `none` and the
-process is root), so a change gate only sees changes from its own chunk. With elevated ops, a watch that cannot
-stay in one chunk is therefore refused before anything applies, as `Run`
-refuses it, and the error names both privilege classes instead of chunk
-indexes:
+process is root), so a change gate only sees changes from its own chunk.
+With elevated ops, a watch that cannot stay in one chunk is therefore
+refused before anything applies, as `Run` refuses it, and the error names
+both privilege classes instead of chunk indexes:
 
 - across classes, in either direction: an unprivileged command gated
   `OnChange` of an elevated one, or an elevated one (such as an elevated
@@ -1090,7 +1090,14 @@ indexes:
 - within one class, when dependencies force an elevated resource between the
   two (the gated resource needs an elevated one that itself needs the watched
   resource): `... watches File[f] (unprivileged), but their dependencies
-  need resources of the other privilege class applied between the two ...`.
+  need resources of the other privilege class applied between the two ...`;
+- within one class, when the watch would fit alone but not together with
+  watches Apply already kept. Apply keeps watches in declaration order, each
+  one only if it still fits with those kept before it, and the error names
+  the kept watches it conflicts with: `... watches Command[d]
+  (unprivileged), but together with the change watch Command[a] watching
+  Command[b] their dependencies need resources of the other privilege class
+  applied in between ...`.
 
 The lower-level `resource.Apply()` path remains for resource-package unit tests
 and ad-hoc compatibility use; new application code should prefer `Run` or

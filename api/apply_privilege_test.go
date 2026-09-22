@@ -305,3 +305,23 @@ func TestApplyNamesOnlyTheUnsatisfiableWatch(t *testing.T) {
 	}
 	requireNothingApplied(t, filepath.Join(dir, "b"), calls)
 }
+
+// TestApplyNamesTheKeptWatchAConflictIsWithTogether pins the refusal of a
+// watch that would fit on its own but not together with a watch kept before
+// it: Command[a] needs Command[d] and watches Command[b]; Command[c] needs
+// the elevated Command[e], which needs Command[b], and watches Command[d].
+// Keeping a with b puts d no later than b, while c with d needs d after the
+// elevation that follows b. Alone, c's watch fits (nothing forces d early),
+// so the refusal must not claim the pair's own dependencies force it apart;
+// it names the kept watch it conflicts with.
+func TestApplyNamesTheKeptWatchAConflictIsWithTogether(t *testing.T) {
+	refuseElevation(t, privilege.Sudo)
+	b := Command("true", nil, options.WithName("b"))
+	d := Command("true", nil, options.WithName("d"))
+	e := Command("true", nil, options.WithName("e"), options.WithElevate, options.DependsOn(b))
+	Command("true", nil, options.WithName("a"), options.OnChange(b), options.DependsOn(d))
+	Command("true", nil, options.WithName("c"), options.OnChange(d), options.DependsOn(e))
+
+	requireClassWatchRefusal(t, Apply(), "Apply: Command[c] (unprivileged) watches Command[d] (unprivileged), "+
+		"but together with the change watch Command[a] watching Command[b] their dependencies need resources")
+}

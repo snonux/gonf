@@ -23,8 +23,8 @@ import (
 // order), chooses the chunk order itself. It gives every op a chunk level
 // (chunkLevels): the lowest level of its privilege class that is not below
 // any dependency's level (strictly above it for a dependency of the other
-// class), with a change-gated op and each same-class op it watches raised to
-// one common level, since change reports do not cross chunks. That least
+// class), with a change-gated op and each same-class op it watches at one
+// common level, since change reports do not cross chunks. That least
 // assignment is the pointwise lowest one satisfying all rules, so its highest
 // level, and with it the chunk count, is the minimum for its starting class
 // (the class of level 0). Both starting classes are tried and the order with
@@ -32,13 +32,15 @@ import (
 // deps, so the result is deterministic. The ops are then emitted level by
 // level in dependency order (levelOrder).
 //
-// A watch across privilege classes can never share a chunk, and a watch
-// whose two ends are forced apart by dependencies on the other class (A
-// watches B, A needs an elevated E that needs B) cannot either. Only such
-// unsatisfiable watches are dropped from the assignment (chunkLevels keeps
-// every other one), so they are the ones that end up crossing chunks and the
-// pre-flight refusal (validateApplyDeps) names one of them, never a watch
-// that could have been kept.
+// Not every watch can be kept. One across privilege classes never shares a
+// chunk; one whose ends are forced apart by dependencies on the other class
+// (A watches B, A needs an elevated E that needs B) cannot either; and some
+// watches can each be kept alone but not together. keptWatches keeps them
+// greedily in declaration order, so a dropped watch conflicts with the
+// dependencies alone or together with watches kept before it. Only dropped
+// watches can end up crossing chunks, and the pre-flight refusal
+// (validateApplyDeps) names one of them, with the kept watches it conflicts
+// with (the returned watchConflicts) when it would fit on its own.
 //
 // ops[0] is the plan header and stays first. Apply lowers registered
 // resources to a flat op list (no when_begin/when_end), so the whole body is
@@ -48,19 +50,21 @@ import (
 // "A -> A"): the elevated chunk is a separate root process, so the plan must
 // be refused before ANY chunk applies, not by the engine once a later chunk
 // is reached.
-func orderForPrivilegeSplit(ops []plan.Op) ([]plan.Op, error) {
+func orderForPrivilegeSplit(ops []plan.Op) ([]plan.Op, watchConflicts, error) {
 	if len(ops) < 2 {
-		return ops, nil
+		return ops, nil, nil
 	}
 	body := ops[1:]
 	g := newDepGraph(body)
-	topo, ok := g.topoOrder()
-	if !ok {
-		return nil, g.cycleError(body)
+	if _, ok := g.topoOrder(); !ok {
+		return nil, nil, g.cycleError(body)
 	}
+	// Which watches can be kept does not depend on the starting class
+	// (see watchesSatisfiable), so both starts share one kept set.
+	kept, conflicts := g.keptWatches(body)
 	first := body[g.firstReady()].Elevate
-	order := g.levelOrder(g.chunkLevels(body, topo, first))
-	if other := g.levelOrder(g.chunkLevels(body, topo, !first)); chunkCount(body, other) < chunkCount(body, order) {
+	order := g.levelOrder(g.chunkLevels(body, first, kept))
+	if other := g.levelOrder(g.chunkLevels(body, !first, kept)); chunkCount(body, other) < chunkCount(body, order) {
 		order = other
 	}
 	out := make([]plan.Op, 0, len(ops))
@@ -68,7 +72,7 @@ func orderForPrivilegeSplit(ops []plan.Op) ([]plan.Op, error) {
 	for _, i := range order {
 		out = append(out, body[i])
 	}
-	return out, nil
+	return out, conflicts, nil
 }
 
 // depGraph is the in-plan dependency graph of an Apply body, by body index.
@@ -161,100 +165,6 @@ func (g depGraph) kahn(rank func(int) int) (order []int, ok bool) {
 		}
 	}
 	return order, true
-}
-
-// chunkLevels assigns every op the chunk level described at
-// orderForPrivilegeSplit, level 0 having class start (and odd levels the
-// other class). When the same-class watches cannot all be kept in one chunk,
-// it keeps them greedily in watch order: a watch is added only if the kept
-// set stays satisfiable. A subset of a satisfiable set is satisfiable, so
-// the result is a maximal satisfiable set, and each dropped watch conflicts
-// with the dependencies plus the kept watches; the pre-flight then names a
-// dropped one (the only kind that can cross chunks) instead of an innocent
-// watch that a drop-everything fallback would have split.
-func (g depGraph) chunkLevels(body []plan.Op, topo []int, start bool) []int {
-	watches := g.sameClassWatches(body)
-	if level, ok := g.solveLevels(body, topo, start, watches); ok {
-		return level
-	}
-	level, _ := g.solveLevels(body, topo, start, nil) // deps alone always solve
-	kept := make([][2]int, 0, len(watches))
-	for _, p := range watches {
-		if l, ok := g.solveLevels(body, topo, start, append(kept, p)); ok {
-			kept, level = append(kept, p), l
-		}
-	}
-	return level
-}
-
-// solveLevels raises levels until every rule holds: each op at or above the
-// level minLevel derives from its deps, and both ends of every watch pair at
-// one level. It starts at 0 and only ever raises, so it reaches the least
-// assignment. That one has no empty level between two used ones (dropping
-// such a gap by two keeps every rule), so no level exceeds len(body) + 1;
-// passing that bound means the watches contradict the dependencies
-// (ok=false). Without watches one pass in topo order is enough.
-func (g depGraph) solveLevels(body []plan.Op, topo []int, start bool, watches [][2]int) (level []int, ok bool) {
-	level = make([]int, len(body))
-	limit := len(body) + 1
-	for changed := true; changed; {
-		changed = false
-		for _, i := range topo {
-			if need := g.minLevel(body, level, i, start); need > level[i] {
-				level[i], changed = need, true
-			}
-		}
-		for _, p := range watches {
-			if top := max(level[p[0]], level[p[1]]); level[p[0]] != level[p[1]] {
-				level[p[0]], level[p[1]], changed = top, top, true
-			}
-		}
-		for _, l := range level {
-			if l > limit {
-				return nil, false
-			}
-		}
-	}
-	return level, true
-}
-
-// minLevel is the lowest level op i may take given its deps' current levels:
-// not below a same-class dep, above an other-class dep, and of i's own class.
-func (g depGraph) minLevel(body []plan.Op, level []int, i int, start bool) int {
-	need := level[i]
-	for _, d := range g.deps[i] {
-		at := level[d]
-		if body[d].Elevate != body[i].Elevate {
-			at++
-		}
-		need = max(need, at)
-	}
-	if levelClass(need, start) != body[i].Elevate {
-		need++
-	}
-	return need
-}
-
-// levelClass is the privilege class (Elevate) of chunk level k.
-func levelClass(k int, start bool) bool { return start != (k%2 == 1) }
-
-// sameClassWatches pairs every change-gated op with each op of its own
-// privilege class that it watches. Watches across classes or naming no op of
-// the plan are not paired: no order can satisfy them, and the pre-flight
-// refuses them.
-func (g depGraph) sameClassWatches(body []plan.Op) [][2]int {
-	var pairs [][2]int
-	for i, op := range body {
-		if !op.IfChanged {
-			continue
-		}
-		for _, w := range op.Watch {
-			if j, found := g.byID[w]; found && j != i && body[j].Elevate == op.Elevate {
-				pairs = append(pairs, [2]int{i, j})
-			}
-		}
-	}
-	return pairs
 }
 
 // chunkCount is the number of privilege chunks order splits into: one plus

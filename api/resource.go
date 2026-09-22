@@ -162,7 +162,7 @@ func applyPackagedOps(ops []plan.Op, planDir string) error {
 	if anyElevated(ops) {
 		return applyElevatedOps(ops, planDir)
 	}
-	if err := validateApplyDeps(plan.SplitPrivilegeChunks(ops)); err != nil {
+	if err := validateApplyDeps(plan.SplitPrivilegeChunks(ops), nil); err != nil {
 		return err
 	}
 	return ApplyPlan(ops, planDir)
@@ -191,12 +191,12 @@ func applyPackagedOps(ops []plan.Op, planDir string) error {
 // ApplyChunks' chunk index: Apply's caller never saw a chunk order, only the
 // resources it registered.
 func applyElevatedOps(ops []plan.Op, planDir string) error {
-	ops, err := orderForPrivilegeSplit(ops)
+	ops, conflicts, err := orderForPrivilegeSplit(ops)
 	if err != nil {
 		return err
 	}
 	chunks := plan.SplitPrivilegeChunks(ops)
-	if err := validateApplyDeps(chunks); err != nil {
+	if err := validateApplyDeps(chunks, conflicts); err != nil {
 		return err
 	}
 	if err := preflightElevation(chunks, processPrivilege); err != nil {
@@ -256,12 +256,14 @@ func anyElevated(ops []plan.Op) bool {
 // prefix (preflightChunks), while errors.As still finds the typed
 // *plan.DanglingDepError / *plan.DanglingWatchError. A watch across chunks is
 // worded in privilege classes, not chunk indexes (crossChunkWatchRefusal),
-// since Apply chose the chunks itself. Running the change-gate half here,
+// since Apply chose the chunks itself; conflicts (from orderForPrivilegeSplit,
+// nil without elevated ops) names the kept watches a refused one conflicts
+// with. Running the change-gate half here,
 // before anything is applied, also means a dangling WatchChanges gets the
 // same wording as a dangling OnChange instead of the plan engine's raw "plan:
 // op ... watches ..." message from plan.Apply's own gate check.
-func validateApplyDeps(chunks []plan.Chunk) error {
-	if err := crossChunkWatchRefusal("Apply", chunks); err != nil {
+func validateApplyDeps(chunks []plan.Chunk, conflicts watchConflicts) error {
+	if err := crossChunkWatchRefusal("Apply", chunks, conflicts); err != nil {
 		return err
 	}
 	return preflightChunks("Apply", fixHintApply, chunks)

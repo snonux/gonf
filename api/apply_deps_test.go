@@ -319,7 +319,7 @@ func TestValidateApplyDeps(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateApplyDeps(plan.SplitPrivilegeChunks(tc.ops))
+			err := validateApplyDeps(plan.SplitPrivilegeChunks(tc.ops), nil)
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("validateApplyDeps() = %v, want nil", err)
@@ -395,10 +395,10 @@ func TestCrossChunkWatchRefusalYieldsToEmptyWatch(t *testing.T) {
 		{Elevate: true, Ops: []plan.Op{hdr, cmd("Command[e]", true)}},
 		{Ops: []plan.Op{hdr, gated}},
 	}
-	if err := crossChunkWatchRefusal("Apply", chunks); err != nil {
+	if err := crossChunkWatchRefusal("Apply", chunks, nil); err != nil {
 		t.Fatalf("crossChunkWatchRefusal() = %v, want nil ahead of an empty gate", err)
 	}
-	err := validateApplyDeps(chunks)
+	err := validateApplyDeps(chunks, nil)
 	if err == nil || !strings.Contains(err.Error(), "Command[empty] is change-gated (if_changed) but watches nothing") ||
 		strings.Contains(err.Error(), "Command[g]") {
 		t.Fatalf("validateApplyDeps() = %v, want the empty-gate refusal", err)
