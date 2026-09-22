@@ -33,14 +33,15 @@ func declareJoinThenMerge(timerOpts ...opt.SystemdTimerOption) resource.Resource
 	return reload
 }
 
-// TestJoinedTimerRefusesMergeOfRelatedInput (bb2): a timer whose service
-// wants or is after b.service joins the reload while b.service is no input
-// yet; the later declaration that makes the File installing b.service an
-// input of the (already joined) reload is refused fail-fast, instead of
-// recording a reload that loads b.service only after the timer started.
+// TestJoinedTimerRefusesMergeOfRelatedInput (bb2, cb2): a timer whose
+// service wants or is after b.service (alone or within a space-separated
+// entry) joins the reload while b.service is no input yet; the later
+// declaration that makes the File installing b.service an input of the
+// (already joined) reload is refused fail-fast, instead of recording a
+// reload that loads b.service only after the timer started.
 // logger.Fatal exits, so each case runs in a helper process.
 func TestJoinedTimerRefusesMergeOfRelatedInput(t *testing.T) {
-	for _, name := range []string{"wants", "after"} {
+	for _, name := range []string{"wants", "after", "listed"} {
 		t.Run(name, func(t *testing.T) {
 			cmd := exec.Command(os.Args[0], "-test.run=^TestJoinedTimerMergeFatalHelperProcess$", "-test.timeout=60s")
 			cmd.Env = append(os.Environ(), "GONF_SYSTEMDTIMER_JOIN_MERGE_FATAL="+name)
@@ -70,8 +71,11 @@ func TestJoinedTimerMergeFatalHelperProcess(t *testing.T) {
 	}
 	resource.ResetRepository()
 	related := opt.WithWants("b.service")
-	if name == "after" {
+	switch name {
+	case "after":
 		related = opt.WithAfter("b.service")
+	case "listed": // one entry naming two units, as systemd splits it (cb2)
+		related = opt.WithWants("network-online.target b.service")
 	}
 	declareJoinThenMerge(related)
 	t.Fatalf("case %q merged without refusing the joined timer", name)

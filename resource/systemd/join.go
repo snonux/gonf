@@ -32,7 +32,8 @@ import (
 // the recorded reload changes, so the plan schema does not.
 //
 // related are the units the joiner's units reference (SystemdTimer's
-// After= and Wants=). Starting the joiner before the registered reload
+// After= and Wants= entries; an entry may list several space-separated
+// units, which are checked one by one). Starting the joiner before the registered reload
 // could otherwise start such a unit from a stale definition: e.g. a
 // Persistent timer that fires on start, whose service wants a composition
 // service whose changed unit file is only loaded by the later reload. The
@@ -94,17 +95,20 @@ func (d *DaemonReloadResource) joinerRelatedInput() (reloadJoiner, string, bool)
 	return reloadJoiner{}, "", false
 }
 
-// relatedInput returns the first of units that one of d's inputs (its
-// watched ids, and the registered files under a watched directory) may
-// define, and whether there is one.
-func (d *DaemonReloadResource) relatedInput(units []string) (string, bool) {
-	if len(units) == 0 {
+// relatedInput returns the first unit named by entries that one of d's
+// inputs (its watched ids, and the registered files under a watched
+// directory) may define, and whether there is one. Each entry is split on
+// whitespace first (strings.Fields), the way systemd reads the rendered
+// After=/Wants= line: WithWants("network-online.target a.service") names
+// two units, and each is checked on its own (cb2).
+func (d *DaemonReloadResource) relatedInput(entries []string) (string, bool) {
+	if len(entries) == 0 {
 		return "", false
 	}
 	inputs := slices.Concat(d.Watch, resource.RegisteredWatchTargets(d.Watch...))
-	for _, unit := range units {
-		for _, in := range inputs {
-			if mayManageUnit(in, unit) {
+	for _, entry := range entries {
+		for _, unit := range strings.Fields(entry) {
+			if slices.ContainsFunc(inputs, func(in string) bool { return mayManageUnit(in, unit) }) {
 				return unit, true
 			}
 		}

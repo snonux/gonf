@@ -161,7 +161,8 @@ func TestMayManageUnit(t *testing.T) {
 
 // TestJoinRegisteredReloadRefusesRelatedInput: a joiner whose related units
 // may be one of the reload's inputs keeps its own reload (the registered
-// draft is untouched); an unrelated unit still joins.
+// draft is untouched); an unrelated unit still joins. A space-separated
+// entry is checked unit by unit, as systemd splits it (cb2).
 func TestJoinRegisteredReloadRefusesRelatedInput(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -172,7 +173,11 @@ func TestJoinRegisteredReloadRefusesRelatedInput(t *testing.T) {
 		{name: "wants a composition unit", input: "/u/a.service", related: []string{"a.service"}},
 		{name: "after a composition drop-in", input: "/u/a.service.d/x.conf", related: []string{"network-online.target", "a.service"}},
 		{name: "directory input may hold it", related: []string{"a.service"}},
+		{name: "space-separated entry naming a composition unit", input: "/u/a.service", related: []string{"network-online.target a.service"}},
+		{name: "tab- and space-separated entry naming a drop-in unit", input: "/u/a.service.d/x.conf", related: []string{"\tnetwork-online.target  a.service "}},
 		{name: "unrelated unit joins", input: "/u/a.service", related: []string{"network-online.target"}, want: true},
+		{name: "unrelated space-separated units join", input: "/u/a.service", related: []string{"network-online.target b.service", " "}, want: true},
+		{name: "a unit named like a prefix of the entry joins", input: "/u/a.service", related: []string{"xa.service a.service.bak"}, want: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resource.ResetRepository()
@@ -203,7 +208,7 @@ func TestJoinRegisteredReloadRefusesRelatedInput(t *testing.T) {
 // naming the joiner and the unit. logger.Fatal exits, so each case runs in
 // a helper process.
 func TestMergeRefusesJoinerRelatedToNewInput(t *testing.T) {
-	for _, name := range []string{"unit", "drop-in"} {
+	for _, name := range []string{"unit", "listed", "drop-in"} {
 		t.Run(name, func(t *testing.T) {
 			cmd := exec.Command(os.Args[0], "-test.run=^TestMergeRefusesJoinerFatalHelperProcess$", "-test.timeout=60s")
 			cmd.Env = append(os.Environ(), "GONF_SYSTEMD_JOINER_MERGE_FATAL="+name)

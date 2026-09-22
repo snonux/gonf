@@ -48,7 +48,8 @@ The timer keeps reloading on its own (at most one extra reload, as before)
 when it is alone, on the other bus, declared before the composition, in
 another when-block or privilege scope, when it depends on the composition
 (joining would close a dependency cycle), or when its `WithAfter` /
-`WithWants` name a unit the composition may install: a file input with that
+`WithWants` name a unit the composition may install (an entry listing several
+space-separated units counts each of them): a file input with that
 unit's (or its template's) name or drop-in directory, or any input that is
 not a single file, such as a `SyncDir` directory. Starting the timer first
 could otherwise start such a unit from its stale definition (e.g. a
