@@ -14,7 +14,8 @@ import (
 // and pointer field some handler lowers (Deps, Watch with IfChanged set,
 // Args, Env, the guards, the line/cron/unit lists, ValidationArgs), leaving
 // the kind-specific fields (config members, supplementary groups, ...) as
-// the fixture set them so the handler still accepts the draft.
+// the fixture set them so the handler still accepts the draft. The encoded
+// TemplateData is included too (only the file handler takes it).
 func withAllReferences(d resource.PlanDraft) resource.PlanDraft {
 	exit := 1
 	d.Deps = append(d.Deps, "Package[alias-dep]")
@@ -30,6 +31,8 @@ func withAllReferences(d resource.PlanDraft) resource.PlanDraft {
 	d.After = append(d.After, "alias.target")
 	d.Wants = append(d.Wants, "alias.target")
 	d.ValidationArgs = []string{"-c", "x"}
+	d.TemplateData = json.RawMessage(`{"alias":1}`)
+	d.TemplateDataSet = true
 	return d
 }
 

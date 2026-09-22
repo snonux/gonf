@@ -543,8 +543,12 @@ func WithParam(value string) fileOption {
 
 // WithTemplateData supplies JSON-compatible data to a file template. It also
 // enables template rendering, so literal template content need not carry a
-// .tmpl suffix. The value is validated while recording the plan and rendered
-// only by the destination.
+// .tmpl suffix. The value is JSON-encoded when the option is applied to the
+// resource, so mutating or reusing it afterwards (e.g. one map updated in a
+// loop over several Files) does not change what an earlier File renders. A
+// value that is not JSON-compatible fails RecordPlan, api.Apply or the
+// direct render. A recorded plan carries the encoding, and only the
+// destination renders it.
 func WithTemplateData(data any) fileOption {
 	return fileOption(func(target any) {
 		requires(target, "WithTemplateData", func(r TemplateDataable) { r.SetTemplateData(data) })

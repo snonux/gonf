@@ -2,7 +2,6 @@ package file
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"slices"
 
@@ -46,11 +45,10 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		Deps:           slices.Clone(d.Deps),
 	}
 	if d.TemplateDataSet {
-		raw, err := json.Marshal(d.TemplateData)
-		if err != nil {
-			return plan.Op{}, fmt.Errorf("file: template data must be JSON-compatible: %w", err)
+		if d.TemplateDataErr != nil {
+			return plan.Op{}, fmt.Errorf("file: template data must be JSON-compatible: %w", d.TemplateDataErr)
 		}
-		op.TemplateData = raw
+		op.TemplateData = slices.Clone(d.TemplateData)
 	}
 	return op, nil
 }
@@ -341,7 +339,8 @@ func (f *File) planDraft() resource.PlanDraft {
 		d.TemplateParam = f.templateParam()
 	}
 	if f.templateDataSet {
-		d.TemplateData = f.templateData
+		d.TemplateData = slices.Clone(f.templateData)
+		d.TemplateDataErr = f.templateDataErr
 		d.TemplateDataSet = true
 	}
 	return d

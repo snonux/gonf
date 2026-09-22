@@ -1,6 +1,8 @@
 package resource_test
 
 import (
+	"encoding/json"
+	"errors"
 	"reflect"
 	"slices"
 	"testing"
@@ -9,18 +11,20 @@ import (
 	"github.com/snonux/gonf/resource"
 )
 
-// fullDraft returns a draft whose every slice, map and pointer field is
-// populated (TestFullDraftCoversEveryReferenceField keeps it that way when
-// PlanDraft grows), so the copy-contract tests below exercise each shared
-// field kind: string slices, the Env map, the guard pointers with their
-// Args and *int, and the nested config-member bytes and validator argv.
+// fullDraft returns a draft whose every slice, map and pointer field, at
+// any depth, is populated (TestFullDraftCoversEveryReferenceField keeps it
+// that way when PlanDraft or a struct it nests grows), so the copy-contract
+// tests below exercise each shared field kind: string slices, the encoded
+// TemplateData, the Env map, the guard pointers with their Args and *int,
+// and the nested config-member bytes and validator argv.
 func fullDraft(id string) resource.PlanDraft {
 	exit := 3
 	return resource.PlanDraft{
 		Kind:                "command",
 		ID:                  id,
 		Name:                "full",
-		TemplateData:        []string{"opaque"},
+		TemplateData:        json.RawMessage(`{"k":["v"]}`),
+		TemplateDataErr:     errors.New("immutable"),
 		TemplateDataSet:     true,
 		ValidationArgs:      []string{"-c", "{{candidate}}"},
 		SupplementaryGroups: []string{"wheel"},
@@ -29,7 +33,7 @@ func fullDraft(id string) resource.PlanDraft {
 		Args:                []string{"arg"},
 		Env:                 map[string]string{"K": "v"},
 		Unless:              &resource.PlanGuardDraft{Bin: "test", Args: []string{"-e", "/x"}, ExpectExit: &exit},
-		OnlyIf:              &resource.PlanGuardDraft{Bin: "test", Args: []string{"-d", "/y"}},
+		OnlyIf:              &resource.PlanGuardDraft{Bin: "test", Args: []string{"-d", "/y"}, ExpectExit: &exit},
 		CronEnv:             []string{"A=1"},
 		After:               []string{"network.target"},
 		Wants:               []string{"network.target"},
@@ -39,6 +43,10 @@ func fullDraft(id string) resource.PlanDraft {
 		Deps:                []string{"Package[dep]"},
 	}
 }
+
+// onlyErr is what a clone may share with its source: the immutable
+// TemplateDataErr error value (see PlanDraft.Clone).
+var onlyErr = []string{"TemplateDataErr"}
 
 // referenceFields lists PlanDraft's slice, map, pointer and interface
 // fields: the ones a shallow copy would share.
@@ -54,29 +62,87 @@ func referenceFields() []string {
 	return names
 }
 
-// TestFullDraftCoversEveryReferenceField fails when PlanDraft gains a
-// slice/map/pointer field that fullDraft leaves nil: Clone must then be
-// taught to copy it, and the tests below must exercise it.
+// TestFullDraftCoversEveryReferenceField fails when PlanDraft, or a struct
+// it nests (PlanGuardDraft, PlanConfigMember, PlanArgv, or a future one),
+// gains a slice/map/pointer/interface field that fullDraft leaves nil or
+// empty: Clone must then be taught to copy it, and the tests below must
+// exercise it. Slices and maps must be non-empty so their element types
+// are walked too.
 func TestFullDraftCoversEveryReferenceField(t *testing.T) {
-	v := reflect.ValueOf(fullDraft("X[x]"))
-	for _, name := range referenceFields() {
-		if v.FieldByName(name).IsNil() {
-			t.Errorf("fullDraft leaves reference field %s nil; populate it and make sure PlanDraft.Clone copies it", name)
+	for _, path := range unpopulatedRefs(reflect.ValueOf(fullDraft("X[x]")), "") {
+		t.Errorf("fullDraft leaves reference field %s nil or empty; populate it and make sure PlanDraft.Clone copies it", path)
+	}
+}
+
+// unpopulatedRefs returns the paths below v of nil or empty reference
+// values, recursing through structs, pointers, interfaces, slice/array
+// elements and map values.
+func unpopulatedRefs(v reflect.Value, path string) []string {
+	switch v.Kind() {
+	case reflect.Struct:
+		var missing []string
+		for i := range v.NumField() {
+			missing = append(missing, unpopulatedRefs(v.Field(i), joinField(path, v.Type().Field(i).Name))...)
 		}
+		return missing
+	case reflect.Pointer, reflect.Interface:
+		if v.IsNil() {
+			return []string{path}
+		}
+		return unpopulatedRefs(v.Elem(), path)
+	case reflect.Map:
+		if v.Len() == 0 {
+			return []string{path}
+		}
+		return unpopulatedRefs(v.MapIndex(v.MapKeys()[0]), path+"[]")
+	case reflect.Slice:
+		if v.Len() == 0 {
+			return []string{path}
+		}
+		return unpopulatedRefs(v.Index(0), path+"[]")
+	case reflect.Array:
+		if v.Len() == 0 {
+			return nil
+		}
+		return unpopulatedRefs(v.Index(0), path+"[]")
+	}
+	return nil
+}
+
+// joinField appends a field name to a dotted path.
+func joinField(path, name string) string {
+	if path == "" {
+		return name
+	}
+	return path + "." + name
+}
+
+// TestUnpopulatedRefsFindsNestedGaps is the guard's negative case: a nil or
+// empty field nested inside a guard, a config member and a validator is
+// reported by its full path.
+func TestUnpopulatedRefsFindsNestedGaps(t *testing.T) {
+	d := fullDraft("X[x]")
+	d.Unless.ExpectExit = nil
+	d.ConfigMembers[0].Content = nil
+	d.Validators[0].Args = []string{}
+	got := unpopulatedRefs(reflect.ValueOf(d), "")
+	want := []string{"Unless.ExpectExit", "ConfigMembers[].Content", "Validators[].Args"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("unpopulatedRefs = %v, want %v", got, want)
 	}
 }
 
 // TestPlanDraftCloneSharesNothing pins the draft half of the copy
-// contract: a clone is equal to its source but shares no mutable storage,
-// except the documented opaque TemplateData.
+// contract: a clone is equal to its source and shares no mutable storage.
+// The one shared reference is the immutable TemplateDataErr error value.
 func TestPlanDraftCloneSharesNothing(t *testing.T) {
 	d := fullDraft("X[x]")
 	c := d.Clone()
 	if !reflect.DeepEqual(c, d) {
 		t.Fatalf("clone differs from source:\n got %#v\nwant %#v", c, d)
 	}
-	if got, want := testutil.SharedRefs(d, c), []string{"TemplateData"}; !slices.Equal(got, want) {
-		t.Fatalf("clone shares %v with its source, want only %v", got, want)
+	if shared := testutil.SharedRefs(d, c); !slices.Equal(shared, onlyErr) {
+		t.Fatalf("clone shares %v with its source, want only %v", shared, onlyErr)
 	}
 
 	// Mutation in either direction leaves the other side as it was.
@@ -146,7 +212,7 @@ func TestRecordPlanDraftIsolatesCallerStoreAndRecorder(t *testing.T) {
 	if len(recorded) != 1 {
 		t.Fatalf("recorder saw %d drafts, want 1", len(recorded))
 	}
-	if shared := testutil.SharedRefs(d, recorded[0]); !slices.Equal(shared, []string{"TemplateData"}) {
+	if shared := testutil.SharedRefs(d, recorded[0]); !slices.Equal(shared, onlyErr) {
 		t.Fatalf("recorder's draft shares %v with the caller's", shared)
 	}
 

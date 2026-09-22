@@ -51,7 +51,7 @@ func draftOp(d resource.PlanDraft) plan.Op {
 		ID:                  d.ID,
 		Name:                d.Name,
 		PrimaryGroup:        d.PrimaryGroup,
-		SupplementaryGroups: append([]string(nil), d.SupplementaryGroups...),
+		SupplementaryGroups: slices.Clone(d.SupplementaryGroups),
 		Home:                d.Home,
 		CreateHome:          d.CreateHome,
 		Shell:               d.Shell,

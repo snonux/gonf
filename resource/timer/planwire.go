@@ -34,7 +34,7 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 	// Change gate (schema v11): OnChange arms IfChanged with the watched ids.
 	if d.IfChanged {
 		op.IfChanged = true
-		op.Watch = append([]string(nil), d.Watch...)
+		op.Watch = slices.Clone(d.Watch)
 	}
 	return op, nil
 }

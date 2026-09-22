@@ -7,8 +7,9 @@ import (
 
 // Clone returns a deep copy of d: every slice, map and pointer field
 // (Args, Env, Deps, Watch, the line/group/cron/unit lists, ValidationArgs,
-// the Unless/OnlyIf guards with their Args and ExpectExit, and the
-// config-set members' Content and validators' Args) gets its own backing
+// the encoded TemplateData, the Unless/OnlyIf guards with their Args and
+// ExpectExit, and the config-set members' Content and validators' Args)
+// gets its own backing
 // storage, so mutating the copy never changes d and vice versa. Nil stays
 // nil and empty stays empty (slices.Clone/maps.Clone), so a clone lowers to
 // the byte-identical plan op.
@@ -17,14 +18,14 @@ import (
 // 872 are the option half, plan.Handler.ToOp the op half): RecordPlanDraft
 // and AmendRegistered store one clone and hand their sink another, and
 // RegisteredPlanDrafts returns clones, so the caller, the draft store, the
-// recorder and every snapshot each own their draft.
-//
-// The one field not copied is TemplateData: it is an opaque recipe value
-// (any JSON-compatible type) that cannot be deep-copied generically, and
-// the file handler encodes it to JSON during ToOp, so no op shares it; the
-// recipe must not mutate it after WithTemplateData.
+// recorder and every snapshot each own their draft. TemplateData is carried
+// as its JSON encoding rather than the recipe's live value, so it is copied
+// like any other slice. The only reference Clone shares is
+// TemplateDataErr: an error is an immutable value, not storage anyone
+// writes through.
 func (d PlanDraft) Clone() PlanDraft {
 	c := d
+	c.TemplateData = slices.Clone(d.TemplateData)
 	c.ValidationArgs = slices.Clone(d.ValidationArgs)
 	c.SupplementaryGroups = slices.Clone(d.SupplementaryGroups)
 	c.AddLines = slices.Clone(d.AddLines)

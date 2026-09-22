@@ -40,7 +40,8 @@ type Handler interface {
 	// field (the Kind discriminator) must be set by the implementation.
 	//
 	// The Op must not alias d: every slice, map or pointer the Op takes
-	// from d is copied (slices.Clone / maps.Clone, nil staying nil), so a
+	// from d is copied (slices.Clone / maps.Clone for slices and maps, a
+	// fresh pointee for pointers; nil stays nil in every case), so a
 	// later change to the draft cannot change the op or vice versa. This
 	// is the op half of the copy contract whose draft half is
 	// resource.PlanDraft.Clone; TestHandlersToOpDoNotAliasDraft (api)

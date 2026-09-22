@@ -12,6 +12,7 @@
 package file
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/user"
@@ -53,8 +54,14 @@ type File struct {
 	// with no source set and a path already stripped of ".tmpl" (planDraft
 	// records the stripped targetPath), so neither suffix check would fire
 	// on its own.
-	template        bool
-	templateData    any
+	template bool
+	// templateData is the JSON encoding of the WithTemplateData value, taken
+	// by SetTemplateData; templateDataErr is the encoding error when that
+	// value is not JSON-compatible. Encoding once at option time means a
+	// recipe mutating or reusing its value afterwards changes neither the
+	// plan draft (lowered later by api.Apply) nor a direct render.
+	templateData    []byte
+	templateDataErr error
 	templateDataSet bool
 	// templateFacts feeds {{.Gonf.*}}: build() seeds it from
 	// localTemplateFacts, and plan apply overrides it with the plan's
@@ -106,8 +113,10 @@ func (f *File) SetTemplate() { f.template = true }
 
 // SetTemplateData implements opt.TemplateDataable. Template data always
 // implies template rendering, including for literal content without .tmpl.
+// The value is JSON-encoded here, once (see the templateData field); an
+// encoding error is kept and reported by the render or the plan lowering.
 func (f *File) SetTemplateData(data any) {
-	f.templateData = data
+	f.templateData, f.templateDataErr = json.Marshal(data)
 	f.templateDataSet = true
 	f.template = true
 }

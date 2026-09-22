@@ -102,7 +102,7 @@ func (f *File) applyTemplateToContent(content []byte, param string) ([]byte, err
 			data[pair[0]] = pair[1]
 		}
 	}
-	templateData, err := templateDataMap(f.templateData, f.templateDataSet)
+	templateData, err := templateDataMap(f.templateData, f.templateDataErr, f.templateDataSet)
 	if err != nil {
 		return nil, err
 	}
@@ -124,14 +124,16 @@ func (f *File) applyTemplateToContent(content []byte, param string) ([]byte, err
 	return buf.Bytes(), nil
 }
 
-func templateDataMap(value any, set bool) (map[string]any, error) {
+// templateDataMap decodes the WithTemplateData encoding (raw, or the
+// encoding error encErr) into the template's root data: the flattened map
+// keys plus .Data.
+func templateDataMap(raw []byte, encErr error, set bool) (map[string]any, error) {
 	data := make(map[string]any)
 	if !set {
 		return data, nil
 	}
-	raw, err := json.Marshal(value)
-	if err != nil {
-		return nil, fmt.Errorf("template data must be JSON-compatible: %w", err)
+	if encErr != nil {
+		return nil, fmt.Errorf("template data must be JSON-compatible: %w", encErr)
 	}
 	normalized, err := decodeTemplateData(raw)
 	if err != nil {

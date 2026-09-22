@@ -1,6 +1,9 @@
 package resource
 
-import "sync"
+import (
+	"encoding/json"
+	"sync"
+)
 
 // PlanGuardDraft is a package-neutral command probe for plan recording.
 type PlanGuardDraft struct {
@@ -79,11 +82,19 @@ type PlanDraft struct {
 	// a plan-apply implementation detail (there is no destination-side
 	// source file to derive it from).
 	TemplateParam string
-	// TemplateData is the JSON-compatible data supplied by WithTemplateData.
-	// The file handler encodes it so invalid values fail during RecordPlan.
-	TemplateData any
+	// TemplateData is the JSON encoding of the value supplied by
+	// WithTemplateData, taken when the option was applied (File.
+	// SetTemplateData), so a recipe that later mutates or reuses its value
+	// cannot change what api.Apply or RecordPlan lower.
+	TemplateData json.RawMessage
+	// TemplateDataErr is the JSON encoding error when the supplied value is
+	// not JSON-compatible (TemplateData is then empty). The file handler's
+	// ToOp refuses such a draft, wrapping this error, so RecordPlan and
+	// api.Apply both fail on it and callers can still errors.As the
+	// encoding/json error.
+	TemplateDataErr error
 	// TemplateDataSet reports that WithTemplateData was given, so TemplateData
-	// is encoded onto the op even when the supplied value is nil.
+	// is put on the op even when the supplied value was nil ("null").
 	TemplateDataSet bool
 	// ValidationBin and ValidationArgs describe an optional argv validator for
 	// a content-managed file. ValidationArgs retains CandidatePath as a typed
