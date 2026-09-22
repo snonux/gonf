@@ -121,10 +121,12 @@ func (d *DaemonReloadResource) relatedInput(entries []string) (string, bool) {
 // mayManageUnit reports whether the resource id may install the unit file
 // or a drop-in of unit. Only a File[path] can be judged by name: its base
 // name is the unit (or its template, a@.service for a@x.service), or its
-// parent directory is the unit's drop-in directory (unit.d, or the
-// template's). Any other kind, including a Directory (a SyncDir's files are
-// not registered one by one), may hold any unit and counts as managing it:
-// the check must never let a join start a unit from a stale definition.
+// parent directory is one of the unit's drop-in directories: unit.d (or the
+// template's), a dash-prefix directory, or the bare type-wide directory
+// (dropinDirs). Any other kind, including a Directory (a SyncDir's files
+// are not registered one by one), may hold any unit and counts as managing
+// it: the check must never let a join start a unit from a stale
+// definition.
 func mayManageUnit(id, unit string) bool {
 	kind, path, ok := strings.Cut(strings.TrimSuffix(id, "]"), "[")
 	if !ok || kind != "File" {
@@ -136,11 +138,34 @@ func mayManageUnit(id, unit string) bool {
 	}
 	base, parent := filepath.Base(path), filepath.Base(filepath.Dir(path))
 	for _, n := range names {
-		if base == n || parent == n+".d" {
+		if base == n || parent == n+".d" || slices.Contains(dropinDirs(n), parent) {
 			return true
 		}
 	}
 	return false
+}
+
+// dropinDirs returns the drop-in directory names systemd additionally
+// searches for unit, beyond unit.d itself (systemd.unit(5), "Configuration
+// Directories and Precedence"):
+//   - one per dash-prefix of the unit's name, progressively truncated after
+//     each remaining '-': for foo-bar-baz.service that is foo-bar-.service.d
+//     and foo-.service.d, so a set of related units sharing a name prefix
+//     can share drop-ins;
+//   - the bare <type>.d directory (e.g. service.d), which applies to every
+//     unit of that type, not just ones with a dash-prefix.
+func dropinDirs(unit string) []string {
+	dot := strings.LastIndexByte(unit, '.')
+	if dot < 0 {
+		return nil
+	}
+	typ, name := unit[dot+1:], unit[:dot]
+	var dirs []string
+	for i := strings.LastIndexByte(name, '-'); i >= 0; i = strings.LastIndexByte(name, '-') {
+		name = name[:i]
+		dirs = append(dirs, name+"-."+typ+".d")
+	}
+	return append(dirs, typ+".d")
 }
 
 // templateName returns the template unit of an instance name

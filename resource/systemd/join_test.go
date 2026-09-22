@@ -133,8 +133,10 @@ func TestGatedReloadCoalescesWithEarlierSameBusReload(t *testing.T) {
 }
 
 // TestMayManageUnit pins the conservative input-to-unit match that guards a
-// join: a File by unit, template or drop-in directory name only, and every
-// other kind (a SyncDir Directory, anything unknown) as possibly any unit.
+// join: a File by unit, template or drop-in directory name only (including
+// the unit's dash-prefix drop-in directories and the bare type-wide one,
+// dropinDirs), and every other kind (a SyncDir Directory, anything unknown)
+// as possibly any unit.
 func TestMayManageUnit(t *testing.T) {
 	for _, tc := range []struct {
 		id, unit string
@@ -150,6 +152,28 @@ func TestMayManageUnit(t *testing.T) {
 		{"File[/usr/local/bin/a.service-helper]", "a.service", false},
 		{"Directory[/home/u/.config/systemd/user]", "a.service", true},
 		{"Command[whatever]", "a.service", true},
+		// Dash-prefix drop-in directories (systemd.unit(5)): for
+		// foo-bar.service, systemd also reads foo-.service.d/ (one
+		// dash-prefix level, since the name has one '-').
+		{"File[/etc/systemd/system/foo-.service.d/10-x.conf]", "foo-bar.service", true},
+		// For foo-bar-baz.service, systemd checks every remaining
+		// prefix level: foo-bar-.service.d/ and foo-.service.d/.
+		{"File[/etc/systemd/system/foo-bar-.service.d/10-x.conf]", "foo-bar-baz.service", true},
+		{"File[/etc/systemd/system/foo-.service.d/10-x.conf]", "foo-bar-baz.service", true},
+		// The bare <type>.d directory applies to every unit of that
+		// type, dash or no dash in its name.
+		{"File[/etc/systemd/system/service.d/10-x.conf]", "foo-bar.service", true},
+		{"File[/etc/systemd/system/service.d/10-x.conf]", "a.service", true},
+		// Negative: a dash-prefix dir that is not actually a prefix
+		// of the unit's name (systemd would not read it for this
+		// unit) must not match.
+		{"File[/etc/systemd/system/bar-.service.d/10-x.conf]", "foo-bar.service", false},
+		// Negative: a.service has no '-', so it has no dash-prefix
+		// directory beyond the bare type-wide one.
+		{"File[/etc/systemd/system/a-.service.d/10-x.conf]", "a.service", false},
+		// Negative: the bare type-wide directory of the wrong type
+		// must not match.
+		{"File[/etc/systemd/system/timer.d/10-x.conf]", "a.service", false},
 	} {
 		if got := mayManageUnit(tc.id, tc.unit); got != tc.want {
 			t.Errorf("mayManageUnit(%s, %s) = %v, want %v", tc.id, tc.unit, got, tc.want)
