@@ -421,9 +421,9 @@ Linux, plus additive supplementary memberships. Shell, primary group, login
 class, and related settings are creation-only. `WithHome` is creation-only by
 default. Core now also offers the explicit `WithManageHome` opt-in, which
 converges an existing account's passwd home field without moving data. It is
-in main, unreleased, as plan schema 19 (task s52; see [user.md](user.md)).
-Until a release is pinned, the OpenBSD consumer keeps its `usermod -d` command
-with an AWK guard. The prepared consumer migration is pending that release.
+released in v0.15.0 as plan schema 19 (task s52; see [user.md](user.md)).
+Until a consumer pins v0.15.0, the OpenBSD consumer keeps its `usermod -d`
+command with an AWK guard. The prepared consumer migration is pending that pin.
 
 Keep existing behavior backward-compatible. Introduce explicit opt-in management
 of selected existing attributes, starting with home, rather than changing what

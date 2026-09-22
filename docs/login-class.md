@@ -4,7 +4,7 @@
 `/etc/login.conf.d/<class>`, and returns a change handle for the daemon that
 must be restarted to pick up new limits. `NoLoginClass` removes it.
 
-Status: implemented in core (unreleased). Native OpenBSD verification is
+Status: implemented in core (released in v0.15.0). Native OpenBSD verification is
 still pending; the platform behaviour below is documentation-based.
 
 ```go

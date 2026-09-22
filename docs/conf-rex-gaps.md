@@ -1,7 +1,7 @@
 # Replacing `~/git/conf` Rex with gonf — gap audit
 
-Refreshed 2026-09-20 against **gonf v0.14.0**; this release uses plan schema
-16. This document is the
+Refreshed 2026-09-22 against **gonf v0.15.0**; this release uses plan schema
+21. This document is the
 canonical plan for porting the [`~/git/conf`](https://codeberg.org/snonux/conf)
 Rexfiles to gonf. Earlier revisions claimed gonf "still lacks Rex-style sudo/doas"
 and that pkg/service/cron "fleet still needs transport" — both are **stale**:
@@ -14,7 +14,7 @@ unattended-upgrades migration already runs on top of them (see
 packages, services, cron, accounts, secrets, and file/line primitives. The
 former feature gaps — a **secrets convention** (Rex `$secrets`), **custom
 package repos** (Rex `PKG_PATH` env), and change-gated service restart (Rex
-`on_change`) — are implemented in v0.14.0. Remaining work is consumer migration
+`on_change`) — are implemented since v0.13.0. Remaining work is consumer migration
 plus a deliberately narrow existing-account update gap; account creation is
 covered, while existing-account mutation remains explicit. Rich
 templates are an ergonomics gap, not a capability gap — record-time Go code can
@@ -28,7 +28,7 @@ compute any content Perl closures could (see
   `gonf/cluster/cluster.go` and deploys via `./gonf.sh cluster <cluster> <tasks…>`
   (wrapper = `cd ./gonf && go run ./cmd/gonf`).
 - **One consumer module per repository**, depending on `github.com/snonux/gonf`
-  (dotfiles currently pins v0.12.2 and conf pins v0.14.0; any later consumer
+  (dotfiles currently pins v0.13.0 and conf pins v0.14.0; any later consumer
   upgrade is a deliberate compatibility change). Multi-Rexfile composition maps to Go packages +
   `RegisterMethods` + `Aggregate`, not to multiple Rexfiles.
 - **Inventory lives in the consumer** (`Host` / `Cluster` / `Fleet` with
@@ -76,9 +76,9 @@ One plan engine serves local and remote runs, so a recipe cannot diverge between
 
 ## Current capability matrix
 
-Status against every conf Rex primitive in v0.14.0 (plan schema 16):
+Status against every conf Rex primitive in v0.15.0 (plan schema 21):
 
-| Conf Rex capability | gonf v0.14.0 | Status |
+| Conf Rex capability | gonf v0.15.0 | Status |
 |---------------------|--------------|--------|
 | `group x => 'h:2', …`, `user`, `parallelism 5` | `Host(name, WithSSHUser, WithSSHHost, WithSSHPort, WithSSHIdentity)` + `Cluster(name, hosts…)`, `cluster.Parallel(n)`; `gonf hosts`/`clusters`/`fleets` | **Done** |
 | `sudo TRUE` / `auth for => group (user, sudo)` | `Task(…, Privileged())` (or `RequiresRoot`) + `Host(WithPrivilege(PrivilegeSudo|Doas|None))`; apply splits plain/elevated chunks; remote elevated chunk wraps `sudo -n gonf apply` / `doas gonf apply`; `-privilege=none` + elevated op refuses to push | **Done** |
@@ -96,8 +96,8 @@ Status against every conf Rex primitive in v0.14.0 (plan schema 16):
 | Rex `cron add => user, {…}` | `Cron` / `NoCron`: marker-managed per-user crontabs, full schedule fields, `WithCronEnv`, `WithCronUser` | **Done** (`@reboot` nice-to-have) |
 | Raw crontab surgery via `run` (rsync, nsd_failover, pf rebuild root crontab) | superseded by `Cron` (marker-based, idempotent, no temp-file race) | **Done** (gonf is ahead) |
 | Multi-Rexfile `require` composition | one Go module + `RegisterMethods(…, WithPrefix, WithCluster)` + `Aggregate`; proven by `~/git/conf/gonf` and `~/git/dotfiles/gonf` | **Done** |
-| `adduser -batch _dserver … unless id _dserver`, `usermod -d` | additive `User` for creation-time group/class/home attributes; existing-account `usermod -d` needs a guarded `Command` | **Done** for account creation in v0.14.0. The explicit `WithManageHome` opt-in for an existing account's passwd home field is in main, unreleased (plan v19); consumers drop the guarded `usermod` command after that release |
-| `/etc/login.conf.d` fragment (Rex relayd also ran `rm -f /etc/login.conf.db && cap_mkdb`; Rex inetd ran none) | `LoginClass(class, src)`: the fragment inside an OpenBSD-only plan requirement (schema 20) plus removal of a stale `<class>.db`; no `cap_mkdb`, which never reads fragments (see [login-class.md](login-class.md)). The current consumers still use `InstallFile` + `Command("cap_mkdb", …, OnChange(login))`, whose rebuild is a no-op for fragment changes | Implemented in core (unreleased); native OpenBSD verification pending |
+| `adduser -batch _dserver … unless id _dserver`, `usermod -d` | additive `User` for creation-time group/class/home attributes; existing-account `usermod -d` needs a guarded `Command` | **Done** for account creation in v0.14.0. The explicit `WithManageHome` opt-in for an existing account's passwd home field ships in v0.15.0 (plan v19); consumers drop the guarded `usermod` command once they pin v0.15.0 |
+| `/etc/login.conf.d` fragment (Rex relayd also ran `rm -f /etc/login.conf.db && cap_mkdb`; Rex inetd ran none) | `LoginClass(class, src)`: the fragment inside an OpenBSD-only plan requirement (schema 20) plus removal of a stale `<class>.db`; no `cap_mkdb`, which never reads fragments (see [login-class.md](login-class.md)). The current consumers still use `InstallFile` + `Command("cap_mkdb", …, OnChange(login))`, whose rebuild is a no-op for fragment changes | Implemented in core (v0.15.0); native OpenBSD verification pending |
 | Garage config deployment | `RequiresRoot` task + direct `InstallFile("/usr/local/etc/garage.toml", …, root:garage, 0640, WithTemplateData(...))` + `Service("garage", WithRestart, OnChange(config))`; the host's `PrivilegeDoas` wraps the one privileged chunk | **Done** |
 | Deferred `on_change` flag (`$restart = TRUE` … `service restart if $restart`) | `OnChange` supports multi-resource fan-in and carries ordering dependencies | **Done** |
 
@@ -208,7 +208,7 @@ the Rexfiles use: `_dserver` and `_gorum` need
 `WithPrimaryGroup(name)`, `WithLoginClass("nologin")`, and `WithHome`; `_gogios`
 needs `WithPrimaryGroup(name)` and `WithHome` (no nologin class in Rex). To
 preserve Rex's existing-account `usermod -d` behavior, add the explicit
-`WithManageHome` opt-in (in gonf main, unreleased; plan schema v19):
+`WithManageHome` opt-in (released in gonf v0.15.0; plan schema v19):
 
 ```go
 account := User("_dserver",
@@ -384,7 +384,7 @@ so the plan has no login-owned `/tmp` secret staging step.
 For this document:
 
 - Every capability row names the gonf API that exists today (verified against
-  v0.14.0, plan schema 16) — no "fleet needs transport" or
+  v0.15.0, plan schema 21) — no "fleet needs transport" or
   missing-feature claims survive.
 - All five Rexfiles are inventoried and every task appears exactly once in the
   mapping with a status (consumer / to do / excluded) and feature codes.
