@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	gexec "github.com/snonux/gonf/internal/exec"
 	"github.com/snonux/gonf/internal/logger"
@@ -205,12 +206,17 @@ func classifyCmdTimeoutProbe(stdout, stderr string) (CmdTimeoutSupport, string) 
 }
 
 // firstLine returns s's first non-empty line, trimmed and capped at 200
-// bytes so a long error cannot flood the warning.
+// bytes (cut on a rune boundary, so multi-byte UTF-8 text is never split)
+// so a long error cannot flood the warning.
 func firstLine(s string) string {
 	for _, line := range strings.Split(s, "\n") {
 		if line = strings.TrimSpace(line); line != "" {
 			if len(line) > 200 {
-				line = line[:200] + "..."
+				cut := 200
+				for cut > 0 && !utf8.RuneStart(line[cut]) {
+					cut--
+				}
+				line = line[:cut] + "..."
 			}
 			return line
 		}

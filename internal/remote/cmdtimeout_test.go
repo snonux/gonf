@@ -277,6 +277,55 @@ func TestToHostForwardsCmdTimeoutOnlyToCapableRemote(t *testing.T) {
 	}
 }
 
+// Preview shares prepareRemote with Push (see delivery.go), so the same
+// capability gating applies to a preview's "-n -strict-preview -" apply
+// argument, and never upgrades a remote gonf too old for the flag.
+func TestPreviewToHostForwardsCmdTimeoutOnlyToCapableRemote(t *testing.T) {
+	tests := []struct {
+		name string
+		kind remoteKind
+		want []string
+	}{
+		{"capable remote", remoteCurrent, []string{
+			"gonf -cmd-timeout=30s apply -n -strict-preview -",
+			"sudo -n gonf -cmd-timeout=30s apply -n -strict-preview -",
+		}},
+		{"old remote", remoteOld, []string{
+			"gonf apply -n -strict-preview -",
+			"sudo -n gonf apply -n -strict-preview -",
+		}},
+		{"sudo refuses the probe", remoteSudoRefuses, []string{
+			"gonf -cmd-timeout=30s apply -n -strict-preview -",
+			"sudo -n gonf apply -n -strict-preview -",
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := installDeliveryRecorder(t)
+			f := installFakeRemoteGonf(t, tc.kind)
+			setCmdTimeout(t, 30*time.Second)
+			ops := []plan.Op{
+				{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "p"},
+				{Op: plan.KindFile, Path: "/tmp/unpriv-out", Mode: "0600", ContentB64: "aGVsbG8K"},
+				{Op: plan.KindFile, Path: "/tmp/priv-out", Mode: "0600", ContentB64: "aGVsbG8K", Elevate: true},
+			}
+			target := PushTarget{Host: "h.example", Privilege: privilege.Sudo}
+			if err := previewToHost(context.Background(), target, "p", ops, nil); err != nil {
+				t.Fatalf("preview: %v", err)
+			}
+			if got := r.cmds(); strings.Join(got, "|") != strings.Join(tc.want, "|") {
+				t.Fatalf("remote apply cmds = %v, want %v", got, tc.want)
+			}
+			if got := f.probeCmds(); len(got) != 2 {
+				t.Fatalf("capability probes = %v, want one per privilege context", got)
+			}
+			if r.bootstraps.Load() != 0 {
+				t.Fatalf("preview bootstrapped/installed gonf: %d", r.bootstraps.Load())
+			}
+		})
+	}
+}
+
 // At the built-in default a push sends the unchanged argv and opens no
 // capability probe at all.
 func TestToHostDefaultCmdTimeoutNotForwarded(t *testing.T) {
