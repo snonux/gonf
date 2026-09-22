@@ -59,10 +59,12 @@ func TestQuoteGlob(t *testing.T) {
 }
 
 // TestSyncDirGlobPruneLeavesSubdirectories applies a glob sync_dir op
-// through the handler itself (the destination side of a plan) over a blob
-// whose directory name holds glob metacharacters. The unmanaged
-// subdirectory and the non-matching regular file must follow glob prune
-// semantics: the directory stays, the file goes.
+// through the handler itself (the destination side of a plan), sourced from
+// a blob under an operator-chosen plan directory (quoteGlob's actual risk
+// vector — sanitizeBlobName already strips glob metacharacters from the
+// blob directory name itself, see TestQuoteGlob for that path). The
+// unmanaged subdirectory and the non-matching regular file must follow glob
+// prune semantics: the directory stays, the file goes.
 func TestSyncDirGlobPruneLeavesSubdirectories(t *testing.T) {
 	resource.ResetRepository()
 	planDir := t.TempDir()
