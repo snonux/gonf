@@ -285,12 +285,14 @@ func TestBuildParentChecks(t *testing.T) {
 	}
 
 	// An ancestor, not just the direct parent, that is world-writable
-	// without the sticky bit must be refused too.
+	// without the sticky bit must be refused too. checkBuildParent names the
+	// resolved ancestor, so compare against resolvedDir (they differ when
+	// the temp dir is reached through a symlink, e.g. macOS /var).
 	openAncestor := t.TempDir()
 	mustDo(t, os.Chmod(openAncestor, 0o777))
 	private := filepath.Join(openAncestor, "private")
 	mustDo(t, os.Mkdir(private, 0o700))
-	if _, err := checkBuildParent(private); err == nil || !strings.Contains(err.Error(), openAncestor) {
+	if _, err := checkBuildParent(private); err == nil || !strings.Contains(err.Error(), resolvedDir(t, openAncestor)) {
 		t.Fatalf("private dir under a non-sticky world-writable ancestor accepted: %v", err)
 	}
 }

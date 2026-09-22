@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/snonux/gonf/internal/privilege"
+	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 )
 
@@ -347,8 +348,14 @@ func TestSCPArgvErrorNotDoublePrefixed(t *testing.T) {
 // dir, so no test in this package (including ones in other files that
 // exercise the package-level EnsureRemoteGonf) leaves anything in the real
 // temp dir, and concurrently running `go test` processes never share a
-// directory with each other.
+// directory with each other. It first resolves a symlinked TMPDIR (see
+// testutil.ResolveTempDirEnv), since the build-parent checks refuse symlinked
+// components of the t.TempDir() dirs several tests use as build parents.
 func TestMain(m *testing.M) {
+	if err := testutil.ResolveTempDirEnv(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	// A fatal-exit helper child (TestCrossBuildFatalHelper) never returns
 	// from m.Run, so it must not create a root that only we would remove.
 	if root := os.Getenv(crossBuildFatalRootEnv); root != "" {
