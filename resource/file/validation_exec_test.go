@@ -19,10 +19,10 @@ import (
 
 // These tests pin how the validator process is executed (tasks l62, b82): it
 // is bounded by the process-wide command timeout of internal/exec (the
-// validator's whole process group is killed when it expires), a descendant
+// validator and its descendants are killed when it expires), a descendant
 // holding the output pipe cannot block the call beyond validator.WaitDelay,
 // and a bounded, sanitized copy of the combined stdout/stderr is appended to
-// the error. internal/validator/procgroup_test.go covers the process group.
+// the error. internal/validator/proctree_test.go covers the descendant kill.
 
 // setValidationCommandTimeout sets the process-wide command timeout the
 // validator inherits (the knob behind api.SetCommandTimeout and -cmd-timeout)
@@ -148,10 +148,10 @@ exit 0`)
 }
 
 // A timed-out validator whose child keeps the output pipe open returns as a
-// timeout: the group kill takes the child too, and even a child that
+// timeout: the timeout kill takes the child too, and even a child that
 // escaped it could only delay the return to timeout + ivalidator.WaitDelay.
 // The 1s timeout leaves the shell time to record the child's pid, so cleanup
-// can kill it should the group kill regress.
+// can kill it should the descendant kill regress.
 func TestValidationTimeoutNotBlockedByLingeringChild(t *testing.T) {
 	resource.ResetRepository()
 	setValidationCommandTimeout(t, time.Second)

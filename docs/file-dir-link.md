@@ -60,19 +60,19 @@ the live file untouched, and reports no `File` change, so an `OnChange` restart
 does not run. Candidates are unique per apply and cleaned after both success
 and failure; their private mode is independent of the final file mode.
 
-The validator runs without a shell, with stdin from `/dev/null`, in its own
-process group, and is bounded by the same per-command timeout as every other
-backend command (`-cmd-timeout` / `api.SetCommandTimeout`, 5 minutes by
-default). When the timeout expires, the validator's whole process group is
-killed (`SIGKILL`), so a wrapper script dies together with the hung checker
-it started, and validation fails with `... failed: timed out after 5m0s:
-context deadline exceeded`. Processes that left the group (`setsid`) and
-processes left behind by a validator that exited on its own keep running.
-The first `SIGINT` (Ctrl-C), `SIGTERM`, `SIGHUP` or `SIGQUIT` gonf receives
-while the validator runs is forwarded to its group and then handled by gonf
-as usual; job control (Ctrl-Z) is not forwarded, and a validator reading the
-terminal (e.g. a `sudo` password prompt) is stopped until the timeout kills
-it. If gonf is not allowed to kill it (`EPERM`, e.g. a non-root gonf
+The validator runs without a shell, with stdin from `/dev/null`, in gonf's own
+process group (so a terminal's Ctrl-C, hangup or Ctrl-Z, and a `SIGKILL` of
+the whole group, reach it as they reach gonf), and is bounded by the same
+per-command timeout as every other backend command (`-cmd-timeout` /
+`api.SetCommandTimeout`, 5 minutes by default). When the timeout expires, the
+validator is killed (`SIGKILL`) together with the processes it started, so a
+wrapper script dies with the hung checker it runs, and validation fails with
+`... failed: timed out after 5m0s: context deadline exceeded`. gonf finds
+those processes by walking the process tree (`/proc` on Linux, `ps`
+elsewhere) after stopping them, so a process that was already detached from
+the validator (e.g. by a double fork) is not killed; if the process table
+cannot be read, only the validator itself is. Processes started by a
+validator that exits on its own before the timeout keep running. If gonf is not allowed to kill it (`EPERM`, e.g. a non-root gonf
 running the validator through `sudo`/`doas`), the timeout cannot bound it and
 gonf waits until it exits; 2 seconds after the failed kill gonf also stops
 reading its output, so its next write may kill it with `SIGPIPE`, reported as

@@ -1,9 +1,9 @@
 // Package validator runs configuration validators: one argv command (never a
-// shell) in its own process group, bounded by the process-wide command
-// timeout of internal/exec (api.SetCommandTimeout, CLI -cmd-timeout) that
-// kills the whole group, with stdin from /dev/null and a bounded, sanitized
-// copy of its combined output appended to the error. It is shared by the
-// File resource's WithValidation and the ConfigSet resource's
+// shell) bounded by the process-wide command timeout of internal/exec
+// (api.SetCommandTimeout, CLI -cmd-timeout), which kills it together with
+// the processes it started, with stdin from /dev/null and a bounded,
+// sanitized copy of its combined output appended to the error. It is shared
+// by the File resource's WithValidation and the ConfigSet resource's
 // WithSetValidation, so both bound and report their validators identically.
 package validator
 
@@ -15,7 +15,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -37,10 +36,10 @@ const (
 	// counted.
 	OutputLimit = 4096
 	// WaitDelay bounds how long Wait keeps waiting for the output
-	// pipe after the validator exited or was killed. A timeout kills the
-	// validator's whole process group, but a descendant that left the group
-	// (setsid, setpgid) or outlived a validator that exited on its own and
-	// inherited its stdout or stderr could otherwise hold the pipe, and so
+	// pipe after the validator exited or was killed. A timeout also kills
+	// the validator's descendants (killTree), but one it cannot reach (see
+	// there) or one left behind by a validator that exited on its own, that
+	// inherited its stdout or stderr, could otherwise hold the pipe, and so
 	// the apply, open forever.
 	WaitDelay = 2 * time.Second
 )
@@ -56,22 +55,20 @@ const (
 // but does not use exec.RunWith because that keeps unbounded output. The
 // validator:
 //   - gets stdin from /dev/null, so it never reads gonf's plan stream;
-//   - leads its own process group (see procgroup.go), and gonf forwards the
-//     first terminating signal it receives while the validator runs
-//     (SIGINT from Ctrl-C, SIGTERM, SIGHUP, SIGQUIT) to that group, so a
-//     Ctrl-C still reaches it; job control (Ctrl-Z) does not;
-//   - is killed together with its process group (SIGKILL to every process
-//     it started that stayed in the group, e.g. a wrapper script's hung
-//     child) when the timeout expires. A kill that fails (EPERM, e.g. a
-//     validator run through sudo/doas by a non-root gonf) cannot bound it:
+//   - stays in gonf's process group, so signals sent to that group (a
+//     terminal's Ctrl-C, hangup and Ctrl-Z, or a SIGKILL of the whole group)
+//     reach it exactly as they reach gonf;
+//   - is killed together with its descendants (SIGKILL, see killTree in
+//     proctree.go) when the timeout expires. A kill that fails (EPERM, e.g.
+//     a validator run through sudo/doas by a non-root gonf) cannot bound it:
 //     Wait then lasts until it exits, though exec closes the output pipe
 //     WaitDelay after the failed kill, so its next write may end it with
-//     SIGPIPE ("signal: broken pipe"). Descendants are only killed on
-//     timeout: those of a validator that exited on its own, and those that
-//     left the group, keep running; one still holding the output pipe is cut
-//     off after WaitDelay, after which RunIn returns without waiting for it.
-//     The verdict is the validator's own exit status: a deadline expiring
-//     while only such a descendant is left does not turn it into a timeout;
+//     SIGPIPE ("signal: broken pipe"). Descendants are killed on timeout
+//     only; one that survives (it escaped killTree, or the validator exited
+//     on its own) and still holds the output pipe is cut off after
+//     WaitDelay, after which RunIn returns without waiting for it. The
+//     verdict is the validator's own exit status: a deadline expiring while
+//     only such a descendant is left does not turn it into a timeout;
 //   - has its stdout and stderr captured together into one bounded buffer.
 //
 // A failure is the exit error, the timeout error or the start error, followed
@@ -94,24 +91,25 @@ func RunIn(dir, bin string, args []string) error {
 	// the deadline wins the race against Wait reaping the validator; a
 	// deadline expiring later, while Wait merely drains a pipe held by a
 	// lingering descendant, never reaches it. When reap and deadline
-	// coincide, Cancel may still run just after the reap: signalGroup then
-	// returns os.ErrProcessDone, signals nothing and nothing is recorded. It
-	// may also run just before the reap, on a validator that already exited (a zombie): the
-	// group kill then succeeds (killing any descendants still in the group)
-	// and the flag is set anyway. The flag therefore only says "we signalled
-	// it"; validatorTimedOut decides.
+	// coincide, Cancel may still run just after the reap: killTree then
+	// returns os.ErrProcessDone and nothing is recorded. It may also run
+	// just before the reap, on a validator that already exited (a zombie):
+	// killTree then kills the descendants still in its tree, the kill of the
+	// zombie itself succeeds without effect and the flag is set anyway. The
+	// flag therefore only says "we signalled it"; validatorTimedOut decides.
 	var killedByTimeout atomic.Bool
 	cmd.Cancel = func() error {
-		return killForTimeout(func() error { return signalGroup(cmd.Process, syscall.SIGKILL) }, &killedByTimeout)
+		return killForTimeout(func() error { return killTree(cmd.Process) }, &killedByTimeout)
 	}
-	err := runInOwnGroup(cmd)
+	err := cmd.Run()
 	return withValidatorOutput(validatorRunError(cmd.ProcessState, killedByTimeout.Load(), timeout, err), output)
 }
 
-// killForTimeout is the validator's exec.Cmd.Cancel: it kills the process
-// group and records that in killed, but only when the kill was delivered (a failed
-// kill, e.g. EPERM or os.ErrProcessDone, leaves the process to its own fate
-// and must not turn its verdict into a timeout).
+// killForTimeout is the validator's exec.Cmd.Cancel: it runs kill (killTree
+// in RunIn, which also kills the descendants) and records in killed that the
+// validator itself was killed, but only when kill reports that kill as
+// delivered (a failed kill, e.g. EPERM or os.ErrProcessDone, leaves the
+// process to its own fate and must not turn its verdict into a timeout).
 func killForTimeout(kill func() error, killed *atomic.Bool) error {
 	err := kill()
 	if err == nil {
