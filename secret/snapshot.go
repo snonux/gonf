@@ -3,7 +3,10 @@ package secret
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -36,6 +39,10 @@ import (
 // The cached bytes live as long as the Snapshot. Installed with
 // api.SetSecretProvider, that is the rest of the process: the provider
 // cannot be replaced, so the snapshot spans the whole invocation.
+//
+// Create a Snapshot with NewSnapshot. The zero Snapshot{} wraps no provider:
+// IsNilProvider reports it (so api.SetSecretProvider refuses it), and its
+// Resolve fails every call with ErrUnavailable instead of panicking.
 //
 // The built-in file provider is not wrapped by default, which keeps
 // MustSecret/OptionalSecret reading the file on every call as they always
@@ -73,6 +80,10 @@ func NewSnapshot(p Provider) *Snapshot {
 
 // Resolve implements Provider.
 func (s *Snapshot) Resolve(ctx context.Context, ref Ref) ([]byte, error) {
+	if IsNilProvider(s.provider) {
+		return nil, &Error{Kind: ErrUnavailable, Ref: ref,
+			Msg: fmt.Sprintf("secret %q: snapshot has no provider (create it with secret.NewSnapshot)", string(ref))}
+	}
 	key, ok := canonicalRef(ref)
 	if !ok {
 		return Resolve(ctx, s.provider, ref)
@@ -143,11 +154,15 @@ func canonicalRef(ref Ref) (Ref, bool) {
 // withRef returns err naming ref: a cached *Error recorded for another
 // spelling of the same reference is copied with Ref replaced, so Resolve's
 // classification (which requires the error to name the requested ref)
-// still passes it through. Its Msg keeps the first spelling.
+// still passes it through. Where its Msg quotes the first spelling (as the
+// file provider's `secret "/a" is missing` does), that quote is replaced by
+// the requested one, so the message is the one a direct lookup of ref would
+// give and never names a reference other than Ref.
 func withRef(err error, ref Ref) error {
 	if e, ok := err.(*Error); ok && e.Ref != ref {
 		c := *e
 		c.Ref = ref
+		c.Msg = strings.ReplaceAll(e.Msg, strconv.Quote(string(e.Ref)), strconv.Quote(string(ref)))
 		return &c
 	}
 	return err

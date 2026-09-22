@@ -431,8 +431,9 @@ func TestSnapshotPanickingLeaderReleasesWaiters(t *testing.T) {
 // immediately, not at the first resolution — including a typed nil pointer.
 func TestNewSnapshotRefusesNilProvider(t *testing.T) {
 	for name, p := range map[string]Provider{
-		"untyped":   nil,
-		"typed nil": (*fakeStore)(nil),
+		"untyped":       nil,
+		"typed nil":     (*fakeStore)(nil),
+		"zero snapshot": &Snapshot{},
 	} {
 		t.Run(name, func(t *testing.T) {
 			defer func() {
@@ -447,12 +448,12 @@ func TestNewSnapshotRefusesNilProvider(t *testing.T) {
 }
 
 func TestIsNilProvider(t *testing.T) {
-	for _, nilP := range []Provider{nil, (*fakeStore)(nil), ProviderFunc(nil)} {
+	for _, nilP := range []Provider{nil, (*fakeStore)(nil), ProviderFunc(nil), (*Snapshot)(nil), &Snapshot{}} {
 		if !IsNilProvider(nilP) {
 			t.Fatalf("IsNilProvider(%#v) = false, want true", nilP)
 		}
 	}
-	for _, okP := range []Provider{&fakeStore{}, FileProvider{}, ProviderFunc(func(context.Context, Ref) ([]byte, error) { return nil, nil })} {
+	for _, okP := range []Provider{&fakeStore{}, FileProvider{}, NewSnapshot(FileProvider{}), ProviderFunc(func(context.Context, Ref) ([]byte, error) { return nil, nil })} {
 		if IsNilProvider(okP) {
 			t.Fatalf("IsNilProvider(%#v) = true, want false", okP)
 		}
@@ -495,4 +496,45 @@ func TestContractErrorsNeverContainValues(t *testing.T) {
 	_, _ = snap.Resolve(context.Background(), "missing")
 	_, err = snap.Resolve(context.Background(), "/missing")
 	check("snapshot cached not-found", err)
+}
+
+// Negative: a zero Snapshot used directly (not through NewSnapshot, and past
+// SetSecretProvider's refusal) fails each resolution with a typed
+// ErrUnavailable instead of panicking on its nil provider or map.
+func TestZeroSnapshotIsUnavailable(t *testing.T) {
+	var snap Snapshot
+	for _, ref := range []Ref{"k", ""} {
+		data, err := snap.Resolve(context.Background(), ref)
+		if data != nil || KindOf(err) != ErrUnavailable || !strings.Contains(err.Error(), "NewSnapshot") {
+			t.Fatalf("zero Snapshot Resolve(%q) = (%q, %v), want ErrUnavailable", ref, data, err)
+		}
+	}
+}
+
+// A cached not-found served for another spelling names the requested
+// reference in Ref and in its message, exactly as a direct lookup of that
+// spelling would word it; a message that does not quote the reference is
+// kept as it is.
+func TestSnapshotCachedNotFoundMessageNamesRequestedRef(t *testing.T) {
+	var calls int
+	snap := NewSnapshot(ProviderFunc(func(_ context.Context, ref Ref) ([]byte, error) {
+		calls++
+		if ref == "plain" {
+			return nil, &Error{Kind: ErrNotFound, Ref: ref, Msg: "no such secret"}
+		}
+		return nil, &Error{Kind: ErrNotFound, Ref: ref, Msg: fmt.Sprintf("secret %q is missing", string(ref))}
+	}))
+	for _, ref := range []Ref{"a/m", "/a/m", "a//m"} {
+		_, err := Resolve(context.Background(), snap, ref)
+		if want := fmt.Sprintf("secret %q is missing", string(ref)); !IsNotFound(err) || err.(*Error).Ref != ref || err.Error() != want {
+			t.Fatalf("Resolve(%q) = %v, want not-found %q", ref, err, want)
+		}
+	}
+	_, _ = snap.Resolve(context.Background(), "plain")
+	if _, err := snap.Resolve(context.Background(), "/plain"); err.Error() != "no such secret" || err.(*Error).Ref != "/plain" {
+		t.Fatalf("Resolve(/plain) = %#v, want the unchanged message naming /plain", err)
+	}
+	if calls != 2 {
+		t.Fatalf("provider calls = %d, want 2 (one per canonical reference)", calls)
+	}
 }

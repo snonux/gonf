@@ -146,6 +146,11 @@ func TestSetSecretProviderIsConfiguredOnce(t *testing.T) {
 	if err := setSecretProvider((*fakeSecrets)(nil)); err == nil {
 		t.Fatal("typed nil provider accepted")
 	}
+	// A zero Snapshot (not built with NewSnapshot) wraps nothing and would
+	// fail every resolution: refused like nil (z52 review 3).
+	if err := setSecretProvider(&secret.Snapshot{}); err == nil || !strings.Contains(err.Error(), "must not be nil") {
+		t.Fatalf("zero Snapshot: %v, want the nil-provider refusal", err)
+	}
 	if err := setSecretProvider(&fakeSecrets{}); err != nil {
 		t.Fatal(err)
 	}

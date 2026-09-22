@@ -21,9 +21,11 @@
 //     blobs below blobs/ with Walk.OpenAt and Create too;
 //   - plan.ReadPrivateFile opens the plan file with OpenRegularAt below a
 //     directory reached the normal way;
-//   - api secrets walk the directories below secrets/ without creating or
-//     verifying anything and require the secret to be a regular file
-//     (Walk.Open + OpenRegularAt);
+//   - the secret package's FileProvider (behind api.MustSecret and
+//     api.OptionalSecret) opens secrets/ with OpenBase, checks with
+//     faccessat that it can be searched, walks the directories below it
+//     with Walk.OpenAt without creating or verifying anything, and requires
+//     the secret to be a regular file (OpenRegularAt);
 //   - resource/file walks the parent of a validation candidate from "/",
 //     creating nothing and verifying every component with its own ownership
 //     and mode rule (Walk with a Check on every component).

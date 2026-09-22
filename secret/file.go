@@ -31,14 +31,18 @@ const readChunk = 32 << 10
 // References may not escape Dir.
 //
 // Errors:
-//   - ErrNotFound: the secret, or a directory on its way below Dir, is absent;
+//   - ErrNotFound: the secret, or a directory on its way below Dir, is absent
+//     while Dir itself is still in place;
 //   - ErrUnavailable: Dir itself is absent (gonf run from the wrong working
 //     directory, the tree renamed or removed) or cannot be opened or
 //     searched, or Dir is misconfigured — never "not found", so an optional
-//     lookup cannot silently drop every secret. Limit: when Dir is itself a
-//     mount point and the filesystem is unmounted, the empty mount-point
-//     directory remains, so every secret below it reads as ErrNotFound; this
-//     provider cannot tell an empty store from an unmounted one;
+//     lookup cannot silently drop every secret. That includes Dir being
+//     removed, renamed or replaced after it was opened, which the lookup
+//     below it sees as a missing entry (see rootVanished). Limit: when Dir
+//     is itself a mount point and the filesystem is unmounted, the empty
+//     mount-point directory remains, so every secret below it reads as
+//     ErrNotFound; this provider cannot tell an empty store from an
+//     unmounted one;
 //   - ErrInvalid: empty or escaping reference, a symlink or a non-directory
 //     on the path, or a final component that is not a regular file;
 //   - ErrUnreadable: any other open failure below Dir (permission denied) or
@@ -85,7 +89,9 @@ func (p FileProvider) Resolve(ctx context.Context, ref Ref) ([]byte, error) {
 
 // dir returns the effective directory, refusing a misconfigured one as
 // ErrUnavailable: a configuration error of the store, not of one secret.
-// Only a single component or "." is accepted — "." means the operator chose
+// Only a single component (no filepath.Separator, the rule of
+// internal/safepath; a backslash is an ordinary name character on unix) or
+// "." is accepted — "." means the operator chose
 // the whole working directory — and ".." is refused so the store stays
 // inside the checkout. (OpenBase would refuse a multi-component Dir anyway.)
 func (p FileProvider) dir(ref Ref) (string, error) {
@@ -93,7 +99,7 @@ func (p FileProvider) dir(ref Ref) (string, error) {
 	if dir == "" {
 		dir = DefaultDir
 	}
-	if strings.ContainsAny(dir, `/\`) {
+	if strings.ContainsRune(dir, filepath.Separator) {
 		return "", &Error{Kind: ErrUnavailable, Ref: ref,
 			Msg: fmt.Sprintf("secret %q: file provider directory %q must be a single path component", string(ref), dir)}
 	}
@@ -121,6 +127,11 @@ func cleanRef(ref Ref) (string, error) {
 // errRootMissing marks a missing Dir, so openError can tell it apart from a
 // missing secret below it.
 var errRootMissing = errors.New("secrets directory missing")
+
+// errRootVanished marks a Dir that was opened fine but was removed, renamed
+// or replaced before the lookup below it finished, so the resulting ENOENT
+// is a store failure and not a missing secret.
+var errRootVanished = errors.New("secrets directory vanished")
 
 // rootError marks any other failure of Dir itself (as opposed to a secret or
 // directory below it), so openError can report it as a store-level failure.
@@ -170,19 +181,53 @@ func openRoot(dir string) (int, error) {
 // and ownership and modes are not checked: the secrets tree is the
 // operator's own checkout.
 func openFile(dir, clean string) (*os.File, error) {
-	parts := strings.Split(clean, string(filepath.Separator))
-	dirs, name := parts[:len(parts)-1], parts[len(parts)-1]
 	rootFD, err := openRoot(dir)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = unix.Close(rootFD) }()
+	return openBelowRoot(rootFD, dir, clean)
+}
+
+// openBelowRoot opens clean below the already opened and checked Dir
+// (rootFD). A missing entry (ENOENT) is re-examined with rootVanished: when
+// Dir itself went away meanwhile, the result is errRootVanished instead of
+// the ENOENT, so a store removed mid-lookup never reads as "not found".
+func openBelowRoot(rootFD int, dir, clean string) (*os.File, error) {
+	parts := strings.Split(clean, string(filepath.Separator))
+	dirs, name := parts[:len(parts)-1], parts[len(parts)-1]
+	file, err := openWalk(rootFD, dir, dirs, name, filepath.Join(dir, clean))
+	if errors.Is(err, unix.ENOENT) && rootVanished(rootFD, dir) {
+		return nil, errRootVanished
+	}
+	return file, err
+}
+
+// openWalk walks dirs below rootFD and opens the regular file name there.
+func openWalk(rootFD int, dir string, dirs []string, name, fullPath string) (*os.File, error) {
 	dirFD, err := safepath.Walk{}.OpenAt(rootFD, dir, dirs)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = unix.Close(dirFD) }()
-	return safepath.OpenRegularAt(dirFD, name, filepath.Join(dir, clean))
+	return safepath.OpenRegularAt(dirFD, name, fullPath)
+}
+
+// rootVanished reports whether the opened Dir (rootFD) is no longer the
+// directory dir in the working directory: it was removed (no links left),
+// or dir now names nothing or a different object (renamed or replaced).
+// It is checked after an ENOENT, so it catches a root that went away at any
+// point before that failure was observed. It cannot see an unmount of a
+// filesystem mounted on Dir (see FileProvider).
+func rootVanished(rootFD int, dir string) bool {
+	var held, named unix.Stat_t
+	if err := unix.Fstat(rootFD, &held); err != nil || held.Nlink == 0 {
+		return true
+	}
+	if err := unix.Fstatat(unix.AT_FDCWD, dir, &named, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return true
+	}
+	return held.Dev != named.Dev || held.Ino != named.Ino
 }
 
 // openError classifies and words a failure of openFile. A symlink anywhere on
@@ -193,8 +238,8 @@ func openFile(dir, clean string) (*os.File, error) {
 // safepath.ErrSymlink). Other errors keep the bare cause after the secret's
 // name, without the path the walk adds. These are the messages MustSecret
 // and OptionalSecret reported before providers existed, kept verbatim; only
-// their kind depends on where the failure happened. A missing Dir carries no
-// cause on purpose: wrapping ENOENT would make errors.Is(err, fs.ErrNotExist)
+// their kind depends on where the failure happened. A missing or vanished
+// Dir carries no cause on purpose: wrapping ENOENT would make errors.Is(err, fs.ErrNotExist)
 // true for an unavailable store. Any other failure of Dir itself (permission
 // denied) is ErrUnavailable, a store-level failure, with the historical
 // "open secret" wording.
@@ -205,6 +250,9 @@ func openError(ref Ref, dir, fullPath string, err error) error {
 	case errors.Is(err, errRootMissing):
 		return &Error{Kind: ErrUnavailable, Ref: ref,
 			Msg: fmt.Sprintf("secret %q: secrets directory %q not found in the working directory", string(ref), dir)}
+	case errors.Is(err, errRootVanished):
+		return &Error{Kind: ErrUnavailable, Ref: ref,
+			Msg: fmt.Sprintf("secret %q: secrets directory %q was removed or replaced during the lookup", string(ref), dir)}
 	case errors.Is(err, safepath.ErrSymlink), errors.Is(err, unix.ELOOP), errors.Is(err, unix.ENOTDIR):
 		// Also for Dir itself: a symlinked secrets/ is refused as unsafe.
 		return &Error{Kind: ErrInvalid, Ref: ref, Err: err, Msg: fmt.Sprintf("secret path %q contains a symlink", fullPath)}

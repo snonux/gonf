@@ -3,6 +3,7 @@ package secret
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -176,6 +177,55 @@ func TestOpenErrorClassifiesRootBeforeNotFound(t *testing.T) {
 	}
 }
 
+// Dir removed, renamed or replaced after it was opened and checked, but
+// before the lookup below it finished (the window between openRoot and the
+// walk), is a store failure: the ENOENT the lookup then sees is re-examined
+// by rootVanished and reported as ErrUnavailable, never as not-found. With
+// Dir intact, a missing entry stays ErrNotFound. (z52 review 3.)
+func TestFileProviderRootVanishingMidLookupIsUnavailable(t *testing.T) {
+	const vanished = `secret %q: secrets directory "secrets" was removed or replaced during the lookup`
+	for name, tc := range map[string]struct {
+		mutate   func() error
+		ref      string
+		wantKind error
+	}{
+		"intact, missing entry": {func() error { return nil }, "sub/missing", ErrNotFound},
+		"removed":               {func() error { return os.RemoveAll(DefaultDir) }, "sub/key", ErrUnavailable},
+		"renamed":               {func() error { return os.Rename(DefaultDir, "moved") }, "sub/missing", ErrUnavailable},
+		"replaced": {func() error {
+			if err := os.Rename(DefaultDir, "moved"); err != nil {
+				return err
+			}
+			return os.Mkdir(DefaultDir, 0o700)
+		}, "missing", ErrUnavailable},
+	} {
+		t.Run(name, func(t *testing.T) {
+			useWorkDir(t)
+			writeFile(t, "sub/key", neverReport)
+			rootFD, err := openRoot(DefaultDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = unix.Close(rootFD) }()
+			if err := tc.mutate(); err != nil {
+				t.Fatal(err)
+			}
+			file, err := openBelowRoot(rootFD, DefaultDir, filepath.FromSlash(tc.ref))
+			if file != nil {
+				_ = file.Close()
+				t.Fatalf("opened %q after the root changed", tc.ref)
+			}
+			got := openError(Ref(tc.ref), DefaultDir, filepath.Join(DefaultDir, tc.ref), err)
+			if KindOf(got) != tc.wantKind {
+				t.Fatalf("kind = %v (%v), want %v", KindOf(got), got, tc.wantKind)
+			}
+			if tc.wantKind == ErrUnavailable && got.Error() != fmt.Sprintf(vanished, tc.ref) {
+				t.Fatalf("error = %q, want %q", got, fmt.Sprintf(vanished, tc.ref))
+			}
+		})
+	}
+}
+
 // The last component is opened without following a symlink even when the
 // link points at a regular file inside secrets/, and a directory or FIFO
 // there is not a secret.
@@ -247,6 +297,17 @@ func TestFileProviderRefusesInvalidReferences(t *testing.T) {
 	_, err := FileProvider{Dir: "a/b"}.Resolve(context.Background(), "key")
 	if KindOf(err) != ErrUnavailable {
 		t.Fatalf("multi-component Dir: err = %v, want ErrUnavailable", err)
+	}
+	// A backslash is an ordinary name character on unix, so `a\b` is one
+	// component (the safepath rule) and a valid directory (z52 review 3).
+	if err := os.MkdirAll(`a\b`, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(`a\b/key`, []byte("bs"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := (FileProvider{Dir: `a\b`}).Resolve(context.Background(), "key"); err != nil || string(data) != "bs" {
+		t.Fatalf(`FileProvider{Dir: "a\\b"} = (%q, %v), want "bs"`, data, err)
 	}
 	if _, err := (FileProvider{Dir: ".."}).Resolve(context.Background(), "key"); KindOf(err) != ErrUnavailable ||
 		err.Error() != `secret "key": file provider directory must not be ".."` {

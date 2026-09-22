@@ -61,11 +61,16 @@ func (f ProviderFunc) Resolve(ctx context.Context, ref Ref) ([]byte, error) { re
 // IsNilProvider reports a nil provider, including one held in a typed nil
 // pointer, map, channel, slice or function (e.g. (*adapter)(nil)), which the
 // plain p == nil interface check misses; such a provider would panic only
-// at the first resolution. Composition roots (api.SetSecretProvider,
-// NewSnapshot) use it to fail fast on a nil provider.
+// at the first resolution. A Snapshot that wraps no provider (the zero
+// &Snapshot{} instead of NewSnapshot) counts as nil too: it cannot resolve
+// anything. Composition roots (api.SetSecretProvider, NewSnapshot) use it to
+// fail fast on a nil provider.
 func IsNilProvider(p Provider) bool {
 	if p == nil {
 		return true
+	}
+	if s, ok := p.(*Snapshot); ok && s != nil {
+		return IsNilProvider(s.provider)
 	}
 	switch v := reflect.ValueOf(p); v.Kind() {
 	case reflect.Chan, reflect.Func, reflect.Map, reflect.Pointer, reflect.Slice, reflect.UnsafePointer:

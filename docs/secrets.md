@@ -72,7 +72,10 @@ an existing `secrets/` is still "missing", with the same message as before.
 All other messages are unchanged; a `secrets/` directory that cannot be
 searched keeps its `open secret "<path>": permission denied` message but is
 now `ErrUnavailable` (a store failure) rather than `ErrUnreadable`. Both
-helpers failed on it before as well.
+helpers failed on it before as well. Likewise a `secrets/` directory that is
+removed, renamed or replaced while a lookup below it is running is
+`ErrUnavailable` (`secret "<path>": secrets directory "secrets" was removed
+or replaced during the lookup`), not "missing".
 
 ## Configuring another provider
 
@@ -97,7 +100,10 @@ func main() {
   invocation sees the same value even if the store rotates meanwhile.
   Transient failures are retried. References are cached in canonical form
   (cleaned, no leading slash — `"/a/b"` and `"a/b"` share one entry), so a
-  provider behind a Snapshot must treat those spellings alike. Each reference
+  provider behind a Snapshot must treat those spellings alike; a cached
+  not-found served for another spelling names that spelling in its `Ref` and
+  message. Build it only with `NewSnapshot`: a zero `secret.Snapshot{}` is
+  refused by `SetSecretProvider` like a nil provider. Each reference
   resolves independently: a slow one does not block others, and a caller
   waiting for someone else's resolution of the same reference stops when its
   own context is done. Every returned slice is a copy. The default file
