@@ -89,6 +89,47 @@ func Fanout(ctx context.Context, d Delivery, g Group) error {
 	return tally.err(g.Name)
 }
 
+// JoinGroupErrors aggregates the per-group errors of a multi-group fan-out
+// (a fleet run's cluster groups) into one `<prefix>: <err>; <err>` error,
+// sorted by message, or nil when errs holds no non-nil error.
+//
+// It applies the fleet-level half of fanoutTally.err's rule that host
+// failures win over an abort. A failing group cancels the shared fleet
+// context, so its sibling groups end with `cluster "<name>": aborted: ...
+// context canceled`. When at least one group failed for a real reason,
+// those aborts are consequences, not causes: they stay in the message (so
+// the operator still sees which clusters were cut short) but are flattened
+// out of the error chain, so errors.Is(err, context.Canceled) does not
+// report a caller cancellation that never happened while the real failures
+// stay reachable with errors.Is / errors.As. When every group was aborted
+// (the caller's context fired), the aborts are kept as they are and
+// context.Canceled stays reachable.
+func JoinGroupErrors(prefix string, errs []error) error {
+	if !hasNonAbort(errs) {
+		return multierr.JoinSorted(prefix, errs)
+	}
+	members := make([]error, 0, len(errs))
+	for _, err := range errs {
+		if err != nil && errors.Is(err, context.Canceled) {
+			// Same text, no chain: the abort is reported, not matched.
+			err = errors.New(err.Error())
+		}
+		members = append(members, err)
+	}
+	return multierr.JoinSorted(prefix, members)
+}
+
+// hasNonAbort reports whether errs holds a non-nil error that is not a
+// fleet-wide abort (one that does not match context.Canceled).
+func hasNonAbort(errs []error) bool {
+	for _, err := range errs {
+		if err != nil && !errors.Is(err, context.Canceled) {
+			return true
+		}
+	}
+	return false
+}
+
 // fanoutTally collects the per-host outcomes of one fan-out. record is called
 // concurrently by the errgroup goroutines; mu guards every field below it
 // while they run. Once eg.Wait has returned, all writes are visible and the

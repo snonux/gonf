@@ -127,3 +127,34 @@ func TestPushFleetRunHostTimeoutKeepsDeadlineChain(t *testing.T) {
 		t.Fatalf("errors.Is(DeadlineExceeded) failed through PushFleetRun: %v", err)
 	}
 }
+
+// When one cluster group fails for a real reason, the fleet context is
+// canceled and the other group ends "aborted: ... context canceled". That
+// abort is a consequence, so the fleet error must not match context.Canceled
+// (a caller treating that as "the operator canceled, exit quietly" would hide
+// the real failure), while the real refusal stays reachable and the abort
+// stays in the message.
+func TestPushFleetRunRealFailureDoesNotMatchCanceled(t *testing.T) {
+	setupFanoutErrors(t, false)
+	// Override the fixture's runner (its cleanup still restores the
+	// original): refuse1 (cluster ca) is refused at once, boom1 (cluster
+	// cb) blocks until the fleet-wide cancel reaches it.
+	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
+		_, _ = io.Copy(io.Discard, stdin)
+		if strings.Contains(argv[len(argv)-2], "refuse") {
+			return fmt.Errorf("remote apply: %w", fanoutDangling)
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	err := PushFleetRun(context.Background(), "fe", "", 0, remote.DefaultHostTimeout, "fanout_err")
+	want := `fleet "fe": cluster "ca": refuse1: chunk 0 (elevate=false): remote apply: ` +
+		fanoutDangling.Error() + `; cluster "cb": aborted: chunk 0 (elevate=false): context canceled`
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %v\nwant %q", err, want)
+	}
+	if errors.Is(err, context.Canceled) {
+		t.Fatalf("errors.Is(Canceled) = true although host refuse1 really failed: %v", err)
+	}
+	assertRefusalChain(t, err)
+}

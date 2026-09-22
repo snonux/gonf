@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/snonux/gonf/internal/inventory"
-	"github.com/snonux/gonf/internal/multierr"
 	"github.com/snonux/gonf/internal/orchestrate"
 	"github.com/snonux/gonf/internal/remote"
 	"github.com/snonux/gonf/plan"
@@ -206,15 +205,19 @@ func (r groupRun) fleet(ctx context.Context) error {
 	}
 	// One single-line `fleet "<name>": <group err>; <group err>` error with
 	// the groups sorted by message; it unwraps to every group's error (and so
-	// to every per-host cause) for errors.Is / errors.As. nil when all
-	// succeeded. The prefix stays `fleet "<name>"` in preview mode too.
+	// to every per-host cause) for errors.Is / errors.As, except that when a
+	// real group failure exists, the other groups' consequent aborts stay in
+	// the text but leave the chain, so the error does not match
+	// context.Canceled (see remote.JoinGroupErrors). nil when all succeeded. The prefix stays
+	// `fleet "<name>"` in preview mode too.
 	errs := r.deliverGroups(ctx, d, inventory.GroupFleetHostsByCluster(entries))
-	return multierr.JoinSorted(fmt.Sprintf("fleet %q", r.name), errs)
+	return remote.JoinGroupErrors(fmt.Sprintf("fleet %q", r.name), errs)
 }
 
 // deliverGroups delivers d to every cluster group concurrently and returns
 // the groups' errors, unsorted. The errors are kept as values (not flattened
-// to strings) so the fleet aggregate still unwraps to every per-host cause.
+// to strings) so the fleet aggregate still unwraps to every per-host cause
+// (remote.JoinGroupErrors only takes consequent aborts out of the chain).
 //
 // fleetCtx is shared by every group's call: canceling it (the instant any
 // group fails) propagates into every OTHER group's errgroup-derived context

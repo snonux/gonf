@@ -156,3 +156,51 @@ func TestSSHRunnerContextKillKeepsExitErrorChain(t *testing.T) {
 		t.Fatalf("message changed:\n got %q\nwant %q", err.Error(), want)
 	}
 }
+
+// JoinGroupErrors keeps a group abort in the chain only when every group was
+// aborted: a real group failure wins, so the aggregate stops matching
+// context.Canceled while the real cause stays reachable. The message always
+// lists every group, sorted.
+func TestJoinGroupErrors(t *testing.T) {
+	abortB := fmt.Errorf("cluster %q: aborted: %w", "cb", context.Canceled)
+	abortC := fmt.Errorf("cluster %q: aborted: %w", "cc", context.Canceled)
+	failA := fmt.Errorf("cluster %q: h1: %w", "ca", errFanoutBoom)
+	tests := []struct {
+		name         string
+		errs         []error
+		wantMsg      string // "" means a nil error
+		wantCanceled bool
+		wantBoom     bool
+	}{
+		{name: "all success", errs: nil},
+		{name: "only nil members", errs: []error{nil, nil}},
+		{name: "real failure only", errs: []error{failA},
+			wantMsg: `fleet "f": cluster "ca": h1: boom`, wantBoom: true},
+		{name: "pure cancellation keeps Canceled", errs: []error{abortC, abortB},
+			wantMsg:      `fleet "f": cluster "cb": aborted: context canceled; cluster "cc": aborted: context canceled`,
+			wantCanceled: true},
+		{name: "real failure wins over abort", errs: []error{abortB, nil, failA},
+			wantMsg:  `fleet "f": cluster "ca": h1: boom; cluster "cb": aborted: context canceled`,
+			wantBoom: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := JoinGroupErrors(`fleet "f"`, tc.errs)
+			if tc.wantMsg == "" {
+				if err != nil {
+					t.Fatalf("err = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || err.Error() != tc.wantMsg {
+				t.Fatalf("err = %v\nwant %q", err, tc.wantMsg)
+			}
+			if got := errors.Is(err, context.Canceled); got != tc.wantCanceled {
+				t.Fatalf("errors.Is(Canceled) = %v, want %v: %v", got, tc.wantCanceled, err)
+			}
+			if got := errors.Is(err, errFanoutBoom); got != tc.wantBoom {
+				t.Fatalf("errors.Is(boom) = %v, want %v: %v", got, tc.wantBoom, err)
+			}
+		})
+	}
+}
