@@ -1,6 +1,7 @@
 package orchestrate
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/snonux/gonf/internal/inventory"
 	"github.com/snonux/gonf/internal/remote"
+	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 )
 
@@ -128,4 +130,76 @@ func observeDelivery(t *testing.T) (*atomic.Int32, *[]string) {
 		return nil
 	}
 	return bootstraps, cmds
+}
+
+// Deliver forwards Group.Writer straight through to remote.Fanout as
+// remote.Group.Writer: the fan-out's summary line lands in it instead of
+// os.Stderr, the one seam api's groupRun (and, through it, every push/preview
+// entry point) relies on to share output policy across single-host, cluster
+// and fleet runs.
+func TestDeliverWritesSummaryThroughGroupWriter(t *testing.T) {
+	inventory.Reset()
+	t.Cleanup(inventory.Reset)
+	inventory.AddHost("h1", func(h *inventory.Host) { h.SSHHost = "h1.example" })
+	inventory.AddHost("h2", func(h *inventory.Host) { h.SSHHost = "h2.example" })
+	oldRunner := remote.SSHRunner
+	restoreProbe := remote.AssumeRemotePlanCurrent()
+	t.Cleanup(func() {
+		remote.SSHRunner = oldRunner
+		restoreProbe()
+	})
+	remote.SSHRunner = func(_ context.Context, stdin io.Reader, _ []string) error {
+		_, _ = io.Copy(io.Discard, stdin)
+		return nil
+	}
+
+	var buf bytes.Buffer
+	ops := []plan.Op{{Op: plan.KindEnsureDir, ID: "1", Path: "/tmp/orchestrate-test-dir"}}
+	d := remote.Delivery{Mode: remote.Push, PlanID: "plan-id", Ops: ops, Mem: plan.NewMemoryStore()}
+	g := Group{Name: "grp", HostNames: []string{"h1", "h2"}, Limit: 2, Writer: &buf}
+	stderr := testutil.CaptureStderr(t, func() {
+		if err := Deliver(context.Background(), d, g); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty: Group.Writer should have taken the summary instead", stderr)
+	}
+	want := "pushed plan-id (1 ops) to grp (2/2 hosts)\n"
+	if buf.String() != want {
+		t.Fatalf("buf = %q, want %q", buf.String(), want)
+	}
+}
+
+// A zero-value Group (Writer unset, matching every production Deliver call
+// before api's groupRun set it explicitly) still writes its summary to
+// os.Stderr: the default stays byte-identical whether or not a caller opts
+// into Group.Writer.
+func TestDeliverNilWriterDefaultsToStderr(t *testing.T) {
+	inventory.Reset()
+	t.Cleanup(inventory.Reset)
+	inventory.AddHost("h1", func(h *inventory.Host) { h.SSHHost = "h1.example" })
+	oldRunner := remote.SSHRunner
+	restoreProbe := remote.AssumeRemotePlanCurrent()
+	t.Cleanup(func() {
+		remote.SSHRunner = oldRunner
+		restoreProbe()
+	})
+	remote.SSHRunner = func(_ context.Context, stdin io.Reader, _ []string) error {
+		_, _ = io.Copy(io.Discard, stdin)
+		return nil
+	}
+
+	ops := []plan.Op{{Op: plan.KindEnsureDir, ID: "1", Path: "/tmp/orchestrate-test-dir"}}
+	d := remote.Delivery{Mode: remote.Push, PlanID: "plan-id", Ops: ops, Mem: plan.NewMemoryStore()}
+	g := Group{Name: "grp", HostNames: []string{"h1"}, Limit: 1}
+	stderr := testutil.CaptureStderr(t, func() {
+		if err := Deliver(context.Background(), d, g); err != nil {
+			t.Fatal(err)
+		}
+	})
+	want := "pushed plan-id (1 ops) to grp (1/1 hosts)\n"
+	if stderr != want {
+		t.Fatalf("stderr = %q, want %q", stderr, want)
+	}
 }

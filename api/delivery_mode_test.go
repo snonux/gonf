@@ -116,7 +116,10 @@ func modeCases() []modeCase {
 // point, the remote.Mode it hands down: a push reaches the gonf bootstrap
 // step on every host and runs a plain remote apply; a preview never
 // bootstraps and runs the strict remote preview. The default plan ID it
-// records is pinned too.
+// records is pinned too. Every summary line lands on os.Stderr here because
+// pushOutput is left at its zero-value default (see var pushOutput in
+// delivery.go); TestEntryPointsWriteSummaryThroughPushOutput below is the
+// same table with pushOutput swapped, pinning the injected-writer side.
 func TestEntryPointsPinDeliveryMode(t *testing.T) {
 	for _, tc := range modeCases() {
 		t.Run(tc.name, func(t *testing.T) {
@@ -151,6 +154,38 @@ func TestEntryPointsPinDeliveryMode(t *testing.T) {
 					t.Fatalf("%s: plan ID = %q, want %q", tc.name, got, tc.planID)
 				}
 			}
+		})
+	}
+}
+
+// TestEntryPointsWriteSummaryThroughPushOutput pins that every push/preview
+// entry point — single-host (PushTo/PreviewTo and the *Context/*Host forms),
+// cluster (PushCluster, PushClusterRun, PreviewClusterRun) and fleet
+// (PushFleet, PushFleetRun, PreviewFleetRun) — routes its summary line
+// through the pushOutput seam instead of writing os.Stderr directly:
+// swapping pushOutput for a buffer captures the line there and os.Stderr
+// stays silent, whether the run is a single host (recordAndPush) or a
+// cluster/fleet fan-out (groupRun.writer, threaded through
+// orchestrate.Group.Writer into remote.Group.Writer/remote.Fanout).
+func TestEntryPointsWriteSummaryThroughPushOutput(t *testing.T) {
+	for _, tc := range modeCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			setupForHostsInventory(t)
+			registerForHostsTask("iter", "all")
+			installModeRecorder(t)
+			var buf bytes.Buffer
+			old := pushOutput
+			pushOutput = &buf
+			t.Cleanup(func() { pushOutput = old })
+			var err error
+			stderr := testutil.CaptureStderr(t, func() { err = tc.run("iter") })
+			if err != nil {
+				t.Fatalf("%s: %v", tc.name, err)
+			}
+			if stderr != "" {
+				t.Fatalf("%s: stderr = %q, want empty: pushOutput should have taken the summary instead", tc.name, stderr)
+			}
+			checkSummary(t, tc, buf.String())
 		})
 	}
 }

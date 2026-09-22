@@ -15,6 +15,7 @@ package orchestrate
 
 import (
 	"context"
+	"io"
 	"time"
 
 	"github.com/snonux/gonf/internal/inventory"
@@ -34,6 +35,11 @@ type Group struct {
 	Limit int
 	// HostTimeout bounds each host's whole delivery (<= 0 means unlimited).
 	HostTimeout time.Duration
+	// Writer receives remote.Fanout's per-group summary line; nil means
+	// os.Stderr (see remote.Group.Writer). It is passed straight through to
+	// remote.Group so api's cluster and fleet entry points share one output
+	// seam with the single-host push/preview path.
+	Writer io.Writer
 }
 
 // Deliver fans an already-recorded plan (d, produced by exactly one
@@ -64,5 +70,6 @@ func Deliver(ctx context.Context, d remote.Delivery, g Group) error {
 		Labels:      g.HostNames,
 		Limit:       g.Limit,
 		HostTimeout: g.HostTimeout,
+		Writer:      g.Writer,
 	})
 }

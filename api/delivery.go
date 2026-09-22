@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 	"time"
@@ -22,6 +23,22 @@ import (
 // The exported functions only pick the mode, the plan ID and the host
 // selection.
 
+// pushOutput overrides every push/preview summary line's destination when a
+// test sets it: recordAndPush's single-host line below, and groupRun's
+// cluster/fleet line via groupRun.writer/orchestrate.Group.Writer/
+// remote.Group.Writer. Left nil (every production run), each layer falls
+// back to the CURRENT os.Stderr instead of a value cached here at package
+// init — recordAndPush re-reads os.Stderr on every call, and a nil
+// groupRun.writer() result reaches remote.Fanout's own os.Stderr fallback —
+// so testutil.CaptureStderr's os.Stderr swap still works once this seam
+// exists, and every summary line stays byte-identical by default. Tests set
+// it (like the remote package's SSHRunner/ensureRuntime seams) to assert on
+// the summary text without redirecting the process-wide os.Stderr; tests
+// using it must not run in parallel. A future output policy (e.g. 062's
+// controller-side secret redaction) wraps this one variable instead of
+// touching every call site.
+var pushOutput io.Writer
+
 // groupRun is one cluster or fleet run request: the remote.Mode chosen by
 // the exported entry point (PushClusterRun vs PreviewClusterRun, PushFleetRun
 // vs PreviewFleetRun) plus the per-run parameters they all share, carried as
@@ -33,6 +50,20 @@ type groupRun struct {
 	parallelOverride int    // > 0 overrides every group's parallelism (-j)
 	hostTimeout      time.Duration
 	tasks            []string
+	// output is this run's Fanout summary destination; nil (every exported
+	// entry point today) falls back to pushOutput via writer(). Tests set it
+	// directly on a groupRun literal to assert on one run's summary without
+	// touching the package-wide seam.
+	output io.Writer
+}
+
+// writer is r's resolved Fanout destination: r.output when set, else the
+// package-wide pushOutput default (see both docs).
+func (r groupRun) writer() io.Writer {
+	if r.output != nil {
+		return r.output
+	}
+	return pushOutput
 }
 
 // recordAndPush validates mode, records tasks with selected as the ForHosts
@@ -65,12 +96,21 @@ func recordAndPush(ctx context.Context, mode remote.Mode, t PushTarget, planID s
 		return err
 	}
 	// "pushed ... to host" but "previewed ... on host": the wording predates
-	// Mode and is kept byte-identical for anyone reading stderr.
+	// Mode and is kept byte-identical for anyone reading stderr. Writes to
+	// pushOutput when a test set it, else the current os.Stderr (read here,
+	// not cached, so testutil.CaptureStderr's os.Stderr swap still reaches
+	// it); the write's result is discarded like the group fan-out's own
+	// summary line (see remote.Fanout), since a failed write to a
+	// diagnostic stream must not turn a successful push into an error.
 	preposition := "to"
 	if mode == remote.Preview {
 		preposition = "on"
 	}
-	fmt.Fprintf(os.Stderr, "%s %s (%d ops) %s %s\n", mode.Verb(), planID, len(d.Ops), preposition, t.Destination())
+	w := pushOutput
+	if w == nil {
+		w = os.Stderr
+	}
+	_, _ = fmt.Fprintf(w, "%s %s (%d ops) %s %s\n", mode.Verb(), planID, len(d.Ops), preposition, t.Destination())
 	return nil
 }
 
@@ -182,7 +222,7 @@ func (r groupRun) cluster(ctx context.Context) error {
 		return err
 	}
 	return orchestrate.Deliver(ctx, d, orchestrate.Group{Name: r.name,
-		HostNames: rec.Hosts, Limit: r.limit(rec), HostTimeout: r.hostTimeout})
+		HostNames: rec.Hosts, Limit: r.limit(rec), HostTimeout: r.hostTimeout, Writer: r.writer()})
 }
 
 // fleet records the run once for the named fleet and delivers it, in
@@ -236,7 +276,7 @@ func (r groupRun) deliverGroups(ctx context.Context, d remote.Delivery, groups [
 	var errs []error
 	for _, g := range groups {
 		og := orchestrate.Group{Name: g.Cluster.Name, HostNames: g.HostNames,
-			Limit: r.limit(g.Cluster), HostTimeout: r.hostTimeout}
+			Limit: r.limit(g.Cluster), HostTimeout: r.hostTimeout, Writer: r.writer()}
 		wg.Go(func() {
 			if err := orchestrate.Deliver(fleetCtx, d, og); err != nil {
 				errMu.Lock()
