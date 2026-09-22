@@ -2,10 +2,12 @@ package logger
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -18,10 +20,13 @@ const maxPendingLine = 64 << 10
 // exited or was killed, for its output pipe to reach end of file. A
 // descendant that inherited the pipe (an orphaned root gonf apply under sudo
 // without use_pty, after the context killed sudo) holds it open; RunRelayed
-// then returns anyway and keeps draining the pipe in the background, so the
-// descendant's later output is still relayed (redacted) and it never dies of
-// SIGPIPE. It matches internal/validator's WaitDelay.
+// then hands the pipe over (see RunRelayed) and returns. It matches
+// internal/validator's WaitDelay.
 const RelayWaitDelay = 2 * time.Second
+
+// relayWaitDelay is the delay RunRelayed uses: RelayWaitDelay, shortened or
+// lengthened by tests only.
+var relayWaitDelay = RelayWaitDelay
 
 // Redactor rewrites text that may quote a secret. api installs the secret
 // registry (secret.Values) with SetRedactor.
@@ -74,11 +79,18 @@ func Redact(s string) string {
 // pipe gonf creates itself (not os/exec's copying goroutine, whose
 // WaitDelay would close the pipe and turn a clean exit into
 // exec.ErrWaitDelay): Wait therefore returns as soon as cmd exits, and the
-// relay then waits at most RelayWaitDelay for the pipe's end of file. When a
-// descendant still holds the pipe, RunRelayed returns and a background
-// goroutine keeps relaying until the descendant closes it — its later output
-// may then appear after RunRelayed's caller moved on, but it is never lost
-// and the descendant never gets SIGPIPE.
+// relay then waits at most RelayWaitDelay for the pipe's end of file.
+//
+// When a descendant still holds the pipe after that (an orphan), gonf must
+// neither wait for it nor, by closing the pipe's read end — as its own exit
+// eventually would — kill it with SIGPIPE mid-apply. So when w is a file
+// (os.Stderr in production) RunRelayed stops relaying and hands the read end
+// to a detached `cat` writing straight to w (handOff): the orphan keeps a
+// reader for as long as it writes, even after gonf has exited, exactly as it
+// kept the terminal before gonf relayed its output. What it writes after the
+// hand-off is NOT redacted. When w is not a file, or cat cannot be started,
+// a background goroutine keeps relaying (redacted) instead, which protects
+// the orphan only while gonf runs.
 func RunRelayed(cmd *exec.Cmd, w io.Writer) error {
 	pr, pw, err := os.Pipe()
 	if err != nil {
@@ -91,13 +103,13 @@ func RunRelayed(cmd *exec.Cmd, w io.Writer) error {
 		return err
 	}
 	_ = pw.Close() // the child holds its own copy
-	drained := make(chan struct{})
-	go relayPipe(pr, w, drained)
+	stopped := make(chan bool, 1)
+	go relayPipe(pr, w, stopped)
 	err = cmd.Wait()
 	select {
-	case <-drained:
-	case <-time.After(RelayWaitDelay):
-		Debug("%s exited but a process it started still holds its output; relaying it in the background", cmd.Path)
+	case <-stopped:
+	case <-time.After(relayWaitDelay):
+		releaseOrphan(cmd.Path, pr, w, stopped)
 	}
 	return err
 }
@@ -163,14 +175,57 @@ func (r *RedactingWriter) forwardSafePrefix() error {
 	return nil
 }
 
-// relayPipe copies pr to w through a RedactingWriter until end of file,
-// then closes pr and done.
-func relayPipe(pr *os.File, w io.Writer, done chan<- struct{}) {
-	defer close(done)
+// relayPipe copies pr to w through a RedactingWriter until end of file (it
+// then closes pr) or until pr's read deadline stops it (pr stays open for
+// handOff), and reports on stopped whether it reached end of file.
+func relayPipe(pr *os.File, w io.Writer, stopped chan<- bool) {
 	out := NewRedactingWriter(w)
-	_, _ = io.Copy(out, pr)
+	_, err := io.Copy(out, pr)
 	_ = out.Close()
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		stopped <- false
+		return
+	}
 	_ = pr.Close()
+	stopped <- true
+}
+
+// releaseOrphan is RunRelayed's path for a pipe still held after the relay
+// delay: stop the relay (a read deadline) and hand pr to a detached cat
+// writing to w; when that is impossible, let the relay keep draining in the
+// background.
+func releaseOrphan(name string, pr *os.File, w io.Writer, stopped chan bool) {
+	f, isFile := w.(*os.File)
+	if !isFile || pr.SetReadDeadline(time.Now()) != nil {
+		Debug("%s exited but a process it started still holds its output; relaying it in the background while gonf runs", name)
+		return
+	}
+	if eof := <-stopped; eof {
+		return // the orphan closed the pipe meanwhile
+	}
+	if err := handOff(pr, f); err != nil {
+		Warn("%s exited but a process it started still holds its output, and handing it over failed (%v); relaying it while gonf runs", name, err)
+		_ = pr.SetReadDeadline(time.Time{})
+		go relayPipe(pr, w, stopped)
+		return
+	}
+	Debug("%s exited but a process it started still holds its output; handed it to the terminal unredacted", name)
+}
+
+// handOff starts `cat` with pr as its input and f as its output, in its own
+// process group so a terminal Ctrl-C meant for gonf does not stop it, then
+// closes gonf's copy of pr and reaps cat in the background. cat exits when
+// the last writer of the pipe closes it.
+func handOff(pr, f *os.File) error {
+	helper := exec.Command("cat")
+	helper.Stdin, helper.Stdout, helper.Stderr = pr, f, f
+	helper.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := helper.Start(); err != nil {
+		return err
+	}
+	_ = pr.Close()
+	go func() { _ = helper.Wait() }()
+	return nil
 }
 
 // Write forwards Redact(p); it reports len(p) unless w fails.

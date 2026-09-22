@@ -191,9 +191,17 @@ On the controller these outputs pass through the registry:
 - When the relayed process has exited (or was killed by its context) but a
   descendant still holds its output — an orphaned root `gonf apply` after
   sudo was killed, under sudo without `use_pty` — gonf returns after at most
-  `logger.RelayWaitDelay` (2 s) and keeps draining that output in the
-  background, redacted: the descendant is never killed by SIGPIPE, and its
-  later lines may appear after gonf moved on. A clean exit stays a success.
+  `logger.RelayWaitDelay` (2 s) and hands that output to a detached `cat`
+  writing to its stderr, in its own process group. The descendant thus
+  keeps a reader for as long as it writes, even after gonf has exited, and
+  is never killed by SIGPIPE mid-apply, as before gonf relayed its output.
+  What it prints after the hand-off is **not redacted** (the controller's
+  registry dies with gonf); destinations withhold validator output, command
+  argv and failure output of sensitive ops themselves, and recording refuses
+  strong secrets in identities, so what is left is limited by the rules
+  above. A clean exit stays a success. (When stderr is not a file, or `cat`
+  cannot start, gonf relays that output redacted in the background, which
+  protects the descendant only while gonf runs.)
 
 Not redacted, because they carry no op IDs or values: flag usage text and
 the output of the `scp` and `go build` runs that install the gonf binary.

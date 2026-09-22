@@ -98,8 +98,9 @@ func defaultElevatedApply(ctx context.Context, mode privilege.Mode, ops []plan.O
 	// redactor, line by line. A descendant still holding the relay pipe after
 	// the child exited or was killed (an orphaned root gonf apply once the
 	// context killed sudo) delays the return by at most logger.RelayWaitDelay;
-	// its later output keeps being relayed in the background, so it is never
-	// killed by SIGPIPE (logger.RunRelayed).
+	// then its output is handed, unredacted, to a detached cat writing to
+	// stderr, so it keeps a reader even after gonf exits and is never killed
+	// by SIGPIPE mid-apply (logger.RunRelayed).
 	err = logger.RunRelayed(cmd, os.Stderr)
 	if err != nil && ctx.Err() != nil {
 		return fmt.Errorf("%w (elevated apply killed by context: %v)", ctx.Err(), err)

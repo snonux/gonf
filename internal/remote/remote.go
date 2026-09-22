@@ -72,7 +72,8 @@ func defaultSSHRunner(ctx context.Context, stdin io.Reader, argv []string) error
 	// The remote gonf has no secret registry: its output reaches the
 	// controller's terminal through the controller's redactor, line by line;
 	// a descendant still holding the pipe delays the return by at most
-	// logger.RelayWaitDelay and is drained in the background (RunRelayed).
+	// logger.RelayWaitDelay and is then handed to a detached cat writing to
+	// stderr (RunRelayed).
 	err := logger.RunRelayed(cmd, os.Stderr)
 	if err != nil && ctx.Err() != nil {
 		// Killed by the push context (abort or deadline), not an ssh failure.

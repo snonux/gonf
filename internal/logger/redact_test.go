@@ -124,6 +124,7 @@ func TestRunRelayedDoesNotWaitForPipeHolders(t *testing.T) {
 // A clean exit with a descendant that writes a little later is a success,
 // not exec.ErrWaitDelay, and the late output is relayed.
 func TestRunRelayedCleanExitWithLateOutput(t *testing.T) {
+	setRelayWaitDelay(t, 10*time.Second) // far above the 1s late write
 	cmd := exec.Command("sh", "-c", "echo hi; (sleep 1; echo late) & exit 0")
 	out := &syncBuilder{}
 	if err := RunRelayed(cmd, out); err != nil {
@@ -151,4 +152,102 @@ func (s *syncBuilder) String() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.b.String()
+}
+
+// setRelayWaitDelay overrides RunRelayed's delay for one test.
+func setRelayWaitDelay(t *testing.T, d time.Duration) {
+	t.Helper()
+	old := relayWaitDelay
+	relayWaitDelay = d
+	t.Cleanup(func() { relayWaitDelay = old })
+}
+
+// waitForFile polls until path exists or the deadline passes.
+func waitForFile(t *testing.T, path string, within time.Duration) bool {
+	t.Helper()
+	for deadline := time.Now().Add(within); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		if _, err := os.Stat(path); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// With a file as destination, an orphan still holding the pipe after the
+// delay is handed to a detached cat: RunRelayed returns right after the
+// delay, and the orphan's later write still arrives in the file.
+func TestRunRelayedHandsOrphanToFile(t *testing.T) {
+	setRelayWaitDelay(t, 100*time.Millisecond)
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "late-write-ok")
+	dst, err := os.Create(filepath.Join(dir, "stderr"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dst.Close()
+	cmd := exec.Command("sh", "-c", "echo hi; (sleep 1; echo late && touch "+marker+") & exit 0")
+	start := time.Now()
+	if err := RunRelayed(cmd, dst); err != nil {
+		t.Fatalf("RunRelayed = %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 900*time.Millisecond {
+		t.Fatalf("RunRelayed took %v; it must not wait for the orphan", elapsed)
+	}
+	if !waitForFile(t, marker, 5*time.Second) {
+		t.Fatal("the orphan's late write failed after the hand-off")
+	}
+	time.Sleep(100 * time.Millisecond) // let cat copy the last line
+	got, err := os.ReadFile(dst.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "hi\nlate\n" {
+		t.Fatalf("destination = %q, want both lines", got)
+	}
+}
+
+// relayHelperEnv makes this test binary act as a short-lived gonf that
+// relays an orphan-leaving child and exits (TestRelayHelperProcess).
+const relayHelperEnv = "GONF_TEST_RELAY_HELPER_MARKER"
+
+// TestRelayHelperProcess is not a test by itself: run by
+// TestRunRelayedOrphanOutlivesGonf with relayHelperEnv set, it relays a
+// child whose descendant writes one second later, then exits at once.
+func TestRelayHelperProcess(t *testing.T) {
+	marker := os.Getenv(relayHelperEnv)
+	if marker == "" {
+		t.Skip("helper process only")
+	}
+	relayWaitDelay = 100 * time.Millisecond
+	cmd := exec.Command("sh", "-c", "(sleep 1; echo late >&2 && touch "+marker+") & exit 0")
+	if err := RunRelayed(cmd, os.Stderr); err != nil {
+		t.Fatal(err)
+	}
+	os.Exit(0) // exit while the orphan still holds the pipe
+}
+
+// The orphan outlives gonf itself: the helper process exits right after
+// the relay delay, and the orphan's later write still succeeds (no SIGPIPE)
+// and reaches the helper's stderr.
+func TestRunRelayedOrphanOutlivesGonf(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "late-write-ok")
+	stderr, err := os.Create(filepath.Join(dir, "stderr"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stderr.Close()
+	helper := exec.Command(os.Args[0], "-test.run=^TestRelayHelperProcess$")
+	helper.Env = append(os.Environ(), relayHelperEnv+"="+marker)
+	helper.Stderr = stderr
+	if err := helper.Run(); err != nil {
+		t.Fatalf("helper: %v", err)
+	}
+	if !waitForFile(t, marker, 5*time.Second) {
+		t.Fatal("the orphan was killed (SIGPIPE) once gonf exited")
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got, _ := os.ReadFile(stderr.Name()); !strings.Contains(string(got), "late") {
+		t.Fatalf("helper stderr = %q, want the orphan's late line", got)
+	}
 }
