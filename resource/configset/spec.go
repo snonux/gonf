@@ -205,9 +205,10 @@ func (s *spec) memberDirs() []string {
 	return dirs
 }
 
-// targets builds a file.Target per member (same order as s.members) and
-// resolves every owner and group, so an unknown account fails before the
-// first live write.
+// targets builds a file.Target per member (same order as s.members). It does
+// not look up owners or groups: a dry-run must succeed while an account the
+// recipe creates earlier in the same run does not exist yet. The real apply
+// resolves them separately (resolveOwnership) before its first write.
 func (s *spec) targets() ([]*file.Target, error) {
 	targets := make([]*file.Target, len(s.members))
 	for i, m := range s.members {
@@ -222,12 +223,23 @@ func (s *spec) targets() ([]*file.Target, error) {
 		if err != nil {
 			return nil, fmt.Errorf("config set %s: member %s: %w", s.name, m.key, err)
 		}
-		if err := t.ResolveOwnership(); err != nil {
-			return nil, fmt.Errorf("config set %s: member %s: %w", s.name, m.key, err)
-		}
 		targets[i] = t
 	}
 	return targets, nil
+}
+
+// resolveOwnership resolves every member's owner and group (targets in the
+// same order as s.members), so an unknown account fails the whole set before
+// anything is staged or published instead of after some members were already
+// replaced. Only the real apply calls it; a dry-run skips it, like a File,
+// which resolves its owner only when it writes.
+func (s *spec) resolveOwnership(targets []*file.Target) error {
+	for i, t := range targets {
+		if err := t.ResolveOwnership(); err != nil {
+			return fmt.Errorf("config set %s: member %s: %w", s.name, s.members[i].key, err)
+		}
+	}
+	return nil
 }
 
 // checkAbsClean requires an absolute path already in canonical form: no

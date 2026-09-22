@@ -12,9 +12,11 @@ import (
 // apply converges the set. The phases run in a fixed order and every phase
 // before "publish" is free of live content writes:
 //
-//  1. targets/render: build and resolve every member's attributes and render
-//     its live bytes (placeholders -> live paths);
-//  2. lock: take the publication locks of all member directories;
+//  1. targets/render: build every member's target and render its live bytes
+//     (placeholders -> live paths);
+//  2. ownership + lock (real apply only): resolve every member's owner and
+//     group, so an unknown account fails before anything is staged, then take
+//     the publication locks of all member directories;
 //  3. diff: find members whose live content differs or is missing, and the
 //     members that still have a pending marker from an earlier publication
 //     that was never signalled (see marker.go);
@@ -26,8 +28,12 @@ import (
 //     marker and replace it, rolling back on the first failure (publish.go);
 //  7. report the published and pending members, then remove their markers.
 //
-// Under dry-run it stops after the diff: nothing is staged and no validator
-// runs, so a dry-run cannot prove that the candidate set is valid.
+// Under dry-run it skips the ownership lookup and stops after the diff:
+// nothing is staged and no validator runs, so a dry-run proves neither that
+// the candidate set is valid nor that its owners and groups exist. Skipping
+// the lookup is deliberate: a recipe may create the account earlier in the
+// same run (a User before a set owned by it), and while the run is only
+// previewed that account does not exist yet. A File behaves the same way.
 func (s *spec) apply() error {
 	forgetOutcome(s.name)
 	targets, err := s.targets()
@@ -40,6 +46,9 @@ func (s *spec) apply() error {
 	}
 	if resource.DryRun() {
 		return s.dryRun(targets, live)
+	}
+	if err := s.resolveOwnership(targets); err != nil {
+		return err
 	}
 	unlock, err := lockDirs(s.memberDirs())
 	if err != nil {

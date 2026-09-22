@@ -60,8 +60,9 @@ controller rendered.
 
 ## What happens on apply
 
-1. **Prepare.** Validate the set description, resolve every owner and group,
-   and render the live bytes of each member.
+1. **Prepare.** Validate the set description, render the live bytes of each
+   member, and (on a real apply) resolve every owner and group, so an unknown
+   account fails the whole set before anything is staged or published.
 2. **Lock.** Open the parent directory of every member without following any
    symlink (a symlink anywhere in the path is refused), drop duplicates by
    device and inode, and take an exclusive `flock(2)` on each in (device,
@@ -123,10 +124,13 @@ Validation runs whenever something is to be published, including when only
 the live file drifted (someone edited it) while the recorded content stayed
 the same. A replay with nothing to publish does not run the validators.
 
-Under dry-run, locking, staging, validation and publication are skipped. The
-set and its members report `would-change` from the diff and the pending
-markers alone (the markers are kept), so **a dry-run cannot prove the set is
-valid**.
+Under dry-run, the owner and group lookup, locking, staging, validation and
+publication are skipped. The set and its members report `would-change` from
+the diff and the pending markers alone (the markers are kept), so **a dry-run
+cannot prove the set is valid**, nor that its owners and groups exist. Like a
+`File`, a set owned by an account that a `User` or `Group` earlier in the same
+recipe creates therefore previews cleanly on a host that lacks the account;
+the real apply creates the account first and then resolves it.
 
 ### Pending markers
 
