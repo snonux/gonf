@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 	"reflect"
@@ -18,6 +17,7 @@ import (
 	"time"
 
 	. "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
@@ -1324,22 +1324,18 @@ func TestPlanApplyForwardsNamedFileIdentity(t *testing.T) {
 	}
 }
 
+// TestNamedFileDuplicateRegistrationFails: a second registration under the
+// same name is a declaration error (internal/declerr) and is not registered.
 func TestNamedFileDuplicateRegistrationFails(t *testing.T) {
-	if os.Getenv("GONF_FILE_DUPLICATE_HELPER") == "1" {
-		resource.ResetRepository()
-		Present("/tmp/gonf-named-duplicate", WithName("duplicate"), WithLine("one"))
-		Present("/tmp/gonf-named-duplicate", WithName("duplicate"), WithLine("two"))
-		return
+	resource.ResetForTest()
+	t.Cleanup(resource.ResetForTest)
+	Present("/tmp/gonf-named-duplicate", WithName("duplicate"), WithLine("one"))
+	Present("/tmp/gonf-named-duplicate", WithName("duplicate"), WithLine("two"))
+	if err := declerr.First(); err == nil || !strings.Contains(err.Error(), "already registered") {
+		t.Fatalf("duplicate registration reported %v, want already registered", err)
 	}
-
-	cmd := exec.Command(os.Args[0], "-test.run=^TestNamedFileDuplicateRegistrationFails$")
-	cmd.Env = append(os.Environ(), "GONF_FILE_DUPLICATE_HELPER=1")
-	output, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatal("duplicate named file registration unexpectedly succeeded")
-	}
-	if !strings.Contains(string(output), "already registered") {
-		t.Fatalf("duplicate registration output = %q, want already registered", output)
+	if ids := resource.RegisteredIDs(); len(ids) != 1 {
+		t.Fatalf("registered %v, want only the first declaration", ids)
 	}
 }
 

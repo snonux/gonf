@@ -1,10 +1,11 @@
 package api
 
 import (
+	"fmt"
 	"path/filepath"
 	"slices"
 
-	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/file"
 	"github.com/snonux/gonf/resource/options"
@@ -48,21 +49,25 @@ const loginClassRequirement = "only OpenBSD reads per-class fragments from /etc/
 // src is ignored. LoginClass creates no accounts, home or runtime
 // directories and does not create /etc/login.conf.d; User and Dir remain
 // separate resources, ordered with DependsOn(class) where needed.
+//
+// Misuse — an invalid class name, line-edit or unsupported options, no content,
+// or content that does not define the class — is reported as a declaration
+// error (internal/declerr, which fails the record) and nothing is declared:
+// the returned handle is then an empty Multi.
 func LoginClass(class, src string, opts ...options.FileOption) Resource {
-	validateLoginClassName(class)
-	intent := inspectLoginClassOptions(class, opts)
+	intent, err := inspectLoginClassOptions(class, opts)
+	if err != nil {
+		declerr.Report(err)
+		return resource.Multi(nil)
+	}
 	if intent.absent {
 		return loginClassRemoval(class, opts)
 	}
-	if !intent.hasContentOverride() && src == "" {
-		logger.Fatal("LoginClass %q: no content; pass a source file or WithContent", class)
+	source, err := checkLoginClassContent(class, src, intent)
+	if err != nil {
+		declerr.Report(err)
+		return resource.Multi(nil)
 	}
-	source := ""
-	if src != "" {
-		source = Expand(src)
-	}
-	content, known := intent.installedContent(source)
-	validateLoginClassContent(class, content, known)
 
 	fileOpts := []options.FileOption{
 		options.WithMode(0o644),
@@ -82,6 +87,21 @@ func LoginClass(class, src string, opts ...options.FileOption) Resource {
 		}
 	})
 	return handle
+}
+
+// checkLoginClassContent returns the expanded default source of a present
+// class, or the error refusing it: no content at all, or content known on the
+// controller that does not define the class (validateLoginClassContent).
+func checkLoginClassContent(class, src string, intent *loginClassProbe) (string, error) {
+	if !intent.hasContentOverride() && src == "" {
+		return "", fmt.Errorf("LoginClass %q: no content; pass a source file or WithContent", class)
+	}
+	source := ""
+	if src != "" {
+		source = Expand(src)
+	}
+	content, known := intent.installedContent(source)
+	return source, validateLoginClassContent(class, content, known)
 }
 
 // NoLoginClass removes the OpenBSD fragment /etc/login.conf.d/<class> and any

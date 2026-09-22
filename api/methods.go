@@ -1,9 +1,12 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"unicode"
+
+	"github.com/snonux/gonf/internal/declerr"
 )
 
 // RegisterOption configures RegisterMethods.
@@ -49,18 +52,30 @@ func WithGroupWhen(opts ...TaskOption) RegisterOption {
 //   - DescHelix() string — description (else empty)
 //   - WhenHelix(Facts) bool — per-task When predicate; appended after any
 //     WithGroupWhen options of the same call. A wrong signature is
-//     registration-time misuse and panics (a silently ignored companion
-//     could drop the guard and run the task on every host).
+//     registration-time misuse: the task is not registered (a silently
+//     ignored companion could drop the guard and run the task on every
+//     host).
 //   - OptsHelix() TaskOptions — per-task TaskOptions, e.g. Privileged() or
 //     the serializable WhenHostnameContains()/WhenProfile() predicates;
 //     appended after any WithGroupWhen options of the same call. A wrong
-//     signature is registration-time misuse and panics (a silently ignored
-//     companion could drop Privileged() and lower a task's privileges).
+//     signature is registration-time misuse: the task is not registered (a
+//     silently ignored companion could drop Privileged() and lower a task's
+//     privileges).
 //
 // Methods named Desc*, When*, or Opts* are not registered as tasks.
+//
+// Misuse — v not a struct or non-nil pointer to one, a companion with the
+// wrong signature — is reported as a declaration error (internal/declerr,
+// which RecordPlan, Run, Apply and the CLI refuse to run with). A bad receiver
+// or struct-level companion registers nothing of v; a bad per-method
+// companion skips only that method's task.
 func RegisterMethods(v any, opts ...RegisterOption) {
 	cfg := registerConfigFor(opts)
-	rv, rt := registerReceiver(v)
+	rv, rt, err := registerReceiver(v)
+	if err != nil {
+		declerr.Report(err)
+		return
+	}
 	registerMethodTasks(rv, rt, cfg)
 }
 
@@ -72,14 +87,16 @@ func registerConfigFor(opts []RegisterOption) registerConfig {
 	return cfg
 }
 
-func registerReceiver(v any) (reflect.Value, reflect.Type) {
+// registerReceiver returns the addressable receiver RegisterMethods reads
+// methods from, or the misuse error for a nil pointer or a non-struct v.
+func registerReceiver(v any) (reflect.Value, reflect.Type, error) {
 	rv := reflect.ValueOf(v)
 	if rv.Kind() == reflect.Pointer {
 		if rv.IsNil() {
-			panic("RegisterMethods: nil pointer")
+			return reflect.Value{}, nil, errors.New("RegisterMethods: nil pointer")
 		}
 	} else if rv.Kind() != reflect.Struct {
-		panic(fmt.Sprintf("RegisterMethods: want struct or *struct, got %T", v))
+		return reflect.Value{}, nil, fmt.Errorf("RegisterMethods: want struct or *struct, got %T", v)
 	}
 
 	// reflect.ValueOf always yields a non-addressable value (CanAddr is
@@ -91,16 +108,23 @@ func registerReceiver(v any) (reflect.Value, reflect.Type) {
 		ptr.Elem().Set(rv)
 		rv = ptr
 	}
-	return rv, rv.Type()
+	return rv, rv.Type(), nil
 }
 
+// registerMethodTasks queues one Task per exported func() method of rv. A
+// companion misuse is reported as a declaration error: a struct-level one
+// registers nothing, a per-method one skips that method.
 func registerMethodTasks(rv reflect.Value, rt reflect.Type, cfg registerConfig) {
 	// Struct-level default TaskOptions: embedded StructOption markers
 	// (e.g. RequiresRoot) and/or the Opts() companion. A method's own
 	// OptsX companion replaces the combined default for that method (an
 	// empty TaskOptions opts out — e.g. an unprivileged smoke-test task on
 	// an otherwise-privileged struct).
-	structOpts := collectStructOptions(rv, rt)
+	structOpts, err := collectStructOptions(rv, rt)
+	if err != nil {
+		declerr.Report(err)
+		return
+	}
 
 	typeNames := map[string]struct{}{}
 	for i := 0; i < rt.NumMethod(); i++ {
@@ -122,27 +146,44 @@ func registerMethodTasks(rv reflect.Value, rt reflect.Type, cfg registerConfig) 
 			continue // only func()
 		}
 
-		taskName := cfg.prefix + camelToSnake(name)
-		fn := method.Interface().(func())
-
-		var taskOpts TaskOptions
-		taskOpts = append(taskOpts, cfg.groupWhen...)
-		if cfg.cluster != "" {
-			taskOpts = append(taskOpts, WithTaskCluster(cfg.cluster))
+		taskOpts, err := methodTaskOptions(rv, name, cfg, structOpts)
+		if err != nil {
+			declerr.Report(err)
+			continue
 		}
-		taskOpts = append(taskOpts, resolveOpts(rv, name, structOpts)...)
-		if whenOpt := resolveWhen(rv, name); whenOpt != nil {
-			taskOpts = append(taskOpts, whenOpt)
-		}
-
-		Task(taskName, resolveDesc(rv, name), fn, taskOpts...)
+		Task(cfg.prefix+camelToSnake(name), resolveDesc(rv, name), method.Interface().(func()), taskOpts...)
 	}
+}
+
+// methodTaskOptions assembles the TaskOptions of method name: the call's
+// WithGroupWhen and WithCluster options, then its OptsX companion (or the
+// struct-level default) and its WhenX guard. A companion with the wrong
+// signature is returned as an error.
+func methodTaskOptions(rv reflect.Value, name string, cfg registerConfig, structOpts TaskOptions) (TaskOptions, error) {
+	var taskOpts TaskOptions
+	taskOpts = append(taskOpts, cfg.groupWhen...)
+	if cfg.cluster != "" {
+		taskOpts = append(taskOpts, WithTaskCluster(cfg.cluster))
+	}
+	methodOpts, err := resolveOpts(rv, name, structOpts)
+	if err != nil {
+		return nil, err
+	}
+	taskOpts = append(taskOpts, methodOpts...)
+	whenOpt, err := resolveWhen(rv, name)
+	if err != nil {
+		return nil, err
+	}
+	if whenOpt != nil {
+		taskOpts = append(taskOpts, whenOpt)
+	}
+	return taskOpts, nil
 }
 
 // resolveDesc returns the DescX companion's description, or "" if the
 // companion is absent or has the wrong signature. Unlike OptsX/WhenX, a
 // missing description has no safety consequence, so a mismatched signature
-// degrades gracefully instead of panicking.
+// degrades gracefully instead of refusing the task.
 func resolveDesc(rv reflect.Value, name string) string {
 	d := rv.MethodByName("Desc" + name)
 	if !d.IsValid() {
@@ -157,40 +198,36 @@ func resolveDesc(rv reflect.Value, name string) string {
 
 // resolveOpts returns the OptsX companion's TaskOptions if present, which
 // REPLACES the struct-level default (an empty TaskOptions is an explicit
-// opt-out), or structOpts otherwise. A wrong OptsX signature panics: a
-// silently ignored companion could drop Privileged() and lower a task's
-// privileges.
-func resolveOpts(rv reflect.Value, name string, structOpts TaskOptions) TaskOptions {
+// opt-out), or structOpts otherwise. A wrong OptsX signature is returned as
+// an error: a silently ignored companion could drop Privileged() and lower a
+// task's privileges.
+func resolveOpts(rv reflect.Value, name string, structOpts TaskOptions) (TaskOptions, error) {
 	o := rv.MethodByName("Opts" + name)
 	if !o.IsValid() {
-		return structOpts
+		return structOpts, nil
 	}
-	ot := o.Type()
-	if ot.NumIn() != 0 || ot.NumOut() != 1 || ot.Out(0) != reflect.TypeOf(TaskOptions(nil)) {
-		panic(fmt.Sprintf("RegisterMethods: Opts%s must be func() TaskOptions", name))
-	}
-	return o.Call(nil)[0].Interface().(TaskOptions)
+	return callTaskOptionsCompanion(o, "Opts"+name+" must be func() TaskOptions")
 }
 
 // resolveWhen returns the TaskOption wrapping the WhenX companion's guard
-// predicate, or nil if the companion is absent. A wrong WhenX signature
-// panics: a silently ignored companion would drop the guard predicate and
-// run the task unconditionally on every host instead of only the intended
-// ones.
-func resolveWhen(rv reflect.Value, name string) TaskOption {
+// predicate, or nil if the companion is absent. A wrong WhenX signature is
+// returned as an error: a silently ignored companion would drop the guard
+// predicate and run the task unconditionally on every host instead of only
+// the intended ones.
+func resolveWhen(rv reflect.Value, name string) (TaskOption, error) {
 	w := rv.MethodByName("When" + name)
 	if !w.IsValid() {
-		return nil
+		return nil, nil
 	}
 	wt := w.Type()
 	if wt.NumIn() != 1 || wt.In(0) != reflect.TypeOf(Facts{}) ||
 		wt.NumOut() != 1 || wt.Out(0).Kind() != reflect.Bool {
-		panic(fmt.Sprintf("RegisterMethods: When%s must be func(Facts) bool", name))
+		return nil, fmt.Errorf("RegisterMethods: When%s must be func(Facts) bool", name)
 	}
 	wMethod := w
 	return When(func(f Facts) bool {
 		return wMethod.Call([]reflect.Value{reflect.ValueOf(f)})[0].Bool()
-	})
+	}), nil
 }
 
 func isCompanionName(name string) bool {

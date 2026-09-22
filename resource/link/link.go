@@ -25,6 +25,7 @@ const (
 type Link struct {
 	embed.DependsOn
 	embed.Absence
+	embed.Misuse
 	resource resource.Resource
 	path     string
 	target   string
@@ -43,12 +44,17 @@ func (l *Link) SetHardlink(target string) {
 	l.target = target
 }
 
-func build(path string, opts ...opt.LinkOption) *Link {
+// build applies opts to a new Link. An option misuse collected while applying
+// them (embed.Misuse) is its error.
+func build(path string, opts ...opt.LinkOption) (*Link, error) {
 	l := &Link{path: path}
 	for _, o := range opts {
 		o.Apply(l)
 	}
-	return l
+	if err := l.MisuseErr(); err != nil {
+		return nil, err
+	}
+	return l, nil
 }
 
 // Apply runs the link reconciliation directly for the legacy resource path.
@@ -57,7 +63,10 @@ func (l *Link) Apply() error { return l.apply() }
 // resource.Register takes this value as a resource.Applier. The assertion
 // pins that contract at the declaration, so a renamed or re-signed Apply is
 // reported here rather than at the Register call.
-var _ resource.Applier = (*Link)(nil)
+var (
+	_ resource.Applier   = (*Link)(nil)
+	_ opt.MisuseReporter = (*Link)(nil)
+)
 
 func (l *Link) apply() error {
 	switch {
@@ -86,13 +95,22 @@ func (l *Link) resourceType() string {
 // Ensure builds and applies the link resource described by opts, without
 // registering it.
 func Ensure(path string, opts ...opt.LinkOption) error {
-	return build(path, opts...).apply()
+	l, err := build(path, opts...)
+	if err != nil {
+		return err
+	}
+	return l.apply()
 }
 
 // Present registers a link resource that ensures path is the configured
-// symlink or hardlink, and records a plan draft for remote apply.
+// symlink or hardlink, and records a plan draft for remote apply. An option
+// misuse is reported as a declaration error (resource.Refuse) and nothing is
+// registered.
 func Present(path string, opts ...opt.LinkOption) resource.Resource {
-	l := build(path, opts...)
+	l, err := build(path, opts...)
+	if err != nil {
+		return resource.Refuse("Link", path, err)
+	}
 	l.resource = resource.Register(l.resourceType(), l.path, l, l.DependsOn.IDs...)
 	resource.RecordPlanDraft(l.planDraft())
 	return l.resource

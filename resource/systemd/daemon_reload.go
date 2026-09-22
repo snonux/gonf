@@ -23,6 +23,7 @@ var (
 	_ opt.Dependable      = (*DaemonReloadResource)(nil)
 	_ opt.ChangeWatchable = (*DaemonReloadResource)(nil)
 	_ opt.ChangeGated     = (*DaemonReloadResource)(nil)
+	_ opt.MisuseReporter  = (*DaemonReloadResource)(nil)
 )
 
 // DaemonReloadResource runs systemctl daemon-reload (optionally --user).
@@ -40,6 +41,7 @@ var (
 type DaemonReloadResource struct {
 	embed.DependsOn
 	embed.ChangeGate
+	embed.Misuse
 	user        bool
 	legacyWatch []string // WithWatch ids until newReload folds them into Watch
 	joiners     []reloadJoiner
@@ -69,8 +71,14 @@ type reloadJoiner struct {
 // reload that stays unwatchable is refused before anything is applied by
 // the plan pre-flight (plan.ValidateChangeGates: "change-gated but
 // watches nothing"), as it always was.
+//
+// An option misuse is reported as a declaration error (resource.Refuse);
+// nothing is registered or merged then.
 func Present(opts ...opt.DaemonReloadOption) resource.Resource {
 	d := newReload(opts)
+	if err := d.MisuseErr(); err != nil {
+		return resource.Refuse("DaemonReload", busName(d.user), err)
+	}
 	if r, prev, ok := registeredReload(d.id()); ok {
 		return prev.mergeInto(r, d)
 	}
@@ -85,6 +93,9 @@ func Present(opts ...opt.DaemonReloadOption) resource.Resource {
 // is refused (CheckWatch) instead of being skipped.
 func Ensure(opts ...opt.DaemonReloadOption) error {
 	d := newReload(opts)
+	if err := d.MisuseErr(); err != nil {
+		return err
+	}
 	if err := d.CheckWatch(); err != nil {
 		return fmt.Errorf("%s: %w", d.id(), err)
 	}
@@ -96,7 +107,8 @@ func Ensure(opts ...opt.DaemonReloadOption) error {
 // OnChange/WatchChanges ids first, then the legacy WithWatch ids, and when
 // neither named any, the DependsOn ids (first seen first), armed or not.
 // Resolving once, after every option ran, makes the list independent of
-// option order and lets apply, planDraft and merging read one list.
+// option order and lets apply, planDraft and merging read one list. An
+// option misuse is left in its embed.Misuse for the caller to check.
 func newReload(opts []opt.DaemonReloadOption) *DaemonReloadResource {
 	d := &DaemonReloadResource{}
 	for _, o := range opts {

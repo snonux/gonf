@@ -38,6 +38,7 @@ type File struct {
 	embed.DependsOn
 	embed.Absence
 	embed.Sensitivity
+	embed.Misuse
 	resource resource.Resource
 	name     string
 	path     string
@@ -189,6 +190,7 @@ var (
 	_ opt.TemplateDataable = (*File)(nil)
 	_ opt.Validatable      = (*File)(nil)
 	_ opt.Sensitivable     = (*File)(nil)
+	_ opt.MisuseReporter   = (*File)(nil)
 )
 
 func build(path string, opts ...opt.FileOption) (*File, error) {
@@ -207,6 +209,10 @@ func build(path string, opts ...opt.FileOption) (*File, error) {
 
 	for _, o := range opts {
 		o.Apply(f)
+	}
+	// An option misuse (e.g. WithRestart on a file) is this build's error.
+	if err := f.MisuseErr(); err != nil {
+		return nil, err
 	}
 
 	if f.lineEdit() && (f.contentSet || f.source != "") {
@@ -362,13 +368,14 @@ func ensureWithFacts(path string, facts templateFacts, opts ...opt.FileOption) e
 
 // Present registers a file resource that ensures path exists with the
 // configured content, mode, and ownership, and records a plan draft for
-// remote apply. A build failure (invalid option combination) is recipe
-// misuse and fails fast via logger.Fatal at record time.
+// remote apply. A build failure (invalid option combination, option misuse)
+// is recipe misuse: it is reported as a declaration error (resource.Refuse)
+// and nothing is registered.
 func Present(path string, opts ...opt.FileOption) resource.Resource {
 	f, err := build(path, opts...)
 	if err != nil {
 		// build's error already names the path.
-		logger.Fatal("%v", err)
+		return resource.Refuse("File", path, err)
 	}
 
 	f.resource = resource.Register("File", f.resourceName(), f, f.DependsOn.IDs...)
@@ -381,12 +388,13 @@ func Present(path string, opts ...opt.FileOption) resource.Resource {
 // draft. The mode defaults to 0600 rather than 0640; an explicit WithMode
 // wins. opts must not configure the content: WithContent, WithSource,
 // WithTemplate, WithTemplateData (or a ".tmpl" path, which would render the
-// secret as a template), line edits and IsAbsent are recipe misuse and fail
-// fast via logger.Fatal, like every other invalid option combination.
+// secret as a template), line edits and IsAbsent are recipe misuse, reported
+// as a declaration error (resource.Refuse) like every other invalid option
+// combination.
 func PresentSecret(path string, content []byte, opts ...opt.FileOption) resource.Resource {
 	f, err := buildSecret(path, content, opts...)
 	if err != nil {
-		logger.Fatal("%v", err)
+		return resource.Refuse("File", path, err)
 	}
 	f.resource = resource.Register("File", f.resourceName(), f, f.DependsOn.IDs...)
 	resource.RecordPlanDraft(f.planDraft())
@@ -400,6 +408,9 @@ func buildSecret(path string, content []byte, opts ...opt.FileOption) (*File, er
 	probe := &File{path: path}
 	for _, o := range opts {
 		o.Apply(probe)
+	}
+	if err := probe.MisuseErr(); err != nil {
+		return nil, err
 	}
 	if probe.contentSet || probe.shouldRenderTemplate() || probe.lineEdit() || probe.Absent {
 		return nil, fmt.Errorf("file %s: SecretFile sets the content itself; it cannot combine WithContent/WithSource, "+
@@ -420,14 +431,17 @@ func buildSecret(path string, content []byte, opts ...opt.FileOption) (*File, er
 }
 
 // PresentEnsure registers an EnsureFile resource. It creates an empty file
-// only when absent and otherwise preserves file content.
+// only when absent and otherwise preserves file content. Content, line-edit,
+// validation and IsAbsent options are recipe misuse, reported as a declaration
+// error (resource.Refuse).
 func PresentEnsure(path string, opts ...opt.FileOption) resource.Resource {
 	f, err := build(path, opts...)
 	if err != nil {
-		logger.Fatal("%v", err)
+		return resource.Refuse("EnsureFile", path, err)
 	}
 	if f.contentSet || f.lineEdit() || f.Absent || f.validationSet {
-		logger.Fatal("file %s: EnsureFile cannot combine WithContent/WithSource, WithLine(s)/WithoutLine(s), or IsAbsent", path)
+		return resource.Refuse("EnsureFile", path, fmt.Errorf(
+			"file %s: EnsureFile cannot combine WithContent/WithSource, WithLine(s)/WithoutLine(s), or IsAbsent", path))
 	}
 	f.preserveContent = true
 	f.resource = resource.Register("EnsureFile", f.resourceName(), f, f.DependsOn.IDs...)

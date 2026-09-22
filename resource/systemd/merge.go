@@ -1,8 +1,10 @@
 package systemd
 
 import (
+	"fmt"
 	"slices"
 
+	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource"
 )
@@ -10,7 +12,7 @@ import (
 // registeredReload returns the daemon-reload already registered under id in
 // the current recipe scope, if any. Anything else registered under a
 // DaemonReload[...] ID is not a reload to merge into; Present then registers
-// as usual and the duplicate-ID abort reports the clash.
+// as usual and the duplicate-ID declaration error reports the clash.
 func registeredReload(id string) (resource.Resource, *DaemonReloadResource, bool) {
 	r, applier, ok := resource.Registered(id)
 	if !ok {
@@ -95,33 +97,41 @@ func (d *DaemonReloadResource) orderingDeps() []string {
 //     (refuseRelatedJoiner): the joiner is converged before the reload, so
 //     it could start that unit from a stale definition, and its edge cannot
 //     be removed again.
+//
+// A refusal is a declaration error (internal/declerr, surfaced by RecordPlan,
+// Run, Apply and the CLI): d, the registered draft and the recorded op stay
+// as they were, and r is still returned so the recipe keeps running.
 func (d *DaemonReloadResource) mergeInto(r resource.Resource, next *DaemonReloadResource) resource.Resource {
 	id := r.ID()
 	m := d.merged(next)
-	m.refuseRelatedJoiner(id, next, d.Watch)
+	if err := m.refuseRelatedJoiner(id, next, d.Watch); err != nil {
+		declerr.Report(err)
+		return r
+	}
 	if err := resource.AmendRegistered(m.planDraft(id), next.orderingDeps()...); err != nil {
-		logger.Fatal("%s: cannot merge a further daemon-reload declaration on this bus (SystemdUnits FanIn or DaemonReload watching %v) into the one already declared in this recipe scope (watching %v): %v; "+
+		declerr.Reportf("%s: cannot merge a further daemon-reload declaration on this bus (SystemdUnits FanIn or DaemonReload watching %v) into the one already declared in this recipe scope (watching %v): %v; "+
 			"declare them in the same when-block and privilege scope without making one's inputs depend on the other, "+
 			"or pass every input to a single SystemdUnits FanIn",
 			id, next.Watch, d.Watch, err)
+		return r
 	}
 	*d = m
 	logger.Debug("%s: merged a further declaration on this bus; now watching %v", id, d.Watch)
 	return r
 }
 
-// refuseRelatedJoiner aborts the merge of next into the reload id (d is the
-// merged reload, prevWatch the watch list before the merge) when one of d's
-// joiners references a unit that its inputs may define. JoinRegisteredReload
+// refuseRelatedJoiner returns the error that refuses the merge of next into
+// the reload id (d is the merged reload, prevWatch the watch list before the
+// merge) when one of d's joiners references a unit that its inputs may define. JoinRegisteredReload
 // made the same check against the inputs known at join time; a later
 // declaration can add such an input (bb2). The error names both watch lists
 // like the other merge refusals, plus the joiner and the unit.
-func (d *DaemonReloadResource) refuseRelatedJoiner(id string, next *DaemonReloadResource, prevWatch []string) {
+func (d *DaemonReloadResource) refuseRelatedJoiner(id string, next *DaemonReloadResource, prevWatch []string) error {
 	j, unit, ok := d.joinerRelatedInput()
 	if !ok {
-		return
+		return nil
 	}
-	logger.Fatal("%s: cannot merge a further daemon-reload declaration on this bus (SystemdUnits FanIn or DaemonReload watching %v) into the one already declared in this recipe scope (watching %v): "+
+	return fmt.Errorf("%s: cannot merge a further daemon-reload declaration on this bus (SystemdUnits FanIn or DaemonReload watching %v) into the one already declared in this recipe scope (watching %v): "+
 		"%s, declared in between, shares that reload and applies before it, but references %s, which the merged reload's inputs may define, so it could be started from a stale unit definition; "+
 		"declare %s after every same-bus SystemdUnits composition and DaemonReload, or pass every input to the SystemdUnits FanIn declared before it",
 		id, next.Watch, prevWatch, j.id, unit, j.id)

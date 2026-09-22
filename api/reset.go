@@ -9,7 +9,8 @@ import (
 // state. It clears the task registry (ResetTasks), the profile override, the
 // configured secret provider, the plan recording session (api/plan.go),
 // plan record mode (plan.ResetForTest), and the resource package state
-// (repository, report, dry-run; via resource.ResetForTest). Individual
+// (repository, report, dry-run, declaration errors; via
+// resource.ResetForTest). Individual
 // reset functions remain available so existing tests keep working.
 //
 // Like the DSL itself this is deliberately single-goroutine: call it only

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/internal/inventory"
-	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/internal/remote"
 )
@@ -97,30 +97,33 @@ func WithGonfPath(path string) HostOption {
 }
 
 // WithValue stores an arbitrary recipe value under key on this host (e.g. a
-// cron window or OnCalendar expression). Duplicate keys on the same host fail
-// fast. Read with MustHostValue[T] from task bodies.
+// cron window or OnCalendar expression). An empty key or a key already set on
+// the same host is registration-time misuse: Host reports it as a declaration
+// error (internal/declerr) and does not register the host. Read with
+// MustHostValue[T] from task bodies.
 func WithValue(key string, value any) HostOption {
 	return func(h *inventory.Host) {
 		if key == "" {
-			logger.Fatal("WithValue: key must not be empty")
+			h.RejectOption(fmt.Errorf("WithValue: key must not be empty"))
+			return
+		}
+		if _, exists := h.Values[key]; exists {
+			h.RejectOption(fmt.Errorf("WithValue: key %q already set", key))
+			return
 		}
 		if h.Values == nil {
 			h.Values = map[string]any{}
-		}
-		if _, exists := h.Values[key]; exists {
-			logger.Fatal("WithValue: key %q already set", key)
 		}
 		h.Values[key] = value
 	}
 }
 
 // SetValue stores an arbitrary recipe value under key on an already-registered
-// host (same rules as WithValue). Returns h for chaining.
+// host (same rules as WithValue). Returns h for chaining. Misuse (an empty
+// key, an unregistered host, a key already set) is reported as a declaration
+// error (internal/declerr) and stores nothing.
 func (h HostRef) SetValue(key string, value any) HostRef {
-	if key == "" {
-		logger.Fatal("SetValue: key must not be empty")
-	}
-	inventory.SetHostValue(h.name, key, value)
+	declerr.Report(inventory.SetHostValue(h.name, key, value))
 	return h
 }
 
@@ -128,32 +131,46 @@ func (h HostRef) SetValue(key string, value any) HostRef {
 func (h HostRef) Name() string { return h.name }
 
 // Host registers a connection in the host registry and returns a handle.
-// Registration-time misuse (empty name, duplicate) fails fast via
-// logger.Fatal.
+// Registration-time misuse (empty name, duplicate, a rejected HostOption) is
+// reported as a declaration error (internal/declerr, which RecordPlan, Run,
+// Apply and the CLI refuse to run with) and the host is not registered; the
+// handle is still returned, so later declarations keep being checked.
 func Host(name string, opts ...HostOption) HostRef {
-	inventory.AddHost(name, opts...)
+	if _, err := inventory.AddHost(name, opts...); err != nil {
+		declerr.Report(err)
+	}
 	return HostRef{name: name}
 }
 
 // Cluster registers a named set of HostRef handles. Each host may appear at most
-// once. Registration-time misuse fails fast via logger.Fatal.
+// once. Registration-time misuse is reported as a declaration error
+// (internal/declerr) and the cluster is not registered; the handle is still
+// returned.
 func Cluster(name string, hosts ...HostRef) ClusterRef {
+	if err := addCluster(name, hosts); err != nil {
+		declerr.Report(err)
+	}
+	return ClusterRef{name: name}
+}
+
+// addCluster is Cluster's checked core.
+func addCluster(name string, hosts []HostRef) error {
 	if name == "" {
-		logger.Fatal("Cluster: name must not be empty")
+		return fmt.Errorf("Cluster: name must not be empty")
 	}
 	if len(hosts) == 0 {
-		logger.Fatal("Cluster %q: must include at least one Host", name)
+		return fmt.Errorf("Cluster %q: must include at least one Host", name)
 	}
 	if err := checkClusterHostsUnique(hosts); err != nil {
-		logger.Fatal("Cluster %q: %v", name, err)
+		return fmt.Errorf("Cluster %q: %v", name, err)
 	}
 
 	names := make([]string, len(hosts))
 	for i, h := range hosts {
 		names[i] = h.name
 	}
-	inventory.AddCluster(name, names)
-	return ClusterRef{name: name}
+	_, err := inventory.AddCluster(name, names)
+	return err
 }
 
 func checkClusterHostsUnique(hosts []HostRef) error {
@@ -170,9 +187,11 @@ func checkClusterHostsUnique(hosts []HostRef) error {
 	return nil
 }
 
-// Parallel sets concurrency for this cluster (default 5). n < 1 means all hosts at once.
+// Parallel sets concurrency for this cluster (default 5). n < 1 means all hosts
+// at once. An unregistered cluster is reported as a declaration error
+// (internal/declerr).
 func (f ClusterRef) Parallel(n int) ClusterRef {
-	inventory.SetClusterParallel(f.name, n)
+	declerr.Report(inventory.SetClusterParallel(f.name, n))
 	return f
 }
 
@@ -192,30 +211,36 @@ func LookupCluster(name string) (ClusterRef, bool) {
 	return ClusterRef{name: name}, true
 }
 
-// MustHost returns LookupHost or logger.Fatal (Go Must* convention).
+// MustHost returns LookupHost's handle. An unknown name is recipe misuse
+// (the Go Must* convention): it is reported as a declaration error
+// (internal/declerr, which fails the record or refuses the run) and the zero
+// HostRef is returned instead of ending the process.
 func MustHost(name string) HostRef {
 	h, ok := LookupHost(name)
 	if !ok {
-		logger.Fatal("Host %q is not registered", name)
+		declerr.Reportf("Host %q is not registered", name)
 	}
 	return h
 }
 
-// MustCluster returns LookupCluster or logger.Fatal (Go Must* convention).
+// MustCluster returns LookupCluster's handle. An unknown name is reported as
+// a declaration error, like MustHost, and the zero ClusterRef is returned.
 func MustCluster(name string) ClusterRef {
 	f, ok := LookupCluster(name)
 	if !ok {
-		logger.Fatal("Cluster %q is not registered", name)
+		declerr.Reportf("Cluster %q is not registered", name)
 	}
 	return f
 }
 
 // HostNames returns the inventory names of hosts in this cluster, in
-// registration order. An unknown cluster handle fails fast via logger.Fatal.
+// registration order. An unknown cluster handle is reported as a declaration
+// error (internal/declerr) and yields nil.
 func (f ClusterRef) HostNames() []string {
 	rec, ok := inventory.LookupCluster(f.name)
 	if !ok {
-		logger.Fatal("Cluster %q is not registered", f.name)
+		declerr.Reportf("Cluster %q is not registered", f.name)
+		return nil
 	}
 	return append([]string(nil), rec.Hosts...)
 }

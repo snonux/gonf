@@ -28,6 +28,7 @@ var (
 	_ opt.Systemable             = (*User)(nil)
 	_ opt.SupplementaryGroupable = (*User)(nil)
 	_ opt.HomeManageable         = (*User)(nil)
+	_ opt.MisuseReporter         = (*User)(nil)
 )
 
 // User ensures a local account exists. Creation attributes are used only for
@@ -37,6 +38,7 @@ var (
 // memberships, and never moves, creates, or chowns an existing home.
 type User struct {
 	embed.DependsOn
+	embed.Misuse
 	name                string
 	primaryGroup        string
 	supplementaryGroups []string
@@ -62,7 +64,8 @@ func newUser(name string, opts []opt.LocalUserOption) *User {
 	return newUserWith(backendForGOOS(runtime.GOOS, nil), name, opts)
 }
 
-// newUserWith builds a User that converges through backend.
+// newUserWith builds a User that converges through backend. An option misuse
+// is left in its embed.Misuse for the caller to check.
 func newUserWith(backend internaluser.Backend, name string, opts []opt.LocalUserOption) *User {
 	u := &User{name: name, backend: backend}
 	for _, option := range opts {
@@ -71,9 +74,13 @@ func newUserWith(backend internaluser.Backend, name string, opts []opt.LocalUser
 	return u
 }
 
-// Present registers a local user that should exist.
+// Present registers a local user that should exist. An option misuse is
+// reported as a declaration error (resource.Refuse) and nothing is registered.
 func Present(name string, opts ...opt.LocalUserOption) resource.Resource {
 	u := newUser(name, opts)
+	if err := u.MisuseErr(); err != nil {
+		return resource.Refuse(resourceType, name, err)
+	}
 	r := resource.Register(resourceType, u.name, u, u.DependsOn.IDs...)
 	resource.RecordPlanDraft(u.planDraft(r.ID()))
 	return r
@@ -82,7 +89,11 @@ func Present(name string, opts ...opt.LocalUserOption) resource.Resource {
 // Ensure builds and applies a local user resource without registering it or
 // recording a plan draft.
 func Ensure(name string, opts ...opt.LocalUserOption) error {
-	return newUser(name, opts).apply()
+	u := newUser(name, opts)
+	if err := u.MisuseErr(); err != nil {
+		return err
+	}
+	return u.apply()
 }
 
 // SetGroup sets the creation-time primary group.

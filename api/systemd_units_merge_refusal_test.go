@@ -1,8 +1,6 @@
 package api
 
 import (
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,7 +13,7 @@ import (
 
 // TestSystemdUnitsMergeRefusalsFailFast covers the merges that must be
 // refused at registration time with the explicit "cannot merge" error naming
-// both watch lists, instead of the generic duplicate-registration abort or
+// both watch lists, instead of the generic duplicate-registration refusal or
 // a plan that records fine but that no host can apply:
 //   - when: a composition inside a when-fragment followed by one after it
 //     (the shared reload would be skipped wherever the fragment is inactive);
@@ -28,7 +26,8 @@ import (
 //     Run and the unprivileged caller composes again afterwards (the merged
 //     op would belong to neither privilege chunk).
 //
-// logger.Fatal exits, so each case runs in a helper process.
+// A refused merge is a declaration error, so RecordPlan returns it; each
+// case records in-process.
 func TestSystemdUnitsMergeRefusalsFailFast(t *testing.T) {
 	cases := map[string]string{
 		"when":              "when_end boundary",
@@ -37,21 +36,11 @@ func TestSystemdUnitsMergeRefusalsFailFast(t *testing.T) {
 		"self-fanin":        "make DaemonReload[system] depend on itself",
 		"self-dependson":    "make DaemonReload[system] depend on itself",
 	}
-	// The helper builds fixtures with twoUnitSources/systemdUnitsFixture, both
-	// of which call t.TempDir(), and then exits via logger.Fatal (os.Exit),
-	// which skips its own deferred cleanup. t.TempDir() creates its directory
-	// under $GOTMPDIR (see testing.common.makeTempDir), so every case below
-	// points its child's GOTMPDIR at this one directory this test owns;
-	// cleanFatalHelperTempDir then removes what the child left there and
-	// confirms it is empty again before the next case reuses it.
-	tmp := t.TempDir()
 	for name, reason := range cases {
 		t.Run(name, func(t *testing.T) {
-			cmd := exec.Command(os.Args[0], "-test.run=^TestSystemdUnitsMergeFatalHelperProcess$", "-test.timeout=60s")
-			cmd.Env = append(os.Environ(), "GONF_API_UNITS_MERGE_FATAL="+name, "GOTMPDIR="+tmp)
-			out, err := cmd.CombinedOutput()
+			err := recordMergeRefusalCase(t, name)
 			if err == nil {
-				t.Fatalf("case %s exited 0; output:\n%s", name, out)
+				t.Fatalf("case %s recorded without a merge refusal", name)
 			}
 			for _, want := range []string{
 				"DaemonReload[system]: cannot merge",
@@ -59,30 +48,26 @@ func TestSystemdUnitsMergeRefusalsFailFast(t *testing.T) {
 				"File[/etc/systemd/system/b.service]",
 				reason,
 			} {
-				if !strings.Contains(string(out), want) {
-					t.Fatalf("case %s output misses %q:\n%s", name, want, out)
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("case %s error misses %q: %v", name, want, err)
 				}
 			}
-			if strings.Contains(string(out), "already registered") {
-				t.Fatalf("got the generic duplicate abort instead of the merge error:\n%s", out)
+			if strings.Contains(err.Error(), "already registered") {
+				t.Fatalf("got the generic duplicate refusal instead of the merge error: %v", err)
 			}
-			cleanFatalHelperTempDir(t, tmp)
 		})
 	}
 }
 
-// TestSystemdUnitsMergeFatalHelperProcess is the helper process for
-// TestSystemdUnitsMergeRefusalsFailFast; it must never exit 0.
-func TestSystemdUnitsMergeFatalHelperProcess(t *testing.T) {
-	name := os.Getenv("GONF_API_UNITS_MERGE_FATAL")
-	if name == "" {
-		return
-	}
+// recordMergeRefusalCase records the named refusal case of
+// TestSystemdUnitsMergeRefusalsFailFast and returns the record error.
+func recordMergeRefusalCase(t *testing.T, name string) error {
+	t.Helper()
 	dir := twoUnitSources(t)
 	aPath, bPath := "/etc/systemd/system/a.service", "/etc/systemd/system/b.service"
 	switch name {
 	case "when":
-		systemdUnitsFixture(t, func() {
+		return systemdUnitsRecordErr(t, func() {
 			WhenPathExists(dir, func() {
 				a := InstallFile(aPath, filepath.Join(dir, "a.service"))
 				SystemdUnits(FanIn(a), ActivateTimer("a"))
@@ -90,16 +75,10 @@ func TestSystemdUnitsMergeFatalHelperProcess(t *testing.T) {
 			b := InstallFile(bPath, filepath.Join(dir, "b.service"))
 			SystemdUnits(FanIn(b), ActivateTimer("b"))
 		})
-	case "cycle", "self-fanin", "self-dependson":
-		systemdUnitsFixture(t, func() {
-			a := InstallFile(aPath, filepath.Join(dir, "a.service"))
-			unitsA := SystemdUnits(FanIn(a), ActivateTimer("a"))
-			declareAfterComposition(name, unitsA, bPath, filepath.Join(dir, "b.service"))
-		})
 	case "nested-privileged":
 		// The outer body's own FanIn is a, the privileged inner one's is b;
 		// the inner reload is the one the outer composition finds.
-		recordTwoTasks(t,
+		_, err := recordTwoTasksErr(t,
 			func() {
 				a := InstallFile(aPath, filepath.Join(dir, "a.service"))
 				_ = Run("probe_inner")
@@ -109,8 +88,25 @@ func TestSystemdUnitsMergeFatalHelperProcess(t *testing.T) {
 				b := InstallFile(bPath, filepath.Join(dir, "b.service"))
 				SystemdUnits(FanIn(b), ActivateService("b"))
 			})
+		return err
+	default: // cycle, self-fanin, self-dependson
+		return systemdUnitsRecordErr(t, func() {
+			a := InstallFile(aPath, filepath.Join(dir, "a.service"))
+			unitsA := SystemdUnits(FanIn(a), ActivateTimer("a"))
+			declareAfterComposition(name, unitsA, bPath, filepath.Join(dir, "b.service"))
+		})
 	}
-	t.Fatalf("case %q recorded without a merge refusal", name)
+}
+
+// systemdUnitsRecordErr is systemdUnitsFixture for a body whose record must
+// fail: it returns the RecordPlan error instead of failing the test.
+func systemdUnitsRecordErr(t *testing.T, body func()) error {
+	t.Helper()
+	ResetForTest()
+	t.Cleanup(ResetForTest)
+	RegisterMethods(systemdUnitsTasks{body: body}, WithPrefix("demo_"))
+	_, err := RecordPlan("units", testutil.PrivateTempDir(t), "demo_units")
+	return err
 }
 
 // declareAfterComposition makes the second same-bus declaration of the
@@ -137,6 +133,16 @@ func declareAfterComposition(name string, unitsA Resource, bPath, bSrc string) {
 // and records outer.
 func recordTwoTasks(t *testing.T, outer, inner func()) []plan.Op {
 	t.Helper()
+	ops, err := recordTwoTasksErr(t, outer, inner)
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+	return ops
+}
+
+// recordTwoTasksErr is recordTwoTasks returning the record error.
+func recordTwoTasksErr(t *testing.T, outer, inner func()) ([]plan.Op, error) {
+	t.Helper()
 	ResetTasks()
 	resource.ResetRepository()
 	t.Cleanup(func() {
@@ -146,11 +152,7 @@ func recordTwoTasks(t *testing.T, outer, inner func()) []plan.Op {
 	})
 	Task("probe_outer", "outer", outer)
 	Task("probe_inner", "inner", inner, Privileged())
-	ops, err := RecordPlan("n", testutil.PrivateTempDir(t), "probe_outer")
-	if err != nil {
-		t.Fatalf("RecordPlan: %v", err)
-	}
-	return ops
+	return RecordPlan("n", testutil.PrivateTempDir(t), "probe_outer")
 }
 
 // TestSystemdUnitsPrivilegedMergeKeepsElevate: two compositions in one

@@ -19,6 +19,13 @@ import (
 )
 
 // Path constraint for resources that can be defined as a single item or a list.
+//
+// The constraint lists the exact types string and []string (no ~), so a
+// type switch over any(v) for a Path-typed v always hits one of those two
+// cases. The default branches of those switches (File, Dir, Link, Package,
+// Service, Timer, WhenHostname) are therefore unreachable and panic as a
+// programmer-bug invariant, not as recipe misuse: reaching one means the
+// constraint was widened without updating the switch.
 type Path interface {
 	string | []string
 }
@@ -31,7 +38,7 @@ func File[T Path](path T, opts ...options.FileOption) Resource {
 	case []string:
 		return Files(v, opts...)
 	default:
-		panic("File: path must be string or []string")
+		panic("unreachable: File: Path is string or []string")
 	}
 }
 
@@ -58,7 +65,7 @@ func Dir[T Path](path T, opts ...options.DirOption) Resource {
 	case []string:
 		return Dirs(v, opts...)
 	default:
-		panic("Dir: path must be string or []string")
+		panic("unreachable: Dir: Path is string or []string")
 	}
 }
 
@@ -85,7 +92,7 @@ func Link[T Path](path T, opts ...options.LinkOption) Resource {
 	case []string:
 		return Links(v, opts...)
 	default:
-		panic("Link: path must be string or []string")
+		panic("unreachable: Link: Path is string or []string")
 	}
 }
 
@@ -119,7 +126,7 @@ func Package[T Path](name T, opts ...options.PackageOption) Resource {
 	case []string:
 		return Packages(v, opts...)
 	default:
-		panic("Package: name must be string or []string")
+		panic("unreachable: Package: Path is string or []string")
 	}
 }
 
@@ -156,7 +163,7 @@ func Service[T Path](name T, opts ...options.ServiceOption) Resource {
 	case []string:
 		return Services(v, opts...)
 	default:
-		panic("Service: name must be string or []string")
+		panic("unreachable: Service: Path is string or []string")
 	}
 }
 
@@ -197,7 +204,7 @@ func Timer[T Path](name T, opts ...options.TimerOption) Resource {
 	case []string:
 		return Timers(v, opts...)
 	default:
-		panic("Timer: name must be string or []string")
+		panic("unreachable: Timer: Path is string or []string")
 	}
 }
 

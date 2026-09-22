@@ -1,12 +1,10 @@
 package cmd
 
 import (
-	"errors"
-	"os"
-	osexec "os/exec"
 	"strings"
 	"testing"
 
+	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/internal/testutil"
 
@@ -106,30 +104,28 @@ func TestCheckSensitiveNameRefusesUnnamedCommands(t *testing.T) {
 	}
 }
 
-// sensitivePresentEnv selects, in a re-executed test binary, the Present
-// call TestPresentRefusesUnnamedSensitiveCommand expects to abort.
-const sensitivePresentEnv = "GONF_CMD_SENSITIVE_PRESENT"
-
-// Present fails the recipe (logger.Fatal, so in a child process) for an
-// unnamed WithSensitive command, and registers a named one.
+// Present refuses an unnamed WithSensitive command with a declaration error
+// (internal/declerr) that names WithName but not the argv, registers nothing
+// for it, and returns a value whose ID carries only the binary; a named one
+// registers normally.
 func TestPresentRefusesUnnamedSensitiveCommand(t *testing.T) {
-	if os.Getenv(sensitivePresentEnv) != "" {
-		Present("/usr/bin/curl", []string{"--token", fakeCmdSecret}, opt.WithSensitive)
-		return
-	}
 	resource.ResetForTest()
 	t.Cleanup(resource.ResetForTest)
 	if r := Present("/usr/bin/curl", []string{"--token", fakeCmdSecret}, opt.WithName("upload"), opt.WithSensitive); r.ID() != "Command[upload]" {
 		t.Fatalf("named sensitive command registered as %s", r.ID())
 	}
-	child := osexec.Command(os.Args[0], "-test.run=^TestPresentRefusesUnnamedSensitiveCommand$")
-	child.Env = append(os.Environ(), sensitivePresentEnv+"=1")
-	out, err := child.CombinedOutput()
-	var exitErr *osexec.ExitError
-	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 || !strings.Contains(string(out), "WithSensitive requires WithName") {
-		t.Fatalf("unnamed sensitive Present did not abort: err = %v, output:\n%s", err, out)
+	if err := declerr.First(); err != nil {
+		t.Fatalf("named sensitive command reported %v", err)
 	}
-	if strings.Contains(string(out), fakeCmdSecret) {
-		t.Fatalf("refusal leaks the argv:\n%s", out)
+	refused := Present("/usr/bin/curl", []string{"--token", fakeCmdSecret}, opt.WithSensitive)
+	err := declerr.First()
+	if err == nil || !strings.Contains(err.Error(), "WithSensitive requires WithName") {
+		t.Fatalf("unnamed sensitive Present reported %v, want the WithName refusal", err)
+	}
+	if strings.Contains(err.Error(), fakeCmdSecret) || strings.Contains(refused.ID(), fakeCmdSecret) {
+		t.Fatalf("refusal leaks the argv: %v / %s", err, refused.ID())
+	}
+	if ids := resource.RegisteredIDs(); len(ids) != 1 || ids[0] != "Command[upload]" {
+		t.Fatalf("registered %v, want only the named command", ids)
 	}
 }

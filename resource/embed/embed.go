@@ -146,7 +146,7 @@ func (c *ChangeGate) AddWatch(ids []string) {
 // Present does not (a bare IfChanged may still merge with a same-bus
 // declaration that names ids; one that stays unwatchable is refused by the
 // plan pre-flight). The other gated kinds cannot be armed without ids through any
-// option (OnChange and WatchChanges abort on an empty list, and the legacy
+// option (OnChange and WatchChanges refuse an empty list, and the legacy
 // IfChanged/WithWatch are daemon-reload-only), so they need no check. The
 // embed must not implement SetWatch: that would make every embedder
 // opt.ChangeGated and accept the legacy spellings.

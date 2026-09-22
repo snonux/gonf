@@ -4,7 +4,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/options"
 )
@@ -36,10 +36,12 @@ func LinkIfExists(path, target string, opts ...options.LinkOption) Resource {
 
 // SymlinkMap registers LinkIfExists for each name/target pair under parent.
 // pairs must be an even-length list: name1, target1, name2, target2, ...
-// An odd-length list is recipe misuse and fails fast via logger.Fatal.
+// An odd-length list is recipe misuse: it is reported as a declaration error
+// (internal/declerr) and no link is declared.
 func SymlinkMap(parent string, pairs ...string) {
 	if len(pairs)%2 != 0 {
-		logger.Fatal("SymlinkMap: odd number of elements (%d)", len(pairs))
+		declerr.Reportf("SymlinkMap: odd number of elements (%d)", len(pairs))
+		return
 	}
 	base := Expand(parent)
 	for i := 0; i < len(pairs); i += 2 {

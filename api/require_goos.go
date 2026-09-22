@@ -3,7 +3,7 @@ package api
 import (
 	"runtime"
 
-	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
@@ -21,7 +21,9 @@ import (
 // filesystem condition could change during the apply (see plan/require.go).
 //
 // Without plan recording (resources registered and applied on the same host)
-// the check runs immediately against runtime.GOOS and aborts registration.
+// the check runs immediately against runtime.GOOS: on a mismatch it reports a
+// declaration error (internal/declerr, which refuses Apply and the CLI) and
+// fn is not run, so nothing of it is registered.
 func requireGOOS(goos, id, requirement string, fn func()) {
 	if resource.PlanDraftRecording() {
 		plan.Record(plan.Op{
@@ -35,7 +37,8 @@ func requireGOOS(goos, id, requirement string, fn func()) {
 		return
 	}
 	if runtime.GOOS != goos {
-		logger.Fatal("%s: requirement not met on this host (goos=%s): %s", id, runtime.GOOS, requirement)
+		declerr.Reportf("%s: requirement not met on this host (goos=%s): %s", id, runtime.GOOS, requirement)
+		return
 	}
 	fn()
 }

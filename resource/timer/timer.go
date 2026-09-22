@@ -25,6 +25,7 @@ var (
 	_ opt.EnableOnlyable  = (*Timer)(nil)
 	_ opt.Dependable      = (*Timer)(nil)
 	_ opt.ChangeWatchable = (*Timer)(nil)
+	_ opt.MisuseReporter  = (*Timer)(nil)
 )
 
 // Timer manages a named systemd .timer unit.
@@ -32,6 +33,7 @@ type Timer struct {
 	embed.DependsOn
 	embed.Absence
 	embed.ChangeGate
+	embed.Misuse
 	name       string // unit name ending in .timer
 	restart    bool
 	user       bool // systemctl --user
@@ -50,11 +52,12 @@ func (t *Timer) SetUser() { t.user = true }
 func (t *Timer) SetEnableOnly() { t.enableOnly = true }
 
 // Present registers a timer that should be active and enabled (or only
-// enabled when WithEnableOnly is set).
+// enabled when WithEnableOnly is set). An option misuse is reported as a
+// declaration error (resource.Refuse) and nothing is registered.
 func Present(name string, opts ...opt.TimerOption) resource.Resource {
-	t := &Timer{name: normalizeUnit(name)}
-	for _, o := range opts {
-		o.Apply(t)
+	t, err := build(name, opts)
+	if err != nil {
+		return resource.Refuse("Timer", normalizeUnit(name), err)
 	}
 	r := resource.Register("Timer", t.name, t, t.DependsOn.IDs...)
 	resource.RecordPlanDraft(t.planDraft(r.ID()))
@@ -63,11 +66,24 @@ func Present(name string, opts ...opt.TimerOption) resource.Resource {
 
 // Ensure builds and applies a timer without registering or recording a draft.
 func Ensure(name string, opts ...opt.TimerOption) error {
+	t, err := build(name, opts)
+	if err != nil {
+		return err
+	}
+	return t.apply()
+}
+
+// build applies opts to a new Timer. An option misuse collected while
+// applying them (embed.Misuse) is its error.
+func build(name string, opts []opt.TimerOption) (*Timer, error) {
 	t := &Timer{name: normalizeUnit(name)}
 	for _, o := range opts {
 		o.Apply(t)
 	}
-	return t.apply()
+	if err := t.MisuseErr(); err != nil {
+		return nil, err
+	}
+	return t, nil
 }
 
 // Absent registers a timer that should be stopped and disabled.

@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/base64"
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 	"reflect"
@@ -465,9 +464,11 @@ func TestNoLoginClassRemovesFragmentAndStaleDB(t *testing.T) {
 	}
 }
 
-// TestLoginClassRegistrationMisuseFailsFast runs each registration-time
-// Fatal in a helper process and asserts the specific message.
-func TestLoginClassRegistrationMisuseFailsFast(t *testing.T) {
+// TestLoginClassRegistrationMisuseIsDeclarationError checks each
+// registration-time misuse in-process: a declaration error with the specific
+// message, nothing registered and an empty handle. Nothing is recorded, so
+// "direct" exercises the same-host (non-plan) path.
+func TestLoginClassRegistrationMisuseIsDeclarationError(t *testing.T) {
 	cases := []struct{ caseName, want string }{
 		{"empty", `invalid class name ""`},
 		{"traversal", `invalid class name "../passwd"`},
@@ -478,67 +479,60 @@ func TestLoginClassRegistrationMisuseFailsFast(t *testing.T) {
 		{"content-mismatch", `defines classes ["other"] but not "daemon"`},
 		{"lines", `WithLine(s)/WithoutLine(s) are not supported`},
 		{"no-content", `LoginClass "daemon": no content`},
+		{"unsupported-option", `*api.loginClassProbe does not support WithCommand`},
 	}
 	if runtime.GOOS != "openbsd" {
 		cases = append(cases, struct{ caseName, want string }{"direct", "requirement not met on this host (goos=" + runtime.GOOS + ")"})
 	}
-	// The helper calls t.TempDir() itself and then exits via logger.Fatal
-	// (os.Exit), which skips its own deferred cleanup (t.TempDir()'s
-	// directory is removed via t.Cleanup, which never runs). t.TempDir()
-	// creates its directory under $GOTMPDIR (see testing.common.makeTempDir),
-	// so every case below points its child's GOTMPDIR at this one directory
-	// this test owns; cleanFatalHelperTempDir then removes what the child
-	// left there and confirms it is empty again before the next case reuses
-	// it, so nothing accumulates and nothing leaks into the real temp root.
-	tmp := t.TempDir()
 	for _, tc := range cases {
 		t.Run(tc.caseName, func(t *testing.T) {
-			c := exec.Command(os.Args[0], "-test.run=^TestLoginClassFatalHelperProcess$", "-test.timeout=60s")
-			c.Env = append(os.Environ(), "GONF_API_LOGINCLASS_MISUSE="+tc.caseName, "GOTMPDIR="+tmp)
-			out, err := c.CombinedOutput()
-			if err == nil {
-				t.Fatalf("misuse %q exited 0; output:\n%s", tc.caseName, out)
+			prevDir := loginClassDir
+			loginClassDir = t.TempDir()
+			t.Cleanup(func() { loginClassDir = prevDir })
+			src := filepath.Join(t.TempDir(), "daemon")
+			writeFixtureFile(t, src, daemonClassFixture)
+			var handle Resource
+			requireDeclErr(t, tc.want, func() { handle = loginClassMisuse(tc.caseName, src) })
+			if handle != nil && len(handle.Dependencies()) != 0 {
+				t.Fatalf("refused class returned %v, want an empty handle", handle.Dependencies())
 			}
-			if !strings.Contains(string(out), tc.want) {
-				t.Fatalf("misuse %q output misses %q:\n%s", tc.caseName, tc.want, out)
+			if ids := resource.RegisteredIDs(); len(ids) != 0 {
+				t.Fatalf("refused class registered %v", ids)
 			}
-			cleanFatalHelperTempDir(t, tmp)
 		})
 	}
 }
 
-// TestLoginClassFatalHelperProcess triggers one misuse per invocation for
-// TestLoginClassRegistrationMisuseFailsFast; it must never exit 0 when armed.
-// Nothing is recorded, so "direct" exercises the same-host (non-plan) path.
-func TestLoginClassFatalHelperProcess(t *testing.T) {
-	name := os.Getenv("GONF_API_LOGINCLASS_MISUSE")
-	if name == "" {
-		return
-	}
-	loginClassDir = t.TempDir()
-	src := filepath.Join(t.TempDir(), "daemon")
-	writeFixtureFile(t, src, daemonClassFixture)
+// loginClassMisuse declares the named misuse case of
+// TestLoginClassRegistrationMisuseIsDeclarationError.
+func loginClassMisuse(name, src string) Resource {
 	switch name {
 	case "content-mismatch":
-		LoginClass("daemon", src, options.WithContent("other:\\\n\t:tc=default:\n"))
+		return LoginClass("daemon", src, options.WithContent("other:\\\n\t:tc=default:\n"))
 	case "lines":
-		LoginClass("daemon", src, options.WithLine(":maxproc=1:"))
+		return LoginClass("daemon", src, options.WithLine(":maxproc=1:"))
 	case "no-content":
-		LoginClass("daemon", "")
+		return LoginClass("daemon", "")
+	case "unsupported-option":
+		return LoginClass("daemon", src, options.ToFileOptions(options.WithCommand("true"))...)
 	case "direct":
-		LoginClass("daemon", src)
+		return LoginClass("daemon", src)
 	default:
 		classes := map[string]string{
 			"empty": "", "traversal": "../passwd", "slash": "a/b", "separator": "a:b",
 			"dotdb": "daemon.db", "mismatch": "relayd",
 		}
-		LoginClass(classes[name], src)
+		return LoginClass(classes[name], src)
 	}
 }
 
 func TestLoginClassSkipsNameCheckForUnknownOrTemplatedContent(t *testing.T) {
-	// Neither may abort registration: a templated name is only known after
+	// Neither may refuse registration: a templated name is only known after
 	// rendering, and the file resource owns missing-source errors.
-	validateLoginClassContent("relayd", "{{.Class}}:\\\n\t:tc=default:\n", true)
-	validateLoginClassContent("relayd", "", false)
+	if err := validateLoginClassContent("relayd", "{{.Class}}:\\\n\t:tc=default:\n", true); err != nil {
+		t.Fatalf("templated content refused: %v", err)
+	}
+	if err := validateLoginClassContent("relayd", "", false); err != nil {
+		t.Fatalf("unknown content refused: %v", err)
+	}
 }

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -334,60 +333,42 @@ func TestForHostsUnselectedBadValueFailsPushBeforeSSH(t *testing.T) {
 	}
 }
 
-// TestForHostsMisuseOutsideRecordingIsFatal runs direct (non-recording)
-// ForHosts misuse in a helper process: without a recording session to fail,
-// it ends the process via logger.Fatal, like MustHostValue.
-func TestForHostsMisuseOutsideRecordingIsFatal(t *testing.T) {
-	cases := map[string]string{
-		"missing-value": `ForHosts: Host "h2": no value "test.window"`,
-		"nil-fn":        "ForHosts: fn must not be nil",
-		"no-cluster":    "ForHosts: no cluster on the current task",
+// TestForHostsMisuseOutsideRecordingIsDeclarationError: direct
+// (non-recording) ForHosts misuse has no recording session to fail, so it is
+// reported as a declaration error (which Apply and the CLI refuse to run
+// with), like MustHostValue, and visits no host.
+func TestForHostsMisuseOutsideRecordingIsDeclarationError(t *testing.T) {
+	var visited []string
+	visit := func(host string, _ [2]string) { visited = append(visited, host) }
+	ok := func() HostOption { return WithValue(forHostsKey, [2]string{"1", "2"}) }
+	cases := []struct {
+		caseName, want string
+		declare        func()
+	}{
+		{"missing-value", `ForHosts: Host "h2": no value "test.window"`, func() {
+			Cluster("c", Host("h1", ok()), Host("h2"))
+			pushTaskCluster("c")
+			ForHosts(forHostsKey, visit)
+		}},
+		{"nil-fn", "ForHosts: fn must not be nil", func() {
+			Cluster("c", Host("h1", ok()))
+			pushTaskCluster("c")
+			ForHosts[[2]string](forHostsKey, nil)
+		}},
+		{"no-cluster", "ForHosts: no cluster on the current task", func() {
+			Host("h1", ok())
+			ForHosts(forHostsKey, visit)
+		}},
 	}
-	for caseName, want := range cases {
-		t.Run(caseName, func(t *testing.T) {
-			cmd := exec.Command(os.Args[0], "-test.run=^TestForHostsFatalHelperProcess$", "-test.timeout=60s")
-			cmd.Env = append(os.Environ(), "GONF_API_FORHOSTS_CASE="+caseName)
-			out, err := cmd.CombinedOutput()
-			if err == nil {
-				t.Fatalf("case %q exited 0, want fail-fast; output:\n%s", caseName, out)
-			}
-			if !strings.Contains(string(out), want) {
-				t.Fatalf("case %q output misses %q:\n%s", caseName, want, out)
-			}
-			for _, marker := range []string{"FORHOSTS-VISITED", "FORHOSTS-RETURNED"} {
-				if strings.Contains(string(out), marker) {
-					t.Fatalf("case %q reached %s before failing:\n%s", caseName, marker, out)
-				}
+	for _, tc := range cases {
+		t.Run(tc.caseName, func(t *testing.T) {
+			visited = nil
+			requireDeclErr(t, tc.want, tc.declare)
+			if len(visited) != 0 {
+				t.Fatalf("visited %v before failing", visited)
 			}
 		})
 	}
-}
-
-// TestForHostsFatalHelperProcess is the helper process for
-// TestForHostsMisuseOutsideRecordingIsFatal; it must never exit 0 for a
-// known case.
-func TestForHostsFatalHelperProcess(t *testing.T) {
-	caseName := os.Getenv("GONF_API_FORHOSTS_CASE")
-	if caseName == "" {
-		return
-	}
-	ResetInventory()
-	visit := func(host string, _ [2]string) { fmt.Println("FORHOSTS-VISITED", host) }
-	ok := WithValue(forHostsKey, [2]string{"1", "2"})
-	switch caseName {
-	case "missing-value":
-		Cluster("c", Host("h1", ok), Host("h2"))
-		pushTaskCluster("c")
-		ForHosts(forHostsKey, visit)
-	case "nil-fn":
-		Cluster("c", Host("h1", ok))
-		pushTaskCluster("c")
-		ForHosts[[2]string](forHostsKey, nil)
-	case "no-cluster":
-		Host("h1", ok)
-		ForHosts(forHostsKey, visit)
-	}
-	fmt.Println("FORHOSTS-RETURNED")
 }
 
 // sshCapture records the stdin of every faked SSH invocation. Cluster and

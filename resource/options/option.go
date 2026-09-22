@@ -6,11 +6,12 @@
 package options
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"slices"
 
-	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -186,6 +187,12 @@ type (
 	ServiceDescriptionable interface{ SetServiceDescription(string) }
 	Afterable              interface{ AddAfter(...string) }
 	Wantsable              interface{ AddWants(...string) }
+
+	// MisuseReporter is how a resource collects option misuse instead of
+	// the process ending: every concrete resource type embeds
+	// embed.Misuse, which implements it, and checks the collected error
+	// after applying its options (see misuse).
+	MisuseReporter interface{ ReportMisuse(error) }
 )
 
 // Resource-family option interfaces. The unexported marker methods prevent
@@ -342,7 +349,8 @@ func newGuard(name string, args []string, opts ...GuardOption) *Guard {
 
 // Apply runs the option against target. Every concrete option type forwards to
 // its underlying func; target must implement the capability interface the
-// option needs, or requires aborts the recipe.
+// option needs, or requires reports the misuse (see misuse) and the option
+// does nothing.
 func (o allResourceOption) Apply(target any)      { o(target) }
 func (o fileDirOption) Apply(target any)          { o(target) }
 func (o fileOption) Apply(target any)             { o(target) }
@@ -516,7 +524,14 @@ func WithUserGroup(group string) userAccountOption {
 // WithMode sets a resource's own file mode.
 func WithMode(mode os.FileMode) fileDirOption {
 	return fileDirOption(func(target any) {
-		requires(target, "WithMode", func(r Moded) { r.SetMode(NormalizeMode(mode)) })
+		requires(target, "WithMode", func(r Moded) {
+			normalized, err := normalizeMode(mode)
+			if err != nil {
+				misuse(target, err)
+				return
+			}
+			r.SetMode(normalized)
+		})
 	})
 }
 
@@ -611,7 +626,14 @@ func WithoutLine(content string) fileOption {
 // WithFileMode sets the mode of regular files copied into a directory.
 func WithFileMode(mode os.FileMode) dirOption {
 	return dirOption(func(target any) {
-		requires(target, "WithFileMode", func(r FileModed) { r.SetFileMode(NormalizeMode(mode)) })
+		requires(target, "WithFileMode", func(r FileModed) {
+			normalized, err := normalizeMode(mode)
+			if err != nil {
+				misuse(target, err)
+				return
+			}
+			r.SetFileMode(normalized)
+		})
 	})
 }
 
@@ -645,7 +667,8 @@ func WithWatch(ids ...string) daemonReloadOption {
 //   - DaemonReload: the reload is skipped unless a watched resource changed.
 //
 // OnChange requires at least one resource: a gate with nothing to watch can
-// never fire, so it is registration-time misuse (fail-fast DSL contract).
+// never fire, so it is declaration-time misuse, reported to the target (see
+// misuse) and leaving the target unarmed.
 func OnChange(resources ...resource.Dependency) changeGateOption {
 	return changeGateOption(func(target any) {
 		var ids []string
@@ -653,7 +676,8 @@ func OnChange(resources ...resource.Dependency) changeGateOption {
 			ids = append(ids, res.Dependencies()...)
 		}
 		if len(ids) == 0 {
-			logger.Fatal("OnChange requires at least one resource to watch")
+			misuse(target, errors.New("OnChange requires at least one resource to watch"))
+			return
 		}
 		changeGate("OnChange", ids)(target)
 		// The watched resources must also apply first: reuse the ordinary
@@ -672,12 +696,13 @@ func OnChange(resources ...resource.Dependency) changeGateOption {
 // dependency. Plan handlers use it (through RecordedChangeGate) to rebuild
 // a recorded gate on the destination, where ordering is already handled by
 // the plan engine's dep sort; recipes should prefer OnChange. An empty
-// watch list can never fire, so it is registration-time misuse.
+// watch list can never fire, so it is declaration-time misuse (see misuse).
 func WatchChanges(ids ...string) changeGateOption {
 	gate := changeGate("WatchChanges", ids)
 	return changeGateOption(func(target any) {
 		if len(ids) == 0 {
-			logger.Fatal("WatchChanges requires at least one resource id to watch")
+			misuse(target, errors.New("WatchChanges requires at least one resource id to watch"))
+			return
 		}
 		gate(target)
 	})
@@ -951,12 +976,28 @@ func changeGate(label string, ids []string) func(any) {
 }
 
 // requires asserts that target implements capability T and calls use with it.
-// A target lacking T is recipe misuse, so it aborts through logger.Fatal
-// naming the target type and the option label.
+// A target lacking T is recipe misuse: it is reported (misuse) naming the
+// target type and the option label, and the option does nothing.
 func requires[T any](target any, label string, use func(T)) {
 	r, ok := target.(T)
 	if !ok {
-		logger.Fatal("%T does not support %s", target, label)
+		misuse(target, fmt.Errorf("%T does not support %s", target, label))
+		return
 	}
 	use(r)
+}
+
+// misuse reports an option misuse. A target that collects misuse
+// (MisuseReporter, every concrete resource type through embed.Misuse) gets
+// it, so the resource's build fails with it: a registering constructor then
+// reports it as a declaration error and an Ensure helper returns it. Any other
+// target (a caller applying an option to a foreign value) reports it straight
+// to internal/declerr, where RecordPlan, Run, Apply and the CLI surface it.
+// Options never end the process.
+func misuse(target any, err error) {
+	if r, ok := target.(MisuseReporter); ok {
+		r.ReportMisuse(err)
+		return
+	}
+	declerr.Report(err)
 }

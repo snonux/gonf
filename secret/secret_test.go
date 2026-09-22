@@ -452,8 +452,10 @@ func TestSnapshotPanickingLeaderReleasesWaiters(t *testing.T) {
 	}
 }
 
-// A nil provider is a composition-root programmer error: NewSnapshot panics
-// immediately, not at the first resolution — including a typed nil pointer.
+// A nil provider is a composition-root mistake: NewSnapshot does not panic
+// but returns a providerless Snapshot — including for a typed nil pointer —
+// that IsNilProvider reports as nil (so api.SetSecretProvider refuses it) and
+// whose Resolve fails with ErrUnavailable.
 func TestNewSnapshotRefusesNilProvider(t *testing.T) {
 	for name, p := range map[string]Provider{
 		"untyped":       nil,
@@ -461,13 +463,14 @@ func TestNewSnapshotRefusesNilProvider(t *testing.T) {
 		"zero snapshot": &Snapshot{},
 	} {
 		t.Run(name, func(t *testing.T) {
-			defer func() {
-				r := recover()
-				if r == nil || !strings.Contains(fmt.Sprint(r), "nil provider") {
-					t.Fatalf("NewSnapshot panic = %v, want the nil-provider refusal", r)
-				}
-			}()
-			_ = NewSnapshot(p)
+			snap := NewSnapshot(p)
+			if !IsNilProvider(snap) {
+				t.Fatal("NewSnapshot(nil) is not reported as a nil provider")
+			}
+			_, err := snap.Resolve(context.Background(), "k")
+			if !errors.Is(err, ErrUnavailable) || !strings.Contains(err.Error(), "no provider") {
+				t.Fatalf("Resolve = %v, want the ErrUnavailable no-provider refusal", err)
+			}
 		})
 	}
 }

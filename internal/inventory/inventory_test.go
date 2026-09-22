@@ -21,8 +21,10 @@ func TestHostValueConcurrentWithSetHostValue(t *testing.T) {
 	Reset()
 	t.Cleanup(Reset)
 
-	AddHost("racer")
-	SetHostValue("racer", "seed", 0)
+	mustAddHost(t, "racer")
+	if err := SetHostValue("racer", "seed", 0); err != nil {
+		t.Fatal(err)
+	}
 
 	const goroutines = 50
 	var wg sync.WaitGroup
@@ -31,11 +33,13 @@ func TestHostValueConcurrentWithSetHostValue(t *testing.T) {
 	for i := 0; i < goroutines; i++ {
 		i := i
 		// Writer: grows the SAME host's Values map with a distinct key per
-		// goroutine (SetHostValue fails fast on a duplicate key, which is
+		// goroutine (SetHostValue refuses a duplicate key, which is
 		// not what this test is exercising).
 		go func() {
 			defer wg.Done()
-			SetHostValue("racer", fmt.Sprintf("key-%d", i), i)
+			if err := SetHostValue("racer", fmt.Sprintf("key-%d", i), i); err != nil {
+				t.Error(err)
+			}
 		}()
 		// Reader: repeatedly reads a key set before the concurrent phase,
 		// concurrently with the writers above mutating the same map.

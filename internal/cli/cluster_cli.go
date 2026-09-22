@@ -132,7 +132,7 @@ func cliFleet(ctx context.Context, args []string) int {
 		err = api.PushFleetRun(ctx, pf.name, pf.planID, pf.jobs, pf.hostTimeout, pf.tasks...)
 	}
 	if err != nil {
-		eprintf("fleet: %v\n", err)
+		eprintErr("fleet", err)
 		return 1
 	}
 	return 0
@@ -154,7 +154,7 @@ func cliCluster(ctx context.Context, args []string) int {
 		err = api.PushClusterRun(ctx, pf.name, pf.planID, pf.jobs, pf.hostTimeout, pf.tasks...)
 	}
 	if err != nil {
-		eprintf("cluster: %v\n", err)
+		eprintErr("cluster", err)
 		return 1
 	}
 	return 0

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/internal/declerr"
 )
 
 // Alias registers name as a second public name for the task target, e.g. a
@@ -31,22 +31,30 @@ import (
 // never listed). Aliases share the task namespace: registering a name twice,
 // an empty name or target, an alias of itself, or an alias of an
 // AggregateTasks that lists the alias as a member (the aggregate would
-// include itself) fails fast (logger.Fatal) like any other
-// registration-time misuse.
+// include itself) is reported as a declaration error (internal/declerr) and
+// not queued, like any other registration-time misuse.
 func Alias(name, description, target string) {
-	if name == "" {
-		logger.Fatal("Alias: name must not be empty")
-	}
-	if target == "" {
-		logger.Fatal("Alias %q: target must not be empty", name)
-	}
-	if target == name {
-		logger.Fatal("Alias %q: must not target itself", name)
-	}
-	if c, ok := findCandidate(target); ok && slices.Contains(c.members, name) {
-		logger.Fatal("Alias %q: aggregate %q lists it as a member, so the aggregate would include itself", name, target)
+	if err := checkAlias(name, target); err != nil {
+		declerr.Report(err)
+		return
 	}
 	queueCandidate(taskCandidate{name: name, description: description, aliasOf: target})
+}
+
+// checkAlias enforces Alias' registration-time contract.
+func checkAlias(name, target string) error {
+	switch {
+	case name == "":
+		return fmt.Errorf("Alias: name must not be empty")
+	case target == "":
+		return fmt.Errorf("Alias %q: target must not be empty", name)
+	case target == name:
+		return fmt.Errorf("Alias %q: must not target itself", name)
+	}
+	if c, ok := findCandidate(target); ok && slices.Contains(c.members, name) {
+		return fmt.Errorf("Alias %q: aggregate %q lists it as a member, so the aggregate would include itself", name, target)
+	}
+	return nil
 }
 
 // resolveAlias returns the real task that name records. For a name that is

@@ -78,11 +78,14 @@ type snapshotEntry struct {
 }
 
 // NewSnapshot returns a Snapshot over p. A nil p (including a typed nil
-// pointer) is a composition-root programmer error and panics immediately
-// rather than on the first resolution.
+// pointer) is a composition-root mistake; it never panics. The Snapshot it
+// returns then has no provider: IsNilProvider reports it as nil, so
+// api.SetSecretProvider refuses it with a declaration error ("provider must
+// not be nil") right at the composition root, and a direct Resolve returns a
+// typed ErrUnavailable error instead of crashing.
 func NewSnapshot(p Provider) *Snapshot {
 	if IsNilProvider(p) {
-		panic("secret: NewSnapshot with nil provider")
+		return &Snapshot{}
 	}
 	return &Snapshot{provider: p, entries: map[Ref]*snapshotEntry{}}
 }

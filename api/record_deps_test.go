@@ -271,8 +271,8 @@ func TestRecordPlanRecordsDependencyOnResourceFromEarlierTask(t *testing.T) {
 // typed plan error stays reachable through errors.As.
 func TestRecordPlanRefusalWordingIsConsistent(t *testing.T) {
 	for _, tc := range refusedRecordCauses() {
-		if tc.name == "packaging error of a later resource" {
-			continue // not a pre-flight refusal; covered by the staging tests
+		if tc.name == "packaging error of a later resource" || tc.name == "declaration error in the task body" {
+			continue // not pre-flight refusals; covered by the staging tests
 		}
 		t.Run(tc.name, func(t *testing.T) {
 			ResetForTest()

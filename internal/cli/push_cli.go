@@ -52,17 +52,24 @@ func cliPush(ctx context.Context, args []string) int {
 	}
 
 	t := api.PushTarget{Host: pos[0], ExtraSSH: sshOpts, Privilege: mode}
-	// PushToContext (not PushTo): "gonf push" is a CLI entry point with a
-	// signal-derived context, so SIGINT/SIGTERM should tear down an in-flight
-	// single-host push exactly like the fleet fan-out already does.
+	return pushOrPreview(ctx, *preview, t, *planID, pos[1:])
+}
+
+// pushOrPreview pushes tasks to t, or strictly previews them there, and
+// returns the exit code: 1 (with the error on stderr) on failure.
+//
+// PushToContext (not PushTo): "gonf push" is a CLI entry point with a
+// signal-derived context, so SIGINT/SIGTERM should tear down an in-flight
+// single-host push exactly like the fleet fan-out already does.
+func pushOrPreview(ctx context.Context, preview bool, t api.PushTarget, planID string, tasks []string) int {
 	var err error
-	if *preview {
-		err = api.PreviewToContext(ctx, t, *planID, pos[1:]...)
+	if preview {
+		err = api.PreviewToContext(ctx, t, planID, tasks...)
 	} else {
-		err = api.PushToContext(ctx, t, *planID, pos[1:]...)
+		err = api.PushToContext(ctx, t, planID, tasks...)
 	}
 	if err != nil {
-		eprintf("push: %v\n", err)
+		eprintErr("push", err)
 		return 1
 	}
 	return 0

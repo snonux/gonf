@@ -24,6 +24,7 @@ var (
 	_ opt.UserService     = (*Service)(nil)
 	_ opt.Dependable      = (*Service)(nil)
 	_ opt.ChangeWatchable = (*Service)(nil)
+	_ opt.MisuseReporter  = (*Service)(nil)
 )
 
 // Service manages a named OS service/daemon.
@@ -31,13 +32,15 @@ type Service struct {
 	embed.DependsOn
 	embed.Absence
 	embed.ChangeGate
+	embed.Misuse
 	name    string
 	restart bool
 	reload  bool
 	user    bool // systemd --user only
 }
 
-// newService builds a Service with opts applied.
+// newService builds a Service with opts applied. An option misuse is left in
+// its embed.Misuse for the caller to check.
 func newService(name string, opts []opt.ServiceOption) *Service {
 	s := &Service{name: name}
 	for _, o := range opts {
@@ -61,17 +64,27 @@ func (s *Service) SetUser() { s.user = true }
 // Apply runs the service reconciliation directly for the legacy resource path.
 func (s *Service) Apply() error { return s.apply() }
 
-// Present registers a service that should be running and enabled at boot.
+// Present registers a service that should be running and enabled at boot. An
+// option misuse is reported as a declaration error (resource.Refuse) and
+// nothing is registered.
 func Present(name string, opts ...opt.ServiceOption) resource.Resource {
 	s := newService(name, opts)
+	if err := s.MisuseErr(); err != nil {
+		return resource.Refuse("Service", name, err)
+	}
 	r := resource.Register("Service", s.name, s, s.DependsOn.IDs...)
 	resource.RecordPlanDraft(s.planDraft(r.ID()))
 	return r
 }
 
 // Ensure applies a service without registering it or recording a plan draft.
+// An option misuse is returned instead of applied around.
 func Ensure(name string, opts ...opt.ServiceOption) error {
-	return newService(name, opts).apply()
+	s := newService(name, opts)
+	if err := s.MisuseErr(); err != nil {
+		return err
+	}
+	return s.apply()
 }
 
 // Absent registers a service that should be stopped and disabled.

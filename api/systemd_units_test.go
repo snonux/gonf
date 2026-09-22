@@ -2,7 +2,6 @@ package api
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -403,66 +402,44 @@ func TestSystemdUnitsRecordedPlanApplies(t *testing.T) {
 	}
 }
 
-// TestSystemdUnitsRegistrationMisuseFailsFast runs the composition's
-// registration-time Fatal paths in a helper process: logger.Fatal exits the
-// process, so the parent asserts a non-zero exit and the specific message
-// instead of an unrelated one.
-func TestSystemdUnitsRegistrationMisuseFailsFast(t *testing.T) {
-	cases := []struct {
-		caseName string
-		want     string
-	}{
-		{"no-inputs", "no watchable managed inputs"},
-		{"empty-timer-name", "ActivateTimer name must not be empty"},
-		{"empty-service-name", "ActivateService name must not be empty"},
+// TestSystemdUnitsRegistrationMisuseIsDeclarationError checks the
+// composition's registration-time misuse in-process: it is reported as a
+// declaration error with the specific message, the checks run in a fixed
+// order (inputs first, whatever order the options came in), nothing of the
+// composition is registered, and an empty Multi comes back.
+func TestSystemdUnitsRegistrationMisuseIsDeclarationError(t *testing.T) {
+	unitFile := func(t *testing.T) Resource {
+		dir := t.TempDir()
+		writeFixtureFile(t, filepath.Join(dir, "a.service"), "[Unit]\n")
+		return InstallFile("/etc/systemd/system/a.service", filepath.Join(dir, "a.service"), options.WithMode(0o644))
 	}
-	// The helper calls t.TempDir() itself (empty-timer-name and
-	// empty-service-name) and then exits via logger.Fatal (os.Exit), which
-	// skips its own deferred cleanup. t.TempDir() creates its directory
-	// under $GOTMPDIR (see testing.common.makeTempDir), so every case below
-	// points its child's GOTMPDIR at this one directory this test owns;
-	// cleanFatalHelperTempDir then removes what the child left there (if
-	// anything - "no-inputs" creates nothing) and confirms it is empty again
-	// before the next case reuses it.
-	tmp := t.TempDir()
+	cases := []struct {
+		caseName, want string
+		compose        func(t *testing.T) Resource
+	}{
+		{"no-inputs", "no watchable managed inputs", func(*testing.T) Resource { return SystemdUnits() }},
+		{"no-inputs-and-empty-name", "no watchable managed inputs", func(*testing.T) Resource {
+			return SystemdUnits(ActivateTimer(""), ActivateService(""))
+		}},
+		{"empty-timer-name", "ActivateTimer name must not be empty", func(t *testing.T) Resource {
+			return SystemdUnits(FanIn(unitFile(t)), ActivateService("a.service"), ActivateTimer(""))
+		}},
+		{"empty-service-name", "ActivateService name must not be empty", func(t *testing.T) Resource {
+			return SystemdUnits(FanIn(unitFile(t)), ActivateService(""))
+		}},
+	}
 	for _, tc := range cases {
 		t.Run(tc.caseName, func(t *testing.T) {
-			cmd := exec.Command(os.Args[0], "-test.run=^TestSystemdUnitsFatalHelperProcess$", "-test.timeout=60s")
-			cmd.Env = append(os.Environ(),
-				"GONF_API_UNITS_MISUSE=1",
-				"GONF_API_UNITS_MISUSE_CASE="+tc.caseName,
-				"GOTMPDIR="+tmp)
-			out, err := cmd.CombinedOutput()
-			if err == nil {
-				t.Fatalf("misuse case %q exited 0, want fail-fast; output:\n%s", tc.caseName, out)
+			var got Resource
+			requireDeclErr(t, tc.want, func() { got = tc.compose(t) })
+			if deps := got.Dependencies(); len(deps) != 0 {
+				t.Fatalf("refused composition returned %v, want an empty Multi", deps)
 			}
-			if !strings.Contains(string(out), tc.want) {
-				t.Fatalf("misuse case %q output misses %q:\n%s", tc.caseName, tc.want, out)
+			for _, id := range resource.RegisteredIDs() {
+				if !strings.HasPrefix(id, "File[") {
+					t.Fatalf("refused composition registered %s (all: %v)", id, resource.RegisteredIDs())
+				}
 			}
-			cleanFatalHelperTempDir(t, tmp)
 		})
-	}
-}
-
-// TestSystemdUnitsFatalHelperProcess is the helper process for
-// TestSystemdUnitsRegistrationMisuseFailsFast: it triggers one registration-
-// time Fatal per misuse case and must never exit 0.
-func TestSystemdUnitsFatalHelperProcess(t *testing.T) {
-	if os.Getenv("GONF_API_UNITS_MISUSE") != "1" {
-		return
-	}
-	switch os.Getenv("GONF_API_UNITS_MISUSE_CASE") {
-	case "no-inputs":
-		SystemdUnits()
-	case "empty-timer-name":
-		dir := t.TempDir()
-		writeFixtureFile(t, filepath.Join(dir, "a.service"), "[Unit]\n")
-		unit := InstallFile("/etc/systemd/system/a.service", filepath.Join(dir, "a.service"), options.WithMode(0o644))
-		SystemdUnits(FanIn(unit), ActivateTimer(""))
-	case "empty-service-name":
-		dir := t.TempDir()
-		writeFixtureFile(t, filepath.Join(dir, "a.service"), "[Unit]\n")
-		unit := InstallFile("/etc/systemd/system/a.service", filepath.Join(dir, "a.service"), options.WithMode(0o644))
-		SystemdUnits(FanIn(unit), ActivateService(""))
 	}
 }

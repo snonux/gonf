@@ -25,7 +25,8 @@ type (
 // Capability interfaces. A resource implements one small setter interface per
 // option it accepts. The family types below normally stop a mismatch at
 // compile time; an erased Option applied to a resource lacking the capability
-// aborts via logger.Fatal when the option is applied.
+// is reported as recipe misuse when the option is applied (a declaration
+// error that fails the record; the option does nothing).
 type (
 	Owner                  = resourceoptions.Owner
 	Grouped                = resourceoptions.Grouped
@@ -83,6 +84,7 @@ type (
 	ServiceDescriptionable = resourceoptions.ServiceDescriptionable
 	Afterable              = resourceoptions.Afterable
 	Wantsable              = resourceoptions.Wantsable
+	MisuseReporter         = resourceoptions.MisuseReporter
 )
 
 // Resource-family option types. Each constructor accepts only its family

@@ -41,6 +41,7 @@ var (
 	_ opt.Weekdayable           = (*Cron)(nil)
 	_ opt.CronEnvable           = (*Cron)(nil)
 	_ opt.Sensitivable          = (*Cron)(nil)
+	_ opt.MisuseReporter        = (*Cron)(nil)
 )
 
 // Cron manages a named crontab entry for a user (default root).
@@ -55,6 +56,7 @@ type Cron struct {
 	embed.DependsOn
 	embed.Absence
 	embed.Sensitivity
+	embed.Misuse
 	name     string
 	user     string
 	legacy   string
@@ -67,7 +69,8 @@ type Cron struct {
 	env      []string
 }
 
-// newCron builds a Cron with defaults applied, then applies opts.
+// newCron builds a Cron with defaults applied, then applies opts. An option
+// misuse is left in its embed.Misuse for the caller to check.
 func newCron(name string, opts []opt.CronOption) *Cron {
 	c := &Cron{
 		name:     name,
@@ -112,17 +115,27 @@ func (c *Cron) SetWeekday(v string) { c.weekday = v }
 // AddCronEnv appends a KEY=VAL environment line above the cron job.
 func (c *Cron) AddCronEnv(kv string) { c.env = append(c.env, kv) }
 
-// Present registers a cron job that should exist in the user's crontab.
+// Present registers a cron job that should exist in the user's crontab. An
+// option misuse is reported as a declaration error (resource.Refuse) and
+// nothing is registered.
 func Present(name string, opts ...opt.CronOption) resource.Resource {
 	c := newCron(name, opts)
+	if err := c.MisuseErr(); err != nil {
+		return resource.Refuse(cronType, c.regName(), err)
+	}
 	r := resource.Register(cronType, c.regName(), c, c.DependsOn.IDs...)
 	resource.RecordPlanDraft(c.planDraft(r.ID()))
 	return r
 }
 
 // Ensure applies a cron job without registering it or recording a plan draft.
+// An option misuse is returned instead of applied around.
 func Ensure(name string, opts ...opt.CronOption) error {
-	return newCron(name, opts).apply()
+	c := newCron(name, opts)
+	if err := c.MisuseErr(); err != nil {
+		return err
+	}
+	return c.apply()
 }
 
 // Absent removes a named cron job from the user's crontab.

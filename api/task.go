@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
@@ -177,16 +177,20 @@ func WhenHostnameContains(substr string) TaskOption {
 }
 
 // Task queues a named unit of work for activation. Call from init() or
-// RegisterMethods. Duplicate names fail fast (logger.Fatal) — tasks,
-// aggregates and aliases share one namespace — because registration-time
-// misuse is always a recipe bug. Activation (When filtering) happens in
+// RegisterMethods. An empty name, a nil fn or a duplicate name — tasks,
+// aggregates and aliases share one namespace — is registration-time misuse,
+// always a recipe bug: it is reported as a declaration error
+// (internal/declerr), the task is not queued, and RecordPlan, Run, Apply and
+// the CLI refuse to run with the error. Activation (When filtering) happens in
 // Activate / CLI / Run.
 func Task(name, description string, fn func(), opts ...TaskOption) {
 	if name == "" {
-		logger.Fatal("Task: name must not be empty")
+		declerr.Reportf("Task: name must not be empty")
+		return
 	}
 	if fn == nil {
-		logger.Fatal("Task %q: fn must not be nil", name)
+		declerr.Reportf("Task %q: fn must not be nil", name)
+		return
 	}
 
 	c := taskCandidate{name: name, description: description, fn: fn}
@@ -206,19 +210,23 @@ func Task(name, description string, fn func(), opts ...TaskOption) {
 }
 
 // queueCandidate appends c to the candidate list after the duplicate-name
-// check shared by Task and Alias, and marks the registry for re-activation.
+// check shared by Task and Alias, and marks the registry for re-activation. A
+// duplicate is reported as a declaration error and not queued, so the first
+// registration keeps the name.
 func queueCandidate(c taskCandidate) {
 	tasksMu.Lock()
 	defer tasksMu.Unlock()
 
 	for _, existing := range candidates {
 		if existing.name == c.name {
-			logger.Fatal("Task %q already queued", c.name)
+			declerr.Reportf("Task %q already queued", c.name)
+			return
 		}
 	}
 	if activated {
 		if _, exists := tasks[c.name]; exists {
-			logger.Fatal("Task %q already registered", c.name)
+			declerr.Reportf("Task %q already registered", c.name)
+			return
 		}
 	}
 	candidates = append(candidates, c)
@@ -234,13 +242,16 @@ func Activate(facts Facts) {
 	activateLocked(facts)
 }
 
-// Matching returns activated task names matching pattern (sorted).
+// Matching returns activated task names matching pattern (sorted). An invalid
+// pattern is recipe misuse: it is reported as a declaration error
+// (internal/declerr) and Matching returns nil.
 func Matching(pattern string) []string {
 	ensureActivated()
 
 	re, err := regexp.Compile(pattern)
 	if err != nil {
-		logger.Fatal("Matching: invalid pattern %q: %v", pattern, err)
+		declerr.Reportf("Matching: invalid pattern %q: %v", pattern, err)
+		return nil
 	}
 
 	tasksMu.Lock()
@@ -313,10 +324,10 @@ func RunContext(ctx context.Context, names ...string) error {
 	defer removePlanDir()
 
 	// Record straight into the private temp dir (no RecordPlan staging): the
-	// directory is removed on return whether the record succeeds or not, and
-	// through logger.OnFatal when a task body ends the process with
-	// logger.Fatal (tempPlanDir), so nothing survives a refusal and staging
-	// would only copy large blobs twice.
+	// directory is removed on return whether the record succeeds or not (DSL
+	// misuse in a task body is a returned record error, not a process exit),
+	// so nothing survives a refusal and staging would only copy large blobs
+	// twice.
 	// The plan applies on this machine, so ForHosts only resolves the hosts
 	// whose destination guard this hostname satisfies (localHostSelection).
 	ops, err := recordPlanForHosts(localHostSelection(), "local", plan.NewStore(planDir), names...)

@@ -231,20 +231,32 @@ func TestRegisterMethodsOptsComposesWithGroupWhen(t *testing.T) {
 	}
 }
 
-func TestRegisterMethodsOptsBadSignaturePanics(t *testing.T) {
-	ResetTasks()
+// TestRegisterMethodsOptsBadSignatureIsDeclarationError: a wrong OptsX
+// signature is a declaration error and skips only that method's task (it
+// must not register with the companion silently dropped); the valid sibling
+// still registers.
+func TestRegisterMethodsOptsBadSignatureIsDeclarationError(t *testing.T) {
+	requireDeclErr(t, "RegisterMethods: OptsBroken must be func() TaskOptions", func() {
+		RegisterMethods(badOpts{}, WithPrefix("demo_"))
+	})
+	requireQueued(t, "demo_ping")
+	requireNotQueued(t, "demo_broken")
+}
 
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected panic for OptsX companion with wrong signature")
-		}
-		msg, ok := r.(string)
-		if !ok || !strings.Contains(msg, "OptsBroken must be func() TaskOptions") {
-			t.Fatalf("unexpected panic value: %v", r)
-		}
-	}()
-	RegisterMethods(badOpts{}, WithPrefix("demo_"))
+// requireQueued fails unless a task candidate named name is queued.
+func requireQueued(t *testing.T, name string) {
+	t.Helper()
+	if _, ok := findCandidate(name); !ok {
+		t.Fatalf("task %q is not queued", name)
+	}
+}
+
+// requireNotQueued fails when a task candidate named name is queued.
+func requireNotQueued(t *testing.T, name string) {
+	t.Helper()
+	if _, ok := findCandidate(name); ok {
+		t.Fatalf("task %q is queued, want it refused", name)
+	}
 }
 
 // OptsPing is valid; OptsBroken has a wrong signature for its Broken task.
@@ -255,25 +267,20 @@ func (badOpts) Ping()                 {}
 func (badOpts) OptsBroken() string    { return "wrong return type" }
 func (badOpts) Broken()               {}
 
-func TestRegisterMethodsWhenBadSignaturePanics(t *testing.T) {
-	ResetTasks()
-
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected panic for WhenX companion with wrong signature")
-		}
-		msg, ok := r.(string)
-		if !ok || !strings.Contains(msg, "WhenBroken must be func(Facts) bool") {
-			t.Fatalf("unexpected panic value: %v", r)
-		}
-	}()
-	RegisterMethods(badWhen{}, WithPrefix("demo_"))
+// TestRegisterMethodsWhenBadSignatureIsDeclarationError: a wrong WhenX
+// signature is a declaration error and Broken is not registered, so it can
+// never run unguarded; the valid sibling still registers.
+func TestRegisterMethodsWhenBadSignatureIsDeclarationError(t *testing.T) {
+	requireDeclErr(t, "RegisterMethods: WhenBroken must be func(Facts) bool", func() {
+		RegisterMethods(badWhen{}, WithPrefix("demo_"))
+	})
+	requireQueued(t, "demo_ping")
+	requireNotQueued(t, "demo_broken")
 }
 
 // WhenPing is valid; WhenBroken has a wrong signature for its Broken task
-// (wrong param type), which must panic rather than silently drop the guard
-// and let Broken run on every host.
+// (wrong param type), which must refuse the task rather than silently drop
+// the guard and let Broken run on every host.
 type badWhen struct{}
 
 func (badWhen) WhenPing(f Facts) bool { return f.GOOS == "linux" }
@@ -408,21 +415,21 @@ func TestRegisterMethodsStructOptsReplacedByOptsX(t *testing.T) {
 	}
 }
 
-func TestRegisterMethodsStructOptsBadSignaturePanics(t *testing.T) {
-	ResetTasks()
+// TestRegisterMethodsStructOptsBadSignatureIsDeclarationError: a wrong
+// struct-level Opts registers no task of the struct (the default could have
+// been Privileged()).
+func TestRegisterMethodsStructOptsBadSignatureIsDeclarationError(t *testing.T) {
+	requireDeclErr(t, "RegisterMethods: Opts must be func() TaskOptions", func() {
+		RegisterMethods(badStruct{}, WithPrefix("demo_"))
+	})
+	requireNotQueued(t, "demo_ping")
+}
 
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected panic for struct-level Opts with wrong signature")
-		}
-		msg, ok := r.(string)
-		if !ok || !strings.Contains(msg, "Opts must be func() TaskOptions") {
-			t.Fatalf("unexpected panic value: %v", r)
-		}
-	}()
-
-	RegisterMethods(badStruct{}, WithPrefix("demo_"))
+// TestRegisterMethodsBadReceiverIsDeclarationError: a nil pointer or a
+// non-struct receiver is a declaration error, not a panic.
+func TestRegisterMethodsBadReceiverIsDeclarationError(t *testing.T) {
+	requireDeclErr(t, "RegisterMethods: nil pointer", func() { RegisterMethods((*badStruct)(nil)) })
+	requireDeclErr(t, "RegisterMethods: want struct or *struct, got int", func() { RegisterMethods(42) })
 }
 
 // Opts with a wrong signature is the struct-level default companion.

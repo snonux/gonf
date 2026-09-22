@@ -25,6 +25,7 @@ var (
 	// renamed or re-signed Apply at the declaration, not at the Register call.
 	_ resource.Applier           = (*SystemdTimer)(nil)
 	_ opt.Absentable             = (*SystemdTimer)(nil)
+	_ opt.MisuseReporter         = (*SystemdTimer)(nil)
 	_ opt.Dependable             = (*SystemdTimer)(nil)
 	_ opt.Commandable            = (*SystemdTimer)(nil)
 	_ opt.OnCalendarable         = (*SystemdTimer)(nil)
@@ -55,6 +56,7 @@ type SystemdTimer struct {
 	embed.DependsOn
 	embed.Absence
 	embed.Sensitivity
+	embed.Misuse
 	name               string // unit name ending in .timer
 	base               string // name without .timer
 	command            string
@@ -71,7 +73,8 @@ type SystemdTimer struct {
 }
 
 // newTimer builds a SystemdTimer for name (with or without a .timer or
-// .service suffix) and applies opts.
+// .service suffix) and applies opts. An option misuse is left in its
+// embed.Misuse for the caller to check.
 func newTimer(name string, opts ...opt.SystemdTimerOption) *SystemdTimer {
 	base, unit := normalizeName(name)
 	t := &SystemdTimer{name: unit, base: base}
@@ -132,20 +135,31 @@ func (t *SystemdTimer) SetEnableOnly() { t.enableOnly = true }
 // After=/Wants= name a unit the composition may install (it could be
 // started from a stale definition). A same-bus declaration after the
 // timer that would add such a unit to the joined reload's inputs is then
-// refused fail-fast when it merges. The timer's op is unchanged, and
+// refused (a declaration error) when it merges. The timer's op is unchanged, and
 // without such a reload (or when joining it is refused) the timer behaves
 // exactly as a standalone one.
+//
+// An option misuse is reported as a declaration error (resource.Refuse) and
+// nothing is registered or joined.
 func Present(name string, opts ...opt.SystemdTimerOption) resource.Resource {
 	t := newTimer(name, opts...)
+	if err := t.MisuseErr(); err != nil {
+		return resource.Refuse("SystemdTimer", t.base, err)
+	}
 	r := resource.Register("SystemdTimer", t.base, t, t.DependsOn.IDs...)
 	resource.RecordPlanDraft(t.planDraft(r.ID()))
 	systemd.JoinRegisteredReload(t.user, r.ID(), slices.Concat(t.after, t.wants)...)
 	return r
 }
 
-// Ensure builds and applies a systemd timer without registering or recording a draft.
+// Ensure builds and applies a systemd timer without registering or recording
+// a draft. An option misuse is returned instead of applied around.
 func Ensure(name string, opts ...opt.SystemdTimerOption) error {
-	return newTimer(name, opts...).apply()
+	t := newTimer(name, opts...)
+	if err := t.MisuseErr(); err != nil {
+		return err
+	}
+	return t.apply()
 }
 
 // Absent registers a systemd timer whose units should be stopped, disabled, and removed.

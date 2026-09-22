@@ -96,8 +96,9 @@ func (f ProviderFunc) Resolve(ctx context.Context, ref Ref) ([]byte, error) { re
 // plain p == nil interface check misses; such a provider would panic only
 // at the first resolution. A Snapshot that wraps no provider (the zero
 // &Snapshot{} instead of NewSnapshot) counts as nil too: it cannot resolve
-// anything. Composition roots (api.SetSecretProvider, NewSnapshot) use it to
-// fail fast on a nil provider.
+// anything. Composition roots use it to refuse a nil provider:
+// api.SetSecretProvider with a declaration error, NewSnapshot by returning a
+// providerless Snapshot.
 func IsNilProvider(p Provider) bool {
 	if p == nil {
 		return true

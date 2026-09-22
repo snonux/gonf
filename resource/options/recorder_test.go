@@ -41,6 +41,7 @@ func (r *recorder) RemoveLines(v ...string)    { r.record("RemoveLines", v) }
 func (r *recorder) SetFileMode(v os.FileMode)  { r.record("SetFileMode", v) }
 func (r *recorder) SetPrune()                  { r.record("SetPrune", nil) }
 func (r *recorder) SetAbsent()                 { r.record("SetAbsent", nil) }
+func (r *recorder) ReportMisuse(err error)     { r.record("ReportMisuse", err.Error()) }
 func (r *recorder) SetLatest()                 { r.record("SetLatest", nil) }
 func (r *recorder) AddDependency(v string)     { r.record("AddDependency", v) }
 func (r *recorder) SetName(v string)           { r.record("SetName", v) }

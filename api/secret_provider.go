@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/secret"
@@ -32,7 +33,8 @@ type secretProviders struct {
 
 // init routes every controller-side log line through the secret registry
 // (logger.SetRedactor): a resolved secret is replaced wherever a message
-// quotes it, e.g. an identity in a registration debug line or a Fatal.
+// quotes it, e.g. an identity in a registration debug line or in a
+// declaration error the CLI prints.
 // With no secret resolved, Redact returns its input unchanged.
 func init() {
 	logger.SetRedactor(&secretConfig.values)
@@ -47,13 +49,15 @@ func init() {
 // cli.CLI or any Run/RecordPlan), so every task, host and chunk of one
 // invocation resolves through the same provider. Calling it twice, with nil,
 // from a task body, or after a secret has already been resolved is
-// registration-time misuse and fails fast via logger.Fatal: silently
-// switching providers mid-run could make one plan mix secret sources. Wrap
+// registration-time misuse, reported as a declaration error
+// (internal/declerr, which RecordPlan, Run, Apply and the CLI refuse to run
+// with) and leaving the provider unchanged: silently switching providers
+// mid-run could make one plan mix secret sources. Wrap
 // the provider in secret.NewSnapshot to also pin each secret's value for the
 // whole invocation.
 func SetSecretProvider(p secret.Provider) {
 	if err := setSecretProvider(p); err != nil {
-		logger.Fatal("SetSecretProvider: %v", err)
+		declerr.Reportf("SetSecretProvider: %v", err)
 	}
 }
 

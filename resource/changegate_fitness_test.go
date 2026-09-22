@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
-	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/cmd"
 	"github.com/snonux/gonf/resource/service"
@@ -14,32 +14,20 @@ import (
 	"github.com/snonux/gonf/resource/timer"
 )
 
-// fatalPanic is the value panicked by the OnFatal hook installed by
-// catchFatal, so a logger.Fatal on the option path unwinds into the test
-// instead of exiting the process.
-type fatalPanic struct{}
-
-// catchFatal runs register and reports whether it hit logger.Fatal. The
-// hook panics before Fatal's os.Exit; the panic is recovered here.
-func catchFatal(t *testing.T, register func()) (fataled bool) {
+// refusedWith runs register with a clean declaration-error state and returns
+// the declaration error it reported (internal/declerr), or nil. Option misuse
+// no longer ends the process, so the refusal is asserted in-process.
+func refusedWith(t *testing.T, register func()) error {
 	t.Helper()
-	unregister := logger.OnFatal(func() { panic(fatalPanic{}) })
-	defer unregister()
-	defer func() {
-		if r := recover(); r != nil {
-			if _, ok := r.(fatalPanic); !ok {
-				panic(r)
-			}
-			fataled = true
-		}
-	}()
+	declerr.Reset()
+	t.Cleanup(declerr.Reset)
 	register()
-	return false
+	return declerr.First()
 }
 
 // TestLegacyGateOptionsRejectedOutsideDaemonReload pins that the legacy
 // IfChanged and WithWatch options, passed through the type-erased
-// opt.Option path, are refused (logger.Fatal "does not support ...") by
+// opt.Option path, are refused (a declaration error "does not support ...") by
 // Service, Timer and Command, also next to OnChange or WatchChanges (which
 // would otherwise give the gate something to watch). IfChanged arms through
 // the one SetChangeWatch capability but requires opt.ChangeGated, and
@@ -79,8 +67,15 @@ func TestLegacyGateOptionsRejectedOutsideDaemonReload(t *testing.T) {
 				// Present only registers (no apply), so nothing touches the host.
 				resource.ResetRepository()
 				t.Cleanup(resource.ResetRepository)
-				if got := catchFatal(t, func() { tc.register(legacy.erased) }); got != tc.wantFail {
-					t.Fatalf("%s via erased option fatal = %t, want %t", legacy.name, got, tc.wantFail)
+				err := refusedWith(t, func() { tc.register(legacy.erased) })
+				if got := err != nil; got != tc.wantFail {
+					t.Fatalf("%s via erased option refused = %t (%v), want %t", legacy.name, got, err, tc.wantFail)
+				}
+				if err != nil && !strings.Contains(err.Error(), "does not support "+legacy.name) {
+					t.Fatalf("refusal = %q, want it to name the unsupported %s", err, legacy.name)
+				}
+				if err != nil && len(resource.RegisteredIDs()) != 0 {
+					t.Fatalf("a refused declaration registered %v", resource.RegisteredIDs())
 				}
 			})
 		}

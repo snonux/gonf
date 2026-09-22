@@ -33,6 +33,7 @@ type Dir struct {
 	embed.DependsOn
 	embed.Absence
 	embed.Sensitivity
+	embed.Misuse
 	resource   resource.Resource
 	path       string
 	source     string
@@ -102,6 +103,7 @@ var (
 	_ opt.SourceGlobable = (*Dir)(nil)
 	_ opt.SourceBaseable = (*Dir)(nil)
 	_ opt.Sensitivable   = (*Dir)(nil)
+	_ opt.MisuseReporter = (*Dir)(nil)
 )
 
 func build(path string, opts ...opt.DirOption) (*Dir, error) {
@@ -120,6 +122,10 @@ func build(path string, opts ...opt.DirOption) (*Dir, error) {
 
 	for _, o := range opts {
 		o.Apply(d)
+	}
+	// An option misuse (e.g. WithContent on a directory) is this build's error.
+	if err := d.MisuseErr(); err != nil {
+		return nil, err
 	}
 
 	if d.source != "" && d.sourceGlob != "" {
@@ -453,13 +459,14 @@ func ensureWithPlanFacts(path string, facts plan.Facts, opts ...opt.DirOption) e
 
 // Present registers a directory resource that ensures path exists with the
 // configured mode, ownership, and source content, and records a plan draft
-// for remote apply. A build failure (invalid option combination) is recipe
-// misuse and fails fast via logger.Fatal at record time.
+// for remote apply. A build failure (invalid option combination, option
+// misuse) is recipe misuse: it is reported as a declaration error
+// (resource.Refuse) and nothing is registered.
 func Present(path string, opts ...opt.DirOption) resource.Resource {
 	d, err := build(path, opts...)
 	if err != nil {
 		// build's error already names the path.
-		logger.Fatal("%v", err)
+		return resource.Refuse("Directory", path, err)
 	}
 
 	d.resource = resource.Register("Directory", d.path, d, d.DependsOn.IDs...)

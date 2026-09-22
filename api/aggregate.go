@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 
+	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/internal/logger"
 )
 
@@ -52,11 +53,15 @@ func Aggregate(name, description, pattern string) {
 // shrink a setup run silently), as does a list whose members are all
 // inactive. The list itself is checked at registration: no members, an empty
 // member name, a duplicate member, or a member that is the aggregate itself —
-// by name or through an already registered Alias — fail fast (logger.Fatal).
+// by name or through an already registered Alias — is reported as a
+// declaration error (internal/declerr) and the aggregate is not registered.
 // Alias applies the same check from the other side, so registration order
 // does not matter.
 func AggregateTasks(name, description string, members ...string) {
-	checkAggregateMembers(name, members)
+	if err := checkAggregateMembers(name, members); err != nil {
+		declerr.Report(err)
+		return
+	}
 	list := append([]string(nil), members...)
 	Task(name, description, func() {
 		names, err := activeMembers(list)
@@ -78,25 +83,26 @@ func asAggregate(members []string) TaskOption {
 }
 
 // checkAggregateMembers enforces AggregateTasks' registration-time contract.
-func checkAggregateMembers(name string, members []string) {
+func checkAggregateMembers(name string, members []string) error {
 	if len(members) == 0 {
-		logger.Fatal("AggregateTasks %q: at least one member task is required", name)
+		return fmt.Errorf("AggregateTasks %q: at least one member task is required", name)
 	}
 	seen := make(map[string]bool, len(members))
 	for _, m := range members {
 		switch {
 		case m == "":
-			logger.Fatal("AggregateTasks %q: member name must not be empty", name)
+			return fmt.Errorf("AggregateTasks %q: member name must not be empty", name)
 		case m == name:
-			logger.Fatal("AggregateTasks %q: must not list itself as a member", name)
+			return fmt.Errorf("AggregateTasks %q: must not list itself as a member", name)
 		case seen[m]:
-			logger.Fatal("AggregateTasks %q: member %q listed twice", name, m)
+			return fmt.Errorf("AggregateTasks %q: member %q listed twice", name, m)
 		}
 		if c, ok := findCandidate(m); ok && c.aliasOf == name {
-			logger.Fatal("AggregateTasks %q: member %q is an alias of the aggregate itself", name, m)
+			return fmt.Errorf("AggregateTasks %q: member %q is an alias of the aggregate itself", name, m)
 		}
 		seen[m] = true
 	}
+	return nil
 }
 
 // patternMembers returns the activated tasks matching pattern, minus the

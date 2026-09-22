@@ -41,8 +41,8 @@ func TestDeliverUnregisteredHostReturnsError(t *testing.T) {
 func TestDeliverFansOutToEachRegisteredHost(t *testing.T) {
 	inventory.Reset()
 	t.Cleanup(inventory.Reset)
-	inventory.AddHost("h1", func(h *inventory.Host) { h.SSHHost = "h1.example" })
-	inventory.AddHost("h2", func(h *inventory.Host) { h.SSHHost = "h2.example" })
+	mustAddHost(t, "h1", "h1.example")
+	mustAddHost(t, "h2", "h2.example")
 
 	oldRunner := remote.SSHRunner
 	restoreProbe := remote.AssumeRemotePlanCurrent()
@@ -85,8 +85,8 @@ func TestDeliverModeDecidesBootstrap(t *testing.T) {
 		t.Run(tc.mode.String(), func(t *testing.T) {
 			inventory.Reset()
 			t.Cleanup(inventory.Reset)
-			inventory.AddHost("h1", func(h *inventory.Host) { h.SSHHost = "h1.example" })
-			inventory.AddHost("h2", func(h *inventory.Host) { h.SSHHost = "h2.example" })
+			mustAddHost(t, "h1", "h1.example")
+			mustAddHost(t, "h2", "h2.example")
 			bootstraps, cmds := observeDelivery(t)
 
 			ops := []plan.Op{{Op: plan.KindEnsureDir, ID: "1", Path: "/tmp/orchestrate-test-dir"}}
@@ -140,8 +140,8 @@ func observeDelivery(t *testing.T) (*atomic.Int32, *[]string) {
 func TestDeliverWritesSummaryThroughGroupWriter(t *testing.T) {
 	inventory.Reset()
 	t.Cleanup(inventory.Reset)
-	inventory.AddHost("h1", func(h *inventory.Host) { h.SSHHost = "h1.example" })
-	inventory.AddHost("h2", func(h *inventory.Host) { h.SSHHost = "h2.example" })
+	mustAddHost(t, "h1", "h1.example")
+	mustAddHost(t, "h2", "h2.example")
 	oldRunner := remote.SSHRunner
 	restoreProbe := remote.AssumeRemotePlanCurrent()
 	t.Cleanup(func() {
@@ -178,7 +178,7 @@ func TestDeliverWritesSummaryThroughGroupWriter(t *testing.T) {
 func TestDeliverNilWriterDefaultsToStderr(t *testing.T) {
 	inventory.Reset()
 	t.Cleanup(inventory.Reset)
-	inventory.AddHost("h1", func(h *inventory.Host) { h.SSHHost = "h1.example" })
+	mustAddHost(t, "h1", "h1.example")
 	oldRunner := remote.SSHRunner
 	restoreProbe := remote.AssumeRemotePlanCurrent()
 	t.Cleanup(func() {
@@ -201,5 +201,14 @@ func TestDeliverNilWriterDefaultsToStderr(t *testing.T) {
 	want := "pushed plan-id (1 ops) to grp (1/1 hosts)\n"
 	if stderr != want {
 		t.Fatalf("stderr = %q, want %q", stderr, want)
+	}
+}
+
+// mustAddHost registers host name with sshHost in the inventory, failing the
+// test when the registration is refused.
+func mustAddHost(t *testing.T, name, sshHost string) {
+	t.Helper()
+	if _, err := inventory.AddHost(name, func(h *inventory.Host) { h.SSHHost = sshHost }); err != nil {
+		t.Fatal(err)
 	}
 }

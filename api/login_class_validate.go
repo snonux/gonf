@@ -1,12 +1,12 @@
 package api
 
 import (
+	"fmt"
 	"os"
 	"regexp"
 	"slices"
 	"strings"
 
-	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource/file"
 	"github.com/snonux/gonf/resource/options"
 )
@@ -17,16 +17,16 @@ import (
 // and "..").
 var loginClassNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
-// validateLoginClassName aborts registration for a class name that could not
-// be looked up as its own fragment: login_getclass(3) opens
-// /etc/login.conf.d/<class> verbatim, so path separators, dot names, getcap
-// separators, and a ".db" suffix (the compiled-database name getcap prefers)
-// are rejected.
-func validateLoginClassName(class string) {
+// validateLoginClassName refuses a class name that could not be looked up as
+// its own fragment: login_getclass(3) opens /etc/login.conf.d/<class>
+// verbatim, so path separators, dot names, getcap separators, and a ".db"
+// suffix (the compiled-database name getcap prefers) are rejected.
+func validateLoginClassName(class string) error {
 	if !loginClassNameRe.MatchString(class) || strings.HasSuffix(class, ".db") {
-		logger.Fatal("LoginClass: invalid class name %q; want letters, digits, '.', '_' or '-', "+
+		return fmt.Errorf("LoginClass: invalid class name %q; want letters, digits, '.', '_' or '-', "+
 			"starting with a letter or digit and not ending in .db", class)
 	}
+	return nil
 }
 
 // loginClassProbe records what the caller's file options would do to the
@@ -59,17 +59,25 @@ func (p *loginClassProbe) AddLines(...string)       { p.lineEdit = true }
 func (p *loginClassProbe) RemoveLines(...string)    { p.lineEdit = true }
 func (p *loginClassProbe) hasContentOverride() bool { return p.sourceSet || p.contentSet }
 
-// inspectLoginClassOptions applies opts to a probe. Line edits are refused:
-// the fragment is owned whole, so partial edits of it make no sense.
-func inspectLoginClassOptions(class string, opts []options.FileOption) *loginClassProbe {
+// inspectLoginClassOptions validates class and applies opts to a probe. An
+// invalid name, an option the probe does not support (collected by the
+// embedded File's embed.Misuse) and line edits are refused: the fragment is
+// owned whole, so partial edits of it make no sense.
+func inspectLoginClassOptions(class string, opts []options.FileOption) (*loginClassProbe, error) {
+	if err := validateLoginClassName(class); err != nil {
+		return nil, err
+	}
 	p := &loginClassProbe{File: &file.File{}}
 	for _, o := range opts {
 		o.Apply(p)
 	}
-	if p.lineEdit {
-		logger.Fatal("LoginClass %q: WithLine(s)/WithoutLine(s) are not supported; the fragment is owned as a whole file", class)
+	if err := p.MisuseErr(); err != nil {
+		return nil, err
 	}
-	return p
+	if p.lineEdit {
+		return nil, fmt.Errorf("LoginClass %q: WithLine(s)/WithoutLine(s) are not supported; the fragment is owned as a whole file", class)
+	}
+	return p, nil
 }
 
 // installedContent returns the text that will be installed and whether it is
@@ -97,19 +105,20 @@ func (p *loginClassProbe) installedContent(src string) (string, bool) {
 // effective: OpenBSD only consults /etc/login.conf.d/<class> for <class>, so
 // some record in it must carry that name (canonical name or '|' alias).
 // Content unknown on the controller, or record names that are still
-// templates ("{{"), cannot be judged before rendering and are accepted.
-func validateLoginClassContent(class string, content string, known bool) {
+// templates ("{{"), cannot be judged before rendering and are accepted. A
+// violation is returned as the refusal naming the classes found.
+func validateLoginClassContent(class string, content string, known bool) error {
 	if !known {
-		return
+		return nil
 	}
 	names := loginClassRecordNames(content)
 	if slices.Contains(names, class) {
-		return
+		return nil
 	}
 	if slices.ContainsFunc(names, func(n string) bool { return strings.Contains(n, "{{") }) {
-		return
+		return nil
 	}
-	logger.Fatal("LoginClass: fragment for %q defines classes %q but not %q; OpenBSD reads %s/%s only when "+
+	return fmt.Errorf("LoginClass: fragment for %q defines classes %q but not %q; OpenBSD reads %s/%s only when "+
 		"looking up %q, so the fragment would never be used", class, names, class, loginClassDir, class, class)
 }
 

@@ -19,8 +19,9 @@ import (
 // pins that contract at the declaration, so a renamed or re-signed Apply is
 // reported here rather than at the Register call.
 var (
-	_ resource.Applier = (*Package)(nil)
-	_ opt.Sensitivable = (*Package)(nil)
+	_ resource.Applier   = (*Package)(nil)
+	_ opt.Sensitivable   = (*Package)(nil)
+	_ opt.MisuseReporter = (*Package)(nil)
 )
 
 // Package reconciles an OS package's presence or absence using the
@@ -36,6 +37,7 @@ type Package struct {
 	embed.DependsOn
 	embed.Absence
 	embed.Sensitivity
+	embed.Misuse
 	name   string
 	latest bool
 	env    map[string]string
@@ -58,14 +60,12 @@ func (p *Package) SetEnv(env map[string]string) {
 func (p *Package) Apply() error { return p.apply() }
 
 // Present registers a package resource ensuring name is installed; IsLatest
-// upgrades it to the newest available version.
+// upgrades it to the newest available version. An option misuse is reported
+// as a declaration error (resource.Refuse) and nothing is registered.
 func Present(name string, opts ...opt.PackageOption) resource.Resource {
-	p := &Package{
-		name: name,
-	}
-
-	for _, o := range opts {
-		o.Apply(p)
+	p, err := build(name, opts)
+	if err != nil {
+		return resource.Refuse("Package", name, err)
 	}
 
 	r := resource.Register("Package", p.name, p, p.DependsOn.IDs...)
@@ -76,9 +76,9 @@ func Present(name string, opts ...opt.PackageOption) resource.Resource {
 // Ensure builds and applies a package resource without registering it or
 // recording a plan draft.
 func Ensure(name string, opts ...opt.PackageOption) error {
-	p := &Package{name: name}
-	for _, o := range opts {
-		o.Apply(p)
+	p, err := build(name, opts)
+	if err != nil {
+		return err
 	}
 	return p.apply()
 }
@@ -87,6 +87,19 @@ func Ensure(name string, opts ...opt.PackageOption) error {
 func Absent(name string, opts ...opt.PackageOption) resource.Resource {
 	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(name, opts...)
+}
+
+// build applies opts to a new Package. An option misuse collected while
+// applying them (embed.Misuse) is its error.
+func build(name string, opts []opt.PackageOption) (*Package, error) {
+	p := &Package{name: name}
+	for _, o := range opts {
+		o.Apply(p)
+	}
+	if err := p.MisuseErr(); err != nil {
+		return nil, err
+	}
+	return p, nil
 }
 
 // apply selects the host's backend and converges p through it with p's own

@@ -31,7 +31,7 @@ func WhenHostname[T Path](hosts T, fn func()) {
 			whenHostnameOne(substr, fn)
 		}
 	default:
-		panic("WhenHostname: hosts must be string or []string")
+		panic("unreachable: WhenHostname: Path is string or []string") // see Path
 	}
 }
 

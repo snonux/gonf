@@ -15,6 +15,7 @@ import (
 	"github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/internal"
 	"github.com/snonux/gonf/internal/clihost"
+	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/internal/exec"
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/internal/privilege"
@@ -56,6 +57,14 @@ var cleanupRemoteBuilds = remote.CleanupBuilds
 //	gonf apply [-n] <plan.jsonl|->               # apply file or GONF-PUSH/1 stdin
 //	gonf <task> [task...]                            # RecordPlan + Apply locally
 func CLI() int {
+	// Registration-time misuse in the recipe's main (an empty Task name, a
+	// duplicate Host, ...) was reported as a declaration error instead of
+	// ending the process; refuse every invocation with it, before any flag
+	// or subcommand runs, exactly as the process used to die before CLI().
+	if err := declerr.First(); err != nil {
+		reportDeclarationError(err)
+		return 1
+	}
 	// This binary's main hands its arguments to the CLI, so the local
 	// elevated re-exec (`<this binary> apply <chunk>`) is safe while the CLI
 	// runs; api refuses it in any process (or phase of a process) that is not
@@ -197,6 +206,16 @@ func configureCLI(options cliOptions) error {
 	return nil
 }
 
+// reportDeclarationError logs a declaration error found before CLI started
+// at error level (the message is exactly what logger.Fatal used to print
+// there) and, when known, the recipe line it was reported at.
+func reportDeclarationError(err error) {
+	logger.Error("%v", err)
+	if loc := declerr.Location(err); loc != "" {
+		logger.Error("declared at %s", loc)
+	}
+}
+
 // runCLI dispatches one configured invocation, in precedence order: an
 // informational version flag, -list, a named subcommand, and finally the
 // positional arguments as task names to record and apply locally. It
@@ -282,7 +301,7 @@ func runTasks(ctx context.Context, names []string) int {
 			eprintf("error: interrupted: %v\n", err)
 			return 1
 		}
-		eprintf("error: %v\n", err)
+		eprintErr("error", err)
 		return 1
 	}
 	return 0
@@ -428,7 +447,7 @@ func planOutputConflict(fs *flag.FlagSet, stdout, withSecrets, redacted bool) st
 func planPreview(planID string, tasks []string) int {
 	ops, err := api.RecordPlanTo(planID, plan.NewMemoryStore(), tasks...)
 	if err != nil {
-		eprintf("plan: %v\n", err)
+		eprintErr("plan", err)
 		return 1
 	}
 	raw, err := api.EncodeRedactedPreview(ops)
@@ -455,7 +474,7 @@ func planPreview(planID string, tasks []string) int {
 func planToStdout(planID string, tasks []string, withSecrets bool) int {
 	ops, err := api.RecordPlanTo(planID, plan.NewMemoryStore(), tasks...)
 	if err != nil {
-		eprintf("plan: %v\n", err)
+		eprintErr("plan", err)
 		return 1
 	}
 	if names := api.SensitiveOpNames(ops); len(names) != 0 && !withSecrets {
@@ -516,7 +535,7 @@ func planToDir(outDir, planID string, tasks []string) int {
 	}
 	ops, err := api.RecordPlan(planID, outDir, tasks...)
 	if err != nil {
-		eprintf("plan: %v\n", err)
+		eprintErr("plan", err)
 		return 1
 	}
 	raw, err := plan.EncodePlan(ops)

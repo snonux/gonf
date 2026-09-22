@@ -3,7 +3,7 @@ package api
 import (
 	"fmt"
 
-	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/internal/declerr"
 )
 
 // ParseKV interprets a flat key/value list (as from List) into pairs.
@@ -20,12 +20,14 @@ func ParseKV(kv []string) ([][2]string, error) {
 }
 
 // EachKV calls fn for each consecutive key/value in kv (typically from List).
-// An odd-length list is recipe misuse and fails fast via logger.Fatal; use
-// ParseKV when you need an error instead.
+// An odd-length list is recipe misuse: it is reported as a declaration error
+// (internal/declerr) and fn is not called at all; use ParseKV when you need
+// the error yourself.
 func EachKV(kv []string, fn func(key, val string)) {
 	pairs, err := ParseKV(kv)
 	if err != nil {
-		logger.Fatal("%v", err)
+		declerr.Report(err)
+		return
 	}
 	for _, p := range pairs {
 		fn(p[0], p[1])

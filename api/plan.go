@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/internal/validator"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -63,9 +64,11 @@ type recordingSession struct {
 	// recordingBodyErr holds a task-body failure stashed because a Task fn
 	// cannot return errors: an aggregate's child failure, empty member set
 	// or broken alias (Aggregate/AggregateTasks), a failed nested Run from
-	// any task body (propagateNestedRunError), a secret lookup failure
-	// (stashSecretError), or a ForHosts misuse or missing/mistyped host
-	// value (failForHosts). Like the cycle stash, every enclosing body
+	// any task body (propagateNestedRunError), or a declaration error
+	// reported while the body ran (internal/declerr, routed here by
+	// RecordPlanTo's Capture): DSL misuse such as an unsupported option, a
+	// secret lookup failure (MustSecret), or a ForHosts misuse or
+	// missing/mistyped host value. Like the cycle stash, every enclosing body
 	// fails its record after its fn returns, and the top-level
 	// RecordPlanTo returns it — so Run's deferred temp-dir cleanup runs and
 	// embedded callers get an error instead of a process exit. Cleared at
@@ -186,9 +189,10 @@ func (s *recordingSession) packager(store plan.BlobStore) draftPackager {
 //     one is verified and keeps its mode (plan.OpenSecureStore never chmods a
 //     directory it did not create).
 //   - The staging directory (in $TMPDIR, created only when a blob is written)
-//     is removed on every return path and when a task body calls logger.Fatal.
-//     A process killed by a signal it does not handle, or by SIGKILL, leaves
-//     it behind.
+//     is removed on every return path: DSL misuse in a task body is a
+//     returned record error (internal/declerr), never a process exit. A
+//     process killed by a signal it does not handle, or by SIGKILL, leaves it
+//     behind.
 //
 // Nested Run calls while recording append into the same plan (used by Aggregate).
 func RecordPlan(planID, planDir string, taskNames ...string) ([]plan.Op, error) {
@@ -207,6 +211,14 @@ func RecordPlan(planID, planDir string, taskNames ...string) ([]plan.Op, error) 
 // record, so no plan that ApplyChunks or remote.Delivery.ToHost would refuse
 // is ever written (`gonf plan`), shipped (push, cluster, fleet) or applied (Run).
 //
+// Declaration errors (internal/declerr) fail the record too. One reported
+// before the record — top-level registration misuse such as an empty Task
+// name or a duplicate Host — refuses it before any task body runs. One
+// reported while a task body runs — an option on a resource that does not
+// support it, a failed MustSecret, a ForHosts misuse — is captured into this
+// session (stashBodyError): the body keeps running, later declarations are
+// still checked, and the record returns the first such error.
+//
 // RecordPlanTo does NOT undo blob writes: a record that fails (the
 // pre-flight refusal, a task-body error, a packaging error) may already have
 // written blobs into store. That is safe only for storage the caller discards
@@ -221,28 +233,11 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 	if len(taskNames) == 0 {
 		return nil, fmt.Errorf("RecordPlan: no tasks specified")
 	}
+	if err := declerr.First(); err != nil {
+		return nil, err
+	}
 
-	plan.ResetRecord()
-	plan.SetRecording(true)
-	// Defensive: recSession.reset() is a general safeguard against state an
-	// earlier session left behind if it never reached its normal cleanup
-	// (e.g. a panic recovered outside RecordPlanTo, such as by go test's
-	// per-test recovery, which keeps running afterward). The stack pop
-	// itself is not at risk here: recordTaskName pops its own entry in a
-	// defer, so a panicking task body cannot leak a stale stack entry.
-	recSession.reset()
-	resource.SetPlanDraftRecorder(func(d resource.PlanDraft) {
-		recordSessionDraft(d, store)
-	})
-	resource.SetPlanDraftAmender(func(d resource.PlanDraft) error {
-		return amendRecordedDraft(d, store)
-	})
-	defer func() {
-		resource.SetPlanDraftRecorder(nil)
-		resource.SetPlanDraftAmender(nil)
-		plan.SetRecording(false)
-	}()
-
+	defer enterRecordMode(store)()
 	if err := recordTaskBodies(taskNames); err != nil {
 		return nil, err
 	}
@@ -261,6 +256,37 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 		return nil, err
 	}
 	return ops, nil
+}
+
+// enterRecordMode starts a fresh recording session packaging into store: it
+// switches on plan recording, resets the session, installs the session's
+// draft recorder and amend sink, and captures declaration errors
+// (internal/declerr) into the session (stashBodyError), so DSL misuse inside
+// a task body fails this record. The returned function leaves record mode
+// again; RecordPlanTo defers it, so it runs even when a task body panics.
+func enterRecordMode(store plan.BlobStore) (exit func()) {
+	plan.ResetRecord()
+	plan.SetRecording(true)
+	// Defensive: recSession.reset() is a general safeguard against state an
+	// earlier session left behind if it never reached its normal cleanup
+	// (e.g. a panic recovered outside RecordPlanTo, such as by go test's
+	// per-test recovery, which keeps running afterward). The stack pop
+	// itself is not at risk here: recordTaskName pops its own entry in a
+	// defer, so a panicking task body cannot leak a stale stack entry.
+	recSession.reset()
+	resource.SetPlanDraftRecorder(func(d resource.PlanDraft) {
+		recordSessionDraft(d, store)
+	})
+	resource.SetPlanDraftAmender(func(d resource.PlanDraft) error {
+		return amendRecordedDraft(d, store)
+	})
+	restoreDeclErr := declerr.Capture(stashBodyError)
+	return func() {
+		restoreDeclErr()
+		resource.SetPlanDraftRecorder(nil)
+		resource.SetPlanDraftAmender(nil)
+		plan.SetRecording(false)
+	}
 }
 
 // recordSessionDraft is the session's draft recorder: it notes d.ID as
@@ -517,8 +543,9 @@ func resetRecordedDrafts() {
 }
 
 // stashBodyError records a task-body failure for the current recording
-// session. Task bodies cannot return errors, so bodies that fail record it
-// here (secret lookups, ForHosts; a failed nested Run is stashed by
+// session. Task bodies cannot return errors, so the declaration errors they
+// report (internal/declerr: DSL misuse, secret lookups, ForHosts) arrive here
+// through RecordPlanTo's Capture (a failed nested Run is stashed by
 // propagateNestedRunError instead); every enclosing body fails its
 // record after its fn returns. The first error wins: a later one in the same
 // session is a consequence or a second, independent failure, and the

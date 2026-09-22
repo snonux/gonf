@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/internal/declerr"
 )
 
 const (
@@ -35,12 +35,27 @@ func ModeToFlags(mode os.FileMode) os.FileMode {
 }
 
 // NormalizeMode validates a mode and converts raw octal special bits into Go
-// FileMode flags. It accepts both 0o4755 and 0o755|os.ModeSetuid forms.
+// FileMode flags. It accepts both 0o4755 and 0o755|os.ModeSetuid forms. A mode
+// with bits outside 0o7777 (a file-type bit, say) is recipe misuse: it is
+// reported as a declaration error (internal/declerr) and those bits are
+// dropped from the result. WithMode and WithFileMode report the same misuse
+// to the resource they configure instead.
 func NormalizeMode(mode os.FileMode) os.FileMode {
-	if invalid := mode &^ modeMax &^ (os.ModeSetuid | os.ModeSetgid | os.ModeSticky); invalid != 0 {
-		logger.Fatal("WithMode value %#o has bits %#o outside 0o7777: setuid/setgid/sticky (0o4000/0o2000/0o1000) plus the nine permission bits are the only supported mode bits", mode, invalid)
+	normalized, err := normalizeMode(mode)
+	if err != nil {
+		declerr.Report(err)
+		return ModeToFlags(mode & (modeMax | os.ModeSetuid | os.ModeSetgid | os.ModeSticky))
 	}
-	return ModeToFlags(mode)
+	return normalized
+}
+
+// normalizeMode is NormalizeMode's checked core: the flags form of mode, or an
+// error naming the bits outside 0o7777.
+func normalizeMode(mode os.FileMode) (os.FileMode, error) {
+	if invalid := mode &^ modeMax &^ (os.ModeSetuid | os.ModeSetgid | os.ModeSticky); invalid != 0 {
+		return 0, fmt.Errorf("WithMode value %#o has bits %#o outside 0o7777: setuid/setgid/sticky (0o4000/0o2000/0o1000) plus the nine permission bits are the only supported mode bits", mode, invalid)
+	}
+	return ModeToFlags(mode), nil
 }
 
 // ModeToWire renders a mode in the canonical plan-wire octal format.

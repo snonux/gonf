@@ -16,7 +16,6 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/internal/remote"
 )
@@ -37,9 +36,14 @@ type Host struct {
 	GOOS      string
 	GOARCH    string
 	GonfPath  string
+	// optErr is the first misuse a HostOption reported (RejectOption); it
+	// makes AddHost refuse the registration. Stored records never carry one.
+	optErr error
 }
 
-// HostOption configures a Host at registration (mirrors api.HostOption).
+// HostOption configures a Host at registration (mirrors api.HostOption). An
+// option that finds its arguments invalid calls RejectOption instead of
+// setting fields.
 type HostOption func(*Host)
 
 // Cluster is a registered named set of hosts.
@@ -75,15 +79,19 @@ var (
 )
 
 // AddHost registers name with opts applied and returns the stored record.
-// Registration-time misuse (empty name, duplicate) fails fast via
-// logger.Fatal, matching the rest of the inventory DSL's fail-fast contract.
-func AddHost(name string, opts ...HostOption) Host {
+// Registration-time misuse (empty name, a HostOption that rejected its
+// arguments, a duplicate) is returned as an error and nothing is registered;
+// api reports it as a declaration error (internal/declerr).
+func AddHost(name string, opts ...HostOption) (Host, error) {
 	if name == "" {
-		logger.Fatal("Host: name must not be empty")
+		return Host{}, fmt.Errorf("Host: name must not be empty")
 	}
 	rec := Host{Name: name, SSHHost: name}
 	for _, o := range opts {
 		o(&rec)
+	}
+	if rec.optErr != nil {
+		return Host{}, rec.optErr
 	}
 	if rec.SSHHost == "" {
 		rec.SSHHost = name
@@ -92,32 +100,42 @@ func AddHost(name string, opts ...HostOption) Host {
 	mu.Lock()
 	defer mu.Unlock()
 	if _, ok := hosts[name]; ok {
-		logger.Fatal("Host %q already registered", name)
+		return Host{}, fmt.Errorf("Host %q already registered", name)
 	}
 	hosts[name] = rec
-	return rec
+	return rec, nil
+}
+
+// RejectOption records err as the misuse of a HostOption applied to h, unless
+// an earlier one is already recorded; AddHost then refuses the host with it.
+func (h *Host) RejectOption(err error) {
+	if h.optErr == nil {
+		h.optErr = err
+	}
 }
 
 // SetHostValue stores value under key on an already-registered host (same
-// rules as a HostOption WithValue: empty key or duplicate key fails fast).
-func SetHostValue(name, key string, value any) {
+// rules as a HostOption WithValue). An empty key, an unknown host or a key
+// already set is returned as an error and nothing is stored.
+func SetHostValue(name, key string, value any) error {
 	if key == "" {
-		logger.Fatal("SetValue: key must not be empty")
+		return fmt.Errorf("SetValue: key must not be empty")
 	}
 	mu.Lock()
 	defer mu.Unlock()
 	rec, ok := hosts[name]
 	if !ok {
-		logger.Fatal("SetValue: Host %q is not registered", name)
+		return fmt.Errorf("SetValue: Host %q is not registered", name)
+	}
+	if _, exists := rec.Values[key]; exists {
+		return fmt.Errorf("Host %q: value key %q already set", name, key)
 	}
 	if rec.Values == nil {
 		rec.Values = map[string]any{}
 	}
-	if _, exists := rec.Values[key]; exists {
-		logger.Fatal("Host %q: value key %q already set", name, key)
-	}
 	rec.Values[key] = value
 	hosts[name] = rec
+	return nil
 }
 
 // LookupHost returns the registered Host record for name.
@@ -157,38 +175,39 @@ func HostValue(name, key string) (value any, hostFound, keyFound bool) {
 // assumed already validated for emptiness/uniqueness by the caller (api's
 // checkClusterHostsUnique runs before this, over the caller's own HostRef
 // handles); AddCluster re-validates registration invariants that only this
-// package's state can answer (every host must already be registered).
-func AddCluster(name string, hostNames []string) Cluster {
+// package's state can answer (every host must already be registered). A
+// violation is returned as an error and nothing is registered.
+func AddCluster(name string, hostNames []string) (Cluster, error) {
 	if name == "" {
-		logger.Fatal("Cluster: name must not be empty")
+		return Cluster{}, fmt.Errorf("Cluster: name must not be empty")
 	}
 	if len(hostNames) == 0 {
-		logger.Fatal("Cluster %q: must include at least one Host", name)
+		return Cluster{}, fmt.Errorf("Cluster %q: must include at least one Host", name)
 	}
 
 	mu.Lock()
 	defer mu.Unlock()
 	if _, ok := clusters[name]; ok {
-		logger.Fatal("Cluster %q already registered", name)
+		return Cluster{}, fmt.Errorf("Cluster %q already registered", name)
 	}
 	for _, h := range hostNames {
 		if _, ok := hosts[h]; !ok {
-			logger.Fatal("Cluster %q: Host %q is not registered", name, h)
+			return Cluster{}, fmt.Errorf("Cluster %q: Host %q is not registered", name, h)
 		}
 	}
 	rec := Cluster{Name: name, Hosts: append([]string(nil), hostNames...)}
 	clusters[name] = rec
-	return rec
+	return rec, nil
 }
 
 // SetClusterParallel sets cluster name's fan-out width. n < 1 means all
-// hosts at once. Fatal if the cluster is not registered.
-func SetClusterParallel(name string, n int) {
+// hosts at once. An unregistered cluster is returned as an error.
+func SetClusterParallel(name string, n int) error {
 	mu.Lock()
 	defer mu.Unlock()
 	rec, ok := clusters[name]
 	if !ok {
-		logger.Fatal("Cluster %q is not registered", name)
+		return fmt.Errorf("Cluster %q is not registered", name)
 	}
 	if n < 1 {
 		rec.Parallelism = -1
@@ -196,6 +215,7 @@ func SetClusterParallel(name string, n int) {
 		rec.Parallelism = n
 	}
 	clusters[name] = rec
+	return nil
 }
 
 // LookupCluster returns the registered Cluster record for name.
@@ -221,28 +241,30 @@ func ClusterParallelism(c Cluster) int {
 	}
 }
 
-// AddFleet registers name with the given member cluster names.
-func AddFleet(name string, clusterNames []string) Fleet {
+// AddFleet registers name with the given member cluster names. A violation
+// (empty name, no clusters, a duplicate, an unregistered member) is returned
+// as an error and nothing is registered.
+func AddFleet(name string, clusterNames []string) (Fleet, error) {
 	if name == "" {
-		logger.Fatal("Fleet: name must not be empty")
+		return Fleet{}, fmt.Errorf("Fleet: name must not be empty")
 	}
 	if len(clusterNames) == 0 {
-		logger.Fatal("Fleet %q: must include at least one Cluster", name)
+		return Fleet{}, fmt.Errorf("Fleet %q: must include at least one Cluster", name)
 	}
 
 	mu.Lock()
 	defer mu.Unlock()
 	if _, ok := fleets[name]; ok {
-		logger.Fatal("Fleet %q already registered", name)
+		return Fleet{}, fmt.Errorf("Fleet %q already registered", name)
 	}
 	for _, c := range clusterNames {
 		if _, ok := clusters[c]; !ok {
-			logger.Fatal("Fleet %q: Cluster %q is not registered", name, c)
+			return Fleet{}, fmt.Errorf("Fleet %q: Cluster %q is not registered", name, c)
 		}
 	}
 	rec := Fleet{Name: name, Clusters: append([]string(nil), clusterNames...)}
 	fleets[name] = rec
-	return rec
+	return rec, nil
 }
 
 // LookupFleet returns the registered Fleet record for name.

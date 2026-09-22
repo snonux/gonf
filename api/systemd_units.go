@@ -1,9 +1,10 @@
 package api
 
 import (
+	"errors"
 	"slices"
 
-	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/options"
 	svc "github.com/snonux/gonf/resource/service"
@@ -45,7 +46,7 @@ import (
 // the same bus usually shares the reload too: it orders the reload after
 // itself, and its own gated reload then covers the composition's inputs
 // (systemd.JoinRegisteredReload lists when the join is refused). The merge
-// amends the recorded reload op in place, which is refused (fail-fast, naming both watch lists)
+// amends the recorded reload op in place, which is refused (a declaration error naming both watch lists)
 // when a when-block boundary or privilege change separates the two
 // declarations, or when the new declaration's inputs already depend on the
 // reload (an input declared with DependsOn(an earlier composition), or that
@@ -53,14 +54,23 @@ import (
 // when a SystemdTimer declared in between joined the reload and its
 // WithAfter/WithWants name a unit the new FanIn may install. A single
 // composition records exactly what it did before.
+//
+// Misuse — no watchable FanIn input, or an empty ActivateTimer/ActivateService
+// name — is reported as a declaration error (internal/declerr, which fails
+// the record) before anything of the composition is registered, and an empty
+// Multi is returned. A refused merge is reported the same way (see
+// systemd.Present).
 func SystemdUnits(opts ...SystemdUnitsOption) Resource {
 	cfg := &systemdUnitsConfig{}
 	for _, o := range opts {
 		o(cfg)
 	}
-	watch := cfg.watchedIDs()
+	watch, err := cfg.validate()
+	if err != nil {
+		declerr.Report(err)
+		return resource.Multi(nil)
+	}
 	deps := cfg.watchedDeps()
-	cfg.checkActivationNames()
 
 	reload := cfg.composedReload(watch, deps)
 	members := make([]resource.Resource, 0, 1+len(cfg.timers)+len(cfg.services))
@@ -68,19 +78,26 @@ func SystemdUnits(opts ...SystemdUnitsOption) Resource {
 	return resource.Multi(cfg.activate(members, reload, watch, deps))
 }
 
-// checkActivationNames fails fast on an empty ActivateTimer/ActivateService
-// name before anything of the composition is registered.
-func (c *systemdUnitsConfig) checkActivationNames() {
+// validate checks the whole composition before anything of it is registered
+// and returns its watch list (watchedIDs). The checks run in a fixed order —
+// the FanIn inputs first, then the activation names — so a recipe with
+// several mistakes always reports the same first one.
+func (c *systemdUnitsConfig) validate() ([]string, error) {
+	watch, err := c.watchedIDs()
+	if err != nil {
+		return nil, err
+	}
 	for _, a := range c.timers {
 		if a.name == "" {
-			logger.Fatal("SystemdUnits: ActivateTimer name must not be empty")
+			return nil, errors.New("SystemdUnits: ActivateTimer name must not be empty")
 		}
 	}
 	for _, a := range c.services {
 		if a.name == "" {
-			logger.Fatal("SystemdUnits: ActivateService name must not be empty")
+			return nil, errors.New("SystemdUnits: ActivateService name must not be empty")
 		}
 	}
+	return watch, nil
 }
 
 // composedReload declares the bus's daemon-reload, change-gated on and
@@ -146,18 +163,18 @@ type unitsServiceActivation struct {
 // watchedIDs flattens the FanIn inputs into the watch list; Multi inputs
 // (e.g. SyncDir results) expand to their member ids. Duplicates need no
 // handling here: the change gate every option lowers to (embed.ChangeGate)
-// de-duplicates watched ids in first-seen order. Registration-time misuse —
-// no FanIn, or inputs that expand to no resource ids — aborts the recipe
-// before anything is registered.
-func (c *systemdUnitsConfig) watchedIDs() []string {
+// de-duplicates watched ids in first-seen order. No FanIn, or inputs that
+// expand to no resource ids, is registration-time misuse and returned as an
+// error; it is a pure accessor otherwise (validate reports the error).
+func (c *systemdUnitsConfig) watchedIDs() ([]string, error) {
 	var ids []string
 	for _, in := range c.inputs {
 		ids = append(ids, in.Dependencies()...)
 	}
 	if len(ids) == 0 {
-		logger.Fatal("SystemdUnits: no watchable managed inputs; pass FanIn(...) with resources that expand to registered resource ids")
+		return nil, errors.New("SystemdUnits: no watchable managed inputs; pass FanIn(...) with resources that expand to registered resource ids")
 	}
-	return ids
+	return ids, nil
 }
 
 // watchedDeps returns the FanIn inputs as dependency values, so the watched

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/internal/inventory"
-	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/plan"
 )
 
@@ -43,7 +43,8 @@ func currentTaskCluster() string {
 
 // ClusterHosts returns List(MustCluster(name).HostNames()...) for the cluster
 // associated with the current task via RegisterMethods(..., WithCluster(name)).
-// Outside a WithCluster task body it fails fast via logger.Fatal.
+// Outside a WithCluster task body it reports a declaration error
+// (internal/declerr, which fails the record) and returns nil.
 //
 // ClusterHosts is a plain inventory listing: it never applies the record-time
 // host selection that ForHosts honours, so existing
@@ -52,12 +53,13 @@ func currentTaskCluster() string {
 func ClusterHosts() []string {
 	hosts, err := currentClusterHosts()
 	if err != nil {
-		logger.Fatal("ClusterHosts: %v", err)
+		declerr.Reportf("ClusterHosts: %v", err)
+		return nil
 	}
 	return hosts
 }
 
-// currentClusterHosts is the non-fatal core of ClusterHosts, shared with
+// currentClusterHosts is the error-returning core of ClusterHosts, shared with
 // ForHosts: the member names of the current task's WithCluster cluster.
 func currentClusterHosts() ([]string, error) {
 	name := currentTaskCluster()
@@ -97,13 +99,13 @@ func currentClusterHosts() ([]string, error) {
 //     apply time, never against the controller's hostname. Outside recording
 //     it runs only when the local hostname contains host.
 //
-// Errors: while a plan is being recorded (Run, gonf plan, push, cluster,
-// fleet), an empty key, a nil fn, a missing WithCluster, or a missing or
-// mistyped value records nothing for this call and fails the record with an
-// error, like MustSecret: RecordPlan/Run/push return it, Run's temporary plan
-// directory is removed, and no SSH connection is opened. Outside recording
-// (a direct call from Go code) the same misuse ends the process via
-// logger.Fatal, like MustHostValue.
+// Errors: an empty key, a nil fn, a missing WithCluster, or a missing or
+// mistyped value records nothing for this call and is reported as a
+// declaration error (internal/declerr), like MustSecret. While a plan is being
+// recorded (Run, gonf plan, push, cluster, fleet) it fails the record:
+// RecordPlan/Run/push return it, Run's temporary plan directory is removed,
+// and no SSH connection is opened. Outside recording (a direct call from Go
+// code) api.Apply and the CLI refuse with it, like MustHostValue.
 //
 // Host selection: every recording entry point that knows where the plan will
 // apply records with a host selection (see recordPlanForHosts), and ForHosts
@@ -154,16 +156,11 @@ func forHostsValues[T any](key string, haveFn bool) ([]string, []T, error) {
 	return hosts, values, nil
 }
 
-// failForHosts reports a ForHosts error: stashed into the current recording
-// session (the record then fails with it, see stashBodyError) or, outside
-// recording, fatal.
+// failForHosts reports a ForHosts error as a declaration error: captured into
+// the current recording session (the record then fails with it, see
+// stashBodyError) or, outside recording, kept for Apply and the CLI.
 func failForHosts(err error) {
-	err = fmt.Errorf("ForHosts: %w", err)
-	if plan.Recording() {
-		stashBodyError(err)
-		return
-	}
-	logger.Fatal("%v", err)
+	declerr.Report(fmt.Errorf("ForHosts: %w", err))
 }
 
 // hostSelection is the record-time set of inventory host names the current
@@ -221,8 +218,7 @@ func setHostSelection(hosts []string) (restore func()) {
 // recordPlanForHosts is RecordPlanTo with the record-time host selection set
 // to hosts for the duration of the recording (see ForHosts); nil hosts
 // records exactly like RecordPlanTo. The deferred restore runs on every
-// return path, including an error or a panic in a task body; only a
-// logger.Fatal process exit skips it, and then nothing is left to restore.
+// return path, including an error or a panic in a task body.
 func recordPlanForHosts(hosts []string, planID string, store plan.BlobStore, tasks ...string) ([]plan.Op, error) {
 	defer setHostSelection(hosts)()
 	return RecordPlanTo(planID, store, tasks...)

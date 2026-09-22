@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
@@ -41,6 +42,10 @@ type Resource interface {
 // any other program would re-run its own main as root; Run refuses the same
 // way, see preflightElevation).
 //
+// A declaration error reported earlier (internal/declerr: DSL misuse such as
+// an unsupported option or a duplicate resource, a failed MustSecret) refuses
+// the apply before anything runs, since the registered set is incomplete.
+//
 // Apply holds the WHOLE registered plan, so it is a controller-side entry
 // point in the same sense as ApplyChunks and remote.Delivery.ToHost: it runs
 // the dependency and change-gate pre-flight itself (validateApplyDeps) over
@@ -54,6 +59,9 @@ func Apply() error {
 	if plan.Recording() || resource.PlanDraftRecording() {
 		return fmt.Errorf("Apply: cannot apply while plan recording is active")
 	}
+	if err := declerr.First(); err != nil {
+		return err
+	}
 
 	drafts := resource.RegisteredPlanDrafts()
 	registered := resource.RegisteredIDs()
@@ -64,8 +72,7 @@ func Apply() error {
 		return err
 	}
 
-	// Removed on return and, through logger.OnFatal, on a fail-fast
-	// logger.Fatal while resources are packaged or applied (tempPlanDir).
+	// Removed on every return path (tempPlanDir).
 	planDir, removePlanDir, err := tempPlanDir("gonf-apply-*")
 	if err != nil {
 		return fmt.Errorf("Apply: temp plan dir: %w", err)

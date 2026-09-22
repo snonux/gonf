@@ -79,7 +79,7 @@ func RegisteredWatchTargets(watch ...string) []string {
 //
 // It lets a kind that is a singleton per scope (daemon-reload: one per
 // systemd bus) find its earlier declaration and fold a later one into it
-// (see AmendRegistered) instead of tripping Register's duplicate-ID abort.
+// (see AmendRegistered) instead of tripping Register's duplicate-ID refusal.
 func Registered(id string) (res Resource, applier Applier, ok bool) {
 	r := getRepository()
 	r.mu.Lock()

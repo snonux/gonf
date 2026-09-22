@@ -27,8 +27,8 @@ var redactedJSON = json.RawMessage(`"` + secret.Redacted + `"`)
 // overrides it. opts may set mode, ownership, a name, dependencies,
 // validation and change watches, but not the content: WithContent,
 // WithSource, WithTemplate, WithTemplateData, line edits and IsAbsent are
-// refused as recipe misuse (logger.Fatal, like other invalid File options),
-// see file.PresentSecret.
+// refused as recipe misuse (a declaration error, internal/declerr, like other
+// invalid File options), see file.PresentSecret.
 //
 // A failed resolution fails plan recording exactly like MustSecret and
 // registers nothing: the returned empty Multi keeps a DependsOn on it safe

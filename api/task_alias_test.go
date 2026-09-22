@@ -1,8 +1,6 @@
 package api
 
 import (
-	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -359,78 +357,59 @@ func TestNestedRunReturnsErrorToBody(t *testing.T) {
 	}
 }
 
-// TestTaskAliasRegistrationMisuseFailsFast runs each registration-time misuse
-// in a helper process (logger.Fatal exits) and checks the message.
-func TestTaskAliasRegistrationMisuseFailsFast(t *testing.T) {
-	cases := []struct{ caseName, want string }{
-		{"alias-dup-task", `Task "x" already queued`},
-		{"task-dup-alias", `Task "a" already queued`},
-		{"alias-self", `Alias "a": must not target itself`},
-		{"alias-empty-target", `Alias "a": target must not be empty`},
-		{"alias-empty-name", "Alias: name must not be empty"},
-		{"agg-no-members", `AggregateTasks "agg": at least one member task is required`},
-		{"agg-dup-member", `AggregateTasks "agg": member "x" listed twice`},
-		{"agg-self-member", `AggregateTasks "agg": must not list itself`},
-		{"agg-empty-member", `AggregateTasks "agg": member name must not be empty`},
-		{"agg-dup-name", `Task "x" already queued`},
-		{"agg-member-alias-of-self", `AggregateTasks "setup": member "setup_alias" is an alias of the aggregate itself`},
-		{"alias-of-agg-listing-it", `Alias "setup_alias": aggregate "setup" lists it as a member`},
+// TestTaskAliasRegistrationMisuseIsDeclarationError checks every
+// registration-time misuse of Task, Alias and AggregateTasks in-process: it is
+// reported as a declaration error with the expected message (no process
+// exit), the offending name is not queued, and the first registration of a
+// duplicated name keeps it.
+func TestTaskAliasRegistrationMisuseIsDeclarationError(t *testing.T) {
+	noop := func() {}
+	cases := []struct {
+		caseName, want string
+		declare        func()
+	}{
+		{"alias-dup-task", `Task "x" already queued`, func() { Task("x", "", noop); Alias("x", "", "y") }},
+		{"task-dup-alias", `Task "a" already queued`, func() { Alias("a", "", "x"); Task("a", "", noop) }},
+		{"alias-self", `Alias "a": must not target itself`, func() { Alias("a", "", "a") }},
+		{"alias-empty-target", `Alias "a": target must not be empty`, func() { Alias("a", "", "") }},
+		{"alias-empty-name", "Alias: name must not be empty", func() { Alias("", "", "x") }},
+		{"agg-no-members", `AggregateTasks "agg": at least one member task is required`, func() { AggregateTasks("agg", "") }},
+		{"agg-dup-member", `AggregateTasks "agg": member "x" listed twice`, func() { AggregateTasks("agg", "", "x", "y", "x") }},
+		{"agg-self-member", `AggregateTasks "agg": must not list itself`, func() { AggregateTasks("agg", "", "x", "agg") }},
+		{"agg-empty-member", `AggregateTasks "agg": member name must not be empty`, func() { AggregateTasks("agg", "", "x", "") }},
+		{"agg-dup-name", `Task "x" already queued`, func() { Task("x", "", noop); AggregateTasks("x", "", "y") }},
+		{"agg-member-alias-of-self", `AggregateTasks "setup": member "setup_alias" is an alias of the aggregate itself`, func() {
+			Alias("setup_alias", "", "setup")
+			AggregateTasks("setup", "", "a", "setup_alias")
+		}},
+		{"alias-of-agg-listing-it", `Alias "setup_alias": aggregate "setup" lists it as a member`, func() {
+			AggregateTasks("setup", "", "a", "setup_alias")
+			Alias("setup_alias", "", "setup")
+		}},
+		{"task-empty-name", "Task: name must not be empty", func() { Task("", "", noop) }},
+		{"task-nil-fn", `Task "x": fn must not be nil`, func() { Task("x", "", nil) }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.caseName, func(t *testing.T) {
-			cmd := exec.Command(os.Args[0], "-test.run=^TestTaskAliasFatalHelperProcess$", "-test.timeout=60s")
-			cmd.Env = append(os.Environ(), "GONF_API_ALIAS_MISUSE="+tc.caseName)
-			out, err := cmd.CombinedOutput()
-			if err == nil {
-				t.Fatalf("misuse case %q exited 0, want fail-fast; output:\n%s", tc.caseName, out)
-			}
-			if !strings.Contains(string(out), tc.want) {
-				t.Fatalf("misuse case %q output misses %q:\n%s", tc.caseName, tc.want, out)
-			}
+			requireDeclErr(t, tc.want, tc.declare)
 		})
 	}
 }
 
-// TestTaskAliasFatalHelperProcess is the helper process for
-// TestTaskAliasRegistrationMisuseFailsFast; it must never exit 0 when a case
-// is set.
-func TestTaskAliasFatalHelperProcess(t *testing.T) {
-	c := os.Getenv("GONF_API_ALIAS_MISUSE")
-	if c == "" {
-		return
+// TestDuplicateTaskKeepsFirstRegistration: a refused duplicate is not
+// queued, so the first registration keeps the name and its body.
+func TestDuplicateTaskKeepsFirstRegistration(t *testing.T) {
+	var ran string
+	requireDeclErr(t, `Task "x" already queued`, func() {
+		Task("x", "first", func() { ran = "first" })
+		Task("x", "second", func() { ran = "second" })
+	})
+	c, ok := findCandidate("x")
+	if !ok || c.description != "first" {
+		t.Fatalf("candidate x = %+v (found %t), want the first registration", c, ok)
 	}
-	ResetForTest()
-	noop := func() {}
-	switch c {
-	case "alias-dup-task":
-		Task("x", "", noop)
-		Alias("x", "", "y")
-	case "task-dup-alias":
-		Alias("a", "", "x")
-		Task("a", "", noop)
-	case "alias-self":
-		Alias("a", "", "a")
-	case "alias-empty-target":
-		Alias("a", "", "")
-	case "alias-empty-name":
-		Alias("", "", "x")
-	case "agg-no-members":
-		AggregateTasks("agg", "")
-	case "agg-dup-member":
-		AggregateTasks("agg", "", "x", "y", "x")
-	case "agg-self-member":
-		AggregateTasks("agg", "", "x", "agg")
-	case "agg-empty-member":
-		AggregateTasks("agg", "", "x", "")
-	case "agg-dup-name":
-		Task("x", "", noop)
-		AggregateTasks("x", "", "y")
-	case "agg-member-alias-of-self":
-		Alias("setup_alias", "", "setup")
-		AggregateTasks("setup", "", "a", "setup_alias")
-	case "alias-of-agg-listing-it":
-		AggregateTasks("setup", "", "a", "setup_alias")
-		Alias("setup_alias", "", "setup")
+	c.fn()
+	if ran != "first" {
+		t.Fatalf("body = %q, want first", ran)
 	}
-	t.Fatalf("misuse case %q did not fail fast", c)
 }

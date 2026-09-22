@@ -1,6 +1,9 @@
 package api
 
-import "reflect"
+import (
+	"fmt"
+	"reflect"
+)
 
 // StructOption can be embedded in (or added as a field to) a struct that is
 // registered with RegisterMethods to contribute DEFAULT TaskOptions for
@@ -38,39 +41,19 @@ func (RequiresRoot) StructTaskOptions() TaskOptions { return TaskOptions{Privile
 // embedded markers are skipped here and fall through to their promoted
 // method on the outer type (single marker only; multiple same-depth
 // markers are an ambiguous selector and are not in the method set).
-func collectStructOptions(rv reflect.Value, rt reflect.Type) TaskOptions {
-	var opts TaskOptions
-	foundMarkerField := false
-	st := rt
-	if st.Kind() == reflect.Pointer {
-		st = st.Elem()
-	}
-	if st.Kind() == reflect.Struct {
-		for i := 0; i < st.NumField(); i++ {
-			f := st.Field(i)
-			if !f.IsExported() {
-				continue
-			}
-			ft := f.Type
-			if ft.Kind() == reflect.Pointer {
-				ft = ft.Elem()
-			}
-			if !ft.Implements(structOptionType) {
-				continue
-			}
-			foundMarkerField = true
-			// Exported embedded marker: the field value is accessible.
-			if m := rv.Elem().Field(i).MethodByName("StructTaskOptions"); m.IsValid() {
-				opts = append(opts, m.Call(nil)[0].Interface().([]TaskOption)...)
-			}
-		}
-	}
+//
+// A struct-level companion with the wrong signature is returned as an error:
+// RegisterMethods then registers no task of the struct, because silently
+// ignoring the companion could drop Privileged() and lower every task's
+// privileges.
+func collectStructOptions(rv reflect.Value, rt reflect.Type) (TaskOptions, error) {
+	opts, foundMarkerField := markerStructOptions(rv, rt)
 	if o := rv.MethodByName("Opts"); o.IsValid() {
-		ot := o.Type()
-		if ot.NumIn() != 0 || ot.NumOut() != 1 || ot.Out(0) != reflect.TypeOf(TaskOptions(nil)) {
-			panic("RegisterMethods: Opts must be func() TaskOptions (the struct-level default companion)")
+		companion, err := callTaskOptionsCompanion(o, "Opts must be func() TaskOptions (the struct-level default companion)")
+		if err != nil {
+			return nil, err
 		}
-		opts = append(opts, o.Call(nil)[0].Interface().([]TaskOption)...)
+		opts = append(opts, companion...)
 	}
 	// Direct StructTaskOptions methods (no marker field): reachable for
 	// structs defining it directly or via unexported embedded markers with
@@ -78,12 +61,58 @@ func collectStructOptions(rv reflect.Value, rt reflect.Type) TaskOptions {
 	// companion composes last, so it is collected before this fallback.
 	if !foundMarkerField {
 		if m := rv.MethodByName("StructTaskOptions"); m.IsValid() {
-			mt := m.Type()
-			if mt.NumIn() != 0 || mt.NumOut() != 1 || mt.Out(0) != reflect.TypeOf(TaskOptions(nil)) {
-				panic("RegisterMethods: StructTaskOptions must be func() TaskOptions")
+			companion, err := callTaskOptionsCompanion(m, "StructTaskOptions must be func() TaskOptions")
+			if err != nil {
+				return nil, err
 			}
+			opts = append(opts, companion...)
+		}
+	}
+	return opts, nil
+}
+
+// markerStructOptions collects the TaskOptions of the exported embedded
+// StructOption marker fields, in declaration order, and reports whether the
+// struct has any such field. Markers implement StructOption, so their
+// StructTaskOptions signature is guaranteed by the compiler.
+func markerStructOptions(rv reflect.Value, rt reflect.Type) (TaskOptions, bool) {
+	var opts TaskOptions
+	found := false
+	st := rt
+	if st.Kind() == reflect.Pointer {
+		st = st.Elem()
+	}
+	if st.Kind() != reflect.Struct {
+		return nil, false
+	}
+	for i := 0; i < st.NumField(); i++ {
+		f := st.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		ft := f.Type
+		if ft.Kind() == reflect.Pointer {
+			ft = ft.Elem()
+		}
+		if !ft.Implements(structOptionType) {
+			continue
+		}
+		found = true
+		// Exported embedded marker: the field value is accessible.
+		if m := rv.Elem().Field(i).MethodByName("StructTaskOptions"); m.IsValid() {
 			opts = append(opts, m.Call(nil)[0].Interface().([]TaskOption)...)
 		}
 	}
-	return opts
+	return opts, found
+}
+
+// callTaskOptionsCompanion calls m, which must be func() TaskOptions, and
+// returns its result; any other signature is registration-time misuse,
+// returned as "RegisterMethods: <want>".
+func callTaskOptionsCompanion(m reflect.Value, want string) (TaskOptions, error) {
+	mt := m.Type()
+	if mt.NumIn() != 0 || mt.NumOut() != 1 || mt.Out(0) != reflect.TypeOf(TaskOptions(nil)) {
+		return nil, fmt.Errorf("RegisterMethods: %s", want)
+	}
+	return m.Call(nil)[0].Interface().(TaskOptions), nil
 }

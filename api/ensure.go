@@ -3,7 +3,7 @@ package api
 import (
 	"os"
 
-	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/dir"
 	"github.com/snonux/gonf/resource/file"
@@ -25,13 +25,15 @@ func EnsureFile(path string, opts ...options.FileOption) Resource {
 //
 // In plan-record mode, emits an ensure_dir recipe instead of probing the
 // controller filesystem (destination apply interprets the recipe). A draft
-// build failure (invalid options) fails fast via logger.Fatal at record time.
+// build failure (invalid options) is reported as a declaration error
+// (internal/declerr), which fails the record, and nothing is recorded.
 func EnsureDir(path string, opts ...options.DirOption) Resource {
 	p := Expand(path)
 	if resource.PlanDraftRecording() {
 		draft, err := dir.EnsurePlanDraft(p, opts...)
 		if err != nil {
-			logger.Fatal("EnsureDir %s: %v", p, err)
+			declerr.Reportf("EnsureDir %s: %v", p, err)
+			return resource.Multi(nil)
 		}
 		resource.RecordPlanDraft(draft)
 		return resource.Multi(nil)

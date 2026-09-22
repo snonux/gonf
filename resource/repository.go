@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/internal/logger"
 )
 
@@ -159,8 +160,14 @@ func (r *repository) applyResources(order []Resource) error {
 // dependency IDs), applies each resource, and prints the outcome summary to
 // stderr.
 //
+// A declaration error reported earlier (internal/declerr: DSL misuse outside
+// a plan recording) refuses the apply before anything runs.
+//
 // Prefer api.Apply or api.Run, which use the plan engine.
 func Apply() error {
+	if err := declerr.First(); err != nil {
+		return err
+	}
 	return getRepository().apply()
 }
 

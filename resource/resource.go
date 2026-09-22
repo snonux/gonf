@@ -7,7 +7,7 @@ package resource
 import (
 	"sort"
 
-	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/internal/declerr"
 )
 
 // Applier is the idempotent work a registered resource performs during the
@@ -44,8 +44,11 @@ type Resource struct {
 // Register records a resource in the repository so Apply runs it after its
 // dependencies. type_ is the kind label, name the instance name, apply the
 // idempotent work, and deps the IDs of resources that must be applied first.
-// It exits via logger.Fatal on a duplicate ID: registering the same
-// Type[Name] twice is always a task bug.
+// A duplicate ID (the same Type[Name] registered twice in one recipe scope)
+// is always a task bug: it is reported as a declaration error
+// (internal/declerr, surfaced by RecordPlan, Run, Apply and the CLI) and the
+// second declaration is not registered; its Resource value is still returned
+// so the recipe keeps running up to the point where the error surfaces.
 //
 // Registration is deliberately single-goroutine: recipe construction happens
 // before fleet fan-out, so the repository is not safe for concurrent
@@ -64,10 +67,22 @@ func Register(type_, name string, apply Applier, deps ...string) Resource {
 	}
 
 	if err := getRepository().register(r); err != nil {
-		logger.Fatal("resource registration failed: %v", err)
+		declerr.Reportf("resource registration failed: %v", err)
 	}
 
 	return r
+}
+
+// Refuse reports err as the declaration error of a resource that a
+// registering constructor (Present, Absent, ...) could not build — invalid
+// options, an option misuse collected by embed.Misuse — and returns the
+// unregistered Resource value type_[name] in place of a registered one. The
+// recipe keeps running (so later declarations are still checked), and the
+// error surfaces from RecordPlan, Run, Apply and the CLI (internal/declerr).
+// Nothing is registered and no plan draft is recorded for it.
+func Refuse(type_, name string, err error) Resource {
+	declerr.Report(err)
+	return Resource{Type: type_, Name: name}
 }
 
 // String returns the resource's ID.

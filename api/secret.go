@@ -3,7 +3,7 @@ package api
 import (
 	"context"
 
-	"github.com/snonux/gonf/plan"
+	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/secret"
 )
 
@@ -55,14 +55,14 @@ func OptionalSecret(path string) (string, bool) {
 	return string(data), true
 }
 
+// stashSecretError reports a secret lookup failure as a declaration error
+// (internal/declerr). Secrets are controller inputs read while a recipe is
+// declared, and MustSecret/OptionalSecret cannot return an error, so the
+// failure travels the same way as DSL misuse: while a plan is recorded it
+// fails that record (RecordPlanTo captures it into stashBodyError), so
+// RecordPlan/Run return normally through their deferred cleanup and PushTo
+// never opens an SSH connection; outside recording (resources declared for a
+// direct api.Apply) Apply refuses with it. It never panics or exits.
 func stashSecretError(err error) {
-	// Secrets are controller inputs, so their failures are record-time runtime
-	// errors—not registration-time DSL misuse. Stashing lets RecordPlan/Run
-	// return normally through their deferred cleanup and keeps PushTo from
-	// opening an SSH connection.
-	if plan.Recording() {
-		stashBodyError(err)
-		return
-	}
-	panic(err)
+	declerr.Report(err)
 }

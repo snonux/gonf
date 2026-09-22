@@ -15,7 +15,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
 	"github.com/snonux/gonf/resource/file"
@@ -29,14 +28,17 @@ import (
 type ConfigSet struct {
 	embed.DependsOn
 	embed.Sensitivity
+	embed.Misuse
 	spec    spec
 	members []*member
 }
 
 // member collects one ConfigFile's file options. sensitive is WithSensitive
 // given to the member: one op carries every member, so it marks the whole
-// set (build).
+// set (build). Its embed.Misuse collects a misused member option, which
+// AddMember hands to the set.
 type member struct {
+	embed.Misuse
 	key, path    string
 	content      []byte
 	contentSet   bool
@@ -58,16 +60,22 @@ var (
 	_ opt.Owner          = (*member)(nil)
 	_ opt.Grouped        = (*member)(nil)
 	_ opt.Sensitivable   = (*ConfigSet)(nil)
+	_ opt.MisuseReporter = (*ConfigSet)(nil)
+	_ opt.MisuseReporter = (*member)(nil)
 	_ opt.Sensitivable   = (*member)(nil)
 )
 
 // AddMember implements opt.MemberAddable (the ConfigFile option). Only
 // content, source, mode and ownership file options are supported; any other
-// file option fails the recipe through the options package's capability check.
+// file option fails the set's build through the options package's capability
+// check: the member's misuse is handed to the set (ReportMisuse).
 func (c *ConfigSet) AddMember(key, path string, opts []opt.FileOption) {
 	m := &member{key: key, path: path, mode: defaultMemberMode}
 	for _, o := range opts {
 		o.Apply(m)
+	}
+	if err := m.MisuseErr(); err != nil {
+		c.ReportMisuse(err)
 	}
 	c.members = append(c.members, m)
 }
@@ -112,6 +120,9 @@ func build(name string, opts []opt.ConfigSetOption) (*ConfigSet, error) {
 	c := &ConfigSet{spec: spec{name: name}}
 	for _, o := range opts {
 		o.Apply(c)
+	}
+	if err := c.MisuseErr(); err != nil {
+		return nil, err
 	}
 	// WithSensitive on the set or on any member marks the set: its one op
 	// carries every member, and a failing validator sees them all.
@@ -166,12 +177,14 @@ type Handle struct {
 }
 
 // Member returns the handle of member key. It reports a change only when
-// that member's live file was published. An unknown key is recipe misuse and
-// fails the record.
+// that member's live file was published. An unknown key is recipe misuse: it
+// is reported as a declaration error (resource.Refuse, which fails the
+// record) and an unregistered handle is returned.
 func (h Handle) Member(key string) resource.Resource {
 	r, ok := h.members[key]
 	if !ok {
-		logger.Fatal("config set %s has no member %q (members: %v)", h.name, key, h.keys)
+		return resource.Refuse("ConfigSetMember", memberName(h.name, key),
+			fmt.Errorf("config set %s has no member %q (members: %v)", h.name, key, h.keys))
 	}
 	return r
 }
@@ -190,14 +203,16 @@ func (h Handle) Members(keys ...string) []resource.Dependency {
 }
 
 // Present registers the config set and one handle resource per member, and
-// records their plan drafts. A misconfigured set fails the record. The set's
+// records their plan drafts. A misconfigured set is reported as a declaration
+// error (resource.Refuse), which fails the record. The set's
 // applier and its member appliers (the legacy resource.Apply path) share one
 // outcome store of their own; the plan path uses the plan handlers' store
 // instead (see newHandlers).
 func Present(name string, opts ...opt.ConfigSetOption) Handle {
 	c, err := build(name, opts)
 	if err != nil {
-		logger.Fatal("%v", err)
+		// A refused set has no member handles: Member reports every key.
+		return Handle{Resource: resource.Refuse("ConfigSet", name, err), name: name}
 	}
 	sp := c.spec
 	sp.sys, sp.outcomes = newSystem(), newOutcomeStore()

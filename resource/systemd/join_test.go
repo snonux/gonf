@@ -1,13 +1,12 @@
 package systemd
 
 import (
-	"os"
-	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
@@ -203,17 +202,33 @@ func TestJoinRegisteredReloadRefusesRelatedInput(t *testing.T) {
 // input yet; a later same-bus declaration watching the File that installs
 // b.service (by unit name, as an entry of a space-separated list, or as a
 // drop-in) would make the merged reload load b only after the joiner
-// started. The merge is refused with the fail-fast "cannot merge" error
-// naming the joiner and the unit. logger.Fatal exits, so each case runs in
-// a helper process.
+// started. The merge is refused with the "cannot merge" declaration error
+// (internal/declerr) naming the joiner and the unit, and the registered
+// reload keeps its draft.
 func TestMergeRefusesJoinerRelatedToNewInput(t *testing.T) {
 	for _, name := range []string{"unit", "listed", "drop-in"} {
 		t.Run(name, func(t *testing.T) {
-			cmd := exec.Command(os.Args[0], "-test.run=^TestMergeRefusesJoinerFatalHelperProcess$", "-test.timeout=60s")
-			cmd.Env = append(os.Environ(), "GONF_SYSTEMD_JOINER_MERGE_FATAL="+name)
-			out, err := cmd.CombinedOutput()
+			resource.ResetForTest()
+			t.Cleanup(resource.ResetForTest)
+			related, input := "b.service", "/u/b.service"
+			switch name {
+			case "listed":
+				related = "network-online.target b.service"
+			case "drop-in":
+				input = "/u/b.service.d/10-x.conf"
+			}
+			a := noop("File", "/u/a.service")
+			reload := Present(opt.WithUser, opt.OnChange(a))
+			joiner := noop("SystemdTimer", "job")
+			if !JoinRegisteredReload(true, joiner.ID(), related) {
+				t.Fatal("joiner unrelated to the reload's inputs at join time did not join")
+			}
+			before := registeredDraft(t, reload.ID())
+			b := noop("File", input)
+			Present(opt.WithUser, opt.OnChange(b))
+			err := declerr.First()
 			if err == nil {
-				t.Fatalf("case %s exited 0; output:\n%s", name, out)
+				t.Fatalf("case %q merged without refusing the joiner", name)
 			}
 			for _, want := range []string{
 				"DaemonReload[user]: cannot merge",
@@ -221,38 +236,15 @@ func TestMergeRefusesJoinerRelatedToNewInput(t *testing.T) {
 				"references b.service",
 				"File[/u/a.service]",
 			} {
-				if !strings.Contains(string(out), want) {
-					t.Fatalf("case %s output misses %q:\n%s", name, want, out)
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("case %s error misses %q: %v", name, want, err)
 				}
+			}
+			if after := registeredDraft(t, reload.ID()); !reflect.DeepEqual(after, before) {
+				t.Fatalf("refused merge changed the reload draft: %#v -> %#v", before, after)
 			}
 		})
 	}
-}
-
-// TestMergeRefusesJoinerFatalHelperProcess is the helper process for
-// TestMergeRefusesJoinerRelatedToNewInput; it must never exit 0.
-func TestMergeRefusesJoinerFatalHelperProcess(t *testing.T) {
-	name := os.Getenv("GONF_SYSTEMD_JOINER_MERGE_FATAL")
-	if name == "" {
-		return
-	}
-	resource.ResetRepository()
-	related, input := "b.service", "/u/b.service"
-	switch name {
-	case "listed":
-		related = "network-online.target b.service"
-	case "drop-in":
-		input = "/u/b.service.d/10-x.conf"
-	}
-	a := noop("File", "/u/a.service")
-	Present(opt.WithUser, opt.OnChange(a))
-	joiner := noop("SystemdTimer", "job")
-	if !JoinRegisteredReload(true, joiner.ID(), related) {
-		t.Fatal("joiner unrelated to the reload's inputs at join time did not join")
-	}
-	b := noop("File", input)
-	Present(opt.WithUser, opt.OnChange(b))
-	t.Fatalf("case %q merged without refusing the joiner", name)
 }
 
 // TestMergeKeepsJoinerWithUnrelatedNewInput: the re-check at merge time

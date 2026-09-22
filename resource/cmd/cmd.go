@@ -29,6 +29,7 @@ var (
 	_ opt.Elevatable      = (*Cmd)(nil)
 	_ opt.ChangeWatchable = (*Cmd)(nil)
 	_ opt.Sensitivable    = (*Cmd)(nil)
+	_ opt.MisuseReporter  = (*Cmd)(nil)
 )
 
 // Cmd is a command resource. It embeds DependsOn but not Absence: there is no
@@ -48,6 +49,7 @@ type Cmd struct {
 	embed.DependsOn
 	embed.ChangeGate
 	embed.Sensitivity
+	embed.Misuse
 	name    string // registry name; defaults to "name args..."
 	bin     string
 	args    []string
@@ -87,18 +89,22 @@ func (c *Cmd) SetElevate() { c.elevate = true }
 func (c *Cmd) SetEnv(env map[string]string) { c.env = maps.Clone(env) }
 
 // Present registers a command resource that runs bin with args on Apply.
-// WithSensitive requires WithName (checkSensitiveName); a violation is
-// recipe misuse and fails fast via logger.Fatal.
+// WithSensitive requires WithName (checkSensitiveName). A violation, like an
+// option misuse, is reported as a declaration error (resource.Refuse) and
+// nothing is registered; the refused value carries the command's WithName, or
+// only its binary for an unnamed one, so no declared-secret argv reaches it.
 func Present(bin string, args []string, opts ...opt.CommandOption) resource.Resource {
-	c := &Cmd{
-		bin:  bin,
-		args: append([]string(nil), args...),
+	c := newCmd(bin, args, opts)
+	err := c.MisuseErr()
+	if err == nil {
+		err = c.checkSensitiveName()
 	}
-	for _, o := range opts {
-		o.Apply(c)
-	}
-	if err := c.checkSensitiveName(); err != nil {
-		logger.Fatal("%v", err)
+	if err != nil {
+		name := c.name
+		if name == "" {
+			name = bin
+		}
+		return resource.Refuse("Command", name, err)
 	}
 	if c.name == "" {
 		c.name = defaultName(bin, c.args)
@@ -112,6 +118,19 @@ func Present(bin string, args []string, opts ...opt.CommandOption) resource.Reso
 // Ensure builds and applies a command resource without registering it or
 // recording a plan draft.
 func Ensure(bin string, args []string, opts ...opt.CommandOption) error {
+	c := newCmd(bin, args, opts)
+	if err := c.MisuseErr(); err != nil {
+		return err
+	}
+	if c.name == "" {
+		c.name = defaultName(bin, c.args)
+	}
+	return c.apply()
+}
+
+// newCmd builds a Cmd running bin with a copy of args and applies opts. An
+// option misuse is left in its embed.Misuse for the caller to check.
+func newCmd(bin string, args []string, opts []opt.CommandOption) *Cmd {
 	c := &Cmd{
 		bin:  bin,
 		args: append([]string(nil), args...),
@@ -119,10 +138,7 @@ func Ensure(bin string, args []string, opts ...opt.CommandOption) error {
 	for _, o := range opts {
 		o.Apply(c)
 	}
-	if c.name == "" {
-		c.name = defaultName(bin, c.args)
-	}
-	return c.apply()
+	return c
 }
 
 // checkSensitiveName refuses an explicitly sensitive command (WithSensitive)
