@@ -21,7 +21,8 @@ import (
 
 // These tests pin the timeout kill of a validator's descendants (task b82):
 // end to end through RunIn with real processes, and the process-tree pieces
-// (table readers, tree walk, freeze rounds) in isolation.
+// (table readers, tree walk, freeze rounds, the identity check before the
+// kill) in isolation.
 
 // trackedPid is a pid a validator script recorded; gone is set once the
 // test confirmed the process no longer exists, so cleanup never signals a
@@ -166,11 +167,40 @@ func TestKillTreeSkipsReapedLeader(t *testing.T) {
 	}
 }
 
+// procs builds a process table from pid -> parent pid, every process with
+// the start time "t0" (the tree tests do not care about identity).
+func procs(parents map[int]int) map[int]procInfo {
+	table := make(map[int]procInfo, len(parents))
+	for pid, ppid := range parents {
+		table[pid] = procInfo{ppid: ppid, start: "t0"}
+	}
+	return table
+}
+
+// ids names the processes pids, each with the start time "t0" as procs
+// gives it.
+func ids(pids ...int) []procID {
+	var out []procID
+	for _, pid := range pids {
+		out = append(out, procID{pid: pid, start: "t0"})
+	}
+	return out
+}
+
+// tableSeq returns a table reader that serves tables one per call and
+// repeats the last one, counting the calls in *calls.
+func tableSeq(calls *int, tables ...map[int]procInfo) func(context.Context) (map[int]procInfo, error) {
+	return func(context.Context) (map[int]procInfo, error) {
+		*calls++
+		return tables[min(*calls, len(tables))-1], nil
+	}
+}
+
 // descendants walks the whole subtree below root, parents first, and
 // ignores unrelated processes and self-parented entries (pid 0 on some
 // systems).
 func TestDescendants(t *testing.T) {
-	parents := map[int]int{0: 0, 1: 0, 10: 1, 11: 10, 12: 10, 13: 11, 20: 1, 21: 20}
+	table := procs(map[int]int{0: 0, 1: 0, 10: 1, 11: 10, 12: 10, 13: 11, 20: 1, 21: 20})
 	tests := []struct {
 		root int
 		want []int
@@ -180,7 +210,7 @@ func TestDescendants(t *testing.T) {
 		{99, nil},
 	}
 	for _, tt := range tests {
-		got := descendants(parents, tt.root)
+		got := descendants(table, tt.root)
 		slices.Sort(got[:min(len(got), 2)]) // siblings come in map order
 		if !reflect.DeepEqual(got, tt.want) {
 			t.Errorf("descendants(%d) = %v, want %v", tt.root, got, tt.want)
@@ -192,13 +222,13 @@ func TestDescendants(t *testing.T) {
 // child forked while its parent was being stopped is caught too; each pid is
 // stopped once; a table error ends the search with what was found.
 func TestFreezeDescendants(t *testing.T) {
-	tables := []map[int]int{
-		{10: 1, 11: 10},
-		{10: 1, 11: 10, 12: 11},
-		{10: 1, 11: 10, 12: 11},
+	tables := []map[int]procInfo{
+		procs(map[int]int{10: 1, 11: 10}),
+		procs(map[int]int{10: 1, 11: 10, 12: 11}),
+		procs(map[int]int{10: 1, 11: 10, 12: 11}),
 	}
 	call := 0
-	table := func(context.Context) (map[int]int, error) {
+	table := func(context.Context) (map[int]procInfo, error) {
 		if call == len(tables) {
 			return nil, errors.New("unexpected extra round")
 		}
@@ -207,13 +237,13 @@ func TestFreezeDescendants(t *testing.T) {
 	}
 	var stops []int
 	got := freezeDescendants(context.Background(), 10, table, func(pid int) error { stops = append(stops, pid); return nil })
-	if want := []int{11, 12}; !reflect.DeepEqual(got, want) || !reflect.DeepEqual(stops, want) {
-		t.Fatalf("stopped %v (calls %v), want %v", got, stops, want)
+	if !reflect.DeepEqual(got, ids(11, 12)) || !reflect.DeepEqual(stops, []int{11, 12}) {
+		t.Fatalf("stopped %v (calls %v), want 11, 12", got, stops)
 	}
 	if call != 3 {
 		t.Fatalf("read the table %d times, want 3 (until nothing new)", call)
 	}
-	failing := func(context.Context) (map[int]int, error) { return nil, errors.New("no table") }
+	failing := func(context.Context) (map[int]procInfo, error) { return nil, errors.New("no table") }
 	if got := freezeDescendants(context.Background(), 10, failing, func(int) error { t.Fatal("stopped without a table"); return nil }); got != nil {
 		t.Fatalf("stopped %v without a table, want nothing", got)
 	}
@@ -228,27 +258,22 @@ func TestFreezeDescendantsSkipsFailedStops(t *testing.T) {
 	tests := []struct {
 		name string
 		fail map[int]error
-		want []int
+		want []procID
 	}{
-		{"none fails", nil, []int{11, 12, 13}},
-		{"exited (ESRCH)", map[int]error{12: unix.ESRCH}, []int{11, 13}},
-		{"not permitted (EPERM)", map[int]error{11: unix.EPERM}, []int{12, 13}},
+		{"none fails", nil, ids(11, 12, 13)},
+		{"exited (ESRCH)", map[int]error{12: unix.ESRCH}, ids(11, 13)},
+		{"not permitted (EPERM)", map[int]error{11: unix.EPERM}, ids(12, 13)},
 		{"all fail", map[int]error{11: unix.ESRCH, 12: unix.EPERM, 13: unix.ESRCH}, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tables := []map[int]int{
-				// A chain, so the order is fixed (siblings come in map
-				// order): 13 appears only in the second round.
-				{11: 10, 12: 11},
-				{11: 10, 12: 11, 13: 12},
-				{11: 10, 12: 11, 13: 12},
-			}
-			call := 0
-			table := func(context.Context) (map[int]int, error) {
-				call++
-				return tables[min(call, len(tables))-1], nil
-			}
+			// A chain, so the order is fixed (siblings come in map order):
+			// 13 appears only in the second round.
+			calls := 0
+			table := tableSeq(&calls,
+				procs(map[int]int{11: 10, 12: 11}),
+				procs(map[int]int{11: 10, 12: 11, 13: 12}),
+			)
 			attempts := map[int]int{}
 			stop := func(pid int) error {
 				attempts[pid]++
@@ -267,15 +292,88 @@ func TestFreezeDescendantsSkipsFailedStops(t *testing.T) {
 	}
 }
 
+// A pid is known together with its start time: when a descendant whose stop
+// failed (it exited) has its number reused by a new descendant in a later
+// round, the new process is stopped and killed, while the same process seen
+// again (same start time) is not stopped twice.
+func TestFreezeDescendantsStopsReusedPid(t *testing.T) {
+	tests := []struct {
+		name  string
+		fail  error
+		want  []procID
+		stops int
+	}{
+		{"failed stop, then reused", unix.ESRCH, []procID{{11, "t0"}, {12, "t1"}}, 2},
+		{"stopped, then reused", nil, []procID{{11, "t0"}, {12, "t0"}, {12, "t1"}}, 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			calls := 0
+			table := tableSeq(&calls,
+				map[int]procInfo{11: {10, "t0"}, 12: {11, "t0"}},
+				map[int]procInfo{11: {10, "t0"}, 12: {11, "t1"}},
+			)
+			failed := false
+			attempts := 0
+			stop := func(pid int) error {
+				if pid != 12 {
+					return nil
+				}
+				attempts++
+				if !failed {
+					failed = true
+					return tt.fail
+				}
+				return nil
+			}
+			got := freezeDescendants(context.Background(), 10, table, stop)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("stopped %v, want %v", got, tt.want)
+			}
+			if attempts != tt.stops {
+				t.Fatalf("stop(12) called %d times, want %d (once per process)", attempts, tt.stops)
+			}
+		})
+	}
+}
+
+// killStopped kills children first and only the processes that still carry
+// the recorded start time: a pid that is gone or reused (resumed by an
+// unstopped ancestor, which let it exit) is skipped; without a current table
+// every stopped process is killed.
+func TestKillStopped(t *testing.T) {
+	stopped := []procID{{11, "a"}, {12, "b"}, {13, "c"}}
+	tests := []struct {
+		name    string
+		current map[int]procInfo
+		err     error
+		want    []int
+	}{
+		{"all unchanged", map[int]procInfo{11: {10, "a"}, 12: {11, "b"}, 13: {12, "c"}}, nil, []int{13, 12, 11}},
+		{"one reused", map[int]procInfo{11: {10, "a"}, 12: {1, "other"}, 13: {12, "c"}}, nil, []int{13, 11}},
+		{"one gone", map[int]procInfo{11: {10, "a"}, 12: {11, "b"}}, nil, []int{12, 11}},
+		{"no table", nil, errors.New("no table"), []int{13, 12, 11}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var killed []int
+			killStopped(stopped, tt.current, tt.err, func(pid int) { killed = append(killed, pid) })
+			if !reflect.DeepEqual(killed, tt.want) {
+				t.Fatalf("killed %v, want %v", killed, tt.want)
+			}
+		})
+	}
+}
+
 // One deadline bounds the whole search: a table reader that hangs until ctx
 // ends (like a stuck ps) stops it at the deadline, keeping what earlier
 // rounds found, and no round starts once ctx has ended.
 func TestFreezeDescendantsHonoursBudget(t *testing.T) {
 	calls := 0
-	slow := func(ctx context.Context) (map[int]int, error) {
+	slow := func(ctx context.Context) (map[int]procInfo, error) {
 		calls++
 		if calls == 1 {
-			return map[int]int{11: 10}, nil
+			return procs(map[int]int{11: 10}), nil
 		}
 		<-ctx.Done()
 		return nil, ctx.Err()
@@ -287,41 +385,51 @@ func TestFreezeDescendantsHonoursBudget(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("search took %v, want it cut at the 100ms deadline", elapsed)
 	}
-	if want := []int{11}; !reflect.DeepEqual(got, want) || calls != 2 {
-		t.Fatalf("stopped %v after %d reads, want %v after 2", got, calls, want)
+	if !reflect.DeepEqual(got, ids(11)) || calls != 2 {
+		t.Fatalf("stopped %v after %d reads, want 11 after 2", got, calls)
 	}
 	if got := freezeDescendants(ctx, 10, slow, func(int) error { return nil }); got != nil || calls != 2 {
 		t.Fatalf("expired search stopped %v after %d reads, want nothing and no read", got, calls)
 	}
 }
 
-// parseProcStatPPID takes the parent pid after the last ')' of comm, which
-// may itself contain spaces and parentheses.
-func TestParseProcStatPPID(t *testing.T) {
+// parseProcStat takes the parent pid and start time (fields 4 and 22)
+// counted after the last ')' of comm, which may itself contain spaces and
+// parentheses.
+func TestParseProcStat(t *testing.T) {
+	// rest holds fields 5..21 of a stat line, then the start time 4242.
+	const rest = " 1 1 0 -1 4194560 100 0 0 0 1 2 0 0 20 0 1 0 4242 1000"
 	tests := []struct {
 		stat string
-		ppid int
+		want procInfo
 		ok   bool
 	}{
-		{"123 (sh) S 45 123 123 0", 45, true},
-		{"7 (a b) c) R 1 7 7", 1, true},
-		{"7 (sh)", 0, false},
-		{"garbage", 0, false},
-		{"7 (sh) S x", 0, false},
+		{"123 (sh) S 45" + rest, procInfo{45, "4242"}, true},
+		{"7 (a b) c) R 1" + rest, procInfo{1, "4242"}, true},
+		{"7 (sh) S 45 123 123 0", procInfo{}, false}, // no start time
+		{"7 (sh)", procInfo{}, false},
+		{"garbage", procInfo{}, false},
+		{"7 (sh) S x" + rest, procInfo{}, false},
 	}
 	for _, tt := range tests {
-		ppid, ok := parseProcStatPPID([]byte(tt.stat))
-		if ppid != tt.ppid || ok != tt.ok {
-			t.Errorf("parseProcStatPPID(%q) = %d, %v; want %d, %v", tt.stat, ppid, ok, tt.ppid, tt.ok)
+		got, ok := parseProcStat([]byte(tt.stat))
+		if got != tt.want || ok != tt.ok {
+			t.Errorf("parseProcStat(%q) = %v, %v; want %v, %v", tt.stat, got, ok, tt.want, tt.ok)
 		}
 	}
 }
 
-// parsePsTable reads "pid ppid" lines, skips malformed ones and rejects
-// output without any process.
+// parsePsTable reads "pid ppid lstart" lines, collapsing the start time's
+// padding, keeps lines without a start time with an empty one, skips
+// malformed lines and rejects output without any process.
 func TestParsePsTable(t *testing.T) {
-	got, err := parsePsTable([]byte("    1     0\n  42 1\nbogus\n 7 x\n\n 8 1 extra\n"))
-	if want := map[int]int{1: 0, 42: 1}; err != nil || !reflect.DeepEqual(got, want) {
+	out := "    1     0 Sun Sep 20 22:38:51 2026\n  42 1 Tue Sep  2 01:02:03 2026\n 43 1\nbogus\n 7 x\n\n"
+	want := map[int]procInfo{
+		1:  {0, "Sun Sep 20 22:38:51 2026"},
+		42: {1, "Tue Sep 2 01:02:03 2026"},
+		43: {1, ""},
+	}
+	if got, err := parsePsTable([]byte(out)); err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("parsePsTable = %v, %v; want %v", got, err, want)
 	}
 	if _, err := parsePsTable([]byte("bogus\n")); err == nil {
@@ -329,23 +437,32 @@ func TestParsePsTable(t *testing.T) {
 	}
 }
 
-// Both real table readers see this test process with its real parent: /proc
-// on Linux, ps everywhere it is installed.
+// Both real table readers see this test process with its real parent and a
+// start time that stays the same across reads: /proc on Linux, ps
+// everywhere it is installed.
 func TestProcessTablesSeeThisProcess(t *testing.T) {
-	readers := map[string]func(context.Context) (map[int]int, error){"processTable": processTable}
+	readers := map[string]func(context.Context) (map[int]procInfo, error){"processTable": processTable}
 	if runtime.GOOS == "linux" {
-		readers["procTable"] = func(context.Context) (map[int]int, error) { return procTable("/proc") }
+		readers["procTable"] = func(context.Context) (map[int]procInfo, error) { return procTable("/proc") }
 	}
 	if _, err := exec.LookPath("ps"); err == nil {
 		readers["psTable"] = psTable
 	}
 	for name, read := range readers {
-		parents, err := read(context.Background())
+		first, err := read(context.Background())
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if got, want := parents[os.Getpid()], os.Getppid(); got != want {
-			t.Errorf("%s: parent of %d = %d, want %d", name, os.Getpid(), got, want)
+		self := first[os.Getpid()]
+		if self.ppid != os.Getppid() || self.start == "" {
+			t.Errorf("%s: this process = %+v, want parent %d and a start time", name, self, os.Getppid())
+		}
+		second, err := read(context.Background())
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if again := second[os.Getpid()].start; again != self.start {
+			t.Errorf("%s: start time changed between reads: %q, then %q", name, self.start, again)
 		}
 	}
 }

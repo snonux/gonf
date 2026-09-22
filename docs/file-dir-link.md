@@ -70,11 +70,19 @@ wrapper script dies with the hung checker it runs, and validation fails with
 `... failed: timed out after 5m0s: context deadline exceeded`. gonf first stops
 the validator (`SIGSTOP`), then finds and stops its descendants by walking the
 process tree (`/proc` on Linux, `ps` elsewhere), spending at most 2 seconds on
-the search, and finally kills them children first and the validator last. A
-process that was already detached from the validator (e.g. by a double fork),
-not found within those 2 seconds, or that could not be stopped (it exited
-meanwhile, so its pid may be reused, or gonf may not signal it) is not killed; if the process table cannot be
-read, only the validator itself is. Processes started by a validator that exits
+the search, and finally kills them children first and the validator last.
+Processes are identified by pid and start time, so a pid reused by another
+process is never mistaken for one already seen. Right before the kill, gonf
+reads the process table once more (spending at most 1 second) and skips every
+stopped descendant that is gone or whose start time changed: a process gonf
+could not stop, such as an ancestor it may not signal, can resume a stopped
+child and let it exit, and its pid could then name an unrelated process. The
+check is exact to the clock tick with `/proc` on Linux and to the second where
+`ps` supplies the start time; if that read fails, the stopped descendants are killed anyway.
+A process that was already detached from the validator (e.g. by a double
+fork), not found within those 2 seconds, or that could not be stopped (it
+exited meanwhile, so its pid may be reused, or gonf may not signal it) is not
+killed; if the process table cannot be read, only the validator itself is. Processes started by a validator that exits
 on its own before the timeout keep running. If gonf is not allowed to kill the
 validator (`EPERM`, e.g. a non-root gonf running the validator through
 `sudo`/`doas`), the timeout cannot bound it and gonf waits until it exits; 2
