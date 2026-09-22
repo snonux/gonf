@@ -21,9 +21,9 @@ func crontabArgs(userName string, extra ...string) []string {
 	return append(args, extra...)
 }
 
-// readCrontab returns userName's crontab. withhold (a sensitive Cron, see
-// Cron.Sensitive) replaces crontab's output in a failure by its sizes.
-func readCrontab(userName string, withhold bool) (string, error) {
+// readCrontab returns userName's crontab. A failure reports crontab's
+// output sizes only (crontabFailure).
+func readCrontab(userName string) (string, error) {
 	args := crontabArgs(userName, "-l")
 	stdout, stderr, code, err := runCmd("crontab", args...)
 	if err != nil {
@@ -35,14 +35,14 @@ func readCrontab(userName string, withhold bool) (string, error) {
 		if strings.Contains(msg, "no crontab") {
 			return "", nil
 		}
-		return "", crontabFailure(args, code, stdout, stderr, withhold)
+		return "", crontabFailure(args, code, stdout, stderr)
 	}
 	return stdout, nil
 }
 
-// writeCrontab replaces userName's crontab with content; withhold is as for
-// readCrontab.
-func writeCrontab(userName, content string, withhold bool) error {
+// writeCrontab replaces userName's crontab with content. A failure reports
+// crontab's output sizes only (crontabFailure).
+func writeCrontab(userName, content string) error {
 	// crontab [-u USER] - reads from stdin on Linux/BSD.
 	args := crontabArgs(userName, "-")
 	stdout, stderr, code, err := runCmdWithStdin(content, "crontab", args...)
@@ -50,18 +50,17 @@ func writeCrontab(userName, content string, withhold bool) error {
 		return fmt.Errorf("crontab %v: %w", args, err)
 	}
 	if code != 0 {
-		return crontabFailure(args, code, stdout, stderr, withhold)
+		return crontabFailure(args, code, stdout, stderr)
 	}
 	return nil
 }
 
-// crontabFailure reports a crontab run that exited code. crontab may quote
-// the offending line (or the whole table) in its output, so with withhold
-// the error carries only the output sizes.
-func crontabFailure(args []string, code int, stdout, stderr string, withhold bool) error {
-	if withhold {
-		return fmt.Errorf("crontab %v failed (exit %d; output withheld: %d bytes stdout, %d bytes stderr; the cron job carries secret material)",
-			args, code, len(stdout), len(stderr))
-	}
-	return fmt.Errorf("crontab %v failed (exit %d): %s%s", args, code, stdout, stderr)
+// crontabFailure reports a crontab run that exited code with the sizes of
+// its output, never the output: crontab may quote the offending line or
+// the whole table, and one table holds every job of the account, so even a
+// job that is not sensitive itself may fail with another job's secret-
+// bearing line in the output. That holds for every job, sensitive or not.
+func crontabFailure(args []string, code int, stdout, stderr string) error {
+	return fmt.Errorf("crontab %v failed (exit %d; output withheld: %d bytes stdout, %d bytes stderr; "+
+		"crontab output may quote lines of a table holding other jobs' secrets)", args, code, len(stdout), len(stderr))
 }

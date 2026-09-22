@@ -42,9 +42,9 @@ func newDraftPackager(store plan.BlobStore) draftPackager {
 // packageDraft lowers d to its plan op (draftToOp, which also carries an
 // explicit WithSensitive), packages its source data (packageContent) and
 // marks the op sensitive when it carries a resolved secret — or refuses it
-// when a strong secret sits in one of its
-// identities (markSensitive; a packaged file source is scanned from the
-// bytes read here, since a blob-backed op no longer carries them).
+// when a strong secret sits in one of its identities (markSensitive; a
+// packaged file source is scanned from the bytes read here, since a
+// blob-backed op no longer carries them).
 func (p draftPackager) packageDraft(d resource.PlanDraft) (plan.Op, error) {
 	op, source, err := p.packageContent(d)
 	if err != nil {
@@ -181,10 +181,10 @@ func (p draftPackager) draftError(d resource.PlanDraft, err error) error {
 // package owns its own wire form and this method only folds in the
 // packager's elevate flag and the draft's explicit sensitivity. Every
 // resource kind registers a Handler (see docs/plan.md, "Adding a resource
-// kind"), so an unmapped kind is always a
-// programming error (typo, or a new resource kind that forgot to register)
-// and fails the record loudly here instead of silently forwarding an unknown
-// op to the wire, where it would only blow up at remote apply time.
+// kind"), so an unmapped kind is always a programming error (typo, or a new
+// resource kind that forgot to register) and fails the record loudly here
+// instead of silently forwarding an unknown op to the wire, where it would
+// only blow up at remote apply time.
 func (p draftPackager) draftToOp(d resource.PlanDraft) (plan.Op, error) {
 	h, ok := plan.HandlerFor(plan.Kind(d.Kind))
 	if !ok {

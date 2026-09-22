@@ -342,9 +342,10 @@ ConfigSet("svc", ConfigFile("auth", "/etc/svc/auth.conf", WithContent(derived), 
 
 - The recorded op is marked sensitive exactly like a detected one, with
   every consequence above and below: schema 22 header, `-stdout` refused,
-  `-redacted` withholds its payload, the elevated-blob refusal, and the
-  destination withholding (validator output, template details, command
-  argv and output, package-manager and crontab failure output).
+  `-redacted` withholds every payload string of the op (the preview cannot
+  recognise derived material, so it withholds all of it), the elevated-blob
+  refusal, and the destination withholding (validator output, template
+  details, command argv and output, package-manager failure output).
 - It only ever adds sensitivity: an op the scan matched is sensitive
   without it, and nothing else about the op changes, so a recipe without
   `WithSensitive` records byte for byte what it recorded before the option
@@ -359,8 +360,11 @@ ConfigSet("svc", ConfigFile("auth", "/etc/svc/auth.conf", WithContent(derived), 
   and User ops carry only identities and metadata, so `WithSensitive` on
   them is a compile-time error, not a silent no-op.
 - It hides nothing that is not payload: identities (IDs, paths, names,
-  binaries) are still logged, so keep secrets out of them (`WithName` for a
-  command), and content still lands on the destination in clear text.
+  binaries) are still logged, so keep secrets out of them, and content
+  still lands on the destination in clear text. A `Command` with
+  `WithSensitive` must also have `WithName`: an unnamed command's ID is its
+  argv, so the recipe is refused at declaration ("WithSensitive requires
+  WithName").
 
 For a file whose content is exactly one secret, the typed entry point is:
 
@@ -403,8 +407,10 @@ Limits of the scan, by design:
 - Command argv/environment: a sensitive command's log lines and dry-run
   description show only its binary (`[argv withheld: secret material]`),
   and its failure reports the output sizes, not the output; a sensitive
-  package op's failing package-manager command and a sensitive cron op's
-  failing `crontab` run report the output sizes too. argv is still
+  package op's failing package-manager command reports the output sizes
+  too, and so does every failing `crontab` run, sensitive or not (one
+  table holds every job's lines, so crontab's output may quote another
+  job's secret). argv is still
   visible in the destination's process list to every local user. Pass
   secrets to programs through a managed `0600` file instead.
 - Content an op writes (a file, a crontab line) is on the destination in
@@ -416,9 +422,9 @@ Limits of the scan, by design:
 |--------|-----------|
 | `gonf plan -o dir` | `plan.jsonl` is written `0600` in a `0700`-created, owner-checked directory, as every plan; a secret-bearing plan also gets a stderr warning naming the sensitive ops: it is an executable secret artifact, delete it once applied. A blob-backed secret file's blob lands in `dir/blobs/` with the same protections. |
 | `gonf plan -stdout` | Refused, naming the sensitive ops (never their values; `SensitiveOpNames` redacts every resolved secret in the names, a short one an identity equals included). `-stdout -with-secrets` is the explicit export; the operator then owns wherever stdout goes. |
-| `gonf plan -redacted` | A human preview on stdout: JSONL headed by a `plan_preview` op, which no gonf version accepts as a plan, with the payload of every sensitive op (content and template data wholesale) and every remembered value in every payload and identity string replaced by `[redacted]`; metadata strings (op kind, owner, mode, ...) only for strong secrets, so a weak secret equal to `file` or `root` does not garble them. Strings are redacted as decoded values and re-encoded, so every line is valid JSON. It is not replayable and must not be labelled as a plan. It cannot be combined with `-stdout`, `-with-secrets` or `-o`. |
+| `gonf plan -redacted` | A human preview on stdout: JSONL headed by a `plan_preview` op, which no gonf version accepts as a plan, with every payload string of every sensitive op replaced wholesale (content, template data, member contents, argv, environment keys and values, lines, cron command and environment, guard and validator arguments, schedules and descriptions; environment keys become numbered `[redacted]-N`, so identities and metadata stay readable) and every remembered value in every payload and identity string replaced by `[redacted]`; metadata strings (op kind, owner, mode, ...) only for strong secrets, so a weak secret equal to `file` or `root` does not garble them. Strings are redacted as decoded values and re-encoded, so every line is valid JSON. It is not replayable and must not be labelled as a plan. It cannot be combined with `-stdout`, `-with-secrets` or `-o`. |
 | `gonf <task>`, `push`, `cluster`, `fleet` | The plan stays in memory on the controller and travels over SSH stdin (`GONF-PUSH/1`), as before. |
-| Destination apply (`gonf apply`) | A failing file (`WithValidation`) or `ConfigSet` validator reports its exit status and only the size of its output ("validator output withheld (N bytes)"), because a validator that quotes the offending line would echo the secret; template parse/execute errors of a sensitive file (or of an entry of a sensitive synced tree) report the step only; a failing command, package-manager or `crontab` run of a sensitive op reports only its output sizes. Debug logs never print content digests (for any file: an unsalted sha256 of a low-entropy secret can be confirmed offline). |
+| Destination apply (`gonf apply`) | A failing file (`WithValidation`) or `ConfigSet` validator reports its exit status and only the size of its output ("validator output withheld (N bytes)"), because a validator that quotes the offending line would echo the secret; template parse/execute errors of a sensitive file (or of an entry of a sensitive synced tree) report the step only; a failing command or package-manager run of a sensitive op, and every failing `crontab` run, reports only its output sizes. Debug logs never print content digests (for any file: an unsalted sha256 of a low-entropy secret can be confirmed offline). |
 | Validation candidates | Unchanged and already private: a file candidate is a `0600` temp file in a parent that only root and the applying user can write; a config set stages below a private staging directory. Both are removed after validation. |
 
 ### Transport, privilege and remote versions

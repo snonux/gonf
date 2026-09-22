@@ -79,7 +79,8 @@ func TestByteSliceTemplateDataIsDetected(t *testing.T) {
 }
 
 // A short secret (below secret.MinContainedLen) that is a whole argv value
-// marks the command and is redacted value by value in the preview.
+// marks the command, whose argv the preview then withholds wholesale (every
+// payload string of a sensitive op, v82).
 func TestShortSecretArgvIsRedactedInPreview(t *testing.T) {
 	ops, err := recordWithSecret(t, "k9z", func() {
 		Command("/usr/bin/tool", List("--pin", MustSecret("svc/key")), options.WithName("pin-tool"))
@@ -91,7 +92,7 @@ func TestShortSecretArgvIsRedactedInPreview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(preview), `"k9z"`) || !strings.Contains(string(preview), `"--pin","[redacted]"`) {
+	if strings.Contains(string(preview), `"k9z"`) || !strings.Contains(string(preview), `"args":["[redacted]","[redacted]"]`) {
 		t.Fatalf("short argv secret not redacted:\n%s", preview)
 	}
 }

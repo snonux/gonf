@@ -34,9 +34,12 @@ type sensitiveOption func(any)
 // (SyncDir, Dir with a source), which the scan does not read. The recorded
 // op is then marked sensitive (plan.Op.Sensitive, plan schema 22) exactly
 // like an op the scan matched, with every consequence documented in
-// docs/secrets.md: `gonf plan -stdout` refuses it, `-redacted` withholds its
-// payload, and the destination withholds validator, template, command and
+// docs/secrets.md: `gonf plan -stdout` refuses it, `-redacted` withholds
+// every payload string of the op (argv, environment, lines, content, ...),
+// and the destination withholds validator, template, command and
 // package-manager failure details and a command's argv from its logs.
+// A Command marked with it must also have WithName (its unnamed ID would
+// be its argv); cmd.Present refuses it otherwise.
 //
 // It only ever adds sensitivity (an op the scan matched stays sensitive
 // without it) and changes nothing else about the op, so a plan recorded

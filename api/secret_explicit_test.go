@@ -165,3 +165,47 @@ func TestWithSensitiveWithoutResolvedSecrets(t *testing.T) {
 		t.Fatalf("redacted preview carries the marked content:\n%s", preview)
 	}
 }
+
+// TestRedactedPreviewWithholdsExplicitPayloads is the review repro: a
+// WithSensitive-only op carries material no resolved value matches, so the
+// preview must withhold every payload string of the op (argv, cron command
+// and environment, package environment keys and values, lines, guards),
+// keep its identities, and still be valid JSONL.
+func TestRedactedPreviewWithholdsExplicitPayloads(t *testing.T) {
+	ResetForTest()
+	t.Cleanup(ResetForTest)
+	Task("t", "", func() {
+		Command("/bin/upload", List("--token", "DERIVED-argv"), options.WithName("upload"),
+			options.Unless("/bin/check", []string{"DERIVED-guard"}), options.WithSensitive)
+		Cron("job", options.WithCommand("/bin/up DERIVED-cron"), options.WithCronEnv("TOKEN=DERIVED-env"),
+			options.WithSensitive)
+		Package("tool", options.WithEnv(map[string]string{"DERIVED_KEY": "DERIVED-value", "B": "DERIVED-b"}),
+			options.WithSensitive)
+		File("/etc/lines", options.WithLines("key DERIVED-line"), options.WithSensitive)
+	})
+	ops, err := RecordPlanTo("explicit", plan.NewMemoryStore(), "t")
+	if err != nil {
+		t.Fatalf("RecordPlanTo: %v", err)
+	}
+	preview, err := EncodeRedactedPreview(ops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(preview, []byte("DERIVED")) {
+		t.Fatalf("preview carries a derived payload:\n%s", preview)
+	}
+	for i, line := range bytes.Split(bytes.TrimSpace(preview), []byte("\n")) {
+		op, err := plan.DecodeOp(line)
+		if err != nil {
+			t.Fatalf("preview line %d is not a valid op line: %v: %s", i+1, err, line)
+		}
+		if op.Op == plan.KindPackage && len(op.Env) != 2 {
+			t.Errorf("package env should keep one withheld entry per variable: %s", line)
+		}
+	}
+	for _, keep := range []string{`"id":"Command[upload]"`, `"bin":"/bin/upload"`, `"id":"Package[tool]"`, `"path":"/etc/lines"`} {
+		if !bytes.Contains(preview, []byte(keep)) {
+			t.Errorf("preview lost the identity %s:\n%s", keep, preview)
+		}
+	}
+}

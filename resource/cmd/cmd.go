@@ -48,7 +48,8 @@ var (
 // sets it from a sensitive command op (plan.Op.Sensitive, whether the scan
 // detected the secret or the recipe passed WithSensitive). The ID is still
 // logged: recording refuses a strong secret in it (an unnamed command's ID
-// is its argv), not a short one; give such a command WithName.
+// is its argv), not a short one, and Present refuses WithSensitive without
+// WithName (checkSensitiveName).
 type Cmd struct {
 	embed.DependsOn
 	embed.ChangeGate
@@ -92,6 +93,8 @@ func (c *Cmd) SetElevate() { c.elevate = true }
 func (c *Cmd) SetEnv(env map[string]string) { c.env = maps.Clone(env) }
 
 // Present registers a command resource that runs bin with args on Apply.
+// WithSensitive requires WithName (checkSensitiveName); a violation is
+// recipe misuse and fails fast via logger.Fatal.
 func Present(bin string, args []string, opts ...opt.CommandOption) resource.Resource {
 	c := &Cmd{
 		bin:  bin,
@@ -99,6 +102,9 @@ func Present(bin string, args []string, opts ...opt.CommandOption) resource.Reso
 	}
 	for _, o := range opts {
 		o.Apply(c)
+	}
+	if err := c.checkSensitiveName(); err != nil {
+		logger.Fatal("%v", err)
 	}
 	if c.name == "" {
 		c.name = defaultName(bin, c.args)
@@ -123,6 +129,22 @@ func Ensure(bin string, args []string, opts ...opt.CommandOption) error {
 		c.name = defaultName(bin, c.args)
 	}
 	return c.apply()
+}
+
+// checkSensitiveName refuses an explicitly sensitive command (WithSensitive)
+// without WithName: an unnamed command's ID is "bin args...", and IDs are
+// logged and reported unredacted on every host (apply logs, the changed
+// summary, SensitiveOpNames in the -stdout refusal and the plan -o
+// warning), so the argv the recipe declared secret would leak through the
+// ID. The message names the binary only. Ensure does not check: the plan
+// handler rebuilds a scan-marked unnamed command through it, whose argv
+// recording already vetted (a strong secret in an ID is refused there).
+func (c *Cmd) checkSensitiveName() error {
+	if c.Sensitive && c.name == "" {
+		return fmt.Errorf("command %s: WithSensitive requires WithName: an unnamed command's ID is its argv, "+
+			"which is logged and reported on every host", c.bin)
+	}
+	return nil
 }
 
 // SetRunnersForTest swaps the command runners (tests only). A nil argument

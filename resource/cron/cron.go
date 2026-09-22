@@ -54,9 +54,11 @@ var (
 // Cron manages a named crontab entry for a user (default root).
 //
 // The Sensitivity embed backs WithSensitive: the job's command or
-// environment lines hold secret material, so a failing crontab run reports
-// only the sizes of its output (crontabFailure). Plan apply sets it from a
-// sensitive cron op.
+// environment lines hold secret material, so its recorded op is sensitive.
+// Apply needs no flag of its own: a failing crontab run reports only the
+// sizes of its output for every job (crontabFailure), since the one table
+// holds every job's lines. Plan apply still sets it from a sensitive cron
+// op, like every kind that accepts WithSensitive.
 type Cron struct {
 	embed.DependsOn
 	embed.Absence
@@ -216,7 +218,7 @@ func (c *Cron) apply() error {
 }
 
 func (c *Cron) reconcile(id string) error {
-	current, err := readCrontab(c.user, c.Sensitive)
+	current, err := readCrontab(c.user)
 	if err != nil {
 		return err
 	}
@@ -236,7 +238,7 @@ func (c *Cron) reconcile(id string) error {
 
 	desc := fmt.Sprintf("update crontab for %s (job %s)", c.user, c.name)
 	return resource.Mutate(id, desc, func() error {
-		if err := writeCrontab(c.user, newTab, c.Sensitive); err != nil {
+		if err := writeCrontab(c.user, newTab); err != nil {
 			return err
 		}
 		logger.Info("updated crontab for %s (job %s)", c.user, c.name)

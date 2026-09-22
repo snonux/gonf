@@ -75,7 +75,7 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 		opts = append(opts, opt.WithCronEnv(kv))
 	}
 	// A sensitive op (scan-detected or WithSensitive at record time)
-	// rebuilds a sensitive Cron, which withholds crontab failure output.
+	// rebuilds a sensitive Cron, as every accepting kind's handler does.
 	if op.Sensitive {
 		opts = append(opts, opt.WithSensitive)
 	}

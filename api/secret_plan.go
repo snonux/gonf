@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/plan"
@@ -52,8 +53,10 @@ func RedactSecrets(s string) string {
 // EncodeRedactedPreview encodes ops as a human preview that is safe to print:
 // JSONL like a plan, but headed by a plan.PreviewKind line (which no gonf
 // version applies) and with secret material replaced by secret.Redacted —
-// the content_b64, template_data and member contents of every sensitive op
-// wholesale, and every resolved secret value in every payload and identity
+// every payload string of every sensitive op wholesale (content_b64,
+// template_data, member contents, argv, environment, lines, cron command
+// and environment, guard and validator arguments; see redactOp), and every
+// resolved secret value in every payload and identity
 // string of every op (fields, list elements, map keys and values, template
 // data leaves); metadata strings only for strong secrets. The
 // strings are redacted as decoded values and the op is re-encoded, so every
@@ -83,28 +86,30 @@ func EncodeRedactedPreview(ops []plan.Op) ([]byte, error) {
 }
 
 // redactOp returns a redacted deep copy of op (the caller's op, whose slices
-// and maps may be shared, is never modified): the encoded content of a
-// sensitive op as a whole, since it cannot be redacted piecewise, then every
-// string value through RedactSecrets.
+// and maps may be shared, is never modified). For a sensitive op every
+// payload string (content, argv, environment keys and values, lines, cron
+// command and environment, guard and validator arguments, ...; see
+// opFieldClasses) is withheld wholesale and its template_data replaced as a
+// whole, because such an op may carry secret material no resolved value
+// matches (an explicit WithSensitive over a derived secret). Identity and
+// metadata strings stay readable. Every remaining string then goes through
+// RedactSecrets (metadata only for strong secrets).
 func redactOp(op plan.Op) (plan.Op, error) {
 	out, err := copyOp(op)
 	if err != nil {
 		return plan.Op{}, err
 	}
+	withhold := func(string, string) (string, bool) { return "", false }
 	if out.Sensitive {
-		if out.ContentB64 != "" {
-			out.ContentB64 = secret.Redacted
-		}
 		if len(out.TemplateData) != 0 {
 			out.TemplateData = redactedJSON
 		}
-		for i := range out.Members {
-			if out.Members[i].ContentB64 != "" {
-				out.Members[i].ContentB64 = secret.Redacted
-			}
-		}
+		withhold = payloadWithholder()
 	}
 	walkOpStrings(&out, func(path, s string) string {
+		if r, ok := withhold(path, s); ok {
+			return r
+		}
 		// Metadata (op kind, owner, mode, ...) is redacted only for strong
 		// secrets: a weak one equal to "file" or "root" is a coincidence,
 		// and redacting it would only garble the preview.
@@ -114,4 +119,23 @@ func redactOp(op plan.Op) (plan.Op, error) {
 		return RedactSecrets(s)
 	})
 	return out, nil
+}
+
+// payloadWithholder returns the replacement rule for a sensitive op's
+// strings: a non-empty payload, content or template-data string becomes
+// secret.Redacted, and a map key "<secret.Redacted>-N" (numbered, so an
+// environment keeps one distinct entry per variable). Identity and
+// metadata strings are left to the caller (ok false).
+func payloadWithholder() func(path, s string) (string, bool) {
+	keys := 0
+	return func(path, s string) (string, bool) {
+		if class := classOf(path); s == "" || class == classIdentity || class == classMetadata {
+			return "", false
+		}
+		if strings.HasSuffix(path, "{key}") {
+			keys++
+			return fmt.Sprintf("%s-%d", secret.Redacted, keys), true
+		}
+		return secret.Redacted, true
+	}
 }

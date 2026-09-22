@@ -8,54 +8,43 @@ import (
 	"github.com/snonux/gonf/resource"
 )
 
-// fakeCronSecret is synthetic secret material in a cron command.
+// fakeCronSecret is synthetic secret material in another (sensitive) job's
+// crontab line.
 const fakeCronSecret = "fake-cron-token-3d9e"
 
-// A sensitive cron op withholds crontab's failure output, for both the
-// read (crontab -l) and the write (crontab -), while a plain op keeps it:
-// crontab may quote the offending line or the whole table.
-func TestSensitiveCronWithholdsCrontabFailureOutput(t *testing.T) {
-	tests := []struct {
-		name      string
-		readFails bool
-	}{
-		{name: "read", readFails: true},
-		{name: "write"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			stubFailingCrontab(t, tt.readFails)
-			op := plan.Op{Op: plan.KindCron, ID: "Cron[u/upload]", Name: "upload", CronUser: currentCronUser(t),
-				Command: "/bin/up " + fakeCronSecret, Schedule: "5 * * * *", Sensitive: true}
-
+// crontab's failure output is withheld for every job, for both the read
+// (crontab -l) and the write (crontab -): the one table holds every job's
+// lines, so a job that is not sensitive itself (Sensitive false here) may
+// fail with another job's secret-bearing line in crontab's output.
+func TestCrontabFailureOutputIsWithheldForEveryJob(t *testing.T) {
+	for _, readFails := range []bool{true, false} {
+		for _, sensitive := range []bool{true, false} {
+			stubFailingCrontab(t, readFails)
+			op := plan.Op{Op: plan.KindCron, ID: "Cron[u/plain]", Name: "plain", CronUser: currentCronUser(t),
+				Command: "/bin/true", Schedule: "5 * * * *", Sensitive: sensitive}
 			err := planHandler{}.Apply(op, plan.ApplyContext{})
 			if err == nil || !strings.Contains(err.Error(), "output withheld") || strings.Contains(err.Error(), fakeCronSecret) {
-				t.Fatalf("sensitive cron: err = %v, want the withheld failure without the secret", err)
+				t.Fatalf("read fails=%v sensitive=%v: err = %v, want the withheld failure without the secret",
+					readFails, sensitive, err)
 			}
-			op.Sensitive = false
-			resource.ResetForTest()
-			err = planHandler{}.Apply(op, plan.ApplyContext{})
-			if err == nil || !strings.Contains(err.Error(), fakeCronSecret) {
-				t.Fatalf("plain cron: err = %v, want crontab's output", err)
-			}
-		})
+		}
 	}
 }
 
-// stubFailingCrontab fakes a crontab whose read (readFails) or write fails,
-// echoing the secret-bearing table in its output.
+// stubFailingCrontab fakes a crontab holding another job's secret-bearing
+// managed block, whose read (readFails) or write fails echoing the table.
 func stubFailingCrontab(t *testing.T, readFails bool) {
 	t.Helper()
 	resource.ResetForTest()
 	oldDry := resource.DryRun()
 	resource.SetDryRun(false)
-	table := "5 * * * * /bin/up " + fakeCronSecret + "\n"
+	table := beginMarker("upload") + "\n5 * * * * /bin/up " + fakeCronSecret + "\n# END GONF Cron[upload]\n"
 	SetRunnersForTest(
 		func(string, ...string) (string, string, int, error) {
 			if readFails {
 				return table, "crontab: bad line", 1, nil
 			}
-			return "", "", 0, nil
+			return table, "", 0, nil
 		},
 		func(stdin string, _ string, _ ...string) (string, string, int, error) {
 			return "", "crontab: rejected " + stdin, 1, nil
