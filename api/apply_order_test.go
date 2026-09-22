@@ -2,12 +2,77 @@ package api
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/snonux/gonf/plan"
 )
+
+// perfRuns is how many timed samples assertGrowsSubQuadratically takes at
+// each size; their median discounts a single stalled tick (GC, scheduler
+// contention on a loaded machine) without hiding a real, repeated slowdown.
+const perfRuns = 5
+
+// perfRatioBound is the most a 4x-size run's median time may be over the
+// base-size run's median: a linear or O(n log n) algorithm grows about 4x
+// under a 4x input, an O(n^2) algorithm about 16x. The bound sits well
+// below 16x, with headroom for scheduler noise on a loaded machine, so a
+// quadratic or worse regression still fails while a correctly-scaling
+// implementation passes regardless of the box's absolute speed.
+const perfRatioBound = 8.0
+
+// perfHangGuard is an absolute ceiling on one timed run, independent of
+// load. It exists only to fail a genuine hang (an infinite loop or
+// deadlock), not to bound normal variance, so it is generous. The race
+// detector roughly tenfolds the algorithm's own cost on top of whatever the
+// machine is already doing, so it gets extra room.
+func perfHangGuard() time.Duration {
+	if raceEnabled {
+		return 120 * time.Second
+	}
+	return 60 * time.Second
+}
+
+// medianDuration runs fn n times and returns the median wall-clock
+// duration: the median of a few samples discounts one outlier tick (a GC
+// pause, a context switch onto a busy machine) without hiding a real,
+// repeated slowdown the way a single sample would.
+func medianDuration(n int, fn func()) time.Duration {
+	durs := make([]time.Duration, n)
+	for i := range durs {
+		start := time.Now()
+		fn()
+		durs[i] = time.Since(start)
+	}
+	slices.Sort(durs)
+	return durs[len(durs)/2]
+}
+
+// assertGrowsSubQuadratically measures small and large (large being the
+// same operation as small at 4x the input size) and fails if either exceeds
+// perfHangGuard (a hang) or if large's median time grew more than
+// perfRatioBound times small's median time. Growth, not an absolute
+// wall-clock bound, is what is asserted, so the check stays valid on a
+// heavily loaded machine (both runs slow down together) while still
+// catching a quadratic or worse regression, such as the historic fixpoint
+// solver and the per-watch deletion-trial search the two callers guard
+// against.
+func assertGrowsSubQuadratically(t *testing.T, small, large func()) {
+	t.Helper()
+	ts := medianDuration(perfRuns, small)
+	tl := medianDuration(perfRuns, large)
+	guard := perfHangGuard()
+	if ts > guard || tl > guard {
+		t.Fatalf("took %v (base size) / %v (4x size): exceeds the %v hang guard", ts, tl, guard)
+	}
+	base := max(ts, time.Microsecond) // guard against dividing by a measurement that rounded to 0
+	if ratio := float64(tl) / float64(base); ratio > perfRatioBound {
+		t.Fatalf("time grew %.1fx from the base size to 4x the size (%v -> %v); want < %.1fx (quadratic growth would be about 16x)",
+			ratio, ts, tl, perfRatioBound)
+	}
+}
 
 var orderHdr = plan.Op{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "apply"}
 
@@ -188,32 +253,30 @@ func refusedWatchPlan(n, w int) []plan.Op {
 	return ops
 }
 
-// TestOrderForPrivilegeSplitLargeRefusedPlanIsFast bounds the time of large
-// refused plans: 2000 ops with 300 refused watch groups (5.6s with the old
-// fixpoint solver) and 10000 ops with 3000. The greedy's per-watch check
-// searches only what the watch's ends reach, so both take milliseconds; the
-// race detector slows them about tenfold, so the bounds are scaled under
-// -race.
+// TestOrderForPrivilegeSplitLargeRefusedPlanIsFast guards against a
+// quadratic or worse regression in ordering large refused plans (2000 ops
+// with 300 refused watch groups took 5.6s with the old fixpoint solver; the
+// greedy's per-watch check searches only what the watch's ends reach, so it
+// does not). An absolute wall-clock bound is flaky under machine load (it
+// failed twice at a load average of ~24), so this instead measures the same
+// plan shape at a base size and at 4x that size and asserts the time grows
+// well below quadratic (see assertGrowsSubQuadratically); a hang guard
+// still catches an outright hang. Two base sizes, a moderate one and one
+// four times larger, are checked to cover both regimes the old bounds did.
 func TestOrderForPrivilegeSplitLargeRefusedPlanIsFast(t *testing.T) {
-	for _, tc := range []struct {
-		ops, watches int
-		bound        time.Duration
-	}{{2000, 300, 500 * time.Millisecond}, {10000, 3000, time.Second}} {
-		ops := refusedWatchPlan(tc.ops, tc.watches)
-		bound := tc.bound
-		if raceEnabled {
-			bound *= 10
+	for _, base := range []struct{ ops, watches int }{{2000, 300}, {2500, 375}} {
+		check := func(ops, watches int) func() {
+			built := refusedWatchPlan(ops, watches)
+			want := watches / 2
+			return func() {
+				_, conflicts, err := orderForPrivilegeSplit(built)
+				if err != nil || len(conflicts) != want {
+					t.Fatalf("orderForPrivilegeSplit() = %v, %d together-conflicts; want no error and %d",
+						err, len(conflicts), want)
+				}
+			}
 		}
-		start := time.Now()
-		_, conflicts, err := orderForPrivilegeSplit(ops)
-		if elapsed := time.Since(start); elapsed > bound {
-			t.Fatalf("orderForPrivilegeSplit took %v for %d ops / %d refused watch groups, want < %v",
-				elapsed, tc.ops, tc.watches, bound)
-		}
-		if err != nil || len(conflicts) != tc.watches/2 {
-			t.Fatalf("orderForPrivilegeSplit() = %v, %d together-conflicts; want no error and %d",
-				err, len(conflicts), tc.watches/2)
-		}
+		assertGrowsSubQuadratically(t, check(base.ops, base.watches), check(base.ops*4, base.watches*4))
 	}
 }
 
@@ -241,29 +304,38 @@ func watchChainPlan(n, k int) []plan.Op {
 	return ops
 }
 
-// TestOrderForPrivilegeSplitLongWatchChainIsFast bounds the minimal conflict
-// search on long watch chains: 5000 chain ops with 50 dropped watches took
-// 5m32s when every watch was a separate deletion trial rebuilding the watch
-// graph. A chain of plain watches is one run for shrinkConflict, so this now
-// takes milliseconds. The refusal still names the chain segment.
+// TestOrderForPrivilegeSplitLongWatchChainIsFast guards against the
+// regression where the minimal conflict search on long watch chains reran a
+// separate deletion trial that rebuilt the watch graph for every dropped
+// watch (5000 chain ops with 50 dropped watches took 5m32s); a chain of
+// plain watches is now one run for shrinkConflict. Rather than an absolute
+// wall-clock bound (flaky under machine load), it measures the search at a
+// base chain length and at 4x that length and asserts the time grows well
+// below quadratic (see assertGrowsSubQuadratically). Only the chain length
+// is scaled: the search cost per dropped watch is roughly the chain length
+// it walks, so with a fixed number of dropped watches k the total cost is
+// linear in the chain length alone; scaling k along with it would make even
+// this correct, O(chain length x k) algorithm look quadratic in the chain
+// length, and wrongly fail the check.
 func TestOrderForPrivilegeSplitLongWatchChainIsFast(t *testing.T) {
-	ops := watchChainPlan(5000, 50)
-	bound := time.Second
-	if raceEnabled {
-		bound *= 10
+	const k = 50
+	check := func(n int) func() {
+		ops := watchChainPlan(n, k)
+		wantConflict := n - 1
+		wantKey := watchKey{"w0", fmt.Sprint("u", n-1)}
+		return func() {
+			_, conflicts, err := orderForPrivilegeSplit(ops)
+			if err != nil || len(conflicts) != k {
+				t.Fatalf("orderForPrivilegeSplit() = %v, %d together-conflicts; want %d", err, len(conflicts), k)
+			}
+			// w0 watches the far end of the chain while e0 needs the near
+			// end: the conflict must list every chain watch in between.
+			if got := len(conflicts[wantKey]); got != wantConflict {
+				t.Fatalf("conflict of w0 lists %d chain watches, want all %d", got, wantConflict)
+			}
+		}
 	}
-	start := time.Now()
-	_, conflicts, err := orderForPrivilegeSplit(ops)
-	if elapsed := time.Since(start); elapsed > bound {
-		t.Fatalf("orderForPrivilegeSplit took %v for a 5000-op watch chain with 50 dropped watches, want < %v", elapsed, bound)
-	}
-	if err != nil || len(conflicts) != 50 {
-		t.Fatalf("orderForPrivilegeSplit() = %v, %d together-conflicts; want 50", err, len(conflicts))
-	}
-	// w0 watches u4999 while e0 needs u0: every chain watch in between.
-	if got := len(conflicts[watchKey{"w0", "u4999"}]); got != 4999 {
-		t.Fatalf("conflict of w0 lists %d chain watches, want all 4999", got)
-	}
+	assertGrowsSubQuadratically(t, check(1250), check(5000))
 }
 
 func BenchmarkOrderForPrivilegeSplitRefusedWatches(b *testing.B) {
