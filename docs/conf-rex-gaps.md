@@ -271,7 +271,6 @@ the consumer composes them with `RegisterMethods` + `WithCluster`, per-host
 | `freebsd_*` / `freebsd-hosts` (f0–f3; doas; freebsd/amd64) | packages, script, services, stamp_dir, cron, newsyslog | hourly minute via `WithValue`; `@reboot` workaround |
 | `rnodes_*` / `rocky-k3s` (r0–r2; root) | nfs_mount_monitor, persistent_journal | ports of `f3s/r-nodes/Rexfile` |
 | `garage_*` / `garage` (f0–f2; doas) | config | configuration only, see below |
-| `debian_pis_*` / `debian-pis` (pi2, pi3) | unattended upgrades and base | registered for explicit runs only, no aggregate yet |
 
 ### First-install prerequisites
 
