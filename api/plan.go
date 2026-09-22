@@ -206,9 +206,12 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 
 	plan.ResetRecord()
 	plan.SetRecording(true)
-	// Defensive: a task body panicking during recording would leak a stale
-	// stack entry (pop is skipped); go test recovers per-test panics and
-	// keeps running, so reset here to keep later sessions truthful.
+	// Defensive: recSession.reset() is a general safeguard against state an
+	// earlier session left behind if it never reached its normal cleanup
+	// (e.g. a panic recovered outside RecordPlanTo, such as by go test's
+	// per-test recovery, which keeps running afterward). The stack pop
+	// itself is not at risk here: recordTaskName pops its own entry in a
+	// defer, so a panicking task body cannot leak a stale stack entry.
 	recSession.reset()
 	resource.SetPlanDraftRecorder(func(d resource.PlanDraft) {
 		recordSessionDraft(d, store)

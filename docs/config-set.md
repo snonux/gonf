@@ -76,11 +76,15 @@ controller rendered.
    operator decision). Also look for the members' pending markers (see
    below). If nothing differs, repair attributes and go to step 7.
 4. **Stage and validate.** Check the staging directory with the same rules as
-   `WithValidation` candidate parents. Every component must be a real
-   directory. Ancestors must be owned by root or the applying user, and may
-   be writable by others only when sticky. The staging directory itself must
-   be owned by the applying user and must not be writable by group or others.
-   Inside it, create a private `.gonf-configset-<name>+XXXX` directory (0700)
+   `WithValidation` candidate parents (see [file-dir-link.md](file-dir-link.md)
+   for the full rule). Every component must be a real directory. Ancestors
+   must be owned by root or the applying user, and may be writable by others
+   only when sticky. The staging directory itself must be owned by the
+   applying user, not world-writable, and group-writable only when its group
+   is the applying user's private group (as with the `0775` directories the
+   umask-002 default of Fedora and most Linux distributions creates; gid `0`
+   is never private, so a root apply gets no such exception). Inside it,
+   create a private `.gonf-configset-<name>+XXXX` directory (0700)
    and write the **complete** set there, unchanged members included, as 0600
    files (created exclusively) that mirror the members' layout. So relative
    references between members resolve the same way, and with `WithChroot` the
