@@ -76,9 +76,14 @@ embedded rather than redeclared:
   its watch list once after its options ran (gate ids, then `WithWatch`
   ids, else its `DependsOn` ids; only `Ensure` then runs `CheckWatch`, since
   a registered bare `IfChanged` may still merge with a same-bus declaration
-  and the plan pre-flight refuses one that stays unwatchable), and it keeps
+  and the plan pre-flight refuses one that stays unwatchable), it keeps
   its own draft wiring (`Watch` is recorded even when unarmed) instead of
-  `DraftGate`.
+  `DraftGate`, and it holds with `Holds(d.changedSinceLastReload)` instead
+  of `resource.AnyChanged`: only a watched change noted after the bus's
+  last reload in this apply (`resource.ChangedSince` on its
+  `DaemonReload[bus]` ID) fires it, so a SystemdTimer that joined the bus's
+  registered reload (`systemd.JoinRegisteredReload`) shares one reload
+  with it.
 
 When adding a field or capability shared by every resource type, prefer a new
 embed type here instead of duplicating the field and its setter in each resource.

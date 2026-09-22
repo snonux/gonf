@@ -130,3 +130,63 @@ func TestGatedReloadCoalescesWithEarlierSameBusReload(t *testing.T) {
 		})
 	}
 }
+
+// TestMayManageUnit pins the conservative input-to-unit match that guards a
+// join: a File by unit, template or drop-in directory name only, and every
+// other kind (a SyncDir Directory, anything unknown) as possibly any unit.
+func TestMayManageUnit(t *testing.T) {
+	for _, tc := range []struct {
+		id, unit string
+		want     bool
+	}{
+		{"File[/etc/systemd/system/a.service]", "a.service", true},
+		{"File[/etc/systemd/system/b.service]", "a.service", false},
+		{"File[/etc/systemd/system/a.service.d/10-x.conf]", "a.service", true},
+		{"File[/etc/systemd/system/b.service.d/10-x.conf]", "a.service", false},
+		{"File[/etc/systemd/system/a@.service]", "a@x.service", true},
+		{"File[/etc/systemd/system/a@.service.d/10-x.conf]", "a@x.service", true},
+		{"File[/etc/systemd/system/a@.service]", "a.service", false},
+		{"File[/usr/local/bin/a.service-helper]", "a.service", false},
+		{"Directory[/home/u/.config/systemd/user]", "a.service", true},
+		{"Command[whatever]", "a.service", true},
+	} {
+		if got := mayManageUnit(tc.id, tc.unit); got != tc.want {
+			t.Errorf("mayManageUnit(%s, %s) = %v, want %v", tc.id, tc.unit, got, tc.want)
+		}
+	}
+}
+
+// TestJoinRegisteredReloadRefusesRelatedInput: a joiner whose related units
+// may be one of the reload's inputs keeps its own reload (the registered
+// draft is untouched); an unrelated unit still joins.
+func TestJoinRegisteredReloadRefusesRelatedInput(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		input   string // a File path, or "" for a Directory input
+		related []string
+		want    bool
+	}{
+		{name: "wants a composition unit", input: "/u/a.service", related: []string{"a.service"}},
+		{name: "after a composition drop-in", input: "/u/a.service.d/x.conf", related: []string{"network-online.target", "a.service"}},
+		{name: "directory input may hold it", related: []string{"a.service"}},
+		{name: "unrelated unit joins", input: "/u/a.service", related: []string{"network-online.target"}, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resource.ResetRepository()
+			t.Cleanup(resource.ResetRepository)
+			in := noop("Directory", "/u")
+			if tc.input != "" {
+				in = noop("File", tc.input)
+			}
+			reload := Present(opt.WithUser, opt.OnChange(in))
+			before := registeredDraft(t, reload.ID())
+			joiner := noop("SystemdTimer", "job")
+			if got := JoinRegisteredReload(true, joiner.ID(), tc.related...); got != tc.want {
+				t.Fatalf("JoinRegisteredReload = %v, want %v", got, tc.want)
+			}
+			if after := registeredDraft(t, reload.ID()); !tc.want && !reflect.DeepEqual(after, before) {
+				t.Fatalf("refused join changed the reload draft: %#v -> %#v", before, after)
+			}
+		})
+	}
+}

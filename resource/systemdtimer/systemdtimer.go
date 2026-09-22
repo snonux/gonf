@@ -119,14 +119,17 @@ func (t *SystemdTimer) SetEnableOnly() { t.enableOnly = true }
 // the timer (systemd.JoinRegisteredReload): the timer's own change-gated
 // reload then also loads the composition's earlier-written inputs, and the
 // registered reload is held unless one of its inputs changed after it, so
-// the bus reloads once per apply. The timer's op is unchanged, and without
-// such a reload (or when joining it is refused) the timer behaves exactly
-// as a standalone one.
+// the bus reloads once for them. The timer is then converged before the
+// composition's reload, so the join is refused when the companion service's
+// After=/Wants= name a unit the composition may install (it could be
+// started from a stale definition). The timer's op is unchanged, and
+// without such a reload (or when joining it is refused) the timer behaves
+// exactly as a standalone one.
 func Present(name string, opts ...opt.SystemdTimerOption) resource.Resource {
 	t := newTimer(name, opts...)
 	r := resource.Register("SystemdTimer", t.base, t, t.DependsOn.IDs...)
 	resource.RecordPlanDraft(t.planDraft(r.ID()))
-	systemd.JoinRegisteredReload(t.user, r.ID())
+	systemd.JoinRegisteredReload(t.user, r.ID(), slices.Concat(t.after, t.wants)...)
 	return r
 }
 

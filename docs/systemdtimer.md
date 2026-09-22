@@ -35,14 +35,24 @@ on the `SystemdTimer`, so the timer applies first and its own change-gated
 reload also loads the composition's already-written inputs. A change-gated
 reload only fires for a watched change noted after the bus's last reload in
 this apply, so the composition's reload is then held unless one of its
-inputs changed later. The bus reloads once per apply, after all unit files
-and before every activation. The `systemd_timer` op itself is unchanged, and
-no plan schema change is involved.
+inputs changed later. So the bus reloads once for everything written up to
+the timer, and every unit is loaded before its own activation: the
+composition's activations run after its reload, the timer's
+enable/start/restart after the timer's own reload. The timer's activation
+now runs before the composition's reload, though: when only the
+composition's inputs changed, the timer restarts (with its own, unchanged
+units) before those inputs are reloaded. The `systemd_timer` op itself is
+unchanged, and no plan schema change is involved.
 
 The timer keeps reloading on its own (at most one extra reload, as before)
 when it is alone, on the other bus, declared before the composition, in
-another when-block or privilege scope, or when it depends on the composition
-(joining would close a dependency cycle).
+another when-block or privilege scope, when it depends on the composition
+(joining would close a dependency cycle), or when its `WithAfter` /
+`WithWants` name a unit the composition may install: a file input with that
+unit's (or its template's) name or drop-in directory, or any input that is
+not a single file, such as a `SyncDir` directory. Starting the timer first
+could otherwise start such a unit from its stale definition (e.g. a
+`Persistent` timer firing on start).
 
 ## Options
 
