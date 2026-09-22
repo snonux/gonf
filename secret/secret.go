@@ -10,10 +10,10 @@
 //
 // FileProvider is the built-in provider: it reads regular files below the
 // controller-local secrets/ directory and is what api.MustSecret and
-// api.OptionalSecret have always used. Other providers (for example a
-// foostore adapter executed via argv) live outside gonf's recipe and resource
-// packages and are configured once, at the consumer's composition root, with
-// api.SetSecretProvider.
+// api.OptionalSecret have always used. Other providers (such as the
+// argv-invoked foostore adapter in package secret/foostore) live outside
+// gonf's recipe and resource packages and are configured once, at the
+// consumer's composition root, with api.SetSecretProvider.
 //
 // The contract only resolves bytes. Plans become secret-aware through
 // Values: api.ResolveSecret remembers every value it returns, and plan

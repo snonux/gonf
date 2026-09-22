@@ -84,13 +84,28 @@ func NewSnapshot(p Provider) *Snapshot {
 	return &Snapshot{provider: p, entries: map[Ref]*snapshotEntry{}}
 }
 
+// CanonicalRef returns the canonical form of ref — path-cleaned, without
+// leading slashes or backslashes, with forward slashes — which is the
+// Snapshot cache key and the reference a Snapshot asks its provider for:
+// "/a/b", `\a/b` and "x/../a/b" all yield "a/b". ok is false when ref has
+// no canonical form (empty, or escaping with ".."). A provider that looks
+// references up in a table (such as foostore.Items) uses it so that every
+// spelling FileProvider reads as one file maps to one entry.
+func CanonicalRef(ref Ref) (Ref, bool) {
+	clean, err := cleanRef(ref)
+	if err != nil {
+		return "", false
+	}
+	return Ref(filepath.ToSlash(clean)), true
+}
+
 // Resolve implements Provider.
 func (s *Snapshot) Resolve(ctx context.Context, ref Ref) ([]byte, error) {
 	if IsNilProvider(s.provider) {
 		return nil, &Error{Kind: ErrUnavailable, Ref: ref,
 			Msg: fmt.Sprintf("secret %q: snapshot has no provider (create it with secret.NewSnapshot)", string(ref))}
 	}
-	key, ok := canonicalRef(ref)
+	key, ok := CanonicalRef(ref)
 	if !ok {
 		return Resolve(ctx, s.provider, ref)
 	}
@@ -182,16 +197,6 @@ func (s *Snapshot) lead(ctx context.Context, key, ref Ref, e *snapshotEntry) ([]
 	// A copy on the miss too, so this caller cannot reach the provider's
 	// own buffer (which the provider may keep and hand out again).
 	return bytes.Clone(data), nil
-}
-
-// canonicalRef returns the cache key of ref: cleaned, without leading
-// slashes, with forward slashes. ok is false when ref has no canonical form.
-func canonicalRef(ref Ref) (Ref, bool) {
-	clean, err := cleanRef(ref)
-	if err != nil {
-		return "", false
-	}
-	return Ref(filepath.ToSlash(clean)), true
 }
 
 // callerError turns a failure of Resolve for the canonical key into the one

@@ -98,8 +98,9 @@ func main() {
   fails fast (`logger.Fatal`), so one invocation never mixes secret sources.
 - A provider implements `Resolve(ctx, secret.Ref) ([]byte, error)`, honours
   `ctx`, returns typed errors and never puts secret bytes into errors or logs.
-  Keep adapters (e.g. an argv-invoked foostore) out of recipe and resource
-  packages; `secret.ProviderFunc` adapts a plain function.
+  Keep adapters (such as the argv-invoked foostore adapter below) out of
+  recipe and resource packages; `secret.ProviderFunc` adapts a plain
+  function.
 - `secret.NewSnapshot(p)` resolves each reference at most once and caches
   successes and not-found; installed with `SetSecretProvider` it lasts for the
   rest of the process, so every task, host and privilege chunk of one
@@ -123,10 +124,94 @@ func main() {
   behaviour.
 - `ResolveSecret` may be called from several goroutines; the provider
   configuration is locked. Providers themselves must then be safe for
-  concurrent use (`Snapshot` and `FileProvider` are).
+  concurrent use (`Snapshot`, `FileProvider` and `foostore.Provider` are).
 - `ResolveSecret(ctx, ref)` returns the error instead of stashing it and works
   outside recording too. `MustSecret` / `OptionalSecret` resolve with
   `context.Background()`: plan recording carries no context yet.
+
+## The foostore provider (task 162)
+
+Package `github.com/snonux/gonf/secret/foostore` resolves secrets from a
+foostore KeePass store by running the `foostore` binary; it does not import
+foostore's Go packages. Configure it at the composition root, wrapped in a
+`Snapshot`:
+
+```go
+items, err := foostore.Items(map[secret.Ref]foostore.Item{
+    "garage/rpc_secret": foostore.Field("Infra/garage-rpc", "Password"),
+    "nsd/tsig.key":      foostore.Attachment("Infra/nsd/tsig.key"),
+})
+if err != nil { log.Fatal(err) }
+p, err := foostore.New(foostore.Config{Lookup: items})
+if err != nil { log.Fatal(err) }
+api.SetSecretProvider(secret.NewSnapshot(p))
+```
+
+Recipes keep their logical references (`MustSecret("garage/rpc_secret")`);
+the table is the explicit mapping from those to foostore items, so a
+consumer can switch provider without touching recipe bodies. Only what the
+table lists is read: an unmapped reference is `ErrNotFound` (the file
+provider's answer for a file that does not exist), so a mistyped required
+secret still fails through `MustSecret`. Keys are compared in canonical
+form (`secret.CanonicalRef`), as the file provider reads `/a/b` and `a/b`
+as one file.
+
+**Contract.** The adapter speaks foostore's machine read contract, called
+version 1 here: `foostore read` as added by foostore commit `cd8de3d` (gonf
+task y52; foostore README, "Machine-Facing Read"). Each read runs
+
+```text
+foostore read --backend keepass --exact --raw --non-interactive \
+    --timeout 30s [--kdbx-path P] [--field NAME] -- REFERENCE
+```
+
+and returns stdout exactly (binary data, trailing newlines). An entry item
+(`Field(reference, name)`) selects one field with `--field`; an attachment
+item (`Attachment("Group/Title/name")`) passes no field. Foostore compares
+the reference byte for byte (no trimming or path cleaning) and rejects
+ambiguous identities. Before its first read a provider runs
+`foostore read --help` once and requires the contract's usage text, so an
+older foostore whose `read` would be an interactive search is refused
+(`ErrUnavailable`) instead of having its search output taken as a secret.
+A failed check is retried on the next lookup.
+
+| foostore result | Kind |
+|-----------------|------|
+| exit 0 | the value (larger than `MaxBytes`, default 16 MiB: `ErrInvalid`) |
+| exit 4, not found; or a reference the table does not map | `ErrNotFound` (the only kind `OptionalSecret` suppresses) |
+| exit 2, usage (reference not in exact form, a field on an attachment); exit 5, ambiguous | `ErrInvalid` |
+| exit 6 locked/credentials, 7 corrupt, 8 store I/O, 1 failure/timeout, any other exit or signal, binary missing, contract check failed, adapter timeout | `ErrUnavailable` |
+
+**No interactive fallback, no leaks.** The child runs with stdin from
+`/dev/null`, in a new session without a controlling terminal (so no prompt
+can reach an operator's terminal), and with an environment of `HOME` only
+(plus the passphrase descriptor below): `FOOSTORE_SHELL`, `PIN` and an
+inherited `FOOSTORE_READ_PASSPHRASE_FD` never reach it. argv holds only
+logical names — the foostore reference, the field name, the store path and
+the timeout. Errors name the gonf reference, the foostore item and the exit
+code; foostore's stdout and stderr are never quoted (stderr is reported as a
+byte count), and a failed read's captured output is overwritten.
+
+**Unlock.** By default foostore unlocks itself with its configured
+`kdbx_pass_file` (owner-only). Alternatively `Config.Passphrase` returns the
+passphrase for each read (for example from an agent); the adapter writes it
+into a pipe the child inherits as descriptor 3
+(`FOOSTORE_READ_PASSPHRASE_FD=3`), closes it, and overwrites its copy. The
+passphrase is never in argv or the environment. Production unlock material
+is outside gonf's tests: they run a fake foostore.
+
+**Cancellation and time.** `Config.Timeout` (default 30 s) is passed to
+foostore as `--timeout`; if the process still runs 2 s after that, the
+adapter kills its whole process group (`ErrUnavailable`). A cancelled
+caller context kills the process group at once and yields an error wrapping
+`ctx.Err()`.
+
+**Once per invocation.** Without a `Snapshot` every lookup runs foostore
+again (one KDF each); with `secret.NewSnapshot` each reference is read at
+most once per gonf invocation, so every task, host and privilege chunk of a
+plan sees the same bytes, and a not-found is remembered too. The file
+provider stays the default and is unchanged: a consumer that does not call
+`SetSecretProvider` keeps reading `secrets/`.
 
 ## What reaches the plan: secret-aware plans (task 062)
 
@@ -326,5 +411,5 @@ protected sidecar holding only the secret payloads — need their own accepted
 design (key management, recipients, what a destination decrypts with) and
 are not implied by sensitivity or by any provider. Until then an executable
 secret-bearing plan exists only under the private-filesystem protections
-above and for as long as the operator keeps it. The foostore adapter is task
-162.
+above and for as long as the operator keeps it. The foostore provider
+(above) changes where secrets come from, not what the plan holds.

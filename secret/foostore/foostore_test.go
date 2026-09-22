@@ -1,0 +1,385 @@
+package foostore
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/snonux/gonf/secret"
+)
+
+// fake is a Provider wired to the fake foostore plus the files it reports
+// through.
+type fake struct {
+	p    *Provider
+	log  string // FAKE_LOG
+	pids string // FAKE_PIDS
+}
+
+// testItems maps the references the tests use.
+var testItems = map[secret.Ref]Item{
+	"garage/rpc_secret": Field("Infra/garage-rpc", "Password"),
+	"nsd/tsig.key":      Attachment("Infra/nsd/tsig.key"),
+}
+
+// newFake returns a Provider running the fake foostore in mode; cfg's
+// Lookup defaults to testItems and env adds FAKE_* settings.
+func newFake(t *testing.T, mode string, cfg Config, env ...string) fake {
+	t.Helper()
+	if cfg.Lookup == nil {
+		lookup, err := Items(testItems)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.Lookup = lookup
+	}
+	cfg.Binary = os.Args[0]
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	f := fake{p: p, log: filepath.Join(dir, "log"), pids: filepath.Join(dir, "pids")}
+	sleep, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.prefix = []string{"-test.run=^TestHelperProcess$", "--"}
+	// GORACE: a -race child otherwise sleeps 1s at exit.
+	p.extraEnv = append([]string{"GONF_FAKE_FOOSTORE=1", "FAKE_MODE=" + mode, "GORACE=atexit_sleep_ms=0",
+		"FAKE_LOG=" + f.log, "FAKE_PIDS=" + f.pids, "FAKE_SLEEP=" + sleep}, env...)
+	return f
+}
+
+// events counts the fake's logged invocations of kind ("probe" or "read").
+func (f fake) events(t *testing.T, kind string) int {
+	t.Helper()
+	data, err := os.ReadFile(f.log)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Count(string(data), kind+"\n")
+}
+
+// valueEnv passes value to the fake's ok/passfd modes.
+func valueEnv(value []byte) string {
+	return "FAKE_VALUE_B64=" + base64.StdEncoding.EncodeToString(value)
+}
+
+// requireNoLeak fails when err (in any format) carries fake output.
+func requireNoLeak(t *testing.T, err error) {
+	t.Helper()
+	for _, s := range []string{err.Error(), fmt.Sprintf("%+v", err), fmt.Sprintf("%#v", err)} {
+		if strings.Contains(s, "TOPSECRET") || strings.Contains(s, "hunter2") {
+			t.Fatalf("error leaks foostore output: %s", s)
+		}
+	}
+}
+
+func TestResolveReturnsExactBytes(t *testing.T) {
+	value := []byte("\x00line one\n\xffline two\n\n")
+	f := newFake(t, "ok", Config{}, valueEnv(value))
+	for _, ref := range []secret.Ref{"garage/rpc_secret", "/garage/rpc_secret", "nsd/tsig.key"} {
+		got, err := secret.Resolve(context.Background(), f.p, ref)
+		if err != nil {
+			t.Fatalf("%s: %v", ref, err)
+		}
+		if !bytes.Equal(got, value) {
+			t.Fatalf("%s: got %q, want %q", ref, got, value)
+		}
+	}
+	if n := f.events(t, "probe"); n != 1 {
+		t.Fatalf("contract probed %d times, want once per provider", n)
+	}
+}
+
+func TestResolvePassesOnlyLogicalReferencesInArgv(t *testing.T) {
+	tests := []struct {
+		name string
+		ref  secret.Ref
+		cfg  Config
+		want []string
+	}{
+		{"entry field", "garage/rpc_secret", Config{},
+			[]string{"read", "--backend", "keepass", "--exact", "--raw", "--non-interactive",
+				"--timeout", "30s", "--field", "Password", "--", "Infra/garage-rpc"}},
+		{"attachment with store and timeout", "nsd/tsig.key",
+			Config{KDBXPath: "/srv/gonf.kdbx", Timeout: 90 * time.Second},
+			[]string{"read", "--backend", "keepass", "--exact", "--raw", "--non-interactive",
+				"--timeout", "1m30s", "--kdbx-path", "/srv/gonf.kdbx", "--", "Infra/nsd/tsig.key"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFake(t, "ok", tt.cfg, valueEnv([]byte("v")),
+				"FAKE_EXPECT="+strings.Join(tt.want, "\x1f"))
+			if _, err := secret.Resolve(context.Background(), f.p, tt.ref); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestResolveHasNoInteractivePath(t *testing.T) {
+	// Inherited interactive overrides must not reach the child; the ok fake
+	// fails (exit 98) if they do, or if it has a terminal or stdin data.
+	t.Setenv("FOOSTORE_SHELL", "/bin/sh")
+	t.Setenv("PIN", "1234")
+	t.Setenv("FOOSTORE_READ_PASSPHRASE_FD", "0")
+	f := newFake(t, "ok", Config{}, valueEnv([]byte("v")))
+	if _, err := secret.Resolve(context.Background(), f.p, "garage/rpc_secret"); err != nil {
+		t.Fatal(err)
+	}
+
+	// A foostore that falls back to prompting finds neither a terminal nor
+	// stdin and fails as locked, never as a value.
+	f = newFake(t, "prompt", Config{})
+	_, err := secret.Resolve(context.Background(), f.p, "garage/rpc_secret")
+	if secret.KindOf(err) != secret.ErrUnavailable {
+		t.Fatalf("prompting foostore: got %v, want ErrUnavailable", err)
+	}
+}
+
+func TestResolvePassphraseThroughInheritedPipe(t *testing.T) {
+	pass := "correct horse battery staple"
+	var handed []byte
+	cfg := Config{Passphrase: func(context.Context) ([]byte, error) {
+		handed = []byte(pass)
+		return handed, nil
+	}}
+	f := newFake(t, "passfd", cfg, valueEnv([]byte("v")), "FAKE_PASS="+pass,
+		"FAKE_EXPECT="+strings.Join([]string{"read", "--backend", "keepass", "--exact", "--raw",
+			"--non-interactive", "--timeout", "30s", "--field", "Password", "--", "Infra/garage-rpc"}, "\x1f"))
+	got, err := secret.Resolve(context.Background(), f.p, "garage/rpc_secret")
+	if err != nil || string(got) != "v" {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	if !bytes.Equal(handed, make([]byte, len(pass))) {
+		t.Fatal("passphrase buffer was not overwritten after use")
+	}
+
+	failing := Config{Passphrase: func(context.Context) ([]byte, error) { return nil, errors.New("agent down") }}
+	f = newFake(t, "passfd", failing)
+	_, err = secret.Resolve(context.Background(), f.p, "garage/rpc_secret")
+	if secret.KindOf(err) != secret.ErrUnavailable || f.events(t, "read") != 0 {
+		t.Fatalf("failing passphrase source: got %v after %d reads", err, f.events(t, "read"))
+	}
+}
+
+func TestResolveClassifiesFailuresWithoutLeaking(t *testing.T) {
+	tests := []struct {
+		mode string
+		want error
+	}{
+		{"notfound", secret.ErrNotFound},
+		{"usage", secret.ErrInvalid},
+		{"ambiguous", secret.ErrInvalid},
+		{"locked", secret.ErrUnavailable},
+		{"corrupt", secret.ErrUnavailable},
+		{"io", secret.ErrUnavailable},
+		{"exit1", secret.ErrUnavailable},
+		{"garbage", secret.ErrUnavailable}, // unknown exit code with output
+		{"signal", secret.ErrUnavailable},
+		{"big", secret.ErrInvalid}, // over MaxBytes
+	}
+	for _, tt := range tests {
+		t.Run(tt.mode, func(t *testing.T) {
+			f := newFake(t, tt.mode, Config{MaxBytes: 64})
+			got, err := secret.Resolve(context.Background(), f.p, "garage/rpc_secret")
+			if got != nil || secret.KindOf(err) != tt.want {
+				t.Fatalf("got %q, %v; want kind %v", got, err, tt.want)
+			}
+			requireNoLeak(t, err)
+			if !strings.Contains(err.Error(), `"Infra/garage-rpc"`) {
+				t.Fatalf("error does not name the foostore reference: %v", err)
+			}
+		})
+	}
+}
+
+func TestResolveUnmappedIsNotFound(t *testing.T) {
+	f := newFake(t, "ok", Config{}, valueEnv([]byte("v")))
+	_, err := secret.Resolve(context.Background(), f.p, "no/such")
+	if !secret.IsNotFound(err) {
+		t.Fatalf("got %v, want not found", err)
+	}
+	if f.events(t, "probe")+f.events(t, "read") != 0 {
+		t.Fatal("an unmapped reference ran foostore")
+	}
+}
+
+func TestResolveRefusesBinaryWithoutContract(t *testing.T) {
+	for _, mode := range []string{"old", "probefail"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newFake(t, mode, Config{})
+			_, err := secret.Resolve(context.Background(), f.p, "garage/rpc_secret")
+			if secret.KindOf(err) != secret.ErrUnavailable {
+				t.Fatalf("got %v, want ErrUnavailable", err)
+			}
+			requireNoLeak(t, err)
+			if n := f.events(t, "read"); n != 0 {
+				t.Fatalf("read ran %d times against a binary without the contract", n)
+			}
+		})
+	}
+
+	p, err := New(Config{Binary: filepath.Join(t.TempDir(), "missing"), Lookup: func(secret.Ref) (Item, bool) {
+		return Field("a/b", "Password"), true
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := secret.Resolve(context.Background(), p, "x"); secret.KindOf(err) != secret.ErrUnavailable {
+		t.Fatalf("missing binary: got %v, want ErrUnavailable", err)
+	}
+}
+
+func TestResolveTimeoutKillsProcessGroup(t *testing.T) {
+	f := newFake(t, "hang", Config{Timeout: 100 * time.Millisecond})
+	start := time.Now()
+	_, err := secret.Resolve(context.Background(), f.p, "garage/rpc_secret")
+	if secret.KindOf(err) != secret.ErrUnavailable {
+		t.Fatalf("got %v, want ErrUnavailable", err)
+	}
+	requireNoLeak(t, err)
+	if d := time.Since(start); d > 100*time.Millisecond+killGrace+waitDelay+5*time.Second {
+		t.Fatalf("timeout took %v", d)
+	}
+	requireDead(t, f.pids)
+}
+
+func TestResolveCancellationKillsProcessGroup(t *testing.T) {
+	f := newFake(t, "hang", Config{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		waitForFile(f.pids)
+		cancel()
+	}()
+	start := time.Now()
+	_, err := secret.Resolve(ctx, f.p, "garage/rpc_secret")
+	if !errors.Is(err, context.Canceled) || secret.KindOf(err) != nil {
+		t.Fatalf("got %v, want an untyped error wrapping context.Canceled", err)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Fatalf("cancellation took %v", d)
+	}
+	requireDead(t, f.pids)
+
+	done, stop := context.WithCancel(context.Background())
+	stop()
+	if _, err := f.p.Resolve(done, "garage/rpc_secret"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("done ctx: got %v", err)
+	}
+}
+
+func TestSnapshotResolvesEachReferenceOnce(t *testing.T) {
+	f := newFake(t, "ok", Config{}, valueEnv([]byte("pinned")))
+	snap := secret.NewSnapshot(f.p)
+	for _, ref := range []secret.Ref{"garage/rpc_secret", "/garage/rpc_secret", "garage/rpc_secret", "nsd/tsig.key"} {
+		if got, err := secret.Resolve(context.Background(), snap, ref); err != nil || string(got) != "pinned" {
+			t.Fatalf("%s: got %q, %v", ref, got, err)
+		}
+	}
+	if probes, reads := f.events(t, "probe"), f.events(t, "read"); probes != 1 || reads != 2 {
+		t.Fatalf("probes=%d reads=%d, want 1 and 2 (one per reference)", probes, reads)
+	}
+
+	nf := newFake(t, "notfound", Config{})
+	snap = secret.NewSnapshot(nf.p)
+	for range 2 {
+		if _, err := secret.Resolve(context.Background(), snap, "garage/rpc_secret"); !secret.IsNotFound(err) {
+			t.Fatalf("got %v, want not found", err)
+		}
+	}
+	if reads := nf.events(t, "read"); reads != 1 {
+		t.Fatalf("not-found read %d times, want once (a snapshot fact)", reads)
+	}
+}
+
+func TestItemsAndNewValidate(t *testing.T) {
+	bad := []map[secret.Ref]Item{
+		{"": Field("a", "Password")},
+		{"../x": Field("a", "Password")},
+		{"a/b": Field("a", "Password"), "/a/b": Field("c", "Password")},
+		{"a": Attachment("")},
+	}
+	for _, table := range bad {
+		if _, err := Items(table); err == nil {
+			t.Fatalf("Items(%v) accepted", table)
+		}
+	}
+	for _, cfg := range []Config{{}, {Lookup: func(secret.Ref) (Item, bool) { return Item{}, false }, Timeout: -1},
+		{Lookup: func(secret.Ref) (Item, bool) { return Item{}, false }, MaxBytes: -1}} {
+		if _, err := New(cfg); err == nil {
+			t.Fatalf("New(%+v) accepted", cfg)
+		}
+	}
+	p, err := New(Config{Lookup: func(secret.Ref) (Item, bool) { return Item{}, true }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := secret.Resolve(context.Background(), p, "a"); secret.KindOf(err) != secret.ErrInvalid {
+		t.Fatalf("empty foostore reference: got %v, want ErrInvalid", err)
+	}
+}
+
+// waitForFile polls until path exists (the fake wrote its pids).
+func waitForFile(path string) {
+	for range 1000 {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// requireDead fails unless every pid in path is gone (or a zombie awaiting
+// its reaper), i.e. the whole process group was killed.
+func requireDead(t *testing.T, path string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("fake never started: %v", err)
+	}
+	for _, field := range strings.Fields(string(data)) {
+		pid, err := strconv.Atoi(field)
+		if err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for !gone(pid) {
+			if time.Now().After(deadline) {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+				t.Fatalf("process %d survived", pid)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+}
+
+// gone reports a pid that no longer runs: absent, or a zombie (Linux
+// /proc state Z) that only waits to be reaped by its new parent.
+func gone(pid int) bool {
+	if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+		return true
+	}
+	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return false
+	}
+	i := bytes.LastIndexByte(stat, ')')
+	return i >= 0 && i+2 < len(stat) && stat[i+2] == 'Z'
+}
