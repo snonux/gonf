@@ -44,6 +44,11 @@ type Snapshot struct {
 	provider Provider
 	mu       sync.Mutex // guards entries (not the resolutions themselves)
 	entries  map[Ref]*snapshotEntry
+
+	// onWait, when set (tests only), is called by a caller that found
+	// another caller's in-flight entry and is about to wait for it. It lets
+	// tests park waiters deterministically before releasing the leader.
+	onWait func(key Ref)
 }
 
 // snapshotEntry is one reference's resolution. The resolving caller fills
@@ -76,6 +81,9 @@ func (s *Snapshot) Resolve(ctx context.Context, ref Ref) ([]byte, error) {
 		e, leader := s.entry(key)
 		if leader {
 			return s.lead(ctx, key, ref, e)
+		}
+		if s.onWait != nil {
+			s.onWait(key)
 		}
 		select {
 		case <-ctx.Done():

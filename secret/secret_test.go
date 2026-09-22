@@ -292,27 +292,138 @@ func TestSnapshotDoesNotSerialiseReferences(t *testing.T) {
 	}
 }
 
-// Concurrent callers of one reference share one provider call.
+// parkedWaiters installs the onWait test hook and returns a channel that
+// receives once per caller that found an in-flight entry and is waiting.
+func parkedWaiters(snap *Snapshot) <-chan Ref {
+	parked := make(chan Ref, 64)
+	snap.onWait = func(key Ref) { parked <- key }
+	return parked
+}
+
+// Concurrent callers of one reference share one provider call: every
+// non-leading caller is parked on the leader's entry before it is released,
+// so the waiter path is always exercised.
 func TestSnapshotResolvesConcurrentCallersOnce(t *testing.T) {
+	const callers = 8
 	var calls atomic.Int32
-	release := make(chan struct{})
+	entered, release := make(chan struct{}), make(chan struct{})
 	snap := NewSnapshot(ProviderFunc(func(context.Context, Ref) ([]byte, error) {
 		calls.Add(1)
+		close(entered)
 		<-release
 		return []byte("v"), nil
 	}))
+	parked := parkedWaiters(snap)
 	var wg sync.WaitGroup
-	for range 8 {
+	for range callers {
 		wg.Go(func() {
 			if data, err := snap.Resolve(context.Background(), "k"); err != nil || string(data) != "v" {
 				t.Errorf("Resolve = (%q, %v)", data, err)
 			}
 		})
 	}
+	<-entered
+	for range callers - 1 {
+		<-parked
+	}
 	close(release)
 	wg.Wait()
 	if n := calls.Load(); n != 1 {
 		t.Fatalf("provider calls = %d, want 1", n)
+	}
+}
+
+// resolveAsync runs snap.Resolve(ctx, ref) on a goroutine and returns a
+// channel with its result.
+func resolveAsync(ctx context.Context, snap *Snapshot, ref Ref) <-chan result {
+	out := make(chan result, 1)
+	go func() {
+		data, err := snap.Resolve(ctx, ref)
+		out <- result{data, err}
+	}()
+	return out
+}
+
+type result struct {
+	data []byte
+	err  error
+}
+
+// awaitResult fails the test when a resolution does not finish in time.
+func awaitResult(t *testing.T, ch <-chan result) result {
+	t.Helper()
+	select {
+	case r := <-ch:
+		return r
+	case <-time.After(5 * time.Second):
+		t.Fatal("resolution hung")
+		return result{}
+	}
+}
+
+// A waiter parked on a leader whose resolution fails transiently (the
+// leader's own ctx is cancelled) retries with its own live ctx and gets the
+// value — not the leader's error, and not (nil, nil). (From the second z52
+// review, which found this path untested.)
+func TestSnapshotWaiterRetriesAfterLeaderFailure(t *testing.T) {
+	var calls atomic.Int32
+	entered, release := make(chan struct{}), make(chan struct{})
+	snap := NewSnapshot(ProviderFunc(func(ctx context.Context, ref Ref) ([]byte, error) {
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-release
+			return nil, ctx.Err()
+		}
+		return []byte("v"), nil
+	}))
+	parked := parkedWaiters(snap)
+	lctx, lcancel := context.WithCancel(context.Background())
+	leader := resolveAsync(lctx, snap, "k")
+	<-entered
+	waiter := resolveAsync(context.Background(), snap, "k")
+	<-parked
+	lcancel()
+	close(release)
+	if r := awaitResult(t, leader); !errors.Is(r.err, context.Canceled) {
+		t.Fatalf("leader = (%q, %v), want context.Canceled", r.data, r.err)
+	}
+	if r := awaitResult(t, waiter); r.err != nil || string(r.data) != "v" {
+		t.Fatalf("waiter = (%q, %v), want v after retry", r.data, r.err)
+	}
+	if n := calls.Load(); n != 2 {
+		t.Fatalf("provider calls = %d, want 2 (failed leader + retry)", n)
+	}
+}
+
+// A panicking provider must not leave a parked waiter hanging (the entry
+// cleanup runs in a defer), and the waiter's retry resolves the value.
+// (From the second z52 review.)
+func TestSnapshotPanickingLeaderReleasesWaiters(t *testing.T) {
+	var calls atomic.Int32
+	entered, release := make(chan struct{}), make(chan struct{})
+	snap := NewSnapshot(ProviderFunc(func(context.Context, Ref) ([]byte, error) {
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-release
+			panic("provider bug")
+		}
+		return []byte("v"), nil
+	}))
+	parked := parkedWaiters(snap)
+	panicked := make(chan any, 1)
+	go func() {
+		defer func() { panicked <- recover() }()
+		_, _ = snap.Resolve(context.Background(), "k")
+	}()
+	<-entered
+	waiter := resolveAsync(context.Background(), snap, "k")
+	<-parked
+	close(release)
+	if p := <-panicked; p == nil {
+		t.Fatal("leader did not panic")
+	}
+	if r := awaitResult(t, waiter); r.err != nil || string(r.data) != "v" {
+		t.Fatalf("waiter after panic = (%q, %v), want v", r.data, r.err)
 	}
 }
 

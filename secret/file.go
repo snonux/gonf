@@ -33,9 +33,12 @@ const readChunk = 32 << 10
 // Errors:
 //   - ErrNotFound: the secret, or a directory on its way below Dir, is absent;
 //   - ErrUnavailable: Dir itself is absent (gonf run from the wrong working
-//     directory, the tree renamed or unmounted) or cannot be searched, or
-//     Dir is misconfigured — never "not found", so an optional lookup cannot
-//     silently drop every secret;
+//     directory, the tree renamed or removed) or cannot be opened or
+//     searched, or Dir is misconfigured — never "not found", so an optional
+//     lookup cannot silently drop every secret. Limit: when Dir is itself a
+//     mount point and the filesystem is unmounted, the empty mount-point
+//     directory remains, so every secret below it reads as ErrNotFound; this
+//     provider cannot tell an empty store from an unmounted one;
 //   - ErrInvalid: empty or escaping reference, a symlink or a non-directory
 //     on the path, or a final component that is not a regular file;
 //   - ErrUnreadable: any other open failure below Dir (permission denied) or
@@ -126,11 +129,21 @@ type rootError struct{ err error }
 func (e rootError) Error() string { return e.err.Error() }
 func (e rootError) Unwrap() error { return e.err }
 
-// openRoot opens dir and checks that it can be searched. On Linux OpenBase
-// uses O_PATH, which succeeds on a directory without any permission, so the
-// explicit faccessat(X_OK) is what turns an unsearchable secrets/ into a
-// root failure instead of an "unreadable secret" at its first child; on the
-// BSDs and macOS OpenBase itself already fails with EACCES.
+// openRoot opens dir and checks that it can be searched, so a secrets/ the
+// operator cannot use is reported as a root (store) failure rather than as
+// an "unreadable secret" at its first child. What OpenBase's open itself
+// requires differs per platform (internal/safepath searchFlag):
+//   - Linux, O_PATH: no permission at all, so the open always succeeds;
+//   - FreeBSD, O_SEARCH: search (x) permission, so the open already fails
+//     with EACCES and the check below is redundant there;
+//   - OpenBSD, NetBSD, macOS, O_RDONLY: read (r) permission, so a
+//     readable but unsearchable directory (r--) opens fine, while a
+//     search-only one (--x) fails the open with EACCES and is refused as a
+//     root failure too, as it always was.
+//
+// The faccessat(X_OK) is therefore what catches an unsearchable secrets/ on
+// Linux and on the O_RDONLY platforms; it runs everywhere for one behaviour.
+// (It checks the real, not the effective, IDs; gonf is not setuid.)
 func openRoot(dir string) (int, error) {
 	rootFD, err := safepath.OpenBase(dir)
 	if errors.Is(err, unix.ENOENT) {
@@ -192,22 +205,33 @@ func openError(ref Ref, dir, fullPath string, err error) error {
 	case errors.Is(err, errRootMissing):
 		return &Error{Kind: ErrUnavailable, Ref: ref,
 			Msg: fmt.Sprintf("secret %q: secrets directory %q not found in the working directory", string(ref), dir)}
+	case errors.Is(err, safepath.ErrSymlink), errors.Is(err, unix.ELOOP), errors.Is(err, unix.ENOTDIR):
+		// Also for Dir itself: a symlinked secrets/ is refused as unsafe.
+		return &Error{Kind: ErrInvalid, Ref: ref, Err: err, Msg: fmt.Sprintf("secret path %q contains a symlink", fullPath)}
+	case isRoot:
+		// Every other failure of Dir — checked before ENOENT, so a root
+		// that vanishes between open and check is never "not found".
+		return rootOpenError(ref, root.err)
 	case errors.Is(err, unix.ENOENT):
 		return &Error{Kind: ErrNotFound, Ref: ref, Msg: fmt.Sprintf("secret %q is missing", string(ref))}
-	case errors.Is(err, safepath.ErrSymlink), errors.Is(err, unix.ELOOP), errors.Is(err, unix.ENOTDIR):
-		return &Error{Kind: ErrInvalid, Ref: ref, Err: err, Msg: fmt.Sprintf("secret path %q contains a symlink", fullPath)}
 	case errors.Is(err, safepath.ErrNotRegular):
 		return &Error{Kind: ErrInvalid, Ref: ref, Err: err, Msg: fmt.Sprintf("secret %q is not a regular file", string(ref))}
-	}
-	kind := ErrUnreadable
-	if isRoot {
-		kind, err = ErrUnavailable, root.err
 	}
 	var ce *safepath.ComponentError
 	if errors.As(err, &ce) {
 		err = ce.Err
 	}
-	return &Error{Kind: kind, Ref: ref, Err: err, Msg: fmt.Sprintf("open secret %q: %v", string(ref), err)}
+	return &Error{Kind: ErrUnreadable, Ref: ref, Err: err, Msg: fmt.Sprintf("open secret %q: %v", string(ref), err)}
+}
+
+// rootOpenError is the ErrUnavailable for a failure of Dir itself, with the
+// historical "open secret" wording.
+func rootOpenError(ref Ref, err error) error {
+	var ce *safepath.ComponentError
+	if errors.As(err, &ce) {
+		err = ce.Err
+	}
+	return &Error{Kind: ErrUnavailable, Ref: ref, Err: err, Msg: fmt.Sprintf("open secret %q: %v", string(ref), err)}
 }
 
 // readAll reads file to EOF, checking ctx between chunks so a cancelled

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snonux/gonf/internal/safepath"
 	"golang.org/x/sys/unix"
 )
 
@@ -161,6 +162,20 @@ func TestFileProviderUnreadableRootIsUnavailable(t *testing.T) {
 	wantFileErr(t, "sub/key", ErrUnavailable, `open secret "sub/key": permission denied`)
 }
 
+// A failure of Dir itself is a store failure even when its errno is ENOENT
+// (secrets/ vanishing between open and access check): openError checks the
+// root before the not-found case. A symlinked root stays ErrInvalid.
+func TestOpenErrorClassifiesRootBeforeNotFound(t *testing.T) {
+	err := openError("k", DefaultDir, "secrets/k", rootError{unix.ENOENT})
+	if KindOf(err) != ErrUnavailable || err.Error() != `open secret "k": no such file or directory` {
+		t.Fatalf("root ENOENT = %v (kind %v), want ErrUnavailable", err, KindOf(err))
+	}
+	err = openError("k", DefaultDir, "secrets/k", rootError{safepath.ErrSymlink})
+	if KindOf(err) != ErrInvalid {
+		t.Fatalf("root symlink = %v (kind %v), want ErrInvalid", err, KindOf(err))
+	}
+}
+
 // The last component is opened without following a symlink even when the
 // link points at a regular file inside secrets/, and a directory or FIFO
 // there is not a secret.
@@ -263,6 +278,18 @@ func TestFileProviderHonoursCancellation(t *testing.T) {
 	data, err := FileProvider{}.Resolve(ctx, "big")
 	if !errors.Is(err, context.Canceled) || data != nil || KindOf(err) != nil {
 		t.Fatalf("pre-cancelled Resolve = (%d bytes, %v), want context.Canceled only", len(data), err)
+	}
+
+	// A done ctx is refused before the reference is checked or anything is
+	// opened: an invalid reference, a missing file and a missing root all
+	// report the cancellation, not what opening them would have found.
+	for _, ref := range []Ref{"", "missing"} {
+		if _, err := (FileProvider{}).Resolve(ctx, ref); !errors.Is(err, context.Canceled) || KindOf(err) != nil {
+			t.Fatalf("done ctx, ref %q: err = %v, want context.Canceled before any open", ref, err)
+		}
+	}
+	if _, err := (FileProvider{Dir: "absent"}).Resolve(ctx, "key"); !errors.Is(err, context.Canceled) || KindOf(err) != nil {
+		t.Fatalf("done ctx, missing root: err = %v, want context.Canceled before any open", err)
 	}
 
 	// Cancelled in the middle of the read: the entry check and readAll's
