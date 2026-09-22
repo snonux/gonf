@@ -28,9 +28,10 @@ compute any content Perl closures could (see
   `gonf/cluster/cluster.go` and deploys via `./gonf.sh cluster <cluster> <tasks…>`
   (wrapper = `cd ./gonf && go run ./cmd/gonf`).
 - **One consumer module per repository**, depending on `github.com/snonux/gonf`
-  (dotfiles currently pins v0.13.0 and conf pins v0.14.0; any later consumer
-  upgrade is a deliberate compatibility change). Multi-Rexfile composition maps to Go packages +
-  `RegisterMethods` + `Aggregate`, not to multiple Rexfiles.
+  (dotfiles and conf both pin v0.15.0; any later consumer upgrade is a
+  deliberate compatibility change). Multi-Rexfile composition maps to Go
+  packages + `RegisterMethods` + `Aggregate` / `AggregateTasks` (in conf's
+  `gonf/tasks/tasks.go`), not to multiple Rexfiles.
 - **Inventory lives in the consumer** (`Host` / `Cluster` / `Fleet` with
   `WithSSHUser` / `WithSSHPort` / `WithPrivilege` / `WithGOOS` / `WithGOARCH` /
   `WithValue`); the gonf library stays inventory-free.
@@ -96,8 +97,8 @@ Status against every conf Rex primitive in v0.15.0 (plan schema 21):
 | Rex `cron add => user, {…}` | `Cron` / `NoCron`: marker-managed per-user crontabs, full schedule fields, `WithCronEnv`, `WithCronUser` | **Done** (`@reboot` nice-to-have) |
 | Raw crontab surgery via `run` (rsync, nsd_failover, pf rebuild root crontab) | superseded by `Cron` (marker-based, idempotent, no temp-file race) | **Done** (gonf is ahead) |
 | Multi-Rexfile `require` composition | one Go module + `RegisterMethods(…, WithPrefix, WithCluster)` + `Aggregate`; proven by `~/git/conf/gonf` and `~/git/dotfiles/gonf` | **Done** |
-| `adduser -batch _dserver … unless id _dserver`, `usermod -d` | additive `User` for creation-time group/class/home attributes; existing-account `usermod -d` needs a guarded `Command` | **Done** for account creation in v0.14.0. The explicit `WithManageHome` opt-in for an existing account's passwd home field ships in v0.15.0 (plan v19); consumers drop the guarded `usermod` command once they pin v0.15.0 |
-| `/etc/login.conf.d` fragment (Rex relayd also ran `rm -f /etc/login.conf.db && cap_mkdb`; Rex inetd ran none) | `LoginClass(class, src)`: the fragment inside an OpenBSD-only plan requirement (schema 20) plus removal of a stale `<class>.db`; no `cap_mkdb`, which never reads fragments (see [login-class.md](login-class.md)). The current consumers still use `InstallFile` + `Command("cap_mkdb", …, OnChange(login))`, whose rebuild is a no-op for fragment changes | Implemented in core (v0.15.0); native OpenBSD verification pending |
+| `adduser -batch _dserver … unless id _dserver`, `usermod -d` | additive `User` for creation-time group/class/home attributes; `WithManageHome` converges an existing account's passwd home field | **Done**: account creation in v0.14.0, `WithManageHome` in v0.15.0 (plan v19). conf pins v0.15.0 and its frontend service accounts use it (task s52, conf 7bc33b3); the guarded `usermod -d` command is gone |
+| `/etc/login.conf.d` fragment (Rex relayd also ran `rm -f /etc/login.conf.db && cap_mkdb`; Rex inetd ran none) | `LoginClass(class, src)`: the fragment inside an OpenBSD-only plan requirement (schema 20) plus removal of a stale `<class>.db`; no `cap_mkdb`, which never reads fragments (see [login-class.md](login-class.md)). conf's inetd and relayd use it (task t52, conf 7ec3015); their former `cap_mkdb` rebuild, a no-op for fragment changes, is gone | Implemented in core (v0.15.0); native OpenBSD verification pending |
 | Garage config deployment | `RequiresRoot` task + direct `InstallFile("/usr/local/etc/garage.toml", …, root:garage, 0640, WithTemplateData(...))` + `Service("garage", WithRestart, OnChange(config))`; the host's `PrivilegeDoas` wraps the one privileged chunk | **Done** |
 | Deferred `on_change` flag (`$restart = TRUE` … `service restart if $restart`) | `OnChange` supports multi-resource fan-in and carries ordering dependencies | **Done** |
 
@@ -227,8 +228,8 @@ with the move flag) when it differs from `WithHome`. It never moves, creates,
 or chowns the directory, and never touches passwords, lock state, shell, login
 class, or memberships. It replaces the earlier migration-local guarded
 `Command("usermod", List("-d", …), Unless("sh", … awk … /etc/passwd))`
-workaround once the consumers pin a gonf release that contains it; until then
-the consumers keep that guarded command. These homes live under `/var/run`,
+workaround; conf pins v0.15.0 and its `_gorum`, `_dserver` and `_gogios`
+accounts use it (task s52, conf 7bc33b3), so that guarded command is gone. These homes live under `/var/run`,
 which does not survive a reboot on OpenBSD; managing the passwd field does not
 recreate the directory, so the ports keep their separate boot-time handling
 (see the `/var/run` caveat in [user.md](user.md)).
@@ -242,8 +243,8 @@ translate their logic to Go data and templates.
 
 The Go-native replacement is **record-time content computation**: recipes are Go,
 so anything the Perl template computed can be computed while recording — shared
-arrays as package vars, per-host values via `MustHostValue` + `WhenHostname(host, …)`
-fragments, secrets via `MustSecret` / `OptionalSecret`. The one-line `myname.tpl` becomes a Go
+arrays as package vars, per-host values via `ForHosts(key, func(host, v) {…})`
+(or `MustHostValue` + `WhenHostname(host, …)`) fragments, secrets via `MustSecret` / `OptionalSecret`. The one-line `myname.tpl` becomes a Go
 expression; zone-file loops become `EachKV`/`for` over the zone list emitting one
 `InstallFile` per zone. This costs more lines than Rex but lives in one language
 and is fully type-checked.
@@ -314,7 +315,7 @@ so the plan has no login-owned `/tmp` secret staging step.
 
 | Rex task | gonf port | Status / needs |
 |----------|-----------|----------------|
-| `commons` (run_task aggregator) | `Aggregate("frontends", …, "^frontends_")` | **Done** (consumer). Note: the aggregate is a superset — Rex `commons` runs an 18-task subset, while every `frontends_*` method joins the aggregate; keep install-only helpers (`*_install`, `cron_test` canary) out of the pattern or accept them running on each deploy |
+| `commons` (run_task aggregator) | `AggregateTasks("frontends", …, frontendSetupTasks()...)` | **Done** (consumer; task n52, conf c5ed357). The explicit list is still a superset of Rex `commons`' 18-task subset; `frontends_acme_invoke` and `frontends_irc_bouncer` are `Operational()` and listed as exclusions, and a registration-time check panics when a `frontends_*` task is in neither list, so a new task cannot silently fall out of setup runs |
 | `id`, `dump_info` | — | **Excluded** (interactive diagnostics; `Command("id", nil)` ad hoc) |
 | `base` (6× pkg present; `pkg_scripts="…"` append to `/etc/rc.conf.local` (znc added on the ircbouncer host); `touch /etc/rc.local`; `/etc/myname` from closure template; `tmux-edit-send` source file) | `Package` ×6 + `File(WithLine)` + `File` + Go-computed content + `InstallFile`; task split `frontends_base`, `frontends_myname` | Needs [templates] only for ergonomics; per-host `myname` via `WhenHostname` + record-time content. **To do** |
 | `hosts_wg` (append `etc/hosts.wg.append` lines, skip comments/blanks) | `frontends_wire_guard_hosts`: `File("/etc/hosts", WithLines(...))` from shared inventory | **Consumer** — task 44b2ee4; local plan verified, live rollout remains explicit |
@@ -324,14 +325,14 @@ so the plan has no login-owned `/tmp` secret staging step.
 | `gemtexter` (template → `/usr/local/bin/gemtexter.sh`; daily.local append) | `InstallFile` + `File(WithLine)` | Needs [templates→Go]. **To do** |
 | `acme` (2 templates over `@acme_hosts`; daily.local append) | 2× `File`/`InstallFile` + `File(WithLine)` | Needs [templates→Go]. **To do** |
 | `acme_invoke` (run acme.sh every deploy) | `frontends_acme_invoke`: `Command("/usr/local/bin/acme.sh", nil)` without guards (runs every explicit apply — matches Rex) | **Consumer** — task v42; intentionally excluded from `frontends` because certificate issuance is an operator action |
-| `httpd` (rc.conf.local flags append; httpd.conf template **restart-on-change**; htdocs dirs; fallback page + health-check `index.txt` template; service) | `frontends_httpd` controller-renders each host config, stages it under `/var/tmp`, validates with `httpd -n -f`, then change-gates the live restart | **Consumer** — task s42; local plan verified, live rollout remains an explicit operator action |
-| `inetd` (flags append; login.conf.d/inetd; inetd.conf restart-on-change; service) | `frontends_inetd`: `File(WithLine)` + 2× `InstallFile` + `cap_mkdb` (no-op for the fragment; core `LoginClass` migration prepared in t52, pending a gonf release) + `Service("inetd", WithRestart, OnChange(...))` | **Consumer** — task s42; local plan verified, live rollout remains an explicit operator action |
-| `relayd` (flags append; login.conf.d/daemon + `cap_mkdb` on change; relayd.conf 0600 restart-on-change; service; daily.local append) | `frontends_relayd` controller-renders, stages and validates `relayd.conf`, rebuilds login DB on change (no-op for the fragment; core `LoginClass` migration prepared in t52, pending a gonf release), then change-gates the restart | **Consumer** — task s42; local plan verified, live rollout remains an explicit operator action |
-| `smtpd` (aliases → `newaliases` on change; virtualdomains/users; 3 reject lists; smtpd.conf restart-on-change; service) | `frontends_smtpd` stages six lookup tables plus the host config and runs `smtpd -n -f` before live writes; `newaliases` watches aliases, while SMTPD restart fans in config/table changes | **Consumer** — task t42; local plan verified, live validation and rollout remain explicit operator actions |
-| `nsd` (flags append; key.conf from secret; nsd.conf.master; per-zone templates; zone removals; restart-if-changed; service) | `frontends_nsd` reads `MustSecret(paths.FrontendSecret(...))`, renders zones controller-side, validates every staged zone with `nsd-checkzone` and its staged config with `nsd-checkconf`, then change-gates NSD restart | **Consumer** — task t42; local plan verified, live validation and rollout remain explicit operator actions |
+| `httpd` (rc.conf.local flags append; httpd.conf template **restart-on-change**; htdocs dirs; fallback page + health-check `index.txt` template; service) | `frontends_httpd` controller-renders each host config and installs it with core `WithValidation("httpd", List("-n", "-f", CandidatePath))` (task j52, conf 122731f), then change-gates the live restart | **Consumer** — task s42; local plan verified, live rollout remains an explicit operator action |
+| `inetd` (flags append; login.conf.d/inetd; inetd.conf restart-on-change; service) | `frontends_inetd`: `File(WithLine)` + `InstallFile` + `LoginClass("inetd", …)` (task t52, conf 7ec3015) + `Service("inetd", WithRestart, OnChange(...))` | **Consumer** — task s42; local plan verified, live rollout remains an explicit operator action |
+| `relayd` (flags append; login.conf.d/daemon + `cap_mkdb` on change; relayd.conf 0600 restart-on-change; service; daily.local append) | `frontends_relayd` controller-renders `relayd.conf`, validates it with core `WithValidation` (task j52), installs the daemon class with `LoginClass` (task t52), then change-gates the restart | **Consumer** — task s42; local plan verified, live rollout remains an explicit operator action |
+| `smtpd` (aliases → `newaliases` on change; virtualdomains/users; 3 reject lists; smtpd.conf restart-on-change; service) | `frontends_smtpd` publishes six lookup tables plus the host config as one core `ConfigSet` validated with `smtpd -n` before live writes (task i52, conf 9e7419d); `newaliases` watches aliases, while SMTPD restart fans in config/table changes | **Consumer** — task t42; local plan verified, live validation and rollout remain explicit operator actions |
+| `nsd` (flags append; key.conf from secret; nsd.conf.master; per-zone templates; zone removals; restart-if-changed; service) | `frontends_nsd` reads `MustSecret(paths.FrontendSecret(...))`; on blowfish it installs immutable inputs for the `dns-publish.ksh` publisher, which owns zone validation, serials and reload; on the standby the key include and `nsd.conf` are one `ConfigSet` validated with `nsd-checkconf` in the chroot (task i52), then change-gates NSD restart | **Consumer** — task t42; local plan verified, live validation and rollout remain explicit operator actions |
 | `nsd_failover` (script + root crontab via run) | `frontends_dns_failover`: installs the script and creates marker-managed `Cron("frontend-nsd-failover", WithCommand("-ns /usr/local/bin/dns-failover.ksh"), WithLegacyCommand(...), WithMinute("*"))`, which adopts the legacy unmarked line by exact command match | **Consumer** — tasks t42 and g52 (exact-command adoption replaced the earlier cleanup command); local plan verified. Live rollout remains an explicit operator action |
 | `dtail_install` (remove stray binaries; `PKG_PATH=… pkg_add -u dtail ‖ pkg_add dtail`) | `frontends_d_tail` cleans only unpackaged legacy binaries and uses `Package("dtail", WithEnv(map[string]string{"PKG_PATH": …}), IsLatest)`; on an absent OpenBSD package `IsLatest` installs first, while installed packages use `pkg_add -u` | **Consumer** — task u42; local plan verified, live rollout remains an explicit operator action |
-| `dtail` (dtail_install + adduser `_dserver` + `usermod -d` + daily.local appends + service) | `frontends_d_tail` includes the no-login account, guarded existing-home convergence, both daily hooks, and `Service("dserver")` | **Consumer** — task u42; individual task remains independently applicable |
+| `dtail` (dtail_install + adduser `_dserver` + `usermod -d` + daily.local appends + service) | `frontends_d_tail` includes the no-login account with `WithManageHome` existing-home convergence (task s52), both daily hooks, and `Service("dserver")` | **Consumer** — task u42; individual task remains independently applicable |
 | `pkgrepo_setup` (`PKG_PATH` export appended to `/root/.profile`) | `frontends_pkg_repo` appends the signed repository export; package resources carry the same environment themselves | **Consumer** — task u42; no unsigned fallback |
 | `gogios_install` (uname branch: OpenBSD custom-repo `pkg_add -u ‖ install`; FreeBSD branch is dead code) | `frontends_gogios` uses `Package("gogios", WithEnv(map[string]string{"PKG_PATH": …}), IsLatest)` (frontends are OpenBSD-only); absent packages install before later latest updates | **Consumer** — task u42; local plan verified, live rollout remains explicit |
 | `gogios` (pkg ×2; adduser `_gogios`; dirs; gogios.json template over 3 arrays; `check_shuriken_age` sourced from `~/git/shuriken.sh`; `_gogios` crontab from template; rc.local appends) | `frontends_gogios` creates `_gogios`, converges runtime/status directories, Go-renders `gogios.json`, installs the external plugin, adopts the three legacy unmarked Gogios cron commands by exact command match (`WithLegacyCommand`, task g52), and preserves boot-time runtime-directory setup | **Consumer** — task u42; Garage and virtual-hosted bucket checks retain task 642's expected HTTP 403 result |
@@ -340,7 +341,7 @@ so the plan has no login-owned `/tmp` secret staging step.
 | `gorum` (adduser `_gorum`; gorum.json + rc.d/gorum restart-on-change; `/var/run/gorum`; service) | — | **Excluded** — disabled operationally; the account-only compatibility task does not imply service enablement |
 | `foostats` (copies scripts from `~/git/foostats`; installs; dirs; daily.local; 5× p5-* pkg; newsyslog.conf) | `frontends_foostats` reads the canonical controller checkout, then installs reporting dirs, daily hook, Perl dependencies, and the full `newsyslog.conf` | **Consumer** — task u42; local plan verified, live rollout remains explicit |
 | `ircbouncer` (pkg znc; service; fishfinger only) | `frontends_irc_bouncer`: `Package("znc")` + `Service("znc")` with `WhenHostname("fishfinger")` | **Consumer** — task v42; intentionally separate from `frontends` because Rex kept it outside `commons` |
-| `pf` (pf.conf restart-on-change → `pfctl -f`; `/var/node_exporter` dir; exporter script; root cron (`-ns`); `rcctl set node_exporter flags`; restart) | `frontends_pf` installs the config, validates it with `pfctl -n -f`, then reloads on change; it also converges exporter storage, script, cron and service flags | **Consumer** — task s42; local plan verified, live rollout remains an explicit operator action |
+| `pf` (pf.conf restart-on-change → `pfctl -f`; `/var/node_exporter` dir; exporter script; root cron (`-ns`); `rcctl set node_exporter flags`; restart) | `frontends_pf` validates a private candidate with core `WithValidation("pfctl", …)` before it replaces `/etc/pf.conf` (task j52), then reloads on change; it also converges exporter storage, script, cron and service flags | **Consumer** — task s42; local plan verified, live rollout remains an explicit operator action |
 
 ### f3s/garage (Rexfile retired; gonf cluster `garage` on f0–f2)
 

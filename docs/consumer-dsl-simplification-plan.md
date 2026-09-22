@@ -343,7 +343,13 @@ an explicit no-bootstrap/no-write contract, or clear separation from preparation
 
 ## What should become core, and what should stay consumer-side?
 
-The following are proposed APIs/capabilities, not features already available.
+The following were proposed APIs/capabilities when this plan was written
+(2026-09-20). Most have since shipped in gonf v0.15.0 and been adopted by conf:
+`WithValidation` for frontend httpd, relayd and PF (task j52, conf 122731f),
+`ConfigSet` for SMTPD and the standby NSD config (task i52, conf 9e7419d),
+Cron adoption (`WithLegacyCommand`, task g52), `LoginClass` for inetd and
+relayd (task t52, conf 7ec3015), `User` `WithManageHome` (task s52, conf
+7bc33b3), `ForHosts` (task o52) and explicit aggregate membership (task n52).
 
 | Pattern | Recommended home and shape | Priority |
 | --- | --- | --- |
@@ -414,6 +420,22 @@ encoding safety policy in a growing regex. Setup aggregates should list groups
 of setup tasks; certificate issuance, disabled services, and diagnostics must
 stay visibly separate.
 
+Status (2026-09-22, gonf v0.15.0): both helpers are in core. `ForHosts[T]`
+(task o52) replaced conf's frontend `Base`/`Myname`/`Goprecords`/`ACME`
+loops (conf 400f42d); the remaining `ClusterHosts` loops are later consumer
+work. It narrows to the target's hosts only on runs with an exactly known
+target (single-host push or preview, local Run); cluster pushes, `gonf plan`,
+raw `gonf push -- <ssh args>` and unknown destinations still record, and so
+resolve the inputs of, every member. `Alias`, `AggregateTasks` and
+`Operational()` (task n52) are adopted too: dotfiles registers `home_prompts`
+as an `Alias` (dotfiles c37d844), and conf's `frontends` aggregate is an
+explicit `AggregateTasks` list (conf c5ed357). A registration-time check in
+conf's `gonf/tasks/tasks.go` panics when a `frontends_*` task is neither a
+member nor in the explicit exclusion list (`frontends_acme_invoke`,
+`frontends_irc_bouncer`, both marked `Operational()`), so a new frontend task
+cannot silently fall out of setup runs. `frontends_ping` (a push-pipeline
+diagnostic) is still a member, as it was under the regex.
+
 ### Users and accounts on the four required systems
 
 Core `User` already supports creation on OpenBSD, FreeBSD, NetBSD, and Rocky
@@ -422,8 +444,9 @@ class, and related settings are creation-only. `WithHome` is creation-only by
 default. Core now also offers the explicit `WithManageHome` opt-in, which
 converges an existing account's passwd home field without moving data. It is
 released in v0.15.0 as plan schema 19 (task s52; see [user.md](user.md)).
-Until a consumer pins v0.15.0, the OpenBSD consumer keeps its `usermod -d`
-command with an AWK guard. The prepared consumer migration is pending that pin.
+conf pins v0.15.0, and its frontend service accounts (`_gorum`, `_dserver`,
+`_gogios`) now declare `User(..., WithHome(...), WithManageHome)` (conf
+7bc33b3); the former `usermod -d` command with its AWK guard is gone.
 
 Keep existing behavior backward-compatible. Introduce explicit opt-in management
 of selected existing attributes, starting with home, rather than changing what
