@@ -3,6 +3,7 @@ package embed
 import (
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -66,23 +67,61 @@ func TestSetChangeWatchArmsAndAccumulates(t *testing.T) {
 	}
 }
 
-// TestArmWithoutWatch pins the arming behind the legacy daemon-reload
-// IfChanged option: the gate is armed but no ids are added.
-func TestArmWithoutWatch(t *testing.T) {
+// TestSetChangeWatchDeduplicates pins that the embed, not its callers,
+// de-duplicates the watch list: repeated ids (within one call or across
+// calls) are kept once, in first-seen order.
+func TestSetChangeWatchDeduplicates(t *testing.T) {
 	var c ChangeGate
-	c.Arm()
-	if !c.Gated || c.Watch != nil {
-		t.Errorf("after Arm Gated=%t Watch=%#v, want true/nil", c.Gated, c.Watch)
+	c.SetChangeWatch([]string{"File[a]", "File[b]", "File[a]"})
+	c.SetChangeWatch([]string{"File[b]", "File[c]"})
+	want := []string{"File[a]", "File[b]", "File[c]"}
+	if !reflect.DeepEqual(c.Watch, want) {
+		t.Errorf("Watch = %#v, want %#v", c.Watch, want)
 	}
 }
 
-// TestChangeGateIsNotChangeGated pins that the embed does not provide
-// SetIfChanged: if it did, every embedder would satisfy opt.ChangeGated and
-// accept the daemon-reload-only IfChanged option through the type-erased
-// option path instead of rejecting it.
-func TestChangeGateIsNotChangeGated(t *testing.T) {
-	if _, ok := any(&ChangeGate{}).(interface{ SetIfChanged() }); ok {
-		t.Fatal("*ChangeGate implements SetIfChanged; embedders would accept IfChanged")
+// TestSetChangeWatchWithoutIDsArmsOnly pins the lowering of the legacy
+// IfChanged option: the gate is armed but no ids are added.
+func TestSetChangeWatchWithoutIDsArmsOnly(t *testing.T) {
+	var c ChangeGate
+	c.SetChangeWatch(nil)
+	if !c.Gated || c.Watch != nil {
+		t.Errorf("after SetChangeWatch(nil) Gated=%t Watch=%#v, want true/nil", c.Gated, c.Watch)
+	}
+}
+
+// TestAddWatchDoesNotArm pins that AddWatch (daemon-reload's DependsOn
+// fallback and merge) adds de-duplicated ids without arming the gate.
+func TestAddWatchDoesNotArm(t *testing.T) {
+	var c ChangeGate
+	c.AddWatch([]string{"File[a]", "File[a]", "File[b]"})
+	if c.Gated || !reflect.DeepEqual(c.Watch, []string{"File[a]", "File[b]"}) {
+		t.Errorf("after AddWatch Gated=%t Watch=%#v, want false/[File[a] File[b]]", c.Gated, c.Watch)
+	}
+}
+
+// TestCheckWatch pins the nothing-to-watch rule: only an armed gate with an
+// empty watch list is refused, with an error naming the fix.
+func TestCheckWatch(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		gate    ChangeGate
+		wantErr bool
+	}{
+		{name: "unarmed empty", gate: ChangeGate{}},
+		{name: "unarmed with ids", gate: ChangeGate{Watch: []string{"File[a]"}}},
+		{name: "armed with ids", gate: ChangeGate{Gated: true, Watch: []string{"File[a]"}}},
+		{name: "armed empty", gate: ChangeGate{Gated: true}, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.gate.CheckWatch()
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("CheckWatch = %v, want error %t", err, tc.wantErr)
+			}
+			if err != nil && !strings.Contains(err.Error(), "use OnChange(resources...)") {
+				t.Errorf("CheckWatch error %q does not name the fix", err)
+			}
+		})
 	}
 }
 
@@ -134,19 +173,6 @@ func TestHolds(t *testing.T) {
 	}
 }
 
-// TestHoldsWatchingUsesSuppliedList pins that HoldsWatching consults the
-// caller's effective watch list, not the embed's Watch field.
-func TestHoldsWatchingUsesSuppliedList(t *testing.T) {
-	c := ChangeGate{Gated: true, Watch: []string{"File[a]"}}
-	var asked []string
-	if !c.HoldsWatching(oracle(&asked, "File[a]"), []string{"File[b]"}) {
-		t.Error("HoldsWatching fired on the embed's Watch instead of the supplied list")
-	}
-	if !reflect.DeepEqual(asked, []string{"File[b]"}) {
-		t.Errorf("oracle asked %#v, want [File[b]]", asked)
-	}
-}
-
 // TestDraftGate pins the plan-draft wiring: unarmed yields false/nil (the
 // wire fields stay omitted), armed yields true plus an unaliased copy.
 func TestDraftGate(t *testing.T) {
@@ -167,7 +193,7 @@ func TestDraftGate(t *testing.T) {
 	}
 
 	var bare ChangeGate
-	bare.Arm()
+	bare.SetChangeWatch(nil)
 	if gated, watch := bare.DraftGate(); !gated || watch != nil {
 		t.Errorf("armed-without-ids DraftGate = %t/%#v, want true/nil", gated, watch)
 	}

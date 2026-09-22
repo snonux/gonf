@@ -148,3 +148,76 @@ func dependencyIDs(target *recorder) []string {
 	}
 	return ids
 }
+
+// TestChangeGateFamilyLowersToOneSetter is the option-level equivalence
+// test of the single change-gate family: every spelling reaches the one
+// SetChangeWatch capability, the legacy IfChanged/WithWatch pair making
+// exactly the calls of WatchChanges (after IfChanged's arm-only call), and
+// OnChange adding only the ordering edges on top.
+func TestChangeGateFamilyLowersToOneSetter(t *testing.T) {
+	gateCalls := func(opts ...interface{ Apply(any) }) []setterCall {
+		target := &recorder{}
+		for _, o := range opts {
+			o.Apply(target)
+		}
+		var gate []setterCall
+		for _, c := range target.calls {
+			if c.method == "SetChangeWatch" {
+				gate = append(gate, c)
+			}
+		}
+		return gate
+	}
+	want := gateCalls(WatchChanges("File[a]", "File[b]"))
+	for name, got := range map[string][]setterCall{
+		"WithWatch":             gateCalls(WithWatch("File[a]", "File[b]")),
+		"OnChange":              gateCalls(OnChange(resource.Resource{Type: "File", Name: "a"}, resource.Resource{Type: "File", Name: "b"})),
+		"IfChanged + WithWatch": gateCalls(IfChanged, WithWatch("File[a]", "File[b]"))[1:],
+	} {
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s gate calls = %#v, want WatchChanges' %#v", name, got, want)
+		}
+	}
+	if got := gateCalls(IfChanged); !reflect.DeepEqual(got, []setterCall{{method: "SetChangeWatch", value: []string(nil)}}) {
+		t.Errorf("IfChanged gate calls = %#v, want one arm-only SetChangeWatch(nil)", got)
+	}
+}
+
+// TestChangeGateCopiesIDs pins that a change-gate option records the ids
+// it was built with, not whatever the caller's slice holds later.
+func TestChangeGateCopiesIDs(t *testing.T) {
+	ids := []string{"File[a]"}
+	o := WatchChanges(ids...)
+	ids[0] = "File[mutated]"
+	target := &recorder{}
+	o.Apply(target)
+	if got := target.calls[0].value; !reflect.DeepEqual(got, []string{"File[a]"}) {
+		t.Errorf("recorded %#v, want the ids at construction", got)
+	}
+}
+
+// TestRecordedChangeGate pins the one apply-side rule every gated kind's
+// plan handler shares: no option for an ungated op (its recorded watch ids
+// are ignored), WatchChanges for a gated op, and an error naming the kind
+// for a gated op without watch ids.
+func TestRecordedChangeGate(t *testing.T) {
+	if o, err := RecordedChangeGate("service", false, []string{"File[a]"}); o != nil || err != nil {
+		t.Errorf("ungated = %v, %v, want nil, nil", o, err)
+	}
+	o, err := RecordedChangeGate("timer", true, []string{"File[a]"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &recorder{}
+	o.Apply(target)
+	want := []setterCall{{method: "SetChangeWatch", value: []string{"File[a]"}}}
+	if !reflect.DeepEqual(target.calls, want) {
+		t.Errorf("gated calls = %#v, want %#v", target.calls, want)
+	}
+	for _, kind := range []string{"command", "service", "timer", "daemon_reload"} {
+		_, err := RecordedChangeGate(kind, true, nil)
+		if err == nil || err.Error() != kind+": if_changed without watch ids" {
+			t.Errorf("%s gated without watch = %v, want the if_changed refusal", kind, err)
+		}
+	}
+}

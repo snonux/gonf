@@ -57,11 +57,14 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if op.User {
 		opts = append(opts, opt.WithUser)
 	}
-	if op.IfChanged {
-		if len(op.Watch) == 0 {
-			return fmt.Errorf("service: if_changed without watch ids")
-		}
-		opts = append(opts, opt.WatchChanges(op.Watch...))
+	// The recorded gate is rebuilt by the rule every gated kind shares
+	// (opt.RecordedChangeGate): a gated op without watch ids is an error.
+	gate, err := opt.RecordedChangeGate(string(plan.KindService), op.IfChanged, op.Watch)
+	if err != nil {
+		return err
+	}
+	if gate != nil {
+		opts = append(opts, gate)
 	}
 	return Ensure(op.Name, opts...)
 }

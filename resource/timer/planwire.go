@@ -57,11 +57,14 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if op.EnableOnly {
 		opts = append(opts, opt.WithEnableOnly)
 	}
-	if op.IfChanged {
-		if len(op.Watch) == 0 {
-			return fmt.Errorf("timer: if_changed without watch ids")
-		}
-		opts = append(opts, opt.WatchChanges(op.Watch...))
+	// The recorded gate is rebuilt by the rule every gated kind shares
+	// (opt.RecordedChangeGate): a gated op without watch ids is an error.
+	gate, err := opt.RecordedChangeGate(string(plan.KindTimer), op.IfChanged, op.Watch)
+	if err != nil {
+		return err
+	}
+	if gate != nil {
+		opts = append(opts, gate)
 	}
 	return Ensure(op.Name, opts...)
 }

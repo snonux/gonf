@@ -24,6 +24,10 @@ var aliasAllowlist = map[string]string{
 	// recipe DSL exposes it only indirectly through those options; the
 	// compatibility surface keeps just an unexported test wrapper (mode.go).
 	"NormalizeMode": "internal WithMode validator; exits on bad input",
+	// RecordedChangeGate rebuilds a recorded plan op's change gate for the
+	// gated kinds' plan handlers (resource/*/planwire.go). It takes wire
+	// fields, not recipe values, so it is no part of the recipe DSL.
+	"RecordedChangeGate": "plan-handler helper; rebuilds a recorded gate from wire fields",
 }
 
 // TestAliasSurfaceIsExhaustive is the fitness test for the hand-maintained

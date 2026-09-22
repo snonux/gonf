@@ -61,8 +61,6 @@ func (c *capTarget) SetReload()                 { c.record("SetReload", nil) }
 func (c *capTarget) SetUser()                   { c.record("SetUser", nil) }
 func (c *capTarget) SetElevate()                { c.record("SetElevate", nil) }
 func (c *capTarget) SetEnableOnly()             { c.record("SetEnableOnly", nil) }
-func (c *capTarget) SetIfChanged()              { c.record("SetIfChanged", nil) }
-func (c *capTarget) SetWatch(v []string)        { c.record("SetWatch", v) }
 func (c *capTarget) SetChangeWatch(v []string)  { c.record("SetChangeWatch", v) }
 func (c *capTarget) AddDependency(v string)     { c.record("AddDependency", v) }
 func (c *capTarget) SetCronUser(v string)       { c.record("SetCronUser", v) }
@@ -202,8 +200,8 @@ func TestOptionsReachTheirSetters(t *testing.T) {
 		{"WithUser", WithUser, "SetUser", nil},
 		{"WithElevate", WithElevate, "SetElevate", nil},
 		{"WithEnableOnly", WithEnableOnly, "SetEnableOnly", nil},
-		{"IfChanged", IfChanged, "SetIfChanged", nil},
-		{"WithWatch", WithWatch("a", "b"), "SetWatch", []string{"a", "b"}},
+		{"IfChanged", IfChanged, "SetChangeWatch", []string(nil)},
+		{"WithWatch", WithWatch("a", "b"), "SetChangeWatch", []string{"a", "b"}},
 		{"WithCronUser", WithCronUser("root"), "SetCronUser", "root"},
 		{"WithLegacyCommand", WithLegacyCommand("/usr/local/bin/old"), "SetLegacyCommand", "/usr/local/bin/old"},
 		{"WithCommand", WithCommand("true"), "SetCommand", "true"},

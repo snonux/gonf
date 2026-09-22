@@ -23,11 +23,10 @@ func registeredReload(id string) (resource.Resource, *DaemonReloadResource, bool
 // merged returns d with next folded in, leaving d itself untouched so a
 // refused merge changes nothing:
 //
-//   - Watch becomes the union of both effective watch lists (watchIDs, first
-//     seen first). Taking the effective lists rather than the raw fields
-//     keeps a legacy IfChanged that relied on the DependsOn fallback
-//     watching those ids once explicit ids join; the legacy list is folded
-//     into Watch for the same reason.
+//   - Watch becomes the union of both watch lists (first seen first). Each
+//     declaration's DependsOn fallback was already resolved into its Watch
+//     (newReload), so a legacy IfChanged that relied on the fallback keeps
+//     watching those ids once explicit ids join.
 //   - DependsOn grows by next's ordering deps (orderingDeps: its DependsOn
 //     ids plus the ids it watches), so the reload applies after every
 //     declaration's inputs, including ones a declaration only watches.
@@ -39,8 +38,8 @@ func registeredReload(id string) (resource.Resource, *DaemonReloadResource, bool
 func (d *DaemonReloadResource) merged(next *DaemonReloadResource) DaemonReloadResource {
 	m := *d
 	m.Gated = d.Gated && next.Gated
-	m.Watch = uniqueWatchIDs(d.watchIDs(), next.watchIDs())
-	m.legacyWatch = nil
+	m.Watch = slices.Clone(d.Watch) // m must not share d's backing array
+	m.AddWatch(next.Watch)
 	m.DependsOn.IDs = slices.Concat(d.DependsOn.IDs, next.orderingDeps())
 	return m
 }
@@ -54,14 +53,14 @@ func (d *DaemonReloadResource) merged(next *DaemonReloadResource) DaemonReloadRe
 // declarations are unchanged), but a merged reload keeps the FIRST
 // declaration's position, which lies before a later declaration's inputs.
 // Without these edges the gated reload could run before such an input
-// changed and be skipped: a watch-only input (WithWatch + IfChanged,
-// WatchChanges adds no dep), or a file under a watched directory that only
+// changed and be skipped: a watch-only input (WatchChanges, or its legacy
+// spelling WithWatch, adds no dep), or a file under a watched directory that only
 // depends on the directory. Watched ids not registered in this scope come
 // from an earlier scope, are recorded before the reload anyway, and cannot
 // be an edge of the repository graph.
 func (d *DaemonReloadResource) orderingDeps() []string {
 	deps := slices.Clone(d.DependsOn.IDs)
-	for _, id := range resource.RegisteredWatchTargets(d.watchIDs()...) {
+	for _, id := range resource.RegisteredWatchTargets(d.Watch...) {
 		if !slices.Contains(deps, id) {
 			deps = append(deps, id)
 		}
@@ -98,9 +97,9 @@ func (d *DaemonReloadResource) mergeInto(r resource.Resource, next *DaemonReload
 		logger.Fatal("%s: cannot merge a further daemon-reload declaration on this bus (SystemdUnits FanIn or DaemonReload watching %v) into the one already declared in this recipe scope (watching %v): %v; "+
 			"declare them in the same when-block and privilege scope without making one's inputs depend on the other, "+
 			"or pass every input to a single SystemdUnits FanIn",
-			id, next.watchIDs(), d.watchIDs(), err)
+			id, next.Watch, d.Watch, err)
 	}
 	*d = m
-	logger.Debug("%s: merged a further declaration on this bus; now watching %v", id, d.watchIDs())
+	logger.Debug("%s: merged a further declaration on this bus; now watching %v", id, d.Watch)
 	return r
 }

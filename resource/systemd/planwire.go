@@ -30,17 +30,22 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 
 // Apply runs systemctl daemon-reload, optionally gated on whether any
 // watched resource changed, mirroring the resource's own option handling
-// exactly.
+// exactly. The gate is rebuilt by opt.RecordedChangeGate, the rule every
+// gated kind shares: a gated op with no watch ids is an error (it could
+// never reload), and an ungated op's recorded watch ids are ignored. The
+// recorded watch list already includes the DependsOn fallback, so the
+// rebuilt reload needs no deps.
 func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	var opts []opt.DaemonReloadOption
 	if op.User {
 		opts = append(opts, opt.WithUser)
 	}
-	if op.IfChanged {
-		opts = append(opts, opt.IfChanged)
-		if len(op.Watch) > 0 {
-			opts = append(opts, opt.WithWatch(op.Watch...))
-		}
+	gate, err := opt.RecordedChangeGate(string(plan.KindDaemonReload), op.IfChanged, op.Watch)
+	if err != nil {
+		return err
+	}
+	if gate != nil {
+		opts = append(opts, gate)
 	}
 	return Ensure(opts...)
 }

@@ -50,7 +50,7 @@ func TestPresentMergesSameBusDeclarations(t *testing.T) {
 	}
 	// The applier the legacy path runs is the first declaration, merged.
 	res, reg, ok := resource.Registered("DaemonReload[system]")
-	if !ok || !reflect.DeepEqual(reg.(*DaemonReloadResource).watchIDs(), want) {
+	if !ok || !reflect.DeepEqual(reg.(*DaemonReloadResource).Watch, want) {
 		t.Fatalf("registered applier not merged: %#v", reg)
 	}
 	if !reflect.DeepEqual(res.Dependencies(), []string{"DaemonReload[system]"}) {
@@ -59,7 +59,8 @@ func TestPresentMergesSameBusDeclarations(t *testing.T) {
 }
 
 // TestPresentMergeOrdersAfterWatchOnlyIDs pins that a folded-in declaration
-// that only watches an id (WithWatch + IfChanged) still orders the merged
+// that only watches an id (legacy WithWatch + IfChanged, the WatchChanges
+// alias) still orders the merged
 // reload after it, while a watched id from outside this scope adds no edge.
 func TestPresentMergeOrdersAfterWatchOnlyIDs(t *testing.T) {
 	resource.ResetRepository()
@@ -108,15 +109,21 @@ func TestMergedGateSemantics(t *testing.T) {
 		t.Fatalf("unconditional+gated merge armed: %#v", m)
 	}
 
-	legacy := &DaemonReloadResource{}
-	legacy.SetIfChanged()
-	legacy.AddDependency("File[/legacy]")
-	m := legacy.merged(gated)
-	if !m.Gated || !reflect.DeepEqual(m.watchIDs(), []string{"File[/legacy]", "File[/u]"}) {
-		t.Fatalf("legacy+OnChange merge = gated %v watch %v, want armed on both", m.Gated, m.watchIDs())
+	// newReload resolves the legacy DependsOn fallback into Watch, as
+	// Present does before any merge.
+	addDep := opt.ToDaemonReloadOptions(func(target any) {
+		target.(*DaemonReloadResource).AddDependency("File[/legacy]")
+	})
+	legacy, err := newReload(append(addDep, opt.IfChanged))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(legacy.watchIDs(), []string{"File[/legacy]"}) {
-		t.Fatalf("merged mutated the receiver: %v", legacy.watchIDs())
+	m := legacy.merged(gated)
+	if !m.Gated || !reflect.DeepEqual(m.Watch, []string{"File[/legacy]", "File[/u]"}) {
+		t.Fatalf("legacy+OnChange merge = gated %v watch %v, want armed on both", m.Gated, m.Watch)
+	}
+	if !reflect.DeepEqual(legacy.Watch, []string{"File[/legacy]"}) {
+		t.Fatalf("merged mutated the receiver: %v", legacy.Watch)
 	}
 }
 

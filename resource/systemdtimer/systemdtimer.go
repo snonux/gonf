@@ -212,12 +212,11 @@ func (t *SystemdTimer) ensureDaemonReload(svcID, timerFileID string) error {
 }
 
 // daemonReloadOpts is the daemon-reload configuration for t's unit files:
-// the legacy IfChanged gate (embed.ChangeGate on the daemon-reload resource)
-// watching exactly the two unit files, on the user bus for WithUser timers.
+// the change gate (embed.ChangeGate on the daemon-reload resource) watching
+// exactly the two unit files, on the user bus for WithUser timers.
 func (t *SystemdTimer) daemonReloadOpts(svcID, timerFileID string) []opt.DaemonReloadOption {
 	reloadOpts := []opt.DaemonReloadOption{
-		opt.IfChanged,
-		opt.WithWatch(svcID, timerFileID),
+		opt.WatchChanges(svcID, timerFileID),
 	}
 	if t.user {
 		reloadOpts = append(reloadOpts, opt.WithUser)

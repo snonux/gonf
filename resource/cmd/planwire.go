@@ -52,11 +52,13 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if op.Name != "" {
 		opts = append(opts, opt.WithName(op.Name))
 	}
-	if op.IfChanged {
-		gate, err := planChangeGate(op)
-		if err != nil {
-			return err
-		}
+	// The recorded gate is rebuilt by the rule every gated kind shares
+	// (opt.RecordedChangeGate): a gated op without watch ids is an error.
+	gate, err := opt.RecordedChangeGate(string(plan.KindCommand), op.IfChanged, op.Watch)
+	if err != nil {
+		return err
+	}
+	if gate != nil {
 		opts = append(opts, gate)
 	}
 	if op.Dir != "" {
@@ -97,16 +99,4 @@ func planGuard(g *resource.PlanGuardDraft) *plan.Guard {
 		ExpectStdout: g.ExpectStdout,
 		ExpectExit:   g.ExpectExit,
 	}
-}
-
-// planChangeGate converts a recorded change gate into the option that arms
-// it on the rebuilt resource: the ids-level WatchChanges counterpart of
-// OnChange(resources...). A gated op with no watch ids can never fire and
-// is an apply-time error (the record-side pre-flight refuses such plans
-// before they get here).
-func planChangeGate(op plan.Op) (opt.CommandOption, error) {
-	if len(op.Watch) == 0 {
-		return nil, fmt.Errorf("command: if_changed without watch ids")
-	}
-	return opt.WatchChanges(op.Watch...), nil
 }

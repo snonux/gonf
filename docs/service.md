@@ -43,8 +43,10 @@ DaemonReload(WithUser, DependsOn(units))            // always reload
 DaemonReload(WithUser, OnChange(units))              // preferred change gate + ordering
 ```
 
-`IfChanged` watches `DependsOn` targets; a `Directory[path]` dependency also
-sees `File[path/…]` notes from `SyncDir` / file installs.
+`IfChanged` watches `DependsOn` targets (it records the same op as
+`OnChange(units)`); a `Directory[path]` dependency also sees `File[path/…]`
+notes from `SyncDir` / file installs. `IfChanged` with neither `DependsOn`
+nor `WithWatch` ids could never reload and aborts the recipe.
 
 There is one daemon-reload per bus and recipe scope (a task body or a
 when-fragment): its ID is `DaemonReload[system]` or `DaemonReload[user]`. A
@@ -52,8 +54,8 @@ second declaration on the same bus in the same scope, whether a further
 `DaemonReload` or a `SystemdUnits` composition, merges into the first one and
 returns it. The merged reload applies after the inputs of every declaration
 and watches all of them. A later declaration's watched ids count as inputs
-here even when it only watches them (`WithWatch` + `IfChanged`,
-`WatchChanges`). So do the files under a directory such a later
+here even when it only watches them (`WatchChanges`, or its legacy
+alias `WithWatch`). So do the files under a directory such a later
 declaration watches: a watched `Directory[p]` also fires on `File[p/…]`
 changes, so the merged reload runs after every file under `p` that is
 registered before that declaration. The first declaration's own watches get

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
 	opt "github.com/snonux/gonf/resource/options"
@@ -38,6 +39,22 @@ type Timer struct {
 	enableOnly bool // enable/disable only; skip start/stop
 }
 
+// newTimer builds a Timer for the normalized unit name with opts applied.
+// The error reports a change gate armed with nothing to watch (the legacy
+// IfChanged reaching a Timer through the type-erased Option path): it could
+// never fire, so Present aborts and Ensure fails instead of holding
+// restarts forever.
+func newTimer(name string, opts []opt.TimerOption) (*Timer, error) {
+	t := &Timer{name: normalizeUnit(name)}
+	for _, o := range opts {
+		o.Apply(t)
+	}
+	if err := t.CheckWatch(); err != nil {
+		return t, fmt.Errorf("%s: %w", resource.FormatID("Timer", t.name), err)
+	}
+	return t, nil
+}
+
 // SetRestart requests a restart of an already-active present timer on each
 // apply (subject to the OnChange gate). It has no effect with SetEnableOnly.
 func (t *Timer) SetRestart() { t.restart = true }
@@ -52,9 +69,9 @@ func (t *Timer) SetEnableOnly() { t.enableOnly = true }
 // Present registers a timer that should be active and enabled (or only
 // enabled when WithEnableOnly is set).
 func Present(name string, opts ...opt.TimerOption) resource.Resource {
-	t := &Timer{name: normalizeUnit(name)}
-	for _, o := range opts {
-		o.Apply(t)
+	t, err := newTimer(name, opts)
+	if err != nil {
+		logger.Fatal("%v", err)
 	}
 	r := resource.Register("Timer", t.name, t, t.DependsOn.IDs...)
 	resource.RecordPlanDraft(t.planDraft(r.ID()))
@@ -63,9 +80,9 @@ func Present(name string, opts ...opt.TimerOption) resource.Resource {
 
 // Ensure builds and applies a timer without registering or recording a draft.
 func Ensure(name string, opts ...opt.TimerOption) error {
-	t := &Timer{name: normalizeUnit(name)}
-	for _, o := range opts {
-		o.Apply(t)
+	t, err := newTimer(name, opts)
+	if err != nil {
+		return err
 	}
 	return t.apply()
 }

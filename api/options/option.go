@@ -153,9 +153,10 @@ var (
 	WithPrune        = resourceoptions.WithPrune
 )
 
-// State options (absence, latest package), service/timer behaviour, the
-// change gate (OnChange/WatchChanges, also accepted by commands) and the
-// daemon-reload IfChanged/WithWatch pair.
+// State options (absence, latest package), service/timer behaviour and the
+// one change-gate family: OnChange/WatchChanges (also accepted by commands)
+// plus the legacy daemon-reload spellings IfChanged/WithWatch, which lower
+// to the same gate.
 var (
 	IsAbsent       = resourceoptions.IsAbsent
 	IsLatest       = resourceoptions.IsLatest

@@ -5,6 +5,7 @@ package systemd
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource"
@@ -20,20 +21,19 @@ var (
 	_ resource.Applier    = (*DaemonReloadResource)(nil)
 	_ opt.UserService     = (*DaemonReloadResource)(nil)
 	_ opt.Dependable      = (*DaemonReloadResource)(nil)
-	_ opt.ChangeGated     = (*DaemonReloadResource)(nil)
-	_ opt.Watchable       = (*DaemonReloadResource)(nil)
 	_ opt.ChangeWatchable = (*DaemonReloadResource)(nil)
 )
 
 // DaemonReloadResource runs systemctl daemon-reload (optionally --user).
-// The embedded ChangeGate supplies OnChange arming (SetChangeWatch); the
-// legacy IfChanged option arms it through SetIfChanged below, which only
-// daemon-reload implements.
+// The embedded ChangeGate holds its one watch list: every change-gate
+// option (OnChange, WatchChanges and the legacy IfChanged/WithWatch
+// spellings) arms it through SetChangeWatch. Unlike the other gated kinds a
+// reload armed without watched ids watches its DependsOn ids instead (the
+// legacy IfChanged fallback, resolved once by newReload).
 type DaemonReloadResource struct {
 	embed.DependsOn
 	embed.ChangeGate
-	user        bool
-	legacyWatch []string // WithWatch target ids; merged with OnChange watches
+	user bool
 }
 
 // Present registers a daemon-reload resource. The resource is a singleton
@@ -44,9 +44,9 @@ type DaemonReloadResource struct {
 // mergeInto) and the existing resource is returned, so every caller depends
 // on the one reload that watches all of their inputs.
 func Present(opts ...opt.DaemonReloadOption) resource.Resource {
-	d := &DaemonReloadResource{}
-	for _, o := range opts {
-		o.Apply(d)
+	d, err := newReload(opts)
+	if err != nil {
+		logger.Fatal("%s: %v", d.id(), err)
 	}
 	if r, prev, ok := registeredReload(d.id()); ok {
 		return prev.mergeInto(r, d)
@@ -62,11 +62,29 @@ func Present(opts ...opt.DaemonReloadOption) resource.Resource {
 
 // Ensure applies daemon-reload without registering or recording a plan draft.
 func Ensure(opts ...opt.DaemonReloadOption) error {
+	d, err := newReload(opts)
+	if err != nil {
+		return fmt.Errorf("%s: %w", d.id(), err)
+	}
+	return d.apply()
+}
+
+// newReload builds a daemon-reload with opts applied and its watch list
+// resolved: when no option named watched ids, the reload watches its
+// DependsOn ids (first seen first), armed or not. The fallback is filled in
+// once, after every option ran, so option order does not matter and every
+// later reader (apply, planDraft, merging) sees one list. An armed reload
+// that still watches nothing (IfChanged with no WithWatch and no DependsOn)
+// could never reload and is refused.
+func newReload(opts []opt.DaemonReloadOption) (*DaemonReloadResource, error) {
 	d := &DaemonReloadResource{}
 	for _, o := range opts {
 		o.Apply(d)
 	}
-	return d.apply()
+	if len(d.Watch) == 0 {
+		d.AddWatch(d.DependsOn.IDs)
+	}
+	return d, d.CheckWatch()
 }
 
 // SetUser implements opt.UserService (the WithUser option): the reload runs
@@ -74,35 +92,22 @@ func Ensure(opts ...opt.DaemonReloadOption) error {
 // one, and the resource ID becomes DaemonReload[user].
 func (d *DaemonReloadResource) SetUser() { d.user = true }
 
-// SetIfChanged implements opt.ChangeGated (the legacy IfChanged option) by
-// arming the embedded gate. It lives here rather than on embed.ChangeGate so
-// that only daemon-reload accepts IfChanged; other gated resources reject it.
-func (d *DaemonReloadResource) SetIfChanged() { d.Arm() }
-
-// SetWatch sets the explicit legacy IfChanged watch ids. They are merged with
-// OnChange targets so composing legacy WithWatch and OnChange is order
-// independent; when neither form supplies ids, DependsOn ids are watched.
-func (d *DaemonReloadResource) SetWatch(ids []string) {
-	d.legacyWatch = append([]string(nil), ids...)
-}
-
 // Apply runs the daemon-reload reconciliation directly for the legacy resource path.
 func (d *DaemonReloadResource) Apply() error { return d.apply() }
 
 // planDraft records the daemon-reload op. Unlike the other gated kinds it
-// does not use ChangeGate.DraftGate: Watch is the effective merged list
-// (watchIDs) and is recorded even when the gate is unarmed. Recorded plans
+// does not use ChangeGate.DraftGate: Watch (including the DependsOn
+// fallback) is recorded even when the gate is unarmed. Recorded plans
 // already carry that shape, so it is kept for byte-stable plans, but the
 // unarmed Watch is inert: destination apply (planHandler.Apply) reads
 // op.Watch only when op.IfChanged is set and ignores it otherwise.
 func (d *DaemonReloadResource) planDraft(id string) resource.PlanDraft {
-	watch := d.watchIDs()
 	return resource.PlanDraft{
 		Kind:      "daemon_reload",
 		ID:        id,
 		User:      d.user,
 		IfChanged: d.Gated,
-		Watch:     watch,
+		Watch:     slices.Clone(d.Watch),
 		Deps:      d.DependsOn.SortedIDs(),
 	}
 }
@@ -113,9 +118,7 @@ func (d *DaemonReloadResource) apply() error {
 		return fmt.Errorf("%s: %w", id, err)
 	}
 
-	// The gate consults the effective watch list (watchIDs), not only the
-	// embed's OnChange ids, hence HoldsWatching rather than Holds.
-	if d.HoldsWatching(resource.AnyChanged, d.watchIDs()) {
+	if d.Holds(resource.AnyChanged) {
 		resource.Note(id, resource.StatusSkipped)
 		logger.Debug("%s: skipped (no watched dependency changed)", id)
 		return nil
@@ -134,34 +137,6 @@ func (d *DaemonReloadResource) apply() error {
 		logger.Info("%s", did)
 		return nil
 	})
-}
-
-// watchIDs combines OnChange and legacy WithWatch targets. Keeping the
-// legacy list separate means WithWatch cannot accidentally erase an earlier
-// OnChange target (or vice versa); both forms describe resources whose change
-// should cause the same daemon reload. A legacy-only IfChanged retains its
-// historical fallback to DependsOn IDs.
-func (d *DaemonReloadResource) watchIDs() []string {
-	watch := uniqueWatchIDs(d.Watch, d.legacyWatch)
-	if len(watch) == 0 {
-		watch = uniqueWatchIDs(d.DependsOn.IDs)
-	}
-	return watch
-}
-
-func uniqueWatchIDs(groups ...[]string) []string {
-	seen := make(map[string]struct{})
-	var ids []string
-	for _, group := range groups {
-		for _, id := range group {
-			if _, ok := seen[id]; ok {
-				continue
-			}
-			seen[id] = struct{}{}
-			ids = append(ids, id)
-		}
-	}
-	return ids
 }
 
 func (d *DaemonReloadResource) id() string {

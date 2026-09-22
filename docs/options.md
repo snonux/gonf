@@ -63,8 +63,9 @@ and backend limits.
 | `WithUser` | `systemctl --user` (systemd Service/Timer/DaemonReload/SystemdTimer) |
 | `WithEnableOnly` | Timer/SystemdTimer: enable/disable only (skip start/stop) |
 | `OnChange(res…)` | Command: run only when watched resources changed; Service/Timer: still converge state, but fire `WithRestart`/`WithReload` only on a watched change; DaemonReload: reload only on a watched change. It also records ordering dependencies. |
-| `IfChanged` | Legacy DaemonReload-only change gate; prefer `OnChange(res…)` in recipes |
-| `WithWatch(ids…)` | DaemonReload: explicit ids for IfChanged (plan/Ensure) |
+| `WatchChanges(ids…)` | The ids-level `OnChange` (same gate, no ordering dependencies); used by plan handlers and compositions |
+| `IfChanged` | Legacy DaemonReload spelling: arms the gate, watching the reload's `DependsOn` ids unless ids are named; prefer `OnChange(res…)` in recipes |
+| `WithWatch(ids…)` | Legacy DaemonReload alias of `WatchChanges(ids…)` (arms the gate; calls accumulate) |
 | `WithCommand` | SystemdTimer: oneshot `ExecStart=` (also Cron) |
 | `WithOnCalendar` / `WithOnBootSec` / `WithPersistent` | SystemdTimer schedule |
 | `WithDescription` / `WithServiceDescription` | SystemdTimer unit descriptions |

@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"slices"
 
+	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
 	opt "github.com/snonux/gonf/resource/options"
@@ -45,13 +46,19 @@ type Service struct {
 	user    bool // systemd --user only
 }
 
-// newService builds a Service with opts applied.
-func newService(name string, opts []opt.ServiceOption) *Service {
+// newService builds a Service with opts applied. The error reports a change
+// gate armed with nothing to watch (the legacy IfChanged reaching a Service
+// through the type-erased Option path): it could never fire, so Present
+// aborts and Ensure fails instead of holding restarts forever.
+func newService(name string, opts []opt.ServiceOption) (*Service, error) {
 	s := &Service{name: name}
 	for _, o := range opts {
 		o.Apply(s)
 	}
-	return s
+	if err := s.CheckWatch(); err != nil {
+		return s, fmt.Errorf("%s: %w", resource.FormatID("Service", name), err)
+	}
+	return s, nil
 }
 
 // SetRestart requests a restart of an already-running present service on
@@ -71,7 +78,10 @@ func (s *Service) Apply() error { return s.apply() }
 
 // Present registers a service that should be running and enabled at boot.
 func Present(name string, opts ...opt.ServiceOption) resource.Resource {
-	s := newService(name, opts)
+	s, err := newService(name, opts)
+	if err != nil {
+		logger.Fatal("%v", err)
+	}
 	r := resource.Register("Service", s.name, s, s.DependsOn.IDs...)
 	resource.RecordPlanDraft(s.planDraft(r.ID()))
 	return r
@@ -79,7 +89,11 @@ func Present(name string, opts ...opt.ServiceOption) resource.Resource {
 
 // Ensure applies a service without registering it or recording a plan draft.
 func Ensure(name string, opts ...opt.ServiceOption) error {
-	return newService(name, opts).apply()
+	s, err := newService(name, opts)
+	if err != nil {
+		return err
+	}
+	return s.apply()
 }
 
 // Absent registers a service that should be stopped and disabled.

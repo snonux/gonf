@@ -138,21 +138,16 @@ type unitsServiceActivation struct {
 	opts []options.ServiceOption
 }
 
-// watchedIDs flattens the FanIn inputs into a deduplicated, first-seen
-// ordered watch list; Multi inputs (e.g. SyncDir results) expand to their
-// member ids. Registration-time misuse — no FanIn, or inputs that expand to
-// no resource ids — aborts the recipe before anything is registered.
+// watchedIDs flattens the FanIn inputs into the watch list; Multi inputs
+// (e.g. SyncDir results) expand to their member ids. Duplicates need no
+// handling here: the change gate every option lowers to (embed.ChangeGate)
+// de-duplicates watched ids in first-seen order. Registration-time misuse —
+// no FanIn, or inputs that expand to no resource ids — aborts the recipe
+// before anything is registered.
 func (c *systemdUnitsConfig) watchedIDs() []string {
-	seen := make(map[string]struct{}, len(c.inputs))
 	var ids []string
 	for _, in := range c.inputs {
-		for _, id := range in.Dependencies() {
-			if _, ok := seen[id]; ok {
-				continue
-			}
-			seen[id] = struct{}{}
-			ids = append(ids, id)
-		}
+		ids = append(ids, in.Dependencies()...)
 	}
 	if len(ids) == 0 {
 		logger.Fatal("SystemdUnits: no watchable managed inputs; pass FanIn(...) with resources that expand to registered resource ids")

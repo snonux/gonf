@@ -55,8 +55,6 @@ func (r *recorder) SetRestart()                { r.record("SetRestart", nil) }
 func (r *recorder) SetReload()                 { r.record("SetReload", nil) }
 func (r *recorder) SetUser()                   { r.record("SetUser", nil) }
 func (r *recorder) SetEnableOnly()             { r.record("SetEnableOnly", nil) }
-func (r *recorder) SetIfChanged()              { r.record("SetIfChanged", nil) }
-func (r *recorder) SetWatch(v []string)        { r.record("SetWatch", v) }
 func (r *recorder) SetChangeWatch(v []string)  { r.record("SetChangeWatch", v) }
 func (r *recorder) SetElevate()                { r.record("SetElevate", nil) }
 func (r *recorder) SetCronUser(v string)       { r.record("SetCronUser", v) }

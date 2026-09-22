@@ -54,17 +54,25 @@ embedded rather than redeclared:
 - `embed.DependsOn` — dependency IDs (`IDs` field) plus the `AddDependency` method.
 - `embed.Absence` — the `Absent` field plus the `SetAbsent` method (implements
   `opt.Absentable`).
-- `embed.ChangeGate` — the OnChange gate (`Gated`, `Watch`) and its behaviour:
-  arming (`SetChangeWatch`, implements `opt.ChangeWatchable`; `Arm`), the hold
-  predicate (`Holds(resource.AnyChanged)`, or `HoldsWatching` for a resource
-  that derives its own watch list), the held-action debug log (`LogHeld`) and
-  the plan-draft wiring (`DraftGate`). Gated resources call these instead of
-  re-implementing the checks; `resource.NoteIdle` reports a gate-held action
-  as skipped. Exceptions: the embed must not provide `SetIfChanged`
-  (`opt.ChangeGated`) — only daemon-reload implements it (delegating to
-  `Arm`), so the legacy `IfChanged` option stays rejected on other resources;
-  and daemon-reload keeps its own draft wiring (its merged watch list is
-  recorded even when unarmed) instead of `DraftGate`.
+- `embed.ChangeGate` — the change gate (`Gated`, `Watch`) and its behaviour.
+  It is the single lowering target of the one change-gate option family:
+  `OnChange`, `WatchChanges` and the legacy daemon-reload spellings
+  `IfChanged` (arm only) and `WithWatch(ids...)` (an alias of `WatchChanges`)
+  all call `SetChangeWatch` (implements `opt.ChangeWatchable`; the legacy
+  capability names `opt.ChangeGated`/`opt.Watchable` are aliases of it).
+  The embed also owns watch de-duplication (callers never dedupe),
+  `AddWatch` (add ids without arming; daemon-reload's fallback and merge
+  only), the nothing-to-watch check (`CheckWatch`, which every gated
+  constructor runs: `Present` aborts, `Ensure` returns the error), the hold
+  predicate (`Holds(resource.AnyChanged)`), the held-action debug log
+  (`LogHeld`) and the plan-draft wiring (`DraftGate`). Gated resources call
+  these instead of re-implementing the checks; `resource.NoteIdle` reports a
+  gate-held action as skipped. Plan handlers rebuild a recorded gate with
+  `opt.RecordedChangeGate` (a gated op without watch ids is an error for
+  every kind). Daemon-reload is the one exception: an armed reload without
+  watched ids watches its `DependsOn` ids (resolved once into `Watch` after
+  its options ran), and it keeps its own draft wiring (`Watch` is recorded
+  even when unarmed) instead of `DraftGate`.
 
 When adding a field or capability shared by every resource type, prefer a new
 embed type here instead of duplicating the field and its setter in each resource.
