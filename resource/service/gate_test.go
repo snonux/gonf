@@ -1,6 +1,7 @@
 package service
 
 import (
+	"github.com/snonux/gonf/internal/testutil"
 	"reflect"
 	"slices"
 	"strings"
@@ -122,8 +123,7 @@ func TestPlanDraftChangeGate(t *testing.T) {
 // embed.ChangeGate.LogHeld; Service names its action "restart/reload").
 func TestHeldGateLogLine(t *testing.T) {
 	resource.ResetReport()
-	output, restore := logger.CaptureForTest(logger.LevelDebug)
-	defer restore()
+	output := testutil.CaptureLog(t, logger.LevelDebug)
 
 	svc := withRestartSvc(Service{name: "d"})
 	svc.SetChangeWatch([]string{"File[never-noted]"})

@@ -12,11 +12,10 @@ import (
 
 	"github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
-	"github.com/snonux/gonf/resource/cron"
-	"github.com/snonux/gonf/resource/service"
 )
 
 // End-to-end: RecordPlan → Encode/Decode → Apply with a temp HOME, covering
@@ -179,11 +178,7 @@ func TestE2ECronAndServicePlanApply(t *testing.T) {
 	}
 	api.ResetTasks()
 	resource.ResetRepository()
-	cron.ResetRunnersForTest()
-	service.ResetRunCmdForTest()
 	t.Cleanup(func() {
-		cron.ResetRunnersForTest()
-		service.ResetRunCmdForTest()
 		resource.SetPlanDraftRecorder(nil)
 		plan.SetRecording(false)
 		plan.ResetRecord()
@@ -191,8 +186,8 @@ func TestE2ECronAndServicePlanApply(t *testing.T) {
 
 	// Fake crontab: starts empty, stores what gonf writes.
 	tab := ""
-	cron.SetRunnersForTest(
-		func(name string, args ...string) (string, string, int, error) {
+	testseam.FakeCrontab(t, testseam.Crontab{
+		Read: func(name string, args ...string) (string, string, int, error) {
 			if name != "crontab" {
 				return "", "unexpected bin " + name, 1, nil
 			}
@@ -201,18 +196,18 @@ func TestE2ECronAndServicePlanApply(t *testing.T) {
 			}
 			return tab, "", 0, nil
 		},
-		func(stdin string, name string, args ...string) (string, string, int, error) {
+		Write: func(stdin string, name string, args ...string) (string, string, int, error) {
 			if name != "crontab" {
 				return "", "unexpected bin " + name, 1, nil
 			}
 			tab = stdin
 			return "", "", 0, nil
 		},
-	)
+	})
 
 	// Fake systemctl: service already running + enabled; record mutation calls.
 	var ctlCalls [][]string
-	service.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+	testseam.FakeServiceRunner(t, func(name string, args ...string) (string, string, int, error) {
 		if name != "systemctl" {
 			return "", "unexpected bin " + name, 1, nil
 		}
@@ -511,20 +506,14 @@ func TestApplyCronRejectsMissingSchedule(t *testing.T) {
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "cron"},
 		{Op: plan.KindCron, Name: "zzjob", CronUser: current.Username, Absent: true},
 	}
-	cron.ResetRunnersForTest()
-	service.ResetRunCmdForTest()
-	t.Cleanup(func() {
-		cron.ResetRunnersForTest()
-		service.ResetRunCmdForTest()
+	testseam.FakeCrontab(t, testseam.Crontab{
+		Read: func(name string, args ...string) (string, string, int, error) {
+			return "", "", 0, nil
+		},
+		Write: func(stdin string, name string, args ...string) (string, string, int, error) {
+			return "", "", 0, nil
+		},
 	})
-	cron.SetRunnersForTest(
-		func(name string, args ...string) (string, string, int, error) {
-			return "", "", 0, nil
-		},
-		func(stdin string, name string, args ...string) (string, string, int, error) {
-			return "", "", 0, nil
-		},
-	)
 	if err := plan.Apply(absent, plan.Facts{GOOS: "linux"}, ""); err != nil {
 		t.Fatalf("absent cron without schedule must apply: %v", err)
 	}

@@ -44,9 +44,9 @@ type backend interface {
 // backends maps each detector name to its implementation. This table is the
 // single place a manager name becomes a backend: supporting another package
 // manager means one new backend file plus one entry here, with no change to
-// the convergence policy. The name indirection stays because the exported
-// SetDetectPackageManagerForTest seam (used by api and plan tests) speaks in
-// names.
+// the convergence policy. The name indirection stays because detection, and
+// the internal/testseam.FakePackageManager fake api, plan and resource tests
+// use, speak in names.
 var backends = map[string]backend{
 	"dnf":     dnfBackend{},
 	"freebsd": freebsdBackend{},
@@ -56,7 +56,8 @@ var backends = map[string]backend{
 
 // selectBackend detects the host's package manager and returns its backend.
 // Detection runs per apply (it is a GOOS switch plus a few stat calls), which
-// keeps the detector test seam effective for every subsequent apply.
+// keeps a detector fake (testseam.FakePackageManager) effective for every
+// subsequent apply.
 func selectBackend() (backend, error) {
 	name, err := detectPkgManager()
 	if err != nil {

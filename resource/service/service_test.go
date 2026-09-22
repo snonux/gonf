@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -39,17 +40,16 @@ func TestPresentIdempotentWithFakeRunner(t *testing.T) {
 
 	switch runtime.GOOS {
 	case "linux":
-		SetRunCmdForTest(fakeSystemdAlreadyOK)
+		testseam.FakeServiceRunner(t, fakeSystemdAlreadyOK)
 	case "openbsd":
-		SetRunCmdForTest(fakeRcctlAlreadyOK)
+		testseam.FakeServiceRunner(t, fakeRcctlAlreadyOK)
 	case "freebsd":
-		SetRunCmdForTest(fakeFreeBSDAlreadyOK)
+		testseam.FakeServiceRunner(t, fakeFreeBSDAlreadyOK)
 	case "netbsd":
-		SetRunCmdForTest(fakeNetBSDAlreadyOK)
+		testseam.FakeServiceRunner(t, fakeNetBSDAlreadyOK)
 	default:
 		t.Skip("unsupported GOOS")
 	}
-	defer ResetRunCmdForTest()
 
 	Present("uptimed")
 	if err := resource.Apply(); err != nil {
@@ -63,28 +63,28 @@ func TestWithRestartIssuesRestart(t *testing.T) {
 	var sawRestart bool
 	switch runtime.GOOS {
 	case "linux":
-		SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+		testseam.FakeServiceRunner(t, func(name string, args ...string) (string, string, int, error) {
 			if name == "systemctl" && contains(args, "restart") {
 				sawRestart = true
 			}
 			return fakeSystemdAlreadyOK(name, args...)
 		})
 	case "openbsd":
-		SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+		testseam.FakeServiceRunner(t, func(name string, args ...string) (string, string, int, error) {
 			if name == "rcctl" && len(args) > 0 && args[0] == "restart" {
 				sawRestart = true
 			}
 			return fakeRcctlAlreadyOK(name, args...)
 		})
 	case "freebsd":
-		SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+		testseam.FakeServiceRunner(t, func(name string, args ...string) (string, string, int, error) {
 			if name == "service" && contains(args, "restart") {
 				sawRestart = true
 			}
 			return fakeFreeBSDAlreadyOK(name, args...)
 		})
 	case "netbsd":
-		SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+		testseam.FakeServiceRunner(t, func(name string, args ...string) (string, string, int, error) {
 			if name == netbsdService && contains(args, "restart") {
 				sawRestart = true
 			}
@@ -93,7 +93,6 @@ func TestWithRestartIssuesRestart(t *testing.T) {
 	default:
 		t.Skip("unsupported GOOS")
 	}
-	defer ResetRunCmdForTest()
 
 	Present("uptimed", opt.WithRestart)
 	if err := resource.Apply(); err != nil {
@@ -118,29 +117,28 @@ func TestOnChangeGatesRestartButNotServiceConvergence(t *testing.T) {
 			var sawRestart bool
 			switch runtime.GOOS {
 			case "linux":
-				SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+				testseam.FakeServiceRunner(t, func(name string, args ...string) (string, string, int, error) {
 					sawRestart = sawRestart || name == "systemctl" && contains(args, "restart")
 					return fakeSystemdAlreadyOK(name, args...)
 				})
 			case "openbsd":
-				SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+				testseam.FakeServiceRunner(t, func(name string, args ...string) (string, string, int, error) {
 					sawRestart = sawRestart || name == "rcctl" && contains(args, "restart")
 					return fakeRcctlAlreadyOK(name, args...)
 				})
 			case "freebsd":
-				SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+				testseam.FakeServiceRunner(t, func(name string, args ...string) (string, string, int, error) {
 					sawRestart = sawRestart || name == "service" && contains(args, "restart")
 					return fakeFreeBSDAlreadyOK(name, args...)
 				})
 			case "netbsd":
-				SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+				testseam.FakeServiceRunner(t, func(name string, args ...string) (string, string, int, error) {
 					sawRestart = sawRestart || name == netbsdService && contains(args, "restart")
 					return fakeNetBSDAlreadyOK(name, args...)
 				})
 			default:
 				t.Skip("unsupported GOOS")
 			}
-			t.Cleanup(ResetRunCmdForTest)
 
 			watched := resource.Register("File", "unit", resource.ApplierFunc(func() error {
 				resource.Note("File[unit]", tc.watchStatus)

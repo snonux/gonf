@@ -9,26 +9,11 @@ import (
 	"slices"
 
 	"github.com/snonux/gonf/internal/exec"
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
 	opt "github.com/snonux/gonf/resource/options"
 )
-
-// runCmd is swapped in unit tests for packages without an environment.
-// runCmdWithEnv receives a complete, inherited environment for packages with
-// WithEnv; keeping the seams separate preserves the legacy unset behavior.
-var (
-	runCmd        = exec.Run
-	runCmdWithEnv = func(env []string, name string, args ...string) (string, string, int, error) {
-		return exec.RunWith(exec.Opts{Env: env}, name, args...)
-	}
-)
-
-// detectPkgManager names the host's package manager; selectBackend maps the
-// name to a backend. It is swapped by SetDetectPackageManagerForTest (CI
-// runners are often Ubuntu); in-package tests instead hand a backend to
-// applyWith directly.
-var detectPkgManager = detectPackageManager
 
 // resource.Register takes this value as a resource.Applier. The assertion
 // pins that contract at the declaration, so a renamed or re-signed Apply is
@@ -69,33 +54,6 @@ func (p *Package) SetEnv(env map[string]string) {
 	p.env = maps.Clone(env)
 }
 
-// SetRunCmdForTest swaps the package-manager command runner (tests only).
-// Cross-package apply tests (e.g. plan.Apply on a package op) reach the
-// backend's dnf/pkg/pkg_add/pkgin invocations through this seam, mirroring
-// resource/systemd's SetRunCmdForTest.
-func SetRunCmdForTest(run func(name string, args ...string) (string, string, int, error)) {
-	runCmd = run
-}
-
-// ResetRunCmdForTest restores the real command runner after a test stub.
-func ResetRunCmdForTest() {
-	runCmd = exec.Run
-}
-
-// SetRunCmdWithEnvForTest swaps the runner used when WithEnv is configured.
-// The environment is complete: it includes the inherited process environment
-// with the resource's values overlaid.
-func SetRunCmdWithEnvForTest(run func(env []string, name string, args ...string) (string, string, int, error)) {
-	runCmdWithEnv = run
-}
-
-// ResetRunCmdWithEnvForTest restores the environment-aware runner.
-func ResetRunCmdWithEnvForTest() {
-	runCmdWithEnv = func(env []string, name string, args ...string) (string, string, int, error) {
-		return exec.RunWith(exec.Opts{Env: env}, name, args...)
-	}
-}
-
 // Apply runs the package reconciliation directly for the legacy resource path.
 func (p *Package) Apply() error { return p.apply() }
 
@@ -129,16 +87,6 @@ func Ensure(name string, opts ...opt.PackageOption) error {
 func Absent(name string, opts ...opt.PackageOption) resource.Resource {
 	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(name, opts...)
-}
-
-// SetDetectPackageManagerForTest stubs OS package-manager detection (tests only).
-func SetDetectPackageManagerForTest(fn func() (string, error)) {
-	detectPkgManager = fn
-}
-
-// ResetDetectPackageManagerForTest restores the real detector after a test stub.
-func ResetDetectPackageManagerForTest() {
-	detectPkgManager = detectPackageManager
 }
 
 // apply selects the host's backend and converges p through it with p's own
@@ -190,9 +138,10 @@ func detectPackageManager() (string, error) {
 	}
 }
 
-// run is p's runner: the legacy seam when no WithEnv is set, otherwise the
-// environment-aware seam with p's variables overlaid on the inherited
-// environment. It satisfies the runner type the backends are handed.
+// run is p's runner: the plain runner when no WithEnv is set, otherwise the
+// environment-aware one with p's variables overlaid on the inherited
+// environment (keeping the two separate preserves the legacy unset
+// behaviour). It satisfies the runner type the backends are handed.
 //
 // For a sensitive package (WithSensitive) a failed command's output is
 // replaced by a note of its sizes before any backend sees it: every backend
@@ -220,4 +169,36 @@ func (p *Package) runRaw(bin string, args ...string) (string, string, int, error
 func withheldOutput(stdout, stderr string) string {
 	return fmt.Sprintf("(output withheld: %d bytes stdout, %d bytes stderr; the package operation carries secret material)",
 		len(stdout), len(stderr))
+}
+
+// runCmd runs a package-manager command for a package without WithEnv: the
+// real runner, or the fake a test in this module installed with
+// internal/testseam.FakePackageRunner (cross-package apply tests reach the
+// backend's dnf/pkg/pkg_add/pkgin invocations that way).
+func runCmd(name string, args ...string) (string, string, int, error) {
+	if fake := testseam.PackageFakes().Run; fake != nil {
+		return fake(name, args...)
+	}
+	return exec.Run(name, args...)
+}
+
+// runCmdWithEnv runs a package-manager command with env, a complete
+// environment (the inherited one with the package's WithEnv values
+// overlaid): the real runner, or a testseam.FakePackageRunner fake.
+func runCmdWithEnv(env []string, name string, args ...string) (string, string, int, error) {
+	if fake := testseam.PackageFakes().RunEnv; fake != nil {
+		return fake(env, name, args...)
+	}
+	return exec.RunWith(exec.Opts{Env: env}, name, args...)
+}
+
+// detectPkgManager names the host's package manager; selectBackend maps the
+// name to a backend. A test in this module can force a name with
+// internal/testseam.FakePackageManager (CI runners are often Ubuntu);
+// in-package tests may instead hand a backend to applyWith directly.
+func detectPkgManager() (string, error) {
+	if fake := testseam.PackageManager(); fake != nil {
+		return fake()
+	}
+	return detectPackageManager()
 }

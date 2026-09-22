@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -139,13 +140,11 @@ func TestPresentMergedReloadAppliesOnSecondInput(t *testing.T) {
 	Present(opt.OnChange(a))
 	Present(opt.OnChange(b))
 
-	old := runCmd
-	t.Cleanup(func() { runCmd = old })
 	var saw []string
-	runCmd = func(name string, args ...string) (string, string, int, error) {
+	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
 		saw = append(saw, name+" "+strings.Join(args, " "))
 		return "", "", 0, nil
-	}
+	})
 	if err := resource.Apply(); err != nil {
 		t.Fatal(err)
 	}

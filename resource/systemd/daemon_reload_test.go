@@ -5,19 +5,18 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
 
 func TestDaemonReloadRunsSystemctl(t *testing.T) {
 	resource.ResetRepository()
-	old := runCmd
-	t.Cleanup(func() { runCmd = old })
 
 	var saw []string
-	runCmd = func(name string, args ...string) (string, string, int, error) {
+	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
 		saw = append(saw, name+" "+strings.Join(args, " "))
 		return "", "", 0, nil
-	}
+	})
 
 	Present()
 	if err := resource.Apply(); err != nil {
@@ -30,14 +29,12 @@ func TestDaemonReloadRunsSystemctl(t *testing.T) {
 
 func TestDaemonReloadWithUser(t *testing.T) {
 	resource.ResetRepository()
-	old := runCmd
-	t.Cleanup(func() { runCmd = old })
 
 	var saw string
-	runCmd = func(name string, args ...string) (string, string, int, error) {
+	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
 		saw = name + " " + strings.Join(args, " ")
 		return "", "", 0, nil
-	}
+	})
 
 	Present(opt.WithUser)
 	if err := resource.Apply(); err != nil {
@@ -50,14 +47,12 @@ func TestDaemonReloadWithUser(t *testing.T) {
 
 func TestDaemonReloadIfChangedSkips(t *testing.T) {
 	resource.ResetRepository()
-	old := runCmd
-	t.Cleanup(func() { runCmd = old })
 
 	called := false
-	runCmd = func(name string, args ...string) (string, string, int, error) {
+	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
 		called = true
 		return "", "", 0, nil
-	}
+	})
 
 	noop := resource.Register("File", "/tmp/stable", resource.ApplierFunc(func() error {
 		resource.Note("File[/tmp/stable]", resource.StatusOK)
@@ -74,14 +69,12 @@ func TestDaemonReloadIfChangedSkips(t *testing.T) {
 
 func TestDaemonReloadIfChangedRuns(t *testing.T) {
 	resource.ResetRepository()
-	old := runCmd
-	t.Cleanup(func() { runCmd = old })
 
 	called := false
-	runCmd = func(name string, args ...string) (string, string, int, error) {
+	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
 		called = true
 		return "", "", 0, nil
-	}
+	})
 
 	changed := resource.Register("File", "/tmp/unit", resource.ApplierFunc(func() error {
 		resource.Note("File[/tmp/unit]", resource.StatusChanged)
@@ -116,14 +109,12 @@ func TestDaemonReloadOnChangeAndWithWatchMergeRegardlessOfOptionOrder(t *testing
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resource.ResetRepository()
-			old := runCmd
-			t.Cleanup(func() { runCmd = old })
 
 			called := false
-			runCmd = func(string, ...string) (string, string, int, error) {
+			testseam.FakeSystemctl(t, func(string, ...string) (string, string, int, error) {
 				called = true
 				return "", "", 0, nil
-			}
+			})
 			changed := resource.Register("File", "changed", resource.ApplierFunc(func() error {
 				resource.Note("File[changed]", resource.StatusChanged)
 				return nil
@@ -145,14 +136,12 @@ func TestDaemonReloadOnChangeAndWithWatchMergeRegardlessOfOptionOrder(t *testing
 
 func TestDaemonReloadIfChangedSeesDirectoryChildFile(t *testing.T) {
 	resource.ResetRepository()
-	old := runCmd
-	t.Cleanup(func() { runCmd = old })
 
 	called := false
-	runCmd = func(name string, args ...string) (string, string, int, error) {
+	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
 		called = true
 		return "", "", 0, nil
-	}
+	})
 
 	dirID := "Directory[/tmp/systemd-user]"
 	units := resource.Register("Directory", "/tmp/systemd-user", resource.ApplierFunc(func() error {
@@ -173,13 +162,11 @@ func TestDaemonReloadDryRun(t *testing.T) {
 	resource.ResetRepository()
 	resource.SetDryRun(true)
 	t.Cleanup(func() { resource.SetDryRun(false) })
-	old := runCmd
-	t.Cleanup(func() { runCmd = old })
 
-	runCmd = func(name string, args ...string) (string, string, int, error) {
+	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
 		t.Fatal("dry-run must not call systemctl")
 		return "", "", 0, nil
-	}
+	})
 	Present()
 	if err := resource.Apply(); err != nil {
 		t.Fatal(err)

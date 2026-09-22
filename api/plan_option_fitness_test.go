@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -104,9 +105,7 @@ func argsContainOpt(args []string, want string) bool {
 // ---------------------------------------------------------------------------
 
 func TestPlanOptionFitness_Package(t *testing.T) {
-	t.Cleanup(pkg.ResetDetectPackageManagerForTest)
-	t.Cleanup(pkg.ResetRunCmdForTest)
-	pkg.SetDetectPackageManagerForTest(func() (string, error) { return "dnf", nil })
+	testseam.FakePackageManager(t, func() (string, error) { return "dnf", nil })
 
 	fakeDNF := func(calls *[][]string) func(name string, args ...string) (string, string, int, error) {
 		return func(name string, args ...string) (string, string, int, error) {
@@ -134,13 +133,13 @@ func TestPlanOptionFitness_Package(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			var directCalls [][]string
-			pkg.SetRunCmdForTest(fakeDNF(&directCalls))
+			testseam.FakePackageRunner(t, testseam.Package{Run: fakeDNF(&directCalls)})
 			if err := pkg.Ensure("demo-pkg", c.opts...); err != nil {
 				t.Fatalf("direct Ensure: %v", err)
 			}
 
 			var planCalls [][]string
-			pkg.SetRunCmdForTest(fakeDNF(&planCalls))
+			testseam.FakePackageRunner(t, testseam.Package{Run: fakeDNF(&planCalls)})
 			recordApplyOption(t, "pkg_opt_"+c.name, func() {
 				Package("demo-pkg", c.opts...)
 			})
@@ -161,10 +160,6 @@ func TestPlanOptionFitness_Package(t *testing.T) {
 // overlaid environment for both its installed-state probe and mutation, just
 // as a direct Ensure does.
 func TestPlanOptionFitness_PackageWithEnv(t *testing.T) {
-	t.Cleanup(pkg.ResetDetectPackageManagerForTest)
-	t.Cleanup(pkg.ResetRunCmdForTest)
-	t.Cleanup(pkg.ResetRunCmdWithEnvForTest)
-
 	tests := []struct {
 		name string
 		mgr  string
@@ -176,8 +171,7 @@ func TestPlanOptionFitness_PackageWithEnv(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pkg.SetDetectPackageManagerForTest(func() (string, error) { return tt.mgr, nil })
-			t.Cleanup(pkg.ResetDetectPackageManagerForTest)
+			testseam.FakePackageManager(t, func() (string, error) { return tt.mgr, nil })
 
 			fake := func(calls *[][]string) func([]string, string, ...string) (string, string, int, error) {
 				return func(env []string, name string, args ...string) (string, string, int, error) {
@@ -191,13 +185,13 @@ func TestPlanOptionFitness_PackageWithEnv(t *testing.T) {
 
 			opts := []opt.PackageOption{opt.WithEnv(map[string]string{"PKG_PATH": "https://pkgrepo.example/"})}
 			var directCalls [][]string
-			pkg.SetRunCmdWithEnvForTest(fake(&directCalls))
+			testseam.FakePackageRunner(t, testseam.Package{RunEnv: fake(&directCalls)})
 			if err := pkg.Ensure("dtail", opts...); err != nil {
 				t.Fatalf("direct Ensure: %v", err)
 			}
 
 			var planCalls [][]string
-			pkg.SetRunCmdWithEnvForTest(fake(&planCalls))
+			testseam.FakePackageRunner(t, testseam.Package{RunEnv: fake(&planCalls)})
 			recordApplyOption(t, "pkg_env_"+tt.name, func() {
 				Package("dtail", opts...)
 			})
@@ -247,7 +241,6 @@ func fakeCrontab(tab *string) (
 }
 
 func TestPlanOptionFitness_Cron(t *testing.T) {
-	t.Cleanup(cron.ResetRunnersForTest)
 	current, err := user.Current()
 	if err != nil {
 		t.Skipf("cannot resolve current user: %v", err)
@@ -280,14 +273,14 @@ func TestPlanOptionFitness_Cron(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			directTab := c.seed
 			read, write := fakeCrontab(&directTab)
-			cron.SetRunnersForTest(read, write)
+			testseam.FakeCrontab(t, testseam.Crontab{Read: read, Write: write})
 			if err := cron.Ensure("optfit", c.opts...); err != nil {
 				t.Fatalf("direct Ensure: %v", err)
 			}
 
 			planTab := c.seed
 			read2, write2 := fakeCrontab(&planTab)
-			cron.SetRunnersForTest(read2, write2)
+			testseam.FakeCrontab(t, testseam.Crontab{Read: read2, Write: write2})
 			recordApplyOption(t, "cron_opt_"+c.name, func() {
 				Cron("optfit", c.opts...)
 			})
@@ -309,14 +302,14 @@ func TestPlanOptionFitness_Cron(t *testing.T) {
 
 		directTab := seed
 		read, write := fakeCrontab(&directTab)
-		cron.SetRunnersForTest(read, write)
+		testseam.FakeCrontab(t, testseam.Crontab{Read: read, Write: write})
 		if err := cron.Ensure("optfit", opt.WithCronUser(current.Username), opt.IsAbsent); err != nil {
 			t.Fatalf("direct Ensure: %v", err)
 		}
 
 		planTab := seed
 		read2, write2 := fakeCrontab(&planTab)
-		cron.SetRunnersForTest(read2, write2)
+		testseam.FakeCrontab(t, testseam.Crontab{Read: read2, Write: write2})
 		recordApplyOption(t, "cron_opt_Absent", func() {
 			Cron("optfit", opt.WithCronUser(current.Username), opt.IsAbsent)
 		})
@@ -361,7 +354,6 @@ func TestPlanOptionFitness_Service(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("systemd service backend is Linux-specific")
 	}
-	t.Cleanup(svc.ResetRunCmdForTest)
 
 	cases := []struct {
 		name            string
@@ -375,13 +367,13 @@ func TestPlanOptionFitness_Service(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			var directCalls [][]string
-			systemd.SetRunCmdForTest(fakeSystemctl(&directCalls, c.active, c.enabled))
+			testseam.FakeSystemctl(t, fakeSystemctl(&directCalls, c.active, c.enabled))
 			if err := svc.Ensure("optfitsvc", c.opts...); err != nil {
 				t.Fatalf("direct Ensure: %v", err)
 			}
 
 			var planCalls [][]string
-			systemd.SetRunCmdForTest(fakeSystemctl(&planCalls, c.active, c.enabled))
+			testseam.FakeSystemctl(t, fakeSystemctl(&planCalls, c.active, c.enabled))
 			recordApplyOption(t, "service_opt_"+c.name, func() {
 				Service("optfitsvc", c.opts...)
 			})
@@ -394,13 +386,13 @@ func TestPlanOptionFitness_Service(t *testing.T) {
 
 	t.Run("Absent", func(t *testing.T) {
 		var directCalls [][]string
-		systemd.SetRunCmdForTest(fakeSystemctl(&directCalls, true, true))
+		testseam.FakeSystemctl(t, fakeSystemctl(&directCalls, true, true))
 		if err := svc.Ensure("optfitsvc", opt.IsAbsent); err != nil {
 			t.Fatalf("direct Ensure: %v", err)
 		}
 
 		var planCalls [][]string
-		systemd.SetRunCmdForTest(fakeSystemctl(&planCalls, true, true))
+		testseam.FakeSystemctl(t, fakeSystemctl(&planCalls, true, true))
 		recordApplyOption(t, "service_opt_Absent", func() {
 			Service("optfitsvc", opt.IsAbsent)
 		})
@@ -415,7 +407,7 @@ func TestPlanOptionFitness_Service(t *testing.T) {
 
 	t.Run("OnChangeRestart", func(t *testing.T) {
 		var planCalls [][]string
-		systemd.SetRunCmdForTest(fakeSystemctl(&planCalls, true, true))
+		testseam.FakeSystemctl(t, fakeSystemctl(&planCalls, true, true))
 		path := filepath.Join(t.TempDir(), "service.conf")
 		recordApplyOption(t, "service_opt_on_change", func() {
 			conf := File(path, opt.WithContent("managed\n"))
@@ -445,7 +437,6 @@ func TestPlanOptionFitness_Timer(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("systemd timer backend is Linux-specific")
 	}
-	t.Cleanup(systemd.ResetRunCmdForTest)
 
 	cases := []struct {
 		name            string
@@ -459,13 +450,13 @@ func TestPlanOptionFitness_Timer(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			var directCalls [][]string
-			systemd.SetRunCmdForTest(fakeSystemctl(&directCalls, c.active, c.enabled))
+			testseam.FakeSystemctl(t, fakeSystemctl(&directCalls, c.active, c.enabled))
 			if err := timer.Ensure("optfit.timer", c.opts...); err != nil {
 				t.Fatalf("direct Ensure: %v", err)
 			}
 
 			var planCalls [][]string
-			systemd.SetRunCmdForTest(fakeSystemctl(&planCalls, c.active, c.enabled))
+			testseam.FakeSystemctl(t, fakeSystemctl(&planCalls, c.active, c.enabled))
 			recordApplyOption(t, "timer_opt_"+c.name, func() {
 				Timer("optfit.timer", c.opts...)
 			})
@@ -478,13 +469,13 @@ func TestPlanOptionFitness_Timer(t *testing.T) {
 
 	t.Run("Absent", func(t *testing.T) {
 		var directCalls [][]string
-		systemd.SetRunCmdForTest(fakeSystemctl(&directCalls, true, true))
+		testseam.FakeSystemctl(t, fakeSystemctl(&directCalls, true, true))
 		if err := timer.Ensure("optfit.timer", opt.IsAbsent); err != nil {
 			t.Fatalf("direct Ensure: %v", err)
 		}
 
 		var planCalls [][]string
-		systemd.SetRunCmdForTest(fakeSystemctl(&planCalls, true, true))
+		testseam.FakeSystemctl(t, fakeSystemctl(&planCalls, true, true))
 		recordApplyOption(t, "timer_opt_Absent", func() {
 			Timer("optfit.timer", opt.IsAbsent)
 		})
@@ -496,7 +487,7 @@ func TestPlanOptionFitness_Timer(t *testing.T) {
 
 	t.Run("OnChangeRestart", func(t *testing.T) {
 		var planCalls [][]string
-		systemd.SetRunCmdForTest(fakeSystemctl(&planCalls, true, true))
+		testseam.FakeSystemctl(t, fakeSystemctl(&planCalls, true, true))
 		path := filepath.Join(t.TempDir(), "timer.conf")
 		recordApplyOption(t, "timer_opt_on_change", func() {
 			conf := File(path, opt.WithContent("managed\n"))
@@ -517,7 +508,6 @@ func TestPlanOptionFitness_DaemonReload(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("systemd daemon-reload is Linux-specific")
 	}
-	t.Cleanup(systemd.ResetRunCmdForTest)
 
 	fake := func(calls *[][]string) func(name string, args ...string) (string, string, int, error) {
 		return func(name string, args ...string) (string, string, int, error) {
@@ -530,14 +520,14 @@ func TestPlanOptionFitness_DaemonReload(t *testing.T) {
 	}
 
 	var directCalls [][]string
-	systemd.SetRunCmdForTest(fake(&directCalls))
+	testseam.FakeSystemctl(t, fake(&directCalls))
 	resource.ResetReport()
 	if err := systemd.Ensure(opt.WithUser); err != nil {
 		t.Fatalf("direct Ensure: %v", err)
 	}
 
 	var planCalls [][]string
-	systemd.SetRunCmdForTest(fake(&planCalls))
+	testseam.FakeSystemctl(t, fake(&planCalls))
 	recordApplyOption(t, "daemon_reload_opt", func() {
 		DaemonReload(opt.WithUser)
 	})
@@ -551,7 +541,7 @@ func TestPlanOptionFitness_DaemonReload(t *testing.T) {
 
 	t.Run("OnChangeAndLegacyIfChangedWatch", func(t *testing.T) {
 		var calls [][]string
-		systemd.SetRunCmdForTest(fake(&calls))
+		testseam.FakeSystemctl(t, fake(&calls))
 		path := filepath.Join(t.TempDir(), "unit.service")
 		recordApplyOption(t, "daemon_reload_opt_on_change", func() {
 			unit := File(path, opt.WithContent("[Unit]\n"))
@@ -575,7 +565,6 @@ func TestPlanOptionFitness_SystemdTimer(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("systemd timer backend is Linux-specific")
 	}
-	t.Cleanup(systemd.ResetRunCmdForTest)
 
 	opts := []opt.SystemdTimerOption{
 		opt.WithCommand("/usr/bin/backup"),
@@ -612,7 +601,7 @@ func TestPlanOptionFitness_SystemdTimer(t *testing.T) {
 
 	t.Setenv("HOME", homeDirect)
 	var directCalls [][]string
-	systemd.SetRunCmdForTest(fakeCtl(&directCalls))
+	testseam.FakeSystemctl(t, fakeCtl(&directCalls))
 	resource.ResetReport()
 	if err := systemdtimer.Ensure("optfit", opts...); err != nil {
 		t.Fatalf("direct Ensure: %v", err)
@@ -620,7 +609,7 @@ func TestPlanOptionFitness_SystemdTimer(t *testing.T) {
 
 	t.Setenv("HOME", homePlan)
 	var planCalls [][]string
-	systemd.SetRunCmdForTest(fakeCtl(&planCalls))
+	testseam.FakeSystemctl(t, fakeCtl(&planCalls))
 	recordApplyOption(t, "systemd_timer_opt_KitchenSink", func() {
 		SystemdTimer("optfit", opts...)
 	})

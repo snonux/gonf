@@ -3,9 +3,9 @@ package logger
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"os"
-	"strings"
 	"sync"
 )
 
@@ -59,8 +59,26 @@ func GetLevel() Level {
 	return level
 }
 
-// logf reads the level and the destination logger under mu, so a test
-// capture (CaptureForTest) can swap std without a data race; the write itself
+// Redirect sends log output to w at level l, without the timestamp prefix so
+// lines can be compared exactly, until restore reinstates the previous
+// destination and level. The redirect is process-global: callers (tests
+// capturing log lines, through internal/testutil.CaptureLog) must not run in
+// parallel with other code that logs or redirects. w must be safe for
+// concurrent use if anything logs from several goroutines.
+func Redirect(w io.Writer, l Level) (restore func()) {
+	mu.Lock()
+	prevStd, prevLevel := std, level
+	std, level = log.New(w, "", 0), l
+	mu.Unlock()
+	return func() {
+		mu.Lock()
+		defer mu.Unlock()
+		std, level = prevStd, prevLevel
+	}
+}
+
+// logf reads the level and the destination logger under mu, so Redirect
+// (a test's log capture) can swap std without a data race; the write itself
 // happens outside the lock (log.Logger serialises its own output).
 func logf(msgLevel Level, format string, args ...any) {
 	mu.Lock()
@@ -81,42 +99,6 @@ func currentRedactor() Redactor {
 	mu.Lock()
 	defer mu.Unlock()
 	return redactor
-}
-
-// captureBuffer is the concurrency-safe sink CaptureForTest installs.
-type captureBuffer struct {
-	mu  sync.Mutex
-	buf strings.Builder
-}
-
-func (c *captureBuffer) Write(p []byte) (int, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.buf.Write(p)
-}
-
-func (c *captureBuffer) String() string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.buf.String()
-}
-
-// CaptureForTest (tests only) redirects log output into memory at level l,
-// without timestamps so lines can be compared exactly. output returns what
-// was logged so far; restore reinstates the previous logger and level.
-// The capture is process-global: tests using it must not run in parallel
-// with other tests that log or capture.
-func CaptureForTest(l Level) (output func() string, restore func()) {
-	c := &captureBuffer{}
-	mu.Lock()
-	prevStd, prevLevel := std, level
-	std, level = log.New(c, "", 0), l
-	mu.Unlock()
-	return c.String, func() {
-		mu.Lock()
-		defer mu.Unlock()
-		std, level = prevStd, prevLevel
-	}
 }
 
 // Error logs a formatted message at LevelError.

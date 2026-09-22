@@ -12,9 +12,9 @@ package plan_test
 import (
 	"testing"
 
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
-	"github.com/snonux/gonf/resource/pkg"
 )
 
 func pkgHeader() plan.Op {
@@ -24,8 +24,7 @@ func pkgHeader() plan.Op {
 func TestApplyPackageDryRun(t *testing.T) {
 	resource.SetDryRun(true)
 	t.Cleanup(func() { resource.SetDryRun(false) })
-	pkg.SetDetectPackageManagerForTest(func() (string, error) { return "dnf", nil })
-	t.Cleanup(pkg.ResetDetectPackageManagerForTest)
+	testseam.FakePackageManager(t, func() (string, error) { return "dnf", nil })
 
 	ops := []plan.Op{
 		pkgHeader(),
@@ -46,11 +45,10 @@ func TestApplyPackageDryRun(t *testing.T) {
 // resource/pkg/planwire.go's Handler.Apply; this test still pins the
 // observable behavior through the public plan.Apply entry point.
 func TestApplyPackageLatestRunsUpgradePath(t *testing.T) {
-	pkg.SetDetectPackageManagerForTest(func() (string, error) { return "dnf", nil })
-	t.Cleanup(pkg.ResetDetectPackageManagerForTest)
+	testseam.FakePackageManager(t, func() (string, error) { return "dnf", nil })
 
 	var dnfCalls [][]string
-	pkg.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+	testseam.FakePackageRunner(t, testseam.Package{Run: func(name string, args ...string) (string, string, int, error) {
 		switch name {
 		case "rpm":
 			// Report the package as already installed: a plain "package"
@@ -62,8 +60,7 @@ func TestApplyPackageLatestRunsUpgradePath(t *testing.T) {
 		default:
 			return "", "unexpected " + name, 1, nil
 		}
-	})
-	t.Cleanup(pkg.ResetRunCmdForTest)
+	}})
 
 	ops := []plan.Op{
 		pkgHeader(),

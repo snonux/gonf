@@ -7,10 +7,11 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
 
-// pkgCall records one invocation of the swapped runCmd.
+// pkgCall records one invocation of the faked package-manager runner.
 type pkgCall struct {
 	bin  string
 	args []string
@@ -69,9 +70,8 @@ func assertPkgAction(t *testing.T, probe pkgCall, wantRun []string, calls []pkgC
 // running pkg, would-act states run pkg and note changed (would-change in
 // dry-run).
 func TestApplyFreeBSDPkgFake(t *testing.T) {
-	oldRun, oldDry := runCmd, resource.DryRun()
+	oldDry := resource.DryRun()
 	defer func() {
-		runCmd = oldRun
 		resource.SetDryRun(oldDry)
 	}()
 
@@ -160,7 +160,7 @@ func TestApplyFreeBSDPkgFake(t *testing.T) {
 			resource.SetDryRun(tt.dryRun)
 
 			var calls []pkgCall
-			runCmd = fakePkgRunner(tt.installed, tt.probeErr, tt.failAction, &calls)
+			testseam.FakePackageRunner(t, testseam.Package{Run: fakePkgRunner(tt.installed, tt.probeErr, tt.failAction, &calls)})
 
 			err := applyVia(freebsdBackend{})(&tt.pkg)
 
@@ -183,11 +183,10 @@ func TestApplyFreeBSDPkgFake(t *testing.T) {
 
 // TestApplyNetBSDFake pins the pkgin backend: the pkg_info -e probe gates the
 // action, latest always runs pkgin install (it upgrades when newer is
-// available), and all invocations route through runCmd.
+// available), and all invocations route through the faked runner.
 func TestApplyNetBSDFake(t *testing.T) {
-	oldRun, oldDry := runCmd, resource.DryRun()
+	oldDry := resource.DryRun()
 	defer func() {
-		runCmd = oldRun
 		resource.SetDryRun(oldDry)
 	}()
 
@@ -276,7 +275,7 @@ func TestApplyNetBSDFake(t *testing.T) {
 			resource.SetDryRun(tt.dryRun)
 
 			var calls []pkgCall
-			runCmd = fakePkgRunner(tt.installed, tt.probeErr, tt.failAction, &calls)
+			testseam.FakePackageRunner(t, testseam.Package{Run: fakePkgRunner(tt.installed, tt.probeErr, tt.failAction, &calls)})
 
 			err := applyVia(netbsdBackend{})(&tt.pkg)
 
@@ -301,9 +300,8 @@ func TestApplyNetBSDFake(t *testing.T) {
 // probe (name-*) gates the action, and absent removals dry-run through the
 // pkg_delete branch.
 func TestApplyOpenBSDFake(t *testing.T) {
-	oldRun, oldDry := runCmd, resource.DryRun()
+	oldDry := resource.DryRun()
 	defer func() {
-		runCmd = oldRun
 		resource.SetDryRun(oldDry)
 	}()
 
@@ -407,7 +405,7 @@ func TestApplyOpenBSDFake(t *testing.T) {
 			resource.SetDryRun(tt.dryRun)
 
 			var calls []pkgCall
-			runCmd = fakePkgRunner(tt.installed, tt.probeErr, tt.failAction, &calls)
+			testseam.FakePackageRunner(t, testseam.Package{Run: fakePkgRunner(tt.installed, tt.probeErr, tt.failAction, &calls)})
 
 			err := applyVia(openbsdBackend{})(&tt.pkg)
 
@@ -429,15 +427,9 @@ func TestApplyOpenBSDFake(t *testing.T) {
 }
 
 // TestApplyDispatchesToDetectedBackend pins that Package.apply routes to the
-// backend named by the swapped detector: each backend's probe binary runs
+// backend named by the faked detector: each backend's probe binary runs
 // first, nothing else.
 func TestApplyDispatchesToDetectedBackend(t *testing.T) {
-	oldRun := runCmd
-	defer func() {
-		ResetDetectPackageManagerForTest()
-		runCmd = oldRun
-	}()
-
 	tests := []struct {
 		mgr       string
 		wantProbe string
@@ -451,11 +443,10 @@ func TestApplyDispatchesToDetectedBackend(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.mgr, func(t *testing.T) {
 			resource.ResetReport()
-			SetDetectPackageManagerForTest(func() (string, error) { return tt.mgr, nil })
-			defer ResetDetectPackageManagerForTest()
+			testseam.FakePackageManager(t, func() (string, error) { return tt.mgr, nil })
 
 			var calls []pkgCall
-			runCmd = fakePkgRunner(true, false, false, &calls)
+			testseam.FakePackageRunner(t, testseam.Package{Run: fakePkgRunner(true, false, false, &calls)})
 
 			p := Package{name: "rsync"}
 			if err := p.apply(); err != nil {
@@ -472,21 +463,15 @@ func TestApplyDispatchesToDetectedBackend(t *testing.T) {
 // TestApplyErrorsWithoutPackageManager covers the detector-error and
 // unsupported-manager branches of apply.
 func TestApplyErrorsWithoutPackageManager(t *testing.T) {
-	oldRun := runCmd
-	defer func() {
-		ResetDetectPackageManagerForTest()
-		runCmd = oldRun
-	}()
-
 	var calls []pkgCall
-	runCmd = fakePkgRunner(false, false, false, &calls)
+	testseam.FakePackageRunner(t, testseam.Package{Run: fakePkgRunner(false, false, false, &calls)})
 
-	SetDetectPackageManagerForTest(func() (string, error) { return "", errors.New("no package manager here") })
+	testseam.FakePackageManager(t, func() (string, error) { return "", errors.New("no package manager here") })
 	if err := (&Package{name: "rsync"}).apply(); err == nil {
 		t.Fatal("expected the detector error to surface")
 	}
 
-	SetDetectPackageManagerForTest(func() (string, error) { return "maconbsd", nil })
+	testseam.FakePackageManager(t, func() (string, error) { return "maconbsd", nil })
 	err := (&Package{name: "rsync"}).apply()
 	if err == nil || !strings.Contains(err.Error(), "unsupported package manager") {
 		t.Fatalf("apply err = %v, want unsupported package manager", err)
@@ -535,21 +520,19 @@ func TestRunOrErr(t *testing.T) {
 }
 
 // TestPresentEnsureAbsentFake exercises the public constructors against the
-// swapped detector and runner: Present registers and installs, Absent
+// faked detector and runner: Present registers and installs, Absent
 // registers with IsAbsent, Ensure applies latest without registering.
 func TestPresentEnsureAbsentFake(t *testing.T) {
-	oldRun, oldDry := runCmd, resource.DryRun()
+	oldDry := resource.DryRun()
 	defer func() {
-		ResetDetectPackageManagerForTest()
-		runCmd = oldRun
 		resource.SetDryRun(oldDry)
 	}()
-	SetDetectPackageManagerForTest(func() (string, error) { return "freebsd", nil })
+	testseam.FakePackageManager(t, func() (string, error) { return "freebsd", nil })
 
 	// Present: not installed → pkg install runs and notes changed.
 	resource.ResetRepository()
 	var calls []pkgCall
-	runCmd = fakePkgRunner(false, false, false, &calls)
+	testseam.FakePackageRunner(t, testseam.Package{Run: fakePkgRunner(false, false, false, &calls)})
 	Present("rsync")
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -561,7 +544,7 @@ func TestPresentEnsureAbsentFake(t *testing.T) {
 	// Absent: not installed → converges ok without an action.
 	resource.ResetRepository()
 	calls = nil
-	runCmd = fakePkgRunner(false, false, false, &calls)
+	testseam.FakePackageRunner(t, testseam.Package{Run: fakePkgRunner(false, false, false, &calls)})
 	Absent("rsync")
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -572,7 +555,7 @@ func TestPresentEnsureAbsentFake(t *testing.T) {
 	// Ensure with IsLatest: applies without registering; the package is
 	// installed so the latest path still acts (upgrade).
 	calls = nil
-	runCmd = fakePkgRunner(true, false, false, &calls)
+	testseam.FakePackageRunner(t, testseam.Package{Run: fakePkgRunner(true, false, false, &calls)})
 	if err := Ensure("rsync", opt.IsLatest); err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}

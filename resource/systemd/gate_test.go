@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
@@ -127,13 +128,11 @@ func lowerReload(t *testing.T, opts []opt.DaemonReloadOption) plan.Op {
 func TestEmptyWithWatchReloadsUnconditionally(t *testing.T) {
 	resource.ResetReport()
 	t.Cleanup(resource.ResetReport)
-	old := runCmd
-	t.Cleanup(func() { runCmd = old })
 	called := false
-	runCmd = func(string, ...string) (string, string, int, error) {
+	testseam.FakeSystemctl(t, func(string, ...string) (string, string, int, error) {
 		called = true
 		return "", "", 0, nil
-	}
+	})
 	if err := Ensure(opt.WithWatch()); err != nil || !called {
 		t.Fatalf("Ensure(WithWatch()) = %v, reloaded %t, want an unconditional reload", err, called)
 	}
@@ -160,13 +159,11 @@ func TestReloadArmedWithNothingToWatchRefused(t *testing.T) {
 func TestPlanHandlerRecordedGate(t *testing.T) {
 	resource.ResetReport()
 	t.Cleanup(resource.ResetReport)
-	old := runCmd
-	t.Cleanup(func() { runCmd = old })
 	calls := 0
-	runCmd = func(string, ...string) (string, string, int, error) {
+	testseam.FakeSystemctl(t, func(string, ...string) (string, string, int, error) {
 		calls++
 		return "", "", 0, nil
-	}
+	})
 
 	err := planHandler{}.Apply(plan.Op{Op: plan.KindDaemonReload, ID: "DaemonReload[system]", IfChanged: true}, plan.ApplyContext{})
 	if err == nil || err.Error() != "daemon_reload: if_changed without watch ids" {
@@ -195,13 +192,11 @@ func (d dep) Dependencies() []string { return []string{string(d)} }
 // ever noted holds the reload and reports it skipped.
 func TestDaemonReloadUnknownWatchSkips(t *testing.T) {
 	resource.ResetRepository()
-	old := runCmd
-	t.Cleanup(func() { runCmd = old })
 	called := false
-	runCmd = func(string, ...string) (string, string, int, error) {
+	testseam.FakeSystemctl(t, func(string, ...string) (string, string, int, error) {
 		called = true
 		return "", "", 0, nil
-	}
+	})
 
 	Present(opt.WatchChanges("File[never-noted]"))
 	if err := resource.Apply(); err != nil {

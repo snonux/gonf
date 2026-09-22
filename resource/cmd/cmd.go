@@ -10,16 +10,10 @@ import (
 
 	"github.com/snonux/gonf/internal/exec"
 	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
 	opt "github.com/snonux/gonf/resource/options"
-)
-
-// runWith runs the main command (it carries Dir/Env opts) and runProbe runs
-// guard probes (Unless/OnlyIf). Both are swapped in unit tests.
-var (
-	runWith  = exec.RunWith
-	runProbe = exec.Run
 )
 
 var (
@@ -145,23 +139,6 @@ func (c *Cmd) checkSensitiveName() error {
 			"which is logged and reported on every host", c.bin)
 	}
 	return nil
-}
-
-// SetRunnersForTest swaps the command runners (tests only). A nil argument
-// keeps the current runner for that slot.
-func SetRunnersForTest(run func(opts exec.Opts, name string, args ...string) (string, string, int, error), probe func(name string, args ...string) (string, string, int, error)) {
-	if run != nil {
-		runWith = run
-	}
-	if probe != nil {
-		runProbe = probe
-	}
-}
-
-// ResetRunnersForTest restores the real command runners.
-func ResetRunnersForTest() {
-	runWith = exec.RunWith
-	runProbe = exec.Run
 }
 
 // Apply runs the command directly for the legacy resource path.
@@ -330,4 +307,23 @@ func guardPasses(g *opt.Guard) (bool, error) {
 		return false, nil
 	}
 	return true, nil
+}
+
+// runWith runs the main command (it carries Dir/Env opts): the real runner,
+// or the fake a test in this module installed with
+// internal/testseam.FakeCommand.
+func runWith(opts exec.Opts, name string, args ...string) (string, string, int, error) {
+	if fake := testseam.CommandFakes().Run; fake != nil {
+		return fake(opts, name, args...)
+	}
+	return exec.RunWith(opts, name, args...)
+}
+
+// runProbe runs an Unless/OnlyIf guard probe: the real runner, or a
+// testseam.FakeCommand fake.
+func runProbe(name string, args ...string) (string, string, int, error) {
+	if fake := testseam.CommandFakes().Probe; fake != nil {
+		return fake(name, args...)
+	}
+	return exec.Run(name, args...)
 }

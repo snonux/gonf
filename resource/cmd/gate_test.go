@@ -7,6 +7,7 @@ import (
 
 	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/exec"
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -31,7 +32,6 @@ type cmdGateCase struct {
 func TestChangeGateOutcomes(t *testing.T) {
 	oldDry := resource.DryRun()
 	t.Cleanup(func() { resource.SetDryRun(oldDry) })
-	t.Cleanup(ResetRunnersForTest)
 
 	for _, tc := range []cmdGateCase{
 		{name: "unchanged watch skips", watch: "File[unit]", watchNote: resource.StatusOK, noted: true,
@@ -48,10 +48,10 @@ func TestChangeGateOutcomes(t *testing.T) {
 			resource.ResetRepository()
 			resource.SetDryRun(tc.dryRun)
 			ran := false
-			SetRunnersForTest(func(exec.Opts, string, ...string) (string, string, int, error) {
+			testseam.FakeCommand(t, testseam.Command{Run: func(exec.Opts, string, ...string) (string, string, int, error) {
 				ran = true
 				return "", "", 0, nil
-			}, nil)
+			}})
 			// A noted watch goes through OnChange so the watched resource is
 			// also ordered first; the unknown id uses the ids-level form.
 			gate := opt.WatchChanges(tc.watch)

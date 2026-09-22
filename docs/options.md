@@ -98,6 +98,33 @@ recorded plans (no plan schema change). Deliberate changes:
   New: `embed.ChangeGate.AddWatch`/`CheckWatch` and
   `options.RecordedChangeGate` (for plan handlers).
 
+### Test seams removed after v0.15.0
+
+Unreleased, pre-1.0 (task 082); test-only Go API, no behaviour or plan
+change. The exported `*ForTest` runner and detector setters are gone from the
+resource packages (neither client module used them). Tests inside this module
+fake host commands through the module-internal `internal/testseam` package
+instead (`FakeCommand`, `FakeCrontab`, `FakePackageRunner`,
+`FakePackageManager`, `FakeServiceRunner`, `FakeServiceManager`,
+`FakeSystemctl`; each restores on the test's cleanup), and capture log lines
+with `internal/testutil.CaptureLog`. Removed:
+
+- `cmd.SetRunnersForTest`, `cmd.ResetRunnersForTest`
+- `cron.SetRunnersForTest`, `cron.ResetRunnersForTest`
+- `pkg.SetRunCmdForTest`, `pkg.ResetRunCmdForTest`,
+  `pkg.SetRunCmdWithEnvForTest`, `pkg.ResetRunCmdWithEnvForTest`,
+  `pkg.SetDetectPackageManagerForTest`,
+  `pkg.ResetDetectPackageManagerForTest`
+- `service.SetRunCmdForTest`, `service.ResetRunCmdForTest`,
+  `service.SetDetectServiceManagerForTest`,
+  `service.ResetDetectServiceManagerForTest`
+- `systemd.SetRunCmdForTest`, `systemd.ResetRunCmdForTest`
+- `internal/logger.CaptureForTest` (module-internal; replaced by
+  `logger.Redirect`, which `testutil.CaptureLog` builds on)
+
+The state resets (`api.ResetForTest`, `resource.ResetForTest`,
+`plan.ResetForTest`) stay.
+
 ## Cron
 
 | Option | Meaning |

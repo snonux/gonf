@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/systemd"
 )
@@ -46,14 +47,13 @@ func applyWithCurrentUnitFiles(t *testing.T, timerConverged bool) bool {
 	writeUnit(t, filepath.Join(dir, "job.timer"), tm.timerUnit())
 
 	var ran [][]string
-	systemd.SetRunCmdForTest(func(_ string, args ...string) (string, string, int, error) {
+	testseam.FakeSystemctl(t, func(_ string, args ...string) (string, string, int, error) {
 		ran = append(ran, args)
 		if !timerConverged && (slices.Contains(args, "is-active") || slices.Contains(args, "is-enabled")) {
 			return "", "", 1, nil
 		}
 		return "", "", 0, nil
 	})
-	t.Cleanup(systemd.ResetRunCmdForTest)
 	ensureReload = func(...opt.DaemonReloadOption) error { return nil }
 	t.Cleanup(func() { ensureReload = systemd.Ensure })
 

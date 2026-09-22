@@ -12,8 +12,8 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/plan"
-	"github.com/snonux/gonf/resource/systemd"
 )
 
 // TestApplyTimerRestartLowering pins that a recorded timer op with restart
@@ -25,13 +25,12 @@ func TestApplyTimerRestartLowering(t *testing.T) {
 	}
 
 	var invoked [][]string
-	systemd.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
 		if name == "systemctl" {
 			invoked = append(invoked, args)
 		}
 		return "", "", 0, nil
 	})
-	t.Cleanup(systemd.ResetRunCmdForTest)
 
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "timers"},

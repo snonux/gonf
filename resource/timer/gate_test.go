@@ -7,10 +7,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snonux/gonf/internal/testseam"
+	"github.com/snonux/gonf/internal/testutil"
+
 	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource"
-	"github.com/snonux/gonf/resource/systemd"
 )
 
 // timerGateCase is one row of TestChangeGateOutcomes: the watched id the
@@ -59,13 +61,12 @@ func TestChangeGateOutcomes(t *testing.T) {
 	}
 	oldDry := resource.DryRun()
 	t.Cleanup(func() { resource.SetDryRun(oldDry) })
-	t.Cleanup(systemd.ResetRunCmdForTest)
 
 	for _, tc := range timerGateCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			resource.ResetRepository()
 			resource.SetDryRun(tc.dryRun)
-			verbs := fakeTimerSystemctl(tc.enabled)
+			verbs := fakeTimerSystemctl(t, tc.enabled)
 			// A noted watch goes through OnChange so the watched resource is
 			// also ordered first; the unknown id uses the ids-level form.
 			gate := opt.WatchChanges(tc.watch)
@@ -95,11 +96,12 @@ func TestChangeGateOutcomes(t *testing.T) {
 	}
 }
 
-// fakeTimerSystemctl installs a systemctl fake that reports the timer as
-// active (and enabled when enabled is true) and records every mutating verb.
-func fakeTimerSystemctl(enabled bool) *[]string {
+// fakeTimerSystemctl installs a systemctl fake (until t ends) that reports
+// the timer as active (and enabled when enabled is true) and records every
+// mutating verb.
+func fakeTimerSystemctl(t *testing.T, enabled bool) *[]string {
 	verbs := &[]string{}
-	systemd.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
 		switch {
 		case contains(args, "is-active"):
 			return "", "", 0, nil
@@ -148,10 +150,8 @@ func TestHeldGateLogLine(t *testing.T) {
 		t.Skip("Timer is Linux-only")
 	}
 	resource.ResetRepository()
-	t.Cleanup(systemd.ResetRunCmdForTest)
-	fakeTimerSystemctl(true)
-	output, restore := logger.CaptureForTest(logger.LevelDebug)
-	defer restore()
+	fakeTimerSystemctl(t, true)
+	output := testutil.CaptureLog(t, logger.LevelDebug)
 
 	Present("fstrim", opt.WithRestart, opt.WatchChanges("File[never-noted]"))
 	if err := resource.Apply(); err != nil {

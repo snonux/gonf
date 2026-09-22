@@ -7,7 +7,8 @@ import (
 )
 
 // systemdBackend converges services via systemctl, through the shared
-// mechanics in resource/systemd (whose runner SetRunCmdForTest also swaps).
+// mechanics in resource/systemd (whose runner testseam.FakeServiceRunner also
+// fakes).
 // Unlike Timer, Service performs no unit-name validation here — the name is
 // passed to systemctl as given. That drift is deliberate for now: validation
 // stays with the callers that had it.

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -78,8 +79,7 @@ func TestConverge(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			resource.ResetReport()
 			resource.SetDryRun(tt.dryRun)
-			output, restore := logger.CaptureForTest(logger.LevelInfo)
-			defer restore()
+			output := testutil.CaptureLog(t, logger.LevelInfo)
 
 			var done []string
 			var actions []resource.Action
@@ -117,8 +117,7 @@ func TestLogLinesSharesMutatePrefix(t *testing.T) {
 	t.Cleanup(func() { resource.SetDryRun(oldDry) })
 	resource.SetDryRun(true)
 	resource.ResetReport()
-	output, restore := logger.CaptureForTest(logger.LevelInfo)
-	defer restore()
+	output := testutil.CaptureLog(t, logger.LevelInfo)
 
 	would, did := resource.LogLines(fakeAction{name: "x"})
 	if would != "dry-run: would do x" || did != "did x" {

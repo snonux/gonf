@@ -9,6 +9,7 @@ import (
 
 	"github.com/snonux/gonf/internal/exec"
 	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
 	opt "github.com/snonux/gonf/resource/options"
@@ -40,15 +41,6 @@ var (
 	_ opt.Weekdayable           = (*Cron)(nil)
 	_ opt.CronEnvable           = (*Cron)(nil)
 	_ opt.Sensitivable          = (*Cron)(nil)
-)
-
-// runCmd reads a crontab (crontab -l) and runCmdWithStdin writes one (crontab
-// -, fed via stdin); both are swapped in unit tests. acquireCrontabLock takes
-// the write lock and is swapped together with them (see SetRunnersForTest).
-var (
-	runCmd             = exec.Run
-	runCmdWithStdin    = exec.RunWithStdin
-	acquireCrontabLock = lockCrontab
 )
 
 // Cron manages a named crontab entry for a user (default root).
@@ -137,28 +129,6 @@ func Ensure(name string, opts ...opt.CronOption) error {
 func Absent(name string, opts ...opt.CronOption) resource.Resource {
 	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(name, opts...)
-}
-
-// SetRunnersForTest swaps the crontab command runners (tests only). A nil
-// argument keeps the current runner for that slot. It also replaces the
-// cross-process crontab lock with an in-process one: a faked crontab is not
-// shared with other processes, and the real lock would create state in the
-// test user's home directory (lock.go) from every package that fakes cron.
-func SetRunnersForTest(run func(name string, args ...string) (string, string, int, error), runWithStdin func(stdin string, name string, args ...string) (string, string, int, error)) {
-	if run != nil {
-		runCmd = run
-	}
-	if runWithStdin != nil {
-		runCmdWithStdin = runWithStdin
-	}
-	acquireCrontabLock = lockCrontabInProcess
-}
-
-// ResetRunnersForTest restores the real crontab command runners and lock.
-func ResetRunnersForTest() {
-	runCmd = exec.Run
-	runCmdWithStdin = exec.RunWithStdin
-	acquireCrontabLock = lockCrontab
 }
 
 // Apply runs the cron reconciliation directly for the legacy resource path.
@@ -317,3 +287,31 @@ func (c *Cron) block() string {
 
 func beginMarker(name string) string { return beginMarkerPrefix + name + "]" }
 func endMarker(name string) string   { return endMarkerPrefix + name + "]" }
+
+// runCmd reads a crontab (crontab -l): the real runner, or the fake a test in
+// this module installed with internal/testseam.FakeCrontab.
+func runCmd(name string, args ...string) (string, string, int, error) {
+	if fake, _ := testseam.CrontabFakes(); fake.Read != nil {
+		return fake.Read(name, args...)
+	}
+	return exec.Run(name, args...)
+}
+
+// runCmdWithStdin writes a crontab (crontab -, fed via stdin): the real
+// runner, or a testseam.FakeCrontab fake.
+func runCmdWithStdin(stdin, name string, args ...string) (string, string, int, error) {
+	if fake, _ := testseam.CrontabFakes(); fake.Write != nil {
+		return fake.Write(stdin, name, args...)
+	}
+	return exec.RunWithStdin(stdin, name, args...)
+}
+
+// acquireCrontabLock takes the write lock for userName's crontab: the
+// cross-process lock (lock.go), or while a testseam.FakeCrontab fake without
+// RealLock is in effect an in-process one (see lockCrontabInProcess).
+func acquireCrontabLock(userName string) (func() error, error) {
+	if fake, faked := testseam.CrontabFakes(); faked && !fake.RealLock {
+		return lockCrontabInProcess(userName)
+	}
+	return lockCrontab(userName)
+}

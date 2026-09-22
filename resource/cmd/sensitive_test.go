@@ -7,6 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snonux/gonf/internal/testseam"
+	"github.com/snonux/gonf/internal/testutil"
+
 	"github.com/snonux/gonf/internal/exec"
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/plan"
@@ -22,12 +25,10 @@ const fakeCmdSecret = "fake-bearer-token-77aa"
 func TestSensitiveCommandWithholdsArgvAndOutput(t *testing.T) {
 	resource.ResetForTest()
 	t.Cleanup(resource.ResetForTest)
-	SetRunnersForTest(func(exec.Opts, string, ...string) (string, string, int, error) {
+	testseam.FakeCommand(t, testseam.Command{Run: func(exec.Opts, string, ...string) (string, string, int, error) {
 		return "echo " + fakeCmdSecret, "denied " + fakeCmdSecret, 7, nil
-	}, nil)
-	t.Cleanup(ResetRunnersForTest)
-	output, restore := logger.CaptureForTest(logger.LevelDebug)
-	t.Cleanup(restore)
+	}})
+	output := testutil.CaptureLog(t, logger.LevelDebug)
 
 	op := plan.Op{Op: plan.KindCommand, ID: "Command[upload]", Name: "upload", Bin: "/usr/bin/curl",
 		Args: []string{"-H", "Authorization: Bearer " + fakeCmdSecret}, Sensitive: true}

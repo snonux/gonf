@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -13,9 +14,6 @@ import (
 // (including --user from Args) reaches systemctl unchanged, and a non-zero
 // exit or a start failure is returned with Run's error text.
 func TestCommandRunsSystemctl(t *testing.T) {
-	old := runCmd
-	t.Cleanup(func() { runCmd = old })
-
 	tests := []struct {
 		name    string
 		cmd     Command
@@ -34,10 +32,10 @@ func TestCommandRunsSystemctl(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var saw []string
-			runCmd = func(name string, args ...string) (string, string, int, error) {
+			testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
 				saw = append([]string{name}, args...)
 				return "", tt.stderr, tt.code, tt.runErr
-			}
+			})
 			err := tt.cmd.Do()
 			if want := append([]string{"systemctl"}, tt.cmd...); !slices.Equal(saw, want) {
 				t.Errorf("argv = %v, want %v", saw, want)
@@ -60,14 +58,12 @@ func TestConvergeCommandFailureStopsAndNotesNothing(t *testing.T) {
 	t.Cleanup(func() { resource.SetDryRun(oldDry) })
 	resource.SetDryRun(false)
 	resource.ResetReport()
-	old := runCmd
-	t.Cleanup(func() { runCmd = old })
 
 	var calls []string
-	runCmd = func(name string, args ...string) (string, string, int, error) {
+	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
 		calls = append(calls, strings.Join(args, " "))
 		return "", "Permission denied", 1, nil
-	}
+	})
 	actions := []resource.Action{Command(Args(false, "enable", "a.timer")), Command(Args(false, "start", "a.timer"))}
 	err := resource.Converge("Timer[a.timer]", actions, false)
 	if err == nil || err.Error() != "systemctl [enable a.timer] failed (exit 1): Permission denied" {

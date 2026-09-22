@@ -74,8 +74,9 @@ func TestRedactingWriterForcedFlushKeepsSecretWhole(t *testing.T) {
 // Log lines and Redact both use the installed redactor; without one they
 // are unchanged.
 func TestSetRedactorAppliesToLogLines(t *testing.T) {
-	output, restore := CaptureForTest(LevelInfo)
-	t.Cleanup(restore)
+	var buf strings.Builder
+	t.Cleanup(Redirect(&buf, LevelInfo))
+	output := buf.String
 	if got := Redact("fake-secret"); got != "fake-secret" {
 		t.Fatalf("Redact without a redactor = %q", got)
 	}

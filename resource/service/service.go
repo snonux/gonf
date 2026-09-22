@@ -26,14 +26,6 @@ var (
 	_ opt.ChangeWatchable = (*Service)(nil)
 )
 
-// detectSvcManager names the host's service manager; selectBackend maps the
-// name to a backend. It is swapped by SetDetectServiceManagerForTest
-// (mirrors resource/pkg's detectPkgManager), so the fitness test can force
-// the BSD/rcctl backends on any single host instead of only ever reaching
-// whichever backend runtime.GOOS happens to select. In-package tests instead
-// hand a backend to applyWith directly.
-var detectSvcManager = detectServiceManager
-
 // Service manages a named OS service/daemon.
 type Service struct {
 	embed.DependsOn
@@ -86,18 +78,6 @@ func Ensure(name string, opts ...opt.ServiceOption) error {
 func Absent(name string, opts ...opt.ServiceOption) resource.Resource {
 	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(name, opts...)
-}
-
-// SetDetectServiceManagerForTest stubs OS service-manager detection (tests
-// only), mirroring resource/pkg's SetDetectPackageManagerForTest.
-func SetDetectServiceManagerForTest(fn func() (string, error)) {
-	detectSvcManager = fn
-}
-
-// ResetDetectServiceManagerForTest restores the real detector after a test
-// stub.
-func ResetDetectServiceManagerForTest() {
-	detectSvcManager = detectServiceManager
 }
 
 // apply selects the host's backend and converges s through it. The shared

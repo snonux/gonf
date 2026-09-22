@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -112,13 +113,11 @@ func TestGatedReloadCoalescesWithEarlierSameBusReload(t *testing.T) {
 		{name: "no change at all", notes: [][2]string{{"DaemonReload[user]", "changed"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			old := runCmd
-			t.Cleanup(func() { runCmd = old })
 			ran := false
-			runCmd = func(string, ...string) (string, string, int, error) {
+			testseam.FakeSystemctl(t, func(string, ...string) (string, string, int, error) {
 				ran = true
 				return "", "", 0, nil
-			}
+			})
 			resource.ResetReport()
 			t.Cleanup(resource.ResetReport)
 			for _, n := range tc.notes {

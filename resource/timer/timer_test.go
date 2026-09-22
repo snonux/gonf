@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/systemd"
 )
@@ -61,8 +62,7 @@ func TestPresentIdempotentWithFakeRunner(t *testing.T) {
 		t.Skip("Timer is Linux-only")
 	}
 	resource.ResetRepository()
-	defer systemd.ResetRunCmdForTest()
-	systemd.SetRunCmdForTest(fakeSystemdAlreadyOK)
+	testseam.FakeSystemctl(t, fakeSystemdAlreadyOK)
 
 	Present("fstrim")
 	if err := resource.Apply(); err != nil {
@@ -75,10 +75,9 @@ func TestPresentEnablesAndStartsWhenInactive(t *testing.T) {
 		t.Skip("Timer is Linux-only")
 	}
 	resource.ResetRepository()
-	defer systemd.ResetRunCmdForTest()
 
 	var saw []string
-	systemd.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
 		if name != "systemctl" {
 			return "", "", 1, nil
 		}
@@ -107,10 +106,9 @@ func TestPresentEnableOnlySkipsStart(t *testing.T) {
 		t.Skip("Timer is Linux-only")
 	}
 	resource.ResetRepository()
-	defer systemd.ResetRunCmdForTest()
 
 	var saw []string
-	systemd.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
 		if name != "systemctl" {
 			return "", "", 1, nil
 		}
@@ -142,10 +140,9 @@ func TestAbsentStopsAndDisables(t *testing.T) {
 		t.Skip("Timer is Linux-only")
 	}
 	resource.ResetRepository()
-	defer systemd.ResetRunCmdForTest()
 
 	var saw []string
-	systemd.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
 		if name != "systemctl" {
 			return "", "", 1, nil
 		}
@@ -174,10 +171,9 @@ func TestWithRestartIssuesRestart(t *testing.T) {
 		t.Skip("Timer is Linux-only")
 	}
 	resource.ResetRepository()
-	defer systemd.ResetRunCmdForTest()
 
 	var sawRestart bool
-	systemd.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
 		if contains(args, "restart") {
 			sawRestart = true
 		}
@@ -207,9 +203,8 @@ func TestOnChangeGatesRestart(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resource.ResetRepository()
-			defer systemd.ResetRunCmdForTest()
 			var sawRestart bool
-			systemd.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+			testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
 				sawRestart = sawRestart || name == "systemctl" && contains(args, "restart")
 				return fakeSystemdAlreadyOK(name, args...)
 			})
@@ -233,10 +228,9 @@ func TestWithUserPassesUserFlag(t *testing.T) {
 		t.Skip("Timer is Linux-only")
 	}
 	resource.ResetRepository()
-	defer systemd.ResetRunCmdForTest()
 
 	var sawUser bool
-	systemd.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
 		if contains(args, "--user") {
 			sawUser = true
 		}
@@ -257,9 +251,8 @@ func TestPresentFailsWhenSystemctlMutateErrors(t *testing.T) {
 		t.Skip("Timer is Linux-only")
 	}
 	resource.ResetRepository()
-	defer systemd.ResetRunCmdForTest()
 
-	systemd.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
 		if contains(args, "is-active") || contains(args, "is-enabled") {
 			return "", "", 1, nil
 		}
@@ -283,10 +276,8 @@ func TestDryRunSkipsMutations(t *testing.T) {
 	resource.SetDryRun(true)
 	defer resource.SetDryRun(false)
 
-	defer systemd.ResetRunCmdForTest()
-
 	var mutated bool
-	systemd.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
 		if contains(args, "enable") || contains(args, "start") {
 			mutated = true
 		}

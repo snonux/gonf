@@ -255,8 +255,7 @@ func TestPreviewLeavesWeakMetadataMatches(t *testing.T) {
 // -verbose registration line of an unnamed Command quotes its argv, and a
 // resolved secret there is redacted before it is written.
 func TestLogLinesAreRedacted(t *testing.T) {
-	output, restore := logger.CaptureForTest(logger.LevelDebug)
-	t.Cleanup(restore)
+	output := testutil.CaptureLog(t, logger.LevelDebug)
 	_, err := recordWithSecret(t, fakePlanSecret, func() {
 		Command("/usr/bin/curl", List("-H", "Authorization: "+MustSecret("svc/key")))
 	})
@@ -273,8 +272,7 @@ func TestLogLinesAreRedacted(t *testing.T) {
 // is not refused, so its ID holds the secret; running it locally must not
 // print the secret in the log lines or the apply summary.
 func TestRunSummaryAndLogsRedactWeakSecretInID(t *testing.T) {
-	output, restore := logger.CaptureForTest(logger.LevelDebug)
-	t.Cleanup(restore)
+	output := testutil.CaptureLog(t, logger.LevelDebug)
 	ResetForTest()
 	t.Cleanup(ResetForTest)
 	useSecretWorkDir(t)

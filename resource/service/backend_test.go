@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -183,7 +184,6 @@ func TestApplyWithUserReachesUserCapableBackend(t *testing.T) {
 // yields its backend type (BSD backends wired to the package runner, NetBSD
 // to /etc/rc.conf.d), and an unknown name or detector error is refused.
 func TestSelectBackend(t *testing.T) {
-	t.Cleanup(ResetDetectServiceManagerForTest)
 	want := map[string]backend{
 		"systemd": systemdBackend{},
 		"rcctl":   rcctlBackend{},
@@ -194,7 +194,7 @@ func TestSelectBackend(t *testing.T) {
 		t.Fatalf("backends table has %d entries, want %d", len(backends), len(want))
 	}
 	for name, wantB := range want {
-		SetDetectServiceManagerForTest(func() (string, error) { return name, nil })
+		testseam.FakeServiceManager(t, func() (string, error) { return name, nil })
 		got, err := selectBackend()
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -205,11 +205,11 @@ func TestSelectBackend(t *testing.T) {
 		assertWired(t, got)
 	}
 
-	SetDetectServiceManagerForTest(func() (string, error) { return "launchd", nil })
+	testseam.FakeServiceManager(t, func() (string, error) { return "launchd", nil })
 	if _, err := selectBackend(); err == nil || !strings.Contains(err.Error(), "unsupported service manager") {
 		t.Errorf("unknown manager err = %v, want unsupported service manager", err)
 	}
-	SetDetectServiceManagerForTest(func() (string, error) { return "", errors.New("detect boom") })
+	testseam.FakeServiceManager(t, func() (string, error) { return "", errors.New("detect boom") })
 	if _, err := selectBackend(); err == nil || !strings.Contains(err.Error(), "detect boom") {
 		t.Errorf("detector err = %v, want detect boom", err)
 	}

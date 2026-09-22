@@ -12,10 +12,10 @@ import (
 	"testing"
 
 	internalexec "github.com/snonux/gonf/internal/exec"
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
-	"github.com/snonux/gonf/resource/cmd"
 	"github.com/snonux/gonf/resource/options"
 )
 
@@ -273,15 +273,14 @@ func newLoginClassApplyFixture(t *testing.T, absent bool) *loginClassApplyFixtur
 func fakeWatcherRunner(t *testing.T) (*int, *int) {
 	t.Helper()
 	watcher, other := 0, 0
-	cmd.SetRunnersForTest(func(_ internalexec.Opts, name string, _ ...string) (string, string, int, error) {
+	testseam.FakeCommand(t, testseam.Command{Run: func(_ internalexec.Opts, name string, _ ...string) (string, string, int, error) {
 		if name == "restart-watcher" {
 			watcher++
 		} else {
 			other++
 		}
 		return "", "", 0, nil
-	}, nil)
-	t.Cleanup(cmd.ResetRunnersForTest)
+	}})
 	return &watcher, &other
 }
 

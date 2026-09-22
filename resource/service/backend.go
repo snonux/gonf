@@ -22,11 +22,12 @@ var _ resource.Action = backendAction{}
 // backends maps each detector name to a constructor for its backend. This
 // table is the single place a manager name becomes an implementation:
 // supporting another service manager is one new backend file plus one entry
-// here, with no change to the policy. The constructors read runCmd when the
-// backend is selected, so SetRunCmdForTest still reaches the BSD backends;
-// in-package tests build backends with their own runner instead. The name
-// indirection stays because the exported SetDetectServiceManagerForTest seam
-// (used by resource fitness tests) speaks in names.
+// here, with no change to the policy. The BSD constructors hand the backend
+// runCmd, which resolves a test fake (internal/testseam.FakeServiceRunner)
+// per call; in-package tests may build backends with their own runner
+// instead. The name indirection stays because detection, and the
+// internal/testseam.FakeServiceManager fake the resource fitness tests use,
+// speak in names.
 var backends = map[string]func() backend{
 	"systemd": func() backend { return systemdBackend{} },
 	"rcctl":   func() backend { return rcctlBackend{run: runCmd} },

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -163,10 +164,12 @@ type svcState struct {
 func TestApplySystemdFake(t *testing.T) {
 	oldDry := resource.DryRun()
 	defer resource.SetDryRun(oldDry)
-	// Install a would-panic guard before the table; ResetRunCmdForTest
-	// (deferred below) restores the real runner.
-	SetRunCmdForTest(nil)
-	defer ResetRunCmdForTest()
+	// Install a failing guard before the table, so a case that forgets its
+	// own fake cannot reach the real systemctl; t's cleanup restores it.
+	testseam.FakeServiceRunner(t, func(name string, args ...string) (string, string, int, error) {
+		t.Fatalf("unfaked service runner reached: %s %v", name, args)
+		return "", "", -1, nil
+	})
 
 	tests := []struct {
 		name       string
@@ -301,7 +304,7 @@ func TestApplySystemdFake(t *testing.T) {
 			resource.SetDryRun(tt.state.dryRun)
 
 			var calls []svcCall
-			SetRunCmdForTest(fakeSystemdCtl(tt.state.running, tt.state.enabled, tt.state.probeErr, tt.state.enabledErr, tt.state.failAction, tt.state.actionErr, &calls))
+			testseam.FakeServiceRunner(t, fakeSystemdCtl(tt.state.running, tt.state.enabled, tt.state.probeErr, tt.state.enabledErr, tt.state.failAction, tt.state.actionErr, &calls))
 
 			err := tt.svc.applyWith(systemdBackend{})
 
@@ -783,11 +786,10 @@ func TestServiceEnsureAndAbsentFake(t *testing.T) {
 
 	oldDry := resource.DryRun()
 	defer resource.SetDryRun(oldDry)
-	defer ResetRunCmdForTest()
 
 	// Ensure with WithReload on a running unit reloads it.
 	var calls []svcCall
-	SetRunCmdForTest(fakeSystemdCtl(true, true, false, false, false, false, &calls))
+	testseam.FakeServiceRunner(t, fakeSystemdCtl(true, true, false, false, false, false, &calls))
 	if err := Ensure("sshd", opt.WithReload); err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}
@@ -797,7 +799,7 @@ func TestServiceEnsureAndAbsentFake(t *testing.T) {
 
 	// Ensure with WithUser routes through the user bus.
 	calls = nil
-	SetRunCmdForTest(fakeSystemdCtl(false, false, false, false, false, false, &calls))
+	testseam.FakeServiceRunner(t, fakeSystemdCtl(false, false, false, false, false, false, &calls))
 	if err := Ensure("sshd", opt.WithUser); err != nil {
 		t.Fatalf("Ensure with user bus: %v", err)
 	}
@@ -809,7 +811,7 @@ func TestServiceEnsureAndAbsentFake(t *testing.T) {
 	// Absent registers a service that stops and disables on Apply.
 	resource.ResetRepository()
 	calls = nil
-	SetRunCmdForTest(fakeSystemdCtl(true, true, false, false, false, false, &calls))
+	testseam.FakeServiceRunner(t, fakeSystemdCtl(true, true, false, false, false, false, &calls))
 	Absent("sshd")
 	if err := resource.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)

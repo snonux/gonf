@@ -2,16 +2,19 @@ package logger
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
-// TestCaptureForTest pins the test seam: output is captured without
-// timestamps at the requested level, lines above it are dropped, and
-// restore reinstates the previous level.
-func TestCaptureForTest(t *testing.T) {
+// TestRedirect pins the redirect internal/testutil.CaptureLog builds on:
+// output is written without timestamps at the requested level, lines above
+// it are dropped, and restore reinstates the previous destination and level.
+func TestRedirect(t *testing.T) {
 	SetLevel(LevelWarn)
 	t.Cleanup(func() { SetLevel(LevelInfo) })
-	output, restore := CaptureForTest(LevelInfo)
+	var buf strings.Builder
+	restore := Redirect(&buf, LevelInfo)
+	output := buf.String
 	Info("hello %s", "world")
 	Debug("dropped")
 	restore()

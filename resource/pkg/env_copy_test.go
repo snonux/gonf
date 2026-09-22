@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 	opt "github.com/snonux/gonf/resource/options"
 )
@@ -72,25 +73,24 @@ func TestWithEnvCopiesCallerMap(t *testing.T) {
 // the package has WithEnv. The seams are restored when t ends.
 func stubOpenBSDEnvRunner(t *testing.T) *[][]string {
 	t.Helper()
-	oldRun, oldRunWith, oldDetect, oldDry := runCmd, runCmdWithEnv, detectPkgManager, resource.DryRun()
+	oldDry := resource.DryRun()
 	t.Cleanup(func() {
-		runCmd, runCmdWithEnv, detectPkgManager = oldRun, oldRunWith, oldDetect
 		resource.SetDryRun(oldDry)
 	})
 	resource.SetDryRun(false)
-	detectPkgManager = func() (string, error) { return "openbsd", nil }
+	testseam.FakePackageManager(t, func() (string, error) { return "openbsd", nil })
 	calls := &[][]string{}
-	runCmd = func(string, ...string) (string, string, int, error) {
+	testseam.FakePackageRunner(t, testseam.Package{Run: func(string, ...string) (string, string, int, error) {
 		t.Error("unset runner used for package with WithEnv")
 		return "", "", 1, nil
-	}
-	runCmdWithEnv = func(env []string, bin string, args ...string) (string, string, int, error) {
+	}})
+	testseam.FakePackageRunner(t, testseam.Package{RunEnv: func(env []string, bin string, args ...string) (string, string, int, error) {
 		*calls = append(*calls, slices.Clone(env))
 		if isPackageProbe(bin, args) {
 			return "", "not installed", 1, nil
 		}
 		return "", "", 0, nil
-	}
+	}})
 	return calls
 }
 

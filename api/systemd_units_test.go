@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -347,7 +348,7 @@ func TestSystemdUnitsRecordedPlanApplies(t *testing.T) {
 	}
 
 	var invoked [][]string
-	systemd.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
 		if name == "systemctl" {
 			invoked = append(invoked, args)
 		}
@@ -355,7 +356,6 @@ func TestSystemdUnitsRecordedPlanApplies(t *testing.T) {
 		// possible mutating action is the gated timer restart.
 		return "", "", 0, nil
 	})
-	t.Cleanup(systemd.ResetRunCmdForTest)
 
 	if err := plan.Apply(ops, plan.Facts{GOOS: runtime.GOOS}, ""); err != nil {
 		t.Fatalf("plan.Apply: %v", err)

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -15,10 +16,8 @@ type envPkgCall struct {
 }
 
 func TestPackageWithEnvReachesEveryBackendProbeAndAction(t *testing.T) {
-	oldRun, oldRunWith, oldDry := runCmd, runCmdWithEnv, resource.DryRun()
+	oldDry := resource.DryRun()
 	t.Cleanup(func() {
-		runCmd = oldRun
-		runCmdWithEnv = oldRunWith
 		resource.SetDryRun(oldDry)
 	})
 	resource.SetDryRun(false)
@@ -38,17 +37,17 @@ func TestPackageWithEnvReachesEveryBackendProbeAndAction(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var calls []envPkgCall
-			runCmd = func(string, ...string) (string, string, int, error) {
+			testseam.FakePackageRunner(t, testseam.Package{Run: func(string, ...string) (string, string, int, error) {
 				t.Fatal("unset runner used for package with WithEnv")
 				return "", "", 1, nil
-			}
-			runCmdWithEnv = func(env []string, bin string, args ...string) (string, string, int, error) {
+			}})
+			testseam.FakePackageRunner(t, testseam.Package{RunEnv: func(env []string, bin string, args ...string) (string, string, int, error) {
 				calls = append(calls, envPkgCall{append([]string(nil), env...), bin, append([]string(nil), args...)})
 				if isPackageProbe(bin, args) {
 					return "", "not installed", 1, nil
 				}
 				return "", "", 0, nil
-			}
+			}})
 
 			p := &Package{name: "dtail", latest: tt.latest}
 			p.SetEnv(map[string]string{"PKG_PATH": "https://pkgrepo.example/openbsd/"})
@@ -72,26 +71,24 @@ func TestPackageWithEnvReachesEveryBackendProbeAndAction(t *testing.T) {
 }
 
 func TestPackageWithoutEnvUsesLegacyRunner(t *testing.T) {
-	oldRun, oldRunWith, oldDry := runCmd, runCmdWithEnv, resource.DryRun()
+	oldDry := resource.DryRun()
 	t.Cleanup(func() {
-		runCmd = oldRun
-		runCmdWithEnv = oldRunWith
 		resource.SetDryRun(oldDry)
 	})
 	resource.SetDryRun(false)
 
 	var legacyCalls int
-	runCmd = func(bin string, args ...string) (string, string, int, error) {
+	testseam.FakePackageRunner(t, testseam.Package{Run: func(bin string, args ...string) (string, string, int, error) {
 		legacyCalls++
 		if isPackageProbe(bin, args) {
 			return "", "not installed", 1, nil
 		}
 		return "", "", 0, nil
-	}
-	runCmdWithEnv = func([]string, string, ...string) (string, string, int, error) {
+	}})
+	testseam.FakePackageRunner(t, testseam.Package{RunEnv: func([]string, string, ...string) (string, string, int, error) {
 		t.Fatal("environment runner used without WithEnv")
 		return "", "", 1, nil
-	}
+	}})
 
 	if err := applyVia(openbsdBackend{})(&Package{name: "dtail"}); err != nil {
 		t.Fatalf("apply: %v", err)

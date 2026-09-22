@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/systemd"
 )
@@ -61,8 +62,7 @@ func TestApplyPathsBothEnsureGatedReload(t *testing.T) {
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	systemd.SetRunCmdForTest(func(string, ...string) (string, string, int, error) { return "", "", 0, nil })
-	t.Cleanup(systemd.ResetRunCmdForTest)
+	testseam.FakeSystemctl(t, func(string, ...string) (string, string, int, error) { return "", "", 0, nil })
 	var calls [][]opt.DaemonReloadOption
 	ensureReload = func(opts ...opt.DaemonReloadOption) error {
 		calls = append(calls, opts)

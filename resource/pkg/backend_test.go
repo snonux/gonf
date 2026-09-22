@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -143,17 +144,20 @@ func TestApplyWithFakeBackendErrors(t *testing.T) {
 
 // TestBackendsRunThroughInjectedRunner shows a real backend needs no global
 // seam either: the runner handed to applyWith receives the probe and the
-// action, while the package-level runners are trapped to fail the test.
+// action, while the default runners (faked through testseam) are trapped to
+// fail the test.
 func TestBackendsRunThroughInjectedRunner(t *testing.T) {
-	oldRun, oldRunWith, oldDry := runCmd, runCmdWithEnv, resource.DryRun()
-	t.Cleanup(func() { runCmd, runCmdWithEnv = oldRun, oldRunWith; resource.SetDryRun(oldDry) })
+	oldDry := resource.DryRun()
+	t.Cleanup(func() { resource.SetDryRun(oldDry) })
 	resource.SetDryRun(false)
 	trap := func(bin string, args ...string) (string, string, int, error) {
 		t.Fatalf("package-level runner reached with %s %v", bin, args)
 		return "", "", -1, nil
 	}
-	runCmd = trap
-	runCmdWithEnv = func(_ []string, bin string, args ...string) (string, string, int, error) { return trap(bin, args...) }
+	testseam.FakePackageRunner(t, testseam.Package{
+		Run:    trap,
+		RunEnv: func(_ []string, bin string, args ...string) (string, string, int, error) { return trap(bin, args...) },
+	})
 
 	var calls []pkgCall
 	p := &Package{name: "rsync"}
@@ -230,7 +234,6 @@ func TestBackendLogLines(t *testing.T) {
 // selects its own backend type, and an unknown name or a detector error is
 // refused before anything runs.
 func TestSelectBackend(t *testing.T) {
-	t.Cleanup(ResetDetectPackageManagerForTest)
 	want := map[string]backend{
 		"dnf": dnfBackend{}, "freebsd": freebsdBackend{}, "netbsd": netbsdBackend{}, "openbsd": openbsdBackend{},
 	}
@@ -238,7 +241,7 @@ func TestSelectBackend(t *testing.T) {
 		t.Fatalf("backends table has %d entries, want %d", len(backends), len(want))
 	}
 	for name, wantB := range want {
-		SetDetectPackageManagerForTest(func() (string, error) { return name, nil })
+		testseam.FakePackageManager(t, func() (string, error) { return name, nil })
 		got, err := selectBackend()
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -248,11 +251,11 @@ func TestSelectBackend(t *testing.T) {
 		}
 	}
 
-	SetDetectPackageManagerForTest(func() (string, error) { return "brew", nil })
+	testseam.FakePackageManager(t, func() (string, error) { return "brew", nil })
 	if _, err := selectBackend(); err == nil || !strings.Contains(err.Error(), "unsupported package manager") {
 		t.Errorf("unknown manager err = %v, want unsupported package manager", err)
 	}
-	SetDetectPackageManagerForTest(func() (string, error) { return "", errors.New("detect boom") })
+	testseam.FakePackageManager(t, func() (string, error) { return "", errors.New("detect boom") })
 	if _, err := selectBackend(); err == nil || !strings.Contains(err.Error(), "detect boom") {
 		t.Errorf("detector err = %v, want detect boom", err)
 	}

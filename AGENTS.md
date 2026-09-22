@@ -100,3 +100,15 @@ embedded rather than redeclared:
 
 When adding a field or capability shared by every resource type, prefer a new
 embed type here instead of duplicating the field and its setter in each resource.
+
+## Test seams
+Public packages export no `*ForTest` setters. A backend's host-command runner
+or host detector is an unexported function that consults the module-internal
+`internal/testseam` fake first and otherwise calls the real `internal/exec`
+runner or detector (e.g. `resource/systemd`'s `runCmd`). Tests anywhere in the
+module install fakes with `testseam.Fake*(t, ...)`, which restore on `t`'s
+cleanup; in-package tests may instead hand a backend its runner directly (as
+`applyWith` in pkg and service, or `newUserWith` in resource/user). Log
+capture is `internal/testutil.CaptureLog`. A new backend runner follows the
+same pattern. State resets (`api.ResetForTest`, `resource.ResetForTest`,
+`plan.ResetForTest`) are the one exported exception.

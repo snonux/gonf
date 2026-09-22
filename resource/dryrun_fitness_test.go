@@ -10,6 +10,7 @@ import (
 	"github.com/snonux/gonf/api"
 	opt "github.com/snonux/gonf/api/options"
 	iexec "github.com/snonux/gonf/internal/exec"
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/cmd"
 	"github.com/snonux/gonf/resource/cron"
@@ -43,9 +44,9 @@ import (
 // backends, which then each carried their own guard. The
 // dedicated *ReapplyAttrs subtests below now pre-create their target so that
 // branch is the one exercised, and the *FreeBSD/*NetBSD/*OpenBSD/*Rcctl
-// subtests force backend selection via SetDetectPackageManagerForTest (pkg,
-// pre-existing) and SetDetectServiceManagerForTest (service, added for this
-// fix) so every backend is driven on a single host regardless of its actual
+// subtests force backend selection via testseam.FakePackageManager (pkg) and
+// testseam.FakeServiceManager (service) so every backend is driven on a
+// single host regardless of its actual
 // GOOS. Since x62 the dry-run guard is no longer per backend: each family
 // has one guard in its shared converge.go (pkg: in applyWith; service: in
 // runActions, which applyWith calls), and these subtests prove that guard holds
@@ -653,20 +654,19 @@ func dryRunHardlinkReplace(t *testing.T, tmp string) {
 }
 
 func dryRunCmd(t *testing.T, tmp string) {
-	t.Cleanup(cmd.ResetRunnersForTest)
 	var mutated bool
-	cmd.SetRunnersForTest(
-		func(opts iexec.Opts, name string, args ...string) (string, string, int, error) {
+	testseam.FakeCommand(t, testseam.Command{
+		Run: func(opts iexec.Opts, name string, args ...string) (string, string, int, error) {
 			mutated = true
 			return "", "", 0, nil
 		},
-		func(name string, args ...string) (string, string, int, error) {
+		Probe: func(name string, args ...string) (string, string, int, error) {
 			// Guard probes (Unless/OnlyIf) are not used by this fixture, but
 			// keep the seam wired so a future probe call is caught too.
 			mutated = true
 			return "", "", 0, nil
 		},
-	)
+	})
 	cmd.Present("true", nil)
 	if err := resource.Apply(); err != nil {
 		t.Fatal(err)
@@ -677,18 +677,17 @@ func dryRunCmd(t *testing.T, tmp string) {
 }
 
 func dryRunCron(t *testing.T, tmp string) {
-	t.Cleanup(cron.ResetRunnersForTest)
 	var mutated bool
-	cron.SetRunnersForTest(
-		func(name string, args ...string) (string, string, int, error) {
+	testseam.FakeCrontab(t, testseam.Crontab{
+		Read: func(name string, args ...string) (string, string, int, error) {
 			// crontab -l on an empty crontab: exit 0, empty stdout.
 			return "", "", 0, nil
 		},
-		func(stdin, name string, args ...string) (string, string, int, error) {
+		Write: func(stdin, name string, args ...string) (string, string, int, error) {
 			mutated = true
 			return "", "", 0, nil
 		},
-	)
+	})
 	cron.Present("fit-job", opt.WithCommand("true"))
 	if err := resource.Apply(); err != nil {
 		t.Fatal(err)
@@ -699,15 +698,11 @@ func dryRunCron(t *testing.T, tmp string) {
 }
 
 func dryRunPkg(t *testing.T, tmp string) {
-	t.Cleanup(func() {
-		pkg.ResetRunCmdForTest()
-		pkg.ResetDetectPackageManagerForTest()
-	})
 	// Force a deterministic backend regardless of the host OS/distro so this
 	// subtest is portable.
-	pkg.SetDetectPackageManagerForTest(func() (string, error) { return "dnf", nil })
+	testseam.FakePackageManager(t, func() (string, error) { return "dnf", nil })
 	var mutated bool
-	pkg.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+	testseam.FakePackageRunner(t, testseam.Package{Run: func(name string, args ...string) (string, string, int, error) {
 		if name == "rpm" {
 			// rpm -q is a read-only probe: report "not installed" so the
 			// backend decides a package install is needed.
@@ -715,7 +710,7 @@ func dryRunPkg(t *testing.T, tmp string) {
 		}
 		mutated = true
 		return "", "", 0, nil
-	})
+	}})
 	pkg.Present("fit-pkg")
 	if err := resource.Apply(); err != nil {
 		t.Fatal(err)
@@ -726,7 +721,7 @@ func dryRunPkg(t *testing.T, tmp string) {
 }
 
 // dryRunPkgBackend forces resource/pkg's package-manager detection to mgr
-// (via the existing SetDetectPackageManagerForTest seam) and runs the same
+// (via testseam.FakePackageManager) and runs the same
 // fixture as dryRunPkg against it, flagging a mutation the moment the
 // backend issues a command isProbe does not recognize as its own read-only
 // "is it installed" check. dryRunPkg above only ever forces "dnf"; these
@@ -735,13 +730,9 @@ func dryRunPkg(t *testing.T, tmp string) {
 // proving no backend's command slips past it.
 func dryRunPkgBackend(t *testing.T, mgr string, isProbe func(name string, args []string) bool) {
 	t.Helper()
-	t.Cleanup(func() {
-		pkg.ResetRunCmdForTest()
-		pkg.ResetDetectPackageManagerForTest()
-	})
-	pkg.SetDetectPackageManagerForTest(func() (string, error) { return mgr, nil })
+	testseam.FakePackageManager(t, func() (string, error) { return mgr, nil })
 	var mutated bool
-	pkg.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+	testseam.FakePackageRunner(t, testseam.Package{Run: func(name string, args ...string) (string, string, int, error) {
 		if isProbe(name, args) {
 			// Not-installed probe response, so the backend decides an
 			// install is needed and (absent its dry-run guard) would issue a
@@ -750,7 +741,7 @@ func dryRunPkgBackend(t *testing.T, mgr string, isProbe func(name string, args [
 		}
 		mutated = true
 		return "", "", 0, nil
-	})
+	}})
 	pkg.Present("fit-pkg")
 	if err := resource.Apply(); err != nil {
 		t.Fatal(err)
@@ -794,20 +785,16 @@ func dryRunPkgOpenBSD(t *testing.T, tmp string) {
 // pkg_info probe as "installed" so pkg.Absent's removal path decides a real
 // pkg_delete is needed, and asserts it never runs.
 func dryRunPkgOpenBSDAbsent(t *testing.T, tmp string) {
-	t.Cleanup(func() {
-		pkg.ResetRunCmdForTest()
-		pkg.ResetDetectPackageManagerForTest()
-	})
-	pkg.SetDetectPackageManagerForTest(func() (string, error) { return "openbsd", nil })
+	testseam.FakePackageManager(t, func() (string, error) { return "openbsd", nil })
 	var mutated bool
-	pkg.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+	testseam.FakePackageRunner(t, testseam.Package{Run: func(name string, args ...string) (string, string, int, error) {
 		if name == "pkg_info" {
 			// installed: exit 0.
 			return "", "", 0, nil
 		}
 		mutated = true
 		return "", "", 0, nil
-	})
+	}})
 	pkg.Absent("fit-pkg")
 	if err := resource.Apply(); err != nil {
 		t.Fatal(err)
@@ -819,9 +806,8 @@ func dryRunPkgOpenBSDAbsent(t *testing.T, tmp string) {
 
 func dryRunService(t *testing.T, tmp string) {
 	requireSystemd(t)
-	t.Cleanup(service.ResetRunCmdForTest)
 	var mutated bool
-	service.SetRunCmdForTest(fakeSystemctlRunner(&mutated))
+	testseam.FakeServiceRunner(t, fakeSystemctlRunner(&mutated))
 	service.Present("fit-service")
 	if err := resource.Apply(); err != nil {
 		t.Fatal(err)
@@ -832,25 +818,21 @@ func dryRunService(t *testing.T, tmp string) {
 }
 
 // dryRunServiceBackend forces resource/service's service-manager detection
-// to mgr (via SetDetectServiceManagerForTest) and probes the service as
+// to mgr (via testseam.FakeServiceManager) and probes the service as
 // enabled-but-stopped, so a correctly-gated apply would queue exactly one
 // "start" action and a broken guard would actually run it. classify
 // inspects a runner call's args and reports "running" or "enabled" for a
 // probe (answered not-running / enabled respectively) or "" for anything
 // else, which flags a mutation. The freebsd/netbsd/rcctl backends share the
 // single "if resource.DryRun()" guard in resource/service's runActions
-// (converge.go, called from applyWith); SetDetectServiceManagerForTest lets these subtests drive
-// each backend's actions through that guard on a single Linux CI host
-// instead of only on the backend's own OS.
+// (converge.go, called from applyWith); testseam.FakeServiceManager lets
+// these subtests drive each backend's actions through that guard on a
+// single Linux CI host instead of only on the backend's own OS.
 func dryRunServiceBackend(t *testing.T, mgr string, classify func(args []string) string) {
 	t.Helper()
-	t.Cleanup(func() {
-		service.ResetRunCmdForTest()
-		service.ResetDetectServiceManagerForTest()
-	})
-	service.SetDetectServiceManagerForTest(func() (string, error) { return mgr, nil })
+	testseam.FakeServiceManager(t, func() (string, error) { return mgr, nil })
 	var mutated bool
-	service.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+	testseam.FakeServiceRunner(t, func(name string, args ...string) (string, string, int, error) {
 		switch classify(args) {
 		case "running":
 			return "", "", 1, nil // not running
@@ -914,9 +896,8 @@ func dryRunServiceRcctl(t *testing.T, tmp string) {
 
 func dryRunDaemonReload(t *testing.T, tmp string) {
 	requireSystemd(t)
-	t.Cleanup(systemd.ResetRunCmdForTest)
 	var mutated bool
-	systemd.SetRunCmdForTest(fakeSystemctlRunner(&mutated))
+	testseam.FakeSystemctl(t, fakeSystemctlRunner(&mutated))
 	systemd.Present()
 	if err := resource.Apply(); err != nil {
 		t.Fatal(err)
@@ -928,9 +909,8 @@ func dryRunDaemonReload(t *testing.T, tmp string) {
 
 func dryRunTimer(t *testing.T, tmp string) {
 	requireSystemd(t)
-	t.Cleanup(systemd.ResetRunCmdForTest)
 	var mutated bool
-	systemd.SetRunCmdForTest(fakeSystemctlRunner(&mutated))
+	testseam.FakeSystemctl(t, fakeSystemctlRunner(&mutated))
 	timer.Present("fit-timer")
 	if err := resource.Apply(); err != nil {
 		t.Fatal(err)
@@ -946,9 +926,8 @@ func dryRunSystemdTimer(t *testing.T, tmp string) {
 	// if the dry-run gate has a bug: the unit dir is derived from
 	// os.UserHomeDir(), never a hardcoded /etc path, when WithUser is set.
 	t.Setenv("HOME", tmp)
-	t.Cleanup(systemd.ResetRunCmdForTest)
 	var mutated bool
-	systemd.SetRunCmdForTest(fakeSystemctlRunner(&mutated))
+	testseam.FakeSystemctl(t, fakeSystemctlRunner(&mutated))
 	systemdtimer.Present("fit-systemdtimer",
 		opt.WithUser,
 		opt.WithCommand("/bin/true"),

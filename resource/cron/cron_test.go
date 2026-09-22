@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -336,21 +337,17 @@ func TestPresentRejectsEmptyMinute(t *testing.T) {
 // the real flock lock; useTestLockDir keeps it in a directory of its own.
 func TestAbsentWithoutCommand(t *testing.T) {
 	useTestLockDir(t)
-	origRun := runCmd
-	origStdin := runCmdWithStdin
-	defer func() {
-		runCmd = origRun
-		runCmdWithStdin = origStdin
-	}()
-
 	var wrote string
-	runCmd = func(name string, args ...string) (string, string, int, error) {
-		return "MAILTO=root\n", "", 0, nil
-	}
-	runCmdWithStdin = func(stdin string, name string, args ...string) (string, string, int, error) {
-		wrote = stdin
-		return "", "", 0, nil
-	}
+	testseam.FakeCrontab(t, testseam.Crontab{
+		Read: func(name string, args ...string) (string, string, int, error) {
+			return "MAILTO=root\n", "", 0, nil
+		},
+		Write: func(stdin string, name string, args ...string) (string, string, int, error) {
+			wrote = stdin
+			return "", "", 0, nil
+		},
+		RealLock: true,
+	})
 
 	resource.ResetRepository()
 	Absent("gone", opt.WithCronUser(currentCronUser(t)))
@@ -402,24 +399,26 @@ type fakeCrontab struct {
 	writes  int
 }
 
-// fakeCrontabRunners replaces runCmd/runCmdWithStdin (restored on cleanup)
-// with an in-memory crontab that starts empty ("no crontab").
+// fakeCrontabRunners fakes the crontab runners (restored on cleanup) with an
+// in-memory crontab that starts empty ("no crontab"), keeping the real
+// cross-process lock (testseam.Crontab.RealLock).
 func fakeCrontabRunners(t *testing.T) *fakeCrontab {
 	t.Helper()
-	origRun, origStdin := runCmd, runCmdWithStdin
-	t.Cleanup(func() { runCmd, runCmdWithStdin = origRun, origStdin })
 	tab := &fakeCrontab{}
-	runCmd = func(name string, args ...string) (string, string, int, error) {
-		if tab.content == "" {
-			return "", "no crontab for root", 1, nil
-		}
-		return tab.content, "", 0, nil
-	}
-	runCmdWithStdin = func(stdin string, name string, args ...string) (string, string, int, error) {
-		tab.writes++
-		tab.content = stdin
-		return "", "", 0, nil
-	}
+	testseam.FakeCrontab(t, testseam.Crontab{
+		Read: func(name string, args ...string) (string, string, int, error) {
+			if tab.content == "" {
+				return "", "no crontab for root", 1, nil
+			}
+			return tab.content, "", 0, nil
+		},
+		Write: func(stdin string, name string, args ...string) (string, string, int, error) {
+			tab.writes++
+			tab.content = stdin
+			return "", "", 0, nil
+		},
+		RealLock: true,
+	})
 	return tab
 }
 
@@ -442,7 +441,6 @@ func applyJobAtMinute(t *testing.T, userName, minute, step string) {
 }
 
 func TestEnsureAdoptsLegacyCommandAndPreservesMixedCrontab(t *testing.T) {
-	t.Cleanup(ResetRunnersForTest)
 	legacy := "/usr/local/bin/old-job"
 	tab := strings.Join([]string{
 		"PATH=/usr/bin:/bin",
@@ -454,14 +452,14 @@ func TestEnsureAdoptsLegacyCommandAndPreservesMixedCrontab(t *testing.T) {
 		"",
 	}, "\n")
 	writes := 0
-	SetRunnersForTest(
-		func(name string, args ...string) (string, string, int, error) { return tab, "", 0, nil },
-		func(stdin string, name string, args ...string) (string, string, int, error) {
+	testseam.FakeCrontab(t, testseam.Crontab{
+		Read: func(name string, args ...string) (string, string, int, error) { return tab, "", 0, nil },
+		Write: func(stdin string, name string, args ...string) (string, string, int, error) {
 			writes++
 			tab = stdin
 			return "", "", 0, nil
 		},
-	)
+	})
 
 	userName := currentCronUser(t)
 	if err := Ensure("new-job", opt.WithCronUser(userName), opt.WithCommand("/usr/local/bin/new-job"), opt.WithLegacyCommand(legacy)); err != nil {
@@ -479,17 +477,16 @@ func TestEnsureAdoptsLegacyCommandAndPreservesMixedCrontab(t *testing.T) {
 }
 
 func TestEnsureLegacyAdoptionReadFailureDoesNotWrite(t *testing.T) {
-	t.Cleanup(ResetRunnersForTest)
 	wrote := false
-	SetRunnersForTest(
-		func(name string, args ...string) (string, string, int, error) {
+	testseam.FakeCrontab(t, testseam.Crontab{
+		Read: func(name string, args ...string) (string, string, int, error) {
 			return "", "permission denied", 1, nil
 		},
-		func(stdin string, name string, args ...string) (string, string, int, error) {
+		Write: func(stdin string, name string, args ...string) (string, string, int, error) {
 			wrote = true
 			return "", "", 0, nil
 		},
-	)
+	})
 	if err := Ensure("new-job", opt.WithCronUser(currentCronUser(t)), opt.WithCommand("/usr/local/bin/new-job"), opt.WithLegacyCommand("/usr/local/bin/old-job")); err == nil {
 		t.Fatal("expected crontab probe failure")
 	}
@@ -499,22 +496,21 @@ func TestEnsureLegacyAdoptionReadFailureDoesNotWrite(t *testing.T) {
 }
 
 func TestEnsureConcurrentCronUpdatesDoNotLoseEitherBlock(t *testing.T) {
-	t.Cleanup(ResetRunnersForTest)
 	var tab string
 	var tabMu sync.Mutex
-	SetRunnersForTest(
-		func(name string, args ...string) (string, string, int, error) {
+	testseam.FakeCrontab(t, testseam.Crontab{
+		Read: func(name string, args ...string) (string, string, int, error) {
 			tabMu.Lock()
 			defer tabMu.Unlock()
 			return tab, "", 0, nil
 		},
-		func(stdin string, name string, args ...string) (string, string, int, error) {
+		Write: func(stdin string, name string, args ...string) (string, string, int, error) {
 			tabMu.Lock()
 			defer tabMu.Unlock()
 			tab = stdin
 			return "", "", 0, nil
 		},
-	)
+	})
 
 	userName := currentCronUser(t)
 	var wg sync.WaitGroup

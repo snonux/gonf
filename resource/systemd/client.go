@@ -9,23 +9,9 @@ import (
 	"runtime"
 
 	"github.com/snonux/gonf/internal/exec"
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
-
-// runCmd executes an external command. Swapped in unit tests via
-// SetRunCmdForTest; all systemctl helpers route through it.
-var runCmd = exec.Run
-
-// SetRunCmdForTest swaps the systemctl command runner (tests only). Service
-// and Timer tests reach their systemctl paths through this seam.
-func SetRunCmdForTest(run func(name string, args ...string) (string, string, int, error)) {
-	runCmd = run
-}
-
-// ResetRunCmdForTest restores the real command runner.
-func ResetRunCmdForTest() {
-	runCmd = exec.Run
-}
 
 // Args builds a systemctl argument vector, prefixing --user when user selects
 // the user bus. args are the operation and its operands.
@@ -92,4 +78,14 @@ func Detected() bool {
 		return true
 	}
 	return resource.Exists("/usr/bin/systemctl") || resource.Exists("/bin/systemctl")
+}
+
+// runCmd executes a systemctl invocation: through the real runner, or the
+// fake a test in this module installed with internal/testseam.FakeSystemctl.
+// All systemctl helpers route through it.
+func runCmd(name string, args ...string) (string, string, int, error) {
+	if fake := testseam.Systemctl(); fake != nil {
+		return fake(name, args...)
+	}
+	return exec.Run(name, args...)
 }

@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -34,16 +35,14 @@ func TestDetectPackageManager(t *testing.T) {
 
 func TestPresentIdempotentFake(t *testing.T) {
 	resource.ResetRepository()
-	old := runCmd
-	defer func() { runCmd = old }()
 
 	switch runtime.GOOS {
 	case "openbsd":
-		runCmd = fakeOpenBSDInstalled
+		testseam.FakePackageRunner(t, testseam.Package{Run: fakeOpenBSDInstalled})
 	case "freebsd":
-		runCmd = fakeFreeBSDInstalled
+		testseam.FakePackageRunner(t, testseam.Package{Run: fakeFreeBSDInstalled})
 	case "netbsd":
-		runCmd = fakeNetBSDInstalled
+		testseam.FakePackageRunner(t, testseam.Package{Run: fakeNetBSDInstalled})
 	default:
 		t.Skip("no fake for this OS")
 	}

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/systemd"
@@ -33,7 +34,7 @@ func newMergedApplyFixture(t *testing.T) *mergedApplyFixture {
 	}
 	f := &mergedApplyFixture{src: twoUnitSources(t), dst: t.TempDir()}
 	f.lastInput = filepath.Join(f.dst, "b.service")
-	systemd.SetRunCmdForTest(func(name string, args ...string) (string, string, int, error) {
+	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
 		if name != "systemctl" {
 			return "", "", 0, nil
 		}
@@ -45,7 +46,6 @@ func newMergedApplyFixture(t *testing.T) *mergedApplyFixture {
 		}
 		return "", "", 0, nil
 	})
-	t.Cleanup(systemd.ResetRunCmdForTest)
 	return f
 }
 
