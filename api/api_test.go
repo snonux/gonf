@@ -50,7 +50,7 @@ func TestNoFileDoesNotMutateCallerOptionSlice(t *testing.T) {
 
 	// (b) The Present resource built from the same backing array must not
 	// have become absent.
-	if err := resource.Apply(); err != nil {
+	if err := Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 	data, err := os.ReadFile(keep)

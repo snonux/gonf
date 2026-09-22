@@ -10,6 +10,7 @@ import (
 
 	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/exec"
+	"github.com/snonux/gonf/internal/testapply"
 	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
@@ -24,7 +25,7 @@ func TestCreatesSkipsWhenPathExists(t *testing.T) {
 
 	out := filepath.Join(dir, "should-not-exist")
 	Present("touch", []string{out}, opt.Creates(marker), opt.WithName("creates-skip"))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if _, err := os.Stat(out); !os.IsNotExist(err) {
@@ -39,7 +40,7 @@ func TestCreatesRunsWhenPathMissing(t *testing.T) {
 	out := filepath.Join(dir, "created")
 
 	Present("touch", []string{out}, opt.Creates(marker), opt.WithName("creates-run"))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if _, err := os.Stat(out); err != nil {
@@ -61,13 +62,10 @@ func TestOnChangeRunsCommandOnlyForChangedDependency(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			resource.ResetRepository()
 			out := filepath.Join(t.TempDir(), "ran")
-			watched := resource.Register("File", "unit", resource.ApplierFunc(func() error {
-				resource.Note("File[unit]", tt.status)
-				return nil
-			}))
+			watched := testapply.Register("File", "unit", testapply.Noting(tt.status, "File[unit]"))
 			Present("touch", []string{out}, opt.OnChange(watched))
 
-			if err := resource.Apply(); err != nil {
+			if err := testapply.Apply(); err != nil {
 				t.Fatalf("Apply: %v", err)
 			}
 			_, err := os.Stat(out)
@@ -90,7 +88,7 @@ func TestUnlessSkipsOnSuccess(t *testing.T) {
 		opt.Unless("true", nil),
 		opt.WithName("unless-skip"),
 	)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if _, err := os.Stat(out); !os.IsNotExist(err) {
@@ -107,7 +105,7 @@ func TestUnlessRunsOnFailure(t *testing.T) {
 		opt.Unless("false", nil),
 		opt.WithName("unless-run"),
 	)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if _, err := os.Stat(out); err != nil {
@@ -124,7 +122,7 @@ func TestOnlyIfSkipsOnFailure(t *testing.T) {
 		opt.OnlyIf("false", nil),
 		opt.WithName("onlyif-skip"),
 	)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if _, err := os.Stat(out); !os.IsNotExist(err) {
@@ -141,7 +139,7 @@ func TestOnlyIfRunsOnSuccess(t *testing.T) {
 		opt.OnlyIf("true", nil),
 		opt.WithName("onlyif-run"),
 	)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if _, err := os.Stat(out); err != nil {
@@ -158,7 +156,7 @@ func TestUnlessExpectStdout(t *testing.T) {
 		opt.Unless("echo", []string{"hello"}, opt.ExpectStdout("hello")),
 		opt.WithName("unless-stdout"),
 	)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if _, err := os.Stat(out); !os.IsNotExist(err) {
@@ -169,7 +167,7 @@ func TestUnlessExpectStdout(t *testing.T) {
 func TestCommandFailure(t *testing.T) {
 	resource.ResetRepository()
 	Present("false", nil, opt.WithName("fail"))
-	if err := resource.Apply(); err == nil {
+	if err := testapply.Apply(); err == nil {
 		t.Fatal("expected Apply to fail")
 	}
 }
@@ -181,7 +179,7 @@ func TestWithDir(t *testing.T) {
 		opt.WithDir(dir),
 		opt.WithName("with-dir"),
 	)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "in-dir")); err != nil {
@@ -198,7 +196,7 @@ func TestWithEnv(t *testing.T) {
 		opt.WithEnv(map[string]string{"GONF_TEST_ENV": "from-gonf"}),
 		opt.WithName("with-env"),
 	)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	got, err := os.ReadFile(out)
@@ -344,7 +342,7 @@ func TestUnlessPassingSkipsMainCommand(t *testing.T) {
 		opt.Unless("always-true", []string{"flag"}),
 		opt.WithName("unless-skip-fake"),
 	)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if probeArgv != "always-true flag" {
@@ -370,7 +368,7 @@ func TestOnlyIfFailingSkipsMainCommand(t *testing.T) {
 		opt.OnlyIf("always-false", nil),
 		opt.WithName("onlyif-skip-fake"),
 	)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if _, err := os.Stat(out); !os.IsNotExist(err) {
@@ -389,7 +387,7 @@ func TestGuardErrorWrapped(t *testing.T) {
 	}})
 
 	Present("true", nil, opt.Unless("probe", nil), opt.WithName("unless-err"))
-	err := resource.Apply()
+	err := testapply.Apply()
 	if err == nil || !strings.Contains(err.Error(),
 		"unless guard for Command[unless-err]: probe exploded") {
 		t.Fatalf("err = %v, want wrapped unless guard error", err)
@@ -413,7 +411,7 @@ func TestCreatesExistingSkipsRunner(t *testing.T) {
 
 	out := filepath.Join(dir, "should-not-exist")
 	Present("touch", []string{out}, opt.Creates(marker), opt.WithName("creates-skip-fake"))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if runs != 0 {
@@ -438,7 +436,7 @@ func TestCreatesMissingInvokesRunnerOnce(t *testing.T) {
 
 	out := filepath.Join(dir, "fake-created")
 	Present("touch", []string{out}, opt.Creates(marker), opt.WithName("creates-run-fake"))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if runs != 1 {
@@ -474,7 +472,7 @@ func TestRunPlumbsArgsEnvDirToRunner(t *testing.T) {
 		opt.WithEnv(map[string]string{"GONF_FAKE_ENV": "plumbed"}),
 		opt.WithName("plumbed"),
 	)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
@@ -509,7 +507,7 @@ func TestRunNonZeroExitErrorMessage(t *testing.T) {
 	}})
 
 	Present("failing-bin", nil, opt.WithName("exit7"))
-	err := resource.Apply()
+	err := testapply.Apply()
 	// run() embeds the raw captured streams, so the fake's trailing newline
 	// shows up as a blank line before "stderr:".
 	want := "failing-bin exited 7\nstdout: some stdout\n\nstderr: some stderr\n"
@@ -526,7 +524,7 @@ func TestRunStartFailureWrapped(t *testing.T) {
 	}})
 
 	Present("gone-bin", nil, opt.WithName("startfail"))
-	err := resource.Apply()
+	err := testapply.Apply()
 	if err == nil || !strings.Contains(err.Error(),
 		"failed to execute gone-bin: fork/exec: no such file or directory") {
 		t.Fatalf("err = %v, want wrapped start failure", err)
@@ -546,7 +544,7 @@ func TestRunDryRunDoesNotInvokeRunner(t *testing.T) {
 	}})
 
 	Present("mybin", []string{"x"}, opt.WithName("dry"))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if runs != 0 {

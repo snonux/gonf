@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/snonux/gonf/internal/testapply"
 	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
@@ -48,7 +49,7 @@ func TestPresentIdempotentFake(t *testing.T) {
 	}
 
 	Present("rsync")
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -81,7 +82,7 @@ func TestLiveRsyncPresent(t *testing.T) {
 	}
 	resource.ResetRepository()
 	Present("rsync")
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatal(err)
 	}
 }

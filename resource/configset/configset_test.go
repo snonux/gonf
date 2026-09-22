@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snonux/gonf/internal/testapply"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/file"
@@ -382,12 +383,12 @@ func TestPlanHandlerPairsShareOnlyTheirOwnStore(t *testing.T) {
 	}
 }
 
-// Present wires the set's applier and its member appliers to one store of
-// their own, so the legacy resource.Apply path reports each member handle.
+// TestPresentMemberHandlesReadTheirSetsOutcomes pins that a registered set
+// applied through the plan engine reports each member handle's change.
 func TestPresentMemberHandlesReadTheirSetsOutcomes(t *testing.T) {
 	f := newFixture(t)
 	h := Present("mail", f.options("root: paul\n")...)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if !resource.AnyChanged(h.Member("aliases").ID()) || !resource.AnyChanged(h.Member("smtpd.conf").ID()) {

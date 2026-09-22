@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snonux/gonf/internal/testapply"
 	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/internal/testutil"
 
@@ -67,22 +68,26 @@ func TestChangeGateOutcomes(t *testing.T) {
 			resource.ResetRepository()
 			resource.SetDryRun(tc.dryRun)
 			verbs := fakeTimerSystemctl(t, tc.enabled)
-			// A noted watch goes through OnChange so the watched resource is
-			// also ordered first; the unknown id uses the ids-level form.
-			gate := opt.WatchChanges(tc.watch)
-			if tc.noted {
-				gate = opt.OnChange(resource.Register("File", "unit", resource.ApplierFunc(func() error {
-					resource.Note("File[unit]", tc.watchNote)
-					return nil
-				})))
-			}
-			opts := []opt.TimerOption{gate}
+			var opts []opt.TimerOption
 			if !tc.noRestart {
 				opts = append(opts, opt.WithRestart)
 			}
-			Present("fstrim", opts...)
-			if err := resource.Apply(); err != nil {
-				t.Fatalf("Apply: %v", err)
+			// A noted watch goes through OnChange so the watched resource is
+			// also ordered first and the plan engine applies both. The
+			// unknown id uses the ids-level form and the direct Ensure path:
+			// the plan pre-flight refuses a dangling watch before apply, so
+			// the gate's own "never noted holds" rule is only reachable there.
+			if !tc.noted {
+				resource.ResetReport()
+				if err := Ensure("fstrim", append(opts, opt.WatchChanges(tc.watch))...); err != nil {
+					t.Fatalf("Ensure: %v", err)
+				}
+			} else {
+				watched := testapply.Register("File", "unit", testapply.Noting(tc.watchNote, "File[unit]"))
+				Present("fstrim", append(opts, opt.OnChange(watched))...)
+				if err := testapply.Apply(); err != nil {
+					t.Fatalf("Apply: %v", err)
+				}
 			}
 			if !slices.Equal(*verbs, tc.wantVerbs) {
 				t.Errorf("systemctl mutations = %v, want %v", *verbs, tc.wantVerbs)
@@ -153,8 +158,9 @@ func TestHeldGateLogLine(t *testing.T) {
 	fakeTimerSystemctl(t, true)
 	output := testutil.CaptureLog(t, logger.LevelDebug)
 
-	Present("fstrim", opt.WithRestart, opt.WatchChanges("File[never-noted]"))
-	if err := resource.Apply(); err != nil {
+	unchanged := testapply.Register("File", "unit", testapply.Noting(resource.StatusOK, "File[unit]"))
+	Present("fstrim", opt.WithRestart, opt.OnChange(unchanged))
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	want := "Timer[fstrim.timer]: restart held by change gate (no watched dependency changed)"

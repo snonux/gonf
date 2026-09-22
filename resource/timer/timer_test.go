@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testapply"
 	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/systemd"
@@ -52,7 +53,7 @@ func TestPresentRejectsEmptyName(t *testing.T) {
 	}
 	resource.ResetRepository()
 	Present("")
-	if err := resource.Apply(); err == nil {
+	if err := testapply.Apply(); err == nil {
 		t.Fatal("expected empty name error")
 	}
 }
@@ -65,7 +66,7 @@ func TestPresentIdempotentWithFakeRunner(t *testing.T) {
 	testseam.FakeSystemctl(t, fakeSystemdAlreadyOK)
 
 	Present("fstrim")
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -93,7 +94,7 @@ func TestPresentEnablesAndStartsWhenInactive(t *testing.T) {
 	})
 
 	Present("fstrim.timer")
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if !containsStr(saw, "enable") || !containsStr(saw, "start") {
@@ -124,7 +125,7 @@ func TestPresentEnableOnlySkipsStart(t *testing.T) {
 	})
 
 	Present("fstrim.timer", opt.WithEnableOnly)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if !containsStr(saw, "enable") {
@@ -158,7 +159,7 @@ func TestAbsentStopsAndDisables(t *testing.T) {
 	})
 
 	Absent("fstrim")
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if !containsStr(saw, "stop") || !containsStr(saw, "disable") {
@@ -181,7 +182,7 @@ func TestWithRestartIssuesRestart(t *testing.T) {
 	})
 
 	Present("fstrim", opt.WithRestart)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if !sawRestart {
@@ -208,12 +209,9 @@ func TestOnChangeGatesRestart(t *testing.T) {
 				sawRestart = sawRestart || name == "systemctl" && contains(args, "restart")
 				return fakeSystemdAlreadyOK(name, args...)
 			})
-			watched := resource.Register("File", "unit", resource.ApplierFunc(func() error {
-				resource.Note("File[unit]", tc.watchStatus)
-				return nil
-			}))
+			watched := testapply.Register("File", "unit", testapply.Noting(tc.watchStatus, "File[unit]"))
 			Present("fstrim", opt.WithRestart, opt.OnChange(watched))
-			if err := resource.Apply(); err != nil {
+			if err := testapply.Apply(); err != nil {
 				t.Fatalf("Apply: %v", err)
 			}
 			if sawRestart != tc.wantRestart {
@@ -238,7 +236,7 @@ func TestWithUserPassesUserFlag(t *testing.T) {
 	})
 
 	Present("myjob", opt.WithUser)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if !sawUser {
@@ -263,7 +261,7 @@ func TestPresentFailsWhenSystemctlMutateErrors(t *testing.T) {
 	})
 
 	Present("fstrim")
-	if err := resource.Apply(); err == nil {
+	if err := testapply.Apply(); err == nil {
 		t.Fatal("expected apply error when enable fails")
 	}
 }
@@ -288,7 +286,7 @@ func TestDryRunSkipsMutations(t *testing.T) {
 	})
 
 	Present("fstrim")
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if mutated {
@@ -373,20 +371,20 @@ func TestLiveUserTimerRoundTrip(t *testing.T) {
 
 	resource.ResetRepository()
 	Present(liveUnit, opt.WithUser)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	assertLiveState(t, true, liveUnit+".timer", true, true)
 
 	resource.ResetRepository()
 	Present(liveUnit, opt.WithUser) // idempotent
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatal(err)
 	}
 
 	resource.ResetRepository()
 	Absent(liveUnit, opt.WithUser)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	assertLiveState(t, true, liveUnit+".timer", false, false)
@@ -411,14 +409,14 @@ func TestLiveSystemTimerRoundTrip(t *testing.T) {
 
 	resource.ResetRepository()
 	Present(liveUnit)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	assertLiveState(t, false, liveUnit+".timer", true, true)
 
 	resource.ResetRepository()
 	Absent(liveUnit)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	assertLiveState(t, false, liveUnit+".timer", false, false)

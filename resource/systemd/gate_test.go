@@ -189,17 +189,18 @@ type dep string
 func (d dep) Dependencies() []string { return []string{string(d)} }
 
 // TestDaemonReloadUnknownWatchSkips pins that a gate watching an id nothing
-// ever noted holds the reload and reports it skipped.
+// ever noted holds the reload and reports it skipped. It uses the direct
+// Ensure path on purpose: the plan pre-flight refuses a dangling watch before
+// apply, so the gate's own rule is only reachable there.
 func TestDaemonReloadUnknownWatchSkips(t *testing.T) {
-	resource.ResetRepository()
+	resource.ResetReport()
 	called := false
 	testseam.FakeSystemctl(t, func(string, ...string) (string, string, int, error) {
 		called = true
 		return "", "", 0, nil
 	})
 
-	Present(opt.WatchChanges("File[never-noted]"))
-	if err := resource.Apply(); err != nil {
+	if err := Ensure(opt.WatchChanges("File[never-noted]")); err != nil {
 		t.Fatal(err)
 	}
 	if called {

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testapply"
 	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
@@ -813,7 +814,7 @@ func TestServiceEnsureAndAbsentFake(t *testing.T) {
 	calls = nil
 	testseam.FakeServiceRunner(t, fakeSystemdCtl(true, true, false, false, false, false, &calls))
 	Absent("sshd")
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	assertSvcActions(t, calls, [][]string{{"systemctl", "stop", "sshd"}, {"systemctl", "disable", "sshd"}},

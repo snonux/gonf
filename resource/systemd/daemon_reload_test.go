@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testapply"
 	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
@@ -19,7 +20,7 @@ func TestDaemonReloadRunsSystemctl(t *testing.T) {
 	})
 
 	Present()
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if len(saw) != 1 || saw[0] != "systemctl daemon-reload" {
@@ -37,7 +38,7 @@ func TestDaemonReloadWithUser(t *testing.T) {
 	})
 
 	Present(opt.WithUser)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if saw != "systemctl --user daemon-reload" {
@@ -54,12 +55,9 @@ func TestDaemonReloadIfChangedSkips(t *testing.T) {
 		return "", "", 0, nil
 	})
 
-	noop := resource.Register("File", "/tmp/stable", resource.ApplierFunc(func() error {
-		resource.Note("File[/tmp/stable]", resource.StatusOK)
-		return nil
-	}))
+	noop := testapply.Register("File", "/tmp/stable", testapply.Noting(resource.StatusOK, "File[/tmp/stable]"))
 	Present(opt.DependsOn(noop), opt.IfChanged)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if called {
@@ -76,12 +74,9 @@ func TestDaemonReloadIfChangedRuns(t *testing.T) {
 		return "", "", 0, nil
 	})
 
-	changed := resource.Register("File", "/tmp/unit", resource.ApplierFunc(func() error {
-		resource.Note("File[/tmp/unit]", resource.StatusChanged)
-		return nil
-	}))
+	changed := testapply.Register("File", "/tmp/unit", testapply.Noting(resource.StatusChanged, "File[/tmp/unit]"))
 	Present(opt.DependsOn(changed), opt.IfChanged)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if !called {
@@ -115,16 +110,10 @@ func TestDaemonReloadOnChangeAndWithWatchMergeRegardlessOfOptionOrder(t *testing
 				called = true
 				return "", "", 0, nil
 			})
-			changed := resource.Register("File", "changed", resource.ApplierFunc(func() error {
-				resource.Note("File[changed]", resource.StatusChanged)
-				return nil
-			}))
-			unchanged := resource.Register("File", "unchanged", resource.ApplierFunc(func() error {
-				resource.Note("File[unchanged]", resource.StatusOK)
-				return nil
-			}))
+			changed := testapply.Register("File", "changed", testapply.Noting(resource.StatusChanged, "File[changed]"))
+			unchanged := testapply.Register("File", "unchanged", testapply.Noting(resource.StatusOK, "File[unchanged]"))
 			Present(tc.opts(changed, unchanged)...)
-			if err := resource.Apply(); err != nil {
+			if err := testapply.Apply(); err != nil {
 				t.Fatalf("Apply: %v", err)
 			}
 			if !called {
@@ -144,13 +133,13 @@ func TestDaemonReloadIfChangedSeesDirectoryChildFile(t *testing.T) {
 	})
 
 	dirID := "Directory[/tmp/systemd-user]"
-	units := resource.Register("Directory", "/tmp/systemd-user", resource.ApplierFunc(func() error {
+	units := testapply.Register("Directory", "/tmp/systemd-user", func() error {
 		resource.Note(dirID, resource.StatusOK)
 		resource.Note("File[/tmp/systemd-user/x.timer]", resource.StatusChanged)
 		return nil
-	}))
+	})
 	Present(opt.DependsOn(units), opt.IfChanged)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if !called {
@@ -168,7 +157,7 @@ func TestDaemonReloadDryRun(t *testing.T) {
 		return "", "", 0, nil
 	})
 	Present()
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatal(err)
 	}
 }

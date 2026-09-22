@@ -8,6 +8,7 @@ import (
 
 	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/exec"
+	"github.com/snonux/gonf/internal/testapply"
 	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
@@ -55,7 +56,7 @@ func TestWithEnvCopiesCallerMap(t *testing.T) {
 	draft.Env["GONF_COPY"] = "draft-mutated"
 	assertEnv(t, "plan op after draft mutation", op.Env)
 
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !slices.Contains(runEnv, "GONF_COPY=original") || slices.Contains(runEnv, "GONF_ADDED=added") {

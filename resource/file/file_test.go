@@ -18,6 +18,7 @@ import (
 
 	. "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/declerr"
+	"github.com/snonux/gonf/internal/testapply"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
@@ -845,7 +846,7 @@ func TestPresentStringCreateNewFile(t *testing.T) {
 	path := filepath.Join(dir, "new.txt")
 
 	Present(path, WithContent("hello world"))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
@@ -865,7 +866,7 @@ func TestPresentMode(t *testing.T) {
 	mode := os.FileMode(0o600)
 
 	Present(path, WithContent("mode test"), WithMode(mode))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
@@ -916,7 +917,7 @@ func TestPresentSourceFile(t *testing.T) {
 	targetPath := filepath.Join(dir, "target.txt")
 
 	Present(targetPath, WithSource(sourcePath))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
@@ -937,7 +938,7 @@ func TestPresentTemplateFile(t *testing.T) {
 	targetPath := filepath.Join(dir, "target.conf")
 
 	Present(targetPath, WithSource(sourcePath))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
@@ -961,7 +962,7 @@ func TestPresentAbsent(t *testing.T) {
 	}
 
 	Present(path, IsAbsent)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -984,7 +985,7 @@ func TestAbsent(t *testing.T) {
 	}
 
 	Absent(path)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -1216,7 +1217,7 @@ func TestNamedFileContentReportsNamedID(t *testing.T) {
 	if got, want := res.ID(), "File[named-content]"; got != want {
 		t.Fatalf("ID = %q, want %q", got, want)
 	}
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if got, err := os.ReadFile(path); err != nil || string(got) != "managed\n" {
@@ -1237,7 +1238,7 @@ func TestNamedAbsentFileReportsNamedID(t *testing.T) {
 	if got, want := res.ID(), "File[named-absent]"; got != want {
 		t.Fatalf("ID = %q, want %q", got, want)
 	}
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if _, err := os.Lstat(path); !os.IsNotExist(err) {
@@ -1255,7 +1256,7 @@ func TestNamedEnsureFileReportsNamedID(t *testing.T) {
 	if got, want := res.ID(), "EnsureFile[named-marker]"; got != want {
 		t.Fatalf("ID = %q, want %q", got, want)
 	}
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if _, err := os.Lstat(path); err != nil {
@@ -1359,7 +1360,7 @@ func TestPresentWithNameAllowsOrderedLineEditsToOnePath(t *testing.T) {
 		t.Fatalf("service line ID = %q, want %q", got, want)
 	}
 
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	got, err := os.ReadFile(path)
@@ -1493,7 +1494,7 @@ func TestAbsentDoesNotMutateCallerOptionSlice(t *testing.T) {
 
 	// (b) The Present resource built from the same backing array must not
 	// have become absent.
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 	data, err := os.ReadFile(keep)

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testapply"
 	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
@@ -534,7 +535,7 @@ func TestPresentEnsureAbsentFake(t *testing.T) {
 	var calls []pkgCall
 	testseam.FakePackageRunner(t, testseam.Package{Run: fakePkgRunner(false, false, false, &calls)})
 	Present("rsync")
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	assertPkgAction(t, pkgCall{bin: "pkg", args: []string{"info", "-e", "rsync"}},
@@ -546,7 +547,7 @@ func TestPresentEnsureAbsentFake(t *testing.T) {
 	calls = nil
 	testseam.FakePackageRunner(t, testseam.Package{Run: fakePkgRunner(false, false, false, &calls)})
 	Absent("rsync")
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	assertPkgAction(t, pkgCall{bin: "pkg", args: []string{"info", "-e", "rsync"}}, nil, calls)

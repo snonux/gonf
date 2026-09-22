@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snonux/gonf/internal/testapply"
 	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 	opt "github.com/snonux/gonf/resource/options"
@@ -50,7 +51,7 @@ func TestWithEnvCopiesCallerMap(t *testing.T) {
 	draft.Env["PKG_PATH"] = "https://draft-mutated.example/"
 	assertEnv(t, "plan op after draft mutation", op.Env)
 
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if len(*calls) != 2 {

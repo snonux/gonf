@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/file"
@@ -19,7 +20,7 @@ func TestDryRunDoesNotWrite(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "new.txt")
 	file.Present(path, options.WithContent("hello"))
-	if err := resource.Apply(); err != nil {
+	if err := api.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {

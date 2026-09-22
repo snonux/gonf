@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testapply"
 	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
@@ -22,16 +23,16 @@ func registeredDraft(t *testing.T, id string) resource.PlanDraft {
 	return resource.PlanDraft{}
 }
 
-// dummy registers a no-op resource so reloads can depend on real IDs under
-// the legacy repository apply path.
+// dummy registers a no-op fixture resource (with its plan draft) so reloads
+// can depend on real IDs that testapply.Apply applies.
 func dummy(name string) resource.Resource {
-	return resource.Register("Dummy", name, resource.ApplierFunc(func() error { return nil }))
+	return testapply.Register("Dummy", name, func() error { return nil })
 }
 
 // TestPresentMergesSameBusDeclarations pins that a second declaration on the
 // same bus returns the first reload and folds its watches and deps into it:
-// the stored draft (api.Apply) and the repository edges (legacy apply) both
-// see the union, and only one daemon-reload is registered.
+// the stored draft (what the plan engine applies) and the repository edges
+// both see the union, and only one daemon-reload is registered.
 func TestPresentMergesSameBusDeclarations(t *testing.T) {
 	resource.ResetRepository()
 	a, b := dummy("a"), dummy("b")
@@ -49,7 +50,8 @@ func TestPresentMergesSameBusDeclarations(t *testing.T) {
 	if got := resource.RegisteredIDs(); !reflect.DeepEqual(got, []string{"DaemonReload[system]", "Dummy[a]", "Dummy[b]"}) {
 		t.Fatalf("registered = %v, want one reload", got)
 	}
-	// The applier the legacy path runs is the first declaration, merged.
+	// The registered value (what a later same-bus declaration merges into)
+	// is the first declaration, merged.
 	res, reg, ok := resource.Registered("DaemonReload[system]")
 	if !ok || !reflect.DeepEqual(reg.(*DaemonReloadResource).Watch, want) {
 		t.Fatalf("registered applier not merged: %#v", reg)
@@ -126,17 +128,14 @@ func TestMergedGateSemantics(t *testing.T) {
 }
 
 // TestPresentMergedReloadAppliesOnSecondInput runs the merged reload through
-// the legacy repository path: a change of only the second declaration's
+// the plan engine (testapply.Apply): a change of only the second declaration's
 // input must fire the reload, which is what the merge adds.
 func TestPresentMergedReloadAppliesOnSecondInput(t *testing.T) {
 	resource.ResetRepository()
 	resource.ResetReport()
 	t.Cleanup(resource.ResetReport)
 	a := dummy("a")
-	b := resource.Register("Dummy", "b", resource.ApplierFunc(func() error {
-		resource.Note("Dummy[b]", resource.StatusChanged)
-		return nil
-	}))
+	b := testapply.Register("Dummy", "b", testapply.Noting(resource.StatusChanged, "Dummy[b]"))
 	Present(opt.OnChange(a))
 	Present(opt.OnChange(b))
 
@@ -145,7 +144,7 @@ func TestPresentMergedReloadAppliesOnSecondInput(t *testing.T) {
 		saw = append(saw, name+" "+strings.Join(args, " "))
 		return "", "", 0, nil
 	})
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if len(saw) != 1 || saw[0] != "systemctl daemon-reload" {

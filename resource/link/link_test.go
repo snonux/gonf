@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	. "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testapply"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -22,7 +23,7 @@ func TestPresentSymlinkCreateAndIdempotent(t *testing.T) {
 	path := filepath.Join(dir, "link")
 
 	Present(path, WithSymlink(target))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
@@ -35,7 +36,7 @@ func TestPresentSymlinkCreateAndIdempotent(t *testing.T) {
 	}
 
 	// Idempotency
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("second Apply failed: %v", err)
 	}
 }
@@ -54,14 +55,14 @@ func TestPresentSymlinkRepoints(t *testing.T) {
 	}
 
 	Present(path, WithSymlink(t1))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply 1 failed: %v", err)
 	}
 
 	// Change target
 	resource.ResetRepository()
 	Present(path, WithSymlink(t2))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply 2 failed: %v", err)
 	}
 
@@ -87,7 +88,7 @@ func TestPresentSymlinkReplacesRealFile(t *testing.T) {
 	}
 
 	Present(path, WithSymlink(target))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
@@ -113,7 +114,7 @@ func TestPresentHardlinkCreateAndIdempotent(t *testing.T) {
 	path := filepath.Join(dir, "link")
 
 	Present(path, WithHardlink(target))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
@@ -135,7 +136,7 @@ func TestPresentHardlinkCreateAndIdempotent(t *testing.T) {
 	}
 
 	// Idempotency
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("second Apply failed: %v", err)
 	}
 }
@@ -161,7 +162,7 @@ func TestPresentHardlinkSymlinkTargetIdempotent(t *testing.T) {
 	path := filepath.Join(dir, "link")
 
 	Present(path, WithHardlink(sl))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 	id := "Hardlink[" + path + "]"
@@ -179,7 +180,7 @@ func TestPresentHardlinkSymlinkTargetIdempotent(t *testing.T) {
 
 	// Second apply must be a no-op: the hardlink already shares the real
 	// file's inode, so the resource must report "ok", not "changed" again.
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("second Apply failed: %v", err)
 	}
 	if resource.AnyChanged(id) {
@@ -189,7 +190,7 @@ func TestPresentHardlinkSymlinkTargetIdempotent(t *testing.T) {
 	// A third apply guards against the original bug's replaceWithLink
 	// churn, which would have kept flipping the entry (and its .old
 	// backup) on every run.
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("third Apply failed: %v", err)
 	}
 	if resource.AnyChanged(id) {
@@ -213,7 +214,7 @@ func TestPresentHardlinkReplacesRealFile(t *testing.T) {
 	}
 
 	Present(path, WithHardlink(target))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
@@ -236,7 +237,7 @@ func TestPresentHardlinkMissingTarget(t *testing.T) {
 	target := filepath.Join(dir, "nonexistent")
 
 	Present(path, WithHardlink(target))
-	if err := resource.Apply(); err == nil {
+	if err := testapply.Apply(); err == nil {
 		t.Error("expected Apply to fail when hardlink target is missing")
 	}
 }
@@ -254,7 +255,7 @@ func TestPresentAbsentSymlink(t *testing.T) {
 	}
 
 	Present(path, IsAbsent)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
@@ -276,7 +277,7 @@ func TestAbsentSymlink(t *testing.T) {
 	}
 
 	Absent(path)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
@@ -292,7 +293,7 @@ func TestBuildRequiresKindOrAbsent(t *testing.T) {
 
 	// Call Present without specifying symlink, hardlink, or absent
 	Present(path)
-	if err := resource.Apply(); err == nil {
+	if err := testapply.Apply(); err == nil {
 		t.Error("expected Apply to fail when neither kind nor absent is specified")
 	}
 }
@@ -304,7 +305,7 @@ func TestSymlinkRefusesMissingTarget(t *testing.T) {
 	missing := filepath.Join(dir, "does-not-exist")
 
 	Present(path, WithSymlink(missing))
-	if err := resource.Apply(); err == nil {
+	if err := testapply.Apply(); err == nil {
 		t.Fatal("expected Apply to fail for missing symlink target")
 	}
 	if _, err := os.Lstat(path); !os.IsNotExist(err) {
@@ -322,7 +323,7 @@ func TestSymlinkRefusesExistingDanglingLink(t *testing.T) {
 	}
 
 	Present(path, WithSymlink(missing))
-	if err := resource.Apply(); err == nil {
+	if err := testapply.Apply(); err == nil {
 		t.Fatal("expected Apply to fail for existing dangling symlink")
 	}
 }
@@ -336,7 +337,7 @@ func TestSymlinkAllowsRelativeTarget(t *testing.T) {
 	path := filepath.Join(dir, "link")
 
 	Present(path, WithSymlink("target"))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	got, err := os.Readlink(path)
@@ -365,7 +366,7 @@ func TestLinkReplacePreservesExistingOldBackup(t *testing.T) {
 	}
 
 	Present(path, WithSymlink(target))
-	if err := resource.Apply(); err == nil {
+	if err := testapply.Apply(); err == nil {
 		t.Fatal("expected Apply to refuse converting a real file while a backup exists")
 	} else if !strings.Contains(err.Error(), old) {
 		t.Errorf("expected the error to name the conflicting backup %s, got %v", old, err)
@@ -413,7 +414,7 @@ func TestHardlinkReplacePreservesExistingOldBackup(t *testing.T) {
 	}
 
 	Present(path, WithHardlink(target))
-	if err := resource.Apply(); err == nil {
+	if err := testapply.Apply(); err == nil {
 		t.Fatal("expected Apply to refuse converting a real file while a backup exists")
 	} else if !strings.Contains(err.Error(), old) {
 		t.Errorf("expected the error to name the conflicting backup %s, got %v", old, err)
@@ -457,7 +458,7 @@ func TestPresentHardlinkRollsBackWhenLinkCreationFails(t *testing.T) {
 	}
 
 	Present(path, WithHardlink(target))
-	if err := resource.Apply(); err == nil {
+	if err := testapply.Apply(); err == nil {
 		t.Fatal("expected Apply to fail when the hardlink cannot be created")
 	}
 
@@ -676,7 +677,7 @@ func TestPresentSymlinkReplacesEmptyDir(t *testing.T) {
 	}
 
 	Present(path, WithSymlink(target))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
@@ -713,7 +714,7 @@ func TestPresentSymlinkReplacesNonEmptyDirKeepsBackup(t *testing.T) {
 	// removed, so the conversion reports an error instead of rm -rf'ing
 	// the user's data.
 	old := path + ".old"
-	applyErr := resource.Apply()
+	applyErr := testapply.Apply()
 	if applyErr == nil {
 		t.Fatal("expected Apply to fail when the aside cannot be removed")
 	}
@@ -738,7 +739,7 @@ func TestPresentSymlinkReplacesNonEmptyDirKeepsBackup(t *testing.T) {
 	resource.ResetRepository()
 	resource.ResetReport()
 	Present(path, WithSymlink(target))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("retry after the aside-removal failure must converge: %v", err)
 	}
 	if _, err := os.Lstat(old); err != nil {
@@ -769,7 +770,7 @@ func TestPresentSymlinkRepointKeepsOldBackup(t *testing.T) {
 	// Repointing an existing symlink never uses the .old aside, so the
 	// pre-existing backup is untouched.
 	Present(path, WithSymlink(t2))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
@@ -813,7 +814,7 @@ func TestDryRunRefusesConversionWithExistingOldBackup(t *testing.T) {
 	t.Cleanup(func() { resource.SetDryRun(false) })
 
 	Present(path, WithSymlink(target))
-	if err := resource.Apply(); err == nil {
+	if err := testapply.Apply(); err == nil {
 		t.Fatal("expected the dry-run to refuse the conversion")
 	}
 	got, err := os.ReadFile(old)

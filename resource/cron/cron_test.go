@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testapply"
 	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
@@ -225,27 +226,29 @@ func TestMergeUnclosedBeginKeepsTail(t *testing.T) {
 func TestPresentRejectsBadEnvAndBlankCommand(t *testing.T) {
 	resource.ResetRepository()
 	Present("x", opt.WithCommand("/bin/true"), opt.WithCronEnv("NOTANENV"))
-	if err := resource.Apply(); err == nil {
+	if err := testapply.Apply(); err == nil {
 		t.Fatal("expected error for env without =")
 	}
 	resource.ResetRepository()
 	Present("x", opt.WithCommand("   "))
-	if err := resource.Apply(); err == nil {
+	if err := testapply.Apply(); err == nil {
 		t.Fatal("expected error for blank command")
 	}
-	resource.ResetRepository()
-	Present("x", opt.WithCommand("/bin/true"), opt.WithCronUser(""))
-	if err := resource.Apply(); err == nil {
-		t.Fatal("expected error for empty cron user")
+	// Direct path on purpose (task vb2): the cron op does not carry an
+	// explicitly empty user, so the plan engine applies it as root's job
+	// instead of refusing it.
+	if err := Ensure("x", opt.WithCommand("/bin/true"), opt.WithCronUser("")); err == nil ||
+		!strings.Contains(err.Error(), "WithCronUser must not be empty") {
+		t.Fatalf("Ensure with an empty cron user = %v, want the empty-user refusal", err)
 	}
 	resource.ResetRepository()
 	Present("x", opt.WithCommand("/bin/true"), opt.WithLegacyCommand("\n"))
-	if err := resource.Apply(); err == nil {
+	if err := testapply.Apply(); err == nil {
 		t.Fatal("expected error for invalid legacy command")
 	}
 	resource.ResetRepository()
 	Absent("x", opt.WithLegacyCommand("/bin/true"))
-	if err := resource.Apply(); err == nil {
+	if err := testapply.Apply(); err == nil {
 		t.Fatal("expected error for legacy adoption on absent cron")
 	}
 	for _, option := range []opt.CronOption{
@@ -263,7 +266,7 @@ func TestPresentRejectsBadEnvAndBlankCommand(t *testing.T) {
 	} {
 		resource.ResetRepository()
 		Present("x", opt.WithCommand("/bin/true"), option)
-		if err := resource.Apply(); err == nil {
+		if err := testapply.Apply(); err == nil {
 			t.Fatal("expected error for invalid cron schedule")
 		}
 	}
@@ -288,7 +291,7 @@ func TestMergeCollapsesDuplicateBlocks(t *testing.T) {
 func TestPresentRequiresCommand(t *testing.T) {
 	resource.ResetRepository()
 	Present("x")
-	if err := resource.Apply(); err == nil {
+	if err := testapply.Apply(); err == nil {
 		t.Fatal("expected error without WithCommand")
 	}
 }
@@ -296,7 +299,7 @@ func TestPresentRequiresCommand(t *testing.T) {
 func TestPresentRejectsWhitespaceName(t *testing.T) {
 	resource.ResetRepository()
 	Present("bad name", opt.WithCommand("/bin/true"))
-	if err := resource.Apply(); err == nil {
+	if err := testapply.Apply(); err == nil {
 		t.Fatal("expected error for whitespace in name")
 	}
 }
@@ -304,7 +307,7 @@ func TestPresentRejectsWhitespaceName(t *testing.T) {
 func TestPresentRejectsEmptyName(t *testing.T) {
 	resource.ResetRepository()
 	Present("", opt.WithCommand("/bin/true"))
-	if err := resource.Apply(); err == nil {
+	if err := testapply.Apply(); err == nil {
 		t.Fatal("expected error for empty name")
 	}
 }
@@ -312,7 +315,7 @@ func TestPresentRejectsEmptyName(t *testing.T) {
 func TestPresentRejectsBracketName(t *testing.T) {
 	resource.ResetRepository()
 	Present("a]", opt.WithCommand("/bin/true"))
-	if err := resource.Apply(); err == nil {
+	if err := testapply.Apply(); err == nil {
 		t.Fatal("expected error for bracket in name")
 	}
 }
@@ -320,7 +323,7 @@ func TestPresentRejectsBracketName(t *testing.T) {
 func TestPresentRejectsNewlineCommand(t *testing.T) {
 	resource.ResetRepository()
 	Present("x", opt.WithCommand("/bin/true\n# END GONF Cron[x]"))
-	if err := resource.Apply(); err == nil {
+	if err := testapply.Apply(); err == nil {
 		t.Fatal("expected error for newline in command")
 	}
 }
@@ -328,7 +331,7 @@ func TestPresentRejectsNewlineCommand(t *testing.T) {
 func TestPresentRejectsEmptyMinute(t *testing.T) {
 	resource.ResetRepository()
 	Present("x", opt.WithCommand("/bin/true"), opt.WithMinute(""))
-	if err := resource.Apply(); err == nil {
+	if err := testapply.Apply(); err == nil {
 		t.Fatal("expected error for empty minute")
 	}
 }
@@ -351,7 +354,7 @@ func TestAbsentWithoutCommand(t *testing.T) {
 
 	resource.ResetRepository()
 	Absent("gone", opt.WithCronUser(currentCronUser(t)))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("absent without command: %v", err)
 	}
 	// no block present → may be unchanged write skip; ensure no panic path
@@ -384,7 +387,7 @@ func TestApplyMockedPresentIdempotentAndDryRun(t *testing.T) {
 
 	resource.ResetRepository()
 	Absent("job", opt.WithCronUser(userName))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("absent: %v", err)
 	}
 	if tab.writes != 2 || strings.Contains(tab.content, "GONF Cron[job]") {
@@ -435,7 +438,7 @@ func applyJobAtMinute(t *testing.T, userName, minute, step string) {
 		opt.WithHour("3"),
 		opt.WithCronEnv("FOO=1"),
 	)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("%s: %v", step, err)
 	}
 }
@@ -585,7 +588,7 @@ func TestLiveCronRoundTrip(t *testing.T) {
 		opt.WithMinute("7"),
 		opt.WithHour("3"),
 	)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("present: %v", err)
 	}
 	assertCrontabContains(t, "root", beginMarker(name), "7 3 * * * /bin/true", endMarker(name))
@@ -597,14 +600,14 @@ func TestLiveCronRoundTrip(t *testing.T) {
 		opt.WithMinute("7"),
 		opt.WithHour("3"),
 	)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("idempotent: %v", err)
 	}
 	assertCrontabContains(t, "root", beginMarker(name))
 
 	resource.ResetRepository()
 	Absent(name, opt.WithCronUser("root"))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("absent: %v", err)
 	}
 	assertCrontabLacks(t, "root", beginMarker(name))
@@ -627,14 +630,14 @@ func TestLiveCronPerUser(t *testing.T) {
 		opt.WithHour("4"),
 		opt.WithCronEnv("GONF_CRON_TEST=1"),
 	)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("present: %v", err)
 	}
 	assertCrontabContains(t, user, beginMarker(name), "GONF_CRON_TEST=1", "11 4 * * * /bin/true")
 
 	resource.ResetRepository()
 	Absent(name, opt.WithCronUser(user))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("absent: %v", err)
 	}
 	assertCrontabLacks(t, user, beginMarker(name))

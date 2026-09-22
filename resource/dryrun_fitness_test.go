@@ -220,7 +220,7 @@ func assertAbsent(t *testing.T, path string) {
 func dryRunDir(t *testing.T, tmp string) {
 	path := filepath.Join(tmp, "newdir")
 	dir.Present(path)
-	if err := resource.Apply(); err != nil {
+	if err := api.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	assertAbsent(t, path)
@@ -248,7 +248,7 @@ func dryRunDirReapplyAttrs(t *testing.T, tmp string) {
 		t.Fatal(err)
 	}
 	dir.Present(path, opt.WithMode(0o750))
-	if err := resource.Apply(); err != nil {
+	if err := api.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(path)
@@ -272,7 +272,7 @@ func dryRunDirAbsent(t *testing.T, tmp string) {
 		t.Fatal(err)
 	}
 	dir.Absent(path)
-	if err := resource.Apply(); err != nil {
+	if err := api.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(path); err != nil {
@@ -307,7 +307,7 @@ func dryRunDirSourceFresh(t *testing.T, tmp string) {
 
 	dest := filepath.Join(tmp, "dest-fresh")
 	dir.Present(dest, opt.WithSource(src), opt.WithPrune)
-	if err := resource.Apply(); err != nil {
+	if err := api.Apply(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -352,7 +352,7 @@ func dryRunDirSourceExisting(t *testing.T, tmp string) {
 	}
 
 	dir.Present(dest, opt.WithSource(src), opt.WithPrune, opt.WithMode(0o750))
-	if err := resource.Apply(); err != nil {
+	if err := api.Apply(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -382,7 +382,7 @@ func dryRunDirSourceGlobFresh(t *testing.T, tmp string) {
 
 	dest := filepath.Join(tmp, "destglob-fresh")
 	dir.Present(dest, opt.WithSourceGlob(filepath.Join(src, "*.txt")), opt.WithPrune)
-	if err := resource.Apply(); err != nil {
+	if err := api.Apply(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -412,7 +412,7 @@ func dryRunDirSourceGlobExisting(t *testing.T, tmp string) {
 	}
 
 	dir.Present(dest, opt.WithSourceGlob(filepath.Join(src, "*.txt")), opt.WithPrune)
-	if err := resource.Apply(); err != nil {
+	if err := api.Apply(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -424,7 +424,7 @@ func dryRunDirSourceGlobExisting(t *testing.T, tmp string) {
 func dryRunFile(t *testing.T, tmp string) {
 	path := filepath.Join(tmp, "newfile.txt")
 	file.Present(path, opt.WithContent("hello"))
-	if err := resource.Apply(); err != nil {
+	if err := api.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	assertAbsent(t, path)
@@ -454,7 +454,7 @@ func dryRunFileReapplyAttrs(t *testing.T, tmp string) {
 		t.Fatal(err)
 	}
 	file.Present(path, opt.WithContent(content), opt.WithMode(0o600))
-	if err := resource.Apply(); err != nil {
+	if err := api.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(path)
@@ -477,7 +477,7 @@ func dryRunFileAbsent(t *testing.T, tmp string) {
 		t.Fatal(err)
 	}
 	file.Absent(path)
-	if err := resource.Apply(); err != nil {
+	if err := api.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(path); err != nil {
@@ -492,7 +492,7 @@ func dryRunLink(t *testing.T, tmp string) {
 	}
 	path := filepath.Join(tmp, "link")
 	link.Present(path, opt.WithSymlink(target))
-	if err := resource.Apply(); err != nil {
+	if err := api.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	assertAbsent(t, path)
@@ -513,7 +513,7 @@ func dryRunLinkAbsent(t *testing.T, tmp string) {
 		t.Fatal(err)
 	}
 	link.Absent(path)
-	if err := resource.Apply(); err != nil {
+	if err := api.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(path); err != nil {
@@ -542,7 +542,7 @@ func dryRunSymlinkRepoint(t *testing.T, tmp string) {
 		t.Fatal(err)
 	}
 	link.Present(path, opt.WithSymlink(newTarget))
-	if err := resource.Apply(); err != nil {
+	if err := api.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.Readlink(path)
@@ -571,7 +571,7 @@ func dryRunSymlinkReplace(t *testing.T, tmp string) {
 		t.Fatal(err)
 	}
 	link.Present(path, opt.WithSymlink(target))
-	if err := resource.Apply(); err != nil {
+	if err := api.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Lstat(path)
@@ -604,7 +604,7 @@ func dryRunHardlinkCreate(t *testing.T, tmp string) {
 	}
 	path := filepath.Join(tmp, "hardlink-new")
 	link.Present(path, opt.WithHardlink(target))
-	if err := resource.Apply(); err != nil {
+	if err := api.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	assertAbsent(t, path)
@@ -631,7 +631,7 @@ func dryRunHardlinkReplace(t *testing.T, tmp string) {
 		t.Fatal(err)
 	}
 	link.Present(path, opt.WithHardlink(target))
-	if err := resource.Apply(); err != nil {
+	if err := api.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(path)
@@ -668,7 +668,7 @@ func dryRunCmd(t *testing.T, tmp string) {
 		},
 	})
 	cmd.Present("true", nil)
-	if err := resource.Apply(); err != nil {
+	if err := api.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if mutated {
@@ -689,7 +689,7 @@ func dryRunCron(t *testing.T, tmp string) {
 		},
 	})
 	cron.Present("fit-job", opt.WithCommand("true"))
-	if err := resource.Apply(); err != nil {
+	if err := api.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if mutated {
@@ -712,7 +712,7 @@ func dryRunPkg(t *testing.T, tmp string) {
 		return "", "", 0, nil
 	}})
 	pkg.Present("fit-pkg")
-	if err := resource.Apply(); err != nil {
+	if err := api.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if mutated {
@@ -743,7 +743,7 @@ func dryRunPkgBackend(t *testing.T, mgr string, isProbe func(name string, args [
 		return "", "", 0, nil
 	}})
 	pkg.Present("fit-pkg")
-	if err := resource.Apply(); err != nil {
+	if err := api.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if mutated {
@@ -796,7 +796,7 @@ func dryRunPkgOpenBSDAbsent(t *testing.T, tmp string) {
 		return "", "", 0, nil
 	}})
 	pkg.Absent("fit-pkg")
-	if err := resource.Apply(); err != nil {
+	if err := api.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if mutated {
@@ -809,7 +809,7 @@ func dryRunService(t *testing.T, tmp string) {
 	var mutated bool
 	testseam.FakeServiceRunner(t, fakeSystemctlRunner(&mutated))
 	service.Present("fit-service")
-	if err := resource.Apply(); err != nil {
+	if err := api.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if mutated {
@@ -844,7 +844,7 @@ func dryRunServiceBackend(t *testing.T, mgr string, classify func(args []string)
 		}
 	})
 	service.Present("fit-service")
-	if err := resource.Apply(); err != nil {
+	if err := api.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if mutated {
@@ -899,7 +899,7 @@ func dryRunDaemonReload(t *testing.T, tmp string) {
 	var mutated bool
 	testseam.FakeSystemctl(t, fakeSystemctlRunner(&mutated))
 	systemd.Present()
-	if err := resource.Apply(); err != nil {
+	if err := api.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if mutated {
@@ -912,7 +912,7 @@ func dryRunTimer(t *testing.T, tmp string) {
 	var mutated bool
 	testseam.FakeSystemctl(t, fakeSystemctlRunner(&mutated))
 	timer.Present("fit-timer")
-	if err := resource.Apply(); err != nil {
+	if err := api.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if mutated {
@@ -933,7 +933,7 @@ func dryRunSystemdTimer(t *testing.T, tmp string) {
 		opt.WithCommand("/bin/true"),
 		opt.WithOnCalendar("*-*-* *:00:00"),
 	)
-	if err := resource.Apply(); err != nil {
+	if err := api.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if mutated {

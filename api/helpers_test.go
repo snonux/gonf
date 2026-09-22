@@ -73,7 +73,7 @@ func TestEnsureDir(t *testing.T) {
 	missing := filepath.Join(dir, "newdir")
 	EnsureDir(missing, options.WithMode(0o700))
 
-	if err := resource.Apply(); err != nil {
+	if err := Apply(); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(missing)
@@ -99,7 +99,7 @@ func TestLinkIfExistsAndSymlinkMap(t *testing.T) {
 		"ok", target,
 		"missing", filepath.Join(dir, "nope"),
 	)
-	if err := resource.Apply(); err != nil {
+	if err := Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(filepath.Join(parent, "ok")); err != nil {
@@ -124,7 +124,7 @@ func TestSyncDirAndInstallFile(t *testing.T) {
 	outFile := filepath.Join(t.TempDir(), "out.txt")
 	InstallFile(outFile, srcFile)
 
-	if err := resource.Apply(); err != nil {
+	if err := Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(dstDir, "a.conf")); err != nil {
@@ -143,7 +143,7 @@ func TestGitGlobalRegisters(t *testing.T) {
 	// Run Apply in dry-run to avoid mutating real git config.
 	resource.SetDryRun(true)
 	defer resource.SetDryRun(false)
-	if err := resource.Apply(); err != nil {
+	if err := Apply(); err != nil {
 		t.Fatal(err)
 	}
 }

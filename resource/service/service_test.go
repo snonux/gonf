@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testapply"
 	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
@@ -52,7 +53,7 @@ func TestPresentIdempotentWithFakeRunner(t *testing.T) {
 	}
 
 	Present("uptimed")
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -95,7 +96,7 @@ func TestWithRestartIssuesRestart(t *testing.T) {
 	}
 
 	Present("uptimed", opt.WithRestart)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	if !sawRestart {
@@ -140,12 +141,9 @@ func TestOnChangeGatesRestartButNotServiceConvergence(t *testing.T) {
 				t.Skip("unsupported GOOS")
 			}
 
-			watched := resource.Register("File", "unit", resource.ApplierFunc(func() error {
-				resource.Note("File[unit]", tc.watchStatus)
-				return nil
-			}))
+			watched := testapply.Register("File", "unit", testapply.Noting(tc.watchStatus, "File[unit]"))
 			Present("uptimed", opt.WithRestart, opt.OnChange(watched))
-			if err := resource.Apply(); err != nil {
+			if err := testapply.Apply(); err != nil {
 				t.Fatalf("Apply: %v", err)
 			}
 			if sawRestart != tc.wantRestart {
@@ -161,7 +159,7 @@ func TestWithUserRejectedOnNonSystemd(t *testing.T) {
 	}
 	resource.ResetRepository()
 	Present("uptimed", opt.WithUser)
-	err := resource.Apply()
+	err := testapply.Apply()
 	if err == nil {
 		t.Fatal("expected WithUser error")
 	}
@@ -257,7 +255,7 @@ func TestLiveUptimedPresent(t *testing.T) {
 	name := liveServiceName()
 	resource.ResetRepository()
 	Present(name)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -269,7 +267,7 @@ func TestLiveUptimedRestart(t *testing.T) {
 	name := liveServiceName()
 	resource.ResetRepository()
 	Present(name, opt.WithRestart)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -7,6 +7,7 @@ import (
 
 	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/exec"
+	"github.com/snonux/gonf/internal/testapply"
 	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
@@ -53,17 +54,20 @@ func TestChangeGateOutcomes(t *testing.T) {
 				return "", "", 0, nil
 			}})
 			// A noted watch goes through OnChange so the watched resource is
-			// also ordered first; the unknown id uses the ids-level form.
-			gate := opt.WatchChanges(tc.watch)
-			if tc.noted {
-				gate = opt.OnChange(resource.Register("File", "unit", resource.ApplierFunc(func() error {
-					resource.Note("File[unit]", tc.watchNote)
-					return nil
-				})))
-			}
-			Present("true", nil, gate)
-			if err := resource.Apply(); err != nil {
-				t.Fatalf("Apply: %v", err)
+			// also ordered first and the plan engine applies both. The
+			// unknown id uses the ids-level form and the direct Ensure path:
+			// the plan pre-flight refuses a dangling watch before apply, so
+			// the gate's own "never noted holds" rule is only reachable there.
+			if !tc.noted {
+				resource.ResetReport()
+				if err := Ensure("true", nil, opt.WatchChanges(tc.watch)); err != nil {
+					t.Fatalf("Ensure: %v", err)
+				}
+			} else {
+				Present("true", nil, opt.OnChange(testapply.Register("File", "unit", testapply.Noting(tc.watchNote, "File[unit]"))))
+				if err := testapply.Apply(); err != nil {
+					t.Fatalf("Apply: %v", err)
+				}
 			}
 			if ran != tc.wantRun {
 				t.Errorf("runner invoked = %t, want %t", ran, tc.wantRun)

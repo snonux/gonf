@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	. "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/testapply"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -100,7 +101,7 @@ func TestPresentDirectoryOwnerGroupApplied(t *testing.T) {
 	path := filepath.Join(dir, "owneddir")
 
 	Present(path, WithOwner(uname), WithGroup(gname))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
@@ -131,7 +132,7 @@ func TestPresentDirectoryCreate(t *testing.T) {
 	path := filepath.Join(dir, "newdir")
 
 	Present(path)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
@@ -151,7 +152,7 @@ func TestPresentDirectoryIdempotentWithMode(t *testing.T) {
 	mode := os.FileMode(0o700)
 
 	Present(path, WithMode(mode))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
@@ -164,7 +165,7 @@ func TestPresentDirectoryIdempotentWithMode(t *testing.T) {
 	}
 
 	// Idempotency check
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("second Apply failed: %v", err)
 	}
 }
@@ -178,7 +179,7 @@ func TestPresentDirectoryFailsWhenFileExists(t *testing.T) {
 	}
 
 	Present(path)
-	if err := resource.Apply(); err == nil {
+	if err := testapply.Apply(); err == nil {
 		t.Error("expected Apply to fail when a file exists at the directory path")
 	}
 }
@@ -195,7 +196,7 @@ func TestPresentAbsentNonEmptyDirWithoutPruneFails(t *testing.T) {
 	}
 
 	Present(path, IsAbsent)
-	if err := resource.Apply(); err == nil {
+	if err := testapply.Apply(); err == nil {
 		t.Error("expected Apply to fail when removing non-empty directory without prune")
 	}
 }
@@ -212,7 +213,7 @@ func TestPresentAbsentPruneDirectoryRecursive(t *testing.T) {
 	}
 
 	Present(path, IsAbsent, WithPrune)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
@@ -233,7 +234,7 @@ func TestAbsentPruneDirectoryRecursive(t *testing.T) {
 	}
 
 	Absent(path, WithPrune)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
@@ -264,7 +265,7 @@ func TestPresentDirectoryWithSource(t *testing.T) {
 	t.Run("Create", func(t *testing.T) {
 		resource.ResetRepository()
 		Present(dst, WithSource(src))
-		if err := resource.Apply(); err != nil {
+		if err := testapply.Apply(); err != nil {
 			t.Fatalf("Apply failed: %v", err)
 		}
 
@@ -285,7 +286,7 @@ func TestPresentDirectoryWithSource(t *testing.T) {
 		}
 
 		Present(dst, WithSource(src), WithPrune)
-		if err := resource.Apply(); err != nil {
+		if err := testapply.Apply(); err != nil {
 			t.Fatalf("Apply failed: %v", err)
 		}
 
@@ -311,7 +312,7 @@ func TestSourceCopyUsesFileModeDefaultNotDirMode(t *testing.T) {
 
 	// Use non-default dir mode to prove files don't use it
 	Present(dst, WithSource(src), WithMode(0o700))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
@@ -340,7 +341,7 @@ func TestSourceCopyRespectsExplicitWithFileMode(t *testing.T) {
 
 	explicitMode := os.FileMode(0o600)
 	Present(dst, WithSource(src), WithFileMode(explicitMode))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
@@ -367,7 +368,7 @@ func TestSourceCopyStripsTmplSuffixOnCopiedFile(t *testing.T) {
 	}
 
 	Present(dst, WithSource(src))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
@@ -394,14 +395,14 @@ func TestSourceCopyWithPruneKeepsTemplatedFile(t *testing.T) {
 
 	// First apply to create the file
 	Present(dst, WithSource(src))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
 	// Now apply with prune
 	resource.ResetRepository()
 	Present(dst, WithSource(src), WithPrune)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
@@ -425,7 +426,7 @@ func TestSourceCopyParamMatchesSingleFilePath(t *testing.T) {
 	}
 
 	Present(dst, WithSource(src))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
@@ -458,7 +459,7 @@ func TestSourceCopyRecreatesSymlinkNotContent(t *testing.T) {
 	}
 
 	Present(dst, WithSource(src))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
@@ -487,7 +488,7 @@ func TestSourceGlobInstallsMatchingFiles(t *testing.T) {
 	}
 
 	Present(dst, WithSourceGlob(filepath.Join(src, "*.rb")), WithFileMode(0o640))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
@@ -507,7 +508,7 @@ func TestSourceGlobInstallsMatchingFiles(t *testing.T) {
 	// Idempotent
 	resource.ResetRepository()
 	Present(dst, WithSourceGlob(filepath.Join(src, "*.rb")), WithFileMode(0o640))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("second Apply: %v", err)
 	}
 }
@@ -536,9 +537,11 @@ func TestSourceGlobPrune(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	Present(dst, WithSourceGlob(filepath.Join(src, "*.rb")), WithPrune)
-	if err := resource.Apply(); err != nil {
-		t.Fatalf("Apply: %v", err)
+	// Direct path on purpose (task sb2): the plan engine rebuilds a glob
+	// sync as a tree sync and prunes the unmanaged subdir; switch back to
+	// Present + testapply.Apply once the wire carries the glob flavor.
+	if err := Ensure(dst, WithSourceGlob(filepath.Join(src, "*.rb")), WithPrune); err != nil {
+		t.Fatalf("Ensure: %v", err)
 	}
 
 	if _, err := os.Stat(filepath.Join(dst, "old.rb")); !os.IsNotExist(err) {
@@ -613,9 +616,9 @@ func TestSourceGlobPruneKeepSetMatchesCountingMatches(t *testing.T) {
 		t.Fatalf("counting matches = %v, want exactly {keep.rb, tofile}", wantKeep)
 	}
 
-	Present(dst, WithSourceGlob(filepath.Join(src, "*")), WithPrune)
-	if err := resource.Apply(); err != nil {
-		t.Fatalf("Apply: %v", err)
+	// Direct path on purpose, like TestSourceGlobPrune (task sb2).
+	if err := Ensure(dst, WithSourceGlob(filepath.Join(src, "*")), WithPrune); err != nil {
+		t.Fatalf("Ensure: %v", err)
 	}
 
 	for _, name := range []string{"keep.rb", "tofile"} {
@@ -671,7 +674,7 @@ func TestSourceTreePruneDryRunKeepsStaleFiles(t *testing.T) {
 	t.Cleanup(func() { resource.SetDryRun(false) })
 
 	Present(dst, WithSource(src), WithPrune)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
@@ -743,7 +746,7 @@ func TestSourceTreeDryRunCreatesNothing(t *testing.T) {
 	t.Cleanup(func() { resource.SetDryRun(false) })
 
 	Present(dst, WithSource(src))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("dry-run Apply failed: %v", err)
 	}
 
@@ -798,7 +801,7 @@ func TestSourceGlobDryRunCopiesNothing(t *testing.T) {
 	t.Cleanup(func() { resource.SetDryRun(false) })
 
 	Present(dst, WithSourceGlob(filepath.Join(src, "*.rb")))
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("dry-run Apply failed: %v", err)
 	}
 
@@ -949,7 +952,7 @@ func TestSourceTreePruneNotesChanged(t *testing.T) {
 	}
 
 	Present(dst, WithSource(src), WithPrune)
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
@@ -1013,7 +1016,7 @@ func TestSourceTreeSubdirNotesReal(t *testing.T) {
 		resource.ResetRepository()
 		summary := summaryOf(t, func() error {
 			Present(dst, WithSource(src))
-			return resource.Apply()
+			return testapply.Apply()
 		})
 		for _, want := range []string{
 			"changed Directory[" + dst + "]",
@@ -1031,7 +1034,7 @@ func TestSourceTreeSubdirNotesReal(t *testing.T) {
 		resource.ResetRepository()
 		summary := summaryOf(t, func() error {
 			Present(dst, WithSource(src))
-			return resource.Apply()
+			return testapply.Apply()
 		})
 		// PrintSummary lists only non-ok notes, so the Directory[<sub>] ok
 		// note (and the files') is pinned via the count: root dir, f1, sub
@@ -1084,7 +1087,7 @@ func TestSourceTreeDryRunParity(t *testing.T) {
 		Present(dst, append([]DirOption{WithSource(src)}, opts...)...)
 		var applyErr error
 		summary := summaryOf(t, func() error {
-			applyErr = resource.Apply()
+			applyErr = testapply.Apply()
 			return applyErr
 		})
 		if applyErr != nil {
@@ -1101,7 +1104,7 @@ func TestSourceTreeDryRunParity(t *testing.T) {
 		Present(dst, append([]DirOption{WithSource(src)}, opts...)...)
 		var applyErr error
 		summary := summaryOf(t, func() error {
-			applyErr = resource.Apply()
+			applyErr = testapply.Apply()
 			return applyErr
 		})
 		resource.SetDryRun(false)
@@ -1252,7 +1255,7 @@ func TestSourceTreeRelativeSymlinkDryRunParity(t *testing.T) {
 		dst := filepath.Join(t.TempDir(), "dst")
 		summary := summaryOf(t, func() error {
 			Present(dst, WithSource(src))
-			return resource.Apply()
+			return testapply.Apply()
 		})
 		if _, err := os.Stat(filepath.Join(dst, "sub", "f2")); err != nil {
 			t.Errorf("missing copied file: %v", err)
@@ -1276,7 +1279,7 @@ func TestSourceTreeRelativeSymlinkDryRunParity(t *testing.T) {
 		t.Cleanup(func() { resource.SetDryRun(false) })
 		summary := summaryOf(t, func() error {
 			Present(dst, WithSource(src))
-			return resource.Apply()
+			return testapply.Apply()
 		})
 		// Nothing on disk, and NO loud refusal: pre-fix, the relative
 		// in-tree targets failed here with 'refusing broken link to'.
@@ -1306,7 +1309,7 @@ func TestSourceTreeRelativeSymlinkDryRunParity(t *testing.T) {
 			resource.ResetRepository()
 			return summaryOf(t, func() error {
 				Present(realDst, WithSource(src))
-				return resource.Apply()
+				return testapply.Apply()
 			})
 		}
 		dryApply := func(t *testing.T) string {
@@ -1316,7 +1319,7 @@ func TestSourceTreeRelativeSymlinkDryRunParity(t *testing.T) {
 			defer resource.SetDryRun(false)
 			return summaryOf(t, func() error {
 				Present(dryDst, WithSource(src))
-				return resource.Apply()
+				return testapply.Apply()
 			})
 		}
 		assertParity := func(t *testing.T, realSummary, drySummary string) {
@@ -1394,7 +1397,7 @@ func TestSourceTreeRelativeSymlinkDryRunParity(t *testing.T) {
 				}
 				dst := filepath.Join(t.TempDir(), "dst")
 				Present(dst, WithSource(src))
-				err := resource.Apply()
+				err := testapply.Apply()
 				if err == nil || !strings.Contains(err.Error(), "refusing broken link to") {
 					t.Fatalf("expected the broken-link refusal in %s mode, got: %v", tc.name, err)
 				}
@@ -1442,7 +1445,7 @@ func TestAbsentDoesNotMutateCallerOptionSlice(t *testing.T) {
 
 	// (b) The Present resource built from the same backing array must not
 	// have become absent.
-	if err := resource.Apply(); err != nil {
+	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 	info, err := os.Stat(keep)
