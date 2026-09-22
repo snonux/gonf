@@ -377,10 +377,15 @@ As of task i5, **every** resource kind uses the `Handler` pattern: `package`,
 systemd,systemdtimer,user}/planwire.go` — `dir` registers three Handlers for its
 three kinds, `link` registers two). `api/plan.go`'s `draftToOp` and
 `plan/apply.go`'s `applyActive` are now pure `HandlerFor` dispatch with no
-fallback switch cases and no resource-package imports of their own — this is
+fallback switch cases and no `resource/<kind>` imports of their own — this is
 also what lets `plan` be a pure types/codec/split/pushwire/blob-store
-package (`go list -deps ./plan/...` pulls in only the resource-neutral
-`resource` core package, never a `resource/<kind>` backend). Steps 2 and 5
+package. The packages are layered, not mutually dependent: `plan` imports
+only the kind-neutral core (`resource` for `PlanDraft` and the apply report,
+`resource/options` for the option constructors behind `OwnerGroupOptions`
+and `GuardOptions`), and every `resource/<kind>` backend imports `plan` to
+register its `Handler`, so `plan` must never import a `resource/<kind>`
+package. `TestPlanImportsOnlyResourceCore` (`plan/layering_test.go`) pins
+that rule. Steps 2 and 5
 below are always "add a `<kind>/planwire.go` with a `Handler` and register
 it"; there is no more legacy switch path for a new kind to fall back to.
 

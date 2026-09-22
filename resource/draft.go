@@ -15,8 +15,12 @@ type PlanGuardDraft struct {
 }
 
 // PlanDraft is a package-neutral snapshot of a registered resource for plan
-// recording. The api package converts drafts to plan.Op so resource packages
-// do not import plan (avoids cycles with plan apply helpers).
+// recording. It lives in this core package, not in plan, because plan
+// imports this package (plan.Handler.ToOp takes a PlanDraft), so this
+// package can never import plan back. The resource/<kind> backends sit
+// above both: each imports plan and lowers its own drafts to plan.Op in its
+// registered plan.Handler (<kind>/planwire.go); the api package only
+// dispatches a draft to that Handler (draftToOp).
 type PlanDraft struct {
 	// Kind selects the op kind the recorder emits, e.g. "file" or "cron".
 	Kind string

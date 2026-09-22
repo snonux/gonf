@@ -22,8 +22,14 @@ type ApplyContext struct {
 // from an init() in the resource package), instead of api/plan.go's
 // draftToOp and plan/apply.go's applyActive each carrying a hand-written
 // case for that kind. This is also what keeps this package free of
-// resource-package imports: applyActive only ever calls through this
-// interface, never a concrete resource kind.
+// resource-KIND imports: applyActive only ever calls through this interface,
+// never a concrete resource kind. The packages are layered, not cyclic:
+// plan imports only the kind-neutral core, resource (PlanDraft, the apply
+// report) and resource/options (the option constructors OwnerGroupOptions
+// and GuardOptions build), while every resource/<kind> backend imports plan
+// to register its Handler, so plan must never import a resource/<kind>
+// package (that would be an import cycle; TestPlanImportsOnlyResourceCore
+// pins the rule).
 //
 // This does not change the wire format: Op and resource.PlanDraft stay the
 // same flat structs (same JSON tags, same CurrentVersion) — only which Go
