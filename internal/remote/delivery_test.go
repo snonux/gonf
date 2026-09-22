@@ -296,7 +296,7 @@ func TestToHostRebuildFailureSendsNoChunk(t *testing.T) {
 	t.Cleanup(func() { ensureRuntime, rebuildRemoteCmds = oldEnsure, oldRebuild })
 	ensureRuntime = func(context.Context, PushTarget) (string, error) { return "/opt/fresh/gonf", nil }
 	boom := errors.New("rebuild boom")
-	rebuildRemoteCmds = func([]plan.Chunk, PushTarget, string, Mode) ([]string, error) { return nil, boom }
+	rebuildRemoteCmds = func([]plan.Chunk, PushTarget, string, Mode, cmdTimeoutForward) ([]string, error) { return nil, boom }
 
 	ops, mem := stickyOps(t)
 	target := PushTarget{Host: "h.example", Privilege: privilege.Sudo}

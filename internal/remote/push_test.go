@@ -32,7 +32,7 @@ func TestRemoteApplyCmdPrivilegeNoneElevateErrors(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := remoteApplyCmd(tc.elevate, PushTarget{Privilege: tc.mode}, "", Push)
+			got, err := remoteApplyCmd(tc.elevate, PushTarget{Privilege: tc.mode}, "", Push, cmdTimeoutForward{})
 			if tc.wantErr {
 				if err == nil || !strings.Contains(err.Error(), "-privilege=none") {
 					t.Fatalf("want privilege error, got %q, %v", got, err)

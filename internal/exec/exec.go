@@ -42,6 +42,14 @@ type Opts struct {
 // being killed outright.
 const CancelGrace = 10 * time.Second
 
+// BuiltinDefaultTimeout is the process-wide default timeout a gonf process
+// starts with (DefaultTimeout before any SetDefaultTimeout). A parent gonf
+// forwards its -cmd-timeout to a child gonf apply (the elevated re-exec in
+// api, the remote apply in internal/remote) only when its own value differs
+// from this, because a child that is not told otherwise starts with the same
+// built-in value.
+const BuiltinDefaultTimeout = 5 * time.Minute
+
 // cancelGrace is the grace RunWith and RunWithStdin use: CancelGrace,
 // shortened by tests only.
 var cancelGrace = CancelGrace
@@ -52,7 +60,7 @@ var cancelGrace = CancelGrace
 // concurrently with an in-flight apply.
 var (
 	timeoutMu      sync.Mutex
-	defaultTimeout = 5 * time.Minute
+	defaultTimeout = BuiltinDefaultTimeout
 )
 
 // The bound context is the parent of every command Run, RunWith and
@@ -92,6 +100,22 @@ func DefaultTimeout() time.Duration {
 	timeoutMu.Lock()
 	defer timeoutMu.Unlock()
 	return defaultTimeout
+}
+
+// CmdTimeoutFlag returns the global "-cmd-timeout=<d>" argument a parent
+// gonf passes to a child gonf apply so the child's backend commands and
+// validators run under the parent's command timeout d, or "" when d is the
+// built-in default (or not positive): the child starts with that value
+// anyway, and leaving the flag out keeps the child's argv unchanged for the
+// common case. d.String() ("30s", "1m30s") is what time.ParseDuration, and
+// so the child's flag.Duration, reads back, and it needs no shell quoting.
+// The flag is global (parsed by internal/cli's top-level flag set), so
+// callers place it before the "apply" subcommand.
+func CmdTimeoutFlag(d time.Duration) string {
+	if d <= 0 || d == BuiltinDefaultTimeout {
+		return ""
+	}
+	return "-cmd-timeout=" + d.String()
 }
 
 // BindContext makes ctx the parent context of every command Run, RunWith and

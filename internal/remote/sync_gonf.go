@@ -22,6 +22,10 @@ import (
 //	sync_probe.go       plan/strict-preview/release version and uname probes
 //	sync_staging.go     the remote mktemp staging directory
 //	sync_install.go     copying the binary over, installing and verifying it
+//
+// cmdtimeout.go adds the Pusher's -cmd-timeout capability probe
+// (CmdTimeoutProber), which gates forwarding the controller's command
+// timeout to the remote apply.
 
 // Pusher bundles the exec/network seams the gonf binary sync (the sync_*.go
 // files) needs to build and stage a fresh gonf binary on a remote host:
@@ -74,6 +78,13 @@ type Pusher struct {
 	// authoritative either way.
 	ReleaseVersionProber func(ctx context.Context, t PushTarget, pc ProbeContext) (string, error)
 
+	// CmdTimeoutProber reports whether the target's gonf binary in pc
+	// accepts the global flag (e.g. "-cmd-timeout=30s"), so a non-default
+	// controller -cmd-timeout is forwarded to the remote apply only where
+	// it cannot break the command line (see cmdtimeout.go). A nil value
+	// forwards nothing.
+	CmdTimeoutProber func(ctx context.Context, t PushTarget, pc ProbeContext, flag string) (bool, error)
+
 	// CrossBuildRoot is the parent directory in which this Pusher creates its
 	// private build dir (see crossbuild.go). Empty means os.TempDir(). It is
 	// a test seam: tests point it at t.TempDir() so nothing lands in the
@@ -105,6 +116,7 @@ func NewPusher() *Pusher {
 		PlanVersionProber:    probePlanVersion,
 		StrictPreviewProber:  probeStrictPreviewVersion,
 		ReleaseVersionProber: probeReleaseVersion,
+		CmdTimeoutProber:     probeCmdTimeoutSupport,
 		buildCache:           map[string]cachedBuild{},
 		buildKeyLocks:        map[string]*sync.Mutex{},
 	}
@@ -119,18 +131,23 @@ func NewPusher() *Pusher {
 // release-version probe whenever the plan schema is current. Faking only the
 // plan schema (as this helper once did) left "gonf -version" running over a
 // real ssh against the test's fake hosts; the failure was only logged, so
-// tests passed while touching the network (task x72). The strict-preview
+// tests passed while touching the network (task x72). The -cmd-timeout
+// capability probe is faked too (as "accepted"): a push reaches it whenever
+// a test left a non-default command timeout active. The strict-preview
 // probe is deliberately left alone: only preview (RequireRemoteGonf) reads
 // it, and preview tests use AssumeRemoteGonfCurrent. A preview reached under
 // this helper hits refuseNetworkExecInTests instead of silently probing.
 func AssumeRemotePlanCurrent() func() {
 	oldPlan := defaultPusher.PlanVersionProber
 	oldRelease := defaultPusher.ReleaseVersionProber
+	oldCmdTimeout := defaultPusher.CmdTimeoutProber
 	defaultPusher.PlanVersionProber = currentPlanVersion
 	defaultPusher.ReleaseVersionProber = currentReleaseVersion
+	defaultPusher.CmdTimeoutProber = acceptCmdTimeout
 	return func() {
 		defaultPusher.PlanVersionProber = oldPlan
 		defaultPusher.ReleaseVersionProber = oldRelease
+		defaultPusher.CmdTimeoutProber = oldCmdTimeout
 	}
 }
 

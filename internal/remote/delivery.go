@@ -28,12 +28,13 @@ const (
 // reassigns it.
 var ensureRuntime = EnsureRemoteGonf
 
-// rebuildRemoteCmds is buildRemoteCmds as prepareRemote's post-install
-// rebuild calls it. Only the binary path differs from the pre-flight build,
-// and privilege.WrapApplyBinCmd does not check the path today, so the rebuild
-// cannot currently fail once the pre-flight passed; its error branch still
-// guards a future path check. It is a variable only so this package's tests
-// can drive that branch; production code never reassigns it.
+// rebuildRemoteCmds is buildRemoteCmds as prepareRemote's post-runtime
+// rebuild calls it. Only the binary path and the forwarded -cmd-timeout
+// differ from the pre-flight build, and privilege.WrapApplyBinCmd checks
+// neither today, so the rebuild cannot currently fail once the pre-flight
+// passed; its error branch still guards a future check. It is a variable
+// only so this package's tests can drive that branch; production code never
+// reassigns it.
 var rebuildRemoteCmds = buildRemoteCmds
 
 // Mode selects how a recorded plan is delivered to a remote host. It is the
@@ -207,35 +208,65 @@ func (d Delivery) forHost(label string) Delivery {
 }
 
 // prepareRemote builds every chunk's remote apply command and makes sure the
-// remote gonf runtime fits d.Mode. The commands are built before any SSH
-// traffic, so a privilege misconfiguration (e.g. -privilege=none with an
+// remote gonf runtime fits d.Mode. The commands are first built before any
+// SSH traffic, so a privilege misconfiguration (e.g. -privilege=none with an
 // elevated chunk) fails before syncing gonf or sending any chunk.
 //
 // Push installs or upgrades gonf when needed; when that lands the binary at
-// a new path, the returned target carries it (GonfPath) and the commands are
-// rebuilt so every later remote call — including the sticky blob upload —
-// runs the fresh binary. Preview only verifies the remote binary and never
-// changes the target.
+// a new path, the returned target carries it (GonfPath) so every later
+// remote call (including the sticky blob upload) runs the fresh binary.
+// Preview only verifies the remote binary and never changes the target.
+//
+// Once the runtime is settled, a non-default controller -cmd-timeout is
+// resolved against the binary that will actually run each chunk
+// (resolveCmdTimeoutForward, see cmdtimeout.go): only then can the probe
+// see a freshly installed binary. The commands are rebuilt whenever the
+// binary path changed or the flag is forwarded to some chunk.
 func (d Delivery) prepareRemote(ctx context.Context, t PushTarget, chunks []plan.Chunk, sticky string) (PushTarget, []string, error) {
-	remotes, err := buildRemoteCmds(chunks, t, sticky, d.Mode)
+	remotes, err := buildRemoteCmds(chunks, t, sticky, d.Mode, cmdTimeoutForward{})
 	if err != nil {
 		return t, nil, err
 	}
+	t, installed, err := d.prepareRuntime(ctx, t, chunks)
+	if err != nil {
+		return t, nil, err
+	}
+	needLogin, needElevated := chunkContexts(chunks)
+	fwd, err := defaultPusher.resolveCmdTimeoutForward(ctx, t, needLogin, needElevated)
+	if err != nil {
+		return t, nil, err
+	}
+	if installed == "" && !fwd.active() {
+		return t, remotes, nil
+	}
+	remotes, err = rebuildRemoteCmds(chunks, t, sticky, d.Mode, fwd)
+	if err != nil {
+		if installed != "" {
+			return t, nil, fmt.Errorf("rebuild remote commands for %s: %w", installed, err)
+		}
+		return t, nil, fmt.Errorf("rebuild remote commands: %w", err)
+	}
+	return t, remotes, nil
+}
+
+// prepareRuntime is prepareRemote's runtime step for d.Mode: Preview only
+// verifies the remote gonf in every privilege context that will apply a
+// chunk; Push installs or upgrades it when needed (ensureRuntime). installed
+// is the path of a freshly installed binary when the returned target now
+// points at it (GonfPath was empty), "" otherwise.
+func (d Delivery) prepareRuntime(ctx context.Context, t PushTarget, chunks []plan.Chunk) (PushTarget, string, error) {
 	if d.Mode == Preview {
-		return t, remotes, requireRemoteGonfForChunks(ctx, t, chunks)
+		return t, "", requireRemoteGonfForChunks(ctx, t, chunks)
 	}
 	installed, err := ensureRuntime(ctx, t)
 	if err != nil {
-		return t, nil, err
+		return t, "", err
 	}
-	if installed != "" && t.GonfPath == "" {
-		t.GonfPath = installed
-		remotes, err = rebuildRemoteCmds(chunks, t, sticky, d.Mode)
-		if err != nil {
-			return t, nil, fmt.Errorf("rebuild remote commands for %s: %w", installed, err)
-		}
+	if installed == "" || t.GonfPath != "" {
+		return t, "", nil
 	}
-	return t, remotes, nil
+	t.GonfPath = installed
+	return t, installed, nil
 }
 
 // stream uploads the blobs to the sticky dir (when there is one), streams

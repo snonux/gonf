@@ -140,14 +140,12 @@ func PushPayload(t PushTarget, payload []byte, elevate bool, applyDir string) er
 // PushPayloadContext is PushPayload bounded/cancelable by ctx: canceling ctx
 // kills the in-flight ssh process. When ctx has no deadline of its own,
 // DefaultHostTimeout is applied so a wedged remote command cannot hang this
-// one-shot push forever.
+// one-shot push forever. Like a Delivery, it forwards a non-default
+// controller -cmd-timeout only when the remote binary accepts the flag
+// (payloadApplyCmd); it never installs or upgrades gonf.
 func PushPayloadContext(ctx context.Context, t PushTarget, payload []byte, elevate bool, applyDir string) error {
 	if t.Host == "" {
 		return fmt.Errorf("push: empty host")
-	}
-	remote, err := remoteApplyCmd(elevate, t, applyDir, Push)
-	if err != nil {
-		return err
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -157,7 +155,26 @@ func PushPayloadContext(ctx context.Context, t PushTarget, payload []byte, eleva
 		ctx, cancel = context.WithTimeout(ctx, DefaultHostTimeout)
 		defer cancel()
 	}
+	remote, err := payloadApplyCmd(ctx, t, elevate, applyDir)
+	if err != nil {
+		return err
+	}
 	return SSHRunner(ctx, bytes.NewReader(payload), t.sshArgv(remote))
+}
+
+// payloadApplyCmd builds PushPayloadContext's remote apply command. The
+// command is built once without the -cmd-timeout flag first, so a privilege
+// misconfiguration fails before the capability probe opens an ssh session.
+func payloadApplyCmd(ctx context.Context, t PushTarget, elevate bool, applyDir string) (string, error) {
+	remote, err := remoteApplyCmd(elevate, t, applyDir, Push, cmdTimeoutForward{})
+	if err != nil {
+		return "", err
+	}
+	fwd, err := defaultPusher.resolveCmdTimeoutForward(ctx, t, !elevate, elevate)
+	if err != nil || !fwd.active() {
+		return remote, err
+	}
+	return remoteApplyCmd(elevate, t, applyDir, Push, fwd)
 }
 
 // requireRemoteGonfForChunks verifies every privilege context that will run a
@@ -166,14 +183,7 @@ func PushPayloadContext(ctx context.Context, t PushTarget, payload []byte, eleva
 // is passed to RequireRemoteGonf explicitly (ProbeLogin / ProbeElevated); t
 // itself stays the plain destination.
 func requireRemoteGonfForChunks(ctx context.Context, t PushTarget, chunks []plan.Chunk) error {
-	var needUnprivileged, needElevated bool
-	for _, chunk := range chunks {
-		if chunk.Elevate {
-			needElevated = true
-		} else {
-			needUnprivileged = true
-		}
-	}
+	needUnprivileged, needElevated := chunkContexts(chunks)
 	if needUnprivileged {
 		if err := RequireRemoteGonf(ctx, t, ProbeLogin); err != nil {
 			return err
@@ -191,11 +201,13 @@ func requireRemoteGonfForChunks(ctx context.Context, t PushTarget, chunks []plan
 // in the given delivery mode. Called once up front (pre-flight, before any
 // SSH traffic) and again after EnsureRemoteGonf if it installed a fresh
 // binary at a new path, so both passes share one implementation instead of
-// drifting apart. sticky ("" for none) is every chunk's -apply-dir.
-func buildRemoteCmds(chunks []plan.Chunk, t PushTarget, sticky string, mode Mode) ([]string, error) {
+// drifting apart. sticky ("" for none) is every chunk's -apply-dir; fwd
+// adds the controller's -cmd-timeout to the chunks whose privilege context
+// accepts it (the zero value adds nothing, as in the pre-flight pass).
+func buildRemoteCmds(chunks []plan.Chunk, t PushTarget, sticky string, mode Mode, fwd cmdTimeoutForward) ([]string, error) {
 	remotes := make([]string, len(chunks))
 	for i, ch := range chunks {
-		remote, err := remoteApplyCmd(ch.Elevate, t, sticky, mode)
+		remote, err := remoteApplyCmd(ch.Elevate, t, sticky, mode, fwd)
 		if err != nil {
 			return nil, fmt.Errorf("chunk %d: %w", i, err)
 		}
@@ -261,14 +273,18 @@ func streamChunks(ctx context.Context, t PushTarget, chunks []plan.Chunk, remote
 }
 
 // remoteApplyCmd builds the remote shell command for one apply session in
-// the given delivery mode (Mode.applyStdinArg picks the stdin argument).
-func remoteApplyCmd(elevate bool, t PushTarget, applyDir string, mode Mode) (string, error) {
+// the given delivery mode (Mode.applyStdinArg picks the stdin argument):
+// "gonf [-cmd-timeout=<d>] apply [-apply-dir <dir>] <stdin arg>", wrapped in
+// sudo/doas for an elevated session. fwd decides whether the global
+// -cmd-timeout flag precedes "apply" for this session's privilege context
+// (see cmdtimeout.go); its zero value never adds it.
+func remoteApplyCmd(elevate bool, t PushTarget, applyDir string, mode Mode, fwd cmdTimeoutForward) (string, error) {
 	stdinArg := mode.applyStdinArg()
 	args := "apply " + stdinArg
 	if applyDir != "" {
 		args = "apply -apply-dir " + applyDir + " " + stdinArg
 	}
-	return privilege.WrapApplyBinCmd(t.privilegeMode(), elevate, remoteGonfBin(t), args)
+	return privilege.WrapApplyBinCmd(t.privilegeMode(), elevate, remoteGonfBin(t), fwd.prefix(elevate)+args)
 }
 
 // pushRemoveStickyTimeout bounds the best-effort sticky-dir removal below.
@@ -317,7 +333,8 @@ func pushBlobs(ctx context.Context, t PushTarget, header plan.Op, mem plan.BlobR
 	if err := plan.EncodePush(&buf, []plan.Op{header}, mem); err != nil {
 		return fmt.Errorf("encode blobs: %w", err)
 	}
-	remote, err := remoteApplyCmd(false, t, applyDir, Push)
+	// No -cmd-timeout: the header-only plan runs no backend command.
+	remote, err := remoteApplyCmd(false, t, applyDir, Push, cmdTimeoutForward{})
 	if err != nil {
 		return err
 	}

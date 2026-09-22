@@ -52,8 +52,9 @@ var errNoCLIHost = errors.New("privileged apply re-executes this binary as `<bin
 type chunkLabel func(i int, ch plan.Chunk) string
 
 // elevatedApplyArgv builds the un-wrapped re-exec argv for the elevated
-// child ("gonf [-profile=<override>] apply [-n] <path>"). Split out from
-// defaultElevatedApply so the dry-run and profile-override propagation can be
+// child ("gonf [-profile=<override>] [-cmd-timeout=<d>] apply [-n] <path>").
+// Split out from defaultElevatedApply so the dry-run, profile-override and
+// command-timeout propagation can be
 // asserted by a unit test without spawning sudo/doas: dryRun must mirror
 // resource.DryRun() at the call site (see remoteApplyCmd in
 // internal/remote/remote.go for the equivalent remote-push argument), or the
@@ -69,10 +70,24 @@ type chunkLabel func(i int, ch plan.Chunk) string
 // "apply" subcommand flag set, so it must precede "apply" in argv. A CLI flag
 // is used rather than an environment variable because sudo's env_reset (the
 // default) strips inherited env vars before the child even starts.
-func elevatedApplyArgv(exe, path string, dryRun bool, profileOverride string) []string {
+//
+// cmdTimeout must mirror CommandTimeout() at the call site, or the child's
+// backend commands and File/ConfigSet validators run under the built-in 5m
+// default instead of the parent's "-cmd-timeout" (a validated /etc file is
+// applied in the root chunk, i.e. by this child). Like "-profile" it is a
+// global flag and precedes "apply"; gexec.CmdTimeoutFlag leaves it out when
+// cmdTimeout is the built-in default. The child is this very binary, so
+// unlike the remote apply (internal/remote cmdtimeout.go) no capability
+// check is needed before passing it. elevatedCancelGrace() relies on this
+// forwarding: the child's validators are bound by the same timeout the
+// grace is derived from.
+func elevatedApplyArgv(exe, path string, dryRun bool, profileOverride string, cmdTimeout time.Duration) []string {
 	argv := []string{exe}
 	if profileOverride != "" {
 		argv = append(argv, "-profile="+profileOverride)
+	}
+	if flag := gexec.CmdTimeoutFlag(cmdTimeout); flag != "" {
+		argv = append(argv, flag)
 	}
 	argv = append(argv, "apply")
 	if dryRun {
@@ -102,7 +117,7 @@ func defaultElevatedApply(ctx context.Context, mode privilege.Mode, ops []plan.O
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		return err
 	}
-	argv := elevatedApplyArgv(exe, path, resource.DryRun(), ProfileOverride())
+	argv := elevatedApplyArgv(exe, path, resource.DryRun(), ProfileOverride(), CommandTimeout())
 	argv, err = privilege.WrapArgv(mode, true, argv)
 	if err != nil {
 		return err
@@ -117,7 +132,9 @@ func defaultElevatedApply(ctx context.Context, mode privilege.Mode, ops []plan.O
 
 // elevatedCancelGrace is how long a canceled elevated re-exec gets between
 // its SIGTERM and the SIGKILL: the command timeout (a validator running in
-// the child is bound by nothing shorter, and the child waits for it) plus
+// the child is bound by nothing shorter, and the child waits for it; the
+// child runs under this same timeout because elevatedApplyArgv forwards
+// "-cmd-timeout") plus
 // twice the child's own command grace, so the child can stop its backend
 // command or finish its validator, discard its verdict and exit before the
 // wrapper is killed. Killing sudo earlier would orphan the root child (sudo

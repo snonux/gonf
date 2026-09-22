@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/api/options"
@@ -241,5 +242,49 @@ func TestCLIPushStrictPreview(t *testing.T) {
 func TestCLIPushLoneID(t *testing.T) {
 	if code := cliPush(context.Background(), []string{"-id"}); code != 2 {
 		t.Fatalf("exit %d want 2", code)
+	}
+}
+
+// TestCLIPushForwardsCmdTimeout drives "gonf -cmd-timeout 30s push ..."
+// end to end through a fake ssh (task c82): the controller's non-default
+// command timeout must reach the remote gonf as the global flag ahead of
+// "apply", so the remote chunk's backend commands and validators run under
+// it instead of the remote's built-in 5m default. The remote gonf is faked
+// as current (AssumeRemotePlanCurrent), so its -cmd-timeout capability probe
+// reports the flag as accepted; the old-remote (skew) side is pinned in
+// internal/remote's cmdtimeout_test.go.
+func TestCLIPushForwardsCmdTimeout(t *testing.T) {
+	orig := api.CommandTimeout()
+	t.Cleanup(func() { api.SetCommandTimeout(orig) })
+	api.ResetTasks()
+	resource.ResetRepository()
+	api.Task("push_timeout_demo", "", func() {
+		api.File(filepath.Join(t.TempDir(), "x"), options.WithContent("via-push"))
+	})
+
+	oldRunner := remote.SSHRunner
+	restoreProbe := remote.AssumeRemotePlanCurrent()
+	t.Cleanup(func() {
+		remote.SSHRunner = oldRunner
+		restoreProbe()
+	})
+	var remoteCmds []string
+	remote.SSHRunner = func(_ context.Context, stdin io.Reader, argv []string) error {
+		_, _ = io.Copy(io.Discard, stdin)
+		remoteCmds = append(remoteCmds, argv[len(argv)-1])
+		return nil
+	}
+
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+	os.Args = []string{"gonf", "-cmd-timeout", "30s", "push", "-id", "demo", "user@host", "push_timeout_demo"}
+	if code := CLI(); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if got := api.CommandTimeout(); got != 30*time.Second {
+		t.Fatalf("CommandTimeout() = %v, want 30s", got)
+	}
+	if len(remoteCmds) != 1 || remoteCmds[0] != "gonf -cmd-timeout=30s apply -" {
+		t.Fatalf("remote cmds = %q, want the forwarded -cmd-timeout before apply", remoteCmds)
 	}
 }

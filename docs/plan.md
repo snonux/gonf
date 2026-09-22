@@ -793,6 +793,21 @@ on the controller. `-profile` is not forwarded to the destination: it only
 affects controller-side (record-time) evaluation such as opaque `When*`
 checks, while the remote `gonf apply` evaluates `when_begin` guards and
 renders `.Gonf` template facts from the destination's own detected facts.
+
+`-cmd-timeout` is forwarded: a value other than the built-in `5m` reaches
+the remote `gonf apply` as `gonf -cmd-timeout=<d> apply …`, so the remote
+chunk's backend commands and File/ConfigSet validators run under the
+controller's bound (the local elevated re-exec gets it the same way). An
+older remote gonf that does not know the flag would reject the whole
+command line, and neither the plan schema nor the release version tells
+(binaries reporting 0.15.0 exist with and without it), so the controller first probes the binary
+that will run each chunk, in its privilege context: `gonf -cmd-timeout=<d>
+-plan-version` (`sudo -n`/`doas` wrapped for elevated chunks). Only a binary
+that answers gets the flag; otherwise the apply runs without it under the
+remote's own default, and a warning says so (an ordinary push upgrades a
+stale gonf; `-preview` and `api.PushPayload` never do). At the default no
+probe runs and the remote command is unchanged.
+
 `gonf -list` lists **activated** tasks (After `When*` filtering for display);
 plan recording still uses the full candidate set.
 
@@ -804,7 +819,7 @@ Three resilience knobs bound the push/fleet path; each has a narrow scope:
 |------|-------|--------|---------|
 | `-host-timeout` (fleet) | per-host context | one host's **whole push** (all chunks: blob upload, applies, sticky removal) | `10m`, `0` = unlimited |
 | `-o ConnectTimeout=15` (generated argv) | every `ssh` invocation | only the **TCP/SSH handshake** | 15s; an explicit `ConnectTimeout` in `ExtraSSH` / `-- ssh-args` wins (ssh uses the first option) |
-| `-cmd-timeout` / `exec.Opts.Timeout` | `internal/exec` `Run`/`RunWith`/`RunWithStdin`, validators | one backend command or validator; an expired command gets SIGTERM, then SIGKILL `CancelGrace` (10s) later, so it may take timeout + 10s | `5m` process-wide; `Opts.Timeout` overrides per call (`< 0` = none) |
+| `-cmd-timeout` / `exec.Opts.Timeout` | `internal/exec` `Run`/`RunWith`/`RunWithStdin`, validators | one backend command or validator; an expired command gets SIGTERM, then SIGKILL `CancelGrace` (10s) later, so it may take timeout + 10s | `5m` process-wide; `Opts.Timeout` overrides per call (`< 0` = none); a non-default value is forwarded to the elevated re-exec and to a remote gonf that accepts the flag |
 
 Design decisions:
 
@@ -853,7 +868,9 @@ Design decisions:
 - **Elevated re-exec.** sudo gets SIGTERM and relays it to the elevated
   `gonf apply`, which stops like a local apply (SIGHUP too, which it gets
   when sudo's `use_pty` pty goes away). gonf prints that it waits and allows
-  the command timeout plus 20s before it SIGKILLs sudo, so a validator
+  the command timeout plus 20s before it SIGKILLs sudo (the child runs under
+  that same timeout: a non-default `-cmd-timeout` is forwarded to it), so a
+  validator
   running in the child can finish and its op be aborted cleanly instead of
   an orphaned root child writing the file afterwards. doas sets the real,
   effective and saved uid to root, so an unprivileged gonf can neither

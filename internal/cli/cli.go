@@ -144,7 +144,8 @@ func parseCLIFlags(program string, args []string) (cliOptions, error) {
 	privFlag := fs.String("privilege", "none", "Privilege helper for Privileged() tasks: none|sudo|doas")
 	cmdTimeout := fs.Duration("cmd-timeout", exec.DefaultTimeout(), fmt.Sprintf("default per-command timeout for backend execs "+
 		"(package manager, systemctl, crontab, ...) and File/ConfigSet validators; a backend exec that outlives it "+
-		"gets SIGTERM and, %v later, SIGKILL; 0 or negative keeps the current default", exec.CancelGrace))
+		"gets SIGTERM and, %v later, SIGKILL; 0 or negative keeps the current default; a non-default value is "+
+		"forwarded to the elevated re-exec and to a remote gonf apply that accepts it", exec.CancelGrace))
 	if err := fs.Parse(args); err != nil {
 		return cliOptions{}, err
 	}
