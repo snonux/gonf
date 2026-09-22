@@ -220,6 +220,87 @@ func TestResolveUnmappedIsNotFound(t *testing.T) {
 	}
 }
 
+func TestResolveRefusesRefsWithoutCanonicalForm(t *testing.T) {
+	// Map every reference, so only the canonical-form check can refuse.
+	all := func(secret.Ref) (Item, bool) { return Field("Infra/x", "Password"), true }
+	f := newFake(t, "ok", Config{Lookup: all}, valueEnv([]byte("v")))
+	for _, ref := range []secret.Ref{"", "/", "..", "../x", "a/../../x"} {
+		for _, p := range []secret.Provider{f.p, secret.NewSnapshot(f.p)} {
+			_, err := secret.Resolve(context.Background(), p, ref)
+			if secret.KindOf(err) != secret.ErrInvalid {
+				t.Fatalf("%T %q: got %v, want ErrInvalid (never a suppressible not-found)", p, ref, err)
+			}
+		}
+	}
+	if n := f.events(t, "probe") + f.events(t, "read"); n != 0 {
+		t.Fatalf("an invalid reference ran foostore %d times", n)
+	}
+}
+
+func TestResolveDoesNotWaitForUnreadPassphrasePipe(t *testing.T) {
+	big := bytes.Repeat([]byte("p"), 1<<20) // far beyond a pipe buffer
+	cfg := Config{Passphrase: func(context.Context) ([]byte, error) { return bytes.Clone(big), nil }}
+	f := newFake(t, "passhold", cfg)
+	t.Cleanup(func() { killPids(f.pids) })
+	errc := make(chan error, 1)
+	go func() {
+		_, err := secret.Resolve(context.Background(), f.p, "garage/rpc_secret")
+		errc <- err
+	}()
+	select {
+	case err := <-errc:
+		if secret.KindOf(err) != secret.ErrUnavailable {
+			t.Fatalf("got %v, want ErrUnavailable (locked)", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("Resolve blocked on a passphrase pipe a descendant holds unread")
+	}
+}
+
+func TestKilledByDeadlineNeedsSignal(t *testing.T) {
+	expired, cancel := context.WithCancel(context.Background())
+	cancel()
+	tests := []struct {
+		ctx  context.Context
+		code int
+		want bool
+	}{
+		{expired, 0, false}, // exited successfully as the deadline passed
+		{expired, 1, false}, // foostore's own timeout exit keeps its result
+		{expired, -1, true}, // killed
+		{context.Background(), -1, false},
+	}
+	for _, tt := range tests {
+		if got := killedByDeadline(tt.ctx, tt.code); got != tt.want {
+			t.Fatalf("killedByDeadline(done=%v, %d) = %v, want %v", tt.ctx.Err() != nil, tt.code, got, tt.want)
+		}
+	}
+}
+
+func TestBoundedBufferClearsOutgrownArrays(t *testing.T) {
+	b := &boundedBuffer{max: 4096}
+	var outgrown [][]byte
+	for i := range 20 {
+		if cap(b.buf) > 0 {
+			outgrown = append(outgrown, b.buf[:cap(b.buf)])
+		}
+		_, _ = b.Write(bytes.Repeat([]byte{'s'}, 100+i))
+	}
+	if b.overflow || b.total != len(b.buf) || !bytes.Equal(b.buf, bytes.Repeat([]byte{'s'}, b.total)) {
+		t.Fatalf("buffer holds %d of %d bytes, overflow %v", len(b.buf), b.total, b.overflow)
+	}
+	for _, old := range outgrown {
+		if &old[0] != &b.buf[:cap(b.buf)][0] && bytes.IndexByte(old, 's') >= 0 {
+			t.Fatal("an outgrown array still holds output bytes")
+		}
+	}
+	last := b.buf[:cap(b.buf)]
+	_, _ = b.Write(make([]byte, 4096))
+	if !b.overflow || b.buf != nil || bytes.IndexByte(last, 's') >= 0 {
+		t.Fatal("overflow did not discard and clear the buffer")
+	}
+}
+
 func TestResolveRefusesBinaryWithoutContract(t *testing.T) {
 	for _, mode := range []string{"old", "probefail"} {
 		t.Run(mode, func(t *testing.T) {
@@ -366,6 +447,17 @@ func requireDead(t *testing.T, path string) {
 				t.Fatalf("process %d survived", pid)
 			}
 			time.Sleep(20 * time.Millisecond)
+		}
+	}
+}
+
+// killPids kills every pid recorded in path (test cleanup of a fake's
+// deliberately orphaned grandchild).
+func killPids(path string) {
+	data, _ := os.ReadFile(path)
+	for _, field := range strings.Fields(string(data)) {
+		if pid, err := strconv.Atoi(field); err == nil {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
 		}
 	}
 }

@@ -38,7 +38,10 @@ type result struct {
 
 // boundedBuffer keeps at most max bytes and counts the rest. It never fails
 // a write, so the child is not blocked or killed by SIGPIPE mid-write; the
-// caller refuses an overflowing result instead.
+// caller refuses an overflowing result instead. It grows its array itself
+// and overwrites each array it outgrows, so no stale copy of the bytes is
+// left behind by growth (the copy buffer os/exec reads the pipe through is
+// beyond its reach; see docs/secrets.md: overwriting is best effort).
 type boundedBuffer struct {
 	buf      []byte
 	max      int
@@ -51,12 +54,27 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 	b.total += len(p)
 	if b.overflow || len(b.buf)+len(p) > b.max {
 		b.overflow = true
-		clear(b.buf)
+		clear(b.buf[:cap(b.buf)])
 		b.buf = nil
 		return len(p), nil
 	}
+	b.grow(len(p))
 	b.buf = append(b.buf, p...)
 	return len(p), nil
+}
+
+// grow makes room for n more bytes (at most up to max), moving the bytes to
+// a new array and clearing the old one.
+func (b *boundedBuffer) grow(n int) {
+	need := len(b.buf) + n
+	if need <= cap(b.buf) {
+		return
+	}
+	newCap := min(max(2*cap(b.buf), need, 512), b.max)
+	grown := make([]byte, len(b.buf), newCap)
+	copy(grown, b.buf)
+	clear(b.buf[:cap(b.buf)])
+	b.buf = grown
 }
 
 // run executes the configured binary with args and collects its outcome.
@@ -92,7 +110,17 @@ func (p *Provider) run(ctx context.Context, args []string, pass []byte, maxStdou
 		stderrLen: stderr.total,
 		exitCode:  code,
 		waitErr:   waitErr,
+		timedOut:  killedByDeadline(ctx, code),
 	}
+}
+
+// killedByDeadline reports that ctx ending killed the process: ctx is done
+// AND the process did not exit on its own (exit code -1: a signal). A
+// process that exited normally while the deadline passed keeps its own
+// result, so a successful read racing the deadline is not misreported as a
+// timeout (and a timeout exit of foostore's own stays exit 1).
+func killedByDeadline(ctx context.Context, exitCode int) bool {
+	return ctx.Err() != nil && exitCode < 0
 }
 
 // command builds the exec.Cmd: argv via the (test) prefix, a new session,
@@ -156,13 +184,18 @@ func (f *passFeed) start() {
 	}()
 }
 
-// finish waits for the writer after the child exited. A child that never
-// read the pipe has closed it by exiting, so the write fails (EPIPE, no
-// signal: it is not stdout/stderr) and the goroutine ends.
+// finish ends the writer after the child exited. It closes the write end
+// first: a descendant of the child may still hold the read end without
+// reading it, and a passphrase larger than the pipe buffer would otherwise
+// block the write — and finish — forever. Closing the (non-blocking,
+// poller-managed) pipe makes a pending write return at once. A child that
+// read the passphrase has let the writer finish already; the second Close
+// is harmless.
 func (f *passFeed) finish() {
 	if f.w == nil {
 		return
 	}
+	_ = f.w.Close()
 	<-f.done
 }
 

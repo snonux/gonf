@@ -88,6 +88,8 @@ func fakeSpecial(mode string) int {
 		return 0
 	case "hang":
 		return fakeHang()
+	case "passhold":
+		return fakePassHold()
 	case "signal":
 		_ = syscall.Kill(os.Getpid(), syscall.SIGKILL)
 		time.Sleep(time.Minute)
@@ -189,6 +191,21 @@ func fakeHang() int {
 	fmt.Print(leak)
 	time.Sleep(time.Hour)
 	return 0
+}
+
+// fakePassHold hands the passphrase descriptor, unread, to a grandchild
+// that outlives it (recorded in FAKE_PIDS), then fails as locked: the
+// adapter's writer must not wait for a reader that never comes.
+func fakePassHold() int {
+	sleeper := exec.Command(os.Getenv("FAKE_SLEEP"), "3600")
+	sleeper.ExtraFiles = []*os.File{os.NewFile(3, "passphrase")}
+	if err := sleeper.Start(); err != nil {
+		return 94
+	}
+	if err := os.WriteFile(os.Getenv("FAKE_PIDS"), []byte(strconv.Itoa(sleeper.Process.Pid)), 0o600); err != nil {
+		return 93
+	}
+	return 6
 }
 
 // fakeLog appends one event to FAKE_LOG so tests can count invocations.

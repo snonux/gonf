@@ -113,7 +113,10 @@ func main() {
   the canonical form only (`"a/b"` for all three, `"b"` for `"x/../b"`), so
   it never sees another spelling and cannot cache a not-found that depends
   on one; every error, cached or fresh, names the caller's own spelling in
-  its `Ref` and message. Build it only with `NewSnapshot`: a zero `secret.Snapshot{}` is
+  its `Ref` and message. A reference with no canonical form (empty, `..`,
+  `../x`) is refused as `ErrInvalid` by the Snapshot itself, with the file
+  provider's message, so no provider behind it can report it as not-found.
+  Build it only with `NewSnapshot`: a zero `secret.Snapshot{}` is
   refused by `SetSecretProvider` like a nil provider. Each reference
   resolves independently: a slow one does not block others, and a caller
   waiting for someone else's resolution of the same reference stops when its
@@ -190,19 +193,32 @@ inherited `FOOSTORE_READ_PASSPHRASE_FD` never reach it. argv holds only
 logical names — the foostore reference, the field name, the store path and
 the timeout. Errors name the gonf reference, the foostore item and the exit
 code; foostore's stdout and stderr are never quoted (stderr is reported as a
-byte count), and a failed read's captured output is overwritten.
+byte count). A reference with no canonical form (empty, `..`, `../x`) is
+`ErrInvalid`, as with the file provider, and never runs foostore.
+
+The adapter overwrites the buffers it owns — a failed read's captured
+output, every array its output buffer outgrows, the passphrase — but that is
+best effort, not a guarantee: the copy buffer `os/exec` reads the pipe
+through, the kernel's pipe buffers and anything the Go runtime has moved
+are beyond its reach (see "Retention and cancellation": Go gives no zeroing
+guarantee).
 
 **Unlock.** By default foostore unlocks itself with its configured
 `kdbx_pass_file` (owner-only). Alternatively `Config.Passphrase` returns the
 passphrase for each read (for example from an agent); the adapter writes it
 into a pipe the child inherits as descriptor 3
-(`FOOSTORE_READ_PASSPHRASE_FD=3`), closes it, and overwrites its copy. The
-passphrase is never in argv or the environment. Production unlock material
+(`FOOSTORE_READ_PASSPHRASE_FD=3`), closes it, and overwrites its copy.
+Foostore strips exactly one trailing line terminator (`\n` or `\r\n`) from
+what it reads, so a passphrase read from a file may keep its final newline.
+The write end is closed once the child has exited even if the passphrase
+was not fully written, so a descendant holding the pipe unread cannot block
+the lookup. The passphrase is never in argv or the environment. Production unlock material
 is outside gonf's tests: they run a fake foostore.
 
 **Cancellation and time.** `Config.Timeout` (default 30 s) is passed to
 foostore as `--timeout`; if the process still runs 2 s after that, the
-adapter kills its whole process group (`ErrUnavailable`). A cancelled
+adapter kills its whole process group (`ErrUnavailable`); a process that
+exits on its own while the deadline passes keeps its own result. A cancelled
 caller context kills the process group at once and yields an error wrapping
 `ctx.Err()`.
 

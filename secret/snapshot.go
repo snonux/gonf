@@ -32,8 +32,11 @@ import (
 // part of the name, so `garage\rpc_secret` is a different reference.
 // The provider is asked for the canonical form only, whatever the caller
 // wrote, so it never sees a spelling such as "x/../b"; results and errors
-// are returned naming the caller's own spelling. A reference with no canonical form (empty, or escaping
-// with "..") is passed to the provider uncached, which refuses it.
+// are returned naming the caller's own spelling. A reference with no
+// canonical form (empty, or escaping with "..") is refused as ErrInvalid
+// without asking the provider — with the file provider's own error — so
+// every provider behind a Snapshot treats it alike and none can turn it into
+// a suppressible not-found.
 //
 // Each reference is resolved by one caller at a time without holding a
 // global lock: a slow reference does not block others, and a caller waiting
@@ -107,7 +110,11 @@ func (s *Snapshot) Resolve(ctx context.Context, ref Ref) ([]byte, error) {
 	}
 	key, ok := CanonicalRef(ref)
 	if !ok {
-		return Resolve(ctx, s.provider, ref)
+		if err := ctx.Err(); err != nil {
+			return nil, canceled(ref, err)
+		}
+		_, err := cleanRef(ref) // the typed ErrInvalid naming ref
+		return nil, err
 	}
 	for {
 		e, leader := s.entry(key)

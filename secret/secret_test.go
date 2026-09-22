@@ -264,12 +264,16 @@ func TestSnapshotCanonicalisesRefs(t *testing.T) {
 	if _, err := Resolve(context.Background(), snap, `a\b`); !IsNotFound(err) || store.calls != 3 {
 		t.Fatalf(`Resolve("a\\b") = %v after %d calls, want its own not-found lookup`, err, store.calls)
 	}
-	// No canonical form: passed through uncached every time.
-	for range 2 {
-		_, _ = snap.Resolve(context.Background(), "")
+	// No canonical form: refused as invalid without asking the provider
+	// (which might otherwise call it not-found, 162 review).
+	for _, ref := range []Ref{"", "/", "..", "../x", "a/../../x"} {
+		_, err := Resolve(context.Background(), snap, ref)
+		if KindOf(err) != ErrInvalid || err.(*Error).Ref != ref {
+			t.Fatalf("Resolve(%q) = %v, want ErrInvalid naming it", ref, err)
+		}
 	}
-	if store.calls != 5 {
-		t.Fatalf("calls = %d, want 5 (empty reference uncached)", store.calls)
+	if store.calls != 3 {
+		t.Fatalf("calls = %d, want 3 (invalid references never reach the provider)", store.calls)
 	}
 }
 

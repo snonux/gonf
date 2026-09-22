@@ -93,14 +93,18 @@ type Config struct {
 	// Lookup maps a gonf reference to the foostore item it names; false
 	// means the store has no such secret (ErrNotFound, which OptionalSecret
 	// suppresses). Items builds one from a table. It must be safe for
-	// concurrent use.
+	// concurrent use. It is only asked about references with a canonical
+	// form; the others are refused as ErrInvalid first.
 	Lookup func(secret.Ref) (Item, bool)
 	// Passphrase, when set, returns the store passphrase for one read; it is
 	// written into a pipe inherited by foostore as FOOSTORE_READ_PASSPHRASE_FD
 	// (the pipe is consumed by each read, so it is called once per read).
 	// When nil, foostore unlocks with its own configured kdbx_pass_file.
 	// Its error is reported as ErrUnavailable and must not carry secret
-	// bytes. The returned slice is overwritten after use.
+	// bytes. The bytes are passed as they are, but foostore strips exactly
+	// one trailing line terminator ("\n" or "\r\n") from what it reads, so a
+	// passphrase that really ends in one needs it twice. The returned slice
+	// is overwritten after use (best effort: see docs/secrets.md).
 	Passphrase func(ctx context.Context) ([]byte, error)
 }
 
@@ -194,11 +198,19 @@ func Items(table map[secret.Ref]Item) (func(secret.Ref) (Item, bool), error) {
 // `foostore read` and returns stdout exactly. Failures are *secret.Error
 // values naming ref and, where it helps, the foostore reference and exit
 // code — never foostore's stdout or stderr, which may hold secret bytes
-// (only the stderr size is reported). A done ctx kills the foostore process
-// group and yields an error wrapping ctx.Err().
+// (only the stderr size is reported). A reference without a canonical form
+// (secret.CanonicalRef) is ErrInvalid, as for the file provider; an
+// unmapped one is ErrNotFound. A done ctx kills the foostore process group
+// and yields an error wrapping ctx.Err().
 func (p *Provider) Resolve(ctx context.Context, ref secret.Ref) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("resolve secret %q: %w", string(ref), err)
+	}
+	// A reference the file provider would refuse as invalid (empty, "..",
+	// "../x") is invalid here too, never a suppressible not-found.
+	if _, ok := secret.CanonicalRef(ref); !ok {
+		return nil, &secret.Error{Kind: secret.ErrInvalid, Ref: ref,
+			Err: errors.New(`reference is empty or escapes with ".."`)}
 	}
 	item, ok := p.cfg.Lookup(ref)
 	if !ok {
@@ -225,7 +237,6 @@ func (p *Provider) read(ctx context.Context, ref secret.Ref, item Item) ([]byte,
 	defer cancel()
 	res := p.run(runCtx, p.readArgs(item), pass, p.cfg.MaxBytes)
 	clear(pass)
-	res.timedOut = runCtx.Err() != nil
 	if err := ctx.Err(); err != nil {
 		res.scrub()
 		return nil, fmt.Errorf("resolve secret %q: %w", string(ref), err)
@@ -281,7 +292,6 @@ func (p *Provider) checkContract(ctx context.Context, ref secret.Ref) error {
 	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	res := p.run(probeCtx, []string{"read", "--help"}, nil, probeMaxBytes)
-	res.timedOut = probeCtx.Err() != nil
 	defer res.scrub()
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("resolve secret %q: %w", string(ref), err)
