@@ -18,9 +18,11 @@ import (
 // member handles that read it: Present creates one per set for the set's
 // applier and its member appliers, the plan handlers registered in init share
 // one between the config_set and config_set_member kinds (newHandlers), and
-// Ensure, which has no member handles, uses a throwaway one. Tests create
-// their own, so they neither see each other's results nor need to reset
-// anything. The mutex only guards the map; applies are single-goroutine like
+// Ensure, which has no member handles, uses a throwaway one. This package's
+// unit tests create their own, so they neither see each other's results nor
+// need to reset anything; tests elsewhere (e.g. api) go through the shared
+// store of the registered handlers, where a set forgets its entry when its
+// apply starts. The mutex only guards the map; applies are single-goroutine like
 // the rest of the resource layer.
 type outcomeStore struct {
 	mu sync.Mutex

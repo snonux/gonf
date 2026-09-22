@@ -26,8 +26,9 @@ type fixture struct {
 	failFlag string // validator fails while this file exists
 	sys      *system
 	outcomes *outcomeStore
-	// parallel fixtures leave the process-wide report and dry-run flag of
-	// package resource alone; their tests must not assert on them.
+	// parallel fixtures never reset the process-wide report or dry-run flag
+	// of package resource; their applies may still write to the report, so
+	// their tests must not assert on it.
 	parallel bool
 }
 
@@ -42,8 +43,9 @@ func newFixture(t *testing.T) *fixture {
 }
 
 // newParallelFixture marks the test parallel and returns a fixture that never
-// touches the process-wide report: everything such a test checks lives in its
-// temp directory, its system and its outcome store.
+// resets the process-wide report (its applies may still write to it) and so
+// must not be asserted on: everything such a test checks lives in its temp
+// directory, its system and its outcome store.
 func newParallelFixture(t *testing.T) *fixture {
 	t.Helper()
 	t.Parallel()
