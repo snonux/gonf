@@ -12,31 +12,6 @@ import (
 	opt "github.com/snonux/gonf/resource/options"
 )
 
-// DaemonReloadResource runs systemctl daemon-reload (optionally --user).
-// The embedded ChangeGate supplies OnChange arming (SetChangeWatch); the
-// legacy IfChanged option arms it through SetIfChanged below, which only
-// daemon-reload implements.
-type DaemonReloadResource struct {
-	embed.DependsOn
-	embed.ChangeGate
-	user        bool
-	legacyWatch []string // WithWatch target ids; merged with OnChange watches
-}
-
-func (d *DaemonReloadResource) SetUser() { d.user = true }
-
-// SetIfChanged implements opt.ChangeGated (the legacy IfChanged option) by
-// arming the embedded gate. It lives here rather than on embed.ChangeGate so
-// that only daemon-reload accepts IfChanged; other gated resources reject it.
-func (d *DaemonReloadResource) SetIfChanged() { d.Arm() }
-
-// SetWatch sets the explicit legacy IfChanged watch ids. They are merged with
-// OnChange targets so composing legacy WithWatch and OnChange is order
-// independent; when neither form supplies ids, DependsOn ids are watched.
-func (d *DaemonReloadResource) SetWatch(ids []string) {
-	d.legacyWatch = append([]string(nil), ids...)
-}
-
 // Interface assertions. resource.Register takes a DaemonReloadResource as a
 // resource.Applier, so that contract is pinned here too: a renamed or
 // re-signed Apply is reported at the declaration rather than at the Register
@@ -49,6 +24,17 @@ var (
 	_ opt.Watchable       = (*DaemonReloadResource)(nil)
 	_ opt.ChangeWatchable = (*DaemonReloadResource)(nil)
 )
+
+// DaemonReloadResource runs systemctl daemon-reload (optionally --user).
+// The embedded ChangeGate supplies OnChange arming (SetChangeWatch); the
+// legacy IfChanged option arms it through SetIfChanged below, which only
+// daemon-reload implements.
+type DaemonReloadResource struct {
+	embed.DependsOn
+	embed.ChangeGate
+	user        bool
+	legacyWatch []string // WithWatch target ids; merged with OnChange watches
+}
 
 // Present registers a daemon-reload resource. The resource is a singleton
 // per systemd bus and recipe scope (its ID is DaemonReload[system] or
@@ -83,6 +69,26 @@ func Ensure(opts ...opt.DaemonReloadOption) error {
 	return d.apply()
 }
 
+// SetUser implements opt.UserService (the WithUser option): the reload runs
+// systemctl --user daemon-reload on the user manager instead of the system
+// one, and the resource ID becomes DaemonReload[user].
+func (d *DaemonReloadResource) SetUser() { d.user = true }
+
+// SetIfChanged implements opt.ChangeGated (the legacy IfChanged option) by
+// arming the embedded gate. It lives here rather than on embed.ChangeGate so
+// that only daemon-reload accepts IfChanged; other gated resources reject it.
+func (d *DaemonReloadResource) SetIfChanged() { d.Arm() }
+
+// SetWatch sets the explicit legacy IfChanged watch ids. They are merged with
+// OnChange targets so composing legacy WithWatch and OnChange is order
+// independent; when neither form supplies ids, DependsOn ids are watched.
+func (d *DaemonReloadResource) SetWatch(ids []string) {
+	d.legacyWatch = append([]string(nil), ids...)
+}
+
+// Apply runs the daemon-reload reconciliation directly for the legacy resource path.
+func (d *DaemonReloadResource) Apply() error { return d.apply() }
+
 // planDraft records the daemon-reload op. Unlike the other gated kinds it
 // does not use ChangeGate.DraftGate: Watch is the effective merged list
 // (watchIDs) and is recorded even when the gate is unarmed. Recorded plans
@@ -100,9 +106,6 @@ func (d *DaemonReloadResource) planDraft(id string) resource.PlanDraft {
 		Deps:      d.DependsOn.SortedIDs(),
 	}
 }
-
-// Apply runs the daemon-reload reconciliation directly for the legacy resource path.
-func (d *DaemonReloadResource) Apply() error { return d.apply() }
 
 func (d *DaemonReloadResource) apply() error {
 	id := d.id()
