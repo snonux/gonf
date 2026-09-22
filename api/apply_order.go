@@ -1,6 +1,7 @@
 package api
 
 import (
+	"container/heap"
 	"fmt"
 	"strings"
 
@@ -143,28 +144,51 @@ func (g depGraph) levelOrder(level []int) []int {
 }
 
 // kahn is a topological sort that always takes the ready op with the lowest
-// (rank, index). It returns ok=false on a cycle.
+// (rank, index). It returns ok=false on a cycle. The ready ops sit in a heap
+// ordered by (rank, index), so a plan of n ops and E deps sorts in
+// O((n + E) log n); rank must not change while kahn runs.
 func (g depGraph) kahn(rank func(int) int) (order []int, ok bool) {
 	indeg := g.indegrees()
-	emitted := make([]bool, len(g.deps))
-	order = make([]int, 0, len(g.deps))
-	for len(order) < len(g.deps) {
-		next := -1
-		for i := range g.deps {
-			if !emitted[i] && indeg[i] == 0 && (next < 0 || rank(i) < rank(next)) {
-				next = i
-			}
-		}
-		if next < 0 {
-			return nil, false // every remaining op waits on another: a cycle
-		}
-		emitted[next] = true
-		order = append(order, next)
-		for _, w := range g.waiters[next] {
-			indeg[w]--
+	ready := &readyHeap{rank: rank}
+	for i, d := range indeg {
+		if d == 0 {
+			ready.ops = append(ready.ops, i)
 		}
 	}
+	heap.Init(ready)
+	order = make([]int, 0, len(g.deps))
+	for ready.Len() > 0 {
+		next := heap.Pop(ready).(int)
+		order = append(order, next)
+		for _, w := range g.waiters[next] {
+			if indeg[w]--; indeg[w] == 0 {
+				heap.Push(ready, w)
+			}
+		}
+	}
+	if len(order) < len(g.deps) {
+		return nil, false // every remaining op waits on another: a cycle
+	}
 	return order, true
+}
+
+// readyHeap is kahn's min-heap of ready op indexes by (rank, index).
+type readyHeap struct {
+	ops  []int
+	rank func(int) int
+}
+
+func (h *readyHeap) Len() int { return len(h.ops) }
+func (h *readyHeap) Less(a, b int) bool {
+	ra, rb := h.rank(h.ops[a]), h.rank(h.ops[b])
+	return ra < rb || (ra == rb && h.ops[a] < h.ops[b])
+}
+func (h *readyHeap) Swap(a, b int) { h.ops[a], h.ops[b] = h.ops[b], h.ops[a] }
+func (h *readyHeap) Push(x any)    { h.ops = append(h.ops, x.(int)) }
+func (h *readyHeap) Pop() any {
+	last := h.ops[len(h.ops)-1]
+	h.ops = h.ops[:len(h.ops)-1]
+	return last
 }
 
 // chunkCount is the number of privilege chunks order splits into: one plus

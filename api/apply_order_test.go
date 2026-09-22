@@ -159,14 +159,24 @@ func TestOrderForPrivilegeSplitKeepsWatchesInOneChunk(t *testing.T) {
 	}
 }
 
-// refusedWatchPlan builds a plan of n ops with w watches that no order can
-// keep (each gated op needs an elevated op that needs what it watches),
-// padded with a dependency chain alternating privilege classes.
+// refusedWatchPlan builds a plan of about n ops with w groups of watches
+// that must be refused, padded with a dependency chain alternating privilege
+// classes. Even groups cannot keep their watch at all (the gated op needs an
+// elevated op that needs what it watches); odd groups are the round-6 review
+// shape, whose watch only conflicts together with kept ones and so also
+// exercises the minimal conflict search.
 func refusedWatchPlan(n, w int) []plan.Op {
 	ops := []plan.Op{orderHdr}
 	for k := range w {
-		b, e, a := fmt.Sprint("b", k), fmt.Sprint("e", k), fmt.Sprint("a", k)
-		ops = append(ops, orderOp(b, false), orderOp(e, true, b), watchOp(a, false, []string{b}, e, b))
+		id := func(name string) string { return fmt.Sprint(name, k) }
+		if k%2 == 0 {
+			ops = append(ops, orderOp(id("b"), false), orderOp(id("e"), true, id("b")),
+				watchOp(id("a"), false, []string{id("b")}, id("e"), id("b")))
+			continue
+		}
+		ops = append(ops, orderOp(id("b"), false), watchOp(id("c"), false, []string{id("b")}),
+			orderOp(id("e"), true, id("c")), watchOp(id("a"), false, []string{id("b")}, id("e")),
+			watchOp(id("d"), false, []string{id("a")}))
 	}
 	for k := 0; len(ops) <= n; k++ {
 		var deps []string
@@ -178,29 +188,37 @@ func refusedWatchPlan(n, w int) []plan.Op {
 	return ops
 }
 
-// TestOrderForPrivilegeSplitLargeRefusedPlanIsFast bounds the time of the
-// worst case the review measured at 5.6s for the old fixpoint solver: 2000
-// ops with 300 watches that must all be dropped. Each satisfiability check
-// is linear now, so this takes tens of milliseconds; the race detector
-// slows it about tenfold, so the bound is scaled under -race.
+// TestOrderForPrivilegeSplitLargeRefusedPlanIsFast bounds the time of large
+// refused plans: 2000 ops with 300 refused watch groups (5.6s with the old
+// fixpoint solver) and 10000 ops with 3000. The greedy's per-watch check
+// searches only what the watch's ends reach, so both take milliseconds; the
+// race detector slows them about tenfold, so the bounds are scaled under
+// -race.
 func TestOrderForPrivilegeSplitLargeRefusedPlanIsFast(t *testing.T) {
-	ops := refusedWatchPlan(2000, 300)
-	bound := 500 * time.Millisecond
-	if raceEnabled {
-		bound *= 10
-	}
-	start := time.Now()
-	_, conflicts, err := orderForPrivilegeSplit(ops)
-	if elapsed := time.Since(start); elapsed > bound {
-		t.Fatalf("orderForPrivilegeSplit took %v for 2000 ops / 300 refused watches, want < %v", elapsed, bound)
-	}
-	if err != nil || len(conflicts) != 0 {
-		t.Fatalf("orderForPrivilegeSplit() = %v, %v; want no error and no together-conflicts", err, conflicts)
+	for _, tc := range []struct {
+		ops, watches int
+		bound        time.Duration
+	}{{2000, 300, 500 * time.Millisecond}, {10000, 3000, time.Second}} {
+		ops := refusedWatchPlan(tc.ops, tc.watches)
+		bound := tc.bound
+		if raceEnabled {
+			bound *= 10
+		}
+		start := time.Now()
+		_, conflicts, err := orderForPrivilegeSplit(ops)
+		if elapsed := time.Since(start); elapsed > bound {
+			t.Fatalf("orderForPrivilegeSplit took %v for %d ops / %d refused watch groups, want < %v",
+				elapsed, tc.ops, tc.watches, bound)
+		}
+		if err != nil || len(conflicts) != tc.watches/2 {
+			t.Fatalf("orderForPrivilegeSplit() = %v, %d together-conflicts; want no error and %d",
+				err, len(conflicts), tc.watches/2)
+		}
 	}
 }
 
 func BenchmarkOrderForPrivilegeSplitRefusedWatches(b *testing.B) {
-	ops := refusedWatchPlan(2000, 300)
+	ops := refusedWatchPlan(10000, 3000)
 	for b.Loop() {
 		if _, _, err := orderForPrivilegeSplit(ops); err != nil {
 			b.Fatal(err)

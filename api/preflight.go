@@ -126,7 +126,8 @@ func crossChunkWatchRefusal(caller string, chunks []plan.Chunk, conflicts watchC
 // watchAcrossChunks explains why gated cannot watch watched: across privilege
 // classes; within one class forced into separate chunks by dependencies on
 // the other class; or, when together is non-empty, only in combination with
-// those kept change watches (the pair alone would fit, see keptWatches).
+// those kept change watches, a minimal conflicting set (the pair alone would
+// fit, and so it would without any one of them; see keptWatches).
 // Change reports are chunk-local either way.
 func watchAcrossChunks(gated string, gatedElevate bool, watched string, watchedElevate bool, together []string) string {
 	head := fmt.Sprintf("%s (%s) watches %s (%s)", gated, privilegeClass(gatedElevate), watched, privilegeClass(watchedElevate))
@@ -136,8 +137,8 @@ func watchAcrossChunks(gated string, gatedElevate bool, watched string, watchedE
 			"resources of its own class: gate on a resource of the same class, or elevate both or neither"
 	}
 	if len(together) > 0 {
-		return head + ", but together with the change watch " + conflictNote(together) +
-			" their dependencies need resources of the other privilege class applied in between, " +
+		return head + ", but together with " + conflictNote(together) +
+			", their dependencies need resources of the other privilege class applied in between, " +
 			"so these watches cannot all share a privilege chunk and change reports are not carried " +
 			"across chunks: remove one of these change gates or a dependency path"
 	}

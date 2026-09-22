@@ -1094,10 +1094,11 @@ both privilege classes instead of chunk indexes:
 - within one class, when the watch would fit alone but not together with
   watches Apply already kept. Apply keeps watches in declaration order, each
   one only if it still fits with those kept before it, and the error names
-  the kept watches it conflicts with: `... watches Command[d]
-  (unprivileged), but together with the change watch Command[a] watching
-  Command[b] their dependencies need resources of the other privilege class
-  applied in between ...`.
+  a minimal set of kept watches it conflicts with (without any one of them
+  it would fit): `... watches Command[d] (unprivileged), but together with
+  the change watch Command[a] watching Command[b], their dependencies need
+  resources of the other privilege class applied in between ...`, or
+  `together with the change watches A watching B and C watching D, ...`.
 
 The lower-level `resource.Apply()` path remains for resource-package unit tests
 and ad-hoc compatibility use; new application code should prefer `Run` or

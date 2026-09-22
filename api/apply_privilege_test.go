@@ -323,5 +323,30 @@ func TestApplyNamesTheKeptWatchAConflictIsWithTogether(t *testing.T) {
 	Command("true", nil, options.WithName("c"), options.OnChange(d), options.DependsOn(e))
 
 	requireClassWatchRefusal(t, Apply(), "Apply: Command[c] (unprivileged) watches Command[d] (unprivileged), "+
-		"but together with the change watch Command[a] watching Command[b] their dependencies need resources")
+		"but together with the change watch Command[a] watching Command[b], their dependencies need resources")
+}
+
+// TestApplyListsOnlyTheWatchesAConflictNeeds pins that the "together with"
+// list is minimal (the round-6 review repro). File[b]; Command[c] watches
+// File[b]; the elevated Command[e] needs Command[c]; Command[a] needs
+// Command[e] and watches File[b]; Command[d] watches Command[a]. Watches are
+// kept in declaration order (by ID): a with b, then d with a; c with b no
+// longer fits, since b sits in a's chunk after e while e needs c. d's watch
+// shares the conflicting component but removing it would fix nothing, so
+// the refusal of c's watch must name a's watch only. WatchChanges, unlike
+// OnChange, adds no dependency, so each of these watches would fit alone.
+func TestApplyListsOnlyTheWatchesAConflictNeeds(t *testing.T) {
+	refuseElevation(t, privilege.Sudo)
+	b := File(filepath.Join(t.TempDir(), "b"), options.WithContent("b"))
+	c := Command("true", nil, options.WithName("c"), options.WatchChanges(b.ID()))
+	e := Command("true", nil, options.WithName("e"), options.WithElevate, options.DependsOn(c))
+	a := Command("true", nil, options.WithName("a"), options.WatchChanges(b.ID()), options.DependsOn(e))
+	Command("true", nil, options.WithName("d"), options.WatchChanges(a.ID()))
+
+	err := Apply()
+	requireClassWatchRefusal(t, err, "Apply: Command[c] (unprivileged) watches "+b.ID()+" (unprivileged), "+
+		"but together with the change watch Command[a] watching "+b.ID()+", their dependencies")
+	if strings.Contains(err.Error(), "Command[d] watching") {
+		t.Fatalf("Apply() error = %v lists Command[d]'s watch, which the conflict does not need", err)
+	}
 }

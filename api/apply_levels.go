@@ -15,9 +15,10 @@ type watchPair struct{ gated, watched int }
 type watchKey struct{ gated, watched string }
 
 // watchConflicts maps a watch that keptWatches dropped although it would fit
-// on its own to the kept watches it conflicts with, each described as
-// "<gated> watching <watched>". A dropped watch that cannot fit even alone
-// (its ends forced apart by dependencies) has no entry.
+// on its own to a minimal set of kept watches it conflicts with, each
+// described as "<gated> watching <watched>": together with them it cannot
+// fit, and without any one of them it could. A dropped watch that cannot fit
+// even alone (its ends forced apart by dependencies) has no entry.
 type watchConflicts map[watchKey][]string
 
 // levelGraph is the constraint graph of the chunk levels. Write an op's
@@ -29,20 +30,41 @@ type watchConflicts map[watchKey][]string
 // weight-1 edge, and its least solution is the longest path over the
 // components. The dependency edges (waiters, shared with depGraph and never
 // modified) and the watch edges are kept apart, so trying another watch set
-// only builds the few watch edges.
+// only builds the few watch edges. seen is scratch space for crossPath,
+// shared by the graphs derived from one another (withWatches).
 type levelGraph struct {
 	body    []plan.Op
 	waiters [][]int       // dependency edges u -> v, from depGraph
 	watch   map[int][]int // watch edges, both directions
+	seen    *pathMarks
+}
+
+// pathMarks marks the (op, crossed) states one crossPath search has visited;
+// bumping stamp clears all marks at once.
+type pathMarks struct {
+	mark  []int
+	stamp int
 }
 
 func newLevelGraph(g depGraph, body []plan.Op, watches []watchPair) levelGraph {
-	watch := make(map[int][]int, 2*len(watches))
+	lg := levelGraph{body: body, waiters: g.waiters, seen: &pathMarks{mark: make([]int, 2*len(body))}}
+	return lg.withWatches(watches)
+}
+
+// withWatches is lg with exactly the given watch edges (dependencies and
+// scratch space shared).
+func (lg levelGraph) withWatches(watches []watchPair) levelGraph {
+	lg.watch = make(map[int][]int, 2*len(watches))
 	for _, p := range watches {
-		watch[p.gated] = append(watch[p.gated], p.watched)
-		watch[p.watched] = append(watch[p.watched], p.gated)
+		lg.addWatch(p)
 	}
-	return levelGraph{body: body, waiters: g.waiters, watch: watch}
+	return lg
+}
+
+// addWatch adds the two edges of watch p.
+func (lg levelGraph) addWatch(p watchPair) {
+	lg.watch[p.gated] = append(lg.watch[p.gated], p.watched)
+	lg.watch[p.watched] = append(lg.watch[p.watched], p.gated)
 }
 
 // each calls fn for every edge u -> v leaving u.
@@ -58,46 +80,146 @@ func (lg levelGraph) each(u int, fn func(v int)) {
 // keptWatches returns the same-class watches chunkLevels keeps: all of them
 // when they fit together, otherwise greedily in declaration order, each one
 // only if it still fits together with the watches kept before it. It also
-// returns, for every dropped watch that would fit on its own, the kept
-// watches it conflicts with.
+// returns, for every dropped watch that would fit on its own, a minimal set
+// of kept watches it conflicts with.
+//
+// The greedy step asks whether one more watch breaks a satisfiable graph,
+// which closesCrossCycle answers by a search from the watch's ends instead
+// of a full component pass. That search is bounded by what the two ends
+// reach, so the whole greedy is O(W * (n + E)) only in the worst case (W
+// watches that each reach most of the plan) and far less on real plans.
 func (g depGraph) keptWatches(body []plan.Op) ([]watchPair, watchConflicts) {
 	all := g.sameClassWatches(body)
 	if _, ok := newLevelGraph(g, body, all).watchesSatisfiable(); ok {
 		return all, nil
 	}
+	lg := newLevelGraph(g, body, nil)
 	kept := make([]watchPair, 0, len(all))
 	var dropped []watchPair
 	for _, p := range all {
-		if _, ok := newLevelGraph(g, body, append(kept, p)).watchesSatisfiable(); ok {
-			kept = append(kept, p)
-		} else {
+		if lg.closesCrossCycle(p) {
 			dropped = append(dropped, p)
-		}
-	}
-	return kept, g.conflictsOf(body, kept, dropped)
-}
-
-// conflictsOf describes, for each dropped watch that fits on its own, the
-// kept watches sharing the offending component once it is added: together
-// with them it closes a cycle through the other privilege class.
-func (g depGraph) conflictsOf(body []plan.Op, kept, dropped []watchPair) watchConflicts {
-	conflicts := watchConflicts{}
-	for _, p := range dropped {
-		if _, alone := newLevelGraph(g, body, []watchPair{p}).watchesSatisfiable(); !alone {
 			continue
 		}
-		lg := newLevelGraph(g, body, append(kept[:len(kept):len(kept)], p))
-		comp, _ := lg.components()
-		bad, _ := lg.watchesSatisfiable()
-		var with []string
+		kept = append(kept, p)
+		lg.addWatch(p)
+	}
+	return kept, conflictsOf(lg, kept, dropped)
+}
+
+// conflictsOf finds, for each dropped watch that fits on its own, a minimal
+// set of kept watches it conflicts with; keptGraph holds the dependencies
+// and every kept watch. The cycle the dropped watch would close runs through
+// ops its ends reach in keptGraph, so the kept watches touching those ops
+// are a conflicting set to start from (found by a search bounded by that
+// reach, not a pass over the whole plan). shrinkConflict then removes each
+// one the conflict does not need (deletion filter). The result is minimal:
+// removing any listed watch would let the dropped one fit, so every watch
+// named in the refusal is part of the conflict.
+func conflictsOf(keptGraph levelGraph, kept, dropped []watchPair) watchConflicts {
+	body := keptGraph.body
+	deps := keptGraph.withWatches(nil)
+	conflicts := watchConflicts{}
+	for _, p := range dropped {
+		if deps.closesCrossCycle(p) {
+			continue // cannot fit even alone: no "together with" entry
+		}
+		reached := keptGraph.reach(p.gated, p.watched)
+		var with []watchPair
 		for _, k := range kept {
-			if comp[k.gated] == bad {
-				with = append(with, body[k.gated].ID+" watching "+body[k.watched].ID)
+			if reached[k.gated] {
+				with = append(with, k)
 			}
 		}
-		conflicts[watchKey{body[p.gated].ID, body[p.watched].ID}] = with
+		with = shrinkConflict(deps, with, p)
+		names := make([]string, len(with))
+		for i, k := range with {
+			names[i] = body[k.gated].ID + " watching " + body[k.watched].ID
+		}
+		conflicts[watchKey{body[p.gated].ID, body[p.watched].ID}] = names
 	}
 	return conflicts
+}
+
+// reach returns the set of ops reachable in lg from any of from (themselves
+// included). Watch edges run both ways, so a watch has both ends in the set
+// or neither.
+func (lg levelGraph) reach(from ...int) map[int]bool {
+	seen := make(map[int]bool, len(from))
+	stack := append([]int(nil), from...)
+	for _, u := range from {
+		seen[u] = true
+	}
+	for len(stack) > 0 {
+		u := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		lg.each(u, func(v int) {
+			if !seen[v] {
+				seen[v] = true
+				stack = append(stack, v)
+			}
+		})
+	}
+	return seen
+}
+
+// shrinkConflict removes from with every watch the conflict of p does not
+// need: a watch is dropped when p still closes a cross-class cycle without
+// it. The property is monotone (more watches never make p fit), so one pass
+// leaves a minimal set.
+func shrinkConflict(deps levelGraph, with []watchPair, p watchPair) []watchPair {
+	for i := 0; i < len(with); {
+		trial := append(with[:i:i], with[i+1:]...)
+		if deps.withWatches(trial).closesCrossCycle(p) {
+			with = trial
+		} else {
+			i++
+		}
+	}
+	return with
+}
+
+// closesCrossCycle reports whether adding watch p to lg, whose watches are
+// satisfiable, breaks it. A new component with a cross-class edge must close
+// its cycle through one of p's two edges, so this is the case exactly when
+// lg already has a walk between p's ends, in either direction, that uses a
+// cross-class edge.
+func (lg levelGraph) closesCrossCycle(p watchPair) bool {
+	return lg.crossPath(p.gated, p.watched) || lg.crossPath(p.watched, p.gated)
+}
+
+// crossPath reports whether lg has a walk from from to to that uses at least
+// one cross-class edge: a search over (op, crossed yet) states.
+func (lg levelGraph) crossPath(from, to int) bool {
+	m := lg.seen
+	m.stamp++
+	visit := func(op, crossed int) bool {
+		at := 2*op + crossed
+		if m.mark[at] == m.stamp || m.mark[2*op+1] == m.stamp { // crossed dominates
+			return false
+		}
+		m.mark[at] = m.stamp
+		return true
+	}
+	visit(from, 0)
+	stack := [][2]int{{from, 0}}
+	for len(stack) > 0 {
+		st := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if st[0] == to && st[1] == 1 {
+			return true
+		}
+		lg.each(st[0], func(v int) {
+			crossed := st[1]
+			if lg.body[v].Elevate != lg.body[st[0]].Elevate {
+				crossed = 1
+			}
+			if visit(v, crossed) {
+				stack = append(stack, [2]int{v, crossed})
+			}
+		})
+	}
+	return false
 }
 
 // chunkLevels assigns every op the chunk level described at
@@ -236,10 +358,14 @@ func (g depGraph) sameClassWatches(body []plan.Op) []watchPair {
 }
 
 // conflictNote renders the kept watches a dropped one conflicts with for a
-// refusal: at most three, then a count of the rest.
+// refusal, as "the change watch A" or "the change watches A, B and C", at
+// most three then a count of the rest.
 func conflictNote(with []string) string {
+	if len(with) == 1 {
+		return "the change watch " + with[0]
+	}
 	if len(with) > 3 {
 		with = append(with[:3:3], fmt.Sprintf("%d more", len(with)-3))
 	}
-	return strings.Join(with, ", ")
+	return "the change watches " + strings.Join(with[:len(with)-1], ", ") + " and " + with[len(with)-1]
 }
