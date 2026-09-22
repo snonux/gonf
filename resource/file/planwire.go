@@ -202,7 +202,7 @@ func applyFileContent(path string, op plan.Op, ownership []opt.FileDirOption, ct
 	if err != nil {
 		return err
 	}
-	return EnsureWithPlanFacts(path, ctx.Facts, opts...)
+	return ensureWithFacts(path, templateFacts(ctx.Facts), op.Sensitive, opts...)
 }
 
 // EnsureWithPlanFacts is Ensure for plan apply: {{.Gonf.GOOS/.Profile/
@@ -210,11 +210,13 @@ func applyFileContent(path string, op plan.Op, ownership []opt.FileDirOption, ct
 // destination's plan.Apply caller detected, honoring api.SetProfileOverride
 // and the CLI -profile flag) instead of Ensure's own local re-detection,
 // which knows nothing about that override. Every plan handler that writes a
-// possibly-templated file must go through here — the file handler above and
-// dir's sync_dir handler for each entry of a synced tree — so identical
-// template text renders identically within one apply.
+// possibly-templated file must render with the plan's facts — the file
+// handler above (through ensureWithFacts directly, to also pass the op's
+// sensitivity) and dir's sync_dir handler for each entry of a synced tree,
+// through here — so identical template text renders identically within one
+// apply. Synced tree entries are never marked sensitive.
 func EnsureWithPlanFacts(path string, facts plan.Facts, opts ...opt.FileOption) error {
-	return ensureWithFacts(path, templateFacts(facts), opts...)
+	return ensureWithFacts(path, templateFacts(facts), false, opts...)
 }
 
 func fileContent(op plan.Op, planDir string) ([]byte, error) {

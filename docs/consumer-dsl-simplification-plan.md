@@ -582,9 +582,16 @@ Garage cluster's shared RPC identity or revoke other credentials.
 
 Status (z52): the resolver contract exists — package `secret` (`Provider`,
 typed `*secret.Error` kinds, the compatible `FileProvider`, `Snapshot`) with
-`api.SetSecretProvider` / `api.ResolveSecret`; see `docs/secrets.md`. Typed
-references in file content and template data, sensitivity in plans, and the
-foostore adapter remain open (062, 162).
+`api.SetSecretProvider` / `api.ResolveSecret`; see `docs/secrets.md`.
+Status (062): plans are secret-aware — schema 22 marks every op carrying a
+provider-resolved value `sensitive` (found in file content, template data,
+config set members and argv even after trimming/interpolation), `SecretFile`
+is the typed file entry point, `gonf plan -stdout` refuses secret-bearing
+plans unless `-with-secrets`, `-redacted` prints a non-replayable preview,
+destinations withhold validator output and template error details, and a
+push refuses login-user staging of elevated secret blobs; see the lifecycle
+and its limits in `docs/secrets.md`. The foostore adapter (162) and durable
+plan encryption (a separate design) remain open.
 
 Configure a provider once at the consumer composition root. Use a small
 context-aware resolver contract returning bytes and typed errors. Integrate

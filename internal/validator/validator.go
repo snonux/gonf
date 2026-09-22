@@ -2,7 +2,8 @@
 // shell) bounded by the process-wide command timeout of internal/exec
 // (api.SetCommandTimeout, CLI -cmd-timeout), which kills it together with
 // the processes it started, with stdin from /dev/null and a bounded,
-// sanitized copy of its combined output appended to the error. It is shared
+// sanitized copy of its combined output appended to the error (only the
+// output's size for a candidate holding secret material, RunInWithheld). It is shared
 // by the File resource's WithValidation and the ConfigSet resource's
 // WithSetValidation, so both bound and report their validators identically.
 package validator
@@ -25,6 +26,11 @@ import (
 // Run is RunIn in gonf's own working directory.
 func Run(bin string, args []string) error {
 	return RunIn("", bin, args)
+}
+
+// RunWithheld is RunInWithheld in gonf's own working directory.
+func RunWithheld(bin string, args []string) error {
+	return RunInWithheld("", bin, args)
 }
 
 const (
@@ -75,8 +81,24 @@ const (
 // A failure is the exit error, the timeout error or the start error, followed
 // by ": validator output: <sanitized output>" when it printed anything. Only
 // what the validator prints is included; gonf never adds the candidate's
-// content, but a validator that echoes its input will leak it.
+// content, but a validator that echoes its input will leak it — for a
+// candidate holding secret material use RunInWithheld instead.
 func RunIn(dir, bin string, args []string) error {
+	return runIn(dir, bin, args, false)
+}
+
+// RunInWithheld is RunIn for a candidate that holds secret material (a
+// sensitive plan op): the validator runs identically, but a failure reports
+// only how many bytes it printed, never the output itself, because a
+// validator that quotes the offending line (a parse error, say) would put
+// the secret into the error, the logs and the controller's terminal.
+func RunInWithheld(dir, bin string, args []string) error {
+	return runIn(dir, bin, args, true)
+}
+
+// runIn is RunIn and RunInWithheld; withhold selects how a failure reports
+// the captured output (withValidatorOutput).
+func runIn(dir, bin string, args []string, withhold bool) error {
 	timeout := gexec.DefaultTimeout()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -104,7 +126,7 @@ func RunIn(dir, bin string, args []string) error {
 		return killForTimeout(func() error { return killTree(cmd.Process) }, &killedByTimeout)
 	}
 	err := cmd.Run()
-	return withValidatorOutput(validatorRunError(cmd.ProcessState, killedByTimeout.Load(), timeout, err), output)
+	return withValidatorOutput(validatorRunError(cmd.ProcessState, killedByTimeout.Load(), timeout, err), output, withhold)
 }
 
 // killForTimeout is the validator's exec.Cmd.Cancel: it runs kill (killTree
@@ -151,10 +173,17 @@ func validatorRunError(state *os.ProcessState, killed bool, timeout time.Duratio
 }
 
 // withValidatorOutput appends the captured output to a non-nil err, keeping
-// err itself wrapped (e.g. for its exit code).
-func withValidatorOutput(err error, output *cappedOutput) error {
+// err itself wrapped (e.g. for its exit code). With withhold it appends only
+// the output's size, and nothing when there was none.
+func withValidatorOutput(err error, output *cappedOutput, withhold bool) error {
 	if err == nil {
 		return nil
+	}
+	if withhold {
+		if total := output.Total(); total > 0 {
+			return fmt.Errorf("%w: validator output withheld (%d bytes): the candidate holds secret material", err, total)
+		}
+		return err
 	}
 	if text := output.String(); text != "" {
 		return fmt.Errorf("%w: validator output: %s", err, text)
@@ -179,6 +208,13 @@ func (c *cappedOutput) Write(p []byte) (int, error) {
 	c.buf = append(c.buf, p[:keep]...)
 	c.total += int64(len(p))
 	return len(p), nil
+}
+
+// Total returns how many bytes were written in total, kept or not.
+func (c *cappedOutput) Total() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.total
 }
 
 // String returns the sanitized kept output, cut to at most limit bytes,

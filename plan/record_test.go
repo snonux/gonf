@@ -43,7 +43,7 @@ func TestRecordAndFinishRecord(t *testing.T) {
 	if len(ops) != 3 {
 		t.Fatalf("len(ops)=%d, want 3", len(ops))
 	}
-	if ops[0].Op != plan.KindPlan || ops[0].Version != plan.CurrentVersion || ops[0].ID != "demo" {
+	if ops[0].Op != plan.KindPlan || ops[0].Version != plan.RequiredVersion(ops[1:]) || ops[0].ID != "demo" {
 		t.Fatalf("header = %#v", ops[0])
 	}
 	if ops[1].Op != plan.KindLink || ops[2].Op != plan.KindCommand {

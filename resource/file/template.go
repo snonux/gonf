@@ -114,14 +114,25 @@ func (f *File) applyTemplateToContent(content []byte, param string) ([]byte, err
 
 	tmpl, err := template.New("resource").Funcs(templateFuncMap()).Option("missingkey=error").Parse(string(content))
 	if err != nil {
-		return nil, fmt.Errorf("template parse error: %w", err)
+		return nil, f.templateError("parse", err)
 	}
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
-		return nil, fmt.Errorf("template execute error: %w", err)
+		return nil, f.templateError("execute", err)
 	}
 	return buf.Bytes(), nil
+}
+
+// templateError reports a failed template step. text/template errors quote
+// the offending template text (a parse error names the unexpected token),
+// so for sensitive content (File.sensitive) the details are withheld and
+// only the step is reported.
+func (f *File) templateError(step string, err error) error {
+	if f.sensitive {
+		return fmt.Errorf("template %s error (details withheld: the file holds secret material)", step)
+	}
+	return fmt.Errorf("template %s error: %w", step, err)
 }
 
 // templateDataMap decodes the WithTemplateData encoding (raw, or the

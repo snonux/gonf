@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -50,7 +51,7 @@ var cleanupRemoteBuilds = remote.CleanupBuilds
 //	gonf -profile=fedora
 //	gonf -verbose | -quiet
 //	gonf -dry-run | -n
-//	gonf plan [-o dir|-stdout] [-id name] <task>...  # emit plan.jsonl (or stdout)
+//	gonf plan [-o dir|-stdout [-with-secrets]|-redacted] [-id name] <task>...  # emit plan.jsonl (or stdout)
 //	gonf apply [-n] <plan.jsonl|->               # apply file or GONF-PUSH/1 stdin
 //	gonf <task> [task...]                            # RecordPlan + Apply locally
 func CLI() int {
@@ -76,7 +77,7 @@ func CLI() int {
 		return 2
 	}
 	if err := configureCLI(options); err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
+		eprintf("%v\n", err)
 		return 2
 	}
 	api.Activate(api.DetectFacts())
@@ -228,7 +229,7 @@ func runSubcommand(ctx context.Context, name string, args []string) (code int, o
 // ApplyChunksContext's DefaultChunkTimeout.
 func runTasks(ctx context.Context, names []string) int {
 	if err := api.RunContext(ctx, names...); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		eprintf("error: %v\n", err)
 		return 1
 	}
 	return 0
@@ -236,22 +237,22 @@ func runTasks(ctx context.Context, names []string) int {
 
 func cliDNSZoneEquivalent(args []string) int {
 	if len(args) != 3 {
-		fmt.Fprintln(os.Stderr, "usage: gonf dns-zone-equivalent <origin> <candidate.zone> <committed.zone>")
+		eprintln("usage: gonf dns-zone-equivalent <origin> <candidate.zone> <committed.zone>")
 		return 2
 	}
 	candidate, err := os.ReadFile(args[1])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "dns-zone-equivalent: read candidate: %v\n", err)
+		eprintf("dns-zone-equivalent: read candidate: %v\n", err)
 		return 2
 	}
 	committed, err := os.ReadFile(args[2])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "dns-zone-equivalent: read committed: %v\n", err)
+		eprintf("dns-zone-equivalent: read committed: %v\n", err)
 		return 2
 	}
 	equal, err := dnszone.Equivalent(candidate, committed, args[0])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "dns-zone-equivalent: %v\n", err)
+		eprintf("dns-zone-equivalent: %v\n", err)
 		return 2
 	}
 	if equal {
@@ -262,17 +263,17 @@ func cliDNSZoneEquivalent(args []string) int {
 
 func cliDNSZoneSerial(args []string) int {
 	if len(args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: gonf dns-zone-serial <origin> <zone>")
+		eprintln("usage: gonf dns-zone-serial <origin> <zone>")
 		return 2
 	}
 	zone, err := os.ReadFile(args[1])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "dns-zone-serial: read zone: %v\n", err)
+		eprintf("dns-zone-serial: read zone: %v\n", err)
 		return 2
 	}
 	serial, err := dnszone.Serial(zone, args[0])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "dns-zone-serial: %v\n", err)
+		eprintf("dns-zone-serial: %v\n", err)
 		return 2
 	}
 	fmt.Println(serial)
@@ -282,7 +283,7 @@ func cliDNSZoneSerial(args []string) int {
 func cliList() int {
 	infos := api.Tasks()
 	if len(infos) == 0 {
-		fmt.Fprintln(os.Stderr, "no tasks registered")
+		eprintln("no tasks registered")
 		return 1
 	}
 	for _, t := range infos {
@@ -313,49 +314,111 @@ func cliPlan(args []string) int {
 	outDir := fs.String("o", ".", "output directory for plan.jsonl and blobs/ (\".\" is the current directory); "+
 		"created 0700 when missing; an existing one is left as it is but must be yours, not world-writable "+
 		"and not group-writable except by your private group")
-	stdout := fs.Bool("stdout", false, "print plan JSONL to stdout instead of writing plan.jsonl")
+	stdout := fs.Bool("stdout", false, "print plan JSONL to stdout instead of writing plan.jsonl "+
+		"(refused for a plan carrying secret material unless -with-secrets is given)")
+	withSecrets := fs.Bool("with-secrets", false, "with -stdout: print a plan carrying secret material anyway, "+
+		"as an executable secret artifact")
+	redacted := fs.Bool("redacted", false, "print a redacted, non-replayable human preview to stdout instead of a plan")
 	planID := fs.String("id", "plan", "plan id written into the header")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	tasks := fs.Args()
 	if len(tasks) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: gonf plan [-o dir|-stdout] [-id name] <task> [task...]")
+		eprintln("usage: gonf plan [-o dir|-stdout [-with-secrets]|-redacted] [-id name] <task> [task...]")
+		return 2
+	}
+	if msg := planOutputConflict(fs, *stdout, *withSecrets, *redacted); msg != "" {
+		eprintln("plan: " + msg)
 		return 2
 	}
 
-	if *stdout {
-		return planToStdout(*planID, tasks)
+	switch {
+	case *redacted:
+		return planPreview(*planID, tasks)
+	case *stdout:
+		return planToStdout(*planID, tasks, *withSecrets)
 	}
 	return planToDir(*outDir, *planID, tasks)
+}
+
+// planOutputConflict returns why the plan output flags contradict each
+// other, or "" when they do not: -with-secrets only modifies -stdout, and
+// -redacted is an output of its own, so combining it with -stdout,
+// -with-secrets or an explicit -o is refused instead of silently picking
+// one. (-stdout with an explicit -o keeps its long-standing meaning: -o is
+// ignored.)
+func planOutputConflict(fs *flag.FlagSet, stdout, withSecrets, redacted bool) string {
+	outSet := false
+	fs.Visit(func(f *flag.Flag) { outSet = outSet || f.Name == "o" })
+	switch {
+	case redacted && (stdout || withSecrets || outSet):
+		return "-redacted prints a preview instead of a plan; it cannot combine with -stdout, -with-secrets or -o"
+	case withSecrets && !stdout:
+		return "-with-secrets only applies to -stdout"
+	}
+	return ""
+}
+
+// planPreview records into memory (as push does) and prints the redacted
+// human preview (api.EncodeRedactedPreview): secret material is replaced and
+// the header is a plan_preview line that no gonf applies. Blob-backed ops
+// print their blob references only; their blobs are discarded.
+func planPreview(planID string, tasks []string) int {
+	ops, err := api.RecordPlanTo(planID, plan.NewMemoryStore(), tasks...)
+	if err != nil {
+		eprintf("plan: %v\n", err)
+		return 1
+	}
+	raw, err := api.EncodeRedactedPreview(ops)
+	if err != nil {
+		eprintf("plan: %v\n", err)
+		return 1
+	}
+	if _, err := os.Stdout.Write(raw); err != nil {
+		eprintf("plan: write stdout: %v\n", err)
+		return 1
+	}
+	eprintf("wrote redacted preview to stdout (%d ops, %d secret-bearing; not a plan, cannot be applied)\n",
+		len(ops), len(plan.SensitiveIDs(ops)))
+	return 0
 }
 
 // planToStdout records into memory (as push does) and prints the plan JSONL.
 // A plan that needs blobs cannot be printed, so nothing needs to reach the disk:
 // no temp directory is created, and blobs a task packages are simply discarded
-// with the refusal.
-func planToStdout(planID string, tasks []string) int {
+// with the refusal. A plan carrying secret material (sensitive ops) is refused
+// unless withSecrets: stdout is easily logged, piped or scrolled back, so
+// printing secrets must be asked for explicitly. The refusal names the ops
+// through api.SensitiveOpNames, like warnSensitivePlan.
+func planToStdout(planID string, tasks []string, withSecrets bool) int {
 	ops, err := api.RecordPlanTo(planID, plan.NewMemoryStore(), tasks...)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "plan: %v\n", err)
+		eprintf("plan: %v\n", err)
+		return 1
+	}
+	if names := api.SensitiveOpNames(ops); len(names) != 0 && !withSecrets {
+		eprintf("plan: -stdout refused: the plan carries secret material in %s; "+
+			"use -o <dir> (plan.jsonl is written 0600), -redacted for a human preview, or -stdout -with-secrets to print it anyway\n",
+			strings.Join(names, ", "))
 		return 1
 	}
 	for _, op := range ops {
 		if op.Blob != "" {
-			fmt.Fprintln(os.Stderr, "plan: -stdout cannot emit plans that need blobs/; use -o <dir>")
+			eprintln("plan: -stdout cannot emit plans that need blobs/; use -o <dir>")
 			return 1
 		}
 	}
 	raw, err := plan.EncodePlan(ops)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "plan: encode: %v\n", err)
+		eprintf("plan: encode: %v\n", err)
 		return 1
 	}
 	if _, err := os.Stdout.Write(raw); err != nil {
-		fmt.Fprintf(os.Stderr, "plan: write stdout: %v\n", err)
+		eprintf("plan: write stdout: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(os.Stderr, "wrote stdout (%d ops)\n", len(ops))
+	eprintf("wrote stdout (%d ops)\n", len(ops))
 	return 0
 }
 
@@ -392,25 +455,42 @@ func planToDir(outDir, planID string, tasks []string) int {
 	}
 	ops, err := api.RecordPlan(planID, outDir, tasks...)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "plan: %v\n", err)
+		eprintf("plan: %v\n", err)
 		return 1
 	}
 	raw, err := plan.EncodePlan(ops)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "plan: encode: %v\n", err)
+		eprintf("plan: encode: %v\n", err)
 		return 1
 	}
 	if err := plan.SecureDir(outDir); err != nil {
-		fmt.Fprintf(os.Stderr, "plan: secure output directory: %v\n", err)
+		eprintf("plan: secure output directory: %v\n", err)
 		return 1
 	}
 	if err := plan.WritePrivateFile(outDir, "plan.jsonl", raw); err != nil {
-		fmt.Fprintf(os.Stderr, "plan: write %s: %v\n", filepath.Join(outDir, "plan.jsonl"), err)
+		eprintf("plan: write %s: %v\n", filepath.Join(outDir, "plan.jsonl"), err)
 		return 1
 	}
 	outPath := filepath.Join(outDir, "plan.jsonl")
 	fmt.Printf("wrote %s (%d ops)\n", outPath, len(ops))
+	warnSensitivePlan(outPath, ops)
 	return 0
+}
+
+// warnSensitivePlan tells the operator on stderr that the written plan is a
+// secret artifact: it names the secret-bearing ops, never their content.
+// The names come from api.SensitiveOpNames, which redacts every resolved
+// secret, including a short one an identity equals (recording refuses only
+// strong secrets in identities). Nothing is printed for a plan without
+// secret material.
+func warnSensitivePlan(outPath string, ops []plan.Op) {
+	names := api.SensitiveOpNames(ops)
+	if len(names) == 0 {
+		return
+	}
+	eprintf("plan: %s carries secret material in clear text (%s); "+
+		"it is an executable secret artifact (mode 0600, base64 is not encryption): delete it once applied\n",
+		outPath, strings.Join(names, ", "))
 }
 
 func cliApply(args []string) int {
@@ -431,7 +511,7 @@ func cliApply(args []string) int {
 	}
 	rest := fs.Args()
 	if len(rest) != 1 {
-		fmt.Fprintln(os.Stderr, "usage: gonf apply [-n|-dry-run] [-strict-preview] [-apply-dir dir] <plan.jsonl|->")
+		eprintln("usage: gonf apply [-n|-dry-run] [-strict-preview] [-apply-dir dir] <plan.jsonl|->")
 		return 2
 	}
 	planPath := rest[0]
@@ -445,17 +525,17 @@ func cliApply(args []string) int {
 	// re-exec reads a chunk below $TMPDIR, which may be a symlinked path.
 	raw, err := plan.ReadPrivateFilePath(planPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "apply: read %s: %v\n", planPath, err)
+		eprintf("apply: read %s: %v\n", planPath, err)
 		return 1
 	}
 	ops, err := plan.DecodePlanBytes(raw)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "apply: %v\n", err)
+		eprintf("apply: %v\n", err)
 		return 1
 	}
 	planDir := filepath.Dir(planPath)
 	if err := api.ApplyPlan(ops, planDir); err != nil {
-		fmt.Fprintf(os.Stderr, "apply: %v\n", err)
+		eprintf("apply: %v\n", err)
 		return 1
 	}
 	fmt.Printf("applied %s (%d ops)\n", planPath, len(ops))
@@ -465,7 +545,7 @@ func cliApply(args []string) int {
 func cliApplyStdin(applyDir string, strictPreview bool) int {
 	if strictPreview {
 		if applyDir != "" {
-			fmt.Fprintln(os.Stderr, "apply: -strict-preview cannot use -apply-dir")
+			eprintln("apply: -strict-preview cannot use -apply-dir")
 			return 2
 		}
 		// DecodePush refuses blobs without a plan directory. This deliberately
@@ -473,26 +553,26 @@ func cliApplyStdin(applyDir string, strictPreview bool) int {
 		// staging directory merely to inspect a plan.
 		payload, err := plan.DecodePush(os.Stdin, "")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "apply: %v\n", err)
+			eprintf("apply: %v\n", err)
 			return 1
 		}
 		if err := api.ApplyPlan(payload.Ops, ""); err != nil {
-			fmt.Fprintf(os.Stderr, "apply: %v\n", err)
+			eprintf("apply: %v\n", err)
 			return 1
 		}
-		fmt.Fprintf(os.Stderr, "previewed stdin (%d ops)\n", len(payload.Ops))
+		eprintf("previewed stdin (%d ops)\n", len(payload.Ops))
 		return 0
 	}
 	runDir, cleanup, err := prepareApplyRunDir(applyDir)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		eprintln(err)
 		return 1
 	}
 	defer cleanup()
 
 	payload, err := plan.DecodePush(os.Stdin, runDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "apply: %v\n", err)
+		eprintf("apply: %v\n", err)
 		return 1
 	}
 	planDir := payload.PlanDir
@@ -500,14 +580,14 @@ func cliApplyStdin(applyDir string, strictPreview bool) int {
 		planDir = applyDir
 	}
 	if err := api.ApplyPlan(payload.Ops, planDir); err != nil {
-		fmt.Fprintf(os.Stderr, "apply: %v\n", err)
+		eprintf("apply: %v\n", err)
 		return 1
 	}
 	src := "stdin"
 	if planDir != "" {
 		src = "stdin+blobs"
 	}
-	fmt.Fprintf(os.Stderr, "applied %s (%d ops)\n", src, len(payload.Ops))
+	eprintf("applied %s (%d ops)\n", src, len(payload.Ops))
 	return 0
 }
 
@@ -606,11 +686,11 @@ func verifyStickyDirOwned(path string) error {
 }
 
 func printUsage() {
-	fmt.Fprintln(os.Stderr, "usage: gonf [-list] [-version] [-plan-version] [-strict-preview-version] [-profile=...] [-verbose|-quiet] [-dry-run|-n] [-privilege=none|sudo|doas] [-cmd-timeout 5m] <task> [task...]")
-	fmt.Fprintln(os.Stderr, "       gonf plan [-o dir|-stdout] [-id name] <task> [task...]")
-	fmt.Fprintln(os.Stderr, "       gonf apply [-n|-dry-run|-strict-preview] [-apply-dir dir] <plan.jsonl|->")
-	fmt.Fprintln(os.Stderr, "       gonf push [-n|-dry-run|-preview] [-id name] [-privilege=...] [-- ssh-args...] user@host <task> [task...]")
-	fmt.Fprintln(os.Stderr, "       gonf cluster [-n|-dry-run|-preview] [-j N] [-id name] [-host-timeout 10m] <cluster> <task> [task...]")
-	fmt.Fprintln(os.Stderr, "       gonf fleet [-n|-dry-run|-preview] [-j N] [-id name] [-host-timeout 10m] <fleet> <task> [task...]")
-	fmt.Fprintln(os.Stderr, "       gonf hosts | clusters | fleets")
+	eprintln("usage: gonf [-list] [-version] [-plan-version] [-strict-preview-version] [-profile=...] [-verbose|-quiet] [-dry-run|-n] [-privilege=none|sudo|doas] [-cmd-timeout 5m] <task> [task...]")
+	eprintln("       gonf plan [-o dir|-stdout [-with-secrets]|-redacted] [-id name] <task> [task...]")
+	eprintln("       gonf apply [-n|-dry-run|-strict-preview] [-apply-dir dir] <plan.jsonl|->")
+	eprintln("       gonf push [-n|-dry-run|-preview] [-id name] [-privilege=...] [-- ssh-args...] user@host <task> [task...]")
+	eprintln("       gonf cluster [-n|-dry-run|-preview] [-j N] [-id name] [-host-timeout 10m] <cluster> <task> [task...]")
+	eprintln("       gonf fleet [-n|-dry-run|-preview] [-j N] [-id name] [-host-timeout 10m] <fleet> <task> [task...]")
+	eprintln("       gonf hosts | clusters | fleets")
 }

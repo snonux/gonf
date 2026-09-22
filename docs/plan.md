@@ -474,7 +474,7 @@ import from an external `plan_test` file is fine.
 | Command | Effect |
 |---------|--------|
 | `gonf <task> [task…]` | Record + apply locally |
-| `gonf plan [-o dir\|-stdout] [-id name] <task>…` | Write `dir/plan.jsonl` (+ `blobs/`; `dir` defaults to `.`, is created `0700` when missing, is never chmod'ed when it exists and must be yours, not world-writable and not group-writable except by your private group, see "The output directory" below), or print JSONL to stdout |
+| `gonf plan [-o dir\|-stdout [-with-secrets]\|-redacted] [-id name] <task>…` | Write `dir/plan.jsonl` (+ `blobs/`; `dir` defaults to `.`, is created `0700` when missing, is never chmod'ed when it exists and must be yours, not world-writable and not group-writable except by your private group, see "The output directory" below), or print JSONL to stdout (refused for a plan with `sensitive` ops unless `-with-secrets`), or print a redacted human preview that no gonf applies (`-redacted`); see "Secret material" below |
 | `gonf apply [-n\|-dry-run\|-strict-preview] <plan.jsonl\|->` | Apply a plan file, or read **GONF-PUSH/1** / bare JSONL from stdin. The plan file must be a regular file and is not followed if it is a symlink (a FIFO or a symlinked `plan.jsonl` is refused; use `-` for piped input); its directory may be reached through symlinks |
 | `gonf push [-n\|-preview] [-id name] [-- ssh-args…] user@host <task>…` | Record in memory, stream over `ssh` to remote `gonf apply -` |
 | `gonf cluster [-n\|-preview] [-j N] [-id name] [-host-timeout 10m] <cluster> <task>…` | Resolve inventory cluster; record once; parallel push or strict preview to each host |
@@ -921,6 +921,20 @@ mid-apply, after earlier operations already ran, so it must refuse v21 at the
 header gate. Plans without a config set encode every other operation exactly
 as in v20.
 
+Plan schema **version 22** adds `sensitive` to resource operations: the op's
+payload (`content_b64` or its blob, `template_data`, member contents, lines,
+argv, environment) holds secret material. The controller sets it while
+recording (see "Secret material" below); the destination then withholds a
+failing file or `config_set` validator's output, template error details and
+a command's argv and failure output. An older binary would ignore the field
+and could echo the secret, so it must refuse v22 plans at the header gate.
+Only a plan with a sensitive op declares v22 (`plan.RequiredVersion`); a
+plan without secret material keeps a v21 header and encodes every operation
+exactly as in v21. `push` and strict preview keep comparing the remote
+runtime with the controller's own schema and release (`-plan-version`,
+`-version`), so push installs a current gonf and strict preview refuses an
+older remote either way.
+
 ### Secret material
 
 `MustSecret(path)` reads a required non-empty file below the controller
@@ -936,11 +950,34 @@ error. The provider contract, its error kinds and the optional-means-not-found
 rule are in [secrets.md](secrets.md). No provider changes what is recorded:
 only what a recipe places into a resource reaches the plan.
 
-When secret bytes are passed to `WithContent`, they are managed material:
-they are present in clear text in the owner-only (`0600`) `plan.jsonl` output
-and in the encrypted SSH transport payload. Do not use `gonf plan -stdout` for
-such a recipe: stdout is easily logged, redirected, or copied. Never put secret
-values in task names, descriptions, or host values.
+Every value the provider returns is remembered for the rest of the process,
+and an op that carries one — verbatim, trimmed, embedded in rendered text, or
+inside template data — is recorded with `sensitive: true` (v22);
+`SecretFile(path, ref)` is the typed entry point for a file that is exactly
+one secret. Sensitivity changes how the plan is handled, not what it holds:
+the secret is still in clear text (base64 is an encoding, not encryption) in
+the owner-only (`0600`) `plan.jsonl`, in the in-memory push payload and in
+the encrypted SSH transport, because the destination must write it.
+
+- `gonf plan -stdout` refuses a plan with sensitive ops (it names them);
+  `-stdout -with-secrets` prints it anyway as an explicit export.
+- `gonf plan -redacted` prints a human preview: the header op is
+  `plan_preview` (no gonf applies it) and secret material is `[redacted]`.
+- `gonf plan -o dir` warns on stderr that `plan.jsonl` is an executable
+  secret artifact; delete it once applied. gonf keeps no other copy.
+- A failing validator's output, template error details and a command's argv
+  and failure output are withheld on the destination for sensitive ops;
+  debug logs never show content digests. An op whose identity (ID, name,
+  path, binary — e.g. an unnamed `Command`'s argv) holds a strong secret
+  (8+ bytes and not word-like) is refused at record time; every string field
+  of every op, control ops included, is scanned (see secrets.md for the
+  classes).
+- A multi-chunk push refuses a sensitive blob-backed op in an elevated
+  chunk, because its sticky blob directory belongs to the SSH login user.
+
+The full lifecycle and its limits are in [secrets.md](secrets.md). Never put
+secret values in task names, descriptions, paths or host values: identities
+are logged everywhere and are not redacted.
 
 Plan schema **version 10** adds the `latest` field to `package` ops: a
 `Package` recorded with `IsLatest` now carries that intent explicitly, so

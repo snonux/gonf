@@ -29,6 +29,10 @@ exceptions are the conditional recipes, which may return an empty `Multi`
   path already is a directory on the controller (a symlink to a directory
   counts); otherwise it delegates to `api.Dir`. `api.LinkIfExists` in direct
   mode always delegates (to `api.Link` or `api.NoLink`).
+- `api.SecretFile` delegates to the registering `file.PresentSecret` once its
+  secret resolved; when the resolution fails it registers nothing and returns
+  an empty `Multi`, because the stashed secret error already fails the record
+  (like `MustSecret`).
 
 A new registering constructor follows the same rule: it registers what it
 creates, and a non-registering helper is named `Ensure*`.

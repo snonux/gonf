@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"flag"
-	"fmt"
 	"os"
 	"strings"
 
@@ -31,7 +30,7 @@ func cliPush(ctx context.Context, args []string) int {
 
 	sshOpts, pos := parsePushArgs(rest)
 	if len(pos) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: gonf push [-n|-dry-run|-preview] [-id name] [-privilege=sudo|doas|none] [-- ssh-args...] user@host <task> [task...]")
+		eprintln("usage: gonf push [-n|-dry-run|-preview] [-id name] [-privilege=sudo|doas|none] [-- ssh-args...] user@host <task> [task...]")
 		return 2
 	}
 
@@ -46,7 +45,7 @@ func cliPush(ctx context.Context, args []string) int {
 	if *privFlag != "" {
 		m, err := privilege.ParseMode(*privFlag)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "push: %v\n", err)
+			eprintf("push: %v\n", err)
 			return 2
 		}
 		mode = m
@@ -63,7 +62,7 @@ func cliPush(ctx context.Context, args []string) int {
 		err = api.PushToContext(ctx, t, *planID, pos[1:]...)
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "push: %v\n", err)
+		eprintf("push: %v\n", err)
 		return 1
 	}
 	return 0

@@ -39,51 +39,71 @@ func newDraftPackager(store plan.BlobStore) draftPackager {
 	return draftPackager{store: store, blobRefs: map[string]string{}}
 }
 
-// packageDraft lowers d to its plan op (draftToOp) and packages its source
-// data: a file source inline as content_b64 when it fits, otherwise — like a
-// sync_dir tree or glob — as a blob in p.store.
+// packageDraft lowers d to its plan op (draftToOp), packages its source
+// data (packageContent) and marks the op sensitive when it carries a
+// resolved secret — or refuses it when a strong secret sits in one of its
+// identities (markSensitive; a packaged file source is scanned from the
+// bytes read here, since a blob-backed op no longer carries them).
 func (p draftPackager) packageDraft(d resource.PlanDraft) (plan.Op, error) {
+	op, source, err := p.packageContent(d)
+	if err != nil {
+		return op, err
+	}
+	if err := markSensitive(&op, source, p.task); err != nil {
+		return op, err
+	}
+	return op, nil
+}
+
+// packageContent is packageDraft without the sensitivity scan: a file
+// source inline as content_b64 when it fits, otherwise — like a sync_dir
+// tree or glob — as a blob in p.store. It also returns a file source's
+// bytes (nil for other drafts).
+func (p draftPackager) packageContent(d resource.PlanDraft) (plan.Op, []byte, error) {
 	op, err := p.draftToOp(d)
 	if err != nil {
-		return plan.Op{}, err
+		return plan.Op{}, nil, err
 	}
 	name := blobName(d)
 	switch {
 	case d.SourcePath != "":
 		return p.packageSourceFile(op, d, name)
 	case d.SourceGlob != "":
-		return p.packageBlob(op, d, name, d.SourceGlob, p.writeGlob)
+		op, err = p.packageBlob(op, d, name, d.SourceGlob, p.writeGlob)
+		return op, nil, err
 	case d.SourceDir != "":
-		return p.packageBlob(op, d, name, d.SourceDir, p.writeTree)
+		op, err = p.packageBlob(op, d, name, d.SourceDir, p.writeTree)
+		return op, nil, err
 	}
-	return op, nil
+	return op, nil, nil
 }
 
 // packageSourceFile packages a file source: inline as content_b64 up to
-// plan.MaxInlineContent, otherwise as a blob, which needs a store.
-func (p draftPackager) packageSourceFile(op plan.Op, d resource.PlanDraft, name string) (plan.Op, error) {
+// plan.MaxInlineContent, otherwise as a blob, which needs a store. It
+// returns the source bytes as well.
+func (p draftPackager) packageSourceFile(op plan.Op, d resource.PlanDraft, name string) (plan.Op, []byte, error) {
 	data, err := os.ReadFile(d.SourcePath)
 	if err != nil {
-		return op, fmt.Errorf("package file %s: %w", d.SourcePath, err)
+		return op, nil, fmt.Errorf("package file %s: %w", d.SourcePath, err)
 	}
 	if len(data) <= plan.MaxInlineContent {
 		op.ContentB64 = base64.StdEncoding.EncodeToString(data)
 		op.Blob = ""
-		return op, nil
+		return op, data, nil
 	}
 	if p.store == nil {
-		return op, fmt.Errorf("package file %s: exceeds inline limit and no plan dir for blobs", d.SourcePath)
+		return op, nil, fmt.Errorf("package file %s: exceeds inline limit and no plan dir for blobs", d.SourcePath)
 	}
 	if err := p.guardBlobRef(name, d); err != nil {
-		return op, err
+		return op, nil, err
 	}
 	ref, err := p.store.WriteFile(name, data)
 	if err != nil {
-		return op, err
+		return op, nil, err
 	}
 	op.Blob = ref
 	op.ContentB64 = ""
-	return op, nil
+	return op, data, nil
 }
 
 // packageBlob packages a sync_dir source (a tree or a glob, named by src) as

@@ -5,6 +5,8 @@ import (
 	"io"
 	"strings"
 	"sync"
+
+	"github.com/snonux/gonf/internal/logger"
 )
 
 // Status is the outcome of applying a resource.
@@ -214,7 +216,10 @@ func PrintSummary(w io.Writer) {
 
 	_, _ = fmt.Fprintf(w, "summary: %d ok, %d changed, %d skipped, %d would-change\n",
 		ok, changed, skipped, would)
+	// IDs pass through the logger's redactor (the controller's secret
+	// registry, see logger.SetRedactor): recording refuses a strong secret in
+	// an identity, but a weak one may remain there.
 	for _, n := range interesting {
-		_, _ = fmt.Fprintf(w, "  %s %s\n", n.st, n.id)
+		_, _ = fmt.Fprint(w, logger.Redact(fmt.Sprintf("  %s %s\n", n.st, n.id)))
 	}
 }

@@ -19,8 +19,12 @@ import (
 // MustSecret("/var/nsd/key") reads secrets/var/nsd/key, not /var/nsd/key on
 // the controller. Paths may not escape the secrets directory.
 //
-// The value is an ordinary string: once placed into file content or template
-// data it is recorded into the plan in the clear (see docs/secrets.md).
+// The value is an ordinary string: once placed into an op (file content,
+// template data, argv, ...) it is recorded into the plan in the clear, but
+// the op carrying it is marked sensitive (ResolveSecret remembers the
+// value), so it is kept off stdout, out of previews and out of validator
+// and command errors; a strong secret in an op's identity refuses the
+// record (see docs/secrets.md for the rules and limits).
 func MustSecret(path string) string {
 	data, err := ResolveSecret(context.Background(), secret.Ref(path))
 	if err != nil {

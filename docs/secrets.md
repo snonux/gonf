@@ -2,8 +2,11 @@
 
 gonf resolves secrets on the **controller**, while a task body is recorded.
 Recipes read them with `MustSecret` / `OptionalSecret` (strings, the
-long-standing helpers) or `ResolveSecret` (bytes plus a typed error). All
-three go through one **secret provider**, configured once per process.
+long-standing helpers) or `ResolveSecret` (bytes plus a typed error), and
+`SecretFile` manages a file that is exactly one secret. All of them go
+through one **secret provider**, configured once per process, and every
+value they return makes the plan ops carrying it sensitive (see the last
+section).
 
 ## Default: the file provider
 
@@ -119,14 +122,166 @@ func main() {
   outside recording too. `MustSecret` / `OptionalSecret` resolve with
   `context.Background()`: plan recording carries no context yet.
 
-## What reaches the plan
+## What reaches the plan: secret-aware plans (task 062)
 
-The provider contract resolves bytes only; it does **not** make plans
-secret-aware. Resolving a secret records nothing. A value a recipe places
-into file content (`WithContent`) or template data is recorded exactly as
-before: in clear text in the owner-only (`0600`) `plan.jsonl` and in the SSH
-transport payload. Do not use `gonf plan -stdout` for such recipes, and never
-put secret values into task names, descriptions or host values. Carrying
-sensitivity through plans, previews, validators and transport (typed secret
-references in file content and template data, redacted previews) is separate
-follow-up work (task 062), as is a foostore adapter (task 162).
+Resolving a secret records nothing by itself; only what a recipe places into
+a resource reaches the plan, and there it stays **plaintext**: the destination
+has to write it. Base64 (`content_b64`, member content) is an encoding, not
+encryption, and nothing in gonf encrypts a plan. What gonf adds is
+**sensitivity**: plan schema 22 marks every op that carries secret material
+with `"sensitive": true`, and every output path treats such an op as secret.
+
+### How an op becomes sensitive
+
+Every value `ResolveSecret` returns — and so every `MustSecret`,
+`OptionalSecret` and `SecretFile` value — is remembered for the rest of the
+process (`secret.Values`). While a plan is recorded, **every string of every
+op** is scanned for those values: resource ops as their drafts are packaged,
+control ops (`when_begin` predicates and requirements) once the plan is
+complete. The walk is by reflection over `plan.Op`, and each string field is
+classified (`api/secret_fields.go`; a fitness test fails when a new field is
+added unclassified):
+
+| Class | Fields | On a match |
+|-------|--------|------------|
+| payload | decoded `content_b64` and member contents, the bytes of a packaged file source, template data strings (and their base64 decoding — how a `[]byte` is recorded and rendered), `template_param`, lines, argv, environment keys and values, cron command/schedule/environment lines, guard argv and expected output, validator argv, systemd calendar/boot delay/descriptions, `when` predicate values | the op is marked sensitive |
+| identity | IDs, names, paths, symlink/hardlink targets, dependency and watch IDs, `After`/`Wants` units, binaries (`bin`, guard and validator binaries), working directory, `Creates`, home, source/staging/chroot directories, config set member keys and paths, `path_exists` predicates, requirement text | a strong secret (below) refuses the record; a weaker match marks the op sensitive |
+| metadata | op kind, blob reference, mode, owner, group, groups, shell, login class, cron user, predicate fact name | a strong secret marks the op sensitive; a weak match is ignored; never refuses |
+
+Only identity fields refuse. Identities are logged and reported on every
+host — apply log lines, the `changed ...` summary, errors — so a secret in
+one is a leak that marking cannot contain on the destination. Whether a
+match refuses depends on the secret's **strength**: a strong secret — at
+least `secret.MinStrongLen` (8) bytes after trimming, and not word-like
+(more than 12 bytes, or containing something other than ASCII letters, `-`
+and `_`, such as a digit) — is evidence of a leak and refuses. A weak one
+(`paul`, `root`, `git`, `postgres`, `backup-user`) is too likely an
+ordinary account or path name to refuse `/home/paul/.bashrc`,
+`User("postgres")` or `WithOwner("postgres")` over; the op is only marked
+sensitive. That is the tradeoff: a weak secret that really is in an
+identity still reaches the destination's own logs; on the controller every
+message redacts it (below). Metadata never refuses, so resolving a secret
+can never break an otherwise valid owner or group. The refusal names the op
+kind and the field (`command op: its id holds a resolved secret value; this
+field is an identity ...`), never the ID or the value; the common case is
+an unnamed `Command`, whose ID is its whole argv: give it `WithName`. Task
+names, descriptions and host values are not ops and are not scanned; never
+put secret values there.
+
+Everything the controller prints passes through the registry: log lines
+(`logger.SetRedactor`, e.g. a `-verbose` registration line or a misuse
+message), the apply summary (`changed Command[...]`), CLI error messages,
+and the output of the processes it relays — a local elevated apply child
+(sudo/doas) and a remote gonf over ssh, neither of which has the registry —
+which is redacted line by line (`logger.RedactingWriter`). The
+destination's own logs, when read on the destination (or a remote's system
+journal), are limited by the rules above.
+
+The scan recognises a value
+verbatim, with surrounding whitespace trimmed and with a trailing newline
+trimmed — the transformations recipes actually apply (`strings.TrimSpace`,
+`TrimSuffix(s, "\n")`, and `strconv.Quote` of a token without characters
+it escapes). So existing recipes need no change: a secret concatenated into
+rendered configuration (`WithContent(renderKey(key))`) or placed into
+`WithTemplateData` is still found.
+
+For a file whose content is exactly one secret, the typed entry point is:
+
+```go
+SecretFile("/etc/goprecords-upload.token", "frontends/fishfinger/goprecords/token",
+    WithMode(0o600), WithOwner("root"))
+```
+
+It resolves the reference like `MustSecret` (a failure fails the record,
+naming the reference only) and manages the file with those exact bytes. Its
+mode defaults to `0600` (not `File`'s `0640`); an explicit `WithMode`
+overrides it. Options that would replace or reinterpret the content —
+`WithContent`, `WithSource`, `WithTemplate`, `WithTemplateData`, a `.tmpl`
+path, line edits, `IsAbsent` — are refused as recipe misuse.
+
+Limits of the scan, by design:
+
+- A secret shorter than `secret.MinContainedLen` (4 bytes) after trimming
+  is only recognised when a payload value is exactly one of its forms (as
+  `SecretFile` content, or a whole argv element, is); searching for 1-3
+  bytes inside every payload would mark everything. The rule is decided on
+  the trimmed secret, so neither `"123\n"` nor a short secret's JSON
+  escaping becomes a substring pattern.
+- A transformation beyond trimming — base64, hashing, splitting, case
+  changes — hides the value. Keep such derived material out of plans, or
+  resolve the derived form through the provider itself.
+- Synced directory trees (`SyncDir`, `Dir` with a source) are not scanned; a
+  secret belongs in `SecretFile`/`File`, not in a synced asset tree.
+- A secret that is not valid UTF-8, placed as a Go string into template
+  data, is recorded with its invalid bytes replaced (`json.Marshal` writes
+  U+FFFD), so the recorded value no longer equals the secret and is not
+  found; pass binary secrets as `[]byte` (base64, found) or as file content.
+- Short secrets in identities: marked, not refused (see above).
+- Command argv/environment: a sensitive command's log lines and dry-run
+  description show only its binary (`[argv withheld: secret material]`),
+  and its failure reports the output sizes, not the output. argv is still
+  visible in the destination's process list to every local user, and a
+  package manager's own failure output is not withheld. Pass secrets to
+  programs through a managed `0600` file instead.
+- Content an op writes (a file, a crontab line) is on the destination in
+  clear text by design.
+
+### Where a sensitive plan goes
+
+| Output | Behaviour |
+|--------|-----------|
+| `gonf plan -o dir` | `plan.jsonl` is written `0600` in a `0700`-created, owner-checked directory, as every plan; a secret-bearing plan also gets a stderr warning naming the sensitive ops: it is an executable secret artifact, delete it once applied. A blob-backed secret file's blob lands in `dir/blobs/` with the same protections. |
+| `gonf plan -stdout` | Refused, naming the sensitive ops (never their values; `SensitiveOpNames` redacts every resolved secret in the names, a short one an identity equals included). `-stdout -with-secrets` is the explicit export; the operator then owns wherever stdout goes. |
+| `gonf plan -redacted` | A human preview on stdout: JSONL headed by a `plan_preview` op, which no gonf version accepts as a plan, with the payload of every sensitive op (content and template data wholesale) and every remembered value in every payload and identity string replaced by `[redacted]`; metadata strings (op kind, owner, mode, ...) only for strong secrets, so a weak secret equal to `file` or `root` does not garble them. Strings are redacted as decoded values and re-encoded, so every line is valid JSON. It is not replayable and must not be labelled as a plan. It cannot be combined with `-stdout`, `-with-secrets` or `-o`. |
+| `gonf <task>`, `push`, `cluster`, `fleet` | The plan stays in memory on the controller and travels over SSH stdin (`GONF-PUSH/1`), as before. |
+| Destination apply (`gonf apply`) | A failing file (`WithValidation`) or `ConfigSet` validator reports its exit status and only the size of its output ("validator output withheld (N bytes)"), because a validator that quotes the offending line would echo the secret; template parse/execute errors of a sensitive file report the step only. Debug logs never print content digests (for any file: an unsalted sha256 of a low-entropy secret can be confirmed offline). |
+| Validation candidates | Unchanged and already private: a file candidate is a `0600` temp file in a parent that only root and the applying user can write; a config set stages below a private staging directory. Both are removed after validation. |
+
+### Transport, privilege and remote versions
+
+- A plan declares schema 22 only when it has a sensitive op
+  (`plan.RequiredVersion`); a plan without secret material keeps a v21
+  header and still applies with an older gonf (`gonf apply` of a
+  `plan.jsonl`). An older remote gonf (plan schema 21, i.e. v0.15.0) cannot
+  honour `sensitive` and refuses a v22 plan at its header gate before any
+  change. For `push` and strict preview the remote runtime check is
+  unchanged: they compare the remote's plan schema and release with the
+  controller's own, so `push` installs the controller's gonf first and
+  strict preview (`push -preview`) refuses an older remote, whatever the
+  plan holds.
+- A multi-chunk push with blobs stages every blob in one sticky directory
+  owned by the SSH login user. A sensitive op with blob content (a
+  secret-bearing file above 512 KiB) in an elevated chunk is therefore
+  refused before any SSH traffic: the login user could read it. Push the
+  privileged task separately (a single chunk embeds its blobs in the stream
+  the elevated apply extracts itself) or keep the content inline.
+
+### Retention and cancellation
+
+- `plan.jsonl` (and `blobs/`) written by `gonf plan -o` stay until the
+  operator deletes them. A local run (`gonf <task>`) packages blobs into a
+  private per-call temporary directory, and `gonf plan -o` stages them in a
+  private `$TMPDIR` directory first; both are removed when the command
+  returns or fails, but not when the process is killed by SIGKILL or
+  crashes.
+- On the destination, embedded blobs are extracted into an owner-only run
+  directory removed after the apply; leftovers of killed applies are swept
+  after 24 hours. A multi-chunk push's sticky blob directory is removed
+  after a successful push only; after a failed or cancelled push it stays
+  until the next push of the same plan to that host wipes it.
+- Cancelling a push (SIGINT/SIGTERM, a host timeout) kills the in-flight
+  `ssh` session; the push payload only ever existed in memory and on that
+  stream.
+- Secret values and plans live in ordinary Go memory until the process
+  exits. Go gives no guarantee that memory is zeroed, and gonf does not
+  claim to zero it.
+
+### Not provided
+
+Durable encrypted plans — recipient encryption of `plan.jsonl`, or a
+protected sidecar holding only the secret payloads — need their own accepted
+design (key management, recipients, what a destination decrypts with) and
+are not implied by sensitivity or by any provider. Until then an executable
+secret-bearing plan exists only under the private-filesystem protections
+above and for as long as the operator keeps it. The foostore adapter is task
+162.

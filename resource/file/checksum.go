@@ -25,14 +25,17 @@ func getChecksum(path string) [32]byte {
 		return checksum
 	}
 	checksum = sha256.Sum256(data)
-	logger.Debug("computed checksum for %s: %x", path, checksum)
+	// The digest itself is never logged: a file may hold a low-entropy
+	// secret, and its unsalted sha256 would let anyone with the debug log
+	// confirm guesses offline.
+	logger.Debug("computed checksum for %s", path)
 	return checksum
 }
 
 func (f *File) ensureFile(path string, content []byte) error {
 	id := f.reportID(path)
+	// Not logged, for the reason given in getChecksum.
 	newChecksum := sha256.Sum256(content)
-	logger.Debug("computed checksum for new content: %x", newChecksum)
 
 	// Classify the target via Lstat BEFORE any open: os.ReadFile opens
 	// without O_NONBLOCK, so a checksum read through a planted FIFO would

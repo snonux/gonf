@@ -3,6 +3,7 @@ package remote
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -113,7 +114,9 @@ func (m Mode) Validate() error {
 // host, see forHost) and reused across pushes to the same host. Reuse only
 // stays safe because cliApplyStdin (internal/cli) wipes the dir's CONTENTS
 // before extracting into it, so ToHost does not care whether the dir was
-// empty, fresh, or left over from an interrupted run.
+// empty, fresh, or left over from an interrupted run. Because that dir is
+// the login user's, a sensitive op with blob content in an elevated chunk is
+// refused before any SSH traffic (refuseSensitiveStickyBlobs).
 //
 // Preview mode: a blob-backed plan is refused before any remote probe, and
 // the remote gonf is only verified (every privilege context that will apply
@@ -134,6 +137,9 @@ func (d Delivery) ToHost(ctx context.Context, t PushTarget) error {
 	// read-only by every chunk. A concrete remote path; the ID is sanitized.
 	sticky := ""
 	if hasBlobs && len(chunks) > 1 {
+		if err := refuseSensitiveStickyBlobs(d.PlanID, chunks); err != nil {
+			return err
+		}
 		sticky = "/tmp/gonf-apply-sticky-" + sanitizeID(d.PlanID)
 	}
 	t, remotes, err := d.prepareRemote(ctx, t, chunks, sticky)
@@ -141,6 +147,23 @@ func (d Delivery) ToHost(ctx context.Context, t PushTarget) error {
 		return err
 	}
 	return d.stream(ctx, t, chunks, remotes, sticky)
+}
+
+// refuseSensitiveStickyBlobs refuses, before any SSH traffic, a multi-chunk
+// plan whose elevated chunks carry a sensitive op with blob content: the
+// sticky dir that would stage its blob belongs to the SSH login user, who
+// could then read secret material meant only for a privileged file. Such a
+// secret-bearing file above plan.MaxInlineContent has to be split off into
+// its own push (a single-chunk plan embeds its blobs in the frame the
+// elevated apply extracts itself) or made smaller, so it travels inline.
+func refuseSensitiveStickyBlobs(planID string, chunks []plan.Chunk) error {
+	ids := plan.SensitiveElevatedBlobs(chunks)
+	if len(ids) == 0 {
+		return nil
+	}
+	return fmt.Errorf("push: plan %q: secret-bearing blob content for the elevated %s would be staged in a directory owned by the SSH login user "+
+		"(gonf plan -redacted shows which); push the privileged task separately or keep its content under %d bytes",
+		planID, strings.Join(ids, ", "), plan.MaxInlineContent)
 }
 
 // ObserveBootstrapForTest is a test seam: until the returned restore func

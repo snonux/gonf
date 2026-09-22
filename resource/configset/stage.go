@@ -105,16 +105,21 @@ func writePrivate(path string, content []byte) (err error) {
 // (s.sys.runValidator, so tests can observe the working directory and argv),
 // exactly like File's WithValidation: argv only (no shell), stdin from
 // /dev/null, bounded by the command timeout (-cmd-timeout), and a failure
-// carries a capped, sanitized copy of the validator's output. The first
-// failure aborts.
+// carries a capped, sanitized copy of the validator's output — or, for a
+// sensitive set (spec.sensitive), only its size (runValidatorWithheld). The
+// first failure aborts.
 func (st *stage) validate(s *spec) error {
 	resolve := s.pathResolver(func(m memberSpec) string { return st.paths[m.key] })
+	run := s.sys.runValidator
+	if s.sensitive {
+		run = s.sys.runValidatorWithheld
+	}
 	for i, v := range s.validators {
 		args, err := renderArgs(v.Args, resolve)
 		if err != nil {
 			return fmt.Errorf("config set %s: validator %d (%s): %w", s.name, i+1, v.Bin, err)
 		}
-		if err := s.sys.runValidator(st.candidates, v.Bin, args); err != nil {
+		if err := run(st.candidates, v.Bin, args); err != nil {
 			return fmt.Errorf("config set %s: validation by %s failed, nothing published: %w", s.name, v.Bin, err)
 		}
 		logger.Debug("config set %s: validator %s accepted the staged set", s.name, v.Bin)

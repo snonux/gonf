@@ -16,7 +16,7 @@ import (
 func cliHosts() int {
 	infos := api.Hosts()
 	if len(infos) == 0 {
-		fmt.Fprintln(os.Stderr, "no hosts registered")
+		eprintln("no hosts registered")
 		return 1
 	}
 	for _, h := range infos {
@@ -39,7 +39,7 @@ func cliHosts() int {
 func cliClusters() int {
 	infos := api.Clusters()
 	if len(infos) == 0 {
-		fmt.Fprintln(os.Stderr, "no clusters registered")
+		eprintln("no clusters registered")
 		return 1
 	}
 	for _, f := range infos {
@@ -51,7 +51,7 @@ func cliClusters() int {
 func cliFleets() int {
 	infos := api.Fleets()
 	if len(infos) == 0 {
-		fmt.Fprintln(os.Stderr, "no fleets registered")
+		eprintln("no fleets registered")
 		return 1
 	}
 	for _, f := range infos {
@@ -95,7 +95,7 @@ func parsePushFlags(kind string, args []string) (pf pushFlags, exitCode int, ok 
 	}
 	pos := fs.Args()
 	if len(pos) < 2 {
-		fmt.Fprintf(os.Stderr, "usage: gonf %s [-n|-dry-run|-preview] [-j N] [-id name] [-host-timeout 10m] <%s> <task> [task...]\n", kind, kind)
+		eprintf("usage: gonf %s [-n|-dry-run|-preview] [-j N] [-id name] [-host-timeout 10m] <%s> <task> [task...]\n", kind, kind)
 		return pushFlags{}, 2, false
 	}
 	name := pos[0]
@@ -132,7 +132,7 @@ func cliFleet(ctx context.Context, args []string) int {
 		err = api.PushFleetRun(ctx, pf.name, pf.planID, pf.jobs, pf.hostTimeout, pf.tasks...)
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "fleet: %v\n", err)
+		eprintf("fleet: %v\n", err)
 		return 1
 	}
 	return 0
@@ -154,7 +154,7 @@ func cliCluster(ctx context.Context, args []string) int {
 		err = api.PushClusterRun(ctx, pf.name, pf.planID, pf.jobs, pf.hostTimeout, pf.tasks...)
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "cluster: %v\n", err)
+		eprintf("cluster: %v\n", err)
 		return 1
 	}
 	return 0

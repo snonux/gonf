@@ -37,8 +37,11 @@ type system struct {
 	// applyAttributes re-applies an unchanged member's mode and ownership in
 	// place (apply.go).
 	applyAttributes func(t *file.Target) error
-	// runValidator runs one set validator in dir (stage.go).
-	runValidator func(dir, bin string, args []string) error
+	// runValidator runs one set validator in dir (stage.go);
+	// runValidatorWithheld is its variant for a sensitive set, whose failure
+	// never carries the validator output.
+	runValidator         func(dir, bin string, args []string) error
+	runValidatorWithheld func(dir, bin string, args []string) error
 	// flock is flock(2) on a member directory; lockTimeout bounds how long an
 	// apply waits for a concurrent publication and lockPoll is how often it
 	// retries meanwhile (lock.go).
@@ -70,16 +73,17 @@ func newSystem() *system {
 		linkBackup: func(dirfd int, name, dst string) error {
 			return unix.Linkat(dirfd, name, unix.AT_FDCWD, dst, 0)
 		},
-		chownFile:       func(f *os.File, uid, gid int) error { return f.Chown(uid, gid) },
-		chmodFile:       func(f *os.File, mode os.FileMode) error { return f.Chmod(mode) },
-		applyAttributes: func(t *file.Target) error { return t.ApplyAttributes() },
-		runValidator:    validator.RunIn,
-		flock:           unix.Flock,
-		lockTimeout:     5 * time.Minute,
-		lockPoll:        50 * time.Millisecond,
-		euid:            os.Geteuid,
-		fsyncFD:         unix.Fsync,
-		unlinkAt:        unix.Unlinkat,
+		chownFile:            func(f *os.File, uid, gid int) error { return f.Chown(uid, gid) },
+		chmodFile:            func(f *os.File, mode os.FileMode) error { return f.Chmod(mode) },
+		applyAttributes:      func(t *file.Target) error { return t.ApplyAttributes() },
+		runValidator:         validator.RunIn,
+		runValidatorWithheld: validator.RunInWithheld,
+		flock:                unix.Flock,
+		lockTimeout:          5 * time.Minute,
+		lockPoll:             50 * time.Millisecond,
+		euid:                 os.Geteuid,
+		fsyncFD:              unix.Fsync,
+		unlinkAt:             unix.Unlinkat,
 	}
 	sys.restoreCopy = sys.writeRestoredCopy
 	sys.syncDirectory = sys.syncDir

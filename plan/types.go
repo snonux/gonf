@@ -56,7 +56,20 @@ import "encoding/json"
 // members/validators/chroot/staging_dir/member fields: an older destination
 // would reach the unknown kind mid-plan, after earlier ops had already
 // mutated the host, so it must refuse v21 at the header gate instead.
-const CurrentVersion = 21
+// Version 22 adds the sensitive field: an op whose payload holds secret
+// material (see VersionSensitive). An older destination would ignore it and
+// echo a failing validator's output — possibly the secret — into its error,
+// so it must refuse v22 at the header gate; push then installs a current
+// gonf first and strict preview refuses (remote.RequireRemoteGonf). A
+// recorded plan declares v22 only when it has a sensitive op
+// (RequiredVersion); otherwise its header stays v21.
+const CurrentVersion = 22
+
+// VersionSensitive is the plan schema version that introduced the op
+// sensitive field. Tests pin it so a merge that loses the bump (and so lets
+// an older destination apply a secret-bearing op without honouring it)
+// fails loudly.
+const VersionSensitive = 22
 
 // VersionConfigSet is the plan schema version that introduced the config_set
 // and config_set_member kinds. Tests pin it so a merge that loses the bump
@@ -96,6 +109,7 @@ var supportedVersions = map[int]struct{}{
 	18:             {},
 	19:             {},
 	20:             {},
+	21:             {},
 	CurrentVersion: {},
 }
 
@@ -404,6 +418,25 @@ type Op struct {
 	IfChanged bool `json:"if_changed,omitempty"`
 	// Watch lists resource ids consulted when IfChanged is set.
 	Watch []string `json:"watch,omitempty"`
+
+	// Sensitive (schema v22, VersionSensitive) marks an op whose payload —
+	// content_b64 or its blob, template_data, member content, lines, argv,
+	// environment — holds secret material. The controller sets it while
+	// recording, when the op contains a value resolved through the secret
+	// provider (api.ResolveSecret, MustSecret, OptionalSecret, SecretFile).
+	// It is not protection by itself: the payload stays in clear text (base64
+	// is an encoding, not encryption). What it changes: `gonf plan -stdout`
+	// refuses the plan unless explicitly asked, the redacted preview hides
+	// the payload, a failing file or config_set validator's output and a
+	// file's template error details are withheld, a command's argv is
+	// withheld from its log lines and dry-run description and its output
+	// from its failure, and a push refuses to stage the op's blob where a
+	// less privileged user could read it. It does not hide argv from the
+	// destination's process list, a package manager's own failure output,
+	// or content the op writes (a crontab line, a file). Recording refuses a
+	// strong secret (8+ bytes, not word-like) in the op's identity; a weak
+	// one there only marks the op and stays visible in destination logs.
+	Sensitive bool `json:"sensitive,omitempty"`
 
 	// Elevate marks ops from a Privileged() task (or WithElevate command).
 	// Controllers use this to split apply into user vs sudo/doas gonf invocations.

@@ -28,7 +28,21 @@ var (
 	mu    sync.Mutex
 	level = LevelInfo
 	std   = log.New(os.Stderr, "", log.LstdFlags)
+	// redact, when set, rewrites every formatted message before it is
+	// written (SetRedactor).
+	redact func(string) string
 )
+
+// SetRedactor installs f to rewrite every log message before it is written,
+// or removes it with nil. api installs the secret registry's Redact
+// (secret.Values), so a resolved secret never reaches a controller-side log
+// line — including a registration debug line or a Fatal message that quotes
+// a resource identity. f must be safe for concurrent use and must not log.
+func SetRedactor(f func(string) string) {
+	mu.Lock()
+	defer mu.Unlock()
+	redact = f
+}
 
 // SetLevel sets the minimum verbosity. Default is LevelInfo.
 func SetLevel(l Level) {
@@ -49,12 +63,16 @@ func GetLevel() Level {
 // happens outside the lock (log.Logger serialises its own output).
 func logf(msgLevel Level, format string, args ...any) {
 	mu.Lock()
-	cur, out := level, std
+	cur, out, rewrite := level, std, redact
 	mu.Unlock()
 	if msgLevel > cur {
 		return
 	}
-	_ = out.Output(3, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	if rewrite != nil {
+		msg = rewrite(msg)
+	}
+	_ = out.Output(3, msg)
 }
 
 // captureBuffer is the concurrency-safe sink CaptureForTest installs.

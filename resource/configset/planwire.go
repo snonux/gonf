@@ -117,7 +117,7 @@ func specFromOp(op plan.Op) (*spec, error) {
 	if op.Name == "" {
 		return nil, fmt.Errorf("config_set: missing name")
 	}
-	s := &spec{name: op.Name, chroot: op.Chroot, stagingDir: op.StagingDir}
+	s := &spec{name: op.Name, chroot: op.Chroot, stagingDir: op.StagingDir, sensitive: op.Sensitive}
 	for _, m := range op.Members {
 		ms, err := memberFromWire(m)
 		if err != nil {

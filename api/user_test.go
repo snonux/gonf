@@ -73,7 +73,7 @@ func TestUserManageHomeRecordsVersionedPlan(t *testing.T) {
 	}
 	lines := strings.Split(strings.TrimSpace(string(encoded)), "\n")
 	want := []string{
-		fmt.Sprintf(`{"op":"plan","version":%d,"id":"home"}`, plan.CurrentVersion),
+		fmt.Sprintf(`{"op":"plan","version":%d,"id":"home"}`, plan.VersionSensitive-1),
 		`{"op":"user","id":"User[_dserver]","primary_group":"_dserver","home":"/var/svc/dserver","manage_home":true,"name":"_dserver"}`,
 		`{"op":"user","id":"User[_plain]","primary_group":"_plain","home":"/var/svc/plain","name":"_plain"}`,
 	}

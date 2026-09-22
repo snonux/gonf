@@ -79,6 +79,11 @@ type File struct {
 	validationBin   string
 	validationArgs  []string
 	validationSet   bool
+	// sensitive marks content holding secret material: plan apply sets it
+	// from a sensitive file op (plan.Op.Sensitive). A failing validator's
+	// output and template parse/execute details are then withheld from
+	// errors, since either can quote the content.
+	sensitive bool
 }
 
 // SetName implements opt.Named. It overrides this resource's identity but
@@ -342,12 +347,15 @@ func EnsurePresent(path string, opts ...opt.FileOption) error {
 
 // ensureWithFacts is Ensure with build()'s locally detected template facts
 // replaced by facts; EnsureWithPlanFacts is its exported plan-apply wrapper.
-func ensureWithFacts(path string, facts templateFacts, opts ...opt.FileOption) error {
+// sensitive marks the content as secret material (a sensitive plan op, see
+// File.sensitive); only the file handler's own apply sets it.
+func ensureWithFacts(path string, facts templateFacts, sensitive bool, opts ...opt.FileOption) error {
 	f, err := build(path, opts...)
 	if err != nil {
 		return err
 	}
 	f.templateFacts = facts
+	f.sensitive = sensitive
 	return f.apply()
 }
 
@@ -365,6 +373,45 @@ func Present(path string, opts ...opt.FileOption) resource.Resource {
 	f.resource = resource.Register("File", f.resourceName(), f, f.DependsOn.IDs...)
 	resource.RecordPlanDraft(f.planDraft())
 	return f.resource
+}
+
+// PresentSecret is Present for a file whose content is exactly the secret
+// bytes content (api.SecretFile): it registers the resource and records its
+// draft. The mode defaults to 0600 rather than 0640; an explicit WithMode
+// wins. opts must not configure the content: WithContent, WithSource,
+// WithTemplate, WithTemplateData (or a ".tmpl" path, which would render the
+// secret as a template), line edits and IsAbsent are recipe misuse and fail
+// fast via logger.Fatal, like every other invalid option combination.
+func PresentSecret(path string, content []byte, opts ...opt.FileOption) resource.Resource {
+	f, err := buildSecret(path, content, opts...)
+	if err != nil {
+		logger.Fatal("%v", err)
+	}
+	f.resource = resource.Register("File", f.resourceName(), f, f.DependsOn.IDs...)
+	resource.RecordPlanDraft(f.planDraft())
+	return f.resource
+}
+
+// buildSecret is PresentSecret's checked core. The caller's options are
+// first applied to a bare probe File, only to see whether they touch the
+// content; the real File is then built with the secret as its content.
+func buildSecret(path string, content []byte, opts ...opt.FileOption) (*File, error) {
+	probe := &File{path: path}
+	for _, o := range opts {
+		o.Apply(probe)
+	}
+	if probe.contentSet || probe.shouldRenderTemplate() || probe.lineEdit() || probe.Absent {
+		return nil, fmt.Errorf("file %s: SecretFile sets the content itself; it cannot combine WithContent/WithSource, "+
+			"WithTemplate/WithTemplateData or a .tmpl path, WithLine(s)/WithoutLine(s) or IsAbsent", path)
+	}
+	f, err := build(path, append([]opt.FileOption{opt.WithContent(string(content))}, opts...)...)
+	if err != nil {
+		return nil, err
+	}
+	if !f.modeSet {
+		f.mode = 0o600
+	}
+	return f, nil
 }
 
 // PresentEnsure registers an EnsureFile resource. It creates an empty file

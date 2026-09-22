@@ -85,7 +85,7 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if op.OnlyIf != nil {
 		opts = append(opts, plan.GuardOptions(op.OnlyIf, false)...)
 	}
-	return Ensure(op.Bin, append([]string(nil), op.Args...), opts...)
+	return ensure(op.Bin, append([]string(nil), op.Args...), op.Sensitive, opts...)
 }
 
 // planGuard converts a package-neutral guard draft to the plan wire Guard,

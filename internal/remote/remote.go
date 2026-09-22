@@ -69,9 +69,13 @@ func defaultSSHRunner(ctx context.Context, stdin io.Reader, argv []string) error
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Stdin = stdin
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
+	// The remote gonf has no secret registry: its output reaches the
+	// controller's terminal through the controller's redactor, line by line.
+	out := logger.NewRedactingWriter(os.Stderr)
+	cmd.Stdout = out
+	cmd.Stderr = out
 	err := cmd.Run()
+	_ = out.Close()
 	if err != nil && ctx.Err() != nil {
 		// Killed by the push context (abort or deadline), not an ssh failure.
 		// Both causes are wrapped: the context error lets the fan-out tell an

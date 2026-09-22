@@ -191,7 +191,7 @@ func TestSystemdUnitsSingleCompositionPlanUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := fmt.Sprintf(`{"op":"plan","version":%d,"id":"units"}`, plan.CurrentVersion) + "\n" + singleCompositionBody
+	want := fmt.Sprintf(`{"op":"plan","version":%d,"id":"units"}`, plan.VersionSensitive-1) + "\n" + singleCompositionBody
 	if string(got) != want {
 		t.Fatalf("single-composition plan changed:\n got: %s\nwant: %s", got, want)
 	}

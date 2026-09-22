@@ -52,6 +52,13 @@ type Cmd struct {
 	unless  *opt.Guard
 	onlyIf  *opt.Guard
 	elevate bool
+	// sensitive is set by plan apply from a sensitive command op
+	// (plan.Op.Sensitive): its argv or environment holds secret material,
+	// so run withholds the argv from logs and the dry-run description and
+	// the output from a failure. The ID is still logged: recording refuses a
+	// strong secret in it (an unnamed command's ID is its argv), not a short
+	// one.
+	sensitive bool
 }
 
 // SetName overrides the registry name, which otherwise defaults to the
@@ -102,9 +109,16 @@ func Present(bin string, args []string, opts ...opt.CommandOption) resource.Reso
 // Ensure builds and applies a command resource without registering it or
 // recording a plan draft.
 func Ensure(bin string, args []string, opts ...opt.CommandOption) error {
+	return ensure(bin, args, false, opts...)
+}
+
+// ensure is Ensure with the op's sensitivity (Cmd.sensitive); only the plan
+// handler passes true.
+func ensure(bin string, args []string, sensitive bool, opts ...opt.CommandOption) error {
 	c := &Cmd{
-		bin:  bin,
-		args: append([]string(nil), args...),
+		bin:       bin,
+		args:      append([]string(nil), args...),
+		sensitive: sensitive,
 	}
 	for _, o := range opts {
 		o.Apply(c)
@@ -240,29 +254,47 @@ func (c *Cmd) id() string {
 }
 
 // run executes the main command through resource.Mutate (so dry-run only
-// logs it), failing on a non-zero exit with its stdout and stderr.
+// logs it), failing on a non-zero exit with its stdout and stderr — for a
+// sensitive command only their sizes, since a program may echo its argv or
+// its secret input.
 func (c *Cmd) run() error {
-	desc := fmt.Sprintf("run %s %s", c.bin, strings.Join(c.args, " "))
+	desc := fmt.Sprintf("run %s", c.commandLine())
 	return resource.Mutate(c.id(), desc, func() error {
 		opts := exec.Opts{Dir: c.dir}
 		if c.env != nil {
 			opts.Env = exec.MergeEnv(c.env)
 		}
 
-		logger.Info("running %s: %s %s", c.id(), c.bin, strings.Join(c.args, " "))
+		logger.Info("running %s: %s", c.id(), c.commandLine())
 		stdout, stderr, exitCode, err := runWith(opts, c.bin, c.args...)
 		if err != nil {
 			return fmt.Errorf("failed to execute %s: %w", c.bin, err)
+		}
+		if exitCode != 0 && c.sensitive {
+			return fmt.Errorf("%s exited %d (output withheld: %d bytes stdout, %d bytes stderr; the command carries secret material)",
+				c.bin, exitCode, len(stdout), len(stderr))
 		}
 		if exitCode != 0 {
 			return fmt.Errorf("%s exited %d\nstdout: %s\nstderr: %s",
 				c.bin, exitCode, stdout, stderr)
 		}
-		if stdout != "" {
+		if stdout != "" && !c.sensitive {
 			logger.Debug("%s stdout: %s", c.id(), strings.TrimSpace(stdout))
 		}
 		return nil
 	})
+}
+
+// commandLine is the command as logs and descriptions show it: bin and
+// argv, or for a sensitive command bin only, with the argv withheld.
+func (c *Cmd) commandLine() string {
+	if c.sensitive {
+		return c.bin + " [argv withheld: secret material]"
+	}
+	if len(c.args) == 0 {
+		return c.bin + " "
+	}
+	return c.bin + " " + strings.Join(c.args, " ")
 }
 
 // guardPasses runs guard probe g and reports whether it exited with the

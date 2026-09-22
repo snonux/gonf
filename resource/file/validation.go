@@ -132,9 +132,15 @@ func removeValidationCandidate(path, candidatePath string, err error) error {
 // CandidatePath placeholder replaced by the staged candidate's path. See
 // internal/validator.Run for how the process is bounded and what the error
 // carries; the "file <path>: validation by <bin> failed: " prefix is stable.
+// For sensitive content the validator's output is withheld from the error
+// (validator.RunWithheld): it may quote the secret-bearing candidate.
 func (f *File) runValidation(path, candidatePath string) error {
 	args := substituteCandidatePath(f.validationArgs, candidatePath)
-	if err := validator.Run(f.validationBin, args); err != nil {
+	run := validator.Run
+	if f.sensitive {
+		run = validator.RunWithheld
+	}
+	if err := run(f.validationBin, args); err != nil {
 		return fmt.Errorf("file %s: validation by %s failed: %w", path, f.validationBin, err)
 	}
 	return nil

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,8 +94,8 @@ func TestConfigSetPlanRoundTripAndMemberGates(t *testing.T) {
 	if !strings.Contains(string(raw), `"op":"config_set"`) || !strings.Contains(string(raw), `"id":"ConfigSetMember[mail/aliases]"`) {
 		t.Fatalf("plan lacks the config_set op or member handles:\n%s", raw)
 	}
-	if !strings.Contains(string(raw), `"version":21`) {
-		t.Fatalf("plan header must carry schema v21:\n%s", raw)
+	if !strings.Contains(string(raw), fmt.Sprintf(`"version":%d`, plan.VersionConfigSet)) {
+		t.Fatalf("plan header must carry schema v%d (config_set; no sensitive op):\n%s", plan.VersionConfigSet, raw)
 	}
 
 	fired, err := f.apply(raw)

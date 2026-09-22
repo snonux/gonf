@@ -15,9 +15,10 @@
 // packages and are configured once, at the consumer's composition root, with
 // api.SetSecretProvider.
 //
-// The contract only resolves bytes. It does not make plans secret-aware: a
-// value a recipe places into file content or template data is recorded in
-// the plan exactly as before (see docs/secrets.md).
+// The contract only resolves bytes. Plans become secret-aware through
+// Values: api.ResolveSecret remembers every value it returns, and plan
+// recording marks the ops that still carry one as sensitive (see
+// docs/secrets.md). The value itself stays in the plan in clear text.
 package secret
 
 import (

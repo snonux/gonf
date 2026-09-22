@@ -23,6 +23,19 @@ type secretProviders struct {
 	provider   secret.Provider // nil: the default secret.FileProvider{}
 	configured bool            // SetSecretProvider has been called
 	used       bool            // a secret has been resolved
+	// values tracks every value ResolveSecret returned in this process, so
+	// plan recording can mark the ops that carry one as sensitive
+	// (markSensitive) and previews can redact them. It has its own lock and
+	// is not reset by SetSecretProvider: a value stays secret material.
+	values secret.Values
+}
+
+// init routes every controller-side log line through the secret registry
+// (logger.SetRedactor): a resolved secret is replaced wherever a message
+// quotes it, e.g. an identity in a registration debug line or a Fatal.
+// With no secret resolved, Redact returns its input unchanged.
+func init() {
+	logger.SetRedactor(secretConfig.values.Redact)
 }
 
 // SetSecretProvider configures the provider that MustSecret, OptionalSecret
@@ -54,6 +67,13 @@ func SetSecretProvider(p secret.Provider) {
 // applied. Unlike MustSecret it returns the error instead of stashing it, so
 // it also works outside plan recording. Errors never contain secret bytes;
 // the returned slice is the caller's.
+//
+// Every value it returns is remembered for the rest of the process as secret
+// material: a plan op with the value (verbatim or with surrounding
+// whitespace or a final newline trimmed, see secret.Values) in any of its
+// strings is recorded as sensitive, and one with a strong secret in an
+// identity is refused (see docs/secrets.md for the classification and its
+// limits); everything the controller prints redacts it.
 func ResolveSecret(ctx context.Context, ref secret.Ref) ([]byte, error) {
 	data, err := secret.Resolve(ctx, useSecretProvider(), ref)
 	if err != nil {
@@ -63,6 +83,7 @@ func ResolveSecret(ctx context.Context, ref secret.Ref) ([]byte, error) {
 		return nil, &secret.Error{Kind: secret.ErrInvalid, Ref: ref,
 			Msg: fmt.Sprintf("secret %q is empty", string(ref))}
 	}
+	secretConfig.values.Add(data)
 	return data, nil
 }
 
@@ -92,6 +113,7 @@ func resetSecretProviderForTest() {
 	secretConfig.mu.Lock()
 	defer secretConfig.mu.Unlock()
 	secretConfig.provider, secretConfig.configured, secretConfig.used = nil, false, false
+	secretConfig.values.Reset()
 }
 
 // useSecretProvider marks the configuration as used (so it can no longer be

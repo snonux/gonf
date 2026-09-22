@@ -36,6 +36,10 @@ type spec struct {
 	validators []resource.PlanArgv
 	chroot     string
 	stagingDir string // explicit WithStagingDir, "" for the default
+	// sensitive is set by plan apply from a sensitive config_set op
+	// (plan.Op.Sensitive): a member holds secret material, so a failing
+	// validator's output is withheld (stage.validate).
+	sensitive bool
 
 	sys      *system
 	outcomes *outcomeStore

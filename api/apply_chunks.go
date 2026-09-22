@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/snonux/gonf/internal/clihost"
+	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -91,10 +92,15 @@ func defaultElevatedApply(ctx context.Context, mode privilege.Mode, ops []plan.O
 		defer cancel()
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
+	// The elevated child has no secret registry of its own: its log lines
+	// and summary reach the operator's terminal through the controller's
+	// redactor, line by line (logger.RedactingWriter).
+	out := logger.NewRedactingWriter(os.Stderr)
+	cmd.Stdout = out
+	cmd.Stderr = out
 	cmd.Stdin = bytes.NewReader(nil)
 	err = cmd.Run()
+	_ = out.Close()
 	if err != nil && ctx.Err() != nil {
 		return fmt.Errorf("%w (elevated apply killed by context: %v)", ctx.Err(), err)
 	}

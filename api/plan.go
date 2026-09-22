@@ -249,6 +249,11 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 
 	ops := plan.FinishRecord(planID)
 	plan.ResetRecord()
+	// Resource ops were scanned as their drafts were packaged; control ops
+	// (when blocks, requirements) are recorded directly and scanned here.
+	if err := markRecordedControlOps(ops); err != nil {
+		return nil, err
+	}
 	if err := validateRecordedPlan(ops); err != nil {
 		return nil, err
 	}
