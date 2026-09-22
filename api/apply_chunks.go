@@ -31,6 +31,9 @@ const DefaultChunkTimeout = 10 * time.Minute
 // elevatedApplyRunner runs a privileged local apply chunk. Overridable in tests.
 var elevatedApplyRunner = defaultElevatedApply
 
+// chunkLabel names chunk i in a chunk's apply error.
+type chunkLabel func(i int, ch plan.Chunk) string
+
 // elevatedApplyArgv builds the un-wrapped re-exec argv for the elevated
 // child ("gonf [-profile=<override>] apply [-n] <path>"). Split out from
 // defaultElevatedApply so the dry-run and profile-override propagation can be
@@ -218,9 +221,6 @@ func ApplyChunksContext(ctx context.Context, ops []plan.Op, planDir string, mode
 	}
 	return applySplitChunks(ctx, chunks, planDir, mode, chunkIndexLabel)
 }
-
-// chunkLabel names chunk i in a chunk's apply error.
-type chunkLabel func(i int, ch plan.Chunk) string
 
 // chunkIndexLabel is ApplyChunks' wording: "chunk 1 (elevated)". Its input is
 // a recorded plan, whose chunk order the caller knows.

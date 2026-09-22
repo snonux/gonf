@@ -41,6 +41,16 @@ type levelGraph struct {
 	back     *pathMarks    // backward search scratch
 }
 
+// tarjan is the state of one strongly-connected-components pass.
+type tarjan struct {
+	lg          levelGraph
+	index, low  []int
+	onStack     []bool
+	stack       []int
+	comp        []int
+	next, count int
+}
+
 func newLevelGraph(g depGraph, body []plan.Op, watches []watchPair) levelGraph {
 	n := len(body)
 	lg := levelGraph{body: body, waiters: g.waiters, incoming: g.deps,
@@ -186,16 +196,6 @@ func (lg levelGraph) components() (comp []int, count int) {
 		}
 	}
 	return t.comp, t.count
-}
-
-// tarjan is the state of one strongly-connected-components pass.
-type tarjan struct {
-	lg          levelGraph
-	index, low  []int
-	onStack     []bool
-	stack       []int
-	comp        []int
-	next, count int
 }
 
 func (t *tarjan) visit(u int) {

@@ -18,6 +18,16 @@ type pathMarks struct {
 	stamp   int
 }
 
+// stateSearch is one breadth-first search over (op, crossed) states, state
+// 2*op+crossed, advanced one state at a time by step.
+type stateSearch struct {
+	lg     levelGraph
+	marks  *pathMarks
+	queue  []int
+	target int
+	expand func(s *stateSearch, st int)
+}
+
 func newPathMarks(ops int) *pathMarks {
 	return &pathMarks{mark: make([]int, 2*ops), parent: make([]int, 2*ops), byWatch: make([]bool, 2*ops)}
 }
@@ -96,16 +106,6 @@ func (lg levelGraph) crossPath(from, to int) bool {
 			return found
 		}
 	}
-}
-
-// stateSearch is one breadth-first search over (op, crossed) states, state
-// 2*op+crossed, advanced one state at a time by step.
-type stateSearch struct {
-	lg     levelGraph
-	marks  *pathMarks
-	queue  []int
-	target int
-	expand func(s *stateSearch, st int)
 }
 
 // forwardSearch walks edges forward from (from, not crossed) towards (to,

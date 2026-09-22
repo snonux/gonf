@@ -8,6 +8,46 @@ import (
 	"github.com/snonux/gonf/plan"
 )
 
+// depGraph is the in-plan dependency graph of an Apply body, by body index.
+// A dep matching no op ID in the body adds no edge. A dep on the op's own ID
+// IS an edge (a self-loop): it is the smallest dependency cycle, and the
+// plan engine refuses it as circular too, so dropping it here would let the
+// elevated chunk run as root before a later chunk hit that refusal.
+type depGraph struct {
+	byID    map[string]int // op ID → its first body index
+	deps    [][]int        // op → the ops it depends on
+	waiters [][]int        // op → the ops depending on it
+}
+
+// readyHeap is kahn's min-heap of ready op indexes by (rank, index).
+type readyHeap struct {
+	ops  []int
+	rank func(int) int
+}
+
+// newDepGraph builds body's in-plan dependency graph (see depGraph).
+func newDepGraph(body []plan.Op) depGraph {
+	g := depGraph{
+		byID:    make(map[string]int, len(body)),
+		deps:    make([][]int, len(body)),
+		waiters: make([][]int, len(body)),
+	}
+	for i, op := range body {
+		if _, seen := g.byID[op.ID]; op.ID != "" && !seen {
+			g.byID[op.ID] = i
+		}
+	}
+	for i, op := range body {
+		for _, dep := range op.Deps {
+			if at, found := g.byID[dep]; found {
+				g.deps[i] = append(g.deps[i], at)
+				g.waiters[at] = append(g.waiters[at], i)
+			}
+		}
+	}
+	return g
+}
+
 // orderForPrivilegeSplit returns the ops of an api.Apply plan that has
 // elevated ops in an order that plan.SplitPrivilegeChunks can cut into
 // privilege chunks without a dependency pointing into a later chunk and
@@ -51,14 +91,21 @@ import (
 // "A -> A"): the elevated chunk is a separate root process, so the plan must
 // be refused before ANY chunk applies, not by the engine once a later chunk
 // is reached.
+//
+// Cost, for n ops, E deps and W same-class watches: the order as a whole is
+// NOT linear. The cycle check (cycleBlocked) and levelOrder are Kahn passes
+// over a heap, O((n + E) log n); a refused cycle's walk (cycleError) and
+// chunkLevels are O(n + E); keptWatches is
+// O(W * (n + E)) in the worst case, and near linear on real plans (see
+// there).
 func orderForPrivilegeSplit(ops []plan.Op) ([]plan.Op, watchConflicts, error) {
 	if len(ops) < 2 {
 		return ops, nil, nil
 	}
 	body := ops[1:]
 	g := newDepGraph(body)
-	if _, ok := g.topoOrder(); !ok {
-		return nil, nil, g.cycleError(body)
+	if blocked, acyclic := g.cycleBlocked(); !acyclic {
+		return nil, nil, g.cycleError(body, blocked)
 	}
 	// Which watches can be kept does not depend on the starting class
 	// (see watchesSatisfiable), so both starts share one kept set.
@@ -74,39 +121,6 @@ func orderForPrivilegeSplit(ops []plan.Op) ([]plan.Op, watchConflicts, error) {
 		out = append(out, body[i])
 	}
 	return out, conflicts, nil
-}
-
-// depGraph is the in-plan dependency graph of an Apply body, by body index.
-// A dep matching no op ID in the body adds no edge. A dep on the op's own ID
-// IS an edge (a self-loop): it is the smallest dependency cycle, and the
-// plan engine refuses it as circular too, so dropping it here would let the
-// elevated chunk run as root before a later chunk hit that refusal.
-type depGraph struct {
-	byID    map[string]int // op ID → its first body index
-	deps    [][]int        // op → the ops it depends on
-	waiters [][]int        // op → the ops depending on it
-}
-
-func newDepGraph(body []plan.Op) depGraph {
-	g := depGraph{
-		byID:    make(map[string]int, len(body)),
-		deps:    make([][]int, len(body)),
-		waiters: make([][]int, len(body)),
-	}
-	for i, op := range body {
-		if _, seen := g.byID[op.ID]; op.ID != "" && !seen {
-			g.byID[op.ID] = i
-		}
-	}
-	for i, op := range body {
-		for _, dep := range op.Deps {
-			if at, found := g.byID[dep]; found {
-				g.deps[i] = append(g.deps[i], at)
-				g.waiters[at] = append(g.waiters[at], i)
-			}
-		}
-	}
-	return g
 }
 
 // indegrees returns a fresh count of in-plan deps per op.
@@ -128,27 +142,38 @@ func (g depGraph) firstReady() int {
 	return -1
 }
 
-// topoOrder returns the body indexes in a dependency order (Kahn, lowest
-// index first), or ok=false when a cycle leaves ops that never get ready.
-func (g depGraph) topoOrder() (order []int, ok bool) {
-	return g.kahn(func(int) int { return 0 })
+// cycleBlocked runs one Kahn pass and reports whether it emitted every op
+// (acyclic). When it did not, blocked is that pass's final in-degree count:
+// > 0 exactly for the ops a dependency cycle keeps from ever getting ready
+// (the cycle's ops and everything depending on them), counting each such
+// op's deps that are blocked too; 0 for every emitted op.
+func (g depGraph) cycleBlocked() (blocked []int, acyclic bool) {
+	order, indeg := g.kahn(func(int) int { return 0 })
+	return indeg, len(order) == len(g.deps)
 }
 
 // levelOrder emits the ops by ascending chunk level, in dependency order
 // within a level (ties by lowest index). Every dep sits at a level no higher
 // than its dependent, so taking the ready op of the lowest level never emits
-// a level before a lower one is complete.
+// a level before a lower one is complete. It returns nil on a cycle, which
+// its callers have already refused (cycleBlocked).
 func (g depGraph) levelOrder(level []int) []int {
 	order, _ := g.kahn(func(i int) int { return level[i] })
+	if len(order) < len(g.deps) {
+		return nil
+	}
 	return order
 }
 
 // kahn is a topological sort that always takes the ready op with the lowest
-// (rank, index). It returns ok=false on a cycle. The ready ops sit in a heap
-// ordered by (rank, index), so a plan of n ops and E deps sorts in
-// O((n + E) log n); rank must not change while kahn runs.
-func (g depGraph) kahn(rank func(int) int) (order []int, ok bool) {
-	indeg := g.indegrees()
+// (rank, index). On a cycle order is short: it misses every op the cycle
+// blocks. indeg is the pass's final in-degree count, 0 for every emitted op
+// and, for a blocked one, the number of its deps that were never emitted
+// (see cycleBlocked). The ready ops sit in a heap ordered by (rank, index),
+// so a plan of n ops and E deps sorts in O((n + E) log n); rank must not
+// change while kahn runs.
+func (g depGraph) kahn(rank func(int) int) (order, indeg []int) {
+	indeg = g.indegrees()
 	ready := &readyHeap{rank: rank}
 	for i, d := range indeg {
 		if d == 0 {
@@ -166,16 +191,7 @@ func (g depGraph) kahn(rank func(int) int) (order []int, ok bool) {
 			}
 		}
 	}
-	if len(order) < len(g.deps) {
-		return nil, false // every remaining op waits on another: a cycle
-	}
-	return order, true
-}
-
-// readyHeap is kahn's min-heap of ready op indexes by (rank, index).
-type readyHeap struct {
-	ops  []int
-	rank func(int) int
+	return order, indeg
 }
 
 func (h *readyHeap) Len() int { return len(h.ops) }
@@ -207,25 +223,15 @@ func chunkCount(body []plan.Op, order []int) int {
 }
 
 // cycleError names one dependency cycle of body as "Apply: circular
-// dependency: A -> B -> A", where each op depends on the next. It walks deps
-// from the lowest-indexed op still blocked after a Kahn pass (every such op
-// has a blocked dep, so the walk must revisit an op) and reports the loop.
-func (g depGraph) cycleError(body []plan.Op) error {
-	indeg := g.indegrees()
-	for changed := true; changed; { // peel off everything that is not blocked
-		changed = false
-		for i := range indeg {
-			if indeg[i] == 0 {
-				indeg[i] = -1
-				changed = true
-				for _, w := range g.waiters[i] {
-					indeg[w]--
-				}
-			}
-		}
-	}
+// dependency: A -> B -> A", where each op depends on the next. blocked is
+// cycleBlocked's final in-degree count. It walks deps from the lowest-indexed
+// blocked op (every blocked op has a blocked dep, so the walk must revisit an
+// op) and reports the loop. Each op is visited at most once and each of its
+// deps scanned at most once, so the refusal costs O(n + E) on top of the
+// Kahn pass that found the cycle.
+func (g depGraph) cycleError(body []plan.Op, blocked []int) error {
 	at, seen, path := -1, map[int]int{}, []int(nil)
-	for i, n := range indeg {
+	for i, n := range blocked {
 		if n > 0 {
 			at = i
 			break
@@ -237,15 +243,16 @@ func (g depGraph) cycleError(body []plan.Op) error {
 		}
 		seen[at] = len(path)
 		path = append(path, at)
-		at = g.blockedDep(at, indeg)
+		at = g.blockedDep(at, blocked)
 	}
 	return fmt.Errorf("Apply: circular dependency among the registered resources")
 }
 
-// blockedDep returns a dep of op that is itself still blocked, or -1.
-func (g depGraph) blockedDep(op int, indeg []int) int {
+// blockedDep returns a dep of op that is itself still blocked (blocked[d] >
+// 0, see cycleBlocked), or -1.
+func (g depGraph) blockedDep(op int, blocked []int) int {
 	for _, d := range g.deps[op] {
-		if indeg[d] > 0 {
+		if blocked[d] > 0 {
 			return d
 		}
 	}
