@@ -56,7 +56,7 @@ func (r *recorder) SetReload()                 { r.record("SetReload", nil) }
 func (r *recorder) SetUser()                   { r.record("SetUser", nil) }
 func (r *recorder) SetEnableOnly()             { r.record("SetEnableOnly", nil) }
 func (r *recorder) SetChangeWatch(v []string)  { r.record("SetChangeWatch", v) }
-func (r *recorder) WatchesDependsOn()          {}
+func (r *recorder) SetWatch(v []string)        { r.record("SetWatch", v) }
 func (r *recorder) SetElevate()                { r.record("SetElevate", nil) }
 func (r *recorder) SetCronUser(v string)       { r.record("SetCronUser", v) }
 func (r *recorder) SetLegacyCommand(v string)  { r.record("SetLegacyCommand", v) }
@@ -143,7 +143,6 @@ var (
 	_ ChangeGated            = (*recorder)(nil)
 	_ Watchable              = (*recorder)(nil)
 	_ ChangeWatchable        = (*recorder)(nil)
-	_ DependsOnWatcher       = (*recorder)(nil)
 	_ Elevatable             = (*recorder)(nil)
 	_ CronUserable           = (*recorder)(nil)
 	_ LegacyCronCommandable  = (*recorder)(nil)

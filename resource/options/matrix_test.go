@@ -117,7 +117,7 @@ var optionCases = []optionCase{
 	{"WithElevate", WithElevate, []string{"Command"}, one("SetElevate", nil)},
 	{"WithEnableOnly", WithEnableOnly, famEnableOnly, one("SetEnableOnly", nil)},
 	{"IfChanged", IfChanged, []string{"DaemonReload"}, one("SetChangeWatch", []string(nil))},
-	{"WithWatch", WithWatch("x", "y"), []string{"DaemonReload"}, one("SetChangeWatch", []string{"x", "y"})},
+	{"WithWatch", WithWatch("x", "y"), []string{"DaemonReload"}, one("SetWatch", []string{"x", "y"})},
 	{"WatchChanges", WatchChanges("File[w]"), famChangeGate, one("SetChangeWatch", []string{"File[w]"})},
 	{"WithCronUser", WithCronUser("root"), []string{"Cron"}, one("SetCronUser", "root")},
 	{"WithLegacyCommand", WithLegacyCommand("/bin/old"), []string{"Cron"}, one("SetLegacyCommand", "/bin/old")},

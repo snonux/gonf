@@ -10,53 +10,55 @@ import (
 	"github.com/snonux/gonf/resource"
 )
 
+// draftWatchCase is one TestDaemonReloadDraftWatch case: the options of a
+// daemon-reload and the gate fields its plan draft must record.
+type draftWatchCase struct {
+	name      string
+	opts      []opt.DaemonReloadOption
+	wantGated bool
+	wantWatch []string
+}
+
+// draftWatchCases are the daemon-reload draft shapes recorded plans depend
+// on, all as recorded before b72: gate ids first, then the (last) WithWatch
+// ids, else the DependsOn ids, recorded armed or not.
+var draftWatchCases = []draftWatchCase{
+	{name: "plain"},
+	{name: "ungated deps still recorded as watch",
+		opts:      []opt.DaemonReloadOption{opt.DependsOn(dep("File[a]"))},
+		wantWatch: []string{"File[a]"}},
+	{name: "legacy IfChanged falls back to deps",
+		opts:      []opt.DaemonReloadOption{opt.IfChanged, opt.DependsOn(dep("File[a]"))},
+		wantGated: true, wantWatch: []string{"File[a]"}},
+	{name: "fallback ignores option order",
+		opts:      []opt.DaemonReloadOption{opt.DependsOn(dep("File[a]")), opt.IfChanged},
+		wantGated: true, wantWatch: []string{"File[a]"}},
+	{name: "IfChanged with WithWatch",
+		opts:      []opt.DaemonReloadOption{opt.IfChanged, opt.WithWatch("File[b]", "File[b]")},
+		wantGated: true, wantWatch: []string{"File[b]"}},
+	{name: "gate ids before WithWatch ids",
+		opts:      []opt.DaemonReloadOption{opt.WatchChanges("File[c]"), opt.WithWatch("File[b]")},
+		wantGated: true, wantWatch: []string{"File[c]", "File[b]"}},
+	{name: "gate ids before WithWatch ids whatever the option order",
+		opts:      []opt.DaemonReloadOption{opt.WithWatch("File[b]"), opt.OnChange(dep("File[a]"))},
+		wantGated: true, wantWatch: []string{"File[a]", "File[b]"}},
+	{name: "WithWatch alone does not arm",
+		opts:      []opt.DaemonReloadOption{opt.WithWatch("File[b]")},
+		wantWatch: []string{"File[b]"}},
+	{name: "last WithWatch replaces earlier ones",
+		opts:      []opt.DaemonReloadOption{opt.IfChanged, opt.WithWatch("File[b]"), opt.WithWatch("File[c]")},
+		wantGated: true, wantWatch: []string{"File[c]"}},
+	{name: "empty WithWatch clears earlier ones, deps fall back",
+		opts:      []opt.DaemonReloadOption{opt.IfChanged, opt.WithWatch("File[b]"), opt.WithWatch(), opt.DependsOn(dep("File[a]"))},
+		wantGated: true, wantWatch: []string{"File[a]"}},
+}
+
 // TestDaemonReloadDraftWatch pins the daemon-reload draft wiring, which
-// deliberately differs from the other gated kinds: Watch is the one watch
-// list every change-gate option fills, falling back to the DependsOn ids
-// when no option named any, and it is recorded even when the gate is
-// unarmed. Recorded plans depend on this shape.
+// deliberately differs from the other gated kinds: Watch is the one list
+// newReload resolves (see draftWatchCases), and it is recorded even when
+// the gate is unarmed. Recorded plans depend on this shape.
 func TestDaemonReloadDraftWatch(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		opts      []opt.DaemonReloadOption
-		wantGated bool
-		wantWatch []string
-	}{
-		{name: "plain", opts: nil},
-		{name: "ungated deps still recorded as watch",
-			opts:      []opt.DaemonReloadOption{opt.DependsOn(dep("File[a]"))},
-			wantWatch: []string{"File[a]"}},
-		{name: "legacy IfChanged falls back to deps",
-			opts:      []opt.DaemonReloadOption{opt.IfChanged, opt.DependsOn(dep("File[a]"))},
-			wantGated: true, wantWatch: []string{"File[a]"}},
-		{name: "fallback ignores option order",
-			opts:      []opt.DaemonReloadOption{opt.DependsOn(dep("File[a]")), opt.IfChanged},
-			wantGated: true, wantWatch: []string{"File[a]"}},
-		{name: "IfChanged with WithWatch",
-			opts:      []opt.DaemonReloadOption{opt.IfChanged, opt.WithWatch("File[b]", "File[b]")},
-			wantGated: true, wantWatch: []string{"File[b]"}},
-		{name: "OnChange then WithWatch merge",
-			opts:      []opt.DaemonReloadOption{opt.WatchChanges("File[c]"), opt.WithWatch("File[b]")},
-			wantGated: true, wantWatch: []string{"File[c]", "File[b]"}},
-		// Behaviour correction (b72): WithWatch lowers to WatchChanges, so it
-		// arms the gate on its own and repeated calls accumulate (formerly the
-		// last WithWatch replaced the earlier ones and it armed nothing).
-		{name: "WithWatch alone arms",
-			opts:      []opt.DaemonReloadOption{opt.WithWatch("File[b]")},
-			wantGated: true, wantWatch: []string{"File[b]"}},
-		// WithWatch() without ids keeps its old meaning: a no-op, so the
-		// reload stays unconditional (unarmed) and the DependsOn fallback is
-		// recorded as before; next to IfChanged it changes nothing either.
-		{name: "WithWatch without ids is a no-op",
-			opts:      []opt.DaemonReloadOption{opt.WithWatch(), opt.DependsOn(dep("File[a]"))},
-			wantWatch: []string{"File[a]"}},
-		{name: "IfChanged with empty WithWatch falls back to deps",
-			opts:      []opt.DaemonReloadOption{opt.IfChanged, opt.WithWatch(), opt.DependsOn(dep("File[a]"))},
-			wantGated: true, wantWatch: []string{"File[a]"}},
-		{name: "WithWatch calls accumulate",
-			opts:      []opt.DaemonReloadOption{opt.WithWatch("File[b]"), opt.WithWatch("File[c]", "File[b]")},
-			wantGated: true, wantWatch: []string{"File[b]", "File[c]"}},
-	} {
+	for _, tc := range draftWatchCases {
 		t.Run(tc.name, func(t *testing.T) {
 			d, err := newReload(tc.opts)
 			if err != nil {
@@ -85,9 +87,9 @@ func TestLegacyGateOptionsLowerToUnifiedOp(t *testing.T) {
 		{name: "WithWatch+IfChanged is WatchChanges",
 			legacy:  []opt.DaemonReloadOption{opt.WithWatch("File[a]"), opt.IfChanged},
 			unified: []opt.DaemonReloadOption{opt.WatchChanges("File[a]")}},
-		{name: "WithWatch is WatchChanges",
-			legacy:  []opt.DaemonReloadOption{opt.WithWatch("File[a]")},
-			unified: []opt.DaemonReloadOption{opt.WatchChanges("File[a]")}},
+		{name: "WithWatch after the gate ids",
+			legacy:  []opt.DaemonReloadOption{opt.WithWatch("File[b]"), opt.IfChanged, opt.OnChange(dep("File[a]"))},
+			unified: []opt.DaemonReloadOption{opt.OnChange(dep("File[a]")), opt.WatchChanges("File[b]")}},
 		{name: "IfChanged+DependsOn is OnChange",
 			legacy:  []opt.DaemonReloadOption{opt.IfChanged, opt.DependsOn(dep("File[a]"), dep("File[b]"))},
 			unified: []opt.DaemonReloadOption{opt.OnChange(dep("File[a]"), dep("File[b]"))}},
@@ -126,8 +128,8 @@ func lowerReload(t *testing.T, opts []opt.DaemonReloadOption) plan.Op {
 }
 
 // TestEmptyWithWatchReloadsUnconditionally runs a DaemonReload(WithWatch())
-// through Ensure: as before b72 it is an ungated reload, so it reloads
-// although nothing changed.
+// through Ensure: WithWatch never arms the gate, so it is an ungated
+// reload and reloads although nothing changed.
 func TestEmptyWithWatchReloadsUnconditionally(t *testing.T) {
 	resource.ResetReport()
 	t.Cleanup(resource.ResetReport)

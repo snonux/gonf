@@ -150,10 +150,12 @@ func dependencyIDs(target *recorder) []string {
 }
 
 // TestChangeGateFamilyLowersToOneSetter is the option-level equivalence
-// test of the single change-gate family: every spelling reaches the one
-// SetChangeWatch capability, the legacy IfChanged/WithWatch pair making
-// exactly the calls of WatchChanges (after IfChanged's arm-only call), and
-// OnChange adding only the ordering edges on top.
+// test of the change-gate family: OnChange, WatchChanges and IfChanged all
+// arm through the one SetChangeWatch capability (OnChange adding only the
+// ordering edges on top, IfChanged arming without ids), while the legacy
+// WithWatch only fills daemon-reload's legacy slot (SetWatch) that the
+// reload folds into the same watch list (see resource/systemd's
+// TestLegacyGateOptionsLowerToUnifiedOp for the recorded-op equivalence).
 func TestChangeGateFamilyLowersToOneSetter(t *testing.T) {
 	gateCalls := func(opts ...interface{ Apply(any) }) []setterCall {
 		target := &recorder{}
@@ -162,24 +164,27 @@ func TestChangeGateFamilyLowersToOneSetter(t *testing.T) {
 		}
 		var gate []setterCall
 		for _, c := range target.calls {
-			if c.method == "SetChangeWatch" {
+			if c.method == "SetChangeWatch" || c.method == "SetWatch" {
 				gate = append(gate, c)
 			}
 		}
 		return gate
 	}
-	want := gateCalls(WatchChanges("File[a]", "File[b]"))
+	want := []setterCall{{method: "SetChangeWatch", value: []string{"File[a]", "File[b]"}}}
 	for name, got := range map[string][]setterCall{
-		"WithWatch":             gateCalls(WithWatch("File[a]", "File[b]")),
-		"OnChange":              gateCalls(OnChange(resource.Resource{Type: "File", Name: "a"}, resource.Resource{Type: "File", Name: "b"})),
-		"IfChanged + WithWatch": gateCalls(IfChanged, WithWatch("File[a]", "File[b]"))[1:],
+		"WatchChanges": gateCalls(WatchChanges("File[a]", "File[b]")),
+		"OnChange":     gateCalls(OnChange(resource.Resource{Type: "File", Name: "a"}, resource.Resource{Type: "File", Name: "b"})),
 	} {
 		if !reflect.DeepEqual(got, want) {
-			t.Errorf("%s gate calls = %#v, want WatchChanges' %#v", name, got, want)
+			t.Errorf("%s gate calls = %#v, want %#v", name, got, want)
 		}
 	}
-	if got := gateCalls(IfChanged); !reflect.DeepEqual(got, []setterCall{{method: "SetChangeWatch", value: []string(nil)}}) {
-		t.Errorf("IfChanged gate calls = %#v, want one arm-only SetChangeWatch(nil)", got)
+	legacy := []setterCall{
+		{method: "SetChangeWatch", value: []string(nil)},
+		{method: "SetWatch", value: []string{"File[a]", "File[b]"}},
+	}
+	if got := gateCalls(IfChanged, WithWatch("File[a]", "File[b]")); !reflect.DeepEqual(got, legacy) {
+		t.Errorf("IfChanged + WithWatch gate calls = %#v, want %#v", got, legacy)
 	}
 }
 
@@ -222,15 +227,19 @@ func TestRecordedChangeGate(t *testing.T) {
 	}
 }
 
-// TestEmptyWithWatchIsANoOp pins WithWatch's one difference from
-// WatchChanges: without ids it makes no setter call (the reload's gate is
-// left as the other options set it, as before b72), where WatchChanges()
-// aborts. It still requires opt.ChangeGated, so a resource without the
-// DependsOn fallback keeps refusing it.
-func TestEmptyWithWatchIsANoOp(t *testing.T) {
+// TestWithWatchSetsTheLegacySlot pins WithWatch as it always was: every
+// call hands its (possibly empty) ids to SetWatch, which replaces the
+// legacy ids, and it never arms the gate; WithWatch() therefore clears
+// earlier WithWatch ids rather than aborting like WatchChanges().
+func TestWithWatchSetsTheLegacySlot(t *testing.T) {
 	target := &recorder{}
+	WithWatch("File[a]").Apply(target)
 	WithWatch().Apply(target)
-	if len(target.calls) != 0 {
-		t.Errorf("WithWatch() calls = %#v, want none", target.calls)
+	want := []setterCall{
+		{method: "SetWatch", value: []string{"File[a]"}},
+		{method: "SetWatch", value: []string(nil)},
+	}
+	if !reflect.DeepEqual(target.calls, want) {
+		t.Errorf("WithWatch calls = %#v, want %#v", target.calls, want)
 	}
 }

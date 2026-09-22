@@ -60,7 +60,6 @@ type (
 	ChangeGated            = resourceoptions.ChangeGated
 	Watchable              = resourceoptions.Watchable
 	ChangeWatchable        = resourceoptions.ChangeWatchable
-	DependsOnWatcher       = resourceoptions.DependsOnWatcher
 	Elevatable             = resourceoptions.Elevatable
 	CronUserable           = resourceoptions.CronUserable
 	LegacyCronCommandable  = resourceoptions.LegacyCronCommandable
@@ -156,8 +155,8 @@ var (
 
 // State options (absence, latest package), service/timer behaviour and the
 // one change-gate family: OnChange/WatchChanges (also accepted by commands)
-// plus the legacy daemon-reload spellings IfChanged/WithWatch, which lower
-// to the same gate.
+// plus the legacy daemon-reload spellings IfChanged/WithWatch, which feed
+// the same gate and watch list.
 var (
 	IsAbsent       = resourceoptions.IsAbsent
 	IsLatest       = resourceoptions.IsLatest

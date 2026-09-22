@@ -136,7 +136,9 @@ restart/reload when no watched target reported a change; state enforcement
 (started/enabled) still runs. Empty watches fail at registration, and empty,
 dangling, or cross-privilege-chunk watches fail before a plan is written,
 pushed, or applied. Legacy `IfChanged`/`WithWatch` remain compatible for
-DaemonReload.
+DaemonReload (after v0.15.0 they feed the same gate as `OnChange`; see
+[options.md](options.md#change-gate-changes-after-v0150) for the
+unreleased pre-1.0 changes).
 
 ### Implemented: secrets convention (`$secrets`)
 

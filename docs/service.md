@@ -54,8 +54,8 @@ second declaration on the same bus in the same scope, whether a further
 `DaemonReload` or a `SystemdUnits` composition, merges into the first one and
 returns it. The merged reload applies after the inputs of every declaration
 and watches all of them. A later declaration's watched ids count as inputs
-here even when it only watches them (`WatchChanges`, or its legacy
-alias `WithWatch`). So do the files under a directory such a later
+here even when it only watches them (`WatchChanges`, or the legacy
+`WithWatch` + `IfChanged`). So do the files under a directory such a later
 declaration watches: a watched `Directory[p]` also fires on `File[p/…]`
 changes, so the merged reload runs after every file under `p` that is
 registered before that declaration. The first declaration's own watches get

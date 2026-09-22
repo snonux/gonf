@@ -65,14 +65,13 @@ type Absence struct {
 func (a *Absence) SetAbsent() { a.Absent = true }
 
 // ChangeGate is embedded into concrete resource types whose mutating action
-// can be gated on watched resources' change reports. It is the single
-// lowering target of every change-gate option: OnChange, WatchChanges and
-// the legacy daemon-reload spellings IfChanged and WithWatch all reach it
-// through SetChangeWatch (opt.ChangeWatchable), so there is one watch list
-// per resource. The gate arms at registration time and is consulted at
-// apply time (Holds): a gated action runs only when one of the watched
-// resources reported a change (or would change, under dry-run) during the
-// current apply.
+// can be gated on watched resources' change reports. It holds the one
+// watch list per resource: OnChange, WatchChanges and the legacy IfChanged
+// arm it through SetChangeWatch (opt.ChangeWatchable), and daemon-reload
+// folds its legacy WithWatch ids into it once its options ran. The gate
+// arms at registration time and is consulted at apply time (Holds): a
+// gated action runs only when one of the watched resources reported a
+// change (or would change, under dry-run) during the current apply.
 //
 // Besides the state, the embed owns the gate's behaviour (arming with
 // de-duplication, the nothing-to-watch check, the hold predicate, the
@@ -123,7 +122,9 @@ func (c *ChangeGate) AddWatch(ids []string) {
 // after filling its DependsOn fallback (Present aborts, Ensure returns the
 // error). The other gated kinds cannot be armed without ids through any
 // option (OnChange and WatchChanges abort on an empty list, and the legacy
-// IfChanged/WithWatch require opt.ChangeGated), so they need no check.
+// IfChanged/WithWatch are daemon-reload-only), so they need no check. The
+// embed must not implement SetWatch: that would make every embedder
+// opt.ChangeGated and accept the legacy spellings.
 func (c *ChangeGate) CheckWatch() error {
 	if c.Gated && len(c.Watch) == 0 {
 		return errNothingToWatch

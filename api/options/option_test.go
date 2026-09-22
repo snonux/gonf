@@ -62,7 +62,7 @@ func (c *capTarget) SetUser()                   { c.record("SetUser", nil) }
 func (c *capTarget) SetElevate()                { c.record("SetElevate", nil) }
 func (c *capTarget) SetEnableOnly()             { c.record("SetEnableOnly", nil) }
 func (c *capTarget) SetChangeWatch(v []string)  { c.record("SetChangeWatch", v) }
-func (c *capTarget) WatchesDependsOn()          {}
+func (c *capTarget) SetWatch(v []string)        { c.record("SetWatch", v) }
 func (c *capTarget) AddDependency(v string)     { c.record("AddDependency", v) }
 func (c *capTarget) SetCronUser(v string)       { c.record("SetCronUser", v) }
 func (c *capTarget) SetLegacyCommand(v string)  { c.record("SetLegacyCommand", v) }
@@ -202,7 +202,7 @@ func TestOptionsReachTheirSetters(t *testing.T) {
 		{"WithElevate", WithElevate, "SetElevate", nil},
 		{"WithEnableOnly", WithEnableOnly, "SetEnableOnly", nil},
 		{"IfChanged", IfChanged, "SetChangeWatch", []string(nil)},
-		{"WithWatch", WithWatch("a", "b"), "SetChangeWatch", []string{"a", "b"}},
+		{"WithWatch", WithWatch("a", "b"), "SetWatch", []string{"a", "b"}},
 		{"WithCronUser", WithCronUser("root"), "SetCronUser", "root"},
 		{"WithLegacyCommand", WithLegacyCommand("/usr/local/bin/old"), "SetLegacyCommand", "/usr/local/bin/old"},
 		{"WithCommand", WithCommand("true"), "SetCommand", "true"},

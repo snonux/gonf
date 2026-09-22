@@ -38,7 +38,7 @@ func testTimerOpts(user bool) []opt.SystemdTimerOption {
 }
 
 // TestDaemonReloadOpts pins the daemon-reload the composite configures: the
-// legacy IfChanged gate armed, watching exactly the service and timer unit
+// change gate armed, watching exactly the service and timer unit
 // files (in that order), on the user bus only for WithUser timers.
 func TestDaemonReloadOpts(t *testing.T) {
 	for _, user := range []bool{false, true} {

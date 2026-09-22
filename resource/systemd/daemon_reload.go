@@ -26,15 +26,17 @@ var (
 )
 
 // DaemonReloadResource runs systemctl daemon-reload (optionally --user).
-// The embedded ChangeGate holds its one watch list: every change-gate
-// option (OnChange, WatchChanges and the legacy IfChanged/WithWatch
-// spellings) arms it through SetChangeWatch. Unlike the other gated kinds a
-// reload armed without watched ids watches its DependsOn ids instead (the
-// legacy IfChanged fallback, resolved once by newReload).
+// The embedded ChangeGate holds its one watch list: OnChange, WatchChanges
+// and the legacy IfChanged arm it through SetChangeWatch. newReload then
+// resolves the legacy parts once, after every option ran: the legacy
+// WithWatch ids (legacyWatch, only an option-time slot) are appended after
+// the gate's ids, and a reload that still watches nothing watches its
+// DependsOn ids. Every later reader sees the one resolved Watch list.
 type DaemonReloadResource struct {
 	embed.DependsOn
 	embed.ChangeGate
-	user bool
+	user        bool
+	legacyWatch []string // WithWatch ids until newReload folds them into Watch
 }
 
 // Present registers a daemon-reload resource. The resource is a singleton
@@ -71,17 +73,20 @@ func Ensure(opts ...opt.DaemonReloadOption) error {
 }
 
 // newReload builds a daemon-reload with opts applied and its watch list
-// resolved: when no option named watched ids, the reload watches its
-// DependsOn ids (first seen first), armed or not. The fallback is filled in
-// once, after every option ran, so option order does not matter and every
-// later reader (apply, planDraft, merging) sees one list. An armed reload
-// that still watches nothing (IfChanged with no WithWatch and no DependsOn)
-// could never reload and is refused.
+// resolved in the order recorded plans have always carried: the
+// OnChange/WatchChanges ids first, then the legacy WithWatch ids, and when
+// neither named any, the DependsOn ids (first seen first), armed or not.
+// Resolving once, after every option ran, makes the list independent of
+// option order and lets apply, planDraft and merging read one list. An
+// armed reload that still watches nothing (IfChanged with no WithWatch ids
+// and no DependsOn) could never reload and is refused.
 func newReload(opts []opt.DaemonReloadOption) (*DaemonReloadResource, error) {
 	d := &DaemonReloadResource{}
 	for _, o := range opts {
 		o.Apply(d)
 	}
+	d.AddWatch(d.legacyWatch)
+	d.legacyWatch = nil
 	if len(d.Watch) == 0 {
 		d.AddWatch(d.DependsOn.IDs)
 	}
@@ -93,11 +98,14 @@ func newReload(opts []opt.DaemonReloadOption) (*DaemonReloadResource, error) {
 // one, and the resource ID becomes DaemonReload[user].
 func (d *DaemonReloadResource) SetUser() { d.user = true }
 
-// WatchesDependsOn implements opt.DependsOnWatcher (and so, with the
-// embedded SetChangeWatch, opt.ChangeGated): a reload armed without watched
-// ids watches its DependsOn ids (resolved by newReload). It is what admits
-// the legacy IfChanged and WithWatch options, which rely on that fallback.
-func (d *DaemonReloadResource) WatchesDependsOn() {}
+// SetWatch implements opt.Watchable (the legacy WithWatch option) and so,
+// with the embedded SetChangeWatch, opt.ChangeGated (IfChanged). The ids
+// replace those of an earlier WithWatch; newReload appends them after the
+// gate's own ids. It lives here rather than on embed.ChangeGate so that
+// only daemon-reload accepts the legacy spellings.
+func (d *DaemonReloadResource) SetWatch(ids []string) {
+	d.legacyWatch = slices.Clone(ids)
+}
 
 // Apply runs the daemon-reload reconciliation directly for the legacy resource path.
 func (d *DaemonReloadResource) Apply() error { return d.apply() }

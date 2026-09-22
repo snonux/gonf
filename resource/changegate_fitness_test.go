@@ -41,11 +41,12 @@ func catchFatal(t *testing.T, register func()) (fataled bool) {
 // IfChanged and WithWatch options, passed through the type-erased
 // opt.Option path, are refused (logger.Fatal "does not support ...") by
 // Service, Timer and Command, also next to OnChange or WatchChanges (which
-// would otherwise give the gate something to watch). Both lower to the one
-// SetChangeWatch capability but require opt.ChangeGated, whose DependsOn
-// fallback marker only daemon-reload implements. DaemonReload accepts them
-// (IfChanged needs a DependsOn fallback or watched ids; alone it is refused
-// as a gate with nothing to watch, the b72 correction).
+// would otherwise give the gate something to watch). IfChanged arms through
+// the one SetChangeWatch capability but requires opt.ChangeGated, and
+// WithWatch requires opt.Watchable (SetWatch); only daemon-reload
+// implements those. DaemonReload accepts them (IfChanged needs a DependsOn
+// fallback or watched ids; alone it is refused as a gate with nothing to
+// watch, the b72 correction).
 func TestLegacyGateOptionsRejectedOutsideDaemonReload(t *testing.T) {
 	unit := resource.Resource{Type: "File", Name: "/etc/unit"}
 	for _, legacy := range []struct {
@@ -105,8 +106,8 @@ func TestIfChangedReloadWithNothingToWatchRefused(t *testing.T) {
 
 // TestEveryGatedKindImplementsTheOneCapability pins the single change-gate
 // family: every ChangeGate embedder satisfies opt.ChangeWatchable, and only
-// daemon-reload also satisfies opt.ChangeGated (the DependsOn fallback the
-// legacy spellings need); opt.Watchable is an alias of opt.ChangeGated.
+// daemon-reload also satisfies opt.ChangeGated (which embeds opt.Watchable,
+// the legacy WithWatch slot the legacy spellings need).
 func TestEveryGatedKindImplementsTheOneCapability(t *testing.T) {
 	var _ opt.Watchable = opt.ChangeGated(nil)
 	for _, tc := range []struct {

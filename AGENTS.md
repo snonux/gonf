@@ -55,26 +55,26 @@ embedded rather than redeclared:
 - `embed.Absence` — the `Absent` field plus the `SetAbsent` method (implements
   `opt.Absentable`).
 - `embed.ChangeGate` — the change gate (`Gated`, `Watch`) and its behaviour.
-  It is the single lowering target of the one change-gate option family:
-  `OnChange`, `WatchChanges` and the legacy daemon-reload spellings
-  `IfChanged` (arm only) and `WithWatch(ids...)` (`WatchChanges` with ids;
-  `WithWatch()` without ids stays a no-op) all call `SetChangeWatch`
-  (implements `opt.ChangeWatchable`). The legacy spellings additionally
-  require `opt.ChangeGated` (`ChangeWatchable` plus the
-  `opt.DependsOnWatcher` marker; `opt.Watchable` is an alias), which only
-  daemon-reload implements, so they stay rejected on Service, Timer and
-  Command even through the type-erased `Option` path. The embed must not
-  implement `WatchesDependsOn`. It owns watch de-duplication (callers never
+  It holds the one watch list of the change-gate option family: `OnChange`,
+  `WatchChanges` and the legacy daemon-reload `IfChanged` (arm only) all
+  call `SetChangeWatch` (implements `opt.ChangeWatchable`). The legacy
+  `WithWatch(ids...)` keeps its old semantics (sets, does not arm, a later
+  call replaces earlier ids) through `opt.Watchable` (`SetWatch`), a slot on
+  daemon-reload only that `newReload` appends after the gate ids.
+  `IfChanged` requires `opt.ChangeGated` (`ChangeWatchable` + `Watchable`),
+  so both legacy spellings stay rejected on Service, Timer and Command even
+  through the type-erased `Option` path; the embed must therefore not
+  implement `SetWatch`. The embed owns watch de-duplication (callers never
   dedupe), `AddWatch` (add ids without arming; daemon-reload's fallback and
-  merge only), the nothing-to-watch check (`CheckWatch`), the hold
-  predicate (`Holds(resource.AnyChanged)`), the held-action debug log
-  (`LogHeld`) and the plan-draft wiring (`DraftGate`). Gated resources call
-  these instead of re-implementing the checks; `resource.NoteIdle` reports a
-  gate-held action as skipped. Plan handlers rebuild a recorded gate with
-  `opt.RecordedChangeGate`. Daemon-reload is the one exception: an armed
-  reload without watched ids watches its `DependsOn` ids (resolved once
-  into `Watch` after its options ran, then `CheckWatch`), and it keeps its
-  own draft wiring (`Watch` is recorded even when unarmed) instead of
+  merge only), the nothing-to-watch check (`CheckWatch`), the hold predicate
+  (`Holds(resource.AnyChanged)`), the held-action debug log (`LogHeld`) and
+  the plan-draft wiring (`DraftGate`). Gated resources call these instead of
+  re-implementing the checks; `resource.NoteIdle` reports a gate-held
+  action as skipped. Plan handlers rebuild a recorded gate with
+  `opt.RecordedChangeGate`. Daemon-reload is the one exception: it resolves
+  its watch list once after its options ran (gate ids, then `WithWatch`
+  ids, else its `DependsOn` ids, then `CheckWatch`), and it keeps its own
+  draft wiring (`Watch` is recorded even when unarmed) instead of
   `DraftGate`.
 
 When adding a field or capability shared by every resource type, prefer a new

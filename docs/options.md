@@ -65,11 +65,30 @@ and backend limits.
 | `OnChange(res…)` | Command: run only when watched resources changed; Service/Timer: still converge state, but fire `WithRestart`/`WithReload` only on a watched change; DaemonReload: reload only on a watched change. It also records ordering dependencies. |
 | `WatchChanges(ids…)` | The ids-level `OnChange` (same gate, no ordering dependencies); used by plan handlers and compositions |
 | `IfChanged` | Legacy DaemonReload spelling: arms the gate, watching the reload's `DependsOn` ids unless ids are named; prefer `OnChange(res…)` in recipes |
-| `WithWatch(ids…)` | Legacy DaemonReload spelling of `WatchChanges(ids…)` (arms the gate; calls accumulate); `WithWatch()` without ids is a no-op, where `WatchChanges()` aborts |
+| `WithWatch(ids…)` | Legacy DaemonReload watch ids for `IfChanged` (does not arm; a later `WithWatch` replaces earlier ids, `WithWatch()` clears them); recorded after the `OnChange`/`WatchChanges` ids. `IfChanged, WithWatch(ids…)` records the same op as `WatchChanges(ids…)` |
 | `WithCommand` | SystemdTimer: oneshot `ExecStart=` (also Cron) |
 | `WithOnCalendar` / `WithOnBootSec` / `WithPersistent` | SystemdTimer schedule |
 | `WithDescription` / `WithServiceDescription` | SystemdTimer unit descriptions |
 | `WithAfter` / `WithWants` | SystemdTimer service dependencies |
+
+### Change-gate changes after v0.15.0
+
+Unreleased, pre-1.0 (task b72). The recipe DSL is unchanged: `OnChange`,
+`WatchChanges`, `IfChanged` and `WithWatch` keep their names, types and
+recorded plans (no plan schema change). Deliberate changes:
+
+- A `DaemonReload` armed by `IfChanged` with neither `WithWatch` ids nor
+  `DependsOn` (a reload that could never fire) aborts at registration
+  (`Ensure` returns the error) instead of being skipped on every apply.
+- `Service`, `Timer` and `Command` watch lists are de-duplicated.
+- Exported Go API below the DSL (no known users): `embed.ChangeGate.Arm`
+  and `embed.ChangeGate.HoldsWatching` are removed (use
+  `SetChangeWatch(nil)` and `Holds`), `systemd.DaemonReloadResource` no
+  longer has `SetIfChanged`, and the capability interface
+  `options.ChangeGated` (also `api/options.ChangeGated`) changed from
+  `interface{ SetIfChanged() }` to `ChangeWatchable` plus `Watchable`.
+  New: `embed.ChangeGate.AddWatch`/`CheckWatch` and
+  `options.RecordedChangeGate` (for plan handlers).
 
 ## Cron
 

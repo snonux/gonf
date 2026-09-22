@@ -53,8 +53,8 @@ func (d *DaemonReloadResource) merged(next *DaemonReloadResource) DaemonReloadRe
 // declarations are unchanged), but a merged reload keeps the FIRST
 // declaration's position, which lies before a later declaration's inputs.
 // Without these edges the gated reload could run before such an input
-// changed and be skipped: a watch-only input (WatchChanges, or its legacy
-// spelling WithWatch, adds no dep), or a file under a watched directory that only
+// changed and be skipped: a watch-only input (WatchChanges, or the legacy
+// WithWatch + IfChanged, adds no dep), or a file under a watched directory that only
 // depends on the directory. Watched ids not registered in this scope come
 // from an earlier scope, are recorded before the reload anyway, and cannot
 // be an edge of the repository graph.
