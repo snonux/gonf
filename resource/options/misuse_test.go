@@ -22,28 +22,28 @@ type watchOnly struct{}
 func (*watchOnly) SetChangeWatch([]string) {}
 
 // misuseCases are option misuses that must be refused, each with a fragment
-// of the message the user sees. apply runs the misuse against target; a nil
+// of the message the user sees. apply runs the misuse against a fresh target(); a nil
 // target stands for a call without one (NormalizeMode).
 var misuseCases = []struct {
 	name    string
-	target  any
+	target  func() any
 	apply   func(target any)
 	wantMsg string
 }{
-	{"option on resource without capability", struct{}{}, func(t any) { WithOwner("x").Apply(t) }, "struct {} does not support WithOwner"},
-	{"option on partially capable resource", &contentOnly{}, func(t any) { WithValidation("v", []string{CandidatePath}).Apply(t) }, "*options.contentOnly does not support WithValidation"},
-	{"option on nil target", nil, func(any) { DependsOn(fileA).Apply(nil) }, "<nil> does not support DependsOn"},
-	{"erased option through the wrong adapter", &contentOnly{}, func(t any) { ToFileOptions(WithCommand("true"))[0].Apply(t) }, "does not support WithCommand"},
-	{"OnChange without resources", &recorder{}, func(t any) { OnChange().Apply(t) }, "OnChange requires at least one resource to watch"},
-	{"OnChange with an empty Multi", &recorder{}, func(t any) { OnChange(resource.Multi(nil)).Apply(t) }, "OnChange requires at least one resource to watch"},
-	{"OnChange on a target without dependencies", &watchOnly{}, func(t any) { OnChange(fileA).Apply(t) }, "*options.watchOnly does not support OnChange"},
-	{"WatchChanges without ids", &recorder{}, func(t any) { WatchChanges().Apply(t) }, "WatchChanges requires at least one resource id"},
-	{"IfChanged outside daemon-reload", &watchOnly{}, func(t any) { IfChanged.Apply(t) }, "*options.watchOnly does not support IfChanged"},
-	{"WithWatch outside daemon-reload", &watchOnly{}, func(t any) { WithWatch("File[a]").Apply(t) }, "*options.watchOnly does not support WithWatch"},
-	{"empty WithWatch outside daemon-reload", &watchOnly{}, func(t any) { WithWatch().Apply(t) }, "*options.watchOnly does not support WithWatch"},
-	{"NormalizeMode above 0o7777", nil, func(any) { NormalizeMode(0o10000) }, "outside 0o7777"},
-	{"WithMode with a type bit", &recorder{}, func(t any) { WithMode(os.ModeDir | 0o755).Apply(t) }, "outside 0o7777"},
-	{"WithFileMode with a type bit", &recorder{}, func(t any) { WithFileMode(os.ModeSymlink | 0o644).Apply(t) }, "outside 0o7777"},
+	{"option on resource without capability", func() any { return struct{}{} }, func(t any) { WithOwner("x").Apply(t) }, "struct {} does not support WithOwner"},
+	{"option on partially capable resource", func() any { return &contentOnly{} }, func(t any) { WithValidation("v", []string{CandidatePath}).Apply(t) }, "*options.contentOnly does not support WithValidation"},
+	{"option on nil target", func() any { return nil }, func(any) { DependsOn(fileA).Apply(nil) }, "<nil> does not support DependsOn"},
+	{"erased option through the wrong adapter", func() any { return &contentOnly{} }, func(t any) { ToFileOptions(WithCommand("true"))[0].Apply(t) }, "does not support WithCommand"},
+	{"OnChange without resources", func() any { return &recorder{} }, func(t any) { OnChange().Apply(t) }, "OnChange requires at least one resource to watch"},
+	{"OnChange with an empty Multi", func() any { return &recorder{} }, func(t any) { OnChange(resource.Multi(nil)).Apply(t) }, "OnChange requires at least one resource to watch"},
+	{"OnChange on a target without dependencies", func() any { return &watchOnly{} }, func(t any) { OnChange(fileA).Apply(t) }, "*options.watchOnly does not support OnChange"},
+	{"WatchChanges without ids", func() any { return &recorder{} }, func(t any) { WatchChanges().Apply(t) }, "WatchChanges requires at least one resource id"},
+	{"IfChanged outside daemon-reload", func() any { return &watchOnly{} }, func(t any) { IfChanged.Apply(t) }, "*options.watchOnly does not support IfChanged"},
+	{"WithWatch outside daemon-reload", func() any { return &watchOnly{} }, func(t any) { WithWatch("File[a]").Apply(t) }, "*options.watchOnly does not support WithWatch"},
+	{"empty WithWatch outside daemon-reload", func() any { return &watchOnly{} }, func(t any) { WithWatch().Apply(t) }, "*options.watchOnly does not support WithWatch"},
+	{"NormalizeMode above 0o7777", func() any { return nil }, func(any) { NormalizeMode(0o10000) }, "outside 0o7777"},
+	{"WithMode with a type bit", func() any { return &recorder{} }, func(t any) { WithMode(os.ModeDir | 0o755).Apply(t) }, "outside 0o7777"},
+	{"WithFileMode with a type bit", func() any { return &recorder{} }, func(t any) { WithFileMode(os.ModeSymlink | 0o644).Apply(t) }, "outside 0o7777"},
 }
 
 // TestOptionMisuseIsReported applies every misuse in-process (options never
@@ -57,8 +57,9 @@ func TestOptionMisuseIsReported(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			declerr.Reset()
 			t.Cleanup(declerr.Reset)
-			tc.apply(tc.target)
-			got := reportedMisuse(t, tc.target)
+			target := tc.target() // fresh per run, so -count=N starts clean
+			tc.apply(target)
+			got := reportedMisuse(t, target)
 			if !strings.Contains(got, tc.wantMsg) {
 				t.Fatalf("reported misuse = %q, want it to contain %q", got, tc.wantMsg)
 			}
