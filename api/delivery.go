@@ -50,19 +50,11 @@ type groupRun struct {
 	parallelOverride int    // > 0 overrides every group's parallelism (-j)
 	hostTimeout      time.Duration
 	tasks            []string
-	// output is this run's Fanout summary destination; nil (every exported
-	// entry point today) falls back to pushOutput via writer(). Tests set it
-	// directly on a groupRun literal to assert on one run's summary without
-	// touching the package-wide seam.
-	output io.Writer
 }
 
-// writer is r's resolved Fanout destination: r.output when set, else the
-// package-wide pushOutput default (see both docs).
+// writer is r's Fanout summary destination: the package-wide pushOutput
+// seam, shared with recordAndPush's single-host line.
 func (r groupRun) writer() io.Writer {
-	if r.output != nil {
-		return r.output
-	}
 	return pushOutput
 }
 
