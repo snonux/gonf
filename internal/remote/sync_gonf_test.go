@@ -1217,11 +1217,15 @@ func TestProbeReleaseVersionToleratesRealisticSSHNoise(t *testing.T) {
 	tests := []struct {
 		name   string
 		output string
+		want   string
 	}{
-		{"clean, no noise", "0.16.6\n"},
-		{"welcome banner", "Welcome to FreeBSD!\n0.16.6\n"},
-		{"login timestamp", "Last login: Tue Sep 23 12:00:00 2026\n0.16.6\n"},
-		{"dev-suffixed version", "0.16.6-dev\n"},
+		{"clean, no noise", "0.16.6\n", "0.16.6"},
+		{"welcome banner", "Welcome to FreeBSD!\n0.16.6\n", "0.16.6"},
+		{"login timestamp", "Last login: Tue Sep 23 12:00:00 2026\n0.16.6\n", "0.16.6"},
+		{"dev-suffixed version", "0.16.6-dev\n", "0.16.6"},
+		{"build-suffixed version", "0.16.6+build3\n", "0.16.6"},
+		{"major only", "16\n", "16"},
+		{"major.minor only", "0.16\n", "0.16"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1232,8 +1236,8 @@ func TestProbeReleaseVersionToleratesRealisticSSHNoise(t *testing.T) {
 			if err != nil {
 				t.Fatalf("probeReleaseVersion(%q) = _, %v, want nil error", tc.output, err)
 			}
-			if got != "0.16.6" {
-				t.Fatalf("probeReleaseVersion(%q) = %q, want \"0.16.6\"", tc.output, got)
+			if got != tc.want {
+				t.Fatalf("probeReleaseVersion(%q) = %q, want %q", tc.output, got, tc.want)
 			}
 		})
 	}
@@ -1265,24 +1269,51 @@ func TestProbeReleaseVersionStillDetectsGenuinelyStaleRelease(t *testing.T) {
 // produce a clear error naming the banner/MOTD hazard and quoting the raw
 // offending line, exactly like probePlanVersion already does — the
 // hardening above must tolerate ROUTINE noise, not swallow every failure
-// silently.
+// silently. The banner/digit-count/date/uptime cases also pin task uf2's
+// fix: releaseVersionPattern used to be anchored only at the START
+// (^[vV]?\d+(\.\d+){0,2}, no trailing $), so ANY line merely starting with
+// digits parsed as a version — "3 updates can be applied immediately."
+// became "3", a bare date "2026-09-24" became "2026", and an uptime line
+// "10:42:01 up 3 days" became "10". All three cleared the 0.16.3
+// compatibility floor, so RequireRemoteRelayed (the sole gate for
+// api.PushPayload, with no plan-schema check underneath) wrongly ACCEPTED a
+// remote whose gonf is missing or predates -version — exactly the raw,
+// confusing "command not found"/"flag provided but not defined" failure
+// this probe's hardening (task lf2) exists to prevent, and with a
+// fabricated version number in the bargain. The whole-line end anchor
+// rejects all three as noise instead.
 func TestProbeReleaseVersionUnparseableOutputReturnsRawTextError(t *testing.T) {
 	oldCapture := sshCaptureExec
 	t.Cleanup(func() { sshCaptureExec = oldCapture })
-	const banner = "*** WARNING: unauthorized access to this system is prohibited ***"
-	sshCaptureExec = func(ctx context.Context, argv []string) (string, string, error) {
-		return banner + "\n", "", nil
-	}
 
-	got, err := probeReleaseVersion(context.Background(), PushTarget{Host: "h.example"}, ProbeLogin)
-	if err == nil {
-		t.Fatalf("probeReleaseVersion() = %q, nil; want an error for output with no recognizable version", got)
+	tests := []struct {
+		name   string
+		output string
+	}{
+		{"login banner", "*** WARNING: unauthorized access to this system is prohibited ***"},
+		{"welcome banner alone", "Welcome to FreeBSD!"},
+		{"MOTD update count", "3 updates can be applied immediately."},
+		{"bare date", "2026-09-24"},
+		{"uptime line", "10:42:01 up 3 days"},
+		{"four dotted segments", "0.16.6.1"},
 	}
-	if !strings.Contains(err.Error(), banner) {
-		t.Fatalf("error %q does not include the raw unparsed probe output %q", err.Error(), banner)
-	}
-	if !strings.Contains(err.Error(), "banner") {
-		t.Fatalf("error %q does not name the banner/MOTD hazard", err.Error())
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sshCaptureExec = func(ctx context.Context, argv []string) (string, string, error) {
+				return tc.output + "\n", "", nil
+			}
+
+			got, err := probeReleaseVersion(context.Background(), PushTarget{Host: "h.example"}, ProbeLogin)
+			if err == nil {
+				t.Fatalf("probeReleaseVersion() = %q, nil; want an error for output with no recognizable version", got)
+			}
+			if !strings.Contains(err.Error(), tc.output) {
+				t.Fatalf("error %q does not include the raw unparsed probe output %q", err.Error(), tc.output)
+			}
+			if !strings.Contains(err.Error(), "banner") {
+				t.Fatalf("error %q does not name the banner/MOTD hazard", err.Error())
+			}
+		})
 	}
 }
 
