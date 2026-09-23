@@ -96,3 +96,52 @@ func TestElevatedCancelGraceCoversCommandTimeout(t *testing.T) {
 		t.Fatalf("elevatedCancelGrace() = %v, want %v", got, want)
 	}
 }
+
+// TestAfterFuncJoinedStopWaitsForAlreadyStartedFunc pins task 1d2's fix: once
+// f has already started (ctx is canceled and the AfterFunc goroutine has
+// begun running), stop must not return until f has actually finished. A bare
+// context.AfterFunc's own stop only reports whether it prevented f from
+// starting — if f already started, stop returns immediately, leaving f
+// running unobserved on its own goroutine. That gap let a f touching a
+// shared package variable (os.Stderr) still be mid-write after the caller
+// that deferred stop had already returned, racing a later test's swap of
+// that same variable under -race -shuffle=on.
+func TestAfterFuncJoinedStopWaitsForAlreadyStartedFunc(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var finished bool
+	stop := afterFuncJoined(ctx, func() {
+		close(started)
+		<-release // block until the test says f may finish
+		finished = true
+	})
+
+	cancel() // let f start
+	<-started
+
+	stopped := make(chan struct{})
+	go func() {
+		stop() // must block: f is running and has not been released yet
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+		t.Fatal("stop() returned before the already-started f finished")
+	case <-time.After(100 * time.Millisecond):
+		// still blocked, as required — now let f finish.
+	}
+
+	close(release)
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stop() never returned after f finished")
+	}
+	if !finished {
+		t.Fatal("stop() returned before f actually set finished = true")
+	}
+}

@@ -211,7 +211,14 @@ func runElevatedCmd(ctx context.Context, mode privilege.Mode, argv []string) err
 	}
 	defer cleanup()
 
-	defer context.AfterFunc(ctx, func() {
+	// afterFuncJoined (api/apply_interrupt.go), not a bare context.AfterFunc:
+	// its stop blocks until this notice goroutine has actually finished
+	// touching os.Stderr (a package-level var) if it started at all, so it
+	// cannot still be running after runElevatedCmd itself has returned. A
+	// bare context.AfterFunc's stop does not wait for an already-started f,
+	// which used to let this goroutine outlive the test that triggered it
+	// and race a later test's os.Stderr swap (task 1d2).
+	defer afterFuncJoined(ctx, func() {
 		if errors.Is(ctx.Err(), context.Canceled) {
 			_, _ = fmt.Fprintf(os.Stderr, elevatedStopNotice, grace)
 		}
