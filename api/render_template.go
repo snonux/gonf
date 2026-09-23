@@ -1,6 +1,10 @@
 package api
 
-import "github.com/snonux/gonf/resource/file"
+import (
+	"errors"
+
+	"github.com/snonux/gonf/resource/file"
+)
 
 // RenderTemplate reads and renders the template file at path on the
 // controller, returning the fully resolved text. It exists for recipes that
@@ -23,6 +27,25 @@ import "github.com/snonux/gonf/resource/file"
 // data must be JSON-compatible: a top-level JSON object's keys become root
 // template variables, and the complete decoded value is also available as
 // .Data.
+//
+// A failed render's error is redacted (RedactSecrets) before it is
+// returned: file.RenderTemplateFile's underlying text/template error can
+// quote the offending value verbatim, including data built from
+// MustSecret/ResolveSecret, and unlike a destination render (a File's
+// Sensitive option) there is no resource here to flag as sensitive — see
+// resource/file/render.go's package doc comment. Redacting by known secret
+// value rather than withholding the whole message wholesale keeps a
+// non-sensitive template's error fully useful for debugging (it is
+// unaffected) while still closing the leak for a sensitive one, regardless
+// of whether the caller ever attaches WithSensitive downstream. Only a
+// resolved secret's tracked bytes disappear; the constructed error is a new
+// one carrying just the redacted text, deliberately not wrapping the
+// original (wrapping it would still let a caller reach the raw, secret-
+// bearing text through errors.Unwrap/errors.As).
 func RenderTemplate(path string, data any) (string, error) {
-	return file.RenderTemplateFile(path, data)
+	text, err := file.RenderTemplateFile(path, data)
+	if err != nil {
+		return "", errors.New(RedactSecrets(err.Error()))
+	}
+	return text, nil
 }

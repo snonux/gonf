@@ -6,11 +6,26 @@ package file
 // exact template engine (funcs, missingkey=error, JSON-compatible data
 // encoding) that applyTemplateToContent in template.go uses for a File's
 // destination-rendered ".tmpl" source, so the two render paths never drift
-// apart, but it deliberately does not reuse applyTemplateToContent itself:
-// that method also mixes in process environment variables and
-// {{.Gonf.*}} destination facts, neither of which exists yet (or would be
-// deterministic) for content rendered on the controller before a
-// destination is even selected.
+// apart in what they render, but it deliberately does not reuse
+// applyTemplateToContent itself: that method also mixes in process
+// environment variables and {{.Gonf.*}} destination facts, neither of which
+// exists yet (or would be deterministic) for content rendered on the
+// controller before a destination is even selected.
+//
+// The two paths DO deliberately drift in error handling. A destination
+// render (template.go's applyTemplateToContent) has a File resource at hand
+// and can check its Sensitive field, so a failure there withholds the
+// text/template error's details (which may quote the offending value
+// verbatim) whenever the file is marked sensitive (see templateError).
+// RenderTemplate has no resource, no Sensitive flag and — sitting below
+// package api — no access to the secret registry that would let it
+// recognise a resolved secret in the error text, so the errors below are
+// left raw and may quote data (including a resolved secret) verbatim. This
+// is safe only because this package's sole public caller,
+// api.RenderTemplate, sits above the secret registry and redacts every
+// known secret value out of the error before returning it to a recipe. Any
+// other caller of RenderTemplate/RenderTemplateFile — direct callers within
+// this module, e.g. tests — sees the raw, unredacted error.
 
 import (
 	"bytes"
@@ -40,6 +55,11 @@ import (
 // missing map key fails the render rather than silently producing an empty
 // value. There is no {{.Gonf}} and no process environment here, unlike a
 // destination render — see the package doc comment above.
+//
+// A returned error may quote templateText or data verbatim, including a
+// resolved secret value: see the package doc comment above for why this
+// function cannot withhold it itself, and why that is safe only through
+// api.RenderTemplate, its one public caller.
 func RenderTemplate(templateText string, data any) (string, error) {
 	encoded, err := json.Marshal(data)
 	if err != nil {
