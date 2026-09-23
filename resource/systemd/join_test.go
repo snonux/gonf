@@ -189,6 +189,15 @@ func TestMayManageUnit(t *testing.T) {
 		// matched by suffix since the home directory varies.
 		{"File[/home/paul/.config/systemd/user/service.d/x.conf]", "a.service", true},
 		{"File[/home/paul/.config/systemd/user/foo-.service.d/x.conf]", "foo-bar.service", true},
+		// Positive (dd2): $XDG_DATA_HOME/systemd/user (or its
+		// ~/.local/share default) is a documented user unit load
+		// directory too (systemd.unit(5), "Unit Load Path", Table 2),
+		// matched by suffix like the .config case above.
+		{"File[/home/u/.local/share/systemd/user/service.d/x.conf]", "a.service", true},
+		// Positive (dd2): /etc/xdg/systemd/user is the documented
+		// default for $XDG_CONFIG_DIRS/systemd/user, a fixed path
+		// like /etc/systemd/user above.
+		{"File[/etc/xdg/systemd/user/service.d/x.conf]", "a.service", true},
 	} {
 		if got := mayManageUnit(tc.id, tc.unit); got != tc.want {
 			t.Errorf("mayManageUnit(%s, %s) = %v, want %v", tc.id, tc.unit, got, tc.want)

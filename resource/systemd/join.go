@@ -163,6 +163,13 @@ func mayManageUnit(id, unit string) bool {
 // (resource/systemdtimer.unitDir), but a File input naming any other
 // standard search directory is just as real a drop-in location, so
 // isUnitSearchDir recognizes the documented set, not just gonf's own two.
+//
+// The dbus-transient directories (*.control, transient, generator[.early|
+// .late]) are deliberately left out: they hold configuration systemd itself
+// writes at runtime (a "systemctl set-property", a generator script), never
+// a plausible target for a hand-written gonf File drop-in, so treating them
+// as unit search directories would only widen mayManageUnit's false-positive
+// surface without guarding a real gonf use case (dd2).
 var unitSearchDirs = []string{
 	"/etc/systemd/system",
 	"/run/systemd/system",
@@ -170,6 +177,7 @@ var unitSearchDirs = []string{
 	"/usr/local/lib/systemd/system",
 	"/lib/systemd/system", // pre-merged-/usr layout; usually a symlink to /usr/lib/systemd/system
 	"/etc/systemd/user",
+	"/etc/xdg/systemd/user", // $XDG_CONFIG_DIRS/systemd/user default (dd2)
 	"/run/systemd/user",
 	"/usr/lib/systemd/user",
 	"/usr/local/lib/systemd/user",
@@ -178,13 +186,27 @@ var unitSearchDirs = []string{
 }
 
 // isUnitSearchDir reports whether dir is one of the standard systemd unit
-// load directories (unitSearchDirs), or a user's own ~/.config/systemd/user
-// (matched by suffix, since the home directory varies per host and user).
+// load directories (unitSearchDirs), or one of the two per-user directories
+// whose default location is under the user's home and so is matched by
+// suffix instead (the home directory varies per host and user):
+// ~/.config/systemd/user ($XDG_CONFIG_HOME default) and
+// ~/.local/share/systemd/user ($XDG_DATA_HOME default, dd2).
+//
+// This only matches the documented XDG *defaults*, not a host's actual
+// $XDG_CONFIG_HOME/$XDG_DATA_HOME: mayManageUnit runs while a recipe
+// declares its resources, on the controller process, which has no per-
+// destination-host environment to consult (a recipe is declared once and
+// applied to any number of destination hosts, each with its own). Reading
+// the controller's own environment variables here would silently check the
+// wrong host's settings, so the suffix match (widened to cover the
+// documented default set, not the controller's environment) stays the
+// right tool for a controller-side, host-agnostic check (dd2).
 func isUnitSearchDir(dir string) bool {
 	if slices.Contains(unitSearchDirs, dir) {
 		return true
 	}
-	return strings.HasSuffix(dir, "/.config/systemd/user")
+	return strings.HasSuffix(dir, "/.config/systemd/user") ||
+		strings.HasSuffix(dir, "/.local/share/systemd/user")
 }
 
 // dropinDirs returns the drop-in directory names systemd additionally
