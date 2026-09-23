@@ -302,6 +302,68 @@ The stable string helpers are `join`, `lower`, `upper`, `trim`, and `replace`.
 Templates use `missingkey=error`; missing map keys fail the apply rather than
 silently rendering an empty value.
 
+### Controller-side rendering (`api.RenderTemplate`)
+
+`api.RenderTemplate(path string, data any) (string, error)` reads and renders
+a template file on the *controller*, before any destination or `File`
+resource exists, for recipes that must resolve content from typed, explicit
+data structs — controller-only topology inputs such as an ACME host list or
+a cluster's member list — and then hand the fully-rendered text to
+`WithContent`, instead of shipping a template plus data for
+`WithTemplateData` to render on the destination (the path documented above).
+It reuses the exact template engine the destination path uses: the same
+helper functions (`join`, `lower`, `upper`, `trim`, `replace`) and the same
+strict `missingkey=error` handling. `data` must be JSON-compatible the same
+way `WithTemplateData`'s data must be: it is JSON-encoded once, a top-level
+JSON object's keys become root template variables, and the complete decoded
+value is also available as `.Data`.
+
+**What's absent at the controller site, and why it fails loudly rather than
+silently.** Unlike the destination render (`File.applyTemplateToContent`):
+
+- No `.Gonf` (`.Gonf.GOOS`, `.Gonf.Profile`, `.Gonf.Hostname`): there is no
+  destination yet when a controller render runs, so there are no live
+  destination facts to supply.
+- No process environment: the destination render mixes `os.Environ()` into
+  the template data; the controller render does not.
+- No `.Param`: the destination render's `{{.Param}}` is the recipe's
+  declared source identity (see "Template `{{.Param}}` in synced trees"
+  above); nothing analogous exists before a destination is chosen.
+
+Because templates use `missingkey=error`, a reference to any of these three
+does not render as an empty string — it fails the render (and so fails plan
+recording) with a missing-key error. This means a template **targets one
+site, controller or destination, and not both interchangeably**: a `.tmpl`
+asset written for the destination site (referencing `.Gonf`, environment
+variables, or `.Param`) hard-fails when rendered through
+`api.RenderTemplate`, even though the same file works fine as a
+`WithSource`/`WithTemplateData` destination template.
+
+**On the plan wire.** The controller-rendered text is not itself carried as
+a template: the caller hands the already-resolved string to `WithContent`,
+so it becomes a plain `content_b64` in the recorded plan op — the same as
+any other literal `WithContent` string, with `template` left `false` and no
+`template_param`. Contrast "Template rendering for a single `File` on the
+plan path" below, where the source stays a real, still-`.tmpl`-suffixed
+template through recording and is rendered again on the destination at
+apply time. A controller-rendered value is therefore baked into the plan at
+record time and is never re-rendered.
+
+**Secret-withholding in render errors.** A failed `api.RenderTemplate` call
+redacts every value `ResolveSecret`/`MustSecret` has returned in this
+process (`api.RedactSecrets`, which replaces known secret values by text,
+not by withholding the whole message) out of the returned error before
+handing it to the recipe: the underlying `text/template` parse/execute
+error can otherwise quote the offending value verbatim, and unlike a
+destination render there is no `File` resource here to carry
+`WithSensitive`/check `Sensitive` and withhold the whole message instead
+(see `templateError` in `resource/file/template.go`). The tradeoff this
+leaves: a non-sensitive template's render error is unaffected and fully
+useful for debugging, while a secret-bearing one has that value scrubbed
+from its error text — the failure is reported without leaking the secret,
+but also without showing it, so diagnosing exactly what was wrong with a
+secret's shape from the error alone is not possible.
+
 ### Template rendering for a single `File` on the plan path
 
 A single `File(dst, WithSource("app.conf.tmpl"))` (not part of a `SyncDir`
