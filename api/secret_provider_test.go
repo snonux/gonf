@@ -171,6 +171,34 @@ func TestSetSecretProviderIsConfiguredOnce(t *testing.T) {
 	}
 }
 
+// TestSetSecretProviderRefusesBrokenFallback confirms the composition-root
+// half of the task-of2 fix: secret.NewFallback with a nil primary or
+// secondary (untyped or typed) is refused by SetSecretProvider with a
+// declaration error, the same as a bare nil provider or a zero Snapshot,
+// instead of being silently accepted and panicking on the first reference
+// that needed the broken side.
+func TestSetSecretProviderRefusesBrokenFallback(t *testing.T) {
+	ResetForTest()
+	t.Cleanup(ResetForTest)
+	good := &fakeSecrets{values: map[secret.Ref]string{"a": syntheticSecret}}
+	for name, broken := range map[string]secret.Provider{
+		"nil primary":         secret.NewFallback(nil, good),
+		"nil secondary":       secret.NewFallback(good, nil),
+		"typed nil primary":   secret.NewFallback((*fakeSecrets)(nil), good),
+		"typed nil secondary": secret.NewFallback(good, (*fakeSecrets)(nil)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := setSecretProvider(broken); err == nil || !strings.Contains(err.Error(), "must not be nil") {
+				t.Fatalf("setSecretProvider(%s) = %v, want the nil-provider refusal", name, err)
+			}
+		})
+	}
+	// The happy path (both operands genuinely non-nil) is unaffected.
+	if err := setSecretProvider(secret.NewFallback(good, good)); err != nil {
+		t.Fatalf("setSecretProvider(healthy Fallback) = %v, want nil", err)
+	}
+}
+
 // ResolveSecret is public and may run on a consumer's goroutines; the
 // configuration it reads and marks as used is locked (checked by -race).
 func TestResolveSecretIsSafeForConcurrentUse(t *testing.T) {

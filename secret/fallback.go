@@ -1,6 +1,14 @@
 package secret
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
+
+// Fallback is the Provider NewFallback returns.
+type Fallback struct {
+	primary, secondary Provider
+}
 
 // NewFallback returns a Provider for a staged, reference-by-reference secret
 // cutover: it resolves through primary and, only when primary reports
@@ -40,13 +48,22 @@ import "context"
 // applies to Fallback's combined result, not to primary and secondary
 // individually, so a reference resolved via secondary is cached exactly like
 // one primary answered directly.
-func NewFallback(primary, secondary Provider) Provider {
-	return &fallbackProvider{primary: primary, secondary: secondary}
-}
-
-// fallbackProvider is the unexported Provider NewFallback returns.
-type fallbackProvider struct {
-	primary, secondary Provider
+//
+// NewFallback is, like NewSnapshot, a composition root: a nil primary or
+// secondary (including a typed nil, e.g. a nil *foostore.Provider wrapped in
+// the Provider interface — the shape a swallowed constructor error or an
+// unwired, feature-flagged provider actually produces) is a composition-root
+// mistake, not a recipe-time one, and NewFallback never panics on it.
+// NewFallback still returns a non-nil *Fallback so the call composes as
+// shown above, but IsNilProvider recurses into it exactly as it does for
+// *Snapshot and reports the broken Fallback as nil, so
+// api.SetSecretProvider refuses it with a declaration error right at the
+// composition root, before any recipe runs. Resolve carries the same check
+// as a second line of defense (belt and braces) for a Fallback built and
+// used directly, outside SetSecretProvider: it returns a typed
+// ErrUnavailable error instead of panicking.
+func NewFallback(primary, secondary Provider) *Fallback {
+	return &Fallback{primary: primary, secondary: secondary}
 }
 
 // Resolve implements Provider. It calls Resolve (the package function, not
@@ -54,7 +71,17 @@ type fallbackProvider struct {
 // api.ResolveSecret or a Snapshot would see it, including a caller ctx that
 // becomes done during primary's call; that classified result is what decides
 // whether secondary runs.
-func (f *fallbackProvider) Resolve(ctx context.Context, ref Ref) ([]byte, error) {
+//
+// The IsNilProvider check guards against a broken Fallback that reached
+// Resolve despite the composition-root refusal above (built directly, or
+// composed before that check existed): resolving through a nil primary or
+// secondary is the panic this whole fix exists to close, so it is refused
+// here as a typed ErrUnavailable instead.
+func (f *Fallback) Resolve(ctx context.Context, ref Ref) ([]byte, error) {
+	if IsNilProvider(f.primary) || IsNilProvider(f.secondary) {
+		return nil, &Error{Kind: ErrUnavailable, Ref: ref,
+			Msg: fmt.Sprintf("secret %q: %v: fallback provider is missing its primary or secondary provider (create it with secret.NewFallback)", string(ref), ErrUnavailable)}
+	}
 	data, err := Resolve(ctx, f.primary, ref)
 	if err == nil {
 		return data, nil

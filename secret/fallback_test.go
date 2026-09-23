@@ -90,6 +90,63 @@ func TestFallbackUnclassifiedPrimaryErrorDoesNotFallBack(t *testing.T) {
 	}
 }
 
+// TestNewFallbackRefusesNilOperand confirms the fix for the confirmed
+// panic-risk bug (task of2, following on task 262): NewFallback used to do no
+// nil check at all, so a nil primary or secondary panicked on the first
+// resolution — including for a TYPED nil (e.g. a nil *fakeStore wrapped in
+// the Provider interface, the shape a swallowed constructor error or an
+// unwired feature-flagged provider actually produces, not just a literal nil
+// argument). NewFallback itself must never panic; Resolve on the broken
+// result must return a typed ErrUnavailable instead of crashing.
+func TestNewFallbackRefusesNilOperand(t *testing.T) {
+	good := &fakeStore{values: map[Ref]string{"a": "v"}}
+	for name, tc := range map[string]struct{ primary, secondary Provider }{
+		"untyped nil primary":   {nil, good},
+		"untyped nil secondary": {good, nil},
+		"typed nil primary":     {(*fakeStore)(nil), good},
+		"typed nil secondary":   {good, (*fakeStore)(nil)},
+		"both nil":              {nil, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := NewFallback(tc.primary, tc.secondary)
+			if f == nil {
+				t.Fatal("NewFallback returned nil")
+			}
+			data, err := f.Resolve(context.Background(), "a")
+			if data != nil {
+				t.Fatalf("Resolve returned data %q despite a nil operand", data)
+			}
+			if KindOf(err) != ErrUnavailable {
+				t.Fatalf("Resolve err = %v, want ErrUnavailable (not a panic)", err)
+			}
+		})
+	}
+}
+
+// TestIsNilProviderRecursesIntoFallback confirms IsNilProvider recurses into
+// *Fallback exactly as it does into *Snapshot, so api.SetSecretProvider can
+// refuse a broken Fallback at the composition root (it cannot recurse into
+// an unexported struct, which was the second half of the bug: IsNilProvider
+// used to report false even for a Fallback that would panic on first use).
+func TestIsNilProviderRecursesIntoFallback(t *testing.T) {
+	good := &fakeStore{values: map[Ref]string{"a": "v"}}
+	broken := []Provider{
+		NewFallback(nil, good),
+		NewFallback(good, nil),
+		NewFallback((*fakeStore)(nil), good),
+		NewFallback(good, (*fakeStore)(nil)),
+		NewFallback(nil, nil),
+	}
+	for _, p := range broken {
+		if !IsNilProvider(p) {
+			t.Fatalf("IsNilProvider(%#v) = false, want true", p)
+		}
+	}
+	if IsNilProvider(NewFallback(good, good)) {
+		t.Fatal("IsNilProvider(NewFallback(good, good)) = true, want false")
+	}
+}
+
 // TestFallbackPropagatesCancellation confirms a context that is already done
 // is never a suppressible not-found (it carries no *Error kind at all), so
 // it must not trigger a secondary read either.

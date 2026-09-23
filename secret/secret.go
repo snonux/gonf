@@ -96,15 +96,22 @@ func (f ProviderFunc) Resolve(ctx context.Context, ref Ref) ([]byte, error) { re
 // plain p == nil interface check misses; such a provider would panic only
 // at the first resolution. A Snapshot that wraps no provider (the zero
 // &Snapshot{} instead of NewSnapshot) counts as nil too: it cannot resolve
-// anything. Composition roots use it to refuse a nil provider:
-// api.SetSecretProvider with a declaration error, NewSnapshot by returning a
-// providerless Snapshot.
+// anything. A Fallback whose primary or secondary is nil (including a typed
+// nil) counts as nil too, for the same reason — it cannot resolve any
+// reference either way — so a broken staged-cutover composition
+// (secret.NewFallback with one operand accidentally nil) is refused exactly
+// like a bare nil provider. Composition roots use it to refuse a nil
+// provider: api.SetSecretProvider with a declaration error, NewSnapshot by
+// returning a providerless Snapshot.
 func IsNilProvider(p Provider) bool {
 	if p == nil {
 		return true
 	}
 	if s, ok := p.(*Snapshot); ok && s != nil {
 		return IsNilProvider(s.provider)
+	}
+	if f, ok := p.(*Fallback); ok && f != nil {
+		return IsNilProvider(f.primary) || IsNilProvider(f.secondary)
 	}
 	switch v := reflect.ValueOf(p); v.Kind() {
 	case reflect.Chan, reflect.Func, reflect.Map, reflect.Pointer, reflect.Slice, reflect.UnsafePointer:

@@ -149,7 +149,14 @@ func main() {
   `secret.NewSnapshot(secret.NewFallback(newProvider, secret.FileProvider{}))`;
   caching then applies to the combined result. `Fallback` holds no state of
   its own and is safe for concurrent use whenever `primary` and `secondary`
-  are.
+  are. Like `NewSnapshot`, `NewFallback` is a composition root: a nil
+  `primary` or `secondary` (including a typed nil, e.g. a swallowed
+  `foostore.New` error or an unwired feature-flagged provider) never panics.
+  `IsNilProvider` recurses into `Fallback` the same way it does into
+  `Snapshot`, so `SetSecretProvider` refuses a broken `Fallback` with a
+  declaration error at the composition root; `Fallback.Resolve` carries the
+  same nil check as a second line of defense and returns a typed
+  `ErrUnavailable` instead of crashing if it is ever reached directly.
 - `ResolveSecret` may be called from several goroutines; the provider
   configuration is locked. Providers themselves must then be safe for
   concurrent use (`Snapshot`, `FileProvider` and `foostore.Provider` are).
