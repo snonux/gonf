@@ -152,8 +152,8 @@ func TestApplyRefusesCronExplicitEmptyUser(t *testing.T) {
 // error; this pins the two guards a caller reaches only by calling Apply
 // directly afterward, ignoring Run's returned error: RecordPlanTo resets
 // the repository on that failure (so there is nothing left to apply), and
-// declerr.CapturedAny makes Apply refuse outright rather than silently
-// no-op on an empty repository, which would look identical to "there was
+// anyRecordFailed makes Apply refuse outright rather than silently no-op
+// on an empty repository, which would look identical to "there was
 // nothing to do" from the caller's side.
 func TestApplyRefusesAfterARunFailedMidBody(t *testing.T) {
 	ResetForTest()
@@ -173,8 +173,8 @@ func TestApplyRefusesAfterARunFailedMidBody(t *testing.T) {
 	if ids := resource.RegisteredIDs(); len(ids) != 0 {
 		t.Fatalf("a failed record left %v registered, want none", ids)
 	}
-	if !declerr.CapturedAny() {
-		t.Fatal("CapturedAny() = false after a record-time misuse was captured into Run's session")
+	if !anyRecordFailed {
+		t.Fatal("anyRecordFailed = false after a record-time misuse was captured into Run's session")
 	}
 	if err := Apply(); err == nil {
 		t.Fatal("Apply() after Run failed mid-body = nil, want a refusal")
@@ -184,12 +184,12 @@ func TestApplyRefusesAfterARunFailedMidBody(t *testing.T) {
 	}
 }
 
-// TestApplyRecoversAfterALaterCleanRecord: CapturedAny must not refuse Apply
-// forever once a failed recipe is fixed. After a failed record (as above),
-// a later, unrelated RecordPlanTo/Run that completes cleanly clears it, and
-// Apply works normally again — an embedding program that keeps running
-// after fixing a broken recipe must not stay refused over a mistake it
-// already recovered from.
+// TestApplyRecoversAfterALaterCleanRecord: anyRecordFailed must not refuse
+// Apply forever once a failed recipe is fixed. After a failed record (as
+// above), a later, unrelated RecordPlanTo/Run that completes cleanly clears
+// it, and Apply works normally again — an embedding program that keeps
+// running after fixing a broken recipe must not stay refused over a mistake
+// it already recovered from.
 func TestApplyRecoversAfterALaterCleanRecord(t *testing.T) {
 	ResetForTest()
 	ResetInventory()
@@ -203,8 +203,8 @@ func TestApplyRecoversAfterALaterCleanRecord(t *testing.T) {
 	if err := Run("bad"); err == nil {
 		t.Fatalf("Run(bad) = nil, want the cron misuse refusal")
 	}
-	if !declerr.CapturedAny() {
-		t.Fatal("CapturedAny() = false after Run(bad) failed")
+	if !anyRecordFailed {
+		t.Fatal("anyRecordFailed = false after Run(bad) failed")
 	}
 
 	dst := filepath.Join(t.TempDir(), "recovered")
@@ -212,8 +212,8 @@ func TestApplyRecoversAfterALaterCleanRecord(t *testing.T) {
 	if err := Run("good"); err != nil {
 		t.Fatalf("Run(good) = %v, want a clean run", err)
 	}
-	if declerr.CapturedAny() {
-		t.Fatal("CapturedAny() = true after a later clean record, want it cleared")
+	if anyRecordFailed {
+		t.Fatal("anyRecordFailed = true after a later clean record, want it cleared")
 	}
 
 	direct := filepath.Join(t.TempDir(), "direct")
@@ -223,6 +223,47 @@ func TestApplyRecoversAfterALaterCleanRecord(t *testing.T) {
 	}
 	if content, err := os.ReadFile(direct); err != nil || string(content) != "ok" {
 		t.Fatalf("direct = %q, %v; want Apply to have written it", content, err)
+	}
+}
+
+// task tc2: fc2's guard must cover every reason a record can fail, not only
+// declared misuse. A task recursion cycle never reaches declerr at all (it
+// is stashed in recSession.recordingCycleErr and returned directly by
+// RecordPlanTo/Run), so it is a different failure shape than
+// TestApplyRefusesAfterARunFailedMidBody's cron misuse — but the same
+// leftover-registration hazard applies: the outer body's own registration,
+// made before the self-recursive Run call fails the record, must not
+// survive for a later Apply to silently apply.
+func TestApplyRefusesAfterARunFailedOnATaskCycle(t *testing.T) {
+	ResetForTest()
+	ResetInventory()
+	t.Cleanup(func() {
+		ResetForTest()
+		ResetInventory()
+	})
+	leftover := filepath.Join(t.TempDir(), "leftover")
+	Task("cyclic", "", func() {
+		Dir(leftover)     // registers fine before the cycle is detected
+		_ = Run("cyclic") // self-recursion: fails the record, never reports to declerr
+	})
+	err := Run("cyclic")
+	if err == nil || !strings.Contains(err.Error(), "cyclic -> cyclic") {
+		t.Fatalf("Run(cyclic) = %v, want the cycle error naming the chain", err)
+	}
+	if declerr.First() != nil {
+		t.Fatalf("a task-cycle failure incorrectly reached declerr.First: %v", declerr.First())
+	}
+	if ids := resource.RegisteredIDs(); len(ids) != 0 {
+		t.Fatalf("a failed record left %v registered, want none", ids)
+	}
+	if !anyRecordFailed {
+		t.Fatal("anyRecordFailed = false after Run(cyclic) failed on a task cycle, not declared misuse")
+	}
+	if err := Apply(); err == nil {
+		t.Fatal("Apply() after Run failed on a task cycle = nil, want a refusal")
+	}
+	if _, err := os.Stat(leftover); !os.IsNotExist(err) {
+		t.Fatalf("the leftover directory exists despite the refused record: %v", err)
 	}
 }
 

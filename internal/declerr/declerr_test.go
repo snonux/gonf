@@ -48,13 +48,8 @@ func TestNoReportNoError(t *testing.T) {
 
 // TestCaptureRoutesReportsAndRestores: while a sink is installed every report
 // goes to it (none becomes sticky), and restore reinstates the previous sink.
-// CapturedAny, unlike First, is set by a captured report and stays set: it is
-// the only trace outside the sink's own session that some report happened.
 func TestCaptureRoutesReportsAndRestores(t *testing.T) {
 	reset(t)
-	if CapturedAny() {
-		t.Fatal("CapturedAny() = true before any report")
-	}
 	var outer, inner []error
 	restoreOuter := Capture(func(err error) { outer = append(outer, err) })
 	restoreInner := Capture(func(err error) { inner = append(inner, err) })
@@ -67,9 +62,6 @@ func TestCaptureRoutesReportsAndRestores(t *testing.T) {
 	}
 	if err := First(); err != nil {
 		t.Fatalf("a captured report became sticky: %v", err)
-	}
-	if !CapturedAny() {
-		t.Fatal("CapturedAny() = false after two captured reports")
 	}
 	Reportf("three")
 	if err := First(); err == nil || err.Error() != "three" {

@@ -62,19 +62,26 @@ func Apply() error {
 	if err := declerr.First(); err != nil {
 		return err
 	}
-	if declerr.CapturedAny() {
-		// Some earlier RecordPlanTo/Run call in this process failed a task
-		// body's record (its own registrations are already gone —
-		// RecordPlanTo resets the repository on that failure — but a
-		// caller that applies without checking that call's returned error
-		// should still learn something went wrong, rather than silently
-		// applying whatever it left registered or silently doing nothing).
-		return fmt.Errorf("Apply: refusing: an earlier record failed a task body's declaration")
-	}
 
 	drafts := resource.RegisteredPlanDrafts()
 	registered := resource.RegisteredIDs()
 	if len(registered) == 0 {
+		if anyRecordFailed {
+			// Some earlier RecordPlanTo/Run call in this process failed
+			// its record — for any of the reasons RecordPlanTo can fail,
+			// not only declared misuse (task tc2) — and RecordPlanTo
+			// reset the repository on that failure, so there is nothing
+			// left to register-check against. Checked only when the
+			// repository is empty: once anything new is registered
+			// (through a later record or directly), it is unrelated to
+			// the stale failure and applying it is exactly what the
+			// caller now asked for, so it must not be refused on the old
+			// failure's account (that also keeps this flag from having to
+			// be cleared by every test and caller that intentionally
+			// fails a record and later registers or applies something
+			// else in the same process).
+			return fmt.Errorf("Apply: refusing: an earlier record failed")
+		}
 		return nil
 	}
 	if err := requireDraftsForAll(drafts, registered); err != nil {
