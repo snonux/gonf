@@ -179,6 +179,28 @@ inventory and resources is a declaration error (`internal/declerr`):
   (`resource.collisionError`, task vd2; an earlier version of this note
   wrongly claimed collisions could never happen here, until a probe
   reproduced one with two `WhenPathExists` fragments).
+  This collision refusal stays sticky for the rest of the process the same
+  way every other declaration error does (see the previous bullet) — task
+  oe2 weighed narrowing that specifically for a When*-fragment collision
+  (a later, wholly unrelated `File(q); Apply()` is refused with the SAME
+  sticky error and `q` is never written,
+  `TestWhenPathExistsDirectCollisionPoisonsLaterUnrelatedApply`) and kept
+  it sticky: a collision reports through the exact same
+  `resource.Register`/`declerr.Reportf` path as every other declaration
+  error, the registered-resource repository is process-wide shared state
+  with no notion of "which `Apply` call a registration belongs to" that a
+  narrower, per-Apply refusal could hang off, and the only path that can
+  produce this collision — direct, non-recording apply — is a single-shot,
+  top-level-in-main usage pattern; the recording path
+  (`RecordPlanTo`/`Run`), the recommended mechanism for a long-running
+  embedding process, gives every `WhenHostname`/`WhenPathExists` fragment
+  its own repository scope and so cannot hit this collision at all. What
+  WAS missing (and what oe2 added) is a production-safe way out for a
+  library embedder that does keep reusing the process after fixing the
+  recipe that caused a declaration error: `resource.ResetDeclarationError`
+  clears only the sticky `declerr` state, unlike the test-only
+  `resource.ResetForTest`, which also wipes the registered repository, its
+  drafts, the apply report and dry-run.
   `RecordPlanTo` also sets `api`'s own `lastRecordFailure` on ANY failure
   including a recovered panic (not `declerr`'s concern, see api/plan.go)
   — cleared by a later clean record. `api.Apply` refuses on it
@@ -210,7 +232,11 @@ resets `api.ResetForTest`, `resource.ResetForTest` and `plan.ResetForTest`
 are the one exception. Module-internal packages may keep a narrow test hook
 that clients cannot import (`internal/clihost.SetForTest`,
 `internal/remote.ObserveBootstrapForTest`, `internal/testapply.
-ApplyWithRunners`).
+ApplyWithRunners`). `resource.ResetDeclarationError` (task oe2) is not one of
+these: it is not named `*ForTest` and is a real production API — the
+supported way for a library embedder to clear the sticky declaration-error
+refusal (see "Registration-time contract") without going through the
+test-scoped `resource.ResetForTest`.
 
 **Preferred mechanism for a migrated kind (task qb2): per-apply runner
 injection through `plan.ApplyContext.Runners`.** Instead of a process-global

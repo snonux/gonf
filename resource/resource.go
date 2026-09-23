@@ -78,6 +78,32 @@ func Refuse(type_, name string, err error) Resource {
 	return Resource{Type: type_, Name: name}
 }
 
+// ResetDeclarationError clears the sticky declaration error that Register or
+// Refuse leaves behind once internal/declerr's first report is made outside
+// a RecordPlanTo recording (see AGENTS.md's "Registration-time contract" and
+// api.Apply's own doc comment) — a duplicate/collided resource ID (including
+// the WhenHostname/WhenPathExists direct-apply collision resource.Register's
+// declerr.Reportf reports, task vd2) or any other DSL misuse Refuse
+// reported. That report is deliberately sticky for the process (a later,
+// unrelated registration must not silently mask it — task ad2/id2's
+// reasoning applies here too, see ResetDeclarationError's discussion in
+// AGENTS.md), so api.Apply, api.RecordPlanTo and api.Run keep refusing with
+// it until it is cleared. resource.ResetForTest already clears it for
+// tests, but it is documented and scoped as a test seam and also wipes the
+// registered repository, its drafts, the apply report and dry-run —
+// unsuitable for production code. ResetDeclarationError is the
+// production-safe, single-purpose equivalent (task oe2): a library embedder
+// that confirmed the underlying recipe issue is fixed (e.g. renamed a
+// colliding resource ID so the next registration no longer collides) calls
+// this to keep applying in the same process, without discarding anything
+// else it does not need to.
+//
+// Like every other repository primitive this is single-goroutine: call it
+// only while no registration, recording, or apply is in flight.
+func ResetDeclarationError() {
+	declerr.Reset()
+}
+
 // String returns the resource's ID.
 func (r Resource) String() string {
 	return r.ID()

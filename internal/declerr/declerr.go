@@ -18,7 +18,13 @@
 //     that failure, so nothing the failed body registered survives it;
 //   - otherwise (top-level registration in main, direct api.Apply use) the
 //     FIRST report is kept and api.RecordPlanTo, api.Run, api.Apply and the
-//     CLI refuse to proceed with it.
+//     CLI refuse to proceed with it — sticky for the rest of the process, on
+//     purpose (task ad2/id2's reasoning: a later, unrelated registration
+//     must not silently mask it), even once the recipe that caused it is
+//     fixed. A library embedder that wants to keep using the process after
+//     fixing that recipe clears it with resource.ResetDeclarationError
+//     (task oe2), the production-safe counterpart of the resource.
+//     ResetForTest test seam.
 //
 // A sink swallows a report for First's purposes: the recording session
 // handles it (RecordPlanTo's caller gets it as the record's returned error),
@@ -130,9 +136,12 @@ func Capture(fn func(error)) (restore func()) {
 	}
 }
 
-// Reset clears the sticky first error and any installed sink. It is a test
-// seam (api.ResetForTest calls it) and must not run concurrently with a
-// recording.
+// Reset clears the sticky first error and any installed sink. Since this
+// package is internal/, only gonf's own public packages can call it:
+// resource.ResetForTest (a test seam that also wipes other resource state)
+// and resource.ResetDeclarationError (its production-safe, single-purpose
+// equivalent for a library embedder, task oe2) both do, and must not run
+// concurrently with a recording.
 func Reset() {
 	mu.Lock()
 	defer mu.Unlock()

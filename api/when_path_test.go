@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/resource"
 )
 
 // TestWhenPathExistsDirectCollisionNamesConditions reproduces the exact
@@ -121,5 +122,67 @@ func TestWhenPathExistsDirectCollisionPoisonsLaterUnrelatedApply(t *testing.T) {
 	}
 	if _, statErr := os.Stat(unrelated); statErr == nil {
 		t.Fatalf("%s must not have been written: the sticky refusal must still block an unrelated later Apply", unrelated)
+	}
+}
+
+// TestResetDeclarationErrorUnsticksLaterUnrelatedApply pins task oe2's
+// chosen contract for the sticky declaration error that
+// TestWhenPathExistsDirectCollisionPoisonsLaterUnrelatedApply documents:
+// the refusal stays sticky by design (see AGENTS.md's "Registration-time
+// contract"), but a library embedder now has a production-safe,
+// single-purpose way to clear it — resource.ResetDeclarationError, unlike
+// the test-only resource.ResetForTest, touches nothing else. This
+// reproduces the exact same poisoned state as the pinning test above, then
+// shows that ResetDeclarationError (not a full ResetForTest) is enough to
+// let a later, unrelated Apply actually run and write its file — proving
+// the escape hatch is real and does not depend on wiping unrelated state
+// (the registered-but-not-yet-applied "collided" resource from the first,
+// successful WhenPathExists fragment survives the reset and gets applied
+// too, exactly as ResetDeclarationError's doc comment promises).
+func TestResetDeclarationErrorUnsticksLaterUnrelatedApply(t *testing.T) {
+	ResetForTest()
+	t.Cleanup(ResetForTest)
+
+	dirA := t.TempDir()
+	dirB := t.TempDir()
+	collided := filepath.Join(t.TempDir(), "collided.txt")
+
+	WhenPathExists(dirA, func() { File(collided, options.WithContent("A")) })
+	WhenPathExists(dirB, func() { File(collided, options.WithContent("B")) })
+
+	if err := Apply(); err == nil {
+		t.Fatal("expected the collision to fail this first Apply")
+	}
+
+	unrelated := filepath.Join(t.TempDir(), "unrelated.txt")
+	File(unrelated, options.WithContent("q"))
+
+	if err := Apply(); err == nil {
+		t.Fatal("expected the sticky first declaration error to still refuse this unrelated Apply")
+	}
+
+	// The production-safe escape hatch: clears only the sticky declaration
+	// error, not the registered repository, drafts, report or dry-run.
+	resource.ResetDeclarationError()
+
+	if err := Apply(); err != nil {
+		t.Fatalf("Apply() after ResetDeclarationError = %v, want nil: the escape hatch should have unstuck it", err)
+	}
+	got, err := os.ReadFile(unrelated)
+	if err != nil {
+		t.Fatalf("reading %s: %v", unrelated, err)
+	}
+	if string(got) != "q" {
+		t.Fatalf("%s content = %q, want %q", unrelated, got, "q")
+	}
+	// The first WhenPathExists fragment's own File[collided] registered
+	// successfully (only the SECOND, colliding Register call was refused;
+	// its RecordPlanDraft call still ran and overwrote the stored draft
+	// with content "B" -- a separate, pre-existing quirk of
+	// resource.Register/RecordPlanDraft this test does not change) and was
+	// never wiped by ResetDeclarationError, so it still applies once Apply
+	// finally runs.
+	if got, err := os.ReadFile(collided); err != nil || string(got) != "B" {
+		t.Fatalf("%s = (%q, %v), want (\"B\", nil): ResetDeclarationError must not have discarded the earlier successful registration", collided, got, err)
 	}
 }

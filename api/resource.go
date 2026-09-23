@@ -44,8 +44,38 @@ type Resource interface {
 // way, see preflightElevation).
 //
 // A declaration error reported earlier (internal/declerr: DSL misuse such as
-// an unsupported option or a duplicate resource, a failed MustSecret) refuses
-// the apply before anything runs, since the registered set is incomplete.
+// an unsupported option or a duplicate resource — including a resource ID
+// two WhenHostname/WhenPathExists fragments both matched on the direct,
+// non-recording apply path, resource.collisionError — a failed MustSecret)
+// refuses the apply before anything runs, since the registered set is
+// incomplete. That refusal is STICKY FOR THE REST OF THE PROCESS, by
+// design, not just for the recipe that caused it: internal/declerr keeps
+// only the first report, so once any one registration collides or any
+// other misuse is declared outside a RecordPlanTo recording, every later
+// Apply call in this process refuses with that SAME error — even one whose
+// own resources registered cleanly and have nothing to do with the
+// original cause (task ad2/id2's reasoning: a later, unrelated
+// registration must not silently mask an earlier declaration error, so
+// Apply must not treat "my own registrations look fine" as proof nothing
+// upstream is broken). Task oe2 evaluated narrowing this specifically for
+// the collision case and kept it: a collision is reported through the
+// exact same resource.Register/declerr.Reportf path as every other
+// declaration error, the registered-resource repository is itself
+// process-wide shared state with no notion of "which Apply call this
+// registration belongs to" to scope a narrower refusal to, and the only
+// path that can produce this collision (direct, non-recording apply) is
+// documented as a single-shot, top-level-in-main usage pattern — the
+// recording path (RecordPlanTo/Run), gonf's recommended mechanism for a
+// long-running embedding process, gives every WhenHostname/WhenPathExists
+// fragment its own repository scope and so cannot hit this collision at
+// all. A library embedder that keeps applying in the same process after
+// fixing the recipe that caused a declaration error (a renamed colliding
+// resource ID, a corrected option) clears the sticky refusal with
+// resource.ResetDeclarationError — a production-safe, single-purpose
+// escape hatch, unlike the test-only resource.ResetForTest, which also
+// wipes the registered repository, its drafts, the apply report and
+// dry-run. See resource.ResetDeclarationError's doc comment and AGENTS.md's
+// "Registration-time contract".
 //
 // Apply holds the WHOLE registered plan, so it is a controller-side entry
 // point in the same sense as ApplyChunks and remote.Delivery.ToHost: it runs
