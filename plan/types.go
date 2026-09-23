@@ -371,7 +371,11 @@ type Op struct {
 	// Blob is a sidecar blob id/path for KindSyncDir (or large KindFile content).
 	Blob string `json:"blob,omitempty"`
 	// SourceDir and Glob (KindSyncDir-exclusive) moved onto SyncDirPayload
-	// (task 9e2, Layer 2's fourth slice). Field docs (unchanged from here):
+	// (task 9e2, Layer 2's fifth slice — see SyncDirPayload's own doc
+	// comment in op_payload.go and docs/plan.md's "Task 9e2" section, both
+	// of which agree with 9e2's own landed commit message; this comment
+	// previously said "fourth", which was 8e2's ordinal, not 9e2's).
+	// Field docs (unchanged from here):
 	//
 	// SyncDirPayload.SourceDir is the recipe's declared source directory
 	// for KindSyncDir (for the glob flavor, the declared glob pattern's
@@ -553,7 +557,14 @@ type Op struct {
 	// KindCommand; task 8e2 added ConfigSetPayload/ConfigSetMemberPayload;
 	// task 9e2 added SyncDirPayload; task ae2 added FilePayload for
 	// KindFile only — see FilePayload's own doc comment for why
-	// KindEnsureFile does not also get one). It is
+	// KindEnsureFile does not also get one). This per-task narrative is
+	// historical color, not the authoritative inventory, and it has fallen
+	// behind a landed migration before (task qf2); OpPayloadExamples()
+	// (below in op_payload.go) is the single, current, exhaustive
+	// Kind-to-payload-type mapping — the same one TestWirePayloadTagsMatch,
+	// api's TestOpFieldClassesAreExhaustive and payloadFieldOwners (task
+	// 2f2) already trust — so check it, not this paragraph, when in doubt.
+	// It is
 	// json:"-" because Op never marshals itself by default reflection — see
 	// MarshalJSON/UnmarshalJSON below — but api's secret-scan reflection
 	// walkers (scanOpStrings and redactOpStrings) still reach its fields:

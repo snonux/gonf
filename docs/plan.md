@@ -545,16 +545,24 @@ class of bug that motivated task j5.
    and cloned with `slices.Clone`/`maps.Clone` in `ToOp`, same as always.
    `cron`, `systemd_timer` (task yd2, Layer 2's first slice), `user` (task
    6e2), `link`, `link_if_exists`, `package` (task 5e2, Layer 2's second
-   slice), `command` (task 7e2, Layer 2's third slice), and
-   `config_set`/`config_set_member` (task 8e2, Layer 2's fourth slice)
+   slice), `command` (task 7e2, Layer 2's third slice),
+   `config_set`/`config_set_member` (task 8e2, Layer 2's fourth slice),
+   `sync_dir` (task 9e2, Layer 2's fifth slice), and `file` (task ae2)
    instead have their own
    `plan.CronPayload`/`plan.SystemdTimerPayload`/`plan.UserPayload`/
    `plan.LinkPayload`/`plan.LinkIfExistsPayload`/`plan.PackagePayload`/
-   `plan.CommandPayload`/`plan.ConfigSetPayload`/`plan.ConfigSetMemberPayload`,
+   `plan.CommandPayload`/`plan.ConfigSetPayload`/`plan.ConfigSetMemberPayload`/
+   `plan.SyncDirPayload`/`plan.FilePayload`,
    set on `Op.Payload`; a NEW exclusive field on an ALREADY-migrated kind goes
    on that kind's payload type instead of back onto `Op` (mirroring step
    4's rule below, now also for `Op`), still cloned in `ToOp` before being
-   assigned into the payload literal.
+   assigned into the payload literal. This list names every kind that has
+   migrated as of its own last edit, but `plan.OpPayloadExamples()`
+   (`plan/op_payload.go`) is the single, current, exhaustive
+   Kind-to-payload-type mapping — the same one `TestWirePayloadTagsMatch`,
+   `TestOpFieldClassesAreExhaustive` and `payloadFieldOwners` (task 2f2)
+   already trust — so check it, not this paragraph, when in doubt about
+   what has migrated as of today.
 3. **Resource draft** — the resource package: set the new draft `Kind` string
    in its `planDraft()` and call `resource.RecordPlanDraft` from `Present`
    (the register-without-draft guard fails the record otherwise). Map absent
