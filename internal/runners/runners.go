@@ -60,11 +60,12 @@ type CommandRunners struct {
 type ctxKey struct{}
 
 // WithSet returns a context carrying s for FromContext to find, so a caller
-// several layers up the call stack (api.ApplyWithRunners, internal/testapply.
-// ApplyWithRunners, a plan-package test calling plan.ApplyWithContext
-// directly) can inject runners for one apply without a package-global
-// variable. A nil s returns ctx unchanged (no-op), so WithSet(ctx, nil) is
-// always safe and never shadows an outer Set with an empty one.
+// several layers up the call stack (api's own unexported applyWithRunners,
+// internal/testapply.ApplyWithRunners, a plan-package test calling
+// plan.ApplyWithContext directly) can inject runners for one apply without a
+// package-global variable. A nil s returns ctx unchanged (no-op), so
+// WithSet(ctx, nil) is always safe and never shadows an outer Set with an
+// empty one.
 func WithSet(ctx context.Context, s *Set) context.Context {
 	if s == nil {
 		return ctx

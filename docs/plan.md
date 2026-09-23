@@ -458,6 +458,24 @@ if err := ApplyPlan(ops, planDir); err != nil { /* … */ }
 - Maps ops to existing resource `Ensure` helpers (`file`, `dir`, `link`,
   `cmd`, `pkg`, …) — same semantics as direct resource APIs.
 
+### Test seams note
+
+`ApplyContext` (the struct above) carries a `Runners *internal/runners.Set`
+field (task qb2), populated per call by `plan.ApplyWithContext` from
+`internal/runners.FromContext(ctx)`. This is the per-apply runner-injection
+seam a migrated `plan.Handler.Apply` reads instead of a process-global test
+fake: a `*Set` travels scoped to one apply only (`internal/runners.WithSet`
+puts it on the `context.Context` passed to `ApplyWithContext`/`ApplyPlan`),
+and its type lives under `internal/`, so an external recipe module can only
+ever observe the nil zero value — "use the real runner" — never construct or
+inject one of its own. Only `resource/cmd` (the `command` kind) has migrated
+onto this seam so far; the other kinds still consult the older
+process-global `internal/testseam` fakes (open task `4e2`). The full
+contract — which module-internal hooks exist to reach this from a test,
+`newXWith`/`ensureWith` per-kind constructors, and the exact relationship to
+`internal/testseam` — is documented in `AGENTS.md`, "Test seams", which this
+note defers to rather than duplicating.
+
 ## Adding a resource kind (checklist)
 
 **Update (task j5):** the "one map per resource, no self-registered codecs"

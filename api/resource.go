@@ -57,21 +57,29 @@ type Resource interface {
 // records through RecordPlanTo (it lowers the registered drafts directly), so
 // the record-time pre-flight does not cover it either.
 func Apply() error {
-	return ApplyWithRunners(nil)
+	return applyWithRunners(nil)
 }
 
-// ApplyWithRunners is Apply with rs injected as the backend runners a
+// applyWithRunners is Apply with rs injected as the backend runners a
 // migrated plan handler uses in place of the real ones (internal/exec), for
 // this one apply (task qb2). rs's type (internal/runners.Set) lives under
 // internal/, so an external recipe module can only ever pass nil here —
-// exactly Apply's own behaviour — which makes this, in effect though not in
-// the Go compiler's eyes, the one module-internal injection hook api keeps:
-// this module's own tests (in package api, or resource/dryrun_fitness_test.go
-// and similar cross-package tests reaching a kind through the registered
-// plan handler) call it directly with a *runners.Set instead of installing a
-// process-global internal/testseam fake. rs travels down to every handler's
-// ApplyContext via ctx (internal/runners.WithSet), scoped to this one call.
-func ApplyWithRunners(rs *runners.Set) error {
+// exactly Apply's own behaviour.
+//
+// Unexported (task 3f2): this used to be the public ApplyWithRunners, but
+// nothing outside this package needed it to be public — the only caller
+// that ever reached it from outside api (resource/dryrun_fitness_test.go)
+// now calls internal/testapply.ApplyWithRunners instead, the proper
+// module-internal equivalent (see AGENTS.md, "Test seams"). Keeping a
+// public function whose sole real parameter type is unnameable outside this
+// module (godoc would show an opaque internal/runners.Set) was itself the
+// accidental test seam AGENTS.md's "Test seams" section forbids: it is
+// neither named *ForTest nor listed among the allowed exceptions there. Any
+// future in-package caller (api's own tests) can call this directly; a
+// cross-package one goes through internal/testapply.ApplyWithRunners or, for
+// a test that already builds plan ops itself, plan.ApplyWithContext +
+// runners.WithSet (see api/login_class_test.go).
+func applyWithRunners(rs *runners.Set) error {
 	if plan.Recording() || resource.PlanDraftRecording() {
 		return fmt.Errorf("Apply: cannot apply while plan recording is active")
 	}

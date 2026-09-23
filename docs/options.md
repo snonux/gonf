@@ -128,6 +128,40 @@ with `internal/testutil.CaptureLog`. Removed:
 The state resets (`api.ResetForTest`, `resource.ResetForTest`,
 `plan.ResetForTest`) stay.
 
+### Per-apply runner injection added (task qb2), preferred going forward
+
+Added in v0.16.6+ (task qb2). `internal/testseam`'s process-global fakes
+above are no longer the only test seam: a migrated resource kind's backend
+runner instead travels through `plan.ApplyContext.Runners`
+(`*internal/runners.Set`), populated per apply from the `context.Context`
+passed to `plan.ApplyWithContext`/`ApplyPlan`
+(`internal/runners.WithSet`/`FromContext`, an unexported context key an
+external recipe module can never populate — it only ever observes the nil
+default, i.e. "use the real runner"). Two narrow module-internal hooks carry
+a `*runners.Set` into one whole apply for a test that cannot build
+`plan.ApplyContext` itself: `internal/testapply.ApplyWithRunners` and, for
+`api`'s own package and its tests, its unexported `applyWithRunners`
+(`api.Apply` calls it with `nil`). This is the PREFERRED mechanism for any
+newly migrated kind; `internal/testseam` is not being extended further and
+should shrink as each kind converts. See `AGENTS.md`, "Test seams", for the
+full contract (the `newXWith`/`ensureWith` per-kind constructor shape,
+which hook to use from which kind of test) and `docs/plan.md`'s "Test seams
+note" for the `ApplyContext.Runners` field itself.
+
+Only `resource/cmd` (the `command` plan kind) has migrated so far. The
+other six kinds — `cron`, `package`, `service`, `timer`, `systemdtimer`,
+`daemon_reload` — still use the `internal/testseam` fakes described above;
+that migration is open task `4e2`, not an inconsistency to fix ad-hoc.
+
+A public `api.ApplyWithRunners` briefly existed for this (task qb2's first
+slice) so a cross-package test outside `api` (`resource/
+dryrun_fitness_test.go`) could inject a fake runner without importing
+`internal/testapply`. It was itself an accidental public test seam —
+callable from an external module, though its sole real parameter type
+(`internal/runners.Set`) lives under `internal/` and so is unnameable
+there — and task 3f2 unexported it once `internal/testapply.ApplyWithRunners`
+was confirmed to cover the same need; no client module called it.
+
 ### Direct repository apply removed after v0.15.0
 
 Removed in v0.16.0 (task e72); no known users (neither client module called

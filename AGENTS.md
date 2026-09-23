@@ -209,17 +209,55 @@ Public (non-`internal`) packages export no `*ForTest` setters; the state
 resets `api.ResetForTest`, `resource.ResetForTest` and `plan.ResetForTest`
 are the one exception. Module-internal packages may keep a narrow test hook
 that clients cannot import (`internal/clihost.SetForTest`,
-`internal/remote.ObserveBootstrapForTest`).
+`internal/remote.ObserveBootstrapForTest`, `internal/testapply.
+ApplyWithRunners`).
 
-A backend's host-command runner or host detector is an unexported function
-that consults the module-internal `internal/testseam` fake first and
-otherwise calls the real `internal/exec` runner or detector (e.g.
-`resource/systemd`'s `runCmd`). Tests anywhere in the module install fakes
-with `testseam.Fake*(t, ...)`; each fake is one layer removed by `t`'s
-cleanup. In-package tests may instead hand a backend its runner directly (as
-`applyWith` in pkg and service, or `newUserWith` in resource/user). Log
-capture is `internal/testutil.CaptureLog`. A new backend runner follows the
-same pattern.
+**Preferred mechanism for a migrated kind (task qb2): per-apply runner
+injection through `plan.ApplyContext.Runners`.** Instead of a process-global
+fake, a `*internal/runners.Set` travels down from the context passed to one
+apply (`internal/runners.WithSet`/`FromContext`, an unexported context key —
+an external recipe module can observe only the nil zero value, i.e. "use the
+real runner"), threaded by `plan.ApplyWithContext` into every
+`plan.Handler.Apply` call for that run. A migrated concrete resource type
+gains unexported runner fields (e.g. `resource/cmd`'s `Cmd.runFn`/`probeFn`)
+that a `newXWith` constructor sets from an injected `*runners.Set`, mirroring
+`resource/user`'s `newUserWith` (task 372); the exported `Ensure` funnels
+through an unexported `ensureWith` both `newXWith` and the plan handler call.
+The plan handler reads `ctx.Runners` (nil-safe field helpers such as
+`runners.CommandOf`) and builds the resource with it. Two narrow
+module-internal hooks carry a `*runners.Set` into one whole apply for tests
+that cannot build `plan.ApplyContext` themselves: `internal/testapply.
+ApplyWithRunners` (any `resource/<kind>` package's own tests, or a
+cross-package, non-`api` test such as `resource/dryrun_fitness_test.go`) and,
+inside `api` itself, its unexported `applyWithRunners` (reached only by
+`api.Apply` and `api`'s own tests). `api/login_class_test.go` shows the third
+form: a test able to build plan ops directly calls `plan.ApplyWithContext` +
+`runners.WithSet` itself, with no hook at all. `api.ApplyWithRunners` was
+briefly exported for this (task qb2's first slice) so `resource/
+dryrun_fitness_test.go` could inject cmd's fake runner without importing
+`internal/testapply`; that made it a real, callable public API of an
+`internal/runners.Set` parameter type an external module can never name —
+itself the accidental public test seam this section forbids. Task 3f2
+unexported it (`internal/testapply.ApplyWithRunners` already covered every
+caller outside `api`) rather than adding it to the allowed-seam list above.
+
+Only `resource/cmd` (the `command` plan kind) has migrated to this mechanism
+so far. The other six kinds — `cron`, `package`, `service`, `timer`,
+`systemdtimer`, `daemon_reload` — remain on the older `internal/testseam`
+mechanism below, under open task `4e2`: a known, in-progress migration, not
+an inconsistency to fix ad-hoc. `internal/runners.Set` gains one field per
+kind as it migrates (see that type's own doc comment).
+
+A backend's host-command runner or host detector, for a kind not yet
+migrated to `internal/runners`, is an unexported function that consults the
+module-internal `internal/testseam` fake first and otherwise calls the real
+`internal/exec` runner or detector (e.g. `resource/systemd`'s `runCmd`).
+Tests anywhere in the module install fakes with `testseam.Fake*(t, ...)`;
+each fake is one layer removed by `t`'s cleanup. In-package tests may instead
+hand a backend its runner directly (as `applyWith` in pkg and service, or
+`newUserWith` in resource/user). Log capture is `internal/testutil.
+CaptureLog`. A newly migrated kind follows the `internal/runners` pattern
+above instead of adding another `testseam` fake.
 
 The fakes and the log capture are process-global, so a test using them must
 not run in parallel. They enforce it: each calls `t.Setenv`

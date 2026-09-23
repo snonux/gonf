@@ -11,6 +11,7 @@ import (
 	opt "github.com/snonux/gonf/api/options"
 	iexec "github.com/snonux/gonf/internal/exec"
 	"github.com/snonux/gonf/internal/runners"
+	"github.com/snonux/gonf/internal/testapply"
 	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/cmd"
@@ -669,7 +670,12 @@ func dryRunCmd(t *testing.T, tmp string) {
 		},
 	}}
 	cmd.Present("true", nil)
-	if err := api.ApplyWithRunners(rs); err != nil {
+	// api.ApplyWithRunners was unexported (task 3f2, an accidental public
+	// test seam whose sole real parameter type — internal/runners.Set — an
+	// external module could never name anyway); this cross-package test
+	// injects the fake command runner through the proper module-internal
+	// equivalent instead, same shape and coverage.
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatal(err)
 	}
 	if mutated {
