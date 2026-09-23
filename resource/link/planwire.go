@@ -25,14 +25,21 @@ func init() {
 	plan.RegisterHandler(plan.KindLinkIfExists, linkIfExistsHandler{})
 }
 
-// ToOp lowers a "link" resource draft to a plan.Op.
+// ToOp lowers a "link" resource draft to a plan.Op. Symlink/Hardlink come
+// from d.Payload (Payload, task w62 Layer 1); a "link" draft without one is
+// a record-time bug (planDraft always sets it), reported like any other
+// handler error rather than panicking.
 func (linkHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
+	p, ok := d.Payload.(Payload)
+	if !ok {
+		return plan.Op{}, fmt.Errorf("link: draft missing link.Payload (got %T)", d.Payload)
+	}
 	return plan.Op{
 		Op:       plan.KindLink,
 		ID:       d.ID,
 		Path:     d.Path,
-		Symlink:  d.Symlink,
-		Hardlink: d.Hardlink,
+		Symlink:  p.Symlink,
+		Hardlink: p.Hardlink,
 		Absent:   d.Absent,
 		Deps:     slices.Clone(d.Deps),
 	}, nil
@@ -69,13 +76,20 @@ func (linkHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	}
 }
 
-// ToOp lowers a "link_if_exists" resource draft to a plan.Op.
+// ToOp lowers a "link_if_exists" resource draft to a plan.Op. Target comes
+// from d.Payload (IfExistsPayload, task w62 Layer 1); a "link_if_exists"
+// draft without one is a record-time bug, reported like any other handler
+// error rather than panicking.
 func (linkIfExistsHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
+	p, ok := d.Payload.(IfExistsPayload)
+	if !ok {
+		return plan.Op{}, fmt.Errorf("link_if_exists: draft missing link.IfExistsPayload (got %T)", d.Payload)
+	}
 	return plan.Op{
 		Op:     plan.KindLinkIfExists,
 		ID:     d.ID,
 		Path:   d.Path,
-		Target: d.Target,
+		Target: p.Target,
 		Deps:   slices.Clone(d.Deps),
 	}, nil
 }

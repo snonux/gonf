@@ -19,15 +19,22 @@ func init() {
 	plan.RegisterHandler(plan.KindService, planHandler{})
 }
 
-// ToOp lowers a "service" resource draft to a plan.Op.
+// ToOp lowers a "service" resource draft to a plan.Op. Reload comes from
+// d.Payload (Payload, task w62 Layer 1); a "service" draft without one is a
+// record-time bug (planDraft always sets it), reported like any other
+// handler error rather than panicking.
 func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
+	p, ok := d.Payload.(Payload)
+	if !ok {
+		return plan.Op{}, fmt.Errorf("service: draft missing service.Payload (got %T)", d.Payload)
+	}
 	op := plan.Op{
 		Op:      plan.KindService,
 		ID:      d.ID,
 		Name:    d.Name,
 		Absent:  d.Absent,
 		Restart: d.Restart,
-		Reload:  d.Reload,
+		Reload:  p.Reload,
 		User:    d.User,
 		Deps:    slices.Clone(d.Deps),
 	}

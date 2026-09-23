@@ -9,6 +9,7 @@ import (
 	"github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
+	"github.com/snonux/gonf/resource/user"
 )
 
 func TestUserPublicDSLRecordsPlanBackedDraft(t *testing.T) {
@@ -31,9 +32,10 @@ func TestUserPublicDSLRecordsPlanBackedDraft(t *testing.T) {
 	if len(drafts) != 1 {
 		t.Fatalf("draft count = %d, want 1", len(drafts))
 	}
-	if drafts[0].Kind != "user" || drafts[0].PrimaryGroup != "svc" ||
-		!reflect.DeepEqual(drafts[0].SupplementaryGroups, []string{"wheel", "audio"}) ||
-		drafts[0].LoginClass != "daemon" {
+	p, ok := drafts[0].Payload.(user.Payload)
+	if drafts[0].Kind != "user" || !ok || p.PrimaryGroup != "svc" ||
+		!reflect.DeepEqual(p.SupplementaryGroups, []string{"wheel", "audio"}) ||
+		p.LoginClass != "daemon" {
 		t.Fatalf("user draft = %#v", drafts[0])
 	}
 	op, err := newDraftPackager(nil).draftToOp(drafts[0])

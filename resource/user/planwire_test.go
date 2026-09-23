@@ -22,13 +22,13 @@ func TestToOpRejectsOnlyRequestsEveryBackendRefuses(t *testing.T) {
 		draft resource.PlanDraft
 		err   string
 	}{
-		{"login class records (BSD accepts it)", resource.PlanDraft{Name: "svc", LoginClass: "daemon"}, ""},
-		{"many groups record (Linux and FreeBSD accept them)", resource.PlanDraft{Name: "svc", SupplementaryGroups: groups}, ""},
-		{"system account records (Linux accepts it)", resource.PlanDraft{Name: "svc", System: true}, ""},
-		{"relative created home records (Linux and BSD accept it)", resource.PlanDraft{Name: "svc", Home: "rel", CreateHome: true}, ""},
-		{"malformed name", resource.PlanDraft{Name: "-svc"}, "starts with -"},
-		{"malformed group", resource.PlanDraft{Name: "svc", PrimaryGroup: "a,b"}, "comma"},
-		{"refused by every platform", resource.PlanDraft{Name: "svc", LoginClass: "daemon", SupplementaryGroups: groups, Home: "rel", CreateHome: true}, "no supported platform accepts this request"},
+		{"login class records (BSD accepts it)", resource.PlanDraft{Name: "svc", Payload: Payload{LoginClass: "daemon"}}, ""},
+		{"many groups record (Linux and FreeBSD accept them)", resource.PlanDraft{Name: "svc", Payload: Payload{SupplementaryGroups: groups}}, ""},
+		{"system account records (Linux accepts it)", resource.PlanDraft{Name: "svc", Payload: Payload{System: true}}, ""},
+		{"relative created home records (Linux and BSD accept it)", resource.PlanDraft{Name: "svc", Payload: Payload{Home: "rel", CreateHome: true}}, ""},
+		{"malformed name", resource.PlanDraft{Name: "-svc", Payload: Payload{}}, "starts with -"},
+		{"malformed group", resource.PlanDraft{Name: "svc", Payload: Payload{PrimaryGroup: "a,b"}}, "comma"},
+		{"refused by every platform", resource.PlanDraft{Name: "svc", Payload: Payload{LoginClass: "daemon", SupplementaryGroups: groups, Home: "rel", CreateHome: true}}, "no supported platform accepts this request"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -51,7 +51,7 @@ func TestToOpRejectsOnlyRequestsEveryBackendRefuses(t *testing.T) {
 // still reported with ValidateManagedHome's text at record time, even where
 // the generic request validation would also object (a NUL byte).
 func TestToOpKeepsManagedHomeErrorText(t *testing.T) {
-	_, err := (planHandler{}).ToOp(resource.PlanDraft{Kind: "user", ID: "User[svc]", Name: "svc", Home: "/var/run/a\x00b", ManageHome: true})
+	_, err := (planHandler{}).ToOp(resource.PlanDraft{Kind: "user", ID: "User[svc]", Name: "svc", Payload: Payload{Home: "/var/run/a\x00b", ManageHome: true}})
 	want := `user "svc": managed home "/var/run/a\x00b" contains ':', a line break, or NUL`
 	if err == nil || err.Error() != want {
 		t.Fatalf("ToOp() = %v, want %q", err, want)

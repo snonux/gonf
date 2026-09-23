@@ -150,8 +150,10 @@ func TestInlineContentBoundary(t *testing.T) {
 	draft := func(n int) resource.PlanDraft {
 		return resource.PlanDraft{
 			Kind: string(plan.KindConfigSet), ID: "ConfigSet[big]", Name: "big",
-			ConfigMembers: []resource.PlanConfigMember{{Key: "big", Path: "/etc/big.conf", Content: make([]byte, n), Mode: "0640"}},
-			Validators:    []resource.PlanArgv{{Bin: "true"}},
+			Payload: SetPayload{
+				ConfigMembers: []resource.PlanConfigMember{{Key: "big", Path: "/etc/big.conf", Content: make([]byte, n), Mode: "0640"}},
+				Validators:    []resource.PlanArgv{{Bin: "true"}},
+			},
 		}
 	}
 	if _, err := (setHandler{}).ToOp(draft(plan.MaxInlineContent)); err != nil {

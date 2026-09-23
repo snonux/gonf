@@ -824,14 +824,15 @@ func blobBaseName(d resource.PlanDraft) string {
 	if d.ID != "" {
 		return d.ID
 	}
-	if d.SourcePath != "" {
-		return filepath.Base(d.SourcePath)
+	if path := sourceFilePath(d); path != "" {
+		return filepath.Base(path)
 	}
-	if d.SourceDir != "" {
-		return filepath.Base(d.SourceDir)
+	sourceDir, sourceGlob := syncDirSource(d)
+	if sourceDir != "" {
+		return filepath.Base(sourceDir)
 	}
-	if d.SourceGlob != "" {
-		dir := filepath.Dir(d.SourceGlob)
+	if sourceGlob != "" {
+		dir := filepath.Dir(sourceGlob)
 		if base := filepath.Base(dir); base != "" && base != "." {
 			return base
 		}
@@ -854,7 +855,8 @@ func blobIdentityKey(d resource.PlanDraft) string {
 	if d.ID != "" {
 		return d.ID
 	}
-	return strings.Join([]string{d.Path, d.SourcePath, d.SourceDir, d.SourceGlob}, "\x00")
+	sourceDir, sourceGlob := syncDirSource(d)
+	return strings.Join([]string{d.Path, sourceFilePath(d), sourceDir, sourceGlob}, "\x00")
 }
 
 // shortHash returns a short, fixed-width hex fingerprint of key, used to

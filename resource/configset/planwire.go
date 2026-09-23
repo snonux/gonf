@@ -39,51 +39,62 @@ func newHandlers(sys *system) (setHandler, memberHandler) {
 	return setHandler{sys: sys, outcomes: outcomes}, memberHandler{outcomes: outcomes}
 }
 
-// planDraft is the package-neutral record of the set.
+// planDraft is the package-neutral record of the set. Its exclusive fields
+// travel in SetPayload (see SetPayload, task w62 Layer 1).
 func (s *spec) planDraft(id string, deps []string) resource.PlanDraft {
 	d := resource.PlanDraft{
-		Kind:       string(plan.KindConfigSet),
-		ID:         id,
-		Name:       s.name,
-		Chroot:     s.chroot,
-		StagingDir: s.stagingDir,
-		Deps:       deps,
-		Sensitive:  s.sensitive,
+		Kind:      string(plan.KindConfigSet),
+		ID:        id,
+		Name:      s.name,
+		Deps:      deps,
+		Sensitive: s.sensitive,
 	}
+	p := SetPayload{Chroot: s.chroot, StagingDir: s.stagingDir}
 	for _, m := range s.members {
 		pm := resource.PlanConfigMember{
 			Key: m.key, Path: m.path, Content: slices.Clone(m.content),
 			Mode: opt.ModeToWire(m.mode), Owner: m.owner, Group: m.group,
 		}
-		d.ConfigMembers = append(d.ConfigMembers, pm)
+		p.ConfigMembers = append(p.ConfigMembers, pm)
 	}
 	for _, v := range s.validators {
-		d.Validators = append(d.Validators, resource.PlanArgv{Bin: v.Bin, Args: slices.Clone(v.Args)})
+		p.Validators = append(p.Validators, resource.PlanArgv{Bin: v.Bin, Args: slices.Clone(v.Args)})
 	}
+	d.Payload = p
 	return d
 }
 
 // memberDraft is the record of one member handle; it depends on the set.
+// Member, its one exclusive field, travels in MemberPayload (task w62
+// Layer 1).
 func memberDraft(id, name string, m memberSpec, set string) resource.PlanDraft {
 	return resource.PlanDraft{
-		Kind:   string(plan.KindConfigSetMember),
-		ID:     id,
-		Name:   name,
-		Member: m.key,
-		Path:   m.path,
-		Deps:   []string{set},
+		Kind:    string(plan.KindConfigSetMember),
+		ID:      id,
+		Name:    name,
+		Payload: MemberPayload{Member: m.key},
+		Path:    m.path,
+		Deps:    []string{set},
 	}
 }
 
 // ToOp lowers a set draft. The spec is re-validated here so a malformed set
 // fails `gonf plan` on the controller, and members larger than the inline
-// limit are refused: a set is published from its plan line, never from blobs.
+// limit are refused: a set is published from its plan line, never from
+// blobs. The exclusive fields come from d.Payload (SetPayload, task w62
+// Layer 1); a "config_set" draft without one is a record-time bug
+// (planDraft always sets it), reported like any other handler error
+// rather than panicking.
 func (setHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
+	p, ok := d.Payload.(SetPayload)
+	if !ok {
+		return plan.Op{}, fmt.Errorf("config_set: draft missing configset.SetPayload (got %T)", d.Payload)
+	}
 	op := plan.Op{
 		Op: plan.KindConfigSet, ID: d.ID, Name: d.Name,
-		Chroot: d.Chroot, StagingDir: d.StagingDir, Deps: slices.Clone(d.Deps),
+		Chroot: p.Chroot, StagingDir: p.StagingDir, Deps: slices.Clone(d.Deps),
 	}
-	for _, m := range d.ConfigMembers {
+	for _, m := range p.ConfigMembers {
 		if len(m.Content) > plan.MaxInlineContent {
 			return plan.Op{}, fmt.Errorf("config set %s: member %s exceeds the %d byte inline limit", d.Name, m.Key, plan.MaxInlineContent)
 		}
@@ -92,7 +103,7 @@ func (setHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 			Mode: m.Mode, Owner: m.Owner, Group: m.Group,
 		})
 	}
-	for _, v := range d.Validators {
+	for _, v := range p.Validators {
 		op.Validators = append(op.Validators, plan.Argv{Bin: v.Bin, Args: slices.Clone(v.Args)})
 	}
 	if _, err := specFromOp(op); err != nil {
@@ -153,11 +164,18 @@ func memberFromWire(m plan.ConfigMember) (memberSpec, error) {
 	return memberSpec{key: m.Key, path: m.Path, content: content, mode: mode, owner: m.Owner, group: m.Group}, nil
 }
 
-// ToOp lowers a member handle draft.
+// ToOp lowers a member handle draft. Member comes from d.Payload
+// (MemberPayload, task w62 Layer 1); a "config_set_member" draft without
+// one is a record-time bug, reported like any other handler error rather
+// than panicking.
 func (memberHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
+	p, ok := d.Payload.(MemberPayload)
+	if !ok {
+		return plan.Op{}, fmt.Errorf("config_set_member: draft missing configset.MemberPayload (got %T)", d.Payload)
+	}
 	return plan.Op{
 		Op: plan.KindConfigSetMember, ID: d.ID, Name: d.Name,
-		Member: d.Member, Path: d.Path, Deps: slices.Clone(d.Deps),
+		Member: p.Member, Path: d.Path, Deps: slices.Clone(d.Deps),
 	}, nil
 }
 

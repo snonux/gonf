@@ -20,19 +20,26 @@ func init() {
 	plan.RegisterHandler(plan.KindCommand, planHandler{})
 }
 
-// ToOp lowers a "command" resource draft to a plan.Op.
+// ToOp lowers a "command" resource draft to a plan.Op. The command-exclusive
+// fields come from d.Payload (Payload, task w62 Layer 1); a "command" draft
+// without one is a record-time bug (planDraft always sets it), reported
+// like any other handler error rather than panicking.
 func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
+	p, ok := d.Payload.(Payload)
+	if !ok {
+		return plan.Op{}, fmt.Errorf("command: draft missing cmd.Payload (got %T)", d.Payload)
+	}
 	op := plan.Op{
 		Op:      plan.KindCommand,
 		ID:      d.ID,
 		Name:    d.Name,
-		Bin:     d.Bin,
-		Args:    slices.Clone(d.Args),
-		Dir:     d.Dir,
+		Bin:     p.Bin,
+		Args:    slices.Clone(p.Args),
+		Dir:     p.Dir,
 		Env:     maps.Clone(d.Env),
-		Creates: d.Creates,
-		Unless:  planGuard(d.Unless),
-		OnlyIf:  planGuard(d.OnlyIf),
+		Creates: p.Creates,
+		Unless:  planGuard(p.Unless),
+		OnlyIf:  planGuard(p.OnlyIf),
 		Deps:    slices.Clone(d.Deps),
 	}
 	// Change gate (schema v11): OnChange arms IfChanged with the watched ids.

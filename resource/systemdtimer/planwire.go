@@ -19,8 +19,15 @@ func init() {
 	plan.RegisterHandler(plan.KindSystemdTimer, planHandler{})
 }
 
-// ToOp lowers a "systemd_timer" resource draft to a plan.Op.
+// ToOp lowers a "systemd_timer" resource draft to a plan.Op. The
+// exclusive fields come from d.Payload (Payload, task w62 Layer 1); a
+// "systemd_timer" draft without one is a record-time bug (planDraft always
+// sets it), reported like any other handler error rather than panicking.
 func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
+	p, ok := d.Payload.(Payload)
+	if !ok {
+		return plan.Op{}, fmt.Errorf("systemd_timer: draft missing systemdtimer.Payload (got %T)", d.Payload)
+	}
 	return plan.Op{
 		Op:                 plan.KindSystemdTimer,
 		ID:                 d.ID,
@@ -30,13 +37,13 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		Restart:            d.Restart,
 		EnableOnly:         d.EnableOnly,
 		Command:            d.Command,
-		OnCalendar:         d.OnCalendar,
-		OnBootSec:          d.OnBootSec,
-		Persistent:         d.Persistent,
-		Description:        d.Description,
-		ServiceDescription: d.ServiceDescription,
-		After:              slices.Clone(d.After),
-		Wants:              slices.Clone(d.Wants),
+		OnCalendar:         p.OnCalendar,
+		OnBootSec:          p.OnBootSec,
+		Persistent:         p.Persistent,
+		Description:        p.Description,
+		ServiceDescription: p.ServiceDescription,
+		After:              slices.Clone(p.After),
+		Wants:              slices.Clone(p.Wants),
 		Deps:               slices.Clone(d.Deps),
 	}, nil
 }

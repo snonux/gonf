@@ -141,19 +141,24 @@ func Absent(name string, opts ...opt.CronOption) resource.Resource {
 	return Present(name, opts...)
 }
 
-// planDraft records c as a "cron" plan draft under id.
+// planDraft records c as a "cron" plan draft under id. Its cron-exclusive
+// fields travel in Payload (see resource/cron.Payload, task w62 Layer 1);
+// Command stays a flat resource.PlanDraft field because systemd_timer
+// reuses it too.
 func (c *Cron) planDraft(id string) resource.PlanDraft {
 	return resource.PlanDraft{
-		Kind:          "cron",
-		ID:            id,
-		Name:          c.name,
-		CronUser:      c.user,
-		Command:       c.command,
-		LegacyCommand: c.legacy,
-		Schedule: strings.Join([]string{
-			c.minute, c.hour, c.monthday, c.month, c.weekday,
-		}, " "),
-		CronEnv:   append([]string(nil), c.env...),
+		Kind:    "cron",
+		ID:      id,
+		Name:    c.name,
+		Command: c.command,
+		Payload: Payload{
+			CronUser:      c.user,
+			LegacyCommand: c.legacy,
+			Schedule: strings.Join([]string{
+				c.minute, c.hour, c.monthday, c.month, c.weekday,
+			}, " "),
+			CronEnv: append([]string(nil), c.env...),
+		},
 		Absent:    c.Absent,
 		Deps:      c.DependsOn.SortedIDs(),
 		Sensitive: c.Sensitive,

@@ -175,26 +175,30 @@ func Absent(name string, opts ...opt.SystemdTimerOption) resource.Resource {
 	return Present(name, opts...)
 }
 
-// planDraft records t as a "systemd_timer" plan draft under id.
+// planDraft records t as a "systemd_timer" plan draft under id. Its
+// exclusive fields travel in Payload (see Payload, task w62 Layer 1);
+// Command stays flat because cron reuses it too.
 func (t *SystemdTimer) planDraft(id string) resource.PlanDraft {
 	return resource.PlanDraft{
-		Kind:               "systemd_timer",
-		ID:                 id,
-		Name:               t.base,
-		Absent:             t.Absent,
-		User:               t.user,
-		Restart:            t.restart,
-		EnableOnly:         t.enableOnly,
-		Command:            t.command,
-		OnCalendar:         t.onCalendar,
-		OnBootSec:          t.onBootSec,
-		Persistent:         t.persistent,
-		Description:        t.description,
-		ServiceDescription: t.serviceDescription,
-		After:              append([]string(nil), t.after...),
-		Wants:              append([]string(nil), t.wants...),
-		Deps:               t.DependsOn.SortedIDs(),
-		Sensitive:          t.Sensitive,
+		Kind:       "systemd_timer",
+		ID:         id,
+		Name:       t.base,
+		Absent:     t.Absent,
+		User:       t.user,
+		Restart:    t.restart,
+		EnableOnly: t.enableOnly,
+		Command:    t.command,
+		Payload: Payload{
+			OnCalendar:         t.onCalendar,
+			OnBootSec:          t.onBootSec,
+			Persistent:         t.persistent,
+			Description:        t.description,
+			ServiceDescription: t.serviceDescription,
+			After:              append([]string(nil), t.after...),
+			Wants:              append([]string(nil), t.wants...),
+		},
+		Deps:      t.DependsOn.SortedIDs(),
+		Sensitive: t.Sensitive,
 	}
 }
 

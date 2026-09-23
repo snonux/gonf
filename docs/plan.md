@@ -512,23 +512,46 @@ class of bug that motivated task j5.
    re-deriving `opt.Option`s from `Op` fields by hand. `ToOp` copies every
    slice, map and pointer it takes from the draft (`slices.Clone`,
    `maps.Clone`), so the op never aliases the draft (task 882;
-   `TestHandlersToOpDoNotAliasDraft` in api checks every kind). A new
-   slice/map/pointer `PlanDraft` field also needs a line in
-   `PlanDraft.Clone` (`resource/draft_clone.go`), which
-   `TestFullDraftCoversEveryReferenceField` enforces.
+   `TestHandlersToOpDoNotAliasDraft` in api checks every kind). `Op` itself
+   is still one flat struct (see the "PlanDraft/Op split" note below), so a
+   new `plan.Op` field is still added directly there and cloning it is still
+   `slices.Clone`/`maps.Clone` in `ToOp` — only the DRAFT side (step 4) has
+   moved to per-kind payload types.
 3. **Resource draft** — the resource package: set the new draft `Kind` string
    in its `planDraft()` and call `resource.RecordPlanDraft` from `Present`
    (the register-without-draft guard fails the record otherwise). Map absent
    resources onto the same kind with `Absent: true` (see `NoCron`/`NoService`).
    Include `Deps: x.DependsOn.SortedIDs()` so `DependsOn` ordering survives
    the wire.
-4. **Draft payload** — `resource/draft.go`: add any new `PlanDraft` fields the
-   kind needs (package-neutral, no `plan` import — resource packages must not
-   depend on the wire codec). A resource package that owns a `Handler` (step
-   2) imports `plan` for `Op`/`Handler`/`RegisterHandler` itself, but
-   `resource.PlanDraft` still must not import `plan`, since `plan` itself
-   must never import a `resource/<kind>` package back (see the cycle note
-   below).
+4. **Draft payload** — a field EXCLUSIVE to the new kind (nothing else reads
+   or writes it) goes on that kind's own `<pkg>.Payload` type in
+   `<pkg>/payload.go` (see `resource/cron.Payload`, `resource/user.Payload`,
+   ...), not on `resource.PlanDraft` itself: define/extend the struct,
+   implement `Clone() resource.DraftPayload` (deep-copying whatever
+   slices/maps/pointers it holds; `TestPayloadCloneSharesNothing` in that
+   package should pin the contract the way `resource/cmd/payload_test.go`
+   does), and set it via `d.Payload = <pkg>.Payload{...}` in `planDraft()`.
+   A field two or more kinds genuinely share with the IDENTICAL meaning
+   (`Path`, `Mode`, `Owner`, `Group`, `Name`, `Absent`, `Deps`, `Sensitive`,
+   `Elevate`, `Env`, `User`, `Watch`/`IfChanged`, `Restart`, `EnableOnly`,
+   `Blob`, ...) stays a flat `resource.PlanDraft` field instead — moving it
+   into one kind's payload would just relocate the coupling, not remove it;
+   `Command` (cron and systemd_timer) is the one field kept flat for this
+   reason despite not looking obviously "structural" like `Mode`/`Owner`.
+   Either way this package-neutral core still must not import `plan`
+   (resource packages must not depend on the wire codec): a resource
+   package that owns a `Handler` (step 2) imports `plan` for
+   `Op`/`Handler`/`RegisterHandler` itself, but `resource.PlanDraft` and
+   `resource.DraftPayload` never do, since `plan` itself must never import a
+   `resource/<kind>` package back (see the cycle note below). Packaging code
+   that runs before/alongside `Handler.ToOp` and needs to read a payload
+   field generically (currently: the source file/dir/glob a blob-backed op
+   is built from, in `api/packager.go` and `internal/testapply`, which must
+   both stay kind-neutral) does so through a small marker interface declared
+   next to `DraftPayload` in `resource/draft.go`
+   (`SourceFilePayload`/`SourceDirPayload`) that the owning kind's payload
+   implements — add a new one of these only when a second, similarly
+   cross-cutting consumer actually needs it, not preemptively.
 5. **Lowering** — implement `Handler.ToOp`, mapping the draft's fields onto
    the new `plan.Op`. `api/packager.go`'s `draftToOp` only ever calls
    `HandlerFor(d.Kind)`; an unmapped kind errors at record time — there is
@@ -549,6 +572,33 @@ class of bug that motivated task j5.
    (kind, payload, IDs stable for `DependsOn`) and apply-side behaviour in
    `plan/apply_test.go` / `plan/e2e_test.go`; update `docs/plan.md` tables
    (recipe table above, schema version notes).
+
+**The PlanDraft/Op split (task w62, "Layer 1" of a code-quality audit
+finding).** An earlier audit found `resource.PlanDraft` and `plan.Op` were
+both flat structs carrying every kind's fields at once (~64 and ~63
+exported fields respectively), so nothing type-checked a kind's payload
+against its own kind and one new field could need edits across 5-6 files.
+`resource.PlanDraft` was restructured first (kept scoped to avoid a
+big-bang rewrite of both halves at once, given this area's documented
+history of subtle regressions — see AGENTS.md, "Dependencies" and "Shared
+embeds"): a `DraftPayload` interface (`Clone() DraftPayload`) plus a
+`PlanDraft.Payload` field, with each resource/<kind> package now declaring
+its OWN payload type for its kind-exclusive fields (step 4 above) instead
+of adding to the shared struct. `plan.Op` is intentionally UNCHANGED by
+this — it is the actual versioned JSONL wire type (`CurrentVersion`, this
+file's schema-version history above), and giving it the same per-kind split
+while keeping the flat wire format needs its own careful design (a
+draft/wire pair sharing one payload TYPE is tempting but was set aside: Op's
+JSON must stay flat for old-plan decode compatibility, which a plain
+interface field cannot do without custom (Un)MarshalJSON, itself a
+non-trivial, byte-level-tested piece of work) — tracked as a separate
+follow-up, not assumed. A field's home follows one rule: exclusive to one
+kind → that kind's own `Payload` type; the same meaning shared by 2+ kinds →
+stays flat on `PlanDraft` (see step 4's list). `resource/draft_clone.go`'s
+`PlanDraft.Clone` no longer has a line per kind-exclusive field: it deep
+copies only the flat common core and delegates to `Payload.Clone()`, so a
+kind's own package (not this shared file) owns proving its own payload's
+copy-contract.
 
 A resource package that registers a `plan.Handler` must never be imported by
 the `plan` package itself (that would reintroduce the cycle the registry

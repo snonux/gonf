@@ -22,8 +22,15 @@ func init() {
 	plan.RegisterHandler(plan.KindEnsureFile, ensureFileHandler{})
 }
 
-// ToOp lowers a "file" resource draft to a plan.Op.
+// ToOp lowers a "file" resource draft to a plan.Op. The file-exclusive
+// fields come from d.Payload (Payload, task w62 Layer 1); a "file" draft
+// without one is a record-time bug (planDraft always sets it), reported
+// like any other handler error rather than panicking.
 func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
+	p, ok := d.Payload.(Payload)
+	if !ok {
+		return plan.Op{}, fmt.Errorf("file: draft missing file.Payload (got %T)", d.Payload)
+	}
 	op := plan.Op{
 		Op:             plan.KindFile,
 		ID:             d.ID,
@@ -32,24 +39,24 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		Mode:           d.Mode,
 		Owner:          d.Owner,
 		Group:          d.Group,
-		ContentB64:     d.ContentB64,
+		ContentB64:     p.ContentB64,
 		Blob:           d.Blob,
-		HasContent:     d.HasContent,
-		Template:       d.Template,
-		TemplateParam:  d.TemplateParam,
-		ValidationBin:  d.ValidationBin,
-		ValidationArgs: slices.Clone(d.ValidationArgs),
-		AddLines:       slices.Clone(d.AddLines),
-		RemoveLines:    slices.Clone(d.RemoveLines),
-		KeyedLines:     wireKeyedLines(d.KeyedLines),
+		HasContent:     p.HasContent,
+		Template:       p.Template,
+		TemplateParam:  p.TemplateParam,
+		ValidationBin:  p.ValidationBin,
+		ValidationArgs: slices.Clone(p.ValidationArgs),
+		AddLines:       slices.Clone(p.AddLines),
+		RemoveLines:    slices.Clone(p.RemoveLines),
+		KeyedLines:     wireKeyedLines(p.KeyedLines),
 		Absent:         d.Absent,
 		Deps:           slices.Clone(d.Deps),
 	}
-	if d.TemplateDataSet {
-		if d.TemplateDataErr != nil {
-			return plan.Op{}, fmt.Errorf("file: template data must be JSON-compatible: %w", d.TemplateDataErr)
+	if p.TemplateDataSet {
+		if p.TemplateDataErr != nil {
+			return plan.Op{}, fmt.Errorf("file: template data must be JSON-compatible: %w", p.TemplateDataErr)
 		}
-		op.TemplateData = slices.Clone(d.TemplateData)
+		op.TemplateData = slices.Clone(p.TemplateData)
 	}
 	return op, nil
 }
@@ -322,24 +329,22 @@ func draftKeyedLines(edits []plan.KeyedLine) []resource.KeyedLine {
 }
 
 // planDraft records f as a "file" (or, for EnsureFile, "ensure_file") plan
-// draft: identity, attributes, line edits, validation, dependencies and the
-// explicit sensitivity here, the content through contentDraft and the
-// template intent and data through templateDraft.
+// draft: identity and attributes here, the file-exclusive fields (line
+// edits, validation, content, template intent and data — see Payload, task
+// w62 Layer 1) through contentDraft and templateDraft into the Payload this
+// builds and assigns once at the end. Payload is filled the same way for
+// both kinds, matching the previous flat-field behaviour: ensureFileHandler
+// simply never reads it.
 func (f *File) planDraft() resource.PlanDraft {
 	d := resource.PlanDraft{
-		Kind:           "file",
-		ID:             f.resource.ID(),
-		Name:           f.name,
-		Path:           f.targetPath(),
-		Mode:           opt.ModeToWire(f.mode),
-		Absent:         f.Absent,
-		AddLines:       slices.Clone(f.addLines),
-		RemoveLines:    slices.Clone(f.removeLines),
-		KeyedLines:     slices.Clone(f.keyedLines),
-		ValidationBin:  f.validationBin,
-		ValidationArgs: slices.Clone(f.validationArgs),
-		Deps:           f.DependsOn.SortedIDs(),
-		Sensitive:      f.Sensitive,
+		Kind:      "file",
+		ID:        f.resource.ID(),
+		Name:      f.name,
+		Path:      f.targetPath(),
+		Mode:      opt.ModeToWire(f.mode),
+		Absent:    f.Absent,
+		Deps:      f.DependsOn.SortedIDs(),
+		Sensitive: f.Sensitive,
 	}
 	if f.preserveContent {
 		d.Kind = "ensure_file"
@@ -359,43 +364,51 @@ func (f *File) planDraft() resource.PlanDraft {
 			d.Group = f.group
 		}
 	}
-	f.contentDraft(&d)
-	f.templateDraft(&d)
+	p := Payload{
+		AddLines:       slices.Clone(f.addLines),
+		RemoveLines:    slices.Clone(f.removeLines),
+		KeyedLines:     slices.Clone(f.keyedLines),
+		ValidationBin:  f.validationBin,
+		ValidationArgs: slices.Clone(f.validationArgs),
+	}
+	f.contentDraft(&p)
+	f.templateDraft(&p)
+	d.Payload = p
 	return d
 }
 
-// contentDraft records f's content half on d: the literal content, or the
+// contentDraft records f's content half on p: the literal content, or the
 // source path for packageDraft to package. HasContent flags that
 // WithContent/WithSource was configured at all, so packageDraft/applyFile
 // can tell a legitimately empty file (content or source resolving to zero
 // bytes, which base64-encodes as "") apart from an op with no content data
 // recorded (a bug, not a valid empty file).
-func (f *File) contentDraft(d *resource.PlanDraft) {
+func (f *File) contentDraft(p *Payload) {
 	switch {
 	case f.source != "":
-		d.SourcePath = f.source
-		d.HasContent = true
+		p.SourcePath = f.source
+		p.HasContent = true
 	case f.contentSet:
-		d.ContentB64 = base64.StdEncoding.EncodeToString([]byte(f.content))
-		d.HasContent = true
+		p.ContentB64 = base64.StdEncoding.EncodeToString([]byte(f.content))
+		p.HasContent = true
 	}
 }
 
-// templateDraft records f's template intent and data on d. Template intent
+// templateDraft records f's template intent and data on p. Template intent
 // must travel on the wire explicitly: packageDraft reads f.source's RAW
 // bytes into content_b64/blob, and targetPath already stripped ".tmpl" from
 // the recorded Path, so neither field plan apply sees still carries the
 // suffix shouldRenderTemplate would otherwise key off. Without
 // Template/TemplateParam, plan apply (Run/push/cluster/fleet) would write
 // the literal unrendered template text to the destination.
-func (f *File) templateDraft(d *resource.PlanDraft) {
+func (f *File) templateDraft(p *Payload) {
 	if f.shouldRenderTemplate() {
-		d.Template = true
-		d.TemplateParam = f.templateParam()
+		p.Template = true
+		p.TemplateParam = f.templateParam()
 	}
 	if f.templateDataSet {
-		d.TemplateData = slices.Clone(f.templateData)
-		d.TemplateDataErr = f.templateDataErr
-		d.TemplateDataSet = true
+		p.TemplateData = slices.Clone(f.templateData)
+		p.TemplateDataErr = f.templateDataErr
+		p.TemplateDataSet = true
 	}
 }

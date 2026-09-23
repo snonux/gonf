@@ -155,23 +155,27 @@ func (c *Cmd) checkSensitiveName() error {
 }
 
 // planDraft records c as a "command" plan draft under id, including its
-// guards, dependencies and OnChange gate.
+// guards, dependencies and OnChange gate. Command's exclusive fields travel
+// in Payload (see Payload, task w62 Layer 1); Env stays flat since package
+// drafts reuse it too.
 func (c *Cmd) planDraft(id string) resource.PlanDraft {
 	d := resource.PlanDraft{
-		Kind:    "command",
-		ID:      id,
-		Name:    c.name,
-		Bin:     c.bin,
-		Args:    append([]string(nil), c.args...),
-		Dir:     c.dir,
-		Creates: c.creates,
-		Deps:    c.DependsOn.SortedIDs(),
+		Kind: "command",
+		ID:   id,
+		Name: c.name,
+		Payload: Payload{
+			Bin:     c.bin,
+			Args:    append([]string(nil), c.args...),
+			Dir:     c.dir,
+			Creates: c.creates,
+			Unless:  planGuardDraft(c.unless),
+			OnlyIf:  planGuardDraft(c.onlyIf),
+		},
+		Deps: c.DependsOn.SortedIDs(),
 	}
 	// The draft gets its own copy: stored drafts outlive this Cmd and must
 	// not share mutable state with it. maps.Clone keeps nil as nil.
 	d.Env = maps.Clone(c.env)
-	d.Unless = planGuardDraft(c.unless)
-	d.OnlyIf = planGuardDraft(c.onlyIf)
 	d.Elevate = c.elevate
 	d.Sensitive = c.Sensitive
 	d.IfChanged, d.Watch = c.DraftGate()

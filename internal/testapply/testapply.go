@@ -170,14 +170,29 @@ func lower(d resource.PlanDraft) (plan.Op, error) {
 
 // packageSource attaches d's source data to op: a file source inline as
 // content_b64 up to plan.MaxInlineContent and as a blob above it, a glob or
-// tree source (sync_dir) always as a blob named name.
+// tree source (sync_dir) always as a blob named name. The file/sync_dir
+// sources moved off resource.PlanDraft's flat fields into resource/file's
+// and resource/dir's own Payload types (task w62 Layer 1); this package
+// stays kind-neutral (see the package doc: it imports only plan and
+// resource, so it never creates a cycle with a resource/<kind> package's
+// own tests), so it finds them through the kind-neutral
+// resource.SourceFilePayload/SourceDirPayload interfaces instead of
+// importing resource/file or resource/dir.
 func packageSource(op plan.Op, d resource.PlanDraft, store plan.BlobStore, name string) (plan.Op, error) {
 	var err error
+	sourcePath := ""
+	if sp, ok := d.Payload.(resource.SourceFilePayload); ok {
+		sourcePath = sp.SourceFilePath()
+	}
+	sourceDir, sourceGlob := "", ""
+	if sp, ok := d.Payload.(resource.SourceDirPayload); ok {
+		sourceDir, sourceGlob = sp.SourceDirGlob()
+	}
 	switch {
-	case d.SourcePath != "":
+	case sourcePath != "":
 		var data []byte
-		if data, err = os.ReadFile(d.SourcePath); err != nil {
-			return op, fmt.Errorf("package file %s: %w", d.SourcePath, err)
+		if data, err = os.ReadFile(sourcePath); err != nil {
+			return op, fmt.Errorf("package file %s: %w", sourcePath, err)
 		}
 		if len(data) <= plan.MaxInlineContent {
 			op.ContentB64, op.Blob = base64.StdEncoding.EncodeToString(data), ""
@@ -185,10 +200,10 @@ func packageSource(op plan.Op, d resource.PlanDraft, store plan.BlobStore, name 
 		}
 		op.ContentB64 = ""
 		op.Blob, err = store.WriteFile(name, data)
-	case d.SourceGlob != "":
-		op.Blob, err = store.WriteGlob(name, d.SourceGlob)
-	case d.SourceDir != "":
-		op.Blob, err = store.WriteTree(name, d.SourceDir)
+	case sourceGlob != "":
+		op.Blob, err = store.WriteGlob(name, sourceGlob)
+	case sourceDir != "":
+		op.Blob, err = store.WriteTree(name, sourceDir)
 	}
 	return op, err
 }

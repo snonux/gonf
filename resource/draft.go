@@ -1,7 +1,6 @@
 package resource
 
 import (
-	"encoding/json"
 	"sync"
 )
 
@@ -25,6 +24,63 @@ type KeyedLine struct {
 	Line string
 }
 
+// DraftPayload is a per-kind extension to PlanDraft (task w62, "Layer 1" of
+// splitting the audited PlanDraft/plan.Op god structs): a resource kind that
+// has migrated off the flat kind-exclusive fields below sets Payload to its
+// own concrete type (e.g. cron.Payload) instead of writing those fields
+// directly, so its planDraft() builder and its Handler.ToOp gain compiler
+// protection against touching another kind's field — the flat fields could
+// not offer that, which was exactly the audited defect ("no kind's payload
+// is type-checked against its own kind"). Payload is nil for a draft whose
+// kind has not migrated yet; PlanDraft's remaining flat fields stay the
+// source of truth for those kinds, and for the small set of fields multiple
+// kinds genuinely share with the same meaning (Path, Mode, Owner, Group,
+// Name, Absent, Deps, Sensitive, Elevate, ...), which stay flat by design
+// rather than being duplicated per kind. This interface, and the concrete
+// payload types that implement it, live in this package rather than
+// resource/<kind> because PlanDraft (declared here) must reference the
+// interface type; the concrete per-kind struct still lives in its owning
+// resource/<kind> package (e.g. resource/cron.Payload) and only needs to
+// implement this one small interface to slot into Payload — resource/<kind>
+// already imports this package for PlanDraft itself, so this adds no new
+// import edge.
+type DraftPayload interface {
+	// Clone returns a deep copy: every slice, map or pointer the payload
+	// holds gets its own backing storage. PlanDraft.Clone calls this to
+	// deep-copy Payload without knowing its concrete type, mirroring how
+	// Clone below deep-copies PlanDraft's own slice/map/pointer fields.
+	Clone() DraftPayload
+}
+
+// SourceDirPayload is implemented by a migrated kind's DraftPayload that
+// carries a controller-local source directory/glob to package as a blob
+// (currently only resource/dir's SyncPayload, for the "sync_dir" kind). It
+// lives in this kind-neutral core package, not in resource/dir, so
+// packaging code that must stay kind-neutral (internal/testapply, whose own
+// package doc says it imports only plan and resource precisely so it never
+// creates a cycle with a resource/<kind> package's own tests) can
+// type-assert it without importing resource/dir back.
+type SourceDirPayload interface {
+	DraftPayload
+	// SourceDirGlob returns the packageable source: SourceDir (a
+	// directory), or SourceGlob (a glob pattern) when the draft was built
+	// from WithSourceGlob. At most one is ever non-empty.
+	SourceDirGlob() (sourceDir, sourceGlob string)
+}
+
+// SourceFilePayload is implemented by a migrated kind's DraftPayload that
+// carries a controller-local source FILE to package as content_b64 or a
+// blob (currently only resource/file's Payload, for the "file" kind).
+// Mirrors SourceDirPayload's role for the "sync_dir" kind, and lives here
+// for the same reason: internal/testapply must stay kind-neutral (see its
+// own package doc) and cannot import resource/file back.
+type SourceFilePayload interface {
+	DraftPayload
+	// SourceFilePath returns the packageable source file path, or "" for a
+	// draft with no file source configured.
+	SourceFilePath() string
+}
+
 // PlanDraft is a package-neutral snapshot of a registered resource for plan
 // recording. It lives in this core package, not in plan, because plan
 // imports this package (plan.Handler.ToOp takes a PlanDraft), so this
@@ -36,25 +92,19 @@ type PlanDraft struct {
 	// Kind selects the op kind the recorder emits, e.g. "file" or "cron".
 	Kind string
 
+	// Payload carries the kind-exclusive fields of a migrated kind (see
+	// DraftPayload). Nil for a kind that still uses the flat fields below.
+	Payload DraftPayload
+
 	// ID is the registered resource ID this draft came from.
 	ID string
 	// Path is the destination path for the file/dir/link/sync/ensure_dir/
 	// ensure_file kinds.
 	Path string
 
-	// Symlink is the symlink target for the "link" kind.
-	Symlink string
-	// Hardlink is the hardlink target when set instead of Symlink.
-	Hardlink string
-	// Target is the existence-checked path for link_if_exists drafts.
-	Target string
-
 	// Mode is an octal permission string such as "0640" for Path; four digits
 	// (e.g. "04755") when setuid/setgid/sticky are set.
 	Mode string
-	// FileMode is an octal permission string for files copied from
-	// SourceDir or SourceGlob (same format as Mode).
-	FileMode string
 	// Owner is the explicitly configured owning user (WithOwner) for the
 	// file/dir/sync_dir/ensure_dir kinds. Empty means not configured, so
 	// destination apply leaves ownership as-is instead of chowning to the
@@ -64,150 +114,40 @@ type PlanDraft struct {
 	// file/dir/sync_dir/ensure_dir kinds (name or numeric id). Empty means
 	// not configured.
 	Group string
-	// ContentB64 is base64 file content for the "file" kind.
-	ContentB64 string
 	// Blob is a sidecar blob reference for the sync_dir kind (or large
-	// "file" content).
+	// "file" content). Filled in later by api's packageDraft, after ToOp
+	// returns, for both kinds; stays flat because both reuse it.
 	Blob string
-	// SourcePath is a controller-local file to package as content_b64 or a blob.
-	SourcePath string
-	// HasContent marks that the "file" kind's content was explicitly
-	// configured (WithContent or WithSource), even when the resulting bytes
-	// are empty. It lets apply tell a legitimately empty file apart from an
-	// op that is missing content data outright (a record-time bug): only
-	// the latter should fail loudly with "missing content_b64 and blob".
-	HasContent bool
-	// Template marks that the "file" kind's content must be rendered as a
-	// text/template on the destination: the recipe's source or path ended
-	// in ".tmpl". draftToOp copies it onto the file op's template field so
-	// plan apply renders it, since by apply time the wire content is raw
-	// template text with no ".tmpl"-suffixed path left to detect it from.
-	Template bool
-	// TemplateParam is the declared source path used as the template's
-	// {{.Param}} default when Template is set — the same value a direct
-	// (non-plan) File with the same ".tmpl" source would use, so plan apply
-	// renders the identical {{.Param}} a local run would instead of exposing
-	// a plan-apply implementation detail (there is no destination-side
-	// source file to derive it from).
-	TemplateParam string
-	// TemplateData is the JSON encoding of the value supplied by
-	// WithTemplateData, taken when the option was applied (File.
-	// SetTemplateData), so a recipe that later mutates or reuses its value
-	// cannot change what api.Apply or RecordPlan lower.
-	TemplateData json.RawMessage
-	// TemplateDataErr is the JSON encoding error when the supplied value is
-	// not JSON-compatible (TemplateData is then empty). The file handler's
-	// ToOp refuses such a draft, wrapping this error, so RecordPlan and
-	// api.Apply both fail on it and callers can still errors.As the
-	// encoding/json error.
-	TemplateDataErr error
-	// TemplateDataSet reports that WithTemplateData was given, so TemplateData
-	// is put on the op even when the supplied value was nil ("null").
-	TemplateDataSet bool
-	// ValidationBin and ValidationArgs describe an optional argv validator for
-	// a content-managed file. ValidationArgs retains CandidatePath as a typed
-	// wire token; destination apply supplies the private candidate filename.
-	ValidationBin  string
-	ValidationArgs []string
-	// SourceDir is a controller-local directory to package as a blob tree;
-	// for sync_dir drafts it also carries the recipe's DECLARED source
-	// directory onto the op's source_dir field (the glob pattern's
-	// directory for the glob flavor, where packaging stays driven by
-	// SourceGlob): destination apply renders tree .tmpl files' {{.Param}}
-	// from it instead of the ephemeral blob path.
-	SourceDir string
-	// SourceGlob is a controller-local glob to package as a flat blob dir.
-	SourceGlob string
-	// Prune removes destination entries not present in the source.
+	// Prune removes destination entries not present in the source (dir and
+	// sync_dir drafts, both handled by resource/dir).
 	Prune bool
 	// Absent marks NoFile/NoDir/NoLink/NoPackage style removal.
 	Absent bool
-	// Latest marks a "package" draft configured with IsLatest: destination
-	// apply must run the backend's upgrade-check path (dnf update / pkg
-	// upgrade / pkg_add -u / pkgin install) instead of a plain install.
-	Latest bool
-
-	// PrimaryGroup and SupplementaryGroups describe a "user" draft. The
-	// resource only adds missing supplementary memberships; it never changes
-	// an existing account's primary group or removes memberships.
-	PrimaryGroup        string
-	SupplementaryGroups []string
-	// Home, CreateHome, Shell, LoginClass, and System are creation-time user
-	// attributes. They are retained on the wire so destination apply makes the
-	// same decision for a missing account as a direct resource apply. Home is
-	// also used for an existing account when ManageHome opts in.
-	Home       string
-	CreateHome bool
-	Shell      string
-	LoginClass string
-	System     bool
-	// ManageHome is the one opt-in exception to creation-only attributes: it
-	// converges an existing account's passwd home field to Home, without
-	// moving, creating, or chowning the directory.
-	ManageHome bool
-
-	// AddLines appends lines to a file when missing (line-in-file).
-	AddLines []string
-	// RemoveLines removes matching lines from a file. There are no singular
-	// AddLine/RemoveLine draft fields: drafts are only produced in-repo and
-	// always use the arrays. The singular wire fields on plan.Op exist solely
-	// so pre-v14 recorded plans still apply.
-	RemoveLines []string
-	// KeyedLines are WithKeyedLine edits: each owns the one line of the file
-	// that starts with its Key (see resource/file/lineedit.go).
-	KeyedLines []KeyedLine
 
 	// Name is a package name, command registry name, file resource identity,
 	// or similar label. A named file keeps its identity independently of Path.
 	Name string
-	// Bin is the executable for the "command" kind.
-	Bin string
-	// Args is argv after Bin for the "command" kind.
-	Args []string
-	// Dir is the working directory for the "command" kind.
-	Dir string
 	// Env is extra environment for the "command" and "package" kinds.
 	Env map[string]string
-	// Creates skips the command when this path already exists.
-	Creates string
-	// Unless skips the command when the guard probe succeeds.
-	Unless *PlanGuardDraft
-	// OnlyIf runs the command only when the guard probe succeeds.
-	OnlyIf *PlanGuardDraft
 
 	// User selects systemd --user for timer / daemon_reload / service drafts.
 	User bool
-	// CronUser is the crontab owner for cron drafts (default root).
-	CronUser string
-	// Command is the crontab command for cron drafts.
+	// Command is the crontab command line for cron drafts, and the oneshot
+	// .service ExecStart command for systemd_timer drafts (two kinds
+	// reusing one field for the analogous "the command to run" meaning,
+	// the same way Path/Mode/Owner/Group are reused across the filesystem
+	// kinds). cron's own CronUser/LegacyCommand/Schedule/CronEnv fields
+	// migrated into resource/cron.Payload (task w62 Layer 1); systemd_timer's
+	// own exclusive fields (OnCalendar, OnBootSec, Persistent, Description,
+	// ServiceDescription, After, Wants) migrated the same way into
+	// resource/systemdtimer.Payload. Command itself stays flat by design,
+	// not as an unfinished migration: both kinds genuinely share its "the
+	// command to run" meaning, the same way Path/Mode/Owner/Group are
+	// reused across the filesystem kinds.
 	Command string
-	// LegacyCommand opts a cron draft into removing one exact unmanaged command.
-	LegacyCommand string
-	// Schedule holds the five space-separated cron time fields
-	// (minute hour monthday month weekday) for cron drafts.
-	Schedule string
-	// CronEnv lists KEY=VAL environment lines above the cron job.
-	CronEnv []string
-	// OnCalendar is the systemd OnCalendar= expression for systemd_timer drafts.
-	OnCalendar string
-	// OnBootSec is the systemd OnBootSec= delay for systemd_timer drafts.
-	OnBootSec string
-	// Persistent sets Persistent=true on systemd_timer drafts.
-	Persistent bool
-	// Description is the [Unit] Description for systemd_timer drafts.
-	Description string
-	// ServiceDescription is the companion oneshot .service Description.
-	ServiceDescription string
-	// After lists After= dependencies on the companion oneshot .service.
-	After []string
-	// Wants lists Wants= dependencies on the companion oneshot .service.
-	Wants []string
 	// Restart restarts the unit once when it is already running
 	// (service or timer drafts).
 	Restart bool
-	// Reload reloads a service once when it is already running
-	// (no restart fallback).
-	Reload bool
 	// EnableOnly skips start/stop for timer present (enable/disable only).
 	EnableOnly bool
 	// IfChanged arms the draft's change gate (the OnChange option): a gated
@@ -218,18 +158,6 @@ type PlanDraft struct {
 	// Watch lists resource ids for IfChanged (the OnChange targets; usually
 	// also DependsOn targets for daemon_reload).
 	Watch []string
-	// ConfigMembers, Validators, Chroot, and StagingDir describe a
-	// "config_set" draft: every member file of the set, the argv validators
-	// run against the complete staged set, and the optional chroot/staging
-	// placement (see resource/configset).
-	ConfigMembers []PlanConfigMember
-	Validators    []PlanArgv
-	Chroot        string
-	StagingDir    string
-	// Member is the member key of a "config_set_member" handle draft; Name
-	// then carries the owning set's name.
-	Member string
-
 	// Deps lists the sorted resource IDs this draft's resource depends on
 	// (the DependsOn targets). draftToOp copies them into plan.Op.Deps so
 	// plan apply orders ops by their dependencies.

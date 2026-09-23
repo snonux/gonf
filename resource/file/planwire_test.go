@@ -17,11 +17,13 @@ import (
 // on plan.Op only so old recorded plans still apply.
 func TestToOpRecordsOnlyLineArrays(t *testing.T) {
 	op, err := planHandler{}.ToOp(resource.PlanDraft{
-		Kind:        string(plan.KindFile),
-		ID:          "File[/etc/x]",
-		Path:        "/etc/x",
-		AddLines:    []string{"a", "b"},
-		RemoveLines: []string{"c"},
+		Kind: string(plan.KindFile),
+		ID:   "File[/etc/x]",
+		Path: "/etc/x",
+		Payload: Payload{
+			AddLines:    []string{"a", "b"},
+			RemoveLines: []string{"c"},
+		},
 	})
 	if err != nil {
 		t.Fatalf("ToOp: %v", err)

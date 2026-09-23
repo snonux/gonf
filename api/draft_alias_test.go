@@ -8,31 +8,46 @@ import (
 	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
+	"github.com/snonux/gonf/resource/cmd"
+	"github.com/snonux/gonf/resource/file"
+	"github.com/snonux/gonf/resource/systemdtimer"
 )
 
 // withAllReferences overlays onto a kind's fitness draft every slice, map
 // and pointer field some handler lowers (Deps, Watch with IfChanged set,
-// Args, Env, the guards, the line/cron/unit lists, ValidationArgs), leaving
-// the kind-specific fields (config members, supplementary groups, ...) as
-// the fixture set them so the handler still accepts the draft. The encoded
-// TemplateData is included too (only the file handler takes it).
+// Env), leaving the kind-specific fields (config members, supplementary
+// groups, a migrated kind's Payload such as cron's CronEnv, ...) as the
+// fixture set them so the handler still accepts the draft, except command's
+// Payload (Args, Unless, OnlyIf), systemd_timer's Payload (After, Wants),
+// and file's Payload (AddLines, RemoveLines, ValidationArgs, TemplateData),
+// which are actively grown/overwritten here too so this generic loop keeps
+// exercising a POINTER-bearing payload's aliasing safety, not just a
+// slice-only one.
 func withAllReferences(d resource.PlanDraft) resource.PlanDraft {
 	exit := 1
 	d.Deps = append(d.Deps, "Package[alias-dep]")
 	d.IfChanged = true
 	d.Watch = append(d.Watch, "File[/alias]")
-	d.Args = append(d.Args, "alias")
 	d.Env = map[string]string{"ALIAS": "1"}
-	d.Unless = &resource.PlanGuardDraft{Bin: "test", Args: []string{"-e", "/u"}, ExpectExit: &exit}
-	d.OnlyIf = &resource.PlanGuardDraft{Bin: "test", Args: []string{"-e", "/o"}}
-	d.AddLines = []string{"add"}
-	d.RemoveLines = []string{"remove"}
-	d.CronEnv = append(d.CronEnv, "ALIAS=1")
-	d.After = append(d.After, "alias.target")
-	d.Wants = append(d.Wants, "alias.target")
-	d.ValidationArgs = []string{"-c", "x"}
-	d.TemplateData = json.RawMessage(`{"alias":1}`)
-	d.TemplateDataSet = true
+	if p, ok := d.Payload.(cmd.Payload); ok {
+		p.Args = append(p.Args, "alias")
+		p.Unless = &resource.PlanGuardDraft{Bin: "test", Args: []string{"-e", "/u"}, ExpectExit: &exit}
+		p.OnlyIf = &resource.PlanGuardDraft{Bin: "test", Args: []string{"-e", "/o"}}
+		d.Payload = p
+	}
+	if p, ok := d.Payload.(systemdtimer.Payload); ok {
+		p.After = append(p.After, "alias.target")
+		p.Wants = append(p.Wants, "alias.target")
+		d.Payload = p
+	}
+	if p, ok := d.Payload.(file.Payload); ok {
+		p.AddLines = []string{"add"}
+		p.RemoveLines = []string{"remove"}
+		p.ValidationArgs = []string{"-c", "x"}
+		p.TemplateData = json.RawMessage(`{"alias":1}`)
+		p.TemplateDataSet = true
+		d.Payload = p
+	}
 	return d
 }
 
@@ -72,9 +87,10 @@ func TestHandlersToOpDoNotAliasDraft(t *testing.T) {
 type aliasingHandler struct{}
 
 func (aliasingHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
+	p := d.Payload.(cmd.Payload)
 	return plan.Op{
-		Op: plan.KindCommand, Bin: d.Bin, Args: d.Args, Env: d.Env, Deps: d.Deps,
-		Unless: &plan.Guard{Bin: d.Unless.Bin, Args: d.Unless.Args, ExpectExit: d.Unless.ExpectExit},
+		Op: plan.KindCommand, Bin: p.Bin, Args: p.Args, Env: d.Env, Deps: d.Deps,
+		Unless: &plan.Guard{Bin: p.Unless.Bin, Args: p.Unless.Args, ExpectExit: p.Unless.ExpectExit},
 	}, nil
 }
 
@@ -85,7 +101,7 @@ func (aliasingHandler) Apply(plan.Op, plan.ApplyContext) error { return nil }
 // its draft must visibly change the op, or the test above would prove
 // nothing.
 func TestSharedRefsCatchesAliasingToOp(t *testing.T) {
-	d := withAllReferences(resource.PlanDraft{Kind: "command", Bin: "true"})
+	d := withAllReferences(resource.PlanDraft{Kind: "command", Payload: cmd.Payload{Bin: "true"}})
 	op, err := aliasingHandler{}.ToOp(d)
 	if err != nil {
 		t.Fatal(err)

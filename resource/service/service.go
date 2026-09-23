@@ -98,7 +98,8 @@ func (s *Service) apply() error {
 }
 
 // planDraft records s as a "service" plan draft under id, including its
-// dependencies and OnChange gate.
+// dependencies and OnChange gate. Reload, service's one exclusive field,
+// travels in Payload (see Payload, task w62 Layer 1).
 func (s *Service) planDraft(id string) resource.PlanDraft {
 	d := resource.PlanDraft{
 		Kind:    "service",
@@ -106,7 +107,7 @@ func (s *Service) planDraft(id string) resource.PlanDraft {
 		Name:    s.name,
 		Absent:  s.Absent,
 		Restart: s.restart,
-		Reload:  s.reload,
+		Payload: Payload{Reload: s.reload},
 		User:    s.user,
 		Deps:    s.DependsOn.SortedIDs(),
 	}

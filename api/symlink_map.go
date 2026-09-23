@@ -6,6 +6,7 @@ import (
 
 	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/resource"
+	"github.com/snonux/gonf/resource/link"
 	"github.com/snonux/gonf/resource/options"
 )
 
@@ -21,10 +22,10 @@ func LinkIfExists(path, target string, opts ...options.LinkOption) Resource {
 		// No DependsOn state exists here: record mode ignores opts (the recipe
 		// is evaluated on the destination), so the draft carries no deps.
 		resource.RecordPlanDraft(resource.PlanDraft{
-			Kind:   "link_if_exists",
-			Path:   p,
-			Target: t,
-			ID:     resource.FormatID("LinkIfExists", p),
+			Kind:    "link_if_exists",
+			Path:    p,
+			Payload: link.IfExistsPayload{Target: t},
+			ID:      resource.FormatID("LinkIfExists", p),
 		})
 		return resource.Multi(nil)
 	}

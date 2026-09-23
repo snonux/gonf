@@ -22,8 +22,8 @@ func TestSyncDirHandlerToOpMarksGlobFlavor(t *testing.T) {
 		draft resource.PlanDraft
 		want  bool
 	}{
-		{"glob", resource.PlanDraft{ID: "Directory[/dst]", Path: "/dst", SourceGlob: "/src/*", SourceDir: "/src"}, true},
-		{"tree", resource.PlanDraft{ID: "Directory[/dst]", Path: "/dst", SourceDir: "/src"}, false},
+		{"glob", resource.PlanDraft{ID: "Directory[/dst]", Path: "/dst", Payload: SyncPayload{SourceGlob: "/src/*", SourceDir: "/src"}}, true},
+		{"tree", resource.PlanDraft{ID: "Directory[/dst]", Path: "/dst", Payload: SyncPayload{SourceDir: "/src"}}, false},
 	}
 	for _, tc := range cases {
 		op, err := syncDirHandler{}.ToOp(tc.draft)

@@ -32,32 +32,36 @@ func init() {
 // ValidateManagedHome has always reported. Any request some platform accepts
 // records exactly as before and is checked again on the destination.
 func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
-	if d.ManageHome {
-		if err := internaluser.ValidateManagedHome(d.Name, d.Home); err != nil {
+	p, ok := d.Payload.(Payload)
+	if !ok {
+		return plan.Op{}, fmt.Errorf("user: draft missing user.Payload (got %T)", d.Payload)
+	}
+	if p.ManageHome {
+		if err := internaluser.ValidateManagedHome(d.Name, p.Home); err != nil {
 			return plan.Op{}, err
 		}
 	}
-	op := draftOp(d)
+	op := draftOp(d, p)
 	if err := internaluser.ValidateForAnyBackend(newUser(op.Name, opOptions(op)).desired()); err != nil {
 		return plan.Op{}, err
 	}
 	return op, nil
 }
 
-// draftOp copies a user draft into its wire form.
-func draftOp(d resource.PlanDraft) plan.Op {
+// draftOp copies a user draft, and its Payload p, into its wire form.
+func draftOp(d resource.PlanDraft, p Payload) plan.Op {
 	return plan.Op{
 		Op:                  plan.KindUser,
 		ID:                  d.ID,
 		Name:                d.Name,
-		PrimaryGroup:        d.PrimaryGroup,
-		SupplementaryGroups: slices.Clone(d.SupplementaryGroups),
-		Home:                d.Home,
-		CreateHome:          d.CreateHome,
-		Shell:               d.Shell,
-		LoginClass:          d.LoginClass,
-		System:              d.System,
-		ManageHome:          d.ManageHome,
+		PrimaryGroup:        p.PrimaryGroup,
+		SupplementaryGroups: slices.Clone(p.SupplementaryGroups),
+		Home:                p.Home,
+		CreateHome:          p.CreateHome,
+		Shell:               p.Shell,
+		LoginClass:          p.LoginClass,
+		System:              p.System,
+		ManageHome:          p.ManageHome,
 		Deps:                slices.Clone(d.Deps),
 	}
 }

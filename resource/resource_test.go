@@ -107,7 +107,7 @@ func TestSnapshotRepositoryRestoresTheOriginalOnAnIDCollision(t *testing.T) {
 	ResetRepository()
 	var originalRan, collidingRan bool
 	Register("File", "/tmp/a", func() error { originalRan = true; return nil })
-	RecordPlanDraft(PlanDraft{ID: "File[/tmp/a]", Kind: "file", SourcePath: "original"})
+	RecordPlanDraft(PlanDraft{ID: "File[/tmp/a]", Kind: "file", Path: "original"})
 
 	restore := SnapshotRepository()
 	// Same ID as before the snapshot, but a different value and draft —
@@ -115,13 +115,13 @@ func TestSnapshotRepositoryRestoresTheOriginalOnAnIDCollision(t *testing.T) {
 	// resource name (e.g. via a shared helper both an outer top-level
 	// declaration and an unrelated task body call).
 	Register("File", "/tmp/a", func() error { collidingRan = true; return nil })
-	RecordPlanDraft(PlanDraft{ID: "File[/tmp/a]", Kind: "file", SourcePath: "colliding"})
+	RecordPlanDraft(PlanDraft{ID: "File[/tmp/a]", Kind: "file", Path: "colliding"})
 
 	restore()
 
 	drafts := RegisteredPlanDrafts()
-	if len(drafts) != 1 || drafts[0].SourcePath != "original" {
-		t.Fatalf("RegisteredPlanDrafts() after restore = %v, want the ORIGINAL draft (SourcePath \"original\"), not the colliding one", drafts)
+	if len(drafts) != 1 || drafts[0].Path != "original" {
+		t.Fatalf("RegisteredPlanDrafts() after restore = %v, want the ORIGINAL draft (Path \"original\"), not the colliding one", drafts)
 	}
 	_, registered, ok := Registered("File[/tmp/a]")
 	if !ok {

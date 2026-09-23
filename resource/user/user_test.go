@@ -36,17 +36,19 @@ func TestPresentRecordsCompleteAdditiveUserDraft(t *testing.T) {
 		t.Fatalf("draft count = %d, want 1", len(drafts))
 	}
 	want := resource.PlanDraft{
-		Kind:                "user",
-		ID:                  "User[svc]",
-		Name:                "svc",
-		PrimaryGroup:        "svc",
-		SupplementaryGroups: []string{"wheel", "audio"},
-		Home:                "/var/lib/svc",
-		CreateHome:          true,
-		Shell:               "/sbin/nologin",
-		LoginClass:          "daemon",
-		System:              true,
-		Deps:                []string{"Package[base]"},
+		Kind: "user",
+		ID:   "User[svc]",
+		Name: "svc",
+		Payload: Payload{
+			PrimaryGroup:        "svc",
+			SupplementaryGroups: []string{"wheel", "audio"},
+			Home:                "/var/lib/svc",
+			CreateHome:          true,
+			Shell:               "/sbin/nologin",
+			LoginClass:          "daemon",
+			System:              true,
+		},
+		Deps: []string{"Package[base]"},
 	}
 	if !reflect.DeepEqual(drafts[0], want) {
 		t.Fatalf("draft = %#v\nwant  %#v", drafts[0], want)
@@ -60,17 +62,19 @@ func TestHandlerRoundTripAndApplyPreserveCreationIntent(t *testing.T) {
 		return nil
 	})}
 	draft := resource.PlanDraft{
-		Kind:                "user",
-		ID:                  "User[svc]",
-		Name:                "svc",
-		PrimaryGroup:        "svc",
-		SupplementaryGroups: []string{"audio", "wheel"},
-		Home:                "/var/lib/svc",
-		CreateHome:          true,
-		Shell:               "/sbin/nologin",
-		LoginClass:          "daemon",
-		System:              true,
-		Deps:                []string{"Package[base]"},
+		Kind: "user",
+		ID:   "User[svc]",
+		Name: "svc",
+		Payload: Payload{
+			PrimaryGroup:        "svc",
+			SupplementaryGroups: []string{"audio", "wheel"},
+			Home:                "/var/lib/svc",
+			CreateHome:          true,
+			Shell:               "/sbin/nologin",
+			LoginClass:          "daemon",
+			System:              true,
+		},
+		Deps: []string{"Package[base]"},
 	}
 	op, err := (planHandler{}).ToOp(draft)
 	if err != nil {

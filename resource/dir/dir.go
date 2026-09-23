@@ -497,7 +497,6 @@ func (d *Dir) planDraft() resource.PlanDraft {
 	switch {
 	case d.sourceGlob != "":
 		draft.Kind = "sync_dir"
-		draft.SourceGlob = d.sourceGlob
 		// The declared source directory (the glob pattern's directory)
 		// travels on the sync_dir op as source_dir: destination apply
 		// renders tree .tmpl files' {{.Param}} from it — stable across plan
@@ -505,12 +504,17 @@ func (d *Dir) planDraft() resource.PlanDraft {
 		// driven by SourceGlob (packageDraft checks it before SourceDir);
 		// the flat glob blob restores as a plain tree whose entries sit at
 		// the root, so the per-file param is dir(glob) + "/" + basename.
-		draft.SourceDir = filepath.ToSlash(filepath.Dir(d.sourceGlob))
-		draft.FileMode = opt.ModeToWire(d.fileMode)
+		draft.Payload = SyncPayload{
+			SourceGlob: d.sourceGlob,
+			SourceDir:  filepath.ToSlash(filepath.Dir(d.sourceGlob)),
+			FileMode:   opt.ModeToWire(d.fileMode),
+		}
 	case d.source != "":
 		draft.Kind = "sync_dir"
-		draft.SourceDir = filepath.ToSlash(d.source)
-		draft.FileMode = opt.ModeToWire(d.fileMode)
+		draft.Payload = SyncPayload{
+			SourceDir: filepath.ToSlash(d.source),
+			FileMode:  opt.ModeToWire(d.fileMode),
+		}
 	default:
 		draft.Kind = "dir"
 	}

@@ -105,14 +105,15 @@ func (p *Package) apply() error {
 	return p.applyWith(b, p.run)
 }
 
-// planDraft records p as a "package" plan draft under id.
+// planDraft records p as a "package" plan draft under id. Latest, package's
+// one exclusive field, travels in Payload (see Payload, task w62 Layer 1).
 func (p *Package) planDraft(id string) resource.PlanDraft {
 	d := resource.PlanDraft{
 		Kind:      "package",
 		ID:        id,
 		Name:      p.name,
 		Absent:    p.Absent,
-		Latest:    p.latest,
+		Payload:   Payload{Latest: p.latest},
 		Deps:      p.DependsOn.SortedIDs(),
 		Sensitive: p.Sensitive,
 	}

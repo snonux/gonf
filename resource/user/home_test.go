@@ -27,8 +27,12 @@ func TestPresentRecordsManageHomeOptIn(t *testing.T) {
 	t.Cleanup(resource.ResetForTest)
 	Present("_dserver", opt.WithHome("/var/run/dserver"), opt.WithManageHome)
 	drafts := resource.RegisteredPlanDrafts()
-	if len(drafts) != 1 || !drafts[0].ManageHome || drafts[0].Home != "/var/run/dserver" {
+	if len(drafts) != 1 {
 		t.Fatalf("drafts = %#v, want one ManageHome draft", drafts)
+	}
+	p, ok := drafts[0].Payload.(Payload)
+	if !ok || !p.ManageHome || p.Home != "/var/run/dserver" {
+		t.Fatalf("draft payload = %#v, want one ManageHome draft", drafts[0].Payload)
 	}
 }
 
@@ -37,7 +41,7 @@ func TestPresentRecordsManageHomeOptIn(t *testing.T) {
 // ManageHome intent as a direct apply.
 func TestManageHomeSurvivesTheRecordedPlanWire(t *testing.T) {
 	backend, got := recordingBackend()
-	draft := resource.PlanDraft{Kind: "user", ID: "User[_dserver]", Name: "_dserver", Home: "/var/run/dserver", ManageHome: true}
+	draft := resource.PlanDraft{Kind: "user", ID: "User[_dserver]", Name: "_dserver", Payload: Payload{Home: "/var/run/dserver", ManageHome: true}}
 	op, err := (planHandler{}).ToOp(draft)
 	if err != nil {
 		t.Fatalf("ToOp() = %v", err)
@@ -64,7 +68,7 @@ func TestManageHomeSurvivesTheRecordedPlanWire(t *testing.T) {
 // TestUserWithoutOptInEncodesExactlyAsBefore guards plan compatibility: a
 // recipe that does not opt in must not emit the new field.
 func TestUserWithoutOptInEncodesExactlyAsBefore(t *testing.T) {
-	op, err := (planHandler{}).ToOp(resource.PlanDraft{Kind: "user", ID: "User[svc]", Name: "svc", Home: "/var/lib/svc"})
+	op, err := (planHandler{}).ToOp(resource.PlanDraft{Kind: "user", ID: "User[svc]", Name: "svc", Payload: Payload{Home: "/var/lib/svc"}})
 	if err != nil {
 		t.Fatalf("ToOp() = %v", err)
 	}
@@ -88,7 +92,7 @@ func TestToOpRejectsInvalidManagedHomeAtRecordTime(t *testing.T) {
 		"/var/run/a\rb":   "a line break",
 		"/var/run/a\x00b": "NUL",
 	} {
-		_, err := (planHandler{}).ToOp(resource.PlanDraft{Kind: "user", ID: "User[svc]", Name: "svc", Home: home, ManageHome: true})
+		_, err := (planHandler{}).ToOp(resource.PlanDraft{Kind: "user", ID: "User[svc]", Name: "svc", Payload: Payload{Home: home, ManageHome: true}})
 		if err == nil || !strings.Contains(err.Error(), wantErr) {
 			t.Errorf("ToOp(home %q) = %v, want %q", home, err, wantErr)
 		}
@@ -98,7 +102,7 @@ func TestToOpRejectsInvalidManagedHomeAtRecordTime(t *testing.T) {
 // TestToOpKeepsNonOptInValidationAtApplyTime pins that the record-time check
 // is scoped to the opt-in: a relative creation-time home still records.
 func TestToOpKeepsNonOptInValidationAtApplyTime(t *testing.T) {
-	if _, err := (planHandler{}).ToOp(resource.PlanDraft{Kind: "user", ID: "User[svc]", Name: "svc", Home: "relative"}); err != nil {
+	if _, err := (planHandler{}).ToOp(resource.PlanDraft{Kind: "user", ID: "User[svc]", Name: "svc", Payload: Payload{Home: "relative"}}); err != nil {
 		t.Fatalf("ToOp() = %v, want nil for a recipe without WithManageHome", err)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
+	"github.com/snonux/gonf/resource/configset"
 )
 
 // configSetFixture records a mail-like task: a two-member set validated by a
@@ -146,8 +147,10 @@ func TestConfigSetWireRejectsMisconfiguredSets(t *testing.T) {
 	target := filepath.Join(f.dir, "x.conf")
 	draft := resource.PlanDraft{
 		Kind: "config_set", ID: "ConfigSet[x]", Name: "x",
-		ConfigMembers: []resource.PlanConfigMember{{Key: "x", Path: "relative/x.conf", Content: []byte("x")}},
-		Validators:    []resource.PlanArgv{{Bin: "true"}},
+		Payload: configset.SetPayload{
+			ConfigMembers: []resource.PlanConfigMember{{Key: "x", Path: "relative/x.conf", Content: []byte("x")}},
+			Validators:    []resource.PlanArgv{{Bin: "true"}},
+		},
 	}
 	if _, err := newDraftPackager(nil).draftToOp(draft); err == nil || !strings.Contains(err.Error(), "absolute") {
 		t.Fatalf("draftToOp accepted a relative member path: %v", err)

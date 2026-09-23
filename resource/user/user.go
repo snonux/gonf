@@ -131,20 +131,24 @@ func (b unsupportedBackend) Capabilities() internaluser.Capabilities {
 	return internaluser.Capabilities{Platform: b.goos}
 }
 
+// planDraft records u as a "user" plan draft under id. Every user-exclusive
+// field travels in Payload (see Payload, task w62 Layer 1).
 func (u *User) planDraft(id string) resource.PlanDraft {
 	return resource.PlanDraft{
-		Kind:                "user",
-		ID:                  id,
-		Name:                u.name,
-		PrimaryGroup:        u.primaryGroup,
-		SupplementaryGroups: append([]string(nil), u.supplementaryGroups...),
-		Home:                u.home,
-		CreateHome:          u.createHome,
-		Shell:               u.shell,
-		LoginClass:          u.loginClass,
-		System:              u.system,
-		ManageHome:          u.manageHome,
-		Deps:                u.DependsOn.SortedIDs(),
+		Kind: "user",
+		ID:   id,
+		Name: u.name,
+		Payload: Payload{
+			PrimaryGroup:        u.primaryGroup,
+			SupplementaryGroups: append([]string(nil), u.supplementaryGroups...),
+			Home:                u.home,
+			CreateHome:          u.createHome,
+			Shell:               u.shell,
+			LoginClass:          u.loginClass,
+			System:              u.system,
+			ManageHome:          u.manageHome,
+		},
+		Deps: u.DependsOn.SortedIDs(),
 	}
 }
 

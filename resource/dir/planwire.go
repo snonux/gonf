@@ -76,20 +76,27 @@ func (dirHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 
 // ToOp lowers a "sync_dir" resource draft to a plan.Op. The Blob field is
 // filled in later by api's packageDraft (api/packager.go), which packages
-// d.SourceDir/d.SourceGlob into the plan's blob store after ToOp returns.
-// Glob records the WithSourceGlob flavor (schema v24): its blob is a flat
-// match set, and apply must rebuild a glob sync, never a tree sync, so that
-// WithPrune keeps its glob semantics (see syncDirSourceOption).
+// the SourceDir/SourceGlob it finds in d.Payload (SyncPayload, task w62
+// Layer 1) into the plan's blob store after ToOp returns. Glob records the
+// WithSourceGlob flavor (schema v24): its blob is a flat match set, and
+// apply must rebuild a glob sync, never a tree sync, so that WithPrune
+// keeps its glob semantics (see syncDirSourceOption). A "sync_dir" draft
+// without a SyncPayload is a record-time bug (planDraft always sets it),
+// reported like any other handler error rather than panicking.
 func (syncDirHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
+	p, ok := d.Payload.(SyncPayload)
+	if !ok {
+		return plan.Op{}, fmt.Errorf("sync_dir: draft missing dir.SyncPayload (got %T)", d.Payload)
+	}
 	return plan.Op{
 		Op:        plan.KindSyncDir,
 		ID:        d.ID,
 		Path:      d.Path,
 		Blob:      d.Blob,
-		SourceDir: d.SourceDir,
-		Glob:      d.SourceGlob != "",
+		SourceDir: p.SourceDir,
+		Glob:      p.SourceGlob != "",
 		Mode:      d.Mode,
-		FileMode:  d.FileMode,
+		FileMode:  p.FileMode,
 		Owner:     d.Owner,
 		Group:     d.Group,
 		Prune:     d.Prune,

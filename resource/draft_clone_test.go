@@ -1,53 +1,92 @@
 package resource_test
 
 import (
-	"encoding/json"
-	"errors"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/resource"
 )
 
-// fullDraft returns a draft whose every slice, map and pointer field, at
-// any depth, is populated (TestFullDraftCoversEveryReferenceField keeps it
-// that way when PlanDraft or a struct it nests grows), so the copy-contract
-// tests below exercise each shared field kind: string slices, the encoded
-// TemplateData, the Env map, the guard pointers with their Args and *int,
-// and the nested config-member bytes and validator argv.
+// payloadStub is a resource.DraftPayload used only to exercise PlanDraft's
+// generic Payload handling (Clone, the reference-field walk) independently
+// of any real kind's payload type (a real one, e.g. resource/cron.Payload,
+// lives in its own resource/<kind> package — see task w62 Layer 1). Members
+// mirrors the "slice of struct with its own nested slice" shape a real
+// payload can hold (e.g. configset.SetPayload's ConfigMembers), so the
+// generic walk/clone contract is proven at that depth too, not just a flat
+// string slice.
+type payloadStub struct {
+	Tag     string
+	List    []string
+	Members []payloadStubMember
+}
+
+// payloadStubMember is payloadStub's nested reference-bearing element.
+type payloadStubMember struct {
+	Key     string
+	Content []byte
+}
+
+// Clone deep-copies the stub, giving List and each Members' Content their
+// own backing storage.
+func (p payloadStub) Clone() resource.DraftPayload {
+	c := p
+	c.List = slices.Clone(p.List)
+	c.Members = clonePayloadStubMembers(p.Members)
+	return c
+}
+
+// clonePayloadStubMembers deep-copies each member's Content (nil stays nil,
+// empty stays empty), mirroring resource/configset's cloneConfigMembers.
+func clonePayloadStubMembers(members []payloadStubMember) []payloadStubMember {
+	if members == nil {
+		return nil
+	}
+	c := make([]payloadStubMember, len(members))
+	for i, m := range members {
+		m.Content = slices.Clone(m.Content)
+		c[i] = m
+	}
+	return c
+}
+
+// fullDraft returns a draft whose every slice, map, pointer and interface
+// field, at any depth, is populated (TestFullDraftCoversEveryReferenceField
+// keeps it that way when PlanDraft or a struct it nests grows), so the
+// copy-contract tests below exercise each shared field kind: string
+// slices, the Env map, and a populated Payload, including its own nested
+// member-slice shape (payloadStub.Members) — a kind's own pointer-bearing
+// fields, e.g. cmd.Payload's Unless/OnlyIf guards or
+// configset.SetPayload's ConfigMembers/Validators, are covered by that
+// kind's own package tests instead (see resource/cmd/payload_test.go,
+// resource/configset/payload_test.go, resource/file/payload_test.go).
 func fullDraft(id string) resource.PlanDraft {
-	exit := 3
 	return resource.PlanDraft{
-		Kind:                "command",
-		ID:                  id,
-		Name:                "full",
-		TemplateData:        json.RawMessage(`{"k":["v"]}`),
-		TemplateDataErr:     errors.New("immutable"),
-		TemplateDataSet:     true,
-		ValidationArgs:      []string{"-c", "{{candidate}}"},
-		SupplementaryGroups: []string{"wheel"},
-		AddLines:            []string{"add"},
-		RemoveLines:         []string{"remove"},
-		KeyedLines:          []resource.KeyedLine{{Key: "k=", Line: "k=v"}},
-		Args:                []string{"arg"},
-		Env:                 map[string]string{"K": "v"},
-		Unless:              &resource.PlanGuardDraft{Bin: "test", Args: []string{"-e", "/x"}, ExpectExit: &exit},
-		OnlyIf:              &resource.PlanGuardDraft{Bin: "test", Args: []string{"-d", "/y"}, ExpectExit: &exit},
-		CronEnv:             []string{"A=1"},
-		After:               []string{"network.target"},
-		Wants:               []string{"network.target"},
-		Watch:               []string{"File[/w]"},
-		ConfigMembers:       []resource.PlanConfigMember{{Key: "k", Path: "/k", Content: []byte("body")}},
-		Validators:          []resource.PlanArgv{{Bin: "check", Args: []string{"-f"}}},
-		Deps:                []string{"Package[dep]"},
+		Kind: "command",
+		ID:   id,
+		Name: "full",
+		Payload: payloadStub{
+			Tag:     "full",
+			List:    []string{"item"},
+			Members: []payloadStubMember{{Key: "k", Content: []byte("body")}},
+		},
+		Env:   map[string]string{"K": "v"},
+		Watch: []string{"File[/w]"},
+		Deps:  []string{"Package[dep]"},
 	}
 }
 
-// onlyErr is what a clone may share with its source: the immutable
-// TemplateDataErr error value (see PlanDraft.Clone).
-var onlyErr = []string{"TemplateDataErr"}
+// noneShared is what a clone may share with its source at the
+// resource.PlanDraft level: nothing. A migrated kind's own Payload may
+// still deliberately share one immutable reference (e.g.
+// file.Payload.Clone() keeps TemplateDataErr, mirroring what PlanDraft.Clone
+// itself used to document before TemplateData/TemplateDataErr moved into
+// file.Payload — task w62 Layer 1); that is payloadStub's and file's own
+// concern to pin (resource/file/payload_test.go), not this generic test's.
+var noneShared []string
 
 // referenceFields lists PlanDraft's slice, map, pointer and interface
 // fields: the ones a shallow copy would share.
@@ -119,31 +158,34 @@ func joinField(path, name string) string {
 }
 
 // TestUnpopulatedRefsFindsNestedGaps is the guard's negative case: a nil or
-// empty field nested inside a guard, a config member and a validator is
+// empty field nested inside an interface-held payload's own nested slice is
 // reported by its full path.
 func TestUnpopulatedRefsFindsNestedGaps(t *testing.T) {
 	d := fullDraft("X[x]")
-	d.Unless.ExpectExit = nil
-	d.ConfigMembers[0].Content = nil
-	d.Validators[0].Args = []string{}
+	p := d.Payload.(payloadStub)
+	p.Members[0].Content = nil
+	d.Payload = p
 	got := unpopulatedRefs(reflect.ValueOf(d), "")
-	want := []string{"Unless.ExpectExit", "ConfigMembers[].Content", "Validators[].Args"}
+	want := []string{"Payload.Members[].Content"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("unpopulatedRefs = %v, want %v", got, want)
 	}
 }
 
 // TestPlanDraftCloneSharesNothing pins the draft half of the copy
-// contract: a clone is equal to its source and shares no mutable storage.
-// The one shared reference is the immutable TemplateDataErr error value.
+// contract: a clone is equal to its source and shares no mutable storage
+// at all (nothing on resource.PlanDraft itself is deliberately shared any
+// more — the one exception this used to document, TemplateDataErr, moved
+// into file.Payload along with TemplateData, task w62 Layer 1, and is
+// file's own Clone contract to pin, see resource/file/payload_test.go).
 func TestPlanDraftCloneSharesNothing(t *testing.T) {
 	d := fullDraft("X[x]")
 	c := d.Clone()
 	if !reflect.DeepEqual(c, d) {
 		t.Fatalf("clone differs from source:\n got %#v\nwant %#v", c, d)
 	}
-	if shared := testutil.SharedRefs(d, c); !slices.Equal(shared, onlyErr) {
-		t.Fatalf("clone shares %v with its source, want only %v", shared, onlyErr)
+	if shared := testutil.SharedRefs(d, c); !slices.Equal(shared, noneShared) {
+		t.Fatalf("clone shares %v with its source, want only %v", shared, noneShared)
 	}
 
 	// Mutation in either direction leaves the other side as it was.
@@ -162,13 +204,20 @@ func TestPlanDraftCloneSharesNothing(t *testing.T) {
 // TestSharedRefsDetectsShallowCopy is the negative case: a plain struct
 // copy shares every reference field, and the detector the contract tests
 // rely on must report each of them (otherwise an empty SharedRefs result
-// would prove nothing).
+// would prove nothing). An Interface-kind field (Payload) never appears as
+// its own bare path — refWalker.walk records no memref for the interface
+// header itself, only for reference storage nested inside the concrete
+// value it holds (reflect.Value has no addressable "pointer" for a generic
+// interface the way it does for Pointer/Map/Slice) — so it is satisfied by
+// any shared path with that field as a prefix instead of an exact match.
 func TestSharedRefsDetectsShallowCopy(t *testing.T) {
 	d := fullDraft("X[x]")
 	shallow := d
 	shared := testutil.SharedRefs(d, shallow)
 	for _, name := range referenceFields() {
-		if !slices.Contains(shared, name) {
+		if !slices.ContainsFunc(shared, func(path string) bool {
+			return path == name || strings.HasPrefix(path, name+".")
+		}) {
 			t.Errorf("shallow copy shares %s but SharedRefs did not report it (got %v)", name, shared)
 		}
 	}
@@ -182,17 +231,16 @@ func TestPlanDraftClonePreservesNilAndEmpty(t *testing.T) {
 		t.Fatalf("zero draft clone = %#v, want the zero draft", got)
 	}
 	empty := resource.PlanDraft{
-		Args: []string{}, Env: map[string]string{}, Deps: []string{},
-		Unless:        &resource.PlanGuardDraft{Args: []string{}},
-		ConfigMembers: []resource.PlanConfigMember{{Content: []byte{}}},
-		Validators:    []resource.PlanArgv{},
+		Env:     map[string]string{},
+		Deps:    []string{},
+		Payload: payloadStub{List: []string{}, Members: []payloadStubMember{{Content: []byte{}}}},
 	}
 	c := empty.Clone()
 	if !reflect.DeepEqual(c, empty) {
 		t.Fatalf("empty draft clone = %#v, want %#v", c, empty)
 	}
-	if c.Args == nil || c.Env == nil || c.Deps == nil || c.Unless.Args == nil ||
-		c.ConfigMembers[0].Content == nil || c.Validators == nil {
+	p, ok := c.Payload.(payloadStub)
+	if c.Env == nil || c.Deps == nil || !ok || p.List == nil || p.Members[0].Content == nil {
 		t.Fatalf("clone turned an empty field into nil: %#v", c)
 	}
 }
@@ -213,7 +261,7 @@ func TestRecordPlanDraftIsolatesCallerStoreAndRecorder(t *testing.T) {
 	if len(recorded) != 1 {
 		t.Fatalf("recorder saw %d drafts, want 1", len(recorded))
 	}
-	if shared := testutil.SharedRefs(d, recorded[0]); !slices.Equal(shared, onlyErr) {
+	if shared := testutil.SharedRefs(d, recorded[0]); !slices.Equal(shared, noneShared) {
 		t.Fatalf("recorder's draft shares %v with the caller's", shared)
 	}
 

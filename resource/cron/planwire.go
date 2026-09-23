@@ -20,18 +20,26 @@ func init() {
 	plan.RegisterHandler(plan.KindCron, planHandler{})
 }
 
-// ToOp lowers a "cron" resource draft to a plan.Op.
+// ToOp lowers a "cron" resource draft to a plan.Op. The cron-exclusive
+// fields come from d.Payload (resource/cron.Payload, task w62 Layer 1); a
+// "cron" draft without one is a record-time bug (planDraft always sets it),
+// reported like any other handler error rather than panicking, since ToOp
+// runs at record time on recipe-shaped input, not on a programmer-only path.
 func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
+	p, ok := d.Payload.(Payload)
+	if !ok {
+		return plan.Op{}, fmt.Errorf("cron: draft missing cron.Payload (got %T)", d.Payload)
+	}
 	return plan.Op{
 		Op:            plan.KindCron,
 		ID:            d.ID,
 		Name:          d.Name,
 		Absent:        d.Absent,
-		CronUser:      d.CronUser,
+		CronUser:      p.CronUser,
 		Command:       d.Command,
-		LegacyCommand: d.LegacyCommand,
-		Schedule:      d.Schedule,
-		CronEnv:       slices.Clone(d.CronEnv),
+		LegacyCommand: p.LegacyCommand,
+		Schedule:      p.Schedule,
+		CronEnv:       slices.Clone(p.CronEnv),
 		Deps:          slices.Clone(d.Deps),
 	}, nil
 }

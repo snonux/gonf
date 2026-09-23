@@ -107,6 +107,8 @@ func Present(path string, opts ...opt.LinkOption) resource.Resource {
 	return l.resource
 }
 
+// planDraft records l as a "link" plan draft. Symlink/Hardlink, link's
+// exclusive fields, travel in Payload (see Payload, task w62 Layer 1).
 func (l *Link) planDraft() resource.PlanDraft {
 	d := resource.PlanDraft{
 		Kind:   "link",
@@ -115,12 +117,14 @@ func (l *Link) planDraft() resource.PlanDraft {
 		Absent: l.Absent,
 		Deps:   l.DependsOn.SortedIDs(),
 	}
+	var p Payload
 	switch l.kind {
 	case symlinkKind:
-		d.Symlink = l.target
+		p.Symlink = l.target
 	case hardlinkKind:
-		d.Hardlink = l.target
+		p.Hardlink = l.target
 	}
+	d.Payload = p
 	return d
 }
 

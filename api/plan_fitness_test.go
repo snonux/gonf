@@ -8,7 +8,17 @@ import (
 
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
+	"github.com/snonux/gonf/resource/cmd"
+	"github.com/snonux/gonf/resource/configset"
+	"github.com/snonux/gonf/resource/cron"
+	"github.com/snonux/gonf/resource/dir"
+	"github.com/snonux/gonf/resource/file"
+	"github.com/snonux/gonf/resource/link"
 	"github.com/snonux/gonf/resource/options"
+	"github.com/snonux/gonf/resource/pkg"
+	"github.com/snonux/gonf/resource/service"
+	"github.com/snonux/gonf/resource/systemdtimer"
+	"github.com/snonux/gonf/resource/user"
 )
 
 // kindFitness pins one fixture per plan.Kind: every declared kind must lower
@@ -48,12 +58,12 @@ func kindFitnessTable() map[plan.Kind]kindFixture {
 
 		// Resource kinds, one per draft kind string draftToOp accepts.
 		plan.KindFile: {draft: &resource.PlanDraft{
-			Kind:       "file",
-			ID:         "File[/tmp/fit.conf]",
-			Path:       "/tmp/fit.conf",
-			Mode:       "0640",
-			ContentB64: b64,
-			Deps:       []string{"Package[fit-dep]"},
+			Kind:    "file",
+			ID:      "File[/tmp/fit.conf]",
+			Path:    "/tmp/fit.conf",
+			Mode:    "0640",
+			Payload: file.Payload{ContentB64: b64},
+			Deps:    []string{"Package[fit-dep]"},
 		}},
 		plan.KindDir: {draft: &resource.PlanDraft{
 			Kind: "dir",
@@ -61,21 +71,23 @@ func kindFitnessTable() map[plan.Kind]kindFixture {
 			Mode: "0750",
 		}},
 		plan.KindSyncDir: {draft: &resource.PlanDraft{
-			Kind:      "sync_dir",
-			Path:      "/tmp/fitsync",
-			Blob:      "blobs/fit",
-			FileMode:  "0640",
-			SourceDir: "assets/fit",
+			Kind: "sync_dir",
+			Path: "/tmp/fitsync",
+			Blob: "blobs/fit",
+			Payload: dir.SyncPayload{
+				FileMode:  "0640",
+				SourceDir: "assets/fit",
+			},
 		}},
 		plan.KindLink: {draft: &resource.PlanDraft{
 			Kind:    "link",
 			Path:    "/tmp/fitlink",
-			Symlink: "/tmp/fit-target",
+			Payload: link.Payload{Symlink: "/tmp/fit-target"},
 		}},
 		plan.KindLinkIfExists: {draft: &resource.PlanDraft{
-			Kind:   "link_if_exists",
-			Path:   "/tmp/fitlinkif",
-			Target: "/tmp/fit-target",
+			Kind:    "link_if_exists",
+			Path:    "/tmp/fitlinkif",
+			Payload: link.IfExistsPayload{Target: "/tmp/fit-target"},
 		}},
 		plan.KindEnsureDir: {draft: &resource.PlanDraft{
 			Kind: "ensure_dir",
@@ -88,15 +100,15 @@ func kindFitnessTable() map[plan.Kind]kindFixture {
 			Mode: "0644",
 		}},
 		plan.KindPackage: {draft: &resource.PlanDraft{
-			Kind: "package",
-			ID:   "Package[fit-pkg]",
-			Name: "fit-pkg",
-			Deps: []string{"Package[fit-base]"},
+			Kind:    "package",
+			ID:      "Package[fit-pkg]",
+			Name:    "fit-pkg",
+			Payload: pkg.Payload{},
+			Deps:    []string{"Package[fit-base]"},
 		}},
 		plan.KindCommand: {draft: &resource.PlanDraft{
-			Kind: "command",
-			Bin:  "true",
-			Args: []string{"fit"},
+			Kind:    "command",
+			Payload: cmd.Payload{Bin: "true", Args: []string{"fit"}},
 		}},
 		plan.KindTimer: {draft: &resource.PlanDraft{
 			Kind:    "timer",
@@ -113,66 +125,75 @@ func kindFitnessTable() map[plan.Kind]kindFixture {
 			Deps:      []string{"File[/tmp/fit]"},
 		}},
 		plan.KindCron: {draft: &resource.PlanDraft{
-			Kind:     "cron",
-			ID:       "Cron[root/fitjob]",
-			Name:     "fitjob",
-			CronUser: "root",
-			Command:  "true",
-			Schedule: "0 0 * * *",
-			CronEnv:  []string{"FIT=1"},
+			Kind:    "cron",
+			ID:      "Cron[root/fitjob]",
+			Name:    "fitjob",
+			Command: "true",
+			Payload: cron.Payload{
+				CronUser: "root",
+				Schedule: "0 0 * * *",
+				CronEnv:  []string{"FIT=1"},
+			},
 		}},
 		plan.KindService: {draft: &resource.PlanDraft{
 			Kind:    "service",
 			Name:    "fitsvc",
 			Restart: true,
+			Payload: service.Payload{},
 		}},
 		plan.KindSystemdTimer: {draft: &resource.PlanDraft{
-			Kind:               "systemd_timer",
-			ID:                 "SystemdTimer[fit-job]",
-			Name:               "fit-job",
-			Command:            "/bin/true",
-			OnCalendar:         "*-*-* *:05:00",
-			OnBootSec:          "10min",
-			Persistent:         true,
-			Description:        "fit timer",
-			ServiceDescription: "fit oneshot",
-			After:              []string{"network-online.target"},
-			Wants:              []string{"network-online.target"},
+			Kind:    "systemd_timer",
+			ID:      "SystemdTimer[fit-job]",
+			Name:    "fit-job",
+			Command: "/bin/true",
+			Payload: systemdtimer.Payload{
+				OnCalendar:         "*-*-* *:05:00",
+				OnBootSec:          "10min",
+				Persistent:         true,
+				Description:        "fit timer",
+				ServiceDescription: "fit oneshot",
+				After:              []string{"network-online.target"},
+				Wants:              []string{"network-online.target"},
+			},
 		}},
 		plan.KindUser: {draft: &resource.PlanDraft{
-			Kind:                "user",
-			ID:                  "User[fit-user]",
-			Name:                "fit-user",
-			PrimaryGroup:        "fit-user",
-			SupplementaryGroups: []string{"audio", "wheel"},
-			Home:                "/var/lib/fit-user",
-			CreateHome:          true,
-			Shell:               "/sbin/nologin",
-			LoginClass:          "daemon",
-			System:              true,
-			ManageHome:          true,
-			Deps:                []string{"Package[fit-base]"},
+			Kind: "user",
+			ID:   "User[fit-user]",
+			Name: "fit-user",
+			Payload: user.Payload{
+				PrimaryGroup:        "fit-user",
+				SupplementaryGroups: []string{"audio", "wheel"},
+				Home:                "/var/lib/fit-user",
+				CreateHome:          true,
+				Shell:               "/sbin/nologin",
+				LoginClass:          "daemon",
+				System:              true,
+				ManageHome:          true,
+			},
+			Deps: []string{"Package[fit-base]"},
 		}},
 		plan.KindConfigSet: {draft: &resource.PlanDraft{
 			Kind: "config_set",
 			ID:   "ConfigSet[fit]",
 			Name: "fit",
-			ConfigMembers: []resource.PlanConfigMember{
-				{Key: "main.conf", Path: "/etc/fit/main.conf", Content: []byte("include " + options.MemberPath("keys") + "\n"), Mode: "0640", Owner: "root", Group: "wheel"},
-				{Key: "keys", Path: "/etc/fit/keys", Content: []byte("secret\n"), Mode: "0600"},
+			Payload: configset.SetPayload{
+				ConfigMembers: []resource.PlanConfigMember{
+					{Key: "main.conf", Path: "/etc/fit/main.conf", Content: []byte("include " + options.MemberPath("keys") + "\n"), Mode: "0640", Owner: "root", Group: "wheel"},
+					{Key: "keys", Path: "/etc/fit/keys", Content: []byte("secret\n"), Mode: "0600"},
+				},
+				Validators: []resource.PlanArgv{{Bin: "fitcheck", Args: []string{"-f", options.MemberPath("main.conf")}}},
+				Chroot:     "/etc",
+				StagingDir: "/etc/fit",
 			},
-			Validators: []resource.PlanArgv{{Bin: "fitcheck", Args: []string{"-f", options.MemberPath("main.conf")}}},
-			Chroot:     "/etc",
-			StagingDir: "/etc/fit",
-			Deps:       []string{"Package[fit-base]"},
+			Deps: []string{"Package[fit-base]"},
 		}},
 		plan.KindConfigSetMember: {draft: &resource.PlanDraft{
-			Kind:   "config_set_member",
-			ID:     "ConfigSetMember[fit/keys]",
-			Name:   "fit",
-			Member: "keys",
-			Path:   "/etc/fit/keys",
-			Deps:   []string{"ConfigSet[fit]"},
+			Kind:    "config_set_member",
+			ID:      "ConfigSetMember[fit/keys]",
+			Name:    "fit",
+			Payload: configset.MemberPayload{Member: "keys"},
+			Path:    "/etc/fit/keys",
+			Deps:    []string{"ConfigSet[fit]"},
 		}},
 	}
 }
