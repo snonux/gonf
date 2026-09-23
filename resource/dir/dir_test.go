@@ -553,14 +553,23 @@ func TestSourceGlobPrune(t *testing.T) {
 	}
 }
 
-// TestSourceGlobPruneKeepSetMatchesCountingMatches pins the lockstep
-// between copySourceGlob and pruneGlob: both classify matches through the
-// one shared predicate (GlobMatchCounts), so the prune keep-set is exactly
-// the basenames copySourceGlob would copy. A destination regular file whose
-// name matches only a non-counting source entry (here: the dangling
-// symlink "ghost" and the unmatched "stale.rb") is converged away instead
-// of being kept forever, while a counting symlink-to-file match keeps its
-// basename.
+// TestSourceGlobPruneKeepSetMatchesCountingMatches goes through Present +
+// testapply.Apply, i.e. the plan-record path: plan.scanGlob (via
+// store.WriteGlob) already classifies matches through GlobMatchCounts at
+// RECORD time and packages only the counting ones into the glob blob, so
+// the dangling symlink "ghost" and the directory "adir" planted here never
+// reach copySourceGlob/pruneGlob at all — they are pruned because they are
+// simply absent from the blob, not because pruneGlob's own keep-set filter
+// rejected them. What this test does pin is that record-time packaging
+// selects exactly the counting matches (keep.rb, tofile) and that the
+// destination converges to exactly that set through the plan apply path,
+// alongside "stale.rb" (present at the destination but not a source match
+// at all) being pruned too. The apply-side lockstep between copySourceGlob
+// and pruneGlob — that pruneGlob's own GlobMatchCounts filter keeps exactly
+// what copySourceGlob would copy — is pinned separately, by
+// api/sync_glob_prune_test.go's TestPlanGlobSyncPruneMatchesDirectPath,
+// which diffs the plan path's resulting tree against the direct
+// WithSourceGlob path's.
 func TestSourceGlobPruneKeepSetMatchesCountingMatches(t *testing.T) {
 	resource.ResetRepository()
 	dir := t.TempDir()

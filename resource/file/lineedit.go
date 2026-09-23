@@ -116,12 +116,13 @@ func (f *File) currentLines(path string) ([]string, error) {
 // is accidentally too broad (e.g. "export " instead of "export
 // PKG_PATH=") silently destroys unrelated administrator-written lines that
 // merely happen to share the prefix. That must be visible even under
-// `-quiet` (which only raises the level past Info, see internal/logger), so
-// a drop is logged at Warn instead, naming the key and the counts but never
-// the dropped text: a line may hold a value that is not necessarily marked
-// sensitive the way a secret-bearing op is, so it would not go through
-// gonf's redaction. The dropped lines' text is only ever logged at Debug,
-// for local recoverability, never at Warn or Info.
+// `-quiet` (which lowers the level to Warn, see internal/logger, so Info
+// and below are suppressed), so a drop is logged at Warn instead, naming the
+// key and the counts but never the dropped text: a line may hold a value
+// that is not necessarily marked sensitive the way a secret-bearing op is,
+// so it would not go through gonf's redaction. The dropped lines' text is
+// only ever logged at Debug, for local recoverability, never at Warn or
+// Info.
 //
 // The drop is not counted or surfaced separately from an ordinary edit:
 // like WithLine/WithoutLine, it relies on ensureFile's checksum comparison

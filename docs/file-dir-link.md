@@ -75,8 +75,9 @@ therefore drops, every other line that happens to share the prefix — for
 example `"export "` also matching unrelated `EDITOR`/`PAGER`/`HTTP_PROXY`
 lines and silently deleting them. A drop (as opposed to a plain replace) is
 therefore logged at Warn instead of Info, so it stays visible even under
-`-quiet` (which only raises the level past Info); the dropped lines'
-text is never logged above Debug, since it is not necessarily redaction-safe.
+`-quiet` (which lowers the level to Warn, so Info and below are suppressed);
+the dropped lines' text is never logged above Debug, since it is not
+necessarily redaction-safe.
 
 Rules, checked when the resource is declared (misuse fails fast):
 
