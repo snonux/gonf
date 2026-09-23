@@ -559,19 +559,25 @@ first suggested fix (ignore `plan.jsonl`) ends up in.
 ### Not provided
 
 Durable encrypted plans now have an accepted design
-(docs/plan-encryption.md, task w82) and a phase-1 implementation: `gonf
-plan -o dir -seal` (task 2b2, this document's "Where a sensitive plan goes"
-table) age-encrypts the GONF-PUSH/1 frame to operator-controlled
-`age1pq…` recipients and writes only `dir/plan.age`. Sealing is not
-automatic or implied by sensitivity — an operator must pass `-seal`
-explicitly, with at least one recipient — and it is confidentiality only,
-never provenance (plan-encryption.md, "Provenance"): nothing in gonf may
-apply a sealed plan unattended until task `7b2`'s signing design lands.
-Still not provided: per-destination sealed artifacts (`-for`, task 4b2),
-resolving the operator identity through a secret provider (task 5b2), and
-sealing a multi-chunk push's blob transport (task 6b2) — see
-plan-encryption.md's "Phased implementation" for the full list. Until each
-of those lands, an executable secret-bearing plan that is not sealed
-exists only under the private-filesystem protections above and for as
-long as the operator keeps it. The foostore provider (above) changes where
-secrets come from, not what the plan holds.
+(docs/plan-encryption.md, task w82) and a phase-1 implementation, both
+sides: `gonf plan -o dir -seal` (task 2b2, this document's "Where a
+sensitive plan goes" table) age-encrypts the GONF-PUSH/1 frame to
+operator-controlled `age1pq…` recipients and writes only `dir/plan.age`,
+and `gonf apply -identity file... <plan.age|->` (task 3b2) decrypts and
+applies it with the same single-process, file-apply semantics as a
+plaintext plan. Sealing is not automatic or implied by sensitivity — an
+operator must pass `-seal` explicitly, with at least one recipient — and
+it is confidentiality only, never provenance (plan-encryption.md,
+"Provenance"): `gonf apply` of a sealed plan never prints "verified" or
+"authenticated", and nothing in gonf may apply a sealed plan unattended
+until task `7b2`'s signing design lands. A protected sidecar holding only
+the secret payloads (rather than sealing the whole artifact) was
+considered and rejected — plan-encryption.md's "Options compared", option
+E. Still not provided: per-destination sealed artifacts (`-for`, task
+4b2), resolving the operator identity through a secret provider (task
+5b2), and sealing a multi-chunk push's blob transport (task 6b2) — see
+plan-encryption.md's "Phased implementation" for the full list. Without
+`-seal`/`-identity`, nothing here changes: `gonf plan -o dir` still writes
+a plaintext `plan.jsonl` under the private-filesystem protections above,
+for as long as the operator keeps it. The foostore provider (above)
+changes where secrets come from, not what the plan holds either way.

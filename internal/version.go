@@ -9,3 +9,13 @@ const Version = "0.16.6"
 // strict-preview changes transport/apply safety behavior without changing a
 // plan's encoding.
 const StrictPreviewVersion = 1
+
+// SealedVersion is the sealed-plan capability version this binary can
+// decrypt and apply (`gonf apply -identity ... plan.age`), printed by
+// `gonf -sealed-version` next to -plan-version/-strict-preview-version.
+// Separate from both: it names what the age(GONF-PUSH/1) container this
+// binary understands looks like (docs/plan-encryption.md, "Schema,
+// versioning and remote skew"), not the inner plan schema or the
+// strict-preview transport behavior, either of which can change without
+// this one moving.
+const SealedVersion = 1

@@ -316,6 +316,27 @@ func TestDecodeOpRejectsEmpty(t *testing.T) {
 	}
 }
 
+// TestDecodePlanBytesRejectsSealedPlanAgeSkewWording pins the file-path half
+// of docs/plan-encryption.md's "old-gonf given a sealed input" table: a
+// gonf binary that predates the sealed-apply sniff (internal/cli, task 3b2)
+// would call DecodePlanBytes directly on `gonf apply <plan.age>`'s file
+// bytes, and age's own cleartext version banner is not valid JSON — so it
+// fails at the header line, before any op is parsed, with an ordinary JSON
+// decode error naming the header line rather than any op-level failure.
+// This is DecodePlanBytes's existing, unchanged behavior; task 3b2's sniff
+// only decides whether DecodePlanBytes is called at all for a given file's
+// bytes, never what it does with bytes handed to it directly.
+func TestDecodePlanBytesRejectsSealedPlanAgeSkewWording(t *testing.T) {
+	t.Parallel()
+	_, err := DecodePlanBytes([]byte("age-encryption.org/v1\n-> X25519 ...\n"))
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.HasPrefix(err.Error(), "plan: header: ") {
+		t.Fatalf("DecodePlanBytes(sealed-looking file) = %v, want a %q-prefixed header decode error", err, "plan: header: ")
+	}
+}
+
 func TestDecodePlanSkipsBlankLines(t *testing.T) {
 	t.Parallel()
 	raw := "\n\n" + `{"op":"plan","version":1,"id":"a"}` + "\n\n" + `{"op":"when_end"}` + "\n\n"

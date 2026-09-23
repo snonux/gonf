@@ -154,3 +154,92 @@ func TestDecodePushBadMagic(t *testing.T) {
 		t.Fatalf("want bad magic, got %v", err)
 	}
 }
+
+// TestDecodePushRejectsSealedPlanAgeSkewWording pins the exact "old-gonf
+// given a sealed plan.age on stdin" wording docs/plan-encryption.md
+// documents ("Schema, versioning and remote skew"): a gonf binary that
+// predates the sealed-apply sniff (internal/cli, task 3b2) would still call
+// DecodePush directly on whatever stdin holds, and age's own cleartext
+// version banner is not the GONF-PUSH/1 magic DecodePush expects — so it
+// fails here, before any op is even parsed, with exactly the quoted-magic
+// wording the doc promises. This is DecodePush's existing, unchanged
+// behavior; the sniff added by task 3b2 only decides whether DecodePush is
+// called at all for a given input, never what DecodePush itself does with
+// bytes it is handed directly.
+func TestDecodePushRejectsSealedPlanAgeSkewWording(t *testing.T) {
+	_, err := DecodePush(strings.NewReader("age-encryption.org/v1\n-> X25519 ...\n"), "")
+	want := `plan push: bad magic "age-encryption.org/v1"`
+	if err == nil || err.Error() != want {
+		t.Fatalf("DecodePush(sealed-looking stdin) = %v, want exactly %q", err, want)
+	}
+}
+
+// TestPushHasBlobs pins PushHasBlobs' peek against the exact frames
+// EncodePush/DecodePush themselves use, so a sealed apply's blob-vs-no-blob
+// probe (internal/cli, task 3b2) never drifts from what DecodePush would
+// actually do with the same bytes.
+func TestPushHasBlobs(t *testing.T) {
+	noBlobsFrame := func(t *testing.T) []byte {
+		t.Helper()
+		var buf bytes.Buffer
+		if err := EncodePush(&buf, []Op{{Op: KindPlan, Version: CurrentVersion, ID: "p"}}, nil); err != nil {
+			t.Fatal(err)
+		}
+		return buf.Bytes()
+	}
+	withBlobsFrame := func(t *testing.T) []byte {
+		t.Helper()
+		mem := NewMemoryStore()
+		ref, err := mem.WriteFile("secret", []byte("x\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var buf bytes.Buffer
+		ops := []Op{
+			{Op: KindPlan, Version: CurrentVersion, ID: "p"},
+			{Op: KindFile, Path: "/tmp/x", Blob: ref},
+		}
+		if err := EncodePush(&buf, ops, mem); err != nil {
+			t.Fatal(err)
+		}
+		return buf.Bytes()
+	}
+	bareJSONL := func(t *testing.T) []byte {
+		t.Helper()
+		raw, err := EncodePlan([]Op{{Op: KindPlan, Version: CurrentVersion, ID: "bare"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+
+	tests := []struct {
+		name string
+		data func(t *testing.T) []byte
+		want bool
+	}{
+		{"no blobs", noBlobsFrame, false},
+		{"with blobs", withBlobsFrame, true},
+		{"bare JSONL", bareJSONL, false},
+		{"empty", func(t *testing.T) []byte { return nil }, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := tt.data(t)
+			if got := PushHasBlobs(data); got != tt.want {
+				t.Fatalf("PushHasBlobs(%q) = %v, want %v", data, got, tt.want)
+			}
+			// PushHasBlobs must agree with what DecodePush itself does: a
+			// "false" frame decodes fine with planDir "", and a "true" frame
+			// requires one (DecodePush's own contract) — this is the
+			// invariant decryptAndDecodeSealedPush (internal/cli) relies on.
+			_, err := DecodePush(bytes.NewReader(data), "")
+			if tt.want && err == nil {
+				t.Fatalf("DecodePush(%q, \"\") unexpectedly succeeded for a blobs frame", tt.name)
+			}
+			if !tt.want && tt.name != "empty" && err != nil {
+				t.Fatalf("DecodePush(%q, \"\") = %v, want success for a no-blobs frame", tt.name, err)
+			}
+		})
+	}
+}

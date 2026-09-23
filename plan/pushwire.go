@@ -128,6 +128,31 @@ func DecodePush(r io.Reader, planDir string) (*PushPayload, error) {
 	return &out, nil
 }
 
+// PushHasBlobs reports whether data — an already fully-read GONF-PUSH/1
+// frame, or bare JSONL, exactly as DecodePush itself would receive it as its
+// r argument — declares a blobs phase, using the same first-byte and
+// blobs-line checks DecodePush performs while streaming, without mutating or
+// copying data. It exists for a sealed apply (plan/seal, task 3b2), which
+// must hold the whole decrypted frame in memory before trusting any of it
+// (age authenticates only its final segment at EOF) and so cannot let
+// DecodePush read straight from the wire the way an ordinary push does: this
+// lets it decide, from the bytes already in hand, whether it needs a run
+// directory for DecodePush's blob-unpacking side effect before calling
+// DecodePush for real. DecodePush's own parsing stays the single authority
+// on whether the frame is actually well-formed; a "true" here that turns out
+// wrong (a frame corrupted in a way that does not touch this early prefix)
+// simply means DecodePush goes on to report that corruption itself.
+func PushHasBlobs(data []byte) bool {
+	if len(data) == 0 || data[0] == '{' || data[0] == '\n' {
+		return false // bare JSONL (or empty): DecodePush never unpacks blobs for it
+	}
+	lines := bytes.SplitN(data, []byte("\n"), 3)
+	if len(lines) < 2 {
+		return false
+	}
+	return strings.TrimSpace(string(lines[1])) == "blobs 1"
+}
+
 func readGzipOrRaw(r io.Reader) ([]byte, error) {
 	raw, err := io.ReadAll(r)
 	if err != nil {

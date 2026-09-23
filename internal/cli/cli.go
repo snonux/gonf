@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -23,15 +25,24 @@ import (
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/internal/remote"
 	"github.com/snonux/gonf/plan"
+	"github.com/snonux/gonf/plan/seal"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/dnszone"
 )
+
+// geteuid is os.Geteuid, swappable in tests: loadSealedIdentities' root
+// check must be exercisable without actually running the test suite as
+// root, and internal/privilege's geteuid (internal/privilege/privilege.go)
+// is the established pattern for this in the module (a package-level var
+// only a same-package test ever reassigns, never exported).
+var geteuid = os.Geteuid
 
 // cliOptions contains the process-wide flags consumed by CLI.
 type cliOptions struct {
 	version              bool
 	planVersion          bool
 	strictPreviewVersion bool
+	sealedVersion        bool
 	list                 bool
 	profile              string
 	verbose              bool
@@ -51,12 +62,13 @@ var cleanupRemoteBuilds = remote.CleanupBuilds
 //	gonf -version
 //	gonf -plan-version
 //	gonf -strict-preview-version
+//	gonf -sealed-version
 //	gonf -list
 //	gonf -profile=fedora
 //	gonf -verbose | -quiet
 //	gonf -dry-run | -n
 //	gonf plan [-o dir|-stdout [-with-secrets]|-redacted] [-seal [-recipient r]...] [-id name] <task>...  # emit plan.jsonl (or stdout), or seal to plan.age
-//	gonf apply [-n] <plan.jsonl|->               # apply file or GONF-PUSH/1 stdin
+//	gonf apply [-n] [-identity file]... <plan.jsonl|plan.age|->  # apply file/sealed file or stdin (GONF-PUSH/1, sealed, or bare JSONL)
 //	gonf <task> [task...]                            # RecordPlan + Apply locally
 func CLI() int {
 	// Registration-time misuse in the recipe's main (an empty Task name, a
@@ -174,6 +186,7 @@ func parseCLIFlags(program string, args []string) (cliOptions, error) {
 	version := fs.Bool("version", false, "Print version")
 	planVersion := fs.Bool("plan-version", false, "Print plan schema version this binary can emit/apply")
 	strictPreviewVersion := fs.Bool("strict-preview-version", false, "Print strict remote preview capability version")
+	sealedVersion := fs.Bool("sealed-version", false, "Print sealed-plan (plan.age) capability version this binary can decrypt/apply")
 	list := fs.Bool("list", false, "List registered tasks")
 	profile := fs.String("profile", "", "Override detected profile (fedora, rocky, ...)")
 	verbose := fs.Bool("verbose", false, "Debug logging")
@@ -192,6 +205,7 @@ func parseCLIFlags(program string, args []string) (cliOptions, error) {
 		version:              *version,
 		planVersion:          *planVersion,
 		strictPreviewVersion: *strictPreviewVersion,
+		sealedVersion:        *sealedVersion,
 		list:                 *list,
 		profile:              *profile,
 		verbose:              *verbose,
@@ -270,9 +284,9 @@ func runCLI(ctx context.Context, options cliOptions) int {
 }
 
 // printVersionInfo prints the value of the first set informational flag
-// (-version, then -plan-version, then -strict-preview-version) to stdout and
-// reports whether one was set. Those flags short-circuit everything else and
-// always exit 0.
+// (-version, then -plan-version, then -strict-preview-version, then
+// -sealed-version) to stdout and reports whether one was set. Those flags
+// short-circuit everything else and always exit 0.
 func printVersionInfo(options cliOptions) bool {
 	switch {
 	case options.version:
@@ -281,6 +295,8 @@ func printVersionInfo(options cliOptions) bool {
 		fmt.Println(plan.CurrentVersion)
 	case options.strictPreviewVersion:
 		fmt.Println(internal.StrictPreviewVersion)
+	case options.sealedVersion:
+		fmt.Println(internal.SealedVersion)
 	default:
 		return false
 	}
@@ -677,7 +693,7 @@ func cliApply(ctx context.Context, args []string) int {
 		resource.SetDryRun(true)
 	}
 	if len(rest) != 1 {
-		eprintln("usage: gonf apply [-n|-dry-run] [-strict-preview] [-apply-dir dir] <plan.jsonl|->")
+		eprintln("usage: gonf apply [-n|-dry-run] [-strict-preview] [-apply-dir dir] [-identity file]... <plan.jsonl|plan.age|->")
 		return 2
 	}
 	if rest[0] == "-" {
@@ -691,7 +707,7 @@ func cliApply(ctx context.Context, args []string) int {
 				"stdin already carries the push payload")
 			return 2
 		}
-		return cliApplyStdin(ctx, f.applyDir, f.strictPreview)
+		return cliApplyStdin(ctx, f.applyDir, f.strictPreview, f.identityPaths)
 	}
 	if f.cancelPipe {
 		var cancel context.CancelFunc
@@ -699,7 +715,7 @@ func cliApply(ctx context.Context, args []string) int {
 		defer cancel()
 		go watchCancelPipe(os.Stdin, cancel)
 	}
-	return cliApplyFile(ctx, rest[0])
+	return cliApplyFile(ctx, rest[0], f.identityPaths)
 }
 
 // applyFlags is cliApply's own "apply" subcommand flags, parsed by
@@ -709,24 +725,32 @@ func cliApply(ctx context.Context, args []string) int {
 // argv built the same way the real producers (api's elevatedApplyArgv,
 // internal/remote's remoteApplyCmd) build it, without going through
 // cliApply's other side effects (SIGPIPE handling, context wiring, actually
-// applying a plan).
+// applying a plan). identityPaths (task 3b2) is not part of that shared
+// producer/consumer wire contract — neither producer ever sets -identity,
+// since sealed apply is never reached through the elevated re-exec or a
+// push/preview session (docs/plan-encryption.md: sealed apply is always a
+// direct, interactive/scripted `gonf apply` of a file or manually piped
+// stdin) — so it is not registered through internal/applyproto.
 type applyFlags struct {
 	dryRun        bool
 	strictPreview bool
 	applyDir      string
 	cancelPipe    bool
 	relayed       bool
+	identityPaths []string
 }
 
 // parseApplyFlags parses cliApply's "apply" subcommand flags from args and
 // returns the parsed flags plus the remaining positional args (the
-// plan.jsonl path or "-"). The two wire-contract flags are registered
-// through applyproto.RegisterFlags under applyproto.CancelPipeFlag/
+// plan.jsonl/plan.age path or "-"). The two wire-contract flags are
+// registered through applyproto.RegisterFlags under applyproto.CancelPipeFlag/
 // RelayedFlag — the single source of truth also used by the producers that
 // build the argv this flag set must accept, instead of this function
 // spelling "cancel-pipe"/"relayed" as its own literals (see
 // internal/applyproto's doc comment for the failure that let a one-sided
-// rename slip past the whole test suite).
+// rename slip past the whole test suite). -identity (task 3b2, repeatable:
+// only used when the positional argument sniffs as a sealed plan.age) is
+// this function's own flag, not part of that shared contract.
 func parseApplyFlags(args []string) (applyFlags, []string, error) {
 	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -745,6 +769,14 @@ func parseApplyFlags(args []string) (applyFlags, []string, error) {
 			"that relaying process dying mid-apply (crash, OOM-kill) does not SIGPIPE-kill "+
 			"this one too; set only by internal/remote's remote apply command, never for an "+
 			"interactive or manually piped-plan (\"-\") local apply")
+	var identityPaths []string
+	fs.Func("identity", "path to an age1pq identity file (repeatable; only used when <plan.jsonl|-> "+
+		"sniffs as a sealed plan.age); default for a non-root invocation: "+
+		"${XDG_CONFIG_HOME:-$HOME/.config}/gonf/identity; as root (sudo/doas), -identity is "+
+		"required, since HOME/XDG_CONFIG_HOME are ambiguous there", func(v string) error {
+		identityPaths = append(identityPaths, v)
+		return nil
+	})
 	if err := fs.Parse(args); err != nil {
 		return applyFlags{}, nil, err
 	}
@@ -754,6 +786,7 @@ func parseApplyFlags(args []string) (applyFlags, []string, error) {
 		applyDir:      *applyDir,
 		cancelPipe:    *cancelPipe,
 		relayed:       *relayed,
+		identityPaths: identityPaths,
 	}, fs.Args(), nil
 }
 
@@ -871,17 +904,29 @@ func watchCancelPipe(r io.Reader, cancel context.CancelFunc) {
 }
 
 // cliApplyFile applies the plan file planPath, with its blobs/ sidecars next
-// to it.
-func cliApplyFile(ctx context.Context, planPath string) int {
-	// Read the plan file the way planToDir wrote it: plan.ReadPrivateFilePath
-	// refuses a path that names a directory ("out/"), and a plan.jsonl that is
-	// a symlink or not a regular file (a FIFO), instead of following it as
-	// os.ReadFile would. The directory is reached the normal way: the elevated
-	// re-exec reads a chunk below $TMPDIR, which may be a symlinked path.
+// to it. planPath may also be a sealed plan.age (docs/plan-encryption.md,
+// task 3b2): the first line is sniffed against the age format's own
+// cleartext version banner (isSealedPlanBytes) before anything is decoded
+// either way, so an older plan.jsonl and a sealed plan.age take completely
+// separate paths from the first line on.
+func cliApplyFile(ctx context.Context, planPath string, identityPaths []string) int {
+	// Read the plan file the way planToDir/2b2's sealed write wrote it:
+	// plan.ReadPrivateFilePath refuses a path that names a directory
+	// ("out/"), and a plan file that is a symlink or not a regular file (a
+	// FIFO), instead of following it as os.ReadFile would. The directory is
+	// reached the normal way: the elevated re-exec reads a chunk below
+	// $TMPDIR, which may be a symlinked path. Reading the whole file here
+	// also happens to satisfy, for the sealed case, the "read to EOF before
+	// applying anything" requirement for free: os.ReadFile-style reads
+	// already load every byte before this function does anything else with
+	// them.
 	raw, err := plan.ReadPrivateFilePath(planPath)
 	if err != nil {
 		eprintf("apply: read %s: %v\n", planPath, err)
 		return 1
+	}
+	if isSealedPlanBytes(raw) {
+		return cliApplySealedFile(ctx, planPath, raw, identityPaths)
 	}
 	ops, err := plan.DecodePlanBytes(raw)
 	if err != nil {
@@ -892,6 +937,24 @@ func cliApplyFile(ctx context.Context, planPath string) int {
 		return 1
 	}
 	fmt.Printf("applied %s (%d ops)\n", planPath, len(ops))
+	return 0
+}
+
+// cliApplySealedFile decrypts raw (planPath's full, already-read bytes, a
+// sealed plan.age) and applies it, printing the "decrypted and applied ..."
+// wording docs/plan-encryption.md's "Provenance" section requires (never
+// "verified"/"authenticated": sealing here is confidentiality only).
+func cliApplySealedFile(ctx context.Context, planPath string, raw []byte, identityPaths []string) int {
+	payload, cleanup, err := decryptAndDecodeSealedPush(bytes.NewReader(raw), identityPaths)
+	defer cleanup()
+	if err != nil {
+		eprintf("apply: %v\n", err)
+		return 1
+	}
+	if err := applyPlanOps(ctx, payload.Ops, payload.PlanDir); err != nil {
+		return 1
+	}
+	fmt.Printf("decrypted and applied %s (%d ops)\n", planPath, len(payload.Ops))
 	return 0
 }
 
@@ -912,11 +975,33 @@ func applyPlanOps(ctx context.Context, ops []plan.Op, planDir string) error {
 	return err
 }
 
-// cliApplyStdin applies a push payload (plan plus blobs) read from stdin,
-// or only previews it with strictPreview.
-func cliApplyStdin(ctx context.Context, applyDir string, strictPreview bool) int {
+// cliApplyStdin applies a push payload (plan plus blobs), a sealed plan.age
+// stream, or bare JSONL read from stdin, or only previews it with
+// strictPreview. The sealed sniff (isSealedPlanBytes) runs on a peek of
+// stdin before any of the three decode paths is chosen — see peekSealed —
+// so -strict-preview and -apply-dir, which only make sense for the
+// unsealed push/preview paths, are refused up front for a sealed stream
+// instead of being silently ignored (docs/plan-encryption.md: a sealed
+// apply is single-process file-apply semantics, never the strict-preview
+// remote-capability check or the multi-chunk sticky dir).
+func cliApplyStdin(ctx context.Context, applyDir string, strictPreview bool, identityPaths []string) int {
+	br := bufio.NewReader(os.Stdin)
+	if isSealedPlanBytes(sealedPeek(br)) {
+		if strictPreview {
+			eprintln("apply: -strict-preview cannot be combined with a sealed plan.age stream " +
+				"(sealed apply is always a real, single-process apply, never a remote-capability preview)")
+			return 2
+		}
+		if applyDir != "" {
+			eprintln("apply: -apply-dir cannot be combined with a sealed plan.age stream " +
+				"(a sealed apply with blobs stages into its own sealed-run-* directory, never the " +
+				"multi-chunk sticky dir)")
+			return 2
+		}
+		return cliApplySealedStdin(ctx, br, identityPaths)
+	}
 	if strictPreview {
-		return cliPreviewStdin(ctx, applyDir)
+		return cliPreviewStdin(ctx, applyDir, br)
 	}
 	runDir, cleanup, err := prepareApplyRunDir(applyDir)
 	if err != nil {
@@ -925,7 +1010,7 @@ func cliApplyStdin(ctx context.Context, applyDir string, strictPreview bool) int
 	}
 	defer cleanup()
 
-	payload, err := plan.DecodePush(os.Stdin, runDir)
+	payload, err := plan.DecodePush(br, runDir)
 	if err != nil {
 		eprintf("apply: %v\n", err)
 		return 1
@@ -945,9 +1030,35 @@ func cliApplyStdin(ctx context.Context, applyDir string, strictPreview bool) int
 	return 0
 }
 
+// cliApplySealedStdin decrypts and applies a sealed plan.age stream whose
+// first bytes were already peeked (not consumed) from br by cliApplyStdin.
+// See decryptAndDecodeSealedPush for the read-to-EOF-before-applying and
+// run-dir logic shared with the file path (cliApplySealedFile); only the
+// source name in the printed summary differs here, matching the "stdin" /
+// "stdin+blobs" distinction the unsealed stdin path already makes.
+func cliApplySealedStdin(ctx context.Context, br *bufio.Reader, identityPaths []string) int {
+	payload, cleanup, err := decryptAndDecodeSealedPush(br, identityPaths)
+	defer cleanup()
+	if err != nil {
+		eprintf("apply: %v\n", err)
+		return 1
+	}
+	if err := applyPlanOps(ctx, payload.Ops, payload.PlanDir); err != nil {
+		return 1
+	}
+	src := "stdin"
+	if payload.PlanDir != "" {
+		src = "stdin+blobs"
+	}
+	eprintf("decrypted and applied %s (%d ops)\n", src, len(payload.Ops))
+	return 0
+}
+
 // cliPreviewStdin is the -strict-preview form of cliApplyStdin: it previews
-// (dry-runs, see cliApply) a blob-free push payload from stdin.
-func cliPreviewStdin(ctx context.Context, applyDir string) int {
+// (dry-runs, see cliApply) a blob-free push payload from r (stdin, already
+// wrapped by cliApplyStdin's own peek so no byte the sealed sniff looked at
+// is lost).
+func cliPreviewStdin(ctx context.Context, applyDir string, r io.Reader) int {
 	if applyDir != "" {
 		eprintln("apply: -strict-preview cannot use -apply-dir")
 		return 2
@@ -955,7 +1066,7 @@ func cliPreviewStdin(ctx context.Context, applyDir string) int {
 	// DecodePush refuses blobs without a plan directory. This deliberately
 	// avoids NewApplyRunDir, so strict remote preview does not create a
 	// staging directory merely to inspect a plan.
-	payload, err := plan.DecodePush(os.Stdin, "")
+	payload, err := plan.DecodePush(r, "")
 	if err != nil {
 		eprintf("apply: %v\n", err)
 		return 1
@@ -965,6 +1076,149 @@ func cliPreviewStdin(ctx context.Context, applyDir string) int {
 	}
 	eprintf("previewed stdin (%d ops)\n", len(payload.Ops))
 	return 0
+}
+
+// ageMagicLine is the first line of every age-encrypted stream (armored or
+// binary alike): the format's own cleartext version banner, always ahead of
+// any recipient stanza (it has to be, so a decryptor can find a matching
+// identity before decrypting anything). cliApplyFile/cliApplyStdin sniff
+// this exact line to tell a sealed plan.age from a plaintext
+// plan.jsonl/push frame/bare JSONL before deciding how to read the rest of
+// the input at all (docs/plan-encryption.md, "Recommended design": `gonf
+// apply` "sniffs the first line").
+const ageMagicLine = "age-encryption.org/v1"
+
+// isSealedPlanBytes reports whether data's first line is exactly
+// ageMagicLine. data may be a full file's bytes (cliApplyFile, which has
+// already read the whole plan file) or only a short peek of a stream
+// (cliApplyStdin's sealedPeek); either way only the bytes up to the first
+// newline (or all of data, when it is shorter than the magic line and
+// carries no newline yet) are compared.
+func isSealedPlanBytes(data []byte) bool {
+	line, _, _ := bytes.Cut(data, []byte("\n"))
+	return string(line) == ageMagicLine
+}
+
+// sealedPeek returns up to len(ageMagicLine) bytes from br without
+// consuming them (bufio.Reader.Peek), for isSealedPlanBytes to sniff before
+// cliApplyStdin decides which of the sealed/push/bare-JSONL paths to read
+// the rest of br through. A short read (less data currently buffered than
+// that — including none at all, e.g. genuinely empty stdin) simply yields
+// fewer bytes, which can never equal ageMagicLine: isSealedPlanBytes then
+// correctly reports "not sealed", and the ordinary (unsealed) decode path
+// goes on to produce its own read/EOF error for such input, exactly as it
+// already did before this sniff existed.
+func sealedPeek(br *bufio.Reader) []byte {
+	peek, _ := br.Peek(len(ageMagicLine))
+	return peek
+}
+
+// decryptAndDecodeSealedPush is the decrypt-then-decode core shared by
+// cliApplySealedFile and cliApplySealedStdin. It loads identities, opens r
+// as a sealed age stream and reads the WHOLE decrypted frame into memory
+// before looking at any of it: age authenticates only its final 64 KiB
+// segment once that segment has actually been read
+// (docs/plan-encryption.md, "Failure handling"), so io.ReadAll-ing the
+// decrypt reader to completion — succeeding only once the whole stream has
+// authenticated — is what makes "a truncated, bit-flipped, or
+// no-matching-identity input applies nothing" true: no run directory is
+// ever created, and ApplyPlanContext is never reached, before that full
+// read has already succeeded.
+//
+// Once the decrypted frame is fully in hand, plan.PushHasBlobs decides
+// whether it needs a run directory for the blob-unpacking side effect of
+// plan.DecodePush: without blobs (the common case: every conf secret today
+// is inline content, docs/plan-encryption.md "Plaintext after decryption"),
+// DecodePush decodes straight from memory and no plaintext ever touches
+// disk on the destination beyond what the ops themselves go on to write.
+// With blobs, plan.NewSealedApplyRunDir provides a dedicated
+// sealed-run-<pid>-* directory (its own dead-owner-PID sweep, distinct from
+// an ordinary push's run dir) — a DecodePush failure after it was created
+// (a malformed frame despite a genuine, authenticated decrypt) still
+// removes it via the returned cleanup before decryptAndDecodeSealedPush
+// returns its error, so nothing partial is left behind either way.
+//
+// The returned cleanup is always safe to call (a no-op when no run
+// directory was created) and the caller must defer it unconditionally,
+// including on error, exactly as it would for plan.NewApplyRunDir's own
+// cleanup.
+func decryptAndDecodeSealedPush(r io.Reader, identityPaths []string) (*plan.PushPayload, func(), error) {
+	noop := func() {}
+	identities, err := loadSealedIdentities(identityPaths)
+	if err != nil {
+		return nil, noop, err
+	}
+	dr, err := seal.Open(r, identities)
+	if err != nil {
+		return nil, noop, err
+	}
+	data, err := io.ReadAll(dr)
+	if err != nil {
+		return nil, noop, fmt.Errorf("sealed plan: %w", err)
+	}
+	if !plan.PushHasBlobs(data) {
+		payload, err := plan.DecodePush(bytes.NewReader(data), "")
+		return payload, noop, err
+	}
+	runDir, cleanup, err := plan.NewSealedApplyRunDir()
+	if err != nil {
+		return nil, noop, fmt.Errorf("sealed plan: run dir: %w", err)
+	}
+	payload, err := plan.DecodePush(bytes.NewReader(data), runDir)
+	if err != nil {
+		cleanup()
+		return nil, noop, err
+	}
+	return payload, cleanup, nil
+}
+
+// loadSealedIdentities resolves the identity files to load for a sealed
+// apply: every repeated -identity path, or, when none was given, the
+// default identity for a non-root invocation. Root (euid 0) gets no default
+// at all and must pass -identity explicitly: under sudo/doas, whether HOME
+// and XDG_CONFIG_HOME are the invoking user's or root's own depends on
+// env_reset, always_set_home and the doas keepenv/setenv rules, so a
+// default here could silently read an unexpected file — or none — instead
+// of the operator's actual identity (docs/plan-encryption.md, "Keys", "No
+// default identity for root").
+func loadSealedIdentities(paths []string) ([]seal.Identity, error) {
+	if len(paths) == 0 {
+		if geteuid() == 0 {
+			return nil, fmt.Errorf("apply: sealed plan.age: running as root (euid 0); " +
+				"-identity is required (sudo/doas leaves HOME/XDG_CONFIG_HOME ambiguous, so no " +
+				"default identity path is guessed) — pass -identity <file>")
+		}
+		def, err := defaultIdentityPath()
+		if err != nil {
+			return nil, fmt.Errorf("apply: sealed plan.age: %w", err)
+		}
+		paths = []string{def}
+	}
+	var identities []seal.Identity
+	for _, p := range paths {
+		loaded, err := seal.LoadIdentities(p)
+		if err != nil {
+			return nil, fmt.Errorf("apply: %w", err)
+		}
+		identities = append(identities, loaded...)
+	}
+	return identities, nil
+}
+
+// defaultIdentityPath returns the non-root default identity file path,
+// ${XDG_CONFIG_HOME:-$HOME/.config}/gonf/identity (docs/plan-encryption.md,
+// "Keys"), the same default gonf plan -seal (task 2b2) uses for its
+// recipients file's own directory.
+func defaultIdentityPath() (string, error) {
+	dir := os.Getenv("XDG_CONFIG_HOME")
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve $HOME: %w", err)
+		}
+		dir = filepath.Join(home, ".config")
+	}
+	return filepath.Join(dir, "gonf", "identity"), nil
 }
 
 func prepareApplyRunDir(applyDir string) (string, func(), error) {
@@ -1062,9 +1316,9 @@ func verifyStickyDirOwned(path string) error {
 }
 
 func printUsage() {
-	eprintln("usage: gonf [-list] [-version] [-plan-version] [-strict-preview-version] [-profile=...] [-verbose|-quiet] [-dry-run|-n] [-privilege=none|sudo|doas] [-cmd-timeout 5m] <task> [task...]")
+	eprintln("usage: gonf [-list] [-version] [-plan-version] [-strict-preview-version] [-sealed-version] [-profile=...] [-verbose|-quiet] [-dry-run|-n] [-privilege=none|sudo|doas] [-cmd-timeout 5m] <task> [task...]")
 	eprintln("       gonf plan [-o dir|-stdout [-with-secrets]|-redacted] [-seal [-recipient r]...] [-id name] <task> [task...]")
-	eprintln("       gonf apply [-n|-dry-run|-strict-preview] [-apply-dir dir] <plan.jsonl|->")
+	eprintln("       gonf apply [-n|-dry-run|-strict-preview] [-apply-dir dir] [-identity file]... <plan.jsonl|plan.age|->")
 	eprintln("       gonf push [-n|-dry-run|-preview] [-id name] [-privilege=...] [-- ssh-args...] user@host <task> [task...]")
 	eprintln("       gonf cluster [-n|-dry-run|-preview] [-j N] [-id name] [-host-timeout 10m] <cluster> <task> [task...]")
 	eprintln("       gonf fleet [-n|-dry-run|-preview] [-j N] [-id name] [-host-timeout 10m] <fleet> <task> [task...]")

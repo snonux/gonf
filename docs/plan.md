@@ -734,7 +734,7 @@ import from an external `plan_test` file is fine.
 |---------|--------|
 | `gonf <task> [task…]` | Record + apply locally |
 | `gonf plan [-o dir\|-stdout [-with-secrets]\|-redacted] [-seal [-recipient r]…] [-id name] <task>…` | Write `dir/plan.jsonl` (+ `blobs/`; `dir` defaults to `.`, is created `0700` when missing, is never chmod'ed when it exists and must be yours, not world-writable and not group-writable except by your private group, see "The output directory" below), or print JSONL to stdout (refused for a plan with `sensitive` ops unless `-with-secrets`), or print a redacted human preview that no gonf applies (`-redacted`); with `-seal` (task 2b2), age-encrypt the GONF-PUSH/1 push frame instead and write only `dir/plan.age` (or, with `-stdout`, the sealed bytes to stdout) — see "Secret material" below and [plan-encryption.md](plan-encryption.md) |
-| `gonf apply [-n\|-dry-run\|-strict-preview] <plan.jsonl\|->` | Apply a plan file, or read **GONF-PUSH/1** / bare JSONL from stdin. The plan file must be a regular file and is not followed if it is a symlink (a FIFO or a symlinked `plan.jsonl` is refused; use `-` for piped input); its directory may be reached through symlinks |
+| `gonf apply [-n\|-dry-run\|-strict-preview] [-identity file]... <plan.jsonl\|plan.age\|->` | Apply a plan file, or read **GONF-PUSH/1** / bare JSONL / a sealed `plan.age` stream from stdin. Sealed input (`age-encryption.org/v1` sniffed as the first line — task 3b2, see docs/plan-encryption.md) is decrypted with `-identity` (repeatable; default for a non-root invocation `${XDG_CONFIG_HOME:-$HOME/.config}/gonf/identity`; root must pass `-identity` explicitly) and applied with the SAME single-process, file-apply semantics as a plaintext plan — no privilege split, `elevate` ignored exactly as for `plan.jsonl` today. `-apply-dir`/`-strict-preview` cannot combine with sealed stdin input. The plan file must be a regular file and is not followed if it is a symlink (a FIFO or a symlinked `plan.jsonl`/`plan.age` is refused; use `-` for piped input); its directory may be reached through symlinks |
 | `gonf push [-n\|-preview] [-id name] [-- ssh-args…] user@host <task>…` | Record in memory, stream over `ssh` to remote `gonf apply -` |
 | `gonf cluster [-n\|-preview] [-j N] [-id name] [-host-timeout 10m] <cluster> <task>…` | Resolve inventory cluster; record once; parallel push or strict preview to each host |
 | `gonf fleet [-n\|-preview] [-j N] [-id name] [-host-timeout 10m] <fleet> <task>…` | Resolve fleet (list of clusters); push or strict preview on unique hosts |
@@ -1015,7 +1015,16 @@ cleaner.
 -strict-preview-version` prints the strict-preview capability version. The
 separate capability probe prevents a controller from treating an older binary
 with a coincidentally matching release/schema as able to parse
-`apply -strict-preview`.
+`apply -strict-preview`. `gonf -sealed-version` prints the sealed-plan
+(`plan.age`) capability version this binary can decrypt and apply (task 3b2,
+docs/plan-encryption.md): a container version distinct from both the plan
+schema and strict-preview, since a future change to what is sealed changes
+the inner `GONF-PUSH/1` magic, not the plan schema. An older gonf given a
+sealed `plan.age` has no such flag and refuses the input before any op runs
+regardless: `gonf apply -` fails in `plan.DecodePush` with `plan push: bad
+magic "age-encryption.org/v1"` (age's own cleartext version banner is not
+the `GONF-PUSH/1` magic); `gonf apply plan.age` fails decoding the first
+line as JSON in `plan.DecodePlanBytes`.
 
 `push -n` / `cluster -n` / `fleet -n` retain their established compatibility
 behavior: they bootstrap a missing or stale remote gonf binary before running
@@ -1429,6 +1438,16 @@ the encrypted SSH transport, because the destination must write it.
 The full lifecycle and its limits are in [secrets.md](secrets.md). Never put
 secret values in task names, descriptions, paths or host values: identities
 are logged everywhere and are not redacted.
+
+**Applying a sealed plan (task 3b2, w82 phase 1).** `gonf apply -identity
+file... <plan.age|->` (see the CLI table above) decrypts what `-seal`
+wrote and applies it with the SAME single-process, file-apply semantics as
+a plaintext plan — see [plan-encryption.md](plan-encryption.md) for the
+full design. `gonf apply` prints `decrypted and applied plan.age (N ops)`,
+never "verified" or "authenticated", for the same confidentiality-only
+reason the bullet above states. Unattended sealed apply (a timer, cron
+job, pull agent or CI step picking up `plan.age` on its own) stays blocked
+until a signing design exists (task 7b2).
 
 Plan schema **version 10** adds the `latest` field to `package` ops: a
 `Package` recorded with `IsLatest` now carries that intent explicitly, so
