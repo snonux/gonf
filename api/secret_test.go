@@ -139,6 +139,11 @@ func secretSymlinkFailures() []secretFailure {
 func requireSecretRecordFails(t *testing.T, tc secretFailure) {
 	t.Helper()
 	ResetForTest()
+	// The expected record failure below sets the sticky lastRecordFailure
+	// (api/plan.go), and ResetForTest alone (called only at the top of the
+	// NEXT test, not here) would not clear it in time under -shuffle=on;
+	// clear it explicitly so it does not leak into a later, unrelated test.
+	t.Cleanup(func() { lastRecordFailure = nil })
 	useSecretWorkDir(t)
 	if tc.setup != nil {
 		tc.setup(t)
@@ -185,6 +190,10 @@ func mustSymlink(t *testing.T, target, link string) {
 
 func TestOptionalSecretMissingDoesNotFollowInternalSymlinks(t *testing.T) {
 	ResetForTest()
+	// The expected record failure below sets the sticky lastRecordFailure
+	// (api/plan.go); clear it so it does not leak into a later, unrelated
+	// test under -shuffle=on.
+	t.Cleanup(func() { lastRecordFailure = nil })
 	useSecretWorkDir(t)
 	writeSecret(t, "actual", "secret\n")
 	if err := os.Symlink("actual", filepath.Join("secrets", "link")); err != nil {
@@ -231,6 +240,10 @@ func TestOptionalSecretMissingOmitsHostFragment(t *testing.T) {
 
 func TestSecretFailureStopsRunAndPushBeforeMutation(t *testing.T) {
 	ResetForTest()
+	// Both the Run and PushTo failures below go through RecordPlanTo and
+	// set the sticky lastRecordFailure (api/plan.go); clear it so it does
+	// not leak into a later, unrelated test under -shuffle=on.
+	t.Cleanup(func() { lastRecordFailure = nil })
 	dir := useSecretWorkDir(t)
 	tempDir := filepath.Join(dir, "tmp")
 	t.Setenv("TMPDIR", tempDir)

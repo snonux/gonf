@@ -155,6 +155,10 @@ func TestWhenPathExistsLocalRunsOnlyIfPresent(t *testing.T) {
 
 func TestRecordPlanOpaqueWhenRequiresLocalPass(t *testing.T) {
 	ResetTasks()
+	// The expected record failure below sets the sticky lastRecordFailure
+	// (api/plan.go); clear it so it does not leak into a later, unrelated
+	// test under -shuffle=on.
+	t.Cleanup(func() { lastRecordFailure = nil })
 	Task("custom", "", func() {
 		Package("x")
 	}, When(func(f Facts) bool { return f.GOOS == "plan9" }))
@@ -406,6 +410,10 @@ func TestRecordPlanFailsOnUnrecordedResource(t *testing.T) {
 		resource.SetPlanDraftRecorder(nil)
 		plan.SetRecording(false)
 		plan.ResetRecord()
+		// The expected record failure below sets the sticky
+		// lastRecordFailure (api/plan.go); clear it so it does not leak
+		// into a later, unrelated test under -shuffle=on.
+		lastRecordFailure = nil
 	})
 
 	Task("custom_kind", "", func() {
@@ -550,6 +558,10 @@ func TestRecordPlanRejectsOnChangeAcrossPrivilegeChunks(t *testing.T) {
 		resource.SetPlanDraftRecorder(nil)
 		plan.SetRecording(false)
 		plan.ResetRecord()
+		// The expected record failure below sets the sticky
+		// lastRecordFailure (api/plan.go); clear it so it does not leak
+		// into a later, unrelated test under -shuffle=on.
+		lastRecordFailure = nil
 	})
 
 	Task("cross_chunk_change_gate", "", func() {
@@ -897,6 +909,10 @@ func TestRecordPlanOpaqueWhenFailingControllerFilterErrors(t *testing.T) {
 		resource.SetPlanDraftRecorder(nil)
 		plan.SetRecording(false)
 		plan.ResetRecord()
+		// The expected record failure below sets the sticky
+		// lastRecordFailure (api/plan.go); clear it so it does not leak
+		// into a later, unrelated test under -shuffle=on.
+		lastRecordFailure = nil
 	})
 
 	Activate(Facts{GOOS: "linux", Profile: "fedora"})

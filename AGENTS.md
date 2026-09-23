@@ -142,14 +142,32 @@ inventory and resources is a declaration error (`internal/declerr`):
   process, and `RecordPlanTo`, `Run`, `api.Apply` and `cli.CLI` refuse with
   it (the CLI prints it and exits 1). `RecordPlanTo` fails a record for
   other reasons too, never reported to declerr: a task recursion cycle, a
-  packaging error. Any of these also resets the registered resource
-  repository (so a failed body's partial registrations cannot outlive it)
-  and sets `api`'s own `anyRecordFailed` (not `declerr`'s concern — see
-  api/plan.go), cleared by a later clean record. `api.Apply` refuses on it
-  only when the repository is empty, so a later, separate call that skipped
-  checking a failed record's returned error is still refused, while a call
-  that goes on to register or apply something new is not refused on the
-  stale failure's account (task tc2).
+  packaging error, a panicked task body (recovered and re-panicked, task
+  cd2). On every outcome — success, failure or a recovered panic —
+  `RecordPlanTo` rolls the registered resource repository back to its
+  snapshot from before the call started (`resource.RollbackTo`, tasks
+  ad2/bd2), so nothing THIS call itself registered can outlive it, on
+  either path (a failed body's partial registrations, or a successful
+  record's last scope — e.g. a `WhenHostname`-guarded fragment whose ops
+  correctly carry `when_begin`/`when_end`, but which a later, unguarded
+  `api.Apply` would otherwise lower and apply directly). This does NOT
+  guarantee whatever was registered before the call survives, though:
+  recording runs each task body against a fresh resource repository
+  (`runTaskBody`), a pre-existing design that already discards prior
+  registrations the moment any task body starts running, independent of
+  this rollback. `RecordPlanTo` also sets `api`'s own `lastRecordFailure`
+  on a (non-panic) failure — not `declerr`'s concern, see api/plan.go —
+  cleared by a later clean record. `api.Apply` refuses on it
+  UNCONDITIONALLY (task ad2 reverted an earlier, narrower empty-repository
+  scoping from task tc2, once it found that scoping let a later, unrelated
+  registration mask an earlier one's silent loss): the ONLY way to clear a
+  failed record's refusal is a later record that actually succeeds, never
+  merely registering or applying something new directly. A test that
+  intentionally fails a record and continues in the same process must
+  therefore call `api.ResetForTest` (or record cleanly again) rather than
+  relying on a fresh registration alone; several tests in `api/*_test.go`
+  do this via `t.Cleanup(func() { lastRecordFailure = nil })` specifically,
+  where the full `ResetForTest` would reset more than the test wants.
 - Code below the DSL (internal packages such as `internal/inventory`, check
   helpers) returns errors; only the DSL entry point reports them.
 - Keep a `panic` only for a genuine, documented programmer-bug invariant that

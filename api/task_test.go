@@ -40,6 +40,11 @@ func TestTaskMatchingAndList(t *testing.T) {
 
 func TestRunUnknownTask(t *testing.T) {
 	ResetTasks()
+	// Run("nope") fails inside RecordPlanTo (an unknown task), which sets
+	// the package-level lastRecordFailure (api/plan.go); clear it so this
+	// expected failure does not leak into a later, unrelated test under
+	// -shuffle=on (see AGENTS.md's Test seams section).
+	t.Cleanup(func() { lastRecordFailure = nil })
 	err := Run("nope")
 	if err == nil {
 		t.Fatal("expected error for unknown task")
@@ -158,6 +163,10 @@ func TestRunAggregateSelfMatchingPattern(t *testing.T) {
 // the recorder must fail the record with a cycle error instead of crashing.
 func TestRunTaskSelfRecursionCycle(t *testing.T) {
 	ResetTasks()
+	// The cycle refusal below fails RecordPlanTo, which sets the sticky
+	// lastRecordFailure (api/plan.go); clear it so this test's expected
+	// failure does not leak into a later, unrelated test under -shuffle=on.
+	t.Cleanup(func() { lastRecordFailure = nil })
 	Task("self", "runs itself", func() {
 		_ = Run("self") // cycle error cannot be returned from a task body
 	})
@@ -175,6 +184,9 @@ func TestRunTaskSelfRecursionCycle(t *testing.T) {
 // tasks and the cycle chain.
 func TestRunMutualRecursionCycle(t *testing.T) {
 	ResetTasks()
+	// See TestRunTaskSelfRecursionCycle: clear the sticky record-failure
+	// guard so this expected cycle refusal does not leak into a later test.
+	t.Cleanup(func() { lastRecordFailure = nil })
 	Task("cyc_a", "", func() {
 		_ = Run("cyc_b")
 	})
@@ -194,6 +206,9 @@ func TestRunMutualRecursionCycle(t *testing.T) {
 // TestRunDeepRecursionCycle covers a -> b -> c -> a.
 func TestRunDeepRecursionCycle(t *testing.T) {
 	ResetTasks()
+	// See TestRunTaskSelfRecursionCycle: clear the sticky record-failure
+	// guard so this expected cycle refusal does not leak into a later test.
+	t.Cleanup(func() { lastRecordFailure = nil })
 	Task("deep_a", "", func() { _ = Run("deep_b") })
 	Task("deep_b", "", func() { _ = Run("deep_c") })
 	Task("deep_c", "", func() { _ = Run("deep_a") })
@@ -366,6 +381,10 @@ func TestNestedRunSurfacesRealPackError(t *testing.T) {
 		resource.SetPlanDraftRecorder(nil)
 		plan.SetRecording(false)
 		plan.ResetRecord()
+		// The expected record failure below sets the sticky
+		// lastRecordFailure (api/plan.go); clear it so it does not leak
+		// into a later, unrelated test under -shuffle=on.
+		lastRecordFailure = nil
 	})
 
 	dir := t.TempDir()
@@ -400,6 +419,10 @@ func TestAggregateNoMatchFailsRecord(t *testing.T) {
 	t.Cleanup(func() {
 		plan.SetRecording(false)
 		plan.ResetRecord()
+		// The expected record failure below sets the sticky
+		// lastRecordFailure (api/plan.go); clear it so it does not leak
+		// into a later, unrelated test under -shuffle=on.
+		lastRecordFailure = nil
 	})
 
 	Task("unrelated", "", func() {})
@@ -427,6 +450,10 @@ func TestAggregateChildFailureFailsRecord(t *testing.T) {
 	t.Cleanup(func() {
 		plan.SetRecording(false)
 		plan.ResetRecord()
+		// The expected record failure below sets the sticky
+		// lastRecordFailure (api/plan.go); clear it so it does not leak
+		// into a later, unrelated test under -shuffle=on.
+		lastRecordFailure = nil
 	})
 
 	// The child's record fails: it registers a resource but no plan draft,
@@ -459,6 +486,10 @@ func TestNestedAggregateChainVisibleInBodyError(t *testing.T) {
 		resource.SetPlanDraftRecorder(nil)
 		plan.SetRecording(false)
 		plan.ResetRecord()
+		// The expected record failure below sets the sticky
+		// lastRecordFailure (api/plan.go); clear it so it does not leak
+		// into a later, unrelated test under -shuffle=on.
+		lastRecordFailure = nil
 	})
 
 	dir := t.TempDir()

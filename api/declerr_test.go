@@ -372,6 +372,150 @@ func TestDeclarationErrorUnwrapsToCause(t *testing.T) {
 	}
 }
 
+// TestApplyRefusesEvenAfterANewUnrelatedRegistrationFollowsARecordFailure
+// pins task ad2's finding: File(a, ...) registers directly at top level,
+// then an unrelated task's body fails to record (declared misuse). Because
+// recording runs each task body against a fresh resource repository
+// (runTaskBody), a's registration is already gone by the time Run returns —
+// regardless of this guard, and regardless of whether RecordPlanTo wipes or
+// rolls back on that failure — so nothing can restore it. What matters is
+// that a later, unrelated File(b, ...) registration must not let Apply()
+// slip through and report success: an empty-repository-only guard (task
+// tc2's narrowing, reverted by ad2) would see the non-empty [b] and apply
+// it, silently dropping a's earlier declaration with no sign anything was
+// wrong. The unconditional guard refuses instead, every time, until a later
+// record actually succeeds.
+func TestApplyRefusesEvenAfterANewUnrelatedRegistrationFollowsARecordFailure(t *testing.T) {
+	ResetForTest()
+	ResetInventory()
+	t.Cleanup(func() {
+		ResetForTest()
+		ResetInventory()
+	})
+	a := filepath.Join(t.TempDir(), "a")
+	b := filepath.Join(t.TempDir(), "b")
+	File(a, options.WithContent("a"))
+	Task("bad", "", func() {
+		Cron("x", options.WithCommand("/bin/true"), options.WithCronUser(""))
+	})
+	if err := Run("bad"); err == nil || !strings.Contains(err.Error(), "WithCronUser must not be empty") {
+		t.Fatalf("Run(bad) = %v, want the cron misuse refusal", err)
+	}
+	File(b, options.WithContent("b"))
+	if err := Apply(); err == nil {
+		t.Fatal("Apply() after an unrelated record failure, with a new registration following it, = nil, want a refusal")
+	}
+	if _, err := os.Stat(a); !os.IsNotExist(err) {
+		t.Fatalf("a should not exist: %v", err)
+	}
+	if _, err := os.Stat(b); !os.IsNotExist(err) {
+		t.Fatalf("b must not be applied while the guard refuses: %v", err)
+	}
+
+	// Recovery: a later, unrelated CLEAN record is what actually clears
+	// the guard — not merely registering something new directly.
+	Task("good", "", func() {})
+	if err := Run("good"); err != nil {
+		t.Fatalf("Run(good) = %v, want a clean run", err)
+	}
+	File(b, options.WithContent("b"))
+	if err := Apply(); err != nil {
+		t.Fatalf("Apply() after recovery = %v, want it to succeed", err)
+	}
+	if content, err := os.ReadFile(b); err != nil || string(content) != "b" {
+		t.Fatalf("b = %q, %v; want it written after recovery", content, err)
+	}
+}
+
+// TestApplyDoesNotBlindlyApplyAWhenGuardedFragmentAfterARecord pins task
+// bd2: a successful RecordPlanTo used to leave its last recorded scope's
+// registrations (with their drafts) sitting in the repository — including
+// the members of a WhenHostname-guarded fragment whose OPS correctly carry
+// when_begin/when_end, but whose live registration carries no such guard.
+// A later, separate api.Apply in the same process would lower and apply
+// that registration directly, bypassing the guard entirely. RecordPlanTo
+// now rolls the repository back to its pre-call snapshot on success too,
+// so nothing survives for a blind Apply() to find.
+func TestApplyDoesNotBlindlyApplyAWhenGuardedFragmentAfterARecord(t *testing.T) {
+	ResetForTest()
+	ResetInventory()
+	t.Cleanup(func() {
+		ResetForTest()
+		ResetInventory()
+	})
+	guarded := filepath.Join(t.TempDir(), "guarded")
+	Task("t", "", func() {
+		WhenHostname("definitely-not-this-host", func() {
+			File(guarded, options.WithContent("nope"))
+		})
+	})
+	if _, err := RecordPlanTo("p", plan.NewMemoryStore(), "t"); err != nil {
+		t.Fatalf("RecordPlanTo(t) = %v, want a clean record", err)
+	}
+	if ids := resource.RegisteredIDs(); len(ids) != 0 {
+		t.Fatalf("a successful record left %v registered, want none", ids)
+	}
+	if err := Apply(); err != nil {
+		t.Fatalf("Apply() after a successful record with nothing registered = %v, want nil (nothing to do)", err)
+	}
+	if _, err := os.Stat(guarded); !os.IsNotExist(err) {
+		t.Fatalf("the when-guarded file must not have been written: %v", err)
+	}
+}
+
+// TestRunTaskBodyPanicDoesNotLeaveAHalfRegisteredSetForApply pins task cd2:
+// a task body panic (a nil-map write, here — a genuine programmer-bug
+// invariant, not a recipe error) used to skip RecordPlanTo's normal return
+// entirely, so the repository rollback never ran; a caller that recovers
+// the panic (as this test, or go test's own per-test recovery, does) would
+// find whatever the body registered before panicking still sitting in the
+// repository, and a later Apply() would silently apply that half-declared
+// set. RecordPlanTo now recovers, rolls the repository back to its
+// pre-call snapshot, and re-panics — so the process-ending behavior for an
+// uninstrumented caller is unchanged, but a caller that does recover finds
+// nothing left over from the panicked body. It deliberately does NOT set
+// lastRecordFailure (unlike a normal error return): a caller able to
+// recover a panic here has already taken on responsibility for it, and
+// TestPanickingTaskDoesNotLeakIntoLaterDraftErrors already pins that a
+// recovered panic must leave no trace for a later, unrelated Apply to
+// stumble over — a sticky refusal would be exactly such a trace.
+func TestRunTaskBodyPanicDoesNotLeaveAHalfRegisteredSetForApply(t *testing.T) {
+	ResetForTest()
+	ResetInventory()
+	t.Cleanup(func() {
+		ResetForTest()
+		ResetInventory()
+	})
+	half := filepath.Join(t.TempDir(), "half")
+	var nilMap map[string]string
+	Task("panics", "", func() {
+		File(half, options.WithContent("half")) // registers fine before the panic
+		nilMap["x"] = "boom"                    // nil map write: panics
+	})
+	func() {
+		defer func() { recover() }()
+		_ = Run("panics")
+		t.Fatal("Run(panics) returned instead of the task body's panic propagating")
+	}()
+	if ids := resource.RegisteredIDs(); len(ids) != 0 {
+		t.Fatalf("a panicked record left %v registered, want none", ids)
+	}
+
+	// Apply() must proceed normally for whatever is registered afterward,
+	// not stay refused over the recovered panic (see the doc comment).
+	good := filepath.Join(t.TempDir(), "good")
+	File(good, options.WithContent("ok"))
+	if err := Apply(); err != nil {
+		t.Fatalf("Apply() after a recovered panic and a fresh registration = %v, want it to succeed", err)
+	}
+	if _, err := os.Stat(half); !os.IsNotExist(err) {
+		t.Fatalf("the half-registered file must not have been written: %v", err)
+	}
+	if content, err := os.ReadFile(good); err != nil || string(content) != "ok" {
+		t.Fatalf("good = %q, %v; want it written", content, err)
+	}
+}
+
 // unregisteredHost returns a handle for name without looking it up, standing
 // in for a recipe that kept a handle whose registration was refused.
 func unregisteredHost(name string) HostRef { return HostRef{name: name} }

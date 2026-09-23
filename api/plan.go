@@ -237,25 +237,78 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 		return nil, err
 	}
 
+	kept := resource.RegisteredIDs()
+	defer func() {
+		// A task body panic (a genuine programmer-bug invariant, not a
+		// recipe error — see enterRecordMode's own comment anticipating
+		// "a panic recovered outside RecordPlanTo") skips the normal
+		// return entirely, so the rollback below would never run without
+		// this. Recovering, rolling back, and re-panicking keeps the
+		// documented panic-on-programmer-bug behavior (it still crashes
+		// an uninstrumented process) while leaving the repository
+		// consistent for any caller that does recover it — go test's
+		// per-test recovery among them (task cd2): whatever the panicked
+		// body itself registered does not outlive the panic, the same
+		// guarantee the normal error return gets below.
+		//
+		// This deliberately does NOT set lastRecordFailure: a caller
+		// sophisticated enough to recover a panic here (rare — the
+		// default outcome is still a crash) has already taken on
+		// responsibility for what happens next, unlike a normal error
+		// return that is easy to ignore by not checking it. Setting it
+		// would also conflict with the documented, tested contract that a
+		// panic recovered here leaves no trace for an unrelated LATER
+		// call to stumble over (TestPanickingTaskDoesNotLeakIntoLaterDraftErrors) —
+		// only the rollback is that trace-free by construction; a sticky
+		// refusal is not.
+		if r := recover(); r != nil {
+			resource.RollbackTo(kept)
+			panic(r)
+		}
+	}()
 	ops, err := recordPlanBody(planID, store, taskNames)
+	// Either outcome rolls the repository back to exactly what was
+	// registered before this call started (tasks ad2/bd2): this record
+	// attempt's own registrations are done being useful to the live
+	// repository the moment RecordPlanTo returns, since what they became
+	// is already captured in ops (success) or lost with err (failure) —
+	// nothing about them needs to additionally sit in the repository
+	// afterward, on either path.
+	//
+	// On failure this replaces a blanket resource.ResetRepository(): a
+	// task body that failed this record — declared misuse, a task
+	// recursion cycle, a packaging error, a plan-level pre-flight refusal
+	// — may already have registered resources before failing, and leaving
+	// them registered would let a later api.Apply in this process
+	// silently apply that half-declared set (task fc2). Wiping the WHOLE
+	// repository was too broad, though: it also dropped whatever a
+	// recipe had registered before this call ever started, and a later,
+	// unrelated direct registration could then mask that loss by making
+	// the repository look non-empty again (task ad2) — rolling back to
+	// the starting snapshot removes only what THIS attempt added.
+	//
+	// On success this is new (task bd2): without it, a successful record
+	// left exactly the last recorded scope's registrations (with their
+	// drafts) sitting in the repository — e.g. the members of a
+	// WhenHostname-guarded fragment that this very record's ops correctly
+	// gated with when_begin/when_end — for a later, unguarded api.Apply
+	// in the same process to lower and apply DIRECTLY, bypassing the
+	// guard the ops encode. Rolling back here means nothing a record
+	// leaves behind can be blindly applied at all: what to do with the
+	// ops is entirely the caller's job (RecordPlanTo just returns them).
+	resource.RollbackTo(kept)
 	if err != nil {
-		// A task body that failed this record — declared misuse, a task
-		// recursion cycle, a packaging error, a plan-level pre-flight
-		// refusal — may already have registered resources before failing.
-		// Leaving them registered would let a later api.Apply in this
-		// process silently apply that half-declared set (task fc2).
-		// lastRecordFailure is the other half of this guard, for a caller
-		// that skips straight to Apply without going through this
+		// lastRecordFailure is the other half of the failure guard, for a
+		// caller that skips straight to Apply without going through this
 		// RecordPlanTo call at all; it covers every failure reason this
 		// function can return, not only ones that reached declerr (task
 		// tc2 — declerr only ever hears about declared misuse, never a
 		// cycle or a packaging error, so gating solely on declerr left
 		// those two reasons without the loud-refusal half of this guard,
-		// even though the repository reset below already covered them).
-		// Storing err itself, not just that some record failed, lets
-		// Apply's refusal name the actual cause instead of an opaque
-		// sentence (task uc2).
-		resource.ResetRepository()
+		// even though the rollback above already covered them). Storing
+		// err itself, not just that some record failed, lets Apply's
+		// refusal name the actual cause instead of an opaque sentence
+		// (task uc2).
 		lastRecordFailure = err
 	} else {
 		// A clean, complete record is itself evidence nothing is left
@@ -271,18 +324,26 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 // failed, for any of the reasons it can fail, and is cleared whenever one
 // succeeds — never sticky for the life of the process the way declerr.First
 // is, since a later clean record is itself proof nothing is left over from
-// an earlier failure. api.Apply checks it, but only when the registered
-// resource repository is empty: that is exactly the state a failed record
-// leaves (the reset above already wiped whatever the failed body
-// registered), so a caller that applies without checking that call's
-// returned error still gets refused, with the real cause, instead of
-// silently no-op'ing. Once anything is registered afterward — through a
-// later record (successful or not) or directly — it is unrelated to the
-// stale failure, and Apply proceeds on it normally rather than refusing on
-// the old failure's account; that scoping is also what keeps this from
-// needing to be cleared by every test or caller that intentionally fails a
-// record and later registers or applies something else in the same
-// process.
+// an earlier failure. api.Apply checks it UNCONDITIONALLY (task ad2
+// reverted an earlier, narrower empty-repository-only scoping from task
+// tc2): recording runs each task body against a fresh resource repository
+// (runTaskBody, api/task.go), a pre-existing design that already discards
+// whatever the repository held before a task body starts running — so a
+// resource registered before a later, unrelated Run/RecordPlanTo call can
+// already be gone by the time that call returns, success or failure alike,
+// regardless of anything this guard does. A caller that registers
+// something else afterward and calls Apply() would see a non-empty
+// repository; scoping the check to "only when empty" would let that slip
+// through with the earlier registration silently dropped — a partial
+// convergence reported as success (task ad2's exact finding). The
+// unconditional check cannot undo that loss, but it stops Apply from ever
+// reporting success while it is possible: the ONLY way to clear this is a
+// later record that actually succeeds, never merely registering or
+// applying something new directly. A test or caller that intentionally
+// fails a record and continues in the same process must therefore call
+// api.ResetForTest (or record cleanly again) rather than relying on a
+// fresh registration alone — see api/reset.go and AGENTS.md's Test seams
+// section for the tests this can affect under -shuffle=on.
 var lastRecordFailure error
 
 // recordPlanBody is RecordPlanTo's actual recording, split out so

@@ -149,6 +149,11 @@ func recordTwoTasksErr(t *testing.T, outer, inner func()) ([]plan.Op, error) {
 		resource.SetPlanDraftRecorder(nil)
 		plan.SetRecording(false)
 		plan.ResetRecord()
+		// A caller (e.g. recordMergeRefusalCase's "nested-privileged" case)
+		// may expect this RecordPlan to fail, which sets the sticky
+		// lastRecordFailure (api/plan.go); clear it so it does not leak
+		// into a later, unrelated test under -shuffle=on.
+		lastRecordFailure = nil
 	})
 	Task("probe_outer", "outer", outer)
 	Task("probe_inner", "inner", inner, Privileged())

@@ -19,6 +19,11 @@ func TestRecordPlanToClearsAmender(t *testing.T) {
 		resource.SetPlanDraftAmender(nil)
 		plan.SetRecording(false)
 		plan.ResetRecord()
+		// The "body-error" and "unknown-task" cases below expect
+		// RecordPlanTo to fail, which sets the sticky lastRecordFailure
+		// (api/plan.go); clear it so it does not leak into a later,
+		// unrelated test under -shuffle=on.
+		lastRecordFailure = nil
 	})
 	cases := map[string]struct {
 		body    func()

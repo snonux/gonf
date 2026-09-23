@@ -42,6 +42,37 @@ func ResetRepository() {
 	repo = newRepository()
 }
 
+// RollbackTo prunes the repository down to exactly kept: any currently
+// registered resource whose ID is not in kept, and its plan draft, is
+// removed. api.RecordPlanTo uses it (tasks ad2/bd2) to undo exactly what one
+// record attempt itself registered — on either outcome, since the record's
+// own findings are already captured in its returned ops (or lost with its
+// error) by the time it returns, nothing about its own registrations needs
+// to survive in the live repository — while leaving whatever was registered
+// BEFORE that attempt started untouched. A full ResetRepository (wiping
+// everything, not just this attempt's additions) would otherwise silently
+// drop an unrelated resource a recipe declared earlier in the same process,
+// the moment any later record failed or even just ran.
+func RollbackTo(kept []string) {
+	getRepository().rollbackTo(kept)
+}
+
+func (r *repository) rollbackTo(kept []string) {
+	keep := make(map[string]struct{}, len(kept))
+	for _, id := range kept {
+		keep[id] = struct{}{}
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for id := range r.registered {
+		if _, ok := keep[id]; !ok {
+			delete(r.registered, id)
+			delete(r.drafts, id)
+		}
+	}
+}
+
 // repository is one recipe scope's registry: the registered resources (by
 // ID, with their dependency edges and registered value) and the plan draft
 // each one recorded. It applies nothing itself; api.Apply and api.Run lower

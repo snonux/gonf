@@ -317,6 +317,11 @@ func TestRecordPlanSameBasenameLargeFilesGetDistinctBlobs(t *testing.T) {
 
 func TestRecordPlanNegative(t *testing.T) {
 	ResetTasks()
+	// RecordPlan("id", "", "missing") below fails inside RecordPlanTo (an
+	// unknown task), which sets the sticky lastRecordFailure
+	// (api/plan.go); clear it so it does not leak into a later, unrelated
+	// test under -shuffle=on.
+	t.Cleanup(func() { lastRecordFailure = nil })
 	Task("x", "", func() {})
 
 	if _, err := RecordPlan("", "", "x"); err == nil {
@@ -451,6 +456,10 @@ func TestRecordPlanDoesNotLeaveRecorderEnabled(t *testing.T) {
 
 func TestRecordPlanSyncDirRequiresPlanDir(t *testing.T) {
 	ResetTasks()
+	// The expected record failure below sets the sticky lastRecordFailure
+	// (api/plan.go); clear it so it does not leak into a later, unrelated
+	// test under -shuffle=on.
+	t.Cleanup(func() { lastRecordFailure = nil })
 	dir := t.TempDir()
 	src := filepath.Join(dir, "a.txt")
 	if err := os.WriteFile(src, []byte("x"), 0o640); err != nil {

@@ -163,21 +163,56 @@ binary's `main` exits, with the code `cli.CLI` returns.
     a task body) fails that record like any stashed task-body error:
     `RecordPlan` / `Run` / push / cluster / fleet return it, nothing is
     applied or pushed, and temporary directories are removed by the normal
-    deferred cleanup. `RecordPlanTo` also resets the registered resource
-    repository on that failure (task fc2), so a failed body's own partial
-    registrations (whatever it registered before the misuse) do not survive
-    it either — a later `api.Apply` call in the same process, made without
-    checking the failed call's returned error, therefore finds nothing left
-    to (mis)apply. As a second, process-wide guard for that same case,
-    `api.Apply` additionally refuses once a record has failed this way and
-    the registered repository is still empty — `RecordPlanTo` fails a
-    record for other reasons too, never reported to `declerr` (a task
-    recursion cycle, a packaging error), so this tracking is `api`'s own
-    (`anyRecordFailed`, task tc2), not `declerr.CapturedAny`'s (removed by
-    tc2) — rather than silently applying an empty registration set and
-    looking identical to "there was nothing to do." Once something new is
-    registered or applied after the failure, it is unrelated to it and is
-    no longer refused on its account. A misuse reported outside a recording
+    deferred cleanup. `RecordPlanTo` also rolls the registered resource
+    repository back to its pre-call snapshot on that failure (task fc2,
+    widened by ad2/bd2 from a blanket reset — see below), so a failed
+    body's own partial registrations do not survive it either — a later
+    `api.Apply` call in the same process, made without checking the
+    failed call's returned error, therefore finds nothing THIS call added
+    left to (mis)apply. That rollback does NOT guarantee anything
+    registered *before* the call survives, though: recording runs each
+    task body against a fresh resource repository (`runTaskBody`), a
+    pre-existing design that already discards prior registrations the
+    moment any task body starts running, independent of the rollback. As
+    a second, process-wide guard, `api.Apply` additionally refuses
+    UNCONDITIONALLY once a record has failed this way — not only when the
+    registered repository happens to be empty (task ad2 reverted an
+    earlier, narrower scoping from task tc2, once it found the narrower
+    form let a later, unrelated registration mask an earlier one's silent
+    loss: since a registration made before a failed call can already be
+    gone regardless of this guard, checking only the empty case let a
+    caller who registered something new afterward slip through with that
+    earlier loss unreported, an apparently-successful partial
+    convergence). `RecordPlanTo` fails a record for other reasons too,
+    never reported to `declerr` (a task recursion cycle, a packaging
+    error), so this tracking is `api`'s own (`lastRecordFailure`, task
+    tc2, later uc2), not `declerr.CapturedAny`'s (removed by tc2) —
+    rather than silently applying an empty registration set and looking
+    identical to "there was nothing to do." The ONLY way to clear it is a
+    LATER record that actually succeeds, never merely registering or
+    applying something new directly; a recovered task-body panic (task
+    cd2) rolls the repository back the same way but does not set
+    `lastRecordFailure` (see api/plan.go's doc comment on that
+    distinction).
+
+    `RecordPlanTo`'s rollback is not limited to the failure path: it rolls
+    back on a SUCCESSFUL record too (task bd2), for the same reason —
+    whatever that record itself registered is done being useful to the
+    live repository once it returns (its result is already in the
+    returned ops), so leaving it registered let a later, unguarded
+    `api.Apply` lower and apply it directly, bypassing whatever `when`
+    guards the ops correctly encode. The rollback targets exactly the
+    call's own additions, not everything: a blanket reset on failure alone
+    (fc2's original shape) could silently drop a resource the recipe had
+    registered *before* the failed call even started — rolling back to
+    the pre-call snapshot (`resource.RollbackTo`) removes only what the
+    call itself added, on every outcome, rather than wiping the whole
+    repository; it just cannot help when something else (`runTaskBody`)
+    already wiped that earlier registration first, which is exactly why
+    `api.Apply`'s guard above stays unconditional rather than relying on
+    the rollback to keep the repository non-empty in that case.
+
+    A misuse reported outside a recording
     (top-level registration in `main`, resources declared for a direct
     `api.Apply`) is
     kept for the process: `RecordPlanTo`, `Run` and `api.Apply` refuse with

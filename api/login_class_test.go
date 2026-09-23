@@ -418,6 +418,10 @@ func TestLoginClassUnderPathConditionRefusedAtRecord(t *testing.T) {
 		resource.SetPlanDraftRecorder(nil)
 		plan.SetRecording(false)
 		plan.ResetRecord()
+		// The expected record failure below sets the sticky
+		// lastRecordFailure (api/plan.go); clear it so it does not leak
+		// into a later, unrelated test under -shuffle=on.
+		lastRecordFailure = nil
 	})
 	RegisterMethods(loginClassTasks{body: func() {
 		WhenPathExists("/etc/login.conf.d", func() { LoginClass("inetd", src) })
