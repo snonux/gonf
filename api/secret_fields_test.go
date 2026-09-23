@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
@@ -73,7 +74,7 @@ func TestOpFieldClassesAreExhaustive(t *testing.T) {
 		walkOpStrings(&op, func(path, s string) string {
 			seen[path] = true
 			return s
-		})
+		}, false)
 	}
 
 	var base plan.Op
@@ -114,7 +115,7 @@ func TestWalkerPanicsOnUnhandledKinds(t *testing.T) {
 					t.Errorf("walkValue(%T) did not panic", v)
 				}
 			}()
-			walkValue(reflect.ValueOf(v).Elem(), "", func(_, s string) string { return s })
+			walkValue(reflect.ValueOf(v).Elem(), "", func(_, s string) string { return s }, false)
 		}()
 	}
 }
@@ -326,6 +327,60 @@ func TestRunSummaryAndLogsRedactWeakSecretInID(t *testing.T) {
 			t.Fatalf("%s leaks the secret:\n%s", what, text)
 		}
 	}
+}
+
+// TestSensitiveOpNamesConcurrentRace pins task 0f2: api.SensitiveOpNames is
+// public and documented read-only, and internal/remote/fleet.go's Fanout
+// fans a single recorded []plan.Op out to one goroutine per host, so
+// several goroutines must be able to call it concurrently over the SAME
+// slice without racing. Before the mutate=false fix, walkStruct's Payload
+// branch (api/secret_fields.go) wrote the walked copy of a migrated kind's
+// concrete payload (plan.CronPayload here) back into Op.Payload
+// unconditionally, even on this read-only path — racing a concurrent
+// reflect.Value.IsNil read of that same interface field in another
+// goroutine's call. This reproduces the exact probe that found it (4
+// goroutines x 200 calls over one shared op carrying a migrated-kind
+// Payload) and must run clean under go test -race; reverting the fix (see
+// this task's self-review) makes it fail with WARNING: DATA RACE.
+func TestSensitiveOpNamesConcurrentRace(t *testing.T) {
+	ops, err := recordWithSecret(t, fakePlanSecret, func() {
+		Cron("job", options.WithCommand("/bin/true"), options.WithMinute(MustSecret("svc/key")))
+	})
+	if err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	var cronOp *plan.Op
+	for i := range ops {
+		if ops[i].Op == plan.KindCron {
+			cronOp = &ops[i]
+			break
+		}
+	}
+	if cronOp == nil {
+		t.Fatal("test premise: no cron op recorded")
+	}
+	if !cronOp.Sensitive {
+		t.Fatal("test premise: the cron op must be marked sensitive")
+	}
+	if cronOp.Payload == nil {
+		t.Fatal("test premise: the cron op must carry a non-nil Payload (a migrated kind, task yd2)")
+	}
+
+	// shared is the one ops slice every goroutine below scans concurrently,
+	// exactly as Fanout hands one recorded slice to every per-host
+	// goroutine.
+	shared := ops
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 200 {
+				_ = SensitiveOpNames(shared)
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 // Control ops (when blocks) are recorded directly and scanned too.

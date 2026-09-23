@@ -93,7 +93,12 @@ func EncodeRedactedPreview(ops []plan.Op) ([]byte, error) {
 // whole, because such an op may carry secret material no resolved value
 // matches (an explicit WithSensitive over a derived secret). Identity and
 // metadata strings stay readable. Every remaining string then goes through
-// RedactSecrets (metadata only for strong secrets).
+// RedactSecrets (metadata only for strong secrets). walkOpStrings runs with
+// mutate=true: it is the one caller that legitimately rewrites strings, and
+// it does so on out, its own copyOp deep copy, never on the caller's op —
+// so writing the rewritten Op.Payload back is safe here even though the
+// same write-back would race a concurrent reader on a shared op (see
+// scanOp and opDisplayName, task 0f2).
 func redactOp(op plan.Op) (plan.Op, error) {
 	out, err := copyOp(op)
 	if err != nil {
@@ -117,7 +122,7 @@ func redactOp(op plan.Op) (plan.Op, error) {
 			return secretConfig.values.RedactStrong(s)
 		}
 		return RedactSecrets(s)
-	})
+	}, true)
 	return out, nil
 }
 

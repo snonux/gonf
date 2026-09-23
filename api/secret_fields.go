@@ -103,8 +103,27 @@ func classOf(path string) fieldClass {
 // this generic panic-on-interface path at all: walkStruct special-cases it
 // by name and descends into its concrete value's own fields directly, at
 // the same path its fields had on the wire before the split.
-func walkOpStrings(op *plan.Op, fn func(path, s string) string) {
-	walkValue(reflect.ValueOf(op).Elem(), "", fn)
+//
+// mutate gates ONLY that Payload field's write-back (walkStruct): every
+// other field already writes conditionally, only when fn actually changed
+// something (SetString/map rebuild/SetBytes each compare before writing),
+// so an fn that never changes a string (scanOp's and opDisplayName's do
+// not) already leaves them untouched regardless of mutate. Payload's
+// concrete value is different — it sits behind an interface field, so the
+// walk works on an addressable local copy and, before task 0f2, wrote that
+// copy back UNCONDITIONALLY. redactOp is the only real mutator (it walks
+// its own copyOp deep copy and needs the rewritten payload stored back), so
+// it alone passes mutate=true. scanOp and opDisplayName scan a caller's
+// shared op (an []plan.Op that internal/remote/fleet.go's Fanout may fan
+// out to per-host goroutines, exactly the aliasing plan/wire.go's own
+// normalizeWire comment warns against) and must pass mutate=false: fn still
+// runs for its side effects (the sensitivity flag), but the rewritten local
+// copy is discarded instead of being stored into the shared interface
+// field, so two goroutines calling the public, read-only
+// api.SensitiveOpNames or api.EncodeRedactedPreview over the same ops slice
+// never race a concurrent reader of that field.
+func walkOpStrings(op *plan.Op, fn func(path, s string) string, mutate bool) {
+	walkValue(reflect.ValueOf(op).Elem(), "", fn, mutate)
 }
 
 // copyOp deep-copies op through the wire codec, which every op round-trips
@@ -119,8 +138,11 @@ func copyOp(op plan.Op) (plan.Op, error) {
 
 var rawMessageType = reflect.TypeOf(json.RawMessage(nil))
 
-// walkValue is walkOpStrings' reflective step.
-func walkValue(v reflect.Value, path string, fn func(path, s string) string) {
+// walkValue is walkOpStrings' reflective step. mutate is threaded through
+// unchanged to every recursive call so it reaches whichever struct (in
+// practice only the top-level Op) holds the Payload field walkStruct
+// special-cases; see walkOpStrings' doc comment.
+func walkValue(v reflect.Value, path string, fn func(path, s string) string, mutate bool) {
 	switch {
 	case v.Type() == rawMessageType:
 		walkRawJSON(v, path, fn)
@@ -130,16 +152,16 @@ func walkValue(v reflect.Value, path string, fn func(path, s string) string) {
 		}
 	case v.Kind() == reflect.Pointer:
 		if !v.IsNil() {
-			walkValue(v.Elem(), path, fn)
+			walkValue(v.Elem(), path, fn, mutate)
 		}
 	case v.Kind() == reflect.Slice && v.Type().Elem().Kind() != reflect.Uint8:
 		for i := range v.Len() {
-			walkValue(v.Index(i), path+"[]", fn)
+			walkValue(v.Index(i), path+"[]", fn, mutate)
 		}
 	case isStringMap(v.Type()):
 		walkStringMap(v, path, fn)
 	case v.Kind() == reflect.Struct:
-		walkStruct(v, path, fn)
+		walkStruct(v, path, fn, mutate)
 	case isScalar(v.Kind()):
 		// Holds no string.
 	default:
@@ -176,7 +198,7 @@ func isScalar(k reflect.Kind) bool {
 // because plan.OpPayload's one method is unexported (only the plan package
 // can implement it), so this package cannot spell the interface type to
 // compare against.
-func walkStruct(v reflect.Value, path string, fn func(path, s string) string) {
+func walkStruct(v reflect.Value, path string, fn func(path, s string) string, mutate bool) {
 	t := v.Type()
 	for i := range t.NumField() {
 		f := t.Field(i)
@@ -188,12 +210,24 @@ func walkStruct(v reflect.Value, path string, fn func(path, s string) string) {
 			// fv.Elem() (the interface's dynamic value) is a copy and not
 			// addressable, so a redaction pass (fn rewriting a string via
 			// SetString) cannot mutate it in place — copy it to an
-			// addressable local, walk that, then write the (possibly
-			// rewritten) copy back into the interface field.
+			// addressable local and walk that. Only write the (possibly
+			// rewritten) copy back into the interface field when mutate:
+			// fv aliases the SAME Payload value a concurrent reader
+			// elsewhere may be reading right now (e.g. another goroutine's
+			// api.SensitiveOpNames call over the same shared []plan.Op —
+			// internal/remote/fleet.go's Fanout runs one such call per
+			// host), so an unconditional fv.Set here raced a concurrent
+			// reflect.Value.IsNil read on that field (task 0f2, reproduced
+			// with go test -race). scanOp and opDisplayName pass
+			// mutate=false for exactly that reason; redactOp — the only
+			// real mutator, and only on its own copyOp deep copy, never a
+			// caller's shared op — passes mutate=true.
 			concrete := reflect.New(fv.Elem().Type()).Elem()
 			concrete.Set(fv.Elem())
-			walkValue(concrete, path, fn)
-			fv.Set(concrete)
+			walkValue(concrete, path, fn, mutate)
+			if mutate {
+				fv.Set(concrete)
+			}
 			continue
 		}
 		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
@@ -206,7 +240,7 @@ func walkStruct(v reflect.Value, path string, fn func(path, s string) string) {
 		if path != "" {
 			name = path + "." + name
 		}
-		walkValue(v.Field(i), name, fn)
+		walkValue(v.Field(i), name, fn, mutate)
 	}
 }
 
