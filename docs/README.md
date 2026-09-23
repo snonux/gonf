@@ -25,12 +25,22 @@ The version bump commit (`internal/version.go`) is easy to land on its own
 and let the docs drift — that happened for v0.16.0, whose commit touched
 only `internal/version.go` while [conf-rex-gaps.md](conf-rex-gaps.md) kept
 citing the previous release and plan schema for another cycle (task oc2
-caught and fixed it). Before or in the same commit as a version bump:
+caught and fixed it). It happened again for v0.16.5 (task se2): commit
+`8405f57` bumped the version and was immediately tagged `v0.16.5`, and only
+a *later*, separate commit `79af441` refreshed
+[conf-rex-gaps.md](conf-rex-gaps.md) — so `git show v0.16.5:docs/conf-rex-gaps.md`
+permanently reads "Refreshed ... against gonf v0.16.4", the exact drift oc2's
+checklist exists to prevent. Contrast the very next release, v0.16.6
+(`deb324a`): the version bump and the `conf-rex-gaps.md` refresh landed in
+that ONE commit, so the tag it carries is accurate. `deb324a`'s pattern —
+not "before or in the same commit" — is the model to follow:
 
-- [ ] Update the version-and-schema line(s) in
-      [conf-rex-gaps.md](conf-rex-gaps.md) (near the top, the capability
-      matrix heading, and the acceptance-criteria section) to the new
-      `internal.Version` and `plan.CurrentVersion`.
+- [ ] **Fold the version-and-schema doc update into the SAME commit as the
+      version bump** (like `deb324a`, not the two-commit `8405f57`/`79af441`
+      split that produced v0.16.5's drift). Update the version-and-schema
+      line(s) in [conf-rex-gaps.md](conf-rex-gaps.md) (near the top, the
+      capability matrix heading, and the acceptance-criteria section) to the
+      new `internal.Version` and `plan.CurrentVersion`.
 - [ ] If `plan.CurrentVersion` moved, confirm [plan.md](plan.md) has a
       "Plan schema **version N**" paragraph for every version up to the new
       current one — a version can ship without a bump (see v23/`keyed_lines`,
@@ -46,3 +56,12 @@ caught and fixed it). Before or in the same commit as a version bump:
       `go test -race -shuffle=on -count=1 ./...`,
       `go tool staticcheck ./...`) after the doc edits — they are
       docs-only, but confirm nothing else broke.
+- [ ] **Tag only after the doc edits have landed on the branch being
+      tagged.** If the doc refresh ever does end up in a separate, later
+      commit despite the rule above, do NOT create the version tag until
+      that doc commit has also landed — the tag must point at a commit
+      where `git show <tag>:docs/conf-rex-gaps.md` already shows the new
+      version. A tag created at the bump commit (before the doc commit
+      exists) is immutable once pushed and cannot be repaired afterward,
+      which is exactly how v0.16.5 shipped with stale docs baked into its
+      tag permanently.
