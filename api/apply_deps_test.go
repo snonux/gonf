@@ -214,7 +214,7 @@ func TestApplyPlanKeepsAcceptingEarlierChunkDeps(t *testing.T) {
 	marker := filepath.Join(dir, "marker")
 	chunk := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "chunk"},
-		{Op: plan.KindCommand, Bin: "touch", Args: []string{marker}, ID: "Command[b]", Deps: []string{"Command[a-in-earlier-chunk]"}},
+		{Op: plan.KindCommand, ID: "Command[b]", Deps: []string{"Command[a-in-earlier-chunk]"}, Payload: plan.CommandPayload{Bin: "touch", Args: []string{marker}}},
 	}
 	if err := ApplyPlan(chunk, dir); err != nil {
 		t.Fatalf("ApplyPlan of a chunk whose dep lives in an earlier chunk: %v", err)
@@ -236,9 +236,9 @@ func TestApplyChunksMixedPrivilegeDepsStillApply(t *testing.T) {
 	second := filepath.Join(dir, "second")
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "mixed"},
-		{Op: plan.KindCommand, Bin: "touch", Args: []string{first}, ID: "Command[first]", Elevate: true},
-		{Op: plan.KindCommand, Bin: "sh", Args: []string{"-c", "test -f " + first + " && touch " + second},
-			ID: "Command[second]", Deps: []string{"Command[first]"}},
+		{Op: plan.KindCommand, ID: "Command[first]", Elevate: true, Payload: plan.CommandPayload{Bin: "touch", Args: []string{first}}},
+		{Op: plan.KindCommand, ID: "Command[second]", Deps: []string{"Command[first]"},
+			Payload: plan.CommandPayload{Bin: "sh", Args: []string{"-c", "test -f " + first + " && touch " + second}}},
 	}
 	old := elevatedApplyRunner
 	t.Cleanup(func() { elevatedApplyRunner = old })
@@ -269,8 +269,8 @@ func TestApplyChunksRefusesDanglingDependencyBeforeAnyChunk(t *testing.T) {
 	marker := filepath.Join(dir, "marker")
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "dangling"},
-		{Op: plan.KindCommand, Bin: "touch", Args: []string{marker}, ID: "Command[a]"},
-		{Op: plan.KindCommand, Bin: "true", ID: "Command[b]", Deps: []string{"Command[typo]"}, Elevate: true},
+		{Op: plan.KindCommand, ID: "Command[a]", Payload: plan.CommandPayload{Bin: "touch", Args: []string{marker}}},
+		{Op: plan.KindCommand, ID: "Command[b]", Deps: []string{"Command[typo]"}, Elevate: true, Payload: plan.CommandPayload{Bin: "true"}},
 	}
 	old := elevatedApplyRunner
 	t.Cleanup(func() { elevatedApplyRunner = old })
@@ -299,7 +299,7 @@ func TestApplyChunksRefusesDanglingDependencyBeforeAnyChunk(t *testing.T) {
 func TestValidateApplyDeps(t *testing.T) {
 	hdr := plan.Op{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "apply"}
 	cmd := func(id string, deps ...string) plan.Op {
-		return plan.Op{Op: plan.KindCommand, Bin: "true", ID: id, Deps: deps}
+		return plan.Op{Op: plan.KindCommand, ID: id, Deps: deps, Payload: plan.CommandPayload{Bin: "true"}}
 	}
 	elevated := func(op plan.Op) plan.Op {
 		op.Elevate = true
@@ -384,7 +384,7 @@ func TestRequireDraftsForAll(t *testing.T) {
 func TestCrossChunkWatchRefusalYieldsToEmptyWatch(t *testing.T) {
 	hdr := plan.Op{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "apply"}
 	cmd := func(id string, elevate bool) plan.Op {
-		return plan.Op{Op: plan.KindCommand, Bin: "true", ID: id, Elevate: elevate}
+		return plan.Op{Op: plan.KindCommand, ID: id, Elevate: elevate, Payload: plan.CommandPayload{Bin: "true"}}
 	}
 	empty := cmd("Command[empty]", false)
 	empty.IfChanged = true

@@ -141,7 +141,7 @@ func TestDefaultElevatedApplyForwardsCmdTimeout(t *testing.T) {
 
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "chunks"},
-		{Op: plan.KindCommand, Bin: "true", ID: "Command[elevated]", Elevate: true},
+		{Op: plan.KindCommand, ID: "Command[elevated]", Elevate: true, Payload: plan.CommandPayload{Bin: "true"}},
 	}
 	if err := defaultElevatedApply(context.Background(), privilege.Sudo, ops, t.TempDir()); err != nil {
 		t.Fatalf("defaultElevatedApply: %v", err)
@@ -190,7 +190,7 @@ func TestDefaultElevatedApplyDryRunAddsN(t *testing.T) {
 	planDir := t.TempDir()
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "chunks"},
-		{Op: plan.KindCommand, Bin: "true", ID: "Command[elevated]", Elevate: true},
+		{Op: plan.KindCommand, ID: "Command[elevated]", Elevate: true, Payload: plan.CommandPayload{Bin: "true"}},
 	}
 	if err := defaultElevatedApply(context.Background(), privilege.Sudo, ops, planDir); err != nil {
 		t.Fatalf("defaultElevatedApply: %v", err)
@@ -244,7 +244,7 @@ func TestDefaultElevatedApplyPropagatesProfileOverride(t *testing.T) {
 	planDir := t.TempDir()
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "chunks"},
-		{Op: plan.KindCommand, Bin: "true", ID: "Command[elevated]", Elevate: true},
+		{Op: plan.KindCommand, ID: "Command[elevated]", Elevate: true, Payload: plan.CommandPayload{Bin: "true"}},
 	}
 	if err := defaultElevatedApply(context.Background(), privilege.Sudo, ops, planDir); err != nil {
 		t.Fatalf("defaultElevatedApply: %v", err)

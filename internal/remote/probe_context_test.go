@@ -58,8 +58,8 @@ func fakeProbesByContext(t *testing.T, stale ...ProbeContext) *[]ProbeContext {
 // chunk needs reports a stale gonf even though the login context is current.
 func TestPreviewDeliveryProbesEveryAppliedPrivilegeContext(t *testing.T) {
 	header := plan.Op{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "preview"}
-	unpriv := plan.Op{Op: plan.KindCommand, ID: "unprivileged", Bin: "true"}
-	elev := plan.Op{Op: plan.KindCommand, ID: "elevated", Bin: "true", Elevate: true}
+	unpriv := plan.Op{Op: plan.KindCommand, ID: "unprivileged", Payload: plan.CommandPayload{Bin: "true"}}
+	elev := plan.Op{Op: plan.KindCommand, ID: "elevated", Elevate: true, Payload: plan.CommandPayload{Bin: "true"}}
 	tests := []struct {
 		name    string
 		ops     []plan.Op

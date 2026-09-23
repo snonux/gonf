@@ -37,8 +37,8 @@ func startedScript(started string) []string {
 func sleepThenTouchOps(started, marker string) []plan.Op {
 	return []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "cancel"},
-		{Op: plan.KindCommand, Bin: "sh", Args: startedScript(started), ID: "Command[sleep]"},
-		{Op: plan.KindCommand, Bin: "touch", Args: []string{marker}, ID: "Command[touch]"},
+		{Op: plan.KindCommand, ID: "Command[sleep]", Payload: plan.CommandPayload{Bin: "sh", Args: startedScript(started)}},
+		{Op: plan.KindCommand, ID: "Command[touch]", Payload: plan.CommandPayload{Bin: "touch", Args: []string{marker}}},
 	}
 }
 
@@ -209,7 +209,7 @@ func TestCLIApplyFailureNotInterrupted(t *testing.T) {
 	root := t.TempDir()
 	failing := writePlanFile(t, root, []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "fail"},
-		{Op: plan.KindCommand, Bin: "false", ID: "Command[false]"},
+		{Op: plan.KindCommand, ID: "Command[false]", Payload: plan.CommandPayload{Bin: "false"}},
 	})
 	var code int
 	stderr := testutil.CaptureStderr(t, func() { code = cliApply(context.Background(), []string{failing}) })

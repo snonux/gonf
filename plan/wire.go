@@ -87,12 +87,18 @@ type wireOp struct {
 	AddLine     string      `json:"add_line,omitempty"`
 	RemoveLine  string      `json:"remove_line,omitempty"`
 
+	// Name and Env are core (Name is a general label field, Env is shared
+	// with KindPackage). Bin/Args/Dir below, and Creates/Unless/OnlyIf in
+	// the next block, are Command-exclusive (plan.CommandPayload, task
+	// 7e2). See CommandPayload's own field docs.
 	Name string            `json:"name,omitempty"`
 	Bin  string            `json:"bin,omitempty"`
 	Args []string          `json:"args,omitempty"`
 	Dir  string            `json:"dir,omitempty"`
 	Env  map[string]string `json:"env,omitempty"`
 
+	// Creates/Unless/OnlyIf are Command-exclusive (plan.CommandPayload).
+	// See CommandPayload's own field docs.
 	Creates string `json:"creates,omitempty"`
 	Unless  *Guard `json:"unless,omitempty"`
 	OnlyIf  *Guard `json:"only_if,omitempty"`

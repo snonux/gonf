@@ -17,8 +17,8 @@ func TestApplyWithContextCancelKillsRunningCommand(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "after")
 	ops := []Op{
 		header(),
-		{Op: KindCommand, Bin: "sleep", Args: []string{"30"}, ID: "Command[sleep]"},
-		{Op: KindCommand, Bin: "touch", Args: []string{marker}, ID: "Command[after]"},
+		{Op: KindCommand, ID: "Command[sleep]", Payload: CommandPayload{Bin: "sleep", Args: []string{"30"}}},
+		{Op: KindCommand, ID: "Command[after]", Payload: CommandPayload{Bin: "touch", Args: []string{marker}}},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -73,7 +73,7 @@ func TestApplyWithContextLiveCtxAndRestoredBinding(t *testing.T) {
 	root := t.TempDir()
 	first := filepath.Join(root, "first")
 	ctx, cancel := context.WithCancel(context.Background())
-	ops := []Op{header(), {Op: KindCommand, Bin: "touch", Args: []string{first}, ID: "Command[first]"}}
+	ops := []Op{header(), {Op: KindCommand, ID: "Command[first]", Payload: CommandPayload{Bin: "touch", Args: []string{first}}}}
 	if err := ApplyWithContext(ctx, ops, Facts{}, ""); err != nil {
 		t.Fatalf("live ctx: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestApplyWithContextLiveCtxAndRestoredBinding(t *testing.T) {
 
 	cancel()
 	second := filepath.Join(root, "second")
-	ops = []Op{header(), {Op: KindCommand, Bin: "touch", Args: []string{second}, ID: "Command[second]"}}
+	ops = []Op{header(), {Op: KindCommand, ID: "Command[second]", Payload: CommandPayload{Bin: "touch", Args: []string{second}}}}
 	if err := Apply(ops, Facts{}, ""); err != nil {
 		t.Fatalf("Apply after a canceled ApplyWithContext ctx: %v", err)
 	}

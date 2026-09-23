@@ -51,8 +51,8 @@ func TestApplyWithContextInjectsPerRunRunnersNotGlobal(t *testing.T) {
 	ctxA := runners.WithSet(context.Background(), setA)
 	ctxB := runners.WithSet(context.Background(), setB)
 
-	opsA := []plan.Op{runnersHeader("runners-a"), {Op: plan.KindCommand, Bin: "marker-a", ID: "Command[marker-a]"}}
-	opsB := []plan.Op{runnersHeader("runners-b"), {Op: plan.KindCommand, Bin: "marker-b", ID: "Command[marker-b]"}}
+	opsA := []plan.Op{runnersHeader("runners-a"), {Op: plan.KindCommand, ID: "Command[marker-a]", Payload: plan.CommandPayload{Bin: "marker-a"}}}
+	opsB := []plan.Op{runnersHeader("runners-b"), {Op: plan.KindCommand, ID: "Command[marker-b]", Payload: plan.CommandPayload{Bin: "marker-b"}}}
 
 	// Apply B first (the reverse of construction order): only setB's fake
 	// may run.
@@ -76,7 +76,7 @@ func TestApplyWithContextInjectsPerRunRunnersNotGlobal(t *testing.T) {
 	// context.Background(), no WithSet) must fail on a binary that does not
 	// exist rather than silently reuse either fake — the strongest proof
 	// neither leaked into an uninjected context.
-	opsC := []plan.Op{runnersHeader("runners-c"), {Op: plan.KindCommand, Bin: "gonf-qb2-no-such-binary-marker", ID: "Command[gonf-qb2-no-such-binary-marker]"}}
+	opsC := []plan.Op{runnersHeader("runners-c"), {Op: plan.KindCommand, ID: "Command[gonf-qb2-no-such-binary-marker]", Payload: plan.CommandPayload{Bin: "gonf-qb2-no-such-binary-marker"}}}
 	if err := plan.Apply(opsC, plan.Facts{}, ""); err == nil {
 		t.Fatal("apply C: want an error starting a nonexistent real binary, got nil")
 	}

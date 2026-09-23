@@ -28,8 +28,8 @@ func TestSensitiveCommandWithholdsArgvAndOutput(t *testing.T) {
 	}}}
 	output := testutil.CaptureLog(t, logger.LevelDebug)
 
-	op := plan.Op{Op: plan.KindCommand, ID: "Command[upload]", Name: "upload", Bin: "/usr/bin/curl",
-		Args: []string{"-H", "Authorization: Bearer " + fakeCmdSecret}, Sensitive: true}
+	op := plan.Op{Op: plan.KindCommand, ID: "Command[upload]", Name: "upload", Sensitive: true,
+		Payload: plan.CommandPayload{Bin: "/usr/bin/curl", Args: []string{"-H", "Authorization: Bearer " + fakeCmdSecret}}}
 	err := planHandler{}.Apply(op, plan.ApplyContext{Runners: rs})
 	if err == nil || !strings.Contains(err.Error(), "output withheld") {
 		t.Fatalf("err = %v, want the withheld failure", err)

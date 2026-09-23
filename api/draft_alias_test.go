@@ -89,8 +89,12 @@ type aliasingHandler struct{}
 func (aliasingHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 	p := d.Payload.(cmd.Payload)
 	return plan.Op{
-		Op: plan.KindCommand, Bin: p.Bin, Args: p.Args, Env: d.Env, Deps: d.Deps,
-		Unless: &plan.Guard{Bin: p.Unless.Bin, Args: p.Unless.Args, ExpectExit: p.Unless.ExpectExit},
+		Op: plan.KindCommand, Env: d.Env, Deps: d.Deps,
+		Payload: plan.CommandPayload{
+			Bin:    p.Bin,
+			Args:   p.Args,
+			Unless: &plan.Guard{Bin: p.Unless.Bin, Args: p.Unless.Args, ExpectExit: p.Unless.ExpectExit},
+		},
 	}, nil
 }
 
@@ -107,7 +111,7 @@ func TestSharedRefsCatchesAliasingToOp(t *testing.T) {
 		t.Fatal(err)
 	}
 	shared := testutil.SharedRefs(d, op)
-	for _, want := range []string{"Args", "Env", "Deps", "Unless.Args", "Unless.ExpectExit"} {
+	for _, want := range []string{"Payload.Args", "Env", "Deps", "Payload.Unless.Args", "Payload.Unless.ExpectExit"} {
 		if !slices.Contains(shared, want) {
 			t.Errorf("SharedRefs missed aliased %s (got %v)", want, shared)
 		}

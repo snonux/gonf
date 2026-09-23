@@ -181,8 +181,8 @@ func TestApplyChunksRefusesElevationUpFront(t *testing.T) {
 			marker := filepath.Join(dir, "marker")
 			ops := []plan.Op{
 				{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "run"},
-				{Op: plan.KindCommand, Bin: "touch", Args: []string{marker}, ID: "Command[user]"},
-				{Op: plan.KindCommand, Bin: "true", ID: "Command[root]", Elevate: true},
+				{Op: plan.KindCommand, ID: "Command[user]", Payload: plan.CommandPayload{Bin: "touch", Args: []string{marker}}},
+				{Op: plan.KindCommand, ID: "Command[root]", Elevate: true, Payload: plan.CommandPayload{Bin: "true"}},
 			}
 			err := ApplyChunks(ops, dir, tc.mode)
 			if err == nil || !strings.Contains(err.Error(), "Command[root]") || !strings.Contains(err.Error(), tc.wants) {

@@ -31,11 +31,13 @@ func TestRecordAndFinishRecord(t *testing.T) {
 	plan.Record(plan.Op{
 		Op:   plan.KindCommand,
 		Name: "daemon-reload",
-		Bin:  "systemctl",
-		Args: []string{"--user", "daemon-reload"},
-		Unless: &plan.Guard{
+		Payload: plan.CommandPayload{
 			Bin:  "systemctl",
-			Args: []string{"--user", "is-enabled", "x"},
+			Args: []string{"--user", "daemon-reload"},
+			Unless: &plan.Guard{
+				Bin:  "systemctl",
+				Args: []string{"--user", "is-enabled", "x"},
+			},
 		},
 	})
 
@@ -49,8 +51,9 @@ func TestRecordAndFinishRecord(t *testing.T) {
 	if ops[1].Op != plan.KindLink || ops[2].Op != plan.KindCommand {
 		t.Fatalf("body kinds = %s, %s", ops[1].Op, ops[2].Op)
 	}
-	if ops[2].Unless == nil || ops[2].Unless.Bin != "systemctl" {
-		t.Fatalf("command unless guard = %#v", ops[2].Unless)
+	cp, ok := ops[2].Payload.(plan.CommandPayload)
+	if !ok || cp.Unless == nil || cp.Unless.Bin != "systemctl" {
+		t.Fatalf("command unless guard = %#v", ops[2].Payload)
 	}
 
 	encoded, err := plan.EncodePlan(ops)

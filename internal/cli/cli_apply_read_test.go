@@ -18,7 +18,7 @@ func writeTouchPlan(t *testing.T, dir, name, target string) string {
 	t.Helper()
 	raw, err := plan.EncodePlan([]plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "read"},
-		{Op: plan.KindCommand, Bin: "touch", Args: []string{target}},
+		{Op: plan.KindCommand, Payload: plan.CommandPayload{Bin: "touch", Args: []string{target}}},
 	})
 	if err != nil {
 		t.Fatal(err)

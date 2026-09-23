@@ -526,10 +526,12 @@ class of bug that motivated task j5.
    a kind that has not migrated yet, a new field is added directly to `Op`
    and cloned with `slices.Clone`/`maps.Clone` in `ToOp`, same as always.
    `cron`, `systemd_timer` (task yd2, Layer 2's first slice), `user` (task
-   6e2), `link`, `link_if_exists`, and `package` (task 5e2, Layer 2's
-   second slice) instead have their own
+   6e2), `link`, `link_if_exists`, `package` (task 5e2, Layer 2's second
+   slice), and `command` (task 7e2, Layer 2's third slice) instead have
+   their own
    `plan.CronPayload`/`plan.SystemdTimerPayload`/`plan.UserPayload`/
-   `plan.LinkPayload`/`plan.LinkIfExistsPayload`/`plan.PackagePayload`, set
+   `plan.LinkPayload`/`plan.LinkIfExistsPayload`/`plan.PackagePayload`/
+   `plan.CommandPayload`, set
    on `Op.Payload`; a NEW exclusive field on an ALREADY-migrated kind goes
    on that kind's payload type instead of back onto `Op` (mirroring step
    4's rule below, now also for `Op`), still cloned in `ToOp` before being
@@ -790,13 +792,44 @@ this split (their JSON path is unchanged, since `walkStruct` computes it
 from the payload's own json tag, not from Go struct nesting), and `Latest`
 is a bool, which the walker never classifies at all (it holds no string).
 
-Every other kind's fields are UNCHANGED after yd2, 6e2, and 5e2, still flat
+Every other kind's fields were UNCHANGED after yd2, 6e2, and 5e2, still flat
 on `Op` — `File`, `Dir`/`SyncDir`, `Command`, `Service`/`Timer`/
 `DaemonReload`, `EnsureDir`/`EnsureFile`, `ConfigSet`/`ConfigSetMember`, and
 `WhenBegin`/`WhenEnd` — pending the remaining follow-up tasks (7e2, 8e2,
 9e2, ae2) scoped the same way (one or a few kinds per task, per this file's
 own "do not attempt it as one uninterrupted blind edit" guidance, matching
-w62's own incremental discipline).
+w62's own incremental discipline). Task 7e2 (below) migrated `command` next.
+
+**Task 7e2: `command`, Layer 2's third slice.** Following yd2's pattern
+exactly, `KindCommand`'s exclusive fields — `Bin`, `Args`, `Dir`, `Creates`,
+`Unless`, `OnlyIf` — moved off `Op` onto `CommandPayload`
+(`plan/op_payload.go`), leaving `Name`/`Env`/`Deps`/`Watch`/`IfChanged`/
+`Sensitive`/`Elevate` flat on `Op`'s core (shared with other kinds — `Env`
+is also `KindPackage`'s, `Watch`/`IfChanged` are shared by the whole
+change-gate family). `wireOp` itself (wire.go) is UNCHANGED in shape (frozen,
+append-only field order); only its doc comments were updated to mark the
+Bin/Args/Dir/Creates/Unless/OnlyIf block as Command-exclusive, the same way
+the Cron-exclusive and SystemdTimer-exclusive blocks already were.
+`resource/cmd/planwire.go` (the one non-test call site) was updated so
+`ToOp` sets `Op.Payload = plan.CommandPayload{...}` instead of the flat
+fields, and `Apply` type-asserts `op.Payload.(plan.CommandPayload)`
+comma-ok (degrading to the zero value for an arbitrary decoded plan, never
+erroring, mirroring `resource/cron/planwire.go`'s `Apply`).
+The one genuinely delicate part: `Unless`/`OnlyIf` are `*Guard` pointers
+that may be shared across `Op` values encoding the SAME plan concurrently
+for multiple hosts (`internal/remote/fleet.go`'s Fanout; see
+`TestEncodePlanConcurrentSharedGuardNoRace`, plan/codec_test.go). Moving
+them onto `CommandPayload` changes nothing about the copy-before-mutate
+contract `wireOp`'s `normalizeWire` already enforced pre-7e2:
+`CommandPayload.applyToWire` (op_payload.go) copies only the POINTER VALUE
+onto `wireOp` (`w.Unless = p.Unless`), never dereferencing or mutating
+`*p.Unless`/`*p.OnlyIf`; `normalizeWire` still does its own
+copy-before-mutate on ITS OWN `wireOp` copy of that pointer, exactly as
+before. The race test (updated to build its fixture op via
+`Payload: CommandPayload{...}` instead of flat fields, same assertions)
+continues to pass under `-race`, including run repeatedly and against a
+saved pre-migration patch reverted and reapplied, as direct proof the fix
+was preserved rather than merely re-typed.
 
 A resource package that registers a `plan.Handler` must never be imported by
 the `plan` package itself (that would reintroduce the cycle the registry

@@ -286,10 +286,12 @@ type Guard struct {
 // it always was regardless of this Go-level split — see wireOp's doc
 // comment (wire.go) for exactly how.
 //
-// As of task 6e2, the cron, systemd_timer and user kinds have migrated their
-// exclusive fields onto a payload (CronPayload, SystemdTimerPayload,
-// UserPayload, op_payload.go); every other kind's fields are still flat
-// here, unchanged, pending follow-up tasks (see docs/plan.md).
+// As of task 7e2, the cron, systemd_timer, user, link, link_if_exists,
+// package and command kinds have migrated their exclusive fields onto a
+// payload (CronPayload, SystemdTimerPayload, UserPayload, LinkPayload,
+// LinkIfExistsPayload, PackagePayload, CommandPayload, op_payload.go);
+// every other kind's fields are still flat here, unchanged, pending
+// follow-up tasks (see docs/plan.md).
 type Op struct {
 	Op      Kind   `json:"op"`
 	Version int    `json:"version,omitempty"`
@@ -410,20 +412,12 @@ type Op struct {
 	// or similar label. For a named KindFile it keeps the resource ID stable
 	// independently of Path, which remains the destination to manage.
 	Name string `json:"name,omitempty"`
-	// Bin is the executable for KindCommand.
-	Bin string `json:"bin,omitempty"`
-	// Args are argv after Bin for KindCommand.
-	Args []string `json:"args,omitempty"`
-	// Dir is the working directory for KindCommand.
-	Dir string `json:"dir,omitempty"`
 	// Env is extra environment for KindCommand and KindPackage.
 	Env map[string]string `json:"env,omitempty"`
-	// Creates skips KindCommand when this path already exists.
-	Creates string `json:"creates,omitempty"`
-	// Unless skips KindCommand when the guard probe succeeds.
-	Unless *Guard `json:"unless,omitempty"`
-	// OnlyIf runs KindCommand only when the guard probe succeeds.
-	OnlyIf *Guard `json:"only_if,omitempty"`
+	// Bin, Args, Dir, Creates, Unless and OnlyIf (task 7e2, Layer 2's third
+	// slice) moved onto CommandPayload (op_payload.go), set on Payload
+	// below: they are exclusive to KindCommand. See CommandPayload's own
+	// field docs.
 
 	// Command is the crontab command for KindCron, and the companion
 	// oneshot .service ExecStart command for KindSystemdTimer: two kinds
@@ -524,9 +518,10 @@ type Op struct {
 	// Payload holds the fields exclusive to Op's own Kind (task yd2, "Layer
 	// 2"): nil for a control kind or a kind that has not migrated any field
 	// off Op yet, otherwise a concrete type from op_payload.go (CronPayload
-	// for KindCron, SystemdTimerPayload for KindSystemdTimer; task 5e2 added
-	// LinkPayload for KindLink, LinkIfExistsPayload for KindLinkIfExists,
-	// and PackagePayload for KindPackage). It is
+	// for KindCron, SystemdTimerPayload for KindSystemdTimer, UserPayload
+	// for KindUser; task 5e2 added LinkPayload for KindLink,
+	// LinkIfExistsPayload for KindLinkIfExists, and PackagePayload for
+	// KindPackage; task 7e2 added CommandPayload for KindCommand). It is
 	// json:"-" because Op never marshals itself by default reflection — see
 	// MarshalJSON/UnmarshalJSON below — but api's secret-scan reflection
 	// walker (walkOpStrings) still reaches its fields: it special-cases the

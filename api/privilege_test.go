@@ -153,8 +153,8 @@ func TestApplyChunksRefusesForwardCrossChunkDep(t *testing.T) {
 	marker := filepath.Join(dir, "marker")
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "chunks"},
-		{Op: plan.KindCommand, Bin: "touch", Args: []string{marker}, ID: "Command[b]", Deps: []string{"Command[a]"}},
-		{Op: plan.KindCommand, Bin: "true", ID: "Command[a]", Elevate: true},
+		{Op: plan.KindCommand, ID: "Command[b]", Deps: []string{"Command[a]"}, Payload: plan.CommandPayload{Bin: "touch", Args: []string{marker}}},
+		{Op: plan.KindCommand, ID: "Command[a]", Elevate: true, Payload: plan.CommandPayload{Bin: "true"}},
 	}
 	old := elevatedApplyRunner
 	t.Cleanup(func() { elevatedApplyRunner = old })
@@ -178,8 +178,8 @@ func TestApplyChunksRefusesForwardCrossChunkDep(t *testing.T) {
 func TestPushRefusesForwardCrossChunkDepsWithZeroSSH(t *testing.T) {
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "chunks"},
-		{Op: plan.KindCommand, Bin: "true", ID: "Command[b]", Deps: []string{"Command[a]"}},
-		{Op: plan.KindCommand, Bin: "true", ID: "Command[a]", Elevate: true},
+		{Op: plan.KindCommand, ID: "Command[b]", Deps: []string{"Command[a]"}, Payload: plan.CommandPayload{Bin: "true"}},
+		{Op: plan.KindCommand, ID: "Command[a]", Elevate: true, Payload: plan.CommandPayload{Bin: "true"}},
 	}
 	old := remote.SSHRunner
 	restoreProbe := remote.AssumeRemotePlanCurrent()
@@ -208,7 +208,7 @@ func TestChangeGatePreflightsRefuseBeforeApplyOrPush(t *testing.T) {
 			name: "empty watch",
 			ops: []plan.Op{
 				{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "empty-watch"},
-				{Op: plan.KindCommand, Bin: "touch", Args: []string{"unused"}, ID: "Command[gated]", IfChanged: true},
+				{Op: plan.KindCommand, ID: "Command[gated]", IfChanged: true, Payload: plan.CommandPayload{Bin: "touch", Args: []string{"unused"}}},
 			},
 			want: "watches nothing",
 		},
@@ -216,7 +216,7 @@ func TestChangeGatePreflightsRefuseBeforeApplyOrPush(t *testing.T) {
 			name: "dangling watch",
 			ops: []plan.Op{
 				{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "dangling-watch"},
-				{Op: plan.KindCommand, Bin: "touch", Args: []string{"unused"}, ID: "Command[gated]", IfChanged: true, Watch: []string{"File[missing]"}},
+				{Op: plan.KindCommand, ID: "Command[gated]", IfChanged: true, Watch: []string{"File[missing]"}, Payload: plan.CommandPayload{Bin: "touch", Args: []string{"unused"}}},
 			},
 			want: "dangling watch",
 		},
@@ -225,7 +225,7 @@ func TestChangeGatePreflightsRefuseBeforeApplyOrPush(t *testing.T) {
 			ops: []plan.Op{
 				{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "cross-watch"},
 				{Op: plan.KindFile, ID: "File[unit]", Elevate: true},
-				{Op: plan.KindCommand, Bin: "touch", Args: []string{"unused"}, ID: "Command[gated]", IfChanged: true, Watch: []string{"File[unit]"}},
+				{Op: plan.KindCommand, ID: "Command[gated]", IfChanged: true, Watch: []string{"File[unit]"}, Payload: plan.CommandPayload{Bin: "touch", Args: []string{"unused"}}},
 			},
 			want: "must live in the same chunk",
 		},

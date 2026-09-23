@@ -144,9 +144,9 @@ func TestApplyChildSurvivesRepeatedSignals(t *testing.T) {
 	// manager's clean shutdown), so the second signal arrives mid-stop.
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "two-signals"},
-		{Op: plan.KindCommand, Bin: "sh", ID: "Command[slow-stop]", Args: []string{"-c",
-			"touch '" + started + "'; trap 'sleep 1; exit 1' TERM; while :; do sleep 0.1; done"}},
-		{Op: plan.KindCommand, Bin: "touch", Args: []string{marker}, ID: "Command[touch]"},
+		{Op: plan.KindCommand, ID: "Command[slow-stop]", Payload: plan.CommandPayload{Bin: "sh", Args: []string{"-c",
+			"touch '" + started + "'; trap 'sleep 1; exit 1' TERM; while :; do sleep 0.1; done"}}},
+		{Op: plan.KindCommand, ID: "Command[touch]", Payload: plan.CommandPayload{Bin: "touch", Args: []string{marker}}},
 	}
 	var payload bytes.Buffer
 	if err := plan.EncodePush(&payload, ops, nil); err != nil {

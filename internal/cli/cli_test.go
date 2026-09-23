@@ -465,7 +465,7 @@ func TestCLIApplyDryRun(t *testing.T) {
 	target := filepath.Join(root, "should-not-exist")
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "dry"},
-		{Op: plan.KindCommand, Bin: "touch", Args: []string{target}},
+		{Op: plan.KindCommand, Payload: plan.CommandPayload{Bin: "touch", Args: []string{target}}},
 	}
 	raw, err := plan.EncodePlan(ops)
 	if err != nil {
@@ -539,7 +539,7 @@ func TestCLIApplyStrictPreviewUsesResourceDryRunWithoutStaging(t *testing.T) {
 
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "strict-preview"},
-		{Op: plan.KindCommand, Bin: "would-mutate", Args: []string{"target"}},
+		{Op: plan.KindCommand, Payload: plan.CommandPayload{Bin: "would-mutate", Args: []string{"target"}}},
 	}
 	var frame bytes.Buffer
 	if err := plan.EncodePush(&frame, ops, nil); err != nil {

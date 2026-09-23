@@ -184,6 +184,50 @@ func (p PackagePayload) applyToWire(w *wireOp) {
 	w.Latest = p.Latest
 }
 
+// CommandPayload holds the wire fields exclusive to KindCommand (task 7e2,
+// Layer 2's third slice). resource/cmd's planwire.go is the only other
+// package that constructs or reads one, always non-nil on a "command" op's
+// Payload, for the same reason CronPayload is (see its doc comment). Its
+// json tags exist for the same secret-scan reflection reason CronPayload's
+// do — see CronPayload's doc comment.
+//
+// Unless/OnlyIf are *Guard pointers that MAY be shared with other Op values
+// referencing the same underlying Guard (e.g. every per-host goroutine in a
+// fleet/cluster push encodes its own copy of the same ops slice — see
+// internal/remote/fleet.go Fanout and TestEncodePlanConcurrentSharedGuardNoRace,
+// plan/codec_test.go). applyToWire below therefore only ever copies the
+// POINTER VALUE onto wireOp — it must never mutate *p.Unless/*p.OnlyIf in
+// place. wireOp's own normalizeWire (wire.go) does the actual
+// copy-before-mutate normalization, on ITS copy of the pointer, exactly as
+// it already does for Op.Unless/Op.OnlyIf pre-yd2; moving these fields onto
+// a payload changes nothing about that contract, since applyToWire runs
+// strictly before normalizeWire in both MarshalJSON and toWire's caller.
+type CommandPayload struct {
+	// Bin is the executable for KindCommand.
+	Bin string `json:"bin,omitempty"`
+	// Args are argv after Bin for KindCommand.
+	Args []string `json:"args,omitempty"`
+	// Dir is the working directory for KindCommand.
+	Dir string `json:"dir,omitempty"`
+	// Creates skips KindCommand when this path already exists.
+	Creates string `json:"creates,omitempty"`
+	// Unless skips KindCommand when the guard probe succeeds.
+	Unless *Guard `json:"unless,omitempty"`
+	// OnlyIf runs KindCommand only when the guard probe succeeds.
+	OnlyIf *Guard `json:"only_if,omitempty"`
+}
+
+func (p CommandPayload) applyToWire(w *wireOp) {
+	w.Bin = p.Bin
+	w.Args = p.Args
+	w.Dir = p.Dir
+	w.Creates = p.Creates
+	// Pointer-value copy only — see the type doc comment above for why this
+	// must not become *w.Unless = *p.Unless or any other in-place write.
+	w.Unless = p.Unless
+	w.OnlyIf = p.OnlyIf
+}
+
 // toWire copies every Op core field onto a fresh wireOp and, when op.Payload
 // is set, layers its kind-exclusive fields on top. It does not normalize;
 // callers (MarshalJSON) do that once, after the merge.
@@ -220,14 +264,7 @@ func (op Op) toWire() wireOp {
 		RemoveLine:  op.RemoveLine,
 
 		Name: op.Name,
-		Bin:  op.Bin,
-		Args: op.Args,
-		Dir:  op.Dir,
 		Env:  op.Env,
-
-		Creates: op.Creates,
-		Unless:  op.Unless,
-		OnlyIf:  op.OnlyIf,
 
 		Command: op.Command,
 
@@ -293,14 +330,7 @@ func fromWire(w wireOp) Op {
 		RemoveLine:  w.RemoveLine,
 
 		Name: w.Name,
-		Bin:  w.Bin,
-		Args: w.Args,
-		Dir:  w.Dir,
 		Env:  w.Env,
-
-		Creates: w.Creates,
-		Unless:  w.Unless,
-		OnlyIf:  w.OnlyIf,
 
 		Command: w.Command,
 
@@ -378,6 +408,15 @@ func payloadFromWire(w wireOp) OpPayload {
 		return PackagePayload{
 			Latest: w.Latest,
 		}
+	case KindCommand:
+		return CommandPayload{
+			Bin:     w.Bin,
+			Args:    w.Args,
+			Dir:     w.Dir,
+			Creates: w.Creates,
+			Unless:  w.Unless,
+			OnlyIf:  w.OnlyIf,
+		}
 	default:
 		return nil
 	}
@@ -400,5 +439,6 @@ func OpPayloadExamples() map[Kind]OpPayload {
 		KindLink:         LinkPayload{},
 		KindLinkIfExists: LinkIfExistsPayload{},
 		KindPackage:      PackagePayload{},
+		KindCommand:      CommandPayload{},
 	}
 }

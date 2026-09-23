@@ -23,8 +23,8 @@ import (
 func sigkillProbeOps(started, marker string) []plan.Op {
 	return []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "sigkill-probe"},
-		{Op: plan.KindCommand, Bin: "sh", Args: []string{"-c", "touch '" + started + "'; sleep 1"}, ID: "Command[sleep]"},
-		{Op: plan.KindCommand, Bin: "touch", Args: []string{marker}, ID: "Command[touch]"},
+		{Op: plan.KindCommand, ID: "Command[sleep]", Payload: plan.CommandPayload{Bin: "sh", Args: []string{"-c", "touch '" + started + "'; sleep 1"}}},
+		{Op: plan.KindCommand, ID: "Command[touch]", Payload: plan.CommandPayload{Bin: "touch", Args: []string{marker}}},
 	}
 }
 

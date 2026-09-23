@@ -15,7 +15,7 @@ import (
 func TestValidateChunkDeps(t *testing.T) {
 	hdr := func(id string) Op { return Op{Op: KindPlan, Version: CurrentVersion, ID: id} }
 	cmd := func(id string, deps ...string) Op {
-		return Op{Op: KindCommand, Bin: "true", ID: id, Deps: deps}
+		return Op{Op: KindCommand, ID: id, Deps: deps, Payload: CommandPayload{Bin: "true"}}
 	}
 	cases := []struct {
 		name    string
@@ -84,7 +84,7 @@ func requireRefusalKind(t *testing.T, err error, wantDangling bool) {
 // names the dependent's chunk, the dep's chunk, and both ops.
 func TestValidateChunkDepsNamesLaterChunk(t *testing.T) {
 	cmd := func(id string, deps ...string) Op {
-		return Op{Op: KindCommand, Bin: "true", ID: id, Deps: deps}
+		return Op{Op: KindCommand, ID: id, Deps: deps, Payload: CommandPayload{Bin: "true"}}
 	}
 	chunks := [][]Op{
 		[]Op{cmd("Command[b]", "Command[a]")},
@@ -107,7 +107,7 @@ func TestValidateChunkDepsNamesLaterChunk(t *testing.T) {
 // so every watched resource must be in the gated op's own chunk.
 func TestValidateChangeGates(t *testing.T) {
 	cmd := func(id string, watch ...string) Op {
-		return Op{Op: KindCommand, Bin: "true", ID: id, IfChanged: true, Watch: watch}
+		return Op{Op: KindCommand, ID: id, IfChanged: true, Watch: watch, Payload: CommandPayload{Bin: "true"}}
 	}
 	cases := []struct {
 		name    string
@@ -180,7 +180,7 @@ func TestSplitPrivilegeChunksWhenPromotion(t *testing.T) {
 		{Op: KindPlan, Version: 2},
 		{Op: KindWhenBegin},
 		{Op: KindFile, Path: "/tmp/a"},
-		{Op: KindCommand, Bin: "true", Elevate: true},
+		{Op: KindCommand, Elevate: true, Payload: CommandPayload{Bin: "true"}},
 		{Op: KindWhenEnd},
 	}
 	chunks := SplitPrivilegeChunks(ops)
@@ -216,9 +216,11 @@ func TestSplitPrivilegeAllUnpriv(t *testing.T) {
 // reported before change-gate problems.
 func TestValidateChunksRefusalsAreTypedAndPrefixed(t *testing.T) {
 	hdr := Op{Op: KindPlan, Version: CurrentVersion, ID: "p"}
-	dep := func(id string, deps ...string) Op { return Op{Op: KindCommand, Bin: "true", ID: id, Deps: deps} }
+	dep := func(id string, deps ...string) Op {
+		return Op{Op: KindCommand, ID: id, Deps: deps, Payload: CommandPayload{Bin: "true"}}
+	}
 	gate := func(id string, watch ...string) Op {
-		return Op{Op: KindCommand, Bin: "true", ID: id, IfChanged: true, Watch: watch}
+		return Op{Op: KindCommand, ID: id, IfChanged: true, Watch: watch, Payload: CommandPayload{Bin: "true"}}
 	}
 	chunk := func(ops ...Op) Chunk { return Chunk{Ops: append([]Op{hdr}, ops...)} }
 	cases := []struct {

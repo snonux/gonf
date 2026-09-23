@@ -111,13 +111,14 @@ func TestRecordPlanEmitsOrderedOpsWithGuards(t *testing.T) {
 	}
 
 	cmdOp := ops[7]
-	if cmdOp.Name != "enable.x" || cmdOp.Bin != "systemctl" {
+	cmdPayload, ok := cmdOp.Payload.(plan.CommandPayload)
+	if !ok || cmdOp.Name != "enable.x" || cmdPayload.Bin != "systemctl" {
 		t.Fatalf("command op = %#v", cmdOp)
 	}
-	if cmdOp.Unless == nil || cmdOp.Unless.Bin != "systemctl" {
-		t.Fatalf("unless guard = %#v", cmdOp.Unless)
+	if cmdPayload.Unless == nil || cmdPayload.Unless.Bin != "systemctl" {
+		t.Fatalf("unless guard = %#v", cmdPayload.Unless)
 	}
-	if cmdOp.Creates == "" {
+	if cmdPayload.Creates == "" {
 		t.Fatalf("creates missing: %#v", cmdOp)
 	}
 

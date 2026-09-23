@@ -340,10 +340,9 @@ func TestApplyLinkDirCommandFileLines(t *testing.T) {
 		{Op: KindDir, Path: dirPath, Mode: "0700"},
 		{Op: KindFile, Path: filePath, AddLine: "hello"},
 		{
-			Op:   KindCommand,
-			Bin:  "touch",
-			Args: []string{marker},
-			Name: "touch-marker",
+			Op:      KindCommand,
+			Name:    "touch-marker",
+			Payload: CommandPayload{Bin: "touch", Args: []string{marker}},
 		},
 	}
 	if err := Apply(ops, Facts{}, ""); err != nil {
@@ -378,12 +377,14 @@ func TestApplyCommandUnlessSkips(t *testing.T) {
 	ops := []Op{
 		header(),
 		{
-			Op:   KindCommand,
-			Bin:  "touch",
-			Args: []string{marker},
-			Unless: &Guard{
-				Bin:  "true",
-				Args: nil,
+			Op: KindCommand,
+			Payload: CommandPayload{
+				Bin:  "touch",
+				Args: []string{marker},
+				Unless: &Guard{
+					Bin:  "true",
+					Args: nil,
+				},
 			},
 		},
 	}
@@ -406,17 +407,15 @@ func TestApplySortsDepsBeforeDependents(t *testing.T) {
 	ops := []Op{
 		header(),
 		{
-			Op:   KindCommand,
-			Bin:  "sh",
-			Args: []string{"-c", "echo B >> " + log},
-			ID:   "Command[b]",
-			Deps: []string{"Command[a]"},
+			Op:      KindCommand,
+			ID:      "Command[b]",
+			Deps:    []string{"Command[a]"},
+			Payload: CommandPayload{Bin: "sh", Args: []string{"-c", "echo B >> " + log}},
 		},
 		{
-			Op:   KindCommand,
-			Bin:  "sh",
-			Args: []string{"-c", "echo A >> " + log},
-			ID:   "Command[a]",
+			Op:      KindCommand,
+			ID:      "Command[a]",
+			Payload: CommandPayload{Bin: "sh", Args: []string{"-c", "echo A >> " + log}},
 		},
 	}
 	if err := Apply(ops, Facts{}, ""); err != nil {
@@ -440,8 +439,8 @@ func TestApplyDepFreeOrderPreserved(t *testing.T) {
 
 	ops := []Op{
 		header(),
-		{Op: KindCommand, Bin: "sh", Args: []string{"-c", "echo one >> " + log}, ID: "Command[one]"},
-		{Op: KindCommand, Bin: "sh", Args: []string{"-c", "echo two >> " + log}, ID: "Command[two]"},
+		{Op: KindCommand, ID: "Command[one]", Payload: CommandPayload{Bin: "sh", Args: []string{"-c", "echo one >> " + log}}},
+		{Op: KindCommand, ID: "Command[two]", Payload: CommandPayload{Bin: "sh", Args: []string{"-c", "echo two >> " + log}}},
 	}
 	if err := Apply(ops, Facts{}, ""); err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -462,7 +461,7 @@ func TestApplyLineNumbersFollowRecordedOrder(t *testing.T) {
 	ops := []Op{
 		header(),
 		{Op: KindFile, Path: "/tmp/dep-line-num", Deps: []string{"Command[a]"}}, // line 2: missing content
-		{Op: KindCommand, Bin: "true", ID: "Command[a]"},
+		{Op: KindCommand, ID: "Command[a]", Payload: CommandPayload{Bin: "true"}},
 	}
 	err := Apply(ops, Facts{}, "")
 	if err == nil {
@@ -481,8 +480,8 @@ func TestApplyDependencyCycle(t *testing.T) {
 
 	ops := []Op{
 		header(),
-		{Op: KindCommand, Bin: "touch", Args: []string{marker}, ID: "Command[a]", Deps: []string{"Command[b]"}},
-		{Op: KindCommand, Bin: "true", ID: "Command[b]", Deps: []string{"Command[a]"}},
+		{Op: KindCommand, ID: "Command[a]", Deps: []string{"Command[b]"}, Payload: CommandPayload{Bin: "touch", Args: []string{marker}}},
+		{Op: KindCommand, ID: "Command[b]", Deps: []string{"Command[a]"}, Payload: CommandPayload{Bin: "true"}},
 	}
 	err := Apply(ops, Facts{}, "")
 	if err == nil || !strings.Contains(err.Error(), "circular dependency involving") {
@@ -507,7 +506,7 @@ func TestApplyDependencyDanglingSatisfiedAtChunkLevel(t *testing.T) {
 
 	ops := []Op{
 		header(),
-		{Op: KindCommand, Bin: "sh", Args: []string{"-c", "echo A >> " + log}, ID: "Command[a]", Deps: []string{"File[missing]"}},
+		{Op: KindCommand, ID: "Command[a]", Deps: []string{"File[missing]"}, Payload: CommandPayload{Bin: "sh", Args: []string{"-c", "echo A >> " + log}}},
 	}
 	if err := Apply(ops, Facts{}, ""); err != nil {
 		t.Fatalf("dangling dep must be satisfied at chunk level: %v", err)
@@ -531,12 +530,12 @@ func TestApplyRefusesInvalidChangeGateBeforeMutation(t *testing.T) {
 	}{
 		{
 			name: "empty watch",
-			op:   Op{Op: KindCommand, Bin: "touch", Args: []string{marker}, ID: "Command[gated]", IfChanged: true},
+			op:   Op{Op: KindCommand, ID: "Command[gated]", IfChanged: true, Payload: CommandPayload{Bin: "touch", Args: []string{marker}}},
 			want: "watches nothing",
 		},
 		{
 			name: "dangling watch",
-			op:   Op{Op: KindCommand, Bin: "touch", Args: []string{marker}, ID: "Command[gated]", IfChanged: true, Watch: []string{"File[missing]"}},
+			op:   Op{Op: KindCommand, ID: "Command[gated]", IfChanged: true, Watch: []string{"File[missing]"}, Payload: CommandPayload{Bin: "touch", Args: []string{marker}}},
 			want: "dangling watch",
 		},
 	}
@@ -562,9 +561,9 @@ func TestApplyDepInLaterWhenBlockRejected(t *testing.T) {
 
 	ops := []Op{
 		header(),
-		{Op: KindCommand, Bin: "touch", Args: []string{marker}, ID: "Command[b]", Deps: []string{"Command[a]"}},
+		{Op: KindCommand, ID: "Command[b]", Deps: []string{"Command[a]"}, Payload: CommandPayload{Bin: "touch", Args: []string{marker}}},
 		{Op: KindWhenBegin, All: []Predicate{{Fact: "goos", Eq: "linux"}}},
-		{Op: KindCommand, Bin: "true", ID: "Command[a]"},
+		{Op: KindCommand, ID: "Command[a]", Payload: CommandPayload{Bin: "true"}},
 		{Op: KindWhenEnd},
 	}
 	err := Apply(ops, Facts{GOOS: "linux"}, "")
@@ -587,9 +586,9 @@ func TestApplyDepOnEarlierWhenBodySatisfied(t *testing.T) {
 	ops := []Op{
 		header(),
 		{Op: KindWhenBegin, All: []Predicate{{Fact: "goos", Eq: "linux"}}},
-		{Op: KindCommand, Bin: "sh", Args: []string{"-c", "echo A >> " + log}, ID: "Command[a]"},
+		{Op: KindCommand, ID: "Command[a]", Payload: CommandPayload{Bin: "sh", Args: []string{"-c", "echo A >> " + log}}},
 		{Op: KindWhenEnd},
-		{Op: KindCommand, Bin: "sh", Args: []string{"-c", "echo B >> " + log}, ID: "Command[b]", Deps: []string{"Command[a]"}},
+		{Op: KindCommand, ID: "Command[b]", Deps: []string{"Command[a]"}, Payload: CommandPayload{Bin: "sh", Args: []string{"-c", "echo B >> " + log}}},
 	}
 	if err := Apply(ops, Facts{GOOS: "linux"}, ""); err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -685,7 +684,7 @@ func sortedApplyOrderFixture() []sortedApplyOrderCase {
 	beginLinux := Op{Op: KindWhenBegin, All: []Predicate{{Fact: "goos", Eq: "linux"}}}
 	end := Op{Op: KindWhenEnd}
 	cmd := func(id string, deps ...string) Op {
-		return Op{Op: KindCommand, Bin: "true", ID: id, Deps: deps}
+		return Op{Op: KindCommand, ID: id, Deps: deps, Payload: CommandPayload{Bin: "true"}}
 	}
 	return []sortedApplyOrderCase{
 		{
@@ -747,7 +746,7 @@ func sortedApplyOrderFixture() []sortedApplyOrderCase {
 		},
 		{
 			name:    "duplicate dep occurrences stay ordered",
-			body:    []Op{cmd("x", "File[same]"), cmd("y"), Op{Op: KindCommand, Bin: "true", ID: "File[same]"}},
+			body:    []Op{cmd("x", "File[same]"), cmd("y"), Op{Op: KindCommand, ID: "File[same]", Payload: CommandPayload{Bin: "true"}}},
 			wantIDs: []string{"y", "File[same]", "x"},
 		},
 	}
@@ -833,8 +832,8 @@ func TestApplyDepInLaterChunkRefusedBeforeApply(t *testing.T) {
 
 	ops := []Op{
 		{Op: KindPlan, Version: CurrentVersion, ID: "chunks"},
-		{Op: KindCommand, Bin: "touch", Args: []string{marker}, ID: "Command[b]", Deps: []string{"Command[a]"}},
-		{Op: KindCommand, Bin: "true", ID: "Command[a]", Elevate: true},
+		{Op: KindCommand, ID: "Command[b]", Deps: []string{"Command[a]"}, Payload: CommandPayload{Bin: "touch", Args: []string{marker}}},
+		{Op: KindCommand, ID: "Command[a]", Elevate: true, Payload: CommandPayload{Bin: "true"}},
 	}
 	chunks := SplitPrivilegeChunks(ops)
 	if len(chunks) != 2 {
@@ -864,8 +863,8 @@ func TestApplyDepOnEarlierChunkSatisfied(t *testing.T) {
 
 	ops := []Op{
 		{Op: KindPlan, Version: CurrentVersion, ID: "chunks"},
-		{Op: KindCommand, Bin: "sh", Args: []string{"-c", "echo A >> " + log}, ID: "Command[a]"},
-		{Op: KindCommand, Bin: "sh", Args: []string{"-c", "echo B >> " + log}, ID: "Command[b]", Elevate: true, Deps: []string{"Command[a]"}},
+		{Op: KindCommand, ID: "Command[a]", Payload: CommandPayload{Bin: "sh", Args: []string{"-c", "echo A >> " + log}}},
+		{Op: KindCommand, ID: "Command[b]", Elevate: true, Deps: []string{"Command[a]"}, Payload: CommandPayload{Bin: "sh", Args: []string{"-c", "echo B >> " + log}}},
 	}
 	chunks := SplitPrivilegeChunks(ops)
 	if len(chunks) != 2 {

@@ -22,26 +22,30 @@ func init() {
 }
 
 // ToOp lowers a "command" resource draft to a plan.Op. The command-exclusive
-// fields come from d.Payload (Payload, task w62 Layer 1); a "command" draft
-// without one is a record-time bug (planDraft always sets it), reported
-// like any other handler error rather than panicking.
+// fields come from d.Payload (resource/cmd.Payload, task w62 Layer 1),
+// carried into the op's own plan.CommandPayload (task 7e2, Layer 2's third
+// slice) rather than staying flat on plan.Op; a "command" draft without a
+// resource/cmd.Payload is a record-time bug (planDraft always sets it),
+// reported like any other handler error rather than panicking.
 func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 	p, ok := d.Payload.(Payload)
 	if !ok {
 		return plan.Op{}, fmt.Errorf("command: draft missing cmd.Payload (got %T)", d.Payload)
 	}
 	op := plan.Op{
-		Op:      plan.KindCommand,
-		ID:      d.ID,
-		Name:    d.Name,
-		Bin:     p.Bin,
-		Args:    slices.Clone(p.Args),
-		Dir:     p.Dir,
-		Env:     maps.Clone(d.Env),
-		Creates: p.Creates,
-		Unless:  planGuard(p.Unless),
-		OnlyIf:  planGuard(p.OnlyIf),
-		Deps:    slices.Clone(d.Deps),
+		Op:   plan.KindCommand,
+		ID:   d.ID,
+		Name: d.Name,
+		Env:  maps.Clone(d.Env),
+		Deps: slices.Clone(d.Deps),
+		Payload: plan.CommandPayload{
+			Bin:     p.Bin,
+			Args:    slices.Clone(p.Args),
+			Dir:     p.Dir,
+			Creates: p.Creates,
+			Unless:  planGuard(p.Unless),
+			OnlyIf:  planGuard(p.OnlyIf),
+		},
 	}
 	// Change gate (schema v11): OnChange arms IfChanged with the watched ids.
 	if d.IfChanged {
@@ -56,7 +60,14 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 // exactly. ctx.Runners.Command, when this apply had one injected (task qb2;
 // nil in every real apply), replaces the real internal/exec runner.
 func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
-	if op.Bin == "" {
+	// A comma-ok assertion, not a "missing payload" error: unlike ToOp (fed
+	// only trusted draft data planDraft() always populates), Apply may see
+	// an op decoded from an arbitrary plan.jsonl (mirrors resource/cron's
+	// planwire.go Apply). A nil or mistyped Payload degrades to the zero
+	// CommandPayload, which the missing-bin check below already turns into
+	// a clean error.
+	p, _ := op.Payload.(plan.CommandPayload)
+	if p.Bin == "" {
 		return fmt.Errorf("command: missing bin")
 	}
 	var opts []opt.CommandOption
@@ -72,15 +83,15 @@ func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	if gate != nil {
 		opts = append(opts, gate)
 	}
-	if op.Dir != "" {
-		dirPath, err := plan.ExpandPath(op.Dir)
+	if p.Dir != "" {
+		dirPath, err := plan.ExpandPath(p.Dir)
 		if err != nil {
 			return err
 		}
 		opts = append(opts, opt.WithDir(dirPath))
 	}
-	if op.Creates != "" {
-		creates, err := plan.ExpandPath(op.Creates)
+	if p.Creates != "" {
+		creates, err := plan.ExpandPath(p.Creates)
 		if err != nil {
 			return err
 		}
@@ -89,18 +100,18 @@ func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	if len(op.Env) > 0 {
 		opts = append(opts, opt.WithEnv(op.Env))
 	}
-	if op.Unless != nil {
-		opts = append(opts, plan.GuardOptions(op.Unless, true)...)
+	if p.Unless != nil {
+		opts = append(opts, plan.GuardOptions(p.Unless, true)...)
 	}
-	if op.OnlyIf != nil {
-		opts = append(opts, plan.GuardOptions(op.OnlyIf, false)...)
+	if p.OnlyIf != nil {
+		opts = append(opts, plan.GuardOptions(p.OnlyIf, false)...)
 	}
 	// A sensitive op (scan-detected or WithSensitive at record time)
 	// rebuilds a sensitive command, which withholds argv and output.
 	if op.Sensitive {
 		opts = append(opts, opt.WithSensitive)
 	}
-	return ensureWith(runners.CommandOf(ctx.Runners), op.Bin, append([]string(nil), op.Args...), opts)
+	return ensureWith(runners.CommandOf(ctx.Runners), p.Bin, append([]string(nil), p.Args...), opts)
 }
 
 // planGuard converts a package-neutral guard draft to the plan wire Guard,

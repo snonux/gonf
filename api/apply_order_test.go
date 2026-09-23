@@ -154,7 +154,7 @@ var orderHdr = plan.Op{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "app
 
 // orderOp builds a command op for the ordering tests.
 func orderOp(id string, elevate bool, deps ...string) plan.Op {
-	return plan.Op{Op: plan.KindCommand, Bin: "true", ID: id, Elevate: elevate, Deps: deps}
+	return plan.Op{Op: plan.KindCommand, ID: id, Elevate: elevate, Deps: deps, Payload: plan.CommandPayload{Bin: "true"}}
 }
 
 // bodyIDs lists the op IDs after the plan header.

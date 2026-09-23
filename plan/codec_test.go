@@ -37,13 +37,15 @@ func sampleOps() []Op {
 		},
 		{Op: KindWhenEnd},
 		{
-			Op:   KindCommand,
-			Bin:  "systemctl",
-			Args: []string{"--user", "enable", "x.timer"},
-			Unless: &Guard{
-				Bin:        "systemctl",
-				Args:       []string{"--user", "is-enabled", "x.timer"},
-				ExpectExit: &exit1,
+			Op: KindCommand,
+			Payload: CommandPayload{
+				Bin:  "systemctl",
+				Args: []string{"--user", "enable", "x.timer"},
+				Unless: &Guard{
+					Bin:        "systemctl",
+					Args:       []string{"--user", "is-enabled", "x.timer"},
+					ExpectExit: &exit1,
+				},
 			},
 		},
 		{
@@ -97,11 +99,10 @@ func sampleOps() []Op {
 			Absent: true,
 		},
 		{
-			Op:   KindCommand,
-			Bin:  "systemctl",
-			Args: []string{"--user", "daemon-reload"},
-			ID:   "DaemonReload[user]",
-			Deps: []string{"File[/etc/a]", "File[/etc/b]"},
+			Op:      KindCommand,
+			ID:      "DaemonReload[user]",
+			Deps:    []string{"File[/etc/a]", "File[/etc/b]"},
+			Payload: CommandPayload{Bin: "systemctl", Args: []string{"--user", "daemon-reload"}},
 		},
 	}
 }
@@ -371,7 +372,7 @@ func TestDecodePlanAllKindsCorpus(t *testing.T) {
 		if k == KindPlan {
 			continue
 		}
-		op := Op{Op: k, Path: "/p", Name: "n", Bin: "b"}
+		op := Op{Op: k, Path: "/p", Name: "n"}
 		switch k {
 		case KindWhenBegin:
 			op.All = []Predicate{{Fact: "goos", Eq: "linux"}}
@@ -398,18 +399,20 @@ func TestDecodePlanAllKindsCorpus(t *testing.T) {
 func TestEncodeDecodeEmptyNonNilSlices(t *testing.T) {
 	t.Parallel()
 	in := Op{
-		Op:   KindCommand,
-		Bin:  "x",
-		Args: []string{},
-		Env:  map[string]string{},
-		All:  []Predicate{},
-		Unless: &Guard{
-			Bin:  "y",
+		Op:  KindCommand,
+		Env: map[string]string{},
+		All: []Predicate{},
+		Payload: CommandPayload{
+			Bin:  "x",
 			Args: []string{},
-		},
-		OnlyIf: &Guard{
-			Bin:  "z",
-			Args: []string{},
+			Unless: &Guard{
+				Bin:  "y",
+				Args: []string{},
+			},
+			OnlyIf: &Guard{
+				Bin:  "z",
+				Args: []string{},
+			},
 		},
 	}
 	b, err := EncodeOp(in)
@@ -421,10 +424,12 @@ func TestEncodeDecodeEmptyNonNilSlices(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Op{
-		Op:     KindCommand,
-		Bin:    "x",
-		Unless: &Guard{Bin: "y"},
-		OnlyIf: &Guard{Bin: "z"},
+		Op: KindCommand,
+		Payload: CommandPayload{
+			Bin:    "x",
+			Unless: &Guard{Bin: "y"},
+			OnlyIf: &Guard{Bin: "z"},
+		},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %#v want %#v", got, want)
@@ -439,8 +444,9 @@ func TestNormalizeEmptySlices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if op.Args != nil || op.All != nil || op.Unless.Args != nil || op.AddLines != nil || op.RemoveLines != nil {
-		t.Fatalf("expected nil empty slices, got %#v", op)
+	p, _ := op.Payload.(CommandPayload)
+	if p.Args != nil || op.All != nil || p.Unless.Args != nil || op.AddLines != nil || op.RemoveLines != nil {
+		t.Fatalf("expected nil empty slices, got %#v (payload %#v)", op, p)
 	}
 }
 
@@ -514,15 +520,17 @@ func TestEncodePlanConcurrentSharedGuardNoRace(t *testing.T) {
 	ops := []Op{
 		{Op: KindPlan, Version: CurrentVersion},
 		{
-			Op:  KindCommand,
-			Bin: "true",
-			Unless: &Guard{
-				Bin:  "true",
-				Args: []string{},
-			},
-			OnlyIf: &Guard{
-				Bin:  "true",
-				Args: []string{},
+			Op: KindCommand,
+			Payload: CommandPayload{
+				Bin: "true",
+				Unless: &Guard{
+					Bin:  "true",
+					Args: []string{},
+				},
+				OnlyIf: &Guard{
+					Bin:  "true",
+					Args: []string{},
+				},
 			},
 		},
 	}
@@ -548,12 +556,21 @@ func TestEncodePlanConcurrentSharedGuardNoRace(t *testing.T) {
 	// Encoding must be side-effect free with respect to the caller's ops:
 	// the correctness property the concurrency fix relies on. If EncodePlan
 	// mutated the shared Guard, this would observe it having been nilled out
-	// (or, under the race, could observe a torn/inconsistent value).
-	if ops[1].Unless.Args == nil || len(ops[1].Unless.Args) != 0 {
-		t.Fatalf("EncodePlan mutated shared Unless.Args: %#v", ops[1].Unless.Args)
+	// (or, under the race, could observe a torn/inconsistent value). Bin,
+	// Unless and OnlyIf now live on CommandPayload (task 7e2), not flat on
+	// Op, but the shared-pointer race the fix guards against is unchanged:
+	// applyToWire (op_payload.go) copies the pointer VALUE onto wireOp, and
+	// normalizeWire (wire.go) still does its own copy-before-mutate on its
+	// own wireOp copy, never on the payload's pointee.
+	cp, ok := ops[1].Payload.(CommandPayload)
+	if !ok {
+		t.Fatalf("ops[1].Payload = %#v, want CommandPayload", ops[1].Payload)
 	}
-	if ops[1].OnlyIf.Args == nil || len(ops[1].OnlyIf.Args) != 0 {
-		t.Fatalf("EncodePlan mutated shared OnlyIf.Args: %#v", ops[1].OnlyIf.Args)
+	if cp.Unless.Args == nil || len(cp.Unless.Args) != 0 {
+		t.Fatalf("EncodePlan mutated shared Unless.Args: %#v", cp.Unless.Args)
+	}
+	if cp.OnlyIf.Args == nil || len(cp.OnlyIf.Args) != 0 {
+		t.Fatalf("EncodePlan mutated shared OnlyIf.Args: %#v", cp.OnlyIf.Args)
 	}
 }
 
@@ -565,11 +582,13 @@ func TestEncodePlanConcurrentSharedGuardNoRace(t *testing.T) {
 func TestEncodeOpGuardNormalizationUnchanged(t *testing.T) {
 	t.Parallel()
 	op := Op{
-		Op:  KindCommand,
-		Bin: "true",
-		Unless: &Guard{
-			Bin:  "true",
-			Args: []string{},
+		Op: KindCommand,
+		Payload: CommandPayload{
+			Bin: "true",
+			Unless: &Guard{
+				Bin:  "true",
+				Args: []string{},
+			},
 		},
 	}
 	b, err := EncodeOp(op)

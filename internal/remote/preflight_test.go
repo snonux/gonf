@@ -17,10 +17,10 @@ import (
 func preflightOps(dep string, depElevated bool) []plan.Op {
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "demo"},
-		{Op: plan.KindCommand, Bin: "true", ID: "Command[b]", Deps: []string{dep}},
+		{Op: plan.KindCommand, ID: "Command[b]", Deps: []string{dep}, Payload: plan.CommandPayload{Bin: "true"}},
 	}
 	if depElevated {
-		ops = append(ops, plan.Op{Op: plan.KindCommand, Bin: "true", ID: "Command[a]", Elevate: true})
+		ops = append(ops, plan.Op{Op: plan.KindCommand, ID: "Command[a]", Elevate: true, Payload: plan.CommandPayload{Bin: "true"}})
 	}
 	return ops
 }
@@ -93,8 +93,8 @@ func TestPushToHostAcceptsBackwardDependencies(t *testing.T) {
 
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "demo"},
-		{Op: plan.KindCommand, Bin: "true", ID: "Command[a]"},
-		{Op: plan.KindCommand, Bin: "true", ID: "Command[b]", Deps: []string{"Command[a]"}},
+		{Op: plan.KindCommand, ID: "Command[a]", Payload: plan.CommandPayload{Bin: "true"}},
+		{Op: plan.KindCommand, ID: "Command[b]", Deps: []string{"Command[a]"}, Payload: plan.CommandPayload{Bin: "true"}},
 	}
 	err := pushToHost(context.Background(), PushTarget{Host: "h.example", Privilege: privilege.None}, "demo", ops, nil)
 	if err != nil {

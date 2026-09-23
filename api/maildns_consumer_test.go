@@ -66,7 +66,8 @@ func TestConsumerMailDNSNSDPlan(t *testing.T) {
 	}
 
 	publisher := consumerPlanOp(t, ops, plan.KindCommand, "Command[publish-nsd-zones]")
-	if publisher.Bin != "/usr/local/bin/dns-publish.ksh" || publisher.IfChanged {
+	publisherPayload, ok := publisher.Payload.(plan.CommandPayload)
+	if !ok || publisherPayload.Bin != "/usr/local/bin/dns-publish.ksh" || publisher.IfChanged {
 		t.Fatalf("DNS publisher command = %#v", publisher)
 	}
 	publisherScript := consumerPlanOp(t, ops, plan.KindFile, "File[/usr/local/bin/dns-publish.ksh]")

@@ -182,11 +182,13 @@ func TestOpJSONTagsMatchPlanExamples(t *testing.T) {
 			op: Op{
 				Op:   KindCommand,
 				Name: "systemctl.enable.random-wallpaper",
-				Bin:  "systemctl",
-				Args: []string{"--user", "enable", "random-wallpaper.timer"},
-				Unless: &Guard{
+				Payload: CommandPayload{
 					Bin:  "systemctl",
-					Args: []string{"--user", "is-enabled", "random-wallpaper.timer"},
+					Args: []string{"--user", "enable", "random-wallpaper.timer"},
+					Unless: &Guard{
+						Bin:  "systemctl",
+						Args: []string{"--user", "is-enabled", "random-wallpaper.timer"},
+					},
 				},
 			},
 			want: `{"op":"command","name":"systemctl.enable.random-wallpaper","bin":"systemctl","args":["--user","enable","random-wallpaper.timer"],"unless":{"bin":"systemctl","args":["--user","is-enabled","random-wallpaper.timer"]}}`,
@@ -194,14 +196,16 @@ func TestOpJSONTagsMatchPlanExamples(t *testing.T) {
 		{
 			name: "command only_if creates expect_exit",
 			op: Op{
-				Op:      KindCommand,
-				Bin:     "npm",
-				Args:    []string{"install", "-g", "@ampcode/cli"},
-				Creates: "/usr/local/bin/amp",
-				OnlyIf: &Guard{
-					Bin:        "command",
-					Args:       []string{"-v", "npm"},
-					ExpectExit: &exit1,
+				Op: KindCommand,
+				Payload: CommandPayload{
+					Bin:     "npm",
+					Args:    []string{"install", "-g", "@ampcode/cli"},
+					Creates: "/usr/local/bin/amp",
+					OnlyIf: &Guard{
+						Bin:        "command",
+						Args:       []string{"-v", "npm"},
+						ExpectExit: &exit1,
+					},
 				},
 			},
 			want: `{"op":"command","bin":"npm","args":["install","-g","@ampcode/cli"],"creates":"/usr/local/bin/amp","only_if":{"bin":"command","args":["-v","npm"],"expect_exit":1}}`,
@@ -363,11 +367,10 @@ func TestOpJSONTagsMatchPlanExamples(t *testing.T) {
 		{
 			name: "command with deps",
 			op: Op{
-				Op:   KindCommand,
-				Bin:  "systemctl",
-				Args: []string{"--user", "restart", "x.service"},
-				ID:   "Command[restart.x]",
-				Deps: []string{"File[/etc/x]", "Package[x]"},
+				Op:      KindCommand,
+				ID:      "Command[restart.x]",
+				Deps:    []string{"File[/etc/x]", "Package[x]"},
+				Payload: CommandPayload{Bin: "systemctl", Args: []string{"--user", "restart", "x.service"}},
 			},
 			want: `{"op":"command","id":"Command[restart.x]","bin":"systemctl","args":["--user","restart","x.service"],"deps":["File[/etc/x]","Package[x]"]}`,
 		},
@@ -384,15 +387,17 @@ func TestOpJSONTagsMatchPlanExamples(t *testing.T) {
 		{
 			name: "command dir env expect_stdout",
 			op: Op{
-				Op:   KindCommand,
-				Bin:  "git",
-				Args: []string{"config", "--global", "--get", "user.name"},
-				Dir:  "/tmp",
-				Env:  map[string]string{"GIT_CONFIG_GLOBAL": "/dev/null"},
-				Unless: &Guard{
-					Bin:          "git",
-					Args:         []string{"config", "--global", "--get", "user.name"},
-					ExpectStdout: "Paul Buetow",
+				Op:  KindCommand,
+				Env: map[string]string{"GIT_CONFIG_GLOBAL": "/dev/null"},
+				Payload: CommandPayload{
+					Bin:  "git",
+					Args: []string{"config", "--global", "--get", "user.name"},
+					Dir:  "/tmp",
+					Unless: &Guard{
+						Bin:          "git",
+						Args:         []string{"config", "--global", "--get", "user.name"},
+						ExpectStdout: "Paul Buetow",
+					},
 				},
 			},
 			want: `{"op":"command","bin":"git","args":["config","--global","--get","user.name"],"dir":"/tmp","env":{"GIT_CONFIG_GLOBAL":"/dev/null"},"unless":{"bin":"git","args":["config","--global","--get","user.name"],"expect_stdout":"Paul Buetow"}}`,
@@ -423,8 +428,15 @@ func TestOpJSONTagsMatchPlanExamples(t *testing.T) {
 func TestOpZeroValueOmitemptyReady(t *testing.T) {
 	t.Parallel()
 	var op Op
-	if op.Unless != nil || op.OnlyIf != nil || op.All != nil || op.Args != nil || op.Env != nil || op.Deps != nil {
+	if op.All != nil || op.Env != nil || op.Deps != nil || op.Payload != nil {
 		t.Fatalf("zero Op has non-nil omitempty fields: %+v", op)
+	}
+	// Unless/OnlyIf/Args moved onto CommandPayload (task 7e2); pin its own
+	// zero value the same way, since a zero Op carries a nil Payload (never
+	// a zero CommandPayload) and would not otherwise exercise this.
+	var cp CommandPayload
+	if cp.Unless != nil || cp.OnlyIf != nil || cp.Args != nil {
+		t.Fatalf("zero CommandPayload has non-nil omitempty fields: %+v", cp)
 	}
 }
 
