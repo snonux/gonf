@@ -213,10 +213,19 @@ binary's `main` exits, with the code `cli.CLI` returns.
     `WhenPathExists`'s own non-recording branches (evaluated directly, not
     through a `RecordPlanTo` call at all) used to reset the repository
     before running a matched branch's body too, with nothing to restore it
-    afterward (task kd2) — removed, since only one branch's body ever runs
-    directly at all (the condition is evaluated once, for the local host),
-    so there was never a same-ID collision to guard against on that path
-    either.
+    afterward (task kd2) — removed, since the reset only ever discarded
+    whatever the recipe had registered earlier at top level, with nothing
+    to show for it. Removing it does not make a same-ID collision
+    impossible on that path, though: each `WhenHostname`/`WhenPathExists`
+    call is an independent condition, and several can match the same local
+    host at once (overlapping substrings, two `List(...)` entries, two
+    existing paths), so their bodies run into the SAME repository in turn.
+    Direct apply therefore requires resource IDs to stay unique across
+    every fragment matching the host — unlike the recording branch above,
+    which deliberately keeps each fragment in its own scope — and a
+    collision is reported with both colliding conditions named (task vd2;
+    an earlier version of this note wrongly claimed collisions could never
+    happen here).
 
     A misuse reported outside a recording
     (top-level registration in `main`, resources declared for a direct

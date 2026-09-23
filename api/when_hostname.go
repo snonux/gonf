@@ -59,11 +59,22 @@ func whenHostnameOne(substr string, fn func()) {
 	// extracts fn()'s registrations before some later fragment's body
 	// runs, so a reset before fn() only ever discarded whatever the
 	// recipe had registered earlier at top level, with nothing to show
-	// for it (task kd2). Only one WhenHostname branch's fn() ever runs
-	// directly at all (the condition is evaluated once, for this one
-	// local host), so — unlike recording mode, which must consider every
-	// branch without knowing the destination host yet — two branches'
-	// resources can never collide here either; there was never a reason
-	// to reset.
+	// for it (task kd2). Removing that reset does NOT mean collisions are
+	// impossible here, though: each WhenHostname call is an independent
+	// condition, and several can match this one local host at once
+	// (overlapping substrings, or several List(...) entries that both
+	// match), so their fn() bodies run into the SAME repository in turn.
+	// Direct apply therefore requires resource IDs to stay unique across
+	// every fragment that matches this host — unlike the recording branch
+	// above, which deliberately keeps each fragment in its own scope (an
+	// earlier version of this comment wrongly claimed a collision could
+	// never happen here; task vd2 corrected it after a probe reproduced
+	// exactly that with two WhenPathExists fragments). Name this
+	// condition while fn() runs so a same-ID collision names both
+	// colliding When*/WhenPathExists calls instead of a bare "already
+	// registered" (resource.collisionError, via resource.Register's
+	// declerr.Reportf).
+	pop := resource.PushWhenContext(fmt.Sprintf("WhenHostname(%q)", substr))
+	defer pop()
 	fn()
 }

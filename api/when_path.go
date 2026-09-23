@@ -33,8 +33,20 @@ func WhenPathExists(path string, fn func()) {
 	}
 	// See WhenHostname's non-recording branch: no per-fragment op scope to
 	// isolate here, so a reset before fn() only ever discarded whatever
-	// the recipe had registered earlier at top level (task kd2). Only one
-	// WhenPathExists branch's fn() ever runs directly at all, so there is
-	// no cross-branch ID collision to guard against either.
+	// the recipe had registered earlier at top level (task kd2). That does
+	// NOT make a collision impossible: several WhenPathExists fragments
+	// (or a WhenPathExists alongside a WhenHostname) can match this one
+	// local host at once (two paths that both exist), so their fn() bodies
+	// run into the SAME repository in turn — direct apply requires
+	// resource IDs to stay unique across every matching fragment, unlike
+	// the recording branch above (task vd2 corrected this comment, which
+	// used to wrongly claim cross-branch collisions were impossible here;
+	// probed and reproduced with two WhenPathExists fragments). Name this
+	// condition while fn() runs so a same-ID collision names both
+	// colliding When*/WhenPathExists calls instead of a bare "already
+	// registered" (resource.collisionError, via resource.Register's
+	// declerr.Reportf).
+	pop := resource.PushWhenContext(fmt.Sprintf("WhenPathExists(%q)", p))
+	defer pop()
 	fn()
 }

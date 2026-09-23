@@ -1,9 +1,11 @@
 package api
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
@@ -183,5 +185,55 @@ func TestRecordPlanWhenHostnameFragmentScopes(t *testing.T) {
 		if got := ops[2+i*3].ID; got != "Cron[root/demo-job]" {
 			t.Fatalf("cron op[%d] ID = %q", i, got)
 		}
+	}
+}
+
+// TestWhenHostnameDirectCollisionNamesConditions is WhenHostname's analogue
+// of api/when_path_test.go's WhenPathExists collision test: two independent
+// WhenHostname fragments that both match this local host (an empty substr
+// always matches, so it overlaps with any other matching substr the same
+// way two overlapping non-empty substrings would in a real recipe) run
+// their fn() bodies, one after the other, into the SAME repository on the
+// direct (non-recording) api.Apply path -- unlike the recording path, which
+// gives each fragment its own scope (see
+// TestRecordPlanWhenHostnameFragmentScopes above). A same resource ID
+// declared by both is a genuine collision (task kd2 removed the
+// per-fragment reset that used to paper over it), and the refusal must name
+// both colliding WhenHostname conditions.
+func TestWhenHostnameDirectCollisionNamesConditions(t *testing.T) {
+	ResetForTest()
+	// This collision goes straight through resource.Register's
+	// declerr.Reportf with no sink installed, so it sets the STICKY
+	// process-wide declerr.First() (see api/when_path_test.go's
+	// TestWhenPathExistsDirectCollisionNamesConditions and AGENTS.md's
+	// "Registration-time contract"). A full ResetForTest clears that so
+	// later tests in this shuffled binary are unaffected.
+	t.Cleanup(ResetForTest)
+
+	host, err := os.Hostname()
+	if err != nil {
+		t.Fatalf("os.Hostname: %v", err)
+	}
+	out := filepath.Join(t.TempDir(), "out.txt")
+
+	// Two distinct, independently-true conditions for this host: the empty
+	// substring (always matches) and the host's own name (matches itself).
+	WhenHostname("", func() { File(out, options.WithContent("A")) })
+	WhenHostname(host, func() { File(out, options.WithContent("B")) })
+
+	applyErr := Apply()
+	if applyErr == nil {
+		t.Fatal("expected a resource-collision error, got nil")
+	}
+	if !strings.Contains(applyErr.Error(), "already registered") {
+		t.Fatalf("error = %q, want it to mention \"already registered\"", applyErr)
+	}
+	wantA := `WhenHostname("")`
+	wantB := fmt.Sprintf("WhenHostname(%q)", host)
+	if !strings.Contains(applyErr.Error(), wantA) {
+		t.Fatalf("error = %q, want it to name the first colliding condition %q", applyErr, wantA)
+	}
+	if !strings.Contains(applyErr.Error(), wantB) {
+		t.Fatalf("error = %q, want it to name the second colliding condition %q", applyErr, wantB)
 	}
 }

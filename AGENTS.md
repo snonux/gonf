@@ -164,8 +164,21 @@ inventory and resources is a declaration error (`internal/declerr`):
   `WhenHostname`/`WhenPathExists`'s own non-recording branches (direct,
   not through `RecordPlanTo`) used to reset the repository before running
   a matched branch's body too, with nothing to restore it afterward —
-  removed (task kd2), since only one branch's body ever runs directly at
-  all, so there was never a same-ID collision to guard against there.
+  removed (task kd2), since the reset only ever discarded whatever the
+  recipe had registered earlier at top level, with nothing to show for
+  it. Removing it does NOT make a same-ID collision impossible on that
+  path, though: each `WhenHostname`/`WhenPathExists` call is an
+  independent condition, and several can match the same local host at
+  once (overlapping substrings, two `List(...)` entries, two existing
+  paths), so their bodies run into the SAME repository in turn. Direct
+  apply therefore requires resource IDs to stay unique across every
+  fragment matching the host — unlike the recording branch, which
+  deliberately keeps each fragment in its own scope — and a collision is
+  reported through `resource.Register`'s `declerr.Reportf` with both
+  colliding `When*`/`WhenPathExists` conditions named
+  (`resource.collisionError`, task vd2; an earlier version of this note
+  wrongly claimed collisions could never happen here, until a probe
+  reproduced one with two `WhenPathExists` fragments).
   `RecordPlanTo` also sets `api`'s own `lastRecordFailure` on ANY failure
   including a recovered panic (not `declerr`'s concern, see api/plan.go)
   — cleared by a later clean record. `api.Apply` refuses on it

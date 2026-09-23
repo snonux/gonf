@@ -83,20 +83,24 @@ func SnapshotRepository() (restore func()) {
 }
 
 // repository is one recipe scope's registry: the registered resources (by
-// ID, with their dependency edges and registered value) and the plan draft
-// each one recorded. It applies nothing itself; api.Apply and api.Run lower
-// the drafts to plan ops and apply them through the plan engine (the direct
-// repository apply path was retired in task e72).
+// ID, with their dependency edges and registered value), the plan draft each
+// one recorded, and (direct-apply path only) the When*/WhenPathExists
+// condition active when each ID was first registered (declaredUnder), so a
+// same-ID collision can name it. It applies nothing itself; api.Apply and
+// api.Run lower the drafts to plan ops and apply them through the plan
+// engine (the direct repository apply path was retired in task e72).
 type repository struct {
-	registered map[string]Resource
-	drafts     map[string]PlanDraft
-	mu         sync.Mutex
+	registered    map[string]Resource
+	drafts        map[string]PlanDraft
+	declaredUnder map[string]string
+	mu            sync.Mutex
 }
 
 func newRepository() *repository {
 	return &repository{
-		registered: make(map[string]Resource),
-		drafts:     make(map[string]PlanDraft),
+		registered:    make(map[string]Resource),
+		drafts:        make(map[string]PlanDraft),
+		declaredUnder: make(map[string]string),
 	}
 }
 
@@ -105,10 +109,11 @@ func (r *repository) register(res Resource) error {
 	defer r.mu.Unlock()
 
 	if _, exists := r.registered[res.ID()]; exists {
-		return fmt.Errorf("resource %v already registered", res)
+		return collisionError(res, r.declaredUnder[res.ID()], currentWhenContext())
 	}
 
 	r.registered[res.ID()] = res
+	r.declaredUnder[res.ID()] = currentWhenContext()
 	logger.Debug("Registered resource %v", res)
 
 	return nil
@@ -164,4 +169,71 @@ func (r *repository) draftsSnapshot() []PlanDraft {
 		drafts = append(drafts, r.drafts[id].Clone())
 	}
 	return drafts
+}
+
+// collisionError composes the "already registered" error for a duplicate
+// ID. On the direct (non-recording) apply path several
+// WhenHostname/WhenPathExists fragments can legitimately match the SAME
+// host and so run their fn() bodies, one after another, into this one
+// repository (task kd2 removed the per-fragment reset that used to paper
+// over that by silently discarding whatever an earlier fragment had
+// registered; see api/when_hostname.go and api/when_path.go). When that
+// produces the same resource ID twice, first and second name the
+// When*/WhenPathExists condition active for the original and for the
+// colliding declaration ("" when a declaration happened outside any
+// When*/WhenPathExists — a plain top-level duplicate, unrelated to
+// overlapping fragments). Naming both means the operator sees which two
+// conditions collided instead of a bare "already registered" — still true
+// even when this exact error later resurfaces on a completely unrelated
+// registration, because declerr's first report is sticky for the process
+// (see AGENTS.md's "Registration-time contract"): the message names its
+// own real cause, so it stays legible instead of misleadingly pointing at
+// whatever registers next.
+func collisionError(res Resource, first, second string) error {
+	switch {
+	case first != "" && second != "":
+		return fmt.Errorf(
+			"resource %v already registered (declared under %s; colliding declaration under %s — direct apply requires resource IDs to stay unique across every When*/WhenPathExists fragment that matches this host, unlike a recorded plan where each fragment keeps its own scope)",
+			res, first, second)
+	case second != "":
+		return fmt.Errorf("resource %v already registered (colliding declaration under %s)", res, second)
+	case first != "":
+		return fmt.Errorf("resource %v already registered (first declared under %s)", res, first)
+	default:
+		return fmt.Errorf("resource %v already registered", res)
+	}
+}
+
+// whenStack is the LIFO of active When*/WhenPathExists condition
+// descriptions on the direct (non-recording) apply path (see
+// PushWhenContext). Registration is single-goroutine by the same DSL
+// invariant the rest of this file relies on (see the package doc comment
+// above), so no lock guards it.
+var whenStack []string
+
+// PushWhenContext records desc (e.g. `WhenHostname("web")`,
+// `WhenPathExists("/etc")`) as the active When*/WhenPathExists condition
+// while its fn() runs on the direct (non-recording) apply path. If fn()
+// registers a resource ID that another matching fragment already
+// registered, collisionError names both conditions instead of a bare
+// "already registered". The recording path never calls this: its
+// when_begin/when_end ops already carry the condition in the recorded
+// plan, and RecordPlan gives each fragment its own repository scope
+// (ResetRepository per fragment), so a same-ID collision cannot happen
+// there in the first place. The caller must defer the returned pop so
+// nested/sibling fragments see a correctly balanced stack.
+func PushWhenContext(desc string) (pop func()) {
+	whenStack = append(whenStack, desc)
+	i := len(whenStack) - 1
+	return func() { whenStack = whenStack[:i] }
+}
+
+// currentWhenContext returns the innermost active When*/WhenPathExists
+// condition, or "" when nothing is running inside one (a plain top-level
+// registration, or the recording path, which never pushes).
+func currentWhenContext() string {
+	if len(whenStack) == 0 {
+		return ""
+	}
+	return whenStack[len(whenStack)-1]
 }
