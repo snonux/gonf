@@ -65,9 +65,12 @@ const DefaultMaxBytes = 16 << 20
 // a binary that hangs anyway.
 const killGrace = 2 * time.Second
 
-// probeTimeout bounds the contract check (`read --help`, which needs no
-// store, no config and no KDF).
-const probeTimeout = 10 * time.Second
+// defaultProbeTimeout bounds the contract check (`read --help`, which needs
+// no store, no config and no KDF) for a Provider created by New. It lives on
+// Provider as probeTimeout, rather than being used directly, so the
+// package's own tests can shrink one Provider's check instead of waiting the
+// full default to see a hung binary's probe attempt finish.
+const defaultProbeTimeout = 10 * time.Second
 
 // probeMaxBytes bounds the usage text the contract check accepts; it is
 // independent of Config.MaxBytes, which bounds secrets.
@@ -123,14 +126,31 @@ type Item struct {
 type Provider struct {
 	cfg Config
 
-	mu     sync.Mutex // guards probed
-	probed bool       // the binary passed the contract check
+	// probeTimeout bounds the contract check (defaultProbeTimeout unless a
+	// package test shrinks it; see defaultProbeTimeout).
+	probeTimeout time.Duration
+
+	mu      sync.Mutex    // guards probed and probing
+	probed  bool          // the binary passed the contract check (remembered)
+	probing *probeAttempt // the in-flight check, or nil when none is running
 
 	// Test seams (package tests only): prefix is inserted before the
 	// foostore argv (to run the test binary as a fake foostore) and extraEnv
 	// is appended to the child's environment.
 	prefix   []string
 	extraEnv []string
+}
+
+// probeAttempt is one shared run of the contract check. A checkContract call
+// that finds one already running waits on done instead of starting its own,
+// so a hung foostore binary is probed once for every caller currently
+// waiting on it rather than once per caller. err is set before done closes
+// and must only be read after observing the close (the close is itself the
+// happens-before edge that makes the write visible, so no further locking is
+// needed to read it).
+type probeAttempt struct {
+	done chan struct{}
+	err  error
 }
 
 // New returns a Provider for cfg, with defaults applied. It refuses a
@@ -153,7 +173,7 @@ func New(cfg Config) (*Provider, error) {
 	if cfg.MaxBytes == 0 {
 		cfg.MaxBytes = DefaultMaxBytes
 	}
-	return &Provider{cfg: cfg}, nil
+	return &Provider{cfg: cfg, probeTimeout: defaultProbeTimeout}, nil
 }
 
 // Field returns the Item selecting field name (e.g. "Password",
@@ -281,26 +301,71 @@ func (p *Provider) passphrase(ctx context.Context, ref secret.Ref) ([]byte, erro
 }
 
 // checkContract verifies once per Provider that the binary implements the
-// machine read contract. A failed check is not remembered, so a binary
-// installed or fixed later is picked up; a passed one is.
+// machine read contract, sharing one in-flight run of the check across every
+// concurrent caller instead of running it once per caller: a caller whose
+// own ctx ends stops waiting via ctx.Done() without waiting for the check's
+// own timeout, and without cutting the check short for whoever else is still
+// waiting on it (see startProbe). A failed check is not remembered, so a
+// binary installed or fixed later is picked up by the next Resolve call
+// (which starts a fresh attempt); a passed one is remembered forever.
 func (p *Provider) checkContract(ctx context.Context, ref secret.Ref) error {
+	attempt := p.startProbe()
+	if attempt == nil {
+		return nil // an earlier attempt already confirmed the contract
+	}
+	select {
+	case <-attempt.done:
+		if attempt.err != nil {
+			return &secret.Error{Kind: secret.ErrUnavailable, Ref: ref, Err: attempt.err}
+		}
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("resolve secret %q: %w", string(ref), ctx.Err())
+	}
+}
+
+// startProbe returns the Provider's in-flight probeAttempt, starting one in
+// the background when none is running, or nil once the contract is already
+// confirmed (no attempt needed). The run itself (runProbe) uses its own
+// background context bounded by p.probeTimeout, independent of whichever
+// caller happened to trigger it, so that caller's own cancellation never
+// cuts the check short for the others concurrently waiting on it.
+func (p *Provider) startProbe() *probeAttempt {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.probed {
 		return nil
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+	if p.probing == nil {
+		attempt := &probeAttempt{done: make(chan struct{})}
+		p.probing = attempt
+		go p.runProbe(attempt)
+	}
+	return p.probing
+}
+
+// runProbe runs the contract check for attempt and publishes its outcome.
+// attempt.err (nil on success) is set before attempt.done closes, so every
+// goroutine that observes the close via checkContract's select sees it
+// without further locking (channel close is a happens-before edge). It then
+// records a pass in p.probed (remembered for every later checkContract call)
+// or clears p.probing on a failure (not remembered), so the next
+// checkContract call reuses the cached pass or starts a fresh attempt.
+func (p *Provider) runProbe(attempt *probeAttempt) {
+	probeCtx, cancel := context.WithTimeout(context.Background(), p.probeTimeout)
 	defer cancel()
 	res := p.run(probeCtx, []string{"read", "--help"}, nil, probeMaxBytes)
 	defer res.scrub()
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("resolve secret %q: %w", string(ref), err)
+	attempt.err = probeError(res, p.cfg.Binary, p.probeTimeout)
+
+	p.mu.Lock()
+	p.probing = nil
+	if attempt.err == nil {
+		p.probed = true
 	}
-	if err := probeError(res, p.cfg.Binary); err != nil {
-		return &secret.Error{Kind: secret.ErrUnavailable, Ref: ref, Err: err}
-	}
-	p.probed = true
-	return nil
+	p.mu.Unlock()
+
+	close(attempt.done)
 }
 
 // childEnv is the whole environment of a foostore child: HOME (foostore

@@ -384,6 +384,56 @@ func TestResolveRefusesBinaryWithoutContract(t *testing.T) {
 	}
 }
 
+// TestResolveConcurrentShortDeadlineDoesNotWaitForHungContractCheck
+// reproduces gonf task 6c2: a foostore binary hung on the one-time contract
+// check (`read --help`) must not force an unrelated concurrent Resolve call
+// to wait out the check's own timeout regardless of that caller's own ctx
+// deadline. Before the fix, checkContract held p.mu for the whole check, so
+// a concurrent caller blocked on the mutex itself -- which does not know
+// about context deadlines -- however long the hung binary took; after the
+// fix, every caller shares one in-flight check but waits on it with a
+// select against its own ctx.Done(), so a short deadline is still honoured.
+func TestResolveConcurrentShortDeadlineDoesNotWaitForHungContractCheck(t *testing.T) {
+	f := newFake(t, "probehang", Config{})
+	// Long enough that, if the bug were present, the short-deadline caller
+	// below would clearly still be blocked when this test's own assertion
+	// runs; short enough to keep the test itself quick.
+	f.p.probeTimeout = 3 * time.Second
+	t.Cleanup(func() { killPids(f.pids) })
+
+	// Reference "a" (no deadline of its own): triggers, and waits out, the
+	// hung contract check.
+	longDone := make(chan error, 1)
+	go func() {
+		_, err := secret.Resolve(context.Background(), f.p, "garage/rpc_secret")
+		longDone <- err
+	}()
+	waitForFile(f.pids) // the probe's fake grandchild is up: the check is in flight
+
+	// Reference "b" (a short deadline), resolved concurrently with the
+	// still-running check that "a" started.
+	shortCtx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, shortErr := secret.Resolve(shortCtx, f.p, "nsd/tsig.key")
+	shortElapsed := time.Since(start)
+
+	if !errors.Is(shortErr, context.DeadlineExceeded) {
+		t.Fatalf("short-deadline caller: got %v, want an error wrapping context.DeadlineExceeded", shortErr)
+	}
+	if shortElapsed > time.Second {
+		t.Fatalf("short-deadline caller waited %v for an unrelated in-flight contract check (probeTimeout %v): its own 200ms deadline was ignored", shortElapsed, f.p.probeTimeout)
+	}
+
+	longErr := <-longDone
+	if secret.KindOf(longErr) != secret.ErrUnavailable {
+		t.Fatalf("long caller: got %v, want ErrUnavailable once the shared check finally times out", longErr)
+	}
+	if n := f.events(t, "probe"); n != 1 {
+		t.Fatalf("contract probed %d times, want once shared by both concurrent callers", n)
+	}
+}
+
 func TestResolveTimeoutKillsProcessGroup(t *testing.T) {
 	f := newFake(t, "hang", Config{Timeout: 100 * time.Millisecond})
 	start := time.Now()

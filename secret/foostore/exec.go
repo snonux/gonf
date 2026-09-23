@@ -49,6 +49,13 @@ type boundedBuffer struct {
 	overflow bool
 }
 
+// passFeed writes the passphrase into the pipe the child inherits.
+type passFeed struct {
+	r, w *os.File
+	pass []byte
+	done chan struct{}
+}
+
 // Write implements io.Writer.
 func (b *boundedBuffer) Write(p []byte) (int, error) {
 	b.total += len(p)
@@ -146,13 +153,6 @@ func (p *Provider) command(ctx context.Context, args []string, withPassFD bool) 
 func (r *result) scrub() {
 	clear(r.stdout)
 	r.stdout = nil
-}
-
-// passFeed writes the passphrase into the pipe the child inherits.
-type passFeed struct {
-	r, w *os.File
-	pass []byte
-	done chan struct{}
 }
 
 // attachPassphrase adds the passphrase pipe to cmd (descriptor 3 in the

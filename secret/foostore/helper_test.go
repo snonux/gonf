@@ -108,6 +108,13 @@ func fakeProbe(mode string) int {
 	case "probefail":
 		fmt.Fprintln(os.Stderr, leak)
 		return 3
+	case "probehang":
+		// A foostore binary hung on the contract check itself (as opposed
+		// to "hang", which answers --help normally but hangs on the actual
+		// read): reuses fakeHang's grandchild-and-block behaviour so the
+		// process group is still killed cleanly once the probe's own
+		// deadline (or a test's killPids cleanup) ends it.
+		return fakeHang()
 	}
 	fmt.Println(fakeUsage)
 	return 0

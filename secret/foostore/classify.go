@@ -3,6 +3,7 @@ package foostore
 import (
 	"bytes"
 	"fmt"
+	"time"
 
 	"github.com/snonux/gonf/secret"
 )
@@ -74,13 +75,15 @@ func classify(ref secret.Ref, item Item, res result, cfg Config) error {
 // probeError reports why the contract check failed, or nil when the binary
 // printed contract version 1's usage. The usage text is not secret, but an
 // older foostore may run an interactive search for "read" instead and print
-// entry names, so the output is never included.
-func probeError(res result, binary string) error {
+// entry names, so the output is never included. timeout is the Provider's
+// own probeTimeout, reported as-is so the message matches what actually
+// bounded the check (a package test may have shrunk it).
+func probeError(res result, binary string, timeout time.Duration) error {
 	switch {
 	case res.startErr != nil:
 		return fmt.Errorf("cannot run %q: %w", binary, res.startErr)
 	case res.timedOut:
-		return fmt.Errorf("%q did not answer `read --help` within %v", binary, probeTimeout)
+		return fmt.Errorf("%q did not answer `read --help` within %v", binary, timeout)
 	case res.exitCode != exitOK || res.waitErr != nil || res.overflow:
 		return fmt.Errorf("%q does not implement the foostore machine read contract v1 (`read --help`: %s)", binary, exitNote(res))
 	case !bytes.HasPrefix(res.stdout, []byte(usagePrefix)) || !bytes.Contains(res.stdout, []byte(notFoundLine)):
