@@ -551,6 +551,86 @@ func TestCLIPlanSealRecipientsFileFlagMissingIsError(t *testing.T) {
 	}
 }
 
+// TestCLIPlanSealRecipientsFileCRLFAccepted pins task de2's finding (c)
+// end-to-end: a recipients file with CRLF line endings (as a Windows
+// editor would save it) used to produce an opaque "malformed age1pq
+// recipient" for an otherwise well-formed line, because
+// readRecipientsFileLines (plan/seal/recipients_file.go) splits only on
+// "\n", leaving a trailing "\r" on every line, and
+// plan/seal.ParseRecipients' parseHybridRecipient discards age's own parse
+// error (by design — never echo recipient content) instead of naming the
+// stray "\r". ParseRecipients now trims each line, so a CRLF-terminated
+// recipients file is accepted like an LF one.
+func TestCLIPlanSealRecipientsFileCRLFAccepted(t *testing.T) {
+	isolateXDGConfig(t)
+	registerSealTask(t)
+	recipient, _ := genSealKeyPair(t)
+	recipientsFile := filepath.Join(t.TempDir(), "crlf-recipients")
+	content := "# operator recipients\r\n" + recipient + "\r\n"
+	if err := os.WriteFile(recipientsFile, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "out")
+	var code int
+	var stderr string
+	out := captureStdout(t, func() {
+		code, stderr = runGonf(t, "plan", "-o", dir, "-seal", "-recipients-file", recipientsFile, "cli_seal_task")
+	})
+	if code != 0 {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, out, stderr)
+	}
+	if !strings.Contains(out, "1 recipients") || !strings.Contains(out, recipient) {
+		t.Fatalf("stdout %q, want 1 recipients naming %s", out, recipient)
+	}
+}
+
+// TestCLIPlanSealRecipientErrorNamesFileLineNotMergedIndex pins task de2's
+// finding (b): resolvePlanRecipients used to concatenate -recipient flag
+// values and a recipients file's lines into one slice before validating,
+// so plan/seal.ParseRecipients' "recipient line %d" numbered over the
+// MERGED slice. With two -recipient flags ahead of a bad line 2 in the
+// file, the error used to read "recipient line 4" — but an operator
+// opening the recipients file at line 4 finds nothing wrong there; the
+// actually-bad line is the file's own line 2. This confirms the error now
+// names the file and its own line number instead.
+func TestCLIPlanSealRecipientErrorNamesFileLineNotMergedIndex(t *testing.T) {
+	isolateXDGConfig(t)
+	registerSealTask(t)
+	flagRecipient1, _ := genSealKeyPair(t)
+	flagRecipient2, _ := genSealKeyPair(t)
+	fileRecipient1, _ := genSealKeyPair(t)
+
+	classicID, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatalf("generate X25519 identity: %v", err)
+	}
+	badFileLine2 := classicID.Recipient().String() // refused: not age1pq
+
+	recipientsFile := filepath.Join(t.TempDir(), "recipients")
+	content := fileRecipient1 + "\n" + badFileLine2 + "\n"
+	if err := os.WriteFile(recipientsFile, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := filepath.Join(t.TempDir(), "out")
+	code, stderr := runGonf(t, "plan", "-o", dir, "-seal",
+		"-recipient", flagRecipient1, "-recipient", flagRecipient2,
+		"-recipients-file", recipientsFile, "cli_seal_task")
+	if code == 0 {
+		t.Fatalf("exit 0, want an error for the file's refused line 2; stderr %q", stderr)
+	}
+	wantLabel := recipientsFile + ":2"
+	if !strings.Contains(stderr, wantLabel) {
+		t.Fatalf("stderr %q does not name the file's own line 2 (%s)", stderr, wantLabel)
+	}
+	if strings.Contains(stderr, "recipient line 4") {
+		t.Fatalf("stderr %q still reports the misleading merged-slice index", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "plan.age")); !os.IsNotExist(err) {
+		t.Fatalf("plan.age exists (err=%v); a refused recipient must refuse before sealing", err)
+	}
+}
+
 // TestCLIPlanWithoutSealUnchanged is a narrow regression pin, alongside the
 // pre-existing plan_outdir_test.go/secret_flags_test.go suites (which this
 // task must not alter the behaviour of): a plain `gonf plan -o dir` with no

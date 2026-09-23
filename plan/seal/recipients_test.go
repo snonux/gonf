@@ -122,6 +122,45 @@ func TestParseRecipientsMalformedHybridLine(t *testing.T) {
 	}
 }
 
+// TestParseRecipientsTrimsCRLFAndTrailingWhitespace pins task de2's finding
+// (c): readRecipientsFileLines (recipients_file.go) splits a recipients
+// file only on "\n", so a CRLF-terminated line (or one with trailing
+// spaces from a stray paste) used to keep its trailing "\r" or spaces all
+// the way into age.ParseHybridRecipient, which fails on that otherwise
+// well-formed key — and parseHybridRecipient deliberately discards age's
+// own parse error (never echoing recipient content), so the result was an
+// opaque "malformed age1pq recipient" with nothing pointing at the real,
+// mundane cause. ParseRecipients now trims each line before
+// classification, so a CRLF-terminated or trailing-whitespace line that is
+// otherwise a valid recipient is accepted.
+func TestParseRecipientsTrimsCRLFAndTrailingWhitespace(t *testing.T) {
+	pq := mustHybridRecipientLine(t)
+
+	crlf, err := ParseRecipients([]string{pq + "\r"})
+	if err != nil {
+		t.Fatalf("ParseRecipients(CRLF-terminated line): %v", err)
+	}
+	if len(crlf) != 1 {
+		t.Fatalf("got %d recipients from a CRLF-terminated line, want 1", len(crlf))
+	}
+
+	trailingSpace, err := ParseRecipients([]string{pq + "  "})
+	if err != nil {
+		t.Fatalf("ParseRecipients(trailing-whitespace line): %v", err)
+	}
+	if len(trailingSpace) != 1 {
+		t.Fatalf("got %d recipients from a trailing-whitespace line, want 1", len(trailingSpace))
+	}
+
+	leadingSpace, err := ParseRecipients([]string{"  " + pq})
+	if err != nil {
+		t.Fatalf("ParseRecipients(leading-whitespace line): %v", err)
+	}
+	if len(leadingSpace) != 1 {
+		t.Fatalf("got %d recipients from a leading-whitespace line, want 1", len(leadingSpace))
+	}
+}
+
 // requireRecipientRefusal asserts err wraps ErrRecipientRefused, mentions
 // lineDesc (e.g. "line 1"), and never contains offendingLine's content.
 func requireRecipientRefusal(t *testing.T, err error, offendingLine, lineDesc string) {

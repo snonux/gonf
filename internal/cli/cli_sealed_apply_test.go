@@ -250,6 +250,73 @@ func TestCLIApplySealedFileWithBlobsUsesAndCleansSealedRunDir(t *testing.T) {
 	requireNoLeftoverSealedRunDirs(t, root)
 }
 
+// TestCLIApplySealedIdentityBadModeErrorIsNotDoubleWrapped pins task de2's
+// finding (a): an identity file's ErrIdentityMode refusal used to reach
+// stderr with the "apply: " prefix doubled — loadSealedIdentities wrapped
+// seal.LoadIdentities' own error with its own "apply: %w", and the single
+// call site here (cliApplyFile -> cliApplySealedFile) wrapped it again with
+// "apply: %v" — producing the confusing "apply: apply: plan/seal: identity
+// file ...: identity file is readable or writable by group or other"
+// (100 Go Mistakes #52). This exercises the exact repro: a 0640 identity
+// file (group-readable) passed to `gonf apply -identity`, both through the
+// file-apply path (cliApplyFile) and the stdin-apply path
+// (cliApplyStdin/cliApplySealedStdin), since both call the same
+// loadSealedIdentities through decryptAndDecodeSealedPush.
+func TestCLIApplySealedIdentityBadModeErrorIsNotDoubleWrapped(t *testing.T) {
+	identityLine, recipientLine := sealedKeyPair(t)
+	dir := t.TempDir()
+	identityPath := filepath.Join(dir, "identity")
+	if err := os.WriteFile(identityPath, []byte(identityLine+"\n"), 0o640); err != nil {
+		t.Fatalf("write identity file: %v", err)
+	}
+	if err := os.Chmod(identityPath, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "out.txt")
+	sealed := sealFrame(t, touchFramePush(t, "sealed-bad-mode", target), []string{recipientLine})
+	planPath := writeSealedPlanFile(t, dir, sealed)
+
+	code, stderr := runGonf(t, "apply", "-identity", identityPath, planPath)
+	if code == 0 {
+		t.Fatalf("a group-readable identity file must be refused; stderr %q", stderr)
+	}
+	if strings.Contains(stderr, "apply: apply:") {
+		t.Fatalf("stderr %q still double-wraps the apply: prefix", stderr)
+	}
+	if !strings.Contains(stderr, "apply: plan/seal: identity file") {
+		t.Fatalf("stderr %q missing the single, correctly-prefixed error", stderr)
+	}
+	if !strings.Contains(stderr, "identity file is readable or writable by group or other") {
+		t.Fatalf("stderr %q missing the ErrIdentityMode text", stderr)
+	}
+
+	// The stdin path (cliApplySealedStdin) shares loadSealedIdentities with
+	// the file path above through decryptAndDecodeSealedPush, so it must
+	// show the same single-prefix behavior.
+	oldStdin := os.Stdin
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdin = r
+	t.Cleanup(func() {
+		os.Stdin = oldStdin
+		_ = r.Close()
+	})
+	go func() {
+		_, _ = w.Write(sealed)
+		_ = w.Close()
+	}()
+
+	stdinCode, stdinStderr := runGonf(t, "apply", "-identity", identityPath, "-")
+	if stdinCode == 0 {
+		t.Fatalf("stdin apply with a group-readable identity file must be refused; stderr %q", stdinStderr)
+	}
+	if strings.Contains(stdinStderr, "apply: apply:") {
+		t.Fatalf("stdin stderr %q still double-wraps the apply: prefix", stdinStderr)
+	}
+}
+
 func TestCLIApplySealedStdinNoBlobs(t *testing.T) {
 	isolateSealedStagingRoot(t)
 	identityLine, recipientLine := sealedKeyPair(t)

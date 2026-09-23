@@ -24,20 +24,22 @@ type Recipient struct {
 	inner *age.HybridRecipient
 }
 
-// String returns the recipient's age1pq… encoding. Unlike an Identity, a
-// Recipient is a public key and safe to log or display.
-func (r Recipient) String() string {
-	if r.inner == nil {
-		return ""
-	}
-	return r.inner.String()
-}
-
 // ParseRecipients validates lines as age1pq hybrid recipients, one per
-// entry. A blank entry or one starting with "#" is ignored, matching the
-// age recipients-file convention (one recipient per line, "#" comments), so
-// a caller can pass either the lines of a recipients file or the values of
+// entry, labeling any refusal with the generic "recipient line %d" (see
+// ParseRecipientsFrom for a caller that needs a more specific origin, e.g.
+// one of several merged sources). A blank entry (after trimming, see
+// below) or one starting with "#" is ignored, matching the age
+// recipients-file convention (one recipient per line, "#" comments), so a
+// caller can pass either the lines of a recipients file or the values of
 // repeated -recipient flags through the same function.
+//
+// Each entry is trimmed of leading/trailing whitespace (including a
+// trailing "\r" from a CRLF-terminated recipients file) before
+// classification: age's own recipient parse error is deliberately
+// discarded (see parseHybridRecipient), so an untrimmed "\r" or trailing
+// space produced an opaque "malformed age1pq recipient" with nothing
+// pointing at the real, mundane cause — a recipients file saved by a
+// Windows editor, not a malicious or corrupted key (task de2).
 //
 // Any entry that is not an age1pq recipient is refused with
 // ErrRecipientRefused, naming the entry's 1-based line number and its class
@@ -52,14 +54,57 @@ func (r Recipient) String() string {
 // and only Seal, at the point it would otherwise produce an unreadable
 // artifact, refuses zero recipients.
 func ParseRecipients(lines []string) ([]Recipient, error) {
+	return parseRecipients(lines, recipientLineLabel)
+}
+
+// ParseRecipientsFrom is ParseRecipients for a single, already-identified
+// source: label(i) names the 0-based index i's origin (e.g. "-recipient
+// #2" for a repeated flag, or "<path>:2" for a recipients file's own
+// 1-based line number) instead of ParseRecipients' generic "recipient line
+// %d".
+//
+// A caller that merges several sources into one slice before validating —
+// as internal/cli/plan_seal.go's resolvePlanRecipients used to, unioning
+// -recipient flags with a recipients file's lines — reports a refused or
+// malformed entry's index over the MERGED slice, which is not the index an
+// operator can find anything at: two -recipient flags ahead of a bad file
+// line 2 produced "recipient line 4", and a file opened at line 4 has
+// nothing wrong with it (task de2). Calling ParseRecipientsFrom once per
+// source, each with its own label, reports the entry's true origin
+// regardless of how the caller went on to merge the results.
+func ParseRecipientsFrom(lines []string, label func(i int) string) ([]Recipient, error) {
+	return parseRecipients(lines, label)
+}
+
+// String returns the recipient's age1pq… encoding. Unlike an Identity, a
+// Recipient is a public key and safe to log or display.
+func (r Recipient) String() string {
+	if r.inner == nil {
+		return ""
+	}
+	return r.inner.String()
+}
+
+// recipientLineLabel is ParseRecipients' default label: the entry's
+// 1-based line number, phrased as "recipient line %d" for a single,
+// undifferentiated source.
+func recipientLineLabel(i int) string {
+	return fmt.Sprintf("recipient line %d", i+1)
+}
+
+// parseRecipients is the shared validation loop behind ParseRecipients and
+// ParseRecipientsFrom; label(i) formats the 0-based index i of a refused or
+// malformed entry into the text an error names it by.
+func parseRecipients(lines []string, label func(i int) string) ([]Recipient, error) {
 	var out []Recipient
-	for i, line := range lines {
+	for i, raw := range lines {
+		line := strings.TrimSpace(raw)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		r, err := parseRecipientLine(line)
 		if err != nil {
-			return nil, fmt.Errorf("plan/seal: recipient line %d: %w", i+1, err)
+			return nil, fmt.Errorf("plan/seal: %s: %w", label(i), err)
 		}
 		out = append(out, Recipient{inner: r})
 	}
@@ -108,8 +153,9 @@ func classicOrPluginRecipientError(line string) error {
 }
 
 // toAgeRecipients adapts recipients to the age.Recipient slice age.Encrypt
-// takes. Every member is a *age.HybridRecipient (ParseRecipients is the
-// only constructor of Recipient), so every label age.Encrypt sees is
+// takes. Every member is a *age.HybridRecipient (ParseRecipients and
+// ParseRecipientsFrom, which shares its validation loop, are the only
+// constructors of Recipient), so every label age.Encrypt sees is
 // "postquantum" (age.HybridRecipient.WrapWithLabels): recipients coming
 // through this package can never trigger age's own "incompatible
 // recipients" mixing refusal, because they are never mixed with a classic

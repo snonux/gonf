@@ -219,11 +219,15 @@ func recipientsFileLabel() string {
 }
 
 // loadRecipientsFileLines resolves which recipients file (if any) to read
-// and returns its raw lines, hardened through plan/seal.LoadRecipientsFile
-// (task ce2 — the pre-fix version of this function used a plain
-// os.ReadFile with no ownership, permission or symlink check at all, which
-// let a symlinked or world-writable recipients file silently inject an
-// extra recipient into every sealed plan).
+// and returns its path and raw lines, hardened through
+// plan/seal.LoadRecipientsFile (task ce2 — the pre-fix version of this
+// function used a plain os.ReadFile with no ownership, permission or
+// symlink check at all, which let a symlinked or world-writable recipients
+// file silently inject an extra recipient into every sealed plan). The
+// returned path is the one resolvePlanRecipients labels its
+// seal.ParseRecipientsFrom errors with (task de2), even on the "no file to
+// read" branches below, where it is simply never used because lines is
+// empty.
 //
 //   - noDefaultRecipients (-no-default-recipients) with no explicit
 //     recipientsFilePath skips this source entirely: the operator opted
@@ -236,49 +240,81 @@ func recipientsFileLabel() string {
 //   - With neither flag, the ambient default path (defaultRecipientsPath)
 //     is read when present and silently skipped when absent: an operator
 //     who seals only with -recipient flags need never create one.
-func loadRecipientsFileLines(recipientsFilePath string, noDefaultRecipients bool) ([]string, error) {
+func loadRecipientsFileLines(recipientsFilePath string, noDefaultRecipients bool) (path string, lines []string, err error) {
 	explicit := recipientsFilePath != ""
 	if noDefaultRecipients && !explicit {
-		return nil, nil
+		return "", nil, nil
 	}
-	path := recipientsFilePath
+	path = recipientsFilePath
 	if !explicit {
 		def, err := defaultRecipientsPath()
 		if err != nil {
-			return nil, err
+			return "", nil, err
 		}
 		path = def
 	}
-	lines, err := seal.LoadRecipientsFile(path)
+	lines, err = seal.LoadRecipientsFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) && !explicit {
-			return nil, nil
+			return path, nil, nil
 		}
-		return nil, fmt.Errorf("recipients file %s: %w", path, err)
+		return "", nil, fmt.Errorf("recipients file %s: %w", path, err)
 	}
-	return lines, nil
+	return path, lines, nil
 }
 
-// resolvePlanRecipients unions -recipient flag values (in the order given)
-// with the resolved recipients file's lines (loadRecipientsFileLines),
-// then validates the whole list through plan/seal.ParseRecipients, which
+// resolvePlanRecipients validates -recipient flag values and the resolved
+// recipients file's lines (loadRecipientsFileLines) as SEPARATE
+// plan/seal.ParseRecipientsFrom calls, each labeled with its own source,
+// then concatenates the results (flags first, in the order given, then the
+// file's own recipients — the same effective order the pre-de2 version
+// got by unioning the two slices before validating). ParseRecipientsFrom
 // enforces the age1pq-only policy (docs/plan-encryption.md "Recipient
-// policy") and names any refused line's class, never its content. It does
-// not itself refuse an empty result (ParseRecipients' own doc comment):
-// planSealed does that, at the point sealing would otherwise produce an
-// unreadable artifact.
+// policy") and names any refused line's class, never its content.
+//
+// Validating each source on its own is what lets a refusal name the
+// entry's TRUE origin: the previous version concatenated -recipient flags
+// and file lines into one slice before validating, so ParseRecipients'
+// generic "recipient line %d" numbered over the MERGED slice — two
+// -recipient flags ahead of a bad file line 2 produced "recipient line 4",
+// and an operator opening the file at line 4 found nothing wrong there
+// (task de2).
+//
+// resolvePlanRecipients does not itself refuse an empty result: planSealed
+// does that, at the point sealing would otherwise produce an unreadable
+// artifact.
 func resolvePlanRecipients(flagRecipients []string, recipientsFilePath string, noDefaultRecipients bool) ([]seal.Recipient, error) {
-	lines := append([]string{}, flagRecipients...)
-	fileLines, err := loadRecipientsFileLines(recipientsFilePath, noDefaultRecipients)
+	fromFlags, err := seal.ParseRecipientsFrom(flagRecipients, recipientFlagLabel)
 	if err != nil {
 		return nil, err
 	}
-	lines = append(lines, fileLines...)
-	recipients, err := seal.ParseRecipients(lines)
+	path, fileLines, err := loadRecipientsFileLines(recipientsFilePath, noDefaultRecipients)
 	if err != nil {
 		return nil, err
 	}
-	return recipients, nil
+	fromFile, err := seal.ParseRecipientsFrom(fileLines, recipientFileLabel(path))
+	if err != nil {
+		return nil, err
+	}
+	return append(fromFlags, fromFile...), nil
+}
+
+// recipientFlagLabel is a seal.ParseRecipientsFrom label for -recipient
+// flag values: i is 0-based, so it is reported as its 1-based
+// command-line position. Unlike a recipients file, repeated -recipient
+// flags have no file to point at, so "-recipient #2" is the most concrete
+// origin available for a refused or malformed one.
+func recipientFlagLabel(i int) string {
+	return fmt.Sprintf("-recipient #%d", i+1)
+}
+
+// recipientFileLabel returns a seal.ParseRecipientsFrom label naming
+// path's own 1-based line number for a 0-based index i, independent of how
+// many -recipient flags resolvePlanRecipients validated alongside it.
+func recipientFileLabel(path string) func(i int) string {
+	return func(i int) string {
+		return fmt.Sprintf("%s:%d", path, i+1)
+	}
 }
 
 // warnPreexistingPlaintextPlan tells the operator, without touching

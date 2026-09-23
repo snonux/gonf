@@ -1264,16 +1264,25 @@ func readSealedFrame(dr io.Reader, max int64) ([]byte, error) {
 // default here could silently read an unexpected file — or none — instead
 // of the operator's actual identity (docs/plan-encryption.md, "Keys", "No
 // default identity for root").
+//
+// None of the errors below carry their own "apply: " prefix: every caller
+// of loadSealedIdentities (directly, or through decryptAndDecodeSealedPush)
+// already adds exactly one via its own "apply: %v" eprintf, and a second,
+// inner prefix here used to double it into a confusing "apply: apply: ..."
+// (100 Go Mistakes #52) — e.g. "apply: apply: plan/seal: identity file
+// ...: identity file is readable or writable by group or other" (task
+// de2). seal.LoadIdentities' own error already names the file and failure
+// class, so the loop below returns it unwrapped.
 func loadSealedIdentities(paths []string) ([]seal.Identity, error) {
 	if len(paths) == 0 {
 		if geteuid() == 0 {
-			return nil, fmt.Errorf("apply: sealed plan.age: running as root (euid 0); " +
+			return nil, fmt.Errorf("sealed plan.age: running as root (euid 0); " +
 				"-identity is required (sudo/doas leaves HOME/XDG_CONFIG_HOME ambiguous, so no " +
 				"default identity path is guessed) — pass -identity <file>")
 		}
 		def, err := defaultIdentityPath()
 		if err != nil {
-			return nil, fmt.Errorf("apply: sealed plan.age: %w", err)
+			return nil, fmt.Errorf("sealed plan.age: %w", err)
 		}
 		paths = []string{def}
 	}
@@ -1281,7 +1290,7 @@ func loadSealedIdentities(paths []string) ([]seal.Identity, error) {
 	for _, p := range paths {
 		loaded, err := seal.LoadIdentities(p)
 		if err != nil {
-			return nil, fmt.Errorf("apply: %w", err)
+			return nil, err
 		}
 		identities = append(identities, loaded...)
 	}
