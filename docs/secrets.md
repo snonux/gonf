@@ -129,6 +129,27 @@ func main() {
   never cached bytes. The default file
   provider is deliberately not wrapped, to keep its read-on-every-call
   behaviour.
+- `secret.NewFallback(primary, secondary)` composes two providers for a
+  staged, reference-by-reference cutover from one store to another (task
+  262): it resolves through `primary` and asks `secondary` only when
+  `primary` reports `ErrNotFound` for a well-formed reference — the answer a
+  reference not yet listed in `primary`'s own lookup table gives (see
+  "Only what the table lists is read" below), so a consumer migrates one
+  secret at a time by adding it to `primary`'s table, and every other
+  reference keeps reading `secondary` unchanged. Every other failure from
+  `primary` — `ErrInvalid`, `ErrUnreadable`, `ErrUnavailable`, a cancelled
+  context, or an unclassified error `Resolve` has already turned into
+  `ErrUnavailable` — is returned exactly as `primary` reported it, and
+  `secondary` is never consulted: a `primary` that is locked, unauthenticated,
+  corrupt or otherwise broken for a reference it DOES map fails loudly
+  instead of silently serving `secondary`'s possibly stale copy of the same
+  secret, which would make that failure indistinguishable from an ordinary
+  not-yet-migrated reference. Wrap the whole composition in `NewSnapshot` as
+  usual, e.g.
+  `secret.NewSnapshot(secret.NewFallback(newProvider, secret.FileProvider{}))`;
+  caching then applies to the combined result. `Fallback` holds no state of
+  its own and is safe for concurrent use whenever `primary` and `secondary`
+  are.
 - `ResolveSecret` may be called from several goroutines; the provider
   configuration is locked. Providers themselves must then be safe for
   concurrent use (`Snapshot`, `FileProvider` and `foostore.Provider` are).

@@ -15,6 +15,13 @@ import (
 // recording before a local apply or remote push can begin. Secret contents
 // are never included in the error.
 //
+// The provider configured here need not be a single store: secret.NewFallback
+// composes a new provider with the existing one so a consumer can move
+// individual MustSecret/OptionalSecret paths (this func's logical path
+// argument, unchanged either way) from one store to another one reference at
+// a time, without touching call sites or the bytes they resolve to (see
+// docs/secrets.md, "secret.NewFallback").
+//
 // A leading slash is accepted for compatibility with the Rex convention:
 // MustSecret("/var/nsd/key") reads secrets/var/nsd/key, not /var/nsd/key on
 // the controller. Paths may not escape the secrets directory.
