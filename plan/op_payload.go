@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"sort"
@@ -362,6 +363,114 @@ func (p SyncDirPayload) applyToWire(w *wireOp) {
 	w.FileMode = p.FileMode
 }
 
+// FilePayload holds the wire fields exclusive to KindFile (task ae2, Layer
+// 2's sixth and largest slice — file is gonf's most-used resource kind).
+// resource/file's planwire.go is the only other non-test package that
+// constructs or reads one, always non-nil on a "file" op's Payload (record
+// side: planHandler.ToOp; apply side: planHandler.Apply and its helpers
+// comma-ok assert it), so a decoded or freshly lowered KindFile op's Payload
+// is never nil, keeping encode/decode round trips symmetric (see
+// payloadFromWire).
+//
+// KindEnsureFile does NOT get a FilePayload, despite resource/file's
+// draft-side Payload (resource/file/payload.go, task w62 Layer 1) being
+// filled unconditionally for both "file" and "ensure_file" drafts: on the
+// WIRE side, ensureFileHandler.ToOp (resource/file/planwire.go) never reads
+// the draft's Payload at all — an ensure_file op never carries content,
+// template, validation, or line-edit intent, and ensureFileHandler.Apply
+// never reads any of these fields either. The draft-side sharing (one Go
+// type reused unmodified for two kinds) does not carry over to the wire
+// side (one Kind, one payload) the way it might seem to at first glance;
+// verified here by reading resource/file/planwire.go's actual handler
+// registrations and field usage rather than assumed from the Layer 1
+// precedent.
+//
+// Its json tags are never consulted by encoding/json — Op.MarshalJSON
+// merges these fields onto a wireOp and marshals THAT (applyToWire below),
+// never this struct directly — but api's secret-scan reflection walker
+// (walkOpStrings/opFieldClasses) still needs them: it descends into
+// Op.Payload's concrete value at the op's own top-level path (see
+// api/secret_fields.go's walkStruct), and computes each leaf's
+// classification path from THESE tags. They must therefore keep naming the
+// same wire keys wireOp's own fields do; TestWirePayloadTagsMatch
+// (types_test.go) pins that the two never drift apart.
+//
+// Several fields are multi-schema-version features (see CurrentVersion's
+// history and the VersionKeyedLines constant, types.go): the version gate
+// is purely about which wire BYTES an older destination refuses, not which
+// Go type holds the field, so moving them onto a payload needed no version
+// change (the same finding 6e2's ManageHome move already made).
+//
+// Field docs (unchanged from Op's pre-ae2 flat field comments):
+type FilePayload struct {
+	// ContentB64 is base64 file content for KindFile (InstallFile-style). A
+	// legitimately empty file (WithContent("") or an empty WithSource file)
+	// also base64-encodes to "", so this alone cannot tell "empty content"
+	// apart from "no content recorded"; see HasContent.
+	ContentB64 string `json:"content_b64,omitempty"`
+	// HasContent marks that KindFile's content was explicitly configured
+	// (WithContent or WithSource), even when it resolves to zero bytes and
+	// ContentB64 is therefore "". Apply uses it to accept a legitimately
+	// empty file while still erroring loudly when both ContentB64 and
+	// Op.Blob are unset AND HasContent is false (a record-time bug).
+	HasContent bool `json:"has_content,omitempty"`
+	// Template marks that KindFile's content must be rendered as a
+	// text/template on the destination (schema v9): the recipe's source or
+	// destination path ended in ".tmpl" at record time. By apply time the
+	// content already travels as raw template text in ContentB64/Op.Blob and
+	// neither Op.Path nor an (empty, wire content is never re-sourced) source
+	// path still carries the ".tmpl" suffix that would otherwise trigger
+	// rendering, so this flag is what carries the intent across the wire.
+	Template bool `json:"template,omitempty"`
+	// TemplateParam is the recipe's declared source path, recorded alongside
+	// Template so the destination render uses the same {{.Param}} default a
+	// direct (non-plan) File with the same ".tmpl" source would use, instead
+	// of exposing the plan-apply implementation detail (there is no source
+	// file on the destination to derive it from).
+	TemplateParam string `json:"template_param,omitempty"`
+	// TemplateData is JSON-compatible data supplied by WithTemplateData
+	// (schema v12).
+	TemplateData json.RawMessage `json:"template_data,omitempty"`
+	// ValidationBin and ValidationArgs are an optional file validator argv
+	// (schema v18). ValidationArgs contains CandidatePath, which destination
+	// apply replaces with a private staged filename before starting
+	// ValidationBin.
+	ValidationBin  string   `json:"validation_bin,omitempty"`
+	ValidationArgs []string `json:"validation_args,omitempty"`
+	// AddLines appends lines to a file when missing (line-in-file), in order.
+	AddLines []string `json:"add_lines,omitempty"`
+	// RemoveLines removes matching lines from a file, in order.
+	RemoveLines []string `json:"remove_lines,omitempty"`
+	// KeyedLines (schema v23, VersionKeyedLines) are WithKeyedLine edits,
+	// applied after RemoveLines and before AddLines: each replaces the first
+	// line starting with its key in place, drops every further one, and is
+	// appended when none exists. An older destination would ignore the field
+	// and leave the legacy line (or skip the whole edit), so it must refuse
+	// v23 at the header gate.
+	KeyedLines []KeyedLine `json:"keyed_lines,omitempty"`
+	// AddLine and RemoveLine are accepted when applying pre-v14 plans.
+	// Current recording never sets them (resource.PlanDraft has no singular
+	// fields); they stay on the wire type only so old recorded plans decode
+	// and apply.
+	AddLine    string `json:"add_line,omitempty"`
+	RemoveLine string `json:"remove_line,omitempty"`
+}
+
+func (p FilePayload) applyToWire(w *wireOp) {
+	w.ContentB64 = p.ContentB64
+	w.HasContent = p.HasContent
+	w.Template = p.Template
+	w.TemplateParam = p.TemplateParam
+	w.TemplateData = p.TemplateData
+	w.ValidationBin = p.ValidationBin
+	w.ValidationArgs = p.ValidationArgs
+	w.AddLines = p.AddLines
+	w.RemoveLines = p.RemoveLines
+	w.KeyedLines = p.KeyedLines
+	w.AddLine = p.AddLine
+	w.RemoveLine = p.RemoveLine
+}
+
 // toWire copies every Op core field onto a fresh wireOp and, when op.Payload
 // is set, layers its kind-exclusive fields on top. It does not normalize;
 // callers (MarshalJSON) do that once, after the merge.
@@ -377,22 +486,9 @@ func (op Op) toWire() wireOp {
 		Owner: op.Owner,
 		Group: op.Group,
 
-		ContentB64:     op.ContentB64,
-		Blob:           op.Blob,
-		HasContent:     op.HasContent,
-		Template:       op.Template,
-		TemplateParam:  op.TemplateParam,
-		TemplateData:   op.TemplateData,
-		ValidationBin:  op.ValidationBin,
-		ValidationArgs: op.ValidationArgs,
-		Prune:          op.Prune,
-		Absent:         op.Absent,
-
-		AddLines:    op.AddLines,
-		RemoveLines: op.RemoveLines,
-		KeyedLines:  op.KeyedLines,
-		AddLine:     op.AddLine,
-		RemoveLine:  op.RemoveLine,
+		Blob:   op.Blob,
+		Prune:  op.Prune,
+		Absent: op.Absent,
 
 		Name: op.Name,
 		Env:  op.Env,
@@ -434,22 +530,9 @@ func fromWire(w wireOp) Op {
 		Owner: w.Owner,
 		Group: w.Group,
 
-		ContentB64:     w.ContentB64,
-		Blob:           w.Blob,
-		HasContent:     w.HasContent,
-		Template:       w.Template,
-		TemplateParam:  w.TemplateParam,
-		TemplateData:   w.TemplateData,
-		ValidationBin:  w.ValidationBin,
-		ValidationArgs: w.ValidationArgs,
-		Prune:          w.Prune,
-		Absent:         w.Absent,
-
-		AddLines:    w.AddLines,
-		RemoveLines: w.RemoveLines,
-		KeyedLines:  w.KeyedLines,
-		AddLine:     w.AddLine,
-		RemoveLine:  w.RemoveLine,
+		Blob:   w.Blob,
+		Prune:  w.Prune,
+		Absent: w.Absent,
 
 		Name: w.Name,
 		Env:  w.Env,
@@ -563,6 +646,24 @@ func payloadFromWire(w wireOp) OpPayload {
 			Glob:      w.Glob,
 			FileMode:  w.FileMode,
 		}
+	case KindFile:
+		// KindEnsureFile deliberately gets no case here — see FilePayload's
+		// own doc comment for why the wire side does not reuse it the way
+		// resource/file's draft-side Payload does.
+		return FilePayload{
+			ContentB64:     w.ContentB64,
+			HasContent:     w.HasContent,
+			Template:       w.Template,
+			TemplateParam:  w.TemplateParam,
+			TemplateData:   w.TemplateData,
+			ValidationBin:  w.ValidationBin,
+			ValidationArgs: w.ValidationArgs,
+			AddLines:       w.AddLines,
+			RemoveLines:    w.RemoveLines,
+			KeyedLines:     w.KeyedLines,
+			AddLine:        w.AddLine,
+			RemoveLine:     w.RemoveLine,
+		}
 	default:
 		return nil
 	}
@@ -661,5 +762,6 @@ func OpPayloadExamples() map[Kind]OpPayload {
 		KindConfigSet:       ConfigSetPayload{},
 		KindConfigSetMember: ConfigSetMemberPayload{},
 		KindSyncDir:         SyncDirPayload{},
+		KindFile:            FilePayload{},
 	}
 }

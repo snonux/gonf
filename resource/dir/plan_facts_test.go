@@ -29,12 +29,14 @@ func factsPlan(blobRef, syncDst, fileDst string) []plan.Op {
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "j62"},
 		{Op: plan.KindSyncDir, Path: syncDst, Blob: blobRef, Mode: "0700", Payload: plan.SyncDirPayload{FileMode: "0600"}},
 		{
-			Op:         plan.KindFile,
-			Path:       fileDst,
-			ContentB64: base64.StdEncoding.EncodeToString([]byte(factsTemplate)),
-			HasContent: true,
-			Template:   true,
-			Mode:       "0600",
+			Op:   plan.KindFile,
+			Path: fileDst,
+			Payload: plan.FilePayload{
+				ContentB64: base64.StdEncoding.EncodeToString([]byte(factsTemplate)),
+				HasContent: true,
+				Template:   true,
+			},
+			Mode: "0600",
 		},
 	}
 }

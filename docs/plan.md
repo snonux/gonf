@@ -1009,6 +1009,112 @@ Every other kind's fields were UNCHANGED after yd2, 6e2, 5e2, 7e2, 8e2, and
 `EnsureDir`/`EnsureFile`, and `WhenBegin`/`WhenEnd` — pending the remaining
 follow-up task (ae2) scoped the same way.
 
+**Task ae2: `file`, Layer 2's sixth and largest slice.** The last of six
+sibling follow-up tasks (5e2, 6e2, 7e2, 8e2, 9e2, ae2) migrated `KindFile`'s
+exclusive fields — `ContentB64`, `HasContent`, `Template`, `TemplateParam`,
+`TemplateData`, `ValidationBin`, `ValidationArgs`, `AddLines`, `RemoveLines`,
+`KeyedLines`, `AddLine`, `RemoveLine` (twelve fields, several multi-schema-
+version: `Template`/`TemplateParam` is v9, `TemplateData` is v12,
+`ValidationBin`/`ValidationArgs` is v18, `KeyedLines` is v23/
+`VersionKeyedLines`) — onto `FilePayload` (`plan/op_payload.go`), the
+largest single payload this split has produced, matching the task's own
+"largest test-file blast radius of the six" flag: file is gonf's most-used
+resource kind, and the migration touched roughly 30 test files across
+`plan`, `api`, `internal/remote`, `internal/cli`, `internal/testapply`,
+`resource/dir` and `resource/file`. `wireOp` itself (`plan/wire.go`) is
+UNCHANGED in field order and json tags — only doc comments mark the
+`ContentB64`/`HasContent`/`Template`/`TemplateParam`/`TemplateData`/
+`ValidationBin`/`ValidationArgs` and `AddLines`/`RemoveLines`/`KeyedLines`/
+`AddLine`/`RemoveLine` blocks as File-exclusive; `Blob` stays core (`sync_dir`
+reuses it, same as before).
+
+The task's own annotation required verifying, before assuming anything,
+whether `KindEnsureFile` reuses the same `FilePayload` the way `resource/
+file.Payload` (the Layer 1, draft-side payload) is reused UNMODIFIED for
+both `file` and `ensure_file` per the w62 Layer 1 session — explicitly
+warning not to assume the draft-side precedent carries over to the wire
+side. It does not: `resource/file/planwire.go`'s `ensureFileHandler.ToOp`
+never reads the draft's `Payload` at all (an `ensure_file` op carries no
+content, template, validation, or line-edit intent), and
+`ensureFileHandler.Apply` never reads any of `FilePayload`'s fields either.
+`payloadFromWire` therefore has no `KindEnsureFile` case — an `ensure_file`
+op's `Payload` stays `nil`, exactly like `KindEnsureDir`'s (`ensureDirHandler`
+has no payload either, per w62's identical finding for that kind). This is
+recorded directly on `FilePayload`'s own doc comment so a later reader does
+not have to re-derive it.
+
+Two non-test call sites outside `resource/file/planwire.go` mutated
+`op.ContentB64` directly AFTER a draft's `ToOp` already ran, packaging a
+file source's bytes once the size (inline vs. blob) was known:
+`api/packager.go`'s `packageSourceFile` and `internal/testapply/
+testapply.go`'s `packageSource`. Neither was named by the task's own
+"only non-test call site" note — the same class of gap 9e2's write-up
+flagged for `plan/sensitive.go`. Both gained an identical small
+`setFileContentB64` helper (comma-ok asserting `plan.FilePayload`, no-op for
+an `ensure_file` op — matching its pre-ae2 behavior exactly, since
+`ensureFileHandler.Apply` never read `ContentB64` either) instead of a
+direct field assignment. A third genuine non-test call site,
+`plan/sensitive.go`'s `RequiredVersion`, read `op.KeyedLines` directly to
+decide the v23 header bump — the exact "a payload field read outside
+`op_payload.go`/`wire.go`" class 9e2's write-up flagged as worth watching
+for; fixed with the same comma-ok `FilePayload` assertion pattern
+`SyncDirPayload`'s `Glob` read already used there. A fourth,
+`api/secret_plan.go`'s `redactOp`, wholesale-replaced a sensitive op's
+`TemplateData` with a redacted JSON marker by mutating the flat field
+directly; now it comma-ok asserts `plan.FilePayload`, mutates the LOCAL
+copy's `TemplateData`, and writes the copy BACK onto `out.Payload` — a value
+type, so forgetting that last write-back would compile cleanly and even
+pass the pre-existing secret-substring tests (the generic per-leaf-string
+redaction walk still finds and redacts each secret value), while silently
+leaving the original JSON shape on the wire instead of collapsing it to one
+opaque marker. `TestRedactOpCollapsesSensitiveTemplateDataWholesale`
+(`api/secret_plan_test.go`) pins the stronger, shape-collapsing contract
+directly against `redactOp`'s output; a revert-and-retest confirmed it (a)
+fails to compile against the pre-ae2 flat-`Op` code (it names
+`plan.FilePayload`), and (b) fails at runtime, with the exact wrong-shape
+symptom predicted, when the `out.Payload = fp` write-back is deliberately
+dropped from the fixed code — while the pre-existing secrets tests kept
+passing in that second case, confirming they would not have caught this
+regression on their own.
+
+`resource/file/planwire.go`'s `planHandler.ToOp`/`Apply` and every helper
+(`validatePlanValidation`, `planLines`, `applyFileLines`, `applyFileContent`,
+`fileContentOptions`, `fileContent`) now build or take a `plan.FilePayload`
+instead of reading/writing the twelve fields on `Op` directly, following the
+same comma-ok-in-`Apply` contract every earlier slice established.
+`plan.OpPayloadExamples()` gained a `KindFile` entry (not `KindEnsureFile`);
+`api`'s `TestOpFieldClassesAreExhaustive` and `plan`'s
+`TestWirePayloadTagsMatch` needed no other change — every field's json tag
+(`content_b64`, `has_content`, `template`, `template_param`, `template_data`,
+`validation_bin`, `validation_args`, `add_lines`, `remove_lines`,
+`keyed_lines`, `add_line`, `remove_line`) was already classified in
+`api/secret_fields.go`'s `opFieldClasses` from before this split, the same
+"classification keys off the json tag, not Go struct nesting" reason every
+earlier slice's write-up gives. Every hand-built `file`/`ensure_file`
+`Op{...}` literal across `plan/*_test.go`, `api/*_test.go`,
+`internal/remote/*_test.go`, `internal/cli/*_test.go`,
+`internal/testapply/*_test.go`, `resource/dir/*_test.go` and
+`resource/file/*_test.go` that set one of the twelve fields moved it onto an
+explicit `Payload: plan.FilePayload{...}` (or a comma-ok read where the test
+only reads a recorded/decoded op), the same literal-migration discipline
+5e2's write-up first documented.
+
+With ae2 landed, every RESOURCE kind's Layer 2 payload split is complete:
+`cron`, `systemd_timer`, `user`, `link`, `link_if_exists`, `package`,
+`command`, `config_set`, `config_set_member`, `sync_dir` and `file` each own
+their exclusive fields on a payload, and `Op`'s core now holds only fields
+two or more kinds genuinely share plus the plan-engine control fields.
+`WhenBegin`'s `All`/`Require` remain flat on `Op`'s core deliberately, not as
+a pending gap: yd2's own filing judged that migrating a control kind's
+fields (exactly one kind ever sets them, and `IsControlKind` already
+special-cases `WhenBegin` throughout the plan engine) would not fix the
+same god-struct/type-safety problem a resource kind's payload does, and nothing
+in this task's own investigation (nor any prior sibling's) found reason to
+revisit that judgment. The original w62/yd2 audit finding — `resource.PlanDraft`
+and `plan.Op` were both flat god-structs — is therefore fully resolved on the
+`plan.Op` ("Layer 2") side, matching Layer 1's own resource-kind-scoped
+completion.
+
 A resource package that registers a `plan.Handler` must never be imported by
 the `plan` package itself (that would reintroduce the cycle the registry
 exists to break): as of task i5, `plan` imports no `resource/<kind>` package

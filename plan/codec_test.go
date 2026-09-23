@@ -30,10 +30,10 @@ func sampleOps() []Op {
 			},
 		},
 		{
-			Op:         KindFile,
-			Path:       "${HOME}/.taskrc",
-			Mode:       "0640",
-			ContentB64: "Li4u",
+			Op:      KindFile,
+			Path:    "${HOME}/.taskrc",
+			Mode:    "0640",
+			Payload: FilePayload{ContentB64: "Li4u"},
 		},
 		{Op: KindWhenEnd},
 		{
@@ -134,11 +134,10 @@ func TestEncodeDecodeOpRoundTrip(t *testing.T) {
 func TestEncodeDecodeOpEmptyContentRoundTrip(t *testing.T) {
 	t.Parallel()
 	op := Op{
-		Op:         KindFile,
-		Path:       "${HOME}/.empty-marker",
-		Mode:       "0640",
-		ContentB64: "",
-		HasContent: true,
+		Op:      KindFile,
+		Path:    "${HOME}/.empty-marker",
+		Mode:    "0640",
+		Payload: FilePayload{ContentB64: "", HasContent: true},
 	}
 	b, err := EncodeOp(op)
 	if err != nil {
@@ -436,26 +435,40 @@ func TestEncodeDecodeEmptyNonNilSlices(t *testing.T) {
 
 func TestNormalizeEmptySlices(t *testing.T) {
 	t.Parallel()
-	raw := []byte(`{"op":"command","bin":"x","args":[],"unless":{"bin":"y","args":[]},"all":[],"add_lines":[],"remove_lines":[]}`)
+	raw := []byte(`{"op":"command","bin":"x","args":[],"unless":{"bin":"y","args":[]},"all":[]}`)
 	// Note: "all" on command is odd but exercises normalizeOp.
 	op, err := DecodeOp(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
 	p, _ := op.Payload.(CommandPayload)
-	if p.Args != nil || op.All != nil || p.Unless.Args != nil || op.AddLines != nil || op.RemoveLines != nil {
+	if p.Args != nil || op.All != nil || p.Unless.Args != nil {
 		t.Fatalf("expected nil empty slices, got %#v (payload %#v)", op, p)
+	}
+
+	// add_lines/remove_lines are File-exclusive (FilePayload, task ae2): a
+	// separate decode of a "file" line exercises their own trimming.
+	fileRaw := []byte(`{"op":"file","path":"/x","add_lines":[],"remove_lines":[]}`)
+	fileOp, err := DecodeOp(fileRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp, _ := fileOp.Payload.(FilePayload)
+	if fp.AddLines != nil || fp.RemoveLines != nil {
+		t.Fatalf("expected nil empty slices, got %#v", fp)
 	}
 }
 
 func TestEncodeDecodeLineArraysRoundTrip(t *testing.T) {
 	t.Parallel()
 	want := Op{
-		Op:          KindFile,
-		Path:        "/etc/rc.local",
-		AddLines:    []string{"first", "second"},
-		RemoveLines: []string{"old", "stale"},
-		KeyedLines:  []KeyedLine{{Key: "export PKG_PATH=", Line: `export PKG_PATH="https://repo/"`}},
+		Op:   KindFile,
+		Path: "/etc/rc.local",
+		Payload: FilePayload{
+			AddLines:    []string{"first", "second"},
+			RemoveLines: []string{"old", "stale"},
+			KeyedLines:  []KeyedLine{{Key: "export PKG_PATH=", Line: `export PKG_PATH="https://repo/"`}},
+		},
 	}
 	raw, err := EncodeOp(want)
 	if err != nil {

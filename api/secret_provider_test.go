@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/secret"
 )
 
@@ -61,7 +62,8 @@ func TestConfiguredProviderFeedsMustSecret(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := base64.StdEncoding.DecodeString(ops[len(ops)-1].ContentB64)
+	lastPayload, _ := ops[len(ops)-1].Payload.(plan.FilePayload)
+	got, err := base64.StdEncoding.DecodeString(lastPayload.ContentB64)
 	if err != nil || string(got) != syntheticSecret {
 		t.Fatalf("recorded content = (%q, %v), want the provider bytes", got, err)
 	}

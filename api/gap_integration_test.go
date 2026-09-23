@@ -99,17 +99,25 @@ func TestGapFeatureSetRecordsAndAppliesTogether(t *testing.T) {
 		t.Fatalf("user op lost creation data or package dependency: %#v", userOp)
 	}
 	configOp := findGapOp(t, decoded, plan.KindFile, "File["+config+"]")
+	configPayload, ok := configOp.Payload.(plan.FilePayload)
+	if !ok {
+		t.Fatalf("config op missing plan.FilePayload: %#v", configOp)
+	}
 	var templateData map[string]string
-	if err := json.Unmarshal(configOp.TemplateData, &templateData); err != nil {
+	if err := json.Unmarshal(configPayload.TemplateData, &templateData); err != nil {
 		t.Fatalf("decode template data: %v", err)
 	}
 	if templateData["Token"] != secret {
 		t.Fatalf("template data did not preserve the secret bytes")
 	}
 	lineOp := findGapOp(t, decoded, plan.KindFile, "File["+lines+"]")
-	if !reflect.DeepEqual(lineOp.RemoveLines, []string{"obsolete"}) ||
-		!reflect.DeepEqual(lineOp.AddLines, []string{"enabled=1"}) {
-		t.Fatalf("line edit op = %#v", lineOp)
+	linePayload, ok := lineOp.Payload.(plan.FilePayload)
+	if !ok {
+		t.Fatalf("line op missing plan.FilePayload: %#v", lineOp)
+	}
+	if !reflect.DeepEqual(linePayload.RemoveLines, []string{"obsolete"}) ||
+		!reflect.DeepEqual(linePayload.AddLines, []string{"enabled=1"}) {
+		t.Fatalf("line edit op = %#v", linePayload)
 	}
 	ensureOp := findGapOp(t, decoded, plan.KindEnsureFile)
 	if ensureOp.Path != preserved || ensureOp.Mode != "0644" {

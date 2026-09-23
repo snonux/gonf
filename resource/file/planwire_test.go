@@ -50,11 +50,11 @@ func TestToOpRecordsOnlyLineArrays(t *testing.T) {
 // singular field must not contribute an empty line, so a v14+ op without
 // removals really has no removals.
 func TestPlanLinesSkipsUnsetLegacyFields(t *testing.T) {
-	add, remove := planLines(plan.Op{AddLines: []string{"a"}})
+	add, remove := planLines(plan.FilePayload{AddLines: []string{"a"}})
 	if !slices.Equal(add, []string{"a"}) || len(remove) != 0 {
 		t.Fatalf("planLines = %q, %q; want [a], []", add, remove)
 	}
-	add, remove = planLines(plan.Op{AddLines: []string{"a"}, AddLine: "b", RemoveLine: "c"})
+	add, remove = planLines(plan.FilePayload{AddLines: []string{"a"}, AddLine: "b", RemoveLine: "c"})
 	if !slices.Equal(add, []string{"a", "b"}) || !slices.Equal(remove, []string{"c"}) {
 		t.Fatalf("planLines legacy = %q, %q; want [a b], [c]", add, remove)
 	}

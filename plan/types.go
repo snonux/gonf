@@ -286,17 +286,21 @@ type Guard struct {
 // it always was regardless of this Go-level split — see wireOp's doc
 // comment (wire.go) for exactly how.
 //
-// As of task 9e2, the cron, systemd_timer, user, link, link_if_exists,
-// package, command, config_set, config_set_member and sync_dir kinds have
-// migrated their exclusive fields onto a payload (CronPayload,
+// As of task ae2, the cron, systemd_timer, user, link, link_if_exists,
+// package, command, config_set, config_set_member, sync_dir and file kinds
+// have migrated their exclusive fields onto a payload (CronPayload,
 // SystemdTimerPayload, UserPayload, LinkPayload, LinkIfExistsPayload,
 // PackagePayload, CommandPayload, ConfigSetPayload, ConfigSetMemberPayload,
-// SyncDirPayload, op_payload.go); every other kind's fields are still flat
-// here, unchanged, pending follow-up tasks (see docs/plan.md). sync_dir's
-// Prune field is the one exception worth flagging: it did NOT move to
+// SyncDirPayload, FilePayload, op_payload.go); every other kind's fields are
+// still flat here, unchanged, pending follow-up tasks (see docs/plan.md).
+// Two exceptions are worth flagging: sync_dir's Prune field did NOT move to
 // SyncDirPayload, because KindDir genuinely shares it (see Prune's own
-// field doc below) — the "exclusive to one kind vs. shared by 2+" rule
-// this comment's own precedent (w62's identical resource.PlanDraft split)
+// field doc below); and KindEnsureFile does NOT reuse FilePayload despite
+// sharing resource/file's draft-side Payload with KindFile at Layer 1 — see
+// FilePayload's own doc comment (op_payload.go) for why the wire side does
+// not carry that sharing over. Both are the "exclusive to one kind vs.
+// shared by 2+, and wire-side doesn't have to mirror draft-side" rule this
+// comment's own precedent (w62's identical resource.PlanDraft split)
 // already applies elsewhere.
 type Op struct {
 	Op      Kind   `json:"op"`
@@ -337,40 +341,35 @@ type Op struct {
 	// only set when the task explicitly configured ownership via WithGroup;
 	// empty means the destination apply leaves the group as-is.
 	Group string `json:"group,omitempty"`
-	// ContentB64 is base64 file content for KindFile (InstallFile-style).
-	// A legitimately empty file (WithContent("") or an empty WithSource
-	// file) also base64-encodes to "", so this alone cannot tell "empty
-	// content" apart from "no content recorded"; see HasContent.
-	ContentB64 string `json:"content_b64,omitempty"`
+	// ContentB64, HasContent, Template, TemplateParam, TemplateData,
+	// ValidationBin and ValidationArgs (KindFile-exclusive) moved onto
+	// FilePayload (task ae2, "Layer 2" of the PlanDraft/Op god-struct split
+	// — see docs/plan.md, "The PlanDraft/Op split"; and CronPayload's doc
+	// comment in op_payload.go for why the wire itself is unaffected).
+	// Field docs (unchanged from here): FilePayload.ContentB64 is base64
+	// file content for KindFile (InstallFile-style) — a legitimately empty
+	// file (WithContent("") or an empty WithSource file) also
+	// base64-encodes to "", so this alone cannot tell "empty content" apart
+	// from "no content recorded", see HasContent.
+	// FilePayload.HasContent marks that KindFile's content was explicitly
+	// configured (WithContent or WithSource), even when it resolves to zero
+	// bytes and ContentB64 is therefore "" — Apply uses it to accept a
+	// legitimately empty file while still erroring loudly when both
+	// ContentB64 and Blob are unset AND HasContent is false (a record-time
+	// bug). FilePayload.Template marks that KindFile's content must be
+	// rendered as a text/template on the destination (schema v9).
+	// FilePayload.TemplateParam is the recipe's declared source path,
+	// recorded alongside Template so the destination render uses the same
+	// {{.Param}} default a direct (non-plan) File with the same ".tmpl"
+	// source would use. FilePayload.TemplateData is JSON-compatible data
+	// supplied by WithTemplateData (schema v12). FilePayload.ValidationBin
+	// and FilePayload.ValidationArgs are an optional file validator argv
+	// (schema v18); ValidationArgs contains CandidatePath, which
+	// destination apply replaces with a private staged filename before
+	// starting ValidationBin.
+
 	// Blob is a sidecar blob id/path for KindSyncDir (or large KindFile content).
 	Blob string `json:"blob,omitempty"`
-	// HasContent marks that KindFile's content was explicitly configured
-	// (WithContent or WithSource), even when it resolves to zero bytes and
-	// ContentB64 is therefore "". Apply uses it to accept a legitimately
-	// empty file while still erroring loudly when both ContentB64 and Blob
-	// are unset AND HasContent is false (a record-time bug).
-	HasContent bool `json:"has_content,omitempty"`
-	// Template marks that KindFile's content must be rendered as a
-	// text/template on the destination (schema v9): the recipe's source or
-	// destination path ended in ".tmpl" at record time. By apply time the
-	// content already travels as raw template text in ContentB64/Blob and
-	// neither Path nor an (empty, wire content is never re-sourced) source
-	// path still carries the ".tmpl" suffix that would otherwise trigger
-	// rendering, so this flag is what carries the intent across the wire.
-	Template bool `json:"template,omitempty"`
-	// TemplateParam is the recipe's declared source path, recorded alongside
-	// Template so the destination render uses the same {{.Param}} default a
-	// direct (non-plan) File with the same ".tmpl" source would use, instead
-	// of exposing the plan-apply implementation detail (there is no source
-	// file on the destination to derive it from).
-	TemplateParam string `json:"template_param,omitempty"`
-	// TemplateData is JSON-compatible data supplied by WithTemplateData.
-	TemplateData json.RawMessage `json:"template_data,omitempty"`
-	// ValidationBin and ValidationArgs are an optional file validator argv.
-	// ValidationArgs contains CandidatePath, which destination apply replaces
-	// with a private staged filename before starting ValidationBin.
-	ValidationBin  string   `json:"validation_bin,omitempty"`
-	ValidationArgs []string `json:"validation_args,omitempty"`
 	// SourceDir and Glob (KindSyncDir-exclusive) moved onto SyncDirPayload
 	// (task 9e2, Layer 2's fourth slice). Field docs (unchanged from here):
 	//
@@ -419,22 +418,21 @@ type Op struct {
 	// update / pkg upgrade / pkg_add -u / pkgin install) instead of a plain
 	// install, even when the package is already present.
 
-	// AddLines appends lines to a file when missing (line-in-file), in order.
-	AddLines []string `json:"add_lines,omitempty"`
-	// RemoveLines removes matching lines from a file, in order.
-	RemoveLines []string `json:"remove_lines,omitempty"`
-	// KeyedLines (schema v23, VersionKeyedLines) are WithKeyedLine edits,
-	// applied after RemoveLines and before AddLines: each replaces the first
-	// line starting with its key in place, drops every further one, and is
-	// appended when none exists. An older destination would ignore the field
-	// and leave the legacy line (or skip the whole edit), so it must refuse
-	// v23 at the header gate.
-	KeyedLines []KeyedLine `json:"keyed_lines,omitempty"`
-	// AddLine and RemoveLine are accepted when applying pre-v14 plans. Current
-	// recording never sets them (resource.PlanDraft has no singular fields);
-	// they stay on the wire type only so old recorded plans decode and apply.
-	AddLine    string `json:"add_line,omitempty"`
-	RemoveLine string `json:"remove_line,omitempty"`
+	// AddLines, RemoveLines, KeyedLines, AddLine and RemoveLine
+	// (KindFile-exclusive) also moved onto FilePayload (task ae2). Field
+	// docs (unchanged from here): FilePayload.AddLines appends lines to a
+	// file when missing (line-in-file), in order. FilePayload.RemoveLines
+	// removes matching lines from a file, in order. FilePayload.KeyedLines
+	// (schema v23, VersionKeyedLines) are WithKeyedLine edits, applied
+	// after RemoveLines and before AddLines: each replaces the first line
+	// starting with its key in place, drops every further one, and is
+	// appended when none exists. An older destination would ignore the
+	// field and leave the legacy line (or skip the whole edit), so it must
+	// refuse v23 at the header gate. FilePayload.AddLine and
+	// FilePayload.RemoveLine are accepted when applying pre-v14 plans;
+	// current recording never sets them (resource.PlanDraft has no singular
+	// fields), they stay on the wire type only so old recorded plans decode
+	// and apply.
 
 	// Name is a package name, command registry name, file resource identity,
 	// or similar label. For a named KindFile it keeps the resource ID stable
@@ -546,12 +544,16 @@ type Op struct {
 	Require string `json:"require,omitempty"`
 
 	// Payload holds the fields exclusive to Op's own Kind (task yd2, "Layer
-	// 2"): nil for a control kind or a kind that has not migrated any field
-	// off Op yet, otherwise a concrete type from op_payload.go (CronPayload
-	// for KindCron, SystemdTimerPayload for KindSystemdTimer, UserPayload
-	// for KindUser; task 5e2 added LinkPayload for KindLink,
-	// LinkIfExistsPayload for KindLinkIfExists, and PackagePayload for
-	// KindPackage; task 7e2 added CommandPayload for KindCommand). It is
+	// 2"): nil for a control kind, KindEnsureFile, or a kind that has not
+	// migrated any field off Op yet, otherwise a concrete type from
+	// op_payload.go (CronPayload for KindCron, SystemdTimerPayload for
+	// KindSystemdTimer, UserPayload for KindUser; task 5e2 added LinkPayload
+	// for KindLink, LinkIfExistsPayload for KindLinkIfExists, and
+	// PackagePayload for KindPackage; task 7e2 added CommandPayload for
+	// KindCommand; task 8e2 added ConfigSetPayload/ConfigSetMemberPayload;
+	// task 9e2 added SyncDirPayload; task ae2 added FilePayload for
+	// KindFile only — see FilePayload's own doc comment for why
+	// KindEnsureFile does not also get one). It is
 	// json:"-" because Op never marshals itself by default reflection — see
 	// MarshalJSON/UnmarshalJSON below — but api's secret-scan reflection
 	// walker (walkOpStrings) still reaches its fields: it special-cases the

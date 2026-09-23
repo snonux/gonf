@@ -418,8 +418,8 @@ func TestPushToHostRemovesStickyOnBlobUploadFailure(t *testing.T) {
 
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "demo"},
-		{Op: plan.KindFile, Path: "/tmp/unpriv-out", Mode: "0600", ContentB64: "aGVsbG8K"},
-		{Op: plan.KindFile, Path: "/tmp/priv-out", Mode: "0600", ContentB64: "aGVsbG8K", Elevate: true},
+		{Op: plan.KindFile, Path: "/tmp/unpriv-out", Mode: "0600", Payload: plan.FilePayload{ContentB64: "aGVsbG8K"}},
+		{Op: plan.KindFile, Path: "/tmp/priv-out", Mode: "0600", Payload: plan.FilePayload{ContentB64: "aGVsbG8K"}, Elevate: true},
 	}
 	mem := plan.NewMemoryStore()
 	if _, err := mem.WriteFile("demo.txt", []byte("blob-content")); err != nil {

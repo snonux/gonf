@@ -24,9 +24,9 @@ func TestApplyChunksRequirementRefusedInFirstChunk(t *testing.T) {
 	dir := t.TempDir()
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "chunks"},
-		{Op: plan.KindFile, ID: "File[user]", Path: filepath.Join(dir, "user"), Mode: "0600", ContentB64: "eAo="},
+		{Op: plan.KindFile, ID: "File[user]", Path: filepath.Join(dir, "user"), Mode: "0600", Payload: plan.FilePayload{ContentB64: "eAo="}},
 		{Op: plan.KindWhenBegin, ID: "req", All: []plan.Predicate{{Fact: "goos", Eq: "openbsd"}}, Require: "needs OpenBSD"},
-		{Op: plan.KindFile, ID: "File[root]", Path: filepath.Join(dir, "root"), Mode: "0600", ContentB64: "eAo=", Elevate: true},
+		{Op: plan.KindFile, ID: "File[root]", Path: filepath.Join(dir, "root"), Mode: "0600", Payload: plan.FilePayload{ContentB64: "eAo="}, Elevate: true},
 		{Op: plan.KindWhenEnd},
 	}
 	old := elevatedApplyRunner

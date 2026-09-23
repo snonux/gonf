@@ -16,7 +16,7 @@ import (
 func TestEncodeDecodePushNoBlobs(t *testing.T) {
 	ops := []Op{
 		{Op: KindPlan, Version: CurrentVersion, ID: "p"},
-		{Op: KindFile, Path: "/tmp/x", ContentB64: "eA=="},
+		{Op: KindFile, Path: "/tmp/x", Payload: FilePayload{ContentB64: "eA=="}},
 	}
 	var buf bytes.Buffer
 	if err := EncodePush(&buf, ops, nil); err != nil {

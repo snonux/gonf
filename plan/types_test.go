@@ -128,11 +128,11 @@ func TestOpJSONTagsMatchPlanExamples(t *testing.T) {
 		{
 			name: "file content",
 			op: Op{
-				Op:         KindFile,
-				Path:       "${HOME}/.taskrc",
-				Mode:       "0640",
-				ContentB64: "Li4u",
-				ID:         "File[${HOME}/.taskrc]",
+				Op:      KindFile,
+				Path:    "${HOME}/.taskrc",
+				Mode:    "0640",
+				Payload: FilePayload{ContentB64: "Li4u"},
+				ID:      "File[${HOME}/.taskrc]",
 			},
 			want: `{"op":"file","id":"File[${HOME}/.taskrc]","path":"${HOME}/.taskrc","mode":"0640","content_b64":"Li4u"}`,
 		},
@@ -301,12 +301,12 @@ func TestOpJSONTagsMatchPlanExamples(t *testing.T) {
 		{
 			name: "file content with owner group",
 			op: Op{
-				Op:         KindFile,
-				Path:       "${HOME}/secret.conf",
-				Mode:       "0640",
-				Owner:      "daemon",
-				Group:      "wheel",
-				ContentB64: "Li4u",
+				Op:      KindFile,
+				Path:    "${HOME}/secret.conf",
+				Mode:    "0640",
+				Owner:   "daemon",
+				Group:   "wheel",
+				Payload: FilePayload{ContentB64: "Li4u"},
 			},
 			want: `{"op":"file","path":"${HOME}/secret.conf","mode":"0640","owner":"daemon","group":"wheel","content_b64":"Li4u"}`,
 		},
@@ -351,10 +351,12 @@ func TestOpJSONTagsMatchPlanExamples(t *testing.T) {
 		{
 			name: "file add_lines remove_lines",
 			op: Op{
-				Op:          KindFile,
-				Path:        "${HOME}/.config/tmux/tmux.conf",
-				AddLines:    []string{"source-file ~/.config/tmux/tmux.rocky.conf", "set -g mouse on"},
-				RemoveLines: []string{"old-line", "stale-line"},
+				Op:   KindFile,
+				Path: "${HOME}/.config/tmux/tmux.conf",
+				Payload: FilePayload{
+					AddLines:    []string{"source-file ~/.config/tmux/tmux.rocky.conf", "set -g mouse on"},
+					RemoveLines: []string{"old-line", "stale-line"},
+				},
 			},
 			want: `{"op":"file","path":"${HOME}/.config/tmux/tmux.conf","add_lines":["source-file ~/.config/tmux/tmux.rocky.conf","set -g mouse on"],"remove_lines":["old-line","stale-line"]}`,
 		},

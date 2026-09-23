@@ -30,7 +30,7 @@ func FuzzDecodeOp(f *testing.F) {
 		{Op: KindWhenBegin, All: []Predicate{{Fact: "goos", Eq: "linux"}}},
 		{Op: KindWhenBegin, All: []Predicate{{Fact: "profile", Eq: "fedora"}}},
 		{Op: KindWhenBegin, All: []Predicate{{PathExists: "${HOME}/.config"}}},
-		{Op: KindFile, Path: "${HOME}/a", ContentB64: "YQ=="},
+		{Op: KindFile, Path: "${HOME}/a", Payload: FilePayload{ContentB64: "YQ=="}},
 		{Op: KindWhenEnd},
 		{Op: KindWhenEnd},
 		{Op: KindWhenEnd},

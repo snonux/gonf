@@ -169,8 +169,8 @@ func TestKeyedLinesSurvivePlanRoundTrip(t *testing.T) {
 // keyed edit must not combine with whole-file content on the wire either.
 func TestPlanApplyRefusesKeyedLinesWithContent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "f")
-	op := plan.Op{Op: plan.KindFile, Path: path, ContentB64: "eA==",
-		KeyedLines: []plan.KeyedLine{{Key: "A=", Line: "A=1"}}}
+	op := plan.Op{Op: plan.KindFile, Path: path, Payload: plan.FilePayload{ContentB64: "eA==",
+		KeyedLines: []plan.KeyedLine{{Key: "A=", Line: "A=1"}}}}
 	err := (planHandler{}).Apply(op, plan.ApplyContext{})
 	if err == nil || !strings.Contains(err.Error(), "keyed_lines cannot combine") {
 		t.Fatalf("err = %v, want the content conflict", err)

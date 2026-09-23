@@ -122,7 +122,7 @@ func touchFramePush(t *testing.T, id, target string) []byte {
 	t.Helper()
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: id},
-		{Op: plan.KindFile, Path: target, Mode: "0600", ContentB64: "aGkK"}, // "hi\n"
+		{Op: plan.KindFile, Path: target, Mode: "0600", Payload: plan.FilePayload{ContentB64: "aGkK"}}, // "hi\n"
 	}
 	var buf bytes.Buffer
 	if err := plan.EncodePush(&buf, ops, nil); err != nil {
@@ -870,10 +870,10 @@ func TestCLIApplySealedLargeLegitimatePlanSucceeds(t *testing.T) {
 		contents[i] = content
 		targets[i] = filepath.Join(dir, fmt.Sprintf("large-%d.bin", i))
 		ops = append(ops, plan.Op{
-			Op:         plan.KindFile,
-			Path:       targets[i],
-			Mode:       "0600",
-			ContentB64: base64.StdEncoding.EncodeToString(content),
+			Op:      plan.KindFile,
+			Path:    targets[i],
+			Mode:    "0600",
+			Payload: plan.FilePayload{ContentB64: base64.StdEncoding.EncodeToString(content)},
 		})
 	}
 	var buf bytes.Buffer

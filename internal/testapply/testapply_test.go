@@ -203,7 +203,9 @@ func TestPackageSourceGatedOnKind(t *testing.T) {
 	if len(ops) != 2 {
 		t.Fatalf("ops = %#v, want header plus one op", ops)
 	}
-	if op := ops[1]; op.ContentB64 != "" || op.Blob != "" {
+	op := ops[1]
+	fp, _ := op.Payload.(plan.FilePayload)
+	if fp.ContentB64 != "" || op.Blob != "" {
 		t.Fatalf("op = %#v, want no content_b64/blob (leakingPayload must not be consulted for kind %q)", op, draft.Kind)
 	}
 }

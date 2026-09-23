@@ -145,7 +145,8 @@ func TestCLIPlanSealRoundTrips(t *testing.T) {
 	if got := fileOp.Path; got != filepath.Join(work, "plain") {
 		t.Fatalf("op path = %q, want %q", got, filepath.Join(work, "plain"))
 	}
-	if got := fileOp.ContentB64; got == "" {
+	fp, _ := fileOp.Payload.(plan.FilePayload)
+	if got := fp.ContentB64; got == "" {
 		t.Fatalf("op content is empty")
 	}
 }

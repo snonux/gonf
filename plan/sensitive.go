@@ -41,7 +41,12 @@ func RequiredVersion(ops []Op) int {
 		if op.Op == KindSyncDir && p.Glob && op.Prune {
 			return VersionSyncDirGlob // the highest on-demand schema
 		}
-		if len(op.KeyedLines) != 0 && version < VersionKeyedLines {
+		// KeyedLines moved onto FilePayload (task ae2); same comma-ok
+		// degrade-to-zero-payload contract as the SyncDirPayload assertion
+		// above — a non-file op can never carry one (payloadFromWire only
+		// builds one for KindFile).
+		fp, _ := op.Payload.(FilePayload)
+		if len(fp.KeyedLines) != 0 && version < VersionKeyedLines {
 			version = VersionKeyedLines
 		}
 		if op.Sensitive && version < VersionSensitive {

@@ -145,7 +145,8 @@ func TestLoginClassCallerOptionsRefineDefaultsAndContent(t *testing.T) {
 
 	// WithContent works without any src.
 	ops = recordLoginClass(t, func() { LoginClass("staff", "", options.WithContent("staff|Staff:\\\n\t:tc=default:\n")) })
-	if ops[3].ID != "File[/etc/login.conf.d/staff]" || !ops[3].HasContent {
+	staffPayload, _ := ops[3].Payload.(plan.FilePayload)
+	if ops[3].ID != "File[/etc/login.conf.d/staff]" || !staffPayload.HasContent {
 		t.Fatalf("inline content fragment = %#v", ops[3])
 	}
 }
@@ -203,7 +204,8 @@ func TestLoginClassValidatesTheSourceFileItInstalls(t *testing.T) {
 		LoginClass("relayd", "", options.WithSource("~/relayd"))
 	})
 	fragment := ops[3]
-	content, err := base64.StdEncoding.DecodeString(fragment.ContentB64)
+	fragmentPayload, _ := fragment.Payload.(plan.FilePayload)
+	content, err := base64.StdEncoding.DecodeString(fragmentPayload.ContentB64)
 	if fragment.ID != "File[/etc/login.conf.d/relayd]" || err != nil || string(content) != good {
 		t.Fatalf("fragment %s content = %q (%v), want the validated verbatim-path file %q", fragment.ID, content, err, good)
 	}
@@ -451,7 +453,11 @@ func TestNoLoginClassRemovesFragmentAndStaleDB(t *testing.T) {
 			removal = &f.ops[i]
 		}
 	}
-	if removal == nil || !removal.Absent || removal.HasContent {
+	if removal == nil || !removal.Absent {
+		t.Fatalf("removal op = %#v in %v", removal, opIDs(f.ops))
+	}
+	removalPayload, _ := removal.Payload.(plan.FilePayload)
+	if removalPayload.HasContent {
 		t.Fatalf("removal op = %#v in %v", removal, opIDs(f.ops))
 	}
 	writeFixtureFile(t, f.fragment, inetdClassFixture)

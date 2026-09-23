@@ -52,6 +52,10 @@ type wireOp struct {
 	Owner    string `json:"owner,omitempty"`
 	Group    string `json:"group,omitempty"`
 
+	// ContentB64/HasContent/Template/TemplateParam/TemplateData/
+	// ValidationBin/ValidationArgs below are File-exclusive
+	// (plan.FilePayload, task ae2). Blob stays core: sync_dir reuses it
+	// (see FilePayload's own field docs).
 	ContentB64     string          `json:"content_b64,omitempty"`
 	Blob           string          `json:"blob,omitempty"`
 	HasContent     bool            `json:"has_content,omitempty"`
@@ -86,6 +90,8 @@ type wireOp struct {
 	System              bool     `json:"system,omitempty"`
 	ManageHome          bool     `json:"manage_home,omitempty"`
 
+	// AddLines/RemoveLines/KeyedLines/AddLine/RemoveLine are also
+	// File-exclusive (plan.FilePayload, task ae2).
 	AddLines    []string    `json:"add_lines,omitempty"`
 	RemoveLines []string    `json:"remove_lines,omitempty"`
 	KeyedLines  []KeyedLine `json:"keyed_lines,omitempty"`

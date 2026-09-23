@@ -367,8 +367,8 @@ func TestToHostForwardsCmdTimeoutOnlyToCapableRemote(t *testing.T) {
 			setCmdTimeout(t, 30*time.Second)
 			ops := []plan.Op{
 				{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "p"},
-				{Op: plan.KindFile, Path: "/tmp/unpriv-out", Mode: "0600", ContentB64: "aGVsbG8K"},
-				{Op: plan.KindFile, Path: "/tmp/priv-out", Mode: "0600", ContentB64: "aGVsbG8K", Elevate: true},
+				{Op: plan.KindFile, Path: "/tmp/unpriv-out", Mode: "0600", Payload: plan.FilePayload{ContentB64: "aGVsbG8K"}},
+				{Op: plan.KindFile, Path: "/tmp/priv-out", Mode: "0600", Payload: plan.FilePayload{ContentB64: "aGVsbG8K"}, Elevate: true},
 			}
 			target := PushTarget{Host: "h.example", Privilege: privilege.Sudo}
 			if err := pushToHost(context.Background(), target, "p", ops, nil); err != nil {
@@ -413,8 +413,8 @@ func TestPreviewToHostForwardsCmdTimeoutOnlyToCapableRemote(t *testing.T) {
 			setCmdTimeout(t, 30*time.Second)
 			ops := []plan.Op{
 				{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "p"},
-				{Op: plan.KindFile, Path: "/tmp/unpriv-out", Mode: "0600", ContentB64: "aGVsbG8K"},
-				{Op: plan.KindFile, Path: "/tmp/priv-out", Mode: "0600", ContentB64: "aGVsbG8K", Elevate: true},
+				{Op: plan.KindFile, Path: "/tmp/unpriv-out", Mode: "0600", Payload: plan.FilePayload{ContentB64: "aGVsbG8K"}},
+				{Op: plan.KindFile, Path: "/tmp/priv-out", Mode: "0600", Payload: plan.FilePayload{ContentB64: "aGVsbG8K"}, Elevate: true},
 			}
 			target := PushTarget{Host: "h.example", Privilege: privilege.Sudo}
 			if err := previewToHost(context.Background(), target, "p", ops, nil); err != nil {
@@ -494,8 +494,8 @@ func TestCmdTimeoutProbeSSHFailureIsBestEffort(t *testing.T) {
 	out := testutil.CaptureLog(t, logger.LevelWarn)
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "p"},
-		{Op: plan.KindFile, Path: "/tmp/unpriv-out", Mode: "0600", ContentB64: "aGVsbG8K"},
-		{Op: plan.KindFile, Path: "/tmp/priv-out", Mode: "0600", ContentB64: "aGVsbG8K", Elevate: true},
+		{Op: plan.KindFile, Path: "/tmp/unpriv-out", Mode: "0600", Payload: plan.FilePayload{ContentB64: "aGVsbG8K"}},
+		{Op: plan.KindFile, Path: "/tmp/priv-out", Mode: "0600", Payload: plan.FilePayload{ContentB64: "aGVsbG8K"}, Elevate: true},
 	}
 	target := PushTarget{Host: "h.example", Privilege: privilege.Sudo}
 	if err := pushToHost(context.Background(), target, "p", ops, nil); err != nil {

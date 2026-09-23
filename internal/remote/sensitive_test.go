@@ -20,7 +20,7 @@ func sensitiveStickyOps(t *testing.T, elevate bool) ([]plan.Op, *plan.MemoryStor
 	t.Helper()
 	ops, mem := stickyOps(t)
 	ops[2] = plan.Op{Op: plan.KindFile, ID: "File[/etc/secret.conf]", Path: "/etc/secret.conf", Mode: "0600",
-		Blob: "blobs/demo.txt", HasContent: true, Sensitive: true, Elevate: elevate}
+		Blob: "blobs/demo.txt", Payload: plan.FilePayload{HasContent: true}, Sensitive: true, Elevate: elevate}
 	if !elevate {
 		ops[1].Elevate = true // keep two chunks: the elevated one now holds no sensitive op
 	}

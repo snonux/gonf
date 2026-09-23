@@ -15,9 +15,9 @@ import (
 func requirePlan(dir string) []Op {
 	return []Op{
 		{Op: KindPlan, Version: CurrentVersion},
-		{Op: KindFile, ID: "File[before]", Path: filepath.Join(dir, "before"), ContentB64: "eAo=", Mode: "0600"},
+		{Op: KindFile, ID: "File[before]", Path: filepath.Join(dir, "before"), Payload: FilePayload{ContentB64: "eAo="}, Mode: "0600"},
 		{Op: KindWhenBegin, ID: "when.require_goos:openbsd:X", All: []Predicate{{Fact: "goos", Eq: "openbsd"}}, Require: "X needs OpenBSD"},
-		{Op: KindFile, ID: "File[inside]", Path: filepath.Join(dir, "inside"), ContentB64: "eAo=", Mode: "0600"},
+		{Op: KindFile, ID: "File[inside]", Path: filepath.Join(dir, "inside"), Payload: FilePayload{ContentB64: "eAo="}, Mode: "0600"},
 		{Op: KindWhenEnd},
 	}
 }
@@ -84,7 +84,7 @@ type badScopeCase struct {
 
 func badScopeCases(dir string) []badScopeCase {
 	marker := filepath.Join(dir, "marker")
-	write := Op{Op: KindFile, ID: "File[marker]", Path: marker, ContentB64: "eAo=", Mode: "0600"}
+	write := Op{Op: KindFile, ID: "File[marker]", Path: marker, Payload: FilePayload{ContentB64: "eAo="}, Mode: "0600"}
 	goos := []Predicate{{Fact: "goos", Eq: "openbsd"}}
 	header := Op{Op: KindPlan, Version: CurrentVersion}
 	return []badScopeCase{{
@@ -148,10 +148,10 @@ func TestRequirementScopeRefusedAtRecordAndApply(t *testing.T) {
 func TestSplitDoesNotCopyBadScopeRequirements(t *testing.T) {
 	ops := []Op{
 		{Op: KindPlan, Version: CurrentVersion},
-		{Op: KindFile, ID: "File[user]", Path: "/tmp/x", ContentB64: "eAo="},
+		{Op: KindFile, ID: "File[user]", Path: "/tmp/x", Payload: FilePayload{ContentB64: "eAo="}},
 		{Op: KindWhenBegin, ID: "when.path_exists:/p", All: []Predicate{{PathExists: "/p"}}},
 		{Op: KindWhenBegin, ID: "req", All: []Predicate{{Fact: "goos", Eq: "openbsd"}}, Require: "r"},
-		{Op: KindFile, ID: "File[root]", Path: "/tmp/y", ContentB64: "eAo=", Elevate: true},
+		{Op: KindFile, ID: "File[root]", Path: "/tmp/y", Payload: FilePayload{ContentB64: "eAo="}, Elevate: true},
 		{Op: KindWhenEnd}, {Op: KindWhenEnd},
 	}
 	chunks := SplitPrivilegeChunks(ops)
@@ -170,10 +170,10 @@ func TestSplitHoistsRequirementsIntoEarlierChunks(t *testing.T) {
 	dir := t.TempDir()
 	ops := []Op{
 		{Op: KindPlan, Version: CurrentVersion},
-		{Op: KindFile, ID: "File[user]", Path: filepath.Join(dir, "user"), ContentB64: "eAo=", Mode: "0600"},
+		{Op: KindFile, ID: "File[user]", Path: filepath.Join(dir, "user"), Payload: FilePayload{ContentB64: "eAo="}, Mode: "0600"},
 		{Op: KindWhenBegin, ID: "when.hostname:h", All: []Predicate{{Fact: "hostname_contains", Eq: "h"}}},
 		{Op: KindWhenBegin, ID: "req", All: []Predicate{{Fact: "goos", Eq: "openbsd"}}, Require: "needs OpenBSD"},
-		{Op: KindFile, ID: "File[root]", Path: filepath.Join(dir, "root"), ContentB64: "eAo=", Mode: "0600", Elevate: true},
+		{Op: KindFile, ID: "File[root]", Path: filepath.Join(dir, "root"), Payload: FilePayload{ContentB64: "eAo="}, Mode: "0600", Elevate: true},
 		{Op: KindWhenEnd},
 		{Op: KindWhenEnd},
 	}
@@ -222,10 +222,10 @@ func TestSplitHoistsRequirementIntoEveryEarlierChunk(t *testing.T) {
 	req := Op{Op: KindWhenBegin, ID: "req", All: []Predicate{{Fact: "goos", Eq: "openbsd"}}, Require: "needs OpenBSD"}
 	ops := []Op{
 		{Op: KindPlan, Version: CurrentVersion},
-		{Op: KindFile, ID: "File[u1]", Path: "/tmp/u1", ContentB64: "eAo="},
-		{Op: KindFile, ID: "File[root]", Path: "/tmp/root", ContentB64: "eAo=", Elevate: true},
+		{Op: KindFile, ID: "File[u1]", Path: "/tmp/u1", Payload: FilePayload{ContentB64: "eAo="}},
+		{Op: KindFile, ID: "File[root]", Path: "/tmp/root", Payload: FilePayload{ContentB64: "eAo="}, Elevate: true},
 		req,
-		{Op: KindFile, ID: "File[u2]", Path: "/tmp/u2", ContentB64: "eAo="},
+		{Op: KindFile, ID: "File[u2]", Path: "/tmp/u2", Payload: FilePayload{ContentB64: "eAo="}},
 		{Op: KindWhenEnd},
 	}
 	chunks := SplitPrivilegeChunks(ops)

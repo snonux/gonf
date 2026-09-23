@@ -165,7 +165,8 @@ func TestDraftPackagerNeedsStoreForBlobs(t *testing.T) {
 			tc.register()
 			op, err := newDraftPackager(nil).packageDraft(onlyDraft(t))
 			if tc.wantErr == "" {
-				if err != nil || op.ContentB64 == "" || op.Blob != "" {
+				fp, _ := op.Payload.(plan.FilePayload)
+				if err != nil || fp.ContentB64 == "" || op.Blob != "" {
 					t.Fatalf("packageDraft() = %#v, %v, want inline content", op, err)
 				}
 				return

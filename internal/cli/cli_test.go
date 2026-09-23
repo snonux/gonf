@@ -399,7 +399,7 @@ func TestCLIApplyStdinFramedNoBlobs(t *testing.T) {
 	dst := filepath.Join(root, "out.txt")
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "stdin"},
-		{Op: plan.KindFile, Path: dst, Mode: "0600", ContentB64: "aGVsbG8K"}, // hello\n
+		{Op: plan.KindFile, Path: dst, Mode: "0600", Payload: plan.FilePayload{ContentB64: "aGVsbG8K"}}, // hello\n
 	}
 	var buf bytes.Buffer
 	if err := plan.EncodePush(&buf, ops, nil); err != nil {
@@ -710,7 +710,7 @@ func TestCLIApplyStickyRefusesPlantedSymlink(t *testing.T) {
 	}
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "sticky"},
-		{Op: plan.KindFile, Path: filepath.Join(root, "out.txt"), Mode: "0600", ContentB64: "aGVsbG8K"},
+		{Op: plan.KindFile, Path: filepath.Join(root, "out.txt"), Mode: "0600", Payload: plan.FilePayload{ContentB64: "aGVsbG8K"}},
 	}
 	var buf bytes.Buffer
 	if err := plan.EncodePush(&buf, ops, nil); err != nil {

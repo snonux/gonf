@@ -69,7 +69,7 @@ func TestRequiredVersion(t *testing.T) {
 			t.Errorf("RequiredVersion(%s) = %d, want %d", tc.name, got, tc.want)
 		}
 	}
-	keyed := Op{Op: KindFile, Path: "/p", KeyedLines: []KeyedLine{{Key: "k=", Line: "k=v"}}}
+	keyed := Op{Op: KindFile, Path: "/p", Payload: FilePayload{KeyedLines: []KeyedLine{{Key: "k=", Line: "k=v"}}}}
 	for _, ops := range [][]Op{
 		{plain, keyed},
 		{{Op: KindFile, Path: "/k", Sensitive: true}, keyed},
@@ -88,7 +88,7 @@ func TestSensitiveElevatedBlobs(t *testing.T) {
 	ops := []Op{
 		{Op: KindPlan, Version: CurrentVersion, ID: "p"},
 		{Op: KindFile, ID: "File[/user-blob]", Blob: "blobs/u", Sensitive: true},
-		{Op: KindFile, ID: "File[/root-inline]", ContentB64: "eA==", Sensitive: true, Elevate: true},
+		{Op: KindFile, ID: "File[/root-inline]", Payload: FilePayload{ContentB64: "eA=="}, Sensitive: true, Elevate: true},
 		{Op: KindFile, ID: "File[/root-plain-blob]", Blob: "blobs/p", Elevate: true},
 		{Op: KindFile, ID: "File[/root-blob]", Blob: "blobs/r", Sensitive: true, Elevate: true},
 	}
@@ -119,7 +119,7 @@ func TestSensitiveSurvivesCodecAndSplit(t *testing.T) {
 	t.Parallel()
 	ops := []Op{
 		{Op: KindPlan, Version: CurrentVersion, ID: "p"},
-		{Op: KindFile, ID: "File[/k]", Path: "/k", ContentB64: "eA==", HasContent: true, Sensitive: true, Elevate: true},
+		{Op: KindFile, ID: "File[/k]", Path: "/k", Payload: FilePayload{ContentB64: "eA==", HasContent: true}, Sensitive: true, Elevate: true},
 	}
 	raw, err := EncodePlan(ops)
 	if err != nil {

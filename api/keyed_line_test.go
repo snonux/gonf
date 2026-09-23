@@ -31,7 +31,9 @@ func TestHeaderVersionFollowsKeyedLines(t *testing.T) {
 	if ops[0].Version != plan.VersionKeyedLines {
 		t.Fatalf("keyed plan header v%d, want v%d", ops[0].Version, plan.VersionKeyedLines)
 	}
-	if op := opByPath(t, ops, "/etc/keyed"); len(op.KeyedLines) != 1 || op.KeyedLines[0] != (plan.KeyedLine{Key: "x=", Line: "x=1"}) {
+	op := opByPath(t, ops, "/etc/keyed")
+	fp, _ := op.Payload.(plan.FilePayload)
+	if len(fp.KeyedLines) != 1 || fp.KeyedLines[0] != (plan.KeyedLine{Key: "x=", Line: "x=1"}) {
 		t.Fatalf("keyed op = %+v", op)
 	}
 }

@@ -18,9 +18,9 @@ import (
 func requirementPushPlan(dir string, reqPreds []plan.Predicate) []plan.Op {
 	return []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "demo"},
-		{Op: plan.KindFile, ID: "File[user]", Path: filepath.Join(dir, "user"), Mode: "0600", ContentB64: "eAo="},
+		{Op: plan.KindFile, ID: "File[user]", Path: filepath.Join(dir, "user"), Mode: "0600", Payload: plan.FilePayload{ContentB64: "eAo="}},
 		{Op: plan.KindWhenBegin, ID: "req", All: reqPreds, Require: "needs OpenBSD"},
-		{Op: plan.KindFile, ID: "File[root]", Path: filepath.Join(dir, "root"), Mode: "0600", ContentB64: "eAo=", Elevate: true},
+		{Op: plan.KindFile, ID: "File[root]", Path: filepath.Join(dir, "root"), Mode: "0600", Payload: plan.FilePayload{ContentB64: "eAo="}, Elevate: true},
 		{Op: plan.KindWhenEnd},
 	}
 }

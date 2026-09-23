@@ -22,8 +22,9 @@ func TestRecordPlanCarriesTemplateData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecordPlan: %v", err)
 	}
-	if len(ops) != 2 || string(ops[1].TemplateData) != `{"name":"relay"}` {
-		t.Fatalf("template_data = %s, want serialized map", ops[1].TemplateData)
+	ops1Payload, _ := ops[1].Payload.(plan.FilePayload)
+	if len(ops) != 2 || string(ops1Payload.TemplateData) != `{"name":"relay"}` {
+		t.Fatalf("template_data = %s, want serialized map", ops1Payload.TemplateData)
 	}
 	raw, err := plan.EncodePlan(ops)
 	if err != nil {
@@ -33,8 +34,9 @@ func TestRecordPlanCarriesTemplateData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	decoded1Payload, _ := decoded[1].Payload.(plan.FilePayload)
 	var data map[string]any
-	if err := json.Unmarshal(decoded[1].TemplateData, &data); err != nil {
+	if err := json.Unmarshal(decoded1Payload.TemplateData, &data); err != nil {
 		t.Fatal(err)
 	}
 	if data["name"] != "relay" {

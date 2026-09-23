@@ -20,7 +20,7 @@ func TestApplyFileTemplateDataUsesDestinationFactsAndEnvironment(t *testing.T) {
 	}
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "template-data"},
-		{Op: plan.KindFile, Path: path, ContentB64: "e3tyYW5nZSAuc2VydmVyc319e3sufX0se3tlbmR9fXx7ey5Hb25mLkhvc3RuYW1lfX18e3suR29uZi5Qcm9maWxlfX18e3suR09ORl9URU1QTEFURV9EQVRBX1RPS0VOfX0=", HasContent: true, Template: true, TemplateData: data},
+		{Op: plan.KindFile, Path: path, Payload: plan.FilePayload{ContentB64: "e3tyYW5nZSAuc2VydmVyc319e3sufX0se3tlbmR9fXx7ey5Hb25mLkhvc3RuYW1lfX18e3suR29uZi5Qcm9maWxlfX18e3suR09ORl9URU1QTEFURV9EQVRBX1RPS0VOfX0=", HasContent: true, Template: true, TemplateData: data}},
 	}
 	if err := plan.Apply(ops, plan.Facts{GOOS: "freebsd", Profile: "edge", Hostname: "host-a"}, ""); err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -37,7 +37,7 @@ func TestApplyFileTemplateDataUsesDestinationFactsAndEnvironment(t *testing.T) {
 func TestPushWirePreservesTemplateData(t *testing.T) {
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "template-data"},
-		{Op: plan.KindFile, Path: "/tmp/config", ContentB64: "eA==", HasContent: true, Template: true, TemplateData: json.RawMessage(`{"items":["a","b"]}`)},
+		{Op: plan.KindFile, Path: "/tmp/config", Payload: plan.FilePayload{ContentB64: "eA==", HasContent: true, Template: true, TemplateData: json.RawMessage(`{"items":["a","b"]}`)}},
 	}
 	var wire bytes.Buffer
 	if err := plan.EncodePush(&wire, ops, nil); err != nil {
@@ -47,7 +47,11 @@ func TestPushWirePreservesTemplateData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodePush: %v", err)
 	}
-	if got, want := string(payload.Ops[1].TemplateData), `{"items":["a","b"]}`; got != want {
+	fp, ok := payload.Ops[1].Payload.(plan.FilePayload)
+	if !ok {
+		t.Fatalf("Ops[1].Payload = %#v, want plan.FilePayload", payload.Ops[1].Payload)
+	}
+	if got, want := string(fp.TemplateData), `{"items":["a","b"]}`; got != want {
 		t.Errorf("template_data = %s, want %s", got, want)
 	}
 }
@@ -56,7 +60,7 @@ func TestApplyFileTemplateDataMissingKeyFails(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config")
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "template-data"},
-		{Op: plan.KindFile, Path: path, ContentB64: "e3suTWlzc2luZ319", HasContent: true, Template: true},
+		{Op: plan.KindFile, Path: path, Payload: plan.FilePayload{ContentB64: "e3suTWlzc2luZ319", HasContent: true, Template: true}},
 	}
 	err := plan.Apply(ops, plan.Facts{}, "")
 	if err == nil || !strings.Contains(err.Error(), "map has no entry for key \"Missing\"") {
@@ -68,7 +72,7 @@ func TestApplyFileTemplateDataPreservesLargeInteger(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config")
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "template-data"},
-		{Op: plan.KindFile, Path: path, ContentB64: "e3suRGF0YS5JRH19", HasContent: true, Template: true, TemplateData: json.RawMessage(`{"ID":9007199254740993}`)},
+		{Op: plan.KindFile, Path: path, Payload: plan.FilePayload{ContentB64: "e3suRGF0YS5JRH19", HasContent: true, Template: true, TemplateData: json.RawMessage(`{"ID":9007199254740993}`)}},
 	}
 	if err := plan.Apply(ops, plan.Facts{}, ""); err != nil {
 		t.Fatalf("Apply: %v", err)

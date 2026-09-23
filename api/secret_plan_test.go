@@ -119,7 +119,8 @@ func TestSecretFileRecordsSensitiveExactContent(t *testing.T) {
 		SecretFile("/etc/svc.key", secret.Ref("svc/key"), options.WithMode(0o600))
 	})
 	op := opByPath(t, ops, "/etc/svc.key")
-	content, err := plan.DecodeContentB64(op.ContentB64)
+	opPayload, _ := op.Payload.(plan.FilePayload)
+	content, err := plan.DecodeContentB64(opPayload.ContentB64)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,8 +173,9 @@ func TestSensitiveBlobSourceIsScanned(t *testing.T) {
 		InstallFile("/etc/big.conf", src)
 	})
 	op := opByPath(t, ops, "/etc/big.conf")
-	if op.Blob == "" || op.ContentB64 != "" || !op.Sensitive {
-		t.Fatalf("blob op = blob %q inline %d bytes sensitive %v; want a sensitive blob", op.Blob, len(op.ContentB64), op.Sensitive)
+	opPayload, _ := op.Payload.(plan.FilePayload)
+	if op.Blob == "" || opPayload.ContentB64 != "" || !op.Sensitive {
+		t.Fatalf("blob op = blob %q inline %d bytes sensitive %v; want a sensitive blob", op.Blob, len(opPayload.ContentB64), op.Sensitive)
 	}
 }
 
@@ -216,6 +218,49 @@ func TestRedactedPreviewHidesSecretsAndCannotApply(t *testing.T) {
 	// The caller's ops are untouched.
 	if again, _ := plan.EncodePlan(ops); !bytes.Equal(again, raw) {
 		t.Fatal("EncodeRedactedPreview modified the recorded ops")
+	}
+}
+
+// TestRedactOpCollapsesSensitiveTemplateDataWholesale pins redactOp's
+// wholesale template_data collapse (its own doc comment: "such an op may
+// carry secret material no resolved value matches ... its template_data
+// replaced as a whole") now that TemplateData lives on plan.FilePayload
+// (task ae2) instead of a flat Op field redactOp used to mutate directly.
+// FilePayload is a value type, so redactOp must copy it out of out.Payload,
+// overwrite the copy's TemplateData, and write the copy BACK onto
+// out.Payload; forgetting that last write-back would compile fine (Go
+// happily discards an unused local mutation) and still pass every
+// pre-existing secrets test — walkOpStrings' payloadWithholder redacts each
+// JSON leaf string in place regardless, so the secret bytes would still be
+// gone and TestRedactedPreviewHidesSecretsAndCannotApply's substring check
+// would not notice — while silently leaving the ORIGINAL template_data
+// object shape (a JSON object with a redacted leaf) on the wire instead of
+// collapsing it to one opaque secret.Redacted marker. This test asserts the
+// stronger, shape-collapsing contract directly against redactOp's own
+// output, not just the absence of the secret's bytes.
+func TestRedactOpCollapsesSensitiveTemplateDataWholesale(t *testing.T) {
+	ops := recordSecretTask(t, func() {
+		key := strings.TrimSpace(MustSecret("svc/key"))
+		File("/etc/t", options.WithContent("{{.K}}"), options.WithTemplateData(map[string]string{"K": key}))
+	})
+	op := opByPath(t, ops, "/etc/t")
+	if !op.Sensitive {
+		t.Fatal("test premise: /etc/t must be recorded sensitive")
+	}
+	redacted, err := redactOp(op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp, ok := redacted.Payload.(plan.FilePayload)
+	if !ok {
+		t.Fatalf("redactOp(op).Payload = %#v, want plan.FilePayload", redacted.Payload)
+	}
+	// The wholesale collapse replaces the WHOLE field with one JSON string
+	// marker; a leaf-only redaction (the regression this test guards
+	// against) would instead leave a JSON OBJECT like {"K":"[redacted]"} —
+	// still secret-free, but the wrong shape.
+	if want := `"` + secret.Redacted + `"`; string(fp.TemplateData) != want {
+		t.Fatalf("redacted template_data = %s, want the wholesale marker %s (not a leaf-redacted object)", fp.TemplateData, want)
 	}
 }
 

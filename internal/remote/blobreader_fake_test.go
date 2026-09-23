@@ -74,7 +74,7 @@ func TestPushToHostWithFakeBlobReader(t *testing.T) {
 
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "demo"},
-		{Op: plan.KindFile, Path: "/tmp/out", Mode: "0600", ContentB64: "aGVsbG8K"},
+		{Op: plan.KindFile, Path: "/tmp/out", Mode: "0600", Payload: plan.FilePayload{ContentB64: "aGVsbG8K"}},
 	}
 	mem := &fakeBlobReader{files: map[string][]byte{
 		"blobs/demo.txt": []byte("fake-blob-content"),
@@ -134,7 +134,7 @@ func TestFanoutWithFakeBlobReader(t *testing.T) {
 
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "demo"},
-		{Op: plan.KindFile, Path: "/tmp/out", Mode: "0600", ContentB64: "aGVsbG8K"},
+		{Op: plan.KindFile, Path: "/tmp/out", Mode: "0600", Payload: plan.FilePayload{ContentB64: "aGVsbG8K"}},
 	}
 	mem := &fakeBlobReader{files: map[string][]byte{
 		"blobs/demo.txt": []byte("fake-blob-content"),

@@ -23,24 +23,18 @@ func init() {
 }
 
 // ToOp lowers a "file" resource draft to a plan.Op. The file-exclusive
-// fields come from d.Payload (Payload, task w62 Layer 1); a "file" draft
-// without one is a record-time bug (planDraft always sets it), reported
-// like any other handler error rather than panicking.
+// fields come from d.Payload (Payload, task w62 Layer 1) and are built into
+// a plan.FilePayload (task ae2 Layer 2) set once on the returned Op; a
+// "file" draft without a file.Payload is a record-time bug (planDraft
+// always sets it), reported like any other handler error rather than
+// panicking.
 func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 	p, ok := d.Payload.(Payload)
 	if !ok {
 		return plan.Op{}, fmt.Errorf("file: draft missing file.Payload (got %T)", d.Payload)
 	}
-	op := plan.Op{
-		Op:             plan.KindFile,
-		ID:             d.ID,
-		Name:           d.Name,
-		Path:           d.Path,
-		Mode:           d.Mode,
-		Owner:          d.Owner,
-		Group:          d.Group,
+	fp := plan.FilePayload{
 		ContentB64:     p.ContentB64,
-		Blob:           d.Blob,
 		HasContent:     p.HasContent,
 		Template:       p.Template,
 		TemplateParam:  p.TemplateParam,
@@ -49,16 +43,26 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		AddLines:       slices.Clone(p.AddLines),
 		RemoveLines:    slices.Clone(p.RemoveLines),
 		KeyedLines:     wireKeyedLines(p.KeyedLines),
-		Absent:         d.Absent,
-		Deps:           slices.Clone(d.Deps),
 	}
 	if p.TemplateDataSet {
 		if p.TemplateDataErr != nil {
 			return plan.Op{}, fmt.Errorf("file: template data must be JSON-compatible: %w", p.TemplateDataErr)
 		}
-		op.TemplateData = slices.Clone(p.TemplateData)
+		fp.TemplateData = slices.Clone(p.TemplateData)
 	}
-	return op, nil
+	return plan.Op{
+		Op:      plan.KindFile,
+		ID:      d.ID,
+		Name:    d.Name,
+		Path:    d.Path,
+		Mode:    d.Mode,
+		Owner:   d.Owner,
+		Group:   d.Group,
+		Blob:    d.Blob,
+		Absent:  d.Absent,
+		Deps:    slices.Clone(d.Deps),
+		Payload: fp,
+	}, nil
 }
 
 // ToOp lowers an ensure_file resource draft to a plan.Op.
@@ -77,7 +81,11 @@ func (ensureFileHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 
 // Apply writes, edits, or removes the destination file, mirroring the
 // resource's own content/template/line-edit/mode/ownership handling exactly
-// (it calls the same Ensure entry point a direct, non-plan use would).
+// (it calls the same Ensure entry point a direct, non-plan use would). The
+// file-exclusive fields come from op.Payload (plan.FilePayload, task ae2);
+// the comma-ok assertion degrades to the zero payload for an op decoded
+// from an arbitrary plan.jsonl, never panicking, the same contract every
+// other migrated kind's Apply follows (see resource/cron/planwire.go).
 func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	path, err := plan.ExpandPath(op.Path)
 	if err != nil {
@@ -86,7 +94,8 @@ func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	if path == "" {
 		return fmt.Errorf("file: missing path")
 	}
-	if err := validatePlanValidation(path, op); err != nil {
+	p, _ := op.Payload.(plan.FilePayload)
+	if err := validatePlanValidation(path, op, p); err != nil {
 		return err
 	}
 	if op.Absent {
@@ -101,30 +110,30 @@ func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	// build() defaults (apply-side user) identical to direct resource use.
 	ownership := plan.OwnerGroupOptions(op)
 
-	if len(op.AddLines) != 0 || len(op.RemoveLines) != 0 || len(op.KeyedLines) != 0 || op.AddLine != "" || op.RemoveLine != "" {
-		return applyFileLines(path, op, ownership)
+	if len(p.AddLines) != 0 || len(p.RemoveLines) != 0 || len(p.KeyedLines) != 0 || p.AddLine != "" || p.RemoveLine != "" {
+		return applyFileLines(path, op, p, ownership)
 	}
-	return applyFileContent(path, op, ownership, ctx)
+	return applyFileContent(path, op, p, ownership, ctx)
 }
 
 // validatePlanValidation rejects malformed validation-bearing file ops before
 // the absent or line-edit branches could mutate while ignoring their validator
 // fields. Normal File recording cannot produce these combinations because
 // build validates them first; the explicit check protects hand-authored plans.
-func validatePlanValidation(path string, op plan.Op) error {
-	if op.ValidationBin == "" && len(op.ValidationArgs) == 0 {
+func validatePlanValidation(path string, op plan.Op, p plan.FilePayload) error {
+	if p.ValidationBin == "" && len(p.ValidationArgs) == 0 {
 		return nil
 	}
-	addLines, removeLines := planLines(op)
+	addLines, removeLines := planLines(p)
 	f := File{
 		path:           path,
-		contentSet:     op.HasContent,
-		validationBin:  op.ValidationBin,
-		validationArgs: slices.Clone(op.ValidationArgs),
+		contentSet:     p.HasContent,
+		validationBin:  p.ValidationBin,
+		validationArgs: slices.Clone(p.ValidationArgs),
 		validationSet:  true,
 		addLines:       addLines,
 		removeLines:    removeLines,
-		keyedLines:     draftKeyedLines(op.KeyedLines),
+		keyedLines:     draftKeyedLines(p.KeyedLines),
 	}
 	f.Absent = op.Absent
 	return f.validateConfiguration(path)
@@ -162,31 +171,31 @@ func (ensureFileHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 // (current recording never sets them). An unset singular field is skipped
 // rather than appended as "", so a v14+ op with no removals yields an empty
 // removeLines and the len() checks in applyFileLines mean what they say.
-func planLines(op plan.Op) (addLines, removeLines []string) {
-	addLines = slices.Clone(op.AddLines)
-	if op.AddLine != "" {
-		addLines = append(addLines, op.AddLine)
+func planLines(p plan.FilePayload) (addLines, removeLines []string) {
+	addLines = slices.Clone(p.AddLines)
+	if p.AddLine != "" {
+		addLines = append(addLines, p.AddLine)
 	}
-	removeLines = slices.Clone(op.RemoveLines)
-	if op.RemoveLine != "" {
-		removeLines = append(removeLines, op.RemoveLine)
+	removeLines = slices.Clone(p.RemoveLines)
+	if p.RemoveLine != "" {
+		removeLines = append(removeLines, p.RemoveLine)
 	}
 	return addLines, removeLines
 }
 
-func applyFileLines(path string, op plan.Op, ownership []opt.FileDirOption) error {
-	if op.ContentB64 != "" || op.Blob != "" {
+func applyFileLines(path string, op plan.Op, p plan.FilePayload, ownership []opt.FileDirOption) error {
+	if p.ContentB64 != "" || op.Blob != "" {
 		return fmt.Errorf("file: add_line/remove_line/keyed_lines cannot combine with content_b64/blob")
 	}
 	var opts []opt.FileOption
 	if op.Name != "" {
 		opts = append(opts, opt.WithName(op.Name))
 	}
-	addLines, removeLines := planLines(op)
+	addLines, removeLines := planLines(p)
 	if len(removeLines) != 0 {
 		opts = append(opts, opt.WithoutLines(removeLines...))
 	}
-	for _, edit := range op.KeyedLines {
+	for _, edit := range p.KeyedLines {
 		opts = append(opts, opt.WithKeyedLine(edit.Key, edit.Line))
 	}
 	if len(addLines) != 0 {
@@ -205,12 +214,12 @@ func applyFileLines(path string, op plan.Op, ownership []opt.FileDirOption) erro
 	return Ensure(path, opts...)
 }
 
-func applyFileContent(path string, op plan.Op, ownership []opt.FileDirOption, ctx plan.ApplyContext) error {
-	content, err := fileContent(op, ctx.PlanDir)
+func applyFileContent(path string, op plan.Op, p plan.FilePayload, ownership []opt.FileDirOption, ctx plan.ApplyContext) error {
+	content, err := fileContent(p, op.Blob, ctx.PlanDir)
 	if err != nil {
 		return err
 	}
-	opts, err := fileContentOptions(op, content, ownership)
+	opts, err := fileContentOptions(op, p, content, ownership)
 	if err != nil {
 		return err
 	}
@@ -232,21 +241,21 @@ func EnsureWithPlanFacts(path string, facts plan.Facts, opts ...opt.FileOption) 
 	return ensureWithFacts(path, templateFacts(facts), opts...)
 }
 
-func fileContent(op plan.Op, planDir string) ([]byte, error) {
+func fileContent(p plan.FilePayload, blob, planDir string) ([]byte, error) {
 	switch {
-	case op.ContentB64 != "":
-		data, err := plan.DecodeContentB64(op.ContentB64)
+	case p.ContentB64 != "":
+		data, err := plan.DecodeContentB64(p.ContentB64)
 		if err != nil {
 			return nil, err
 		}
 		return data, nil
-	case op.Blob != "":
-		data, err := plan.ReadFile(planDir, op.Blob)
+	case blob != "":
+		data, err := plan.ReadFile(planDir, blob)
 		if err != nil {
 			return nil, err
 		}
 		return data, nil
-	case op.HasContent:
+	case p.HasContent:
 		// WithContent("") or a zero-byte WithSource file: content_b64
 		// legitimately encodes as "" for zero bytes. HasContent (recorded
 		// whenever WithContent/WithSource was configured at all) is what
@@ -257,12 +266,12 @@ func fileContent(op plan.Op, planDir string) ([]byte, error) {
 	}
 }
 
-func fileContentOptions(op plan.Op, content []byte, ownership []opt.FileDirOption) ([]opt.FileOption, error) {
+func fileContentOptions(op plan.Op, p plan.FilePayload, content []byte, ownership []opt.FileDirOption) ([]opt.FileOption, error) {
 	opts := []opt.FileOption{opt.WithContent(string(content))}
 	if op.Name != "" {
 		opts = append(opts, opt.WithName(op.Name))
 	}
-	if op.Template {
+	if p.Template {
 		// The wire content is raw template text (packageDraft/RecordPlan
 		// reads a .tmpl source's bytes verbatim), and by now neither path
 		// nor source still carries the ".tmpl" suffix File.shouldRenderTemplate
@@ -271,15 +280,15 @@ func fileContentOptions(op plan.Op, content []byte, ownership []opt.FileDirOptio
 		// WithTemplate forces rendering; WithParam reproduces the {{.Param}}
 		// a direct (non-plan) run with the same declared source would use.
 		opts = append(opts, opt.WithTemplate)
-		if op.TemplateParam != "" {
-			opts = append(opts, opt.WithParam(op.TemplateParam))
+		if p.TemplateParam != "" {
+			opts = append(opts, opt.WithParam(p.TemplateParam))
 		}
 	}
-	if op.ValidationBin != "" || len(op.ValidationArgs) != 0 {
-		opts = append(opts, opt.WithValidation(op.ValidationBin, slices.Clone(op.ValidationArgs)))
+	if p.ValidationBin != "" || len(p.ValidationArgs) != 0 {
+		opts = append(opts, opt.WithValidation(p.ValidationBin, slices.Clone(p.ValidationArgs)))
 	}
-	if len(op.TemplateData) != 0 {
-		data, err := decodeTemplateData(op.TemplateData)
+	if len(p.TemplateData) != 0 {
+		data, err := decodeTemplateData(p.TemplateData)
 		if err != nil {
 			return nil, fmt.Errorf("file: decode template_data: %w", err)
 		}

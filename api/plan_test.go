@@ -87,14 +87,16 @@ func TestRecordPlanEmitsOrderedOpsWithGuards(t *testing.T) {
 	}
 
 	fileOp := ops[2]
+	fileOpPayload, _ := fileOp.Payload.(plan.FilePayload)
 	wantB64 := base64.StdEncoding.EncodeToString([]byte("set x=1\n"))
-	if fileOp.ContentB64 != wantB64 || fileOp.Mode != "0640" {
+	if fileOpPayload.ContentB64 != wantB64 || fileOp.Mode != "0640" {
 		t.Fatalf("file op = %#v", fileOp)
 	}
 
 	installOp := ops[3]
+	installOpPayload, _ := installOp.Payload.(plan.FilePayload)
 	wantInstall := base64.StdEncoding.EncodeToString([]byte("user.name=test\n"))
-	if installOp.ContentB64 != wantInstall || installOp.Blob != "" {
+	if installOpPayload.ContentB64 != wantInstall || installOp.Blob != "" {
 		t.Fatalf("InstallFile op = %#v", installOp)
 	}
 
@@ -423,10 +425,11 @@ func TestRecordPlanInlineVsBlobThreshold(t *testing.T) {
 		if op.Op != plan.KindFile {
 			continue
 		}
+		fp, _ := op.Payload.(plan.FilePayload)
 		switch {
-		case op.ContentB64 != "" && op.Blob == "":
+		case fp.ContentB64 != "" && op.Blob == "":
 			smallOp = op
-		case op.Blob != "" && op.ContentB64 == "":
+		case op.Blob != "" && fp.ContentB64 == "":
 			largeOp = op
 		}
 	}
@@ -436,7 +439,8 @@ func TestRecordPlanInlineVsBlobThreshold(t *testing.T) {
 	if largeOp == nil {
 		t.Fatal("expected 600KiB file as blob")
 	}
-	raw, err := base64.StdEncoding.DecodeString(smallOp.ContentB64)
+	smallOpPayload, _ := smallOp.Payload.(plan.FilePayload)
+	raw, err := base64.StdEncoding.DecodeString(smallOpPayload.ContentB64)
 	if err != nil || len(raw) != 100<<10 {
 		t.Fatalf("small content len=%d err=%v", len(raw), err)
 	}
@@ -522,13 +526,15 @@ func TestRecordPlanEmptyFileContentSetsHasContent(t *testing.T) {
 	if contentOp == nil {
 		t.Fatal("missing op for WithContent(\"\") file")
 	}
-	if contentOp.ContentB64 != "" || !contentOp.HasContent {
+	contentOpPayload, _ := contentOp.Payload.(plan.FilePayload)
+	if contentOpPayload.ContentB64 != "" || !contentOpPayload.HasContent {
 		t.Fatalf("WithContent(\"\") op = %+v, want content_b64=\"\" has_content=true", contentOp)
 	}
 	if sourceOp == nil {
 		t.Fatal("missing op for empty WithSource file")
 	}
-	if sourceOp.ContentB64 != "" || !sourceOp.HasContent {
+	sourceOpPayload, _ := sourceOp.Payload.(plan.FilePayload)
+	if sourceOpPayload.ContentB64 != "" || !sourceOpPayload.HasContent {
 		t.Fatalf("empty WithSource op = %+v, want content_b64=\"\" has_content=true", sourceOp)
 	}
 }
@@ -613,7 +619,8 @@ func TestRecordPlanValidationCodecApply(t *testing.T) {
 	if fileOp == nil {
 		t.Fatal("recorded plan has no file op")
 	}
-	if fileOp.ValidationBin != os.Args[0] || len(fileOp.ValidationArgs) != len(validatorArgs) || fileOp.ValidationArgs[len(fileOp.ValidationArgs)-1] != options.CandidatePath || !fileOp.HasContent {
+	fileOpPayload, _ := fileOp.Payload.(plan.FilePayload)
+	if fileOpPayload.ValidationBin != os.Args[0] || len(fileOpPayload.ValidationArgs) != len(validatorArgs) || fileOpPayload.ValidationArgs[len(fileOpPayload.ValidationArgs)-1] != options.CandidatePath || !fileOpPayload.HasContent {
 		t.Fatalf("recorded validation op = %+v", fileOp)
 	}
 	raw, err := plan.EncodePlan(ops)

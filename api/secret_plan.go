@@ -106,8 +106,14 @@ func redactOp(op plan.Op) (plan.Op, error) {
 	}
 	withhold := func(string, string) (string, bool) { return "", false }
 	if out.Sensitive {
-		if len(out.TemplateData) != 0 {
-			out.TemplateData = redactedJSON
+		// TemplateData moved onto plan.FilePayload (task ae2): only a
+		// KindFile op ever carries one (payloadFromWire only builds one for
+		// KindFile), so the comma-ok assertion degrades harmlessly to the
+		// zero payload for every other kind, mirroring plan/sensitive.go's
+		// identical assertion.
+		if fp, ok := out.Payload.(plan.FilePayload); ok && len(fp.TemplateData) != 0 {
+			fp.TemplateData = redactedJSON
+			out.Payload = fp
 		}
 		withhold = payloadWithholder()
 	}

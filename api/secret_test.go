@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/plan"
 	"golang.org/x/sys/unix"
 )
 
@@ -71,7 +72,8 @@ func TestMustSecretRecordsExactBytes(t *testing.T) {
 	if len(ops) != 2 {
 		t.Fatalf("ops = %#v", ops)
 	}
-	got, err := base64.StdEncoding.DecodeString(ops[1].ContentB64)
+	ops1Payload, _ := ops[1].Payload.(plan.FilePayload)
+	got, err := base64.StdEncoding.DecodeString(ops1Payload.ContentB64)
 	if err != nil {
 		t.Fatal(err)
 	}

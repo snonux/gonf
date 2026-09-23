@@ -44,10 +44,10 @@ func TestApplyFileContentB64AndCorrupt(t *testing.T) {
 	ops := []Op{
 		header(),
 		{
-			Op:         KindFile,
-			Path:       dst,
-			Mode:       "0640",
-			ContentB64: base64.StdEncoding.EncodeToString([]byte("set x=1\n")),
+			Op:      KindFile,
+			Path:    dst,
+			Mode:    "0640",
+			Payload: FilePayload{ContentB64: base64.StdEncoding.EncodeToString([]byte("set x=1\n"))},
 		},
 	}
 	if err := Apply(ops, Facts{}, ""); err != nil {
@@ -63,7 +63,7 @@ func TestApplyFileContentB64AndCorrupt(t *testing.T) {
 
 	bad := []Op{
 		header(),
-		{Op: KindFile, Path: filepath.Join(root, "bad"), ContentB64: "@@@@"},
+		{Op: KindFile, Path: filepath.Join(root, "bad"), Payload: FilePayload{ContentB64: "@@@@"}},
 	}
 	err = Apply(bad, Facts{}, "")
 	if err == nil || !strings.Contains(err.Error(), "corrupt base64") {
@@ -81,11 +81,10 @@ func TestApplyFileHasContentAllowsEmpty(t *testing.T) {
 	ops := []Op{
 		header(),
 		{
-			Op:         KindFile,
-			Path:       dst,
-			Mode:       "0640",
-			ContentB64: "",
-			HasContent: true,
+			Op:      KindFile,
+			Path:    dst,
+			Mode:    "0640",
+			Payload: FilePayload{ContentB64: "", HasContent: true},
 		},
 	}
 	if err := Apply(ops, Facts{}, ""); err != nil {

@@ -338,7 +338,7 @@ func TestApplyLinkDirCommandFileLines(t *testing.T) {
 		header(),
 		{Op: KindLink, Path: linkPath, Payload: LinkPayload{Symlink: target}},
 		{Op: KindDir, Path: dirPath, Mode: "0700"},
-		{Op: KindFile, Path: filePath, AddLine: "hello"},
+		{Op: KindFile, Path: filePath, Payload: FilePayload{AddLine: "hello"}},
 		{
 			Op:      KindCommand,
 			Name:    "touch-marker",
@@ -610,7 +610,7 @@ func TestApplyFileLineRemove(t *testing.T) {
 	}
 	ops := []Op{
 		header(),
-		{Op: KindFile, Path: path, RemoveLine: "drop"},
+		{Op: KindFile, Path: path, Payload: FilePayload{RemoveLine: "drop"}},
 	}
 	if err := Apply(ops, Facts{}, ""); err != nil {
 		t.Fatal(err)
@@ -635,9 +635,10 @@ func TestApplyFileLineBatchesPreserveOrderAndAcceptLegacyFields(t *testing.T) {
 	}
 	ops := []Op{
 		header(),
-		{Op: KindFile, Path: path,
+		{Op: KindFile, Path: path, Payload: FilePayload{
 			RemoveLines: []string{"old", "old"}, RemoveLine: "stale",
-			AddLines: []string{"second", "first", "second"}, AddLine: "third"},
+			AddLines: []string{"second", "first", "second"}, AddLine: "third",
+		}},
 	}
 	if err := Apply(ops, Facts{}, ""); err != nil {
 		t.Fatal(err)
@@ -915,7 +916,7 @@ func TestApplyPrintsSummary(t *testing.T) {
 
 	ops := []Op{
 		{Op: KindPlan, Version: CurrentVersion, ID: "summary"},
-		{Op: KindFile, Path: filepath.Join(t.TempDir(), "out"), ContentB64: base64.StdEncoding.EncodeToString([]byte("x"))},
+		{Op: KindFile, Path: filepath.Join(t.TempDir(), "out"), Payload: FilePayload{ContentB64: base64.StdEncoding.EncodeToString([]byte("x"))}},
 	}
 	if err := Apply(ops, Facts{GOOS: "linux"}, ""); err != nil {
 		t.Fatalf("Apply: %v", err)

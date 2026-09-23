@@ -26,7 +26,7 @@ var errFanoutBoom = errors.New("boom")
 func fanoutErrorFixture(n int) ([]plan.Op, []PushTarget, []string) {
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "demo"},
-		{Op: plan.KindFile, Path: "/tmp/out", Mode: "0600", ContentB64: "aGVsbG8K"},
+		{Op: plan.KindFile, Path: "/tmp/out", Mode: "0600", Payload: plan.FilePayload{ContentB64: "aGVsbG8K"}},
 	}
 	targets := make([]PushTarget, n)
 	labels := make([]string, n)

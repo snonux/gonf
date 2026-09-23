@@ -1285,12 +1285,14 @@ func TestPlanApplyForwardsNamedFileIdentity(t *testing.T) {
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "named-file-forwarding"},
 		{
-			Op:         plan.KindFile,
-			ID:         contentID,
-			Name:       "named-plan-content",
-			Path:       contentPath,
-			ContentB64: base64.StdEncoding.EncodeToString([]byte("managed\n")),
-			HasContent: true,
+			Op:   plan.KindFile,
+			ID:   contentID,
+			Name: "named-plan-content",
+			Path: contentPath,
+			Payload: plan.FilePayload{
+				ContentB64: base64.StdEncoding.EncodeToString([]byte("managed\n")),
+				HasContent: true,
+			},
 		},
 		{
 			Op:     plan.KindFile,
@@ -1679,12 +1681,14 @@ func TestValidationPlanApplyAndConcurrentCandidates(t *testing.T) {
 	// once per concurrent apply makes this stress test needlessly memory-heavy.
 	validator := writeValidationScript(t, "test -s \"$1\"")
 	op := plan.Op{
-		Op:             plan.KindFile,
-		Path:           target,
-		ContentB64:     base64.StdEncoding.EncodeToString([]byte("from plan")),
-		HasContent:     true,
-		ValidationBin:  validator,
-		ValidationArgs: []string{CandidatePath},
+		Op:   plan.KindFile,
+		Path: target,
+		Payload: plan.FilePayload{
+			ContentB64:     base64.StdEncoding.EncodeToString([]byte("from plan")),
+			HasContent:     true,
+			ValidationBin:  validator,
+			ValidationArgs: []string{CandidatePath},
+		},
 	}
 	if err := plan.Apply([]plan.Op{{Op: plan.KindPlan, Version: plan.CurrentVersion}, op}, plan.Facts{}, ""); err != nil {
 		t.Fatalf("plan apply: %v", err)
@@ -1721,7 +1725,7 @@ func TestValidationPlanRejectsMissingContentBeforeMutation(t *testing.T) {
 	}
 	err := plan.Apply([]plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion},
-		{Op: plan.KindFile, Path: target, ValidationBin: "true", ValidationArgs: []string{CandidatePath}},
+		{Op: plan.KindFile, Path: target, Payload: plan.FilePayload{ValidationBin: "true", ValidationArgs: []string{CandidatePath}}},
 	}, plan.Facts{}, "")
 	if err == nil || !strings.Contains(err.Error(), "requires WithContent or WithSource") {
 		t.Fatalf("malformed validation plan error = %v", err)
@@ -1874,7 +1878,7 @@ func TestValidationPlanRejectsMalformedAbsenceBeforeMutation(t *testing.T) {
 	}
 	err := plan.Apply([]plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion},
-		{Op: plan.KindFile, Path: target, Absent: true, ValidationBin: "true", ValidationArgs: []string{CandidatePath}},
+		{Op: plan.KindFile, Path: target, Absent: true, Payload: plan.FilePayload{ValidationBin: "true", ValidationArgs: []string{CandidatePath}}},
 	}, plan.Facts{}, "")
 	if err == nil || !strings.Contains(err.Error(), "cannot combine with IsAbsent") {
 		t.Fatalf("malformed validation plan error = %v", err)

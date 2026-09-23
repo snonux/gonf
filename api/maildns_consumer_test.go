@@ -94,12 +94,14 @@ func TestConsumerMailDNSNSDPlan(t *testing.T) {
 	}
 
 	publisherConfig := consumerPlanOp(t, ops, plan.KindFile, "File[/var/nsd/etc/gonf-publisher/publisher.conf]")
-	publisherContent, err := plan.DecodeContentB64(publisherConfig.ContentB64)
+	publisherConfigPayload, _ := publisherConfig.Payload.(plan.FilePayload)
+	publisherContent, err := plan.DecodeContentB64(publisherConfigPayload.ContentB64)
 	if err != nil {
 		t.Fatalf("decode publisher config: %v", err)
 	}
 	zoneTemplate := consumerPlanOp(t, ops, plan.KindFile, "File[/var/nsd/etc/gonf-publisher/zones/buetow.org.zone.tpl]")
-	zoneContent, err := plan.DecodeContentB64(zoneTemplate.ContentB64)
+	zoneTemplatePayload, _ := zoneTemplate.Payload.(plan.FilePayload)
+	zoneContent, err := plan.DecodeContentB64(zoneTemplatePayload.ContentB64)
 	if err != nil {
 		t.Fatalf("decode zone template: %v", err)
 	}
@@ -160,7 +162,8 @@ func TestConsumerDNSFailoverPlanUsesSolePublisher(t *testing.T) {
 		t.Fatalf("decode recorded plan: %v", err)
 	}
 	publisher := consumerPlanOp(t, ops, plan.KindFile, "File[/usr/local/bin/dns-publish.ksh]")
-	publisherContent, err := plan.DecodeContentB64(publisher.ContentB64)
+	publisherPayload, _ := publisher.Payload.(plan.FilePayload)
+	publisherContent, err := plan.DecodeContentB64(publisherPayload.ContentB64)
 	if err != nil {
 		t.Fatalf("decode publisher script: %v", err)
 	}
@@ -179,7 +182,8 @@ func TestConsumerDNSFailoverPlanUsesSolePublisher(t *testing.T) {
 		t.Fatalf("publisher script lacks transaction boundary: %q", publisherContent)
 	}
 	failover := consumerPlanOp(t, ops, plan.KindFile, "File[/usr/local/bin/dns-failover.ksh]")
-	failoverContent, err := plan.DecodeContentB64(failover.ContentB64)
+	failoverPayload, _ := failover.Payload.(plan.FilePayload)
+	failoverContent, err := plan.DecodeContentB64(failoverPayload.ContentB64)
 	if err != nil {
 		t.Fatalf("decode failover script: %v", err)
 	}

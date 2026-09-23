@@ -146,7 +146,7 @@ func (p draftPackager) packageSourceFile(op plan.Op, d resource.PlanDraft, name 
 		return op, nil, fmt.Errorf("package file %s: %w", path, err)
 	}
 	if len(data) <= plan.MaxInlineContent {
-		op.ContentB64 = base64.StdEncoding.EncodeToString(data)
+		setFileContentB64(&op, base64.StdEncoding.EncodeToString(data))
 		op.Blob = ""
 		return op, data, nil
 	}
@@ -161,8 +161,26 @@ func (p draftPackager) packageSourceFile(op plan.Op, d resource.PlanDraft, name 
 		return op, nil, err
 	}
 	op.Blob = ref
-	op.ContentB64 = ""
+	setFileContentB64(&op, "")
 	return op, data, nil
+}
+
+// setFileContentB64 sets b64 onto op's FilePayload.ContentB64 in place.
+// ContentB64 moved off Op onto FilePayload (task ae2); this packaging pass
+// runs AFTER draftToOp/ToOp already built the op (and, for a "file" kind,
+// its FilePayload), so it can no longer assign op.ContentB64 directly. The
+// comma-ok assertion degrades to a no-op for an "ensure_file" op — its
+// ToOp never sets a FilePayload (see plan.FilePayload's own doc comment for
+// why) — which matches pre-ae2 behaviour exactly: ensureFileHandler.Apply
+// never read ContentB64 either, so setting it on an ensure_file op was
+// already dead wire data before this task, not a new behaviour change.
+func setFileContentB64(op *plan.Op, b64 string) {
+	fp, ok := op.Payload.(plan.FilePayload)
+	if !ok {
+		return
+	}
+	fp.ContentB64 = b64
+	op.Payload = fp
 }
 
 // packageBlob packages a sync_dir source (a tree or a glob, named by src) as
