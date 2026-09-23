@@ -66,16 +66,65 @@ var payloadCases = []payloadCase{
 // TemplateDataErr.
 var errorType = reflect.TypeFor[error]()
 
+// unexportedReferenceField reports the name and type of typ's first
+// unexported field whose kind is Slice, Map or Pointer, or ok=false when it
+// has none. It looks at typ's own fields only, one level: fillValue's
+// reflect.Struct case already recurses into every EXPORTED struct field, so
+// a nested exported struct's unexported reference-typed field is still
+// caught -- fillValue's recursive call reaches that nested struct's own
+// reflect.Struct case, which runs this same check again there.
+//
+// It is a plain, *testing.T-free function (not folded directly into
+// fillValue's t.Fatalf call) precisely so
+// TestFillValueCatchesUnexportedReferenceTypedField can assert its verdict
+// directly: a subtest that deliberately triggers a real t.Fatalf always
+// marks its parent test (and so the whole `go test ./...` run) failed too,
+// which would make a "prove this fails loudly" test itself break the gate
+// suite it is supposed to keep green (draft_clone_test.go's unpopulatedRefs
+// is the same kind of extracted, directly-assertable predicate, for the
+// same reason).
+func unexportedReferenceField(typ reflect.Type) (name string, fieldType reflect.Type, ok bool) {
+	for i := range typ.NumField() {
+		field := typ.Field(i)
+		if field.IsExported() {
+			continue
+		}
+		switch field.Type.Kind() {
+		case reflect.Slice, reflect.Map, reflect.Pointer:
+			return field.Name, field.Type, true
+		}
+	}
+	return "", nil, false
+}
+
 // fillValue reflectively sets every string, bool, int, pointer, error and
 // slice reachable from v (which must be addressable) to a non-nil,
 // non-zero value, recursing into nested structs (resource.PlanGuardDraft,
 // resource.PlanConfigMember, resource.PlanArgv, resource.KeyedLine, ...)
 // and slice elements. Unlike a hand-maintained fullPayload() fixture, this
-// reaches any field a payload type gains later automatically, which is the
-// point: task 1e2's mutation probe found that a new uncopied slice field
-// left go build, go vet, staticcheck and go test ./... all green, because
-// nothing populated it. A field kind this cannot handle fails the test
-// loudly (via t.Fatalf) rather than silently leaving a blind spot.
+// reaches any EXPORTED field a payload type gains later automatically,
+// which is the point: task 1e2's mutation probe found that a new uncopied
+// slice field left go build, go vet, staticcheck and go test ./... all
+// green, because nothing populated it. A field kind this cannot handle
+// fails the test loudly (via t.Fatalf) rather than silently leaving a
+// blind spot.
+//
+// Limitation (task re2, finding b): this package is resource_test, an
+// external test package, so it cannot Set() an unexported field's Value
+// through plain reflect (that panics) without resorting to unsafe tricks
+// this guard deliberately does not use. An unexported SCALAR field (string,
+// bool, int, ...) carries no aliasing risk for Clone, so leaving it at its
+// zero value is harmless. An unexported slice/map/pointer field is exactly
+// task 882's original aliasing-bug shape, though: a payload's own
+// constructor could populate one internally without ever exposing it to
+// this fixture, and a Clone that forgot to deep-copy it would go
+// undetected here. No payload type declares one today (confirmed by
+// inspection across every case in payloadCases), so this is a currently
+// latent gap rather than an active blind spot — but rather than merely
+// documenting that limitation, this case FAILS LOUDLY the moment any
+// payload gains such a field, so the gap cannot silently reopen: extend
+// this helper (or the payload's own hand-written Clone test) before
+// trusting the guard again.
 func fillValue(t *testing.T, v reflect.Value) {
 	t.Helper()
 	switch v.Kind() {
@@ -103,10 +152,17 @@ func fillValue(t *testing.T, v reflect.Value) {
 		v.Set(reflect.MakeSlice(v.Type(), 1, 1))
 		fillValue(t, v.Index(0))
 	case reflect.Struct:
+		if name, fieldType, found := unexportedReferenceField(v.Type()); found {
+			t.Fatalf("fillValue: %s has unexported field %q of reference type %s, which this guard cannot populate or verify Clone copies — this reproduces task 882's original aliasing-bug shape (an internally populated field Clone forgets to deep-copy); extend fillValue (see its doc comment) or add a dedicated Clone test for this field before trusting this payload's Clone-coverage guard", v.Type(), name, fieldType)
+		}
 		for i := range v.NumField() {
 			if v.Type().Field(i).IsExported() {
 				fillValue(t, v.Field(i))
 			}
+			// An unexported scalar field carries no aliasing risk for
+			// Clone (copying it by value, which every Payload's Clone
+			// does via a struct copy, is already correct), so it is left
+			// at its zero value.
 		}
 	default:
 		t.Fatalf("fillValue: %s has unhandled kind %s", v.Type(), v.Kind())
@@ -220,5 +276,67 @@ func TestPayloadClonePreservesNilAndEmpty(t *testing.T) {
 				t.Fatalf("empty payload clone = %#v, want %#v", got, empty)
 			}
 		})
+	}
+}
+
+// payloadStubWithUnexportedSlice is a throwaway resource.DraftPayload used
+// only to reproduce, in isolation, the exact latent shape task re2 finding
+// (b) is about: a payload with an unexported, reference-typed field
+// (hidden) that its own constructor could populate internally without ever
+// exposing it to fillValue -- exactly task 882's original aliasing-bug
+// shape, had Clone forgotten to deep-copy it. It is never added to
+// payloadCases (no real payload type declares such a field today, per that
+// finding); it exists purely so
+// TestFillValueCatchesUnexportedReferenceTypedField can hand
+// unexportedReferenceField a concrete type that must trip it.
+type payloadStubWithUnexportedSlice struct {
+	Exported string
+	hidden   []string
+}
+
+// Clone deep-copies hidden correctly -- this stub is never run through
+// TestPayloadCloneContract, so whether Clone gets hidden right or wrong is
+// beside the point here; only unexportedReferenceField's ability to spot
+// the field's shape is under test (TestFillValueCatchesUnexportedReferenceTypedField).
+// hidden is read here (staticcheck's U1000 would otherwise flag a field
+// this stub never uses for anything but its reflect.Type shape).
+func (p payloadStubWithUnexportedSlice) Clone() resource.DraftPayload {
+	c := p
+	c.hidden = slices.Clone(p.hidden)
+	return c
+}
+
+// TestFillValueCatchesUnexportedReferenceTypedField proves finding (b)'s
+// fix: a payload that declares an unexported slice/map/pointer field is now
+// CAUGHT rather than silently skipped. It asserts unexportedReferenceField
+// directly (see that function's doc comment for why: fillValue's own
+// t.Fatalf, exercised through a live *testing.T, cannot be asserted without
+// marking this very test -- and so `go test ./...` -- failed, which would
+// defeat the point of a passing regression test). unexportedReferenceField
+// is exactly what fillValue's reflect.Struct case calls before it does
+// anything else, so a positive verdict here is a positive verdict for
+// fillValue's real t.Fatalf path against the exact same type.
+func TestFillValueCatchesUnexportedReferenceTypedField(t *testing.T) {
+	typ := reflect.TypeFor[payloadStubWithUnexportedSlice]()
+	name, fieldType, ok := unexportedReferenceField(typ)
+	if !ok {
+		t.Fatalf("unexportedReferenceField(%s) = false, want it to catch the unexported %q slice field -- the Clone-coverage guard's blind spot (task re2, finding b) has reopened", typ, "hidden")
+	}
+	if name != "hidden" {
+		t.Fatalf("unexportedReferenceField(%s) name = %q, want %q", typ, name, "hidden")
+	}
+	if fieldType != reflect.TypeFor[[]string]() {
+		t.Fatalf("unexportedReferenceField(%s) fieldType = %s, want []string", typ, fieldType)
+	}
+
+	// The negative case: every real payload in payloadCases has none today
+	// (finding (b) confirmed this by inspection), so the guard must stay
+	// silent for a struct with no unexported reference-typed field --
+	// otherwise TestPayloadCloneContract would fail loudly on every real
+	// payload, not just a future one that actually grows such a field.
+	for _, tc := range payloadCases {
+		if _, _, found := unexportedReferenceField(tc.typ); found {
+			t.Errorf("unexportedReferenceField(%s) unexpectedly found an unexported reference-typed field; TestPayloadCloneContract's fillValue call would already be failing loudly for it", tc.typ)
+		}
 	}
 }

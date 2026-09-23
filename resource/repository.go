@@ -86,13 +86,21 @@ func SnapshotRepository() (restore func()) {
 // ID, with their dependency edges and registered value), the plan draft each
 // one recorded, and (direct-apply path only) the When*/WhenPathExists
 // condition active when each ID was first registered (declaredUnder), so a
-// same-ID collision can name it. It applies nothing itself; api.Apply and
-// api.Run lower the drafts to plan ops and apply them through the plan
-// engine (the direct repository apply path was retired in task e72).
+// same-ID collision can name it. whenStack is the LIFO of currently-active
+// When*/WhenPathExists conditions on that same direct-apply path (see
+// PushWhenContext below): it is per-recipe-scope state exactly like
+// declaredUnder, so it lives here rather than as a separate package-level
+// global — a repository swap (ResetRepository, SnapshotRepository, and so
+// ResetForTest) now discards it along with everything else this scope
+// tracked, instead of leaking a stale condition into a later scope. It
+// applies nothing itself; api.Apply and api.Run lower the drafts to plan ops
+// and apply them through the plan engine (the direct repository apply path
+// was retired in task e72).
 type repository struct {
 	registered    map[string]Resource
 	drafts        map[string]PlanDraft
 	declaredUnder map[string]string
+	whenStack     []string
 	mu            sync.Mutex
 }
 
@@ -109,11 +117,11 @@ func (r *repository) register(res Resource) error {
 	defer r.mu.Unlock()
 
 	if _, exists := r.registered[res.ID()]; exists {
-		return collisionError(res, r.declaredUnder[res.ID()], currentWhenContext())
+		return collisionError(res, r.declaredUnder[res.ID()], r.currentWhenContext())
 	}
 
 	r.registered[res.ID()] = res
-	r.declaredUnder[res.ID()] = currentWhenContext()
+	r.declaredUnder[res.ID()] = r.currentWhenContext()
 	logger.Debug("Registered resource %v", res)
 
 	return nil
@@ -204,36 +212,43 @@ func collisionError(res Resource, first, second string) error {
 	}
 }
 
-// whenStack is the LIFO of active When*/WhenPathExists condition
-// descriptions on the direct (non-recording) apply path (see
-// PushWhenContext). Registration is single-goroutine by the same DSL
-// invariant the rest of this file relies on (see the package doc comment
-// above), so no lock guards it.
-var whenStack []string
-
 // PushWhenContext records desc (e.g. `WhenHostname("web")`,
-// `WhenPathExists("/etc")`) as the active When*/WhenPathExists condition
-// while its fn() runs on the direct (non-recording) apply path. If fn()
-// registers a resource ID that another matching fragment already
-// registered, collisionError names both conditions instead of a bare
-// "already registered". The recording path never calls this: its
-// when_begin/when_end ops already carry the condition in the recorded
-// plan, and RecordPlan gives each fragment its own repository scope
-// (ResetRepository per fragment), so a same-ID collision cannot happen
-// there in the first place. The caller must defer the returned pop so
-// nested/sibling fragments see a correctly balanced stack.
+// `WhenPathExists("/etc")`) as the active When*/WhenPathExists condition on
+// the CURRENT repository scope while its fn() runs on the direct
+// (non-recording) apply path. If fn() registers a resource ID that another
+// matching fragment already registered, collisionError names both
+// conditions instead of a bare "already registered". The recording path
+// never calls this: its when_begin/when_end ops already carry the condition
+// in the recorded plan, and RecordPlan gives each fragment its own
+// repository scope (ResetRepository per fragment), so a same-ID collision
+// cannot happen there in the first place. The caller must defer the
+// returned pop so nested/sibling fragments see a correctly balanced stack;
+// even a dropped pop cannot outlive a repository swap, though (see
+// repository.whenStack), so at worst it mislabels a collision within the
+// SAME still-live scope, never across a ResetForTest or a later recipe run.
 func PushWhenContext(desc string) (pop func()) {
-	whenStack = append(whenStack, desc)
-	i := len(whenStack) - 1
-	return func() { whenStack = whenStack[:i] }
+	return getRepository().pushWhenContext(desc)
+}
+
+// pushWhenContext is PushWhenContext's implementation, scoped to this one
+// repository instance. Registration is single-goroutine by the same DSL
+// invariant the rest of this file relies on (see the package doc comment
+// above), so no lock guards whenStack: the returned pop closes over r and
+// the pushed index directly, so it stays correct even if getRepository()
+// later hands out a different instance.
+func (r *repository) pushWhenContext(desc string) (pop func()) {
+	r.whenStack = append(r.whenStack, desc)
+	i := len(r.whenStack) - 1
+	return func() { r.whenStack = r.whenStack[:i] }
 }
 
 // currentWhenContext returns the innermost active When*/WhenPathExists
-// condition, or "" when nothing is running inside one (a plain top-level
-// registration, or the recording path, which never pushes).
-func currentWhenContext() string {
-	if len(whenStack) == 0 {
+// condition on this repository, or "" when nothing is running inside one (a
+// plain top-level registration, or the recording path, which never
+// pushes).
+func (r *repository) currentWhenContext() string {
+	if len(r.whenStack) == 0 {
 		return ""
 	}
-	return whenStack[len(whenStack)-1]
+	return r.whenStack[len(r.whenStack)-1]
 }
