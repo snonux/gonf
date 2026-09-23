@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,7 +15,6 @@ import (
 	"github.com/snonux/gonf/api/options"
 	iexec "github.com/snonux/gonf/internal/exec"
 	"github.com/snonux/gonf/internal/runners"
-	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -528,14 +528,12 @@ func TestCLIApplyStrictPreviewUsesResourceDryRunWithoutStaging(t *testing.T) {
 	t.Cleanup(func() { resource.SetDryRun(false) })
 
 	var ran bool
-	t.Setenv(testseam.ParallelGuardEnv, "1")
-	testBaseContext = runners.WithSet(context.Background(), &runners.Set{Command: &runners.CommandRunners{
+	setTestBaseContext(t, runners.WithSet(context.Background(), &runners.Set{Command: &runners.CommandRunners{
 		Run: func(iexec.Opts, string, ...string) (string, string, int, error) {
 			ran = true
 			return "", "", 0, nil
 		},
-	}})
-	t.Cleanup(func() { testBaseContext = nil })
+	}}))
 
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "strict-preview"},
@@ -570,6 +568,50 @@ func TestCLIApplyStrictPreviewUsesResourceDryRunWithoutStaging(t *testing.T) {
 	if ran {
 		t.Fatal("strict preview ran a mutating command instead of only reporting it")
 	}
+}
+
+// parallelHelperEnv selects the child process for
+// TestSetTestBaseContextRefusesParallelTest (see
+// TestParallelBaseContextHelper below), distinct from signal_context_test.go's
+// helperEnv dispatch (a different mechanism: that one always runs a helper
+// function inline and exits, this one skips unless the env var is set,
+// mirroring internal/testseam's own TestFakeRefusesParallelTest).
+const parallelHelperEnv = "GONF_CLI_PARALLEL_HELPER"
+
+// TestSetTestBaseContextRefusesParallelTest runs
+// TestParallelBaseContextHelper in a child test binary: a parallel test
+// calling setTestBaseContext must fail through testing's Setenv check
+// instead of racing other tests on the package-global testBaseContext.
+// This mirrors internal/testseam's TestFakeRefusesParallelTest — the exact
+// guard-enforcement precedent setTestBaseContext was added to match (see its
+// doc comment in cli.go). Before setTestBaseContext existed, the one caller
+// set testseam.ParallelGuardEnv by hand right next to the raw
+// testBaseContext assignment; nothing forced a later caller to repeat that,
+// so a future test could have assigned testBaseContext directly and raced
+// silently instead of failing like this. Routing every assignment through
+// setTestBaseContext makes the guard unavoidable, which is what this test
+// pins.
+func TestSetTestBaseContextRefusesParallelTest(t *testing.T) {
+	cmd := osexec.Command(os.Args[0], "-test.run=^TestParallelBaseContextHelper$", "-test.count=1")
+	cmd.Env = append(os.Environ(), parallelHelperEnv+"=1")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("parallel test calling setTestBaseContext passed:\n%s", out)
+	}
+	if !strings.Contains(string(out), "t.Parallel") {
+		t.Fatalf("child failed for another reason:\n%s", out)
+	}
+}
+
+// TestParallelBaseContextHelper is the child half of
+// TestSetTestBaseContextRefusesParallelTest; skipped unless parallelHelperEnv
+// is set, so a normal test run never runs it directly.
+func TestParallelBaseContextHelper(t *testing.T) {
+	if os.Getenv(parallelHelperEnv) != "1" {
+		t.Skip("helper for TestSetTestBaseContextRefusesParallelTest")
+	}
+	t.Parallel()
+	setTestBaseContext(t, context.Background())
 }
 
 // TestCLICmdTimeoutFlag pins the "-cmd-timeout" wiring added for task x5: the

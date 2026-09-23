@@ -24,6 +24,7 @@ import (
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/internal/remote"
+	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/plan/seal"
 	"github.com/snonux/gonf/resource"
@@ -143,20 +144,18 @@ func signalContext(forceOnRepeat bool) (context.Context, context.CancelFunc) {
 	return ctx, stop
 }
 
-// testBaseContext, set only by this package's own in-package tests
-// (cli_test.go), replaces context.Background() as signalContext's parent
-// for the duration of one test: internal/cli's `gonf apply` path
-// (cliApplyFile/cliApplyStdin) already threads ctx down to
-// api.ApplyPlanContext and so to plan.ApplyWithContext, so wrapping this
-// base context with internal/runners.WithSet lets a test inject a
-// *runners.Set for one CLI() call in place of a process-global
-// internal/testseam fake — the same narrow, module-internal test hook
-// internal/clihost.SetForTest already is for a different piece of state
-// (AGENTS.md, "Test seams"). It is nil in every real invocation (CLI()
-// never sets it), so production always gets context.Background() here,
-// unchanged from before. A test using it must not run in parallel; it sets
-// the same guard internal/testseam's fakes do (testseam.ParallelGuardEnv)
-// before assigning it.
+// testBaseContext, set only through setTestBaseContext below (this
+// package's own in-package tests, cli_test.go, are its only caller),
+// replaces context.Background() as signalContext's parent for the duration
+// of one test: internal/cli's `gonf apply` path (cliApplyFile/cliApplyStdin)
+// already threads ctx down to api.ApplyPlanContext and so to
+// plan.ApplyWithContext, so wrapping this base context with
+// internal/runners.WithSet lets a test inject a *runners.Set for one CLI()
+// call in place of a process-global internal/testseam fake — the same
+// narrow, module-internal test hook internal/clihost.SetForTest already is
+// for a different piece of state (AGENTS.md, "Test seams"). It is nil in
+// every real invocation (CLI() never sets it), so production always gets
+// context.Background() here, unchanged from before.
 var testBaseContext context.Context
 
 // baseContext returns testBaseContext when a test set one, else
@@ -166,6 +165,27 @@ func baseContext() context.Context {
 		return testBaseContext
 	}
 	return context.Background()
+}
+
+// setTestBaseContext installs ctx as testBaseContext for the duration of one
+// test and restores the previous value (nil, in practice) on c's cleanup.
+// Test-only, like testBaseContext itself: cli_test.go is its only caller.
+//
+// It mirrors internal/testseam's Fake* helpers (internal/testseam.go) on the
+// one property that matters here: it sets the same parallel guard they do
+// (testseam.ParallelGuardEnv, through c.Setenv) itself, rather than leaning
+// on the caller to remember it by hand. Before this helper existed, the one
+// caller that used testBaseContext set that guard manually right next to the
+// assignment — correct today, but nothing tied the two together, so a later
+// test could assign testBaseContext directly, forget the guard, and race
+// silently against another parallel test instead of panicking loudly the way
+// every testseam.Fake* call already does. Routing the assignment through
+// this helper closes that gap the same way testseam's own slot.push does.
+func setTestBaseContext(c testseam.Cleaner, ctx context.Context) {
+	c.Setenv(testseam.ParallelGuardEnv, "1")
+	old := testBaseContext
+	testBaseContext = ctx
+	c.Cleanup(func() { testBaseContext = old })
 }
 
 // forceExitOnRepeat reports whether a second signal may force-exit this

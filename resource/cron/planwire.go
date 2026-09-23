@@ -57,7 +57,21 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	// an op decoded from an arbitrary plan.jsonl. A nil or mistyped Payload
 	// degrades to the zero CronPayload — every cron-exclusive field reads
 	// as unset, which the schedule check below already turns into a clean
-	// error for a present job, and is simply inert for an absent one.
+	// error for a present job. It is NOT actually safe for an absent one,
+	// despite reading that way at first glance: CronUser empty makes
+	// opt.WithCronUser never get appended below, and cron's own option
+	// handling then defaults an absent job to ROOT's crontab, so a decoded
+	// op that lost its owner here would remove the named job from ROOT's
+	// crontab instead of the intended owner's — a real footgun, not an
+	// inert no-op. This assertion is unreachable in practice today, not
+	// because the degraded case is harmless: payloadFromWire
+	// (plan/op_payload.go's KindCron case) always builds a CronPayload for
+	// a cron line, checkForeignPayload (same file) refuses a decoded line
+	// that carries any other kind's fields before payloadFromWire ever
+	// runs, and this kind's own ToOp (above) always sets one too — so a
+	// decoded op.Payload reaching here is always the right concrete type,
+	// never nil or mistyped. If that ever changes, this comma-ok assertion
+	// stops being inert and starts being the footgun described above.
 	p, _ := op.Payload.(plan.CronPayload)
 	var opts []opt.CronOption
 	if op.Absent {

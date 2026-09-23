@@ -19,12 +19,13 @@ import (
 // non-empty value, so a walk over it meets every field path. A kind the
 // walker does not know fails the test, like it would panic the walker.
 //
-// The struct case skips a field literally named "Payload": Op.Payload
-// (task yd2) is polymorphic — one Op value holds at most one concrete
-// OpPayload at a time — so filling every kind's exclusive fields takes one
-// pass per kind instead of one shared pass here; see
-// TestOpFieldClassesAreExhaustive, which drives those passes itself using
-// plan.OpPayloadExamples.
+// The struct case skips the field of type plan.OpPayload (matched the same
+// way scanStruct/redactStruct do, by payloadFieldType, not by the field's Go
+// name — see that var's doc comment in secret_fields.go): Op.Payload (task
+// yd2) is polymorphic — one Op value holds at most one concrete OpPayload at
+// a time — so filling every kind's exclusive fields takes one pass per kind
+// instead of one shared pass here; see TestOpFieldClassesAreExhaustive,
+// which drives those passes itself using plan.OpPayloadExamples.
 func fillValue(t *testing.T, v reflect.Value, path string) {
 	t.Helper()
 	switch {
@@ -45,7 +46,7 @@ func fillValue(t *testing.T, v reflect.Value, path string) {
 	case v.Kind() == reflect.Struct:
 		for i := range v.NumField() {
 			f := v.Type().Field(i)
-			if !f.IsExported() || f.Name == "Payload" {
+			if !f.IsExported() || f.Type == payloadFieldType {
 				continue
 			}
 			fillValue(t, v.Field(i), path+"."+f.Name)
@@ -159,6 +160,43 @@ func TestScanAndRedactVisitSameFieldPaths(t *testing.T) {
 			t.Fatalf("plan.OpPayloadExamples()[%q] = %T does not implement plan.OpPayload", kind, example)
 		}
 		compare(op)
+	}
+}
+
+// TestPayloadFieldMatchedByTypeNotName pins task 6f2 finding (a):
+// scanStruct/redactStruct must identify Op's payload field by its TYPE
+// (payloadFieldType, plan.OpPayload) rather than by the Go field name
+// "Payload" literally. A local struct with a differently-named field of the
+// same interface type proves the match survives a rename to the exact
+// failure mode the old `f.Name == "Payload"` check had no protection
+// against: it would have silently stopped walking into the payload (and so
+// stopped scanning and redacting its secrets) the moment that field was
+// renamed, with nothing to catch the drift.
+func TestPayloadFieldMatchedByTypeNotName(t *testing.T) {
+	type renamed struct {
+		NotCalledPayload plan.OpPayload
+	}
+	const secret = "sensitive-schedule-value"
+	v := renamed{NotCalledPayload: plan.CronPayload{Schedule: secret}}
+
+	var scanned []string
+	scanValue(reflect.ValueOf(&v).Elem(), "", func(path, s string) string {
+		scanned = append(scanned, s)
+		return s
+	})
+	if !slices.Contains(scanned, secret) {
+		t.Fatalf("scanValue did not walk into a same-type field named %q; saw %v", "NotCalledPayload", scanned)
+	}
+
+	redactValue(reflect.ValueOf(&v).Elem(), "", func(_, s string) string {
+		if s == secret {
+			return "[REDACTED]"
+		}
+		return s
+	})
+	got, ok := v.NotCalledPayload.(plan.CronPayload)
+	if !ok || got.Schedule != "[REDACTED]" {
+		t.Fatalf("redactValue did not rewrite through a same-type field named %q; got %#v", "NotCalledPayload", v.NotCalledPayload)
 	}
 }
 
