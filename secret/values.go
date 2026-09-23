@@ -31,12 +31,16 @@ const MinStrongLen = 8
 const maxWordLen = 12
 
 // MaxSplitGuard is the longest form FlushPoint protects from being split
-// across two forced flushes of a relayed unterminated line; it matches the
-// relay's 64 KiB flush window (logger.RedactingWriter). FlushPoint also uses
-// it as the threshold past which it must stop waiting for a self-overlapping
-// match chain to resolve and flush what it has (see FlushPoint), since every
-// real caller only asks it to find a cut point once its own buffer already
-// exceeds this many bytes.
+// across two forced flushes of a relayed unterminated line, and the single
+// source of the relay's own flush window: MaxPending reports it to
+// logger.RedactingWriter, which buffers an unterminated line up to whatever
+// MaxPending returns rather than carrying a separate, independently-sized
+// threshold of its own, so the two can never drift apart. FlushPoint also
+// uses it as the threshold past which it must stop waiting for a
+// self-overlapping match chain to resolve and flush what it has (see
+// FlushPoint), since every real caller only asks it to find a cut point
+// once its own buffer already exceeds this many bytes (guaranteed by
+// MaxPending being the relay's flush threshold).
 const MaxSplitGuard = 64 << 10
 
 // Redacted replaces every recognised secret occurrence in redacted output.
