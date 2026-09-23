@@ -14,6 +14,7 @@ import (
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
+	"github.com/snonux/gonf/secret"
 )
 
 // setCmdTimeout makes d the process-wide command timeout for one test.
@@ -236,6 +237,96 @@ func TestCmdTimeoutWarningWording(t *testing.T) {
 				t.Fatalf("warning = %q, want it to contain %q and not %q", got, tc.want, tc.notWant)
 			}
 		})
+	}
+}
+
+// installFakeSecret tracks secretValue with a real secret.Values (the same
+// type api installs with logger.SetRedactor in production) for one test,
+// and removes it again on cleanup.
+func installFakeSecret(t *testing.T, secretValue string) {
+	t.Helper()
+	var values secret.Values
+	values.Add([]byte(secretValue))
+	logger.SetRedactor(&values)
+	t.Cleanup(func() { logger.SetRedactor(nil) })
+}
+
+// firstLine must redact before it truncates: cutting the raw text at 200
+// bytes first can slice a secret in half, and secret.Values only recognises
+// a secret's complete bytes (see secret/values.go), so the surviving half
+// would then pass Redact unrecognised and leak. A secret planted so it
+// starts before byte 200 and ends after it catches a regression to
+// truncate-then-redact.
+func TestFirstLineRedactsBeforeTruncating(t *testing.T) {
+	secretValue := "S3cr3t_" + strings.Repeat("Q", 33) // 40 bytes
+	installFakeSecret(t, secretValue)
+
+	// Chosen so the secret straddles the 200-byte cut (prefix < 200 <
+	// prefix+len(secretValue)) while still leaving room for the much
+	// shorter secret.Redacted marker to survive that same cut once the
+	// secret is replaced by it (prefix+len(secret.Redacted) < 200).
+	prefix := strings.Repeat("a", 170)
+	if boundary := len(prefix); boundary >= 200 || boundary+len(secretValue) <= 200 {
+		t.Fatalf("test setup: secret (len %d) starting at %d does not straddle the 200-byte cut", len(secretValue), boundary)
+	}
+	got := firstLine(prefix + secretValue + " tail")
+
+	if !strings.Contains(got, secret.Redacted) {
+		t.Fatalf("firstLine did not redact at all: %q", got)
+	}
+	// A truncate-then-redact regression would keep exactly this fragment (the
+	// secret's bytes up to the 200-byte cut) untouched, since Redact only
+	// recognises a tracked value's complete bytes, never a partial one.
+	if leak := secretValue[:200-len(prefix)]; strings.Contains(got, leak) {
+		t.Fatalf("firstLine leaked the pre-cut fragment %q: %q", leak, got)
+	}
+	// No shorter fragment (secret.MinContainedLen or longer) may survive
+	// either.
+	for n := len(secretValue); n >= secret.MinContainedLen; n-- {
+		if strings.Contains(got, secretValue[:n]) {
+			t.Fatalf("firstLine leaked a %d-byte fragment of the secret: %q", n, got)
+		}
+	}
+}
+
+// A secret in a probe's stderr must not reach the logged warning either:
+// classifyCmdTimeoutProbe's detail is built from firstLine, and
+// acceptsCmdTimeout interpolates it straight into the warning it logs. The
+// secret again straddles firstLine's 200-byte cut.
+func TestCmdTimeoutWarningRedactsProbeStderr(t *testing.T) {
+	secretValue := "S3cr3t_" + strings.Repeat("Q", 33) // 40 bytes
+	installFakeSecret(t, secretValue)
+
+	oldCapture, oldProber := sshCaptureExec, defaultPusher.CmdTimeoutProber
+	t.Cleanup(func() { sshCaptureExec, defaultPusher.CmdTimeoutProber = oldCapture, oldProber })
+	defaultPusher.CmdTimeoutProber = probeCmdTimeoutSupport
+	sshCaptureExec = func(_ context.Context, argv []string) (string, string, error) {
+		cmd := argv[len(argv)-1]
+		if !strings.Contains(cmd, "-cmd-timeout=") {
+			return strconv.Itoa(plan.CurrentVersion) + "\n", "", nil
+		}
+		// "doas: " (6 bytes) + 164 filler bytes = a 170-byte prefix, chosen
+		// like TestFirstLineRedactsBeforeTruncating's so the secret
+		// straddles firstLine's 200-byte cut while the much shorter
+		// secret.Redacted marker that replaces it still fits before the cut.
+		return "", "doas: " + strings.Repeat("a", 164) + secretValue + " Operation not permitted\n", errors.New("exit status 1")
+	}
+
+	setCmdTimeout(t, 30*time.Second)
+	out := testutil.CaptureLog(t, logger.LevelWarn)
+	target := PushTarget{Host: "h.example", Privilege: privilege.Doas}
+	fwd, err := defaultPusher.resolveCmdTimeoutForward(context.Background(), target, false, true)
+	if err != nil || fwd.active() {
+		t.Fatalf("fwd=%+v err=%v, want nothing forwarded", fwd, err)
+	}
+	warning := out()
+	if !strings.Contains(warning, secret.Redacted) {
+		t.Fatalf("warning was not redacted at all: %q", warning)
+	}
+	for n := len(secretValue); n >= secret.MinContainedLen; n-- {
+		if strings.Contains(warning, secretValue[:n]) {
+			t.Fatalf("warning leaked a %d-byte fragment of the probe's secret: %q", n, warning)
+		}
 	}
 }
 

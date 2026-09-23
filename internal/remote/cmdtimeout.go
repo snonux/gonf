@@ -205,12 +205,26 @@ func classifyCmdTimeoutProbe(stdout, stderr string) (CmdTimeoutSupport, string) 
 	return CmdTimeoutUnverified, "no output"
 }
 
-// firstLine returns s's first non-empty line, trimmed and capped at 200
-// bytes (cut on a rune boundary, so multi-byte UTF-8 text is never split)
-// so a long error cannot flood the warning.
+// firstLine returns s's first non-empty line, trimmed, redacted
+// (logger.Redact) and then capped at 200 bytes (cut on a rune boundary, so
+// multi-byte UTF-8 text is never split) so a long error cannot flood the
+// warning. Its result feeds straight into the "could not run gonf" warning
+// (see acceptsCmdTimeout), and s is raw remote stderr/stdout that gonf never
+// controls (a sudoers/PAM refusal, an SSH banner) and that the controller's
+// secret registry never saw, so it must go through gonf's redaction
+// contract like any other quoted remote output.
+//
+// Redact runs before the cut, not after: truncating first could slice a
+// secret in half, and secret.Values only recognises a tracked value's
+// complete bytes, so the surviving half would then pass through Redact
+// unrecognised. Redacting the untruncated line first guarantees a whole
+// secret present in it is replaced before any cut can split it; the cut
+// then simply bounds whatever (possibly shorter, once redacted) text
+// remains, exactly as before.
 func firstLine(s string) string {
 	for _, line := range strings.Split(s, "\n") {
 		if line = strings.TrimSpace(line); line != "" {
+			line = logger.Redact(line)
 			if len(line) > 200 {
 				cut := 200
 				for cut > 0 && !utf8.RuneStart(line[cut]) {
