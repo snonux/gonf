@@ -579,7 +579,7 @@ func TestRunTaskBodyPanicDoesNotLeaveAHalfRegisteredSetForApply(t *testing.T) {
 		nilMap["x"] = "boom"                    // nil map write: panics
 	})
 	func() {
-		defer func() { recover() }()
+		defer func() { _ = recover() }()
 		_ = Run("panics")
 		t.Fatal("Run(panics) returned instead of the task body's panic propagating")
 	}()

@@ -270,32 +270,34 @@ func syncDirGlobGuard(path, pattern, blobDir string) error {
 	if err != nil {
 		return fmt.Errorf("sync_dir: invalid glob %q: %w", pattern, err)
 	}
-	if countingMatches(matches) == 0 {
+	if !hasCountingMatch(matches) {
 		return fmt.Errorf("sync_dir: glob %q has no counting entries although blob dir %q is non-empty; refusing to install/prune %s (a correctly built pattern always counting-matches a non-empty blob, so this signals a bug in glob pattern construction or blob packaging rather than an empty source)", pattern, blobDir, path)
 	}
 	return nil
 }
 
-// countingMatches reports how many of matches are COUNTING glob matches
+// hasCountingMatch reports whether any of matches is a COUNTING glob match
 // (GlobMatchCounts) — the same predicate pruneGlob's real keep-set and
 // copySourceGlob's install loop are built from, so syncDirGlobGuard's
 // emptiness check shares pruneGlob's notion of "matches" instead of a raw
 // filepath.Glob count that a non-counting entry (e.g. a stray subdirectory
 // in the blob) could satisfy trivially. An unreadable match is not counted
 // (mirroring pruneGlob's own "an unreadable match cannot count" handling)
-// rather than failing the guard outright.
-func countingMatches(matches []string) int {
-	n := 0
+// rather than failing the guard outright. Stops at the first counting
+// match (task ed2): the guard only ever needs "is there at least one," so
+// os.Lstat-ing every match in a large glob blob wasted a syscall pair per
+// entry for a count nothing used past its zero-ness.
+func hasCountingMatch(matches []string) bool {
 	for _, match := range matches {
 		info, err := os.Lstat(match)
 		if err != nil {
 			continue
 		}
 		if GlobMatchCounts(match, info) {
-			n++
+			return true
 		}
 	}
-	return n
+	return false
 }
 
 // quoteGlob escapes the filepath.Match metacharacters in path so it matches

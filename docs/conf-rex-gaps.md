@@ -1,8 +1,8 @@
 # Replacing `~/git/conf` Rex with gonf — gap audit
 
-Refreshed 2026-09-23 against **gonf v0.16.4**; this release uses plan schema
-24. This document is the
-canonical plan for porting the [`~/git/conf`](https://codeberg.org/snonux/conf)
+Refreshed 2026-09-23 against **gonf v0.16.4**; this release uses plan schema 24.
+This document is the canonical plan for porting the
+[`~/git/conf`](https://codeberg.org/snonux/conf)
 Rexfiles to gonf. Earlier revisions claimed gonf "still lacks Rex-style sudo/doas"
 and that pkg/service/cron "fleet still needs transport" — both are **stale**:
 fleet SSH transport (`push` / `cluster` / `fleet`) and the `Privileged()` +
@@ -426,8 +426,8 @@ so the plan has no login-owned `/tmp` secret staging step.
 
 For this document:
 
-- Every capability row names the gonf API that exists today (verified against
-  v0.16.4, plan schema 24) — no "fleet needs transport" or
+- Every capability row names the gonf API that exists today (verified
+  against v0.16.4, plan schema 24) — no "fleet needs transport" or
   missing-feature claims survive.
 - All Rexfiles (four tracked, plus the retired `f3s/garage` one) are
   inventoried and every task appears exactly once in the

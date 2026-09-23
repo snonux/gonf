@@ -167,7 +167,7 @@ func TestSIGKillCancelPipeControllerHelperProcess(t *testing.T) {
 	// Never written to: this controller dies (SIGKILLed by the outer test)
 	// before ever choosing to cancel, exactly like a crashed/OOM-killed
 	// controller in production.
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 	child := exec.Command(os.Args[0], "-test.run=^TestSIGKillCancelPipeChildHelperProcess$")
 	child.Env = append(os.Environ(), sigkillCancelPipeChildPlanEnv+"="+path)
 	child.Stdin = r

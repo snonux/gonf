@@ -358,6 +358,11 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 // again) rather than relying on a fresh registration alone — see
 // api/reset.go and AGENTS.md's Test seams section for the tests this can
 // affect under -shuffle=on.
+//
+// A bare package var, not mutex-guarded (task ed2): safe today because
+// recording is single-goroutine (fleet records centrally before fan-out,
+// the same invariant recordingSession's own doc states), so a future
+// concurrent record must not read or write this without adding one.
 var lastRecordFailure error
 
 // recordPlanBody is RecordPlanTo's actual recording, split out so
