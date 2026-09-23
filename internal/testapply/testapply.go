@@ -8,15 +8,18 @@
 // core (plan and resource), so any test in the module can use it, and it
 // runs the same engine api.Apply runs for an unprivileged recipe:
 //
-//  1. snapshot the registered plan drafts (resource.RegisteredPlanDrafts) and
+//  1. refuse before anything runs when plan-record mode is active or a
+//     declaration error was reported earlier (internal/declerr), as
+//     api.Apply does;
+//  2. snapshot the registered plan drafts (resource.RegisteredPlanDrafts) and
 //     refuse a registered resource without one, as api.Apply does;
-//  2. lower each draft to its plan op through the kind's registered
+//  3. lower each draft to its plan op through the kind's registered
 //     plan.Handler, packaging file, glob and tree sources inline or as blobs
 //     in a temporary plan directory;
-//  3. run the whole-plan pre-flight api.Apply runs (plan.ValidateChunks over
+//  4. run the whole-plan pre-flight api.Apply runs (plan.ValidateChunks over
 //     the privilege chunks), so a dangling DependsOn or watch is refused
 //     before anything is applied;
-//  4. apply the ops with plan.Apply and the local host's facts (GOOS,
+//  5. apply the ops with plan.Apply and the local host's facts (GOOS,
 //     hostname and profile — see localFacts), which orders them by
 //     dependency, evaluates when blocks and renders {{.Gonf.*}} templates,
 //     and prints the outcome summary to stderr.
@@ -42,6 +45,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
@@ -52,7 +56,34 @@ const planID = "testapply"
 // Apply lowers every registered resource to a plan op and applies the plan
 // through plan.Apply, as described in the package comment. It returns nil
 // without applying anything when nothing is registered.
+//
+// Like api.Apply (api/resource.go) it refuses before anything is applied
+// when plan-record mode is active (a record session, not an apply, owns the
+// registered drafts then) or when a declaration error was reported earlier
+// (internal/declerr: DSL misuse such as a duplicate resource registration
+// means the registered set is known incomplete). Without these guards a
+// resource/<kind> test whose option misuse routed through resource.Refuse
+// would see Apply quietly apply the remaining subset and pass, although
+// api.Apply/Run/cli.CLI would refuse the whole recipe.
+//
+// The recording check is plan.Recording() alone, not also
+// resource.PlanDraftRecording() as api.Apply's is: the only production path
+// that installs a draft recorder (api.RecordPlanTo) always sets both flags
+// together for one record session (resource/draft.go), so plan.Recording()
+// already catches every real session. Several resource/<kind> tests
+// (e.g. TestWithEnvCopiesCallerMap in resource/cmd and resource/pkg) call
+// resource.SetPlanDraftRecorder directly, without plan.SetRecording, purely
+// to capture the drafts a Present call records for assertions, then still
+// apply through this function; folding in PlanDraftRecording() here would
+// refuse that legitimate, decoupled pattern.
 func Apply() error {
+	if plan.Recording() {
+		return fmt.Errorf("testapply: cannot apply while plan recording is active")
+	}
+	if err := declerr.First(); err != nil {
+		return err
+	}
+
 	registered := resource.RegisteredIDs()
 	if len(registered) == 0 {
 		return nil

@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/internal/testapply"
+	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -113,6 +115,54 @@ func TestApplyRefusals(t *testing.T) {
 		resource.ResetRepository()
 		if err := testapply.Apply(); err != nil {
 			t.Fatalf("Apply() = %v, want nil", err)
+		}
+	})
+}
+
+// TestApplyDeclErrGuard pins the two guards Apply mirrors from api.Apply
+// (api/resource.go): a declaration error reported earlier (here, a
+// resource-already-registered error, exactly the kind the review's probe
+// used) must refuse the apply before anything runs, and so must an active
+// plan-record session. Without these guards Apply silently applied whatever
+// subset of the registered resources still had a draft, even though the
+// declaration error meant the registered set was known incomplete.
+func TestApplyDeclErrGuard(t *testing.T) {
+	t.Run("declaration error refuses before applying", func(t *testing.T) {
+		resource.ResetRepository()
+		declerr.Reset()
+		t.Cleanup(declerr.Reset)
+
+		ran := false
+		testapply.Register("T", "A", func() error { ran = true; return nil })
+		// A duplicate registration under the same ID reports a
+		// resource-already-registered declaration error (resource.Register,
+		// resource/resource.go) without registering the second declaration,
+		// exactly the review's probe scenario.
+		resource.Register("T", "A", resource.ApplierFunc(func() error { return nil }))
+		if declerr.First() == nil {
+			t.Fatalf("declerr.First() = nil, want the duplicate-registration error")
+		}
+
+		err := testapply.Apply()
+		if err == nil || !errors.Is(err, declerr.First()) || ran {
+			t.Fatalf("Apply() = %v (ran %t), want it to refuse with the declaration error and apply nothing", err, ran)
+		}
+	})
+
+	t.Run("plan recording refuses before applying", func(t *testing.T) {
+		resource.ResetRepository()
+		declerr.Reset()
+		t.Cleanup(declerr.Reset)
+
+		ran := false
+		testapply.Register("T", "A", func() error { ran = true; return nil })
+
+		plan.SetRecording(true)
+		t.Cleanup(func() { plan.SetRecording(false) })
+
+		err := testapply.Apply()
+		if err == nil || ran {
+			t.Fatalf("Apply() = %v (ran %t), want it to refuse while plan recording is active", err, ran)
 		}
 	})
 }
