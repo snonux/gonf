@@ -280,3 +280,151 @@ func TestWithKeyedLineNarrowKeyDoesNotWarn(t *testing.T) {
 		})
 	}
 }
+
+// TestWithKeyedLinePreservesDominantTerminator pins task bc2 finding (a): a
+// line edit no longer normalizes the whole file to LF regardless of its
+// original line endings. It now writes back using the file's own dominant
+// terminator -- CRLF when strictly more of the file's line breaks are CRLF
+// than bare LF, else LF (ties go to LF, matching the pre-fix, LF-only
+// behavior for a file with no CRLF majority).
+func TestWithKeyedLinePreservesDominantTerminator(t *testing.T) {
+	cases := []struct {
+		name, before, want string
+	}{
+		{name: "all CRLF stays CRLF",
+			before: "# c\r\nexport PKG_PATH=old\r\nPATH=/bin\r\n",
+			want:   "# c\r\n" + pkgQuoted + "\r\nPATH=/bin\r\n"},
+		{name: "CRLF minority normalized to the LF majority",
+			before: "a\nexport PKG_PATH=old\r\nb\n",
+			want:   "a\n" + pkgQuoted + "\nb\n"},
+		{name: "LF minority normalized to the CRLF majority",
+			before: "a\r\nexport PKG_PATH=old\r\nb\n",
+			want:   "a\r\n" + pkgQuoted + "\r\nb\r\n"},
+		{name: "tied count keeps LF",
+			before: "a\r\nexport PKG_PATH=old\n",
+			want:   "a\n" + pkgQuoted + "\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resource.ResetRepository()
+			path := filepath.Join(t.TempDir(), "profile")
+			if err := os.WriteFile(path, []byte(tc.before), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := Ensure(path, WithKeyedLine(pkgKey, pkgQuoted), WithMode(0o644)); err != nil {
+				t.Fatalf("Ensure: %v", err)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tc.want {
+				t.Fatalf("content = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestWithKeyedLineToleratesLeadingWhitespace pins task bc2 finding (b): a
+// key match now tolerates the matched line's own leading spaces/tabs, so an
+// indented existing line is recognized as owned instead of being left in
+// place beside a newly appended, conflicting line. The replacement is
+// written back unindented.
+func TestWithKeyedLineToleratesLeadingWhitespace(t *testing.T) {
+	cases := []struct{ name, before string }{
+		{"leading spaces", "  export PKG_PATH=old\n"},
+		{"leading tab", "\texport PKG_PATH=old\n"},
+		{"leading spaces and tabs mixed", " \t export PKG_PATH=old\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resource.ResetRepository()
+			path := filepath.Join(t.TempDir(), "profile")
+			if err := os.WriteFile(path, []byte(tc.before), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := Ensure(path, WithKeyedLine(pkgKey, pkgQuoted), WithMode(0o644)); err != nil {
+				t.Fatalf("Ensure: %v", err)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := pkgQuoted + "\n"; string(got) != want {
+				t.Fatalf("content = %q, want %q (the indented line should be recognized as owned and replaced unindented, not left beside a duplicate)", got, want)
+			}
+		})
+	}
+}
+
+// TestWithKeyedLineLeavesInternalWhitespaceAndCaseUnmatched pins the
+// documented remainder of finding (b): only LEADING whitespace is
+// tolerated. Extra internal whitespace and a differently-cased key are not
+// matched, so the existing line is left untouched and the new line is
+// appended beside it as a second, conflicting assignment -- the known,
+// documented gap (docs/file-dir-link.md, "What counts as a match"), not a
+// silent regression.
+func TestWithKeyedLineLeavesInternalWhitespaceAndCaseUnmatched(t *testing.T) {
+	cases := []struct{ name, before string }{
+		{"extra internal whitespace", "export  PKG_PATH=old\n"},
+		{"different case", "EXPORT PKG_PATH=old\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resource.ResetRepository()
+			path := filepath.Join(t.TempDir(), "profile")
+			if err := os.WriteFile(path, []byte(tc.before), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := Ensure(path, WithKeyedLine(pkgKey, pkgQuoted), WithMode(0o644)); err != nil {
+				t.Fatalf("Ensure: %v", err)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := tc.before + pkgQuoted + "\n"; string(got) != want {
+				t.Fatalf("content = %q, want %q (unmatched variant left in place, new line appended)", got, want)
+			}
+		})
+	}
+}
+
+// TestWithKeyedLineDryRunLogsWouldNotDoes pins task bc2 finding (c): under
+// dry-run, resolveLine (and therefore applyKeyedLine) still runs before
+// ensureFile's dry-run gate, but the log line must now say "would replace"/
+// "would drop" instead of claiming a write dry-run never performs. The file
+// itself must stay untouched.
+func TestWithKeyedLineDryRunLogsWouldNotDoes(t *testing.T) {
+	resource.ResetRepository()
+	resource.SetDryRun(true)
+	t.Cleanup(func() { resource.SetDryRun(false) })
+	path := filepath.Join(t.TempDir(), "profile")
+	before := "export EDITOR=vi\nexport PAGER=less\nexport PKG_PATH=old\n"
+	if err := os.WriteFile(path, []byte(before), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	output := testutil.CaptureLog(t, logger.LevelInfo)
+	broadKey := "export "
+	newLine := `export PKG_PATH="new"`
+	if err := Ensure(path, WithKeyedLine(broadKey, newLine), WithMode(0o644)); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+
+	logged := output()
+	if !strings.Contains(logged, "would replace 1 and would drop 2 existing line(s)") {
+		t.Fatalf("dry-run log = %q, want it to say \"would replace ... and would drop ...\"", logged)
+	}
+	if strings.Contains(logged, "\" replaces ") || strings.Contains(logged, "\" drops ") {
+		t.Fatalf("dry-run log = %q, must not use the present-tense wording (nothing was actually written)", logged)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != before {
+		t.Fatalf("dry-run must not write the file; content = %q, want unchanged %q", got, before)
+	}
+}

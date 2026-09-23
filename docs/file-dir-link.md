@@ -48,13 +48,43 @@ setting whose existing line differs: a quoted legacy
 `export PKG_PATH="…"`, an older value, or an administrator's edit would stay
 beside the new line as a second, conflicting assignment. `WithKeyedLine(key,
 line)` owns the setting instead of the text: the first existing line starting
-with `key` (a literal prefix, not a pattern) is replaced **in place** by
-`line`, every further line starting with `key` is removed, and `line` is
-appended when no line starts with `key`. Every other line, comment and the
-file's order are left alone, so it is safe on shared rc/profile/daily files
-that are not owned whole. A replaced differing line is logged at Info (key
-and counts only, not the old text), and the file change is reported like any
-other content change.
+with `key` (a literal prefix, not a pattern, but matched after stripping the
+line's own leading spaces/tabs — see "What counts as a match" below) is
+replaced **in place** by `line`, every further line starting with `key` is
+removed, and `line` is appended when no line starts with `key`. Every other
+line, comment and the file's order are left alone, so it is safe on shared
+rc/profile/daily files that are not owned whole. A replaced differing line is
+logged at Info (key and counts only, not the old text), and the file change
+is reported like any other content change.
+
+The file's line endings are normalized as a side effect of any line edit
+(`WithLine(s)`/`WithoutLine(s)`/`WithKeyedLine`, not just a keyed one): gonf
+writes the result back using the file's own *dominant* terminator — `\r\n`
+when the file has strictly more CRLF line endings than bare LF ones, else
+`\n` — rather than preserving each line's original terminator individually.
+A homogeneously CRLF-terminated file (a Windows-authored `.profile` mirrored
+onto a Unix host, say) therefore keeps its CRLF endings across a keyed edit;
+a file with a small minority of stray CRLF or LF lines has that minority
+normalized to match the majority. A brand-new file created by the edit (the
+key or line was missing and the file itself didn't exist yet) gets plain
+`\n`.
+
+**What counts as a match.** The key match tolerates the matched line's own
+leading whitespace: `"  export PKG_PATH=old"` (leading spaces) and a
+leading-tab-indented line are both recognized as owned by
+`WithKeyedLine("export PKG_PATH=", ...)`, and the replacement is written back
+*unindented* — the key now owns the line's position, not its original
+indentation. The match does **not** tolerate anything past the leading
+whitespace: extra internal whitespace (`"export  PKG_PATH=old"`, two spaces)
+and case differences (`"EXPORT PKG_PATH=old"`) are left untouched, and the
+new line is appended beside them as a second, conflicting assignment —
+exactly the duplicate this feature otherwise exists to prevent. Safely
+normalizing internal whitespace or case would need real parsing (word
+splitting, and case-folding a key that may itself be case-sensitive shell
+syntax) this feature does not attempt; pick a key whose known variants are
+covered, or accept that a hand-edited line with unusual internal spacing or
+case needs its own separate `WithKeyedLine` (or a one-off `WithLine`/
+`WithoutLine` pair) to converge.
 
 This safety is about the *lines only*: like every other `File`, a keyed edit
 does **not** preserve a shared file's existing mode or ownership. `build()`

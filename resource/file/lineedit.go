@@ -48,13 +48,21 @@ func appendUniqueLines(dst []string, lines ...string) []string {
 // node, directory) is a loud user error naming the path and the entry type
 // — line edits manage regular files, and unlike the content path there is no
 // "replace with new content" semantics to fall back on; see readForLineEdit.
+//
+// The rebuilt content is joined with term, the file's own dominant line
+// terminator (see currentLines/dominantTerminator), instead of a hard-coded
+// "\n": otherwise a CRLF-terminated shared file would be silently rewritten
+// to LF by any keyed/added/removed-line edit, breaking
+// docs/file-dir-link.md's "every other line ... left alone" promise for line
+// endings too (task bc2 finding (a)). A brand-new file (missing before this
+// edit) is written with "\n", matching the prior behavior.
 func (f *File) resolveLine() (path string, content []byte, noop bool, err error) {
 	path = f.path
-	lines, err := f.currentLines(path)
+	lines, term, exists, err := f.currentLines(path)
 	if err != nil {
 		return "", nil, false, err
 	}
-	if lines == nil && len(f.keyedLines) == 0 && len(f.addLines) == 0 {
+	if !exists && len(f.keyedLines) == 0 && len(f.addLines) == 0 {
 		return path, nil, true, nil
 	}
 
@@ -76,37 +84,80 @@ func (f *File) resolveLine() (path string, content []byte, noop bool, err error)
 	if len(kept) == 0 {
 		return path, []byte{}, false, nil
 	}
-	return path, []byte(strings.Join(kept, "\n") + "\n"), false, nil
+	return path, []byte(strings.Join(kept, term) + term), false, nil
 }
 
-// currentLines returns the file's lines, or nil (and no error) when the file
-// does not exist. An existing empty file yields an empty, non-nil slice.
-func (f *File) currentLines(path string) ([]string, error) {
+// currentLines returns the file's lines, its dominant line terminator (see
+// dominantTerminator), and whether the file exists at all. exists is an
+// explicit signal instead of the former nil-vs-empty-slice convention on
+// lines alone (missing file: nil; existing empty file: an empty non-nil
+// slice) that 100 Go Mistakes #22 flags as fragile — a later edit could
+// collapse that distinction (e.g. by initializing lines to []string{} up
+// front) without any test noticing, since both a nil and an empty slice
+// range over zero elements. This is a pure internal refactor: resolveLine's
+// noop check observes the same behavior as before, just through exists
+// instead of a `lines == nil` comparison.
+func (f *File) currentLines(path string) (lines []string, term string, exists bool, err error) {
 	raw, err := readForLineEdit(path)
 	if err != nil {
 		// errors.Is, not os.IsNotExist: the raw os error is wrapped on the
 		// way out of readForLineEdit, and os.IsNotExist does not unwrap %w
 		// chains.
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+			return nil, "\n", false, nil
 		}
-		return nil, err
+		return nil, "", false, err
 	}
-	lines := []string{}
+	lines = []string{}
 	scanner := bufio.NewScanner(bytes.NewReader(raw))
 	for scanner.Scan() {
 		lines = append(lines, scanner.Text())
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("failed to scan file %s: %w", path, err)
+		return nil, "", false, fmt.Errorf("failed to scan file %s: %w", path, err)
 	}
-	return lines, nil
+	return lines, dominantTerminator(raw), true, nil
+}
+
+// dominantTerminator reports the line terminator raw predominantly uses:
+// "\r\n" when raw has strictly more CRLF line endings than bare LF ones,
+// else "\n". A bare LF is one not immediately preceded by "\r" (bufio's
+// ScanLines already strips the CR from a CRLF line when currentLines scans
+// raw, so nothing downstream of this needs to know which terminator any
+// individual line originally had — the whole file is written back with one,
+// uniform terminator). A file with no line breaks, or with equally many of
+// each, keeps "\n". A mixed-ending file's minority-style lines are therefore
+// normalized to the majority style, same as a homogeneously-terminated file
+// keeps its own terminator; see docs/file-dir-link.md's keyed-line section.
+func dominantTerminator(raw []byte) string {
+	crlf := bytes.Count(raw, []byte("\r\n"))
+	lf := bytes.Count(raw, []byte("\n")) - crlf
+	if crlf > lf {
+		return "\r\n"
+	}
+	return "\n"
 }
 
 // applyKeyedLine gives edit ownership of the lines starting with edit.Key:
 // the first is replaced in place by edit.Line (so the setting keeps its
 // position among comments and neighbouring settings), every further one is
 // dropped, and edit.Line is appended when none exists.
+//
+// The match tolerates leading whitespace: a line is owned when edit.Key
+// prefixes it after stripping leading spaces/tabs (strings.TrimLeft(line, "
+// \t")), so an administrator's indented hand edit, or a line accidentally
+// indented by an earlier tool, is still recognized instead of being left
+// alone beside a newly appended, conflicting line (task bc2 finding (b)).
+// The match stays literal otherwise: extra *internal* whitespace (e.g.
+// "export  PKG_PATH=old" with two spaces) and case differences (e.g.
+// "EXPORT PKG_PATH=old") are NOT tolerated and are therefore left in place,
+// untouched, with edit.Line appended as a second, conflicting line — safely
+// normalizing those would need real parsing (word-splitting, case folding a
+// key that might itself be case-sensitive shell syntax) this feature does
+// not attempt; see docs/file-dir-link.md's keyed-line section, which
+// documents the gap. An owned, indented line is replaced by edit.Line
+// unindented: the key now owns the line's position, not its original
+// indentation.
 //
 // A plain replace (the owned line's value converging to a new one) is the
 // common, expected case and stays at Info. A drop is different: it deletes
@@ -136,7 +187,7 @@ func applyKeyedLine(path string, lines []string, edit resource.KeyedLine) []stri
 	found := false
 	replaced, dropped := 0, 0
 	for _, line := range lines {
-		if !strings.HasPrefix(line, edit.Key) {
+		if !strings.HasPrefix(strings.TrimLeft(line, " \t"), edit.Key) {
 			out = append(out, line)
 			continue
 		}
@@ -154,14 +205,36 @@ func applyKeyedLine(path string, lines []string, edit resource.KeyedLine) []stri
 	if !found {
 		out = append(out, edit.Line)
 	}
+	logKeyedLineResult(path, edit.Key, replaced, dropped, droppedLines)
+	return out
+}
+
+// logKeyedLineResult reports applyKeyedLine's outcome, phrased by mode:
+// resolveLine (and therefore applyKeyedLine) runs before ensureFile's
+// dry-run gating (checksum.go), so under `gonf -n` nothing downstream of
+// this call actually writes the file — logging the present tense there
+// would claim a change dry-run never makes (task bc2 finding (c)). This
+// follows the same present/"would ..." distinction resource.Mutate's
+// dryRunPrefix draws for every other resource kind's mutation, without
+// going through Mutate itself: a keyed-line drop/replace is not gated as
+// its own mutation, only as part of the file's eventual content write.
+//
+// A drop logs at Warn (visible even under -quiet) naming the key and counts
+// but never the dropped text (see applyKeyedLine's doc comment); a plain
+// replace logs at Info; an edit that changed nothing (already converged, or
+// a fresh append with nothing to report) logs nothing.
+func logKeyedLineResult(path, key string, replaced, dropped int, droppedLines []string) {
+	verb, dropVerb := "replaces", "drops"
+	if resource.DryRun() {
+		verb, dropVerb = "would replace", "would drop"
+	}
 	switch {
 	case dropped != 0:
-		logger.Warn("file %s: keyed line %q replaces %d and drops %d existing line(s); a drop deletes content the key matched but did not own — check whether %q is narrow enough for this file", path, edit.Key, replaced, dropped, edit.Key)
-		logger.Debug("file %s: keyed line %q dropped line(s): %q", path, edit.Key, droppedLines)
+		logger.Warn("file %s: keyed line %q %s %d and %s %d existing line(s); a drop deletes content the key matched but did not own — check whether %q is narrow enough for this file", path, key, verb, replaced, dropVerb, dropped, key)
+		logger.Debug("file %s: keyed line %q dropped line(s): %q", path, key, droppedLines)
 	case replaced != 0:
-		logger.Info("file %s: keyed line %q replaces %d existing line(s)", path, edit.Key, replaced)
+		logger.Info("file %s: keyed line %q %s %d existing line(s)", path, key, verb, replaced)
 	}
-	return out
 }
 
 // validateKeyedLines refuses WithKeyedLine declarations whose ownership is
