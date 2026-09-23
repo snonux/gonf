@@ -13,13 +13,16 @@ import (
 	"github.com/snonux/gonf/resource"
 )
 
-// TestCLIPlanOutDirWarnsAboutUnignoredGitWorktree wires the 0b2 git-worktree
-// check (git_worktree_warn.go) into the real `gonf plan -o` path, on top of
-// git_worktree_warn_test.go's direct unit tests of the two helpers: it
-// proves warnSensitivePlan actually calls warnIfPlanUnignoredInGitWorktree
-// for a sensitive plan written under a real, unignoring git worktree, and
-// that the pre-existing "carries secret material" warning (062) still fires
-// alongside it, unchanged.
+// TestCLIPlanOutDirWarnsAboutUnignoredGitWorktree wires the 0b2/zd2
+// git-worktree check (git_worktree_warn.go) into the real `gonf plan -o`
+// path, on top of git_worktree_warn_test.go's direct unit tests of its
+// helpers: it proves warnSensitivePlan actually calls
+// warnIfPlanUnignoredInGitWorktree for a sensitive plan written under a
+// real, unignoring git worktree, and that the pre-existing "carries secret
+// material" warning (062) still fires alongside it, unchanged. This
+// recipe's secret stays inline (below plan.MaxInlineContent), so no
+// blobs/ directory is written and only plan.jsonl is named; the blobs/
+// probe added by zd2 is covered directly in git_worktree_warn_test.go.
 func TestCLIPlanOutDirWarnsAboutUnignoredGitWorktree(t *testing.T) {
 	work := registerSecretTask(t)
 	repo := filepath.Join(work, "repo")
@@ -32,7 +35,7 @@ func TestCLIPlanOutDirWarnsAboutUnignoredGitWorktree(t *testing.T) {
 	if !strings.Contains(stderr, "carries secret material in clear text") {
 		t.Fatalf("stderr %q: want the 062 secret-artifact warning still present", stderr)
 	}
-	if !strings.Contains(stderr, "is inside a git worktree and plan.jsonl there is not gitignored") {
+	if !strings.Contains(stderr, "is inside a git worktree and plan.jsonl is not gitignored") {
 		t.Fatalf("stderr %q: want the 0b2 git-worktree warning", stderr)
 	}
 	if leaksCLISecret(stderr) {
