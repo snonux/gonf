@@ -18,3 +18,27 @@
 | [options.md](options.md) | Shared options cheat-sheet |
 | [secrets.md](secrets.md) | `MustSecret` / `OptionalSecret` / `ResolveSecret`, the file provider, typed errors, `SetSecretProvider` |
 | [conf-rex-gaps.md](conf-rex-gaps.md) | Gaps vs `~/git/conf` Rex (remote fleet) |
+
+## Release checklist
+
+The version bump commit (`internal/version.go`) is easy to land on its own
+and let the docs drift — that happened for v0.16.0, whose commit touched
+only `internal/version.go` while [conf-rex-gaps.md](conf-rex-gaps.md) kept
+citing the previous release and plan schema for another cycle (task oc2
+caught and fixed it). Before or in the same commit as a version bump:
+
+- [ ] Update the version-and-schema line(s) in
+      [conf-rex-gaps.md](conf-rex-gaps.md) (near the top, the capability
+      matrix heading, and the acceptance-criteria section) to the new
+      `internal.Version` and `plan.CurrentVersion`.
+- [ ] If `plan.CurrentVersion` moved, confirm [plan.md](plan.md) has a
+      "Plan schema **version N**" paragraph for every version up to the new
+      current one — a version can ship without a bump (see v23/`keyed_lines`,
+      whose doc paragraph was added late by task oc2) if a doc pass is
+      skipped.
+- [ ] Grep the docs for "unreleased" / a feature's dev branch name and
+      flip any that shipped in this release to their release note.
+- [ ] Re-run the gate suite (`gofmt -l .`, `go build ./...`, `go vet ./...`,
+      `go test -race -shuffle=on -count=1 ./...`,
+      `go tool staticcheck ./...`) after the doc edits — they are
+      docs-only, but confirm nothing else broke.

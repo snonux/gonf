@@ -1074,6 +1074,19 @@ runtime with the controller's own schema and release (`-plan-version`,
 `-version`), so push installs a current gonf and strict preview refuses an
 older remote either way.
 
+Plan schema **version 23** adds `keyed_lines` to `file` operations: the op
+was recorded from `WithKeyedLine(key, line)` (see
+[file-dir-link.md](file-dir-link.md)), so its edits own the one line
+starting with the literal `key` prefix in a shared file — replacing it in
+place, or appending it, instead of the exact-match semantics of
+`WithLine`/`WithoutLine`. An older binary would ignore the field: it would
+leave a legacy or conflicting line in place, or skip a keyed-only edit
+entirely, while still reporting success, so it must refuse v23 at the header
+gate. Like v22, it is declared on demand: only a plan with a keyed-line edit
+declares v23 (`plan.RequiredVersion`); a plan without one keeps its v21/v22
+header and encodes every operation exactly as before. This binary keeps
+applying v1–22 plans, whose `file` ops carry no `keyed_lines` field.
+
 Plan schema **version 24** adds `glob` to `sync_dir` operations: the op was
 recorded from `WithSourceGlob`, so its blob is the flattened match set and
 its `prune` has glob semantics (only non-matching regular files directly

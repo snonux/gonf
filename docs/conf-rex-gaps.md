@@ -1,7 +1,7 @@
 # Replacing `~/git/conf` Rex with gonf — gap audit
 
-Refreshed 2026-09-22 against **gonf v0.15.0**; this release uses plan schema
-21. This document is the
+Refreshed 2026-09-23 against **gonf v0.16.1**; this release uses plan schema
+24. This document is the
 canonical plan for porting the [`~/git/conf`](https://codeberg.org/snonux/conf)
 Rexfiles to gonf. Earlier revisions claimed gonf "still lacks Rex-style sudo/doas"
 and that pkg/service/cron "fleet still needs transport" — both are **stale**:
@@ -79,9 +79,9 @@ One plan engine serves local and remote runs, so a recipe cannot diverge between
 
 ## Current capability matrix
 
-Status against every conf Rex primitive in v0.15.0 (plan schema 21):
+Status against every conf Rex primitive in v0.16.1 (plan schema 24):
 
-| Conf Rex capability | gonf v0.15.0 | Status |
+| Conf Rex capability | gonf v0.16.1 | Status |
 |---------------------|--------------|--------|
 | `group x => 'h:2', …`, `user`, `parallelism 5` | `Host(name, WithSSHUser, WithSSHHost, WithSSHPort, WithSSHIdentity)` + `Cluster(name, hosts…)`, `cluster.Parallel(n)`; `gonf hosts`/`clusters`/`fleets` | **Done** |
 | `sudo TRUE` / `auth for => group (user, sudo)` | `Task(…, Privileged())` (or `RequiresRoot`) + `Host(WithPrivilege(PrivilegeSudo|Doas|None))`; apply splits plain/elevated chunks; remote elevated chunk wraps `sudo -n gonf apply` / `doas gonf apply`; `-privilege=none` + elevated op refuses to push | **Done** |
@@ -373,7 +373,7 @@ so the plan has no login-owned `/tmp` secret staging step.
 | `nsd_failover` (script + root crontab via run) | `frontends_dns_failover`: installs the script and creates marker-managed `Cron("frontend-nsd-failover", WithCommand("-ns /usr/local/bin/dns-failover.ksh"), WithLegacyCommand(...), WithMinute("*"))`, which adopts the legacy unmarked line by exact command match | **Consumer** — tasks t42 and g52 (exact-command adoption replaced the earlier cleanup command); local plan verified. Live rollout remains an explicit operator action |
 | `dtail_install` (remove stray binaries; `PKG_PATH=… pkg_add -u dtail ‖ pkg_add dtail`) | `frontends_d_tail` cleans only unpackaged legacy binaries and uses `Package("dtail", WithEnv(map[string]string{"PKG_PATH": …}), IsLatest)`; on an absent OpenBSD package `IsLatest` installs first, while installed packages use `pkg_add -u` | **Consumer** — task u42; local plan verified, live rollout remains an explicit operator action |
 | `dtail` (dtail_install + adduser `_dserver` + `usermod -d` + daily.local appends + service) | `frontends_d_tail` includes the no-login account with `WithManageHome` existing-home convergence (task s52), both daily hooks, and `Service("dserver")` | **Consumer** — task u42; individual task remains independently applicable |
-| `pkgrepo_setup` (`PKG_PATH` export appended to `/root/.profile`) | `frontends_pkg_repo` keeps the signed repository export in `/root/.profile`, byte for byte the quoted line Rex wrote (task hb2); package resources carry the same environment themselves | **Consumer** — tasks u42, hb2; no unsigned fallback. Adopting an unquoted or older-URL variant without a duplicate needs core `WithKeyedLine` (task r52, branch `r52-core`, unreleased) |
+| `pkgrepo_setup` (`PKG_PATH` export appended to `/root/.profile`) | `frontends_pkg_repo` keeps the signed repository export in `/root/.profile`, byte for byte the quoted line Rex wrote (task hb2); package resources carry the same environment themselves | **Consumer** — tasks u42, hb2; no unsigned fallback. Adopting an unquoted or older-URL variant without a duplicate uses core `WithKeyedLine` (task r52, shipped in gonf v0.16.0) |
 | `gogios_install` (uname branch: OpenBSD custom-repo `pkg_add -u ‖ install`; FreeBSD branch is dead code) | `frontends_gogios` uses `Package("gogios", WithEnv(map[string]string{"PKG_PATH": …}), IsLatest)` (frontends are OpenBSD-only); absent packages install before later latest updates | **Consumer** — task u42; local plan verified, live rollout remains explicit |
 | `gogios` (pkg ×2; adduser `_gogios`; dirs; gogios.json template over 3 arrays; `check_shuriken_age` sourced from `~/git/shuriken.sh`; `_gogios` crontab from template; rc.local appends) | `frontends_gogios` creates `_gogios`, converges runtime/status directories, Go-renders `gogios.json`, installs the external plugin, adopts the three legacy unmarked Gogios cron commands by exact command match (`WithLegacyCommand`, task g52), and preserves boot-time runtime-directory setup | **Consumer** — task u42; Garage and virtual-hosted bucket checks retain task 642's expected HTTP 403 result |
 | `cron_test` (Rex cron canary, `_gogios` user) | — | **Excluded** — non-operational `/bin/ls` canary; `frontends_ping` and recorded-plan checks supersede it |
@@ -427,7 +427,7 @@ so the plan has no login-owned `/tmp` secret staging step.
 For this document:
 
 - Every capability row names the gonf API that exists today (verified against
-  v0.15.0, plan schema 21) — no "fleet needs transport" or
+  v0.16.1, plan schema 24) — no "fleet needs transport" or
   missing-feature claims survive.
 - All Rexfiles (four tracked, plus the retired `f3s/garage` one) are
   inventoried and every task appears exactly once in the
