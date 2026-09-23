@@ -70,17 +70,20 @@ func markRecordedControlOps(ops []plan.Op) error {
 	return nil
 }
 
-// scanOp walks every string of op (walkOpStrings, classified by
+// scanOp walks every string of op (scanOpStrings, classified by
 // opFieldClasses) and reports whether one holds a resolved secret, and the
 // JSON path of the first identity field holding a strong one
 // (secret.Values.ContainsStrong), which the caller refuses. op is not
-// modified — walkOpStrings' mutate=false guarantees it even for op.Payload,
-// so calling this concurrently over a shared []plan.Op (e.g. one op fanned
-// out to several per-host goroutines, internal/remote/fleet.go's Fanout) is
-// race-free (task 0f2).
+// modified — scanOpStrings is structurally read-only (task kf2 split it out
+// of the old walkOpStrings, whose mutate=false mode gated only one of
+// several write paths and so did not actually guarantee this; see
+// scanOpStrings' doc comment), so calling this concurrently over a shared
+// []plan.Op (e.g. one op fanned out to several per-host goroutines,
+// internal/remote/fleet.go's Fanout) is race-free (task 0f2, and task kf2's
+// TestScanOpStringsConcurrentRaceWithRewritingFn for the gap 0f2 left open).
 func scanOp(op *plan.Op) (sensitive bool, refuse string) {
 	values := &secretConfig.values
-	walkOpStrings(op, func(path, s string) string {
+	scanOpStrings(op, func(path, s string) string {
 		if refuse != "" || s == "" {
 			return s
 		}
@@ -100,7 +103,7 @@ func scanOp(op *plan.Op) (sensitive bool, refuse string) {
 			sensitive = sensitive || values.Contains([]byte(s)) || values.Contains(decodedBase64(s))
 		}
 		return s
-	}, false)
+	})
 	return sensitive, refuse
 }
 
@@ -133,21 +136,21 @@ func secretFieldError(prefix, kind, field string) error {
 		"for a Command, a managed 0600 file for a path argument)", prefix, kind, field)
 }
 
-// opDisplayName is one SensitiveOpNames entry. It only reads op (mutate is
-// false for the same reason scanOp's is: SensitiveOpNames is a public,
-// documented read-only scan that may run concurrently over a shared
-// []plan.Op, task 0f2).
+// opDisplayName is one SensitiveOpNames entry. It only reads op — it uses
+// scanOpStrings for the same reason scanOp does: SensitiveOpNames is a
+// public, documented read-only scan that may run concurrently over a
+// shared []plan.Op (task 0f2, task kf2).
 func opDisplayName(op *plan.Op) string {
 	name := op.ID
 	if name == "" {
 		name = string(op.Op) + " " + op.Path
 	}
 	name = RedactSecrets(name)
-	walkOpStrings(op, func(path, s string) string {
+	scanOpStrings(op, func(path, s string) string {
 		if s != "" && classOf(path) == classIdentity && secretConfig.values.Contains([]byte(s)) {
 			name = strings.ReplaceAll(name, s, secret.Redacted)
 		}
 		return s
-	}, false)
+	})
 	return name
 }

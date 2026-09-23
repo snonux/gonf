@@ -230,7 +230,7 @@ func TestRedactedPreviewHidesSecretsAndCannotApply(t *testing.T) {
 // overwrite the copy's TemplateData, and write the copy BACK onto
 // out.Payload; forgetting that last write-back would compile fine (Go
 // happily discards an unused local mutation) and still pass every
-// pre-existing secrets test — walkOpStrings' payloadWithholder redacts each
+// pre-existing secrets test — redactOpStrings' payloadWithholder redacts each
 // JSON leaf string in place regardless, so the secret bytes would still be
 // gone and TestRedactedPreviewHidesSecretsAndCannotApply's substring check
 // would not notice — while silently leaving the ORIGINAL template_data

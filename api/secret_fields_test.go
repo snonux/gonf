@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"reflect"
 	"slices"
@@ -51,7 +52,7 @@ func fillValue(t *testing.T, v reflect.Value, path string) {
 		}
 	case isScalar(v.Kind()):
 	default:
-		t.Fatalf("plan.Op%s has type %s, which walkOpStrings does not handle", path, v.Type())
+		t.Fatalf("plan.Op%s has type %s, which scanOpStrings/redactOpStrings do not handle", path, v.Type())
 	}
 }
 
@@ -71,10 +72,10 @@ func TestOpFieldClassesAreExhaustive(t *testing.T) {
 	seen := map[string]bool{}
 	record := func(op plan.Op) {
 		t.Helper()
-		walkOpStrings(&op, func(path, s string) string {
+		scanOpStrings(&op, func(path, s string) string {
 			seen[path] = true
 			return s
-		}, false)
+		})
 	}
 
 	var base plan.Op
@@ -105,17 +106,84 @@ func TestOpFieldClassesAreExhaustive(t *testing.T) {
 	}
 }
 
-// The walker refuses kinds it cannot see strings in instead of skipping
-// them silently.
+// TestScanAndRedactVisitSameFieldPaths guards the risk task kf2's split
+// deliberately took on: scanOpStrings/redactOpStrings (and their reflective
+// steps, scanValue/redactValue etc.) are two independent implementations of
+// the same traversal, kept separate so the read-only one is structurally
+// incapable of writing anything back rather than merely gated by a flag.
+// That separation only stays safe if the two never drift apart on WHICH
+// paths they visit; this pins that scanOpStrings and redactOpStrings (the
+// latter run on a throwaway copy, since it always writes) see exactly the
+// same set of JSON paths for the same op, across the base op and every
+// plan.OpPayloadExamples entry.
+func TestScanAndRedactVisitSameFieldPaths(t *testing.T) {
+	compare := func(op plan.Op) {
+		t.Helper()
+		scanned := map[string]bool{}
+		scanOpStrings(&op, func(path, s string) string {
+			scanned[path] = true
+			return s
+		})
+		redacted := map[string]bool{}
+		out, err := copyOp(op)
+		if err != nil {
+			t.Fatalf("copyOp: %v", err)
+		}
+		redactOpStrings(&out, func(path, s string) string {
+			redacted[path] = true
+			return s
+		})
+		for path := range scanned {
+			if !redacted[path] {
+				t.Errorf("scanOpStrings saw %q but redactOpStrings did not", path)
+			}
+		}
+		for path := range redacted {
+			if !scanned[path] {
+				t.Errorf("redactOpStrings saw %q but scanOpStrings did not", path)
+			}
+		}
+	}
+
+	var base plan.Op
+	fillValue(t, reflect.ValueOf(&base).Elem(), "")
+	compare(base)
+
+	for kind, example := range plan.OpPayloadExamples() {
+		pv := reflect.New(reflect.TypeOf(example)).Elem()
+		fillValue(t, pv, "")
+		op := plan.Op{Op: kind}
+		var ok bool
+		op.Payload, ok = pv.Interface().(plan.OpPayload)
+		if !ok {
+			t.Fatalf("plan.OpPayloadExamples()[%q] = %T does not implement plan.OpPayload", kind, example)
+		}
+		compare(op)
+	}
+}
+
+// Both walkers (the read-only scanValue and the mutating redactValue, task
+// kf2's split of the old single walkValue) refuse kinds they cannot see
+// strings in instead of skipping them silently. Checking both guards
+// against either one silently falling behind opFieldClasses' set of known
+// kinds after this task's split duplicated the switch.
 func TestWalkerPanicsOnUnhandledKinds(t *testing.T) {
 	for _, v := range []any{&struct{ X any }{X: "s"}, &struct{ X [1]string }{}, &struct{ X map[string]int }{}, &struct{ X []byte }{}} {
 		func() {
 			defer func() {
 				if recover() == nil {
-					t.Errorf("walkValue(%T) did not panic", v)
+					t.Errorf("scanValue(%T) did not panic", v)
 				}
 			}()
-			walkValue(reflect.ValueOf(v).Elem(), "", func(_, s string) string { return s }, false)
+			scanValue(reflect.ValueOf(v).Elem(), "", func(_, s string) string { return s })
+		}()
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("redactValue(%T) did not panic", v)
+				}
+			}()
+			redactValue(reflect.ValueOf(v).Elem(), "", func(_, s string) string { return s })
 		}()
 	}
 }
@@ -381,6 +449,122 @@ func TestSensitiveOpNamesConcurrentRace(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// TestScanOpStringsNeverMutatesEvenWithARewritingFn pins task kf2: this is
+// the exact probe from the kf2 task annotation, which found that the old
+// walkOpStrings(op, fn, mutate=false) did NOT make the walk read-only — it
+// gated only the top-level Payload field's write-back, while the plain
+// reflect.Value.SetString call for every other string field (including one
+// reached through a shared *Guard pointer, CommandPayload.Unless) had no
+// gate at all. A rewriting (non-identity) fn therefore mutated the
+// caller's op in place through the shared Guard even with mutate=false,
+// while CommandPayload.Bin's rewrite was silently discarded — a
+// half-mutated op. scanOpStrings (this task's fix) has no write path to
+// gate in the first place, so this must be a complete no-op on cmdOp
+// regardless of what fn returns.
+func TestScanOpStringsNeverMutatesEvenWithARewritingFn(t *testing.T) {
+	cmdOp := &plan.Op{
+		Op: plan.KindCommand,
+		ID: "Command[cmd]",
+		Payload: plan.CommandPayload{
+			Bin:    "/bin/test",
+			Unless: &plan.Guard{Bin: "/bin/test", Args: []string{}},
+		},
+	}
+	before, err := plan.EncodeOp(*cmdOp)
+	if err != nil {
+		t.Fatalf("test premise: EncodeOp: %v", err)
+	}
+
+	rewrite := func(_, s string) string { return s + "!" }
+	scanOpStrings(cmdOp, rewrite)
+
+	after, err := plan.EncodeOp(*cmdOp)
+	if err != nil {
+		t.Fatalf("EncodeOp after scan: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("scanOpStrings mutated op:\nbefore: %s\nafter:  %s", before, after)
+	}
+	if cmdOp.ID != "Command[cmd]" {
+		t.Fatalf("scanOpStrings mutated Op.ID: got %q", cmdOp.ID)
+	}
+	payload, ok := cmdOp.Payload.(plan.CommandPayload)
+	if !ok {
+		t.Fatalf("test premise: cmdOp.Payload is %T, want plan.CommandPayload", cmdOp.Payload)
+	}
+	if payload.Bin != "/bin/test" {
+		t.Fatalf("scanOpStrings mutated CommandPayload.Bin (a plain string field): got %q", payload.Bin)
+	}
+	if payload.Unless == nil || payload.Unless.Bin != "/bin/test" {
+		t.Fatalf("scanOpStrings mutated CommandPayload.Unless.Bin (behind the shared *Guard pointer): got %+v", payload.Unless)
+	}
+}
+
+// TestScanOpStringsConcurrentRaceWithRewritingFn extends
+// TestSensitiveOpNamesConcurrentRace (task 0f2) to close exactly the gap
+// task kf2's annotation identified: 0f2's own fix only worked in practice
+// because its two mutate=false callers, scanOp and opDisplayName, both
+// happen to pass an identity fn. This drives scanOpStrings directly with a
+// REWRITING (non-identity) fn — the shape a hypothetical future "redact
+// while scanning for a preview" feature would use — over the SAME shared
+// ops slice from 4 goroutines, exactly as internal/remote/fleet.go's
+// Fanout hands one recorded []plan.Op to a goroutine per host. It must
+// stay race-clean under go test -race (scanOpStrings must never write
+// anything back, no matter what fn returns, so there is nothing for two
+// goroutines to race on), and the shared op must come out byte-identical.
+func TestScanOpStringsConcurrentRaceWithRewritingFn(t *testing.T) {
+	ops, err := recordWithSecret(t, fakePlanSecret, func() {
+		Cron("job", options.WithCommand("/bin/true"), options.WithMinute(MustSecret("svc/key")))
+	})
+	if err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	var cronOp *plan.Op
+	for i := range ops {
+		if ops[i].Op == plan.KindCron {
+			cronOp = &ops[i]
+			break
+		}
+	}
+	if cronOp == nil {
+		t.Fatal("test premise: no cron op recorded")
+	}
+	if cronOp.Payload == nil {
+		t.Fatal("test premise: the cron op must carry a non-nil Payload (a migrated kind, task yd2)")
+	}
+	before, err := plan.EncodeOp(*cronOp)
+	if err != nil {
+		t.Fatalf("test premise: EncodeOp: %v", err)
+	}
+
+	// shared is the one ops slice every goroutine below scans concurrently,
+	// exactly as Fanout hands one recorded slice to every per-host
+	// goroutine.
+	shared := ops
+	rewrite := func(_, s string) string { return s + "!" }
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 200 {
+				for i := range shared {
+					scanOpStrings(&shared[i], rewrite)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	after, err := plan.EncodeOp(*cronOp)
+	if err != nil {
+		t.Fatalf("EncodeOp after concurrent scan: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("scanOpStrings mutated the shared op under concurrency:\nbefore: %s\nafter:  %s", before, after)
+	}
 }
 
 // Control ops (when blocks) are recorded directly and scanned too.

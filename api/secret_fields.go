@@ -39,10 +39,10 @@ const (
 // opFieldClasses classifies every string-bearing field of plan.Op by its
 // JSON path ("members[].key", "env{}" for map values, "env{key}" for map
 // keys, "template_data{}" for template data leaves). The scan and the
-// redaction walk all of them by reflection (walkOpStrings);
-// TestOpFieldClassesAreExhaustive fails when a field is added to plan.Op
-// without being classified here. An unclassified path met at run time is
-// treated as identity.
+// redaction walk all of them by reflection (scanOpStrings and
+// redactOpStrings); TestOpFieldClassesAreExhaustive fails when a field is
+// added to plan.Op without being classified here. An unclassified path met
+// at run time is treated as identity.
 var opFieldClasses = map[string]fieldClass{
 	// Kind, generated references and host metadata.
 	"op": classMetadata, "blob": classMetadata, "mode": classMetadata, "file_mode": classMetadata,
@@ -91,41 +91,6 @@ func classOf(path string) fieldClass {
 	return classIdentity
 }
 
-// walkOpStrings calls fn for every string in op — every string field,
-// slice element, map[string]string key and value, and template_data leaf —
-// with its JSON path, and stores what fn returns. Callers that must not
-// modify op pass a copy (copyOp) or an fn that returns its input. It knows
-// exactly the kinds plan.Op is built from (strings, bools, numbers,
-// pointers, slices, structs, map[string]string, json.RawMessage) and panics
-// on any other (an interface, array, other map or []byte field), a
-// programming error that TestOpFieldClassesAreExhaustive catches first. The
-// one interface field Op actually has, Payload (task yd2), never reaches
-// this generic panic-on-interface path at all: walkStruct special-cases it
-// by name and descends into its concrete value's own fields directly, at
-// the same path its fields had on the wire before the split.
-//
-// mutate gates ONLY that Payload field's write-back (walkStruct): every
-// other field already writes conditionally, only when fn actually changed
-// something (SetString/map rebuild/SetBytes each compare before writing),
-// so an fn that never changes a string (scanOp's and opDisplayName's do
-// not) already leaves them untouched regardless of mutate. Payload's
-// concrete value is different — it sits behind an interface field, so the
-// walk works on an addressable local copy and, before task 0f2, wrote that
-// copy back UNCONDITIONALLY. redactOp is the only real mutator (it walks
-// its own copyOp deep copy and needs the rewritten payload stored back), so
-// it alone passes mutate=true. scanOp and opDisplayName scan a caller's
-// shared op (an []plan.Op that internal/remote/fleet.go's Fanout may fan
-// out to per-host goroutines, exactly the aliasing plan/wire.go's own
-// normalizeWire comment warns against) and must pass mutate=false: fn still
-// runs for its side effects (the sensitivity flag), but the rewritten local
-// copy is discarded instead of being stored into the shared interface
-// field, so two goroutines calling the public, read-only
-// api.SensitiveOpNames or api.EncodeRedactedPreview over the same ops slice
-// never race a concurrent reader of that field.
-func walkOpStrings(op *plan.Op, fn func(path, s string) string, mutate bool) {
-	walkValue(reflect.ValueOf(op).Elem(), "", fn, mutate)
-}
-
 // copyOp deep-copies op through the wire codec. A legitimately built op
 // round-trips losslessly: its Payload (if any) only ever carries fields
 // exclusive to its OWN Kind (every concrete OpPayload's applyToWire,
@@ -153,37 +118,6 @@ func copyOp(op plan.Op) (plan.Op, error) {
 
 var rawMessageType = reflect.TypeOf(json.RawMessage(nil))
 
-// walkValue is walkOpStrings' reflective step. mutate is threaded through
-// unchanged to every recursive call so it reaches whichever struct (in
-// practice only the top-level Op) holds the Payload field walkStruct
-// special-cases; see walkOpStrings' doc comment.
-func walkValue(v reflect.Value, path string, fn func(path, s string) string, mutate bool) {
-	switch {
-	case v.Type() == rawMessageType:
-		walkRawJSON(v, path, fn)
-	case v.Kind() == reflect.String:
-		if s := fn(path, v.String()); s != v.String() {
-			v.SetString(s)
-		}
-	case v.Kind() == reflect.Pointer:
-		if !v.IsNil() {
-			walkValue(v.Elem(), path, fn, mutate)
-		}
-	case v.Kind() == reflect.Slice && v.Type().Elem().Kind() != reflect.Uint8:
-		for i := range v.Len() {
-			walkValue(v.Index(i), path+"[]", fn, mutate)
-		}
-	case isStringMap(v.Type()):
-		walkStringMap(v, path, fn)
-	case v.Kind() == reflect.Struct:
-		walkStruct(v, path, fn, mutate)
-	case isScalar(v.Kind()):
-		// Holds no string.
-	default:
-		panic(fmt.Sprintf("walkOpStrings: %s has unhandled type %s; teach walkValue and classify it", path, v.Type()))
-	}
-}
-
 // isStringMap reports whether t is a map from a string kind to a string
 // kind (map[string]string).
 func isStringMap(t reflect.Type) bool {
@@ -201,19 +135,88 @@ func isScalar(k reflect.Kind) bool {
 	return false
 }
 
-// walkStruct walks every exported field under its JSON name. Op.Payload
-// (task yd2, "Layer 2" of the PlanDraft/Op god-struct split) is special:
-// its json tag is "-" because Op never marshals itself by default struct
-// reflection (see Op.MarshalJSON), but its concrete value's OWN fields
-// (plan.CronPayload, plan.SystemdTimerPayload, ...) still sit at the OP'S
-// top level on the wire — that is exactly what Op.MarshalJSON's wireOp
-// merge reproduces. So the walk must reach them at the SAME path, not
-// nested under a "Payload" segment that never existed on the wire and that
-// opFieldClasses knows nothing about; it is named, not type-matched,
-// because plan.OpPayload's one method is unexported (only the plan package
-// can implement it), so this package cannot spell the interface type to
-// compare against.
-func walkStruct(v reflect.Value, path string, fn func(path, s string) string, mutate bool) {
+// ---------------------------------------------------------------------
+// Read-only walker (scanOpStrings): used by every pass that may run
+// concurrently over an op shared with other goroutines.
+// ---------------------------------------------------------------------
+
+// scanOpStrings calls fn for every string in op — every string field, slice
+// element, map[string]string key and value, template_data leaf, and (by
+// name) the concrete Payload's own fields — with its JSON path. fn may
+// return a rewritten string, exactly like redactOpStrings' fn, so a scan
+// and a redaction can share one closure shape; scanOpStrings simply never
+// looks at what fn returns. That is the whole safety property: it is not a
+// flag that gates a write, there is no write anywhere in this call graph
+// (scanValue, scanStruct, scanStringMap, scanRawJSON, scanAny) to gate in
+// the first place. A caller that must not modify op — scanOp and
+// opDisplayName (api/secret_scan.go), because both may run concurrently
+// over the SAME []plan.Op (internal/remote/fleet.go's Fanout hands one
+// recorded slice to a goroutine per host) — always uses this function, even
+// when its fn happens to be an identity closure. redactOp
+// (api/secret_plan.go) is the one caller that needs a real rewrite, and it
+// calls redactOpStrings instead, always on its own copyOp deep copy, never
+// on a caller's shared op.
+//
+// Before task kf2, there was one walkOpStrings with a `mutate bool`
+// parameter instead of this split: mutate=false gated only walkStruct's
+// Payload write-back, while the plain reflect.Value.SetString call for
+// every OTHER string field (including a string reached through a shared
+// *Guard pointer, e.g. CommandPayload.Unless.Bin) was unconditional. That
+// left the "read-only" mode read-only only because its two callers
+// happened to pass an identity fn; a rewriting fn (the shape a redacted
+// preview built from a scan, rather than a full redactOp copy, would use)
+// mutated the caller's op in place through the shared Guard pointer while
+// simultaneously discarding the (correctly gated) top-level Payload
+// field's own rewrite — a half-mutated op, and the exact concurrency
+// hazard task 0f2 had just fixed for that Payload field specifically. See
+// TestScanOpStringsNeverMutatesEvenWithARewritingFn and
+// TestScanOpStringsConcurrentRaceWithRewritingFn for the regression tests.
+func scanOpStrings(op *plan.Op, fn func(path, s string) string) {
+	scanValue(reflect.ValueOf(op).Elem(), "", fn)
+}
+
+// scanValue is scanOpStrings' reflective step. It only ever reads: every
+// branch either recurses or calls fn and drops the result, and no branch
+// calls a reflect.Value Set*/SetBytes method or rebuilds a map. Compare
+// redactValue below, its mutating twin.
+func scanValue(v reflect.Value, path string, fn func(path, s string) string) {
+	switch {
+	case v.Type() == rawMessageType:
+		scanRawJSON(v, path, fn)
+	case v.Kind() == reflect.String:
+		fn(path, v.String())
+	case v.Kind() == reflect.Pointer:
+		if !v.IsNil() {
+			scanValue(v.Elem(), path, fn)
+		}
+	case v.Kind() == reflect.Slice && v.Type().Elem().Kind() != reflect.Uint8:
+		for i := range v.Len() {
+			scanValue(v.Index(i), path+"[]", fn)
+		}
+	case isStringMap(v.Type()):
+		scanStringMap(v, path, fn)
+	case v.Kind() == reflect.Struct:
+		scanStruct(v, path, fn)
+	case isScalar(v.Kind()):
+		// Holds no string.
+	default:
+		panic(fmt.Sprintf("scanOpStrings: %s has unhandled type %s; teach scanValue and classify it", path, v.Type()))
+	}
+}
+
+// scanStruct walks every exported field under its JSON name, the read-only
+// twin of redactStruct. Op.Payload (task yd2) is special: its json tag is
+// "-" because Op never marshals itself by default struct reflection (see
+// Op.MarshalJSON), but its concrete value's OWN fields (plan.CronPayload,
+// plan.SystemdTimerPayload, ...) still sit at the OP'S top level on the
+// wire — that is exactly what Op.MarshalJSON's wireOp merge reproduces. So
+// the walk must reach them at the SAME path, not nested under a "Payload"
+// segment that never existed on the wire. Unlike redactStruct, there is
+// nothing to write back here, so this branch reads the interface's dynamic
+// value directly (fv.Elem()) instead of copying it to an addressable local
+// first: the shared Payload value is only ever read, never touched by a
+// Set call of any kind.
+func scanStruct(v reflect.Value, path string, fn func(path, s string) string) {
 	t := v.Type()
 	for i := range t.NumField() {
 		f := t.Field(i)
@@ -222,27 +225,7 @@ func walkStruct(v reflect.Value, path string, fn func(path, s string) string, mu
 			if fv.IsNil() {
 				continue
 			}
-			// fv.Elem() (the interface's dynamic value) is a copy and not
-			// addressable, so a redaction pass (fn rewriting a string via
-			// SetString) cannot mutate it in place — copy it to an
-			// addressable local and walk that. Only write the (possibly
-			// rewritten) copy back into the interface field when mutate:
-			// fv aliases the SAME Payload value a concurrent reader
-			// elsewhere may be reading right now (e.g. another goroutine's
-			// api.SensitiveOpNames call over the same shared []plan.Op —
-			// internal/remote/fleet.go's Fanout runs one such call per
-			// host), so an unconditional fv.Set here raced a concurrent
-			// reflect.Value.IsNil read on that field (task 0f2, reproduced
-			// with go test -race). scanOp and opDisplayName pass
-			// mutate=false for exactly that reason; redactOp — the only
-			// real mutator, and only on its own copyOp deep copy, never a
-			// caller's shared op — passes mutate=true.
-			concrete := reflect.New(fv.Elem().Type()).Elem()
-			concrete.Set(fv.Elem())
-			walkValue(concrete, path, fn, mutate)
-			if mutate {
-				fv.Set(concrete)
-			}
+			scanValue(fv.Elem(), path, fn)
 			continue
 		}
 		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
@@ -255,13 +238,152 @@ func walkStruct(v reflect.Value, path string, fn func(path, s string) string, mu
 		if path != "" {
 			name = path + "." + name
 		}
-		walkValue(v.Field(i), name, fn, mutate)
+		scanValue(v.Field(i), name, fn)
 	}
 }
 
-// walkStringMap walks a map[string]string's keys ("{key}") and values
-// ("{}"), rebuilding it when fn changed either.
-func walkStringMap(v reflect.Value, path string, fn func(path, s string) string) {
+// scanStringMap walks a map[string]string's keys ("{key}") and values
+// ("{}"), the read-only twin of redactStringMap: it never rebuilds or
+// writes the map.
+func scanStringMap(v reflect.Value, path string, fn func(path, s string) string) {
+	if v.IsNil() {
+		return
+	}
+	iter := v.MapRange()
+	for iter.Next() {
+		fn(path+"{key}", iter.Key().String())
+		fn(path+"{}", iter.Value().String())
+	}
+}
+
+// scanRawJSON walks the string leaves ("{}") and object keys ("{key}") of
+// encoded JSON (template_data), the read-only twin of redactRawJSON: it
+// decodes a throwaway copy and never calls v.SetBytes. Invalid JSON is left
+// alone; recording never produces it.
+func scanRawJSON(v reflect.Value, path string, fn func(path, s string) string) {
+	if v.Len() == 0 {
+		return
+	}
+	dec := json.NewDecoder(bytes.NewReader(v.Bytes()))
+	dec.UseNumber()
+	var data any
+	if err := dec.Decode(&data); err != nil {
+		return
+	}
+	scanAny(data, path, fn)
+}
+
+// scanAny is scanRawJSON's recursive step over decoded JSON.
+func scanAny(x any, path string, fn func(path, s string) string) {
+	switch t := x.(type) {
+	case string:
+		fn(path+"{}", t)
+	case []any:
+		for _, e := range t {
+			scanAny(e, path, fn)
+		}
+	case map[string]any:
+		for k, e := range t {
+			fn(path+"{key}", k)
+			scanAny(e, path, fn)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------
+// Mutating walker (redactOpStrings): the one real rewriter, used only by
+// redactOp (api/secret_plan.go) on its own copyOp deep copy — never on a
+// caller's shared op.
+// ---------------------------------------------------------------------
+
+// redactOpStrings calls fn for every string in op exactly like
+// scanOpStrings does, but writes back whatever fn returns: every string
+// field, slice element, map[string]string key/value and template_data leaf
+// that fn changed is rewritten in place (map and template_data get rebuilt
+// and re-encoded only when something in them changed), and the concrete
+// Payload's rewritten copy is written back into the interface field.
+// Because it always writes, it must only ever be called on an op no other
+// goroutine can observe — redactOp's copyOp deep copy — never on a shared
+// []plan.Op such as one internal/remote/fleet.go's Fanout hands to several
+// per-host goroutines; see scanOpStrings' doc comment for that hazard and
+// task kf2 for the bug this split closes (a `mutate bool` flag on one
+// shared function was not a strong enough guarantee: it gated only one of
+// several write paths).
+func redactOpStrings(op *plan.Op, fn func(path, s string) string) {
+	redactValue(reflect.ValueOf(op).Elem(), "", fn)
+}
+
+// redactValue is redactOpStrings' reflective step, the mutating twin of
+// scanValue.
+func redactValue(v reflect.Value, path string, fn func(path, s string) string) {
+	switch {
+	case v.Type() == rawMessageType:
+		redactRawJSON(v, path, fn)
+	case v.Kind() == reflect.String:
+		if s := fn(path, v.String()); s != v.String() {
+			v.SetString(s)
+		}
+	case v.Kind() == reflect.Pointer:
+		if !v.IsNil() {
+			redactValue(v.Elem(), path, fn)
+		}
+	case v.Kind() == reflect.Slice && v.Type().Elem().Kind() != reflect.Uint8:
+		for i := range v.Len() {
+			redactValue(v.Index(i), path+"[]", fn)
+		}
+	case isStringMap(v.Type()):
+		redactStringMap(v, path, fn)
+	case v.Kind() == reflect.Struct:
+		redactStruct(v, path, fn)
+	case isScalar(v.Kind()):
+		// Holds no string.
+	default:
+		panic(fmt.Sprintf("redactOpStrings: %s has unhandled type %s; teach redactValue and classify it", path, v.Type()))
+	}
+}
+
+// redactStruct walks every exported field under its JSON name, the
+// mutating twin of scanStruct. Op.Payload (task yd2) is special the same
+// way scanStruct's doc comment explains; the difference here is that its
+// concrete value sits behind an interface field and is therefore not
+// addressable, so a rewrite (fn returning a different string, via
+// SetString) cannot mutate it in place — this copies it to an addressable
+// local first, walks and (unconditionally, since redactOpStrings is only
+// ever called on an op nothing else can observe) writes the possibly
+// rewritten copy back into the interface field.
+func redactStruct(v reflect.Value, path string, fn func(path, s string) string) {
+	t := v.Type()
+	for i := range t.NumField() {
+		f := t.Field(i)
+		if f.Name == "Payload" && f.Type.Kind() == reflect.Interface {
+			fv := v.Field(i)
+			if fv.IsNil() {
+				continue
+			}
+			concrete := reflect.New(fv.Elem().Type()).Elem()
+			concrete.Set(fv.Elem())
+			redactValue(concrete, path, fn)
+			fv.Set(concrete)
+			continue
+		}
+		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if name == "-" || !f.IsExported() {
+			continue
+		}
+		if name == "" {
+			name = f.Name
+		}
+		if path != "" {
+			name = path + "." + name
+		}
+		redactValue(v.Field(i), name, fn)
+	}
+}
+
+// redactStringMap walks a map[string]string's keys ("{key}") and values
+// ("{}"), rebuilding it when fn changed either — the mutating twin of
+// scanStringMap.
+func redactStringMap(v reflect.Value, path string, fn func(path, s string) string) {
 	if v.IsNil() {
 		return
 	}
@@ -279,10 +401,11 @@ func walkStringMap(v reflect.Value, path string, fn func(path, s string) string)
 	}
 }
 
-// walkRawJSON walks the string leaves ("{}") and object keys ("{key}") of
-// encoded JSON (template_data) and re-encodes it when fn changed any.
-// Invalid JSON is left alone; recording never produces it.
-func walkRawJSON(v reflect.Value, path string, fn func(path, s string) string) {
+// redactRawJSON walks the string leaves ("{}") and object keys ("{key}") of
+// encoded JSON (template_data) and re-encodes it when fn changed any — the
+// mutating twin of scanRawJSON. Invalid JSON is left alone; recording never
+// produces it.
+func redactRawJSON(v reflect.Value, path string, fn func(path, s string) string) {
 	if v.Len() == 0 {
 		return
 	}
@@ -293,7 +416,7 @@ func walkRawJSON(v reflect.Value, path string, fn func(path, s string) string) {
 		return
 	}
 	changed := false
-	data = walkAny(data, path, fn, &changed)
+	data = redactAny(data, path, fn, &changed)
 	if !changed {
 		return
 	}
@@ -302,8 +425,8 @@ func walkRawJSON(v reflect.Value, path string, fn func(path, s string) string) {
 	}
 }
 
-// walkAny is walkRawJSON's recursive step over decoded JSON.
-func walkAny(x any, path string, fn func(path, s string) string, changed *bool) any {
+// redactAny is redactRawJSON's recursive step over decoded JSON.
+func redactAny(x any, path string, fn func(path, s string) string, changed *bool) any {
 	switch t := x.(type) {
 	case string:
 		s := fn(path+"{}", t)
@@ -311,7 +434,7 @@ func walkAny(x any, path string, fn func(path, s string) string, changed *bool) 
 		return s
 	case []any:
 		for i := range t {
-			t[i] = walkAny(t[i], path, fn, changed)
+			t[i] = redactAny(t[i], path, fn, changed)
 		}
 		return t
 	case map[string]any:
@@ -319,7 +442,7 @@ func walkAny(x any, path string, fn func(path, s string) string, changed *bool) 
 		for k, e := range t {
 			nk := fn(path+"{key}", k)
 			*changed = *changed || nk != k
-			out[nk] = walkAny(e, path, fn, changed)
+			out[nk] = redactAny(e, path, fn, changed)
 		}
 		return out
 	}

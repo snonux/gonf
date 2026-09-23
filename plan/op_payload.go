@@ -33,11 +33,11 @@ type OpPayload interface {
 //
 // Its json tags are never consulted by encoding/json — Op.MarshalJSON
 // merges these fields onto a wireOp and marshals THAT (applyToWire below),
-// never this struct directly — but api's secret-scan reflection walker
-// (walkOpStrings/opFieldClasses) still needs them: it descends into
-// Op.Payload's concrete value at the op's own top-level path (see
-// api/secret_fields.go's walkStruct), and computes each leaf's
-// classification path from THESE tags. They must therefore keep naming the
+// never this struct directly — but api's secret-scan reflection walkers
+// (scanOpStrings/redactOpStrings, opFieldClasses) still need them: it
+// descends into Op.Payload's concrete value at the op's own top-level path
+// (see api/secret_fields.go's scanStruct/redactStruct), and computes each
+// leaf's classification path from THESE tags. They must therefore keep naming the
 // same wire keys wireOp's own fields do; TestWirePayloadTagsMatch
 // (types_test.go) pins that the two never drift apart.
 //
@@ -103,11 +103,11 @@ func (p SystemdTimerPayload) applyToWire(w *wireOp) {
 //
 // Its json tags are never consulted by encoding/json — Op.MarshalJSON
 // merges these fields onto a wireOp and marshals THAT (applyToWire below),
-// never this struct directly — but api's secret-scan reflection walker
-// (walkOpStrings/opFieldClasses) still needs them: it descends into
-// Op.Payload's concrete value at the op's own top-level path (see
-// api/secret_fields.go's walkStruct), and computes each leaf's
-// classification path from THESE tags. They must therefore keep naming the
+// never this struct directly — but api's secret-scan reflection walkers
+// (scanOpStrings/redactOpStrings, opFieldClasses) still need them: it
+// descends into Op.Payload's concrete value at the op's own top-level path
+// (see api/secret_fields.go's scanStruct/redactStruct), and computes each
+// leaf's classification path from THESE tags. They must therefore keep naming the
 // same wire keys wireOp's own fields do; TestWirePayloadTagsMatch
 // (types_test.go) pins that the two never drift apart.
 //
@@ -252,10 +252,11 @@ func (p CommandPayload) applyToWire(w *wireOp) {
 //
 // Its json tags are never consulted by encoding/json — Op.MarshalJSON merges
 // these fields onto a wireOp and marshals THAT, never this struct directly —
-// but api's secret-scan reflection walker (walkOpStrings/opFieldClasses)
-// still needs them: it descends into Op.Payload's concrete value at the
-// op's own top-level path (see api/secret_fields.go's walkStruct), and
-// computes each leaf's classification path from THESE tags. They must
+// but api's secret-scan reflection walkers (scanOpStrings/redactOpStrings,
+// opFieldClasses) still need them: it descends into Op.Payload's concrete
+// value at the op's own top-level path (see api/secret_fields.go's
+// scanStruct/redactStruct), and computes each leaf's classification path
+// from THESE tags. They must
 // therefore keep naming the same wire keys wireOp's own fields do;
 // TestWirePayloadTagsMatch (types_test.go) pins that the two never drift
 // apart.
@@ -322,11 +323,11 @@ func (p ConfigSetMemberPayload) applyToWire(w *wireOp) {
 //
 // Its json tags are never consulted by encoding/json — Op.MarshalJSON
 // merges these fields onto a wireOp and marshals THAT (applyToWire below),
-// never this struct directly — but api's secret-scan reflection walker
-// (walkOpStrings/opFieldClasses) still needs them: it descends into
-// Op.Payload's concrete value at the op's own top-level path (see
-// api/secret_fields.go's walkStruct), and computes each leaf's
-// classification path from THESE tags. They must therefore keep naming the
+// never this struct directly — but api's secret-scan reflection walkers
+// (scanOpStrings/redactOpStrings, opFieldClasses) still need them: it
+// descends into Op.Payload's concrete value at the op's own top-level path
+// (see api/secret_fields.go's scanStruct/redactStruct), and computes each
+// leaf's classification path from THESE tags. They must therefore keep naming the
 // same wire keys wireOp's own fields do; TestWirePayloadTagsMatch
 // (types_test.go) pins that the two never drift apart.
 //
@@ -387,11 +388,11 @@ func (p SyncDirPayload) applyToWire(w *wireOp) {
 //
 // Its json tags are never consulted by encoding/json — Op.MarshalJSON
 // merges these fields onto a wireOp and marshals THAT (applyToWire below),
-// never this struct directly — but api's secret-scan reflection walker
-// (walkOpStrings/opFieldClasses) still needs them: it descends into
-// Op.Payload's concrete value at the op's own top-level path (see
-// api/secret_fields.go's walkStruct), and computes each leaf's
-// classification path from THESE tags. They must therefore keep naming the
+// never this struct directly — but api's secret-scan reflection walkers
+// (scanOpStrings/redactOpStrings, opFieldClasses) still need them: it
+// descends into Op.Payload's concrete value at the op's own top-level path
+// (see api/secret_fields.go's scanStruct/redactStruct), and computes each
+// leaf's classification path from THESE tags. They must therefore keep naming the
 // same wire keys wireOp's own fields do; TestWirePayloadTagsMatch
 // (types_test.go) pins that the two never drift apart.
 //

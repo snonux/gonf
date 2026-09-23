@@ -446,13 +446,14 @@ func TestOpZeroValueOmitemptyReady(t *testing.T) {
 // Those tags are never consulted by encoding/json (Op.MarshalJSON always
 // merges onto a wireOp and marshals that, never a payload type directly —
 // see op_payload.go's toWire/applyToWire) but api's secret-scan reflection
-// walker (walkOpStrings) descends straight into a payload's concrete value
-// and computes each leaf's opFieldClasses path from THESE tags, so a
-// payload tag that drifts from wireOp's would silently misclassify (or
-// stop scanning) that field — exactly the class of bug
-// TestOpFieldClassesAreExhaustive (api/secret_fields_test.go) already
-// guards from the other direction. This test guards the tag SOURCE the
-// walker trusts, field by field, so a typo'd or forgotten payload tag fails
+// walkers (scanOpStrings and redactOpStrings) descend straight into a
+// payload's concrete value and compute each leaf's opFieldClasses path
+// from THESE tags, so a payload tag that drifts from wireOp's would
+// silently misclassify (or stop scanning) that field — exactly the class
+// of bug TestOpFieldClassesAreExhaustive (api/secret_fields_test.go)
+// already guards from the other direction. This test guards the tag
+// SOURCE the walkers trust, field by field, so a typo'd or forgotten
+// payload tag fails
 // here instead of only showing up as a missing opFieldClasses entry with no
 // clue where the mismatch actually is.
 func TestWirePayloadTagsMatch(t *testing.T) {

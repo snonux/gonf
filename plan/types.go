@@ -556,10 +556,10 @@ type Op struct {
 	// KindEnsureFile does not also get one). It is
 	// json:"-" because Op never marshals itself by default reflection — see
 	// MarshalJSON/UnmarshalJSON below — but api's secret-scan reflection
-	// walker (walkOpStrings) still reaches its fields: it special-cases the
-	// "Payload" field by name and descends into it at the SAME path its
-	// fields had on the wire, since that is where they still sit (see
-	// api/secret_fields.go).
+	// walkers (scanOpStrings and redactOpStrings) still reach its fields:
+	// each special-cases the "Payload" field by name and descends into it
+	// at the SAME path its fields had on the wire, since that is where
+	// they still sit (see api/secret_fields.go).
 	Payload OpPayload `json:"-"`
 }
 
