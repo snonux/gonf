@@ -174,6 +174,21 @@ func TestMayManageUnit(t *testing.T) {
 		// Negative: the bare type-wide directory of the wrong type
 		// must not match.
 		{"File[/etc/systemd/system/timer.d/10-x.conf]", "a.service", false},
+		// Negative (zc2): a same-named service.d directory that is not
+		// under any standard systemd unit search path is not a
+		// drop-in directory systemd would ever read for a.service,
+		// no matter its basename.
+		{"File[/srv/data/service.d/x.conf]", "a.service", false},
+		{"File[/home/u/notes/service.d/todo.conf]", "a.service", false},
+		// Negative (zc2): same for a dash-prefix drop-in directory
+		// outside a unit search path.
+		{"File[/srv/data/foo-.service.d/10-x.conf]", "foo-bar.service", false},
+		// Positive: the bare type-wide and dash-prefix directories
+		// still match under a real search directory, including the
+		// user one addressed by home (~/.config/systemd/user),
+		// matched by suffix since the home directory varies.
+		{"File[/home/paul/.config/systemd/user/service.d/x.conf]", "a.service", true},
+		{"File[/home/paul/.config/systemd/user/foo-.service.d/x.conf]", "foo-bar.service", true},
 	} {
 		if got := mayManageUnit(tc.id, tc.unit); got != tc.want {
 			t.Errorf("mayManageUnit(%s, %s) = %v, want %v", tc.id, tc.unit, got, tc.want)

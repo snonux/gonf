@@ -123,10 +123,17 @@ func (d *DaemonReloadResource) relatedInput(entries []string) (string, bool) {
 // name is the unit (or its template, a@.service for a@x.service), or its
 // parent directory is one of the unit's drop-in directories: unit.d (or the
 // template's), a dash-prefix directory, or the bare type-wide directory
-// (dropinDirs). Any other kind, including a Directory (a SyncDir's files
-// are not registered one by one), may hold any unit and counts as managing
-// it: the check must never let a join start a unit from a stale
-// definition.
+// (dropinDirs). The two directories named by dropinDirs only match when the
+// drop-in directory itself sits directly under a real systemd unit search
+// directory (isUnitSearchDir): systemd only ever scans them there
+// (systemd.unit(5)), so e.g. /srv/data/service.d/x.conf must not be treated
+// as a drop-in of every .service unit just because its parent is named
+// "service.d" (zc2). unit.d itself is left unscoped: it names the unit, so
+// a same-named directory elsewhere is not a plausible false positive the
+// way the type-wide and dash-prefix directories are. Any other kind,
+// including a Directory (a SyncDir's files are not registered one by one),
+// may hold any unit and counts as managing it: the check must never let a
+// join start a unit from a stale definition.
 func mayManageUnit(id, unit string) bool {
 	kind, path, ok := strings.Cut(strings.TrimSuffix(id, "]"), "[")
 	if !ok || kind != "File" {
@@ -136,13 +143,48 @@ func mayManageUnit(id, unit string) bool {
 	if tmpl, ok := templateName(unit); ok {
 		names = append(names, tmpl)
 	}
-	base, parent := filepath.Base(path), filepath.Base(filepath.Dir(path))
+	base, dir := filepath.Base(path), filepath.Dir(path)
+	parent := filepath.Base(dir)
 	for _, n := range names {
-		if base == n || parent == n+".d" || slices.Contains(dropinDirs(n), parent) {
+		if base == n || parent == n+".d" {
+			return true
+		}
+		if slices.Contains(dropinDirs(n), parent) && isUnitSearchDir(filepath.Dir(dir)) {
 			return true
 		}
 	}
 	return false
+}
+
+// unitSearchDirs are the standard systemd unit load directories under which
+// systemd also scans a unit's dash-prefix and bare type-wide drop-in
+// directories (systemd.unit(5), "Unit Load Path"). Gonf's own SystemdTimer
+// only ever writes units to /etc/systemd/system or ~/.config/systemd/user
+// (resource/systemdtimer.unitDir), but a File input naming any other
+// standard search directory is just as real a drop-in location, so
+// isUnitSearchDir recognizes the documented set, not just gonf's own two.
+var unitSearchDirs = []string{
+	"/etc/systemd/system",
+	"/run/systemd/system",
+	"/usr/lib/systemd/system",
+	"/usr/local/lib/systemd/system",
+	"/lib/systemd/system", // pre-merged-/usr layout; usually a symlink to /usr/lib/systemd/system
+	"/etc/systemd/user",
+	"/run/systemd/user",
+	"/usr/lib/systemd/user",
+	"/usr/local/lib/systemd/user",
+	"/usr/share/systemd/user",
+	"/usr/local/share/systemd/user",
+}
+
+// isUnitSearchDir reports whether dir is one of the standard systemd unit
+// load directories (unitSearchDirs), or a user's own ~/.config/systemd/user
+// (matched by suffix, since the home directory varies per host and user).
+func isUnitSearchDir(dir string) bool {
+	if slices.Contains(unitSearchDirs, dir) {
+		return true
+	}
+	return strings.HasSuffix(dir, "/.config/systemd/user")
 }
 
 // dropinDirs returns the drop-in directory names systemd additionally
@@ -154,6 +196,12 @@ func mayManageUnit(id, unit string) bool {
 //     can share drop-ins;
 //   - the bare <type>.d directory (e.g. service.d), which applies to every
 //     unit of that type, not just ones with a dash-prefix.
+//
+// It returns only the directory names, unqualified by location: systemd
+// reads them wherever it finds them within its unit search path, so
+// mayManageUnit (their only caller) additionally requires the directory's
+// own parent to be one (isUnitSearchDir) before treating a same-named
+// directory elsewhere as a match.
 func dropinDirs(unit string) []string {
 	dot := strings.LastIndexByte(unit, '.')
 	if dot < 0 {
