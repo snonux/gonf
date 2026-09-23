@@ -1199,3 +1199,173 @@ func TestEnsureRemoteGonfUnparseablePlanVersionProbeFailsWithRawOutput(t *testin
 		t.Fatalf("error %q must not silently reinterpret banner noise as \"schema 0\"", err.Error())
 	}
 }
+
+// TestProbeReleaseVersionToleratesRealisticSSHNoise is task lf2's direct
+// unit-level regression test: probeReleaseVersion is now the SOLE
+// compatibility gate for api.PushPayload (RequireRemoteRelayed, since ne2
+// removed the plan-schema backstop from that path), so it must not be
+// fooled by the routine ssh noise a real host actually produces ahead of
+// "gonf -version"'s own answer, or by a locally built remote binary's
+// release/pre-release suffix. Before this fix, every case below made
+// probeReleaseVersion return the raw, unparsed multi-line (or suffixed)
+// string, which parseReleaseVersion then refused with "has a non-numeric
+// segment" — wrongly refusing a fully -relayed-capable 0.16.6 remote.
+func TestProbeReleaseVersionToleratesRealisticSSHNoise(t *testing.T) {
+	oldCapture := sshCaptureExec
+	t.Cleanup(func() { sshCaptureExec = oldCapture })
+
+	tests := []struct {
+		name   string
+		output string
+	}{
+		{"clean, no noise", "0.16.6\n"},
+		{"welcome banner", "Welcome to FreeBSD!\n0.16.6\n"},
+		{"login timestamp", "Last login: Tue Sep 23 12:00:00 2026\n0.16.6\n"},
+		{"dev-suffixed version", "0.16.6-dev\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sshCaptureExec = func(ctx context.Context, argv []string) (string, string, error) {
+				return tc.output, "", nil
+			}
+			got, err := probeReleaseVersion(context.Background(), PushTarget{Host: "h.example"}, ProbeLogin)
+			if err != nil {
+				t.Fatalf("probeReleaseVersion(%q) = _, %v, want nil error", tc.output, err)
+			}
+			if got != "0.16.6" {
+				t.Fatalf("probeReleaseVersion(%q) = %q, want \"0.16.6\"", tc.output, got)
+			}
+		})
+	}
+}
+
+// TestProbeReleaseVersionStillDetectsGenuinelyStaleRelease pins that the
+// hardening above does not weaken the actual version comparison: a clean,
+// noise-free release older than relayedMinRelease must still parse to
+// exactly itself, so the caller's floor check still refuses it.
+func TestProbeReleaseVersionStillDetectsGenuinelyStaleRelease(t *testing.T) {
+	oldCapture := sshCaptureExec
+	t.Cleanup(func() { sshCaptureExec = oldCapture })
+	sshCaptureExec = func(ctx context.Context, argv []string) (string, string, error) {
+		return "0.16.2\n", "", nil
+	}
+
+	got, err := probeReleaseVersion(context.Background(), PushTarget{Host: "h.example"}, ProbeLogin)
+	if err != nil {
+		t.Fatalf("probeReleaseVersion() = _, %v, want nil error", err)
+	}
+	if got != "0.16.2" {
+		t.Fatalf("probeReleaseVersion() = %q, want \"0.16.2\" (genuinely stale release must not be altered)", got)
+	}
+}
+
+// TestProbeReleaseVersionUnparseableOutputReturnsRawTextError mirrors
+// TestProbePlanVersionUnparseableOutputReturnsRawTextError: output with no
+// recognizable version anywhere (not just noise ahead of one) must still
+// produce a clear error naming the banner/MOTD hazard and quoting the raw
+// offending line, exactly like probePlanVersion already does — the
+// hardening above must tolerate ROUTINE noise, not swallow every failure
+// silently.
+func TestProbeReleaseVersionUnparseableOutputReturnsRawTextError(t *testing.T) {
+	oldCapture := sshCaptureExec
+	t.Cleanup(func() { sshCaptureExec = oldCapture })
+	const banner = "*** WARNING: unauthorized access to this system is prohibited ***"
+	sshCaptureExec = func(ctx context.Context, argv []string) (string, string, error) {
+		return banner + "\n", "", nil
+	}
+
+	got, err := probeReleaseVersion(context.Background(), PushTarget{Host: "h.example"}, ProbeLogin)
+	if err == nil {
+		t.Fatalf("probeReleaseVersion() = %q, nil; want an error for output with no recognizable version", got)
+	}
+	if !strings.Contains(err.Error(), banner) {
+		t.Fatalf("error %q does not include the raw unparsed probe output %q", err.Error(), banner)
+	}
+	if !strings.Contains(err.Error(), "banner") {
+		t.Fatalf("error %q does not name the banner/MOTD hazard", err.Error())
+	}
+}
+
+// TestPushPayloadContextAcceptsNoisyButRelayedCapableRemote is the
+// end-to-end version of TestProbeReleaseVersionToleratesRealisticSSHNoise:
+// it drives PushPayloadContext through the REAL, default-wired
+// probeReleaseVersion (via sshCaptureExec) instead of a stubbed
+// ReleaseVersionProber, confirming the fix reaches the actual push gate
+// (RequireRemoteRelayed) that regressed — a fully -relayed-capable 0.16.6
+// remote must be accepted despite realistic ssh banner/MOTD noise or a
+// dev-suffixed release string, and the push must still reach SSH (proving
+// it was not refused).
+func TestPushPayloadContextAcceptsNoisyButRelayedCapableRemote(t *testing.T) {
+	oldRelease := defaultPusher.ReleaseVersionProber
+	oldCapture := sshCaptureExec
+	oldSSH := SSHRunner
+	t.Cleanup(func() {
+		defaultPusher.ReleaseVersionProber = oldRelease
+		sshCaptureExec = oldCapture
+		SSHRunner = oldSSH
+	})
+	defaultPusher.ReleaseVersionProber = probeReleaseVersion // exercise the real probe, not a stub
+
+	tests := []struct {
+		name   string
+		output string
+	}{
+		{"welcome banner", "Welcome to FreeBSD!\n0.16.6\n"},
+		{"login timestamp", "Last login: Tue Sep 23 12:00:00 2026\n0.16.6\n"},
+		{"dev-suffixed version", "0.16.6-dev\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sshCaptureExec = func(ctx context.Context, argv []string) (string, string, error) {
+				return tc.output, "", nil
+			}
+			sshCalled := false
+			SSHRunner = func(context.Context, io.Reader, []string) error {
+				sshCalled = true
+				return nil
+			}
+
+			err := PushPayloadContext(context.Background(), PushTarget{Host: "h.example"}, []byte("GONF-PUSH/1"), false, "")
+			if err != nil {
+				t.Fatalf("PushPayloadContext() = %v, want a noisy-but-capable remote (%q) accepted", err, tc.output)
+			}
+			if !sshCalled {
+				t.Fatalf("PushPayloadContext did not reach SSH for a -relayed-capable remote reporting %q", tc.output)
+			}
+		})
+	}
+}
+
+// TestPushPayloadContextRefusesGenuinelyStaleRemoteWithoutSSH is the
+// end-to-end counterpart of TestPushPayloadContextAcceptsNoisyButRelayedCapableRemote:
+// it drives the REAL probeReleaseVersion against a clean, noise-free but
+// genuinely too-old release, confirming the hardening did not loosen the
+// gate ne2 was created to close — the push must be refused BEFORE any SSH
+// session opens.
+func TestPushPayloadContextRefusesGenuinelyStaleRemoteWithoutSSH(t *testing.T) {
+	oldRelease := defaultPusher.ReleaseVersionProber
+	oldCapture := sshCaptureExec
+	oldSSH := SSHRunner
+	t.Cleanup(func() {
+		defaultPusher.ReleaseVersionProber = oldRelease
+		sshCaptureExec = oldCapture
+		SSHRunner = oldSSH
+	})
+	defaultPusher.ReleaseVersionProber = probeReleaseVersion // exercise the real probe, not a stub
+	sshCaptureExec = func(ctx context.Context, argv []string) (string, string, error) {
+		return "0.16.2\n", "", nil // clean, no noise: one release below the 0.16.3 floor
+	}
+	sshCalled := false
+	SSHRunner = func(context.Context, io.Reader, []string) error {
+		sshCalled = true
+		return nil
+	}
+
+	err := PushPayloadContext(context.Background(), PushTarget{Host: "h.example"}, []byte("GONF-PUSH/1"), false, "")
+	if err == nil || !strings.Contains(err.Error(), "older than the minimum") {
+		t.Fatalf("PushPayloadContext() = %v, want a clear refusal of the genuinely stale remote", err)
+	}
+	if sshCalled {
+		t.Fatal("PushPayloadContext opened an ssh session against a genuinely stale remote; want it refused first")
+	}
+}

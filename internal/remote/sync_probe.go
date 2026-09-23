@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -112,12 +113,31 @@ func probeStrictPreviewVersion(ctx context.Context, t PushTarget, pc ProbeContex
 
 // probeReleaseVersion returns the remote gonf binary's own release version
 // string (as reported by "gonf -version", e.g. "0.12.1"), or "" with a nil
-// error when the binary is missing or too old to support -version. Unlike
-// probePlanVersion, an unparseable non-empty result is NOT turned into an
-// error here — see remoteReleaseIsStale, which treats it as "skip this
-// extra check" rather than failing the whole push, since the release-version
-// comparison is a best-effort safety net layered on top of the authoritative
-// plan-schema check.
+// error when the binary is missing or too old to support -version.
+//
+// Like probePlanVersion, raw ssh output can carry a login banner, MOTD, or
+// shell startup noise ahead of the real answer, so this probe takes the
+// LAST non-empty line of the output (lastNonEmptyLine) rather than the raw
+// whole string — the remote command's own answer always prints after any
+// such noise, never before it. A locally built remote binary can also
+// report a release with a trailing build/pre-release tag (e.g.
+// "0.16.6-dev"); versionPrefix keeps only that line's leading
+// MAJOR[.MINOR[.PATCH]] digits, since the tag does not change which release
+// the binary behaves as for capability comparisons. A line that still has
+// no recognizable version prefix after both are applied is reported as an
+// error quoting the raw line and naming the banner/MOTD hazard, the same
+// way probePlanVersion already does.
+//
+// This probe is no longer just a best-effort supplement: task ne2 made it
+// the SOLE compatibility gate for api.PushPayload (RequireRemoteRelayed) —
+// there is no plan-schema check layered underneath that path any more (see
+// RequireRemoteRelayed's own doc comment) — so an unhardened parse here
+// used to refuse a fully capable remote purely over cosmetic ssh noise
+// (task lf2). remoteReleaseIsStale (EnsureRemoteGonf's path, which DOES
+// still have the plan-schema check as a backstop) keeps its own, separate
+// graceful "unparseable → skip this extra check" handling of this probe's
+// error return; RequireRemoteGonf and RequireRemoteRelayed both still treat
+// an error here as a hard refusal, since neither has that backstop either.
 func probeReleaseVersion(ctx context.Context, t PushTarget, pc ProbeContext) (string, error) {
 	cmd, err := remoteProbeCmd(t, pc, "-version")
 	if err != nil {
@@ -127,7 +147,45 @@ func probeReleaseVersion(ctx context.Context, t PushTarget, pc ProbeContext) (st
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(out), nil
+	line := lastNonEmptyLine(out)
+	if line == "" {
+		return "", nil
+	}
+	version := versionPrefix(line)
+	if version == "" {
+		return "", fmt.Errorf("release probe: %s returned unparseable output %q instead of a release version (a login banner, MOTD, or other ssh startup noise may be mixed into the probe output — check the remote login shell's startup files)", cmd, line)
+	}
+	return version, nil
+}
+
+// lastNonEmptyLine returns the last non-blank, trimmed line of s, or "" when
+// s has no non-blank line. Ssh startup noise (a login banner, MOTD, shell rc
+// output) always prints before the remote command's own output, never after
+// it, so the last non-empty line is the answer even when earlier lines are
+// contaminated.
+func lastNonEmptyLine(s string) string {
+	lines := strings.Split(s, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if line := strings.TrimSpace(lines[i]); line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
+// releaseVersionPattern matches a release version's leading
+// MAJOR[.MINOR[.PATCH]] digits, tolerating parseReleaseVersion's own
+// optional leading "v"/"V" prefix. Anything after the match (a build or
+// pre-release tag such as "-dev" or "+build3") is deliberately dropped: it
+// names extra metadata about the same release, not a different one, so
+// keeping it would only make an otherwise-valid version string fail to
+// parse.
+var releaseVersionPattern = regexp.MustCompile(`^[vV]?\d+(\.\d+){0,2}`)
+
+// versionPrefix returns line's leading release-version-shaped substring (see
+// releaseVersionPattern), or "" when line does not start with one.
+func versionPrefix(line string) string {
+	return releaseVersionPattern.FindString(line)
 }
 
 // remoteProbeCmd builds a version/capability probe of t's gonf binary in the
@@ -146,9 +204,10 @@ func remoteProbeCmd(t PushTarget, pc ProbeContext, args string) (string, error) 
 // check exists to catch a fix that never bumped plan.CurrentVersion (see
 // Pusher.ReleaseVersionProber's doc comment), not to add a new way for a
 // push to fail outright. A probe/parse problem is still logged as a
-// warning, though, so genuine banner/MOTD contamination on "-version" (the
-// same hazard fixed for "-plan-version" in probePlanVersion) remains
-// diagnosable instead of being swallowed entirely.
+// warning, though, so genuine trouble is still diagnosable instead of being
+// swallowed entirely — probeReleaseVersion itself now tolerates the routine
+// banner/MOTD/dev-suffix noise (task lf2, mirroring probePlanVersion's
+// banner handling), so an error reaching here means something odder.
 func (p *Pusher) remoteReleaseIsStale(ctx context.Context, t PushTarget) (bool, string) {
 	remoteRelease, err := p.ReleaseVersionProber(ctx, t, ProbeLogin)
 	if err != nil {
