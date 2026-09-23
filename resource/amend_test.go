@@ -16,7 +16,7 @@ func TestAmendRegisteredAddsEdgesAndDraft(t *testing.T) {
 	ResetRepository()
 	t.Cleanup(func() { ResetRepository(); SetPlanDraftAmender(nil) })
 	Register("X", "a", noop())
-	target := Register("R", "r", noop())
+	target, _ := Register("R", "r", noop())
 	var sunk []PlanDraft
 	SetPlanDraftAmender(func(d PlanDraft) error { sunk = append(sunk, d); return nil })
 
@@ -38,7 +38,7 @@ func TestAmendRegisteredAddsEdgesAndDraft(t *testing.T) {
 func TestAmendRegisteredRefusesCycle(t *testing.T) {
 	ResetRepository()
 	t.Cleanup(func() { ResetRepository(); SetPlanDraftAmender(nil) })
-	target := Register("R", "r", noop())
+	target, _ := Register("R", "r", noop())
 	Register("T", "t", noop(), "R[r]")
 	Register("X", "b", noop(), "T[t]") // b -> t -> r
 	SetPlanDraftAmender(func(PlanDraft) error { t.Fatal("sink ran for a refused amendment"); return nil })
@@ -61,7 +61,7 @@ func TestAmendRegisteredRefusesSelfDependency(t *testing.T) {
 	ResetRepository()
 	t.Cleanup(func() { ResetRepository(); SetPlanDraftAmender(nil) })
 	Register("X", "a", noop())
-	target := Register("R", "r", noop())
+	target, _ := Register("R", "r", noop())
 	SetPlanDraftAmender(func(PlanDraft) error { t.Fatal("sink ran for a refused amendment"); return nil })
 
 	err := AmendRegistered(PlanDraft{ID: "R[r]"}, "X[a]", "R[r]")
@@ -82,7 +82,7 @@ func TestAmendRegisteredSinkErrorChangesNothing(t *testing.T) {
 	ResetRepository()
 	t.Cleanup(func() { ResetRepository(); SetPlanDraftAmender(nil) })
 	Register("X", "a", noop())
-	target := Register("R", "r", noop())
+	target, _ := Register("R", "r", noop())
 	RecordPlanDraft(PlanDraft{ID: "R[r]", Kind: "original"})
 	refuse := errors.New("boundary")
 	SetPlanDraftAmender(func(PlanDraft) error { return refuse })

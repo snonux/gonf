@@ -32,7 +32,7 @@ func TestResetForTestClearsStaleWhenContext(t *testing.T) {
 	// "" again, not the entry a dropped pop left behind on the old
 	// repository instance.
 	repo := getRepository()
-	res := Register("File", "/tmp/collide.txt", noopRegistered)
+	res, _ := Register("File", "/tmp/collide.txt", noopRegistered)
 	err := repo.register(res)
 	if err == nil {
 		t.Fatal("expected a collision error when registering the same resource twice, got nil")

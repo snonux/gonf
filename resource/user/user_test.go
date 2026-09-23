@@ -17,7 +17,7 @@ import (
 
 func TestPresentRecordsCompleteAdditiveUserDraft(t *testing.T) {
 	resource.ResetForTest()
-	dep := resource.Register("Package", "base", func() error { return nil })
+	dep, _ := resource.Register("Package", "base", func() error { return nil })
 	got := Present("svc",
 		opt.WithPrimaryGroup("svc"),
 		opt.WithSupplementaryGroups("wheel", "audio"),

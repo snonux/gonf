@@ -78,8 +78,10 @@ func Present(name string, opts ...opt.LocalUserOption) resource.Resource {
 	if err := u.MisuseErr(); err != nil {
 		return resource.Refuse(resourceType, name, err)
 	}
-	r := resource.Register(resourceType, u.name, u, u.DependsOn.IDs...)
-	resource.RecordPlanDraft(u.planDraft(r.ID()))
+	r, ok := resource.Register(resourceType, u.name, u, u.DependsOn.IDs...)
+	if ok {
+		resource.RecordPlanDraft(u.planDraft(r.ID()))
+	}
 	return r
 }
 

@@ -120,8 +120,10 @@ func Present(name string, opts ...opt.CronOption) resource.Resource {
 	if err := c.MisuseErr(); err != nil {
 		return resource.Refuse(cronType, c.regName(), err)
 	}
-	r := resource.Register(cronType, c.regName(), c, c.DependsOn.IDs...)
-	resource.RecordPlanDraft(c.planDraft(r.ID()))
+	r, ok := resource.Register(cronType, c.regName(), c, c.DependsOn.IDs...)
+	if ok {
+		resource.RecordPlanDraft(c.planDraft(r.ID()))
+	}
 	return r
 }
 

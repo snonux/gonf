@@ -234,7 +234,7 @@ func TestPlanDraftClonePreservesNilAndEmpty(t *testing.T) {
 func TestRecordPlanDraftIsolatesCallerStoreAndRecorder(t *testing.T) {
 	resource.ResetRepository()
 	t.Cleanup(func() { resource.ResetRepository(); resource.SetPlanDraftRecorder(nil) })
-	res := resource.Register("Command", "full", func() error { return nil })
+	res, _ := resource.Register("Command", "full", func() error { return nil })
 	var recorded []resource.PlanDraft
 	resource.SetPlanDraftRecorder(func(d resource.PlanDraft) { recorded = append(recorded, d) })
 
@@ -267,7 +267,7 @@ func TestRecordPlanDraftIsolatesCallerStoreAndRecorder(t *testing.T) {
 func TestAmendRegisteredIsolatesCallerStoreAndSink(t *testing.T) {
 	resource.ResetRepository()
 	t.Cleanup(func() { resource.ResetRepository(); resource.SetPlanDraftAmender(nil) })
-	res := resource.Register("Command", "full", func() error { return nil })
+	res, _ := resource.Register("Command", "full", func() error { return nil })
 	var sunk []resource.PlanDraft
 	resource.SetPlanDraftAmender(func(d resource.PlanDraft) error { sunk = append(sunk, d); return nil })
 

@@ -61,8 +61,10 @@ func Present(name string, opts ...opt.PackageOption) resource.Resource {
 		return resource.Refuse("Package", name, err)
 	}
 
-	r := resource.Register("Package", p.name, p, p.DependsOn.IDs...)
-	resource.RecordPlanDraft(p.planDraft(r.ID()))
+	r, ok := resource.Register("Package", p.name, p, p.DependsOn.IDs...)
+	if ok {
+		resource.RecordPlanDraft(p.planDraft(r.ID()))
+	}
 	return r
 }
 

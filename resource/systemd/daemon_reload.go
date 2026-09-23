@@ -78,8 +78,10 @@ func Present(opts ...opt.DaemonReloadOption) resource.Resource {
 	if r, prev, ok := registeredReload(d.id()); ok {
 		return prev.mergeInto(r, d)
 	}
-	r := resource.Register("DaemonReload", busName(d.user), d, d.DependsOn.IDs...)
-	resource.RecordPlanDraft(d.planDraft(r.ID()))
+	r, ok := resource.Register("DaemonReload", busName(d.user), d, d.DependsOn.IDs...)
+	if ok {
+		resource.RecordPlanDraft(d.planDraft(r.ID()))
+	}
 	return r
 }
 

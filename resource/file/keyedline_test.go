@@ -134,7 +134,7 @@ func TestKeyedLinesSurvivePlanRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.resource = resource.Register("File", f.resourceName(), f)
+	f.resource, _ = resource.Register("File", f.resourceName(), f)
 	op, err := planHandler{}.ToOp(f.planDraft())
 	if err != nil {
 		t.Fatalf("ToOp: %v", err)

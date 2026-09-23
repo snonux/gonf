@@ -404,8 +404,11 @@ func Present(path string, opts ...opt.FileOption) resource.Resource {
 		return resource.Refuse("File", path, err)
 	}
 
-	f.resource = resource.Register("File", f.resourceName(), f, f.DependsOn.IDs...)
-	resource.RecordPlanDraft(f.planDraft())
+	r, ok := resource.Register("File", f.resourceName(), f, f.DependsOn.IDs...)
+	f.resource = r
+	if ok {
+		resource.RecordPlanDraft(f.planDraft())
+	}
 	return f.resource
 }
 
@@ -422,8 +425,11 @@ func PresentSecret(path string, content []byte, opts ...opt.FileOption) resource
 	if err != nil {
 		return resource.Refuse("File", path, err)
 	}
-	f.resource = resource.Register("File", f.resourceName(), f, f.DependsOn.IDs...)
-	resource.RecordPlanDraft(f.planDraft())
+	r, ok := resource.Register("File", f.resourceName(), f, f.DependsOn.IDs...)
+	f.resource = r
+	if ok {
+		resource.RecordPlanDraft(f.planDraft())
+	}
 	return f.resource
 }
 
@@ -470,8 +476,11 @@ func PresentEnsure(path string, opts ...opt.FileOption) resource.Resource {
 			"file %s: EnsureFile cannot combine WithContent/WithSource, WithLine(s)/WithoutLine(s)/WithKeyedLine, or IsAbsent", path))
 	}
 	f.preserveContent = true
-	f.resource = resource.Register("EnsureFile", f.resourceName(), f, f.DependsOn.IDs...)
-	resource.RecordPlanDraft(f.planDraft())
+	r, ok := resource.Register("EnsureFile", f.resourceName(), f, f.DependsOn.IDs...)
+	f.resource = r
+	if ok {
+		resource.RecordPlanDraft(f.planDraft())
+	}
 	return f.resource
 }
 

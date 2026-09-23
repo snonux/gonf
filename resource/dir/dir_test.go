@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	. "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/internal/testapply"
 	"github.com/snonux/gonf/resource"
 )
@@ -1899,5 +1900,55 @@ func TestSourceCopyParamWithoutSourceBaseKeepsBlobPath(t *testing.T) {
 	}
 	if want := "param is " + filepath.Join(blob, "app.conf.tmpl") + "\n"; string(got) != want {
 		t.Fatalf("rendered content = %q, want %q", got, want)
+	}
+}
+
+// TestPresentCollisionDoesNotOverwriteFirstDeclarationsDraft pins task sf2's
+// fix for a different resource kind than the one that first surfaced it
+// (file.Present; see api's TestResetDeclarationErrorUnsticksLaterUnrelatedApply):
+// a second, colliding Present declaration under the same ID must not
+// silently overwrite the FIRST, successfully registered declaration's plan
+// draft. Two Present(path, ...) calls for the same path register under the
+// identical "Directory[path]" ID, which resource.Register always refuses on
+// the second call (its own doc comment: "a duplicate ID ... is always a
+// task bug") regardless of any WhenPathExists/WhenHostname wrapping -- so
+// this reproduces the same class of bug with a bare double declaration.
+//
+// Before sf2, dir.Present called resource.RecordPlanDraft unconditionally
+// even when Register refused the second call, so the refused declaration's
+// draft (mode 0750) silently overwrote the first, successfully registered
+// declaration's draft (mode 0700) under the same ID, although the
+// repository's registered value stayed the FIRST declaration's -- the same
+// registered-vs-draft mismatch file.Present had. resource.Register now
+// returns ok=false for the refused call, and dir.Present skips
+// RecordPlanDraft when ok is false, so the surviving draft (and thus the
+// mode actually applied) stays the FIRST declaration's.
+func TestPresentCollisionDoesNotOverwriteFirstDeclarationsDraft(t *testing.T) {
+	resource.ResetForTest()
+	t.Cleanup(resource.ResetForTest)
+
+	path := filepath.Join(t.TempDir(), "d")
+
+	Present(path, WithMode(0o700))
+	Present(path, WithMode(0o750))
+
+	if declerr.First() == nil {
+		t.Fatal("expected the duplicate Directory declaration to report a collision")
+	}
+	// The production-safe escape hatch (task oe2): unstick the sticky
+	// declaration error without discarding the registered repository or
+	// its drafts, mirroring how a library embedder recovers in production.
+	resource.ResetDeclarationError()
+
+	if err := testapply.Apply(); err != nil {
+		t.Fatalf("Apply() after ResetDeclarationError = %v, want nil", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("mode = %o, want %o (the first declaration's, not the refused second one's)", got, 0o700)
 	}
 }

@@ -464,8 +464,11 @@ func Present(path string, opts ...opt.DirOption) resource.Resource {
 		return resource.Refuse("Directory", path, err)
 	}
 
-	d.resource = resource.Register("Directory", d.path, d, d.DependsOn.IDs...)
-	resource.RecordPlanDraft(d.planDraft())
+	r, ok := resource.Register("Directory", d.path, d, d.DependsOn.IDs...)
+	d.resource = r
+	if ok {
+		resource.RecordPlanDraft(d.planDraft())
+	}
 	return d.resource
 }
 

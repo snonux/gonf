@@ -40,11 +40,13 @@ var _ plan.Handler = fixtureHandler{}
 // binary that never uses a fixture has no extra kind registered.
 func Register(typeName, name string, work func() error, deps ...string) resource.Resource {
 	registerOnce.Do(func() { plan.RegisterHandler(fixtureKind, fixtureHandler{}) })
-	res := resource.Register(typeName, name, work, deps...)
-	fixturesMu.Lock()
-	fixtures[res.ID()] = work
-	fixturesMu.Unlock()
-	resource.RecordPlanDraft(resource.PlanDraft{Kind: string(fixtureKind), ID: res.ID(), Deps: slices.Clone(deps)})
+	res, ok := resource.Register(typeName, name, work, deps...)
+	if ok {
+		fixturesMu.Lock()
+		fixtures[res.ID()] = work
+		fixturesMu.Unlock()
+		resource.RecordPlanDraft(resource.PlanDraft{Kind: string(fixtureKind), ID: res.ID(), Deps: slices.Clone(deps)})
+	}
 	return res
 }
 

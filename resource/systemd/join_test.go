@@ -13,7 +13,8 @@ import (
 
 // noop registers a do-nothing resource of kind/name and returns it.
 func noop(kind, name string, deps ...string) resource.Resource {
-	return resource.Register(kind, name, func() error { return nil }, deps...)
+	r, _ := resource.Register(kind, name, func() error { return nil }, deps...)
+	return r
 }
 
 // TestJoinRegisteredReload pins which joins succeed: a same-bus registered

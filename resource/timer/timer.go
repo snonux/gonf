@@ -56,8 +56,10 @@ func Present(name string, opts ...opt.TimerOption) resource.Resource {
 	if err != nil {
 		return resource.Refuse("Timer", normalizeUnit(name), err)
 	}
-	r := resource.Register("Timer", t.name, t, t.DependsOn.IDs...)
-	resource.RecordPlanDraft(t.planDraft(r.ID()))
+	r, ok := resource.Register("Timer", t.name, t, t.DependsOn.IDs...)
+	if ok {
+		resource.RecordPlanDraft(t.planDraft(r.ID()))
+	}
 	return r
 }
 

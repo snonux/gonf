@@ -115,8 +115,10 @@ func Present(bin string, args []string, opts ...opt.CommandOption) resource.Reso
 		c.name = defaultName(bin, c.args)
 	}
 
-	r := resource.Register("Command", c.name, c, c.DependsOn.IDs...)
-	resource.RecordPlanDraft(c.planDraft(r.ID()))
+	r, ok := resource.Register("Command", c.name, c, c.DependsOn.IDs...)
+	if ok {
+		resource.RecordPlanDraft(c.planDraft(r.ID()))
+	}
 	return r
 }
 

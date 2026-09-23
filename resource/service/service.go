@@ -66,8 +66,10 @@ func Present(name string, opts ...opt.ServiceOption) resource.Resource {
 	if err := s.MisuseErr(); err != nil {
 		return resource.Refuse("Service", name, err)
 	}
-	r := resource.Register("Service", s.name, s, s.DependsOn.IDs...)
-	resource.RecordPlanDraft(s.planDraft(r.ID()))
+	r, ok := resource.Register("Service", s.name, s, s.DependsOn.IDs...)
+	if ok {
+		resource.RecordPlanDraft(s.planDraft(r.ID()))
+	}
 	return r
 }
 

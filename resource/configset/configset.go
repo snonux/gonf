@@ -223,13 +223,17 @@ func Present(name string, opts ...opt.ConfigSetOption) Handle {
 	// above). memberSpec below stays a value copy: unlike spec it has no
 	// methods of its own and is passed by value everywhere else in this
 	// package (markerName, hasMarker, pathResolver, ...).
-	set := resource.Register("ConfigSet", name, &sp, c.DependsOn.IDs...)
-	resource.RecordPlanDraft(sp.planDraft(set.ID(), c.DependsOn.SortedIDs()))
+	set, setOK := resource.Register("ConfigSet", name, &sp, c.DependsOn.IDs...)
+	if setOK {
+		resource.RecordPlanDraft(sp.planDraft(set.ID(), c.DependsOn.SortedIDs()))
+	}
 
 	h := Handle{Resource: set, name: name, members: map[string]resource.Resource{}}
 	for _, m := range sp.members {
-		r := resource.Register("ConfigSetMember", memberName(name, m.key), m, set.ID())
-		resource.RecordPlanDraft(memberDraft(r.ID(), name, m, set.ID()))
+		r, ok := resource.Register("ConfigSetMember", memberName(name, m.key), m, set.ID())
+		if ok {
+			resource.RecordPlanDraft(memberDraft(r.ID(), name, m, set.ID()))
+		}
 		h.members[m.key] = r
 		h.keys = append(h.keys, m.key)
 	}

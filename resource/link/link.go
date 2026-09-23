@@ -102,8 +102,11 @@ func Present(path string, opts ...opt.LinkOption) resource.Resource {
 	if err != nil {
 		return resource.Refuse("Link", path, err)
 	}
-	l.resource = resource.Register(l.resourceType(), l.path, l, l.DependsOn.IDs...)
-	resource.RecordPlanDraft(l.planDraft())
+	r, ok := resource.Register(l.resourceType(), l.path, l, l.DependsOn.IDs...)
+	l.resource = r
+	if ok {
+		resource.RecordPlanDraft(l.planDraft())
+	}
 	return l.resource
 }
 

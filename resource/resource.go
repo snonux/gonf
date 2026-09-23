@@ -43,27 +43,46 @@ type Resource struct {
 // returned so the recipe keeps running up to the point where the error
 // surfaces.
 //
+// ok reports whether THIS call actually added the entry: false on the
+// duplicate-ID case above. A caller that goes on to record a plan draft for
+// the returned Resource (RecordPlanDraft) MUST skip that call when ok is
+// false — every Present-style constructor in the module follows this
+// `r, ok := resource.Register(...); if ok { resource.RecordPlanDraft(...) }`
+// shape. Before task sf2 added ok, every one of those constructors called
+// RecordPlanDraft unconditionally: repository.recordDraft only checked that
+// the ID was PRESENT in the registered map, not which call put it there, so
+// a refused (colliding) second declaration's draft silently overwrote the
+// first, successfully registered declaration's draft under the same ID —
+// the repository ended up with Registered() answering with the FIRST
+// declaration's value but RegisteredPlanDrafts() answering with the SECOND,
+// refused declaration's draft, a silent mismatch between what is registered
+// and what actually gets applied. ok closes that gap by making the
+// success/failure of this specific call explicit at the call site (the
+// Go comma-ok idiom) instead of asking RecordPlanDraft to infer it later
+// from repository state it cannot attribute to one call or the other.
+//
 // Registration is deliberately single-goroutine: recipe construction happens
 // before fleet fan-out, so the repository is not safe for concurrent
 // registration (see resource/repository.go).
-func Register(type_, name string, registered any, deps ...string) Resource {
+func Register(type_, name string, registered any, deps ...string) (r Resource, ok bool) {
 	dependsOn := make(map[string]struct{}, len(deps))
 	for _, id := range deps {
 		dependsOn[id] = struct{}{}
 	}
 
-	r := Resource{
+	r = Resource{
 		Type:       type_,
 		Name:       name,
 		registered: registered,
 		dependsOn:  dependsOn,
 	}
 
-	if err := getRepository().register(r); err != nil {
+	err := getRepository().register(r)
+	if err != nil {
 		declerr.Reportf("resource registration failed: %w", err)
 	}
 
-	return r
+	return r, err == nil
 }
 
 // Refuse reports err as the declaration error of a resource that a

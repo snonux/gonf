@@ -145,17 +145,24 @@ func Present(name string, opts ...opt.SystemdTimerOption) resource.Resource {
 	if err := t.MisuseErr(); err != nil {
 		return resource.Refuse("SystemdTimer", t.base, err)
 	}
-	r := resource.Register("SystemdTimer", t.base, t, t.DependsOn.IDs...)
-	resource.RecordPlanDraft(t.planDraft(r.ID()))
-	// related must also name the timer's own service and timer units, not
-	// just its After=/Wants= entries: a same-bus reload whose inputs write a
-	// drop-in under <base>.service.d/ or <base>.timer.d/ (or the unit file
-	// itself) is exactly as unsafe to start the timer's own units ahead of
-	// as one that writes a unit those entries name (4c2). Without this the
-	// join went through and the timer's restart ran before the reload that
-	// would have picked up the drop-in.
-	related := slices.Concat([]string{t.base + ".service", t.base + ".timer"}, t.after, t.wants)
-	systemd.JoinRegisteredReload(t.user, r.ID(), related...)
+	r, ok := resource.Register("SystemdTimer", t.base, t, t.DependsOn.IDs...)
+	if ok {
+		resource.RecordPlanDraft(t.planDraft(r.ID()))
+		// related must also name the timer's own service and timer units,
+		// not just its After=/Wants= entries: a same-bus reload whose
+		// inputs write a drop-in under <base>.service.d/ or
+		// <base>.timer.d/ (or the unit file itself) is exactly as unsafe
+		// to start the timer's own units ahead of as one that writes a
+		// unit those entries name (4c2). Without this the join went
+		// through and the timer's restart ran before the reload that
+		// would have picked up the drop-in. Gated on ok along with the
+		// draft: a refused (colliding) second declaration under the same
+		// ID is not really registered, so it must not join the reload
+		// either — that bookkeeping belongs to the first, successfully
+		// registered declaration only.
+		related := slices.Concat([]string{t.base + ".service", t.base + ".timer"}, t.after, t.wants)
+		systemd.JoinRegisteredReload(t.user, r.ID(), related...)
+	}
 	return r
 }
 

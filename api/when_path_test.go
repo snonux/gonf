@@ -176,13 +176,18 @@ func TestResetDeclarationErrorUnsticksLaterUnrelatedApply(t *testing.T) {
 		t.Fatalf("%s content = %q, want %q", unrelated, got, "q")
 	}
 	// The first WhenPathExists fragment's own File[collided] registered
-	// successfully (only the SECOND, colliding Register call was refused;
-	// its RecordPlanDraft call still ran and overwrote the stored draft
-	// with content "B" -- a separate, pre-existing quirk of
-	// resource.Register/RecordPlanDraft this test does not change) and was
-	// never wiped by ResetDeclarationError, so it still applies once Apply
-	// finally runs.
-	if got, err := os.ReadFile(collided); err != nil || string(got) != "B" {
-		t.Fatalf("%s = (%q, %v), want (\"B\", nil): ResetDeclarationError must not have discarded the earlier successful registration", collided, got, err)
+	// successfully; the second, colliding Register call was refused and,
+	// since task sf2, its RecordPlanDraft call is skipped too (the
+	// resource.Register `ok` return now tells file.Present not to record a
+	// draft for a call that never actually registered). Before sf2 that
+	// second call's RecordPlanDraft ran unconditionally anyway and silently
+	// overwrote the stored draft with content "B", even though the
+	// repository's registered value was still the FIRST declaration's --
+	// a mismatch between what was registered and what would actually be
+	// applied. The surviving draft must now be the FIRST declaration's
+	// (content "A"), and it was never wiped by ResetDeclarationError, so it
+	// still applies once Apply finally runs.
+	if got, err := os.ReadFile(collided); err != nil || string(got) != "A" {
+		t.Fatalf("%s = (%q, %v), want (\"A\", nil): ResetDeclarationError must not have discarded the earlier successful registration, and its draft must not have been overwritten by the refused second declaration (task sf2)", collided, got, err)
 	}
 }

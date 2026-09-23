@@ -427,7 +427,7 @@ func TestRecordPlanFailsOnUnrecordedResource(t *testing.T) {
 	})
 
 	Task("custom_kind", "", func() {
-		_ = resource.Register("Widget", "gadget",
+		_, _ = resource.Register("Widget", "gadget",
 			func() error { return nil })
 	})
 
