@@ -51,18 +51,20 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 // draftOp copies a user draft, and its Payload p, into its wire form.
 func draftOp(d resource.PlanDraft, p Payload) plan.Op {
 	return plan.Op{
-		Op:                  plan.KindUser,
-		ID:                  d.ID,
-		Name:                d.Name,
-		PrimaryGroup:        p.PrimaryGroup,
-		SupplementaryGroups: slices.Clone(p.SupplementaryGroups),
-		Home:                p.Home,
-		CreateHome:          p.CreateHome,
-		Shell:               p.Shell,
-		LoginClass:          p.LoginClass,
-		System:              p.System,
-		ManageHome:          p.ManageHome,
-		Deps:                slices.Clone(d.Deps),
+		Op:   plan.KindUser,
+		ID:   d.ID,
+		Name: d.Name,
+		Deps: slices.Clone(d.Deps),
+		Payload: plan.UserPayload{
+			PrimaryGroup:        p.PrimaryGroup,
+			SupplementaryGroups: slices.Clone(p.SupplementaryGroups),
+			Home:                p.Home,
+			CreateHome:          p.CreateHome,
+			Shell:               p.Shell,
+			LoginClass:          p.LoginClass,
+			System:              p.System,
+			ManageHome:          p.ManageHome,
+		},
 	}
 }
 
@@ -89,30 +91,38 @@ func (h planHandler) newUser(op plan.Op) *User {
 
 // opOptions rebuilds the recipe options from a recorded op, so destination
 // apply goes through exactly the same resource path as a direct apply.
+//
+// A comma-ok assertion, not a "missing payload" error: unlike ToOp (fed only
+// trusted draft data draftOp always populates), opOptions may see an op
+// decoded from an arbitrary plan.jsonl. A nil or mistyped Payload degrades
+// to the zero UserPayload — every user-exclusive field reads as unset,
+// which simply yields a bare account request (name only), same as a recipe
+// that set no options at all.
 func opOptions(op plan.Op) []opt.LocalUserOption {
+	p, _ := op.Payload.(plan.UserPayload)
 	var opts []opt.LocalUserOption
-	if op.PrimaryGroup != "" {
-		opts = append(opts, opt.WithGroup(op.PrimaryGroup))
+	if p.PrimaryGroup != "" {
+		opts = append(opts, opt.WithGroup(p.PrimaryGroup))
 	}
-	if len(op.SupplementaryGroups) > 0 {
-		opts = append(opts, opt.WithSupplementaryGroups(op.SupplementaryGroups...))
+	if len(p.SupplementaryGroups) > 0 {
+		opts = append(opts, opt.WithSupplementaryGroups(p.SupplementaryGroups...))
 	}
-	if op.Home != "" {
-		opts = append(opts, opt.WithHome(op.Home))
+	if p.Home != "" {
+		opts = append(opts, opt.WithHome(p.Home))
 	}
-	if op.CreateHome {
+	if p.CreateHome {
 		opts = append(opts, opt.WithCreateHome)
 	}
-	if op.Shell != "" {
-		opts = append(opts, opt.WithShell(op.Shell))
+	if p.Shell != "" {
+		opts = append(opts, opt.WithShell(p.Shell))
 	}
-	if op.LoginClass != "" {
-		opts = append(opts, opt.WithClass(op.LoginClass))
+	if p.LoginClass != "" {
+		opts = append(opts, opt.WithClass(p.LoginClass))
 	}
-	if op.System {
+	if p.System {
 		opts = append(opts, opt.WithSystem)
 	}
-	if op.ManageHome {
+	if p.ManageHome {
 		opts = append(opts, opt.WithManageHome)
 	}
 	return opts

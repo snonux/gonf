@@ -86,6 +86,55 @@ func (p SystemdTimerPayload) applyToWire(w *wireOp) {
 	w.Wants = p.Wants
 }
 
+// UserPayload holds the wire fields exclusive to KindUser. resource/user's
+// planwire.go is the only other package that constructs or reads one — it
+// always sets a non-nil UserPayload on a "user" op's Payload (record side:
+// draftOp; apply side: opOptions type-asserts it), so a decoded or freshly
+// lowered KindUser op's Payload is never nil, keeping encode/decode round
+// trips symmetric (see payloadFromWire).
+//
+// Its json tags are never consulted by encoding/json — Op.MarshalJSON
+// merges these fields onto a wireOp and marshals THAT (applyToWire below),
+// never this struct directly — but api's secret-scan reflection walker
+// (walkOpStrings/opFieldClasses) still needs them: it descends into
+// Op.Payload's concrete value at the op's own top-level path (see
+// api/secret_fields.go's walkStruct), and computes each leaf's
+// classification path from THESE tags. They must therefore keep naming the
+// same wire keys wireOp's own fields do; TestWirePayloadTagsMatch
+// (types_test.go) pins that the two never drift apart.
+//
+// Field docs (unchanged from Op's pre-yd2/6e2 flat field comments):
+type UserPayload struct {
+	// PrimaryGroup and SupplementaryGroups are the requested groups for a
+	// KindUser operation. Only missing supplementary memberships are added;
+	// no existing membership or primary group is removed or rewritten.
+	PrimaryGroup        string   `json:"primary_group,omitempty"`
+	SupplementaryGroups []string `json:"supplementary_groups,omitempty"`
+	// Home, CreateHome, Shell, LoginClass, and System are only used when a
+	// KindUser operation creates a missing account; Home is additionally the
+	// target of an existing account's home field when ManageHome is set.
+	Home       string `json:"home,omitempty"`
+	CreateHome bool   `json:"create_home,omitempty"`
+	Shell      string `json:"shell,omitempty"`
+	LoginClass string `json:"login_class,omitempty"`
+	System     bool   `json:"system,omitempty"`
+	// ManageHome (schema v19, VersionUserManageHome) opts a KindUser
+	// operation in to converging an existing account's passwd home field to
+	// Home. It never moves, creates, or chowns the directory.
+	ManageHome bool `json:"manage_home,omitempty"`
+}
+
+func (p UserPayload) applyToWire(w *wireOp) {
+	w.PrimaryGroup = p.PrimaryGroup
+	w.SupplementaryGroups = p.SupplementaryGroups
+	w.Home = p.Home
+	w.CreateHome = p.CreateHome
+	w.Shell = p.Shell
+	w.LoginClass = p.LoginClass
+	w.System = p.System
+	w.ManageHome = p.ManageHome
+}
+
 // toWire copies every Op core field onto a fresh wireOp and, when op.Payload
 // is set, layers its kind-exclusive fields on top. It does not normalize;
 // callers (MarshalJSON) do that once, after the merge.
@@ -118,15 +167,6 @@ func (op Op) toWire() wireOp {
 		Prune:          op.Prune,
 		Absent:         op.Absent,
 		Latest:         op.Latest,
-
-		PrimaryGroup:        op.PrimaryGroup,
-		SupplementaryGroups: op.SupplementaryGroups,
-		Home:                op.Home,
-		CreateHome:          op.CreateHome,
-		Shell:               op.Shell,
-		LoginClass:          op.LoginClass,
-		System:              op.System,
-		ManageHome:          op.ManageHome,
 
 		AddLines:    op.AddLines,
 		RemoveLines: op.RemoveLines,
@@ -205,15 +245,6 @@ func fromWire(w wireOp) Op {
 		Absent:         w.Absent,
 		Latest:         w.Latest,
 
-		PrimaryGroup:        w.PrimaryGroup,
-		SupplementaryGroups: w.SupplementaryGroups,
-		Home:                w.Home,
-		CreateHome:          w.CreateHome,
-		Shell:               w.Shell,
-		LoginClass:          w.LoginClass,
-		System:              w.System,
-		ManageHome:          w.ManageHome,
-
 		AddLines:    w.AddLines,
 		RemoveLines: w.RemoveLines,
 		KeyedLines:  w.KeyedLines,
@@ -259,10 +290,10 @@ func fromWire(w wireOp) Op {
 
 // payloadFromWire builds the concrete OpPayload for w.Op's Kind, or nil for
 // a control kind or a kind that has not migrated any field off Op yet.
-// Extending this switch (and CronPayload/SystemdTimerPayload's siblings) is
-// the whole of what a follow-up task needs to migrate one more kind's
-// exclusive fields, once wireOp itself already carries them (it always
-// does: wireOp is unchanged by which kinds have migrated).
+// Extending this switch (and CronPayload/SystemdTimerPayload/UserPayload's
+// siblings) is the whole of what a follow-up task needs to migrate one more
+// kind's exclusive fields, once wireOp itself already carries them (it
+// always does: wireOp is unchanged by which kinds have migrated).
 func payloadFromWire(w wireOp) OpPayload {
 	switch w.Op {
 	case KindCron:
@@ -282,6 +313,17 @@ func payloadFromWire(w wireOp) OpPayload {
 			After:              w.After,
 			Wants:              w.Wants,
 		}
+	case KindUser:
+		return UserPayload{
+			PrimaryGroup:        w.PrimaryGroup,
+			SupplementaryGroups: w.SupplementaryGroups,
+			Home:                w.Home,
+			CreateHome:          w.CreateHome,
+			Shell:               w.Shell,
+			LoginClass:          w.LoginClass,
+			System:              w.System,
+			ManageHome:          w.ManageHome,
+		}
 	default:
 		return nil
 	}
@@ -300,5 +342,6 @@ func OpPayloadExamples() map[Kind]OpPayload {
 	return map[Kind]OpPayload{
 		KindCron:         CronPayload{},
 		KindSystemdTimer: SystemdTimerPayload{},
+		KindUser:         UserPayload{},
 	}
 }

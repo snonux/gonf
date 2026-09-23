@@ -42,9 +42,13 @@ func TestUserPublicDSLRecordsPlanBackedDraft(t *testing.T) {
 	if err != nil {
 		t.Fatalf("draftToOp() = %v", err)
 	}
-	if op.Op != "user" || op.Name != "svc" || op.PrimaryGroup != "svc" ||
-		!reflect.DeepEqual(op.SupplementaryGroups, []string{"wheel", "audio"}) ||
-		op.LoginClass != "daemon" {
+	opPayload, ok := op.Payload.(plan.UserPayload)
+	if !ok {
+		t.Fatalf("user op missing plan.UserPayload: %#v", op)
+	}
+	if op.Op != "user" || op.Name != "svc" || opPayload.PrimaryGroup != "svc" ||
+		!reflect.DeepEqual(opPayload.SupplementaryGroups, []string{"wheel", "audio"}) ||
+		opPayload.LoginClass != "daemon" {
 		t.Fatalf("user op = %#v", op)
 	}
 }

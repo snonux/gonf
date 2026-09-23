@@ -525,8 +525,9 @@ class of bug that motivated task j5.
    `Op` is still flat fields (see the "PlanDraft/Op split" note below): for
    a kind that has not migrated yet, a new field is added directly to `Op`
    and cloned with `slices.Clone`/`maps.Clone` in `ToOp`, same as always.
-   `cron` and `systemd_timer` (task yd2, Layer 2's first slice) instead have
-   their own `plan.CronPayload`/`plan.SystemdTimerPayload`, set on
+   `cron`, `systemd_timer` (task yd2, Layer 2's first slice) and `user`
+   (task 6e2) instead have their own
+   `plan.CronPayload`/`plan.SystemdTimerPayload`/`plan.UserPayload`, set on
    `Op.Payload`; a NEW exclusive field on an ALREADY-migrated kind goes on
    that kind's payload type instead of back onto `Op` (mirroring step 4's
    rule below, now also for `Op`), still cloned in `ToOp` before being
@@ -652,13 +653,14 @@ here, confirming the mirror-struct approach honors them by construction
 rather than by luck.
 
 Every concrete `OpPayload` (`CronPayload`, `SystemdTimerPayload`,
-`plan/op_payload.go`) is declared IN the `plan` package itself, unlike a
-`resource.DraftPayload` — decode happens inside `plan`, which must never
-import a `resource/<kind>` package (see the layering note below), so `plan`
-cannot ask a resource package to build one. `applyToWire` is the interface's
-one, unexported method, so only a type declared in `plan` can implement
-`OpPayload` — the same closed-set discipline `TestSourcePayloadFitness`
-already enforces for `resource.DraftPayload`'s marker interfaces.
+`UserPayload`, `plan/op_payload.go`) is declared IN the `plan` package
+itself, unlike a `resource.DraftPayload` — decode happens inside `plan`,
+which must never import a `resource/<kind>` package (see the layering note
+below), so `plan` cannot ask a resource package to build one. `applyToWire`
+is the interface's one, unexported method, so only a type declared in
+`plan` can implement `OpPayload` — the same closed-set discipline
+`TestSourcePayloadFitness` already enforces for `resource.DraftPayload`'s
+marker interfaces.
 
 One gotcha this slice hit, worth recording so a later kind's migration
 doesn't rediscover it: `api`'s secret-scan reflection walker
@@ -705,14 +707,35 @@ methods, the secret-scan walker fix) could be proven end to end without
 also chasing edits across every kind's call sites in one pass. `Command`
 stays flat on Op's core despite reading as cron/systemd_timer-specific,
 for the same reason `resource.PlanDraft.Command` does (see step 4 above):
-both kinds genuinely share its "the command to run" meaning. Every other
-kind's fields are UNCHANGED, still flat on `Op` — `File`, `Dir`/`SyncDir`,
+both kinds genuinely share its "the command to run" meaning.
+
+**Layer 2 follow-up (task 6e2): `user`.** The second of six sibling
+follow-up tasks (5e2, 6e2, 7e2, 8e2, 9e2, ae2) migrated `user`'s exclusive
+fields onto `UserPayload` (`PrimaryGroup`, `SupplementaryGroups`, `Home`,
+`CreateHome`, `Shell`, `LoginClass`, `System`, `ManageHome`), the same
+pattern yd2's first slice established: `wireOp`'s field block keeps its
+frozen wire position (only a comment was added there, since reordering it
+would break the byte-for-byte invariant), `payloadFromWire` and
+`OpPayloadExamples` gained a `KindUser` case, and the one non-test call
+site (`resource/user/planwire.go`'s `draftOp`/`opOptions`) now builds and
+reads a `plan.UserPayload` instead of flat `Op` fields — `opOptions`
+follows cron/systemd_timer's comma-ok assertion (an op decoded from an
+arbitrary `plan.jsonl` degrades to a zero `UserPayload`, i.e. a bare
+account request, rather than erroring). `ManageHome` (schema v19,
+`VersionUserManageHome`) moved with the rest of the block: the version gate
+is purely about which wire BYTES an older destination refuses, not which Go
+type holds the field, so it needed no change. No dedicated call-site
+gotcha surfaced this time — the secret-scan walker fix and
+`TestWirePayloadTagsMatch`/`TestOpFieldClassesAreExhaustive` from yd2's
+first slice are generic over `OpPayloadExamples`, so `user` was covered
+automatically once it was added there. Every other kind's fields are
+UNCHANGED, still flat on `Op` — `File`, `Dir`/`SyncDir`,
 `Link`/`LinkIfExists`, `Command`, `Package`, `Service`/`Timer`/
-`DaemonReload`, `EnsureDir`/`EnsureFile`, `User`, `ConfigSet`/
-`ConfigSetMember`, and `WhenBegin`/`WhenEnd` all remain exactly as they
-were pre-yd2, pending follow-up tasks scoped the same way (one or a few
-kinds per task, per this file's own "do not attempt it as one uninterrupted
-blind edit" guidance, matching w62's own incremental discipline).
+`DaemonReload`, `EnsureDir`/`EnsureFile`, `ConfigSet`/`ConfigSetMember`, and
+`WhenBegin`/`WhenEnd` all remain exactly as they were pre-yd2, pending the
+remaining follow-up tasks scoped the same way (one or a few kinds per task,
+per this file's own "do not attempt it as one uninterrupted blind edit"
+guidance, matching w62's own incremental discipline).
 
 A resource package that registers a `plan.Handler` must never be imported by
 the `plan` package itself (that would reintroduce the cycle the registry

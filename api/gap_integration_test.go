@@ -88,8 +88,12 @@ func TestGapFeatureSetRecordsAndAppliesTogether(t *testing.T) {
 		t.Fatalf("package op lost IsLatest or WithEnv: %#v", packageOp)
 	}
 	userOp := findGapOp(t, decoded, plan.KindUser)
-	if userOp.Name != "_gonf_integration" || userOp.PrimaryGroup != "_gonf_integration" ||
-		!reflect.DeepEqual(userOp.SupplementaryGroups, []string{"wheel", "audio"}) ||
+	userPayload, ok := userOp.Payload.(plan.UserPayload)
+	if !ok {
+		t.Fatalf("user op missing plan.UserPayload: %#v", userOp)
+	}
+	if userOp.Name != "_gonf_integration" || userPayload.PrimaryGroup != "_gonf_integration" ||
+		!reflect.DeepEqual(userPayload.SupplementaryGroups, []string{"wheel", "audio"}) ||
 		!reflect.DeepEqual(userOp.Deps, []string{packageOp.ID}) {
 		t.Fatalf("user op lost creation data or package dependency: %#v", userOp)
 	}

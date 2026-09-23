@@ -286,10 +286,10 @@ type Guard struct {
 // it always was regardless of this Go-level split — see wireOp's doc
 // comment (wire.go) for exactly how.
 //
-// As of task yd2's first slice, only the cron and systemd_timer kinds have
-// migrated their exclusive fields onto a payload (CronPayload,
-// SystemdTimerPayload, op_payload.go); every other kind's fields are still
-// flat here, unchanged, pending follow-up tasks (see docs/plan.md).
+// As of task 6e2, the cron, systemd_timer and user kinds have migrated their
+// exclusive fields onto a payload (CronPayload, SystemdTimerPayload,
+// UserPayload, op_payload.go); every other kind's fields are still flat
+// here, unchanged, pending follow-up tasks (see docs/plan.md).
 type Op struct {
 	Op      Kind   `json:"op"`
 	Version int    `json:"version,omitempty"`
@@ -383,24 +383,6 @@ type Op struct {
 	// update / pkg upgrade / pkg_add -u / pkgin install) instead of a plain
 	// install, even when the package is already present.
 	Latest bool `json:"latest,omitempty"`
-
-	// PrimaryGroup and SupplementaryGroups are the requested groups for a
-	// KindUser operation. Only missing supplementary memberships are added;
-	// no existing membership or primary group is removed or rewritten.
-	PrimaryGroup        string   `json:"primary_group,omitempty"`
-	SupplementaryGroups []string `json:"supplementary_groups,omitempty"`
-	// Home, CreateHome, Shell, LoginClass, and System are only used when a
-	// KindUser operation creates a missing account; Home is additionally the
-	// target of an existing account's home field when ManageHome is set.
-	Home       string `json:"home,omitempty"`
-	CreateHome bool   `json:"create_home,omitempty"`
-	Shell      string `json:"shell,omitempty"`
-	LoginClass string `json:"login_class,omitempty"`
-	System     bool   `json:"system,omitempty"`
-	// ManageHome (schema v19, VersionUserManageHome) opts a KindUser
-	// operation in to converging an existing account's passwd home field to
-	// Home. It never moves, creates, or chowns the directory.
-	ManageHome bool `json:"manage_home,omitempty"`
 
 	// AddLines appends lines to a file when missing (line-in-file), in order.
 	AddLines []string `json:"add_lines,omitempty"`

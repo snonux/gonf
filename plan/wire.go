@@ -62,6 +62,12 @@ type wireOp struct {
 	Absent         bool            `json:"absent,omitempty"`
 	Latest         bool            `json:"latest,omitempty"`
 
+	// User-exclusive (plan.UserPayload). See UserPayload's own field docs.
+	// This block's position is frozen like every other field in this
+	// struct: task 6e2 moved these fields off Op onto UserPayload on the Go
+	// side, but they stay declared HERE, at their original wire position,
+	// because wireOp's declaration order is what the encoded byte stream
+	// follows (see this type's own doc comment).
 	PrimaryGroup        string   `json:"primary_group,omitempty"`
 	SupplementaryGroups []string `json:"supplementary_groups,omitempty"`
 	Home                string   `json:"home,omitempty"`
