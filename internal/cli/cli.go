@@ -67,7 +67,7 @@ var cleanupRemoteBuilds = remote.CleanupBuilds
 //	gonf -profile=fedora
 //	gonf -verbose | -quiet
 //	gonf -dry-run | -n
-//	gonf plan [-o dir|-stdout [-with-secrets]|-redacted] [-seal [-recipient r]...] [-id name] <task>...  # emit plan.jsonl (or stdout), or seal to plan.age
+//	gonf plan [-o dir|-stdout [-with-secrets]|-redacted] [-seal [-recipient r]... [-recipients-file f] [-no-default-recipients]] [-id name] <task>...  # emit plan.jsonl (or stdout), or seal to plan.age
 //	gonf apply [-n] [-identity file]... <plan.jsonl|plan.age|->  # apply file/sealed file or stdin (GONF-PUSH/1, sealed, or bare JSONL)
 //	gonf <task> [task...]                            # RecordPlan + Apply locally
 func CLI() int {
@@ -448,18 +448,24 @@ func cliPlan(args []string) int {
 	planID := fs.String("id", "plan", "plan id written into the header")
 	sealFlag := fs.Bool("seal", false, "age-encrypt the plan (docs/plan-encryption.md) instead of writing it in the "+
 		"clear: writes dir/plan.age (or, with -stdout, the sealed bytes to stdout) to the union of -recipient flags "+
-		"and the default recipients file; refused with zero recipients (never falls back to plaintext), and cannot "+
+		"and the recipients file; refused with zero recipients (never falls back to plaintext), and cannot "+
 		"combine with -redacted or -with-secrets")
 	var recipientFlags stringSliceFlag
 	fs.Var(&recipientFlags, "recipient", "an age1pq recipient to seal to with -seal (repeatable); unioned with the "+
-		"default recipients file (${XDG_CONFIG_HOME:-$HOME/.config}/gonf/recipients, one age1pq recipient per line, "+
-		"# comments allowed)")
+		"recipients file (${XDG_CONFIG_HOME:-$HOME/.config}/gonf/recipients by default, one age1pq recipient per "+
+		"line, # comments allowed, hardened the same way as -identity: must be a regular file, owned by you, "+
+		"not writable by group or other) unless -no-default-recipients is given")
+	recipientsFile := fs.String("recipients-file", "", "read the recipients file from this path instead of the "+
+		"ambient default; still unioned with -recipient flags; a missing file here is an error, not silently empty")
+	noDefaultRecipients := fs.Bool("no-default-recipients", false, "do not read the ambient default recipients "+
+		"file; seal only to -recipient flags (and -recipients-file, if also given)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	tasks := fs.Args()
 	if len(tasks) == 0 {
-		eprintln("usage: gonf plan [-o dir|-stdout [-with-secrets]|-redacted] [-seal [-recipient r]...] [-id name] <task> [task...]")
+		eprintln("usage: gonf plan [-o dir|-stdout [-with-secrets]|-redacted] " +
+			"[-seal [-recipient r]... [-recipients-file f] [-no-default-recipients]] [-id name] <task> [task...]")
 		return 2
 	}
 	if msg := planOutputConflict(fs, *stdout, *withSecrets, *redacted, *sealFlag); msg != "" {
@@ -471,7 +477,7 @@ func cliPlan(args []string) int {
 	case *redacted:
 		return planPreview(*planID, tasks)
 	case *sealFlag:
-		return planSealed(*outDir, *planID, tasks, *stdout, recipientFlags)
+		return planSealed(*outDir, *planID, tasks, *stdout, recipientFlags, *recipientsFile, *noDefaultRecipients)
 	case *stdout:
 		return planToStdout(*planID, tasks, *withSecrets)
 	}
@@ -1317,7 +1323,8 @@ func verifyStickyDirOwned(path string) error {
 
 func printUsage() {
 	eprintln("usage: gonf [-list] [-version] [-plan-version] [-strict-preview-version] [-sealed-version] [-profile=...] [-verbose|-quiet] [-dry-run|-n] [-privilege=none|sudo|doas] [-cmd-timeout 5m] <task> [task...]")
-	eprintln("       gonf plan [-o dir|-stdout [-with-secrets]|-redacted] [-seal [-recipient r]...] [-id name] <task> [task...]")
+	eprintln("       gonf plan [-o dir|-stdout [-with-secrets]|-redacted] " +
+		"[-seal [-recipient r]... [-recipients-file f] [-no-default-recipients]] [-id name] <task> [task...]")
 	eprintln("       gonf apply [-n|-dry-run|-strict-preview] [-apply-dir dir] [-identity file]... <plan.jsonl|plan.age|->")
 	eprintln("       gonf push [-n|-dry-run|-preview] [-id name] [-privilege=...] [-- ssh-args...] user@host <task> [task...]")
 	eprintln("       gonf cluster [-n|-dry-run|-preview] [-j N] [-id name] [-host-timeout 10m] <cluster> <task> [task...]")

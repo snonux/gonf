@@ -175,7 +175,7 @@ the executable artifact. Rejected.
 | Key | Where | Made with |
 |-----|-------|-----------|
 | Operator identity | controller, `-identity file` (default for a non-root user: `${XDG_CONFIG_HOME:-$HOME/.config}/gonf/identity`) | `age-keygen -pq -o …` |
-| Operator recipients | `${XDG_CONFIG_HOME:-$HOME/.config}/gonf/recipients` (one `age1pq…` per line, `#` comments), or `-recipient` flags | `age-keygen -y` |
+| Operator recipients | `${XDG_CONFIG_HOME:-$HOME/.config}/gonf/recipients` by default (one `age1pq…` per line, `#` comments), overridable with `-recipients-file`, unioned with `-recipient` flags unless `-no-default-recipients` is given | `age-keygen -y` |
 | Destination identity (phase 2) | on the host, e.g. `/etc/gonf/identity` (root, `0600`) | generated **on the host** by the operator; the private key never leaves it |
 | Destination recipient (phase 2) | inventory: `Host(…, WithPlanRecipient("age1pq…"))` | `age-keygen -y` output copied from the host |
 
@@ -192,6 +192,28 @@ Rules:
   it is opened with the same no-follow walk as secret files
   (`internal/safepath`). Errors name the path and the class, never key
   material.
+- **The recipients file's trust role: it decides who can decrypt every plan
+  this account ever seals.** Its content is public keys, so reading it is
+  harmless, but *writing* it is not: whoever can write this file, or plant
+  a symlink at its path, silently becomes a permanent recipient of every
+  future `gonf plan -seal` from this account — and the only visible signal
+  used to be a bare recipient count, which nobody realistically checks
+  against an expected value (task `ce2` found and closed this as a real,
+  probed vulnerability: a symlinked or mode-666 default recipients file was
+  silently accepted and unioned in). It is therefore opened with the same
+  `internal/safepath` no-follow walk as the identity file and must be a
+  regular file owned by the effective uid, **refused** (not merely warned
+  about) when it is writable by group or other — narrower than the identity
+  file's "no group or other bit at all" rule, since a recipients file's
+  read bits are not a secrecy problem the way an identity file's are.
+  `gonf plan -seal` also prints the actual resolved recipient public keys
+  in its output, not only a count, so an operator reviewing it has a real
+  chance of noticing an unexpected one. `-no-default-recipients` opts out
+  of the ambient default file entirely (sealing only to `-recipient`
+  flags), and `-recipients-file <path>` names a specific, deliberately
+  chosen file instead of the ambient default; a missing file named this way
+  is an error, unlike a missing ambient default (which is fine — an
+  operator who seals only with `-recipient` flags need never create one).
 - Only `age1pq` recipients and hybrid identities (see "Recipient policy").
 - A sealed write with zero recipients is refused, never degraded to
   plaintext.

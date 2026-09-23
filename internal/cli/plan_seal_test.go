@@ -347,6 +347,209 @@ func TestCLIPlanSealUsesDefaultRecipientsFile(t *testing.T) {
 	}
 }
 
+// TestCLIPlanSealRefusesSymlinkedRecipientsFile reproduces task ce2's probe
+// (A): the default recipients file planted as a SYMLINK to a mode-666 file
+// carrying an attacker's recipient line is refused (exit non-zero), and
+// nothing is written — before this fix, `gonf plan -seal` accepted it and
+// the injected key genuinely decrypted the sealed frame.
+func TestCLIPlanSealRefusesSymlinkedRecipientsFile(t *testing.T) {
+	xdg := isolateXDGConfig(t)
+	registerSealTask(t)
+	operatorRecipient, _ := genSealKeyPair(t)
+	attackerRecipient, _ := genSealKeyPair(t)
+
+	recipientsDir := filepath.Join(xdg, "gonf")
+	if err := os.MkdirAll(recipientsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// The attacker's world-writable file, planted anywhere, and a symlink
+	// from the default recipients path to it — exactly probe (A).
+	attackerFile := filepath.Join(t.TempDir(), "attacker-recipients")
+	if err := os.WriteFile(attackerFile, []byte(attackerRecipient+"\n"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(attackerFile, filepath.Join(recipientsDir, "recipients")); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := filepath.Join(t.TempDir(), "out")
+	code, stderr := runGonf(t, "plan", "-o", dir, "-seal", "-recipient", operatorRecipient, "cli_seal_task")
+	if code == 0 {
+		t.Fatalf("exit 0, want a refusal for a symlinked recipients file; stderr %q", stderr)
+	}
+	if !strings.Contains(stderr, "symlink") {
+		t.Fatalf("stderr %q, want it to name the symlink refusal", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "plan.age")); !os.IsNotExist(err) {
+		t.Fatalf("plan.age exists (err=%v); a refused recipients file must never seal", err)
+	}
+}
+
+// TestCLIPlanSealRefusesWorldWritableRecipientsFile reproduces task ce2's
+// probe (B): a plain mode-666 (world-writable) regular default recipients
+// file is refused the same way, no warning-only fallback.
+func TestCLIPlanSealRefusesWorldWritableRecipientsFile(t *testing.T) {
+	xdg := isolateXDGConfig(t)
+	registerSealTask(t)
+	operatorRecipient, _ := genSealKeyPair(t)
+	attackerRecipient, _ := genSealKeyPair(t)
+
+	recipientsDir := filepath.Join(xdg, "gonf")
+	if err := os.MkdirAll(recipientsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(recipientsDir, "recipients"), []byte(attackerRecipient+"\n"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	// os.WriteFile's mode is narrowed by umask; force it exactly, since this
+	// test is about the mode gonf sees.
+	if err := os.Chmod(filepath.Join(recipientsDir, "recipients"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := filepath.Join(t.TempDir(), "out")
+	code, stderr := runGonf(t, "plan", "-o", dir, "-seal", "-recipient", operatorRecipient, "cli_seal_task")
+	if code == 0 {
+		t.Fatalf("exit 0, want a refusal for a world-writable recipients file; stderr %q", stderr)
+	}
+	if !strings.Contains(stderr, "writable") {
+		t.Fatalf("stderr %q, want it to name the writable-by-group-or-other refusal", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "plan.age")); !os.IsNotExist(err) {
+		t.Fatalf("plan.age exists (err=%v); a refused recipients file must never seal", err)
+	}
+}
+
+// TestCLIPlanSealNoDefaultRecipientsExcludesDefaultFile reproduces task
+// ce2's probe (C) as a genuine round trip, not just a count: with
+// -no-default-recipients, a legitimate (properly-permissioned) default
+// recipients file's own key does NOT decrypt the sealed plan, while the
+// explicitly-passed -recipient key still does — before this fix, an
+// operator passing exactly one -recipient still got the default file's
+// entries silently unioned in.
+func TestCLIPlanSealNoDefaultRecipientsExcludesDefaultFile(t *testing.T) {
+	xdg := isolateXDGConfig(t)
+	work := registerSealTask(t)
+	explicitRecipient, explicitIdentity := genSealKeyPair(t)
+	defaultRecipient, defaultIdentity := genSealKeyPair(t)
+
+	recipientsDir := filepath.Join(xdg, "gonf")
+	if err := os.MkdirAll(recipientsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(recipientsDir, "recipients"), []byte(defaultRecipient+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := filepath.Join(t.TempDir(), "out")
+	var code int
+	var stderr string
+	out := captureStdout(t, func() {
+		code, stderr = runGonf(t, "plan", "-o", dir, "-seal", "-recipient", explicitRecipient,
+			"-no-default-recipients", "cli_seal_task")
+	})
+	if code != 0 {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, out, stderr)
+	}
+	if !strings.Contains(out, "1 recipients") {
+		t.Fatalf("stdout %q, want exactly 1 recipient (the default file must be excluded)", out)
+	}
+	sealed, err := os.ReadFile(filepath.Join(dir, "plan.age"))
+	if err != nil {
+		t.Fatalf("read plan.age: %v", err)
+	}
+
+	// The explicit -recipient identity still decrypts.
+	explicitIdentityPath := filepath.Join(work, "explicit-identity")
+	writeIdentityFile(t, explicitIdentityPath, explicitIdentity)
+	explicitIdentities, err := seal.LoadIdentities(explicitIdentityPath)
+	if err != nil {
+		t.Fatalf("LoadIdentities(explicit): %v", err)
+	}
+	if _, err := seal.Open(bytes.NewReader(sealed), explicitIdentities); err != nil {
+		t.Fatalf("Open with the explicit -recipient identity failed: %v", err)
+	}
+
+	// The default-file-only identity does NOT: it was excluded.
+	defaultIdentityPath := filepath.Join(work, "default-identity")
+	writeIdentityFile(t, defaultIdentityPath, defaultIdentity)
+	defaultIdentities, err := seal.LoadIdentities(defaultIdentityPath)
+	if err != nil {
+		t.Fatalf("LoadIdentities(default): %v", err)
+	}
+	if _, err := seal.Open(bytes.NewReader(sealed), defaultIdentities); err == nil {
+		t.Fatal("Open succeeded with the excluded default-file identity; -no-default-recipients did not exclude it")
+	}
+}
+
+// TestCLIPlanSealPrintsResolvedRecipientKeys: the "wrote ..." output names
+// the actual resolved recipient public keys, not only a count (task ce2),
+// so an operator reviewing output has a real chance of noticing an
+// unexpected extra recipient.
+func TestCLIPlanSealPrintsResolvedRecipientKeys(t *testing.T) {
+	isolateXDGConfig(t)
+	registerSealTask(t)
+	r1, _ := genSealKeyPair(t)
+	r2, _ := genSealKeyPair(t)
+	dir := filepath.Join(t.TempDir(), "out")
+	var code int
+	var stderr string
+	out := captureStdout(t, func() {
+		code, stderr = runGonf(t, "plan", "-o", dir, "-seal", "-recipient", r1, "-recipient", r2, "cli_seal_task")
+	})
+	if code != 0 {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, out, stderr)
+	}
+	if !strings.Contains(out, r1) || !strings.Contains(out, r2) {
+		t.Fatalf("stdout %q, want both resolved recipient public keys printed, not only a count", out)
+	}
+}
+
+// TestCLIPlanSealRecipientsFileFlagReadsExplicitPath: -recipients-file
+// reads the named file instead of the ambient default, still unioned with
+// -recipient flags.
+func TestCLIPlanSealRecipientsFileFlagReadsExplicitPath(t *testing.T) {
+	isolateXDGConfig(t) // no ambient default file exists
+	registerSealTask(t)
+	explicit, _ := genSealKeyPair(t)
+	recipientsFile := filepath.Join(t.TempDir(), "my-recipients")
+	if err := os.WriteFile(recipientsFile, []byte(explicit+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "out")
+	var code int
+	var stderr string
+	out := captureStdout(t, func() {
+		code, stderr = runGonf(t, "plan", "-o", dir, "-seal", "-recipients-file", recipientsFile, "cli_seal_task")
+	})
+	if code != 0 {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, out, stderr)
+	}
+	if !strings.Contains(out, "1 recipients") || !strings.Contains(out, explicit) {
+		t.Fatalf("stdout %q, want 1 recipients naming %s", out, explicit)
+	}
+}
+
+// TestCLIPlanSealRecipientsFileFlagMissingIsError: unlike the ambient
+// default, an explicitly named -recipients-file that does not exist is a
+// hard error, not silently empty — a typo'd path must not fail open into
+// "zero recipients from this source".
+func TestCLIPlanSealRecipientsFileFlagMissingIsError(t *testing.T) {
+	isolateXDGConfig(t)
+	registerSealTask(t)
+	recipient, _ := genSealKeyPair(t)
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
+	dir := filepath.Join(t.TempDir(), "out")
+	code, stderr := runGonf(t, "plan", "-o", dir, "-seal", "-recipient", recipient,
+		"-recipients-file", missing, "cli_seal_task")
+	if code == 0 {
+		t.Fatalf("exit 0, want an error for a missing explicit -recipients-file; stderr %q", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "plan.age")); !os.IsNotExist(err) {
+		t.Fatalf("plan.age exists (err=%v); a missing explicit -recipients-file must refuse before sealing", err)
+	}
+}
+
 // TestCLIPlanWithoutSealUnchanged is a narrow regression pin, alongside the
 // pre-existing plan_outdir_test.go/secret_flags_test.go suites (which this
 // task must not alter the behaviour of): a plain `gonf plan -o dir` with no

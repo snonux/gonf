@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -51,12 +52,16 @@ func (s *stringSliceFlag) Set(v string) error {
 }
 
 // planSealed is gonf plan -seal, both output forms (dir and -stdout): it
-// resolves recipients once (the union of -recipient flags and the default
+// resolves recipients once (the union of -recipient flags and the
 // recipients file, docs/plan-encryption.md "Keys") and refuses up front
 // with zero of them, before any task body runs, so a plan that could never
 // be sealed is never even recorded — no silent plaintext fallback.
-func planSealed(outDir, planID string, tasks []string, toStdout bool, recipientFlags []string) int {
-	recipients, err := resolvePlanRecipients(recipientFlags)
+// recipientsFilePath is -recipients-file (empty for the ambient default);
+// noDefaultRecipients is -no-default-recipients, which skips the ambient
+// default file entirely (an explicit -recipients-file is still read even
+// when it is set — see loadRecipientsFileLines).
+func planSealed(outDir, planID string, tasks []string, toStdout bool, recipientFlags []string, recipientsFilePath string, noDefaultRecipients bool) int {
+	recipients, err := resolvePlanRecipients(recipientFlags, recipientsFilePath, noDefaultRecipients)
 	if err != nil {
 		eprintf("plan: %v\n", err)
 		return 1
@@ -109,7 +114,11 @@ func planToSealedDir(outDir, planID string, tasks []string, recipients []seal.Re
 	// Wording note (docs/plan-encryption.md "Provenance"): "wrote", never
 	// "verified" or "trusted" — a plan.age that decrypts proves only that
 	// whoever sealed it knew a recipient's PUBLIC key, not who they were.
-	fmt.Printf("wrote %s (%d ops, %d recipients)\n", filepath.Join(outDir, "plan.age"), len(ops), len(recipients))
+	// The resolved keys are printed, not just a count (task ce2): they are
+	// public, safe to echo, and printing them is what actually lets an
+	// operator reviewing output notice an unexpected extra recipient.
+	fmt.Printf("wrote %s (%d ops, %d recipients: %s)\n",
+		filepath.Join(outDir, "plan.age"), len(ops), len(recipients), formatRecipients(recipients))
 	warnPreexistingPlaintextPlan(outDir)
 	return 0
 }
@@ -138,8 +147,22 @@ func planToSealedStdout(planID string, tasks []string, recipients []seal.Recipie
 		eprintf("plan: write stdout: %v\n", err)
 		return 1
 	}
-	eprintf("wrote stdout (%d ops, %d recipients, sealed)\n", len(ops), len(recipients))
+	eprintf("wrote stdout (%d ops, %d recipients, sealed: %s)\n", len(ops), len(recipients), formatRecipients(recipients))
 	return 0
+}
+
+// formatRecipients renders recipients as their age1pq… public-key
+// strings, comma separated, for the "wrote ..." messages above (task ce2):
+// printing the actual resolved list, not only a count, is what gives an
+// operator a real chance of noticing an unexpected extra recipient — a
+// bare count is not something anyone realistically checks against an
+// expected value.
+func formatRecipients(recipients []seal.Recipient) string {
+	keys := make([]string, len(recipients))
+	for i, r := range recipients {
+		keys[i] = r.String()
+	}
+	return strings.Join(keys, ", ")
 }
 
 // sealPushFrame builds the GONF-PUSH/1 frame for ops/mem (plan.EncodePush,
@@ -195,36 +218,58 @@ func recipientsFileLabel() string {
 	return path
 }
 
-// readRecipientsFile reads the default recipients file's lines for
-// seal.ParseRecipients (one age1pq recipient per line, "#" comments
-// allowed — ParseRecipients' own convention). A missing file is not an
-// error: an operator who seals only with -recipient flags need never
-// create one.
-func readRecipientsFile() ([]string, error) {
-	path, err := defaultRecipientsPath()
-	if err != nil {
-		return nil, err
+// loadRecipientsFileLines resolves which recipients file (if any) to read
+// and returns its raw lines, hardened through plan/seal.LoadRecipientsFile
+// (task ce2 — the pre-fix version of this function used a plain
+// os.ReadFile with no ownership, permission or symlink check at all, which
+// let a symlinked or world-writable recipients file silently inject an
+// extra recipient into every sealed plan).
+//
+//   - noDefaultRecipients (-no-default-recipients) with no explicit
+//     recipientsFilePath skips this source entirely: the operator opted
+//     out, relying solely on -recipient flags.
+//   - recipientsFilePath (-recipients-file) is read even when
+//     noDefaultRecipients is also set — it names a file the operator chose
+//     deliberately, not the ambient default — and a missing explicit file
+//     is an error rather than silently empty, since a typo'd path should
+//     not fail open.
+//   - With neither flag, the ambient default path (defaultRecipientsPath)
+//     is read when present and silently skipped when absent: an operator
+//     who seals only with -recipient flags need never create one.
+func loadRecipientsFileLines(recipientsFilePath string, noDefaultRecipients bool) ([]string, error) {
+	explicit := recipientsFilePath != ""
+	if noDefaultRecipients && !explicit {
+		return nil, nil
 	}
-	data, err := os.ReadFile(path)
+	path := recipientsFilePath
+	if !explicit {
+		def, err := defaultRecipientsPath()
+		if err != nil {
+			return nil, err
+		}
+		path = def
+	}
+	lines, err := seal.LoadRecipientsFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) && !explicit {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("read recipients file %s: %w", path, err)
+		return nil, fmt.Errorf("recipients file %s: %w", path, err)
 	}
-	return strings.Split(string(data), "\n"), nil
+	return lines, nil
 }
 
 // resolvePlanRecipients unions -recipient flag values (in the order given)
-// with the default recipients file's lines, then validates the whole list
-// through plan/seal.ParseRecipients, which enforces the age1pq-only policy
-// (docs/plan-encryption.md "Recipient policy") and names any refused
-// line's class, never its content. It does not itself refuse an empty
-// result (ParseRecipients' own doc comment): planSealed does that, at the
-// point sealing would otherwise produce an unreadable artifact.
-func resolvePlanRecipients(flagRecipients []string) ([]seal.Recipient, error) {
+// with the resolved recipients file's lines (loadRecipientsFileLines),
+// then validates the whole list through plan/seal.ParseRecipients, which
+// enforces the age1pq-only policy (docs/plan-encryption.md "Recipient
+// policy") and names any refused line's class, never its content. It does
+// not itself refuse an empty result (ParseRecipients' own doc comment):
+// planSealed does that, at the point sealing would otherwise produce an
+// unreadable artifact.
+func resolvePlanRecipients(flagRecipients []string, recipientsFilePath string, noDefaultRecipients bool) ([]seal.Recipient, error) {
 	lines := append([]string{}, flagRecipients...)
-	fileLines, err := readRecipientsFile()
+	fileLines, err := loadRecipientsFileLines(recipientsFilePath, noDefaultRecipients)
 	if err != nil {
 		return nil, err
 	}
