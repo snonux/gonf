@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -219,5 +220,160 @@ func TestCheckForeignPayloadCoversEveryMigratedKind(t *testing.T) {
 	}
 	if got := len(payloadFieldOwners); got != want {
 		t.Fatalf("len(payloadFieldOwners) = %d, want %d (one entry per OpPayloadExamples field)", got, want)
+	}
+}
+
+// wireRawMessageType is fillEveryWireField's special case for wireOp's one
+// json.RawMessage field (TemplateData): its Kind() is Slice (RawMessage is
+// defined as []byte), so it must be matched before the general
+// "slice of non-byte elements" case below, exactly like
+// api/secret_fields.go's rawMessageType does for the same field reached
+// through FilePayload.
+var wireRawMessageType = reflect.TypeOf(json.RawMessage(nil))
+
+// fillEveryWireField recursively sets every exported field reachable from
+// v to a distinguishable non-zero value, keyed by its struct-field path
+// (e.g. ".KeyedLines[].Key"). It is TestWireFieldRoundTripOwnership's
+// filler: unlike api/secret_fields_test.go's fillValue (which the scan/
+// redact walkers only ever feed strings, so it leaves bool/int fields at
+// their zero value on purpose), this one must also set every bool and int
+// field, since the totality test below asserts on ALL of wireOp's fields,
+// not just the string-bearing ones.
+func fillEveryWireField(t *testing.T, v reflect.Value, path string) {
+	t.Helper()
+	switch {
+	case v.Type() == wireRawMessageType:
+		v.SetBytes([]byte(`{"k":"v:` + path + `"}`))
+	case v.Kind() == reflect.String:
+		v.SetString("wire:" + path)
+	case v.Kind() == reflect.Bool:
+		v.SetBool(true)
+	case v.Kind() == reflect.Int:
+		v.SetInt(7)
+	case v.Kind() == reflect.Pointer:
+		v.Set(reflect.New(v.Type().Elem()))
+		fillEveryWireField(t, v.Elem(), path)
+	case v.Kind() == reflect.Slice && v.Type().Elem().Kind() != reflect.Uint8:
+		v.Set(reflect.MakeSlice(v.Type(), 1, 1))
+		fillEveryWireField(t, v.Index(0), path+"[]")
+	case v.Kind() == reflect.Map:
+		m := reflect.MakeMap(v.Type())
+		key := reflect.ValueOf("k:" + path).Convert(v.Type().Key())
+		val := reflect.ValueOf("v:" + path).Convert(v.Type().Elem())
+		m.SetMapIndex(key, val)
+		v.Set(m)
+	case v.Kind() == reflect.Struct:
+		for i := range v.NumField() {
+			f := v.Type().Field(i)
+			if !f.IsExported() {
+				continue
+			}
+			fillEveryWireField(t, v.Field(i), path+"."+f.Name)
+		}
+	default:
+		t.Fatalf("wireOp%s has unhandled type %s; teach fillEveryWireField to fill it", path, v.Type())
+	}
+}
+
+// TestWireFieldRoundTripOwnership is the mechanical totality guard task 5f2
+// was opened to add. The Op field inventory is duplicated four ways with no
+// compiler or test tying them together: plan/types.go (Op's own core
+// struct), wire.go (wireOp, documented as "an exact, frozen, same-order
+// copy"), op_payload.go (toWire/fromWire, plus each kind's own
+// payloadConstructors entry and applyToWire method), and — one level
+// further out — api's opFieldClasses/TestOpFieldClassesAreExhaustive.
+// Forgetting one kind's "X: op.X" copy in toWire, or its
+// payloadConstructors entry, compiles cleanly and silently drops field X
+// from every recorded plan of that kind forever — exactly the regression
+// task 2f2 found and fixed (TestDecodeRefusesForeignKindFields above), just
+// approached from the opposite direction: 2f2 guards against a FOREIGN
+// field surviving decode when it should have been refused; this test
+// guards against an OWNED field failing to survive the fromWire/toWire
+// round trip in the first place, mechanically, for every wireOp field and
+// every Kind — not only the Chroot/Creates fields the pre-existing
+// api.opFieldClasses fitness tests happen to exercise today.
+//
+// For every plan.AllKinds() entry (so a brand-new Kind with no
+// OpPayloadExamples() entry yet is covered exactly like every migrated
+// one, and KindEnsureFile's deliberate "no payload at all" case —
+// FilePayload's own doc comment — is exercised too): fill a wireOp so
+// EVERY field, not just the ones some other pass happens to touch, carries
+// a distinguishable non-zero value, set its Op to the Kind under test, and
+// run it through fromWire then back through toWire. A field must come out
+// exactly as it went in when the decoded Kind owns it (every core field,
+// plus — only for the matching Kind — that Kind's own OpPayload-exclusive
+// fields), and must come out as the field type's zero value for every
+// field some OTHER kind owns exclusively.
+//
+// Ownership is computed purely by reflecting wireOp itself and
+// payloadFieldOwners (built, in turn, by reflecting OpPayloadExamples() —
+// this codebase's established single source of truth for "which kind owns
+// which wire field", already trusted by checkForeignPayload,
+// TestWirePayloadTagsMatch and api's TestOpFieldClassesAreExhaustive): no
+// second, hand-maintained field list of its own, so this test needs no
+// update when OpPayloadExamples() gains an entry for a future kind
+// migration — it is covered automatically, the same way
+// TestCheckForeignPayloadCoversEveryMigratedKind already is.
+// assertWireFieldRoundTrip checks one wireOp field's fromWire/toWire round
+// trip against its expected owner: kind's own fields (core, or exclusive to
+// kind itself per owner/hasOwner) must survive unchanged; a field exclusive
+// to some OTHER kind's payload must come back as its zero value (see
+// TestWireFieldRoundTripOwnership's own doc comment for why). Split out as
+// its own unit, rather than inlined in that test's loop, per CLAUDE.md's
+// refactor-at-50-lines guidance.
+func assertWireFieldRoundTrip(t *testing.T, kind Kind, f reflect.StructField, wantVal, gotVal any, owner payloadFieldOwner, hasOwner bool) {
+	t.Helper()
+	if !hasOwner || owner.kind == kind {
+		// A core field (shared by every kind, or not yet migrated onto any
+		// payload), or one of THIS kind's own payload-exclusive fields:
+		// must survive the round trip unchanged.
+		if !reflect.DeepEqual(gotVal, wantVal) {
+			t.Errorf("kind %q: field %q must round-trip unchanged (core, or %s's own), got %#v, want %#v",
+				kind, f.Name, kind, gotVal, wantVal)
+		}
+		return
+	}
+
+	// Exclusive to some OTHER kind's payload: fromWire must not have kept
+	// it (payloadFromWire only reads w.Op's own entry), and toWire must
+	// not have written it back (only op.Payload.applyToWire, for w.Op's
+	// own concrete payload type, ever runs). A forgotten kind guard
+	// anywhere in that chain — or a forgotten copy in toWire/fromWire's
+	// own core-field literals — surfaces here as a non-zero value that
+	// should be zero.
+	zero := reflect.Zero(f.Type).Interface()
+	if !reflect.DeepEqual(gotVal, zero) {
+		t.Errorf("kind %q: field %q is %s-exclusive but survived fromWire/toWire as %#v (want the zero value %#v): "+
+			"a coordinated edit site (toWire, fromWire, payloadConstructors, or applyToWire) is missing its kind guard",
+			kind, f.Name, owner.kind, gotVal, zero)
+	}
+}
+
+func TestWireFieldRoundTripOwnership(t *testing.T) {
+	t.Parallel()
+	wt := reflect.TypeOf(wireOp{})
+
+	for _, kind := range AllKinds() {
+		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
+
+			var w wireOp
+			fillEveryWireField(t, reflect.ValueOf(&w).Elem(), "")
+			// Fix the kind under test AFTER the generic fill, which would
+			// otherwise leave it some unrelated non-empty string: w.Op is
+			// what payloadFromWire (via fromWire) and toWire's Payload
+			// dispatch both key off.
+			w.Op = kind
+
+			got := fromWire(w).toWire()
+
+			wv := reflect.ValueOf(w)
+			gv := reflect.ValueOf(got)
+			for i := range wt.NumField() {
+				f := wt.Field(i)
+				owner, hasOwner := payloadFieldOwners[f.Name]
+				assertWireFieldRoundTrip(t, kind, f, wv.Field(i).Interface(), gv.Field(i).Interface(), owner, hasOwner)
+			}
+		})
 	}
 }
