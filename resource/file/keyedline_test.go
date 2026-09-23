@@ -83,6 +83,15 @@ func TestWithKeyedLineRefusesAmbiguousOwnership(t *testing.T) {
 		want string
 	}{
 		{"empty key", []FileOption{WithKeyedLine("", "x")}, "non-empty key"},
+		// task nd2: a space- or tab-leading key can never match, because
+		// applyKeyedLine strips a candidate line's OWN leading whitespace
+		// before comparing it against the key (task bc2) — an untrimmed,
+		// whitespace-leading key can never equal that trimmed prefix, so
+		// "found" is never true and the key's line is appended as a new
+		// line on every single apply (unbounded duplicate-line growth,
+		// silent, since logKeyedLineResult only logs a replace or a drop).
+		{"space-leading key", []FileOption{WithKeyedLine("  A=", "  A=1")}, "must not start with whitespace"},
+		{"tab-leading key", []FileOption{WithKeyedLine("\tA=", "\tA=1")}, "must not start with whitespace"},
 		{"line without key", []FileOption{WithKeyedLine("A=", "B=1")}, "must start with its key"},
 		{"multi-line", []FileOption{WithKeyedLine("A=", "A=1\nB=2")}, "line break"},
 		{"same key twice", []FileOption{WithKeyedLine("A=", "A=1"), WithKeyedLine("A=", "A=2")}, "two different lines"},

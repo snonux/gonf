@@ -86,6 +86,19 @@ covered, or accept that a hand-edited line with unusual internal spacing or
 case needs its own separate `WithKeyedLine` (or a one-off `WithLine`/
 `WithoutLine` pair) to converge.
 
+Because the match strips the *candidate line's* leading whitespace before
+comparing it against `key`, `key` itself must not start with a space or tab:
+an untrimmed, whitespace-leading key could never equal that trimmed prefix,
+so no line would ever be recognized as owned and `line` would be appended as
+a brand-new line on every single apply — unbounded duplicate-line growth,
+with nothing logged (a plain append is neither a replace nor a drop). This is
+refused at declaration time; write the key without its indentation (e.g.
+`WithKeyedLine("ServerName ", "ServerName foo")` to own an indented
+`    ServerName foo` line in an nginx block) — `line` must itself start with
+`key` (the rule above), so it too carries no leading whitespace, and the
+owned line is written back unindented regardless, per "What counts as a
+match" above.
+
 This safety is about the *lines only*: like every other `File`, a keyed edit
 does **not** preserve a shared file's existing mode or ownership. `build()`
 defaults an unset mode to `0640` and applies that default unconditionally —
@@ -112,6 +125,7 @@ necessarily redaction-safe.
 Rules, checked when the resource is declared (misuse fails fast):
 
 - `line` must start with `key` and must not contain a line break;
+- `key` must not start with whitespace (see "What counts as a match" above);
 - within one File, a key is declared once (an exact repeat is ignored), and
   no key may be a prefix of another (`"A"` and `"AB="` would both own
   `AB=1`) — include the delimiter, e.g. `"export PKG_PATH="`;

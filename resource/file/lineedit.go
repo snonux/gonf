@@ -238,10 +238,12 @@ func logKeyedLineResult(path, key string, replaced, dropped int, droppedLines []
 }
 
 // validateKeyedLines refuses WithKeyedLine declarations whose ownership is
-// ambiguous or cannot converge (see opt.WithKeyedLine): an empty key, a line
-// not starting with its key or spanning lines, one key declared with two
-// different lines or prefixing another key, and a WithLine/WithoutLine line
-// the key would also own.
+// ambiguous or cannot converge (see opt.WithKeyedLine): an empty key, a key
+// starting with whitespace (applyKeyedLine's match strips a matched line's
+// own leading whitespace, so such a key could never match and would append
+// a duplicate line on every apply), a line not starting with its key or
+// spanning lines, one key declared with two different lines or prefixing
+// another key, and a WithLine/WithoutLine line the key would also own.
 func (f *File) validateKeyedLines(path string) error {
 	for i, edit := range f.keyedLines {
 		if err := validateKeyedLine(edit); err != nil {
@@ -277,6 +279,17 @@ func validateKeyedLine(edit resource.KeyedLine) error {
 	switch {
 	case edit.Key == "":
 		return fmt.Errorf("WithKeyedLine requires a non-empty key")
+	case edit.Key != strings.TrimLeft(edit.Key, " \t"):
+		// applyKeyedLine's match strips a candidate line's OWN leading
+		// whitespace before comparing it against edit.Key (see its doc
+		// comment); if edit.Key itself starts with a space/tab, the
+		// trimmed line can never carry that leading-whitespace prefix, so
+		// "found" is never true and edit.Line is appended as a brand-new
+		// line on every single apply — unbounded duplicate-line growth,
+		// with nothing logged (logKeyedLineResult only logs a replace or a
+		// drop, never a plain append). Refused here instead of only at
+		// apply time, matching every other WithKeyedLine convergence rule.
+		return fmt.Errorf("WithKeyedLine %q: the key must not start with whitespace; the match strips a line's own leading whitespace, so an indented key can never match and the edit never converges", edit.Key)
 	case strings.ContainsAny(edit.Line, "\r\n"):
 		return fmt.Errorf("WithKeyedLine %q: the line must not contain a line break", edit.Key)
 	case !strings.HasPrefix(edit.Line, edit.Key):
