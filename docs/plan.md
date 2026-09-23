@@ -560,7 +560,20 @@ class of bug that motivated task j5.
    next to `DraftPayload` in `resource/draft.go`
    (`SourceFilePayload`/`SourceDirPayload`) that the owning kind's payload
    implements — add a new one of these only when a second, similarly
-   cross-cutting consumer actually needs it, not preemptively.
+   cross-cutting consumer actually needs it, not preemptively. **Every
+   consumer of one of these markers must check `d.Kind` before the type
+   assertion, never assert alone** (task 0e2): the assertion only tests
+   `d.Payload`'s concrete Go type, so an unrelated kind's payload that later
+   grows a like-named accessor for its own purpose (e.g. its own
+   `SourceFilePath()`) would otherwise be silently consulted too, packaging
+   that kind's controller-local bytes into an op that never asked for them —
+   a real, reproduced secret leak, not a hypothetical one. `api/packager.go`'s
+   `sourceFilePath`/`syncDirSource` and `internal/testapply`'s
+   `packageSource` both gate this way; a new consumer follows the same
+   pattern. `api/plan_fitness_test.go`'s `TestSourcePayloadFitness` (next to
+   `TestPlanKindFitness`) pins the exact, closed set of payload types allowed
+   to implement each marker at all, as defense in depth alongside the
+   caller-side gate; extend both together, never one without the other.
 5. **Lowering** — implement `Handler.ToOp`, mapping the draft's fields onto
    the new `plan.Op`. `api/packager.go`'s `draftToOp` only ever calls
    `HandlerFor(d.Kind)`; an unmapped kind errors at record time — there is

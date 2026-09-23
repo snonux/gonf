@@ -166,3 +166,44 @@ func TestApplyDeclErrGuard(t *testing.T) {
 		}
 	})
 }
+
+// leakingPayload implements both resource.SourceFilePayload and
+// resource.SourceDirPayload the way a future resource kind's own payload
+// could by accident (task 0e2's reproduction added a like-named accessor to
+// cron.Payload and watched every recorded cron op silently gain the target
+// file's bytes). It drives TestPackageSourceGatedOnKind below, which proves
+// this package's packageSource (unexported; driven through the public Ops)
+// ignores it for a kind that never meant to carry a source.
+type leakingPayload struct{ path, dir, glob string }
+
+func (leakingPayload) Clone() resource.DraftPayload      { return leakingPayload{} }
+func (p leakingPayload) SourceFilePath() string          { return p.path }
+func (p leakingPayload) SourceDirGlob() (string, string) { return p.dir, p.glob }
+
+// TestPackageSourceGatedOnKind is the task 0e2 regression: before the fix,
+// packageSource type-asserted resource.SourceFilePayload/
+// resource.SourceDirPayload against whatever concrete type a draft's Payload
+// held, with no check that the draft's Kind was ever meant to carry a
+// source, so leakingPayload's bytes would have ended up as this op's
+// content_b64/blob. "testapply_fixture" (fixtureKind, from fixture.go) is
+// used as the mismatched kind because it is the one kind this external test
+// package can register a plan.Handler for without importing a
+// resource/<kind> package back — the same reason this package itself stays
+// kind-neutral (see the package doc).
+func TestPackageSourceGatedOnKind(t *testing.T) {
+	resource.ResetRepository()
+	testapply.Register("T", "noop", func() error { return nil }) // installs fixtureHandler
+	leaking := leakingPayload{path: "/etc/shadow", dir: "/etc", glob: "*.conf"}
+	draft := resource.PlanDraft{Kind: "testapply_fixture", ID: "T[leak]", Payload: leaking}
+
+	ops, err := testapply.Ops([]resource.PlanDraft{draft}, plan.NewMemoryStore())
+	if err != nil {
+		t.Fatalf("Ops() = %v", err)
+	}
+	if len(ops) != 2 {
+		t.Fatalf("ops = %#v, want header plus one op", ops)
+	}
+	if op := ops[1]; op.ContentB64 != "" || op.Blob != "" {
+		t.Fatalf("op = %#v, want no content_b64/blob (leakingPayload must not be consulted for kind %q)", op, draft.Kind)
+	}
+}

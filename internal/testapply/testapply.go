@@ -192,15 +192,31 @@ func lower(d resource.PlanDraft) (plan.Op, error) {
 // own tests), so it finds them through the kind-neutral
 // resource.SourceFilePayload/SourceDirPayload interfaces instead of
 // importing resource/file or resource/dir.
+//
+// Each type assertion is gated on d.Kind first (task 0e2): w62 Layer 1 left
+// them unguarded, consulting whatever concrete type d.Payload held with no
+// discriminator, so a future payload that happens to grow a like-named
+// SourceFilePath()/SourceDirGlob() for its own, unrelated purpose would
+// silently have controller-local file bytes packaged into that OTHER kind's
+// op — the same leak api/packager.go's sourceFilePath/syncDirSource guard
+// against, and for the identical reason: this package and that one are the
+// only two callers of these marker interfaces (see resource/draft.go), so
+// both needed the same fix. "ensure_file" joins "file" for the same reason
+// api/packager.go's sourceFilePath does: resource/file's planDraft fills
+// Payload with file.Payload for both kinds alike.
 func packageSource(op plan.Op, d resource.PlanDraft, store plan.BlobStore, name string) (plan.Op, error) {
 	var err error
 	sourcePath := ""
-	if sp, ok := d.Payload.(resource.SourceFilePayload); ok {
-		sourcePath = sp.SourceFilePath()
+	if d.Kind == "file" || d.Kind == "ensure_file" {
+		if sp, ok := d.Payload.(resource.SourceFilePayload); ok {
+			sourcePath = sp.SourceFilePath()
+		}
 	}
 	sourceDir, sourceGlob := "", ""
-	if sp, ok := d.Payload.(resource.SourceDirPayload); ok {
-		sourceDir, sourceGlob = sp.SourceDirGlob()
+	if d.Kind == "sync_dir" {
+		if sp, ok := d.Payload.(resource.SourceDirPayload); ok {
+			sourceDir, sourceGlob = sp.SourceDirGlob()
+		}
 	}
 	switch {
 	case sourcePath != "":

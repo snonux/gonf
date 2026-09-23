@@ -60,6 +60,16 @@ type DraftPayload interface {
 // package doc says it imports only plan and resource precisely so it never
 // creates a cycle with a resource/<kind> package's own tests) can
 // type-assert it without importing resource/dir back.
+// A caller must check d.Kind == "sync_dir" before this assertion, not rely
+// on the assertion alone (task 0e2): the assertion only tests d.Payload's
+// concrete TYPE, so an unrelated kind whose payload happens to grow a
+// like-named SourceDirGlob() method for its own purpose would otherwise be
+// consulted too, silently packaging controller-local directory bytes into
+// that kind's op. api/packager.go's syncDirSource and internal/testapply's
+// packageSource are the only two consumers and both gate this way;
+// api/plan_fitness_test.go's TestSourcePayloadFitness pins the exact set of
+// payload types allowed to implement this interface at all, as defense in
+// depth alongside the caller-side gate.
 type SourceDirPayload interface {
 	DraftPayload
 	// SourceDirGlob returns the packageable source: SourceDir (a
@@ -74,6 +84,14 @@ type SourceDirPayload interface {
 // Mirrors SourceDirPayload's role for the "sync_dir" kind, and lives here
 // for the same reason: internal/testapply must stay kind-neutral (see its
 // own package doc) and cannot import resource/file back.
+// A caller must check d.Kind == "file" || d.Kind == "ensure_file" before
+// this assertion, not rely on the assertion alone (task 0e2), for the same
+// reason SourceDirPayload's doc above gives: the assertion only tests
+// d.Payload's concrete TYPE, not that the draft's kind ever meant to carry a
+// file source. api/packager.go's sourceFilePath and internal/testapply's
+// packageSource are the only two consumers and both gate this way;
+// TestSourcePayloadFitness (api/plan_fitness_test.go) pins the exact set of
+// payload types allowed to implement this interface at all.
 type SourceFilePayload interface {
 	DraftPayload
 	// SourceFilePath returns the packageable source file path, or "" for a

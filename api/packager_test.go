@@ -176,3 +176,52 @@ func TestDraftPackagerNeedsStoreForBlobs(t *testing.T) {
 		})
 	}
 }
+
+// leakingPayload implements both resource.SourceFilePayload and
+// resource.SourceDirPayload the way a FUTURE resource kind's payload could
+// by accident: a like-named accessor added for that kind's own, unrelated
+// purpose (see the task 0e2 annotation's reproduction, which added exactly
+// such a method to cron.Payload and watched every recorded cron op silently
+// gain the target file's bytes). It exists only so
+// TestSourceAccessorsGatedOnKind can drive sourceFilePath/syncDirSource with
+// a payload that WOULD leak if the d.Kind gate were missing or removed.
+type leakingPayload struct{ path, dir, glob string }
+
+func (leakingPayload) Clone() resource.DraftPayload      { return leakingPayload{} }
+func (p leakingPayload) SourceFilePath() string          { return p.path }
+func (p leakingPayload) SourceDirGlob() (string, string) { return p.dir, p.glob }
+
+// TestSourceAccessorsGatedOnKind reproduces and closes the task 0e2 leak:
+// before the fix, sourceFilePath/syncDirSource type-asserted
+// resource.SourceFilePayload/resource.SourceDirPayload against whatever
+// concrete type a draft's Payload held, with no check that the draft's Kind
+// was ever meant to carry a source, so leakingPayload's bytes would have
+// been packaged into ops of every kind below. It also proves the gate is
+// purely additive-restrictive: the very same leakingPayload still answers
+// correctly once the draft's Kind is one that legitimately carries a
+// source, so the fix does not depend on the payload's identity, only on
+// d.Kind.
+func TestSourceAccessorsGatedOnKind(t *testing.T) {
+	leaking := leakingPayload{path: "/etc/shadow", dir: "/etc", glob: "*.conf"}
+
+	for _, kind := range []string{"cron", "command", "package", "service", "user", "timer", "", "widget"} {
+		d := resource.PlanDraft{Kind: kind, Payload: leaking}
+		if got := sourceFilePath(d); got != "" {
+			t.Errorf("kind %q: sourceFilePath = %q, want \"\" (SourceFilePath must not be consulted for this kind)", kind, got)
+		}
+		if gotDir, gotGlob := syncDirSource(d); gotDir != "" || gotGlob != "" {
+			t.Errorf("kind %q: syncDirSource = (%q, %q), want (\"\", \"\") (SourceDirGlob must not be consulted for this kind)", kind, gotDir, gotGlob)
+		}
+	}
+
+	for _, kind := range []string{"file", "ensure_file"} {
+		d := resource.PlanDraft{Kind: kind, Payload: leaking}
+		if got := sourceFilePath(d); got != leaking.path {
+			t.Errorf("kind %q: sourceFilePath = %q, want %q", kind, got, leaking.path)
+		}
+	}
+	d := resource.PlanDraft{Kind: "sync_dir", Payload: leaking}
+	if gotDir, gotGlob := syncDirSource(d); gotDir != leaking.dir || gotGlob != leaking.glob {
+		t.Errorf("sync_dir: syncDirSource = (%q, %q), want (%q, %q)", gotDir, gotGlob, leaking.dir, leaking.glob)
+	}
+}

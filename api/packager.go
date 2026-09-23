@@ -17,19 +17,48 @@ import (
 // finds them through the kind-neutral resource.SourceDirPayload interface
 // instead of a direct field read, so this package need not import
 // resource/dir just for this.
+//
+// The d.Kind == "sync_dir" check runs BEFORE the type assertion (task 0e2):
+// w62 Layer 1 left the assertion alone consulting whatever concrete type
+// d.Payload happened to hold, with no discriminator. That is structural
+// typing, not the deliberate opt-in the flat-field era had — any future
+// payload that grows a like-named SourceDirGlob() for its own, unrelated
+// reason would silently have its accessor called and its return values
+// packaged as a blob into THIS draft's op, even though its kind never meant
+// to carry a source directory. Gating on Kind restores the "only a kind that
+// deliberately opted in" guarantee; TestSourcePayloadFitness (api/
+// plan_fitness_test.go) pins which payload types are allowed to implement
+// the marker at all, as defense in depth alongside this gate.
 func syncDirSource(d resource.PlanDraft) (sourceDir, sourceGlob string) {
+	if d.Kind != "sync_dir" {
+		return "", ""
+	}
 	if sp, ok := d.Payload.(resource.SourceDirPayload); ok {
 		return sp.SourceDirGlob()
 	}
 	return "", ""
 }
 
-// sourceFilePath returns d's "file"-kind SourcePath, or "" for any other
-// draft. It moved off resource.PlanDraft's flat field into resource/file's
-// Payload (task w62 Layer 1); found through the kind-neutral
+// sourceFilePath returns d's "file"/"ensure_file"-kind SourcePath, or "" for
+// any other draft. It moved off resource.PlanDraft's flat field into
+// resource/file's Payload (task w62 Layer 1); found through the kind-neutral
 // resource.SourceFilePayload interface for the same reason as
 // syncDirSource above.
+//
+// The d.Kind check runs BEFORE the type assertion, for the same reason as
+// syncDirSource's above (task 0e2): consulting the marker interface against
+// whatever d.Payload happens to hold, with no discriminator, let a future
+// unrelated payload's like-named SourceFilePath() silently leak controller-
+// local file bytes into its own kind's op. "ensure_file" is included because
+// resource/file's (*File).planDraft fills Payload with the same file.Payload
+// type for both kinds (ensureFileHandler.ToOp just never reads
+// SourcePath, so it is always "" there in practice) — excluding it here
+// would not add safety, only asymmetry with the type-level allow-list
+// TestSourcePayloadFitness pins.
 func sourceFilePath(d resource.PlanDraft) string {
+	if d.Kind != "file" && d.Kind != "ensure_file" {
+		return ""
+	}
 	if sp, ok := d.Payload.(resource.SourceFilePayload); ok {
 		return sp.SourceFilePath()
 	}
