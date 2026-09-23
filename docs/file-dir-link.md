@@ -7,7 +7,7 @@ File("/etc/motd", WithContent("hello\n"), WithMode(0o644))
 File("/etc/app.conf", WithSource("assets/app.conf.tmpl"))
 File("/etc/lines.conf", WithLines("keep=1", "other=1"), WithoutLines("stale", "obsolete"))
 File("/etc/rc.conf.local", WithLine(`httpd_flags=""`), WithName("rc-conf-httpd-flags"))
-File("/root/.profile", WithKeyedLine("export PKG_PATH=", `export PKG_PATH="https://repo/"`))
+File("/root/.profile", WithKeyedLine("export PKG_PATH=", `export PKG_PATH="https://repo/"`), WithMode(0o644), WithOwner("root"), WithGroup("wheel"))
 EnsureFile("/etc/daily.local", WithMode(0o644))
 NoFile("/tmp/old.txt")
 
@@ -55,6 +55,17 @@ file's order are left alone, so it is safe on shared rc/profile/daily files
 that are not owned whole. A replaced differing line is logged at Info (key
 and counts only, not the old text), and the file change is reported like any
 other content change.
+
+This safety is about the *lines only*: like every other `File`, a keyed edit
+does **not** preserve a shared file's existing mode or ownership. `build()`
+defaults an unset mode to `0640` and applies that default unconditionally —
+mode is not gated by whether `WithMode` was called (see the
+`WithOwner`/`WithGroup`/`WithMode` row above for the ownership default's own,
+narrower rule) — so a root-owned `/root/.profile` at `0644` silently becomes
+`0640` under a bare `WithKeyedLine`, the same trap `WithLine` and
+`WithContent` already have. Pass `WithMode`/`WithOwner`/`WithGroup` explicitly
+(as in the example above) whenever the file's existing mode or ownership must
+survive.
 
 **Pick `key` as narrow as the setting itself** (e.g. `"export PKG_PATH="`,
 not `"export "`): declaration-time checks (below) validate that `key` and
