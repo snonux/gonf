@@ -903,7 +903,11 @@ Design decisions:
   (also the receiving end of a push and the elevated re-exec child) run under
   the CLI's signal context (SIGINT, SIGTERM, and SIGHUP unless it is ignored,
   so `nohup gonf …` survives a logout; `api.RunContext`,
-  `api.ApplyPlanContext`). `plan.ApplyWithContext` binds that context to
+  `api.ApplyPlanContext`). The elevated re-exec child additionally derives
+  its context from `-cancel-pipe` (`cliApply`'s `watchCancelPipe`): EOF on
+  its stdin cancels it exactly like a delivered signal would, and is the
+  parent's actual, reliable cancellation trigger — see "Elevated re-exec"
+  below. `plan.ApplyWithContext` binds that context to
   `internal/exec` for the duration of the apply, so a signal stops the
   backend command in flight, no further op starts, and the command fails
   with `interrupted: … context canceled` and exit 1. Stopping is graceful:
@@ -924,18 +928,35 @@ Design decisions:
   gonf waits for it. After an interrupt no validator starts, and the verdict
   of one that finishes later is discarded: the op fails and the candidate is
   never published to the live file.
-- **Elevated re-exec.** sudo gets SIGTERM and relays it to the elevated
-  `gonf apply`, which stops like a local apply (SIGHUP too, which it gets
-  when sudo's `use_pty` pty goes away). gonf prints that it waits and allows
-  the command timeout plus 20s before it SIGKILLs sudo (the child runs under
-  that same timeout: a non-default `-cmd-timeout` is forwarded to it), so a
-  validator
-  running in the child can finish and its op be aborted cleanly instead of
-  an orphaned root child writing the file afterwards. doas sets the real,
-  effective and saved uid to root, so an unprivileged gonf can neither
-  SIGTERM nor SIGKILL a doas child: only a signal the terminal sends to the
-  whole foreground process group (Ctrl-C) reaches it, and a SIGTERM sent to
-  gonf alone leaves gonf waiting for the doas child to finish.
+- **Elevated re-exec.** gonf tells the elevated `gonf apply` child to cancel
+  through a pipe wired to its stdin (`elevatedApplyArgv`'s `-cancel-pipe`,
+  `api.runElevatedCmd`) instead of relying on the sudo/doas wrapper to relay
+  or withhold a process signal: that turned out to behave differently for
+  each wrapper, and no single one of them is trustworthy alone as the sole
+  cancellation mechanism (task 3c2; task z62's original design assumed only
+  the last of these three): sudo relays SIGTERM to its child faithfully.
+  OpenDoas — the doas implementation Linux distros such as Fedora ship —
+  also lets an unprivileged SIGTERM reach the doas process itself (verified
+  against opendoas 6.8.2), but its own PAM parent then prints "Session
+  terminated, killing shell" and SIGKILLs the elevated child roughly two
+  seconds later regardless of whether that child is mid graceful-shutdown,
+  cutting its intended grace period down to ~2s. Native OpenBSD doas instead
+  sets the real, effective and saved uid to root, so an unprivileged gonf
+  can signal neither the doas process nor its child (both fail with EPERM)
+  and simply waits for it to finish on its own; only a signal the terminal
+  sends to the whole foreground process group (Ctrl-C) reaches it. Closing
+  the cancel pipe sidesteps all three: it reaches the child directly,
+  bypassing the wrapper's signal handling (or lack of it) entirely, so the
+  child gets its full, deterministic grace period (the command timeout plus
+  20s, same bound as before: the child runs under that same timeout, since a
+  non-default `-cmd-timeout` is forwarded to it) regardless of which wrapper
+  is in front of it. gonf still also sends the wrapper an explicit SIGTERM,
+  but only for sudo (a harmless, cheap defense-in-depth there); never for
+  doas, since that signal is what triggers OpenDoas's premature kill in the
+  first place. Either way, the wrapper itself is SIGKILLed only after that
+  same grace period if it has not already exited behind its child, so a
+  validator running in the child can finish and its op be aborted cleanly
+  instead of leaving an orphaned root child writing the file afterwards.
 - **No end-to-end remote cancel.** Canceling a push (`push`, `cluster`,
   `fleet`) kills only the local `ssh`. Nothing signals the remote `gonf
   apply`: it keeps applying until its next write to the now closed stdout

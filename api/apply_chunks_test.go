@@ -20,7 +20,7 @@ import (
 // must add "-n" right after "apply"; non-dry-run must not add it at all.
 func TestElevatedApplyArgvDryRun(t *testing.T) {
 	got := elevatedApplyArgv("/usr/local/bin/gonf", "/tmp/plan/chunk-elevated.jsonl", true, "", gexec.BuiltinDefaultTimeout)
-	want := []string{"/usr/local/bin/gonf", "apply", "-n", "/tmp/plan/chunk-elevated.jsonl"}
+	want := []string{"/usr/local/bin/gonf", "apply", "-cancel-pipe", "-n", "/tmp/plan/chunk-elevated.jsonl"}
 	if len(got) != len(want) {
 		t.Fatalf("dry-run argv = %v, want %v", got, want)
 	}
@@ -31,7 +31,7 @@ func TestElevatedApplyArgvDryRun(t *testing.T) {
 	}
 
 	got = elevatedApplyArgv("/usr/local/bin/gonf", "/tmp/plan/chunk-elevated.jsonl", false, "", gexec.BuiltinDefaultTimeout)
-	want = []string{"/usr/local/bin/gonf", "apply", "/tmp/plan/chunk-elevated.jsonl"}
+	want = []string{"/usr/local/bin/gonf", "apply", "-cancel-pipe", "/tmp/plan/chunk-elevated.jsonl"}
 	if len(got) != len(want) {
 		t.Fatalf("non-dry-run argv = %v, want %v", got, want)
 	}
@@ -61,7 +61,7 @@ func TestElevatedApplyArgvDryRun(t *testing.T) {
 // combine, with "-profile" before "apply" and "-n" right after it.
 func TestElevatedApplyArgvProfileOverride(t *testing.T) {
 	got := elevatedApplyArgv("/usr/local/bin/gonf", "/tmp/plan/chunk-elevated.jsonl", false, "rocky", gexec.BuiltinDefaultTimeout)
-	want := []string{"/usr/local/bin/gonf", "-profile=rocky", "apply", "/tmp/plan/chunk-elevated.jsonl"}
+	want := []string{"/usr/local/bin/gonf", "-profile=rocky", "apply", "-cancel-pipe", "/tmp/plan/chunk-elevated.jsonl"}
 	if len(got) != len(want) {
 		t.Fatalf("profile-override argv = %v, want %v", got, want)
 	}
@@ -79,7 +79,7 @@ func TestElevatedApplyArgvProfileOverride(t *testing.T) {
 	}
 
 	got = elevatedApplyArgv("/usr/local/bin/gonf", "/tmp/plan/chunk-elevated.jsonl", true, "rocky", gexec.BuiltinDefaultTimeout)
-	want = []string{"/usr/local/bin/gonf", "-profile=rocky", "apply", "-n", "/tmp/plan/chunk-elevated.jsonl"}
+	want = []string{"/usr/local/bin/gonf", "-profile=rocky", "apply", "-cancel-pipe", "-n", "/tmp/plan/chunk-elevated.jsonl"}
 	if len(got) != len(want) {
 		t.Fatalf("dry-run+profile-override argv = %v, want %v", got, want)
 	}
@@ -103,11 +103,11 @@ func TestElevatedApplyArgvCmdTimeout(t *testing.T) {
 		timeout time.Duration
 		want    []string
 	}{
-		{"set", false, "", 30 * time.Second, []string{exe, "-cmd-timeout=30s", "apply", path}},
+		{"set", false, "", 30 * time.Second, []string{exe, "-cmd-timeout=30s", "apply", "-cancel-pipe", path}},
 		{"set with profile and dry-run", true, "rocky", 90 * time.Second,
-			[]string{exe, "-profile=rocky", "-cmd-timeout=1m30s", "apply", "-n", path}},
-		{"built-in default omitted", false, "", gexec.BuiltinDefaultTimeout, []string{exe, "apply", path}},
-		{"zero omitted", false, "", 0, []string{exe, "apply", path}},
+			[]string{exe, "-profile=rocky", "-cmd-timeout=1m30s", "apply", "-cancel-pipe", "-n", path}},
+		{"built-in default omitted", false, "", gexec.BuiltinDefaultTimeout, []string{exe, "apply", "-cancel-pipe", path}},
+		{"zero omitted", false, "", 0, []string{exe, "apply", "-cancel-pipe", path}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -228,6 +228,89 @@ func TestCLIApplyFailureNotInterrupted(t *testing.T) {
 	}
 }
 
+// TestCLIApplyCancelPipeStopsLongRunningCommand: task 3c2's core fix on the
+// child side. "-cancel-pipe" makes cliApply treat stdin as an out-of-band
+// cancel channel (api.runElevatedCmd closes it, instead of relying on
+// sudo/doas to relay or withhold a signal correctly): closing it here
+// (standing in for that close, with no OS signal and no ctx cancellation at
+// all — context.Background()) must stop the long-running command through
+// the very same "apply: interrupted: …" path as a signal-based cancel does,
+// pinning that the pipe is only an alternate trigger, not a separate
+// cancellation mechanism.
+func TestCLIApplyCancelPipeStopsLongRunningCommand(t *testing.T) {
+	root := t.TempDir()
+	started, marker := filepath.Join(root, "started"), filepath.Join(root, "after")
+	path := writePlanFile(t, root, sleepThenTouchOps(started, marker))
+
+	oldStdin := os.Stdin
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdin = r
+	t.Cleanup(func() {
+		os.Stdin = oldStdin
+		_ = r.Close()
+	})
+	whenStarted(t, started, func() { _ = w.Close() })
+
+	var code int
+	start := time.Now()
+	stderr := testutil.CaptureStderr(t, func() {
+		code = cliApply(context.Background(), []string{"-cancel-pipe", path})
+	})
+	requireInterrupted(t, code, time.Since(start), stderr, "apply: interrupted: ", marker)
+}
+
+// TestCLIApplyFileIgnoresStdinWithoutCancelPipe is the regression guard for
+// "-cancel-pipe" being opt-in: a plain `gonf apply <path>` (no flag) must
+// never watch stdin. Without this, a cron/systemd invocation with stdin
+// already at EOF (e.g. redirected from /dev/null, exactly like this test)
+// would self-cancel the instant it started, which would be a severe
+// regression for every non-interactive, non-elevated apply.
+func TestCLIApplyFileIgnoresStdinWithoutCancelPipe(t *testing.T) {
+	root := t.TempDir()
+	marker := filepath.Join(root, "ok")
+	path := writeTouchPlan(t, root, "ok.jsonl", marker)
+
+	oldStdin := os.Stdin
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdin = devNull
+	t.Cleanup(func() {
+		os.Stdin = oldStdin
+		_ = devNull.Close()
+	})
+
+	code := cliApply(context.Background(), []string{path})
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 (stdin already at EOF must not affect a plain apply)", code)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("apply did not run: %v", err)
+	}
+}
+
+// TestCLIApplyCancelPipeRefusedWithStdinPlan: "-cancel-pipe" dedicates
+// stdin to the cancel channel, "-" dedicates it to the push payload; nothing
+// sets both today (elevatedApplyArgv always passes a plan path), but the
+// combination must be refused explicitly (exit 2) rather than silently
+// letting one meaning win.
+func TestCLIApplyCancelPipeRefusedWithStdinPlan(t *testing.T) {
+	var code int
+	stderr := testutil.CaptureStderr(t, func() {
+		code = cliApply(context.Background(), []string{"-cancel-pipe", "-"})
+	})
+	if code != 2 {
+		t.Fatalf("exit %d, want 2", code)
+	}
+	if !strings.Contains(stderr, "-cancel-pipe") || !strings.Contains(stderr, "stdin") {
+		t.Fatalf("stderr %q, want a refusal mentioning -cancel-pipe and stdin", stderr)
+	}
+}
+
 // TestInterruptedByCause pins that "interrupted" is decided by the error
 // chain: a cancellation is one, a timeout or an unrelated failure is not,
 // whatever the ctx state when the error surfaced.

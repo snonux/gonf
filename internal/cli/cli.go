@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -87,8 +88,11 @@ func CLI() int {
 	// Signal-derived context (signalContext): SIGINT/SIGTERM (and SIGHUP
 	// unless ignored) cancel in-flight work. It reaches local task runs
 	// (api.RunContext), `gonf apply` (api.ApplyPlanContext), which stop the
-	// backend command or elevated sudo/doas re-exec in flight (SIGTERM,
-	// SIGKILL after a grace), single-host push (PushToContext) and the
+	// backend command in flight (SIGTERM, SIGKILL after a grace) and, for an
+	// elevated sudo/doas re-exec, close that child's cancel pipe instead of
+	// (or, for sudo only, in addition to) signalling the wrapper — see
+	// api.runElevatedCmd's doc comment for why a signal to the wrapper alone
+	// is not trusted — single-host push (PushToContext) and the
 	// cluster/fleet fan-out, which kill their local ssh on cancel (the
 	// remote gonf is not signalled; see cliApply). Installed after flag
 	// parsing only because whether a repeated signal force-exits depends on
@@ -576,12 +580,17 @@ func warnSensitivePlan(outPath string, ops []plan.Op) {
 // cliApply runs `gonf apply [flags] <plan.jsonl|->` under ctx, the CLI's
 // SIGINT/SIGTERM context: a signal stops the backend command in flight
 // (api.ApplyPlanContext; SIGTERM, SIGKILL after a grace) and the apply fails
-// with exit 1. This is also the elevated re-exec child (sudo relays the
-// parent's SIGTERM to it) and the receiving end of a push, so a signal
-// reaching either process stops its apply the same way. Canceling a push on
-// the controller, however, only kills the local ssh: nothing signals the
-// remote gonf, which keeps applying until its next write to the closed
-// stdout fails; there is no end-to-end remote cancel.
+// with exit 1. This is also the receiving end of a push, so a signal
+// reaching it stops its apply the same way. With "-cancel-pipe" (set only by
+// the local sudo/doas elevated re-exec; see api.elevatedApplyArgv), this is
+// also the elevated child: watchCancelPipe below wires an EOF on stdin into
+// the same ctx cancellation, so the parent (api.runElevatedCmd) can trigger
+// this child's graceful stop directly, out-of-band from process signalling —
+// which the parent no longer trusts alone, since it behaves inconsistently
+// across sudo/doas implementations (see runElevatedCmd's doc comment).
+// Canceling a push on the controller, however, only kills the local ssh:
+// nothing signals the remote gonf, which keeps applying until its next write
+// to the closed stdout fails; there is no end-to-end remote cancel.
 func cliApply(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -589,6 +598,9 @@ func cliApply(ctx context.Context, args []string) int {
 	dryRunShort := fs.Bool("n", false, "Alias for -dry-run")
 	strictPreview := fs.Bool("strict-preview", false, "Require a no-staging remote preview")
 	applyDir := fs.String("apply-dir", "", "sticky staging dir for multi-chunk push (skip wipe)")
+	cancelPipe := fs.Bool("cancel-pipe", false, "internal: treat stdin as an out-of-band cancel "+
+		"channel (EOF cancels this apply's context); set only by the local sudo/doas elevated "+
+		"re-exec (api.runElevatedCmd), never for interactive or piped-plan (\"-\") use")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -604,9 +616,43 @@ func cliApply(ctx context.Context, args []string) int {
 		return 2
 	}
 	if rest[0] == "-" {
+		if *cancelPipe {
+			// "-cancel-pipe" dedicates stdin to the cancel channel; "-"
+			// already dedicates it to the push payload (plan.DecodePush).
+			// Nothing sets both together today (elevatedApplyArgv always
+			// passes a plan path, never "-"), but refuse the combination
+			// explicitly instead of silently letting one of them win.
+			eprintln("apply: -cancel-pipe cannot be combined with stdin plan input \"-\": " +
+				"stdin already carries the push payload")
+			return 2
+		}
 		return cliApplyStdin(ctx, *applyDir, *strictPreview)
 	}
+	if *cancelPipe {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		go watchCancelPipe(os.Stdin, cancel)
+	}
 	return cliApplyFile(ctx, rest[0])
+}
+
+// watchCancelPipe reads r (the elevated child's stdin, wired by
+// api.runElevatedCmd to the read end of its cancel pipe) until EOF or error,
+// then calls cancel. This is the child side of the parent-closes-the-pipe
+// cancellation cliApply's "-cancel-pipe" enables: closing the pipe reaches
+// this goroutine regardless of whether the sudo/doas wrapper in between
+// would have relayed (or withheld) a process signal correctly, so
+// cancellation works the same way under sudo, OpenDoas and native OpenBSD
+// doas. cancel is a context.CancelFunc, safe to call more than once (e.g.
+// this fires while a real SIGTERM also reached the child directly), and any
+// bytes read before EOF are discarded — only the close/EOF itself matters.
+// A normal, uncanceled apply leaves this goroutine parked on the read until
+// the process exits (cmd.Stdin's fd is then closed by the OS), which is
+// harmless.
+func watchCancelPipe(r io.Reader, cancel context.CancelFunc) {
+	_, _ = io.Copy(io.Discard, r)
+	cancel()
 }
 
 // cliApplyFile applies the plan file planPath, with its blobs/ sidecars next

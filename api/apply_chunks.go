@@ -1,13 +1,13 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/snonux/gonf/internal/clihost"
@@ -30,7 +30,10 @@ import (
 const DefaultChunkTimeout = 10 * time.Minute
 
 // elevatedStopNotice is printed when an interrupt arrives while an elevated
-// re-exec runs; %v is elevatedCancelGrace().
+// re-exec runs; %v is elevatedCancelGrace(). The child is told to stop via
+// the cancel pipe (runElevatedCmd), not by counting on the wrapper to relay
+// or withhold a signal correctly, so this bound applies uniformly whether
+// the wrapper is sudo or doas.
 const elevatedStopNotice = "gonf: interrupt received; waiting up to %v for the elevated apply to stop " +
 	"(interrupt again to force exit)\n"
 
@@ -52,13 +55,22 @@ var errNoCLIHost = errors.New("privileged apply re-executes this binary as `<bin
 type chunkLabel func(i int, ch plan.Chunk) string
 
 // elevatedApplyArgv builds the un-wrapped re-exec argv for the elevated
-// child ("gonf [-profile=<override>] [-cmd-timeout=<d>] apply [-n] <path>").
-// Split out from defaultElevatedApply so the dry-run, profile-override and
-// command-timeout propagation can be
+// child ("gonf [-profile=<override>] [-cmd-timeout=<d>] apply -cancel-pipe
+// [-n] <path>"). Split out from defaultElevatedApply so the dry-run,
+// profile-override and command-timeout propagation can be
 // asserted by a unit test without spawning sudo/doas: dryRun must mirror
 // resource.DryRun() at the call site (see remoteApplyCmd in
 // internal/remote/remote.go for the equivalent remote-push argument), or the
 // elevated child applies for real during a local "gonf -n" / "-dry-run" run.
+//
+// "-cancel-pipe" (an apply-subcommand flag, so it follows "apply" like "-n")
+// tells the child to treat its stdin as an out-of-band cancel channel: EOF
+// on it cancels the child's own context the same way a delivered SIGTERM
+// would (see internal/cli's cliApply and api's runElevatedCmd, which wires
+// the parent end). It is always set here because this argv is only ever
+// used for the local elevated re-exec, whose stdin runElevatedCmd dedicates
+// to that pipe (the plan is passed by path, never by stdin, so nothing else
+// needs the child's stdin).
 //
 // profileOverride must mirror api.ProfileOverride() at the call site, or the
 // elevated child re-derives its profile from the host (DetectFacts) instead
@@ -89,7 +101,7 @@ func elevatedApplyArgv(exe, path string, dryRun bool, profileOverride string, cm
 	if flag := gexec.CmdTimeoutFlag(cmdTimeout); flag != "" {
 		argv = append(argv, flag)
 	}
-	argv = append(argv, "apply")
+	argv = append(argv, "apply", "-cancel-pipe")
 	if dryRun {
 		argv = append(argv, "-n")
 	}
@@ -127,55 +139,136 @@ func defaultElevatedApply(ctx context.Context, mode privilege.Mode, ops []plan.O
 		ctx, cancel = context.WithTimeout(ctx, DefaultChunkTimeout)
 		defer cancel()
 	}
-	return runElevatedCmd(ctx, argv)
+	return runElevatedCmd(ctx, mode, argv)
 }
 
 // elevatedCancelGrace is how long a canceled elevated re-exec gets between
-// its SIGTERM and the SIGKILL: the command timeout (a validator running in
-// the child is bound by nothing shorter, and the child waits for it; the
-// child runs under this same timeout because elevatedApplyArgv forwards
-// "-cmd-timeout") plus
-// twice the child's own command grace, so the child can stop its backend
-// command or finish its validator, discard its verdict and exit before the
-// wrapper is killed. Killing sudo earlier would orphan the root child (sudo
-// without use_pty) or hang it up mid-op (use_pty). A second interrupt
-// force-exits gonf instead of waiting (see internal/cli signalContext).
+// the cancel firing and the wrapper (sudo/doas) being SIGKILLed: the command
+// timeout (a validator running in the child is bound by nothing shorter, and
+// the child waits for it; the child runs under this same timeout because
+// elevatedApplyArgv forwards "-cmd-timeout") plus twice the child's own
+// command grace, so the child can stop its backend command or finish its
+// validator, discard its verdict and exit before the wrapper is killed.
+// Killing the wrapper earlier would orphan the root child (a wrapper without
+// use_pty) or hang it up mid-op (use_pty). A second interrupt force-exits
+// gonf instead of waiting (see internal/cli signalContext).
+//
+// This grace is delivered to the child via the cancel pipe (runElevatedCmd),
+// not by signalling the wrapper: task z62 built this on the assumption that
+// an unprivileged process cannot signal a doas child at all (EPERM), so
+// signalling sudo (which does relay) was safe and doas silently couldn't be
+// signalled either way. That assumption held for native OpenBSD doas
+// (confirmed: an unprivileged SIGTERM/SIGKILL to it fails with EPERM, and
+// gonf then simply waits for it to finish on its own, so no bound is
+// actually enforced there) but not for OpenDoas, the doas implementation
+// shipped by Linux distros such as Fedora: verified empirically against
+// opendoas 6.8.2 there, an unprivileged SIGTERM to the doas process
+// succeeds, and OpenDoas's own PAM parent then prints "Session terminated,
+// killing shell", forwards the signal to the elevated child, and SIGKILLs it
+// only about two seconds later regardless of whether that child is mid
+// graceful-shutdown — cutting this grace period down to ~2s instead of
+// honoring it. So all three behave differently, and none of them can be
+// trusted alone: sudo forwards a signal faithfully, OpenDoas forwards it but
+// then kills early anyway, and native OpenBSD doas refuses it outright. The
+// pipe sidesteps this by telling the child directly, bypassing the wrapper's
+// signal handling (or lack of it) entirely.
 func elevatedCancelGrace() time.Duration {
 	return gexec.DefaultTimeout() + 2*gexec.CancelGrace
 }
 
 // runElevatedCmd runs the wrapped re-exec argv under ctx and relays its
-// output. On cancel, sudo gets SIGTERM, which it relays to the elevated gonf
-// apply, whose own signal context then stops its backend command gracefully;
-// SIGKILL follows only elevatedCancelGrace() later, and an interrupt prints
-// that the stop is awaited. doas is different: it sets the real, effective
-// and saved uid to root, so this unprivileged gonf can neither SIGTERM nor
-// SIGKILL it (both fail with EPERM) and waits for it to finish; only a
-// signal the terminal sends to the whole foreground process group (Ctrl-C)
-// reaches a doas child.
-func runElevatedCmd(ctx context.Context, argv []string) error {
+// output. On cancel, gonf closes the write end of a pipe wired to the
+// child's stdin (cancelR/cancelW below); elevatedApplyArgv's "-cancel-pipe"
+// tells the child (internal/cli's cliApply, via its watchCancelPipe
+// goroutine) to watch that fd and cancel its own context on EOF, exactly as
+// a delivered SIGTERM would — both feed the same ctx that the child's
+// applyPlanOps/api.ApplyPlanContext already stops on, so the pipe is only an
+// alternate trigger for that one graceful-shutdown path, not a second one.
+// This works uniformly for sudo, OpenDoas and native OpenBSD doas, because
+// it never depends on the wrapper relaying (or refusing) a signal — see
+// elevatedCancelGrace's doc comment for why that
+// signal-only approach was unreliable. gonf also still sends the wrapper an
+// explicit SIGTERM, but only when it is sudo: sudo relays signals correctly,
+// so this is a harmless, cheap defense-in-depth for setups the pipe alone
+// might not cover (e.g. a wrapper too old to preserve fd 0 verbatim). It is
+// deliberately NOT sent for doas: an unprivileged SIGTERM to a doas process
+// reaches OpenDoas's own premature-kill logic (elevatedCancelGrace) even
+// though the pipe already asked the child to stop gracefully, so signalling
+// doas would reintroduce exactly the bug this pipe exists to fix; native
+// OpenBSD doas would just reject it anyway. Either way, SIGKILL of the
+// wrapper itself still follows only elevatedCancelGrace() later
+// (cmd.WaitDelay, set by gexec.SetGracefulCancel below), once the child
+// (stopped via the pipe) has had its full grace period to exit on its own
+// and the wrapper should have exited right behind it.
+func runElevatedCmd(ctx context.Context, mode privilege.Mode, argv []string) error {
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	grace := elevatedCancelGrace()
 	gexec.SetGracefulCancel(cmd, grace)
+
+	cleanup, err := wireElevatedCancelPipe(cmd, mode)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
 	defer context.AfterFunc(ctx, func() {
 		if errors.Is(ctx.Err(), context.Canceled) {
 			_, _ = fmt.Fprintf(os.Stderr, elevatedStopNotice, grace)
 		}
 	})()
-	cmd.Stdin = bytes.NewReader(nil)
 	// The elevated child has no secret registry of its own: its log lines
 	// and summary reach the operator's terminal through the controller's
 	// redactor, line by line. A descendant still holding the relay pipe after
 	// the child exited or was killed (an orphaned root gonf apply once the
-	// context killed sudo) delays the return by at most logger.RelayWaitDelay;
-	// then its output is handed, unredacted, to a detached cat writing to
-	// stderr, so it keeps a reader even after gonf exits and is never killed
-	// by SIGPIPE mid-apply (logger.RunRelayed).
-	err := logger.RunRelayed(cmd, os.Stderr)
+	// context killed the wrapper) delays the return by at most
+	// logger.RelayWaitDelay; then its output is handed, unredacted, to a
+	// detached cat writing to stderr, so it keeps a reader even after gonf
+	// exits and is never killed by SIGPIPE mid-apply (logger.RunRelayed).
+	err = logger.RunRelayed(cmd, os.Stderr)
 	if err != nil && ctx.Err() != nil {
 		return fmt.Errorf("%w (elevated apply stopped by context: %v)", ctx.Err(), err)
 	}
 	return err
+}
+
+// wireElevatedCancelPipe gives cmd (already passed through
+// gexec.SetGracefulCancel, so cmd.Cancel is its SIGTERM-the-wrapper closure
+// and cmd.WaitDelay is already set) an out-of-band cancel channel: cmd.Stdin
+// becomes the read end of a fresh pipe (elevatedApplyArgv never uses the
+// child's stdin for anything else, see its doc comment), and cmd.Cancel is
+// replaced with one that closes the write end first — this is the primary,
+// wrapper-independent trigger the child's watchCancelPipe reacts to — and
+// only then, for mode Sudo, still calls the original SIGTERM closure too
+// (kept as defense-in-depth; never for doas, see runElevatedCmd's doc
+// comment for why that would reintroduce the bug the pipe exists to fix).
+// The returned cleanup closes both ends of the pipe and must be deferred by
+// the caller; closing the write end is idempotent (cmd.Cancel may already
+// have closed it) and safe even if the child never started or already
+// exited.
+func wireElevatedCancelPipe(cmd *exec.Cmd, mode privilege.Mode) (cleanup func(), err error) {
+	cancelR, cancelW, err := os.Pipe()
+	if err != nil {
+		return nil, fmt.Errorf("elevated apply: cancel pipe: %w", err)
+	}
+	cmd.Stdin = cancelR
+
+	sigTerm := cmd.Cancel
+	var closeCancelOnce sync.Once
+	closeCancelPipe := func() { closeCancelOnce.Do(func() { _ = cancelW.Close() }) }
+	cmd.Cancel = func() error {
+		closeCancelPipe()
+		if mode == privilege.Sudo {
+			return sigTerm()
+		}
+		return nil
+	}
+
+	// cancelR (the parent's own copy of the read end) is never read from —
+	// only the child's dup, inherited across the wrapper, is — so there is no
+	// Start-only hook available to close it earlier; holding it open for the
+	// whole apply is harmless, since EOF delivery depends only on cancelW's
+	// refcount, not on how many read-end copies remain open.
+	return func() { _ = cancelR.Close(); closeCancelPipe() }, nil
 }
 
 // preflightElevation refuses, before ANY chunk is applied, a plan whose
@@ -264,11 +357,14 @@ func ApplyChunks(ops []plan.Op, planDir string, mode privilege.Mode) error {
 
 // ApplyChunksContext is ApplyChunks bounded/cancelable by ctx: canceling ctx
 // (e.g. the CLI's SIGINT/SIGTERM context) stops an in-flight elevated
-// sudo/doas re-exec or the backend command of an in-process chunk, SIGTERM
-// first and SIGKILL only after a grace period (internal/exec
-// SetGracefulCancel). See ApplyChunks's doc comment for why ApplyChunks
-// itself keeps the old context.Background() behavior instead of taking ctx
-// directly.
+// sudo/doas re-exec or the backend command of an in-process chunk. An
+// in-process chunk gets SIGTERM first and SIGKILL only after a grace period
+// (internal/exec SetGracefulCancel); an elevated re-exec is stopped via its
+// cancel pipe instead (see runElevatedCmd's doc comment for why a signal to
+// the wrapper alone is not used), with the wrapper itself SIGKILLed only
+// after elevatedCancelGrace() if it is still alive by then. See ApplyChunks's
+// doc comment for why ApplyChunks itself keeps the old context.Background()
+// behavior instead of taking ctx directly.
 func ApplyChunksContext(ctx context.Context, ops []plan.Op, planDir string, mode privilege.Mode) error {
 	chunks := plan.SplitPrivilegeChunks(ops)
 	if err := plan.ValidateChunks(chunks); err != nil {
