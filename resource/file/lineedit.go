@@ -256,7 +256,16 @@ func (f *File) validateKeyedLines(path string) error {
 			}
 		}
 		for _, line := range slices.Concat(f.addLines, f.removeLines) {
-			if strings.HasPrefix(line, edit.Key) {
+			// Trimmed the same way applyKeyedLine's own match is (task
+			// ld2): an indented WithLine/WithoutLine still starts with
+			// the key once its own leading whitespace no longer counts,
+			// exactly the shape the keyed line would recognize and own
+			// as an existing line to replace. Without this, the two
+			// edits were not caught as conflicting — WithKeyedLine
+			// silently dropped the indented line as an "unowned" one
+			// every apply (a permanent Warn false alarm, since content
+			// converges), rather than being refused at declaration time.
+			if strings.HasPrefix(strings.TrimLeft(line, " \t"), edit.Key) {
 				return fmt.Errorf("file %s: WithLine/WithoutLine %q starts with WithKeyedLine key %q, which already owns it", path, line, edit.Key)
 			}
 		}

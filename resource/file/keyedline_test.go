@@ -89,6 +89,12 @@ func TestWithKeyedLineRefusesAmbiguousOwnership(t *testing.T) {
 		{"prefix keys", []FileOption{WithKeyedLine("A", "A=1"), WithKeyedLine("AB=", "AB=2")}, "overlap"},
 		{"WithLine owned by key", []FileOption{WithKeyedLine("A=", "A=1"), WithLine("A=2")}, "already owns it"},
 		{"WithoutLine owned by key", []FileOption{WithKeyedLine("A=", "A=1"), WithoutLine("A=0")}, "already owns it"},
+		// task ld2: an indented WithLine/WithoutLine is owned by the key
+		// too, matching applyKeyedLine's own leading-whitespace-tolerant
+		// match (task bc2) — the declaration-time check must agree with
+		// it, or the two silently coexist at apply time.
+		{"indented WithLine owned by key", []FileOption{WithKeyedLine("A=", "A=1"), WithLine("  A=2")}, "already owns it"},
+		{"tab-indented WithoutLine owned by key", []FileOption{WithKeyedLine("A=", "A=1"), WithoutLine("\tA=0")}, "already owns it"},
 		{"with content", []FileOption{WithKeyedLine("A=", "A=1"), WithContent("x")}, "cannot be combined"},
 	}
 	for _, tc := range cases {
