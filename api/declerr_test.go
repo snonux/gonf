@@ -346,6 +346,16 @@ func TestDSLMisuseIsDeclarationError(t *testing.T) {
 		{"ensure-dir-option", "does not support WithContent", func() {
 			EnsureDir(filepath.Join(os.TempDir(), "gonf-declerr-never"), options.ToDirOptions(options.WithContent("x"))...)
 		}},
+		{"plan-recipient-empty", "WithPlanRecipient: recipient must not be empty",
+			func() { Host("h", WithPlanRecipient("")) }},
+		{"plan-recipient-comment-only", "WithPlanRecipient: recipient must not be empty",
+			func() { Host("h", WithPlanRecipient("# not a key")) }},
+		{"plan-recipient-classic", "recipient refused",
+			func() {
+				Host("h", WithPlanRecipient("age1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"))
+			}},
+		{"plan-recipient-malformed", "malformed age1pq recipient",
+			func() { Host("h", WithPlanRecipient("age1pq1notavalidkey")) }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

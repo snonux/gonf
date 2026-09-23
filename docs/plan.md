@@ -1142,7 +1142,7 @@ import from an external `plan_test` file is fine.
 | Command | Effect |
 |---------|--------|
 | `gonf <task> [task…]` | Record + apply locally |
-| `gonf plan [-o dir\|-stdout [-with-secrets]\|-redacted] [-seal [-recipient r]…] [-id name] <task>…` | Write `dir/plan.jsonl` (+ `blobs/`; `dir` defaults to `.`, is created `0700` when missing, is never chmod'ed when it exists and must be yours, not world-writable and not group-writable except by your private group, see "The output directory" below), or print JSONL to stdout (refused for a plan with `sensitive` ops unless `-with-secrets`), or print a redacted human preview that no gonf applies (`-redacted`); with `-seal` (task 2b2), age-encrypt the GONF-PUSH/1 push frame instead and write only `dir/plan.age` (or, with `-stdout`, the sealed bytes to stdout) — see "Secret material" below and [plan-encryption.md](plan-encryption.md) |
+| `gonf plan [-o dir\|-stdout [-with-secrets]\|-redacted] [-seal [-recipient r]… [-for host\|cluster\|fleet]] [-id name] <task>…` | Write `dir/plan.jsonl` (+ `blobs/`; `dir` defaults to `.`, is created `0700` when missing, is never chmod'ed when it exists and must be yours, not world-writable and not group-writable except by your private group, see "The output directory" below), or print JSONL to stdout (refused for a plan with `sensitive` ops unless `-with-secrets`), or print a redacted human preview that no gonf applies (`-redacted`); with `-seal` (task 2b2), age-encrypt the GONF-PUSH/1 push frame instead and write only `dir/plan.age` (or, with `-stdout`, the sealed bytes to stdout); with `-seal -for` (task 4b2) also, write one `dir/plan-<host>.age` per destination host instead, each sealed to that host's own recipient — see "Secret material" below and [plan-encryption.md](plan-encryption.md) |
 | `gonf apply [-n\|-dry-run\|-strict-preview] [-identity file]... <plan.jsonl\|plan.age\|->` | Apply a plan file, or read **GONF-PUSH/1** / bare JSONL / a sealed `plan.age` stream from stdin. Sealed input (`age-encryption.org/v1` sniffed as the first line — task 3b2, see docs/plan-encryption.md) is decrypted with `-identity` (repeatable; default for a non-root invocation `${XDG_CONFIG_HOME:-$HOME/.config}/gonf/identity`; root must pass `-identity` explicitly) and applied with the SAME single-process, file-apply semantics as a plaintext plan — no privilege split, `elevate` ignored exactly as for `plan.jsonl` today. `-apply-dir`/`-strict-preview` cannot combine with sealed stdin input. The plan file must be a regular file and is not followed if it is a symlink (a FIFO or a symlinked `plan.jsonl`/`plan.age` is refused; use `-` for piped input); its directory may be reached through symlinks |
 | `gonf push [-n\|-preview] [-id name] [-- ssh-args…] user@host <task>…` | Record in memory, stream over `ssh` to remote `gonf apply -` |
 | `gonf cluster [-n\|-preview] [-j N] [-id name] [-host-timeout 10m] <cluster> <task>…` | Resolve inventory cluster; record once; parallel push or strict preview to each host |
@@ -1851,6 +1851,16 @@ the encrypted SSH transport, because the destination must write it.
   confidentiality only, never provenance: a decrypting `plan.age` proves
   only that whoever sealed it knew a recipient's public key, not who they
   were (see plan-encryption.md, "Provenance").
+- `gonf plan -o dir -seal -for host\|cluster\|fleet …` (task 4b2,
+  [plan-encryption.md](plan-encryption.md) "Runbook") is `-seal` targeted
+  at a specific destination: `Host(..., api.WithPlanRecipient("age1pq…"))`
+  names a host's own recipient, and `-for` records and seals ONCE PER
+  TARGET HOST, writing `dir/plan-<host>.age` per host instead of one
+  `dir/plan.age` — so a `ForHosts` body written for one host's secrets is
+  never resolved while another host's artifact is being built. Refused up
+  front (nothing written) when a target host has no recipient or when two
+  resolved hosts' names collide after filename sanitization; `-for`
+  requires `-seal` and, with `-stdout`, must resolve to exactly one host.
 
 The full lifecycle and its limits are in [secrets.md](secrets.md). Never put
 secret values in task names, descriptions, paths or host values: identities

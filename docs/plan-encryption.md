@@ -1,8 +1,11 @@
 # Sealed plan artifacts (design, task w82)
 
-Status: **design only, not implemented.** Nothing below exists in gonf yet.
-Implementation needs this design accepted and the user's explicit approval;
-the follow-up tasks are listed in the last section.
+Status: **phases 0-2 implemented** (tasks `0b2`, `1b2`, `2b2`, `3b2`, `4b2`):
+`gonf plan -seal` (whole-plan and per-destination `-for`) and `gonf apply
+-identity` both exist. Phases 3+ (`5b2` optional default flip / provider
+identity, `6b2` optional sealed sticky-dir blobs, `7b2` signing design) are
+still design-only follow-ups; the "Phased implementation" table at the end
+of this document tracks exact status per task.
 
 **Merge order.** This design builds on task 062 (secret-aware plans, plan
 schema v22), which is not merged into main yet (branch
@@ -279,7 +282,7 @@ age -d -i key.txt out/plan.age | gonf apply -
 |---------|-----------|
 | `gonf plan -o dir -seal [-recipient r]…` | records into memory, encodes the push frame, seals to the union of `-recipient` and the operator recipients file; writes `dir/plan.age`; prints `wrote dir/plan.age (N ops, M recipients)`. Warns when `dir` still holds a `plan.jsonl` or `blobs/` from an earlier plaintext run (never deletes it: the operator's file). |
 | `gonf plan -seal -stdout …` | the same sealed bytes on stdout. |
-| `gonf plan -o dir -seal -for host\|cluster\|fleet …` (phase 2) | **records once per host**, with that host alone as the host selection (`recordPlanForHosts([]string{host}, …)` in `api/cluster_hosts.go`, the selection push uses), so a `ForHosts` body for another host is not in the artifact; seals each host's plan to that host's recipient plus the operator's; writes `dir/plan-<host>.age` per host. A host without `WithPlanRecipient` refuses the whole command before anything is written. `-for` with `-stdout` is refused unless it resolves to exactly one host. A plain `gonf plan` without `-for` records every `ForHosts` member (no selection), which is why a multi-host sealed artifact is never produced. |
+| `gonf plan -o dir -seal -for host\|cluster\|fleet …` (task 4b2) | **records once per host** (`api.RecordPlanForHost`, `internal/cli/plan_seal_for.go`), with the same push-alias host selection `PushHost` would use for that host (`inventory.SelectionForHosts([]string{host})`), so a `ForHosts` body for another host is not in the artifact; every host's plan is fully recorded and sealed in memory before anything is written. Seals each host's plan to that host's `api.WithPlanRecipient` plus the union of `-recipient`/recipients-file; writes `dir/plan-<host>.age` per host (the host name sanitized to `[A-Za-z0-9._-]`). Refuses before writing anything when any resolved host lacks a recipient (naming it) or when two resolved hosts would sanitize to the same filename. `-for` requires `-seal` (a static usage error otherwise) and, with `-stdout`, is refused unless it resolves to exactly one host. A plain `gonf plan` without `-for` records every `ForHosts` member (no selection), which is why a multi-host sealed artifact is never produced. |
 | `gonf plan -o dir` (no `-seal`) | unchanged (062 behaviour, plaintext + warning); the warning gains a hint `use -seal`. Whether `-seal` becomes the default for sensitive plans when a recipients file exists is a separate, user-approved decision (phase 3). |
 | `gonf apply [-identity f]… file` | sniffs the first line: `age-encryption.org/v1` means sealed, anything else is the existing JSONL path. The whole decrypted frame is decoded before anything is applied; the plan is then applied exactly like a plaintext plan file (`api.ApplyPlan`). |
 | `gonf apply [-identity f] -` | the same sniff on stdin (a sealed stream, a GONF-PUSH/1 frame, or bare JSONL). |
@@ -387,9 +390,79 @@ on current amd64) plus 16 bytes per 64 KiB. gzip, which the push frame
 already runs, dominates by an order of magnitude. Memory matches push: the
 frame is built from a `MemoryStore`, so a plan with large synced trees is
 held in memory on both sides, as a push already is. Per-host sealing
-(phase 2) records the plan once per host, like a push to each host would.
+(`-for`, task 4b2) records the plan once per host, like a push to each host
+would.
 The implementation task adds a benchmark over a representative conf plan
 (`frontends`/`garage_config`) rather than relying on these estimates.
+
+### Runbook: host keys and shipped plan.age (task 4b2)
+
+This is the concrete, step-by-step version of the "seal per destination"
+row of "Operator UX" above, for an operator setting up `-for` against a real
+host for the first time.
+
+**1. Generate the destination's identity, on the destination, as the user
+that will apply the plan (root for a `Privileged()` recipe):**
+
+```text
+ssh rex@blowfish
+sudo age-keygen -pq -o /etc/gonf/identity
+chmod 600 /etc/gonf/identity          # age-keygen already sets this; verify it
+```
+
+`age-keygen -pq` prints the matching public key as `Public key:
+age1pq1…`. The private key never leaves the host: this command must be run
+on the destination itself, not generated on the controller and copied
+over — copying a private key defeats the point of per-host recipients (an
+operator who can read it can decrypt anything ever sealed to it, forever;
+see "No forward secrecy; rotate" above).
+
+**2. Add the printed public key to the inventory, on the controller:**
+
+```go
+api.Host("blowfish",
+    api.WithSSHHost("blowfish.example"),
+    api.WithPlanRecipient("age1pq1…"), // from step 1's "Public key:" line
+)
+```
+
+`WithPlanRecipient` validates the value at registration (the same
+`age1pq`-only, hybrid-only policy every recipient in this design follows);
+a malformed or non-hybrid value is refused immediately as a declaration
+error, naming the host, never silently accepted.
+
+**3. Seal and ship the per-host artifact:**
+
+```text
+gonf plan -o out -seal -for blowfish frontends_nsd   # -> out/plan-blowfish.age
+scp out/plan-blowfish.age rex@blowfish:
+```
+
+(`-for` also takes a cluster or fleet name — see "Operator UX" — to ship
+one artifact per member host in one command.)
+
+**4. Apply on the destination, as the operator, with the identity from
+step 1:**
+
+```text
+ssh rex@blowfish
+sudo gonf apply -identity /etc/gonf/identity plan-blowfish.age
+rm plan-blowfish.age                  # delete once applied; see "Retention"
+```
+
+`gonf apply` here prints `decrypted and applied plan-blowfish.age (N ops)`
+— confidentiality only, never a claim of authenticity (see "Provenance"):
+nothing about this step is, or should be, automated or unattended (no
+timer, cron job or pull agent) until task `7b2`'s signing design exists.
+
+**5. Rotate the key periodically:** at least yearly, whenever the host is
+rebuilt or changes hands, and immediately on suspected compromise (see "No
+forward secrecy; rotate"). Rotation is: repeat step 1 to overwrite
+`/etc/gonf/identity` with a fresh pair, update `WithPlanRecipient` in the
+inventory to the new public key, and re-seal — there is no re-wrap tool,
+and an artifact already sealed to the old key still needs the old identity
+to open (keep it only as long as such an artifact must still be applied,
+then delete it).
 
 ## Phase 4 design: sealed multi-chunk sticky-dir blobs (task `6b2`)
 
@@ -641,7 +714,7 @@ bumps gonf, is expected and noted, not a failure).
 | 1 | `1b2` | `plan/seal` package over `filippo.io/age`: `age1pq`-only recipient policy and hybrid-only identities, identity loading with owner/mode/no-follow checks, `Seal`/`Open`; tests for round trip, multi-recipient, wrong identity, mixed/classic/ssh recipients refused, and **corruption only** (truncation, bit flip; no authenticity claim). Adds the dependencies and the `x/sys` raise. |
 | 1 | `2b2` | `gonf plan -o dir -seal [-recipient]…` and `-seal -stdout`; writes only `plan.age` from a `MemoryStore` push frame. |
 | 1 | `3b2` | `gonf apply [-identity]… <plan.age\|->`: magic sniff, root requires `-identity`, read to EOF before apply, in-memory decode without blobs, `sealed-run-*` run dir with dead-owner sweep, single-process apply via `api.ApplyPlan`, "decrypted" wording, `gonf -sealed-version`. |
-| 2 | `4b2` | Destination recipients: `WithPlanRecipient` on `Host`; `-for host\|cluster\|fleet` records once per host with that host's selection and writes `plan-<host>.age` per host. |
+| 2 | `4b2` (done) | Destination recipients: `api.WithPlanRecipient` on `Host`; `gonf plan -seal -for host\|cluster\|fleet` records once per host (`api.RecordPlanForHost`) and writes `plan-<host>.age` per host, sealed to that host's recipient plus the operator's; refuses up front when a target host lacks a recipient or when two hosts would sanitize to the same filename; `-for` with `-stdout` only when it resolves to exactly one host. See "Runbook: host keys and shipped plan.age" above. |
 | 3 | `5b2` | Optional, needs a user decision: `-seal` default for sensitive plans when an operator recipients file exists, and/or the operator identity through the secret provider. |
 | 4 | `6b2` | Optional: seal a multi-chunk push's sticky-dir blobs to an ephemeral per-push key sent only on each chunk's stdin, lifting 062's refusal of sensitive blobs in elevated chunks. **Scoped down to design only** (see "Phase 4 design: sealed multi-chunk sticky-dir blobs" above) rather than a one-session implementation of security-sensitive privileged-apply plumbing; split into its own sub-phases `yf2` (ephemeral seal primitive) → `zf2` (wire extension + delivery) → `0g2` (destination staging, refusal removal, full gates, self-review). |
 | - | `7b2` | Design (not implement) signed plan artifacts; until it is implemented, unattended sealed apply stays blocked. |

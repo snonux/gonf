@@ -1,0 +1,330 @@
+package cli
+
+import (
+	"bytes"
+	"encoding/base64"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/snonux/gonf/api"
+	"github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/plan"
+	"github.com/snonux/gonf/plan/seal"
+)
+
+// This file is task 4b2 (w82 phase 2, docs/plan-encryption.md): `gonf plan
+// -seal -for host|cluster|fleet`. The central property under test —
+// docs/plan-encryption.md's whole reason for recording once per host — is
+// TestCLIPlanSealForIsolatesHostSecrets: a host's ForHosts-only secret must
+// never reach another host's plan-<host>.age, even though both are recorded
+// from the same recipe in the same command.
+
+// registerSealForInventory registers two hosts (hostA, hostB), each with its
+// own generated age1pq recipient/identity pair and its own secret file under
+// secrets/<host>/token, a cluster "edge" containing both, a fleet
+// "edge-fleet" wrapping a solo cluster containing only hostA, and one task
+// (cli_seal_for_task) that writes each visited host's own secret into
+// <work>/<host>-out via ForHosts — the shape docs/plan-encryption.md's
+// "records once per host" rule exists to protect.
+func registerSealForInventory(t *testing.T) (work string, recipient, identity map[string]string) {
+	t.Helper()
+	api.ResetForTest()
+	api.ResetInventory()
+	t.Cleanup(func() {
+		api.ResetForTest()
+		api.ResetInventory()
+	})
+	work = t.TempDir()
+	t.Chdir(work)
+
+	recipient = map[string]string{}
+	identity = map[string]string{}
+	for _, host := range []string{"hostA", "hostB"} {
+		r, id := genSealKeyPair(t)
+		recipient[host] = r
+		identity[host] = id
+		writeHostSecretFile(t, host, "secret-for-"+host)
+	}
+
+	hA := api.Host("hostA", api.WithPlanRecipient(recipient["hostA"]), api.WithValue("secretkey", "hostA/token"))
+	hB := api.Host("hostB", api.WithPlanRecipient(recipient["hostB"]), api.WithValue("secretkey", "hostB/token"))
+	api.Cluster("edge", hA, hB)
+	api.Fleet("edge-fleet", api.Cluster("solo", hA))
+
+	api.Task("cli_seal_for_task", "", func() {
+		api.ForHosts("secretkey", func(host string, key string) {
+			api.File(filepath.Join(work, host+"-out"), options.WithContent(api.MustSecret(key)))
+		})
+	}, api.WithTaskCluster("edge"))
+
+	return work, recipient, identity
+}
+
+// writeHostSecretFile writes content as the fake secrets/<host>/token file
+// the default file secret provider reads relative to the current directory
+// (see internal/cli/secret_plan_test.go's registerSecretTask, same
+// technique).
+func writeHostSecretFile(t *testing.T, host, content string) {
+	t.Helper()
+	dir := filepath.Join("secrets", host)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "token"), []byte(content+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// decryptSealedPlanOps opens path with identityLine (an AGE-SECRET-KEY-PQ-1…
+// line) and decodes its GONF-PUSH/1 frame, failing the test on any error.
+func decryptSealedPlanOps(t *testing.T, path, identityLine string) []plan.Op {
+	t.Helper()
+	sealed, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	identityPath := filepath.Join(t.TempDir(), "identity")
+	writeIdentityFile(t, identityPath, identityLine)
+	identities, err := seal.LoadIdentities(identityPath)
+	if err != nil {
+		t.Fatalf("LoadIdentities: %v", err)
+	}
+	r, err := seal.Open(bytes.NewReader(sealed), identities)
+	if err != nil {
+		t.Fatalf("Open %s: %v", path, err)
+	}
+	payload, err := plan.DecodePush(r, "")
+	if err != nil {
+		t.Fatalf("DecodePush %s: %v", path, err)
+	}
+	return payload.Ops
+}
+
+// fileOpContents returns the decoded content of every "file" op in ops.
+func fileOpContents(t *testing.T, ops []plan.Op) []string {
+	t.Helper()
+	var out []string
+	for _, op := range ops {
+		if string(op.Op) != "file" {
+			continue
+		}
+		fp, ok := op.Payload.(plan.FilePayload)
+		if !ok {
+			continue
+		}
+		raw, err := base64.StdEncoding.DecodeString(fp.ContentB64)
+		if err != nil {
+			t.Fatalf("decode content_b64 of %s: %v", op.Path, err)
+		}
+		out = append(out, string(raw))
+	}
+	return out
+}
+
+// containsSubstring reports whether any of vals contains want.
+func containsSubstring(vals []string, want string) bool {
+	for _, v := range vals {
+		if strings.Contains(v, want) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestCLIPlanSealForIsolatesHostSecrets is the core property task 4b2 adds:
+// -for records once per target host, so a per-host sealed artifact carries
+// only that host's own ForHosts secret, never a sibling's — even though
+// hostA and hostB are recorded from the very same command against the same
+// recipe. It also proves the cross-identity negative: hostB's identity does
+// not open hostA's artifact.
+func TestCLIPlanSealForIsolatesHostSecrets(t *testing.T) {
+	isolateXDGConfig(t)
+	_, _, identity := registerSealForInventory(t)
+	dir := filepath.Join(t.TempDir(), "out")
+
+	code, stderr := runGonf(t, "plan", "-o", dir, "-seal", "-for", "edge", "cli_seal_for_task")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, stderr)
+	}
+	for _, name := range []string{"plan-hostA.age", "plan-hostB.age"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("%s missing: %v", name, err)
+		}
+	}
+
+	opsA := decryptSealedPlanOps(t, filepath.Join(dir, "plan-hostA.age"), identity["hostA"])
+	opsB := decryptSealedPlanOps(t, filepath.Join(dir, "plan-hostB.age"), identity["hostB"])
+	contentsA := fileOpContents(t, opsA)
+	contentsB := fileOpContents(t, opsB)
+
+	if !containsSubstring(contentsA, "secret-for-hostA") || containsSubstring(contentsA, "secret-for-hostB") {
+		t.Fatalf("plan-hostA.age file contents = %v; want only hostA's own secret", contentsA)
+	}
+	if !containsSubstring(contentsB, "secret-for-hostB") || containsSubstring(contentsB, "secret-for-hostA") {
+		t.Fatalf("plan-hostB.age file contents = %v; want only hostB's own secret", contentsB)
+	}
+
+	// Cross-identity refusal: hostA's artifact does not open with hostB's
+	// identity (each is sealed to its own host's recipient, not the other's).
+	sealedA, err := os.ReadFile(filepath.Join(dir, "plan-hostA.age"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	idPath := filepath.Join(t.TempDir(), "hostB-identity")
+	writeIdentityFile(t, idPath, identity["hostB"])
+	idsB, err := seal.LoadIdentities(idPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seal.Open(bytes.NewReader(sealedA), idsB); err == nil {
+		t.Fatal("plan-hostA.age opened with hostB's identity; want a refusal")
+	}
+}
+
+// TestCLIPlanSealForFleetTargetSingleHost: -for accepts a fleet name too,
+// and -stdout is allowed when it resolves to exactly one host (edge-fleet
+// here wraps a solo cluster containing only hostA).
+func TestCLIPlanSealForFleetTargetSingleHost(t *testing.T) {
+	isolateXDGConfig(t)
+	_, _, identity := registerSealForInventory(t)
+	var code int
+	var stderr string
+	out := captureStdout(t, func() {
+		code, stderr = runGonf(t, "plan", "-seal", "-stdout", "-for", "edge-fleet", "cli_seal_for_task")
+	})
+	if code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, stderr)
+	}
+	if !strings.HasPrefix(out, "age-encryption.org/v1") {
+		t.Fatalf("stdout does not start with the age magic; got %q", out[:min(len(out), 40)])
+	}
+	identityPath := filepath.Join(t.TempDir(), "identity")
+	writeIdentityFile(t, identityPath, identity["hostA"])
+	identities, err := seal.LoadIdentities(identityPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := seal.Open(strings.NewReader(out), identities)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	payload, err := plan.DecodePush(r, "")
+	if err != nil {
+		t.Fatalf("DecodePush: %v", err)
+	}
+	contents := fileOpContents(t, payload.Ops)
+	if !containsSubstring(contents, "secret-for-hostA") {
+		t.Fatalf("contents = %v, want hostA's secret", contents)
+	}
+}
+
+// TestCLIPlanSealForStdoutRefusesMultipleHosts: -for -stdout is refused,
+// naming the host count, when the target resolves to more than one host.
+func TestCLIPlanSealForStdoutRefusesMultipleHosts(t *testing.T) {
+	isolateXDGConfig(t)
+	registerSealForInventory(t)
+	var code int
+	var stderr string
+	out := captureStdout(t, func() {
+		code, stderr = runGonf(t, "plan", "-seal", "-stdout", "-for", "edge", "cli_seal_for_task")
+	})
+	if code == 0 || out != "" {
+		t.Fatalf("exit %d, stdout %q; want a refusal and no output", code, out)
+	}
+	if !strings.Contains(stderr, "2 hosts") {
+		t.Fatalf("stderr %q, want it to name the 2 resolved hosts", stderr)
+	}
+}
+
+// TestCLIPlanSealForRefusesHostWithoutRecipient: a target host missing
+// api.WithPlanRecipient is refused BY NAME before anything is written —
+// docs/plan-encryption.md's "-for" row's own rule.
+func TestCLIPlanSealForRefusesHostWithoutRecipient(t *testing.T) {
+	isolateXDGConfig(t)
+	api.ResetForTest()
+	api.ResetInventory()
+	t.Cleanup(func() {
+		api.ResetForTest()
+		api.ResetInventory()
+	})
+	work := t.TempDir()
+	t.Chdir(work)
+	recipient, _ := genSealKeyPair(t)
+	hA := api.Host("hostA", api.WithPlanRecipient(recipient))
+	hB := api.Host("hostB") // no WithPlanRecipient
+	api.Cluster("edge", hA, hB)
+	api.Task("cli_seal_for_norecipient", "", func() {})
+
+	dir := filepath.Join(t.TempDir(), "out")
+	code, stderr := runGonf(t, "plan", "-o", dir, "-seal", "-for", "edge", "cli_seal_for_norecipient")
+	if code == 0 {
+		t.Fatalf("exit 0, want a refusal; stderr %q", stderr)
+	}
+	if !strings.Contains(stderr, "hostB") || !strings.Contains(stderr, "a plan recipient") {
+		t.Fatalf("stderr %q, want it to name hostB and say it lacks a plan recipient", stderr)
+	}
+	if strings.Contains(stderr, "hostA lacks") {
+		t.Fatalf("stderr %q names hostA, which HAS a recipient", stderr)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("output directory %s exists (err=%v); nothing should have been written", dir, err)
+	}
+}
+
+// TestCLIPlanSealForRequiresSeal: -for without -seal is a static usage
+// error (exit 2), not a runtime refusal.
+func TestCLIPlanSealForRequiresSeal(t *testing.T) {
+	isolateXDGConfig(t)
+	registerSealForInventory(t)
+	code, stderr := runGonf(t, "plan", "-for", "edge", "cli_seal_for_task")
+	if code != 2 || !strings.Contains(stderr, "-for only applies to -seal") {
+		t.Fatalf("exit %d, stderr %q; want a usage refusal", code, stderr)
+	}
+}
+
+// TestCLIPlanSealForUnknownTarget: an unregistered -for name is refused by
+// name, exit 1.
+func TestCLIPlanSealForUnknownTarget(t *testing.T) {
+	isolateXDGConfig(t)
+	registerSealForInventory(t)
+	code, stderr := runGonf(t, "plan", "-seal", "-for", "ghost", "cli_seal_for_task")
+	if code == 0 || !strings.Contains(stderr, `"ghost" is not a registered host, cluster or fleet`) {
+		t.Fatalf("exit %d, stderr %q; want the unknown-target refusal", code, stderr)
+	}
+}
+
+// TestCLIPlanSealForFilenameCollisionRefused: two hosts whose names
+// sanitize to the same dir/plan-<name>.age fragment are refused before
+// anything is written, rather than one silently overwriting the other's
+// artifact.
+func TestCLIPlanSealForFilenameCollisionRefused(t *testing.T) {
+	isolateXDGConfig(t)
+	api.ResetForTest()
+	api.ResetInventory()
+	t.Cleanup(func() {
+		api.ResetForTest()
+		api.ResetInventory()
+	})
+	work := t.TempDir()
+	t.Chdir(work)
+	r1, _ := genSealKeyPair(t)
+	r2, _ := genSealKeyPair(t)
+	h1 := api.Host("h/a", api.WithPlanRecipient(r1))
+	h2 := api.Host("h*a", api.WithPlanRecipient(r2))
+	api.Cluster("collide", h1, h2)
+	api.Task("cli_seal_for_collide", "", func() {})
+
+	dir := filepath.Join(t.TempDir(), "out")
+	code, stderr := runGonf(t, "plan", "-o", dir, "-seal", "-for", "collide", "cli_seal_for_collide")
+	if code == 0 {
+		t.Fatalf("exit 0, want a refusal; stderr %q", stderr)
+	}
+	if !strings.Contains(stderr, "plan-h_a.age") {
+		t.Fatalf("stderr %q, want it to name the colliding filename plan-h_a.age", stderr)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("output directory %s exists (err=%v); nothing should have been written", dir, err)
+	}
+}

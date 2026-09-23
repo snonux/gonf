@@ -25,9 +25,10 @@ import (
 // package doc and docs/plan-encryption.md "Provenance"): every message this
 // file prints on success says "wrote", never "verified" or "trusted".
 //
-// -for (per-host recipient targeting, phase 2) is task 4b2 and is not
-// implemented here: planSealed always records every ForHosts member, the
-// same "whole plan" selection the plaintext -o and -stdout paths use.
+// -for (per-host recipient targeting, phase 2, task 4b2) is implemented in
+// plan_seal_for.go: planSealed itself, unchanged here, always records every
+// ForHosts member, the same "whole plan" selection the plaintext -o and
+// -stdout paths use — a -for run never reaches this file's functions.
 
 // stringSliceFlag collects every occurrence of a repeatable flag, in the
 // order given, so `-recipient r1 -recipient r2` accumulates both instead of

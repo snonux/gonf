@@ -224,6 +224,57 @@ func recordPlanForHosts(hosts []string, planID string, store plan.BlobStore, tas
 	return RecordPlanTo(planID, store, tasks...)
 }
 
+// RecordPlanForHost records tasks with the same ForHosts host selection a
+// push to host would use (inventory.SelectionForHosts: host plus every
+// inventory name that could match the same machine at apply time, exactly
+// like PushHost/runHost). It is `gonf plan -seal -for`'s (task 4b2, w82
+// phase 2) recording entry point: called once per target host, so a
+// ForHosts body for another host is never resolved and its inputs (e.g. a
+// per-host MustSecret read inside it) are never read into THIS host's
+// artifact — see docs/plan-encryption.md "Operator UX", the `-for` row's
+// "records once per host" rule, which exists specifically so a per-host
+// sealed artifact cannot carry another host's secret material.
+func RecordPlanForHost(host, planID string, store plan.BlobStore, tasks ...string) ([]plan.Op, error) {
+	return recordPlanForHosts(inventory.SelectionForHosts([]string{host}), planID, store, tasks...)
+}
+
+// PlanRecipientTargetHosts resolves name — `gonf plan -seal -for`'s argument
+// (task 4b2) — to the host names to seal a per-host plan for: a registered
+// host by itself, or every member of a registered cluster or fleet (a
+// fleet's members are already deduplicated across its clusters, see
+// FleetRef.HostNames). A host name takes priority over a same-named cluster
+// or fleet, then a cluster over a fleet, matching how the three registries
+// are otherwise looked up independently (Host/Cluster/Fleet share no
+// namespace, so a genuine collision is rare, but -for must still pick one
+// deterministically rather than erroring on an ambiguity nothing else in
+// gonf treats as one). A name that matches none of the three is refused by
+// name, never silently treated as an empty selection.
+func PlanRecipientTargetHosts(name string) ([]string, error) {
+	if h, ok := LookupHost(name); ok {
+		return []string{h.name}, nil
+	}
+	if c, ok := LookupCluster(name); ok {
+		return c.HostNames(), nil
+	}
+	if f, ok := LookupFleet(name); ok {
+		return f.HostNames(), nil
+	}
+	return nil, fmt.Errorf("-for: %q is not a registered host, cluster or fleet", name)
+}
+
+// HostPlanRecipient returns the age1pq recipient api.WithPlanRecipient set
+// on the registered host name, and whether one was set at all (false for an
+// unregistered host too). Used by `gonf plan -seal -for` (task 4b2) to check
+// every target host has a recipient before sealing anything, and to build
+// each host's own recipient list.
+func HostPlanRecipient(name string) (string, bool) {
+	rec, ok := inventory.LookupHost(name)
+	if !ok || rec.PlanRecipient == "" {
+		return "", false
+	}
+	return rec.PlanRecipient, true
+}
+
 // localHostSelection is the selection of a local Run: the inventory names the
 // local hostname contains — exactly the names whose destination guard the
 // local apply accepts, so no other host's ForHosts body could apply here.

@@ -68,7 +68,7 @@ var cleanupRemoteBuilds = remote.CleanupBuilds
 //	gonf -profile=fedora
 //	gonf -verbose | -quiet
 //	gonf -dry-run | -n
-//	gonf plan [-o dir|-stdout [-with-secrets]|-redacted] [-seal [-recipient r]... [-recipients-file f] [-no-default-recipients]] [-id name] <task>...  # emit plan.jsonl (or stdout), or seal to plan.age
+//	gonf plan [-o dir|-stdout [-with-secrets]|-redacted] [-seal [-recipient r]... [-recipients-file f] [-no-default-recipients] [-for host|cluster|fleet]] [-id name] <task>...  # emit plan.jsonl (or stdout), or seal to plan.age (or plan-<host>.age per host with -for)
 //	gonf apply [-n] [-identity file]... <plan.jsonl|plan.age|->  # apply file/sealed file or stdin (GONF-PUSH/1, sealed, or bare JSONL)
 //	gonf <task> [task...]                            # RecordPlan + Apply locally
 func CLI() int {
@@ -479,23 +479,34 @@ func cliPlan(args []string) int {
 		"ambient default; still unioned with -recipient flags; a missing file here is an error, not silently empty")
 	noDefaultRecipients := fs.Bool("no-default-recipients", false, "do not read the ambient default recipients "+
 		"file; seal only to -recipient flags (and -recipients-file, if also given)")
+	forTarget := fs.String("for", "", "with -seal: seal one artifact per destination host instead of one whole-plan "+
+		"artifact — name a registered host, cluster or fleet. Records once per host (a ForHosts body for another "+
+		"host is never resolved) and writes dir/plan-<host>.age per host, sealed to that host's "+
+		"api.WithPlanRecipient plus the union of -recipient/recipients-file; refuses before writing anything if "+
+		"any resolved host lacks a recipient; with -stdout, resolves to exactly one host or is refused")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	tasks := fs.Args()
 	if len(tasks) == 0 {
 		eprintln("usage: gonf plan [-o dir|-stdout [-with-secrets]|-redacted] " +
-			"[-seal [-recipient r]... [-recipients-file f] [-no-default-recipients]] [-id name] <task> [task...]")
+			"[-seal [-recipient r]... [-recipients-file f] [-no-default-recipients] [-for host|cluster|fleet]] [-id name] <task> [task...]")
 		return 2
 	}
 	if msg := planOutputConflict(fs, *stdout, *withSecrets, *redacted, *sealFlag); msg != "" {
 		eprintln("plan: " + msg)
 		return 2
 	}
+	if *forTarget != "" && !*sealFlag {
+		eprintln("plan: -for only applies to -seal")
+		return 2
+	}
 
 	switch {
 	case *redacted:
 		return planPreview(*planID, tasks)
+	case *sealFlag && *forTarget != "":
+		return planSealedFor(*outDir, *planID, tasks, *stdout, *forTarget, recipientFlags, *recipientsFile, *noDefaultRecipients)
 	case *sealFlag:
 		return planSealed(*outDir, *planID, tasks, *stdout, recipientFlags, *recipientsFile, *noDefaultRecipients)
 	case *stdout:
@@ -1410,7 +1421,7 @@ func verifyStickyDirOwned(path string) error {
 func printUsage() {
 	eprintln("usage: gonf [-list] [-version] [-plan-version] [-strict-preview-version] [-sealed-version] [-profile=...] [-verbose|-quiet] [-dry-run|-n] [-privilege=none|sudo|doas] [-cmd-timeout 5m] <task> [task...]")
 	eprintln("       gonf plan [-o dir|-stdout [-with-secrets]|-redacted] " +
-		"[-seal [-recipient r]... [-recipients-file f] [-no-default-recipients]] [-id name] <task> [task...]")
+		"[-seal [-recipient r]... [-recipients-file f] [-no-default-recipients] [-for host|cluster|fleet]] [-id name] <task> [task...]")
 	eprintln("       gonf apply [-n|-dry-run|-strict-preview] [-apply-dir dir] [-identity file]... <plan.jsonl|plan.age|->")
 	eprintln("       gonf push [-n|-dry-run|-preview] [-id name] [-privilege=...] [-- ssh-args...] user@host <task> [task...]")
 	eprintln("       gonf cluster [-n|-dry-run|-preview] [-j N] [-id name] [-host-timeout 10m] <cluster> <task> [task...]")

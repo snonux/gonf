@@ -9,6 +9,7 @@ import (
 	"github.com/snonux/gonf/internal/inventory"
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/internal/remote"
+	"github.com/snonux/gonf/plan/seal"
 )
 
 // HostRef is an opaque inventory handle for one SSH destination.
@@ -76,6 +77,37 @@ const (
 // WithPrivilege sets how privileged apply chunks are wrapped on this host.
 func WithPrivilege(mode privilege.Mode) HostOption {
 	return func(h *inventory.Host) error { h.Privilege = mode; return nil }
+}
+
+// WithPlanRecipient sets this host's age1pq recipient for `gonf plan -seal
+// -for host|cluster|fleet` (task 4b2, w82 phase 2, docs/plan-encryption.md
+// "Keys" and "Operator UX"): a per-host sealed artifact (dir/plan-<host>.age)
+// is sealed to this recipient in addition to the operator's own, so the
+// destination can decrypt it with the matching identity it holds (typically
+// /etc/gonf/identity — see docs/plan-encryption.md "Runbook"). The recipient
+// is validated with plan/seal.ParseRecipients right here, at registration:
+// a malformed value or one that is not an age1pq hybrid recipient (a classic
+// X25519, ssh, or plugin recipient) is registration-time misuse, reported as
+// a declaration error (internal/declerr) like any other rejected HostOption,
+// rather than a silent later refusal when `-for` builds the artifact. A host
+// with no WithPlanRecipient is simply not eligible for `-for`: it is refused
+// by name before anything is written, never silently skipped.
+func WithPlanRecipient(recipient string) HostOption {
+	return func(h *inventory.Host) error {
+		recipients, err := seal.ParseRecipients([]string{recipient})
+		if err != nil {
+			return fmt.Errorf("WithPlanRecipient: %w", err)
+		}
+		if len(recipients) != 1 {
+			return fmt.Errorf("WithPlanRecipient: recipient must not be empty or a \"#\" comment")
+		}
+		// Store the recipient's own canonical age1pq… encoding (Recipient.String),
+		// not the raw argument: ParseRecipients re-encodes whatever it parsed,
+		// so a copy/paste with incidental leading/trailing whitespace still
+		// lands here as the exact bytes plan/seal itself would produce.
+		h.PlanRecipient = recipients[0].String()
+		return nil
+	}
 }
 
 // WithGOOS sets the GOOS used when push syncs a newer gonf binary to this host.
