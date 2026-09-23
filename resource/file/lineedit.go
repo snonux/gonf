@@ -106,12 +106,32 @@ func (f *File) currentLines(path string) ([]string, error) {
 // applyKeyedLine gives edit ownership of the lines starting with edit.Key:
 // the first is replaced in place by edit.Line (so the setting keeps its
 // position among comments and neighbouring settings), every further one is
-// dropped, and edit.Line is appended when none exists. Replacing or dropping
-// a differing line is logged, naming the key and counts but not the text
-// (a line may hold a value the log must not repeat), so a legacy or
-// administrator-set value being taken over is visible rather than silent.
+// dropped, and edit.Line is appended when none exists.
+//
+// A plain replace (the owned line's value converging to a new one) is the
+// common, expected case and stays at Info. A drop is different: it deletes
+// a line the key did not narrowly target — declaration-time validation
+// (validateKeyedLines) only checks that key/line are shaped correctly, not
+// that key is specific enough for THIS file's actual content, so a key that
+// is accidentally too broad (e.g. "export " instead of "export
+// PKG_PATH=") silently destroys unrelated administrator-written lines that
+// merely happen to share the prefix. That must be visible even under
+// `-quiet` (which only raises the level past Info, see internal/logger), so
+// a drop is logged at Warn instead, naming the key and the counts but never
+// the dropped text: a line may hold a value that is not necessarily marked
+// sensitive the way a secret-bearing op is, so it would not go through
+// gonf's redaction. The dropped lines' text is only ever logged at Debug,
+// for local recoverability, never at Warn or Info.
+//
+// The drop is not counted or surfaced separately from an ordinary edit:
+// like WithLine/WithoutLine, it relies on ensureFile's checksum comparison
+// against the file's previous content to note the resource StatusChanged
+// (a drop always changes the produced content, since it removes a line),
+// which is how it reaches the apply summary ("N changed") that an operator
+// reviewing output actually reads, rather than only the log.
 func applyKeyedLine(path string, lines []string, edit resource.KeyedLine) []string {
 	out := make([]string, 0, len(lines)+1)
+	var droppedLines []string
 	found := false
 	replaced, dropped := 0, 0
 	for _, line := range lines {
@@ -121,6 +141,7 @@ func applyKeyedLine(path string, lines []string, edit resource.KeyedLine) []stri
 		}
 		if found {
 			dropped++
+			droppedLines = append(droppedLines, line)
 			continue
 		}
 		found = true
@@ -132,8 +153,12 @@ func applyKeyedLine(path string, lines []string, edit resource.KeyedLine) []stri
 	if !found {
 		out = append(out, edit.Line)
 	}
-	if replaced != 0 || dropped != 0 {
-		logger.Info("file %s: keyed line %q replaces %d and drops %d existing line(s)", path, edit.Key, replaced, dropped)
+	switch {
+	case dropped != 0:
+		logger.Warn("file %s: keyed line %q replaces %d and drops %d existing line(s); a drop deletes content the key matched but did not own — check whether %q is narrow enough for this file", path, edit.Key, replaced, dropped, edit.Key)
+		logger.Debug("file %s: keyed line %q dropped line(s): %q", path, edit.Key, droppedLines)
+	case replaced != 0:
+		logger.Info("file %s: keyed line %q replaces %d existing line(s)", path, edit.Key, replaced)
 	}
 	return out
 }

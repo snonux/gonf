@@ -52,9 +52,20 @@ with `key` (a literal prefix, not a pattern) is replaced **in place** by
 `line`, every further line starting with `key` is removed, and `line` is
 appended when no line starts with `key`. Every other line, comment and the
 file's order are left alone, so it is safe on shared rc/profile/daily files
-that are not owned whole. A replaced or dropped differing line is logged
-(key and counts only, not the old text), and the file change is reported
-like any other content change.
+that are not owned whole. A replaced differing line is logged at Info (key
+and counts only, not the old text), and the file change is reported like any
+other content change.
+
+**Pick `key` as narrow as the setting itself** (e.g. `"export PKG_PATH="`,
+not `"export "`): declaration-time checks (below) validate that `key` and
+`line` are shaped correctly, not that `key` is specific enough for a given
+file's actual content. A key that is accidentally too broad matches, and
+therefore drops, every other line that happens to share the prefix — for
+example `"export "` also matching unrelated `EDITOR`/`PAGER`/`HTTP_PROXY`
+lines and silently deleting them. A drop (as opposed to a plain replace) is
+therefore logged at Warn instead of Info, so it stays visible even under
+`-quiet` (which only raises the level past Info); the dropped lines'
+text is never logged above Debug, since it is not necessarily redaction-safe.
 
 Rules, checked when the resource is declared (misuse fails fast):
 

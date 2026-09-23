@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	. "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
@@ -157,5 +159,124 @@ func TestPlanApplyRefusesKeyedLinesWithContent(t *testing.T) {
 	err := (planHandler{}).Apply(op, plan.ApplyContext{})
 	if err == nil || !strings.Contains(err.Error(), "keyed_lines cannot combine") {
 		t.Fatalf("err = %v, want the content conflict", err)
+	}
+}
+
+// summaryOf renders the current apply report the way PrintSummary would.
+func summaryOf(t *testing.T) string {
+	t.Helper()
+	var buf strings.Builder
+	resource.PrintSummary(&buf)
+	return buf.String()
+}
+
+// TestWithKeyedLineDropWarnsLoudlyAndReportsChange pins the fix for the
+// data-loss-adjacent bug this task (8c2) closes: a key that is accidentally
+// too broad for the file's actual content (an "export " prefix key on a
+// /root/.profile-style file, instead of the narrow "export PKG_PATH=" the
+// recipe author meant) matches, and therefore drops, every other line
+// sharing that prefix — EDITOR, PAGER and HTTP_PROXY here. That must be
+// loud: logged at Warn (so it survives -quiet, which only raises the level
+// past Info, see internal/logger.Level) and never at Info-and-below, never
+// naming the dropped lines' own text, and the resource must be reported
+// StatusChanged so it shows up in the apply summary an operator actually
+// reads.
+func TestWithKeyedLineDropWarnsLoudlyAndReportsChange(t *testing.T) {
+	resource.ResetRepository()
+	resource.ResetReport()
+	path := filepath.Join(t.TempDir(), "profile")
+	before := "export EDITOR=vi\nexport PAGER=less\nexport PKG_PATH=old\nexport HTTP_PROXY=proxy.example:8080\n"
+	if err := os.WriteFile(path, []byte(before), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Capture at LevelWarn, the level -quiet runs at: if the drop report
+	// does not survive here, an operator running -quiet never sees it.
+	quietOutput := testutil.CaptureLog(t, logger.LevelWarn)
+
+	broadKey := "export "
+	newPkgLine := `export PKG_PATH="https://repo/"`
+	if err := Ensure(path, WithKeyedLine(broadKey, newPkgLine), WithMode(0o644)); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Confirm the bug is real: EDITOR, PAGER and HTTP_PROXY are gone, only
+	// the intended PKG_PATH line remains.
+	if want := newPkgLine + "\n"; string(got) != want {
+		t.Fatalf("content = %q, want %q (EDITOR/PAGER/HTTP_PROXY must be dropped by the over-broad key)", got, want)
+	}
+
+	logged := quietOutput()
+	if !strings.Contains(logged, "drops 3") {
+		t.Fatalf("quiet-level log = %q, want it to report the 3 dropped lines even under -quiet", logged)
+	}
+	if !strings.Contains(logged, broadKey) {
+		t.Fatalf("quiet-level log = %q, want it to name the key", logged)
+	}
+	for _, secret := range []string{"EDITOR", "PAGER", "HTTP_PROXY", "vi", "less", "proxy.example"} {
+		if strings.Contains(logged, secret) {
+			t.Fatalf("quiet-level log = %q, must not repeat dropped line text (%q leaked)", logged, secret)
+		}
+	}
+
+	if summary := summaryOf(t); !strings.Contains(summary, "changed "+"File["+path+"]") {
+		t.Fatalf("summary = %q, want the file reported changed", summary)
+	}
+}
+
+// TestWithKeyedLineDropDebugLogsRecoverableText confirms the dropped lines'
+// text is recoverable at Debug (explicitly sanctioned by task 8c2's review:
+// fine for local debugging, never at Warn or Info since the text is not
+// necessarily redaction-safe).
+func TestWithKeyedLineDropDebugLogsRecoverableText(t *testing.T) {
+	resource.ResetRepository()
+	resource.ResetReport()
+	path := filepath.Join(t.TempDir(), "profile")
+	before := "export EDITOR=vi\nexport PKG_PATH=old\n"
+	if err := os.WriteFile(path, []byte(before), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	debugOutput := testutil.CaptureLog(t, logger.LevelDebug)
+	if err := Ensure(path, WithKeyedLine("export ", `export PKG_PATH="new"`), WithMode(0o644)); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	if logged := debugOutput(); !strings.Contains(logged, "PKG_PATH=old") {
+		t.Fatalf("debug-level log = %q, want the dropped line's text recoverable at Debug", logged)
+	}
+}
+
+// TestWithKeyedLineNarrowKeyDoesNotWarn pins the non-regression: a correctly
+// narrow key that replaces or appends its one line, with nothing else to
+// drop, must not warn (a Warn on every ordinary converge would bury the
+// signal this task adds Warn for).
+func TestWithKeyedLineNarrowKeyDoesNotWarn(t *testing.T) {
+	cases := []struct {
+		name, before string
+	}{
+		{"replaces its one line", "export EDITOR=vi\nexport PKG_PATH=old\n"},
+		{"appends, nothing to own yet", "export EDITOR=vi\n"},
+		{"already converged", pkgQuoted + "\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resource.ResetRepository()
+			resource.ResetReport()
+			path := filepath.Join(t.TempDir(), "profile")
+			if err := os.WriteFile(path, []byte(tc.before), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			warnOutput := testutil.CaptureLog(t, logger.LevelWarn)
+			if err := Ensure(path, WithKeyedLine(pkgKey, pkgQuoted), WithMode(0o644)); err != nil {
+				t.Fatalf("Ensure: %v", err)
+			}
+			if logged := warnOutput(); logged != "" {
+				t.Fatalf("warn-level log = %q, want no warning for a narrow key with nothing to drop", logged)
+			}
+		})
 	}
 }

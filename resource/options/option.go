@@ -637,6 +637,15 @@ func WithoutLine(content string) fileOption {
 // WithLine/WithoutLine line: those overlaps are ownership conflicts and fail
 // when the resource is declared. Like the other line edits it cannot combine
 // with WithContent/WithSource or WithValidation.
+//
+// key must be narrow enough to match only the one line it is meant to own in
+// the ACTUAL target file: declaration-time checks validate that key/line are
+// shaped correctly (see above), not that key is specific to a given file's
+// content, so a key that is accidentally broad (e.g. "export " instead of
+// "export PKG_PATH=") will match and drop every other line sharing that
+// prefix. A drop is logged at Warn (visible even under `-quiet`) and the
+// resource is reported changed, but nothing refuses the apply; pick keys as
+// specific as the setting's own name.
 func WithKeyedLine(key, line string) fileOption {
 	return fileOption(func(target any) {
 		requires(target, "WithKeyedLine", func(r KeyedLineSettable) { r.SetKeyedLine(key, line) })
