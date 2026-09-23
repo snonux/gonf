@@ -154,33 +154,46 @@ func NewRedactedWriter(w io.Writer) io.Writer {
 
 // Write buffers p and forwards every completed line, redacted. It reports
 // len(p) unless the destination fails.
+//
+// currentRedactor is read exactly once, up front, and that single value is
+// threaded through every decision this call makes (each forward, the
+// pendingLimit threshold, and forwardSafePrefix). Production never clears
+// the installed redactor, but tests do (SetRedactor(nil) via t.Cleanup); if
+// Write instead re-read the package-global at each step, a SetRedactor
+// landing mid-call could make it pick pendingLimit's threshold from one
+// redactor and then, past that threshold, take forwardSafePrefix's nil
+// branch — which forwards the entire pending buffer unredacted. Reading
+// once makes that impossible: this call sees one redactor state throughout.
 func (r *RedactingWriter) Write(p []byte) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	red := currentRedactor()
 	r.pending = append(r.pending, p...)
 	for {
 		i := bytes.IndexByte(r.pending, '\n')
 		if i < 0 {
 			break
 		}
-		if err := r.forward(r.pending[:i+1]); err != nil {
+		if err := r.forward(red, r.pending[:i+1]); err != nil {
 			return 0, err
 		}
 		r.pending = r.pending[i+1:]
 	}
-	if len(r.pending) > pendingLimit() {
-		if err := r.forwardSafePrefix(); err != nil {
+	if len(r.pending) > pendingLimit(red) {
+		if err := r.forwardSafePrefix(red); err != nil {
 			return 0, err
 		}
 	}
 	return len(p), nil
 }
 
-// pendingLimit returns the installed redactor's Redactor.MaxPending, so the
-// forced-flush threshold tracks its split-guard, or maxPendingLine's default
-// with none installed (nothing to protect a cut from splitting then).
-func pendingLimit() int {
-	if red := currentRedactor(); red != nil {
+// pendingLimit returns red's Redactor.MaxPending, so the forced-flush
+// threshold tracks its split-guard, or maxPendingLine's default when red is
+// nil (nothing to protect a cut from splitting then). red is the caller's
+// single currentRedactor() read (see Write's doc), not re-read here, so this
+// always agrees with whatever redactor state the rest of the same call used.
+func pendingLimit(red Redactor) int {
+	if red != nil {
 		return red.MaxPending()
 	}
 	return maxPendingLine
@@ -193,7 +206,7 @@ func (r *RedactingWriter) Close() error {
 	if len(r.pending) == 0 {
 		return nil
 	}
-	err := r.forward(r.pending)
+	err := r.forward(currentRedactor(), r.pending)
 	r.pending = nil
 	return err
 }
@@ -209,13 +222,19 @@ func (r redactedWriter) Write(p []byte) (int, error) {
 // forwardSafePrefix forwards the already-redacted part of an overlong
 // pending run that no secret can still extend into (Redactor.FlushPoint
 // both finds and redacts it — see the interface doc for why the caller must
-// not redact that prefix itself), keeping the rest pending. With no
-// redactor installed there is nothing to protect, so it forwards (and
-// clears) everything pending.
-func (r *RedactingWriter) forwardSafePrefix() error {
-	red := currentRedactor()
+// not redact that prefix itself), keeping the rest pending. red is nil when
+// no redactor is installed, in which case there is nothing to protect, so it
+// forwards (and clears) everything pending; red is the caller's single
+// currentRedactor() read (see Write's doc), never re-read here.
+//
+// consumed is clamped to len(r.pending) before it slices: FlushPoint is part
+// of the exported Redactor interface (SetRedactor takes any implementation),
+// so a third-party redactor that returns consumed > len(s) — buggy or
+// malicious — must not panic this relay goroutine mid-apply; it is instead
+// treated as "consume everything currently pending".
+func (r *RedactingWriter) forwardSafePrefix(red Redactor) error {
 	if red == nil {
-		if err := r.forward(r.pending); err != nil {
+		if err := r.forward(nil, r.pending); err != nil {
 			return err
 		}
 		r.pending = nil
@@ -225,6 +244,7 @@ func (r *RedactingWriter) forwardSafePrefix() error {
 	if consumed <= 0 {
 		return nil
 	}
+	consumed = min(consumed, len(r.pending))
 	if _, err := io.WriteString(r.w, out); err != nil {
 		return err
 	}
@@ -288,8 +308,15 @@ func handOff(pr, f *os.File) error {
 	return nil
 }
 
-// forward writes one redacted chunk to the destination.
-func (r *RedactingWriter) forward(line []byte) error {
-	_, err := io.WriteString(r.w, Redact(string(line)))
+// forward writes one chunk to the destination, redacted with red (nil
+// forwards it unchanged). red is the caller's single currentRedactor() read
+// (see Write's doc) rather than a fresh lookup here, so every chunk a single
+// Write or Close call forwards is redacted against the same redactor state.
+func (r *RedactingWriter) forward(red Redactor, line []byte) error {
+	s := string(line)
+	if red != nil {
+		s = red.Redact(s)
+	}
+	_, err := io.WriteString(r.w, s)
 	return err
 }

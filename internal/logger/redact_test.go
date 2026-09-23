@@ -43,6 +43,137 @@ func installFake(t *testing.T, secret string) {
 	t.Cleanup(func() { SetRedactor(nil) })
 }
 
+// overclaimRedactor's FlushPoint always reports consuming far more bytes
+// than it was ever given, simulating a buggy or malicious third-party
+// Redactor implementation. Redactor and SetRedactor are exported API with
+// external consumers, so RedactingWriter cannot trust FlushPoint's consumed
+// to stay in range: task sd2 finding (a) is that an unclamped consumed
+// panicked the relay goroutine via an out-of-range slice.
+type overclaimRedactor struct{ fakeRedactor }
+
+func (o overclaimRedactor) FlushPoint(s string) (out string, consumed int) {
+	return o.Redact(s), len(s) + 1_000_000
+}
+
+// nonProgressingRedactor's FlushPoint always reports consuming nothing (the
+// legitimate "no safe cut yet" answer FlushPoint's doc allows), so
+// RedactingWriter must leave everything pending rather than forward or drop
+// anything.
+type nonProgressingRedactor struct{ fakeRedactor }
+
+func (nonProgressingRedactor) FlushPoint(s string) (out string, consumed int) {
+	return "", -1
+}
+
+// raceRedactor reproduces task sd2 finding (b)'s exact TOCTOU window
+// deterministically: its MaxPending implementation itself calls
+// SetRedactor(nil) the first time it runs, simulating a SetRedactor(nil)
+// landing between RedactingWriter.Write's threshold check (pendingLimit,
+// which calls MaxPending) and its forced-flush decision (forwardSafePrefix)
+// -- the same r.mu-guarded critical section, and exactly the ordering a
+// test's t.Cleanup(func() { SetRedactor(nil) }) can produce concurrently in
+// production code paths that share this writer. Before the fix, Write's two
+// independent currentRedactor() reads meant forwardSafePrefix would then see
+// the redactor as already nil and forward its whole pending buffer
+// unredacted; the fix reads currentRedactor() once, up front, so
+// forwardSafePrefix keeps using the same redactor Write already captured.
+type raceRedactor struct {
+	fakeRedactor
+	cleared bool
+}
+
+func (r *raceRedactor) MaxPending() int {
+	if !r.cleared {
+		r.cleared = true
+		SetRedactor(nil)
+	}
+	return r.fakeRedactor.MaxPending()
+}
+
+// An overclaiming FlushPoint must not panic RedactingWriter.Write; consumed
+// is clamped to what is actually pending, so it is fully (and safely)
+// drained instead.
+func TestRedactingWriterClampsOverclaimingFlushPoint(t *testing.T) {
+	secretStr := "S3cr3tP@ss"
+	SetRedactor(overclaimRedactor{fakeRedactor{secret: secretStr}})
+	t.Cleanup(func() { SetRedactor(nil) })
+
+	var out strings.Builder
+	w := NewRedactingWriter(&out)
+	payload := strings.Repeat("x", maxPendingLine) + secretStr
+	if _, err := w.Write([]byte(payload)); err != nil {
+		t.Fatal(err)
+	}
+	w.mu.Lock()
+	pending := len(w.pending)
+	w.mu.Unlock()
+	if pending != 0 {
+		t.Fatalf("pending = %d bytes after an overclaiming FlushPoint, want 0 (consumed clamped to everything pending)", pending)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A FlushPoint that reports consumed <= 0 (nothing safe to flush yet) is a
+// no-op: nothing is forwarded and nothing pending is lost.
+func TestRedactingWriterNonPositiveConsumedIsNoOp(t *testing.T) {
+	SetRedactor(nonProgressingRedactor{fakeRedactor{secret: "S3cr3tP@ss"}})
+	t.Cleanup(func() { SetRedactor(nil) })
+
+	var out strings.Builder
+	w := NewRedactingWriter(&out)
+	payload := strings.Repeat("x", maxPendingLine+10)
+	if _, err := w.Write([]byte(payload)); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); got != "" {
+		t.Fatalf("output = %q, want nothing forwarded when FlushPoint reports consumed <= 0", got)
+	}
+	w.mu.Lock()
+	pending := len(w.pending)
+	w.mu.Unlock()
+	if pending != len(payload) {
+		t.Fatalf("pending = %d, want all %d bytes kept back when FlushPoint makes no progress", pending, len(payload))
+	}
+}
+
+// TestRedactingWriterWriteUsesOneRedactorPerCall proves task sd2 finding
+// (b)'s fix: a single Write call never straddles two different redactor
+// states. raceRedactor clears the installed redactor (as a test's
+// t.Cleanup(func(){ SetRedactor(nil) }) does concurrently in production)
+// from inside the very first of Write's redactor reads (MaxPending, via
+// pendingLimit) -- the same seam finding (b) identified. Before the fix,
+// forwardSafePrefix's own, independent currentRedactor() read would then see
+// nil and dump the whole pending buffer -- including the secret -- raw. With
+// the fix, Write captured the redactor once before pendingLimit ran, so
+// forwardSafePrefix still redacts through it.
+func TestRedactingWriterWriteUsesOneRedactorPerCall(t *testing.T) {
+	secretStr := "S3cr3tP@ss"
+	red := &raceRedactor{fakeRedactor: fakeRedactor{secret: secretStr}}
+	SetRedactor(red)
+	t.Cleanup(func() { SetRedactor(nil) })
+
+	var out strings.Builder
+	w := NewRedactingWriter(&out)
+	// The secret sits well before the forced-flush cut (near the very end),
+	// so it is part of what forwardSafePrefix forwards this Write call, not
+	// what it holds back -- the leak (or lack of one) is visible without a
+	// Close, which runs under a separate, later currentRedactor() read and
+	// so is not part of this call's TOCTOU window.
+	payload := secretStr + strings.Repeat("x", maxPendingLine)
+	if _, err := w.Write([]byte(payload)); err != nil {
+		t.Fatal(err)
+	}
+	if !red.cleared {
+		t.Fatal("test setup bug: MaxPending never ran, so the race window this test drives was never exercised")
+	}
+	got := out.String()
+	if strings.Contains(got, secretStr) {
+		t.Fatalf("forwardSafePrefix used the just-cleared (nil) redactor instead of Write's single captured read: raw secret leaked: %q", got)
+	}
+}
+
 // The writer redacts complete lines, so a secret split across two writes is
 // still caught, and Close forwards the unterminated tail.
 func TestRedactingWriterRedactsSplitLines(t *testing.T) {
