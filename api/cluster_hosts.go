@@ -53,7 +53,7 @@ func currentTaskCluster() string {
 func ClusterHosts() []string {
 	hosts, err := currentClusterHosts()
 	if err != nil {
-		declerr.Reportf("ClusterHosts: %v", err)
+		declerr.Reportf("ClusterHosts: %w", err)
 		return nil
 	}
 	return hosts

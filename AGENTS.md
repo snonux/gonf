@@ -130,7 +130,10 @@ inventory and resources is a declaration error (`internal/declerr`):
   unregistered value) and return an inert value — an unregistered resource,
   an empty `resource.Multi`, a zero handle, a nil list — so the recipe keeps
   running and later declarations are still checked. Never register a refused
-  declaration.
+  declaration. `Reportf` wraps its cause with `%w`, not `%v` (`declerr.Error`
+  implements `Unwrap` precisely so `errors.Is`/`errors.As` see through a
+  report); a new call site follows the same `%w` pattern instead of copying
+  an older `%v` one.
 - An option reports misuse to its target (`misuse` in resource/options):
   a target with `embed.Misuse` collects it, anything else goes to declerr.
 - The first report wins and carries the recipe line (`declerr.Location`).

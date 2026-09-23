@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp/syntax"
 	"strings"
 	"testing"
 
@@ -353,6 +354,21 @@ func TestDSLMisuseIsDeclarationError(t *testing.T) {
 				t.Fatalf("misuse registered %v", ids)
 			}
 		})
+	}
+}
+
+// TestDeclarationErrorUnwrapsToCause pins the behavior fixed by task hc2:
+// declerr.Reportf's call sites wrap their cause with %w (not %v), so the
+// cause stays reachable through errors.Is/errors.As even after the
+// declaration-error report. Matching's invalid-pattern error is a concrete
+// stdlib type (*syntax.Error) that %v would have flattened into an
+// unreachable string; %w keeps it reachable.
+func TestDeclarationErrorUnwrapsToCause(t *testing.T) {
+	requireDeclErr(t, `Matching: invalid pattern "("`, func() { requireNil(Matching("(")) })
+	var synErr *syntax.Error
+	err := declerr.First()
+	if !errors.As(err, &synErr) {
+		t.Fatalf("errors.As(%v, *syntax.Error) = false, want true (the regexp.Compile cause should stay reachable)", err)
 	}
 }
 

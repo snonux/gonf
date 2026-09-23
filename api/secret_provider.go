@@ -57,7 +57,7 @@ func init() {
 // whole invocation.
 func SetSecretProvider(p secret.Provider) {
 	if err := setSecretProvider(p); err != nil {
-		declerr.Reportf("SetSecretProvider: %v", err)
+		declerr.Reportf("SetSecretProvider: %w", err)
 	}
 }
 

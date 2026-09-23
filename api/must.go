@@ -17,7 +17,7 @@ import (
 func MustHostValue[T any](host, key string) T {
 	v, err := lookupHostValue[T](host, key)
 	if err != nil {
-		declerr.Reportf("MustHostValue: %v", err)
+		declerr.Reportf("MustHostValue: %w", err)
 	}
 	return v
 }

@@ -32,7 +32,7 @@ func EnsureDir(path string, opts ...options.DirOption) Resource {
 	if resource.PlanDraftRecording() {
 		draft, err := dir.EnsurePlanDraft(p, opts...)
 		if err != nil {
-			declerr.Reportf("EnsureDir %s: %v", p, err)
+			declerr.Reportf("EnsureDir %s: %w", p, err)
 			return resource.Multi(nil)
 		}
 		resource.RecordPlanDraft(draft)

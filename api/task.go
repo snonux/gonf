@@ -250,7 +250,7 @@ func Matching(pattern string) []string {
 
 	re, err := regexp.Compile(pattern)
 	if err != nil {
-		declerr.Reportf("Matching: invalid pattern %q: %v", pattern, err)
+		declerr.Reportf("Matching: invalid pattern %q: %w", pattern, err)
 		return nil
 	}
 

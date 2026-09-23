@@ -73,7 +73,7 @@ func Register(type_, name string, apply Applier, deps ...string) Resource {
 	}
 
 	if err := getRepository().register(r); err != nil {
-		declerr.Reportf("resource registration failed: %v", err)
+		declerr.Reportf("resource registration failed: %w", err)
 	}
 
 	return r

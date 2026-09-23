@@ -110,7 +110,7 @@ func (d *DaemonReloadResource) mergeInto(r resource.Resource, next *DaemonReload
 		return r
 	}
 	if err := resource.AmendRegistered(m.planDraft(id), next.orderingDeps()...); err != nil {
-		declerr.Reportf("%s: cannot merge a further daemon-reload declaration on this bus (SystemdUnits FanIn or DaemonReload watching %v) into the one already declared in this recipe scope (watching %v): %v; "+
+		declerr.Reportf("%s: cannot merge a further daemon-reload declaration on this bus (SystemdUnits FanIn or DaemonReload watching %v) into the one already declared in this recipe scope (watching %v): %w; "+
 			"declare them in the same when-block and privilege scope without making one's inputs depend on the other, "+
 			"or pass every input to a single SystemdUnits FanIn",
 			id, next.Watch, d.Watch, err)
