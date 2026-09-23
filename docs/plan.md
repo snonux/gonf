@@ -952,6 +952,27 @@ wire-level `glob` field is silently dropped, preserving the exact scenario
 (an old or forged `plan.jsonl` line) the case existed to pin, reached via
 decode instead of an now-impossible Go literal.
 
+**Update (task 2f2):** the "silently dropped" behaviour the paragraph above
+documents was itself a genuine encode/decode fidelity regression, the same
+"an older destination would ignore the field ... so it must refuse" class
+CurrentVersion's own schema history rejects everywhere else in this
+package — just reached by a hand-edited or forged plan line instead of an
+unsupported schema version, and confirmed by a probe carrying a "cron" line
+with stray `systemd_timer`-exclusive fields (`on_calendar`, `persistent`,
+`description`, `after`) and a "file" line with stray `cron`-exclusive
+fields (`cron_user`, `on_calendar`): both round-tripped losslessly before
+task yd2 and silently dropped the foreign fields after it. `plan/op_payload.go`'s
+`checkForeignPayload`, called from `Op.UnmarshalJSON` before
+`payloadFromWire` ever runs, now refuses such a line outright instead of
+building an incomplete `OpPayload` from it — it is built once, by
+reflecting `OpPayloadExamples()`, so it covers every kind that has migrated
+exclusive fields off `Op` without a second hand-maintained field list. The
+`{"op":"dir",...,"glob":true,...}` fixture above is refused (not decoded)
+as of this task; `plan/op_payload_test.go`'s
+`TestDecodeRefusesForeignKindFields`/`TestDecodeNormalLinesUnaffected` are
+its pin, and `plan/sensitive_test.go`'s `TestRequiredVersion` dropped its
+now-impossible "glob on dir" `RequiredVersion` case accordingly.
+
 `resource/dir/planwire.go`'s three handlers were touched narrowly, matching
 the task's own scoping note: `syncDirHandler.ToOp` now builds
 `Payload: plan.SyncDirPayload{SourceDir, Glob, FileMode}` alongside the

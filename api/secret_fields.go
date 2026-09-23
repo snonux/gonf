@@ -126,8 +126,23 @@ func walkOpStrings(op *plan.Op, fn func(path, s string) string, mutate bool) {
 	walkValue(reflect.ValueOf(op).Elem(), "", fn, mutate)
 }
 
-// copyOp deep-copies op through the wire codec, which every op round-trips
-// losslessly.
+// copyOp deep-copies op through the wire codec. A legitimately built op
+// round-trips losslessly: its Payload (if any) only ever carries fields
+// exclusive to its OWN Kind (every concrete OpPayload's applyToWire,
+// plan/op_payload.go, writes only its own fields), so encoding it and
+// decoding the result back reconstructs the same value. This is narrower
+// than an earlier version of this comment claimed ("every op round-trips
+// losslessly," unqualified): before task 2f2, a DECODED wireOp carrying an
+// extra field exclusive to some OTHER kind (reachable only via a
+// hand-edited or forged plan.jsonl line, never via toWire/applyToWire) was
+// silently dropped by payloadFromWire's kind-dispatch switch instead of
+// refused — see the task 2f2 annotation for the probe that found it.
+// checkForeignPayload (op_payload.go) now refuses such a line at decode
+// instead, so copyOp itself never had a caller that could observe the old
+// silent drop (a plan.Op value copyOp receives has already survived that
+// same decode, or was never decoded at all), but the unqualified claim was
+// still false about what DecodeOp would do with a forged line, so it is
+// corrected here rather than left to mislead the next reader.
 func copyOp(op plan.Op) (plan.Op, error) {
 	line, err := plan.EncodeOp(op)
 	if err != nil {

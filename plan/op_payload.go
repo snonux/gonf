@@ -1,5 +1,12 @@
 package plan
 
+import (
+	"fmt"
+	"reflect"
+	"sort"
+	"strings"
+)
+
 // OpPayload holds the wire fields exclusive to one Op's Kind (task yd2,
 // "Layer 2" of the PlanDraft/Op god-struct split — see docs/plan.md, "The
 // PlanDraft/Op split", and resource.DraftPayload's identical Layer 1 role
@@ -474,6 +481,19 @@ func fromWire(w wireOp) Op {
 // siblings) is the whole of what a follow-up task needs to migrate one more
 // kind's exclusive fields, once wireOp itself already carries them (it
 // always does: wireOp is unchanged by which kinds have migrated).
+//
+// It keeps ONLY the fields belonging to w.Op's own case, by construction —
+// a wireOp decoded from a line that ALSO carries some other kind's
+// exclusive field (e.g. a "cron" line with "on_calendar" set, which is
+// SystemdTimerPayload's) has that field read here, discarded, and never
+// reachable again. Before task 2f2 that was a silent encode/decode
+// fidelity bug (see docs/plan.md, "Adding a resource kind (checklist)",
+// task 9e2's note, and the task 2f2 annotation for the probe that found
+// it): UnmarshalJSON (types.go) now calls checkForeignPayload, below,
+// BEFORE reaching this switch, and refuses a line carrying any such
+// foreign-kind field instead of silently reaching this function to drop
+// it — so a non-nil OpPayload built here is now guaranteed to be the only
+// non-zero payload data w ever carried.
 func payloadFromWire(w wireOp) OpPayload {
 	switch w.Op {
 	case KindCron:
@@ -546,6 +566,78 @@ func payloadFromWire(w wireOp) OpPayload {
 	default:
 		return nil
 	}
+}
+
+// payloadFieldOwner records which Kind's OpPayload a wireOp field (keyed by
+// its Go field name, e.g. "OnCalendar") is exclusive to, plus the json tag
+// checkForeignPayload's error should name it by. It is built once, by
+// reflecting OpPayloadExamples() (task 2f2's own single source of truth for
+// "which kind owns which wire field," already trusted by
+// TestWirePayloadTagsMatch), so a follow-up task that extends
+// OpPayloadExamples() to migrate one more kind is automatically covered
+// here too — nothing in this file needs a second, hand-maintained list of
+// exclusive fields that could drift from the first the way the yd2-era
+// kind-dispatch switch above silently could.
+type payloadFieldOwner struct {
+	kind Kind
+	tag  string
+}
+
+var payloadFieldOwners = buildPayloadFieldOwners()
+
+func buildPayloadFieldOwners() map[string]payloadFieldOwner {
+	owners := make(map[string]payloadFieldOwner)
+	for kind, example := range OpPayloadExamples() {
+		pt := reflect.TypeOf(example)
+		for i := range pt.NumField() {
+			f := pt.Field(i)
+			tag, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+			owners[f.Name] = payloadFieldOwner{kind: kind, tag: tag}
+		}
+	}
+	return owners
+}
+
+// checkForeignPayload refuses a decoded wireOp that carries a non-zero
+// value in a field exclusive to some OTHER kind's OpPayload than w.Op's
+// own (see payloadFieldOwners above). payloadFromWire's kind-dispatch
+// switch only ever extracts the fields belonging to w.Op's own kind, so
+// any other kind's exclusive field surviving on the wire would otherwise
+// be silently discarded on the next encode — a genuine decode/encode
+// fidelity bug task yd2 introduced and task 2f2 fixed here (see the task
+// 2f2 annotation for the probe that found it: a "cron" line carrying
+// SystemdTimerPayload's on_calendar/persistent/description/after, and a
+// "file" line carrying CronPayload's cron_user/on_calendar, both
+// round-tripped at 540 bytes before yd2 and dropped to 327 bytes after).
+//
+// This mirrors the "an older destination would ignore the field ... so it
+// must refuse" governing philosophy plan/types.go's own schema-version
+// history already applies everywhere else in this package (see
+// CurrentVersion's doc comment) — the same principle, just reached by a
+// hand-edited or forged plan line carrying a foreign-kind field instead of
+// an unsupported schema version. It is called from UnmarshalJSON
+// (types.go) as a decode-time refusal, the same class of check DecodeOp
+// already performs (missing op, empty line) — not a declerr report: no
+// recipe has run yet, and this only rejects a wire line that
+// toWire/applyToWire could never have produced from a legitimately built
+// Op, since a payload's applyToWire (above) only ever writes ITS OWN
+// kind's fields.
+func checkForeignPayload(w wireOp) error {
+	wv := reflect.ValueOf(w)
+	var bad []string
+	for name, owner := range payloadFieldOwners {
+		if owner.kind == w.Op {
+			continue // w.Op's own exclusive field; payloadFromWire keeps it.
+		}
+		if !wv.FieldByName(name).IsZero() {
+			bad = append(bad, fmt.Sprintf("%s (%s-exclusive)", owner.tag, owner.kind))
+		}
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	sort.Strings(bad)
+	return fmt.Errorf("%s op carries foreign-kind field(s) it cannot own: %s", w.Op, strings.Join(bad, ", "))
 }
 
 // OpPayloadExamples returns one zero-value OpPayload per Kind that has

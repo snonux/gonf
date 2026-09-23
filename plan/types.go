@@ -573,15 +573,20 @@ func (op Op) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON is MarshalJSON's mirror: decode the flat JSON into a
 // wireOp (one json.Unmarshal reaches every field, core and
-// kind-exclusive alike, exactly as it always has), normalize it, then
-// split it into Op's core fields plus a concrete Payload built by
-// payloadFromWire.
+// kind-exclusive alike, exactly as it always has), normalize it, refuse a
+// line carrying a foreign-kind field (checkForeignPayload, op_payload.go —
+// task 2f2; see its doc comment for why this must refuse rather than let
+// payloadFromWire silently drop such a field), then split it into Op's
+// core fields plus a concrete Payload built by payloadFromWire.
 func (op *Op) UnmarshalJSON(data []byte) error {
 	var w wireOp
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
 	normalizeWire(&w)
+	if err := checkForeignPayload(w); err != nil {
+		return err
+	}
 	*op = fromWire(w)
 	return nil
 }

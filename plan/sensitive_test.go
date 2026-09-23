@@ -1,7 +1,6 @@
 package plan
 
 import (
-	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -36,18 +35,21 @@ func TestRequiredVersion(t *testing.T) {
 	plain := Op{Op: KindFile, Path: "/a"}
 	sensitive := Op{Op: KindFile, Path: "/k", Sensitive: true}
 	globPrune := Op{Op: KindSyncDir, Path: "/g", Blob: "blobs/g", Prune: true, Payload: SyncDirPayload{Glob: true}}
-	// "glob on dir" (task 9e2): once Glob moved onto SyncDirPayload, a "dir"
-	// op literal can no longer even express a stray glob flag — Op has no
-	// Glob field any more outside SyncDirPayload, so the type system now
-	// enforces what this case used to prove at runtime. The only way left
-	// to reconstruct the shape (an old or forged plan.jsonl line) is
-	// decoding raw wire bytes: payloadFromWire only builds a SyncDirPayload
-	// for KindSyncDir, so a decoded "dir" op's wire-level glob:true is
-	// silently dropped (never copied anywhere), exactly mirroring the old
-	// runtime behavior this case pinned.
-	var globOnDir Op
-	if err := json.Unmarshal([]byte(`{"op":"dir","path":"/d","glob":true,"prune":true}`), &globOnDir); err != nil {
-		t.Fatalf("decode glob-on-dir fixture: %v", err)
+	// "glob on dir" (task 9e2, superseded by task 2f2): once Glob moved onto
+	// SyncDirPayload, a "dir" op literal can no longer even express a stray
+	// glob flag — Op has no Glob field any more outside SyncDirPayload, so
+	// the type system enforces what this case used to prove at runtime. The
+	// only way left to reconstruct the shape (an old or forged plan.jsonl
+	// line) was decoding raw wire bytes; task 9e2's version of this case
+	// pinned that payloadFromWire silently dropped a "dir" op's wire-level
+	// glob:true (never copied anywhere) instead of refusing it — exactly
+	// the encode/decode fidelity bug task 2f2's checkForeignPayload
+	// (op_payload.go) closed. Decoding this fixture is now refused instead
+	// of silently succeeding, so "glob on dir" can no longer reach
+	// RequiredVersion at all; TestDecodeRefusesForeignKindFields
+	// (op_payload_test.go) is task 2f2's replacement pin for this shape.
+	if _, err := DecodeOp([]byte(`{"op":"dir","path":"/d","glob":true,"prune":true}`)); err == nil {
+		t.Fatal("decode glob-on-dir fixture: want a foreign-payload refusal, got nil error")
 	}
 	cases := []struct {
 		name string
@@ -61,9 +63,6 @@ func TestRequiredVersion(t *testing.T) {
 		{"glob prune", []Op{plain, globPrune}, VersionSyncDirGlob},
 		{"glob prune before sensitive", []Op{globPrune, sensitive}, VersionSyncDirGlob},
 		{"sensitive before glob prune", []Op{sensitive, globPrune}, VersionSyncDirGlob},
-		// glob is only meaningful on sync_dir; a stray flag elsewhere does
-		// not raise the header.
-		{"glob on dir", []Op{globOnDir}, VersionConfigSet},
 	}
 	for _, tc := range cases {
 		if got := RequiredVersion(tc.ops); got != tc.want {
