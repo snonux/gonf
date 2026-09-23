@@ -46,11 +46,24 @@ func TestRequiredVersion(t *testing.T) {
 	// the encode/decode fidelity bug task 2f2's checkForeignPayload
 	// (op_payload.go) closed. Decoding this fixture is now refused instead
 	// of silently succeeding, so "glob on dir" can no longer reach
-	// RequiredVersion at all; TestDecodeRefusesForeignKindFields
-	// (op_payload_test.go) is task 2f2's replacement pin for this shape.
+	// RequiredVersion via the decode path; TestDecodeRefusesForeignKindFields
+	// (op_payload_test.go) is task 2f2's replacement pin for that shape.
 	if _, err := DecodeOp([]byte(`{"op":"dir","path":"/d","glob":true,"prune":true}`)); err == nil {
 		t.Fatal("decode glob-on-dir fixture: want a foreign-payload refusal, got nil error")
 	}
+	// "glob on non-sync_dir op" (task pf2): the decode path above can never
+	// reach RequiredVersion with a mismatched Kind/Payload any more, but an
+	// IN-PROCESS Op is not decoded and nothing on the record path rules the
+	// shape out by construction — a mutation probe found RequiredVersion's
+	// own Kind guard could be deleted from the SyncDirPayload check with
+	// every test (including the decode-refusal one above) still green,
+	// because this was the only case that ever reached it. It compiles
+	// (unlike a "dir" op literal setting a Glob field directly, which no
+	// longer exists on Op) precisely because Payload is untyped per-Kind at
+	// the Go level; RequiredVersion's Kind guard is what keeps it from
+	// bumping the header for a kind that cannot legitimately carry glob
+	// semantics at all.
+	globOnDir := Op{Op: KindDir, Path: "/d", Prune: true, Payload: SyncDirPayload{Glob: true}}
 	cases := []struct {
 		name string
 		ops  []Op
@@ -60,6 +73,7 @@ func TestRequiredVersion(t *testing.T) {
 		{"sensitive", []Op{plain, sensitive}, VersionSensitive},
 		{"glob without prune", []Op{{Op: KindSyncDir, Path: "/g", Blob: "blobs/g", Payload: SyncDirPayload{Glob: true}}}, VersionConfigSet},
 		{"tree prune", []Op{{Op: KindSyncDir, Path: "/t", Blob: "blobs/t", Prune: true}}, VersionConfigSet},
+		{"glob on non-sync_dir op", []Op{globOnDir}, VersionConfigSet},
 		{"glob prune", []Op{plain, globPrune}, VersionSyncDirGlob},
 		{"glob prune before sensitive", []Op{globPrune, sensitive}, VersionSyncDirGlob},
 		{"sensitive before glob prune", []Op{sensitive, globPrune}, VersionSyncDirGlob},
@@ -78,6 +92,22 @@ func TestRequiredVersion(t *testing.T) {
 		if got := RequiredVersion(ops); got != VersionKeyedLines {
 			t.Fatalf("RequiredVersion(%v) = %d, want %d", ops, got, VersionKeyedLines)
 		}
+	}
+	// "keyed lines on non-file op" (task rf2): the ALREADY-WRONG comma-ok
+	// copy this task fixed. Unlike the SyncDirPayload arm above, the
+	// FilePayload arm's comma-ok assertion had no matching Kind guard
+	// before this fix — an in-process Op{Op: KindDir, Payload:
+	// FilePayload{KeyedLines: ...}} genuinely bumped the header to
+	// VersionKeyedLines, asymmetric with its neighbor and wrong: a "dir" op
+	// cannot legitimately carry keyed-line semantics at all, the same
+	// reasoning that already protected the SyncDirPayload arm. This proves
+	// the fix changes real output, not just test coverage: reverting
+	// plan.go's "if op.Op == KindFile" guard alone (keeping this test case)
+	// makes this assertion fail with got=23 (VersionKeyedLines), want=21
+	// (VersionConfigSet) — see this task's self-review patch revert.
+	keyedOnDir := Op{Op: KindDir, Path: "/d", Payload: FilePayload{KeyedLines: []KeyedLine{{Key: "k=", Line: "k=v"}}}}
+	if got := RequiredVersion([]Op{keyedOnDir}); got != VersionConfigSet {
+		t.Fatalf("RequiredVersion(keyed lines on non-file op) = %d, want %d", got, VersionConfigSet)
 	}
 }
 

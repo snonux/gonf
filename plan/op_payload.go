@@ -24,6 +24,34 @@ type OpPayload interface {
 	applyToWire(w *wireOp)
 }
 
+// PayloadOf type-asserts op.Payload to T, returning the zero T instead of
+// failing when it is absent or holds some other concrete type (task rf2,
+// replacing 16 copy-pasted comma-ok assertions across 10 call sites that
+// had drifted out of sync — one of them, plan/sensitive.go's RequiredVersion,
+// was already wrong: see below).
+//
+// This is deliberately NOT a "missing payload" error. Op.Payload is trusted
+// (a resource package's own ToOp is fed only draft data its own planDraft
+// always populates), but a caller reading an arbitrary plan.Op is not:
+// Apply may see an op decoded from an arbitrary plan.jsonl, and nothing on
+// the record path rules out an in-process Op built with a Payload of the
+// wrong concrete type for its own Kind (see plan/sensitive.go's
+// TestRequiredVersion "glob on non-sync_dir op" case, task pf2 — a mutation
+// probe found RequiredVersion's own Kind guard, without that case, could be
+// deleted with every test still green). The zero T then reads as "every
+// T-exclusive field unset," which each caller's own downstream check
+// already turns into either a clean "missing X" error (a present op that
+// needed the field) or a harmless no-op default — never a panic.
+//
+// PayloadOf alone cannot tell "legitimately absent" apart from "wrong Kind
+// entirely": a caller that must not conflate the two (RequiredVersion is
+// the one example so far) still guards on op.Op itself before trusting the
+// result, the same way it always had to.
+func PayloadOf[T OpPayload](op Op) T {
+	p, _ := op.Payload.(T)
+	return p
+}
+
 // CronPayload holds the wire fields exclusive to KindCron. resource/cron's
 // planwire.go is the only other package that constructs or reads one — it
 // always sets a non-nil CronPayload on a "cron" op's Payload (record side:
@@ -559,35 +587,26 @@ func fromWire(w wireOp) Op {
 	}
 }
 
-// payloadFromWire builds the concrete OpPayload for w.Op's Kind, or nil for
-// a control kind or a kind that has not migrated any field off Op yet.
-// Extending this switch (and CronPayload/SystemdTimerPayload/UserPayload's
-// siblings) is the whole of what a follow-up task needs to migrate one more
-// kind's exclusive fields, once wireOp itself already carries them (it
-// always does: wireOp is unchanged by which kinds have migrated).
-//
-// It keeps ONLY the fields belonging to w.Op's own case, by construction —
-// a wireOp decoded from a line that ALSO carries some other kind's
-// exclusive field (e.g. a "cron" line with "on_calendar" set, which is
-// SystemdTimerPayload's) has that field read here, discarded, and never
-// reachable again. Before task 2f2 that was a silent encode/decode
-// fidelity bug (see docs/plan.md, "Adding a resource kind (checklist)",
-// task 9e2's note, and the task 2f2 annotation for the probe that found
-// it): UnmarshalJSON (types.go) now calls checkForeignPayload, below,
-// BEFORE reaching this switch, and refuses a line carrying any such
-// foreign-kind field instead of silently reaching this function to drop
-// it — so a non-nil OpPayload built here is now guaranteed to be the only
-// non-zero payload data w ever carried.
-func payloadFromWire(w wireOp) OpPayload {
-	switch w.Op {
-	case KindCron:
+// payloadConstructors maps each Kind that has migrated exclusive fields off
+// Op onto the constructor that rebuilds its concrete OpPayload from a
+// decoded wireOp. payloadFromWire is driven from this table instead of a
+// hand-written switch (task rf2: the switch it replaced had grown past
+// CLAUDE.md's refactor-at-50-lines rule as more Layer 2 slices landed).
+// Extending this table — one entry, mirroring CronPayload/
+// SystemdTimerPayload/UserPayload's siblings — is the whole of what a
+// follow-up task needs to migrate one more kind's exclusive fields, once
+// wireOp itself already carries them (it always does: wireOp is unchanged
+// by which kinds have migrated).
+var payloadConstructors = map[Kind]func(wireOp) OpPayload{
+	KindCron: func(w wireOp) OpPayload {
 		return CronPayload{
 			CronUser:      w.CronUser,
 			LegacyCommand: w.LegacyCommand,
 			Schedule:      w.Schedule,
 			CronEnv:       w.CronEnv,
 		}
-	case KindSystemdTimer:
+	},
+	KindSystemdTimer: func(w wireOp) OpPayload {
 		return SystemdTimerPayload{
 			OnCalendar:         w.OnCalendar,
 			OnBootSec:          w.OnBootSec,
@@ -597,7 +616,8 @@ func payloadFromWire(w wireOp) OpPayload {
 			After:              w.After,
 			Wants:              w.Wants,
 		}
-	case KindUser:
+	},
+	KindUser: func(w wireOp) OpPayload {
 		return UserPayload{
 			PrimaryGroup:        w.PrimaryGroup,
 			SupplementaryGroups: w.SupplementaryGroups,
@@ -608,20 +628,17 @@ func payloadFromWire(w wireOp) OpPayload {
 			System:              w.System,
 			ManageHome:          w.ManageHome,
 		}
-	case KindLink:
-		return LinkPayload{
-			Symlink:  w.Symlink,
-			Hardlink: w.Hardlink,
-		}
-	case KindLinkIfExists:
-		return LinkIfExistsPayload{
-			Target: w.Target,
-		}
-	case KindPackage:
-		return PackagePayload{
-			Latest: w.Latest,
-		}
-	case KindCommand:
+	},
+	KindLink: func(w wireOp) OpPayload {
+		return LinkPayload{Symlink: w.Symlink, Hardlink: w.Hardlink}
+	},
+	KindLinkIfExists: func(w wireOp) OpPayload {
+		return LinkIfExistsPayload{Target: w.Target}
+	},
+	KindPackage: func(w wireOp) OpPayload {
+		return PackagePayload{Latest: w.Latest}
+	},
+	KindCommand: func(w wireOp) OpPayload {
 		return CommandPayload{
 			Bin:     w.Bin,
 			Args:    w.Args,
@@ -630,27 +647,29 @@ func payloadFromWire(w wireOp) OpPayload {
 			Unless:  w.Unless,
 			OnlyIf:  w.OnlyIf,
 		}
-	case KindConfigSet:
+	},
+	KindConfigSet: func(w wireOp) OpPayload {
 		return ConfigSetPayload{
 			Members:    w.Members,
 			Validators: w.Validators,
 			Chroot:     w.Chroot,
 			StagingDir: w.StagingDir,
 		}
-	case KindConfigSetMember:
-		return ConfigSetMemberPayload{
-			Member: w.Member,
-		}
-	case KindSyncDir:
+	},
+	KindConfigSetMember: func(w wireOp) OpPayload {
+		return ConfigSetMemberPayload{Member: w.Member}
+	},
+	KindSyncDir: func(w wireOp) OpPayload {
 		return SyncDirPayload{
 			SourceDir: w.SourceDir,
 			Glob:      w.Glob,
 			FileMode:  w.FileMode,
 		}
-	case KindFile:
-		// KindEnsureFile deliberately gets no case here — see FilePayload's
-		// own doc comment for why the wire side does not reuse it the way
-		// resource/file's draft-side Payload does.
+	},
+	// KindEnsureFile deliberately gets no entry here — see FilePayload's own
+	// doc comment for why the wire side does not reuse it the way
+	// resource/file's draft-side Payload does.
+	KindFile: func(w wireOp) OpPayload {
 		return FilePayload{
 			ContentB64:     w.ContentB64,
 			HasContent:     w.HasContent,
@@ -665,9 +684,30 @@ func payloadFromWire(w wireOp) OpPayload {
 			AddLine:        w.AddLine,
 			RemoveLine:     w.RemoveLine,
 		}
-	default:
-		return nil
+	},
+}
+
+// payloadFromWire builds the concrete OpPayload for w.Op's Kind, or nil for
+// a control kind or a kind that has not migrated any field off Op yet, by
+// looking up payloadConstructors above.
+//
+// It keeps ONLY the fields belonging to w.Op's own entry, by construction —
+// a wireOp decoded from a line that ALSO carries some other kind's
+// exclusive field (e.g. a "cron" line with "on_calendar" set, which is
+// SystemdTimerPayload's) has that field read here, discarded, and never
+// reachable again. Before task 2f2 that was a silent encode/decode
+// fidelity bug (see docs/plan.md, "Adding a resource kind (checklist)",
+// task 9e2's note, and the task 2f2 annotation for the probe that found
+// it): UnmarshalJSON (types.go) now calls checkForeignPayload, below,
+// BEFORE reaching this function, and refuses a line carrying any such
+// foreign-kind field instead of silently reaching this function to drop
+// it — so a non-nil OpPayload built here is now guaranteed to be the only
+// non-zero payload data w ever carried.
+func payloadFromWire(w wireOp) OpPayload {
+	if ctor, ok := payloadConstructors[w.Op]; ok {
+		return ctor(w)
 	}
+	return nil
 }
 
 // payloadFieldOwner records which Kind's OpPayload a wireOp field (keyed by

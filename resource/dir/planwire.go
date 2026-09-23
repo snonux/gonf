@@ -123,13 +123,11 @@ func (syncDirHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	if err != nil {
 		return err
 	}
-	// A comma-ok assertion, not a "missing payload" error: Apply may see an
-	// op decoded from an arbitrary plan.jsonl (mirrors resource/cron's
-	// planwire.go Apply). A nil or mistyped Payload degrades to the zero
-	// SyncDirPayload (Glob false, FileMode/SourceDir empty), which is
-	// exactly pre-v24/pre-v6 behavior for a plan recorded before those
-	// fields existed.
-	p, _ := op.Payload.(plan.SyncDirPayload)
+	// p reads as the zero SyncDirPayload (Glob false, FileMode/SourceDir
+	// empty) for a decoded or mistyped Payload (see plan.PayloadOf's doc
+	// comment) — exactly pre-v24/pre-v6 behavior for a plan recorded before
+	// those fields existed.
+	p := plan.PayloadOf[plan.SyncDirPayload](op)
 	if p.Glob {
 		// Defense-in-depth (task qc2, the kc2 reviewer's follow-up): verify
 		// the rebuilt pattern actually covers the resolved blob BEFORE
@@ -171,11 +169,11 @@ func syncDirBlobTree(blob, planDir string) (string, error) {
 // from the resolved blob tree src. SourceDir/Glob/FileMode come from the
 // op's SyncDirPayload (task 9e2); Mode/Owner/Group/Prune/Sensitive stay
 // core Op fields (Prune is genuinely shared with KindDir — see Op.Prune's
-// doc comment, plan/types.go). The comma-ok Payload assertion mirrors
-// Apply's own (see its comment): a nil or mistyped Payload degrades to the
-// zero SyncDirPayload.
+// doc comment, plan/types.go). p reads as the zero SyncDirPayload for a
+// decoded or mistyped Payload, same as Apply's own read (see
+// plan.PayloadOf's doc comment).
 func syncDirOptions(op plan.Op, src string) ([]opt.DirOption, error) {
-	p, _ := op.Payload.(plan.SyncDirPayload)
+	p := plan.PayloadOf[plan.SyncDirPayload](op)
 	opts := []opt.DirOption{syncDirSourceOption(p, src)}
 	// source_dir is the recipe's declared source directory (the glob
 	// pattern's directory for the glob flavor): .tmpl files inside the

@@ -49,12 +49,10 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if op.Name == "" {
 		return fmt.Errorf("package: missing name")
 	}
-	// A comma-ok assertion, not a "missing payload" error: unlike ToOp (fed
-	// only trusted draft data planDraft() always populates), Apply may see
-	// an op decoded from an arbitrary plan.jsonl. A nil or mistyped Payload
-	// degrades to the zero PackagePayload — Latest reads as false, a clean
+	// p reads as the zero PackagePayload for a decoded or mistyped Payload
+	// (see plan.PayloadOf's doc comment) — Latest reads as false, a clean
 	// plain-install fallback.
-	p, _ := op.Payload.(plan.PackagePayload)
+	p := plan.PayloadOf[plan.PackagePayload](op)
 	var opts []opt.PackageOption
 	if op.Absent {
 		opts = append(opts, opt.IsAbsent)

@@ -90,16 +90,13 @@ func (h planHandler) newUser(op plan.Op) *User {
 }
 
 // opOptions rebuilds the recipe options from a recorded op, so destination
-// apply goes through exactly the same resource path as a direct apply.
-//
-// A comma-ok assertion, not a "missing payload" error: unlike ToOp (fed only
-// trusted draft data draftOp always populates), opOptions may see an op
-// decoded from an arbitrary plan.jsonl. A nil or mistyped Payload degrades
-// to the zero UserPayload — every user-exclusive field reads as unset,
-// which simply yields a bare account request (name only), same as a recipe
-// that set no options at all.
+// apply goes through exactly the same resource path as a direct apply. p
+// reads as the zero UserPayload for a decoded or mistyped Payload (see
+// plan.PayloadOf's doc comment) — every user-exclusive field reads as
+// unset, which simply yields a bare account request (name only), same as a
+// recipe that set no options at all.
 func opOptions(op plan.Op) []opt.LocalUserOption {
-	p, _ := op.Payload.(plan.UserPayload)
+	p := plan.PayloadOf[plan.UserPayload](op)
 	var opts []opt.LocalUserOption
 	if p.PrimaryGroup != "" {
 		opts = append(opts, opt.WithGroup(p.PrimaryGroup))

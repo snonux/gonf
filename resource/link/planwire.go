@@ -61,13 +61,11 @@ func (linkHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if op.Absent {
 		return Ensure(path, opt.IsAbsent)
 	}
-	// A comma-ok assertion, not a "missing payload" error: unlike ToOp (fed
-	// only trusted draft data planDraft() always populates), Apply may see
-	// an op decoded from an arbitrary plan.jsonl. A nil or mistyped Payload
-	// degrades to the zero LinkPayload — both fields read as unset, which
-	// the "missing symlink or hardlink target" error below already turns
-	// into a clean error.
-	p, _ := op.Payload.(plan.LinkPayload)
+	// p reads as the zero LinkPayload for a decoded or mistyped Payload (see
+	// plan.PayloadOf's doc comment) — both fields read as unset, which the
+	// "missing symlink or hardlink target" error below already turns into a
+	// clean error.
+	p := plan.PayloadOf[plan.LinkPayload](op)
 	switch {
 	case p.Symlink != "":
 		target, err := plan.ExpandPath(p.Symlink)
@@ -114,9 +112,9 @@ func (linkIfExistsHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if err != nil {
 		return err
 	}
-	// Comma-ok, not an error: see linkHandler.Apply's doc comment above for
-	// why a decoded op's Payload cannot be assumed present or well-typed.
-	p, _ := op.Payload.(plan.LinkIfExistsPayload)
+	// p reads as the zero LinkIfExistsPayload for a decoded or mistyped
+	// Payload (see plan.PayloadOf's doc comment).
+	p := plan.PayloadOf[plan.LinkIfExistsPayload](op)
 	target, err := plan.ExpandPath(p.Target)
 	if err != nil {
 		return err

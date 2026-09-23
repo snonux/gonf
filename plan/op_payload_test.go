@@ -129,6 +129,77 @@ func TestDecodeNormalLinesUnaffected(t *testing.T) {
 	}
 }
 
+// checkPayloadOf pins PayloadOf's contract (task rf2) for one concrete
+// OpPayload type T: the correctly-typed value round-trips unchanged, and
+// both a nil Payload and a different kind's payload degrade to the zero T
+// instead of panicking — the exact contract PayloadOf's own doc comment
+// promises, previously spelled out by hand in each of the 16 comma-ok
+// copies this helper's caller replaces.
+func checkPayloadOf[T OpPayload](t *testing.T, kind Kind, want T) {
+	t.Helper()
+	if got := PayloadOf[T](Op{Op: kind, Payload: want}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("PayloadOf[%T] on its own kind = %#v, want %#v", want, got, want)
+	}
+	var zero T
+	if got := PayloadOf[T](Op{Op: kind}); !reflect.DeepEqual(got, zero) {
+		t.Fatalf("PayloadOf[%T] on a nil Payload = %#v, want the zero value %#v", want, got, zero)
+	}
+	if got := PayloadOf[T](Op{Op: kind, Payload: foreignPayload(want)}); !reflect.DeepEqual(got, zero) {
+		t.Fatalf("PayloadOf[%T] on a %T Payload = %#v, want the zero value %#v", want, foreignPayload(want), got, zero)
+	}
+}
+
+// foreignPayload returns some OpPayload value whose concrete type differs
+// from avoid's, for checkPayloadOf's mistyped-Payload case.
+func foreignPayload(avoid OpPayload) OpPayload {
+	if _, ok := avoid.(CronPayload); !ok {
+		return CronPayload{CronUser: "someone-else"}
+	}
+	return SystemdTimerPayload{OnCalendar: "someone-else"}
+}
+
+// TestPayloadOfMatchesEveryMigratedKind exercises PayloadOf for every kind
+// OpPayloadExamples() lists, driven off that same inventory (this
+// codebase's established single source of truth for "which kinds have a
+// migrated payload," already relied on by
+// TestCheckForeignPayloadCoversEveryMigratedKind just above) so a future
+// kind migration that forgets a case in the switch below fails this test
+// loudly instead of silently shipping an unverified PayloadOf instantiation.
+func TestPayloadOfMatchesEveryMigratedKind(t *testing.T) {
+	t.Parallel()
+	for kind, example := range OpPayloadExamples() {
+		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
+			switch example.(type) {
+			case CronPayload:
+				checkPayloadOf(t, kind, CronPayload{CronUser: "root", Schedule: "* * * * *"})
+			case SystemdTimerPayload:
+				checkPayloadOf(t, kind, SystemdTimerPayload{OnCalendar: "daily"})
+			case UserPayload:
+				checkPayloadOf(t, kind, UserPayload{Home: "/home/x", CreateHome: true})
+			case LinkPayload:
+				checkPayloadOf(t, kind, LinkPayload{Symlink: "/x"})
+			case LinkIfExistsPayload:
+				checkPayloadOf(t, kind, LinkIfExistsPayload{Target: "/x"})
+			case PackagePayload:
+				checkPayloadOf(t, kind, PackagePayload{Latest: true})
+			case CommandPayload:
+				checkPayloadOf(t, kind, CommandPayload{Bin: "true", Args: []string{"-v"}})
+			case ConfigSetPayload:
+				checkPayloadOf(t, kind, ConfigSetPayload{Chroot: "/etc"})
+			case ConfigSetMemberPayload:
+				checkPayloadOf(t, kind, ConfigSetMemberPayload{Member: "m"})
+			case SyncDirPayload:
+				checkPayloadOf(t, kind, SyncDirPayload{Glob: true, SourceDir: "assets"})
+			case FilePayload:
+				checkPayloadOf(t, kind, FilePayload{HasContent: true, ContentB64: "eA=="})
+			default:
+				t.Fatalf("OpPayloadExamples()[%s] = %T: add a checkPayloadOf case for it in this test", kind, example)
+			}
+		})
+	}
+}
+
 // TestCheckForeignPayloadCoversEveryMigratedKind guards checkForeignPayload
 // itself: payloadFieldOwners is built once, by reflecting
 // OpPayloadExamples() (buildPayloadFieldOwners, op_payload.go). It must

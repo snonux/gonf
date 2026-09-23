@@ -57,10 +57,9 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if op.Name == "" {
 		return fmt.Errorf("systemd_timer: missing name")
 	}
-	// See resource/cron/planwire.go's Apply for why this is comma-ok rather
-	// than an error: Apply may see an op decoded from an arbitrary
-	// plan.jsonl, and a nil or mistyped Payload degrades cleanly to
-	// presentOptions' own "missing on_calendar" refusal below.
+	// presentOptions' own plan.PayloadOf read (see its doc comment) degrades
+	// cleanly to its "missing on_calendar" refusal for a decoded or
+	// mistyped Payload.
 	opts := []opt.SystemdTimerOption{opt.IsAbsent}
 	if !op.Absent {
 		var err error
@@ -93,8 +92,9 @@ func presentOptions(op plan.Op) ([]opt.SystemdTimerOption, error) {
 	if op.Command == "" {
 		return nil, fmt.Errorf("systemd_timer: missing command")
 	}
-	// Comma-ok, not an error: see Apply's doc comment above.
-	p, _ := op.Payload.(plan.SystemdTimerPayload)
+	// p reads as the zero SystemdTimerPayload for a decoded or mistyped
+	// Payload (see plan.PayloadOf's doc comment).
+	p := plan.PayloadOf[plan.SystemdTimerPayload](op)
 	if p.OnCalendar == "" {
 		return nil, fmt.Errorf("systemd_timer: missing on_calendar")
 	}

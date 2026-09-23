@@ -131,13 +131,12 @@ func (h setHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 // specFromOp decodes and validates a config_set op. p degrades to the zero
 // plan.ConfigSetPayload (an empty set with no chroot/staging override) for
 // an op whose Payload is nil or mistyped — an op decoded from an arbitrary
-// plan.jsonl — rather than panicking, the same comma-ok contract
-// resource/cron/planwire.go's Apply established.
+// plan.jsonl — rather than panicking (see plan.PayloadOf's doc comment).
 func specFromOp(op plan.Op) (*spec, error) {
 	if op.Name == "" {
 		return nil, fmt.Errorf("config_set: missing name")
 	}
-	p, _ := op.Payload.(plan.ConfigSetPayload)
+	p := plan.PayloadOf[plan.ConfigSetPayload](op)
 	s := &spec{name: op.Name, chroot: p.Chroot, stagingDir: p.StagingDir, sensitive: op.Sensitive}
 	for _, m := range p.Members {
 		ms, err := memberFromWire(m)
@@ -193,11 +192,11 @@ func (memberHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 
 // Apply notes the member handle's result from its set's apply, read from the
 // store the paired setHandler recorded it in. Member comes from op.Payload
-// (plan.ConfigSetMemberPayload, task 8e2), comma-ok so an op whose Payload
-// is nil or mistyped degrades to an empty member key (missing, refused
-// below) instead of panicking.
+// (plan.ConfigSetMemberPayload, task 8e2); p degrades to an empty member key
+// (missing, refused below) instead of panicking for a nil or mistyped
+// Payload (see plan.PayloadOf's doc comment).
 func (h memberHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
-	p, _ := op.Payload.(plan.ConfigSetMemberPayload)
+	p := plan.PayloadOf[plan.ConfigSetMemberPayload](op)
 	if op.Name == "" || p.Member == "" {
 		return fmt.Errorf("config_set_member: missing set name or member key")
 	}

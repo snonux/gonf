@@ -52,10 +52,8 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if op.Name == "" {
 		return fmt.Errorf("cron: missing name")
 	}
-	// A comma-ok assertion, not a "missing payload" error: unlike ToOp (fed
-	// only trusted draft data planDraft() always populates), Apply may see
-	// an op decoded from an arbitrary plan.jsonl. A nil or mistyped Payload
-	// degrades to the zero CronPayload — every cron-exclusive field reads
+	// p reads as the zero CronPayload for a decoded or mistyped Payload (see
+	// plan.PayloadOf's doc comment) — every cron-exclusive field then reads
 	// as unset, which the schedule check below already turns into a clean
 	// error for a present job. It is NOT actually safe for an absent one,
 	// despite reading that way at first glance: CronUser empty makes
@@ -63,16 +61,16 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	// handling then defaults an absent job to ROOT's crontab, so a decoded
 	// op that lost its owner here would remove the named job from ROOT's
 	// crontab instead of the intended owner's — a real footgun, not an
-	// inert no-op. This assertion is unreachable in practice today, not
-	// because the degraded case is harmless: payloadFromWire
-	// (plan/op_payload.go's KindCron case) always builds a CronPayload for
-	// a cron line, checkForeignPayload (same file) refuses a decoded line
-	// that carries any other kind's fields before payloadFromWire ever
-	// runs, and this kind's own ToOp (above) always sets one too — so a
-	// decoded op.Payload reaching here is always the right concrete type,
-	// never nil or mistyped. If that ever changes, this comma-ok assertion
-	// stops being inert and starts being the footgun described above.
-	p, _ := op.Payload.(plan.CronPayload)
+	// inert no-op. This is unreachable in practice today, not because the
+	// degraded case is harmless: payloadFromWire (plan/op_payload.go's
+	// payloadConstructors[KindCron]) always builds a CronPayload for a cron
+	// line, checkForeignPayload (same file) refuses a decoded line that
+	// carries any other kind's fields before payloadFromWire ever runs, and
+	// this kind's own ToOp (above) always sets one too — so a decoded
+	// op.Payload reaching here is always the right concrete type, never nil
+	// or mistyped. If that ever changes, this stops being inert and starts
+	// being the footgun described above.
+	p := plan.PayloadOf[plan.CronPayload](op)
 	var opts []opt.CronOption
 	if op.Absent {
 		opts = append(opts, opt.IsAbsent)

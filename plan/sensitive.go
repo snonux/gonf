@@ -30,24 +30,41 @@ const PreviewKind Kind = "plan_preview"
 func RequiredVersion(ops []Op) int {
 	version := VersionConfigSet
 	for _, op := range ops {
-		// Glob moved onto SyncDirPayload (task 9e2); Prune stayed a flat
-		// Op field (KindDir shares it — see Op.Prune's own doc comment in
-		// types.go), so only Glob needs the payload assertion here. A
-		// non-sync_dir op can never carry a SyncDirPayload
-		// (payloadFromWire only builds one for KindSyncDir), so the
-		// comma-ok degrades harmlessly to the zero payload for every
-		// other kind.
-		p, _ := op.Payload.(SyncDirPayload)
-		if op.Op == KindSyncDir && p.Glob && op.Prune {
-			return VersionSyncDirGlob // the highest on-demand schema
+		// Glob moved onto SyncDirPayload (task 9e2); Prune stayed a flat Op
+		// field (KindDir shares it — see Op.Prune's own doc comment in
+		// types.go), so only Glob needs the payload read here. The Kind
+		// check is NOT redundant with PayloadOf's own zero-value degrade: it
+		// held for every DECODED op (payloadFromWire only ever builds a
+		// SyncDirPayload for KindSyncDir), but not for an in-process
+		// Op{Op: KindDir, Payload: SyncDirPayload{Glob: true}} — nothing on
+		// the record path rules that shape out by construction, and it is
+		// exactly the shape this guard exists to reject. A mutation probe
+		// found this Kind check could be deleted with every test still
+		// green, because the only regression case then in
+		// TestRequiredVersion had been rewritten (task 9e2) into a decoded
+		// line, which task 2f2's checkForeignPayload now refuses before
+		// RequiredVersion ever sees it; task pf2 restored a Go-literal case
+		// that reaches this exact guard.
+		if op.Op == KindSyncDir {
+			if p := PayloadOf[SyncDirPayload](op); p.Glob && op.Prune {
+				return VersionSyncDirGlob // the highest on-demand schema
+			}
 		}
-		// KeyedLines moved onto FilePayload (task ae2); same comma-ok
-		// degrade-to-zero-payload contract as the SyncDirPayload assertion
-		// above — a non-file op can never carry one (payloadFromWire only
-		// builds one for KindFile).
-		fp, _ := op.Payload.(FilePayload)
-		if len(fp.KeyedLines) != 0 && version < VersionKeyedLines {
-			version = VersionKeyedLines
+		// KeyedLines moved onto FilePayload (task ae2). Before task rf2 this
+		// arm had NO Kind guard at all — unlike its SyncDirPayload sibling
+		// above, which already checked op.Op == KindSyncDir — so an
+		// in-process Op{Op: KindDir, Payload: FilePayload{KeyedLines: ...}}
+		// genuinely bumped the header to VersionKeyedLines for a "dir" op,
+		// which can never legitimately carry keyed-line semantics: a real
+		// output bug, not merely a test-coverage gap (see
+		// TestRequiredVersion's "keyed lines on non-file op" case, which
+		// fails against the pre-rf2 code with got=23 want=21). The Kind
+		// check here closes that the same way the SyncDirPayload arm's
+		// already did.
+		if op.Op == KindFile {
+			if fp := PayloadOf[FilePayload](op); len(fp.KeyedLines) != 0 && version < VersionKeyedLines {
+				version = VersionKeyedLines
+			}
 		}
 		if op.Sensitive && version < VersionSensitive {
 			version = VersionSensitive

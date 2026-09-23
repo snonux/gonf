@@ -60,13 +60,10 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 // exactly. ctx.Runners.Command, when this apply had one injected (task qb2;
 // nil in every real apply), replaces the real internal/exec runner.
 func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
-	// A comma-ok assertion, not a "missing payload" error: unlike ToOp (fed
-	// only trusted draft data planDraft() always populates), Apply may see
-	// an op decoded from an arbitrary plan.jsonl (mirrors resource/cron's
-	// planwire.go Apply). A nil or mistyped Payload degrades to the zero
-	// CommandPayload, which the missing-bin check below already turns into
-	// a clean error.
-	p, _ := op.Payload.(plan.CommandPayload)
+	// p reads as the zero CommandPayload for a decoded or mistyped Payload
+	// (see plan.PayloadOf's doc comment), which the missing-bin check below
+	// already turns into a clean error.
+	p := plan.PayloadOf[plan.CommandPayload](op)
 	if p.Bin == "" {
 		return fmt.Errorf("command: missing bin")
 	}
