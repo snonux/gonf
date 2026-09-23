@@ -15,6 +15,7 @@ import (
 
 	"github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/internal"
+	"github.com/snonux/gonf/internal/applyproto"
 	"github.com/snonux/gonf/internal/clihost"
 	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/internal/exec"
@@ -639,23 +640,8 @@ func warnSensitivePlan(outPath, outDir string, ops []plan.Op) {
 // "-relayed" (set only by internal/remote's remote apply command, for the
 // push/preview destination) — see ignoreSIGPIPEForRelayedChild.
 func cliApply(ctx context.Context, args []string) int {
-	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	dryRun := fs.Bool("dry-run", false, "Preview changes without applying them")
-	dryRunShort := fs.Bool("n", false, "Alias for -dry-run")
-	strictPreview := fs.Bool("strict-preview", false, "Require a no-staging remote preview")
-	applyDir := fs.String("apply-dir", "", "sticky staging dir for multi-chunk push (skip wipe)")
-	cancelPipe := fs.Bool("cancel-pipe", false, "internal: treat stdin as an out-of-band cancel "+
-		"channel (a byte written to it, then closed, cancels this apply's context; a bare "+
-		"close/EOF with no byte ever read does not, task 6d2); set only by the local sudo/doas "+
-		"elevated re-exec (api.runElevatedCmd), never for interactive or piped-plan (\"-\") use")
-	relayed := fs.Bool("relayed", false, "internal: this apply's stdout/stderr are being relayed "+
-		"by another gonf process (the local elevated sudo/doas re-exec, which sets -cancel-pipe "+
-		"instead, or the receiving end of a push/preview over ssh) — ignore SIGPIPE for the "+
-		"whole run so that relaying process dying mid-apply (crash, OOM-kill) does not "+
-		"SIGPIPE-kill this one too; set only by internal/remote's remote apply command, never "+
-		"for an interactive or manually piped-plan (\"-\") local apply")
-	if err := fs.Parse(args); err != nil {
+	f, rest, err := parseApplyFlags(args)
+	if err != nil {
 		return 2
 	}
 	// Ignore SIGPIPE only for a genuine relayed child (see
@@ -663,22 +649,21 @@ func cliApply(ctx context.Context, args []string) int {
 	// comment above, task 7d2): neither marker is set for an ordinary local
 	// "gonf apply <plan.jsonl>" or a manually piped-plan "gonf apply -",
 	// which both keep the default SIGPIPE disposition.
-	if *cancelPipe || *relayed {
+	if f.cancelPipe || f.relayed {
 		ignoreSIGPIPEForRelayedChild()
 	}
 	// Escalate-only: a top-level "gonf -n apply ..." already set this via
 	// CLI()'s unconditional call before dispatch; don't stomp it back to
 	// false just because this subcommand's own flags didn't repeat -n.
-	if *dryRun || *dryRunShort || *strictPreview {
+	if f.dryRun || f.strictPreview {
 		resource.SetDryRun(true)
 	}
-	rest := fs.Args()
 	if len(rest) != 1 {
 		eprintln("usage: gonf apply [-n|-dry-run] [-strict-preview] [-apply-dir dir] <plan.jsonl|->")
 		return 2
 	}
 	if rest[0] == "-" {
-		if *cancelPipe {
+		if f.cancelPipe {
 			// "-cancel-pipe" dedicates stdin to the cancel channel; "-"
 			// already dedicates it to the push payload (plan.DecodePush).
 			// Nothing sets both together today (elevatedApplyArgv always
@@ -688,15 +673,70 @@ func cliApply(ctx context.Context, args []string) int {
 				"stdin already carries the push payload")
 			return 2
 		}
-		return cliApplyStdin(ctx, *applyDir, *strictPreview)
+		return cliApplyStdin(ctx, f.applyDir, f.strictPreview)
 	}
-	if *cancelPipe {
+	if f.cancelPipe {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithCancel(ctx)
 		defer cancel()
 		go watchCancelPipe(os.Stdin, cancel)
 	}
 	return cliApplyFile(ctx, rest[0])
+}
+
+// applyFlags is cliApply's own "apply" subcommand flags, parsed by
+// parseApplyFlags. Grouping them here (task xd2) keeps cliApply itself
+// short and gives internal/cli's fitness test
+// (TestParseApplyFlagsAcceptsProducerArgv) a parse entry point it can feed
+// argv built the same way the real producers (api's elevatedApplyArgv,
+// internal/remote's remoteApplyCmd) build it, without going through
+// cliApply's other side effects (SIGPIPE handling, context wiring, actually
+// applying a plan).
+type applyFlags struct {
+	dryRun        bool
+	strictPreview bool
+	applyDir      string
+	cancelPipe    bool
+	relayed       bool
+}
+
+// parseApplyFlags parses cliApply's "apply" subcommand flags from args and
+// returns the parsed flags plus the remaining positional args (the
+// plan.jsonl path or "-"). The two wire-contract flags are registered
+// through applyproto.RegisterFlags under applyproto.CancelPipeFlag/
+// RelayedFlag — the single source of truth also used by the producers that
+// build the argv this flag set must accept, instead of this function
+// spelling "cancel-pipe"/"relayed" as its own literals (see
+// internal/applyproto's doc comment for the failure that let a one-sided
+// rename slip past the whole test suite).
+func parseApplyFlags(args []string) (applyFlags, []string, error) {
+	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	dryRun := fs.Bool("dry-run", false, "Preview changes without applying them")
+	dryRunShort := fs.Bool("n", false, "Alias for -dry-run")
+	strictPreview := fs.Bool("strict-preview", false, "Require a no-staging remote preview")
+	applyDir := fs.String("apply-dir", "", "sticky staging dir for multi-chunk push (skip wipe)")
+	cancelPipe, relayed := applyproto.RegisterFlags(fs,
+		"internal: treat stdin as an out-of-band cancel channel (a byte written to it, then "+
+			"closed, cancels this apply's context; a bare close/EOF with no byte ever read does "+
+			"not, task 6d2); set only by the local sudo/doas elevated re-exec "+
+			"(api.runElevatedCmd), never for interactive or piped-plan (\"-\") use",
+		"internal: this apply's stdout/stderr are being relayed by another gonf process (the "+
+			"local elevated sudo/doas re-exec, which sets -cancel-pipe instead, or the "+
+			"receiving end of a push/preview over ssh) — ignore SIGPIPE for the whole run so "+
+			"that relaying process dying mid-apply (crash, OOM-kill) does not SIGPIPE-kill "+
+			"this one too; set only by internal/remote's remote apply command, never for an "+
+			"interactive or manually piped-plan (\"-\") local apply")
+	if err := fs.Parse(args); err != nil {
+		return applyFlags{}, nil, err
+	}
+	return applyFlags{
+		dryRun:        *dryRun || *dryRunShort,
+		strictPreview: *strictPreview,
+		applyDir:      *applyDir,
+		cancelPipe:    *cancelPipe,
+		relayed:       *relayed,
+	}, fs.Args(), nil
 }
 
 // ignoreSIGPIPEForRelayedChild makes this process ignore SIGPIPE for the

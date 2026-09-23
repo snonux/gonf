@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/snonux/gonf/internal/applyproto"
 	"github.com/snonux/gonf/internal/clihost"
 	gexec "github.com/snonux/gonf/internal/exec"
 	"github.com/snonux/gonf/internal/logger"
@@ -72,19 +73,22 @@ type chunkLabel func(i int, ch plan.Chunk) string
 // internal/remote/remote.go for the equivalent remote-push argument), or the
 // elevated child applies for real during a local "gonf -n" / "-dry-run" run.
 //
-// "-cancel-pipe" (an apply-subcommand flag, so it follows "apply" like "-n")
+// "-cancel-pipe" (internal/applyproto.CancelPipeFlag; an apply-subcommand
+// flag, so it follows "apply" like "-n", and built here via
+// applyproto.ElevatedArgs, the single source of truth this argv shares with
+// internal/cli's cliApply flag set — see that package's doc comment for why)
 // tells the child to treat its stdin as an out-of-band cancel channel: a
 // successful read of the one-byte cancel signal the parent writes (see
-// wireElevatedCancelPipe/cancelPipeByte) cancels the child's own context the
-// same way a delivered SIGTERM would (see internal/cli's cliApply, its
-// watchCancelPipe, and api's runElevatedCmd, which wires the parent end); a
-// bare EOF with no byte ever read — the parent's write end closing without
-// sending it, e.g. because the controller process itself died — is NOT
-// treated as a cancel (task 6d2), so the child keeps applying instead of
-// wrongly aborting an in-flight privileged command. It is always set here
-// because this argv is only ever used for the local elevated re-exec, whose
-// stdin runElevatedCmd dedicates to that pipe (the plan is passed by path,
-// never by stdin, so nothing else needs the child's stdin).
+// wireElevatedCancelPipe/applyproto.CancelByte) cancels the child's own
+// context the same way a delivered SIGTERM would (see internal/cli's
+// cliApply, its watchCancelPipe, and api's runElevatedCmd, which wires the
+// parent end); a bare EOF with no byte ever read — the parent's write end
+// closing without sending it, e.g. because the controller process itself
+// died — is NOT treated as a cancel (task 6d2), so the child keeps applying
+// instead of wrongly aborting an in-flight privileged command. It is always
+// set here because this argv is only ever used for the local elevated
+// re-exec, whose stdin runElevatedCmd dedicates to that pipe (the plan is
+// passed by path, never by stdin, so nothing else needs the child's stdin).
 //
 // profileOverride must mirror api.ProfileOverride() at the call site, or the
 // elevated child re-derives its profile from the host (DetectFacts) instead
@@ -122,10 +126,8 @@ func elevatedApplyArgv(exe, path string, dryRun bool, profileOverride string, cm
 	if flag := gexec.CmdTimeoutFlag(cmdTimeout); flag != "" {
 		argv = append(argv, flag)
 	}
-	argv = append(argv, "apply", "-cancel-pipe")
-	if dryRun {
-		argv = append(argv, "-n")
-	}
+	argv = append(argv, "apply")
+	argv = append(argv, applyproto.ElevatedArgs(dryRun)...)
 	return append(argv, path)
 }
 
@@ -280,14 +282,6 @@ func runElevatedCmd(ctx context.Context, mode privilege.Mode, argv []string) err
 	return err
 }
 
-// cancelPipeByte is the one byte the parent writes to the cancel pipe to
-// signal a deliberate cancel (task 6d2); its value carries no meaning, only
-// its presence does. watchCancelPipe (internal/cli) treats a successful read
-// of it as "cancel", and a bare EOF (the write end closing without ever
-// sending it — the controller process itself vanishing, not choosing to
-// cancel) as "keep applying".
-const cancelPipeByte = 1
-
 // wireElevatedCancelPipe gives cmd (already passed through
 // gexec.SetGracefulCancel, so cmd.Cancel is its SIGTERM-the-wrapper closure
 // and cmd.WaitDelay is already set) an out-of-band cancel channel: cmd.Stdin
@@ -329,7 +323,7 @@ func wireElevatedCancelPipe(cmd *exec.Cmd, mode privilege.Mode) (cleanup func(),
 			// Close right after still delivers EOF, and closing without a
 			// byte having landed is exactly the "not a cancel" case anyway,
 			// which is moot once nothing is left to read it.
-			_, _ = cancelW.Write([]byte{cancelPipeByte})
+			_, _ = cancelW.Write([]byte{applyproto.CancelByte})
 			_ = cancelW.Close()
 		})
 		if mode == privilege.Sudo {

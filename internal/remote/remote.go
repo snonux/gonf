@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/snonux/gonf/internal/applyproto"
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/plan"
@@ -310,41 +311,44 @@ func streamChunks(ctx context.Context, t PushTarget, chunks []plan.Chunk, remote
 // "gonf [-cmd-timeout=<d>] apply -relayed [-apply-dir <dir>] <stdin arg>",
 // wrapped in sudo/doas for an elevated session. fwd decides whether the
 // global -cmd-timeout flag precedes "apply" for this session's privilege
-// context (see cmdtimeout.go); its zero value never adds it.
+// context (see cmdtimeout.go); its zero value never adds it. The
+// "apply -relayed ..." tail itself comes from applyproto.RelayedArgs, not a
+// literal built here, so this producer and internal/cli's cliApply flag set
+// (the consumer) cannot drift apart under a one-sided rename — see
+// internal/applyproto's doc comment for the failure this closes, and
+// task xd2 for the DRY fix: this used to build that "apply -relayed ..."
+// string itself, in two near-identical branches (with/without -apply-dir).
 //
-// "-relayed" (an apply-subcommand flag, so it follows "apply" like
-// "-apply-dir") tells the destination gonf (internal/cli's cliApply) that
-// its own stdout/stderr are being relayed back to the controller over this
-// ssh session, so it should ignore SIGPIPE for its whole run — otherwise
-// the controller dying mid-relay (crash, OOM-kill) would SIGPIPE-kill this
-// destination process too, on its very next log write, aborting an
-// in-flight apply for no reason other than the controller no longer being
-// there to watch it (task 7d2; mirrors "-cancel-pipe" wiring the local
-// elevated re-exec's own SIGPIPE-immunity, see api.elevatedApplyArgv). It
-// is added unconditionally, exactly like "-cancel-pipe" is for the LOCAL
-// re-exec: unlike "-cmd-timeout" (cmdtimeout.go), which is gated behind a
-// capability probe because it changes actual apply BEHAVIOUR (the command
-// timeout) and an older remote binary would apply under the wrong one
-// silently if the probe were skipped, "-relayed" only changes a resilience
-// nicety (whether a controller crash aborts an otherwise-fine apply) and,
-// like "-cancel-pipe", is a plain apply-subcommand flag an older remote
-// gonf (one that predates task 7d2) would reject outright ("flag provided
-// but not defined: -relayed") rather than silently misbehave — see
-// docs/plan.md's "Fixed-argument sudoers/doas rules" section, which this
-// unconditional flag is now also subject to, same as "-cancel-pipe": an
-// ordinary `push` self-heals this via EnsureRemoteGonf's release-version
-// upgrade (once the release carrying this fix bumps internal.Version),
-// `-preview` already refuses outright against a stale remote
-// (RequireRemoteGonf) rather than surfacing a raw "unknown flag" error, and
-// PushPayloadContext's payloadApplyCmd now follows -preview's precedent for
-// the same reason (task ud2): unlike push, it never installs or upgrades
-// gonf, so it cannot self-heal a stale remote either.
+// "-relayed" (internal/applyproto.RelayedFlag; an apply-subcommand flag, so
+// it follows "apply" like "-apply-dir") tells the destination gonf
+// (internal/cli's cliApply) that its own stdout/stderr are being relayed
+// back to the controller over this ssh session, so it should ignore SIGPIPE
+// for its whole run — otherwise the controller dying mid-relay (crash,
+// OOM-kill) would SIGPIPE-kill this destination process too, on its very
+// next log write, aborting an in-flight apply for no reason other than the
+// controller no longer being there to watch it (task 7d2; mirrors
+// "-cancel-pipe" wiring the local elevated re-exec's own SIGPIPE-immunity,
+// see api.elevatedApplyArgv). It is added unconditionally, exactly like
+// "-cancel-pipe" is for the LOCAL re-exec: unlike "-cmd-timeout"
+// (cmdtimeout.go), which is gated behind a capability probe because it
+// changes actual apply BEHAVIOUR (the command timeout) and an older remote
+// binary would apply under the wrong one silently if the probe were
+// skipped, "-relayed" only changes a resilience nicety (whether a
+// controller crash aborts an otherwise-fine apply) and, like "-cancel-pipe",
+// is a plain apply-subcommand flag an older remote gonf (one that predates
+// task 7d2) would reject outright ("flag provided but not defined:
+// -relayed") rather than silently misbehave — see docs/plan.md's
+// "Fixed-argument sudoers/doas rules" section, which this unconditional
+// flag is now also subject to, same as "-cancel-pipe": an ordinary `push`
+// self-heals this via EnsureRemoteGonf's release-version upgrade (once the
+// release carrying this fix bumps internal.Version), `-preview` already
+// refuses outright against a stale remote (RequireRemoteGonf) rather than
+// surfacing a raw "unknown flag" error, and PushPayloadContext's
+// payloadApplyCmd now follows -preview's precedent for the same reason
+// (task ud2): unlike push, it never installs or upgrades gonf, so it cannot
+// self-heal a stale remote either.
 func remoteApplyCmd(elevate bool, t PushTarget, applyDir string, mode Mode, fwd cmdTimeoutForward) (string, error) {
-	stdinArg := mode.applyStdinArg()
-	args := "apply -relayed " + stdinArg
-	if applyDir != "" {
-		args = "apply -relayed -apply-dir " + applyDir + " " + stdinArg
-	}
+	args := "apply " + applyproto.RelayedArgs(applyDir, mode.applyStdinArg())
 	return privilege.WrapApplyBinCmd(t.privilegeMode(), elevate, remoteGonfBin(t), fwd.prefix(elevate)+args)
 }
 
