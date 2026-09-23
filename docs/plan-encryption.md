@@ -307,6 +307,36 @@ refused recipient type, a truncated or corrupted file: error, exit 1,
 nothing applied, run dir removed. Messages name the file and the number of
 recipients, never key material or plaintext.
 
+**Memory bound (task be2).** Reading the whole decrypted stream before
+applying anything is required (above), but doing it with a plain,
+unbounded `io.ReadAll` is itself a hazard T10 makes concrete: since
+recipients are public, ANYONE can produce a `plan.age` that decrypts
+(never one that is trusted — see "Provenance" — but decryption alone is
+enough to reach the code below). A `plan.age` whose plan section is a
+high-ratio gzip stream ("gzip bomb") drove peak RSS to **~10.5 GB from a
+3.0 MB file** before this task's fix, which an attacker could plant
+anywhere T2 already worries about (a backup, a CI artifact store, a
+shared directory) for a clean, silent OOM on the next `gonf apply`. Two
+independent caps close this, both named constants rather than inline
+numbers so they are easy to find and raise if a legitimate plan ever
+needs more:
+- `maxSealedFrameBytes` (`internal/cli/cli.go`, 512 MiB) bounds the
+  fully-decrypted GONF-PUSH/1 frame `decryptAndDecodeSealedPush` reads
+  from `seal.Open`'s reader — the read the paragraph above requires can
+  still happen, but only up to this many bytes before it refuses loudly.
+- `plan.MaxDecompressedPushPlan` (`plan/pushwire.go`, 256 MiB) separately
+  bounds the plan section's OWN gzip decompression inside that frame
+  (`readGzipOrRaw`/`maybeGunzip`), which is where the 3 MB-to-10.5 GB
+  amplification actually happens — this also fixes the pre-existing
+  `gonf apply -` (stdin) case, which reached the same unbounded
+  decompression even before sealed apply (task 3b2) existed.
+
+Either cap refuses with a named sentinel error (`errSealedFrameTooLarge`,
+`plan.ErrPushPlanTooLarge`) and applies nothing, exactly like the other
+failures in this section — this is availability protection only, not a
+new trust boundary: a plan under both caps is exactly as untrusted as
+before (see "Provenance").
+
 ### Plaintext after decryption
 
 - A sealed plan **without blobs** is decoded entirely in memory

@@ -1711,7 +1711,14 @@ full design. `gonf apply` prints `decrypted and applied plan.age (N ops)`,
 never "verified" or "authenticated", for the same confidentiality-only
 reason the bullet above states. Unattended sealed apply (a timer, cron
 job, pull agent or CI step picking up `plan.age` on its own) stays blocked
-until a signing design exists (task 7b2).
+until a signing design exists (task 7b2). Reading the decrypted stream is
+size-capped (task be2, `maxSealedFrameBytes` 512 MiB in
+`internal/cli/cli.go` for the whole frame, `plan.MaxDecompressedPushPlan`
+256 MiB in `plan/pushwire.go` for the plan section's own gzip
+decompression) so a crafted or corrupted `plan.age` — which, per T10,
+anyone can produce, since recipients are public — cannot exhaust memory
+before `gonf apply` refuses it; see plan-encryption.md's "Failure
+handling" for the measured repro and rationale.
 
 Plan schema **version 10** adds the `latest` field to `package` ops: a
 `Package` recorded with `IsLatest` now carries that intent explicitly, so

@@ -3,8 +3,11 @@ package plan
 import (
 	"archive/tar"
 	"bytes"
+	"compress/gzip"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -241,5 +244,108 @@ func TestPushHasBlobs(t *testing.T) {
 				t.Fatalf("DecodePush(%q, \"\") = %v, want success for a no-blobs frame", tt.name, err)
 			}
 		})
+	}
+}
+
+// gzipBomb gzip-compresses n zero bytes (a highly compressible payload: a
+// few MB of zeros collapses to a few KB) and returns the compressed bytes,
+// for a test that needs a small, fast-to-build stream with a large
+// decompression ratio without constructing anything close to the
+// multi-gigabyte repro task be2's own investigation measured against the
+// real gonf binary.
+func gzipBomb(t *testing.T, n int) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	if _, err := gw.Write(make([]byte, n)); err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// TestMaybeGunzipCapsDecompressedOutput is task be2's regression test for
+// the memory-amplification DoS: without a decompressed-output cap,
+// maybeGunzip's io.ReadAll(gr) would read a gzip stream to completion no
+// matter how large it inflates to. This uses maybeGunzip's max parameter
+// (not the real MaxDecompressedPushPlan constant, task be2's own annotation
+// notes this deliberately: the mechanism is proven at a small, fast scale,
+// not by actually decompressing hundreds of megabytes in a test) to prove
+// the cap fires, loudly, before the bomb's true 5 MiB is ever fully
+// realized.
+func TestMaybeGunzipCapsDecompressedOutput(t *testing.T) {
+	const bombSize = 5 << 20 // 5 MiB of zeros
+	bomb := gzipBomb(t, bombSize)
+	if len(bomb) > 64<<10 {
+		t.Fatalf("bomb compressed to %d bytes, expected a high compression ratio", len(bomb))
+	}
+
+	const testCap = 64 << 10 // artificially low test-only cap, well under bombSize
+	out, err := maybeGunzip(bomb, testCap)
+	if out != nil {
+		t.Fatalf("maybeGunzip over cap returned %d bytes, want nil", len(out))
+	}
+	if !errors.Is(err, ErrPushPlanTooLarge) {
+		t.Fatalf("maybeGunzip over cap error = %v, want ErrPushPlanTooLarge", err)
+	}
+}
+
+// TestMaybeGunzipCapsDecompressedOutputBoundsMemory is
+// TestMaybeGunzipCapsDecompressedOutput's "prove it, don't just assert the
+// error" companion: it samples runtime.MemStats.TotalAlloc (a monotonic
+// cumulative counter, unaffected by when GC happens to run, unlike
+// HeapAlloc) around the same call and asserts the call did not allocate
+// anywhere near the bomb's true 5 MiB decompressed size — mathematically
+// guaranteed by construction (maybeGunzip wraps the gzip.Reader in
+// io.LimitReader(gr, max+1) before io.ReadAll, so the decompressor is never
+// asked to produce more than max+1 bytes regardless of what the compressed
+// stream could otherwise expand to), and this test is the empirical check
+// that the wiring actually behaves that way.
+func TestMaybeGunzipCapsDecompressedOutputBoundsMemory(t *testing.T) {
+	const bombSize = 5 << 20 // 5 MiB of zeros
+	bomb := gzipBomb(t, bombSize)
+	const testCap = 64 << 10 // artificially low test-only cap
+
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	out, err := maybeGunzip(bomb, testCap)
+	runtime.ReadMemStats(&after)
+
+	if out != nil || !errors.Is(err, ErrPushPlanTooLarge) {
+		t.Fatalf("maybeGunzip(bomb, %d) = (%v bytes, %v), want (nil, ErrPushPlanTooLarge)", testCap, len(out), err)
+	}
+	const allocBound = 2 << 20 // 2 MiB: far below bombSize, comfortably above cap+overhead
+	if delta := after.TotalAlloc - before.TotalAlloc; delta > allocBound {
+		t.Fatalf("maybeGunzip(bomb, %d) allocated %d bytes, want under %d (bomb decompresses to %d if unbounded)",
+			testCap, delta, allocBound, bombSize)
+	}
+}
+
+// TestMaybeGunzipWithinCapUnaffected pins that a legitimate payload well
+// under the cap decodes exactly as before this task's fix: the cap must
+// never truncate or otherwise alter a stream that never approaches it.
+func TestMaybeGunzipWithinCapUnaffected(t *testing.T) {
+	ops := []Op{{Op: KindPlan, Version: CurrentVersion, ID: "small"}}
+	raw, err := EncodePlan(ops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	if _, err := gw.Write(raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out, err := maybeGunzip(buf.Bytes(), MaxDecompressedPushPlan)
+	if err != nil {
+		t.Fatalf("maybeGunzip within cap: %v", err)
+	}
+	if !bytes.Equal(out, raw) {
+		t.Fatalf("maybeGunzip within cap = %q, want %q", out, raw)
 	}
 }

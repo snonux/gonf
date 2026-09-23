@@ -3,9 +3,13 @@ package cli
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/base64"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -765,4 +769,138 @@ func TestCLIPlanSealThenApplyIdentityInterop(t *testing.T) {
 	if err != nil || string(got) != "sealed and applied\n" {
 		t.Fatalf("target content = %q, %v", got, err)
 	}
+}
+
+// TestReadSealedFrameCapsOutput is task be2's regression test for the
+// memory-amplification DoS at the outer sealed-frame layer:
+// decryptAndDecodeSealedPush used to io.ReadAll the fully-decrypted stream
+// with no bound at all. It uses readSealedFrame's max parameter (not the
+// real maxSealedFrameBytes constant) so the cap mechanism is proven at a
+// small, fast scale rather than by actually decrypting and reading hundreds
+// of megabytes in a test — the same "artificially low test-only cap"
+// approach plan.TestMaybeGunzipCapsDecompressedOutput uses for the inner
+// decompression cap this frame-level cap complements.
+func TestReadSealedFrameCapsOutput(t *testing.T) {
+	over := bytes.Repeat([]byte{0}, 128) // one byte over the test cap below
+	const testMax = 127
+	data, err := readSealedFrame(bytes.NewReader(over), testMax)
+	if data != nil {
+		t.Fatalf("readSealedFrame over cap returned %d bytes, want nil", len(data))
+	}
+	if !errors.Is(err, errSealedFrameTooLarge) {
+		t.Fatalf("readSealedFrame over cap error = %v, want errSealedFrameTooLarge", err)
+	}
+}
+
+// TestReadSealedFrameCapsOutputBoundsMemory is
+// TestReadSealedFrameCapsOutput's "prove it, don't just assert the error"
+// companion, mirroring plan.TestMaybeGunzipCapsDecompressedOutputBoundsMemory:
+// it samples runtime.MemStats.TotalAlloc around a call whose SOURCE reader
+// could supply many megabytes, but whose test-only cap is tiny, and asserts
+// the call did not allocate anywhere near the source's true size —
+// mathematically guaranteed by construction (readSealedFrame wraps dr in
+// io.LimitReader(dr, max+1) before io.ReadAll, so it is never asked to read
+// more than max+1 bytes regardless of how much dr could otherwise supply),
+// and this test is the empirical check that the wiring actually behaves
+// that way.
+func TestReadSealedFrameCapsOutputBoundsMemory(t *testing.T) {
+	const sourceSize = 5 << 20 // 5 MiB the reader could supply if unbounded
+	source := bytes.Repeat([]byte{0}, sourceSize)
+	const testMax = 64 << 10 // artificially low test-only cap
+
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	data, err := readSealedFrame(bytes.NewReader(source), testMax)
+	runtime.ReadMemStats(&after)
+
+	if data != nil || !errors.Is(err, errSealedFrameTooLarge) {
+		t.Fatalf("readSealedFrame(source, %d) = (%d bytes, %v), want (nil, errSealedFrameTooLarge)", testMax, len(data), err)
+	}
+	const allocBound = 2 << 20 // 2 MiB: far below sourceSize, comfortably above cap+overhead
+	if delta := after.TotalAlloc - before.TotalAlloc; delta > allocBound {
+		t.Fatalf("readSealedFrame(source, %d) allocated %d bytes, want under %d (source is %d bytes)",
+			testMax, delta, allocBound, sourceSize)
+	}
+}
+
+// TestReadSealedFrameWithinCapUnaffected pins that a read well under the
+// cap returns exactly what the reader held, unchanged from before this
+// task's fix.
+func TestReadSealedFrameWithinCapUnaffected(t *testing.T) {
+	want := []byte("a small, legitimate decrypted frame\n")
+	data, err := readSealedFrame(bytes.NewReader(want), maxSealedFrameBytes)
+	if err != nil {
+		t.Fatalf("readSealedFrame within cap: %v", err)
+	}
+	if !bytes.Equal(data, want) {
+		t.Fatalf("readSealedFrame within cap = %q, want %q", data, want)
+	}
+}
+
+// TestCLIApplySealedLargeLegitimatePlanSucceeds is task be2's "the fix must
+// not break normal usage" regression: a legitimate plan with many sizable
+// ops (docs/plan.md and this task's own maxSealedFrameBytes/
+// plan.MaxDecompressedPushPlan doc comments both note "plans with many
+// blob-backed ops can run to tens of MB") must still apply successfully,
+// well within both of this task's caps, through the REAL constants — unlike
+// TestReadSealedFrameCapsOutput/TestMaybeGunzipCapsDecompressedOutput
+// (plan/pushwire_test.go), which deliberately use small test-only caps to
+// prove the mechanism without decompressing hundreds of MB. Content is
+// inline (ContentB64), not blob-backed, so this exercises the plan
+// SECTION's own gzip decompression path (plan.MaxDecompressedPushPlan) —
+// the one this task's fix bounds — rather than the separately-streamed,
+// unaffected blobs phase.
+func TestCLIApplySealedLargeLegitimatePlanSucceeds(t *testing.T) {
+	root := isolateSealedStagingRoot(t)
+	identityLine, recipientLine := sealedKeyPair(t)
+	dir := t.TempDir()
+	identityPath := writeSealedIdentityFile(t, dir, "identity", identityLine)
+
+	const numOps = 20
+	const opContentSize = 400 << 10 // 400 KiB per op, inline (under plan.MaxInlineContent's 512 KiB blob threshold)
+	ops := []plan.Op{{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "sealed-large-legit"}}
+	targets := make([]string, numOps)
+	contents := make([][]byte, numOps)
+	for i := range numOps {
+		content := make([]byte, opContentSize)
+		if _, err := rand.Read(content); err != nil {
+			t.Fatal(err)
+		}
+		contents[i] = content
+		targets[i] = filepath.Join(dir, fmt.Sprintf("large-%d.bin", i))
+		ops = append(ops, plan.Op{
+			Op:         plan.KindFile,
+			Path:       targets[i],
+			Mode:       "0600",
+			ContentB64: base64.StdEncoding.EncodeToString(content),
+		})
+	}
+	var buf bytes.Buffer
+	if err := plan.EncodePush(&buf, ops, nil); err != nil {
+		t.Fatal(err)
+	}
+	frame := buf.Bytes()
+
+	sealed := sealFrame(t, frame, []string{recipientLine})
+	if len(sealed) > maxSealedFrameBytes || len(sealed) > plan.MaxDecompressedPushPlan {
+		t.Fatalf("test construction error: sealed frame %d bytes already exceeds a cap, not a meaningful legitimate-plan check", len(sealed))
+	}
+	planPath := writeSealedPlanFile(t, dir, sealed)
+
+	code, stderr := runGonf(t, "apply", "-identity", identityPath, planPath)
+	if code != 0 {
+		t.Fatalf("legitimate large sealed plan (%d ops, %d bytes sealed) apply exit %d, stderr %q",
+			numOps, len(sealed), code, stderr)
+	}
+	for i, target := range targets {
+		got, err := os.ReadFile(target)
+		if err != nil {
+			t.Fatalf("target %d (%s): %v", i, target, err)
+		}
+		if !bytes.Equal(got, contents[i]) {
+			t.Fatalf("target %d (%s) content mismatch", i, target)
+		}
+	}
+	requireNoLeftoverSealedRunDirs(t, root)
 }

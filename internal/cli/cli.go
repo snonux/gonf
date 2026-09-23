@@ -1094,6 +1094,31 @@ func cliPreviewStdin(ctx context.Context, applyDir string, r io.Reader) int {
 // apply` "sniffs the first line").
 const ageMagicLine = "age-encryption.org/v1"
 
+// maxSealedFrameBytes bounds the fully-decrypted GONF-PUSH/1 frame
+// decryptAndDecodeSealedPush reads into memory before trusting any of it:
+// age's AEAD authenticates the final segment only once the whole stream has
+// been read (see that function's own doc comment), so the whole frame has
+// to land in memory before anything can be decoded from it at all — there
+// is no way to stream-decode a sealed apply. Without a cap, a crafted or
+// corrupted plan.age drives an unbounded io.ReadAll: task be2 measured
+// ~10.5 GB peak RSS from a 3.0 MB plan.age whose plan section was a gzip
+// bomb (docs/plan-encryption.md, threat T10: recipients are public, so
+// anyone can produce a plan.age that decrypts). 512 MiB comfortably covers
+// a legitimate sealed frame, including one carrying tar+gzip blobs — this
+// cap bounds them in their still-compressed, on-the-wire form, not their
+// unpacked size, since readBlobsGzipTar streams extraction straight to disk
+// rather than buffering it — while staying far below what would
+// meaningfully threaten a typical machine's RAM. Named here, not inlined,
+// so it is easy to find and raise if a legitimate sealed plan ever needs
+// more. See also plan.MaxDecompressedPushPlan, the separate cap on the
+// plan section's OWN gzip decompression inside the frame this bounds.
+const maxSealedFrameBytes = 512 << 20 // 512 MiB
+
+// errSealedFrameTooLarge is returned when the decrypted sealed frame would
+// exceed maxSealedFrameBytes. The refusal is loud and immediate: nothing
+// past the cap is ever decoded or applied.
+var errSealedFrameTooLarge = errors.New("sealed plan: decrypted frame exceeds size limit")
+
 // isSealedPlanBytes reports whether data's first line is exactly
 // ageMagicLine. data may be a full file's bytes (cliApplyFile, which has
 // already read the whole plan file) or only a short peek of a stream
@@ -1148,6 +1173,10 @@ func sealedPeek(br *bufio.Reader) []byte {
 // directory was created) and the caller must defer it unconditionally,
 // including on error, exactly as it would for plan.NewApplyRunDir's own
 // cleanup.
+//
+// The decrypted frame is read through readSealedFrame, capped at
+// maxSealedFrameBytes (see that constant's doc comment for why an unbounded
+// read here is a real memory-amplification DoS, task be2).
 func decryptAndDecodeSealedPush(r io.Reader, identityPaths []string) (*plan.PushPayload, func(), error) {
 	noop := func() {}
 	identities, err := loadSealedIdentities(identityPaths)
@@ -1158,9 +1187,9 @@ func decryptAndDecodeSealedPush(r io.Reader, identityPaths []string) (*plan.Push
 	if err != nil {
 		return nil, noop, err
 	}
-	data, err := io.ReadAll(dr)
+	data, err := readSealedFrame(dr, maxSealedFrameBytes)
 	if err != nil {
-		return nil, noop, fmt.Errorf("sealed plan: %w", err)
+		return nil, noop, err
 	}
 	if !plan.PushHasBlobs(data) {
 		payload, err := plan.DecodePush(bytes.NewReader(data), "")
@@ -1176,6 +1205,34 @@ func decryptAndDecodeSealedPush(r io.Reader, identityPaths []string) (*plan.Push
 		return nil, noop, err
 	}
 	return payload, cleanup, nil
+}
+
+// readSealedFrame reads dr (the reader seal.Open returns) fully into
+// memory, refusing loudly instead of continuing once more than max bytes
+// have come back. max is a parameter (not a direct read of
+// maxSealedFrameBytes) so this package's own tests can exercise the cap
+// mechanism against a small, fast frame instead of a genuinely huge one.
+//
+// dr is given io.LimitReader(dr, max+1): reading one byte past max is what
+// lets the check below tell "the stream ended exactly at the limit" (fewer
+// than max+1 bytes came back: genuine EOF, no error, matching age's normal
+// full-stream read) apart from "the stream had more" (max+1 bytes came
+// back) without first reading arbitrarily far past it to find out. A
+// stream that overflows the cap is never fully read, so age's final-segment
+// authentication may not have run for it — that is fine here, since the
+// frame is refused either way and nothing from it is ever decoded or
+// applied; a frame within the cap is read to genuine EOF exactly as before,
+// so this changes nothing about the pre-existing authentication behavior
+// for any legitimate-sized input.
+func readSealedFrame(dr io.Reader, max int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(dr, max+1))
+	if err != nil {
+		return nil, fmt.Errorf("sealed plan: %w", err)
+	}
+	if int64(len(data)) > max {
+		return nil, fmt.Errorf("%w (%d byte limit)", errSealedFrameTooLarge, max)
+	}
+	return data, nil
 }
 
 // loadSealedIdentities resolves the identity files to load for a sealed

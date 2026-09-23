@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +15,29 @@ import (
 )
 
 const pushMagic = "GONF-PUSH/1"
+
+// MaxDecompressedPushPlan bounds how many decompressed bytes maybeGunzip
+// will produce from the GONF-PUSH/1 frame's gzip-compressed plan section:
+// io.ReadAll-ing a gzip.Reader has no size limit of its own, and bounding
+// only the compressed INPUT (as an earlier version of this code did, via
+// readGzipOrRaw's own io.ReadAll) does nothing to stop a small, high-ratio
+// gzip stream ("gzip bomb") from expanding far past it. Without a cap on the
+// decompressed OUTPUT, a crafted or corrupted frame can inflate to gigabytes
+// in memory before DecodePlanBytes ever gets a chance to reject it as
+// malformed JSON — task be2 measured ~10.5 GB peak RSS from a 3 MB plan.age
+// built this way (docs/plan-encryption.md, threat T10: recipients are
+// public, so anyone can produce a plan.age that decrypts). 256 MiB
+// comfortably covers a legitimate plan's JSONL (docs/plan.md notes plans
+// with many blob-backed ops can run to tens of MB) while staying far below
+// what would meaningfully threaten a typical machine's RAM. Named here, not
+// inlined, so it is easy to find and raise if a legitimate plan ever needs
+// more.
+const MaxDecompressedPushPlan = 256 << 20 // 256 MiB
+
+// ErrPushPlanTooLarge is returned when decompressing the GONF-PUSH/1 frame's
+// plan section would exceed MaxDecompressedPushPlan. The refusal is loud and
+// immediate: no partial or truncated plan is ever handed to DecodePlanBytes.
+var ErrPushPlanTooLarge = errors.New("plan push: decompressed plan section exceeds size limit")
 
 // PushPayload is the decoded result of a GONF-PUSH/1 stream.
 type PushPayload struct {
@@ -61,7 +85,11 @@ func EncodePush(w io.Writer, ops []Op, mem BlobReader) error {
 // When blobs are present they are unpacked under planDir (must be an existing
 // empty owner-only directory) and the payload reports that path in PlanDir.
 // The plan dir's lifecycle belongs to the caller: the apply CLI owns it via
-// NewApplyRunDir or the sticky -apply-dir (see staging.go).
+// NewApplyRunDir or the sticky -apply-dir (see staging.go). The plan
+// section's gzip decompression is capped at MaxDecompressedPushPlan
+// (ErrPushPlanTooLarge past it, see that constant's doc comment); blob
+// extraction (readBlobsGzipTar) streams straight to planDir on disk rather
+// than buffering in memory, so it is not part of this in-memory cap.
 func DecodePush(r io.Reader, planDir string) (*PushPayload, error) {
 	br := bufio.NewReader(r)
 	peek, err := br.Peek(1)
@@ -158,19 +186,42 @@ func readGzipOrRaw(r io.Reader) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return maybeGunzip(raw)
+	return maybeGunzip(raw, MaxDecompressedPushPlan)
 }
 
-func maybeGunzip(raw []byte) ([]byte, error) {
-	if len(raw) >= 2 && raw[0] == 0x1f && raw[1] == 0x8b {
-		gr, err := gzip.NewReader(bytes.NewReader(raw))
-		if err != nil {
-			return nil, fmt.Errorf("plan push: gzip: %w", err)
-		}
-		defer func() { _ = gr.Close() }()
-		return io.ReadAll(gr)
+// maybeGunzip decompresses raw when it carries a gzip magic header,
+// otherwise returns it unchanged (the bare-JSONL plan section case). max
+// caps the DECOMPRESSED output, not just the compressed input — see
+// MaxDecompressedPushPlan's doc comment for why the two are not
+// interchangeable. It is a parameter rather than a direct read of that
+// constant so this package's own tests can exercise the cap mechanism at a
+// small scale (a few MB) instead of actually decompressing hundreds of
+// megabytes just to prove the check fires.
+//
+// The limited reader is given max+1: reading one byte past the cap is what
+// lets the check below tell "landed exactly on the limit" (max+1 bytes
+// requested, fewer came back: genuine EOF, no error) apart from "would have
+// kept going" (max+1 bytes came back: the stream had more) without needing
+// to read past max+1 to find out. Exceeding it fails loudly with
+// ErrPushPlanTooLarge; the plan is never silently truncated and handed to
+// DecodePlanBytes as if it were complete.
+func maybeGunzip(raw []byte, max int64) ([]byte, error) {
+	if len(raw) < 2 || raw[0] != 0x1f || raw[1] != 0x8b {
+		return raw, nil
 	}
-	return raw, nil
+	gr, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		return nil, fmt.Errorf("plan push: gzip: %w", err)
+	}
+	defer func() { _ = gr.Close() }()
+	out, err := io.ReadAll(io.LimitReader(gr, max+1))
+	if err != nil {
+		return nil, fmt.Errorf("plan push: gzip: %w", err)
+	}
+	if int64(len(out)) > max {
+		return nil, fmt.Errorf("%w (%d byte limit)", ErrPushPlanTooLarge, max)
+	}
+	return out, nil
 }
 
 func writeBlobsGzipTar(w io.Writer, mem BlobReader) error {
