@@ -1938,7 +1938,13 @@ func TestPresentCollisionDoesNotOverwriteFirstDeclarationsDraft(t *testing.T) {
 	// The production-safe escape hatch (task oe2): unstick the sticky
 	// declaration error without discarding the registered repository or
 	// its drafts, mirroring how a library embedder recovers in production.
-	resource.ResetDeclarationError()
+	// This is the genuinely-safe collision class (task vf2's doc comment on
+	// ResetDeclarationError): the refused second Present call never touched
+	// the first, successfully registered declaration's value, so the
+	// returned discarded error is deliberately ignored here rather than
+	// also calling resource.ResetRepository (which the unsafe
+	// secret-resolution class needs instead).
+	_ = resource.ResetDeclarationError()
 
 	if err := testapply.Apply(); err != nil {
 		t.Fatalf("Apply() after ResetDeclarationError = %v, want nil", err)

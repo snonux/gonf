@@ -162,8 +162,16 @@ func TestResetDeclarationErrorUnsticksLaterUnrelatedApply(t *testing.T) {
 	}
 
 	// The production-safe escape hatch: clears only the sticky declaration
-	// error, not the registered repository, drafts, report or dry-run.
-	resource.ResetDeclarationError()
+	// error, not the registered repository, drafts, report or dry-run. It
+	// now returns the error it discarded (task vf2); this scenario is the
+	// genuinely-safe collision case (nothing else was registered with a
+	// wrong value because of it), so the test asserts on it once for
+	// coverage and then discards it deliberately, exactly the judgment call
+	// ResetDeclarationError's doc comment asks the caller to make.
+	discarded := resource.ResetDeclarationError()
+	if discarded == nil || !strings.Contains(discarded.Error(), "collided") {
+		t.Fatalf("ResetDeclarationError() = %v, want the collision error it just cleared", discarded)
+	}
 
 	if err := Apply(); err != nil {
 		t.Fatalf("Apply() after ResetDeclarationError = %v, want nil: the escape hatch should have unstuck it", err)

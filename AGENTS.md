@@ -198,9 +198,48 @@ inventory and resources is a declaration error (`internal/declerr`):
   WAS missing (and what oe2 added) is a production-safe way out for a
   library embedder that does keep reusing the process after fixing the
   recipe that caused a declaration error: `resource.ResetDeclarationError`
-  clears only the sticky `declerr` state, unlike the test-only
+  clears only the sticky `declerr` first-error slot (`internal/declerr.
+  ResetFirst`, task tf2 — see below), unlike the test-only
   `resource.ResetForTest`, which also wipes the registered repository, its
-  drafts, the apply report and dry-run.
+  drafts, the apply report, dry-run, AND the `declerr` capture sink
+  (`internal/declerr.Reset`).
+  Two follow-on bugs, both confirmed by probe and fixed together (tasks
+  tf2/vf2): (1) `ResetDeclarationError` used to call the same `declerr.Reset`
+  `ResetForTest` uses, which clears the capture sink `RecordPlanTo` installs
+  for the duration of a recording (`api/plan.go`'s `enterRecordMode`,
+  `declerr.Capture(stashBodyError)`) as well as the sticky first error. A
+  task body that defensively called `resource.ResetDeclarationError()`
+  mid-recording — its own doc comment always framed the supported use as the
+  direct-apply path, not mid-recording, but nothing enforced that — silently
+  tore down that sink too: a LATER declaration error in the same body (e.g.
+  a failed `MustSecret`) then missed the recording's capture, landed on the
+  process-wide sticky slot instead, and nothing re-checks `declerr.First()`
+  after a record completes (`RecordPlanTo` checks it only before recording
+  starts; `ApplyChunksContext` never checks it at all) — so the record
+  finished as if nothing had failed, silently writing a credentials file
+  with an empty secret and returning a nil error. Fixed by giving
+  `internal/declerr` a narrower `ResetFirst` that clears only the sticky
+  first error and never the sink; `ResetDeclarationError` now calls that
+  instead, and `resource.ResetForTest` calls the broader `declerr.Reset`
+  directly (it still needs the full wipe between tests). (2) Even outside a
+  recording, `declerr` carries EVERY declaration-error class through the
+  same one sticky slot, and `ResetDeclarationError` could not distinguish
+  which class it was clearing: a collided resource ID is safe to clear and
+  simply continue from (no OTHER resource's registered value depended on
+  the collision), but a failed `MustSecret`/`OptionalSecret`/`ResolveSecret`
+  lookup is NOT — those calls cannot return an error, so a resource built
+  inline from one (e.g. `WithContent("password="+MustSecret(...))`) is
+  already registered, holding the empty zero-value string, by the time the
+  failure is reported; clearing and continuing leaves it registered with an
+  empty or wrong value that a later `Apply` then happily writes. Fixed by
+  making `ResetDeclarationError` return the error it discarded instead of
+  discarding it silently, so a caller must look at what it is clearing: for
+  the unsafe (secret-resolution) class, the safe remediation is to also call
+  `resource.ResetRepository()` right after clearing the error, so every
+  resource is re-declared from scratch against a recipe that can now
+  resolve the secret correctly, rather than just clearing and continuing
+  with the half-registered set. `api.Apply`'s own doc comment carries the
+  same warning.
   `RecordPlanTo` also sets `api`'s own `lastRecordFailure` on ANY failure
   including a recovered panic (not `declerr`'s concern, see api/plan.go)
   — cleared by a later clean record. `api.Apply` refuses on it

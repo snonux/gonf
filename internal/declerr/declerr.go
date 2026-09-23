@@ -139,14 +139,47 @@ func Capture(fn func(error)) (restore func()) {
 // Reset clears the sticky first error and any installed sink. Since this
 // package is internal/, only gonf's own public packages can call it:
 // resource.ResetForTest (a test seam that also wipes other resource state)
-// and resource.ResetDeclarationError (its production-safe, single-purpose
-// equivalent for a library embedder, task oe2) both do, and must not run
-// concurrently with a recording.
+// calls it directly for its full between-tests wipe, and must not run
+// concurrently with a recording. resource.ResetDeclarationError (task oe2's
+// production-safe escape hatch) used to call this too, but task tf2 moved it
+// onto ResetFirst instead — see ResetFirst's doc comment for why clearing
+// the sink as a side effect of that call was a real bug, not just an
+// over-broad reset.
 func Reset() {
 	mu.Lock()
 	defer mu.Unlock()
 	first = nil
 	sink = nil
+}
+
+// ResetFirst clears only the sticky first error, leaving any installed sink
+// (Capture) completely untouched. resource.ResetDeclarationError (task oe2's
+// escape hatch) calls this instead of the broader Reset, specifically so it
+// can never tear down an active RecordPlanTo recording's capture sink.
+//
+// Before task tf2, ResetDeclarationError called Reset, which clears both
+// first AND sink unconditionally — including sink when a recording is
+// currently capturing into it (api/plan.go's enterRecordMode installs
+// declerr.Capture(stashBodyError) for the duration of RecordPlanTo). A task
+// body that defensively called resource.ResetDeclarationError() mid-recording
+// (its own doc comment warns this is meant for the direct-apply path, not
+// mid-recording, but nothing enforced that) silently cleared the sink too:
+// every declaration error reported by the REST of that same body — e.g. a
+// MustSecret call placed right after the reset — then missed the recording
+// session's capture entirely and went to the process-wide sticky first slot
+// instead. Nothing re-checks First() after a record completes
+// (api/plan.go's RecordPlanTo checks it only before, and
+// ApplyChunksContext never checks it at all), so the record finished as if
+// nothing had failed: a File built from that failed MustSecret's empty
+// return value was written to disk with an empty secret, and RecordPlanTo/
+// Run returned nil. ResetFirst fixes this at the root by never touching
+// sink: a later report inside the same recording body still reaches
+// stashBodyError and correctly fails the record, exactly as it would have
+// without the ResetDeclarationError() call in between.
+func ResetFirst() {
+	mu.Lock()
+	defer mu.Unlock()
+	first = nil
 }
 
 // Location returns the recipe location recorded with err, or "" when err is

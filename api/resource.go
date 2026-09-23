@@ -74,7 +74,20 @@ type Resource interface {
 // resource.ResetDeclarationError — a production-safe, single-purpose
 // escape hatch, unlike the test-only resource.ResetForTest, which also
 // wipes the registered repository, its drafts, the apply report and
-// dry-run. See resource.ResetDeclarationError's doc comment and AGENTS.md's
+// dry-run. ResetDeclarationError returns the error it discarded (task
+// vf2), because not every declaration-error class is safe to clear and
+// simply continue from: a collided resource ID is safe (no OTHER
+// resource's registered state depended on the collision), but a failed
+// MustSecret/OptionalSecret/ResolveSecret lookup is NOT — MustSecret
+// cannot return an error, so a resource built from its inline call (e.g.
+// WithContent("password="+MustSecret(...))) is already registered, holding
+// the empty zero-value string, by the time the failure is reported. Simply
+// clearing and continuing leaves that resource registered with an empty or
+// wrong value that this Apply would then happily write; the safe
+// remediation for that class is to also call resource.ResetRepository()
+// after clearing the error, so every resource is re-declared from scratch
+// once the recipe can resolve the secret correctly. See
+// resource.ResetDeclarationError's doc comment and AGENTS.md's
 // "Registration-time contract".
 //
 // Apply holds the WHOLE registered plan, so it is a controller-side entry

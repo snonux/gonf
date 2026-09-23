@@ -112,15 +112,53 @@ func Refuse(type_, name string, err error) Resource {
 // registered repository, its drafts, the apply report and dry-run —
 // unsuitable for production code. ResetDeclarationError is the
 // production-safe, single-purpose equivalent (task oe2): a library embedder
-// that confirmed the underlying recipe issue is fixed (e.g. renamed a
-// colliding resource ID so the next registration no longer collides) calls
-// this to keep applying in the same process, without discarding anything
-// else it does not need to.
+// that confirmed the underlying recipe issue is fixed calls this to keep
+// applying in the same process, without discarding anything else it does
+// not need to. It clears only the sticky first error (internal/declerr.
+// ResetFirst, task tf2) and never the capture sink an active RecordPlanTo
+// recording installs, so calling it mid-recording cannot cause a later
+// report in the same task body to miss that recording's capture and land
+// back on the sticky slot instead — see ResetFirst's own doc comment for the
+// silent-empty-secret-written bug that shape used to cause. Even so, this
+// function's documented, supported use is the direct-apply path, not while
+// a recording is active; a caller that must clear it mid-recording anyway
+// should also confirm no report happens between the call and the body's
+// return, since a report the sink would have caught is still visible only
+// through the returned error below, not automatically retried against the
+// recording.
+//
+// ResetDeclarationError returns the error it discarded (task vf2), or nil
+// when nothing was pending, so a caller that clears it must look at what it
+// is discarding rather than silently moving on. NOT every declaration error
+// class is safe to clear and continue from: a collided resource ID
+// (WhenHostname/WhenPathExists, or a plain duplicate Present/Register call)
+// is safe, because nothing about the colliding registration attempt itself
+// changed any OTHER resource's registered state — the recipe's earlier,
+// successful registrations are exactly as declared. A failed
+// MustSecret/OptionalSecret/ResolveSecret lookup is NOT safe to clear and
+// continue from: MustSecret cannot return an error, so a recipe that calls
+// it inline (e.g. WithContent("password="+MustSecret(...))) has ALREADY
+// registered that resource by the time the failure is reported, holding the
+// function's inert zero return ("") where the real secret value belongs.
+// Clearing the sticky error and simply continuing (the collision remedy)
+// leaves that resource registered with the wrong value; the safe remedy for
+// this class is to also call resource.ResetRepository() after clearing the
+// error, so every resource is re-declared from scratch against a recipe
+// that (having fixed whatever made the secret lookup fail) will now resolve
+// it correctly the second time. ResetDeclarationError cannot tell these two
+// classes apart on its own — internal/declerr carries every declaration
+// error, of any cause, through the same one sticky slot — so it makes no
+// attempt to; returning the discarded error is what lets the caller make
+// that judgment instead of the mistake happening silently. See AGENTS.md's
+// "Registration-time contract" and api.Apply's own doc comment for the same
+// warning.
 //
 // Like every other repository primitive this is single-goroutine: call it
 // only while no registration, recording, or apply is in flight.
-func ResetDeclarationError() {
-	declerr.Reset()
+func ResetDeclarationError() error {
+	err := declerr.First()
+	declerr.ResetFirst()
+	return err
 }
 
 // String returns the resource's ID.
