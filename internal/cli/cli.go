@@ -557,7 +557,7 @@ func planToDir(outDir, planID string, tasks []string) int {
 	}
 	outPath := filepath.Join(outDir, "plan.jsonl")
 	fmt.Printf("wrote %s (%d ops)\n", outPath, len(ops))
-	warnSensitivePlan(outPath, ops)
+	warnSensitivePlan(outPath, outDir, ops)
 	return 0
 }
 
@@ -566,8 +566,14 @@ func planToDir(outDir, planID string, tasks []string) int {
 // The names come from api.SensitiveOpNames, which redacts every resolved
 // secret, including a short one an identity equals (recording refuses only
 // strong secrets in identities). Nothing is printed for a plan without
-// secret material.
-func warnSensitivePlan(outPath string, ops []plan.Op) {
+// secret material. When there is secret material, it also runs the 0b2
+// git-worktree check (warnIfPlanUnignoredInGitWorktree, git_worktree_warn.go)
+// on outDir: gonf does not seal plans yet (that is task 2b2), so a sensitive
+// plan.jsonl written here is plaintext, and if outDir sits inside a git
+// worktree that does not already ignore plan.jsonl, a later `git
+// add`/`git commit` by the operator could put it into history
+// (docs/plan-encryption.md, threat T2).
+func warnSensitivePlan(outPath, outDir string, ops []plan.Op) {
 	names := api.SensitiveOpNames(ops)
 	if len(names) == 0 {
 		return
@@ -575,6 +581,7 @@ func warnSensitivePlan(outPath string, ops []plan.Op) {
 	eprintf("plan: %s carries secret material in clear text (%s); "+
 		"it is an executable secret artifact (mode 0600, base64 is not encryption): delete it once applied\n",
 		outPath, strings.Join(names, ", "))
+	warnIfPlanUnignoredInGitWorktree(outDir)
 }
 
 // cliApply runs `gonf apply [flags] <plan.jsonl|->` under ctx, the CLI's

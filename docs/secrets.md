@@ -449,12 +449,47 @@ Limits of the scan, by design:
 
 | Output | Behaviour |
 |--------|-----------|
-| `gonf plan -o dir` | `plan.jsonl` is written `0600` in a `0700`-created, owner-checked directory, as every plan; a secret-bearing plan also gets a stderr warning naming the sensitive ops: it is an executable secret artifact, delete it once applied. A blob-backed secret file's blob lands in `dir/blobs/` with the same protections. |
+| `gonf plan -o dir` | `plan.jsonl` is written `0600` in a `0700`-created, owner-checked directory, as every plan; a secret-bearing plan also gets a stderr warning naming the sensitive ops: it is an executable secret artifact, delete it once applied. A blob-backed secret file's blob lands in `dir/blobs/` with the same protections. When `dir` sits inside a git worktree that does not already ignore `plan.jsonl`, a second stderr warning fires (below). |
 | `gonf plan -stdout` | Refused, naming the sensitive ops (never their values; `SensitiveOpNames` redacts every resolved secret in the names, a short one an identity equals included). `-stdout -with-secrets` is the explicit export; the operator then owns wherever stdout goes. |
 | `gonf plan -redacted` | A human preview on stdout: JSONL headed by a `plan_preview` op, which no gonf version accepts as a plan, with every payload string of every sensitive op replaced wholesale (content, template data, member contents, argv, environment keys and values, lines, cron command and environment, guard and validator arguments, schedules and descriptions; environment keys become numbered `[redacted]-N`, so identities and metadata stay readable) and every remembered value in every payload and identity string replaced by `[redacted]`; metadata strings (op kind, owner, mode, ...) only for strong secrets, so a weak secret equal to `file` or `root` does not garble them. Strings are redacted as decoded values and re-encoded, so every line is valid JSON. It is not replayable and must not be labelled as a plan. It cannot be combined with `-stdout`, `-with-secrets` or `-o`. |
 | `gonf <task>`, `push`, `cluster`, `fleet` | The plan stays in memory on the controller and travels over SSH stdin (`GONF-PUSH/1`), as before. |
 | Destination apply (`gonf apply`) | A failing file (`WithValidation`) or `ConfigSet` validator reports its exit status and only the size of its output ("validator output withheld (N bytes)"), because a validator that quotes the offending line would echo the secret; template parse/execute errors of a sensitive file (or of an entry of a sensitive synced tree) report the step only; a failing command or package-manager run of a sensitive op, and every failing `crontab` run, reports only its output sizes. Debug logs never print content digests (for any file: an unsalted sha256 of a low-entropy secret can be confirmed offline). |
 | Validation candidates | Unchanged and already private: a file candidate is a `0600` temp file in a parent that only root and the applying user can write; a config set stages below a private staging directory. Both are removed after validation. |
+
+**Git-worktree warning (task 0b2, phase 0 of the plan-encryption design,
+docs/plan-encryption.md).** `plan.jsonl` written by `gonf plan -o dir` stays
+plaintext (gonf does not seal plans yet; sealing is task `2b2`, not
+implemented), and the default `-o .` is normally the recipe checkout, which
+backups, sync tools and an operator's own `git add -A` all read. After
+writing a secret-bearing `plan.jsonl`, `gonf plan -o dir` therefore also
+checks whether `dir` sits inside a git worktree and, if so, whether
+`plan.jsonl` there is already covered by that worktree's ignore rules
+(`internal/cli`'s `warnIfPlanUnignoredInGitWorktree`,
+`git_worktree_warn.go`):
+
+- Detection is two steps and never touches or trusts the repository's own
+  configuration for the risky part: first a plain filesystem walk up from
+  `dir` for a `.git` entry (a directory or a worktree's `gitdir:` file), with
+  no git process started at all when none is found (the common case for a
+  private, non-git `-o` directory); only once an ancestor is found does it
+  run `git check-ignore -q plan.jsonl` with `dir` as the working directory,
+  through `internal/exec` with a short timeout separate from gonf's usual,
+  much longer command-timeout default.
+- The check is warn-only and fails safe: it can never refuse or delay the
+  plan write (already on disk by the time it runs), and anything that keeps
+  it from getting a clear answer — no git binary, a timeout, an unexpected
+  git exit status — is treated as "cannot tell" and stays silent, never a
+  false warning.
+- When `plan.jsonl` is not ignored, the warning names `dir` and suggests
+  adding a `.gitignore` entry for `plan.jsonl` (and `blobs/`) or writing the
+  plan to a private `-o <dir>` outside any checkout; it does not mention
+  `-seal`, since that flag does not exist until task `2b2` lands.
+- Like the secret-artifact warning above, this goes through the CLI's
+  redacting stderr path (`eprintf`, `logger.Redact`), though the message
+  itself carries only the output directory path, never plan content.
+- A plan without secret material is completely unaffected: the git-worktree
+  check runs only after the secret-artifact warning already found sensitive
+  ops, so a plain plan never even attempts the `.git` walk.
 
 ### Transport, privilege and remote versions
 

@@ -13,6 +13,33 @@ import (
 	"github.com/snonux/gonf/resource"
 )
 
+// TestCLIPlanOutDirWarnsAboutUnignoredGitWorktree wires the 0b2 git-worktree
+// check (git_worktree_warn.go) into the real `gonf plan -o` path, on top of
+// git_worktree_warn_test.go's direct unit tests of the two helpers: it
+// proves warnSensitivePlan actually calls warnIfPlanUnignoredInGitWorktree
+// for a sensitive plan written under a real, unignoring git worktree, and
+// that the pre-existing "carries secret material" warning (062) still fires
+// alongside it, unchanged.
+func TestCLIPlanOutDirWarnsAboutUnignoredGitWorktree(t *testing.T) {
+	work := registerSecretTask(t)
+	repo := filepath.Join(work, "repo")
+	initGitDir(t, repo)
+	outDir := filepath.Join(repo, "out")
+	code, stderr := runGonf(t, "plan", "-o", outDir, "cli_secret")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, stderr)
+	}
+	if !strings.Contains(stderr, "carries secret material in clear text") {
+		t.Fatalf("stderr %q: want the 062 secret-artifact warning still present", stderr)
+	}
+	if !strings.Contains(stderr, "is inside a git worktree and plan.jsonl there is not gitignored") {
+		t.Fatalf("stderr %q: want the 0b2 git-worktree warning", stderr)
+	}
+	if leaksCLISecret(stderr) {
+		t.Fatalf("git-worktree warning leaks the secret: %q", stderr)
+	}
+}
+
 // fakeCLISecret is synthetic secret material for the plan output tests.
 const fakeCLISecret = "fake-cli-token-9a8b7c6d"
 
