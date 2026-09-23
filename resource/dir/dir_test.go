@@ -537,11 +537,9 @@ func TestSourceGlobPrune(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Direct path on purpose (task sb2): the plan engine rebuilds a glob
-	// sync as a tree sync and prunes the unmanaged subdir; switch back to
-	// Present + testapply.Apply once the wire carries the glob flavor.
-	if err := Ensure(dst, WithSourceGlob(filepath.Join(src, "*.rb")), WithPrune); err != nil {
-		t.Fatalf("Ensure: %v", err)
+	Present(dst, WithSourceGlob(filepath.Join(src, "*.rb")), WithPrune)
+	if err := testapply.Apply(); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 
 	if _, err := os.Stat(filepath.Join(dst, "old.rb")); !os.IsNotExist(err) {
@@ -616,9 +614,9 @@ func TestSourceGlobPruneKeepSetMatchesCountingMatches(t *testing.T) {
 		t.Fatalf("counting matches = %v, want exactly {keep.rb, tofile}", wantKeep)
 	}
 
-	// Direct path on purpose, like TestSourceGlobPrune (task sb2).
-	if err := Ensure(dst, WithSourceGlob(filepath.Join(src, "*")), WithPrune); err != nil {
-		t.Fatalf("Ensure: %v", err)
+	Present(dst, WithSourceGlob(filepath.Join(src, "*")), WithPrune)
+	if err := testapply.Apply(); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 
 	for _, name := range []string{"keep.rb", "tofile"} {
