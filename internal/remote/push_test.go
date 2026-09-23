@@ -46,6 +46,99 @@ func TestRemoteApplyCmdPrivilegeNoneElevateErrors(t *testing.T) {
 	}
 }
 
+// TestPushPayloadContextRefusesStaleRemote is task ud2's regression test.
+// Before the fix, payloadApplyCmd appended "-relayed" unconditionally and
+// never verified the remote at all, so a pre-7d2 remote gonf reached SSH and
+// failed there with a raw "flag provided but not defined: -relayed" (the
+// exact failure the probe below simulates via a fake SSHRunner). After the
+// fix, PushPayloadContext follows -preview's precedent (RequireRemoteGonf)
+// and refuses before ever opening that ssh session, with a clear message
+// instead of the raw flag-usage dump.
+func TestPushPayloadContextRefusesStaleRemote(t *testing.T) {
+	oldPlan, oldStrictPreview, oldRelease := defaultPusher.PlanVersionProber, defaultPusher.StrictPreviewProber, defaultPusher.ReleaseVersionProber
+	oldSSH := SSHRunner
+	t.Cleanup(func() {
+		defaultPusher.PlanVersionProber = oldPlan
+		defaultPusher.StrictPreviewProber = oldStrictPreview
+		defaultPusher.ReleaseVersionProber = oldRelease
+		SSHRunner = oldSSH
+	})
+	defaultPusher.PlanVersionProber = func(context.Context, PushTarget, ProbeContext) (int, error) {
+		return plan.CurrentVersion, nil
+	}
+	defaultPusher.StrictPreviewProber = func(context.Context, PushTarget, ProbeContext) (int, error) {
+		return 1, nil
+	}
+	// A pre-7d2 remote: release 0.16.2, one release older than the 0.16.3
+	// that added the unconditional "-relayed" flag.
+	defaultPusher.ReleaseVersionProber = func(context.Context, PushTarget, ProbeContext) (string, error) {
+		return "0.16.2", nil
+	}
+	sshCalled := false
+	SSHRunner = func(context.Context, io.Reader, []string) error {
+		sshCalled = true
+		// What a real pre-7d2 remote would actually do if this fix did not
+		// exist and the flag reached it: reject the unknown flag outright.
+		return errors.New("flag provided but not defined: -relayed\nexit status 2")
+	}
+
+	err := PushPayloadContext(context.Background(), PushTarget{Host: "h.example"}, []byte("GONF-PUSH/1"), false, "")
+	if err == nil || !strings.Contains(err.Error(), "older than controller") {
+		t.Fatalf("PushPayloadContext() = %v, want a clear refusal naming the stale remote release", err)
+	}
+	if strings.Contains(err.Error(), "flag provided but not defined") {
+		t.Fatalf("PushPayloadContext() = %v, want the clear refusal, not the raw remote flag-usage error", err)
+	}
+	if sshCalled {
+		t.Fatal("PushPayloadContext opened an ssh session against a remote release too old for -relayed; want it refused first")
+	}
+}
+
+// TestPushPayloadContextRequiresRemoteGonfInCallsOwnPrivilegeContext checks
+// that payloadApplyCmd probes ProbeElevated when the call elevates and
+// ProbeLogin otherwise — PushPayload applies exactly one privilege context
+// per call (unlike the chunked Delivery path, which probes both when a plan
+// mixes them), so only that one context's remote gonf need be verified.
+func TestPushPayloadContextRequiresRemoteGonfInCallsOwnPrivilegeContext(t *testing.T) {
+	oldPlan, oldStrictPreview, oldRelease := defaultPusher.PlanVersionProber, defaultPusher.StrictPreviewProber, defaultPusher.ReleaseVersionProber
+	oldSSH := SSHRunner
+	t.Cleanup(func() {
+		defaultPusher.PlanVersionProber = oldPlan
+		defaultPusher.StrictPreviewProber = oldStrictPreview
+		defaultPusher.ReleaseVersionProber = oldRelease
+		SSHRunner = oldSSH
+	})
+	defaultPusher.PlanVersionProber = func(context.Context, PushTarget, ProbeContext) (int, error) {
+		return plan.CurrentVersion, nil
+	}
+	defaultPusher.StrictPreviewProber = func(context.Context, PushTarget, ProbeContext) (int, error) {
+		return 1, nil
+	}
+	var seen []ProbeContext
+	defaultPusher.ReleaseVersionProber = func(_ context.Context, _ PushTarget, pc ProbeContext) (string, error) {
+		seen = append(seen, pc)
+		return "99.0.0", nil
+	}
+	SSHRunner = func(context.Context, io.Reader, []string) error { return nil }
+
+	for _, tc := range []struct {
+		elevate bool
+		want    ProbeContext
+	}{
+		{false, ProbeLogin},
+		{true, ProbeElevated},
+	} {
+		seen = nil
+		target := PushTarget{Host: "h.example", Privilege: privilege.Sudo}
+		if err := PushPayloadContext(context.Background(), target, []byte("GONF-PUSH/1"), tc.elevate, ""); err != nil {
+			t.Fatalf("elevate=%v: PushPayloadContext() = %v", tc.elevate, err)
+		}
+		if len(seen) != 1 || seen[0] != tc.want {
+			t.Fatalf("elevate=%v: RequireRemoteGonf probed %v, want exactly [%v]", tc.elevate, seen, tc.want)
+		}
+	}
+}
+
 // firstConnectTimeout returns the first ConnectTimeout option in an ssh argv:
 // ssh uses the first occurrence on the command line, so this is the value in
 // effect.

@@ -30,7 +30,14 @@ func Privilege() privilege.Mode { return processPrivilege }
 // callers that can supply a context should use PushPayloadContext instead.
 // The payload is one chunk already encoded by the caller, so no
 // dangling-dependency pre-flight runs here (see ApplyPlan); PushTo, which
-// records the whole plan, does run it.
+// records the whole plan, does run it. It never installs or upgrades the
+// remote gonf, but it does verify it (remote.RequireRemoteGonf, the same
+// check -preview uses): the target must already run gonf release 0.16.3 or
+// newer, the release that added the apply command's unconditional
+// "-relayed" flag (task 7d2) that this entry point cannot omit for an older
+// remote — an embedder pushing to a stale remote gets a clear refusal
+// instead of a raw "flag provided but not defined: -relayed" from the far
+// end (task ud2).
 func PushPayload(t PushTarget, payload []byte, elevate bool, applyDir string) error {
 	return remote.PushPayloadContext(context.Background(), t, payload, elevate, applyDir)
 }
@@ -38,7 +45,9 @@ func PushPayload(t PushTarget, payload []byte, elevate bool, applyDir string) er
 // PushPayloadContext is PushPayload bounded/cancelable by ctx: when ctx has
 // no deadline of its own, remote.DefaultHostTimeout is applied so a wedged
 // remote command cannot hang the push forever (mirroring the per-host
-// timeout the fleet fan-out already applies to remote.Delivery.ToHost).
+// timeout the fleet fan-out already applies to remote.Delivery.ToHost). See
+// PushPayload's doc comment for the minimum remote gonf release this now
+// requires.
 func PushPayloadContext(ctx context.Context, t PushTarget, payload []byte, elevate bool, applyDir string) error {
 	return remote.PushPayloadContext(ctx, t, payload, elevate, applyDir)
 }

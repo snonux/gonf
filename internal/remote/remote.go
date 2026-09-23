@@ -152,7 +152,13 @@ func PushPayload(t PushTarget, payload []byte, elevate bool, applyDir string) er
 // DefaultHostTimeout is applied so a wedged remote command cannot hang this
 // one-shot push forever. Like a Delivery, it forwards a non-default
 // controller -cmd-timeout only when the remote binary accepts the flag
-// (payloadApplyCmd); it never installs or upgrades gonf.
+// (payloadApplyCmd); it never installs or upgrades gonf. Because it cannot
+// self-heal a stale remote, it follows -preview's precedent instead of
+// push's: payloadApplyCmd verifies the remote gonf with RequireRemoteGonf
+// before any apply traffic, so a remote older than release 0.16.3 (the
+// release that added the unconditional "-relayed" apply flag, task 7d2) is
+// refused with a clear error instead of reaching the far end and failing
+// there with a raw "flag provided but not defined: -relayed" (task ud2).
 func PushPayloadContext(ctx context.Context, t PushTarget, payload []byte, elevate bool, applyDir string) error {
 	if t.Host == "" {
 		return fmt.Errorf("push: empty host")
@@ -174,10 +180,27 @@ func PushPayloadContext(ctx context.Context, t PushTarget, payload []byte, eleva
 
 // payloadApplyCmd builds PushPayloadContext's remote apply command. The
 // command is built once without the -cmd-timeout flag first, so a privilege
-// misconfiguration fails before the capability probe opens an ssh session.
+// misconfiguration fails before any remote probe opens an ssh session. Once
+// that succeeds, RequireRemoteGonf verifies the remote gonf in the chunk's
+// own privilege context (ProbeElevated when elevate, otherwise ProbeLogin —
+// PushPayload applies exactly one privilege context per call, unlike the
+// chunked Delivery path, so there is only ever one context to check) before
+// any apply traffic: unlike -cmd-timeout below, the unconditional "-relayed"
+// flag (remoteApplyCmd's doc comment) cannot be probed-and-omitted for an
+// old remote, because omitting it would silently reintroduce the SIGPIPE bug
+// task 7d2 fixed rather than degrade gracefully — so an old remote is
+// refused outright here, the same way -preview already refuses it, instead
+// of being let through to fail unhelpfully at the far end (task ud2).
 func payloadApplyCmd(ctx context.Context, t PushTarget, elevate bool, applyDir string) (string, error) {
 	remote, err := remoteApplyCmd(elevate, t, applyDir, Push, cmdTimeoutForward{})
 	if err != nil {
+		return "", err
+	}
+	pc := ProbeLogin
+	if elevate {
+		pc = ProbeElevated
+	}
+	if err := RequireRemoteGonf(ctx, t, pc); err != nil {
 		return "", err
 	}
 	fwd := defaultPusher.resolveCmdTimeoutForward(ctx, t, !elevate, elevate)
@@ -310,9 +333,12 @@ func streamChunks(ctx context.Context, t PushTarget, chunks []plan.Chunk, remote
 // docs/plan.md's "Fixed-argument sudoers/doas rules" section, which this
 // unconditional flag is now also subject to, same as "-cancel-pipe": an
 // ordinary `push` self-heals this via EnsureRemoteGonf's release-version
-// upgrade (once the release carrying this fix bumps internal.Version), and
+// upgrade (once the release carrying this fix bumps internal.Version),
 // `-preview` already refuses outright against a stale remote
-// (RequireRemoteGonf) rather than surfacing a raw "unknown flag" error.
+// (RequireRemoteGonf) rather than surfacing a raw "unknown flag" error, and
+// PushPayloadContext's payloadApplyCmd now follows -preview's precedent for
+// the same reason (task ud2): unlike push, it never installs or upgrades
+// gonf, so it cannot self-heal a stale remote either.
 func remoteApplyCmd(elevate bool, t PushTarget, applyDir string, mode Mode, fwd cmdTimeoutForward) (string, error) {
 	stdinArg := mode.applyStdinArg()
 	args := "apply -relayed " + stdinArg
