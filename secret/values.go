@@ -32,7 +32,11 @@ const maxWordLen = 12
 
 // MaxSplitGuard is the longest form FlushPoint protects from being split
 // across two forced flushes of a relayed unterminated line; it matches the
-// relay's 64 KiB flush window (logger.RedactingWriter).
+// relay's 64 KiB flush window (logger.RedactingWriter). FlushPoint also uses
+// it as the threshold past which it must stop waiting for a self-overlapping
+// match chain to resolve and flush what it has (see FlushPoint), since every
+// real caller only asks it to find a cut point once its own buffer already
+// exceeds this many bytes.
 const MaxSplitGuard = 64 << 10
 
 // Redacted replaces every recognised secret occurrence in redacted output.
@@ -236,11 +240,31 @@ func (v *Values) redact(s string, strongOnly bool) string {
 // forward now when s is the start of output that continues later (see
 // logger.RedactingWriter): an occurrence of the longest tracked form could
 // still start in the last len-1 bytes, so those stay, and the cut moves back
-// to the start of any occurrence that crosses it, so no secret is split
-// between two redactions. Forms longer than MaxSplitGuard are left out of
-// the keep-back (they are still redacted wherever a flushed chunk holds
-// them whole), so a huge secret cannot make the relay buffer without
-// bound. It implements logger.Redactor with Redact.
+// to the start of whichever merged run of overlapping matches crosses it, so
+// no secret is split between two redactions. Matches are merged in one
+// linear, start-position-sorted pass (mergeSpans) rather than chased
+// backward one overlapping match at a time: a secret whose repeat period is
+// shorter than its own length (e.g. "x1x1x1x1x1", which also matches itself
+// shifted by 2 bytes, at offsets 0, 2, 4, ...) chains arbitrarily many
+// overlapping occurrences together, and walking backward from one match to
+// the next, rescanning every span each step, is both quadratic and — because
+// the chain reaches all the way to offset 0 — never terminates above 0; a
+// long run of such a pattern would then never be forwarded and the caller's
+// pending buffer would grow without bound. When even the merged run's start
+// is 0 (the chain reaches the very beginning of s) and s already exceeds
+// MaxSplitGuard bytes — the same threshold logger.RedactingWriter's
+// maxPendingLine uses to decide a line is overlong enough to force a flush,
+// so every real call here already has len(s) that large — the whole run is
+// flushed through its end instead of held back forever: with s already this
+// large, the run's end is the end of an occurrence that is itself wholly
+// present in s (matchSpans only reports complete occurrences), so nothing
+// still pending can extend it, and any bytes after the run that are not yet
+// part of a complete match stay buffered as usual. The caller's Redact,
+// applied to the forwarded prefix, then replaces the whole run with one
+// marker, never a partial one. Forms longer than MaxSplitGuard are left out
+// of the keep-back (they are still redacted wherever a flushed chunk holds
+// them whole), so a huge secret cannot make the relay buffer without bound.
+// It implements logger.Redactor with Redact.
 func (v *Values) FlushPoint(s string) int {
 	longest := 0
 	for _, e := range v.snapshot() {
@@ -253,13 +277,19 @@ func (v *Values) FlushPoint(s string) int {
 		return 0
 	}
 	spans, _ := v.matchSpans(s, false)
-	for moved := true; moved; {
-		moved = false
-		for _, sp := range spans {
-			if sp[0] < cut && cut < sp[1] {
-				cut, moved = sp[0], true
-			}
+	for _, run := range mergeSpans(spans) {
+		if run[0] >= cut || cut >= run[1] {
+			continue
 		}
+		// The merged runs are disjoint and sorted, so at most one can cross
+		// cut: no earlier run's end can reach past run[0] (it would have
+		// merged into this one), and no later run's start can reach back to
+		// or before run[1] for the same reason. Either branch below is
+		// therefore final; no further scan or backward step is needed.
+		if run[0] <= 0 && len(s) > MaxSplitGuard {
+			return run[1]
+		}
+		return run[0]
 	}
 	return cut
 }
@@ -316,23 +346,48 @@ func isStrong(trimmed string) bool {
 // replaceSpans replaces the union of spans (byte ranges of s) by Redacted,
 // one marker per merged run.
 func replaceSpans(s string, spans [][2]int) string {
-	if len(spans) == 0 {
+	merged := mergeSpans(spans)
+	if len(merged) == 0 {
 		return s
 	}
-	slices.SortFunc(spans, func(a, b [2]int) int { return a[0] - b[0] })
 	var out strings.Builder
 	last := 0
-	for i := 0; i < len(spans); {
-		start, end := spans[i][0], spans[i][1]
-		for i++; i < len(spans) && spans[i][0] <= end; i++ {
-			end = max(end, spans[i][1])
-		}
-		out.WriteString(s[last:start])
+	for _, run := range merged {
+		out.WriteString(s[last:run[0]])
 		out.WriteString(Redacted)
-		last = end
+		last = run[1]
 	}
 	out.WriteString(s[last:])
 	return out.String()
+}
+
+// mergeSpans sorts spans (byte ranges, start inclusive, end exclusive) by
+// start and merges every run of overlapping or touching ones into one
+// [start, end) span, so every byte covered by any input span is covered by
+// exactly one output span and the output is sorted and disjoint. It is the
+// one place that combines matchSpans' possibly-overlapping occurrences into
+// maximal runs, used both to replace them (replaceSpans) and to find the run
+// crossing a candidate cut point (FlushPoint) — the latter in one linear
+// pass instead of FlushPoint's former backward walk that rescanned every
+// span for each step and, for a self-overlapping secret, never terminated
+// above offset 0. It sorts spans in place; the caller must not reuse the
+// slice.
+func mergeSpans(spans [][2]int) [][2]int {
+	if len(spans) == 0 {
+		return nil
+	}
+	slices.SortFunc(spans, func(a, b [2]int) int { return a[0] - b[0] })
+	merged := make([][2]int, 0, len(spans))
+	start, end := spans[0][0], spans[0][1]
+	for _, sp := range spans[1:] {
+		if sp[0] <= end {
+			end = max(end, sp[1])
+			continue
+		}
+		merged = append(merged, [2]int{start, end})
+		start, end = sp[0], sp[1]
+	}
+	return append(merged, [2]int{start, end})
 }
 
 // snapshot returns the tracked forms longest first. The slice is rebuilt

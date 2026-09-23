@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/snonux/gonf/secret"
 )
 
 // fakeRedactor replaces one synthetic secret; FlushPoint keeps back the
@@ -68,6 +70,52 @@ func TestRedactingWriterForcedFlushKeepsSecretWhole(t *testing.T) {
 	_ = w.Close()
 	if got := out.String(); strings.Contains(got, "S3cr") || !strings.HasSuffix(got, "x[redacted]\n") {
 		t.Fatalf("forced flush split the secret: ...%q", got[max(len(got)-40, 0):])
+	}
+}
+
+// A self-overlapping secret (one whose repeat period is shorter than its
+// own length, e.g. "x1x1x1x1x1" also matching itself shifted by 2 bytes)
+// used to make secret.Values.FlushPoint chase overlapping matches backward
+// one at a time until it reached offset 0, so it never advanced: written a
+// little at a time with no newline, RedactingWriter's pending buffer grew
+// without bound instead of forwarding anything past maxPendingLine. This
+// drives the real secret.Values (not the simplified fakeRedactor above)
+// through RedactingWriter to confirm the buffer now stays bounded and the
+// eventually-forwarded output never shows the raw secret.
+func TestRedactingWriterBoundsSelfOverlappingSecret(t *testing.T) {
+	var vals secret.Values
+	vals.Add([]byte("x1x1x1x1x1"))
+	SetRedactor(&vals)
+	t.Cleanup(func() { SetRedactor(nil) })
+
+	var out strings.Builder
+	w := NewRedactingWriter(&out)
+	const total = 6 * maxPendingLine
+	const chunk = 4096
+	deadline := time.Now().Add(10 * time.Second)
+	for written := 0; written < total; written += chunk {
+		if _, err := w.Write([]byte(strings.Repeat("x1", chunk/2))); err != nil {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("writing stalled after %d bytes; the pending buffer likely never flushes", written)
+		}
+		w.mu.Lock()
+		pending := len(w.pending)
+		w.mu.Unlock()
+		// A little slack above maxPendingLine for the keep-back tail and
+		// the bytes just appended before the next flush check, but nowhere
+		// near unbounded growth (the pre-fix behaviour kept every byte
+		// ever written).
+		if pending > 3*maxPendingLine {
+			t.Fatalf("pending buffer grew to %d bytes (> 3x maxPendingLine=%d): still unbounded", pending, maxPendingLine)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "x1x1x1x1x1") {
+		t.Fatal("raw secret leaked into forwarded output")
 	}
 }
 

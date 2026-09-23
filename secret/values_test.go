@@ -181,6 +181,61 @@ func TestValuesFlushPointIgnoresHugeForms(t *testing.T) {
 	}
 }
 
+// A secret that is "periodic" (a proper suffix of it equals a proper
+// prefix, e.g. "x1x1x1x1x1" also matches itself shifted by 2 bytes) makes
+// every occurrence overlap the next, chaining together into one run that
+// reaches back to offset 0. Below MaxSplitGuard, FlushPoint keeps buffering
+// (0 is the correct, conservative answer — nothing forces a flush yet).
+func TestValuesFlushPointSelfOverlappingBelowBound(t *testing.T) {
+	t.Parallel()
+	var v Values
+	v.Add([]byte("x1x1x1x1x1")) // period 2, own length 10: overlaps itself
+	s := strings.Repeat("x1", 2048)
+	if got := v.FlushPoint(s); got != 0 {
+		t.Fatalf("FlushPoint = %d, want 0 (still below MaxSplitGuard, correctly conservative)", got)
+	}
+}
+
+// Once the buffer exceeds MaxSplitGuard, the same self-overlapping run must
+// still be flushed: the old backward-chaining walk moved the cut back one
+// overlapping match at a time and, for a periodic secret, that chain always
+// reaches offset 0, so FlushPoint returned 0 forever and the caller's
+// pending buffer (logger.RedactingWriter, bounded by maxPendingLine, the
+// same 64 KiB as MaxSplitGuard) grew without bound. The fix's escape hatch
+// must flush the run once s is already this large, and the flushed prefix
+// must redact to exactly one marker with no raw occurrence surviving,
+// because the whole run is one contiguous match.
+func TestValuesFlushPointSelfOverlappingAboveBoundIsFlushedAndRedacted(t *testing.T) {
+	t.Parallel()
+	var v Values
+	v.Add([]byte("x1x1x1x1x1"))
+	run := strings.Repeat("x1", (MaxSplitGuard/2)+4096) // > MaxSplitGuard bytes, all one chain
+	tail := "yyyyyyyy" + "x1x1x1"                       // plain text, then an incomplete occurrence
+	s := run + tail
+
+	cut := v.FlushPoint(s)
+	if cut == 0 {
+		t.Fatal("FlushPoint stayed 0 above MaxSplitGuard: the buffer would grow without bound")
+	}
+	// Nothing past the last complete occurrence may be swept in: at least
+	// the trailing 6-byte incomplete occurrence must stay pending.
+	if cut > len(s)-len("x1x1x1") {
+		t.Fatalf("cut %d reaches into the incomplete trailing occurrence (len %d)", cut, len(s))
+	}
+
+	flushed, pending := s[:cut], s[cut:]
+	if flushed+pending != s {
+		t.Fatal("flushed+pending must reconstruct s exactly")
+	}
+	redacted := v.Redact(flushed)
+	if strings.Contains(redacted, "x1x1x1x1x1") {
+		t.Fatalf("raw secret survived redaction: %.40s...", redacted)
+	}
+	if got, want := strings.Count(redacted, Redacted), 1; got != want {
+		t.Fatalf("the contiguous run must collapse into exactly %d marker, got %d", want, got)
+	}
+}
+
 func TestValuesRedactLongestFirst(t *testing.T) {
 	t.Parallel()
 	var v Values
