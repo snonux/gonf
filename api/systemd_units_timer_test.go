@@ -232,3 +232,71 @@ func TestSystemdTimerApplyNegativeCases(t *testing.T) {
 		})
 	}
 }
+
+// TestSystemdTimerOwnDropInReloadsBeforeRestart (4c2) is the apply-level
+// regression test for the join.go related-unit gap: a FanIn composition
+// installing a drop-in under the SystemdTimer's own <base>.service.d/ or
+// <base>.timer.d/ must still reload the bus before the timer restarts, the
+// same guarantee u82/bb2 give a composition whose input is an unrelated
+// unit. Before 4c2 the timer's own unit names were missing from the
+// related-unit set JoinRegisteredReload and the bb2 merge re-check use, so
+// neither recognized the drop-in as belonging to the timer: the join went
+// through, and on a later apply that only changed the drop-in, the timer
+// restarted with the old drop-in still loaded before the reload that would
+// have picked it up.
+func TestSystemdTimerOwnDropInReloadsBeforeRestart(t *testing.T) {
+	for _, tc := range []struct{ name, dropInDir string }{
+		{"service drop-in", "wall.service.d"},
+		{"timer drop-in", "wall.timer.d"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if runtime.GOOS != "linux" || !systemd.Detected() {
+				t.Skip("systemd apply fake is Linux-specific")
+			}
+			src, dst, home := t.TempDir(), t.TempDir(), t.TempDir()
+			t.Setenv("HOME", home)
+			dropInDst := filepath.Join(dst, tc.dropInDir, "10.conf")
+			if err := os.MkdirAll(filepath.Dir(dropInDst), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeFixtureFile(t, filepath.Join(src, "10.conf"), "[Service]\nEnvironment=X=1\n")
+
+			body := func() {
+				d := InstallFile(dropInDst, filepath.Join(src, "10.conf"))
+				SystemdUnits(FanIn(d), WithUserBus())
+				SystemdTimer("wall", options.WithUser, options.WithRestart,
+					options.WithCommand("/bin/true"), options.WithOnCalendar("hourly"))
+			}
+
+			var invoked [][]string
+			apply := func() {
+				ops := systemdUnitsFixture(t, body)
+				invoked = nil
+				testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
+					if name != "systemctl" {
+						return "", "", 0, nil
+					}
+					invoked = append(invoked, args)
+					return "", "", 0, nil
+				})
+				if err := plan.Apply(ops, plan.Facts{GOOS: runtime.GOOS}, ""); err != nil {
+					t.Fatalf("plan.Apply: %v", err)
+				}
+			}
+			apply() // everything new
+
+			writeFixtureFile(t, filepath.Join(src, "10.conf"), "[Service]\nEnvironment=X=2\n")
+			apply() // only the drop-in changed
+
+			isReload := func(a []string) bool { return slices.Contains(a, "daemon-reload") }
+			isRestart := func(a []string) bool { return slices.Contains(a, "restart") }
+			r, s := slices.IndexFunc(invoked, isReload), slices.IndexFunc(invoked, isRestart)
+			if r < 0 || s < 0 {
+				t.Fatalf("expected both a reload and a restart, got %v", invoked)
+			}
+			if s < r {
+				t.Fatalf("restart ran before the reload that would pick up the changed drop-in: %v", invoked)
+			}
+		})
+	}
+}

@@ -131,13 +131,15 @@ func (t *SystemdTimer) SetEnableOnly() { t.enableOnly = true }
 // reload then also loads the composition's earlier-written inputs, and the
 // registered reload is held unless one of its inputs changed after it, so
 // the bus reloads once for them. The timer is then converged before the
-// composition's reload, so the join is refused when the companion service's
-// After=/Wants= name a unit the composition may install (it could be
-// started from a stale definition). A same-bus declaration after the
-// timer that would add such a unit to the joined reload's inputs is then
-// refused (a declaration error) when it merges. The timer's op is unchanged, and
-// without such a reload (or when joining it is refused) the timer behaves
-// exactly as a standalone one.
+// composition's reload, so the join is refused when the composition may
+// install one of the timer's own service/timer units (including a drop-in
+// under <base>.service.d/ or <base>.timer.d/) or a unit its companion
+// service's After=/Wants= names (it could be started from a stale
+// definition). A same-bus declaration after the timer that would add such a
+// unit to the joined reload's inputs is then refused (a declaration error)
+// when it merges. The timer's op is unchanged, and without such a reload
+// (or when joining it is refused) the timer behaves exactly as a standalone
+// one.
 //
 // An option misuse is reported as a declaration error (resource.Refuse) and
 // nothing is registered or joined.
@@ -148,7 +150,15 @@ func Present(name string, opts ...opt.SystemdTimerOption) resource.Resource {
 	}
 	r := resource.Register("SystemdTimer", t.base, t, t.DependsOn.IDs...)
 	resource.RecordPlanDraft(t.planDraft(r.ID()))
-	systemd.JoinRegisteredReload(t.user, r.ID(), slices.Concat(t.after, t.wants)...)
+	// related must also name the timer's own service and timer units, not
+	// just its After=/Wants= entries: a same-bus reload whose inputs write a
+	// drop-in under <base>.service.d/ or <base>.timer.d/ (or the unit file
+	// itself) is exactly as unsafe to start the timer's own units ahead of
+	// as one that writes a unit those entries name (4c2). Without this the
+	// join went through and the timer's restart ran before the reload that
+	// would have picked up the drop-in.
+	related := slices.Concat([]string{t.base + ".service", t.base + ".timer"}, t.after, t.wants)
+	systemd.JoinRegisteredReload(t.user, r.ID(), related...)
 	return r
 }
 

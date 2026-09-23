@@ -31,12 +31,14 @@ import (
 // (below) must not name one of those inputs. Only the dependency list of
 // the recorded reload changes, so the plan schema does not.
 //
-// related are the units the joiner's units reference (SystemdTimer's
-// After= and Wants= entries; an entry may list several space-separated
-// units, which are checked one by one). Starting the joiner before the registered reload
-// could otherwise start such a unit from a stale definition: e.g. a
-// Persistent timer that fires on start, whose service wants a composition
-// service whose changed unit file is only loaded by the later reload. The
+// related are the units the joiner's own units are or reference (for
+// SystemdTimer: its own <base>.service and <base>.timer, plus its After=
+// and Wants= entries; an entry may list several space-separated units,
+// which are checked one by one). Starting the joiner before the registered
+// reload could otherwise start such a unit from a stale definition: e.g. a
+// Persistent timer that fires on start with a stale drop-in on its own
+// service, or whose service wants a composition service whose changed unit
+// file is only loaded by the later reload. The
 // check sees the reload's inputs at join time only, so a successful join is
 // remembered (DaemonReloadResource.joiners) and a later same-bus declaration
 // whose inputs may define one of the joiner's related units is refused when
