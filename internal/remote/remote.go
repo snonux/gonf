@@ -73,7 +73,13 @@ func defaultSSHRunner(ctx context.Context, stdin io.Reader, argv []string) error
 	// controller's terminal through the controller's redactor, line by line;
 	// a descendant still holding the pipe delays the return by at most
 	// logger.RelayWaitDelay and is then handed to a detached cat writing to
-	// stderr (RunRelayed).
+	// stderr (RunRelayed). If this controller process itself dies while ssh
+	// is still relaying (SIGKILLed, OOM-killed, crashed), that hand-off
+	// never runs and ssh's own next write here fails; regardless of what
+	// that does to ssh, the remote `gonf apply -` on the far end of it
+	// survives that same failure independently, by ignoring SIGPIPE for
+	// its own run (internal/cli's cliApply, ignoreSIGPIPEForRelayedChild,
+	// task lb2).
 	err := logger.RunRelayed(cmd, os.Stderr)
 	if err != nil && ctx.Err() != nil {
 		// Killed by the push context (abort or deadline), not an ssh failure.

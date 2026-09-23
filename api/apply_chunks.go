@@ -224,6 +224,11 @@ func runElevatedCmd(ctx context.Context, mode privilege.Mode, argv []string) err
 	// logger.RelayWaitDelay; then its output is handed, unredacted, to a
 	// detached cat writing to stderr, so it keeps a reader even after gonf
 	// exits and is never killed by SIGPIPE mid-apply (logger.RunRelayed).
+	// If instead this controller process itself dies while the child is
+	// still running (SIGKILLed, OOM-killed, crashed), none of the above
+	// runs at all; the child survives that separately, by ignoring SIGPIPE
+	// for its own run (internal/cli's cliApply, ignoreSIGPIPEForRelayedChild,
+	// task lb2).
 	err = logger.RunRelayed(cmd, os.Stderr)
 	if err != nil && ctx.Err() != nil {
 		return fmt.Errorf("%w (elevated apply stopped by context: %v)", ctx.Err(), err)

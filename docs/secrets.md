@@ -306,15 +306,29 @@ On the controller these outputs pass through the registry:
   writing to its stderr, in a new session without a controlling terminal
   (so neither Ctrl-C, a hangup nor `stty tostop` stops it). The descendant thus
   keeps a reader for as long as it writes, even after gonf has exited, and
-  is never killed by SIGPIPE mid-apply, as before gonf relayed its output.
-  What it prints after the hand-off (strictly: from the start of the line
-  that was unfinished at the hand-off) is **not redacted** (the controller's
+  is never killed by SIGPIPE mid-apply here either: it keeps a reader
+  exactly as it had one before gonf relayed its output. What it prints
+  after the hand-off (strictly: from the start of the line that was
+  unfinished at the hand-off) is **not redacted** (the controller's
   registry dies with gonf); destinations withhold validator output, command
   argv and failure output of sensitive ops themselves, and recording refuses
   strong secrets in identities, so what is left is limited by the rules
   above. A clean exit stays a success. (When stderr is not a file, or `cat`
   cannot start, gonf relays that output redacted in the background, which
   protects the descendant only while gonf runs.)
+- The hand-off above only ever runs because gonf itself is still around to
+  start it, on its own schedule, once the relayed process has exited or
+  been killed by its context. It does nothing for the separate case of the
+  CONTROLLER ITSELF dying while relaying a still-running child — SIGKILLed,
+  OOM-killed, crashed — since a dead controller runs no hand-off and starts
+  no `cat`. The relay pipe's read end simply closes out from under the
+  child, local elevated sudo/doas re-exec or the receiving end of a push
+  alike; for a plain shell, that write would raise SIGPIPE and kill it,
+  exactly what pre-062 avoided by writing straight to the terminal instead
+  of a pipe. Both relayed children instead ignore SIGPIPE for their whole
+  run (`internal/cli`'s `cliApply`, `ignoreSIGPIPEForRelayedChild`, task
+  lb2), so such a write fails with a plain, discarded error and the apply
+  keeps going.
 
 Not redacted, because they carry no op IDs or values: flag usage text and
 the output of the `scp` and `go build` runs that install the gonf binary.

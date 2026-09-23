@@ -590,8 +590,12 @@ func warnSensitivePlan(outPath string, ops []plan.Op) {
 // across sudo/doas implementations (see runElevatedCmd's doc comment).
 // Canceling a push on the controller, however, only kills the local ssh:
 // nothing signals the remote gonf, which keeps applying until its next write
-// to the closed stdout fails; there is no end-to-end remote cancel.
+// to the closed stdout fails; there is no end-to-end remote cancel. Either
+// way this is the relayed child's entry point (logger.RunRelayed), so it
+// ignores SIGPIPE before anything else runs — see
+// ignoreSIGPIPEForRelayedChild.
 func cliApply(ctx context.Context, args []string) int {
+	ignoreSIGPIPEForRelayedChild()
 	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	dryRun := fs.Bool("dry-run", false, "Preview changes without applying them")
@@ -635,6 +639,60 @@ func cliApply(ctx context.Context, args []string) int {
 		go watchCancelPipe(os.Stdin, cancel)
 	}
 	return cliApplyFile(ctx, rest[0])
+}
+
+// ignoreSIGPIPEForRelayedChild makes this process ignore SIGPIPE for the
+// rest of its run. cliApply is reached only as the relayed child's entry
+// point: a local elevated sudo/doas re-exec (api.runElevatedCmd) or the
+// receiving end of a push over ssh (internal/remote's defaultSSHRunner) —
+// either way logger.RunRelayed owns the pipe (or, for push, the ssh
+// channel feeding one) this child's stdout and stderr are wired to, and the
+// controller is its only reader.
+//
+// RunRelayed's detached-cat hand-off already keeps a descendant alive once
+// it outlives its own gonf's normal exit or a context-cancelled kill (the
+// hand-off has time to run because gonf is still the one closing the pipe,
+// on its own schedule). It does nothing, however, when the CONTROLLER
+// ITSELF dies out from under a still-running child — SIGKILL, the OOM
+// killer, a crash: the read end simply vanishes with no hand-off to catch
+// it. Go's runtime already treats a SIGPIPE received while writing to file
+// descriptor 1 or 2 specially (see the os/signal package docs, "SIGPIPE"):
+// unless the signal is otherwise handled, such a write kills the process
+// outright, exactly like a plain C program's default disposition. Before
+// gonf relayed a child's output at all (task 062), fd 1/2 were the
+// terminal, so this never mattered; once they became the write end of a
+// pipe with a single, now-dead reader, the very next log line
+// (internal/logger) or CLI print killed this child mid-apply (task lb2) —
+// confirmed by a probe that SIGKILLed only the controller and found the
+// child's own marker write never ran.
+//
+// Ignoring SIGPIPE here makes such a write return a plain EPIPE error
+// instead, the same as it already would on any file descriptor other than
+// 1 or 2. internal/logger's logf discards that error (as it already
+// discards any other write failure), so the apply keeps going and finishes
+// its work even though nothing is listening to the pipe any more; a caller
+// piping this child's own stdout/stderr further (rare — it is normally
+// exec'd with both wired to a pipe or an ssh channel, never a terminal)
+// would see the same "keep going and drop it" behaviour rather than being
+// killed. The disposition is process-wide and, being SIG_IGN rather than a
+// caught signal, POSIX preserves it across a later exec — including every
+// backend command this apply goes on to run (systemctl, a package manager,
+// a Command/Cron script), and a shell such as sh/bash does NOT reset it for
+// the commands it execs (verified: `sh -c 'yes | head -1'` under an
+// ignoring parent leaves `yes` seeing EPIPE, not being killed, exactly as
+// gonf's own writes now do). gonf's own backends (internal/exec) capture a
+// command's stdout/stderr into buffers rather than wiring them to a live
+// pipe another process reads concurrently, so none of them write into a
+// pipe that could go away mid-command; a well-behaved program that does
+// (GNU coreutils, verified above with `yes`) checks write()'s result and
+// exits on EPIPE same as it would have exited on SIGPIPE. A recipe's own
+// Command/Cron script that builds a shell pipeline and assumes an
+// unresponsive reader kills its producer via signal, without checking
+// write() itself, would instead see that producer keep running until
+// canceled some other way — a behavior change worth knowing about, not
+// one this fix can rule out for every possible script.
+func ignoreSIGPIPEForRelayedChild() {
+	signal.Ignore(syscall.SIGPIPE)
 }
 
 // watchCancelPipe reads r (the elevated child's stdin, wired by
