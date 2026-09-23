@@ -158,6 +158,14 @@ func (r *RedactingWriter) Close() error {
 	return err
 }
 
+// Write forwards Redact(p); it reports len(p) unless w fails.
+func (r redactedWriter) Write(p []byte) (int, error) {
+	if _, err := io.WriteString(r.w, Redact(string(p))); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
 // forwardSafePrefix forwards the part of an overlong pending run that no
 // secret can still extend into (Redactor.FlushPoint), keeping the rest.
 func (r *RedactingWriter) forwardSafePrefix() error {
@@ -229,14 +237,6 @@ func handOff(pr, f *os.File) error {
 	_ = pr.Close()
 	go func() { _ = helper.Wait() }()
 	return nil
-}
-
-// Write forwards Redact(p); it reports len(p) unless w fails.
-func (r redactedWriter) Write(p []byte) (int, error) {
-	if _, err := io.WriteString(r.w, Redact(string(p))); err != nil {
-		return 0, err
-	}
-	return len(p), nil
 }
 
 // forward writes one redacted chunk to the destination.

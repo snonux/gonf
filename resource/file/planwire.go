@@ -323,7 +323,8 @@ func draftKeyedLines(edits []plan.KeyedLine) []resource.KeyedLine {
 
 // planDraft records f as a "file" (or, for EnsureFile, "ensure_file") plan
 // draft: identity, attributes, line edits, validation, dependencies and the
-// explicit sensitivity here, the content through draftContent.
+// explicit sensitivity here, the content through contentDraft and the
+// template intent and data through templateDraft.
 func (f *File) planDraft() resource.PlanDraft {
 	d := resource.PlanDraft{
 		Kind:           "file",
@@ -358,17 +359,18 @@ func (f *File) planDraft() resource.PlanDraft {
 			d.Group = f.group
 		}
 	}
-	f.draftContent(&d)
+	f.contentDraft(&d)
+	f.templateDraft(&d)
 	return d
 }
 
-// draftContent records f's content half on d: the literal content or the
-// source to package, and the template intent and data.
-func (f *File) draftContent(d *resource.PlanDraft) {
-	// HasContent flags that WithContent/WithSource was configured at all, so
-	// packageDraft/applyFile can tell a legitimately empty file (content or
-	// source resolving to zero bytes, which base64-encodes as "") apart from
-	// an op with no content data recorded (a bug, not a valid empty file).
+// contentDraft records f's content half on d: the literal content, or the
+// source path for packageDraft to package. HasContent flags that
+// WithContent/WithSource was configured at all, so packageDraft/applyFile
+// can tell a legitimately empty file (content or source resolving to zero
+// bytes, which base64-encodes as "") apart from an op with no content data
+// recorded (a bug, not a valid empty file).
+func (f *File) contentDraft(d *resource.PlanDraft) {
 	switch {
 	case f.source != "":
 		d.SourcePath = f.source
@@ -377,13 +379,16 @@ func (f *File) draftContent(d *resource.PlanDraft) {
 		d.ContentB64 = base64.StdEncoding.EncodeToString([]byte(f.content))
 		d.HasContent = true
 	}
-	// Template intent must travel on the wire explicitly: packageDraft
-	// reads f.source's RAW bytes into content_b64/blob (below), and
-	// targetPath above already stripped ".tmpl" from the recorded Path, so
-	// neither field plan apply sees still carries the suffix
-	// shouldRenderTemplate would otherwise key off. Without Template/
-	// TemplateParam, plan apply (Run/push/cluster/fleet) would write the
-	// literal unrendered template text to the destination.
+}
+
+// templateDraft records f's template intent and data on d. Template intent
+// must travel on the wire explicitly: packageDraft reads f.source's RAW
+// bytes into content_b64/blob, and targetPath already stripped ".tmpl" from
+// the recorded Path, so neither field plan apply sees still carries the
+// suffix shouldRenderTemplate would otherwise key off. Without
+// Template/TemplateParam, plan apply (Run/push/cluster/fleet) would write
+// the literal unrendered template text to the destination.
+func (f *File) templateDraft(d *resource.PlanDraft) {
 	if f.shouldRenderTemplate() {
 		d.Template = true
 		d.TemplateParam = f.templateParam()

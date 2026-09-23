@@ -21,8 +21,8 @@ import (
 // recorder and every snapshot each own their draft. TemplateData is carried
 // as its JSON encoding rather than the recipe's live value, so it is copied
 // like any other slice. The only reference Clone shares is
-// TemplateDataErr: an error is an immutable value, not storage anyone
-// writes through.
+// TemplateDataErr: an error value nothing writes through, not storage that
+// mutation could corrupt.
 func (d PlanDraft) Clone() PlanDraft {
 	c := d
 	c.TemplateData = slices.Clone(d.TemplateData)
