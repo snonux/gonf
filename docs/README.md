@@ -37,7 +37,11 @@ caught and fixed it). Before or in the same commit as a version bump:
       whose doc paragraph was added late by task oc2) if a doc pass is
       skipped.
 - [ ] Grep the docs for "unreleased" / a feature's dev branch name and
-      flip any that shipped in this release to their release note.
+      flip any that shipped in this release to their release note. After an
+      in-place text substitution, re-read the surrounding paragraph and
+      re-wrap/re-flow it — task ed2 had to repair the same orphaned-line
+      artifact twice from repeated `sed` edits that left stale line breaks
+      behind.
 - [ ] Re-run the gate suite (`gofmt -l .`, `go build ./...`, `go vet ./...`,
       `go test -race -shuffle=on -count=1 ./...`,
       `go tool staticcheck ./...`) after the doc edits — they are

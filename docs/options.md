@@ -76,7 +76,7 @@ and backend limits.
 
 ### Change-gate changes after v0.15.0
 
-Unreleased, pre-1.0 (task b72). The recipe DSL is unchanged: `OnChange`,
+Removed in v0.16.0 (task b72). The recipe DSL is unchanged: `OnChange`,
 `WatchChanges`, `IfChanged` and `WithWatch` keep their names, types and
 recorded plans (no plan schema change). Deliberate changes:
 
@@ -102,7 +102,7 @@ recorded plans (no plan schema change). Deliberate changes:
 
 ### Test seams removed after v0.15.0
 
-Unreleased, pre-1.0 (task 082); test-only Go API, no behaviour or plan
+Removed in v0.16.0 (task 082); test-only Go API, no behaviour or plan
 change. The exported `*ForTest` runner and detector setters are gone from the
 resource packages (neither client module used them). Tests inside this module
 fake host commands through the module-internal `internal/testseam` package
@@ -130,7 +130,7 @@ The state resets (`api.ResetForTest`, `resource.ResetForTest`,
 
 ### Direct repository apply removed after v0.15.0
 
-Unreleased, pre-1.0 (task e72); no known users (neither client module called
+Removed in v0.16.0 (task e72); no known users (neither client module called
 it). `api.Apply`/`api.Run` and the plan engine were already the sole apply
 path for recipes; this removes the legacy path they had superseded. Removed:
 
@@ -144,7 +144,10 @@ Tests inside this module that used to call `resource.Apply` now call
 module-internal `internal/testapply.Apply` (from a `resource/<kind>`
 package's own tests, which cannot import `api`).
 
-Follow-up (task ub2): `resource.Register` used to still require its
+### resource.Applier contract removed (task ub2)
+
+Removed in v0.16.5 (task ub2), a follow-up to the direct-repository-apply
+removal above. `resource.Register` used to still require its
 registered-value argument to satisfy a `resource.Applier` interface, so every
 resource kind kept a now-pointless one-line `Apply` method (e.g.
 `file.File.Apply`) and a compile-time assertion, even though nothing called
