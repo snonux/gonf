@@ -31,13 +31,17 @@ func Privilege() privilege.Mode { return processPrivilege }
 // The payload is one chunk already encoded by the caller, so no
 // dangling-dependency pre-flight runs here (see ApplyPlan); PushTo, which
 // records the whole plan, does run it. It never installs or upgrades the
-// remote gonf, but it does verify it (remote.RequireRemoteGonf, the same
-// check -preview uses): the target must already run gonf release 0.16.3 or
-// newer, the release that added the apply command's unconditional
+// remote gonf, but it does verify the one capability it depends on
+// (remote.RequireRemoteRelayed): the target must already run gonf release
+// 0.16.3 or newer, the release that added the apply command's unconditional
 // "-relayed" flag (task 7d2) that this entry point cannot omit for an older
 // remote — an embedder pushing to a stale remote gets a clear refusal
 // instead of a raw "flag provided but not defined: -relayed" from the far
-// end (task ud2).
+// end (task ud2). Unlike -preview's remote.RequireRemoteGonf, this floor
+// check accepts any remote at or above 0.16.3, even one that trails the
+// controller's own latest patch release — a fleet upgraded on its own
+// cadence, the realistic case task ne2 fixed after ud2's first cut reused
+// RequireRemoteGonf wholesale and over-refused it.
 func PushPayload(t PushTarget, payload []byte, elevate bool, applyDir string) error {
 	return remote.PushPayloadContext(context.Background(), t, payload, elevate, applyDir)
 }

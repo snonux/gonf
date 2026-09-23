@@ -46,14 +46,21 @@ func TestRemoteApplyCmdPrivilegeNoneElevateErrors(t *testing.T) {
 	}
 }
 
-// TestPushPayloadContextRefusesStaleRemote is task ud2's regression test.
-// Before the fix, payloadApplyCmd appended "-relayed" unconditionally and
+// TestPushPayloadContextRefusesStaleRemote is task ud2's regression test,
+// narrowed by task ne2 to match RequireRemoteRelayed's push-phrased wording.
+// Before ud2's fix, payloadApplyCmd appended "-relayed" unconditionally and
 // never verified the remote at all, so a pre-7d2 remote gonf reached SSH and
 // failed there with a raw "flag provided but not defined: -relayed" (the
-// exact failure the probe below simulates via a fake SSHRunner). After the
-// fix, PushPayloadContext follows -preview's precedent (RequireRemoteGonf)
-// and refuses before ever opening that ssh session, with a clear message
-// instead of the raw flag-usage dump.
+// exact failure the probe below simulates via a fake SSHRunner). ud2 fixed
+// that but over-corrected to the full RequireRemoteGonf gate (refusing any
+// remote behind the controller's exact release, and any remote whose
+// unrelated strict-preview capability couldn't be verified); ne2 replaced it
+// with RequireRemoteRelayed, a fixed 0.16.3 floor. This test still covers
+// the boundary ne2's own annotation says was tested before (one release
+// below the floor, refused) — see TestPushPayloadContextAcceptsRelayedFloor
+// and TestPushPayloadContextAcceptsRemoteBehindControllerButAboveFloor for
+// the at-floor and slightly-behind-but-capable cases that were NOT
+// previously tested and were previously wrongly refused.
 func TestPushPayloadContextRefusesStaleRemote(t *testing.T) {
 	oldPlan, oldStrictPreview, oldRelease := defaultPusher.PlanVersionProber, defaultPusher.StrictPreviewProber, defaultPusher.ReleaseVersionProber
 	oldSSH := SSHRunner
@@ -83,8 +90,11 @@ func TestPushPayloadContextRefusesStaleRemote(t *testing.T) {
 	}
 
 	err := PushPayloadContext(context.Background(), PushTarget{Host: "h.example"}, []byte("GONF-PUSH/1"), false, "")
-	if err == nil || !strings.Contains(err.Error(), "older than controller") {
-		t.Fatalf("PushPayloadContext() = %v, want a clear refusal naming the stale remote release", err)
+	if err == nil || !strings.Contains(err.Error(), "older than the minimum") {
+		t.Fatalf("PushPayloadContext() = %v, want a clear, push-phrased refusal naming the stale remote release", err)
+	}
+	if strings.Contains(err.Error(), "preview") {
+		t.Fatalf("PushPayloadContext() = %v, want push-phrased wording, not preview wording", err)
 	}
 	if strings.Contains(err.Error(), "flag provided but not defined") {
 		t.Fatalf("PushPayloadContext() = %v, want the clear refusal, not the raw remote flag-usage error", err)
@@ -94,11 +104,138 @@ func TestPushPayloadContextRefusesStaleRemote(t *testing.T) {
 	}
 }
 
+// TestPushPayloadContextAcceptsRelayedFloor checks the exact documented
+// minimum (0.16.3, task 7d2's release) is accepted, not just rejected one
+// release below it.
+func TestPushPayloadContextAcceptsRelayedFloor(t *testing.T) {
+	oldRelease := defaultPusher.ReleaseVersionProber
+	oldSSH := SSHRunner
+	t.Cleanup(func() {
+		defaultPusher.ReleaseVersionProber = oldRelease
+		SSHRunner = oldSSH
+	})
+	defaultPusher.ReleaseVersionProber = func(context.Context, PushTarget, ProbeContext) (string, error) {
+		return "0.16.3", nil
+	}
+	sshCalled := false
+	SSHRunner = func(context.Context, io.Reader, []string) error {
+		sshCalled = true
+		return nil
+	}
+
+	if err := PushPayloadContext(context.Background(), PushTarget{Host: "h.example"}, []byte("GONF-PUSH/1"), false, ""); err != nil {
+		t.Fatalf("PushPayloadContext() = %v, want a remote at exactly the 0.16.3 floor accepted", err)
+	}
+	if !sshCalled {
+		t.Fatal("PushPayloadContext did not reach SSH for a remote at the 0.16.3 floor")
+	}
+}
+
+// TestPushPayloadContextAcceptsRemoteBehindControllerButAboveFloor is the
+// realistic "slightly behind but still -relayed-capable" case task ne2's
+// annotation says ud2's own tests never covered, and that ud2's
+// RequireRemoteGonf-based fix wrongly refused: a fleet host upgraded to
+// 0.16.4 or 0.16.5 (above the 0.16.3 -relayed floor, but behind the
+// controller's own 0.16.6) must still be accepted, since -relayed has been
+// stable since 0.16.3 — the controller's own exact release is irrelevant to
+// this one capability.
+func TestPushPayloadContextAcceptsRemoteBehindControllerButAboveFloor(t *testing.T) {
+	for _, remoteRelease := range []string{"0.16.4", "0.16.5"} {
+		t.Run(remoteRelease, func(t *testing.T) {
+			oldRelease := defaultPusher.ReleaseVersionProber
+			oldSSH := SSHRunner
+			t.Cleanup(func() {
+				defaultPusher.ReleaseVersionProber = oldRelease
+				SSHRunner = oldSSH
+			})
+			defaultPusher.ReleaseVersionProber = func(context.Context, PushTarget, ProbeContext) (string, error) {
+				return remoteRelease, nil
+			}
+			sshCalled := false
+			SSHRunner = func(context.Context, io.Reader, []string) error {
+				sshCalled = true
+				return nil
+			}
+
+			// internal.Version is 0.16.6 at the time this test was written
+			// (see internal/version.go); remoteRelease trails it but clears
+			// the 0.16.3 floor.
+			if err := PushPayloadContext(context.Background(), PushTarget{Host: "h.example"}, []byte("GONF-PUSH/1"), false, ""); err != nil {
+				t.Fatalf("PushPayloadContext() = %v, want a remote at %s (above the 0.16.3 floor, behind the controller) accepted", err, remoteRelease)
+			}
+			if !sshCalled {
+				t.Fatalf("PushPayloadContext did not reach SSH for remote release %s", remoteRelease)
+			}
+		})
+	}
+}
+
+// TestPushPayloadContextAcceptsFarAheadRemote keeps task ud2's original
+// far-ahead-remote case working under RequireRemoteRelayed.
+func TestPushPayloadContextAcceptsFarAheadRemote(t *testing.T) {
+	oldRelease := defaultPusher.ReleaseVersionProber
+	oldSSH := SSHRunner
+	t.Cleanup(func() {
+		defaultPusher.ReleaseVersionProber = oldRelease
+		SSHRunner = oldSSH
+	})
+	defaultPusher.ReleaseVersionProber = func(context.Context, PushTarget, ProbeContext) (string, error) {
+		return "99.0.0", nil
+	}
+	sshCalled := false
+	SSHRunner = func(context.Context, io.Reader, []string) error {
+		sshCalled = true
+		return nil
+	}
+
+	if err := PushPayloadContext(context.Background(), PushTarget{Host: "h.example"}, []byte("GONF-PUSH/1"), false, ""); err != nil {
+		t.Fatalf("PushPayloadContext() = %v, want a far-ahead remote accepted", err)
+	}
+	if !sshCalled {
+		t.Fatal("PushPayloadContext did not reach SSH for a far-ahead remote")
+	}
+}
+
+// TestPushPayloadContextIgnoresUnrelatedStrictPreviewCapability is task
+// ne2's regression test: before the fix, payloadApplyCmd called
+// RequireRemoteGonf, which refused outright whenever StrictPreviewProber was
+// nil ("cannot verify remote strict-preview capability") — a capability
+// completely unrelated to -relayed. With RequireRemoteRelayed, a nil
+// StrictPreviewProber (simulating that unrelated capability being
+// unverifiable) must not affect PushPayloadContext at all.
+func TestPushPayloadContextIgnoresUnrelatedStrictPreviewCapability(t *testing.T) {
+	oldStrictPreview, oldRelease := defaultPusher.StrictPreviewProber, defaultPusher.ReleaseVersionProber
+	oldSSH := SSHRunner
+	t.Cleanup(func() {
+		defaultPusher.StrictPreviewProber = oldStrictPreview
+		defaultPusher.ReleaseVersionProber = oldRelease
+		SSHRunner = oldSSH
+	})
+	defaultPusher.StrictPreviewProber = nil
+	defaultPusher.ReleaseVersionProber = func(context.Context, PushTarget, ProbeContext) (string, error) {
+		return "0.16.5", nil
+	}
+	sshCalled := false
+	SSHRunner = func(context.Context, io.Reader, []string) error {
+		sshCalled = true
+		return nil
+	}
+
+	err := PushPayloadContext(context.Background(), PushTarget{Host: "h.example"}, []byte("GONF-PUSH/1"), false, "")
+	if err != nil {
+		t.Fatalf("PushPayloadContext() = %v, want a nil StrictPreviewProber (an unrelated capability) to not refuse the push", err)
+	}
+	if !sshCalled {
+		t.Fatal("PushPayloadContext did not reach SSH despite a -relayed-capable remote")
+	}
+}
+
 // TestPushPayloadContextRequiresRemoteGonfInCallsOwnPrivilegeContext checks
-// that payloadApplyCmd probes ProbeElevated when the call elevates and
-// ProbeLogin otherwise — PushPayload applies exactly one privilege context
-// per call (unlike the chunked Delivery path, which probes both when a plan
-// mixes them), so only that one context's remote gonf need be verified.
+// that payloadApplyCmd's RequireRemoteRelayed call probes ProbeElevated when
+// the call elevates and ProbeLogin otherwise — PushPayload applies exactly
+// one privilege context per call (unlike the chunked Delivery path, which
+// probes both when a plan mixes them), so only that one context's remote
+// gonf need be verified.
 func TestPushPayloadContextRequiresRemoteGonfInCallsOwnPrivilegeContext(t *testing.T) {
 	oldPlan, oldStrictPreview, oldRelease := defaultPusher.PlanVersionProber, defaultPusher.StrictPreviewProber, defaultPusher.ReleaseVersionProber
 	oldSSH := SSHRunner

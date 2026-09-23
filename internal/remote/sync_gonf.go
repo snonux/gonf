@@ -249,6 +249,81 @@ func (p *Pusher) RequireRemoteGonf(ctx context.Context, t PushTarget, pc ProbeCo
 	return nil
 }
 
+// relayedMinRelease is the minimum remote gonf release that accepts the
+// unconditional "apply -relayed" flag PushPayloadContext always sends (task
+// 7d2, docs/plan.md's "Fixed-argument sudoers/doas rules"). It is a fixed
+// floor, not a moving target tied to the controller's own internal.Version:
+// -relayed has been stable since this release, so a remote at or above it is
+// fully capable regardless of how many further controller releases have
+// shipped since. RequireRemoteRelayed compares against this constant instead
+// of internal.Version for exactly that reason (task ne2, narrowing task
+// ud2's fix — see RequireRemoteRelayed's doc comment).
+const relayedMinRelease = "0.16.3"
+
+// RequireRemoteRelayed verifies that t's remote gonf binary is new enough to
+// accept the "apply -relayed" flag that PushPayloadContext's payloadApplyCmd
+// always sends (task 7d2): the remote release must be at least
+// relayedMinRelease. This is a thin wrapper over defaultPusher's method; see
+// that method's doc comment for why it checks only this one capability,
+// unlike RequireRemoteGonf.
+func RequireRemoteRelayed(ctx context.Context, t PushTarget, pc ProbeContext) error {
+	return defaultPusher.RequireRemoteRelayed(ctx, t, pc)
+}
+
+// RequireRemoteRelayed is the Pusher-scoped implementation of the
+// package-level RequireRemoteRelayed above. It deliberately checks only the
+// remote's release version against the fixed relayedMinRelease floor — NOT
+// RequireRemoteGonf's full plan-schema/strict-preview/exact-controller-
+// release gate. That fuller gate exists for strict preview, which needs the
+// remote to behave identically to the controller in every respect preview
+// can't otherwise verify; PushPayloadContext depends on exactly one remote
+// capability (accepting "-relayed"), which has been stable since
+// relayedMinRelease, so gating it on the controller's own exact release (as
+// task ud2's fix did, by reusing RequireRemoteGonf wholesale) refused every
+// remote even one patch release behind the controller — including a remote
+// that was fully -relayed-capable — and refused outright whenever
+// StrictPreviewProber was nil, a capability entirely unrelated to -relayed
+// (task ne2).
+//
+// Like RequireRemoteGonf, a missing, unparseable, or too-old release is
+// treated as a refusal: PushPayloadContext cannot install or upgrade the
+// remote gonf (see its own doc comment), so it cannot self-heal a remote
+// this check rejects, and must refuse clearly here instead of reaching SSH
+// and failing there with a raw "flag provided but not defined: -relayed".
+func (p *Pusher) RequireRemoteRelayed(ctx context.Context, t PushTarget, pc ProbeContext) error {
+	if t.Host == "" {
+		return fmt.Errorf("push: empty host")
+	}
+	if p.ReleaseVersionProber == nil {
+		return fmt.Errorf("push: cannot verify remote gonf release version; -relayed requires release %s or newer", relayedMinRelease)
+	}
+	remoteRelease, err := p.ReleaseVersionProber(ctx, t, pc)
+	if err != nil {
+		return fmt.Errorf("push: probe gonf release version: %w", err)
+	}
+	if remoteRelease == "" {
+		return fmt.Errorf("push: remote gonf did not report a release version; -relayed requires release %s or newer, run push once against a version-verified path or upgrade the remote gonf binary manually first", relayedMinRelease)
+	}
+	remoteVersion, err := parseReleaseVersion(remoteRelease)
+	if err != nil {
+		return fmt.Errorf("push: remote gonf release version %q: %w", remoteRelease, err)
+	}
+	minVersion, err := parseReleaseVersion(relayedMinRelease)
+	if err != nil {
+		// relayedMinRelease is a package constant literal, never remote
+		// input, so this can only be a self-inflicted typo — but library
+		// code never panics for recipe/input errors (AGENTS.md's
+		// registration-time contract; the caller here is a runtime push,
+		// not a declaration), so it is reported the same conservative way
+		// as any other unverifiable case, instead of crashing the process.
+		return fmt.Errorf("push: internal relayedMinRelease %q does not parse: %w", relayedMinRelease, err)
+	}
+	if releaseVersionLess(remoteVersion, minVersion) {
+		return fmt.Errorf("push: remote gonf release %s is older than the minimum %s required for -relayed; upgrade the remote gonf binary first", remoteRelease, relayedMinRelease)
+	}
+	return nil
+}
+
 // EnsureRemoteGonf is the Pusher-scoped implementation of the package-level
 // EnsureRemoteGonf above (see its doc comment for the full behavior). It
 // reads only p's own fields (SCPRunner, GoBuildRunner, PlanVersionProber,

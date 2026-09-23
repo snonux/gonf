@@ -1389,15 +1389,22 @@ defined: -relayed", the same failure mode as an unknown `-cmd-timeout`);
 an ordinary `push` self-heals this via `EnsureRemoteGonf`'s release-version
 upgrade once the release carrying task 7d2 lands (0.16.3), and `-preview`
 refuses outright against a stale remote (`RequireRemoteGonf`) rather than
-surfacing that raw error. `api.PushPayload`/`api.PushPayloadContext` follow
-`-preview`'s precedent for the same reason (task ud2): like preview, this
-entry point never installs or upgrades gonf, so it cannot self-heal a stale
-remote either, and unlike `-cmd-timeout` (a nicety that a capability probe
-can gate on/off per host) `-relayed` cannot be probed-and-omitted without
+surfacing that raw error. `api.PushPayload`/`api.PushPayloadContext` refuse
+the same way for the same reason (task ud2): like preview, this entry point
+never installs or upgrades gonf, so it cannot self-heal a stale remote
+either, and unlike `-cmd-timeout` (a nicety that a capability probe can gate
+on/off per host) `-relayed` cannot be probed-and-omitted without
 reintroducing the SIGPIPE bug task 7d2 fixed — so `payloadApplyCmd` also
-calls `RequireRemoteGonf`, in the call's own privilege context (elevated or
-login), before any apply traffic. The remote must already be gonf 0.16.3 or
-newer for `PushPayload`/`PushPayloadContext` to succeed.
+verifies the remote, in the call's own privilege context (elevated or
+login), before any apply traffic. Unlike `-preview`, it does NOT call the
+full `RequireRemoteGonf` (task ud2's first cut did, and over-refused every
+remote even one patch release behind the controller, including a fully
+`-relayed`-capable one, plus any remote whose UNRELATED strict-preview
+capability could not be verified): `payloadApplyCmd` calls
+`RequireRemoteRelayed` instead (task ne2), which checks only the one
+capability this entry point depends on — the remote release must be gonf
+0.16.3 or newer, a fixed floor, not tied to the controller's own exact
+release — for `PushPayload`/`PushPayloadContext` to succeed.
 
 `gonf -list` lists **activated** tasks (After `When*` filtering for display);
 plan recording still uses the full candidate set.
