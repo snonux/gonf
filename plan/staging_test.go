@@ -28,6 +28,34 @@ func writeBlob(t *testing.T, dir string) string {
 	return path
 }
 
+// TestApplyStagingRootSharedRootSticky is the regression test for task ee2:
+// os.Chmod(shared, 0o1777) looked plausible but silently dropped the sticky
+// bit, because os.Chmod reads the ModeSticky FileMode flag (a high bit), not
+// the low-order 0o1000 octal literal. It stats the real, on-disk mode of the
+// shared parent after ApplyStagingRoot runs, rather than merely asserting
+// which chmod argument was used — that argument-only check is exactly what
+// let the original bug slip through.
+func TestApplyStagingRootSharedRootSticky(t *testing.T) {
+	isolateStagingRoot(t)
+
+	root, err := ApplyStagingRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared := filepath.Dir(root)
+
+	info, err := os.Stat(shared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSticky == 0 {
+		t.Fatalf("shared staging root %s: sticky bit not set, mode %v", shared, info.Mode())
+	}
+	if perm := info.Mode().Perm(); perm != 0o777 {
+		t.Fatalf("shared staging root %s: permission bits %#o, want 0o777", shared, perm)
+	}
+}
+
 // TestNewApplyRunDirIsolatedFromConcurrentRuns is the regression test for the
 // old eager sweep: creating a second run directory used to RemoveAll every
 // entry under the staging root, destroying any in-flight apply's staging dir

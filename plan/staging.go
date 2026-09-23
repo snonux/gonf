@@ -45,8 +45,17 @@ func ApplyStagingRoot() (string, error) {
 	// Best effort: the shared parent must stay writable for every uid that
 	// may apply here. Failures are expected on pre-existing dirs the current
 	// user does not own; the one-time cleanup is a host-side root action.
+	//
+	// The sticky bit must be set via os.ModeSticky, not the raw octal
+	// literal 0o1777: os.Chmod's Unix path reads the ModeSetuid/ModeSetgid/
+	// ModeSticky FileMode flag bits (each a high bit, e.g. ModeSticky is
+	// 1<<20) off the mode value, not the low-order 0o1000 octal bit a plain
+	// integer literal sets. Passing 0o1777 therefore silently drops the
+	// sticky bit and leaves the shared root world-writable without it,
+	// letting any local user rename another uid's per-uid subdirectory out
+	// of the way (task ee2).
 	shared := filepath.Dir(root)
-	_ = os.Chmod(shared, 0o1777)
+	_ = os.Chmod(shared, os.ModeSticky|0o777)
 	return root, nil
 }
 
