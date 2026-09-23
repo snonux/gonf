@@ -12,17 +12,18 @@ func registerSelectionInventory(t *testing.T) {
 	t.Helper()
 	Reset()
 	t.Cleanup(Reset)
-	mustAddHost(t, "r0", func(h *Host) { h.User, h.SSHHost = "root", "r0.lan" })
-	mustAddHost(t, "r0-wg", func(h *Host) { h.SSHHost = "r0.lan" })
-	mustAddHost(t, "r1", func(h *Host) { h.SSHHost = "r1.lan" })
+	mustAddHost(t, "r0", func(h *Host) error { h.User, h.SSHHost = "root", "r0.lan"; return nil })
+	mustAddHost(t, "r0-wg", func(h *Host) error { h.SSHHost = "r0.lan"; return nil })
+	mustAddHost(t, "r1", func(h *Host) error { h.SSHHost = "r1.lan"; return nil })
 	mustAddHost(t, "pi1")
 	mustAddHost(t, "pi10")
-	mustAddHost(t, "fishfinger", func(h *Host) {
+	mustAddHost(t, "fishfinger", func(h *Host) error {
 		h.User, h.SSHHost, h.Port = "rex", "fishfinger.example", 2
+		return nil
 	})
 	// Two VMs behind port forwards on one SSH host: different machines.
-	mustAddHost(t, "vm1", func(h *Host) { h.SSHHost, h.Port = "f3.lan", 2201 })
-	mustAddHost(t, "vm2", func(h *Host) { h.SSHHost, h.Port = "f3.lan", 2202 })
+	mustAddHost(t, "vm1", func(h *Host) error { h.SSHHost, h.Port = "f3.lan", 2201; return nil })
+	mustAddHost(t, "vm2", func(h *Host) error { h.SSHHost, h.Port = "f3.lan", 2202; return nil })
 }
 
 // TestSelectionForHosts pins that a push to known inventory names never
@@ -122,10 +123,10 @@ func TestSelectionForLocalHostname(t *testing.T) {
 func TestSelectionSameForEveryNameOfOneMachine(t *testing.T) {
 	Reset()
 	t.Cleanup(Reset)
-	mustAddHost(t, "db", func(h *Host) { h.SSHHost = "10.0.0.5" })
-	mustAddHost(t, "pi10", func(h *Host) { h.SSHHost = "10.0.0.5" })
-	mustAddHost(t, "pi1", func(h *Host) { h.SSHHost = "pi1.lan" })
-	mustAddHost(t, "web", func(h *Host) { h.SSHHost = "web.lan" })
+	mustAddHost(t, "db", func(h *Host) error { h.SSHHost = "10.0.0.5"; return nil })
+	mustAddHost(t, "pi10", func(h *Host) error { h.SSHHost = "10.0.0.5"; return nil })
+	mustAddHost(t, "pi1", func(h *Host) error { h.SSHHost = "pi1.lan"; return nil })
+	mustAddHost(t, "web", func(h *Host) error { h.SSHHost = "web.lan"; return nil })
 
 	want := []string{"db", "pi1", "pi10"}
 	selections := map[string][]string{
@@ -154,9 +155,9 @@ func TestSelectionSameForEveryNameOfOneMachine(t *testing.T) {
 func TestSelectionIgnoresSSHHostCase(t *testing.T) {
 	Reset()
 	t.Cleanup(Reset)
-	mustAddHost(t, "db", func(h *Host) { h.SSHHost = "Host5.lan" })
-	mustAddHost(t, "pi10", func(h *Host) { h.SSHHost = "host5.lan" })
-	mustAddHost(t, "pi1", func(h *Host) { h.SSHHost = "pi1.lan" })
+	mustAddHost(t, "db", func(h *Host) error { h.SSHHost = "Host5.lan"; return nil })
+	mustAddHost(t, "pi10", func(h *Host) error { h.SSHHost = "host5.lan"; return nil })
+	mustAddHost(t, "pi1", func(h *Host) error { h.SSHHost = "pi1.lan"; return nil })
 
 	want := []string{"db", "pi1", "pi10"}
 	selections := map[string][]string{

@@ -34,7 +34,7 @@ func TestRegistrationMisuseReturnsErrors(t *testing.T) {
 	}{
 		{"empty host", second(AddHost("")), "Host: name must not be empty"},
 		{"duplicate host", second(AddHost("h")), `Host "h" already registered`},
-		{"rejected option", second(AddHost("x", func(h *Host) { h.RejectOption(rejected) })), rejected.Error()},
+		{"rejected option", second(AddHost("x", func(h *Host) error { return rejected })), rejected.Error()},
 		{"value on unknown host", SetHostValue("nope", "k", 1), `SetValue: Host "nope" is not registered`},
 		{"empty value key", SetHostValue("h", "", 1), "SetValue: key must not be empty"},
 		{"empty cluster", second(AddCluster("c2", nil)), `Cluster "c2": must include at least one Host`},
@@ -61,3 +61,30 @@ func TestRegistrationMisuseReturnsErrors(t *testing.T) {
 
 // second returns the error of a (record, error) registration result.
 func second[T any](_ T, err error) error { return err }
+
+// TestAddHostFirstOptionErrorWins pins AddHost's error-collection contract:
+// every HostOption runs (a later one may still mutate the draft), but only
+// the first-reported error is returned, and the host stays unregistered.
+// This is the runtime half of the RejectOption removal (task ic2): the
+// per-option error return replaces the old stash-on-Host field, and AddHost
+// itself now owns the "first misuse wins" rule that used to live on Host.
+func TestAddHostFirstOptionErrorWins(t *testing.T) {
+	Reset()
+	t.Cleanup(Reset)
+	first := errors.New("first misuse")
+	secondErr := errors.New("second misuse")
+	var secondRan bool
+	_, err := AddHost("x",
+		func(h *Host) error { return first },
+		func(h *Host) error { secondRan = true; return secondErr },
+	)
+	if !errors.Is(err, first) {
+		t.Fatalf("AddHost err = %v, want %v", err, first)
+	}
+	if !secondRan {
+		t.Error("second option did not run")
+	}
+	if _, ok := LookupHost("x"); ok {
+		t.Error("host with a rejected option was stored")
+	}
+}

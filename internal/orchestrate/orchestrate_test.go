@@ -208,7 +208,7 @@ func TestDeliverNilWriterDefaultsToStderr(t *testing.T) {
 // test when the registration is refused.
 func mustAddHost(t *testing.T, name, sshHost string) {
 	t.Helper()
-	if _, err := inventory.AddHost(name, func(h *inventory.Host) { h.SSHHost = sshHost }); err != nil {
+	if _, err := inventory.AddHost(name, func(h *inventory.Host) error { h.SSHHost = sshHost; return nil }); err != nil {
 		t.Fatal(err)
 	}
 }

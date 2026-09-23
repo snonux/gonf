@@ -24,7 +24,11 @@ import (
 // not called Parallel(n).
 const DefaultClusterParallelism = 5
 
-// Host is one registered SSH destination's stored data.
+// Host is one registered SSH destination's stored data. It is a pure record:
+// the value LookupHost/HostInfos return and that gets copied into the hosts
+// map has no transient validation-error channel and no way to reach one —
+// registration-time misuse is threaded through HostOption's own return value
+// instead (see AddHost), never stashed on a Host field.
 type Host struct {
 	Name      string
 	User      string
@@ -36,15 +40,12 @@ type Host struct {
 	GOOS      string
 	GOARCH    string
 	GonfPath  string
-	// optErr is the first misuse a HostOption reported (RejectOption); it
-	// makes AddHost refuse the registration. Stored records never carry one.
-	optErr error
 }
 
 // HostOption configures a Host at registration (mirrors api.HostOption). An
-// option that finds its arguments invalid calls RejectOption instead of
-// setting fields.
-type HostOption func(*Host)
+// option that finds its arguments invalid returns its own error instead of
+// setting fields; AddHost collects the first one reported.
+type HostOption func(*Host) error
 
 // Cluster is a registered named set of hosts.
 type Cluster struct {
@@ -81,17 +82,22 @@ var (
 // AddHost registers name with opts applied and returns the stored record.
 // Registration-time misuse (empty name, a HostOption that rejected its
 // arguments, a duplicate) is returned as an error and nothing is registered;
-// api reports it as a declaration error (internal/declerr).
+// api reports it as a declaration error (internal/declerr). Every option runs
+// (later ones may still mutate rec), but only the first error is kept, since
+// a later one is usually a consequence of it.
 func AddHost(name string, opts ...HostOption) (Host, error) {
 	if name == "" {
 		return Host{}, fmt.Errorf("Host: name must not be empty")
 	}
 	rec := Host{Name: name, SSHHost: name}
+	var optErr error
 	for _, o := range opts {
-		o(&rec)
+		if err := o(&rec); err != nil && optErr == nil {
+			optErr = err
+		}
 	}
-	if rec.optErr != nil {
-		return Host{}, rec.optErr
+	if optErr != nil {
+		return Host{}, optErr
 	}
 	if rec.SSHHost == "" {
 		rec.SSHHost = name
@@ -104,14 +110,6 @@ func AddHost(name string, opts ...HostOption) (Host, error) {
 	}
 	hosts[name] = rec
 	return rec, nil
-}
-
-// RejectOption records err as the misuse of a HostOption applied to h, unless
-// an earlier one is already recorded; AddHost then refuses the host with it.
-func (h *Host) RejectOption(err error) {
-	if h.optErr == nil {
-		h.optErr = err
-	}
 }
 
 // SetHostValue stores value under key on an already-registered host (same

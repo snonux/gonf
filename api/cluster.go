@@ -46,22 +46,22 @@ type ClusterInfo struct {
 // WithSSHUser sets the SSH username (empty → ssh default).
 // Named WithSSHUser so it does not clash with options.WithUser (systemd).
 func WithSSHUser(user string) HostOption {
-	return func(h *inventory.Host) { h.User = user }
+	return func(h *inventory.Host) error { h.User = user; return nil }
 }
 
 // WithSSHHost sets the SSH hostname (default: inventory name).
 func WithSSHHost(host string) HostOption {
-	return func(h *inventory.Host) { h.SSHHost = host }
+	return func(h *inventory.Host) error { h.SSHHost = host; return nil }
 }
 
 // WithSSHPort sets the SSH port (0 → omit -p).
 func WithSSHPort(port int) HostOption {
-	return func(h *inventory.Host) { h.Port = port }
+	return func(h *inventory.Host) error { h.Port = port; return nil }
 }
 
 // WithSSHIdentity sets ssh -i path.
 func WithSSHIdentity(path string) HostOption {
-	return func(h *inventory.Host) { h.Identity = path }
+	return func(h *inventory.Host) error { h.Identity = path; return nil }
 }
 
 // PrivilegeNone, PrivilegeSudo, and PrivilegeDoas re-export the
@@ -75,25 +75,25 @@ const (
 
 // WithPrivilege sets how privileged apply chunks are wrapped on this host.
 func WithPrivilege(mode privilege.Mode) HostOption {
-	return func(h *inventory.Host) { h.Privilege = mode }
+	return func(h *inventory.Host) error { h.Privilege = mode; return nil }
 }
 
 // WithGOOS sets the GOOS used when push syncs a newer gonf binary to this host.
 // Empty (default) probes via remote uname -s.
 func WithGOOS(goos string) HostOption {
-	return func(h *inventory.Host) { h.GOOS = goos }
+	return func(h *inventory.Host) error { h.GOOS = goos; return nil }
 }
 
 // WithGOARCH sets the GOARCH used when push syncs a newer gonf binary.
 // Empty (default) probes via remote uname -m.
 func WithGOARCH(goarch string) HostOption {
-	return func(h *inventory.Host) { h.GOARCH = goarch }
+	return func(h *inventory.Host) error { h.GOARCH = goarch; return nil }
 }
 
 // WithGonfPath sets the remote path for a synced gonf binary (default
 // /usr/local/bin/gonf).
 func WithGonfPath(path string) HostOption {
-	return func(h *inventory.Host) { h.GonfPath = path }
+	return func(h *inventory.Host) error { h.GonfPath = path; return nil }
 }
 
 // WithValue stores an arbitrary recipe value under key on this host (e.g. a
@@ -102,19 +102,18 @@ func WithGonfPath(path string) HostOption {
 // error (internal/declerr) and does not register the host. Read with
 // MustHostValue[T] from task bodies.
 func WithValue(key string, value any) HostOption {
-	return func(h *inventory.Host) {
+	return func(h *inventory.Host) error {
 		if key == "" {
-			h.RejectOption(fmt.Errorf("WithValue: key must not be empty"))
-			return
+			return fmt.Errorf("WithValue: key must not be empty")
 		}
 		if _, exists := h.Values[key]; exists {
-			h.RejectOption(fmt.Errorf("WithValue: key %q already set", key))
-			return
+			return fmt.Errorf("WithValue: key %q already set", key)
 		}
 		if h.Values == nil {
 			h.Values = map[string]any{}
 		}
 		h.Values[key] = value
+		return nil
 	}
 }
 
