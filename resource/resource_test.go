@@ -6,7 +6,7 @@ import (
 
 // noopApplier is the registered value of resources these tests only
 // register; nothing applies them.
-var noopApplier = ApplierFunc(func() error { return nil })
+var noopApplier = func() error { return nil }
 
 func TestResourceID(t *testing.T) {
 	ResetRepository()
@@ -102,11 +102,11 @@ func TestSnapshotRepositoryRestoresExactlyThePreSnapshotState(t *testing.T) {
 // original. Swapping the whole repository pointer back cannot do that: the
 // post-snapshot registration of the same ID must simply not exist once
 // restore runs, and the original resource's identity (here, distinguished
-// by which noopApplier closure it wraps) must be the one that comes back.
+// by which func() error closure it wraps) must be the one that comes back.
 func TestSnapshotRepositoryRestoresTheOriginalOnAnIDCollision(t *testing.T) {
 	ResetRepository()
 	var originalRan, collidingRan bool
-	Register("File", "/tmp/a", ApplierFunc(func() error { originalRan = true; return nil }))
+	Register("File", "/tmp/a", func() error { originalRan = true; return nil })
 	RecordPlanDraft(PlanDraft{ID: "File[/tmp/a]", Kind: "file", SourcePath: "original"})
 
 	restore := SnapshotRepository()
@@ -114,7 +114,7 @@ func TestSnapshotRepositoryRestoresTheOriginalOnAnIDCollision(t *testing.T) {
 	// standing in for a task body that happens to redeclare the same
 	// resource name (e.g. via a shared helper both an outer top-level
 	// declaration and an unrelated task body call).
-	Register("File", "/tmp/a", ApplierFunc(func() error { collidingRan = true; return nil }))
+	Register("File", "/tmp/a", func() error { collidingRan = true; return nil })
 	RecordPlanDraft(PlanDraft{ID: "File[/tmp/a]", Kind: "file", SourcePath: "colliding"})
 
 	restore()
@@ -123,11 +123,15 @@ func TestSnapshotRepositoryRestoresTheOriginalOnAnIDCollision(t *testing.T) {
 	if len(drafts) != 1 || drafts[0].SourcePath != "original" {
 		t.Fatalf("RegisteredPlanDrafts() after restore = %v, want the ORIGINAL draft (SourcePath \"original\"), not the colliding one", drafts)
 	}
-	_, applier, ok := Registered("File[/tmp/a]")
+	_, registered, ok := Registered("File[/tmp/a]")
 	if !ok {
 		t.Fatal("Registered(File[/tmp/a]) = false after restore, want true")
 	}
-	if err := applier.Apply(); err != nil {
+	work, ok := registered.(func() error)
+	if !ok {
+		t.Fatalf("Registered(File[/tmp/a]) = %#v, want a func() error", registered)
+	}
+	if err := work(); err != nil {
 		t.Fatal(err)
 	}
 	if !originalRan || collidingRan {

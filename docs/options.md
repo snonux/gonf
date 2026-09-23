@@ -139,14 +139,21 @@ path for recipes; this removes the legacy path they had superseded. Removed:
 - `resource.Resource.Apply`
 - `resource.Multi.Apply`
 
-`resource.Register` still takes a `resource.Applier` and each resource kind
-still exposes a one-line `Apply` method on its concrete type (e.g.
-`file.File.Apply`), but nothing in this module calls it any more — only
-`resource.Registered` reads the stored value back (for daemon-reload
-merging). `resource.ApplierFunc` is unchanged. Tests inside this module that
-used to call `resource.Apply` now call `api.Apply` (from `api` or an external
-test package) or the new module-internal `internal/testapply.Apply` (from a
-`resource/<kind>` package's own tests, which cannot import `api`).
+Tests inside this module that used to call `resource.Apply` now call
+`api.Apply` (from `api` or an external test package) or the new
+module-internal `internal/testapply.Apply` (from a `resource/<kind>`
+package's own tests, which cannot import `api`).
+
+Follow-up (task ub2): `resource.Register` used to still require its
+registered-value argument to satisfy a `resource.Applier` interface, so every
+resource kind kept a now-pointless one-line `Apply` method (e.g.
+`file.File.Apply`) and a compile-time assertion, even though nothing called
+it any more. That contract is gone: `resource.Register`'s third parameter is
+untyped (`any`), `resource.Applier`/`resource.ApplierFunc` no longer exist,
+and no kind has an `Apply` method. `resource.Registered` returns the
+registered value untyped; its only real consumer,
+`resource/systemd/merge.go`, type-asserts it back to
+`*DaemonReloadResource`.
 
 ## Cron
 

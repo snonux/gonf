@@ -14,11 +14,11 @@ import (
 // DaemonReload[...] ID is not a reload to merge into; Present then registers
 // as usual and the duplicate-ID declaration error reports the clash.
 func registeredReload(id string) (resource.Resource, *DaemonReloadResource, bool) {
-	r, applier, ok := resource.Registered(id)
+	r, registered, ok := resource.Registered(id)
 	if !ok {
 		return resource.Resource{}, nil, false
 	}
-	prev, ok := applier.(*DaemonReloadResource)
+	prev, ok := registered.(*DaemonReloadResource)
 	return r, prev, ok
 }
 

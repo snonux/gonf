@@ -62,9 +62,14 @@ this:
 - behaviour the plan pre-flight makes unreachable (e.g. a change gate
   watching an ID nothing notes) is tested on the direct `Ensure` path.
 
-`resource.Register` still takes a `resource.Applier`, so every kind keeps a
-one-line `Apply()` method that nothing calls through the repository; only
-`resource.Registered` hands the value back (daemon-reload merging).
+`resource.Register`'s third parameter is the registered value untyped
+(`any`, task ub2 dropped the vestigial `resource.Applier` contract it used to
+require): a kind passes its own concrete value (e.g. the `*file.File` it
+built), with no `Apply() error` method or compile-time assertion needed any
+more. `resource.Registered` hands that value back untyped; the only real
+consumer is `resource/systemd/merge.go`, which type-asserts it back to
+`*DaemonReloadResource` to fold a later same-bus declaration into the one
+already registered in this recipe scope.
 
 ## Shared embeds
 State common to all concrete resource types lives in the `embed` package and is

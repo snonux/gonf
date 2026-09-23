@@ -460,7 +460,7 @@ func TestAggregateChildFailureFailsRecord(t *testing.T) {
 	// which checkUnrecordedDrafts rejects at record time.
 	Task("child_no_draft", "", func() {
 		resource.Register("Test", "no-draft",
-			resource.ApplierFunc(func() error { return nil }))
+			func() error { return nil })
 	})
 	Aggregate("agg", "runs the child", "^child_")
 

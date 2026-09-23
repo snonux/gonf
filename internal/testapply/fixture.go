@@ -30,8 +30,8 @@ type fixtureHandler struct{}
 
 var _ plan.Handler = fixtureHandler{}
 
-// Register is the plan-path replacement for registering a hand-written
-// resource.ApplierFunc: it registers typeName[name] with deps and records a
+// Register is the plan-path replacement for registering a hand-written work
+// function directly: it registers typeName[name] with deps and records a
 // plan draft for it, so Apply runs work in dependency order like any other
 // resource. Tests use it for a stand-in that only notes a status (e.g. a
 // File[unit] reported changed) to drive change gates and the report.
@@ -40,7 +40,7 @@ var _ plan.Handler = fixtureHandler{}
 // binary that never uses a fixture has no extra kind registered.
 func Register(typeName, name string, work func() error, deps ...string) resource.Resource {
 	registerOnce.Do(func() { plan.RegisterHandler(fixtureKind, fixtureHandler{}) })
-	res := resource.Register(typeName, name, resource.ApplierFunc(work), deps...)
+	res := resource.Register(typeName, name, work, deps...)
 	fixturesMu.Lock()
 	fixtures[res.ID()] = work
 	fixturesMu.Unlock()

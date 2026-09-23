@@ -57,19 +57,7 @@ func build(path string, opts ...opt.LinkOption) (*Link, error) {
 	return l, nil
 }
 
-// Apply runs the link reconciliation directly. It makes the value Present
-// registers a resource.Applier; since the repository apply was retired (task
-// e72) nothing calls it through the repository, and the plan engine applies
-// the kind through its plan handler instead.
-func (l *Link) Apply() error { return l.apply() }
-
-// resource.Register takes this value as a resource.Applier. The assertion
-// pins that contract at the declaration, so a renamed or re-signed Apply is
-// reported here rather than at the Register call.
-var (
-	_ resource.Applier   = (*Link)(nil)
-	_ opt.MisuseReporter = (*Link)(nil)
-)
+var _ opt.MisuseReporter = (*Link)(nil)
 
 func (l *Link) apply() error {
 	switch {

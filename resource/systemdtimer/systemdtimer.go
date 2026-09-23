@@ -21,9 +21,6 @@ import (
 )
 
 var (
-	// Register takes the value as a resource.Applier; asserting it here reports a
-	// renamed or re-signed Apply at the declaration, not at the Register call.
-	_ resource.Applier           = (*SystemdTimer)(nil)
 	_ opt.Absentable             = (*SystemdTimer)(nil)
 	_ opt.MisuseReporter         = (*SystemdTimer)(nil)
 	_ opt.Dependable             = (*SystemdTimer)(nil)
@@ -177,12 +174,6 @@ func Absent(name string, opts ...opt.SystemdTimerOption) resource.Resource {
 	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(name, opts...)
 }
-
-// Apply runs the systemd timer reconciliation directly. It makes the value
-// Present registers a resource.Applier; since the repository apply was retired
-// (task e72) nothing calls it through the repository, and the plan engine
-// applies the kind through its plan handler instead.
-func (t *SystemdTimer) Apply() error { return t.apply() }
 
 // planDraft records t as a "systemd_timer" plan draft under id.
 func (t *SystemdTimer) planDraft(id string) resource.PlanDraft {

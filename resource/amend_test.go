@@ -6,7 +6,9 @@ import (
 	"testing"
 )
 
-func noop() Applier { return ApplierFunc(func() error { return nil }) }
+// noop returns a placeholder registered value for tests that only care about
+// dependency edges and drafts, never about applying anything.
+func noop() any { return nil }
 
 // TestAmendRegisteredAddsEdgesAndDraft pins the happy path: the new edges
 // and draft are stored, and the record-mode sink sees the draft.

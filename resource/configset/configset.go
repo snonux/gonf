@@ -204,11 +204,11 @@ func (h Handle) Members(keys ...string) []resource.Dependency {
 
 // Present registers the config set and one handle resource per member, and
 // records their plan drafts. A misconfigured set is reported as a declaration
-// error (resource.Refuse), which fails the record. The set's
-// registered value and its members' (resource.Applier) share one outcome
-// store of their own; nothing applies them through the repository since
-// task e72 retired that path. Applying goes through the plan handlers and
-// their store (see newHandlers).
+// error (resource.Refuse), which fails the record. Nothing applies the
+// registered values through the repository since task e72 retired that path
+// (Register's registered parameter is now purely informational, see
+// resource.Registered); applying goes through the plan handlers and their
+// own outcome store (see newHandlers).
 func Present(name string, opts ...opt.ConfigSetOption) Handle {
 	c, err := build(name, opts)
 	if err != nil {
@@ -217,12 +217,12 @@ func Present(name string, opts ...opt.ConfigSetOption) Handle {
 	}
 	sp := c.spec
 	sp.sys, sp.outcomes = newSystem(), newOutcomeStore()
-	set := resource.Register("ConfigSet", name, resource.ApplierFunc(sp.apply), c.DependsOn.IDs...)
+	set := resource.Register("ConfigSet", name, sp, c.DependsOn.IDs...)
 	resource.RecordPlanDraft(sp.planDraft(set.ID(), c.DependsOn.SortedIDs()))
 
 	h := Handle{Resource: set, name: name, members: map[string]resource.Resource{}}
 	for _, m := range sp.members {
-		r := resource.Register("ConfigSetMember", memberName(name, m.key), memberApplier(sp.outcomes, name, m.key), set.ID())
+		r := resource.Register("ConfigSetMember", memberName(name, m.key), m, set.ID())
 		resource.RecordPlanDraft(memberDraft(r.ID(), name, m, set.ID()))
 		h.members[m.key] = r
 		h.keys = append(h.keys, m.key)

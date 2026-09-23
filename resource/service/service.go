@@ -15,9 +15,6 @@ import (
 )
 
 var (
-	// Register takes the value as a resource.Applier; asserting it here reports a
-	// renamed or re-signed Apply at the declaration, not at the Register call.
-	_ resource.Applier    = (*Service)(nil)
 	_ opt.Absentable      = (*Service)(nil)
 	_ opt.Restartable     = (*Service)(nil)
 	_ opt.Reloadable      = (*Service)(nil)
@@ -60,12 +57,6 @@ func (s *Service) SetReload() { s.reload = true }
 // SetUser targets the systemd --user manager instead of the system one.
 // Backends without a user bus reject it at apply time.
 func (s *Service) SetUser() { s.user = true }
-
-// Apply runs the service reconciliation directly. It makes the value Present
-// registers a resource.Applier; since the repository apply was retired (task
-// e72) nothing calls it through the repository, and the plan engine applies
-// the kind through its plan handler instead.
-func (s *Service) Apply() error { return s.apply() }
 
 // Present registers a service that should be running and enabled at boot. An
 // option misuse is reported as a declaration error (resource.Refuse) and

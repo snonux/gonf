@@ -63,17 +63,12 @@ func (o *outcomeStore) member(name, key string) (changed, ok bool) {
 	return changed, ok
 }
 
-// memberApplier is the registered value (resource.Applier) of a member handle
-// resource. It reads the result from outcomes, the store of the set it
-// belongs to; the plan path reports members through its handlers' store.
-func memberApplier(outcomes *outcomeStore, name, key string) resource.Applier {
-	return resource.ApplierFunc(func() error { return applyMember(outcomes, name, key) })
-}
-
 // applyMember notes the member handle's result, read from outcomes, under its
 // own ID. It mutates nothing: the set already published the file. Failing
 // when the set has not applied keeps a watch on this handle from silently
-// never firing.
+// never firing. The plan path (memberHandler.Apply, planwire.go) calls it
+// directly; nothing calls it through the repository since task e72 retired
+// that path.
 func applyMember(outcomes *outcomeStore, name, key string) error {
 	changed, ok := outcomes.member(name, key)
 	if !ok {

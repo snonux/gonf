@@ -95,7 +95,7 @@ func TestApplyRefusals(t *testing.T) {
 	t.Run("registered without draft", func(t *testing.T) {
 		resource.ResetRepository()
 		ran := false
-		resource.Register("T", "bare", resource.ApplierFunc(func() error { ran = true; return nil }))
+		resource.Register("T", "bare", func() error { ran = true; return nil })
 		err := testapply.Apply()
 		if err == nil || !strings.Contains(err.Error(), "registered resources without plan drafts: T[bare]") || ran {
 			t.Fatalf("Apply() = %v (ran %t), want the missing-draft refusal", err, ran)
@@ -138,7 +138,7 @@ func TestApplyDeclErrGuard(t *testing.T) {
 		// resource-already-registered declaration error (resource.Register,
 		// resource/resource.go) without registering the second declaration,
 		// exactly the review's probe scenario.
-		resource.Register("T", "A", resource.ApplierFunc(func() error { return nil }))
+		resource.Register("T", "A", func() error { return nil })
 		if declerr.First() == nil {
 			t.Fatalf("declerr.First() = nil, want the duplicate-registration error")
 		}

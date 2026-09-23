@@ -190,9 +190,6 @@ func (f *File) SetMode(mode os.FileMode) {
 }
 
 var (
-	// Register takes the value as a resource.Applier; asserting it here reports a
-	// renamed or re-signed Apply at the declaration, not at the Register call.
-	_ resource.Applier      = (*File)(nil)
 	_ opt.LineAddable       = (*File)(nil)
 	_ opt.LineRemovable     = (*File)(nil)
 	_ opt.LinesAddable      = (*File)(nil)
@@ -298,12 +295,6 @@ func (f *File) resourceName() string {
 
 // apply performs the idempotent OS work for f without registering a
 // resource.
-// Apply runs the file reconciliation directly. It makes the value Present
-// registers a resource.Applier; since the repository apply was retired (task
-// e72) nothing calls it through the repository, and the plan engine applies
-// the kind through its plan handler instead.
-func (f *File) Apply() error { return f.apply() }
-
 func (f *File) apply() error {
 	if f.Absent {
 		return ensureAbsentWithID(f.targetPath(), f.reportID(f.targetPath()))

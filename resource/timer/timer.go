@@ -16,9 +16,6 @@ import (
 )
 
 var (
-	// Register takes the value as a resource.Applier; asserting it here reports a
-	// renamed or re-signed Apply at the declaration, not at the Register call.
-	_ resource.Applier    = (*Timer)(nil)
 	_ opt.Absentable      = (*Timer)(nil)
 	_ opt.Restartable     = (*Timer)(nil)
 	_ opt.UserService     = (*Timer)(nil)
@@ -91,12 +88,6 @@ func Absent(name string, opts ...opt.TimerOption) resource.Resource {
 	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(name, opts...)
 }
-
-// Apply runs the timer reconciliation directly. It makes the value Present
-// registers a resource.Applier; since the repository apply was retired (task
-// e72) nothing calls it through the repository, and the plan engine applies
-// the kind through its plan handler instead.
-func (t *Timer) Apply() error { return t.apply() }
 
 // planDraft records t as a "timer" plan draft under id, including its
 // dependencies and OnChange gate.

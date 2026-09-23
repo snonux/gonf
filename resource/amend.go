@@ -73,14 +73,16 @@ func RegisteredWatchTargets(watch ...string) []string {
 
 // Registered returns the resource registered under id in the current recipe
 // scope (the repository since the last ResetRepository: one task body or one
-// when-fragment) together with its applier, which is the concrete resource
-// value its Present function passed to Register. ok is false when nothing
-// with that ID is registered in this scope.
+// when-fragment) together with the registered value its Present function
+// passed to Register, untyped. ok is false when nothing with that ID is
+// registered in this scope.
 //
 // It lets a kind that is a singleton per scope (daemon-reload: one per
 // systemd bus) find its earlier declaration and fold a later one into it
-// (see AmendRegistered) instead of tripping Register's duplicate-ID refusal.
-func Registered(id string) (res Resource, applier Applier, ok bool) {
+// (see AmendRegistered) instead of tripping Register's duplicate-ID refusal:
+// resource/systemd/merge.go type-asserts the returned value back to
+// *DaemonReloadResource.
+func Registered(id string) (res Resource, registered any, ok bool) {
 	r := getRepository()
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -88,7 +90,7 @@ func Registered(id string) (res Resource, applier Applier, ok bool) {
 	if !ok {
 		return Resource{}, nil, false
 	}
-	return res, res.applier, true
+	return res, res.registered, true
 }
 
 // AmendRegistered updates the resource registered under draft.ID in the

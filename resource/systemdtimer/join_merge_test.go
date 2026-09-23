@@ -14,7 +14,7 @@ import (
 // unitFile registers a do-nothing File resource standing in for an
 // installed unit file, and returns its ID.
 func unitFile(path string) resource.Resource {
-	return resource.Register("File", path, resource.ApplierFunc(func() error { return nil }))
+	return resource.Register("File", path, func() error { return nil })
 }
 
 // declareJoinThenMerge is the bb2 sequence at resource level (what

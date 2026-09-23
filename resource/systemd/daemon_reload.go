@@ -13,12 +13,8 @@ import (
 	opt "github.com/snonux/gonf/resource/options"
 )
 
-// Interface assertions. resource.Register takes a DaemonReloadResource as a
-// resource.Applier, so that contract is pinned here too: a renamed or
-// re-signed Apply is reported at the declaration rather than at the Register
-// call.
+// Interface assertions.
 var (
-	_ resource.Applier    = (*DaemonReloadResource)(nil)
 	_ opt.UserService     = (*DaemonReloadResource)(nil)
 	_ opt.Dependable      = (*DaemonReloadResource)(nil)
 	_ opt.ChangeWatchable = (*DaemonReloadResource)(nil)
@@ -135,12 +131,6 @@ func (d *DaemonReloadResource) SetUser() { d.user = true }
 func (d *DaemonReloadResource) SetWatch(ids []string) {
 	d.legacyWatch = slices.Clone(ids)
 }
-
-// Apply runs the daemon-reload reconciliation directly. It makes the value
-// Present registers a resource.Applier; since the repository apply was retired
-// (task e72) nothing calls it through the repository, and the plan engine
-// applies the kind through its plan handler instead.
-func (d *DaemonReloadResource) Apply() error { return d.apply() }
 
 // planDraft records the daemon-reload op. Unlike the other gated kinds it
 // does not use ChangeGate.DraftGate: Watch (including the DependsOn

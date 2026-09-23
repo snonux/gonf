@@ -15,11 +15,7 @@ import (
 	opt "github.com/snonux/gonf/resource/options"
 )
 
-// resource.Register takes this value as a resource.Applier. The assertion
-// pins that contract at the declaration, so a renamed or re-signed Apply is
-// reported here rather than at the Register call.
 var (
-	_ resource.Applier   = (*Package)(nil)
 	_ opt.Sensitivable   = (*Package)(nil)
 	_ opt.MisuseReporter = (*Package)(nil)
 )
@@ -55,12 +51,6 @@ func (p *Package) SetLatest() { p.latest = true }
 func (p *Package) SetEnv(env map[string]string) {
 	p.env = maps.Clone(env)
 }
-
-// Apply runs the package reconciliation directly. It makes the value Present
-// registers a resource.Applier; since the repository apply was retired (task
-// e72) nothing calls it through the repository, and the plan engine applies
-// the kind through its plan handler instead.
-func (p *Package) Apply() error { return p.apply() }
 
 // Present registers a package resource ensuring name is installed; IsLatest
 // upgrades it to the newest available version. An option misuse is reported

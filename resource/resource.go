@@ -11,65 +11,48 @@ import (
 	"github.com/snonux/gonf/internal/declerr"
 )
 
-// Applier is the contract of the value a resource kind passes to Register:
-// its idempotent direct apply (what the kind's Ensure runs). The repository
-// no longer calls it — the direct resource.Apply path was retired in task
-// e72 and every registered resource is applied from its plan draft by the
-// plan engine — but Registered hands the value back, so a per-scope
-// singleton kind (daemon-reload) can fold a later declaration into it.
-type Applier interface {
-	Apply() error
-}
-
-// ApplierFunc adapts a plain function to the Applier interface, for a
-// registered value that is only a function (e.g. a ConfigSet member).
-type ApplierFunc func() error
-
-// Apply runs the wrapped function.
-func (f ApplierFunc) Apply() error {
-	return f()
-}
-
 // Resource is the value returned by the DSL constructors (api.File,
 // api.Dir, ...). It identifies the registered resource and can be passed to
-// the DependsOn option. It keeps the registered value (see Applier) for
+// the DependsOn option. It keeps the registered value (see Register) for
 // Registered and its dependency edges for AmendRegistered's cycle check;
 // applying uses the registered plan draft instead.
 type Resource struct {
 	// Type is the resource kind label, e.g. "File" or "Directory".
 	Type string
 	// Name identifies the instance within its Type, e.g. a path.
-	Name      string
-	applier   Applier
-	dependsOn map[string]struct{}
+	Name       string
+	registered any
+	dependsOn  map[string]struct{}
 }
 
 // Register records a resource in the repository. type_ is the kind label,
-// name the instance name, apply the kind's registered value (see Applier),
-// and deps the IDs of resources that must be applied first. Register records
-// no plan draft itself: the kind's Present records one with RecordPlanDraft,
-// and api.Apply refuses a registered resource without a draft (it would
-// otherwise be silently skipped). A duplicate ID (the same Type[Name]
-// registered twice in one recipe scope) is always a task bug: it is
-// reported as a declaration error (internal/declerr, surfaced by RecordPlan,
-// Run, Apply and the CLI) and the second declaration is not registered; its
-// Resource value is still returned so the recipe keeps running up to the
-// point where the error surfaces.
+// name the instance name, registered the kind's registered value (the
+// concrete resource, e.g. *file.File — nothing applies it through the
+// repository any more, see Registered), and deps the IDs of resources that
+// must be applied first. Register records no plan draft itself: the kind's
+// Present records one with RecordPlanDraft, and api.Apply refuses a
+// registered resource without a draft (it would otherwise be silently
+// skipped). A duplicate ID (the same Type[Name] registered twice in one
+// recipe scope) is always a task bug: it is reported as a declaration error
+// (internal/declerr, surfaced by RecordPlan, Run, Apply and the CLI) and the
+// second declaration is not registered; its Resource value is still
+// returned so the recipe keeps running up to the point where the error
+// surfaces.
 //
 // Registration is deliberately single-goroutine: recipe construction happens
 // before fleet fan-out, so the repository is not safe for concurrent
 // registration (see resource/repository.go).
-func Register(type_, name string, apply Applier, deps ...string) Resource {
+func Register(type_, name string, registered any, deps ...string) Resource {
 	dependsOn := make(map[string]struct{}, len(deps))
 	for _, id := range deps {
 		dependsOn[id] = struct{}{}
 	}
 
 	r := Resource{
-		Type:      type_,
-		Name:      name,
-		applier:   apply,
-		dependsOn: dependsOn,
+		Type:       type_,
+		Name:       name,
+		registered: registered,
+		dependsOn:  dependsOn,
 	}
 
 	if err := getRepository().register(r); err != nil {

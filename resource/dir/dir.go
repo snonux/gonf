@@ -97,9 +97,6 @@ func (d *Dir) SetFileMode(mode os.FileMode) { d.fileMode = mode }
 func (d *Dir) SetPrune() { d.prune = true }
 
 var (
-	// Register takes the value as a resource.Applier; asserting it here reports a
-	// renamed or re-signed Apply at the declaration, not at the Register call.
-	_ resource.Applier   = (*Dir)(nil)
 	_ opt.Sourced        = (*Dir)(nil)
 	_ opt.SourceGlobable = (*Dir)(nil)
 	_ opt.SourceBaseable = (*Dir)(nil)
@@ -138,12 +135,6 @@ func build(path string, opts ...opt.DirOption) (*Dir, error) {
 
 // apply performs the idempotent OS work for d without registering a
 // resource.
-// Apply runs the directory reconciliation directly. It makes the value Present
-// registers a resource.Applier; since the repository apply was retired (task
-// e72) nothing calls it through the repository, and the plan engine applies
-// the kind through its plan handler instead.
-func (d *Dir) Apply() error { return d.apply() }
-
 func (d *Dir) apply() error {
 	if d.Absent {
 		return ensureAbsent(d)

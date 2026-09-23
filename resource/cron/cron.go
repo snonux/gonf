@@ -26,9 +26,6 @@ const (
 )
 
 var (
-	// Register takes the value as a resource.Applier; asserting it here reports a
-	// renamed or re-signed Apply at the declaration, not at the Register call.
-	_ resource.Applier          = (*Cron)(nil)
 	_ opt.Absentable            = (*Cron)(nil)
 	_ opt.Dependable            = (*Cron)(nil)
 	_ opt.CronUserable          = (*Cron)(nil)
@@ -143,12 +140,6 @@ func Absent(name string, opts ...opt.CronOption) resource.Resource {
 	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(name, opts...)
 }
-
-// Apply runs the cron reconciliation directly. It makes the value Present
-// registers a resource.Applier; since the repository apply was retired (task
-// e72) nothing calls it through the repository, and the plan engine applies
-// the kind through its plan handler instead.
-func (c *Cron) Apply() error { return c.apply() }
 
 // planDraft records c as a "cron" plan draft under id.
 func (c *Cron) planDraft(id string) resource.PlanDraft {

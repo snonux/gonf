@@ -418,7 +418,7 @@ func TestRecordPlanFailsOnUnrecordedResource(t *testing.T) {
 
 	Task("custom_kind", "", func() {
 		_ = resource.Register("Widget", "gadget",
-			resource.ApplierFunc(func() error { return nil }))
+			func() error { return nil })
 	})
 
 	ops, err := RecordPlan("p", "", "custom_kind")
