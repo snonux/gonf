@@ -26,22 +26,25 @@ func init() {
 }
 
 // ToOp lowers a "link" resource draft to a plan.Op. Symlink/Hardlink come
-// from d.Payload (Payload, task w62 Layer 1); a "link" draft without one is
-// a record-time bug (planDraft always sets it), reported like any other
-// handler error rather than panicking.
+// from d.Payload (Payload, task w62 Layer 1) and are set on plan.LinkPayload
+// (task 5e2 Layer 2); a "link" draft without one is a record-time bug
+// (planDraft always sets it), reported like any other handler error rather
+// than panicking.
 func (linkHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 	p, ok := d.Payload.(Payload)
 	if !ok {
 		return plan.Op{}, fmt.Errorf("link: draft missing link.Payload (got %T)", d.Payload)
 	}
 	return plan.Op{
-		Op:       plan.KindLink,
-		ID:       d.ID,
-		Path:     d.Path,
-		Symlink:  p.Symlink,
-		Hardlink: p.Hardlink,
-		Absent:   d.Absent,
-		Deps:     slices.Clone(d.Deps),
+		Op:     plan.KindLink,
+		ID:     d.ID,
+		Path:   d.Path,
+		Absent: d.Absent,
+		Deps:   slices.Clone(d.Deps),
+		Payload: plan.LinkPayload{
+			Symlink:  p.Symlink,
+			Hardlink: p.Hardlink,
+		},
 	}, nil
 }
 
@@ -58,15 +61,22 @@ func (linkHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if op.Absent {
 		return Ensure(path, opt.IsAbsent)
 	}
+	// A comma-ok assertion, not a "missing payload" error: unlike ToOp (fed
+	// only trusted draft data planDraft() always populates), Apply may see
+	// an op decoded from an arbitrary plan.jsonl. A nil or mistyped Payload
+	// degrades to the zero LinkPayload — both fields read as unset, which
+	// the "missing symlink or hardlink target" error below already turns
+	// into a clean error.
+	p, _ := op.Payload.(plan.LinkPayload)
 	switch {
-	case op.Symlink != "":
-		target, err := plan.ExpandPath(op.Symlink)
+	case p.Symlink != "":
+		target, err := plan.ExpandPath(p.Symlink)
 		if err != nil {
 			return err
 		}
 		return Ensure(path, opt.WithSymlink(target))
-	case op.Hardlink != "":
-		target, err := plan.ExpandPath(op.Hardlink)
+	case p.Hardlink != "":
+		target, err := plan.ExpandPath(p.Hardlink)
 		if err != nil {
 			return err
 		}
@@ -77,20 +87,21 @@ func (linkHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 }
 
 // ToOp lowers a "link_if_exists" resource draft to a plan.Op. Target comes
-// from d.Payload (IfExistsPayload, task w62 Layer 1); a "link_if_exists"
-// draft without one is a record-time bug, reported like any other handler
-// error rather than panicking.
+// from d.Payload (IfExistsPayload, task w62 Layer 1) and is set on
+// plan.LinkIfExistsPayload (task 5e2 Layer 2); a "link_if_exists" draft
+// without one is a record-time bug, reported like any other handler error
+// rather than panicking.
 func (linkIfExistsHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 	p, ok := d.Payload.(IfExistsPayload)
 	if !ok {
 		return plan.Op{}, fmt.Errorf("link_if_exists: draft missing link.IfExistsPayload (got %T)", d.Payload)
 	}
 	return plan.Op{
-		Op:     plan.KindLinkIfExists,
-		ID:     d.ID,
-		Path:   d.Path,
-		Target: p.Target,
-		Deps:   slices.Clone(d.Deps),
+		Op:      plan.KindLinkIfExists,
+		ID:      d.ID,
+		Path:    d.Path,
+		Deps:    slices.Clone(d.Deps),
+		Payload: plan.LinkIfExistsPayload{Target: p.Target},
 	}, nil
 }
 
@@ -103,7 +114,10 @@ func (linkIfExistsHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if err != nil {
 		return err
 	}
-	target, err := plan.ExpandPath(op.Target)
+	// Comma-ok, not an error: see linkHandler.Apply's doc comment above for
+	// why a decoded op's Payload cannot be assumed present or well-typed.
+	p, _ := op.Payload.(plan.LinkIfExistsPayload)
+	target, err := plan.ExpandPath(p.Target)
 	if err != nil {
 		return err
 	}

@@ -79,7 +79,8 @@ func TestRecordPlanLowersWhenEnsureDirLinkIfExists(t *testing.T) {
 	}
 
 	linkOp := ops[3]
-	if linkOp.Path != linkPath || linkOp.Target != notes {
+	linkPayload, ok := linkOp.Payload.(plan.LinkIfExistsPayload)
+	if linkOp.Path != linkPath || !ok || linkPayload.Target != notes {
 		t.Fatalf("link_if_exists = %#v", linkOp)
 	}
 }
@@ -192,8 +193,9 @@ func TestLinkIfExistsDoesNotProbeDuringRecord(t *testing.T) {
 	if len(ops) != 2 || ops[1].Op != plan.KindLinkIfExists {
 		t.Fatalf("ops=%#v", ops)
 	}
-	if ops[1].Target != target {
-		t.Fatalf("target=%q", ops[1].Target)
+	targetPayload, ok := ops[1].Payload.(plan.LinkIfExistsPayload)
+	if !ok || targetPayload.Target != target {
+		t.Fatalf("target=%#v", ops[1].Payload)
 	}
 	if _, err := os.Lstat(path); !os.IsNotExist(err) {
 		t.Fatalf("must not create NoLink on controller: %v", err)
@@ -972,12 +974,14 @@ func TestRecordPlanLowersPackageIsLatest(t *testing.T) {
 	}
 
 	latestOp := ops[1]
-	if latestOp.Name != "rsync" || !latestOp.Latest {
+	latestPayload, ok := latestOp.Payload.(plan.PackagePayload)
+	if latestOp.Name != "rsync" || !ok || !latestPayload.Latest {
 		t.Fatalf("rsync package op = %#v, want name=rsync latest=true", latestOp)
 	}
 
 	plainOp := ops[2]
-	if plainOp.Name != "fish" || plainOp.Latest {
+	plainPayload, ok := plainOp.Payload.(plan.PackagePayload)
+	if plainOp.Name != "fish" || !ok || plainPayload.Latest {
 		t.Fatalf("fish package op = %#v, want name=fish latest=false", plainOp)
 	}
 

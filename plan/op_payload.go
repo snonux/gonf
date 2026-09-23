@@ -135,6 +135,55 @@ func (p UserPayload) applyToWire(w *wireOp) {
 	w.ManageHome = p.ManageHome
 }
 
+// LinkPayload holds the wire fields exclusive to KindLink.
+// resource/link's planwire.go is the only other package that constructs or
+// reads one (its ToOp/Apply for the "link" kind specifically —
+// LinkIfExistsPayload below is the separate payload for the "link_if_exists"
+// kind that same file also handles), always non-nil on a "link" op's
+// Payload, for the same reason CronPayload is (see its doc comment). Its
+// json tags exist for the same secret-scan reflection reason CronPayload's
+// do — see CronPayload's doc comment.
+type LinkPayload struct {
+	// Symlink is the symlink target.
+	Symlink string `json:"symlink,omitempty"`
+	// Hardlink is the hardlink target, set instead of Symlink.
+	Hardlink string `json:"hardlink,omitempty"`
+}
+
+func (p LinkPayload) applyToWire(w *wireOp) {
+	w.Symlink = p.Symlink
+	w.Hardlink = p.Hardlink
+}
+
+// LinkIfExistsPayload holds the wire field exclusive to KindLinkIfExists.
+// resource/link's planwire.go is the only other package that constructs or
+// reads one, always non-nil on a "link_if_exists" op's Payload, for the same
+// reason CronPayload is (see its doc comment).
+type LinkIfExistsPayload struct {
+	// Target is the existence-checked path.
+	Target string `json:"target,omitempty"`
+}
+
+func (p LinkIfExistsPayload) applyToWire(w *wireOp) {
+	w.Target = p.Target
+}
+
+// PackagePayload holds the wire field exclusive to KindPackage.
+// resource/pkg's planwire.go is the only other package that constructs or
+// reads one, always non-nil on a "package" op's Payload, for the same
+// reason CronPayload is (see its doc comment).
+type PackagePayload struct {
+	// Latest marks a KindPackage op configured with IsLatest: destination
+	// apply must run the backend's upgrade-check path (dnf update / pkg
+	// upgrade / pkg_add -u / pkgin install) instead of a plain install, even
+	// when the package is already present.
+	Latest bool `json:"latest,omitempty"`
+}
+
+func (p PackagePayload) applyToWire(w *wireOp) {
+	w.Latest = p.Latest
+}
+
 // toWire copies every Op core field onto a fresh wireOp and, when op.Payload
 // is set, layers its kind-exclusive fields on top. It does not normalize;
 // callers (MarshalJSON) do that once, after the merge.
@@ -144,10 +193,7 @@ func (op Op) toWire() wireOp {
 		Version: op.Version,
 		ID:      op.ID,
 
-		Path:     op.Path,
-		Symlink:  op.Symlink,
-		Target:   op.Target,
-		Hardlink: op.Hardlink,
+		Path: op.Path,
 
 		Mode:     op.Mode,
 		FileMode: op.FileMode,
@@ -166,7 +212,6 @@ func (op Op) toWire() wireOp {
 		Glob:           op.Glob,
 		Prune:          op.Prune,
 		Absent:         op.Absent,
-		Latest:         op.Latest,
 
 		AddLines:    op.AddLines,
 		RemoveLines: op.RemoveLines,
@@ -221,10 +266,7 @@ func fromWire(w wireOp) Op {
 		Version: w.Version,
 		ID:      w.ID,
 
-		Path:     w.Path,
-		Symlink:  w.Symlink,
-		Target:   w.Target,
-		Hardlink: w.Hardlink,
+		Path: w.Path,
 
 		Mode:     w.Mode,
 		FileMode: w.FileMode,
@@ -243,7 +285,6 @@ func fromWire(w wireOp) Op {
 		Glob:           w.Glob,
 		Prune:          w.Prune,
 		Absent:         w.Absent,
-		Latest:         w.Latest,
 
 		AddLines:    w.AddLines,
 		RemoveLines: w.RemoveLines,
@@ -324,6 +365,19 @@ func payloadFromWire(w wireOp) OpPayload {
 			System:              w.System,
 			ManageHome:          w.ManageHome,
 		}
+	case KindLink:
+		return LinkPayload{
+			Symlink:  w.Symlink,
+			Hardlink: w.Hardlink,
+		}
+	case KindLinkIfExists:
+		return LinkIfExistsPayload{
+			Target: w.Target,
+		}
+	case KindPackage:
+		return PackagePayload{
+			Latest: w.Latest,
+		}
 	default:
 		return nil
 	}
@@ -343,5 +397,8 @@ func OpPayloadExamples() map[Kind]OpPayload {
 		KindCron:         CronPayload{},
 		KindSystemdTimer: SystemdTimerPayload{},
 		KindUser:         UserPayload{},
+		KindLink:         LinkPayload{},
+		KindLinkIfExists: LinkIfExistsPayload{},
+		KindPackage:      PackagePayload{},
 	}
 }

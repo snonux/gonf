@@ -465,7 +465,7 @@ func TestE2EGoldenMiniApplyWithTempTargets(t *testing.T) {
 
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "demo"},
-		{Op: plan.KindLink, Path: "${HOME}/.bashrc", Symlink: target},
+		{Op: plan.KindLink, Path: "${HOME}/.bashrc", Payload: plan.LinkPayload{Symlink: target}},
 		{Op: plan.KindWhenBegin, All: []plan.Predicate{{Fact: "goos", Eq: "linux"}}},
 		{Op: plan.KindFile, Path: "${HOME}/.taskrc", Mode: "0640", ContentB64: "Li4u"},
 		{Op: plan.KindWhenEnd},

@@ -64,7 +64,7 @@ func TestApplyPackageLatestRunsUpgradePath(t *testing.T) {
 
 	ops := []plan.Op{
 		pkgHeader(),
-		{Op: plan.KindPackage, Name: "rsync", Latest: true},
+		{Op: plan.KindPackage, Name: "rsync", Payload: plan.PackagePayload{Latest: true}},
 	}
 	if err := plan.Apply(ops, plan.Facts{}, ""); err != nil {
 		t.Fatalf("apply package latest: %v", err)

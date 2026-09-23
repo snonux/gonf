@@ -115,7 +115,7 @@ func TestApplyLinkIfExistsExpandsTokens(t *testing.T) {
 
 	ops := []Op{
 		header(),
-		{Op: KindLinkIfExists, Path: "${HOME}/link", Target: "${HOME}/notes"},
+		{Op: KindLinkIfExists, Path: "${HOME}/link", Payload: LinkIfExistsPayload{Target: "${HOME}/notes"}},
 	}
 	if err := Apply(ops, Facts{}, ""); err != nil {
 		t.Fatalf("Apply: %v", err)

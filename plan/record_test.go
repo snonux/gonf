@@ -27,7 +27,7 @@ func TestRecordAndFinishRecord(t *testing.T) {
 		plan.ResetRecord()
 	})
 
-	plan.Record(plan.Op{Op: plan.KindLink, Path: "${HOME}/.bashrc", Symlink: "/dot/bashrc"})
+	plan.Record(plan.Op{Op: plan.KindLink, Path: "${HOME}/.bashrc", Payload: plan.LinkPayload{Symlink: "/dot/bashrc"}})
 	plan.Record(plan.Op{
 		Op:   plan.KindCommand,
 		Name: "daemon-reload",

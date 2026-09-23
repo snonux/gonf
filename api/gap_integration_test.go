@@ -84,7 +84,8 @@ func TestGapFeatureSetRecordsAndAppliesTogether(t *testing.T) {
 	}
 
 	packageOp := findGapOp(t, decoded, plan.KindPackage)
-	if !packageOp.Latest || packageOp.Env["PKG_PATH"] != "https://pkgrepo.example/openbsd/" {
+	packagePayload, ok := packageOp.Payload.(plan.PackagePayload)
+	if !ok || !packagePayload.Latest || packageOp.Env["PKG_PATH"] != "https://pkgrepo.example/openbsd/" {
 		t.Fatalf("package op lost IsLatest or WithEnv: %#v", packageOp)
 	}
 	userOp := findGapOp(t, decoded, plan.KindUser)

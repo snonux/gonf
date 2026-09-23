@@ -109,8 +109,8 @@ func TestOpJSONTagsMatchPlanExamples(t *testing.T) {
 			op: Op{
 				Op:      KindLink,
 				Path:    "${HOME}/.bashrc",
-				Symlink: "/home/paul/git/dotfiles/bash/bashrc",
 				ID:      "Symlink[${HOME}/.bashrc]",
+				Payload: LinkPayload{Symlink: "/home/paul/git/dotfiles/bash/bashrc"},
 			},
 			want: `{"op":"link","id":"Symlink[${HOME}/.bashrc]","path":"${HOME}/.bashrc","symlink":"/home/paul/git/dotfiles/bash/bashrc"}`,
 		},
@@ -171,9 +171,9 @@ func TestOpJSONTagsMatchPlanExamples(t *testing.T) {
 		{
 			name: "link_if_exists",
 			op: Op{
-				Op:     KindLinkIfExists,
-				Path:   "${HOME}/QuickEdit/Notes",
-				Target: "${HOME}/Notes",
+				Op:      KindLinkIfExists,
+				Path:    "${HOME}/QuickEdit/Notes",
+				Payload: LinkIfExistsPayload{Target: "${HOME}/Notes"},
 			},
 			want: `{"op":"link_if_exists","path":"${HOME}/QuickEdit/Notes","target":"${HOME}/Notes"}`,
 		},
@@ -342,7 +342,7 @@ func TestOpJSONTagsMatchPlanExamples(t *testing.T) {
 		},
 		{
 			name: "package",
-			op:   Op{Op: KindPackage, Name: "helix", ID: "Package[helix]"},
+			op:   Op{Op: KindPackage, Name: "helix", ID: "Package[helix]", Payload: PackagePayload{}},
 			want: `{"op":"package","id":"Package[helix]","name":"helix"}`,
 		},
 		{
@@ -374,10 +374,10 @@ func TestOpJSONTagsMatchPlanExamples(t *testing.T) {
 		{
 			name: "link hardlink absent",
 			op: Op{
-				Op:       KindLink,
-				Path:     "/tmp/a",
-				Hardlink: "/tmp/b",
-				Absent:   true,
+				Op:      KindLink,
+				Path:    "/tmp/a",
+				Absent:  true,
+				Payload: LinkPayload{Hardlink: "/tmp/b"},
 			},
 			want: `{"op":"link","path":"/tmp/a","hardlink":"/tmp/b","absent":true}`,
 		},

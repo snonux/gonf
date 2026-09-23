@@ -38,9 +38,12 @@ type wireOp struct {
 	Version int    `json:"version,omitempty"`
 	ID      string `json:"id,omitempty"`
 
-	Path     string `json:"path,omitempty"`
-	Symlink  string `json:"symlink,omitempty"`
-	Target   string `json:"target,omitempty"`
+	Path string `json:"path,omitempty"`
+	// Link-exclusive (plan.LinkPayload). See LinkPayload's own field docs.
+	Symlink string `json:"symlink,omitempty"`
+	// LinkIfExists-exclusive (plan.LinkIfExistsPayload). See its own field docs.
+	Target string `json:"target,omitempty"`
+	// Link-exclusive (plan.LinkPayload). See LinkPayload's own field docs.
 	Hardlink string `json:"hardlink,omitempty"`
 
 	Mode     string `json:"mode,omitempty"`
@@ -60,7 +63,8 @@ type wireOp struct {
 	Glob           bool            `json:"glob,omitempty"`
 	Prune          bool            `json:"prune,omitempty"`
 	Absent         bool            `json:"absent,omitempty"`
-	Latest         bool            `json:"latest,omitempty"`
+	// Package-exclusive (plan.PackagePayload). See its own field docs.
+	Latest bool `json:"latest,omitempty"`
 
 	// User-exclusive (plan.UserPayload). See UserPayload's own field docs.
 	// This block's position is frozen like every other field in this

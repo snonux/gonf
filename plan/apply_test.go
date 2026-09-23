@@ -170,8 +170,8 @@ func TestApplySkipDoesNotMutate(t *testing.T) {
 		header(),
 		{Op: KindWhenBegin, All: []Predicate{{Fact: "goos", Eq: "plan9"}}},
 		{Op: KindEnsureDir, Path: dirPath, Mode: "0750"},
-		{Op: KindLinkIfExists, Path: linkPath, Target: target},
-		{Op: KindLinkIfExists, Path: stale, Target: filepath.Join(root, "missing")},
+		{Op: KindLinkIfExists, Path: linkPath, Payload: LinkIfExistsPayload{Target: target}},
+		{Op: KindLinkIfExists, Path: stale, Payload: LinkIfExistsPayload{Target: filepath.Join(root, "missing")}},
 		{Op: KindWhenEnd},
 	}
 	if err := Apply(ops, Facts{GOOS: "linux"}, ""); err != nil {
@@ -225,7 +225,7 @@ func TestApplyLinkIfExistsBranches(t *testing.T) {
 
 	opsPresent := []Op{
 		header(),
-		{Op: KindLinkIfExists, Path: linkOK, Target: target},
+		{Op: KindLinkIfExists, Path: linkOK, Payload: LinkIfExistsPayload{Target: target}},
 	}
 	if err := Apply(opsPresent, Facts{}, ""); err != nil {
 		t.Fatalf("target present: %v", err)
@@ -240,7 +240,7 @@ func TestApplyLinkIfExistsBranches(t *testing.T) {
 
 	opsAbsent := []Op{
 		header(),
-		{Op: KindLinkIfExists, Path: linkGone, Target: filepath.Join(root, "nope")},
+		{Op: KindLinkIfExists, Path: linkGone, Payload: LinkIfExistsPayload{Target: filepath.Join(root, "nope")}},
 	}
 	if err := Apply(opsAbsent, Facts{}, ""); err != nil {
 		t.Fatalf("target absent: %v", err)
@@ -336,7 +336,7 @@ func TestApplyLinkDirCommandFileLines(t *testing.T) {
 
 	ops := []Op{
 		header(),
-		{Op: KindLink, Path: linkPath, Symlink: target},
+		{Op: KindLink, Path: linkPath, Payload: LinkPayload{Symlink: target}},
 		{Op: KindDir, Path: dirPath, Mode: "0700"},
 		{Op: KindFile, Path: filePath, AddLine: "hello"},
 		{

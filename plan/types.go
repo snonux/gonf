@@ -297,12 +297,15 @@ type Op struct {
 
 	// Path is the destination path for file/dir/link/sync/ensure ops.
 	Path string `json:"path,omitempty"`
-	// Symlink is the symlink target for KindLink.
-	Symlink string `json:"symlink,omitempty"`
-	// Target is the existence-checked path for KindLinkIfExists.
-	Target string `json:"target,omitempty"`
-	// Hardlink is the hardlink target when set instead of Symlink.
-	Hardlink string `json:"hardlink,omitempty"`
+	// Symlink (KindLink-exclusive) and Target (KindLinkIfExists-exclusive)
+	// and Hardlink (KindLink-exclusive) moved onto LinkPayload/
+	// LinkIfExistsPayload (task 5e2, "Layer 2" of the PlanDraft/Op
+	// god-struct split — see docs/plan.md, "The PlanDraft/Op split"; and
+	// CronPayload's doc comment in op_payload.go for why the wire itself is
+	// unaffected). Field docs (unchanged from here): LinkPayload.Symlink is
+	// the symlink target for KindLink; LinkIfExistsPayload.Target is the
+	// existence-checked path for KindLinkIfExists; LinkPayload.Hardlink is
+	// the hardlink target when set instead of Symlink.
 
 	// Mode is an octal permission string such as "0640", "0750", or — when
 	// setuid/setgid/sticky are set — four digits like "04755", for path
@@ -378,11 +381,13 @@ type Op struct {
 	Prune bool `json:"prune,omitempty"`
 	// Absent marks NoFile / NoDir / NoLink / NoPackage style removal.
 	Absent bool `json:"absent,omitempty"`
-	// Latest marks KindPackage as configured with IsLatest (schema v10):
+	// Latest (KindPackage-exclusive, schema v10) moved onto PackagePayload
+	// (task 5e2, "Layer 2" of the PlanDraft/Op god-struct split — see
+	// docs/plan.md, "The PlanDraft/Op split"). Field doc (unchanged):
+	// PackagePayload.Latest marks KindPackage as configured with IsLatest:
 	// destination apply must run the backend's upgrade-check path (dnf
 	// update / pkg upgrade / pkg_add -u / pkgin install) instead of a plain
 	// install, even when the package is already present.
-	Latest bool `json:"latest,omitempty"`
 
 	// AddLines appends lines to a file when missing (line-in-file), in order.
 	AddLines []string `json:"add_lines,omitempty"`
@@ -519,7 +524,9 @@ type Op struct {
 	// Payload holds the fields exclusive to Op's own Kind (task yd2, "Layer
 	// 2"): nil for a control kind or a kind that has not migrated any field
 	// off Op yet, otherwise a concrete type from op_payload.go (CronPayload
-	// for KindCron, SystemdTimerPayload for KindSystemdTimer). It is
+	// for KindCron, SystemdTimerPayload for KindSystemdTimer; task 5e2 added
+	// LinkPayload for KindLink, LinkIfExistsPayload for KindLinkIfExists,
+	// and PackagePayload for KindPackage). It is
 	// json:"-" because Op never marshals itself by default reflection — see
 	// MarshalJSON/UnmarshalJSON below — but api's secret-scan reflection
 	// walker (walkOpStrings) still reaches its fields: it special-cases the

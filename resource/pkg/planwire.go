@@ -22,22 +22,23 @@ func init() {
 }
 
 // ToOp lowers a "package" resource draft to a plan.Op. Latest comes from
-// d.Payload (Payload, task w62 Layer 1); a "package" draft without one is a
-// record-time bug (planDraft always sets it), reported like any other
-// handler error rather than panicking.
+// d.Payload (Payload, task w62 Layer 1) and is set on plan.PackagePayload
+// (task 5e2 Layer 2); a "package" draft without one is a record-time bug
+// (planDraft always sets it), reported like any other handler error rather
+// than panicking.
 func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 	p, ok := d.Payload.(Payload)
 	if !ok {
 		return plan.Op{}, fmt.Errorf("package: draft missing pkg.Payload (got %T)", d.Payload)
 	}
 	return plan.Op{
-		Op:     plan.KindPackage,
-		ID:     d.ID,
-		Name:   d.Name,
-		Absent: d.Absent,
-		Latest: p.Latest,
-		Env:    maps.Clone(d.Env),
-		Deps:   slices.Clone(d.Deps),
+		Op:      plan.KindPackage,
+		ID:      d.ID,
+		Name:    d.Name,
+		Absent:  d.Absent,
+		Env:     maps.Clone(d.Env),
+		Deps:    slices.Clone(d.Deps),
+		Payload: plan.PackagePayload{Latest: p.Latest},
 	}, nil
 }
 
@@ -48,11 +49,17 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if op.Name == "" {
 		return fmt.Errorf("package: missing name")
 	}
+	// A comma-ok assertion, not a "missing payload" error: unlike ToOp (fed
+	// only trusted draft data planDraft() always populates), Apply may see
+	// an op decoded from an arbitrary plan.jsonl. A nil or mistyped Payload
+	// degrades to the zero PackagePayload — Latest reads as false, a clean
+	// plain-install fallback.
+	p, _ := op.Payload.(plan.PackagePayload)
 	var opts []opt.PackageOption
 	if op.Absent {
 		opts = append(opts, opt.IsAbsent)
 	}
-	if op.Latest {
+	if p.Latest {
 		opts = append(opts, opt.IsLatest)
 	}
 	if op.Env != nil {

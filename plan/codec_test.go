@@ -18,8 +18,8 @@ func sampleOps() []Op {
 		{
 			Op:      KindLink,
 			Path:    "${HOME}/.bashrc",
-			Symlink: "/dotfiles/bash/bashrc",
 			ID:      "Symlink[.bashrc]",
+			Payload: LinkPayload{Symlink: "/dotfiles/bash/bashrc"},
 		},
 		{
 			Op: KindWhenBegin,
@@ -47,9 +47,9 @@ func sampleOps() []Op {
 			},
 		},
 		{
-			Op:     KindLinkIfExists,
-			Path:   "${HOME}/QuickEdit/Notes",
-			Target: "${HOME}/Notes",
+			Op:      KindLinkIfExists,
+			Path:    "${HOME}/QuickEdit/Notes",
+			Payload: LinkIfExistsPayload{Target: "${HOME}/Notes"},
 		},
 		{
 			Op:       KindSyncDir,
@@ -69,7 +69,7 @@ func sampleOps() []Op {
 			Prune:     true,
 			FileMode:  "0750",
 		},
-		{Op: KindPackage, Name: "fish"},
+		{Op: KindPackage, Name: "fish", Payload: PackagePayload{}},
 		{Op: KindEnsureDir, Path: "${HOME}/.cursor", Mode: "0750"},
 		{Op: KindDir, Path: "${HOME}/data", Mode: "0700"},
 		{
@@ -371,9 +371,14 @@ func TestDecodePlanAllKindsCorpus(t *testing.T) {
 		if k == KindPlan {
 			continue
 		}
-		op := Op{Op: k, Path: "/p", Name: "n", Bin: "b", Target: "/t", Symlink: "/s"}
-		if k == KindWhenBegin {
+		op := Op{Op: k, Path: "/p", Name: "n", Bin: "b"}
+		switch k {
+		case KindWhenBegin:
 			op.All = []Predicate{{Fact: "goos", Eq: "linux"}}
+		case KindLink:
+			op.Payload = LinkPayload{Symlink: "/s"}
+		case KindLinkIfExists:
+			op.Payload = LinkIfExistsPayload{Target: "/t"}
 		}
 		ops = append(ops, op)
 	}

@@ -525,12 +525,14 @@ class of bug that motivated task j5.
    `Op` is still flat fields (see the "PlanDraft/Op split" note below): for
    a kind that has not migrated yet, a new field is added directly to `Op`
    and cloned with `slices.Clone`/`maps.Clone` in `ToOp`, same as always.
-   `cron`, `systemd_timer` (task yd2, Layer 2's first slice) and `user`
-   (task 6e2) instead have their own
-   `plan.CronPayload`/`plan.SystemdTimerPayload`/`plan.UserPayload`, set on
-   `Op.Payload`; a NEW exclusive field on an ALREADY-migrated kind goes on
-   that kind's payload type instead of back onto `Op` (mirroring step 4's
-   rule below, now also for `Op`), still cloned in `ToOp` before being
+   `cron`, `systemd_timer` (task yd2, Layer 2's first slice), `user` (task
+   6e2), `link`, `link_if_exists`, and `package` (task 5e2, Layer 2's
+   second slice) instead have their own
+   `plan.CronPayload`/`plan.SystemdTimerPayload`/`plan.UserPayload`/
+   `plan.LinkPayload`/`plan.LinkIfExistsPayload`/`plan.PackagePayload`, set
+   on `Op.Payload`; a NEW exclusive field on an ALREADY-migrated kind goes
+   on that kind's payload type instead of back onto `Op` (mirroring step
+   4's rule below, now also for `Op`), still cloned in `ToOp` before being
    assigned into the payload literal.
 3. **Resource draft** — the resource package: set the new draft `Kind` string
    in its `planDraft()` and call `resource.RecordPlanDraft` from `Present`
@@ -707,7 +709,16 @@ methods, the secret-scan walker fix) could be proven end to end without
 also chasing edits across every kind's call sites in one pass. `Command`
 stays flat on Op's core despite reading as cron/systemd_timer-specific,
 for the same reason `resource.PlanDraft.Command` does (see step 4 above):
-both kinds genuinely share its "the command to run" meaning.
+both kinds genuinely share its "the command to run" meaning. Every other
+kind's fields were UNCHANGED at the end of this first slice, still flat on
+`Op` — `File`, `Dir`/`SyncDir`, `Link`/`LinkIfExists`, `Command`, `Package`,
+`Service`/`Timer`/`DaemonReload`, `EnsureDir`/`EnsureFile`, `User`,
+`ConfigSet`/`ConfigSetMember`, and `WhenBegin`/`WhenEnd` all remained exactly
+as they were pre-yd2, pending follow-up tasks scoped the same way (one or a
+few kinds per task, per this file's own "do not attempt it as one
+uninterrupted blind edit" guidance, matching w62's own incremental
+discipline). yd2 filed six such follow-ups (5e2, 6e2, 7e2, 8e2, 9e2, ae2),
+each disjoint in the kinds it touches so they can run in parallel.
 
 **Layer 2 follow-up (task 6e2): `user`.** The second of six sibling
 follow-up tasks (5e2, 6e2, 7e2, 8e2, 9e2, ae2) migrated `user`'s exclusive
@@ -728,14 +739,64 @@ type holds the field, so it needed no change. No dedicated call-site
 gotcha surfaced this time — the secret-scan walker fix and
 `TestWirePayloadTagsMatch`/`TestOpFieldClassesAreExhaustive` from yd2's
 first slice are generic over `OpPayloadExamples`, so `user` was covered
-automatically once it was added there. Every other kind's fields are
-UNCHANGED, still flat on `Op` — `File`, `Dir`/`SyncDir`,
-`Link`/`LinkIfExists`, `Command`, `Package`, `Service`/`Timer`/
+automatically once it was added there.
+
+**Layer 2 (task 5e2): `plan.Op`, second slice.** Migrated three more kinds'
+exclusive fields off `Op` onto a payload, following yd2's pattern exactly —
+`link` (`LinkPayload`: `Symlink`, `Hardlink`), `link_if_exists`
+(`LinkIfExistsPayload`: `Target`), and `package` (`PackagePayload`:
+`Latest`) — chosen (like yd2's first slice) for small field clusters with
+exactly one non-test call site each beyond the shared infrastructure:
+`resource/link/planwire.go` owns both the `linkHandler` and
+`linkIfExistsHandler`, and `resource/pkg/planwire.go` owns `planHandler`.
+Both files' `Apply` now read their kind's payload through the same
+comma-ok `op.Payload.(plan.XPayload)` assertion `resource/cron/planwire.go`
+established (never a bare type assertion or a nil check that panics on a
+decoded op from an arbitrary `plan.jsonl` — a nil or mistyped `Payload`
+degrades cleanly to the zero payload, which each kind's existing
+required-field checks already turn into a clean apply-time error or a
+harmless no-op). `wireOp` itself (`plan/wire.go`) is unchanged in field
+order and json tags — only its doc comments now say which payload owns
+`Symlink`/`Target`/`Hardlink`/`Latest` — so the wire stays byte-for-byte
+identical to before this slice, the same invariant yd2 pinned.
+
+One consequence worth recording for the remaining follow-ups: once a
+kind's exclusive field moves off `Op`'s core, `payloadFromWire` (called
+unconditionally by `fromWire`/`UnmarshalJSON` for every op of that kind, see
+`plan/op_payload.go`) always builds a non-nil, possibly-zero-value payload
+for that kind, even when nothing on the wire carried a non-default value —
+this is exactly what yd2's own `CronPayload`/`SystemdTimerPayload` already
+did, but a hand-built `plan.Op{Op: plan.KindPackage, Name: "x"}` test
+literal that predates a kind's migration (i.e. omits `Payload` entirely)
+will decode-then-re-encode to a value with a non-nil `Payload`, breaking a
+`reflect.DeepEqual` round-trip comparison against the original nil-`Payload`
+literal. Migrating a kind therefore means grep'ing every hand-built
+`plan.Op{...}` literal of that kind across `plan/*_test.go` and
+`api/*_test.go` (not just the ones naming the migrated field) and adding an
+explicit `Payload: XPayload{}` to each, matching the convention every
+`KindCron`/`KindSystemdTimer` literal already followed from yd2 onward; two
+such gaps (`plan/codec_test.go`'s `sampleOps` and
+`plan/types_test.go`'s `TestOpJSONTagsMatchPlanExamples` "package" case)
+surfaced immediately as `TestEncodeDecodePlanRoundTrip` /
+`TestEncodeDecodeOpRoundTrip` / `TestOpJSONTagsMatchPlanExamples` failures
+during this slice and were fixed the same way.
+
+`plan.OpPayloadExamples()` gained `KindLink`, `KindLinkIfExists`, and
+`KindPackage` entries; `api`'s `TestOpFieldClassesAreExhaustive` and
+`plan`'s `TestWirePayloadTagsMatch` (both described above) needed no other
+change — `opFieldClasses` (`api/secret_fields.go`) already classified
+`"symlink"`, `"target"`, and `"hardlink"` as `classIdentity` from before
+this split (their JSON path is unchanged, since `walkStruct` computes it
+from the payload's own json tag, not from Go struct nesting), and `Latest`
+is a bool, which the walker never classifies at all (it holds no string).
+
+Every other kind's fields are UNCHANGED after yd2, 6e2, and 5e2, still flat
+on `Op` — `File`, `Dir`/`SyncDir`, `Command`, `Service`/`Timer`/
 `DaemonReload`, `EnsureDir`/`EnsureFile`, `ConfigSet`/`ConfigSetMember`, and
-`WhenBegin`/`WhenEnd` all remain exactly as they were pre-yd2, pending the
-remaining follow-up tasks scoped the same way (one or a few kinds per task,
-per this file's own "do not attempt it as one uninterrupted blind edit"
-guidance, matching w62's own incremental discipline).
+`WhenBegin`/`WhenEnd` — pending the remaining follow-up tasks (7e2, 8e2,
+9e2, ae2) scoped the same way (one or a few kinds per task, per this file's
+own "do not attempt it as one uninterrupted blind edit" guidance, matching
+w62's own incremental discipline).
 
 A resource package that registers a `plan.Handler` must never be imported by
 the `plan` package itself (that would reintroduce the cycle the registry
