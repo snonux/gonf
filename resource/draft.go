@@ -1,6 +1,7 @@
 package resource
 
 import (
+	"slices"
 	"sync"
 )
 
@@ -14,6 +15,27 @@ type PlanGuardDraft struct {
 	ExpectStdout string
 	// ExpectExit is the exit code that makes the probe succeed. Nil means 0.
 	ExpectExit *int
+}
+
+// ClonePlanGuardDraft deep-copies a guard probe, including its Args and
+// ExpectExit (nil stays nil). Exported (task 2e2) so every kind package
+// that embeds a *PlanGuardDraft in its own DraftPayload (currently
+// resource/cmd's Payload, for the Unless/OnlyIf guards) clones it through
+// this one definition next to the type, instead of a private per-package
+// copy: resource genuinely cannot reach INTO a kind package's payload type
+// to clone it generically, but it can export a clone function for its own
+// type here, which every consumer can call.
+func ClonePlanGuardDraft(g *PlanGuardDraft) *PlanGuardDraft {
+	if g == nil {
+		return nil
+	}
+	c := *g
+	c.Args = slices.Clone(g.Args)
+	if g.ExpectExit != nil {
+		exit := *g.ExpectExit
+		c.ExpectExit = &exit
+	}
+	return &c
 }
 
 // KeyedLine is one WithKeyedLine edit in a plan draft: Line owns the file's

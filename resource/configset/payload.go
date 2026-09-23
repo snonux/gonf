@@ -1,8 +1,6 @@
 package configset
 
 import (
-	"slices"
-
 	"github.com/snonux/gonf/resource"
 )
 
@@ -25,43 +23,14 @@ type SetPayload struct {
 }
 
 // Clone returns a deep copy of p: ConfigMembers' and Validators' own
-// reference fields (Content, Args) get their own backing storage.
-// Implements resource.DraftPayload.
+// reference fields (Content, Args) get their own backing storage, via
+// resource.ClonePlanConfigMembers/ClonePlanArgvs (task 2e2 exported these
+// next to resource.PlanConfigMember/PlanArgv, replacing this package's own
+// former private copies). Implements resource.DraftPayload.
 func (p SetPayload) Clone() resource.DraftPayload {
 	c := p
-	c.ConfigMembers = cloneConfigMembers(p.ConfigMembers)
-	c.Validators = cloneArgvs(p.Validators)
-	return c
-}
-
-// cloneConfigMembers deep-copies config-set members, including each
-// member's Content bytes (nil stays nil, empty stays empty). Mirrors
-// resource.PlanDraft.Clone's own former helper of the same shape, kept
-// here too since resource/draft_clone.go cannot reach into this package's
-// payload to clone it generically.
-func cloneConfigMembers(members []resource.PlanConfigMember) []resource.PlanConfigMember {
-	if members == nil {
-		return nil
-	}
-	c := make([]resource.PlanConfigMember, len(members))
-	for i, m := range members {
-		m.Content = slices.Clone(m.Content)
-		c[i] = m
-	}
-	return c
-}
-
-// cloneArgvs deep-copies argv commands, including each one's Args (nil
-// stays nil, empty stays empty).
-func cloneArgvs(argvs []resource.PlanArgv) []resource.PlanArgv {
-	if argvs == nil {
-		return nil
-	}
-	c := make([]resource.PlanArgv, len(argvs))
-	for i, a := range argvs {
-		a.Args = slices.Clone(a.Args)
-		c[i] = a
-	}
+	c.ConfigMembers = resource.ClonePlanConfigMembers(p.ConfigMembers)
+	c.Validators = resource.ClonePlanArgvs(p.Validators)
 	return c
 }
 

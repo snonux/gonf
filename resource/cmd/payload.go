@@ -32,24 +32,7 @@ type Payload struct {
 func (p Payload) Clone() resource.DraftPayload {
 	c := p
 	c.Args = slices.Clone(p.Args)
-	c.Unless = cloneGuard(p.Unless)
-	c.OnlyIf = cloneGuard(p.OnlyIf)
+	c.Unless = resource.ClonePlanGuardDraft(p.Unless)
+	c.OnlyIf = resource.ClonePlanGuardDraft(p.OnlyIf)
 	return c
-}
-
-// cloneGuard deep-copies a guard probe, including its Args and ExpectExit
-// (nil stays nil). Mirrors resource.PlanDraft's own cloneGuard, kept here
-// too since resource/draft_clone.go cannot reach into this package's
-// payload to clone it generically.
-func cloneGuard(g *resource.PlanGuardDraft) *resource.PlanGuardDraft {
-	if g == nil {
-		return nil
-	}
-	c := *g
-	c.Args = slices.Clone(g.Args)
-	if g.ExpectExit != nil {
-		exit := *g.ExpectExit
-		c.ExpectExit = &exit
-	}
-	return &c
 }

@@ -14,42 +14,25 @@ import (
 // generic Payload handling (Clone, the reference-field walk) independently
 // of any real kind's payload type (a real one, e.g. resource/cron.Payload,
 // lives in its own resource/<kind> package — see task w62 Layer 1). Members
-// mirrors the "slice of struct with its own nested slice" shape a real
-// payload can hold (e.g. configset.SetPayload's ConfigMembers), so the
-// generic walk/clone contract is proven at that depth too, not just a flat
-// string slice.
+// reuses resource.PlanConfigMember itself (rather than a bespoke stub
+// element type) so it both mirrors the "slice of struct with its own
+// nested slice" shape a real payload can hold (e.g. configset.SetPayload's
+// ConfigMembers) and exercises resource.ClonePlanConfigMembers (task 2e2)
+// as its clone step, instead of a third private copy of the same clone
+// logic.
 type payloadStub struct {
 	Tag     string
 	List    []string
-	Members []payloadStubMember
+	Members []resource.PlanConfigMember
 }
 
-// payloadStubMember is payloadStub's nested reference-bearing element.
-type payloadStubMember struct {
-	Key     string
-	Content []byte
-}
-
-// Clone deep-copies the stub, giving List and each Members' Content their
-// own backing storage.
+// Clone deep-copies the stub, giving List its own backing storage and
+// deep-copying Members (including each member's Content) via
+// resource.ClonePlanConfigMembers.
 func (p payloadStub) Clone() resource.DraftPayload {
 	c := p
 	c.List = slices.Clone(p.List)
-	c.Members = clonePayloadStubMembers(p.Members)
-	return c
-}
-
-// clonePayloadStubMembers deep-copies each member's Content (nil stays nil,
-// empty stays empty), mirroring resource/configset's cloneConfigMembers.
-func clonePayloadStubMembers(members []payloadStubMember) []payloadStubMember {
-	if members == nil {
-		return nil
-	}
-	c := make([]payloadStubMember, len(members))
-	for i, m := range members {
-		m.Content = slices.Clone(m.Content)
-		c[i] = m
-	}
+	c.Members = resource.ClonePlanConfigMembers(p.Members)
 	return c
 }
 
@@ -71,7 +54,7 @@ func fullDraft(id string) resource.PlanDraft {
 		Payload: payloadStub{
 			Tag:     "full",
 			List:    []string{"item"},
-			Members: []payloadStubMember{{Key: "k", Content: []byte("body")}},
+			Members: []resource.PlanConfigMember{{Key: "k", Content: []byte("body")}},
 		},
 		Env:   map[string]string{"K": "v"},
 		Watch: []string{"File[/w]"},
@@ -233,7 +216,7 @@ func TestPlanDraftClonePreservesNilAndEmpty(t *testing.T) {
 	empty := resource.PlanDraft{
 		Env:     map[string]string{},
 		Deps:    []string{},
-		Payload: payloadStub{List: []string{}, Members: []payloadStubMember{{Content: []byte{}}}},
+		Payload: payloadStub{List: []string{}, Members: []resource.PlanConfigMember{{Content: []byte{}}}},
 	}
 	c := empty.Clone()
 	if !reflect.DeepEqual(c, empty) {
