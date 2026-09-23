@@ -198,6 +198,30 @@ func TestMayManageUnit(t *testing.T) {
 		// default for $XDG_CONFIG_DIRS/systemd/user, a fixed path
 		// like /etc/systemd/user above.
 		{"File[/etc/xdg/systemd/user/service.d/x.conf]", "a.service", true},
+		// Positive (od2): a NON-default $XDG_CONFIG_HOME (or
+		// $XDG_DATA_HOME) still ends in "/systemd/user", so the
+		// widened suffix match catches it even though it is not one
+		// of the documented ~/.config or ~/.local/share defaults
+		// (dd2's literal-suffix match missed this).
+		{"File[/home/u/cfg/systemd/user/service.d/x.conf]", "a.service", true},
+		// Positive (od2): $XDG_RUNTIME_DIR/systemd/user
+		// (/run/user/<uid>/systemd/user in its default form) is a
+		// documented per-user unit load directory too
+		// (systemd.unit(5), "Unit Load Path", Table 2) that the prior
+		// literal-suffix match also missed; /run/systemd/user (the
+		// SYSTEM path) was already in unitSearchDirs, but not this
+		// per-user runtime one.
+		{"File[/run/user/1000/systemd/user/service.d/x.conf]", "a.service", true},
+		// Negative (od2 regression guard): the widened suffix match
+		// must not start matching the dbus-transient directories
+		// (*.control, transient, generator[.early|.late]) dd2
+		// deliberately excluded -- none of them end in
+		// "/systemd/user", so they stay excluded before and after
+		// this widening.
+		{"File[/run/systemd/transient/service.d/x.conf]", "a.service", false},
+		{"File[/run/systemd/generator/service.d/x.conf]", "a.service", false},
+		{"File[/run/systemd/generator.early/service.d/x.conf]", "a.service", false},
+		{"File[/run/systemd/system/a.service.control/service.d/x.conf]", "a.service", false},
 	} {
 		if got := mayManageUnit(tc.id, tc.unit); got != tc.want {
 			t.Errorf("mayManageUnit(%s, %s) = %v, want %v", tc.id, tc.unit, got, tc.want)

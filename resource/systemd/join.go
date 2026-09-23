@@ -186,27 +186,35 @@ var unitSearchDirs = []string{
 }
 
 // isUnitSearchDir reports whether dir is one of the standard systemd unit
-// load directories (unitSearchDirs), or one of the two per-user directories
-// whose default location is under the user's home and so is matched by
-// suffix instead (the home directory varies per host and user):
-// ~/.config/systemd/user ($XDG_CONFIG_HOME default) and
-// ~/.local/share/systemd/user ($XDG_DATA_HOME default, dd2).
+// load directories (unitSearchDirs), or any directory ending in
+// "/systemd/user": every per-user search directory in systemd.unit(5)'s
+// Table 2 that is NOT one of the fixed system-wide paths already listed in
+// unitSearchDirs sits under some environment variable's value and ends this
+// way -- $XDG_CONFIG_HOME/systemd/user, $XDG_DATA_HOME/systemd/user, each
+// $XDG_DATA_DIRS entry's systemd/user, and $XDG_RUNTIME_DIR/systemd/user --
+// so matching the suffix directly covers every one of them at once,
+// including a host's non-default XDG_CONFIG_HOME/XDG_DATA_HOME (od2), not
+// just the documented defaults ~/.config/systemd/user and
+// ~/.local/share/systemd/user (dd2).
 //
-// This only matches the documented XDG *defaults*, not a host's actual
-// $XDG_CONFIG_HOME/$XDG_DATA_HOME: mayManageUnit runs while a recipe
-// declares its resources, on the controller process, which has no per-
-// destination-host environment to consult (a recipe is declared once and
-// applied to any number of destination hosts, each with its own). Reading
-// the controller's own environment variables here would silently check the
-// wrong host's settings, so the suffix match (widened to cover the
-// documented default set, not the controller's environment) stays the
-// right tool for a controller-side, host-agnostic check (dd2).
+// This still does not read any environment variable: mayManageUnit runs
+// while a recipe declares its resources, on the controller process, which
+// has no per-destination-host environment to consult (a recipe is declared
+// once and applied to any number of destination hosts, each with its own).
+// Reading the controller's own environment variables here would silently
+// check the wrong host's settings, so the suffix match -- now covering
+// every documented "/systemd/user" spelling instead of enumerating each
+// one -- stays the right tool for a controller-side, host-agnostic check.
+// It can only ever widen mayManageUnit's true matches (the safe direction:
+// this check exists to REFUSE a join, so a false positive here costs an
+// extra reload at worst, never a stale-definition start), never narrow
+// them, so it stays safe even where it is more permissive than any single
+// real host's actual search path.
 func isUnitSearchDir(dir string) bool {
 	if slices.Contains(unitSearchDirs, dir) {
 		return true
 	}
-	return strings.HasSuffix(dir, "/.config/systemd/user") ||
-		strings.HasSuffix(dir, "/.local/share/systemd/user")
+	return strings.HasSuffix(dir, "/systemd/user")
 }
 
 // dropinDirs returns the drop-in directory names systemd additionally
