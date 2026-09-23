@@ -114,6 +114,14 @@ func (syncDirHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	if err != nil {
 		return err
 	}
+	if op.Glob {
+		// Defense-in-depth (task qc2, the kc2 reviewer's follow-up): verify
+		// the rebuilt pattern actually covers the resolved blob BEFORE
+		// installing or pruning anything from it. See syncDirGlobGuard.
+		if err := syncDirGlobGuard(path, globPattern(src), src); err != nil {
+			return err
+		}
+	}
 	opts, err := syncDirOptions(op, src)
 	if err != nil {
 		return err
@@ -200,9 +208,62 @@ func syncDirOptions(op plan.Op, src string) ([]opt.DirOption, error) {
 // tree sync.
 func syncDirSourceOption(op plan.Op, src string) opt.DirOption {
 	if op.Glob {
-		return opt.WithSourceGlob(filepath.Join(quoteGlob(src), "*"))
+		return opt.WithSourceGlob(globPattern(src))
 	}
 	return opt.WithSource(src)
+}
+
+// globPattern is the "<src>/*" glob pattern a glob sync_dir op rebuilds over
+// its flat blob directory (see syncDirSourceOption). It is factored out so
+// syncDirGlobGuard checks the EXACT pattern that install/prune will use,
+// never a hand-rolled approximation that could drift from it.
+func globPattern(src string) string {
+	return filepath.Join(quoteGlob(src), "*")
+}
+
+// syncDirGlobGuard is a defense-in-depth check for the glob sync_dir apply
+// path (task qc2, the follow-up the kc2 reviewer asked for — kc2 itself
+// fixed the one known root cause, quoteGlob's rune-vs-byte bug). It refuses
+// the apply when pattern matches ZERO entries while blobDir — the resolved
+// blob directory pattern was built from — is non-empty.
+//
+// Every entry a glob blob holds is a COUNTING match by construction
+// (plan.scanGlob only packages regular files, and symlinks resolved through
+// to one; see plan/manifest.go), and Go's "*" matches dot-names too (unlike
+// a shell glob), so a correctly built "<blobDir>/*" pattern is guaranteed to
+// match every entry of a non-empty blobDir. A zero-match result against a
+// non-empty blobDir can therefore never be a legitimate "nothing to sync"
+// outcome — it can only mean pattern no longer names blobDir. kc2's
+// byte-vs-rune escaping bug was one way to produce that shape; this guard
+// is generic and catches ANY future bug with the same shape (wrong path
+// plumbed through, a blob resolved to the wrong directory, a future glob
+// helper miscomputing the pattern, and so on), not just a repeat of kc2.
+// Silently proceeding would otherwise install nothing (copySourceGlob) and,
+// with WithPrune, delete every unmanaged regular file directly under the
+// destination (pruneGlob's keep-set would end up empty) — the exact
+// data-loss shape kc2 fixed.
+//
+// A genuinely empty blob directory (nothing to sync — a legitimate glob
+// sync_dir whose source matched nothing at record time) is NOT refused:
+// that case returns nil before filepath.Glob ever runs, leaving
+// copySourceGlob/pruneGlob's normal (legitimate) empty-match handling
+// untouched.
+func syncDirGlobGuard(path, pattern, blobDir string) error {
+	entries, err := os.ReadDir(blobDir)
+	if err != nil {
+		return fmt.Errorf("sync_dir: read blob dir %q: %w", blobDir, err)
+	}
+	if len(entries) == 0 {
+		return nil // genuinely empty blob: nothing to sync, not a bug
+	}
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return fmt.Errorf("sync_dir: invalid glob %q: %w", pattern, err)
+	}
+	if len(matches) == 0 {
+		return fmt.Errorf("sync_dir: glob %q matched no entries although blob dir %q is non-empty; refusing to install/prune %s (a correctly built pattern always matches a non-empty blob, so this signals a bug in glob pattern construction rather than an empty source)", pattern, blobDir, path)
+	}
+	return nil
 }
 
 // quoteGlob escapes the filepath.Match metacharacters in path so it matches
