@@ -162,8 +162,8 @@ func TestResolveHasNoInteractivePath(t *testing.T) {
 // always empty outside this package's own tests.
 func TestChildEnvNeverNil(t *testing.T) {
 	if home, ok := os.LookupEnv("HOME"); ok {
-		os.Unsetenv("HOME")
-		t.Cleanup(func() { os.Setenv("HOME", home) })
+		_ = os.Unsetenv("HOME")
+		t.Cleanup(func() { _ = os.Setenv("HOME", home) })
 	}
 	p := &Provider{}
 	env := p.childEnv(false)
@@ -189,8 +189,8 @@ func TestChildEnvExcludesParentEnvironment(t *testing.T) {
 		t.Skip("no env(1) binary available")
 	}
 	if home, ok := os.LookupEnv("HOME"); ok {
-		os.Unsetenv("HOME")
-		t.Cleanup(func() { os.Setenv("HOME", home) })
+		_ = os.Unsetenv("HOME")
+		t.Cleanup(func() { _ = os.Setenv("HOME", home) })
 	}
 	t.Setenv("PIN", "pin-leak")
 	t.Setenv("FOOSTORE_SHELL", "1")
