@@ -4,13 +4,13 @@ import (
 	"testing"
 )
 
-// noopApplier is the registered value of resources these tests only
+// noopRegistered is the registered value of resources these tests only
 // register; nothing applies them.
-var noopApplier = func() error { return nil }
+var noopRegistered = func() error { return nil }
 
 func TestResourceID(t *testing.T) {
 	ResetRepository()
-	res := Register("File", "/tmp/foo.txt", noopApplier)
+	res := Register("File", "/tmp/foo.txt", noopRegistered)
 	expected := "File[/tmp/foo.txt]"
 	if res.ID() != expected {
 		t.Errorf("expected ID %s, got %s", expected, res.ID())
@@ -19,7 +19,7 @@ func TestResourceID(t *testing.T) {
 
 func TestResourceString(t *testing.T) {
 	ResetRepository()
-	res := Register("File", "/tmp/foo.txt", noopApplier)
+	res := Register("File", "/tmp/foo.txt", noopRegistered)
 	expected := "File[/tmp/foo.txt]"
 	if res.String() != expected {
 		t.Errorf("expected String %s, got %s", expected, res.String())
@@ -30,7 +30,7 @@ func TestNew(t *testing.T) {
 	ResetRepository()
 	type_ := "File"
 	name := "/tmp/foo.txt"
-	res := Register(type_, name, noopApplier)
+	res := Register(type_, name, noopRegistered)
 
 	if res.Type != type_ {
 		t.Errorf("expected type %s, got %s", type_, res.Type)
@@ -46,7 +46,7 @@ func TestNew(t *testing.T) {
 func TestRepositoryRegister(t *testing.T) {
 	ResetRepository()
 	repo := getRepository()
-	res := Register("File", "/tmp/foo.txt", noopApplier)
+	res := Register("File", "/tmp/foo.txt", noopRegistered)
 
 	// First registration already happened in New()
 	// But we can try to register again via the repository directly
@@ -55,7 +55,7 @@ func TestRepositoryRegister(t *testing.T) {
 	}
 
 	// Registration of a different resource should succeed
-	res2 := Register("File", "/tmp/bar.txt", noopApplier)
+	res2 := Register("File", "/tmp/bar.txt", noopRegistered)
 	if err := repo.register(res2); err == nil {
 		t.Error("expected error when registering the same resource twice, got nil")
 	}
@@ -69,7 +69,7 @@ func TestRepositoryRegister(t *testing.T) {
 // back exactly as it was.
 func TestSnapshotRepositoryRestoresExactlyThePreSnapshotState(t *testing.T) {
 	ResetRepository()
-	Register("File", "/tmp/a", noopApplier)
+	Register("File", "/tmp/a", noopRegistered)
 	RecordPlanDraft(PlanDraft{ID: "File[/tmp/a]", Kind: "file"})
 
 	restore := SnapshotRepository()
@@ -77,7 +77,7 @@ func TestSnapshotRepositoryRestoresExactlyThePreSnapshotState(t *testing.T) {
 		t.Fatalf("RegisteredIDs() right after the snapshot = %v, want none (a fresh scratch space)", got)
 	}
 
-	Register("File", "/tmp/b", noopApplier)
+	Register("File", "/tmp/b", noopRegistered)
 	RecordPlanDraft(PlanDraft{ID: "File[/tmp/b]", Kind: "file"})
 	if got := RegisteredIDs(); len(got) != 1 || got[0] != "File[/tmp/b]" {
 		t.Fatalf("RegisteredIDs() before restore = %v, want only File[/tmp/b]", got)
@@ -146,8 +146,8 @@ func TestSnapshotRepositoryRestoresTheOriginalOnAnIDCollision(t *testing.T) {
 func TestSnapshotRepositoryOfAnEmptyRepositoryRestoresEmpty(t *testing.T) {
 	ResetRepository()
 	restore := SnapshotRepository()
-	Register("File", "/tmp/a", noopApplier)
-	Register("File", "/tmp/b", noopApplier)
+	Register("File", "/tmp/a", noopRegistered)
+	Register("File", "/tmp/b", noopRegistered)
 	if got := RegisteredIDs(); len(got) != 2 {
 		t.Fatalf("RegisteredIDs() before restore = %v, want 2 entries", got)
 	}

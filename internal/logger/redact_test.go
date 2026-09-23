@@ -294,7 +294,7 @@ func TestRunRelayedHandsOrphanToFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer dst.Close()
+	defer func() { _ = dst.Close() }()
 	cmd := exec.Command("sh", "-c", "echo hi; (sleep 1; echo late && touch "+marker+") & exit 0")
 	start := time.Now()
 	if err := RunRelayed(cmd, dst); err != nil {
@@ -346,7 +346,7 @@ func TestRunRelayedOrphanOutlivesGonf(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stderr.Close()
+	defer func() { _ = stderr.Close() }()
 	helper := exec.Command(os.Args[0], "-test.run=^TestRelayHelperProcess$")
 	helper.Env = append(os.Environ(), relayHelperEnv+"="+marker)
 	helper.Stderr = stderr

@@ -26,10 +26,14 @@ type Resource struct {
 }
 
 // Register records a resource in the repository. type_ is the kind label,
-// name the instance name, registered the kind's registered value (the
-// concrete resource, e.g. *file.File — nothing applies it through the
-// repository any more, see Registered), and deps the IDs of resources that
-// must be applied first. Register records no plan draft itself: the kind's
+// name the instance name, registered whatever the kind wants Registered to
+// hand back later — usually its concrete resource, e.g. *file.File; nil is
+// fine for a kind that never reads it back. The value is stored untyped and
+// unconstrained (not necessarily a pointer: resource/configset's
+// ConfigSetMember passes a value copy of its member spec, since memberSpec
+// has no methods of its own) — nothing applies it through the repository
+// any more, see Registered — and deps the IDs of resources that must be
+// applied first. Register records no plan draft itself: the kind's
 // Present records one with RecordPlanDraft, and api.Apply refuses a
 // registered resource without a draft (it would otherwise be silently
 // skipped). A duplicate ID (the same Type[Name] registered twice in one

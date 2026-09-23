@@ -217,7 +217,13 @@ func Present(name string, opts ...opt.ConfigSetOption) Handle {
 	}
 	sp := c.spec
 	sp.sys, sp.outcomes = newSystem(), newOutcomeStore()
-	set := resource.Register("ConfigSet", name, sp, c.DependsOn.IDs...)
+	// &sp, not sp: every spec method has a pointer receiver (spec.go,
+	// apply.go, ...), so a pointer is spec's natural identity even though
+	// nothing reads this registered value back today (see the Present doc
+	// above). memberSpec below stays a value copy: unlike spec it has no
+	// methods of its own and is passed by value everywhere else in this
+	// package (markerName, hasMarker, pathResolver, ...).
+	set := resource.Register("ConfigSet", name, &sp, c.DependsOn.IDs...)
 	resource.RecordPlanDraft(sp.planDraft(set.ID(), c.DependsOn.SortedIDs()))
 
 	h := Handle{Resource: set, name: name, members: map[string]resource.Resource{}}
