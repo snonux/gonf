@@ -123,11 +123,36 @@ func signalContext(forceOnRepeat bool) (context.Context, context.CancelFunc) {
 	if !signal.Ignored(syscall.SIGHUP) {
 		sigs = append(sigs, syscall.SIGHUP)
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), sigs...)
+	ctx, stop := signal.NotifyContext(baseContext(), sigs...)
 	if forceOnRepeat {
 		context.AfterFunc(ctx, stop)
 	}
 	return ctx, stop
+}
+
+// testBaseContext, set only by this package's own in-package tests
+// (cli_test.go), replaces context.Background() as signalContext's parent
+// for the duration of one test: internal/cli's `gonf apply` path
+// (cliApplyFile/cliApplyStdin) already threads ctx down to
+// api.ApplyPlanContext and so to plan.ApplyWithContext, so wrapping this
+// base context with internal/runners.WithSet lets a test inject a
+// *runners.Set for one CLI() call in place of a process-global
+// internal/testseam fake — the same narrow, module-internal test hook
+// internal/clihost.SetForTest already is for a different piece of state
+// (AGENTS.md, "Test seams"). It is nil in every real invocation (CLI()
+// never sets it), so production always gets context.Background() here,
+// unchanged from before. A test using it must not run in parallel; it sets
+// the same guard internal/testseam's fakes do (testseam.ParallelGuardEnv)
+// before assigning it.
+var testBaseContext context.Context
+
+// baseContext returns testBaseContext when a test set one, else
+// context.Background().
+func baseContext() context.Context {
+	if testBaseContext != nil {
+		return testBaseContext
+	}
+	return context.Background()
 }
 
 // forceExitOnRepeat reports whether a second signal may force-exit this

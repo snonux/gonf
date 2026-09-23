@@ -8,8 +8,8 @@ import (
 
 	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/exec"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/internal/testapply"
-	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -28,10 +28,10 @@ func TestWithEnvCopiesCallerMap(t *testing.T) {
 	resource.SetPlanDraftRecorder(func(d resource.PlanDraft) { recorded = append(recorded, d) })
 	t.Cleanup(func() { resource.SetPlanDraftRecorder(nil) })
 	var runEnv []string
-	testseam.FakeCommand(t, testseam.Command{Run: func(opts exec.Opts, _ string, _ ...string) (string, string, int, error) {
+	rs := &runners.Set{Command: &runners.CommandRunners{Run: func(opts exec.Opts, _ string, _ ...string) (string, string, int, error) {
 		runEnv = slices.Clone(opts.Env)
 		return "", "", 0, nil
-	}})
+	}}}
 
 	env := maps.Clone(wantCopiedEnv)
 	Present("mybin", nil, opt.WithEnv(env), opt.WithName("env-copy"))
@@ -56,7 +56,7 @@ func TestWithEnvCopiesCallerMap(t *testing.T) {
 	draft.Env["GONF_COPY"] = "draft-mutated"
 	assertEnv(t, "plan op after draft mutation", op.Env)
 
-	if err := testapply.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !slices.Contains(runEnv, "GONF_COPY=original") || slices.Contains(runEnv, "GONF_ADDED=added") {

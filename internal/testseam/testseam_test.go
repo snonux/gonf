@@ -5,8 +5,6 @@ import (
 	osexec "os/exec"
 	"strings"
 	"testing"
-
-	"github.com/snonux/gonf/internal/exec"
 )
 
 // helperEnv makes the test binary run TestParallelFakeHelper for real; the
@@ -58,25 +56,25 @@ func stdout(run Run) string {
 // value and finally to none.
 func TestFakeMergesAndRestoresInOrder(t *testing.T) {
 	var outer, inner fakeCleaner
-	FakeCommand(&outer, Command{Probe: named("probe-1")})
-	FakeCommand(&inner, Command{Run: func(exec.Opts, string, ...string) (string, string, int, error) {
-		return "run-2", "", 0, nil
+	FakeCrontab(&outer, Crontab{Read: named("read-1")})
+	FakeCrontab(&inner, Crontab{Write: func(string, string, ...string) (string, string, int, error) {
+		return "write-2", "", 0, nil
 	}})
 	if outer.env[ParallelGuardEnv] != "1" || inner.env[ParallelGuardEnv] != "1" {
 		t.Fatalf("Fake* did not set the parallel guard: %v %v", outer.env, inner.env)
 	}
-	if got := stdout(CommandFakes().Probe); got != "probe-1" {
-		t.Fatalf("probe after a Run-only fake = %q, want the kept probe-1", got)
+	if got := stdout(CrontabFakes().Read); got != "read-1" {
+		t.Fatalf("read after a Write-only fake = %q, want the kept read-1", got)
 	}
-	if CommandFakes().Run == nil {
-		t.Fatal("Run fake not installed")
+	if CrontabFakes().Write == nil {
+		t.Fatal("Write fake not installed")
 	}
 	inner.run()
-	if CommandFakes().Run != nil || stdout(CommandFakes().Probe) != "probe-1" {
+	if CrontabFakes().Write != nil || stdout(CrontabFakes().Read) != "read-1" {
 		t.Fatal("inner cleanup did not restore the outer fake")
 	}
 	outer.run()
-	if f := CommandFakes(); f.Run != nil || f.Probe != nil {
+	if f := CrontabFakes(); f.Read != nil || f.Write != nil {
 		t.Fatal("outer cleanup did not restore the real runners")
 	}
 }

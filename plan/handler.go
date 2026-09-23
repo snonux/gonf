@@ -1,6 +1,9 @@
 package plan
 
-import "github.com/snonux/gonf/resource"
+import (
+	"github.com/snonux/gonf/internal/runners"
+	"github.com/snonux/gonf/resource"
+)
 
 // ApplyContext carries the apply-time inputs a Handler needs beyond the Op
 // itself. It exists so Handler.Apply signatures do not have to grow a new
@@ -13,6 +16,15 @@ type ApplyContext struct {
 	PlanDir string
 	// Facts are detected on the destination and exposed to template handlers.
 	Facts Facts
+	// Runners overrides the backend runners a migrated kind's Handler.Apply
+	// uses in place of the real ones (internal/exec), for this apply only.
+	// It is nil in a real apply (every handler then falls back to its real
+	// runner) and is populated from the context ApplyWithContext was called
+	// with (see internal/runners.WithSet/FromContext): a Runners set is
+	// never a package-global, only a context value scoped to one apply. Its
+	// type lives under internal/, so an external recipe module can read
+	// this field but can never populate one with anything but nil.
+	Runners *runners.Set
 }
 
 // Handler is a resource kind's ownership of its plan wire form: converting a

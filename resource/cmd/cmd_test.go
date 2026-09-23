@@ -10,8 +10,8 @@ import (
 
 	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/exec"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/internal/testapply"
-	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -274,14 +274,14 @@ func TestGuardPassesSemantics(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			testseam.FakeCommand(t, testseam.Command{Probe: func(name string, args ...string) (string, string, int, error) {
+			c := &Cmd{probeFn: func(name string, args ...string) (string, string, int, error) {
 				if name != "probe" {
 					t.Errorf("probe name = %q, want probe", name)
 				}
 				return tt.probeStdout, "", tt.probeExit, nil
-			}})
+			}}
 
-			got, err := guardPasses(tt.guard)
+			got, err := c.guardPasses(tt.guard)
 			if err != nil {
 				t.Fatalf("guardPasses: %v", err)
 			}
@@ -294,14 +294,14 @@ func TestGuardPassesSemantics(t *testing.T) {
 
 // guardPasses must run the probe with the exact argv from the Guard.
 func TestGuardPassesProbeArgv(t *testing.T) {
-	testseam.FakeCommand(t, testseam.Command{Probe: func(name string, args ...string) (string, string, int, error) {
+	c := &Cmd{probeFn: func(name string, args ...string) (string, string, int, error) {
 		if name != "check" || !slices.Equal(args, []string{"-x", "y"}) {
 			t.Errorf("probe argv = %q %v, want check [-x y]", name, args)
 		}
 		return "", "", 0, nil
-	}})
+	}}
 
-	ok, err := guardPasses(&opt.Guard{Name: "check", Args: []string{"-x", "y"}})
+	ok, err := c.guardPasses(&opt.Guard{Name: "check", Args: []string{"-x", "y"}})
 	if err != nil {
 		t.Fatalf("guardPasses: %v", err)
 	}
@@ -312,14 +312,17 @@ func TestGuardPassesProbeArgv(t *testing.T) {
 
 // A failing probe must surface its error; the main command must not run.
 func TestGuardPassesProbeError(t *testing.T) {
-	testseam.FakeCommand(t, testseam.Command{Run: func(opts exec.Opts, name string, args ...string) (string, string, int, error) {
-		t.Error("main command must not run when the probe errors")
-		return "", "", 0, nil
-	}, Probe: func(name string, args ...string) (string, string, int, error) {
-		return "", "", -1, errors.New("probe exploded")
-	}})
+	c := &Cmd{
+		runFn: func(opts exec.Opts, name string, args ...string) (string, string, int, error) {
+			t.Error("main command must not run when the probe errors")
+			return "", "", 0, nil
+		},
+		probeFn: func(name string, args ...string) (string, string, int, error) {
+			return "", "", -1, errors.New("probe exploded")
+		},
+	}
 
-	_, err := guardPasses(&opt.Guard{Name: "probe"})
+	_, err := c.guardPasses(&opt.Guard{Name: "probe"})
 	if err == nil || !strings.Contains(err.Error(), "probe exploded") {
 		t.Fatalf("err = %v, want probe exploded", err)
 	}
@@ -329,20 +332,23 @@ func TestGuardPassesProbeError(t *testing.T) {
 func TestUnlessPassingSkipsMainCommand(t *testing.T) {
 	resource.ResetRepository()
 	probeArgv := ""
-	testseam.FakeCommand(t, testseam.Command{Run: func(opts exec.Opts, name string, args ...string) (string, string, int, error) {
-		t.Errorf("main command %q must not run when the unless guard passes", name)
-		return "", "", 0, nil
-	}, Probe: func(name string, args ...string) (string, string, int, error) {
-		probeArgv = name + " " + strings.Join(args, " ")
-		return "", "", 0, nil
-	}})
+	rs := &runners.Set{Command: &runners.CommandRunners{
+		Run: func(opts exec.Opts, name string, args ...string) (string, string, int, error) {
+			t.Errorf("main command %q must not run when the unless guard passes", name)
+			return "", "", 0, nil
+		},
+		Probe: func(name string, args ...string) (string, string, int, error) {
+			probeArgv = name + " " + strings.Join(args, " ")
+			return "", "", 0, nil
+		},
+	}}
 
 	out := filepath.Join(t.TempDir(), "should-not-exist")
 	Present("touch", []string{out},
 		opt.Unless("always-true", []string{"flag"}),
 		opt.WithName("unless-skip-fake"),
 	)
-	if err := testapply.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if probeArgv != "always-true flag" {
@@ -356,19 +362,22 @@ func TestUnlessPassingSkipsMainCommand(t *testing.T) {
 // OnlyIf failing → skip the main command.
 func TestOnlyIfFailingSkipsMainCommand(t *testing.T) {
 	resource.ResetRepository()
-	testseam.FakeCommand(t, testseam.Command{Run: func(opts exec.Opts, name string, args ...string) (string, string, int, error) {
-		t.Errorf("main command %q must not run when the onlyIf guard fails", name)
-		return "", "", 0, nil
-	}, Probe: func(name string, args ...string) (string, string, int, error) {
-		return "", "", 1, nil
-	}})
+	rs := &runners.Set{Command: &runners.CommandRunners{
+		Run: func(opts exec.Opts, name string, args ...string) (string, string, int, error) {
+			t.Errorf("main command %q must not run when the onlyIf guard fails", name)
+			return "", "", 0, nil
+		},
+		Probe: func(name string, args ...string) (string, string, int, error) {
+			return "", "", 1, nil
+		},
+	}}
 
 	out := filepath.Join(t.TempDir(), "should-not-exist")
 	Present("touch", []string{out},
 		opt.OnlyIf("always-false", nil),
 		opt.WithName("onlyif-skip-fake"),
 	)
-	if err := testapply.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if _, err := os.Stat(out); !os.IsNotExist(err) {
@@ -379,15 +388,18 @@ func TestOnlyIfFailingSkipsMainCommand(t *testing.T) {
 // Guard probe errors are wrapped with the guard kind and resource id.
 func TestGuardErrorWrapped(t *testing.T) {
 	resource.ResetRepository()
-	testseam.FakeCommand(t, testseam.Command{Run: func(opts exec.Opts, name string, args ...string) (string, string, int, error) {
-		t.Error("main command must not run when the guard errors")
-		return "", "", 0, nil
-	}, Probe: func(name string, args ...string) (string, string, int, error) {
-		return "", "", -1, errors.New("probe exploded")
-	}})
+	rs := &runners.Set{Command: &runners.CommandRunners{
+		Run: func(opts exec.Opts, name string, args ...string) (string, string, int, error) {
+			t.Error("main command must not run when the guard errors")
+			return "", "", 0, nil
+		},
+		Probe: func(name string, args ...string) (string, string, int, error) {
+			return "", "", -1, errors.New("probe exploded")
+		},
+	}}
 
 	Present("true", nil, opt.Unless("probe", nil), opt.WithName("unless-err"))
-	err := testapply.Apply()
+	err := testapply.ApplyWithRunners(rs)
 	if err == nil || !strings.Contains(err.Error(),
 		"unless guard for Command[unless-err]: probe exploded") {
 		t.Fatalf("err = %v, want wrapped unless guard error", err)
@@ -404,14 +416,14 @@ func TestCreatesExistingSkipsRunner(t *testing.T) {
 	}
 
 	runs := 0
-	testseam.FakeCommand(t, testseam.Command{Run: func(opts exec.Opts, name string, args ...string) (string, string, int, error) {
+	rs := &runners.Set{Command: &runners.CommandRunners{Run: func(opts exec.Opts, name string, args ...string) (string, string, int, error) {
 		runs++
 		return "", "", 0, nil
-	}})
+	}}}
 
 	out := filepath.Join(dir, "should-not-exist")
 	Present("touch", []string{out}, opt.Creates(marker), opt.WithName("creates-skip-fake"))
-	if err := testapply.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if runs != 0 {
@@ -429,14 +441,14 @@ func TestCreatesMissingInvokesRunnerOnce(t *testing.T) {
 	marker := filepath.Join(dir, "missing")
 
 	runs := 0
-	testseam.FakeCommand(t, testseam.Command{Run: func(opts exec.Opts, name string, args ...string) (string, string, int, error) {
+	rs := &runners.Set{Command: &runners.CommandRunners{Run: func(opts exec.Opts, name string, args ...string) (string, string, int, error) {
 		runs++
 		return "", "", 0, nil
-	}})
+	}}}
 
 	out := filepath.Join(dir, "fake-created")
 	Present("touch", []string{out}, opt.Creates(marker), opt.WithName("creates-run-fake"))
-	if err := testapply.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if runs != 1 {
@@ -459,20 +471,23 @@ func TestRunPlumbsArgsEnvDirToRunner(t *testing.T) {
 	}
 	var got runCall
 	probes := 0
-	testseam.FakeCommand(t, testseam.Command{Run: func(opts exec.Opts, name string, args ...string) (string, string, int, error) {
-		got = runCall{opts: opts, name: name, args: args}
-		return "main stdout\n", "", 0, nil
-	}, Probe: func(name string, args ...string) (string, string, int, error) {
-		probes++
-		return "", "", 0, nil
-	}})
+	rs := &runners.Set{Command: &runners.CommandRunners{
+		Run: func(opts exec.Opts, name string, args ...string) (string, string, int, error) {
+			got = runCall{opts: opts, name: name, args: args}
+			return "main stdout\n", "", 0, nil
+		},
+		Probe: func(name string, args ...string) (string, string, int, error) {
+			probes++
+			return "", "", 0, nil
+		},
+	}}
 
 	Present("mybin", []string{"a1", "a2"},
 		opt.WithDir(dir),
 		opt.WithEnv(map[string]string{"GONF_FAKE_ENV": "plumbed"}),
 		opt.WithName("plumbed"),
 	)
-	if err := testapply.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
@@ -502,12 +517,12 @@ func TestRunPlumbsArgsEnvDirToRunner(t *testing.T) {
 // A non-zero exit from the runner produces the historical error message.
 func TestRunNonZeroExitErrorMessage(t *testing.T) {
 	resource.ResetRepository()
-	testseam.FakeCommand(t, testseam.Command{Run: func(opts exec.Opts, name string, args ...string) (string, string, int, error) {
+	rs := &runners.Set{Command: &runners.CommandRunners{Run: func(opts exec.Opts, name string, args ...string) (string, string, int, error) {
 		return "some stdout\n", "some stderr\n", 7, nil
-	}})
+	}}}
 
 	Present("failing-bin", nil, opt.WithName("exit7"))
-	err := testapply.Apply()
+	err := testapply.ApplyWithRunners(rs)
 	// run() embeds the raw captured streams, so the fake's trailing newline
 	// shows up as a blank line before "stderr:".
 	want := "failing-bin exited 7\nstdout: some stdout\n\nstderr: some stderr\n"
@@ -519,12 +534,12 @@ func TestRunNonZeroExitErrorMessage(t *testing.T) {
 // A start failure from the runner is wrapped with "failed to execute".
 func TestRunStartFailureWrapped(t *testing.T) {
 	resource.ResetRepository()
-	testseam.FakeCommand(t, testseam.Command{Run: func(opts exec.Opts, name string, args ...string) (string, string, int, error) {
+	rs := &runners.Set{Command: &runners.CommandRunners{Run: func(opts exec.Opts, name string, args ...string) (string, string, int, error) {
 		return "", "", -1, errors.New("fork/exec: no such file or directory")
-	}})
+	}}}
 
 	Present("gone-bin", nil, opt.WithName("startfail"))
-	err := testapply.Apply()
+	err := testapply.ApplyWithRunners(rs)
 	if err == nil || !strings.Contains(err.Error(),
 		"failed to execute gone-bin: fork/exec: no such file or directory") {
 		t.Fatalf("err = %v, want wrapped start failure", err)
@@ -538,13 +553,13 @@ func TestRunDryRunDoesNotInvokeRunner(t *testing.T) {
 	defer resource.SetDryRun(false)
 
 	runs := 0
-	testseam.FakeCommand(t, testseam.Command{Run: func(opts exec.Opts, name string, args ...string) (string, string, int, error) {
+	rs := &runners.Set{Command: &runners.CommandRunners{Run: func(opts exec.Opts, name string, args ...string) (string, string, int, error) {
 		runs++
 		return "", "", 0, nil
-	}})
+	}}}
 
 	Present("mybin", []string{"x"}, opt.WithName("dry"))
-	if err := testapply.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if runs != 0 {

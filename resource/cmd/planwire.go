@@ -5,6 +5,7 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 	opt "github.com/snonux/gonf/resource/options"
@@ -51,8 +52,10 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 }
 
 // Apply runs the command (subject to Creates/Unless/OnlyIf guards and the
-// OnChange change gate), mirroring the resource's own guard handling exactly.
-func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
+// OnChange change gate), mirroring the resource's own guard handling
+// exactly. ctx.Runners.Command, when this apply had one injected (task qb2;
+// nil in every real apply), replaces the real internal/exec runner.
+func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	if op.Bin == "" {
 		return fmt.Errorf("command: missing bin")
 	}
@@ -97,7 +100,7 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if op.Sensitive {
 		opts = append(opts, opt.WithSensitive)
 	}
-	return Ensure(op.Bin, append([]string(nil), op.Args...), opts...)
+	return ensureWith(runners.CommandOf(ctx.Runners), op.Bin, append([]string(nil), op.Args...), opts)
 }
 
 // planGuard converts a package-neutral guard draft to the plan wire Guard,

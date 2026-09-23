@@ -1,7 +1,15 @@
 // Package testseam holds the module-internal overrides that let this
-// module's tests fake the host commands resource backends run (command,
-// crontab, package-manager, service-manager and systemctl invocations) and
-// the host's package- and service-manager detection.
+// module's tests fake the host commands resource backends run (crontab,
+// package-manager, service-manager and systemctl invocations) and the
+// host's package- and service-manager detection, for the resource kinds
+// that have not yet migrated to internal/runners' per-apply injection (see
+// that package's doc comment, and AGENTS.md's "Test seams" section) —
+// task qb2 shrinks this package one migrated kind at a time instead of
+// deleting it in one step, since a kind is only removed here once its own
+// production path and every test that faked it have moved to a *runners.Set
+// built and passed per apply. resource/cmd (the "command" plan kind)
+// migrated first, task qb2's first slice; Command/RunOpts/FakeCommand/
+// CommandFakes lived here until then.
 //
 // It replaces the exported *ForTest setters the resource packages used to
 // carry: being internal, it is importable only from inside this module, so
@@ -27,8 +35,6 @@ package testseam
 
 import (
 	"sync"
-
-	"github.com/snonux/gonf/internal/exec"
 )
 
 // ParallelGuardEnv is the environment variable every Fake* call sets through
@@ -49,9 +55,6 @@ type Cleaner interface {
 // Run is the signature of internal/exec.Run.
 type Run func(name string, args ...string) (stdout, stderr string, exitCode int, err error)
 
-// RunOpts is the signature of internal/exec.RunWith.
-type RunOpts func(opts exec.Opts, name string, args ...string) (stdout, stderr string, exitCode int, err error)
-
 // RunEnv runs a command with a complete environment (the inherited process
 // environment with a resource's values overlaid).
 type RunEnv func(env []string, name string, args ...string) (stdout, stderr string, exitCode int, err error)
@@ -61,13 +64,6 @@ type RunStdin func(stdin, name string, args ...string) (stdout, stderr string, e
 
 // Detect names a host manager ("dnf", "rcctl", "systemd", ...) or fails.
 type Detect func() (string, error)
-
-// Command fakes resource/cmd's runners: Run runs the main command (it
-// carries Dir/Env opts), Probe runs the Unless/OnlyIf guard probes.
-type Command struct {
-	Run   RunOpts
-	Probe Run
-}
 
 // Crontab fakes resource/cron's crontab(1) runners: Read runs crontab -l,
 // Write runs crontab - with the new table on stdin.
@@ -112,7 +108,6 @@ type slot[T any] struct {
 }
 
 var (
-	command        slot[Command]
 	crontab        slot[crontabFake]
 	crontabLock    slot[lockChoice]
 	pkgRunners     slot[Package]
@@ -121,23 +116,6 @@ var (
 	serviceManager slot[Detect]
 	systemctl      slot[Run]
 )
-
-// FakeCommand installs f's non-nil runners for resource/cmd until c's
-// cleanup; a nil field keeps the runner currently in effect for that slot.
-func FakeCommand(c Cleaner, f Command) {
-	command.push(c, func(cur Command) Command {
-		if f.Run != nil {
-			cur.Run = f.Run
-		}
-		if f.Probe != nil {
-			cur.Probe = f.Probe
-		}
-		return cur
-	})
-}
-
-// CommandFakes returns the resource/cmd fakes in effect (nil fields: real).
-func CommandFakes() Command { return command.get() }
 
 // FakeCrontab installs f's non-nil crontab runners for resource/cron until
 // c's cleanup (a nil field keeps the runner currently in effect). While any

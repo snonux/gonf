@@ -10,7 +10,7 @@ import (
 
 	"github.com/snonux/gonf/internal/exec"
 	"github.com/snonux/gonf/internal/logger"
-	"github.com/snonux/gonf/internal/testseam"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
 	opt "github.com/snonux/gonf/resource/options"
@@ -56,6 +56,14 @@ type Cmd struct {
 	unless  *opt.Guard
 	onlyIf  *opt.Guard
 	elevate bool
+	// runFn and probeFn are the injected overrides of runWith/runProbe (see
+	// newCmdWith): nil in every real Cmd (newCmd), so run() and
+	// guardPasses() fall back to the real internal/exec runner. Set by the
+	// command plan.Handler from its ApplyContext.Runners (ctx.Runners.
+	// Command, task qb2) and directly by this package's own tests, instead
+	// of a process-global internal/testseam fake.
+	runFn   func(exec.Opts, string, ...string) (string, string, int, error)
+	probeFn func(string, ...string) (string, string, int, error)
 }
 
 // SetName overrides the registry name, which otherwise defaults to the
@@ -115,7 +123,15 @@ func Present(bin string, args []string, opts ...opt.CommandOption) resource.Reso
 // Ensure builds and applies a command resource without registering it or
 // recording a plan draft.
 func Ensure(bin string, args []string, opts ...opt.CommandOption) error {
-	c := newCmd(bin, args, opts)
+	return ensureWith(nil, bin, args, opts)
+}
+
+// ensureWith is Ensure with cr's runners (nil: the real ones) — the plan
+// handler's apply-time entry (task qb2), built with the ApplyContext.Runners.
+// Command override for this run, instead of Ensure growing a public runners
+// parameter of its own.
+func ensureWith(cr *runners.CommandRunners, bin string, args []string, opts []opt.CommandOption) error {
+	c := newCmdWith(cr, bin, args, opts)
 	if err := c.MisuseErr(); err != nil {
 		return err
 	}
@@ -125,12 +141,25 @@ func Ensure(bin string, args []string, opts ...opt.CommandOption) error {
 	return c.apply()
 }
 
-// newCmd builds a Cmd running bin with a copy of args and applies opts. An
-// option misuse is left in its embed.Misuse for the caller to check.
+// newCmd builds a Cmd running bin with a copy of args and applies opts,
+// using the real runners. An option misuse is left in its embed.Misuse for
+// the caller to check.
 func newCmd(bin string, args []string, opts []opt.CommandOption) *Cmd {
+	return newCmdWith(nil, bin, args, opts)
+}
+
+// newCmdWith is newCmd with cr's runners injected (nil: the real ones, via
+// runWith/runProbe): the command plan.Handler's apply-time constructor
+// (task qb2, mirroring resource/user's newUserWith from task 372) and this
+// package's own tests use it directly instead of a package-global fake.
+func newCmdWith(cr *runners.CommandRunners, bin string, args []string, opts []opt.CommandOption) *Cmd {
 	c := &Cmd{
 		bin:  bin,
 		args: append([]string(nil), args...),
+	}
+	if cr != nil {
+		c.runFn = cr.Run
+		c.probeFn = cr.Probe
 	}
 	for _, o := range opts {
 		o.Apply(c)
@@ -232,7 +261,7 @@ func (c *Cmd) apply() error {
 	}
 
 	if c.unless != nil {
-		ok, err := guardPasses(c.unless)
+		ok, err := c.guardPasses(c.unless)
 		if err != nil {
 			return fmt.Errorf("unless guard for %s: %w", c.id(), err)
 		}
@@ -244,7 +273,7 @@ func (c *Cmd) apply() error {
 	}
 
 	if c.onlyIf != nil {
-		ok, err := guardPasses(c.onlyIf)
+		ok, err := c.guardPasses(c.onlyIf)
 		if err != nil {
 			return fmt.Errorf("onlyIf guard for %s: %w", c.id(), err)
 		}
@@ -276,7 +305,7 @@ func (c *Cmd) run() error {
 		}
 
 		logger.Info("running %s: %s", c.id(), c.commandLine())
-		stdout, stderr, exitCode, err := runWith(opts, c.bin, c.args...)
+		stdout, stderr, exitCode, err := c.runWith(opts, c.bin, c.args...)
 		if err != nil {
 			return fmt.Errorf("failed to execute %s: %w", c.bin, err)
 		}
@@ -307,10 +336,11 @@ func (c *Cmd) commandLine() string {
 	return c.bin + " " + strings.Join(c.args, " ")
 }
 
-// guardPasses runs guard probe g and reports whether it exited with the
+// guardPasses runs guard probe g through c's runner (c.probeFn when
+// injected, else the real one) and reports whether it exited with the
 // expected code and, when set, printed the expected trimmed stdout.
-func guardPasses(g *opt.Guard) (bool, error) {
-	stdout, _, exitCode, err := runProbe(g.Name, g.Args...)
+func (c *Cmd) guardPasses(g *opt.Guard) (bool, error) {
+	stdout, _, exitCode, err := c.runProbe(g.Name, g.Args...)
 	if err != nil {
 		return false, err
 	}
@@ -323,21 +353,21 @@ func guardPasses(g *opt.Guard) (bool, error) {
 	return true, nil
 }
 
-// runWith runs the main command (it carries Dir/Env opts): the real runner,
-// or the fake a test in this module installed with
-// internal/testseam.FakeCommand.
-func runWith(opts exec.Opts, name string, args ...string) (string, string, int, error) {
-	if fake := testseam.CommandFakes().Run; fake != nil {
-		return fake(opts, name, args...)
+// runWith runs the main command (it carries Dir/Env opts): c.runFn when a
+// runners.CommandRunners was injected (newCmdWith), otherwise the real
+// internal/exec runner.
+func (c *Cmd) runWith(opts exec.Opts, name string, args ...string) (string, string, int, error) {
+	if c.runFn != nil {
+		return c.runFn(opts, name, args...)
 	}
 	return exec.RunWith(opts, name, args...)
 }
 
-// runProbe runs an Unless/OnlyIf guard probe: the real runner, or a
-// testseam.FakeCommand fake.
-func runProbe(name string, args ...string) (string, string, int, error) {
-	if fake := testseam.CommandFakes().Probe; fake != nil {
-		return fake(name, args...)
+// runProbe runs an Unless/OnlyIf guard probe: c.probeFn when injected,
+// otherwise the real internal/exec runner.
+func (c *Cmd) runProbe(name string, args ...string) (string, string, int, error) {
+	if c.probeFn != nil {
+		return c.probeFn(name, args...)
 	}
 	return exec.Run(name, args...)
 }

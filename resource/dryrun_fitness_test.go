@@ -10,6 +10,7 @@ import (
 	"github.com/snonux/gonf/api"
 	opt "github.com/snonux/gonf/api/options"
 	iexec "github.com/snonux/gonf/internal/exec"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/cmd"
@@ -655,7 +656,7 @@ func dryRunHardlinkReplace(t *testing.T, tmp string) {
 
 func dryRunCmd(t *testing.T, tmp string) {
 	var mutated bool
-	testseam.FakeCommand(t, testseam.Command{
+	rs := &runners.Set{Command: &runners.CommandRunners{
 		Run: func(opts iexec.Opts, name string, args ...string) (string, string, int, error) {
 			mutated = true
 			return "", "", 0, nil
@@ -666,9 +667,9 @@ func dryRunCmd(t *testing.T, tmp string) {
 			mutated = true
 			return "", "", 0, nil
 		},
-	})
+	}}
 	cmd.Present("true", nil)
-	if err := api.Apply(); err != nil {
+	if err := api.ApplyWithRunners(rs); err != nil {
 		t.Fatal(err)
 	}
 	if mutated {

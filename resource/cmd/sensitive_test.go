@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/snonux/gonf/internal/declerr"
-	"github.com/snonux/gonf/internal/testseam"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/internal/testutil"
 
 	"github.com/snonux/gonf/internal/exec"
@@ -23,14 +23,14 @@ const fakeCmdSecret = "fake-bearer-token-77aa"
 func TestSensitiveCommandWithholdsArgvAndOutput(t *testing.T) {
 	resource.ResetForTest()
 	t.Cleanup(resource.ResetForTest)
-	testseam.FakeCommand(t, testseam.Command{Run: func(exec.Opts, string, ...string) (string, string, int, error) {
+	rs := &runners.Set{Command: &runners.CommandRunners{Run: func(exec.Opts, string, ...string) (string, string, int, error) {
 		return "echo " + fakeCmdSecret, "denied " + fakeCmdSecret, 7, nil
-	}})
+	}}}
 	output := testutil.CaptureLog(t, logger.LevelDebug)
 
 	op := plan.Op{Op: plan.KindCommand, ID: "Command[upload]", Name: "upload", Bin: "/usr/bin/curl",
 		Args: []string{"-H", "Authorization: Bearer " + fakeCmdSecret}, Sensitive: true}
-	err := planHandler{}.Apply(op, plan.ApplyContext{})
+	err := planHandler{}.Apply(op, plan.ApplyContext{Runners: rs})
 	if err == nil || !strings.Contains(err.Error(), "output withheld") {
 		t.Fatalf("err = %v, want the withheld failure", err)
 	}
@@ -45,7 +45,7 @@ func TestSensitiveCommandWithholdsArgvAndOutput(t *testing.T) {
 
 	op.Sensitive = false
 	resource.ResetForTest()
-	err = planHandler{}.Apply(op, plan.ApplyContext{})
+	err = planHandler{}.Apply(op, plan.ApplyContext{Runners: rs})
 	if err == nil || !strings.Contains(err.Error(), "denied "+fakeCmdSecret) {
 		t.Fatalf("plain command: err = %v, want its output", err)
 	}
@@ -56,13 +56,13 @@ func TestSensitiveCommandWithholdsArgvAndOutput(t *testing.T) {
 func TestWithSensitiveCommandWithholdsArgvDirectly(t *testing.T) {
 	resource.ResetForTest()
 	t.Cleanup(resource.ResetForTest)
-	testseam.FakeCommand(t, testseam.Command{Run: func(exec.Opts, string, ...string) (string, string, int, error) {
+	cr := &runners.CommandRunners{Run: func(exec.Opts, string, ...string) (string, string, int, error) {
 		return "", "denied " + fakeCmdSecret, 7, nil
-	}})
+	}}
 	output := testutil.CaptureLog(t, logger.LevelDebug)
 
 	args := []string{"-H", "Authorization: Bearer " + fakeCmdSecret}
-	err := Ensure("/usr/bin/curl", args, opt.WithName("upload"), opt.WithSensitive)
+	err := ensureWith(cr, "/usr/bin/curl", args, []opt.CommandOption{opt.WithName("upload"), opt.WithSensitive})
 	if err == nil || strings.Contains(err.Error(), fakeCmdSecret) || strings.Contains(output(), fakeCmdSecret) {
 		t.Fatalf("direct sensitive command leaks: err = %v, log:\n%s", err, output())
 	}

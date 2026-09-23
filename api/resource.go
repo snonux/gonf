@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/snonux/gonf/internal/declerr"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
@@ -56,6 +57,21 @@ type Resource interface {
 // records through RecordPlanTo (it lowers the registered drafts directly), so
 // the record-time pre-flight does not cover it either.
 func Apply() error {
+	return ApplyWithRunners(nil)
+}
+
+// ApplyWithRunners is Apply with rs injected as the backend runners a
+// migrated plan handler uses in place of the real ones (internal/exec), for
+// this one apply (task qb2). rs's type (internal/runners.Set) lives under
+// internal/, so an external recipe module can only ever pass nil here —
+// exactly Apply's own behaviour — which makes this, in effect though not in
+// the Go compiler's eyes, the one module-internal injection hook api keeps:
+// this module's own tests (in package api, or resource/dryrun_fitness_test.go
+// and similar cross-package tests reaching a kind through the registered
+// plan handler) call it directly with a *runners.Set instead of installing a
+// process-global internal/testseam fake. rs travels down to every handler's
+// ApplyContext via ctx (internal/runners.WithSet), scoped to this one call.
+func ApplyWithRunners(rs *runners.Set) error {
 	if plan.Recording() || resource.PlanDraftRecording() {
 		return fmt.Errorf("Apply: cannot apply while plan recording is active")
 	}
@@ -107,7 +123,8 @@ func Apply() error {
 	if err != nil {
 		return err
 	}
-	return applyPackagedOps(ops, planDir)
+	ctx := runners.WithSet(context.Background(), rs)
+	return applyPackagedOps(ctx, ops, planDir)
 }
 
 // requireDraftsForAll refuses the apply when the registered resources and
@@ -182,14 +199,14 @@ func packageApplyOps(drafts []resource.PlanDraft, store plan.BlobStore) ([]plan.
 // ApplyPlan, unsorted — the pre-split behaviour and error wording of Apply,
 // byte for byte (a dependency cycle is still reported by the engine, before
 // it applies anything). With an elevated op, applyElevatedOps takes over.
-func applyPackagedOps(ops []plan.Op, planDir string) error {
+func applyPackagedOps(ctx context.Context, ops []plan.Op, planDir string) error {
 	if anyElevated(ops) {
-		return applyElevatedOps(ops, planDir)
+		return applyElevatedOps(ctx, ops, planDir)
 	}
 	if err := validateApplyDeps(plan.SplitPrivilegeChunks(ops), nil); err != nil {
 		return err
 	}
-	return ApplyPlan(ops, planDir)
+	return ApplyPlanContext(ctx, ops, planDir)
 }
 
 // applyElevatedOps applies a plan with elevated ops as privilege chunks.
@@ -214,7 +231,7 @@ func applyPackagedOps(ops []plan.Op, planDir string) error {
 // <class> resources <IDs>: ..." (resourceChunkLabel) rather than with
 // ApplyChunks' chunk index: Apply's caller never saw a chunk order, only the
 // resources it registered.
-func applyElevatedOps(ops []plan.Op, planDir string) error {
+func applyElevatedOps(ctx context.Context, ops []plan.Op, planDir string) error {
 	ops, conflicts, err := orderForPrivilegeSplit(ops)
 	if err != nil {
 		return err
@@ -226,7 +243,7 @@ func applyElevatedOps(ops []plan.Op, planDir string) error {
 	if err := preflightElevation(chunks, processPrivilege); err != nil {
 		return fmt.Errorf("Apply: %w", err)
 	}
-	if err := applySplitChunks(context.Background(), chunks, planDir, processPrivilege, resourceChunkLabel); err != nil {
+	if err := applySplitChunks(ctx, chunks, planDir, processPrivilege, resourceChunkLabel); err != nil {
 		return fmt.Errorf("Apply: %w", err)
 	}
 	return nil

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/base64"
 	"os"
 	"os/user"
@@ -11,7 +12,7 @@ import (
 	"testing"
 
 	internalexec "github.com/snonux/gonf/internal/exec"
-	"github.com/snonux/gonf/internal/testseam"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -225,6 +226,7 @@ type loginClassApplyFixture struct {
 	ops                    []plan.Op
 	fragment, db, earlier  string
 	watcherRuns, otherRuns *int
+	runners                *runners.Set
 }
 
 func newLoginClassApplyFixture(t *testing.T, absent bool) *loginClassApplyFixture {
@@ -263,29 +265,32 @@ func newLoginClassApplyFixture(t *testing.T, absent bool) *loginClassApplyFixtur
 		}
 		Command("restart-watcher", nil, options.OnChange(class))
 	})
-	f.watcherRuns, f.otherRuns = fakeWatcherRunner(t)
+	f.watcherRuns, f.otherRuns, f.runners = fakeWatcherRunner(t)
 	return f
 }
 
 // fakeWatcherRunner counts executions of the watcher command and of anything
-// else; nothing real is executed.
-func fakeWatcherRunner(t *testing.T) (*int, *int) {
+// else; nothing real is executed. The returned *runners.Set is injected by
+// apply (plan.ApplyWithContext + internal/runners.WithSet) for exactly this
+// fixture's applies, instead of a process-global internal/testseam fake.
+func fakeWatcherRunner(t *testing.T) (watcherRuns, otherRuns *int, rs *runners.Set) {
 	t.Helper()
 	watcher, other := 0, 0
-	testseam.FakeCommand(t, testseam.Command{Run: func(_ internalexec.Opts, name string, _ ...string) (string, string, int, error) {
+	rs = &runners.Set{Command: &runners.CommandRunners{Run: func(_ internalexec.Opts, name string, _ ...string) (string, string, int, error) {
 		if name == "restart-watcher" {
 			watcher++
 		} else {
 			other++
 		}
 		return "", "", 0, nil
-	}})
-	return &watcher, &other
+	}}}
+	return &watcher, &other, rs
 }
 
 func (f *loginClassApplyFixture) apply(t *testing.T, goos string) error {
 	t.Helper()
-	return plan.Apply(f.ops, plan.Facts{GOOS: goos}, "")
+	ctx := runners.WithSet(context.Background(), f.runners)
+	return plan.ApplyWithContext(ctx, f.ops, plan.Facts{GOOS: goos}, "")
 }
 
 func mustNotExist(t *testing.T, path string) {

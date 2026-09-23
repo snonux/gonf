@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/api/options"
 	iexec "github.com/snonux/gonf/internal/exec"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
@@ -526,10 +528,14 @@ func TestCLIApplyStrictPreviewUsesResourceDryRunWithoutStaging(t *testing.T) {
 	t.Cleanup(func() { resource.SetDryRun(false) })
 
 	var ran bool
-	testseam.FakeCommand(t, testseam.Command{Run: func(iexec.Opts, string, ...string) (string, string, int, error) {
-		ran = true
-		return "", "", 0, nil
+	t.Setenv(testseam.ParallelGuardEnv, "1")
+	testBaseContext = runners.WithSet(context.Background(), &runners.Set{Command: &runners.CommandRunners{
+		Run: func(iexec.Opts, string, ...string) (string, string, int, error) {
+			ran = true
+			return "", "", 0, nil
+		},
 	}})
+	t.Cleanup(func() { testBaseContext = nil })
 
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "strict-preview"},

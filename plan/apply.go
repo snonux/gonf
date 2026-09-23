@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	gexec "github.com/snonux/gonf/internal/exec"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/resource"
 	opt "github.com/snonux/gonf/resource/options"
 )
@@ -121,14 +122,17 @@ func ApplyWithContext(ctx context.Context, ops []Op, facts Facts, planDir string
 // applyBody applies the sorted, pre-flighted plan body line by line. ctx is
 // checked before each line so a canceled apply starts no further op; a
 // command already running is stopped through the internal/exec binding set
-// up by ApplyWithContext.
+// up by ApplyWithContext. ctx also carries this run's injected backend
+// runners, if any (internal/runners.WithSet), which applyLine reads back out
+// (internal/runners.FromContext) to populate each op's ApplyContext.Runners
+// — a value scoped to this one call, never a package-global.
 func applyBody(ctx context.Context, body []planLine, facts Facts, planDir string) error {
 	var stack []bool
 	for _, l := range body {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("plan: apply %s before line %d: %w", stopCause(err), l.line, err)
 		}
-		if err := applyLine(l.op, facts, planDir, &stack); err != nil {
+		if err := applyLine(ctx, l.op, facts, planDir, &stack); err != nil {
 			return fmt.Errorf("plan: apply line %d: %w", l.line, err)
 		}
 	}
@@ -306,7 +310,7 @@ func kahnStable(run []planLine, indeg []int, waiters [][]int) ([]planLine, error
 	return sorted, nil
 }
 
-func applyLine(op Op, facts Facts, planDir string, stack *[]bool) error {
+func applyLine(ctx context.Context, op Op, facts Facts, planDir string, stack *[]bool) error {
 	active := whenActive(*stack)
 
 	switch op.Op {
@@ -342,7 +346,7 @@ func applyLine(op Op, facts Facts, planDir string, stack *[]bool) error {
 	if !active {
 		return nil
 	}
-	return applyActiveWithFacts(op, planDir, facts)
+	return applyActiveWithFacts(ctx, op, planDir, facts)
 }
 
 func whenActive(stack []bool) bool {
@@ -361,12 +365,17 @@ func whenActive(stack []bool) bool {
 // report and OwnerGroupOptions/GuardOptions below; see Handler in
 // handler.go for the layering.)
 func applyActive(op Op, planDir string) error {
-	return applyActiveWithFacts(op, planDir, Facts{})
+	return applyActiveWithFacts(context.Background(), op, planDir, Facts{})
 }
 
-func applyActiveWithFacts(op Op, planDir string, facts Facts) error {
+// applyActiveWithFacts builds op's ApplyContext and dispatches to its
+// handler. Runners comes from ctx (internal/runners.FromContext): nil in
+// every real apply, or the *runners.Set a test attached to ctx via
+// internal/runners.WithSet before calling ApplyWithContext, scoped to this
+// one call only.
+func applyActiveWithFacts(ctx context.Context, op Op, planDir string, facts Facts) error {
 	if h, ok := HandlerFor(op.Op); ok {
-		return h.Apply(op, ApplyContext{PlanDir: planDir, Facts: facts})
+		return h.Apply(op, ApplyContext{PlanDir: planDir, Facts: facts, Runners: runners.FromContext(ctx)})
 	}
 	return fmt.Errorf("unknown op %q", op.Op)
 }

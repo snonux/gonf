@@ -38,6 +38,7 @@ package testapply
 
 import (
 	"bufio"
+	"context"
 	"encoding/base64"
 	"fmt"
 	"os"
@@ -46,6 +47,7 @@ import (
 	"strings"
 
 	"github.com/snonux/gonf/internal/declerr"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
@@ -77,6 +79,17 @@ const planID = "testapply"
 // apply through this function; folding in PlanDraftRecording() here would
 // refuse that legitimate, decoupled pattern.
 func Apply() error {
+	return ApplyWithRunners(nil)
+}
+
+// ApplyWithRunners is Apply with rs injected as the backend runners a
+// migrated plan handler uses in place of the real ones, for this one apply
+// (task qb2): a resource/<kind> package's own test builds a *runners.Set
+// (e.g. &runners.Set{Command: &runners.CommandRunners{Run: fake}}) and
+// passes it here instead of installing a process-global
+// internal/testseam fake. rs travels down to every handler's ApplyContext
+// via ctx (internal/runners.WithSet), scoped to this one call.
+func ApplyWithRunners(rs *runners.Set) error {
 	if plan.Recording() {
 		return fmt.Errorf("testapply: cannot apply while plan recording is active")
 	}
@@ -102,7 +115,8 @@ func Apply() error {
 	if err != nil {
 		return err
 	}
-	return applyOps(ops, planDir)
+	ctx := runners.WithSet(context.Background(), rs)
+	return applyOps(ctx, ops, planDir)
 }
 
 // Ops lowers drafts to a plan (a header followed by one op per draft, in
@@ -211,7 +225,7 @@ func packageSource(op plan.Op, d resource.PlanDraft, store plan.BlobStore, name 
 // applyOps runs the whole-plan pre-flight and applies ops with the local
 // host's facts. An elevated op is refused: the privilege split lives in
 // api.Apply, and running the op in-process would silently drop it.
-func applyOps(ops []plan.Op, planDir string) error {
+func applyOps(ctx context.Context, ops []plan.Op, planDir string) error {
 	for _, op := range ops {
 		if op.Elevate {
 			return fmt.Errorf("testapply: %s is elevated; use api.Apply for privilege-split plans", op.ID)
@@ -220,7 +234,7 @@ func applyOps(ops []plan.Op, planDir string) error {
 	if err := plan.ValidateChunks(plan.SplitPrivilegeChunks(ops)); err != nil {
 		return fmt.Errorf("Apply: %w", err)
 	}
-	return plan.Apply(ops, localFacts(), planDir)
+	return plan.ApplyWithContext(ctx, ops, localFacts(), planDir)
 }
 
 // localFacts are the host facts plan.Apply evaluates when blocks and, for a
