@@ -244,7 +244,7 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 		// refusal — may already have registered resources before failing.
 		// Leaving them registered would let a later api.Apply in this
 		// process silently apply that half-declared set (task fc2).
-		// anyRecordFailed is the other half of this guard, for a caller
+		// lastRecordFailure is the other half of this guard, for a caller
 		// that skips straight to Apply without going through this
 		// RecordPlanTo call at all; it covers every failure reason this
 		// function can return, not only ones that reached declerr (task
@@ -252,34 +252,38 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 		// cycle or a packaging error, so gating solely on declerr left
 		// those two reasons without the loud-refusal half of this guard,
 		// even though the repository reset below already covered them).
+		// Storing err itself, not just that some record failed, lets
+		// Apply's refusal name the actual cause instead of an opaque
+		// sentence (task uc2).
 		resource.ResetRepository()
-		anyRecordFailed = true
+		lastRecordFailure = err
 	} else {
 		// A clean, complete record is itself evidence nothing is left
 		// over from an earlier failure: an embedding program that fixed a
 		// broken recipe must not stay refused by api.Apply forever over a
-		// mistake it already recovered from (see anyRecordFailed).
-		anyRecordFailed = false
+		// mistake it already recovered from (see lastRecordFailure).
+		lastRecordFailure = nil
 	}
 	return ops, err
 }
 
-// anyRecordFailed is set whenever a RecordPlanTo call fails, for any of the
-// reasons it can fail, and cleared whenever one succeeds — never sticky for
-// the life of the process the way declerr.First is, since a later clean
-// record is itself proof nothing is left over from an earlier failure.
-// api.Apply checks it, but only when the registered resource repository is
-// empty: that is exactly the state a failed record leaves (the reset above
-// already wiped whatever the failed body registered), so a caller that
-// applies without checking that call's returned error still gets refused
-// instead of silently no-op'ing. Once anything is registered afterward —
-// through a later record (successful or not) or directly — it is unrelated
-// to the stale failure, and Apply proceeds on it normally rather than
-// refusing on the old failure's account; that scoping is also what keeps
-// this flag from needing to be cleared by every test or caller that
-// intentionally fails a record and later registers or applies something
-// else in the same process.
-var anyRecordFailed bool
+// lastRecordFailure holds the error of the last RecordPlanTo call that
+// failed, for any of the reasons it can fail, and is cleared whenever one
+// succeeds — never sticky for the life of the process the way declerr.First
+// is, since a later clean record is itself proof nothing is left over from
+// an earlier failure. api.Apply checks it, but only when the registered
+// resource repository is empty: that is exactly the state a failed record
+// leaves (the reset above already wiped whatever the failed body
+// registered), so a caller that applies without checking that call's
+// returned error still gets refused, with the real cause, instead of
+// silently no-op'ing. Once anything is registered afterward — through a
+// later record (successful or not) or directly — it is unrelated to the
+// stale failure, and Apply proceeds on it normally rather than refusing on
+// the old failure's account; that scoping is also what keeps this from
+// needing to be cleared by every test or caller that intentionally fails a
+// record and later registers or applies something else in the same
+// process.
+var lastRecordFailure error
 
 // recordPlanBody is RecordPlanTo's actual recording, split out so
 // RecordPlanTo has one place to react to its error return (resetting the

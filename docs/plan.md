@@ -169,11 +169,17 @@ binary's `main` exits, with the code `cli.CLI` returns.
     it either — a later `api.Apply` call in the same process, made without
     checking the failed call's returned error, therefore finds nothing left
     to (mis)apply. As a second, process-wide guard for that same case,
-    `api.Apply` additionally refuses outright once any recording session has
-    ever failed this way (`declerr.CapturedAny`), rather than silently
-    applying an empty registration set and looking identical to "there was
-    nothing to do." A misuse reported outside a recording (top-level
-    registration in `main`, resources declared for a direct `api.Apply`) is
+    `api.Apply` additionally refuses once a record has failed this way and
+    the registered repository is still empty — `RecordPlanTo` fails a
+    record for other reasons too, never reported to `declerr` (a task
+    recursion cycle, a packaging error), so this tracking is `api`'s own
+    (`anyRecordFailed`, task tc2), not `declerr.CapturedAny`'s (removed by
+    tc2) — rather than silently applying an empty registration set and
+    looking identical to "there was nothing to do." Once something new is
+    registered or applied after the failure, it is unrelated to it and is
+    no longer refused on its account. A misuse reported outside a recording
+    (top-level registration in `main`, resources declared for a direct
+    `api.Apply`) is
     kept for the process: `RecordPlanTo`, `Run` and `api.Apply` refuse with
     it before any task body runs, and `cli.CLI` refuses every invocation
     (`-list` and `-version` included) with it, exit status 1, printing the

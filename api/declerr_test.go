@@ -152,9 +152,10 @@ func TestApplyRefusesCronExplicitEmptyUser(t *testing.T) {
 // error; this pins the two guards a caller reaches only by calling Apply
 // directly afterward, ignoring Run's returned error: RecordPlanTo resets
 // the repository on that failure (so there is nothing left to apply), and
-// anyRecordFailed makes Apply refuse outright rather than silently no-op
-// on an empty repository, which would look identical to "there was
-// nothing to do" from the caller's side.
+// lastRecordFailure makes Apply refuse outright — naming the cause and
+// its declaration site (task uc2) — rather than silently no-op on an
+// empty repository, which would look identical to "there was nothing to
+// do" from the caller's side.
 func TestApplyRefusesAfterARunFailedMidBody(t *testing.T) {
 	ResetForTest()
 	ResetInventory()
@@ -173,21 +174,28 @@ func TestApplyRefusesAfterARunFailedMidBody(t *testing.T) {
 	if ids := resource.RegisteredIDs(); len(ids) != 0 {
 		t.Fatalf("a failed record left %v registered, want none", ids)
 	}
-	if !anyRecordFailed {
-		t.Fatal("anyRecordFailed = false after a record-time misuse was captured into Run's session")
+	if lastRecordFailure == nil {
+		t.Fatal("lastRecordFailure = nil after a record-time misuse was captured into Run's session")
 	}
-	if err := Apply(); err == nil {
+	err := Apply()
+	if err == nil {
 		t.Fatal("Apply() after Run failed mid-body = nil, want a refusal")
+	}
+	if !strings.Contains(err.Error(), "WithCronUser must not be empty") {
+		t.Fatalf("Apply() error = %v, want it to carry the cron misuse cause", err)
+	}
+	if !strings.Contains(err.Error(), "declared at") {
+		t.Fatalf("Apply() error = %v, want it to name the misuse's declaration site", err)
 	}
 	if _, err := os.Stat(leftover); !os.IsNotExist(err) {
 		t.Fatalf("the leftover directory exists despite the refused record: %v", err)
 	}
 }
 
-// TestApplyRecoversAfterALaterCleanRecord: anyRecordFailed must not refuse
-// Apply forever once a failed recipe is fixed. After a failed record (as
-// above), a later, unrelated RecordPlanTo/Run that completes cleanly clears
-// it, and Apply works normally again — an embedding program that keeps
+// TestApplyRecoversAfterALaterCleanRecord: lastRecordFailure must not
+// refuse Apply forever once a failed recipe is fixed. After a failed
+// record (as above), a later, unrelated RecordPlanTo/Run that completes
+// cleanly clears it, and Apply works normally again — an embedding program that keeps
 // running after fixing a broken recipe must not stay refused over a mistake
 // it already recovered from.
 func TestApplyRecoversAfterALaterCleanRecord(t *testing.T) {
@@ -203,8 +211,8 @@ func TestApplyRecoversAfterALaterCleanRecord(t *testing.T) {
 	if err := Run("bad"); err == nil {
 		t.Fatalf("Run(bad) = nil, want the cron misuse refusal")
 	}
-	if !anyRecordFailed {
-		t.Fatal("anyRecordFailed = false after Run(bad) failed")
+	if lastRecordFailure == nil {
+		t.Fatal("lastRecordFailure = nil after Run(bad) failed")
 	}
 
 	dst := filepath.Join(t.TempDir(), "recovered")
@@ -212,8 +220,8 @@ func TestApplyRecoversAfterALaterCleanRecord(t *testing.T) {
 	if err := Run("good"); err != nil {
 		t.Fatalf("Run(good) = %v, want a clean run", err)
 	}
-	if anyRecordFailed {
-		t.Fatal("anyRecordFailed = true after a later clean record, want it cleared")
+	if lastRecordFailure != nil {
+		t.Fatalf("lastRecordFailure = %v after a later clean record, want it cleared", lastRecordFailure)
 	}
 
 	direct := filepath.Join(t.TempDir(), "direct")
@@ -256,11 +264,18 @@ func TestApplyRefusesAfterARunFailedOnATaskCycle(t *testing.T) {
 	if ids := resource.RegisteredIDs(); len(ids) != 0 {
 		t.Fatalf("a failed record left %v registered, want none", ids)
 	}
-	if !anyRecordFailed {
-		t.Fatal("anyRecordFailed = false after Run(cyclic) failed on a task cycle, not declared misuse")
+	if lastRecordFailure == nil {
+		t.Fatal("lastRecordFailure = nil after Run(cyclic) failed on a task cycle, not declared misuse")
 	}
-	if err := Apply(); err == nil {
+	applyErr := Apply()
+	if applyErr == nil {
 		t.Fatal("Apply() after Run failed on a task cycle = nil, want a refusal")
+	}
+	if !strings.Contains(applyErr.Error(), "cyclic -> cyclic") {
+		t.Fatalf("Apply() error = %v, want it to carry the cycle cause", applyErr)
+	}
+	if strings.Contains(applyErr.Error(), "declared at") {
+		t.Fatalf("Apply() error = %v, a task-cycle error has no declerr location to name", applyErr)
 	}
 	if _, err := os.Stat(leftover); !os.IsNotExist(err) {
 		t.Fatalf("the leftover directory exists despite the refused record: %v", err)

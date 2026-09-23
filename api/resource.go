@@ -66,7 +66,7 @@ func Apply() error {
 	drafts := resource.RegisteredPlanDrafts()
 	registered := resource.RegisteredIDs()
 	if len(registered) == 0 {
-		if anyRecordFailed {
+		if lastRecordFailure != nil {
 			// Some earlier RecordPlanTo/Run call in this process failed
 			// its record — for any of the reasons RecordPlanTo can fail,
 			// not only declared misuse (task tc2) — and RecordPlanTo
@@ -76,11 +76,17 @@ func Apply() error {
 			// (through a later record or directly), it is unrelated to
 			// the stale failure and applying it is exactly what the
 			// caller now asked for, so it must not be refused on the old
-			// failure's account (that also keeps this flag from having to
-			// be cleared by every test and caller that intentionally
-			// fails a record and later registers or applies something
-			// else in the same process).
-			return fmt.Errorf("Apply: refusing: an earlier record failed")
+			// failure's account (that also keeps this from having to be
+			// cleared by every test and caller that intentionally fails a
+			// record and later registers or applies something else in
+			// the same process). The cause is wrapped in (%w) rather than
+			// discarded, and named at its declaration site when it has
+			// one, so the refusal is actionable instead of an opaque
+			// sentence (task uc2).
+			if loc := declerr.Location(lastRecordFailure); loc != "" {
+				return fmt.Errorf("Apply: refusing: an earlier record failed (declared at %s): %w", loc, lastRecordFailure)
+			}
+			return fmt.Errorf("Apply: refusing: an earlier record failed: %w", lastRecordFailure)
 		}
 		return nil
 	}

@@ -8,7 +8,7 @@ import (
 // ResetForTest is the single canonical test seam for api package ambient
 // state. It clears the task registry (ResetTasks), the profile override, the
 // configured secret provider, the plan recording session (api/plan.go), the
-// sticky record-failure flag Apply checks (anyRecordFailed), plan record
+// sticky record-failure error Apply checks (lastRecordFailure), plan record
 // mode (plan.ResetForTest), and the resource package state (repository,
 // report, dry-run, declaration errors; via resource.ResetForTest).
 // Individual reset functions remain available so existing tests keep
@@ -25,7 +25,7 @@ func ResetForTest() {
 	SetProfileOverride("")       // CLI -profile must not leak between tests
 	resetSecretProviderForTest() // back to the default file provider (api/secret_provider.go)
 	recSession.reset()           // plan recording session (api/plan.go)
-	anyRecordFailed = false      // sticky record-failure flag (api/plan.go)
+	lastRecordFailure = nil      // sticky record-failure error (api/plan.go)
 	plan.ResetForTest()
 	resource.ResetForTest()
 }

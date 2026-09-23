@@ -137,12 +137,16 @@ inventory and resources is a declaration error (`internal/declerr`):
   While `RecordPlanTo` records, reports are captured into the session and
   fail that record; outside a recording the first one is kept for the
   process, and `RecordPlanTo`, `Run`, `api.Apply` and `cli.CLI` refuse with
-  it (the CLI prints it and exits 1). A capture that fails a record also
-  resets the registered resource repository (so a failed body's partial
-  registrations cannot outlive it), and `declerr.CapturedAny` stays true for
-  the rest of the process once any capture has failed a record, so
-  `api.Apply` still refuses a later, separate call that skipped checking
-  that record's returned error (task fc2).
+  it (the CLI prints it and exits 1). `RecordPlanTo` fails a record for
+  other reasons too, never reported to declerr: a task recursion cycle, a
+  packaging error. Any of these also resets the registered resource
+  repository (so a failed body's partial registrations cannot outlive it)
+  and sets `api`'s own `anyRecordFailed` (not `declerr`'s concern — see
+  api/plan.go), cleared by a later clean record. `api.Apply` refuses on it
+  only when the repository is empty, so a later, separate call that skipped
+  checking a failed record's returned error is still refused, while a call
+  that goes on to register or apply something new is not refused on the
+  stale failure's account (task tc2).
 - Code below the DSL (internal packages such as `internal/inventory`, check
   helpers) returns errors; only the DSL entry point reports them.
 - Keep a `panic` only for a genuine, documented programmer-bug invariant that
