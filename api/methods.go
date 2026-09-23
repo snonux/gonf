@@ -126,17 +126,24 @@ func registerMethodTasks(rv reflect.Value, rt reflect.Type, cfg registerConfig) 
 		return
 	}
 
-	typeNames := map[string]struct{}{}
+	// names is built from rt.Method(i) in index order rather than a map:
+	// reflect.Type.Method documents that methods are sorted in lexicographic
+	// order by name, so iterating this slice (instead of ranging a map, whose
+	// iteration order Go randomizes per range) registers tasks in a fixed,
+	// deterministic order and — mirroring the SystemdUnits precedent
+	// (api/systemd_units.go's validate) — a recipe with several broken
+	// companions always reports the same first one (alphabetically first by
+	// method name) instead of a different one each run.
+	names := make([]string, 0, rt.NumMethod())
 	for i := 0; i < rt.NumMethod(); i++ {
-		m := rt.Method(i)
-		name := m.Name
+		name := rt.Method(i).Name
 		if isCompanionName(name) {
 			continue
 		}
-		typeNames[name] = struct{}{}
+		names = append(names, name)
 	}
 
-	for name := range typeNames {
+	for _, name := range names {
 		method := rv.MethodByName(name)
 		if !method.IsValid() {
 			continue

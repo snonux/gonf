@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
@@ -289,6 +290,47 @@ func (badWhen) WhenBroken(s string) bool {
 	return s == "linux"
 }
 func (badWhen) Broken() {}
+
+// twoBrokenWhens has two methods with wrong WhenX companion signatures
+// (mirroring gonf task gc2's review: WhenAlpha() string / WhenBeta(int, int)
+// bool). Before gc2, registerMethodTasks ranged a map of method names, whose
+// iteration order Go randomizes per range, so which of the two errors
+// surfaced (and stuck, since internal/declerr is first-error-wins) varied
+// run to run. It now iterates a slice built from rt.Method(i), which
+// reflect.Type.Method documents as sorted in lexicographic order, so "Alpha"
+// is always seen (and reported) before "Beta".
+type twoBrokenWhens struct{}
+
+func (twoBrokenWhens) Alpha()            {}
+func (twoBrokenWhens) WhenAlpha() string { return "wrong" }
+
+func (twoBrokenWhens) Beta()                  {}
+func (twoBrokenWhens) WhenBeta(int, int) bool { return false }
+
+// TestRegisterMethodsCompanionErrorOrderIsDeterministic pins gc2: a recipe
+// with several broken companions always reports the alphabetically-first
+// method's error, run after run, instead of whichever the map iteration
+// happened to visit first (see twoBrokenWhens). It repeats registration many
+// times in-process — Go re-randomizes a map's iteration start on every
+// range, not just once per process, so the old bug would already show up
+// as variance within this loop.
+func TestRegisterMethodsCompanionErrorOrderIsDeterministic(t *testing.T) {
+	const n = 200
+	for i := 0; i < n; i++ {
+		ResetForTest()
+		ResetInventory()
+		RegisterMethods(twoBrokenWhens{}, WithPrefix("probe_"))
+		err := declerr.First()
+		if err == nil {
+			t.Fatalf("iter %d: expected a declaration error, got nil", i)
+		}
+		if want := "RegisterMethods: WhenAlpha must be func(Facts) bool"; err.Error() != want {
+			t.Fatalf("iter %d: error = %q, want %q (alphabetically-first method)", i, err.Error(), want)
+		}
+	}
+	ResetForTest()
+	ResetInventory()
+}
 
 func TestRegisterMethodsWhenGoodSignatureGuards(t *testing.T) {
 	ResetTasks()
