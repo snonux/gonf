@@ -268,16 +268,51 @@ func (v *Values) redact(s string, strongOnly bool) string {
 // that silently swallows L's leading bytes, and L's tail, arriving on a
 // later call with its matching prefix already gone, would then be forwarded
 // raw. So the escape hatch keeps the ordinary keep-back cut
-// (len(s)-longest+1) instead, preserving the same boundedness (every forced
-// flush still drains that many bytes) without ever losing the last
-// longest-1 bytes a longer, straddling secret might still need. Because the
-// crossing run starts at 0, the whole flushed prefix [0, cut) is run
-// material with nothing legitimate ahead of it, so it is redacted as a
-// single opaque Redacted marker instead of respanned: respanning only the
-// prefix (not the full run, which continues past cut) can leave a few
-// dangling, non-periodic-aligned bytes at the very end unmatched (matches
-// must be complete within the substring given to Redact), and always
-// redacting the whole flushed span is the safe side of that trade-off.
+// (len(s)-longest+1) as its starting point, preserving the same boundedness
+// (every forced flush still drains close to that many bytes) without ever
+// losing the last longest-1 bytes a longer, straddling secret might still
+// need -- but that starting cut is only a byte offset inside the crossing
+// run, not necessarily an occurrence boundary, and the retained tail after
+// it is raw secret material: forwarding it unredacted on a later call would
+// leak whatever bytes of a real occurrence it began with (Redact can never
+// match a partial occurrence). So before returning, the cut is checked
+// against protectedCrossing, which finds the largest point at or before it
+// that no occurrence of a protected form (one FlushPoint's keep-back is
+// actually sized to guard, i.e. no longer than MaxSplitGuard -- see below)
+// reaches strictly across. Snapping to the nearest single occurrence's own
+// start is NOT enough: a different, still-open occurrence from another
+// tracked form can cross that exact point too (e.g. a 10-byte protected
+// form at [0,10) and a 5-byte one at [3,8) both cross a cut of 6; snapping
+// only to the second form's start, 3, leaves the first form's tail, bytes
+// [8,10), sitting raw at the front of the retained text once the
+// still-open first occurrence is later completed elsewhere or simply
+// forwarded as-is). protectedCrossing instead finds a point that clears
+// every protected occurrence, not just the nearest one's start. When it
+// finds such a point above 0, the cut snaps back to it, which can only
+// shorten the flushed prefix (never lengthen it past the keep-back), so the
+// same boundedness holds; progress per flush drops by at most one
+// occurrence length instead of by nothing. When it reports that some
+// protected occurrence still crosses cut but no safe point exists (a chain
+// that stays unresolved for its entire self-overlapping length, e.g.
+// "x1x1x1x1x1" repeated with no break anywhere in s -- see
+// protectedCrossing), FlushPoint makes NO progress at all this call
+// (consumed 0) rather than ever retain a raw fragment: a stall is always
+// safe (the caller keeps buffering and retries once more data crosses
+// MaxSplitGuard again -- the same "stay conservative" answer already used
+// below the threshold), while forwarding any fragment of a protected
+// occurrence never is. Only when nothing protected crosses cut at all --
+// the crossing is caused solely by a form longer than MaxSplitGuard, which
+// the keep-back was never sized to protect in the first place (see below)
+// -- does the plain keep-back cut stand as computed, its long-accepted
+// trade-off unchanged by any of this. Because the crossing run starts at
+// 0, the whole flushed prefix [0, cut) -- using whatever cut is finally
+// returned -- is run material with nothing legitimate ahead of it, so it
+// is redacted as a single opaque Redacted marker instead of respanned:
+// respanning only the prefix (not the full run, which continues past cut)
+// can leave a few dangling, non-periodic-aligned bytes at the very end
+// unmatched (matches must be complete within the substring given to
+// Redact), and always redacting the whole flushed span is the safe side of
+// that trade-off.
 // Outside the escape hatch, cutting at run[0] (the normal non-crossing-at-0
 // case) never has this problem: ordinary Redact, respanning the flushed
 // prefix itself, always produces the same single marker for it, since no
@@ -286,7 +321,10 @@ func (v *Values) redact(s string, strongOnly bool) string {
 //
 // Forms longer than MaxSplitGuard are left out of the keep-back (they are
 // still redacted wherever a flushed chunk holds them whole), so a huge
-// secret cannot make the relay buffer without bound. It implements
+// secret cannot make the relay buffer without bound; protectedCrossing
+// leaves their occurrences out of its safety check for the same reason --
+// protecting them was never promised, so refusing to make progress on
+// their account would defeat the point of excluding them. It implements
 // logger.Redactor with Redact and MaxPending.
 func (v *Values) FlushPoint(s string) (out string, consumed int) {
 	longest := 0
@@ -310,6 +348,13 @@ func (v *Values) FlushPoint(s string) (out string, consumed int) {
 		// or before run[1] for the same reason. Either branch below is
 		// therefore final; no further scan or backward step is needed.
 		if run[0] <= 0 && len(s) > MaxSplitGuard {
+			snap, crossed := protectedCrossing(v.protectedSpans(s), cut)
+			switch {
+			case snap > 0:
+				cut = snap
+			case crossed:
+				return "", 0
+			}
 			return Redacted, cut
 		}
 		cut = run[0]
@@ -319,6 +364,98 @@ func (v *Values) FlushPoint(s string) (out string, consumed int) {
 		return "", 0
 	}
 	return v.Redact(s[:cut]), cut
+}
+
+// protectedSpans returns the occurrences, sorted by start, of every tracked
+// form no longer than MaxSplitGuard in s: the ones FlushPoint's keep-back is
+// actually sized to protect (see FlushPoint's doc). It is a deliberately
+// separate, independent scan from matchSpans (some duplicated work, not
+// reused via a shared slice) rather than a filter applied after the fact:
+// matchSpans' result is sorted in place as a side effect of the mergeSpans
+// call FlushPoint already made on it, and a second, differently-filtered
+// view built by reordering or re-tagging that same backing array would risk
+// exactly the kind of subtle span/metadata desync this file has already
+// been burned by (see this function's own history). A fresh, isolated scan
+// has no such risk.
+func (v *Values) protectedSpans(s string) [][2]int {
+	var spans [][2]int
+	for _, e := range v.snapshot() {
+		if !e.contained || len(e.form) > MaxSplitGuard {
+			continue
+		}
+		for from := 0; from < len(s); {
+			i := strings.Index(s[from:], e.form)
+			if i < 0 {
+				break
+			}
+			start := from + i
+			spans = append(spans, [2]int{start, start + len(e.form)})
+			from = start + 1
+		}
+	}
+	slices.SortFunc(spans, func(a, b [2]int) int { return a[0] - b[0] })
+	return spans
+}
+
+// protectedCrossing scans spans (sorted by start, as protectedSpans returns
+// them) and returns the largest point at or before cut that no span reaches
+// strictly across (snap; 0 when no such point exists beyond the trivially
+// safe start of s), and whether some span starts before cut and still ends
+// after it (crossed; false whenever a safe snap was found, including snap
+// == cut itself). A point p is safe exactly when no span [a,b) in spans has
+// a < p < b -- not merely when p equals some individual span's own start,
+// which does not by itself clear every OTHER span that might still be open
+// at p (see FlushPoint's doc for the two-form counter-example this guards
+// against). frontier tracks the running end of every span seen so far;
+// whenever the next span's start sp[0] has reached or passed frontier, no
+// span already processed reaches past frontier (their max end is exactly
+// frontier) and no later span (all of which start no earlier than sp, by
+// sort order) can start before frontier either, so every point in the gap
+// [frontier, sp[0]] is confirmed safe -- not just frontier itself, the gap's
+// near edge, but every point up to sp[0], its far edge (an earlier version
+// of this function returned only frontier here, needlessly under-reporting
+// how far it is actually safe to go, which cannot leak but can make a
+// large, entirely ordinary multi-line secret -- e.g. a cert bundle, whose
+// own body lines are separately tracked as short protected forms scattered
+// through it, see strongLines -- advance only a handful of bytes per call
+// despite most of the gap between them being genuinely open). The largest
+// point in that gap at or below cut is taken as the new candidate; once a
+// span starts at or past cut, the gap already reaches cut itself, so cut is
+// the answer and the scan stops (a span starting at or past cut is
+// otherwise irrelevant to cut's safety: it begins inside or after the
+// retained tail, not before the flushed prefix). If frontier ever exceeds
+// cut, nothing further can help: cut sits inside that span's occurrence, so
+// the scan stops there too.
+//
+// When FlushPoint returns "no progress" because no safe point exists at all
+// (see its doc), the caller's pending buffer keeps growing and
+// protectedSpans/protectedCrossing rescan it from scratch on every later
+// call, since nothing was ever forwarded to shrink it — cost proportional
+// to len(s), repeated on every still-unresolved call, so total cost grows
+// roughly with the square of how long a genuinely never-breaking chain
+// persists. This is the accepted cost of never leaking rather than a new
+// hang (each individual call still terminates quickly): it can only arise
+// when literally no gap exists anywhere in the buffer given so far (a
+// perfectly, densely self-overlapping run), which the fix above already
+// finds and exploits every gap to avoid whenever one exists.
+func protectedCrossing(spans [][2]int, cut int) (snap int, crossed bool) {
+	frontier := 0
+	for _, sp := range spans {
+		if frontier > cut {
+			break
+		}
+		if sp[0] >= frontier {
+			if sp[0] >= cut {
+				return cut, false
+			}
+			snap = sp[0]
+		}
+		frontier = max(frontier, sp[1])
+	}
+	if frontier <= cut {
+		return cut, false
+	}
+	return snap, true
 }
 
 // MaxPending implements logger.Redactor: RedactingWriter must not force a

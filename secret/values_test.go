@@ -197,66 +197,89 @@ func TestValuesFlushPointSelfOverlappingBelowBound(t *testing.T) {
 	}
 }
 
-// Once the buffer exceeds MaxSplitGuard, the same self-overlapping run must
-// still be flushed: the old backward-chaining walk moved the cut back one
-// overlapping match at a time and, for a periodic secret, that chain always
-// reaches offset 0, so FlushPoint returned 0 forever and the caller's
-// pending buffer (logger.RedactingWriter, bounded by maxPendingLine, the
-// same 64 KiB as MaxSplitGuard) grew without bound. The escape hatch fixing
-// that must flush the run once s is already this large, and — this is the
-// part task 3d2 fixed after a regression — it must keep the ordinary
-// longest-1 keep-back rather than sweeping the run's raw end into the
-// flush: the trailing tail below is appended directly (no filler gap), so
-// the run genuinely crosses the ordinary cut point and this test actually
-// exercises the escape-hatch branch (a prior version of this test placed
-// a non-matching gap before the tail, so the cut always landed past the
-// run and the branch was never entered — see task 5d2).
-func TestValuesFlushPointSelfOverlappingAboveBoundIsFlushedAndRedacted(t *testing.T) {
+// TestValuesFlushPointSelfOverlappingAboveBoundStallsRatherThanLeak pins the
+// rd2-era contract for a self-overlapping chain that never breaks anywhere
+// in s: FlushPoint must make NO progress (consumed 0) rather than ever
+// return a cut that lands inside an occurrence. This is a deliberate,
+// documented change from the pre-rd2 contract (this test used to require
+// cut > 0 here): for a secret whose repeat period is shorter than its own
+// length, EVERY point strictly between the chain's start and its end is
+// covered by some occurrence (that is exactly what "self-overlapping"
+// means), so as long as the chain has not yet broken anywhere in the
+// buffer FlushPoint has been given, there is no occurrence-boundary cut to
+// return at all -- returning some other, merely-arbitrary byte offset (the
+// pre-rd2 behaviour) is precisely the mid-occurrence leak task rd2 fixed
+// (see protectedCrossing's doc on secret/values.go). A stall here is always
+// safe: the caller (logger.RedactingWriter) keeps buffering and retries
+// FlushPoint once more data crosses MaxSplitGuard again -- see
+// TestValuesFlushPointSelfOverlappingResolvesOnceChainBreaks for the
+// realistic case (any actual line eventually varies or ends) where that
+// retry does make bounded progress, which is what task mb2's original
+// boundedness goal actually protects against in practice: a HUNG,
+// non-terminating COMPUTATION (the old backward-chasing walk), not merely
+// a large buffer while an adversarial, perfectly repeating pattern
+// continues without any break whatsoever.
+func TestValuesFlushPointSelfOverlappingAboveBoundStallsRatherThanLeak(t *testing.T) {
 	t.Parallel()
 	var v Values
-	v.Add([]byte("x1x1x1x1x1"))                         // 10 bytes: keep 9 back
+	v.Add([]byte("x1x1x1x1x1"))                         // 10 bytes, period 2: self-overlapping
 	run := strings.Repeat("x1", (MaxSplitGuard/2)+4096) // > MaxSplitGuard bytes, all one chain
-	tail := "x1x1x1"                                    // more of the same pattern: the chain runs right up to (and past) the cut
+	tail := "x1x1x1"                                    // more of the same pattern: the chain never breaks
 	s := run + tail
 
 	out, cut := v.FlushPoint(s)
+	if cut != 0 || out != "" {
+		t.Fatalf("FlushPoint = (%q, %d), want (\"\", 0): an unbroken self-overlapping chain has no safe cut to return", out, cut)
+	}
+}
+
+// TestValuesFlushPointSelfOverlappingResolvesOnceChainBreaks proves the
+// realistic side of the contract above: once a self-overlapping chain
+// exceeding MaxSplitGuard actually ends (any real line eventually does,
+// whether by varying content or a newline), FlushPoint makes real,
+// occurrence-safe progress on it rather than stalling forever -- the
+// boundedness task mb2 introduced the escape hatch for still holds for
+// every input that is not a perfectly repeating, never-varying stream.
+func TestValuesFlushPointSelfOverlappingResolvesOnceChainBreaks(t *testing.T) {
+	t.Parallel()
+	var v Values
+	v.Add([]byte("x1x1x1x1x1")) // 10 bytes, period 2: self-overlapping
+	run := strings.Repeat("x1", (MaxSplitGuard/2)+4096)
+	s := run + strings.Repeat("z", 20) // a real break: "z" cannot extend the chain
+
+	out, cut := v.FlushPoint(s)
 	if cut == 0 {
-		t.Fatal("FlushPoint stayed 0 above MaxSplitGuard: the buffer would grow without bound")
+		t.Fatal("FlushPoint stayed 0 once the chain broke: it must resolve and make progress")
 	}
-	if out != Redacted {
-		t.Fatalf("the escape hatch must redact the flushed prefix as one opaque marker, got %q", out)
-	}
-	// At least the last 9 bytes (longest-1) must stay pending: the ordinary
-	// keep-back, not the run's raw (further) end.
-	if kept := len(s) - cut; kept < 9 {
-		t.Fatalf("only %d bytes kept back, want at least 9 (longest-1)", kept)
+	if strings.Contains(out, "x1x1x1x1x1") {
+		t.Fatalf("raw secret survived in the flushed output: %q", out)
 	}
 	if cut <= 0 || cut > len(s) {
 		t.Fatalf("cut %d out of range for len(s) = %d", cut, len(s))
 	}
-	if strings.Contains(out, "x1x1x1x1x1") {
-		t.Fatalf("raw secret survived in the flushed marker: %q", out)
-	}
 }
 
 // TestValuesFlushPointTwoSecretLeakRegression is a permanent regression test
-// for the vulnerability the review found (task 3d2, a regression against
+// for the vulnerability task 3d2's review found (a regression against
 // e87ca0a~1): a shorter, periodic secret S ("x1x1x1x1x1", period 2) chains
 // into one giant self-overlapping merged run, and a second, longer secret
-// L = S+tail starts with S's exact bytes. The buggy escape hatch returned
-// the merged run's raw end (run[1]) instead of the ordinary keep-back cut,
-// so once the buffer crossed MaxSplitGuard the WHOLE periodic run —
-// including the bytes that are also L's still-incomplete prefix — was
-// flushed with nothing held back. When L's tail then arrived on a later
-// write, it no longer had its matching prefix available to complete the
-// match against, so it was forwarded completely unredacted: a real,
-// exploitable leak of L's tail (this is exactly the shape a relayed child
-// process's chunked output goes through — see
-// internal/logger.RedactingWriter and its own
-// TestRedactingWriterBoundsTwoSecretLeak, the end-to-end version of this
-// same scenario). The fix keeps the ordinary longest-1 keep-back even on
-// the escape-hatch path, so L's prefix bytes stay pending here and are
-// available to complete the match once its tail arrives.
+// L = S+tail starts with S's exact bytes. The buggy escape hatch of that era
+// returned the merged run's raw end (run[1]) instead of the ordinary
+// keep-back cut, so once the buffer crossed MaxSplitGuard the WHOLE
+// periodic run — including the bytes that are also L's still-incomplete
+// prefix — was flushed with nothing held back, and L's tail, arriving on a
+// later write with its matching prefix already gone, was forwarded raw (see
+// internal/logger.TestRedactingWriterBoundsTwoSecretLeak for the end-to-end
+// version). This exact buffer (pure S-periodic text, L's tail not yet
+// written) is ALSO an unbroken self-overlapping chain with no safe
+// occurrence-boundary cut anywhere in it yet (see
+// TestValuesFlushPointSelfOverlappingAboveBoundStallsRatherThanLeak): under
+// the current (task rd2) contract FlushPoint makes no progress on it at all
+// rather than guess at any cut, plain or run[1]-based — a strictly stronger
+// guarantee than 3d2's original fix (which still returned a plain,
+// non-occurrence-aware cut here). The real point this test pins either way:
+// L's prefix bytes are never swept away, so once L's tail actually arrives,
+// Redact still finds and hides the complete secret.
 func TestValuesFlushPointTwoSecretLeakRegression(t *testing.T) {
 	t.Parallel()
 	var v Values
@@ -267,33 +290,212 @@ func TestValuesFlushPointTwoSecretLeakRegression(t *testing.T) {
 
 	// The buffer at the moment a real relay's forced flush fires: past
 	// MaxSplitGuard, still pure s1-periodic text (s2's tail has not been
-	// written yet).
+	// written yet) — an unbroken self-overlapping chain, so FlushPoint must
+	// make no progress on it yet rather than guess at an unsafe cut.
 	buf := strings.Repeat("x1", 40000) // 80000 bytes, > MaxSplitGuard
 
 	out, consumed := v.FlushPoint(buf)
-	if consumed == 0 {
-		t.Fatal("FlushPoint made no progress above MaxSplitGuard: the buffer would grow without bound (the mb2 regression)")
-	}
-	if out != Redacted {
-		t.Fatalf("the escape hatch must redact the flushed prefix as one opaque marker, got %q", out)
-	}
-	// s2 is the longest tracked form (40 bytes): its 39-byte keep-back must
-	// survive, or its prefix is gone before its tail ever arrives.
-	if kept := len(buf) - consumed; kept < len(s2)-1 {
-		t.Fatalf("only %d bytes kept back, want at least %d (len(s2)-1)", kept, len(s2)-1)
+	if consumed != 0 || out != "" {
+		t.Fatalf("FlushPoint = (%q, %d), want (\"\", 0): an unbroken self-overlapping chain has no safe cut, so s2's prefix must stay fully pending rather than risk a partial cut", out, consumed)
 	}
 
-	// s2's tail arrives on a later write; the kept-back bytes plus the tail
-	// must still let Redact find and hide the complete secret — the whole
-	// point of keeping them pending instead of sweeping them into the
-	// escape hatch's flush.
-	pending := buf[consumed:] + strings.Repeat("Q", 30) + "\n"
+	// s2's tail arrives on a later write; the whole buffer (nothing was
+	// flushed) plus the tail must still let Redact find and hide the
+	// complete secret — the whole point of never sweeping any of it away.
+	pending := buf + strings.Repeat("Q", 30) + "\n"
 	redactedTail := v.Redact(pending)
 	if strings.Contains(redactedTail, strings.Repeat("Q", 30)) {
 		t.Fatalf("raw secret tail leaked: %q", redactedTail)
 	}
 	if !strings.Contains(redactedTail, Redacted) {
 		t.Fatalf("the completed secret was not redacted at all: %q", redactedTail)
+	}
+}
+
+// TestValuesFlushPointRetainedTailAtEOFRegression is a permanent regression
+// test for task rd2, the THIRD consecutive regression in this exact escape
+// hatch (mb2 -> 3d2 -> rd2). A single strong secret repeated enough times to
+// cross MaxSplitGuard forms one merged run starting at offset 0 --
+// mergeSpans merges TOUCHING spans, so plain back-to-back repetition of an
+// ordinary, non-periodic secret is enough to reach the escape hatch; no
+// self-overlapping (periodic) pattern is needed. The escape hatch's cut
+// (the ordinary keep-back, len(s)-longest+1) is an arbitrary byte offset
+// inside that run, not an occurrence boundary: for "db-password-42" (14
+// bytes) it lands exactly 1 byte into the final occurrence, so the buggy
+// code retained "b-password-42" (13 of 14 bytes, missing only the leading
+// "d") as the pending tail. Redact can never match a partial occurrence, so
+// once that tail was later forwarded (by a forced flush completing the
+// line, or by Close at EOF -- see
+// TestRedactingWriterBoundsChunkedSingleSecretLeak for the EOF shape
+// end-to-end), it went out raw, uncensored. The fix snaps the cut back to
+// the start of the last occurrence at or before it, so the retained tail is
+// always the complete secret.
+func TestValuesFlushPointRetainedTailAtEOFRegression(t *testing.T) {
+	t.Parallel()
+	var v Values
+	secretVal := "db-password-42" // 14 bytes; > maxWordLen(12) so strong regardless of its characters
+	v.Add([]byte(secretVal))
+
+	// Comfortably above MaxSplitGuard once repeated; strings.Repeat produces
+	// an exact multiple of len(secretVal), so the plain keep-back cut
+	// (len(s)-13) is guaranteed to land 1 byte inside the final occurrence
+	// rather than, by chance, on a boundary.
+	reps := MaxSplitGuard/len(secretVal) + 100
+	s := strings.Repeat(secretVal, reps)
+
+	out, cut := v.FlushPoint(s)
+	if cut == 0 {
+		t.Fatal("FlushPoint made no progress above MaxSplitGuard: the buffer would grow without bound")
+	}
+	if out != Redacted {
+		t.Fatalf("escape hatch must redact the flushed prefix as one opaque marker, got %q", out)
+	}
+	tail := s[cut:]
+	if tail != secretVal {
+		t.Fatalf("retained tail = %q, want the complete secret %q (cut must land at an occurrence boundary, not mid-occurrence)", tail, secretVal)
+	}
+	// What actually happens next -- a forced flush completing the line, or
+	// Close at EOF -- forwards the tail through Redact exactly like this.
+	if redacted := v.Redact(tail); redacted != Redacted {
+		t.Fatalf("Redact(retained tail) = %q, want the tail fully hidden (it must be a complete occurrence)", redacted)
+	}
+}
+
+// TestValuesFlushPointSingleHugeFormKeepsPlainCut pins the "snap > 0" guard
+// the fix above needs: a second, ordinary tracked secret (never occurring in
+// s) sets a real keep-back so cut lands strictly inside the huge form's one
+// lone occurrence (which starts at 0, crossing cut, so the escape hatch's
+// snap loop runs) -- but that occurrence is the only span, and it starts at
+// 0 itself, so there is no smaller occurrence for the snap loop to advance
+// to. The guard (snap > 0) must then leave cut exactly as computed, matching
+// the pre-rd2, accepted behaviour for a form this large (see FlushPoint's
+// doc, "Forms longer than MaxSplitGuard are left out of the keep-back"),
+// rather than, say, zeroing it and stalling forward progress.
+func TestValuesFlushPointSingleHugeFormKeepsPlainCut(t *testing.T) {
+	t.Parallel()
+	var v Values
+	huge := strings.Repeat("Z", MaxSplitGuard+4096) // longer than MaxSplitGuard: excluded from the keep-back length
+	v.Add([]byte(huge))
+	other := "unrelated-tracked-secret-xyz" // 28 bytes, never occurs in s; only sets the keep-back
+	v.Add([]byte(other))
+	s := huge // one lone occurrence filling all of s, starting at 0
+
+	out, cut := v.FlushPoint(s)
+	if cut <= 0 {
+		t.Fatal("FlushPoint made no progress on a single huge occurrence: the buffer would grow without bound")
+	}
+	if out != Redacted {
+		t.Fatalf("escape hatch must redact the flushed prefix as one opaque marker, got %q", out)
+	}
+	// other's keep-back (len(other)-1) applies, and nothing shorter than the
+	// huge occurrence itself starts inside it, so the snap loop finds
+	// nothing to advance to and cut stays exactly at the plain keep-back.
+	want := len(s) - (len(other) - 1)
+	if cut != want {
+		t.Fatalf("cut = %d, want %d (no smaller occurrence to snap to; keep the plain keep-back cut)", cut, want)
+	}
+}
+
+// TestValuesFlushPointSingleModerateOccurrenceForcesStallNotLeak is a
+// permanent regression test for the second gap the rd2 review found in an
+// earlier version of this fix: its "snap > 0" guard fell back to the plain,
+// potentially mid-occurrence keep-back cut whenever no smaller occurrence
+// existed to snap to -- correct only for a form EXCLUDED from protection
+// (longer than MaxSplitGuard, see
+// TestValuesFlushPointSingleHugeFormKeepsPlainCut). A single, ordinary
+// PROTECTED form (well under MaxSplitGuard) occurring exactly once, at
+// offset 0, with nothing smaller to snap to, hits the very same
+// "nothing to snap to" case -- but here the fallback must NOT be the plain
+// cut: that cut lands deep inside the one and only occurrence, and once
+// forwarded there is nothing left anywhere to complete the match against,
+// so the retained fragment would leak raw forever. FlushPoint must instead
+// make no progress at all on this call.
+func TestValuesFlushPointSingleModerateOccurrenceForcesStallNotLeak(t *testing.T) {
+	t.Parallel()
+	var v Values
+	moderate := strings.Repeat("m", 40000) // well under MaxSplitGuard (65536): a protected form
+	v.Add([]byte(moderate))
+	s := moderate + strings.Repeat("z", 30000) // > MaxSplitGuard total; one lone occurrence at offset 0
+
+	out, cut := v.FlushPoint(s)
+	if cut != 0 || out != "" {
+		t.Fatalf("FlushPoint = (%q, %d), want (\"\", 0): the lone occurrence has nothing smaller to snap to, so any cut here would retain a raw fragment of it forever", out, cut)
+	}
+}
+
+// TestProtectedCrossingRejectsUnsafeNearestSpanStart is a permanent
+// regression test for the exact bug the rd2 review found in an earlier
+// version of this fix's snap logic: snapping to "the nearest span's own
+// start at or before cut" is not enough when a DIFFERENT, still-open span
+// also crosses that same point. Two forms whose occurrences are [0,10) and
+// [3,8) (a 10-byte form nesting a 5-byte one, e.g. "ABCDEFGHIJ" and its own
+// substring "DEFGH") merge into one run; at cut=6, the buggy logic snapped
+// to 3 (the second span's start) even though the first span's occurrence,
+// [0,10), still crosses 3 just as much as it crosses 6 -- retaining bytes
+// [8,10) of the first occurrence raw at the front of the tail once the
+// (also fully redacted-looking) second span's text is stripped out ahead of
+// it. protectedCrossing must instead report that no point below 10 is safe.
+func TestProtectedCrossingRejectsUnsafeNearestSpanStart(t *testing.T) {
+	t.Parallel()
+	spans := [][2]int{{0, 10}, {3, 8}}
+	if snap, crossed := protectedCrossing(spans, 6); snap != 0 || !crossed {
+		t.Fatalf("protectedCrossing(spans, 6) = (%d, %v), want (0, true): no safe point below 10 exists (the [0,10) span still crosses it)", snap, crossed)
+	}
+	if snap, crossed := protectedCrossing(spans, 9); snap != 0 || !crossed {
+		t.Fatalf("protectedCrossing(spans, 9) = (%d, %v), want (0, true): the [0,10) span still crosses 9", snap, crossed)
+	}
+	if snap, crossed := protectedCrossing(spans, 10); snap != 10 || crossed {
+		t.Fatalf("protectedCrossing(spans, 10) = (%d, %v), want (10, false): both occurrences are fully cleared at 10", snap, crossed)
+	}
+}
+
+// TestProtectedCrossingFindsInteriorTouchBoundary complements the above: two
+// forms whose occurrences merely TOUCH rather than overlap ([0,3) and
+// [3,6), e.g. two distinct three-byte forms placed back to back) do have a
+// genuine safe interior boundary — at their shared touch point, 3, and
+// again at the run's own end, 6 — which protectedCrossing must find (the
+// largest one at or below cut), not just the trivial 0.
+func TestProtectedCrossingFindsInteriorTouchBoundary(t *testing.T) {
+	t.Parallel()
+	spans := [][2]int{{0, 3}, {3, 6}}
+	if snap, crossed := protectedCrossing(spans, 6); snap != 6 || crossed {
+		t.Fatalf("protectedCrossing(spans, 6) = (%d, %v), want (6, false)", snap, crossed)
+	}
+	// The second span [3,6) itself still crosses 5 (crossed = true), but the
+	// touch point at 3 is a genuine safe boundary below it, and FlushPoint's
+	// caller checks snap > 0 before crossed, so this is still real progress.
+	if snap, crossed := protectedCrossing(spans, 5); snap != 3 || !crossed {
+		t.Fatalf("protectedCrossing(spans, 5) = (%d, %v), want (3, true)", snap, crossed)
+	}
+}
+
+// TestProtectedCrossingFindsFarEdgeOfGap is a permanent regression test for
+// a bug the rd2 review's second round found: an earlier version of
+// protectedCrossing recorded only frontier (a safe gap's NEAR edge) as the
+// snap candidate, instead of the largest point in that gap at or below cut
+// (its FAR edge — the next span's own start, or cut itself once nothing
+// further constrains it). That under-reported the truly safe cut: for
+// spans [0,5) and [20,25) with cut=15, nothing crosses 15 at all (the gap
+// between the two spans covers it entirely), so 15 itself is safe, but the
+// buggy version returned only 5. This cannot leak (a smaller-than-optimal
+// safe point is still safe), but it can make a large, entirely ordinary
+// multi-line secret whose own body lines are separately tracked as short
+// protected forms scattered through it (see strongLines) advance only a
+// handful of bytes per FlushPoint call despite most of the gap between
+// them being genuinely open — compounding the quadratic rescan cost
+// protectedCrossing's doc describes for a real, non-adversarial input.
+func TestProtectedCrossingFindsFarEdgeOfGap(t *testing.T) {
+	t.Parallel()
+	spans := [][2]int{{0, 5}, {20, 25}}
+	if snap, crossed := protectedCrossing(spans, 15); snap != 15 || crossed {
+		t.Fatalf("protectedCrossing(spans, 15) = (%d, %v), want (15, false): the gap between the two spans clears 15 entirely", snap, crossed)
+	}
+	if snap, crossed := protectedCrossing(spans, 30); snap != 30 || crossed {
+		t.Fatalf("protectedCrossing(spans, 30) = (%d, %v), want (30, false): nothing crosses 30 either", snap, crossed)
+	}
+	// A cut genuinely inside the second span must still be rejected.
+	if snap, crossed := protectedCrossing(spans, 22); snap != 20 || !crossed {
+		t.Fatalf("protectedCrossing(spans, 22) = (%d, %v), want (20, true)", snap, crossed)
 	}
 }
 

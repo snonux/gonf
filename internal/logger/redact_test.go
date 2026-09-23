@@ -88,11 +88,30 @@ func TestRedactingWriterForcedFlushKeepsSecretWhole(t *testing.T) {
 // used to make secret.Values.FlushPoint chase overlapping matches backward
 // one at a time until it reached offset 0, so it never advanced: written a
 // little at a time with no newline, RedactingWriter's pending buffer grew
-// without bound instead of forwarding anything past maxPendingLine. This
-// drives the real secret.Values (not the simplified fakeRedactor above)
-// through RedactingWriter to confirm the buffer now stays bounded and the
-// eventually-forwarded output never shows the raw secret.
-func TestRedactingWriterBoundsSelfOverlappingSecret(t *testing.T) {
+// without bound instead of forwarding anything past maxPendingLine. These
+// two tests drive the real secret.Values (not the simplified fakeRedactor
+// above) through RedactingWriter to confirm that hang is still fixed, under
+// the rd2-era contract described below.
+//
+// TestRedactingWriterSelfOverlappingSecretStallsRatherThanLeak pins the
+// rd2-era contract for an UNBROKEN self-overlapping secret ("x1x1x1x1x1",
+// period 2): unlike the earlier mb2-era expectation (this test used to
+// require the pending buffer to stay near maxPendingLine throughout), an
+// endlessly repeating, never-varying stream has no occurrence-safe cut
+// anywhere in it at all (see
+// secret.TestValuesFlushPointSelfOverlappingAboveBoundStallsRatherThanLeak),
+// so RedactingWriter's pending buffer is allowed to grow with the input in
+// this one, narrow, adversarial shape: confidentiality (never forwarding a
+// raw fragment) now strictly outranks the older, weaker boundedness promise
+// for exactly this shape. What must still hold, and is checked here: the
+// computation itself never hangs (each Write call returns quickly --
+// mb2's original, primary concern was a non-terminating backward scan, not
+// merely a buffer proportional to a pathological input that never lets up),
+// and no raw secret byte is ever forwarded. See
+// TestRedactingWriterSelfOverlappingSecretResolvesOnceChainBreaks for the
+// realistic case (any actual line eventually varies or ends) where bounded
+// memory still holds.
+func TestRedactingWriterSelfOverlappingSecretStallsRatherThanLeak(t *testing.T) {
 	var vals secret.Values
 	vals.Add([]byte("x1x1x1x1x1"))
 	SetRedactor(&vals)
@@ -100,26 +119,69 @@ func TestRedactingWriterBoundsSelfOverlappingSecret(t *testing.T) {
 
 	var out strings.Builder
 	w := NewRedactingWriter(&out)
-	const total = 6 * maxPendingLine
+	// Only 2x maxPendingLine, not 6x: since pending never shrinks in this
+	// unresolved-chain shape, every Write past the threshold rescans the
+	// whole (growing) buffer from scratch (see protectedCrossing's doc on
+	// this cost), so total cost grows roughly with the square of how far
+	// past the threshold this runs -- 2x is already enough to prove no
+	// per-call hang without paying for that quadratic growth in the test
+	// itself, especially under -race's added overhead.
+	const total = 2 * maxPendingLine
 	const chunk = 4096
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
 	for written := 0; written < total; written += chunk {
 		if _, err := w.Write([]byte(strings.Repeat("x1", chunk/2))); err != nil {
 			t.Fatal(err)
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("writing stalled after %d bytes; the pending buffer likely never flushes", written)
+			t.Fatalf("writing stalled (wall-clock, not just buffered) after %d bytes: the computation itself must never hang", written)
 		}
-		w.mu.Lock()
-		pending := len(w.pending)
-		w.mu.Unlock()
-		// A little slack above maxPendingLine for the keep-back tail and
-		// the bytes just appended before the next flush check, but nowhere
-		// near unbounded growth (the pre-fix behaviour kept every byte
-		// ever written).
-		if pending > 3*maxPendingLine {
-			t.Fatalf("pending buffer grew to %d bytes (> 3x maxPendingLine=%d): still unbounded", pending, maxPendingLine)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "x1x1x1x1x1") {
+		t.Fatal("raw secret leaked into forwarded output")
+	}
+}
+
+// TestRedactingWriterSelfOverlappingSecretResolvesOnceChainBreaks proves the
+// realistic side of the contract above: once a self-overlapping chain
+// exceeding maxPendingLine actually ends, RedactingWriter's pending buffer
+// comes back down and stays bounded -- the boundedness task mb2 introduced
+// the escape hatch for still holds for every input that is not a perfectly
+// repeating, never-varying stream.
+func TestRedactingWriterSelfOverlappingSecretResolvesOnceChainBreaks(t *testing.T) {
+	var vals secret.Values
+	vals.Add([]byte("x1x1x1x1x1"))
+	SetRedactor(&vals)
+	t.Cleanup(func() { SetRedactor(nil) })
+
+	var out strings.Builder
+	w := NewRedactingWriter(&out)
+	// See the sibling test above for why this stays at 2x maxPendingLine
+	// rather than 6x (the quadratic rescan cost of an unresolved chain).
+	const total = 2 * maxPendingLine
+	const chunk = 4096
+	deadline := time.Now().Add(20 * time.Second)
+	for written := 0; written < total; written += chunk {
+		if _, err := w.Write([]byte(strings.Repeat("x1", chunk/2))); err != nil {
+			t.Fatal(err)
 		}
+		if time.Now().After(deadline) {
+			t.Fatalf("writing stalled after %d bytes", written)
+		}
+	}
+	// The break: real content never repeats forever. Once it stops
+	// matching, the chain resolves and pending must come back down.
+	if _, err := w.Write([]byte(strings.Repeat("z", chunk))); err != nil {
+		t.Fatal(err)
+	}
+	w.mu.Lock()
+	pending := len(w.pending)
+	w.mu.Unlock()
+	if pending > 3*maxPendingLine {
+		t.Fatalf("pending buffer stayed at %d bytes (> 3x maxPendingLine=%d) after the chain broke: it must resolve", pending, maxPendingLine)
 	}
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
@@ -177,6 +239,52 @@ func TestRedactingWriterBoundsTwoSecretLeak(t *testing.T) {
 	}
 	if !strings.Contains(got, secret.Redacted) {
 		t.Fatalf("output was not redacted at all: %q", got)
+	}
+}
+
+// TestRedactingWriterBoundsChunkedSingleSecretLeak is the end-to-end
+// regression test for task rd2 (the THIRD consecutive regression in
+// FlushPoint's escape hatch: mb2 -> 3d2 -> rd2), reproducing the production
+// shape: relayPipe copies a relayed child's output through io.Copy, whose
+// default buffer is 32 KiB, so a long unterminated line reaches
+// RedactingWriter.Write in 32 KiB chunks. A single strong secret repeated
+// across such a line forms one merged, touching-span run from offset 0 (no
+// periodic self-overlap needed -- see
+// secret.TestValuesFlushPointRetainedTailAtEOFRegression, which pins the
+// same root cause directly at the secret.Values level: the escape hatch's
+// cut was an arbitrary byte offset inside that run, not an occurrence
+// boundary, so the retained pending tail began mid-occurrence and Redact
+// could never match it, forwarding raw fragments once later chunks and
+// Close flushed them). This drives the real secret.Values through the real
+// RedactingWriter with the exact 32 KiB chunking a relayed child produces
+// and confirms the fix: stripping every "[redacted]" marker out of the
+// forwarded output leaves nothing, because the whole line was pure repeated
+// secret with no legitimate text of its own -- any leftover byte is a
+// leaked fragment.
+func TestRedactingWriterBoundsChunkedSingleSecretLeak(t *testing.T) {
+	var vals secret.Values
+	tok := "api-token-9fK2xQabcdE" // 22 bytes: > maxWordLen(12), so strong regardless of its characters
+	vals.Add([]byte(tok))
+	SetRedactor(&vals)
+	t.Cleanup(func() { SetRedactor(nil) })
+
+	var out strings.Builder
+	w := NewRedactingWriter(&out)
+	const chunk = 32 << 10                                   // io.Copy's default buffer size
+	line := strings.Repeat(tok, 6*maxPendingLine/len(tok)+1) // several times MaxSplitGuard, unterminated
+	for off := 0; off < len(line); off += chunk {
+		end := min(off+chunk, len(line))
+		if _, err := w.Write([]byte(line[off:end])); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	got := out.String()
+	if stripped := strings.ReplaceAll(got, secret.Redacted, ""); stripped != "" {
+		t.Fatalf("raw secret fragment leaked into forwarded output: %q (full output %d bytes)", stripped, len(got))
 	}
 }
 
