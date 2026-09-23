@@ -223,25 +223,35 @@ func globPattern(src string) string {
 
 // syncDirGlobGuard is a defense-in-depth check for the glob sync_dir apply
 // path (task qc2, the follow-up the kc2 reviewer asked for — kc2 itself
-// fixed the one known root cause, quoteGlob's rune-vs-byte bug). It refuses
-// the apply when pattern matches ZERO entries while blobDir — the resolved
+// fixed the one known root cause, quoteGlob's rune-vs-byte bug; task yc2
+// then closed a gap in the guard itself, see below). It refuses the apply
+// when pattern's COUNTING matches are ZERO while blobDir — the resolved
 // blob directory pattern was built from — is non-empty.
 //
-// Every entry a glob blob holds is a COUNTING match by construction
+// A glob blob is SUPPOSED to hold only COUNTING entries by construction
 // (plan.scanGlob only packages regular files, and symlinks resolved through
 // to one; see plan/manifest.go), and Go's "*" matches dot-names too (unlike
 // a shell glob), so a correctly built "<blobDir>/*" pattern is guaranteed to
-// match every entry of a non-empty blobDir. A zero-match result against a
-// non-empty blobDir can therefore never be a legitimate "nothing to sync"
-// outcome — it can only mean pattern no longer names blobDir. kc2's
-// byte-vs-rune escaping bug was one way to produce that shape; this guard
-// is generic and catches ANY future bug with the same shape (wrong path
-// plumbed through, a blob resolved to the wrong directory, a future glob
-// helper miscomputing the pattern, and so on), not just a repeat of kc2.
-// Silently proceeding would otherwise install nothing (copySourceGlob) and,
-// with WithPrune, delete every unmanaged regular file directly under the
-// destination (pruneGlob's keep-set would end up empty) — the exact
-// data-loss shape kc2 fixed.
+// counting-match every entry of a non-empty blobDir — UNLESS that
+// construction invariant itself has broken (a tree blob accidentally
+// plumbed into a Glob op, a future WriteGlob learning to preserve symlinks,
+// a dangling symlink surviving into a blob, ...), in which case blobDir can
+// hold non-counting entries (e.g. a subdirectory) that filepath.Glob still
+// reports as raw matches even though GlobMatchCounts — the same predicate
+// pruneGlob's real keep-set is built from — rejects them. Task yc2: raw
+// matches alone are therefore not a valid proxy for "the pattern still
+// covers the blob"; the guard must count matches the same way pruneGlob
+// does, or it can pass trivially (len(matches) != 0) while the real
+// keep-set pruneGlob builds is empty. A blobDir whose counting-match count
+// is zero — whether because pattern no longer names blobDir at all (kc2's
+// shape) or because blobDir's entries exist but none of them count (yc2's
+// shape) — can therefore never be a legitimate "nothing to sync" outcome
+// when blobDir itself is non-empty; either way this guard is generic and
+// catches ANY future bug with one of these shapes, not just a repeat of a
+// known incident. Silently proceeding would otherwise install nothing
+// (copySourceGlob) and, with WithPrune, delete every unmanaged regular file
+// directly under the destination (pruneGlob's keep-set would end up empty)
+// — the exact data-loss shape kc2 fixed.
 //
 // A genuinely empty blob directory (nothing to sync — a legitimate glob
 // sync_dir whose source matched nothing at record time) is NOT refused:
@@ -260,10 +270,32 @@ func syncDirGlobGuard(path, pattern, blobDir string) error {
 	if err != nil {
 		return fmt.Errorf("sync_dir: invalid glob %q: %w", pattern, err)
 	}
-	if len(matches) == 0 {
-		return fmt.Errorf("sync_dir: glob %q matched no entries although blob dir %q is non-empty; refusing to install/prune %s (a correctly built pattern always matches a non-empty blob, so this signals a bug in glob pattern construction rather than an empty source)", pattern, blobDir, path)
+	if countingMatches(matches) == 0 {
+		return fmt.Errorf("sync_dir: glob %q has no counting entries although blob dir %q is non-empty; refusing to install/prune %s (a correctly built pattern always counting-matches a non-empty blob, so this signals a bug in glob pattern construction or blob packaging rather than an empty source)", pattern, blobDir, path)
 	}
 	return nil
+}
+
+// countingMatches reports how many of matches are COUNTING glob matches
+// (GlobMatchCounts) — the same predicate pruneGlob's real keep-set and
+// copySourceGlob's install loop are built from, so syncDirGlobGuard's
+// emptiness check shares pruneGlob's notion of "matches" instead of a raw
+// filepath.Glob count that a non-counting entry (e.g. a stray subdirectory
+// in the blob) could satisfy trivially. An unreadable match is not counted
+// (mirroring pruneGlob's own "an unreadable match cannot count" handling)
+// rather than failing the guard outright.
+func countingMatches(matches []string) int {
+	n := 0
+	for _, match := range matches {
+		info, err := os.Lstat(match)
+		if err != nil {
+			continue
+		}
+		if GlobMatchCounts(match, info) {
+			n++
+		}
+	}
+	return n
 }
 
 // quoteGlob escapes the filepath.Match metacharacters in path so it matches

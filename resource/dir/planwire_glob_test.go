@@ -244,6 +244,60 @@ func TestSyncDirGlobGuardAllowsEmptyBlob(t *testing.T) {
 	}
 }
 
+// TestSyncDirGlobGuardCatchesNonCountingBlob pins the gap task yc2 closed in
+// syncDirGlobGuard itself: a blob directory that is non-empty but holds only
+// NON-COUNTING entries (here, a lone subdirectory — GlobMatchCounts rejects
+// directories) used to satisfy the guard's old raw "len(matches) == 0" check
+// trivially (Go's Glob does not filter by type, so the subdirectory itself
+// is a "match"), while pruneGlob's real keep-set — built through
+// GlobMatchCounts, the same predicate copySourceGlob installs through — is
+// actually empty. The guard's whole premise ("every entry a glob blob holds
+// is a counting match by construction") does not hold in this shape, so
+// before the fix it let the apply through and pruneGlob silently deleted
+// every unmanaged regular file directly under the destination — the exact
+// data-loss shape the guard exists to catch, just reached from a different
+// angle than kc2's byte-vs-rune bug. The fix filters matches through
+// GlobMatchCounts before the emptiness check, so the guard now refuses this
+// shape instead of missing it.
+func TestSyncDirGlobGuardCatchesNonCountingBlob(t *testing.T) {
+	resource.ResetRepository()
+	planDir := t.TempDir()
+	blobRef, err := plan.BlobRefFor("scripts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob := filepath.Join(planDir, filepath.FromSlash(blobRef))
+	// The blob holds exactly one entry: a subdirectory. A glob blob is
+	// supposed to be flat (plan.scanGlob only packages counting matches),
+	// but the guard must not assume that invariant always holds — it exists
+	// precisely to catch the case where some future bug breaks it.
+	if err := os.MkdirAll(filepath.Join(blob, "subdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := filepath.Join(t.TempDir(), "dst")
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dst, "admin.conf"), []byte("keep me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	op := plan.Op{Op: plan.KindSyncDir, ID: "Directory[" + dst + "]", Path: dst,
+		Blob: blobRef, Glob: true, Prune: true, Mode: "0700", FileMode: "0600"}
+	err = (syncDirHandler{}).Apply(op, plan.ApplyContext{PlanDir: planDir})
+
+	if err == nil {
+		t.Fatal("expected the guard to refuse: the blob is non-empty but holds no COUNTING entries, so the real prune keep-set would be empty")
+	}
+	if !strings.Contains(err.Error(), "no counting entries") {
+		t.Errorf("error %q should describe the check as \"no counting entries\", not the old raw match-count wording", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dst, "admin.conf")); statErr != nil {
+		t.Errorf("admin.conf should have survived the refused apply, got stat error: %v", statErr)
+	}
+}
+
 // TestSyncDirHandlerApplyEmptyGlobBlobSyncsCleanly exercises the legitimate
 // empty-blob case through the full syncDirHandler.Apply path (not just the
 // guard in isolation): a glob sync_dir recorded from a source that matched
