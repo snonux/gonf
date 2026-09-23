@@ -30,7 +30,15 @@ const PreviewKind Kind = "plan_preview"
 func RequiredVersion(ops []Op) int {
 	version := VersionConfigSet
 	for _, op := range ops {
-		if op.Op == KindSyncDir && op.Glob && op.Prune {
+		// Glob moved onto SyncDirPayload (task 9e2); Prune stayed a flat
+		// Op field (KindDir shares it — see Op.Prune's own doc comment in
+		// types.go), so only Glob needs the payload assertion here. A
+		// non-sync_dir op can never carry a SyncDirPayload
+		// (payloadFromWire only builds one for KindSyncDir), so the
+		// comma-ok degrades harmlessly to the zero payload for every
+		// other kind.
+		p, _ := op.Payload.(SyncDirPayload)
+		if op.Op == KindSyncDir && p.Glob && op.Prune {
 			return VersionSyncDirGlob // the highest on-demand schema
 		}
 		if len(op.KeyedLines) != 0 && version < VersionKeyedLines {

@@ -286,13 +286,18 @@ type Guard struct {
 // it always was regardless of this Go-level split — see wireOp's doc
 // comment (wire.go) for exactly how.
 //
-// As of task 8e2, the cron, systemd_timer, user, link, link_if_exists,
-// package, command, config_set and config_set_member kinds have migrated
-// their exclusive fields onto a payload (CronPayload, SystemdTimerPayload,
-// UserPayload, LinkPayload, LinkIfExistsPayload, PackagePayload,
-// CommandPayload, ConfigSetPayload, ConfigSetMemberPayload, op_payload.go);
-// every other kind's fields are still flat here, unchanged, pending
-// follow-up tasks (see docs/plan.md).
+// As of task 9e2, the cron, systemd_timer, user, link, link_if_exists,
+// package, command, config_set, config_set_member and sync_dir kinds have
+// migrated their exclusive fields onto a payload (CronPayload,
+// SystemdTimerPayload, UserPayload, LinkPayload, LinkIfExistsPayload,
+// PackagePayload, CommandPayload, ConfigSetPayload, ConfigSetMemberPayload,
+// SyncDirPayload, op_payload.go); every other kind's fields are still flat
+// here, unchanged, pending follow-up tasks (see docs/plan.md). sync_dir's
+// Prune field is the one exception worth flagging: it did NOT move to
+// SyncDirPayload, because KindDir genuinely shares it (see Prune's own
+// field doc below) — the "exclusive to one kind vs. shared by 2+" rule
+// this comment's own precedent (w62's identical resource.PlanDraft split)
+// already applies elsewhere.
 type Op struct {
 	Op      Kind   `json:"op"`
 	Version int    `json:"version,omitempty"`
@@ -314,9 +319,14 @@ type Op struct {
 	// setuid/setgid/sticky are set — four digits like "04755", for path
 	// metadata.
 	Mode string `json:"mode,omitempty"`
-	// FileMode is an octal permission string applied to files copied by KindSyncDir
-	// (same format as Mode, including the four-digit special-bit form).
-	FileMode string `json:"file_mode,omitempty"`
+	// FileMode (KindSyncDir-exclusive) moved onto SyncDirPayload (task 9e2,
+	// "Layer 2" of the PlanDraft/Op god-struct split — see docs/plan.md,
+	// "The PlanDraft/Op split"; and CronPayload's doc comment in
+	// op_payload.go for why the wire itself is unaffected). Field doc
+	// (unchanged): SyncDirPayload.FileMode is an octal permission string
+	// applied to files copied by KindSyncDir (same format as Mode,
+	// including the four-digit special-bit form).
+
 	// Owner is the owning user (name or numeric uid) recorded for the
 	// filesystem ops KindFile, KindDir, KindSyncDir, and KindEnsureDir. It is
 	// only set when the task explicitly configured ownership via WithOwner;
@@ -361,26 +371,43 @@ type Op struct {
 	// with a private staged filename before starting ValidationBin.
 	ValidationBin  string   `json:"validation_bin,omitempty"`
 	ValidationArgs []string `json:"validation_args,omitempty"`
-	// SourceDir is the recipe's declared source directory for KindSyncDir
-	// (for the glob flavor, the declared glob pattern's directory). Apply
-	// passes it to the synced tree so .tmpl files inside render {{.Param}}
-	// from the stable declared identity ("source_dir/relative entry path")
-	// instead of the ephemeral blob-extraction path, which changes every
-	// plan run. Empty on plans recorded before schema v6: apply then keeps
-	// the blob-path Param (pre-v6 behavior).
-	SourceDir string `json:"source_dir,omitempty"`
-	// Glob (schema v24, VersionSyncDirGlob) marks a KindSyncDir op recorded
-	// from WithSourceGlob: its blob is the flat set of counting glob matches,
-	// not a tree. Apply then installs the blob's entries by basename and, with
-	// Prune, removes only regular files directly under Path that are not
-	// among them — subdirectories, symlinks and other non-regular entries are
-	// left alone, exactly like the direct WithSourceGlob path (Rex prune_dir).
-	// Without Glob, Prune has tree semantics and removes every entry with no
-	// counterpart in the blob. Plans recorded before v24 carry no glob field
-	// and keep tree semantics.
-	Glob bool `json:"glob,omitempty"`
-	// Prune removes destination entries not present in the sync source (glob
-	// semantics when Glob is set, tree semantics otherwise).
+	// SourceDir and Glob (KindSyncDir-exclusive) moved onto SyncDirPayload
+	// (task 9e2, Layer 2's fourth slice). Field docs (unchanged from here):
+	//
+	// SyncDirPayload.SourceDir is the recipe's declared source directory
+	// for KindSyncDir (for the glob flavor, the declared glob pattern's
+	// directory). Apply passes it to the synced tree so .tmpl files inside
+	// render {{.Param}} from the stable declared identity
+	// ("source_dir/relative entry path") instead of the ephemeral
+	// blob-extraction path, which changes every plan run. Empty on plans
+	// recorded before schema v6: apply then keeps the blob-path Param
+	// (pre-v6 behavior).
+	//
+	// SyncDirPayload.Glob (schema v24, VersionSyncDirGlob) marks a
+	// KindSyncDir op recorded from WithSourceGlob: its blob is the flat set
+	// of counting glob matches, not a tree. Apply then installs the blob's
+	// entries by basename and, with Prune, removes only regular files
+	// directly under Path that are not among them — subdirectories,
+	// symlinks and other non-regular entries are left alone, exactly like
+	// the direct WithSourceGlob path (Rex prune_dir). Without Glob, Prune
+	// has tree semantics and removes every entry with no counterpart in the
+	// blob. Plans recorded before v24 carry no glob field and keep tree
+	// semantics.
+
+	// Prune removes destination entries not present in the sync source
+	// (glob semantics when SyncDirPayload.Glob is set, tree semantics
+	// otherwise). Unlike FileMode/SourceDir/Glob, Prune did NOT move onto
+	// SyncDirPayload during task 9e2's migration: KindDir genuinely shares
+	// it with identical meaning — a plain "dir" op also prunes its own
+	// managed destination (see resource/dir/planwire.go's dirHandler,
+	// which reads and writes Prune exactly like syncDirHandler does) — so
+	// the "exclusive to one kind vs. shared by 2+" rule (this file's Op
+	// doc comment, and op_payload.go's own) keeps it flat here, the same
+	// way w62's Layer 1 SyncPayload (resource/dir/payload.go) already kept
+	// Prune flat on resource.PlanDraft instead of its own SyncPayload for
+	// the identical reason. Task 9e2's own annotation history records
+	// verifying this by grepping every Op{...Prune...} literal and every
+	// op.Prune read in the repo before assuming otherwise.
 	Prune bool `json:"prune,omitempty"`
 	// Absent marks NoFile / NoDir / NoLink / NoPackage style removal.
 	Absent bool `json:"absent,omitempty"`

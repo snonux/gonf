@@ -297,6 +297,64 @@ func (p ConfigSetMemberPayload) applyToWire(w *wireOp) {
 	w.Member = p.Member
 }
 
+// SyncDirPayload holds the wire fields exclusive to KindSyncDir (task 9e2,
+// Layer 2's fifth slice). resource/dir's planwire.go is the only other
+// non-test package that constructs or reads one — it always sets a
+// non-nil SyncDirPayload on a "sync_dir" op's Payload (record side:
+// syncDirHandler.ToOp; apply side: syncDirHandler.Apply/syncDirOptions/
+// syncDirSourceOption all comma-ok assert it), so a decoded or freshly
+// lowered KindSyncDir op's Payload is never nil, keeping encode/decode
+// round trips symmetric (see payloadFromWire). Prune is NOT here despite
+// reading as sync_dir-specific: KindDir genuinely shares it with identical
+// meaning, so it stays a flat Op core field — see Op.Prune's own doc
+// comment (types.go) for the full rationale, verified by grepping every
+// Op{...Prune...} literal and op.Prune read in the repo before this task
+// assumed otherwise (the same check w62's Layer 1 SyncPayload, resource/
+// dir/payload.go, already did for resource.PlanDraft.Prune).
+//
+// Its json tags are never consulted by encoding/json — Op.MarshalJSON
+// merges these fields onto a wireOp and marshals THAT (applyToWire below),
+// never this struct directly — but api's secret-scan reflection walker
+// (walkOpStrings/opFieldClasses) still needs them: it descends into
+// Op.Payload's concrete value at the op's own top-level path (see
+// api/secret_fields.go's walkStruct), and computes each leaf's
+// classification path from THESE tags. They must therefore keep naming the
+// same wire keys wireOp's own fields do; TestWirePayloadTagsMatch
+// (types_test.go) pins that the two never drift apart.
+//
+// Field docs (unchanged from Op's pre-9e2 flat field comments):
+type SyncDirPayload struct {
+	// SourceDir is the recipe's declared source directory for KindSyncDir
+	// (for the glob flavor, the declared glob pattern's directory). Apply
+	// passes it to the synced tree so .tmpl files inside render {{.Param}}
+	// from the stable declared identity ("source_dir/relative entry path")
+	// instead of the ephemeral blob-extraction path, which changes every
+	// plan run. Empty on plans recorded before schema v6: apply then keeps
+	// the blob-path Param (pre-v6 behavior).
+	SourceDir string `json:"source_dir,omitempty"`
+	// Glob (schema v24, VersionSyncDirGlob) marks a KindSyncDir op recorded
+	// from WithSourceGlob: its blob is the flat set of counting glob
+	// matches, not a tree. Apply then installs the blob's entries by
+	// basename and, with the core Op.Prune, removes only regular files
+	// directly under Path that are not among them — subdirectories,
+	// symlinks and other non-regular entries are left alone, exactly like
+	// the direct WithSourceGlob path (Rex prune_dir). Without Glob, Prune
+	// has tree semantics and removes every entry with no counterpart in
+	// the blob. Plans recorded before v24 carry no glob field and keep
+	// tree semantics.
+	Glob bool `json:"glob,omitempty"`
+	// FileMode is an octal permission string applied to files copied by
+	// KindSyncDir (same format as Mode, including the four-digit
+	// special-bit form).
+	FileMode string `json:"file_mode,omitempty"`
+}
+
+func (p SyncDirPayload) applyToWire(w *wireOp) {
+	w.SourceDir = p.SourceDir
+	w.Glob = p.Glob
+	w.FileMode = p.FileMode
+}
+
 // toWire copies every Op core field onto a fresh wireOp and, when op.Payload
 // is set, layers its kind-exclusive fields on top. It does not normalize;
 // callers (MarshalJSON) do that once, after the merge.
@@ -308,10 +366,9 @@ func (op Op) toWire() wireOp {
 
 		Path: op.Path,
 
-		Mode:     op.Mode,
-		FileMode: op.FileMode,
-		Owner:    op.Owner,
-		Group:    op.Group,
+		Mode:  op.Mode,
+		Owner: op.Owner,
+		Group: op.Group,
 
 		ContentB64:     op.ContentB64,
 		Blob:           op.Blob,
@@ -321,8 +378,6 @@ func (op Op) toWire() wireOp {
 		TemplateData:   op.TemplateData,
 		ValidationBin:  op.ValidationBin,
 		ValidationArgs: op.ValidationArgs,
-		SourceDir:      op.SourceDir,
-		Glob:           op.Glob,
 		Prune:          op.Prune,
 		Absent:         op.Absent,
 
@@ -368,10 +423,9 @@ func fromWire(w wireOp) Op {
 
 		Path: w.Path,
 
-		Mode:     w.Mode,
-		FileMode: w.FileMode,
-		Owner:    w.Owner,
-		Group:    w.Group,
+		Mode:  w.Mode,
+		Owner: w.Owner,
+		Group: w.Group,
 
 		ContentB64:     w.ContentB64,
 		Blob:           w.Blob,
@@ -381,8 +435,6 @@ func fromWire(w wireOp) Op {
 		TemplateData:   w.TemplateData,
 		ValidationBin:  w.ValidationBin,
 		ValidationArgs: w.ValidationArgs,
-		SourceDir:      w.SourceDir,
-		Glob:           w.Glob,
 		Prune:          w.Prune,
 		Absent:         w.Absent,
 
@@ -485,6 +537,12 @@ func payloadFromWire(w wireOp) OpPayload {
 		return ConfigSetMemberPayload{
 			Member: w.Member,
 		}
+	case KindSyncDir:
+		return SyncDirPayload{
+			SourceDir: w.SourceDir,
+			Glob:      w.Glob,
+			FileMode:  w.FileMode,
+		}
 	default:
 		return nil
 	}
@@ -510,5 +568,6 @@ func OpPayloadExamples() map[Kind]OpPayload {
 		KindCommand:         CommandPayload{},
 		KindConfigSet:       ConfigSetPayload{},
 		KindConfigSetMember: ConfigSetMemberPayload{},
+		KindSyncDir:         SyncDirPayload{},
 	}
 }

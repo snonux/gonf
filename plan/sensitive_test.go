@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -34,7 +35,20 @@ func TestRequiredVersion(t *testing.T) {
 	}
 	plain := Op{Op: KindFile, Path: "/a"}
 	sensitive := Op{Op: KindFile, Path: "/k", Sensitive: true}
-	globPrune := Op{Op: KindSyncDir, Path: "/g", Blob: "blobs/g", Glob: true, Prune: true}
+	globPrune := Op{Op: KindSyncDir, Path: "/g", Blob: "blobs/g", Prune: true, Payload: SyncDirPayload{Glob: true}}
+	// "glob on dir" (task 9e2): once Glob moved onto SyncDirPayload, a "dir"
+	// op literal can no longer even express a stray glob flag — Op has no
+	// Glob field any more outside SyncDirPayload, so the type system now
+	// enforces what this case used to prove at runtime. The only way left
+	// to reconstruct the shape (an old or forged plan.jsonl line) is
+	// decoding raw wire bytes: payloadFromWire only builds a SyncDirPayload
+	// for KindSyncDir, so a decoded "dir" op's wire-level glob:true is
+	// silently dropped (never copied anywhere), exactly mirroring the old
+	// runtime behavior this case pinned.
+	var globOnDir Op
+	if err := json.Unmarshal([]byte(`{"op":"dir","path":"/d","glob":true,"prune":true}`), &globOnDir); err != nil {
+		t.Fatalf("decode glob-on-dir fixture: %v", err)
+	}
 	cases := []struct {
 		name string
 		ops  []Op
@@ -42,14 +56,14 @@ func TestRequiredVersion(t *testing.T) {
 	}{
 		{"plain", []Op{plain}, VersionConfigSet},
 		{"sensitive", []Op{plain, sensitive}, VersionSensitive},
-		{"glob without prune", []Op{{Op: KindSyncDir, Path: "/g", Blob: "blobs/g", Glob: true}}, VersionConfigSet},
+		{"glob without prune", []Op{{Op: KindSyncDir, Path: "/g", Blob: "blobs/g", Payload: SyncDirPayload{Glob: true}}}, VersionConfigSet},
 		{"tree prune", []Op{{Op: KindSyncDir, Path: "/t", Blob: "blobs/t", Prune: true}}, VersionConfigSet},
 		{"glob prune", []Op{plain, globPrune}, VersionSyncDirGlob},
 		{"glob prune before sensitive", []Op{globPrune, sensitive}, VersionSyncDirGlob},
 		{"sensitive before glob prune", []Op{sensitive, globPrune}, VersionSyncDirGlob},
 		// glob is only meaningful on sync_dir; a stray flag elsewhere does
 		// not raise the header.
-		{"glob on dir", []Op{{Op: KindDir, Path: "/d", Glob: true, Prune: true}}, VersionConfigSet},
+		{"glob on dir", []Op{globOnDir}, VersionConfigSet},
 	}
 	for _, tc := range cases {
 		if got := RequiredVersion(tc.ops); got != tc.want {

@@ -46,7 +46,8 @@ type wireOp struct {
 	// Link-exclusive (plan.LinkPayload). See LinkPayload's own field docs.
 	Hardlink string `json:"hardlink,omitempty"`
 
-	Mode     string `json:"mode,omitempty"`
+	Mode string `json:"mode,omitempty"`
+	// SyncDir-exclusive (plan.SyncDirPayload). See its own field docs.
 	FileMode string `json:"file_mode,omitempty"`
 	Owner    string `json:"owner,omitempty"`
 	Group    string `json:"group,omitempty"`
@@ -59,10 +60,14 @@ type wireOp struct {
 	TemplateData   json.RawMessage `json:"template_data,omitempty"`
 	ValidationBin  string          `json:"validation_bin,omitempty"`
 	ValidationArgs []string        `json:"validation_args,omitempty"`
-	SourceDir      string          `json:"source_dir,omitempty"`
-	Glob           bool            `json:"glob,omitempty"`
-	Prune          bool            `json:"prune,omitempty"`
-	Absent         bool            `json:"absent,omitempty"`
+	// SyncDir-exclusive (plan.SyncDirPayload). See its own field docs.
+	SourceDir string `json:"source_dir,omitempty"`
+	// SyncDir-exclusive (plan.SyncDirPayload). See its own field docs.
+	Glob bool `json:"glob,omitempty"`
+	// Prune stays core (not payload): KindDir genuinely shares it with
+	// KindSyncDir (see plan.Op's own Prune field doc for why).
+	Prune  bool `json:"prune,omitempty"`
+	Absent bool `json:"absent,omitempty"`
 	// Package-exclusive (plan.PackagePayload). See its own field docs.
 	Latest bool `json:"latest,omitempty"`
 

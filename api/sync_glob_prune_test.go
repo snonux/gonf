@@ -146,6 +146,15 @@ func syncDirOpOf(t *testing.T, ops []plan.Op) plan.Op {
 	return plan.Op{}
 }
 
+// syncDirPayloadOf returns op's SyncDirPayload (task 9e2 moved
+// FileMode/SourceDir/Glob off plan.Op onto it). A comma-ok assertion,
+// degrading to the zero payload for a non-sync_dir op or one decoded
+// without a Payload — never a bare assertion that would panic.
+func syncDirPayloadOf(op plan.Op) plan.SyncDirPayload {
+	p, _ := op.Payload.(plan.SyncDirPayload)
+	return p
+}
+
 // TestPlanGlobSyncPruneMatchesDirectPath is the sb2 regression: a Dir with
 // WithSourceGlob and WithPrune applied through the plan path (record →
 // encode → decode → plan.Apply) must leave the destination exactly as the
@@ -214,7 +223,7 @@ func TestPlanGlobSyncPruneMatchesDirectPath(t *testing.T) {
 
 			planDir := t.TempDir()
 			ops := recordGlobSync(t, planDir, viaPlan, pattern, options.WithPrune)
-			if op := syncDirOpOf(t, ops); !op.Glob || !op.Prune {
+			if op := syncDirOpOf(t, ops); !syncDirPayloadOf(op).Glob || !op.Prune {
 				t.Fatalf("sync_dir op = %#v, want glob and prune set", op)
 			}
 			if ops[0].Version != plan.VersionSyncDirGlob {
@@ -264,7 +273,7 @@ func TestPlanGlobSyncWithoutPruneKeepsOldHeader(t *testing.T) {
 	writeGlobPruneDest(t, dst)
 	planDir := t.TempDir()
 	ops := recordGlobSync(t, planDir, dst, filepath.Join(src, "*.sh"))
-	if op := syncDirOpOf(t, ops); !op.Glob || op.Prune {
+	if op := syncDirOpOf(t, ops); !syncDirPayloadOf(op).Glob || op.Prune {
 		t.Fatalf("sync_dir op = %#v, want glob without prune", op)
 	}
 	if ops[0].Version != plan.VersionConfigSet {
@@ -302,7 +311,7 @@ func TestPlanTreeSyncPruneKeepsTreeSemantics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecordPlan: %v", err)
 	}
-	if op := syncDirOpOf(t, ops); op.Glob || ops[0].Version != plan.VersionConfigSet {
+	if op := syncDirOpOf(t, ops); syncDirPayloadOf(op).Glob || ops[0].Version != plan.VersionConfigSet {
 		t.Fatalf("tree sync op = %#v, header v%d; want no glob, v%d", op, ops[0].Version, plan.VersionConfigSet)
 	}
 	if err := plan.Apply(ops, plan.Facts{}, planDir); err != nil {

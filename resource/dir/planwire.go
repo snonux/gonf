@@ -89,18 +89,20 @@ func (syncDirHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		return plan.Op{}, fmt.Errorf("sync_dir: draft missing dir.SyncPayload (got %T)", d.Payload)
 	}
 	return plan.Op{
-		Op:        plan.KindSyncDir,
-		ID:        d.ID,
-		Path:      d.Path,
-		Blob:      d.Blob,
-		SourceDir: p.SourceDir,
-		Glob:      p.SourceGlob != "",
-		Mode:      d.Mode,
-		FileMode:  p.FileMode,
-		Owner:     d.Owner,
-		Group:     d.Group,
-		Prune:     d.Prune,
-		Deps:      slices.Clone(d.Deps),
+		Op:    plan.KindSyncDir,
+		ID:    d.ID,
+		Path:  d.Path,
+		Blob:  d.Blob,
+		Mode:  d.Mode,
+		Owner: d.Owner,
+		Group: d.Group,
+		Prune: d.Prune,
+		Deps:  slices.Clone(d.Deps),
+		Payload: plan.SyncDirPayload{
+			SourceDir: p.SourceDir,
+			Glob:      p.SourceGlob != "",
+			FileMode:  p.FileMode,
+		},
 	}, nil
 }
 
@@ -121,7 +123,14 @@ func (syncDirHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	if err != nil {
 		return err
 	}
-	if op.Glob {
+	// A comma-ok assertion, not a "missing payload" error: Apply may see an
+	// op decoded from an arbitrary plan.jsonl (mirrors resource/cron's
+	// planwire.go Apply). A nil or mistyped Payload degrades to the zero
+	// SyncDirPayload (Glob false, FileMode/SourceDir empty), which is
+	// exactly pre-v24/pre-v6 behavior for a plan recorded before those
+	// fields existed.
+	p, _ := op.Payload.(plan.SyncDirPayload)
+	if p.Glob {
 		// Defense-in-depth (task qc2, the kc2 reviewer's follow-up): verify
 		// the rebuilt pattern actually covers the resolved blob BEFORE
 		// installing or pruning anything from it. See syncDirGlobGuard.
@@ -159,17 +168,23 @@ func syncDirBlobTree(blob, planDir string) (string, error) {
 
 // syncDirOptions translates a sync_dir op's recorded fields into the
 // DirOptions the direct WithSource / WithSourceGlob path would use, sourcing
-// from the resolved blob tree src.
+// from the resolved blob tree src. SourceDir/Glob/FileMode come from the
+// op's SyncDirPayload (task 9e2); Mode/Owner/Group/Prune/Sensitive stay
+// core Op fields (Prune is genuinely shared with KindDir — see Op.Prune's
+// doc comment, plan/types.go). The comma-ok Payload assertion mirrors
+// Apply's own (see its comment): a nil or mistyped Payload degrades to the
+// zero SyncDirPayload.
 func syncDirOptions(op plan.Op, src string) ([]opt.DirOption, error) {
-	opts := []opt.DirOption{syncDirSourceOption(op, src)}
+	p, _ := op.Payload.(plan.SyncDirPayload)
+	opts := []opt.DirOption{syncDirSourceOption(p, src)}
 	// source_dir is the recipe's declared source directory (the glob
 	// pattern's directory for the glob flavor): .tmpl files inside the
 	// synced tree render {{.Param}} from it instead of the ephemeral blob
 	// path, which would change every run and flap the rendered checksums.
 	// Plans recorded before schema v6 carry no source_dir and keep the
 	// blob-path Param.
-	if op.SourceDir != "" {
-		opts = append(opts, opt.WithSourceBase(op.SourceDir))
+	if p.SourceDir != "" {
+		opts = append(opts, opt.WithSourceBase(p.SourceDir))
 	}
 	if op.Mode != "" {
 		mode, err := plan.ParseMode(op.Mode)
@@ -178,8 +193,8 @@ func syncDirOptions(op plan.Op, src string) ([]opt.DirOption, error) {
 		}
 		opts = append(opts, opt.WithMode(mode))
 	}
-	if op.FileMode != "" {
-		mode, err := plan.ParseMode(op.FileMode)
+	if p.FileMode != "" {
+		mode, err := plan.ParseMode(p.FileMode)
 		if err != nil {
 			return nil, fmt.Errorf("sync_dir: file_mode: %w", err)
 		}
@@ -212,9 +227,10 @@ func syncDirOptions(op plan.Op, src string) ([]opt.DirOption, error) {
 // Go's "*" matches dot-names too, as on the direct path. The blob path is
 // quoted so a glob metacharacter in it matches literally. Every other op —
 // and a glob op recorded before v24, which carries no glob field — keeps the
-// tree sync.
-func syncDirSourceOption(op plan.Op, src string) opt.DirOption {
-	if op.Glob {
+// tree sync. p is the op's SyncDirPayload (task 9e2), already comma-ok
+// asserted by the caller.
+func syncDirSourceOption(p plan.SyncDirPayload, src string) opt.DirOption {
+	if p.Glob {
 		return opt.WithSourceGlob(globPattern(src))
 	}
 	return opt.WithSource(src)

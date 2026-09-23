@@ -27,7 +27,7 @@ var planOnlyFacts = plan.Facts{GOOS: "plan-goos", Profile: "PLANFACT", Hostname:
 func factsPlan(blobRef, syncDst, fileDst string) []plan.Op {
 	return []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "j62"},
-		{Op: plan.KindSyncDir, Path: syncDst, Blob: blobRef, Mode: "0700", FileMode: "0600"},
+		{Op: plan.KindSyncDir, Path: syncDst, Blob: blobRef, Mode: "0700", Payload: plan.SyncDirPayload{FileMode: "0600"}},
 		{
 			Op:         plan.KindFile,
 			Path:       fileDst,

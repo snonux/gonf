@@ -799,21 +799,23 @@ func TestRecordPlanLowersSyncDirSourceDir(t *testing.T) {
 		t.Fatalf("ops kinds = %v, want %v", opsKinds(ops), wantKinds)
 	}
 
-	// A plain dir op carries no source_dir.
-	if ops[1].SourceDir != "" {
-		t.Fatalf("dir op source_dir = %q, want empty", ops[1].SourceDir)
+	// A plain dir op carries no source_dir (it has no SyncDirPayload at
+	// all, task 9e2; syncDirPayloadOf's comma-ok degrades to the zero
+	// value, api/sync_glob_prune_test.go).
+	if got := syncDirPayloadOf(ops[1]).SourceDir; got != "" {
+		t.Fatalf("dir op source_dir = %q, want empty", got)
 	}
 	// The tree flavor carries the declared source directory verbatim.
-	if got, want := ops[2].SourceDir, treeSrc; got != want {
+	if got, want := syncDirPayloadOf(ops[2]).SourceDir, treeSrc; got != want {
 		t.Fatalf("tree sync_dir source_dir = %q, want %q", got, want)
 	}
 	// The glob flavor carries the glob pattern's directory.
-	if got, want := ops[3].SourceDir, globSrc; got != want {
+	if got, want := syncDirPayloadOf(ops[3]).SourceDir, globSrc; got != want {
 		t.Fatalf("glob sync_dir source_dir = %q, want %q", got, want)
 	}
 	// File ops carry no source_dir.
-	if ops[4].SourceDir != "" {
-		t.Fatalf("file op source_dir = %q, want empty", ops[4].SourceDir)
+	if got := syncDirPayloadOf(ops[4]).SourceDir; got != "" {
+		t.Fatalf("file op source_dir = %q, want empty", got)
 	}
 
 	// The field must survive the wire round-trip under its json tag.

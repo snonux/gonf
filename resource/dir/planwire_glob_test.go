@@ -30,8 +30,9 @@ func TestSyncDirHandlerToOpMarksGlobFlavor(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: ToOp: %v", tc.name, err)
 		}
-		if op.Glob != tc.want {
-			t.Errorf("%s: op.Glob = %t, want %t", tc.name, op.Glob, tc.want)
+		p, _ := op.Payload.(plan.SyncDirPayload)
+		if p.Glob != tc.want {
+			t.Errorf("%s: op.Payload.(plan.SyncDirPayload).Glob = %t, want %t", tc.name, p.Glob, tc.want)
 		}
 	}
 }
@@ -120,7 +121,7 @@ func TestSyncDirGlobPruneLeavesSubdirectories(t *testing.T) {
 	}
 
 	op := plan.Op{Op: plan.KindSyncDir, ID: "Directory[" + dst + "]", Path: dst,
-		Blob: blobRef, Glob: true, Prune: true, Mode: "0700", FileMode: "0600"}
+		Blob: blobRef, Prune: true, Mode: "0700", Payload: plan.SyncDirPayload{Glob: true, FileMode: "0600"}}
 	if err := (syncDirHandler{}).Apply(op, plan.ApplyContext{PlanDir: planDir}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -174,7 +175,7 @@ func TestSyncDirGlobPruneSurvivesNonUTF8PlanDir(t *testing.T) {
 	}
 
 	op := plan.Op{Op: plan.KindSyncDir, ID: "Directory[" + dst + "]", Path: dst,
-		Blob: blobRef, Glob: true, Prune: true, Mode: "0700", FileMode: "0600"}
+		Blob: blobRef, Prune: true, Mode: "0700", Payload: plan.SyncDirPayload{Glob: true, FileMode: "0600"}}
 	if err := (syncDirHandler{}).Apply(op, plan.ApplyContext{PlanDir: planDir}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -284,7 +285,7 @@ func TestSyncDirGlobGuardCatchesNonCountingBlob(t *testing.T) {
 	}
 
 	op := plan.Op{Op: plan.KindSyncDir, ID: "Directory[" + dst + "]", Path: dst,
-		Blob: blobRef, Glob: true, Prune: true, Mode: "0700", FileMode: "0600"}
+		Blob: blobRef, Prune: true, Mode: "0700", Payload: plan.SyncDirPayload{Glob: true, FileMode: "0600"}}
 	err = (syncDirHandler{}).Apply(op, plan.ApplyContext{PlanDir: planDir})
 
 	if err == nil {
@@ -325,7 +326,7 @@ func TestSyncDirHandlerApplyEmptyGlobBlobSyncsCleanly(t *testing.T) {
 	}
 
 	op := plan.Op{Op: plan.KindSyncDir, ID: "Directory[" + dst + "]", Path: dst,
-		Blob: blobRef, Glob: true, Prune: true, Mode: "0700", FileMode: "0600"}
+		Blob: blobRef, Prune: true, Mode: "0700", Payload: plan.SyncDirPayload{Glob: true, FileMode: "0600"}}
 	if err := (syncDirHandler{}).Apply(op, plan.ApplyContext{PlanDir: planDir}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}

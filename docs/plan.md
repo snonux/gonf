@@ -880,6 +880,96 @@ their `Members`/`Member` values onto an explicit
 `Payload: plan.ConfigSetPayload{...}`/`Payload: plan.ConfigSetMemberPayload{...}`,
 the same literal-migration 5e2's note above describes.
 
+**Task 9e2: `sync_dir`, Layer 2's fifth slice.** The fifth of six sibling
+follow-ups (5e2, 6e2, 7e2, 8e2, 9e2, ae2) migrated `sync_dir`'s exclusive
+fields — but NOT all four the task description started from. Its own
+annotation required verifying, before designing anything, whether `Prune`
+is genuinely `sync_dir`-exclusive on the `Op` side or shared with
+`KindDir`/`KindEnsureDir` — the same question w62's Layer 1 had already
+answered for `resource.PlanDraft` (`resource/dir/payload.go`'s `SyncPayload`
+doc comment: "Prune stays a flat `resource.PlanDraft` field because the
+plain `dir` kind ... reuses it with the identical meaning"). Grepping every
+`Op{...Prune...}` literal and every `op.Prune` read confirmed the same is
+true on the `Op` side: `resource/dir/planwire.go`'s `dirHandler.ToOp` sets
+`Prune: d.Prune` and `dirHandler.Apply` reads `op.Prune` for the plain
+`"dir"` kind exactly like `syncDirHandler` does for `"sync_dir"` — the only
+non-test call site the task's own annotation named turned out to hold TWO
+kinds' worth of evidence, not one. `KindEnsureDir`'s handler, by contrast,
+never touches `Prune`/`Glob`/`SourceDir`/`FileMode` at all (`ensureDirHandler`
+has no payload either, matching w62's finding for that kind).
+So `SourceDir`, `Glob`, and `FileMode` moved onto a new `SyncDirPayload`
+(`plan/op_payload.go`), while `Prune` stayed flat on `Op`'s core — the
+`Op` struct's own doc comment and `Prune`'s field doc (`plan/types.go`)
+now record this explicitly, so the next reader does not have to re-derive
+it from a repo-wide grep. `wireOp` itself (`plan/wire.go`) is UNCHANGED in
+field order and json tags — only doc comments mark the
+`FileMode`/`SourceDir`/`Glob` block as `SyncDir`-exclusive and note that
+`Prune` stays core because `KindDir` shares it.
+
+This slice's other gotcha: `plan/sensitive.go`'s `RequiredVersion` reads
+`op.Glob` directly (`op.Op == KindSyncDir && op.Glob && op.Prune`, deciding
+whether a plan needs to declare schema v24) — a genuine non-test call site
+inside the `plan` package itself that the task's own annotation, which
+named only `resource/dir/planwire.go`, did not mention. Since `plan` can
+declare its own `OpPayload` types (unlike a `resource/<kind>` package), the
+fix is a direct, in-package comma-ok assertion:
+`p, _ := op.Payload.(SyncDirPayload); if op.Op == KindSyncDir && p.Glob && op.Prune`.
+No prior Layer 2 slice (yd2, 6e2, 5e2, 7e2) had a payload field read
+anywhere outside `op_payload.go`/`wire.go` themselves, so this is worth
+flagging for a future slice: grepping a kind's moved field names is not
+enough on its own once a kind's `Op`-side field feeds plan-level logic like
+`RequiredVersion`, not just its own handler's `ToOp`/`Apply`.
+
+A smaller consequence surfaced in `plan/sensitive_test.go`'s
+`TestRequiredVersion`: one existing case built a `KindDir` op literal with a
+stray `Glob: true` to pin that "glob is only meaningful on sync_dir; a
+stray flag elsewhere does not raise the header." Once `Glob` moved onto
+`SyncDirPayload`, `Op` has no `Glob` field at all outside it any more, so
+that literal stopped compiling — not a regression to work around, but the
+type system now enforcing at compile time what the test used to prove at
+run time. The case was rewritten to decode the equivalent raw wire bytes
+(`{"op":"dir","path":"/d","glob":true,"prune":true}`) instead: `payloadFromWire`
+only builds a `SyncDirPayload` for `KindSyncDir`, so a decoded `"dir"` op's
+wire-level `glob` field is silently dropped, preserving the exact scenario
+(an old or forged `plan.jsonl` line) the case existed to pin, reached via
+decode instead of an now-impossible Go literal.
+
+`resource/dir/planwire.go`'s three handlers were touched narrowly, matching
+the task's own scoping note: `syncDirHandler.ToOp` now builds
+`Payload: plan.SyncDirPayload{SourceDir, Glob, FileMode}` alongside the
+still-flat `Prune: d.Prune`; `syncDirHandler.Apply`, `syncDirOptions`, and
+`syncDirSourceOption` each take a comma-ok `op.Payload.(plan.SyncDirPayload)`
+(mirroring `resource/cmd/planwire.go`'s established pattern) for the fields
+that moved, while continuing to read `op.Mode`/`op.Prune`/`op.Sensitive`
+and the owner/group helpers directly from `op`. `dirHandler` and
+`ensureDirHandler` were NOT touched at all — confirming the task's
+narrowed scope held: only `sync_dir` needed a payload.
+
+`plan.OpPayloadExamples()` gained a `KindSyncDir` entry;
+`TestWirePayloadTagsMatch` and `TestOpFieldClassesAreExhaustive` needed no
+other change (`source_dir` was already `classIdentity` and `file_mode`
+already `classMetadata` in `api/secret_fields.go` from before this split —
+classification keys off the json tag, not Go struct nesting, the same
+reason 5e2's `Symlink`/`Target`/`Hardlink` needed none either; `Glob` is a
+bool, which the walker never classifies, same as `PackagePayload.Latest`).
+Every hand-built `sync_dir` `Op{...}` literal across `plan/*_test.go`,
+`api/*_test.go`, and `resource/dir/*_test.go` that set `FileMode`,
+`SourceDir`, or `Glob` was migrated to `Payload: SyncDirPayload{...}`
+(`plan/codec_test.go`'s `sampleOps`, `plan/content_test.go`,
+`plan/types_test.go`'s `TestOpJSONTagsMatchPlanExamples` "sync_dir" cases,
+`plan/sensitive_test.go`'s `TestRequiredVersion`, `resource/dir/
+planwire_glob_test.go`, `resource/dir/plan_facts_test.go`), following the
+same "grep every hand-built literal of the migrated kind" discipline 5e2's
+write-up above already documents; `api/plan_lower_test.go` and `api/
+sync_glob_prune_test.go` read `.SourceDir`/`.Glob` off recorded ops
+directly and gained a small `syncDirPayloadOf` helper (comma-ok, degrading
+to the zero payload for a `dir`/`file` op) instead.
+
+Every other kind's fields were UNCHANGED after yd2, 6e2, 5e2, 7e2, 8e2, and
+9e2, still flat on `Op` — `File`, `Dir`, `Service`/`Timer`/`DaemonReload`,
+`EnsureDir`/`EnsureFile`, and `WhenBegin`/`WhenEnd` — pending the remaining
+follow-up task (ae2) scoped the same way.
+
 A resource package that registers a `plan.Handler` must never be imported by
 the `plan` package itself (that would reintroduce the cycle the registry
 exists to break): as of task i5, `plan` imports no `resource/<kind>` package

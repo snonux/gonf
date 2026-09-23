@@ -143,7 +143,7 @@ func TestApplyFileAndSyncDirBlobs(t *testing.T) {
 	ops := []Op{
 		header(),
 		{Op: KindFile, Path: fileDst, Mode: "0640", Blob: fileRef},
-		{Op: KindSyncDir, Path: dirDst, Mode: "0700", FileMode: "0640", Blob: treeRef, Prune: true},
+		{Op: KindSyncDir, Path: dirDst, Mode: "0700", Blob: treeRef, Prune: true, Payload: SyncDirPayload{FileMode: "0640"}},
 	}
 	if err := Apply(ops, Facts{}, planDir); err != nil {
 		t.Fatalf("apply blobs: %v", err)
