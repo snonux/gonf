@@ -31,6 +31,10 @@ func WhenPathExists(path string, fn func()) {
 	if _, err := os.Stat(p); err != nil {
 		return
 	}
-	resource.ResetRepository()
+	// See WhenHostname's non-recording branch: no per-fragment op scope to
+	// isolate here, so a reset before fn() only ever discarded whatever
+	// the recipe had registered earlier at top level (task kd2). Only one
+	// WhenPathExists branch's fn() ever runs directly at all, so there is
+	// no cross-branch ID collision to guard against either.
 	fn()
 }

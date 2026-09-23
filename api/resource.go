@@ -68,22 +68,19 @@ func Apply() error {
 		// record — for any of the reasons RecordPlanTo can fail, not only
 		// declared misuse (task tc2). Checked UNCONDITIONALLY, not only
 		// when the repository is empty (task ad2 reverted an empty-only
-		// scoping this var's own doc comment explains in full): recording
-		// runs each task body against a fresh resource repository
-		// (runTaskBody), a pre-existing, load-bearing design choice this
-		// guard cannot and must not change — so a resource registered
-		// BEFORE a later, unrelated failed record can already be gone by
-		// the time that record returns, regardless of what this guard
-		// does. A caller that then registers something else and calls
-		// Apply() would see a non-empty repository and, under an
-		// empty-only check, slip through with that earlier registration
-		// silently dropped — a partial convergence reported as success.
-		// Refusing unconditionally here is a blunt but necessary net: it
-		// cannot undo the loss, but it stops Apply from ever reporting
-		// success while it is possible. The cause is wrapped in (%w)
-		// rather than discarded, and named at its declaration site when
-		// it has one, so the refusal is actionable instead of an opaque
-		// sentence (task uc2).
+		// scoping this var's own doc comment explains in full, after
+		// finding it let a later, unrelated registration mask an earlier
+		// one's silent loss — since fixed at the root by
+		// resource.SnapshotRepository, task id2, which restores exactly
+		// what was registered before a record started on every outcome).
+		// This stays unconditional anyway: it costs only an explicit
+		// recovery step (a later clean record) and buys robustness
+		// against whatever failure shape id2's fix does not happen to
+		// cover, rather than trusting the repository's emptiness as a
+		// proxy for "nothing was lost" again. The cause is wrapped in
+		// (%w) rather than discarded, and named at its declaration site
+		// when it has one, so the refusal is actionable instead of an
+		// opaque sentence (task uc2).
 		if loc := declerr.Location(lastRecordFailure); loc != "" {
 			return fmt.Errorf("Apply: refusing: an earlier record failed (declared at %s): %w", loc, lastRecordFailure)
 		}

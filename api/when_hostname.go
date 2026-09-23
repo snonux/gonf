@@ -54,6 +54,16 @@ func whenHostnameOne(substr string, fn func()) {
 	if !strings.Contains(strings.ToLower(DetectFacts().Hostname), strings.ToLower(substr)) {
 		return
 	}
-	resource.ResetRepository()
+	// Unlike the recording branch above, this direct (non-recording) path
+	// has no per-fragment op scope to isolate — there is nothing here that
+	// extracts fn()'s registrations before some later fragment's body
+	// runs, so a reset before fn() only ever discarded whatever the
+	// recipe had registered earlier at top level, with nothing to show
+	// for it (task kd2). Only one WhenHostname branch's fn() ever runs
+	// directly at all (the condition is evaluated once, for this one
+	// local host), so — unlike recording mode, which must consider every
+	// branch without knowing the destination host yet — two branches'
+	// resources can never collide here either; there was never a reason
+	// to reset.
 	fn()
 }

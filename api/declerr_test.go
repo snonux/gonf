@@ -413,14 +413,19 @@ func TestApplyRefusesEvenAfterANewUnrelatedRegistrationFollowsARecordFailure(t *
 	}
 
 	// Recovery: a later, unrelated CLEAN record is what actually clears
-	// the guard — not merely registering something new directly.
+	// the guard — not merely registering something new directly. Neither
+	// a nor b needs re-registering: both already survive Run("good")'s
+	// restore (task id2 — a genuinely survived the earlier failure too,
+	// not just b), so re-registering either here would collide.
 	Task("good", "", func() {})
 	if err := Run("good"); err != nil {
 		t.Fatalf("Run(good) = %v, want a clean run", err)
 	}
-	File(b, options.WithContent("b"))
 	if err := Apply(); err != nil {
 		t.Fatalf("Apply() after recovery = %v, want it to succeed", err)
+	}
+	if content, err := os.ReadFile(a); err != nil || string(content) != "a" {
+		t.Fatalf("a = %q, %v; want it written after recovery (task id2: it survived the earlier failure intact)", content, err)
 	}
 	if content, err := os.ReadFile(b); err != nil || string(content) != "b" {
 		t.Fatalf("b = %q, %v; want it written after recovery", content, err)
@@ -463,22 +468,103 @@ func TestApplyDoesNotBlindlyApplyAWhenGuardedFragmentAfterARecord(t *testing.T) 
 	}
 }
 
-// TestRunTaskBodyPanicDoesNotLeaveAHalfRegisteredSetForApply pins task cd2:
-// a task body panic (a nil-map write, here — a genuine programmer-bug
-// invariant, not a recipe error) used to skip RecordPlanTo's normal return
-// entirely, so the repository rollback never ran; a caller that recovers
-// the panic (as this test, or go test's own per-test recovery, does) would
-// find whatever the body registered before panicking still sitting in the
-// repository, and a later Apply() would silently apply that half-declared
-// set. RecordPlanTo now recovers, rolls the repository back to its
-// pre-call snapshot, and re-panics — so the process-ending behavior for an
-// uninstrumented caller is unchanged, but a caller that does recover finds
-// nothing left over from the panicked body. It deliberately does NOT set
-// lastRecordFailure (unlike a normal error return): a caller able to
-// recover a panic here has already taken on responsibility for it, and
-// TestPanickingTaskDoesNotLeakIntoLaterDraftErrors already pins that a
-// recovered panic must leave no trace for a later, unrelated Apply to
-// stumble over — a sticky refusal would be exactly such a trace.
+// TestApplyDoesNotApplyAWhenGuardedFragmentThatCollidesWithATopLevelID pins
+// task id2: an earlier, ID-based RollbackTo(kept []string) restored bd2's
+// bug in full whenever the guarded fragment happened to register the SAME
+// ID as something declared before the record started — pruning down to a
+// set of names keeps a same-ID registration made during the record (with
+// its OWN, guarded-content value), rather than restoring the original,
+// because the name alone does not distinguish "the pre-record resource" from
+// "a same-named resource the record body redeclared." File(path,
+// WithContent("toplevel")) at top level, then a WhenHostname-guarded
+// fragment for a NON-matching host redeclaring the exact same path with
+// different content, must leave the TOP-LEVEL content in place after the
+// record and a later Apply — never the guarded fragment's, and never
+// nothing at all.
+func TestApplyDoesNotApplyAWhenGuardedFragmentThatCollidesWithATopLevelID(t *testing.T) {
+	ResetForTest()
+	ResetInventory()
+	t.Cleanup(func() {
+		ResetForTest()
+		ResetInventory()
+	})
+	path := filepath.Join(t.TempDir(), "motd")
+	File(path, options.WithContent("toplevel"))
+	Task("t", "", func() {
+		WhenHostname("definitely-not-this-host", func() {
+			File(path, options.WithContent("guarded"))
+		})
+	})
+	if _, err := RecordPlanTo("p", plan.NewMemoryStore(), "t"); err != nil {
+		t.Fatalf("RecordPlanTo(t) = %v, want a clean record", err)
+	}
+	if ids := resource.RegisteredIDs(); len(ids) != 1 || ids[0] != "File["+path+"]" {
+		t.Fatalf("registered = %v, want exactly the top-level File[%s], restored intact", ids, path)
+	}
+	if err := Apply(); err != nil {
+		t.Fatalf("Apply() after the record = %v, want it to succeed", err)
+	}
+	if content, err := os.ReadFile(path); err != nil || string(content) != "toplevel" {
+		t.Fatalf("content = %q, %v; want the top-level declaration's content, not the guarded fragment's and not absent", content, err)
+	}
+}
+
+// TestApplySeesATopLevelDeclarationAfterAnUnrelatedEmptyTaskRecords pins
+// task kd2: File(f, ...) at top level, then RecordPlanTo/Run for a
+// completely unrelated, EMPTY task, used to leave f's registration gone —
+// runTaskBody's per-task-body fresh repository wiped it, and (before task
+// id2) nothing restored it, so a recipe that declares resources at top
+// level and also runs any task in the same process silently converged
+// nothing and reported success. resource.SnapshotRepository (id2) restores
+// the pre-call state on every RecordPlanTo outcome, including a clean one,
+// so f's registration survives an unrelated task's record intact.
+func TestApplySeesATopLevelDeclarationAfterAnUnrelatedEmptyTaskRecords(t *testing.T) {
+	ResetForTest()
+	ResetInventory()
+	t.Cleanup(func() {
+		ResetForTest()
+		ResetInventory()
+	})
+	f := filepath.Join(t.TempDir(), "f")
+	File(f, options.WithContent("f"))
+	Task("empty", "", func() {})
+	if err := Run("empty"); err != nil {
+		t.Fatalf("Run(empty) = %v, want a clean run", err)
+	}
+	if ids := resource.RegisteredIDs(); len(ids) != 1 || ids[0] != "File["+f+"]" {
+		t.Fatalf("registered = %v, want exactly the top-level File[%s], surviving the unrelated empty task's record", ids, f)
+	}
+	if err := Apply(); err != nil {
+		t.Fatalf("Apply() after the unrelated record = %v, want it to succeed", err)
+	}
+	if content, err := os.ReadFile(f); err != nil || string(content) != "f" {
+		t.Fatalf("f = %q, %v; want it written, not silently dropped", content, err)
+	}
+}
+
+// TestRunTaskBodyPanicDoesNotLeaveAHalfRegisteredSetForApply pins tasks
+// cd2/jd2: a task body panic (a nil-map write, here — a genuine
+// programmer-bug invariant, not a recipe error) used to skip RecordPlanTo's
+// normal return entirely, so neither the repository restore nor
+// lastRecordFailure ever ran; a caller that recovers the panic (as this
+// test, or go test's own per-test recovery, does) would find whatever the
+// body registered before panicking still sitting in the repository, with
+// lastRecordFailure == nil, and a later Apply() would silently apply that
+// half-declared set alongside whatever else got registered afterward — the
+// exact partial-convergence-reported-as-success shape ad2 closed, on the
+// one path ad2's guard did not otherwise cover.
+//
+// RecordPlanTo now recovers, restores the repository to its pre-call
+// snapshot, sets lastRecordFailure, and re-panics — so the process-ending
+// behavior for an uninstrumented caller is unchanged, but a caller that
+// does recover finds nothing left over from the panicked body AND stays
+// refused until a later, clean record actually succeeds (task jd2 — an
+// earlier version of this fix deliberately left lastRecordFailure unset,
+// reasoning that a caller sophisticated enough to recover a panic had
+// already taken responsibility for it; that reasoning conflated two
+// different invariants — see TestPanickingTaskDoesNotLeakIntoLaterDraftErrors,
+// which only pins that no STALE TASK NAME leaks into a later, unrelated
+// draft error, not that Apply must succeed after a recovered panic).
 func TestRunTaskBodyPanicDoesNotLeaveAHalfRegisteredSetForApply(t *testing.T) {
 	ResetForTest()
 	ResetInventory()
@@ -500,19 +586,42 @@ func TestRunTaskBodyPanicDoesNotLeaveAHalfRegisteredSetForApply(t *testing.T) {
 	if ids := resource.RegisteredIDs(); len(ids) != 0 {
 		t.Fatalf("a panicked record left %v registered, want none", ids)
 	}
+	if lastRecordFailure == nil {
+		t.Fatal("lastRecordFailure = nil after a recovered task-body panic, want it set")
+	}
 
-	// Apply() must proceed normally for whatever is registered afterward,
-	// not stay refused over the recovered panic (see the doc comment).
+	// A fresh registration alone must not be enough to slip past the
+	// refusal (ad2's guard is unconditional): Apply() must still refuse,
+	// naming the panic, not silently apply the fresh registration.
 	good := filepath.Join(t.TempDir(), "good")
 	File(good, options.WithContent("ok"))
-	if err := Apply(); err != nil {
-		t.Fatalf("Apply() after a recovered panic and a fresh registration = %v, want it to succeed", err)
+	err := Apply()
+	if err == nil {
+		t.Fatal("Apply() after a recovered task-body panic and a fresh registration = nil, want a refusal")
+	}
+	if !strings.Contains(err.Error(), "task body panicked") {
+		t.Fatalf("Apply() error = %v, want it to name the panic", err)
 	}
 	if _, err := os.Stat(half); !os.IsNotExist(err) {
 		t.Fatalf("the half-registered file must not have been written: %v", err)
 	}
+	if _, err := os.Stat(good); !os.IsNotExist(err) {
+		t.Fatalf("good must not be applied while the guard refuses: %v", err)
+	}
+
+	// Recovery: a later, unrelated CLEAN record is what actually clears
+	// the guard — not merely registering something new directly. good
+	// needs no re-registration: it already survives Run("healthy")'s
+	// restore, since it was registered before that call started.
+	Task("healthy", "", func() {})
+	if err := Run("healthy"); err != nil {
+		t.Fatalf("Run(healthy) = %v, want a clean run", err)
+	}
+	if err := Apply(); err != nil {
+		t.Fatalf("Apply() after recovery = %v, want it to succeed", err)
+	}
 	if content, err := os.ReadFile(good); err != nil || string(content) != "ok" {
-		t.Fatalf("good = %q, %v; want it written", content, err)
+		t.Fatalf("good = %q, %v; want it written after recovery", content, err)
 	}
 }
 

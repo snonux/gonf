@@ -63,6 +63,15 @@ func TestDraftErrorWrapsTheHandlerError(t *testing.T) {
 // TestPanickingTaskDoesNotLeakIntoLaterDraftErrors is the regression test for
 // a recovered panic inside a recorded task body: its name must not stay on
 // the recording stack and be blamed by a later local Apply's draft error.
+// It deliberately moves past the panic to test that SEPARATE concern, so —
+// like every other test that intentionally fails a record and continues in
+// the same process (task tc2/ad2/jd2, see AGENTS.md's Test seams section) —
+// it clears lastRecordFailure itself right after recovering: without that,
+// ad2's unconditional guard would refuse this test's own Apply() call with
+// the panic's own refusal, before ever reaching the draft-error path this
+// test actually cares about (jd2 added lastRecordFailure to the panic path;
+// this test's assertion predates that and needs the explicit acknowledgment
+// a real caller recovering a panic and choosing to continue would give too).
 func TestPanickingTaskDoesNotLeakIntoLaterDraftErrors(t *testing.T) {
 	ResetForTest()
 	t.Cleanup(ResetForTest)
@@ -74,6 +83,10 @@ func TestPanickingTaskDoesNotLeakIntoLaterDraftErrors(t *testing.T) {
 	if len(recSession.recordingStack) != 0 {
 		t.Fatalf("recording stack after a recovered panic = %v, want empty", recSession.recordingStack)
 	}
+	if lastRecordFailure == nil {
+		t.Fatal("lastRecordFailure = nil after a recovered task-body panic, want it set (task jd2)")
+	}
+	lastRecordFailure = nil // acknowledge the panic and move on, like recovering it implies
 	// Simulate a stack leaked by any other path: Apply must not use it either.
 	recSession.recordingStack = []string{"boom"}
 	resource.SetPlanDraftRecorder(nil)

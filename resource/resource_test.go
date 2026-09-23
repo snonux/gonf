@@ -61,57 +61,96 @@ func TestRepositoryRegister(t *testing.T) {
 	}
 }
 
-// TestRollbackToPrunesAdditionsAndKeepsTheSnapshot pins RollbackTo's exact
-// contract (tasks ad2/bd2): given a snapshot taken earlier, it removes any
-// currently registered resource (and its draft) whose ID is not in that
-// snapshot, and leaves everything in the snapshot untouched — including its
-// draft, so a caller that only re-registers without re-recording a draft
-// does not lose one it already had.
-func TestRollbackToPrunesAdditionsAndKeepsTheSnapshot(t *testing.T) {
+// TestSnapshotRepositoryRestoresExactlyThePreSnapshotState pins
+// SnapshotRepository's exact contract (tasks ad2/bd2/id2): after the
+// snapshot, the repository is empty (a fresh scratch space); registrations
+// made after the snapshot do not appear once restore runs, and everything
+// that was registered before the snapshot — including its draft — comes
+// back exactly as it was.
+func TestSnapshotRepositoryRestoresExactlyThePreSnapshotState(t *testing.T) {
 	ResetRepository()
 	Register("File", "/tmp/a", noopApplier)
 	RecordPlanDraft(PlanDraft{ID: "File[/tmp/a]", Kind: "file"})
-	kept := RegisteredIDs()
+
+	restore := SnapshotRepository()
+	if got := RegisteredIDs(); len(got) != 0 {
+		t.Fatalf("RegisteredIDs() right after the snapshot = %v, want none (a fresh scratch space)", got)
+	}
 
 	Register("File", "/tmp/b", noopApplier)
 	RecordPlanDraft(PlanDraft{ID: "File[/tmp/b]", Kind: "file"})
-	if got := RegisteredIDs(); len(got) != 2 {
-		t.Fatalf("RegisteredIDs() = %v, want 2 entries before rollback", got)
+	if got := RegisteredIDs(); len(got) != 1 || got[0] != "File[/tmp/b]" {
+		t.Fatalf("RegisteredIDs() before restore = %v, want only File[/tmp/b]", got)
 	}
 
-	RollbackTo(kept)
+	restore()
 
 	got := RegisteredIDs()
 	if len(got) != 1 || got[0] != "File[/tmp/a]" {
-		t.Fatalf("RegisteredIDs() after RollbackTo = %v, want exactly %v", got, kept)
+		t.Fatalf("RegisteredIDs() after restore = %v, want exactly [File[/tmp/a]]", got)
 	}
 	drafts := RegisteredPlanDrafts()
 	if len(drafts) != 1 || drafts[0].ID != "File[/tmp/a]" {
-		t.Fatalf("RegisteredPlanDrafts() after RollbackTo = %v, want only File[/tmp/a]'s draft", drafts)
-	}
-
-	// A resource re-registered after being rolled back is unaffected by
-	// the earlier rollback (it is simply a new registration).
-	Register("File", "/tmp/c", noopApplier)
-	if got := RegisteredIDs(); len(got) != 2 {
-		t.Fatalf("RegisteredIDs() after a fresh registration = %v, want 2", got)
+		t.Fatalf("RegisteredPlanDrafts() after restore = %v, want only File[/tmp/a]'s draft", drafts)
 	}
 }
 
-// TestRollbackToEmptySnapshotClearsEverything pins the specific shape
-// RecordPlanTo relies on when nothing was registered before it started: a
-// nil/empty kept slice prunes every current registration.
-func TestRollbackToEmptySnapshotClearsEverything(t *testing.T) {
+// TestSnapshotRepositoryRestoresTheOriginalOnAnIDCollision pins the exact
+// bug task id2 found in an earlier, ID-based RollbackTo(kept []string):
+// pruning down to a set of NAMES could keep a same-ID registration made
+// AFTER the snapshot — with its own, new value — instead of restoring the
+// original. Swapping the whole repository pointer back cannot do that: the
+// post-snapshot registration of the same ID must simply not exist once
+// restore runs, and the original resource's identity (here, distinguished
+// by which noopApplier closure it wraps) must be the one that comes back.
+func TestSnapshotRepositoryRestoresTheOriginalOnAnIDCollision(t *testing.T) {
 	ResetRepository()
+	var originalRan, collidingRan bool
+	Register("File", "/tmp/a", ApplierFunc(func() error { originalRan = true; return nil }))
+	RecordPlanDraft(PlanDraft{ID: "File[/tmp/a]", Kind: "file", SourcePath: "original"})
+
+	restore := SnapshotRepository()
+	// Same ID as before the snapshot, but a different value and draft —
+	// standing in for a task body that happens to redeclare the same
+	// resource name (e.g. via a shared helper both an outer top-level
+	// declaration and an unrelated task body call).
+	Register("File", "/tmp/a", ApplierFunc(func() error { collidingRan = true; return nil }))
+	RecordPlanDraft(PlanDraft{ID: "File[/tmp/a]", Kind: "file", SourcePath: "colliding"})
+
+	restore()
+
+	drafts := RegisteredPlanDrafts()
+	if len(drafts) != 1 || drafts[0].SourcePath != "original" {
+		t.Fatalf("RegisteredPlanDrafts() after restore = %v, want the ORIGINAL draft (SourcePath \"original\"), not the colliding one", drafts)
+	}
+	_, applier, ok := Registered("File[/tmp/a]")
+	if !ok {
+		t.Fatal("Registered(File[/tmp/a]) = false after restore, want true")
+	}
+	if err := applier.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	if !originalRan || collidingRan {
+		t.Fatalf("originalRan=%v collidingRan=%v, want the restored resource to be the ORIGINAL one, not the colliding registration", originalRan, collidingRan)
+	}
+}
+
+// TestSnapshotRepositoryOfAnEmptyRepositoryRestoresEmpty pins the specific
+// shape RecordPlanTo relies on when nothing was registered before it
+// started: restore leaves the repository empty, the same as
+// RollbackTo(nil) used to.
+func TestSnapshotRepositoryOfAnEmptyRepositoryRestoresEmpty(t *testing.T) {
+	ResetRepository()
+	restore := SnapshotRepository()
 	Register("File", "/tmp/a", noopApplier)
 	Register("File", "/tmp/b", noopApplier)
 	if got := RegisteredIDs(); len(got) != 2 {
-		t.Fatalf("RegisteredIDs() = %v, want 2 entries before rollback", got)
+		t.Fatalf("RegisteredIDs() before restore = %v, want 2 entries", got)
 	}
 
-	RollbackTo(nil)
+	restore()
 
 	if got := RegisteredIDs(); len(got) != 0 {
-		t.Fatalf("RegisteredIDs() after RollbackTo(nil) = %v, want none", got)
+		t.Fatalf("RegisteredIDs() after restore = %v, want none (nothing was registered before the snapshot)", got)
 	}
 }

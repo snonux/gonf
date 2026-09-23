@@ -163,54 +163,60 @@ binary's `main` exits, with the code `cli.CLI` returns.
     a task body) fails that record like any stashed task-body error:
     `RecordPlan` / `Run` / push / cluster / fleet return it, nothing is
     applied or pushed, and temporary directories are removed by the normal
-    deferred cleanup. `RecordPlanTo` also rolls the registered resource
-    repository back to its pre-call snapshot on that failure (task fc2,
-    widened by ad2/bd2 from a blanket reset — see below), so a failed
+    deferred cleanup. `RecordPlanTo` also restores the registered resource
+    repository to its exact pre-call snapshot on that failure (task fc2,
+    widened by ad2/bd2/id2 from a blanket reset — see below), so a failed
     body's own partial registrations do not survive it either — a later
     `api.Apply` call in the same process, made without checking the
     failed call's returned error, therefore finds nothing THIS call added
-    left to (mis)apply. That rollback does NOT guarantee anything
-    registered *before* the call survives, though: recording runs each
-    task body against a fresh resource repository (`runTaskBody`), a
-    pre-existing design that already discards prior registrations the
-    moment any task body starts running, independent of the rollback. As
-    a second, process-wide guard, `api.Apply` additionally refuses
+    left to (mis)apply, and anything registered *before* the call
+    genuinely survives it too (see `resource.SnapshotRepository` below).
+    As a second, process-wide guard, `api.Apply` additionally refuses
     UNCONDITIONALLY once a record has failed this way — not only when the
     registered repository happens to be empty (task ad2 reverted an
     earlier, narrower scoping from task tc2, once it found the narrower
     form let a later, unrelated registration mask an earlier one's silent
-    loss: since a registration made before a failed call can already be
-    gone regardless of this guard, checking only the empty case let a
-    caller who registered something new afterward slip through with that
-    earlier loss unreported, an apparently-successful partial
-    convergence). `RecordPlanTo` fails a record for other reasons too,
-    never reported to `declerr` (a task recursion cycle, a packaging
-    error), so this tracking is `api`'s own (`lastRecordFailure`, task
-    tc2, later uc2), not `declerr.CapturedAny`'s (removed by tc2) —
-    rather than silently applying an empty registration set and looking
-    identical to "there was nothing to do." The ONLY way to clear it is a
-    LATER record that actually succeeds, never merely registering or
-    applying something new directly; a recovered task-body panic (task
-    cd2) rolls the repository back the same way but does not set
-    `lastRecordFailure` (see api/plan.go's doc comment on that
-    distinction).
+    loss). This stays unconditional even after id2 closed that specific
+    loss: refusing costs only an explicit recovery step and buys
+    robustness against whatever failure shape id2's fix does not happen to
+    cover, rather than trusting the repository's emptiness as a proxy for
+    "nothing was lost" again. `RecordPlanTo` fails a record for other
+    reasons too, never reported to `declerr` (a task recursion cycle, a
+    packaging error, a recovered task-body panic — tasks cd2/jd2), so this
+    tracking is `api`'s own (`lastRecordFailure`, task tc2, later uc2), not
+    `declerr.CapturedAny`'s (removed by tc2) — rather than silently
+    applying an empty registration set and looking identical to "there was
+    nothing to do." The ONLY way to clear it is a LATER record that
+    actually succeeds, never merely registering or applying something new
+    directly; a recovered task-body panic restores the repository the same
+    way and ALSO sets `lastRecordFailure` (task jd2 — an earlier version of
+    this fix deliberately did not, reasoning a caller able to recover a
+    panic had already taken responsibility for it, but that left the
+    partial-convergence risk completely unreported on the one path ad2's
+    guard does not otherwise cover; see api/plan.go's doc comment).
 
-    `RecordPlanTo`'s rollback is not limited to the failure path: it rolls
-    back on a SUCCESSFUL record too (task bd2), for the same reason —
+    `RecordPlanTo`'s restore is not limited to the failure path: it also
+    runs after a SUCCESSFUL record (task bd2), for the same reason —
     whatever that record itself registered is done being useful to the
     live repository once it returns (its result is already in the
     returned ops), so leaving it registered let a later, unguarded
     `api.Apply` lower and apply it directly, bypassing whatever `when`
-    guards the ops correctly encode. The rollback targets exactly the
-    call's own additions, not everything: a blanket reset on failure alone
-    (fc2's original shape) could silently drop a resource the recipe had
-    registered *before* the failed call even started — rolling back to
-    the pre-call snapshot (`resource.RollbackTo`) removes only what the
-    call itself added, on every outcome, rather than wiping the whole
-    repository; it just cannot help when something else (`runTaskBody`)
-    already wiped that earlier registration first, which is exactly why
-    `api.Apply`'s guard above stays unconditional rather than relying on
-    the rollback to keep the repository non-empty in that case.
+    guards the ops correctly encode. `resource.SnapshotRepository` (task
+    id2, replacing an earlier, ID-based `RollbackTo(kept []string)`) is
+    what makes "restores to exactly what was registered before" literally
+    true on every outcome, not just usually true: pruning down to a set of
+    ID names could KEEP a same-ID registration the record attempt itself
+    made — with its own, new value — instead of restoring the original,
+    reopening bd2's bug one ID collision away. Swapping the whole
+    repository pointer back and forth cannot have that failure mode, since
+    there is no per-ID merge decision to get wrong. `WhenHostname` and
+    `WhenPathExists`'s own non-recording branches (evaluated directly, not
+    through a `RecordPlanTo` call at all) used to reset the repository
+    before running a matched branch's body too, with nothing to restore it
+    afterward (task kd2) — removed, since only one branch's body ever runs
+    directly at all (the condition is evaluated once, for the local host),
+    so there was never a same-ID collision to guard against on that path
+    either.
 
     A misuse reported outside a recording
     (top-level registration in `main`, resources declared for a direct

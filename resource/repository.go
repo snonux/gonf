@@ -42,34 +42,43 @@ func ResetRepository() {
 	repo = newRepository()
 }
 
-// RollbackTo prunes the repository down to exactly kept: any currently
-// registered resource whose ID is not in kept, and its plan draft, is
-// removed. api.RecordPlanTo uses it (tasks ad2/bd2) to undo exactly what one
-// record attempt itself registered — on either outcome, since the record's
-// own findings are already captured in its returned ops (or lost with its
-// error) by the time it returns, nothing about its own registrations needs
-// to survive in the live repository — while leaving whatever was registered
-// BEFORE that attempt started untouched. A full ResetRepository (wiping
-// everything, not just this attempt's additions) would otherwise silently
-// drop an unrelated resource a recipe declared earlier in the same process,
-// the moment any later record failed or even just ran.
-func RollbackTo(kept []string) {
-	getRepository().rollbackTo(kept)
-}
-
-func (r *repository) rollbackTo(kept []string) {
-	keep := make(map[string]struct{}, len(kept))
-	for _, id := range kept {
-		keep[id] = struct{}{}
+// SnapshotRepository swaps in a fresh empty repository and returns a
+// restore func that swaps the ORIGINAL one back, discarding whatever the
+// fresh one accumulated in between. api.RecordPlanTo uses it (tasks
+// ad2/bd2, id2) to undo exactly what one record attempt itself registered
+// — on every outcome (success, failure, or a recovered panic), since the
+// record's own findings are already captured in its returned ops (or lost
+// with its error) by the time it returns, nothing about its own
+// registrations needs to survive in the live repository — while leaving
+// whatever was registered BEFORE that attempt started untouched, verbatim.
+//
+// This replaced an earlier, ID-based RollbackTo(kept []string) (tasks
+// ad2/bd2): pruning down to a set of ID names, rather than restoring the
+// actual pre-snapshot values, meant a resource the record attempt
+// registered under an ID that collided with one from BEFORE the snapshot
+// was silently KEPT (with the record's own, new value) instead of the
+// original being restored — reopening the exact when-guard-bypass bd2
+// fixed, just one ID collision away (task id2). Swapping the whole
+// repository pointer back cannot have that failure mode: there is no
+// per-ID merge decision to get wrong.
+//
+// Single-goroutine by the same DSL invariant every other repository
+// primitive relies on: nothing may register concurrently with a snapshot
+// still outstanding, and only one snapshot may be outstanding at a time
+// (restoring an outer one after an inner one already restored would lose
+// the inner scope's own restore).
+func SnapshotRepository() (restore func()) {
+	repoMu.Lock()
+	saved := repo
+	if saved == nil {
+		saved = newRepository()
 	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for id := range r.registered {
-		if _, ok := keep[id]; !ok {
-			delete(r.registered, id)
-			delete(r.drafts, id)
-		}
+	repo = newRepository()
+	repoMu.Unlock()
+	return func() {
+		repoMu.Lock()
+		repo = saved
+		repoMu.Unlock()
 	}
 }
 
