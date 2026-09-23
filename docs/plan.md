@@ -1224,14 +1224,15 @@ Design decisions:
   sets the real, effective and saved uid to root, so an unprivileged gonf
   can signal neither the doas process nor its child (both fail with EPERM)
   and simply waits for it to finish on its own; only a signal the terminal
-  sends to the whole foreground process group (Ctrl-C) reaches it. Closing
-  the cancel pipe sidesteps all three: it reaches the child directly,
-  bypassing the wrapper's signal handling (or lack of it) entirely, so the
-  child gets its full, deterministic grace period (the command timeout plus
-  20s, same bound as before: the child runs under that same timeout, since a
-  non-default `-cmd-timeout` is forwarded to it) regardless of which wrapper
-  is in front of it. gonf still also sends the wrapper an explicit SIGTERM,
-  but only for sudo (a harmless, cheap defense-in-depth there); never for
+  sends to the whole foreground process group (Ctrl-C) reaches it. Writing
+  the cancel byte, then closing the write end, sidesteps all three: it
+  reaches the child directly, bypassing the wrapper's signal handling (or
+  lack of it) entirely, so the child gets its full, deterministic grace
+  period (the command timeout plus 20s, same bound as before: the child
+  runs under that same timeout, since a non-default `-cmd-timeout` is
+  forwarded to it) regardless of which wrapper is in front of it. gonf
+  still also sends the wrapper an explicit SIGTERM, but only for sudo (a
+  harmless, cheap defense-in-depth there); never for
   doas, since that signal is what triggers OpenDoas's premature kill in the
   first place. Either way, the wrapper itself is SIGKILLed only after that
   same grace period if it has not already exited behind its child AND gonf

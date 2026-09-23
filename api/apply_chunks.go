@@ -222,7 +222,7 @@ func elevatedCancelGrace() time.Duration {
 // running in a terminal" doc, NOT reproduced against gonf's own
 // non-interactive, piped invocation; still unverified either way, see
 // docs/plan.md's "Fixed-argument sudoers/doas rules" section) a sudoers
-// "use_pty" wrapper whose pty relay might not propagate a plain stdin EOF
+// "use_pty" wrapper whose pty relay might not propagate a single stdin byte
 // the same way a pipe does. It is deliberately NOT sent for doas: an
 // unprivileged SIGTERM to a doas process reaches OpenDoas's own
 // premature-kill logic (elevatedCancelGrace) even though the pipe already
