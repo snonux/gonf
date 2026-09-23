@@ -3,12 +3,27 @@
 //
 // Layout: file.go holds the File type, its option setters, build, identity,
 // the apply dispatch and the Present/Ensure constructors. The rest is split
-// by responsibility: template.go (content resolution and rendering),
-// lineedit.go (WithLine(s)/WithoutLine(s)/WithKeyedLine), read.go
+// by responsibility: template.go (content resolution and rendering for a
+// destination-rendered File), render.go (controller-side
+// RenderTemplate/RenderTemplateFile, for a recipe that must fully resolve
+// content before it becomes a File resource — see RenderTemplate's doc
+// comment), lineedit.go (WithLine(s)/WithoutLine(s)/WithKeyedLine), read.go
 // (non-blocking reads of existing and source content), checksum.go (atomic
 // content writes), validation.go (WithValidation candidates), attributes.go
 // (mode and ownership), ensure.go (absence and EnsureFile), planwire.go (plan draft,
 // ToOp and plan apply) and target.go (unregistered Target for composites).
+//
+// Safety: RenderTemplate and RenderTemplateFile (render.go) return a raw,
+// unredacted error on a parse or execute failure unless an ErrorRedactor is
+// installed with SetErrorRedactor — a returned error may otherwise quote
+// the rendered template or its data verbatim, including a resolved secret
+// value. api installs the secret registry as that redactor at init
+// (api/secret_provider.go), which is what makes api.RenderTemplate, this
+// package's one production caller, safe. A caller that links this package
+// directly without also linking api, or that calls
+// RenderTemplateFile/RenderTemplate before any redactor is installed, gets
+// the raw error — see RenderTemplateFile's doc comment, the package's
+// actual leaking entry point.
 package file
 
 import (

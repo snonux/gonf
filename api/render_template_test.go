@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/snonux/gonf/resource/file"
 )
 
 func TestRenderTemplateRendersFile(t *testing.T) {
@@ -96,6 +98,46 @@ func TestRenderTemplateRedactsResolvedSecretFromExecuteError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "template execute error") {
 		t.Fatalf("RenderTemplate error lost its (non-secret) step context: %v", err)
+	}
+}
+
+// TestDirectFileRenderTemplateFileRedactsResolvedSecret reproduces task
+// if2's exact confirmed probe: calling resource/file.RenderTemplateFile
+// DIRECTLY — bypassing api.RenderTemplate entirely — used to return the raw
+// secret ("range can't iterate over s3cr3t-Passw0rd-Value") because only
+// the api.RenderTemplate wrapper redacted, not resource/file itself. Since
+// this test lives in the api package, api's own init has already run
+// (file.SetErrorRedactor(&secretConfig.values)) before this test starts, so
+// it exercises the real, production wiring rather than a stand-in fake —
+// the scenario any consumer of resource/file hits in practice, since gonf
+// recipes always link api. The direct call must now come back redacted,
+// exactly like api.RenderTemplate's own (TestRenderTemplateRedactsResolvedSecretFromExecuteError).
+func TestDirectFileRenderTemplateFileRedactsResolvedSecret(t *testing.T) {
+	ResetForTest()
+	t.Cleanup(ResetForTest)
+	useSecretWorkDir(t)
+	const secretValue = "s3cr3t-Passw0rd-Value"
+	writeSecret(t, "svc/password", secretValue)
+	pw := MustSecret("svc/password")
+	if pw != secretValue {
+		t.Fatalf("MustSecret = %q, want %q", pw, secretValue)
+	}
+
+	path := filepath.Join(t.TempDir(), "leaky.tmpl")
+	if err := os.WriteFile(path, []byte(`{{range .Password}}x{{end}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The direct resource/file entry point, not api.RenderTemplate.
+	_, err := file.RenderTemplateFile(path, map[string]any{"Password": pw})
+	if err == nil {
+		t.Fatal("file.RenderTemplateFile: want an error ranging over a non-iterable string")
+	}
+	if strings.Contains(err.Error(), secretValue) {
+		t.Fatalf("file.RenderTemplateFile error leaks the raw secret via the direct resource/file entry point: %v", err)
+	}
+	if !strings.Contains(err.Error(), "template execute error") {
+		t.Fatalf("file.RenderTemplateFile error lost its (non-secret) step context: %v", err)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/plan"
+	"github.com/snonux/gonf/resource/file"
 	"github.com/snonux/gonf/secret"
 )
 
@@ -34,10 +35,18 @@ type secretProviders struct {
 // init routes every controller-side log line through the secret registry
 // (logger.SetRedactor): a resolved secret is replaced wherever a message
 // quotes it, e.g. an identity in a registration debug line or in a
-// declaration error the CLI prints.
+// declaration error the CLI prints. It also installs the same registry as
+// resource/file's ErrorRedactor (file.SetErrorRedactor), so a
+// RenderTemplate/RenderTemplateFile parse or execute error redacts a
+// resolved secret before it ever leaves that package — closing the leak a
+// caller reaching resource/file directly (not just through
+// api.RenderTemplate, which additionally redacts on its own with
+// RedactSecrets) would otherwise hit; see resource/file/render.go and
+// file.go's package doc comment.
 // With no secret resolved, Redact returns its input unchanged.
 func init() {
 	logger.SetRedactor(&secretConfig.values)
+	file.SetErrorRedactor(&secretConfig.values)
 }
 
 // SetSecretProvider configures the provider that MustSecret, OptionalSecret
