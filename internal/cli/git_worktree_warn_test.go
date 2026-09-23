@@ -15,8 +15,13 @@ import (
 // planFileUnignoredByGit), not a fake, because the whole point of 0b2's
 // design is to trust git's own ignore-rule precedence rather than
 // reimplementing it. A host without git is exactly the "cannot tell" case
-// the production code already fails safe for (see TestPlanFileUnignoredByGit
-// NoGitBinary below), so skipping here loses no coverage of gonf's own logic.
+// the production code already fails safe for; a genuinely missing git
+// binary is covered separately (without skipping) by
+// TestPlanFileUnignoredByGitFailsSafeWithoutGitBinary below, and a
+// nonexistent working directory - a different flavour of the same
+// exec-fails-to-start fail-safe path - by
+// TestPlanFileUnignoredByGitFailsSafeOnStartFailure, so skipping here loses
+// no coverage of gonf's own logic.
 func requireGit(t *testing.T) {
 	t.Helper()
 	if _, err := goexec.LookPath("git"); err != nil {
@@ -136,5 +141,22 @@ func TestPlanFileUnignoredByGitFailsSafeOnStartFailure(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "does-not-exist")
 	if planFileUnignoredByGit(missing) {
 		t.Fatalf("planFileUnignoredByGit(%s) = true, want false (fail safe: dir does not even exist)", missing)
+	}
+}
+
+// planFileUnignoredByGit also fails safe when "git" itself cannot be found
+// on $PATH at all - a different flavour of "exec fails to start" than
+// TestPlanFileUnignoredByGitFailsSafeOnStartFailure's nonexistent working
+// directory. This test does not call requireGit: the whole point is to run
+// with git genuinely unresolvable via exec.LookPath/exec.Command, which
+// t.Setenv("PATH", "") guarantees regardless of whether a real git binary
+// exists on this host. t.Setenv panics if an ancestor test called
+// t.Parallel; this file has none, matching AGENTS.md's "Test seams"
+// convention for tests that mutate process-wide state.
+func TestPlanFileUnignoredByGitFailsSafeWithoutGitBinary(t *testing.T) {
+	t.Setenv("PATH", "")
+	dir := t.TempDir()
+	if planFileUnignoredByGit(dir) {
+		t.Fatalf("planFileUnignoredByGit(%s) = true, want false (fail safe: git binary not found on PATH)", dir)
 	}
 }
