@@ -29,8 +29,11 @@ const gitCheckIgnoreTimeout = 5 * time.Second
 // secret bytes at all while blobs/ holds the cleartext, and an operator who
 // follows this warning's first suggested fix (ignore plan.jsonl) and sees
 // silence on the next run would otherwise commit blobs/ believing it is
-// covered. Sealing (task 2b2) does not exist yet, so there is no flag to
-// recommend instead of a .gitignore entry or a private -o directory.
+// covered. Sealing (task 2b2) now exists, so the fix advice below offers it
+// as a third option alongside a .gitignore entry or a private -o directory:
+// `gonf plan -o <dir> -seal` writes only an encrypted plan.age, which is
+// safe to keep in a git worktree (or a backup, or a CI artifact store) even
+// unignored.
 //
 // This is warn-only and fails safe in every direction: it never refuses or
 // delays the plan write (which has already happened by the time this is
@@ -58,8 +61,9 @@ func warnIfPlanUnignoredInGitWorktree(outDir string) {
 	}
 	eprintf("plan: %s is inside a git worktree and %s %s not gitignored; "+
 		"a git add/commit could put this secret-bearing plan into version-control history. "+
-		"Add plan.jsonl (and blobs/) to .gitignore, or write the plan to a private -o <dir> "+
-		"outside any git checkout (sealing plans is planned but not implemented yet)\n",
+		"Add plan.jsonl (and blobs/) to .gitignore, write the plan to a private -o <dir> "+
+		"outside any git checkout, or use gonf plan -o <dir> -seal to write an encrypted "+
+		"plan.age instead (docs/plan-encryption.md)\n",
 		outDir, describeUnignored(unignored), isAre(unignored))
 }
 

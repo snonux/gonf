@@ -55,7 +55,7 @@ var cleanupRemoteBuilds = remote.CleanupBuilds
 //	gonf -profile=fedora
 //	gonf -verbose | -quiet
 //	gonf -dry-run | -n
-//	gonf plan [-o dir|-stdout [-with-secrets]|-redacted] [-id name] <task>...  # emit plan.jsonl (or stdout)
+//	gonf plan [-o dir|-stdout [-with-secrets]|-redacted] [-seal [-recipient r]...] [-id name] <task>...  # emit plan.jsonl (or stdout), or seal to plan.age
 //	gonf apply [-n] <plan.jsonl|->               # apply file or GONF-PUSH/1 stdin
 //	gonf <task> [task...]                            # RecordPlan + Apply locally
 func CLI() int {
@@ -430,15 +430,23 @@ func cliPlan(args []string) int {
 		"as an executable secret artifact")
 	redacted := fs.Bool("redacted", false, "print a redacted, non-replayable human preview to stdout instead of a plan")
 	planID := fs.String("id", "plan", "plan id written into the header")
+	sealFlag := fs.Bool("seal", false, "age-encrypt the plan (docs/plan-encryption.md) instead of writing it in the "+
+		"clear: writes dir/plan.age (or, with -stdout, the sealed bytes to stdout) to the union of -recipient flags "+
+		"and the default recipients file; refused with zero recipients (never falls back to plaintext), and cannot "+
+		"combine with -redacted or -with-secrets")
+	var recipientFlags stringSliceFlag
+	fs.Var(&recipientFlags, "recipient", "an age1pq recipient to seal to with -seal (repeatable); unioned with the "+
+		"default recipients file (${XDG_CONFIG_HOME:-$HOME/.config}/gonf/recipients, one age1pq recipient per line, "+
+		"# comments allowed)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	tasks := fs.Args()
 	if len(tasks) == 0 {
-		eprintln("usage: gonf plan [-o dir|-stdout [-with-secrets]|-redacted] [-id name] <task> [task...]")
+		eprintln("usage: gonf plan [-o dir|-stdout [-with-secrets]|-redacted] [-seal [-recipient r]...] [-id name] <task> [task...]")
 		return 2
 	}
-	if msg := planOutputConflict(fs, *stdout, *withSecrets, *redacted); msg != "" {
+	if msg := planOutputConflict(fs, *stdout, *withSecrets, *redacted, *sealFlag); msg != "" {
 		eprintln("plan: " + msg)
 		return 2
 	}
@@ -446,6 +454,8 @@ func cliPlan(args []string) int {
 	switch {
 	case *redacted:
 		return planPreview(*planID, tasks)
+	case *sealFlag:
+		return planSealed(*outDir, *planID, tasks, *stdout, recipientFlags)
 	case *stdout:
 		return planToStdout(*planID, tasks, *withSecrets)
 	}
@@ -453,17 +463,22 @@ func cliPlan(args []string) int {
 }
 
 // planOutputConflict returns why the plan output flags contradict each
-// other, or "" when they do not: -with-secrets only modifies -stdout, and
-// -redacted is an output of its own, so combining it with -stdout,
-// -with-secrets or an explicit -o is refused instead of silently picking
-// one. (-stdout with an explicit -o keeps its long-standing meaning: -o is
-// ignored.)
-func planOutputConflict(fs *flag.FlagSet, stdout, withSecrets, redacted bool) string {
+// other, or "" when they do not: -with-secrets only modifies -stdout,
+// -redacted is an output of its own so combining it with -stdout,
+// -with-secrets, -o or -seal is refused instead of silently picking one,
+// and -seal is refused together with -with-secrets (a sealed export needs
+// no plaintext override; task 2b2, docs/plan-encryption.md "Operator UX")
+// regardless of -stdout. (-stdout with an explicit -o keeps its
+// long-standing meaning: -o is ignored; -seal -stdout is allowed — the
+// natural CI/pipe form for a sealed plan.)
+func planOutputConflict(fs *flag.FlagSet, stdout, withSecrets, redacted, sealed bool) string {
 	outSet := false
 	fs.Visit(func(f *flag.Flag) { outSet = outSet || f.Name == "o" })
 	switch {
-	case redacted && (stdout || withSecrets || outSet):
-		return "-redacted prints a preview instead of a plan; it cannot combine with -stdout, -with-secrets or -o"
+	case redacted && (stdout || withSecrets || outSet || sealed):
+		return "-redacted prints a preview instead of a plan; it cannot combine with -stdout, -with-secrets, -o or -seal"
+	case sealed && withSecrets:
+		return "-seal cannot combine with -with-secrets: a sealed plan needs no plaintext override"
 	case withSecrets && !stdout:
 		return "-with-secrets only applies to -stdout"
 	}
@@ -594,11 +609,14 @@ func planToDir(outDir, planID string, tasks []string) int {
 // strong secrets in identities). Nothing is printed for a plan without
 // secret material. When there is secret material, it also runs the 0b2
 // git-worktree check (warnIfPlanUnignoredInGitWorktree, git_worktree_warn.go)
-// on outDir: gonf does not seal plans yet (that is task 2b2), so a sensitive
-// plan.jsonl written here is plaintext, and if outDir sits inside a git
-// worktree that does not already ignore plan.jsonl, a later `git
-// add`/`git commit` by the operator could put it into history
-// (docs/plan-encryption.md, threat T2).
+// on outDir: this is the plaintext -o path (no -seal, which planSealed
+// handles separately and writes only an encrypted plan.age — task 2b2), so
+// a sensitive plan.jsonl written here is plaintext, and if outDir sits
+// inside a git worktree that does not already ignore plan.jsonl, a later
+// `git add`/`git commit` by the operator could put it into history
+// (docs/plan-encryption.md, threat T2). That warning's own fix advice now
+// includes -seal as an alternative to a .gitignore entry or a private -o
+// directory.
 func warnSensitivePlan(outPath, outDir string, ops []plan.Op) {
 	names := api.SensitiveOpNames(ops)
 	if len(names) == 0 {
@@ -1045,7 +1063,7 @@ func verifyStickyDirOwned(path string) error {
 
 func printUsage() {
 	eprintln("usage: gonf [-list] [-version] [-plan-version] [-strict-preview-version] [-profile=...] [-verbose|-quiet] [-dry-run|-n] [-privilege=none|sudo|doas] [-cmd-timeout 5m] <task> [task...]")
-	eprintln("       gonf plan [-o dir|-stdout [-with-secrets]|-redacted] [-id name] <task> [task...]")
+	eprintln("       gonf plan [-o dir|-stdout [-with-secrets]|-redacted] [-seal [-recipient r]...] [-id name] <task> [task...]")
 	eprintln("       gonf apply [-n|-dry-run|-strict-preview] [-apply-dir dir] <plan.jsonl|->")
 	eprintln("       gonf push [-n|-dry-run|-preview] [-id name] [-privilege=...] [-- ssh-args...] user@host <task> [task...]")
 	eprintln("       gonf cluster [-n|-dry-run|-preview] [-j N] [-id name] [-host-timeout 10m] <cluster> <task> [task...]")

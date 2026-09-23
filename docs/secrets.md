@@ -452,16 +452,17 @@ Limits of the scan, by design:
 | `gonf plan -o dir` | `plan.jsonl` is written `0600` in a `0700`-created, owner-checked directory, as every plan; a secret-bearing plan also gets a stderr warning naming the sensitive ops: it is an executable secret artifact, delete it once applied. A blob-backed secret file's blob lands in `dir/blobs/` with the same protections. When `dir` sits inside a git worktree that does not already ignore `plan.jsonl` and/or a `blobs/` directory the plan actually wrote, a second stderr warning fires, naming which one(s) (below). |
 | `gonf plan -stdout` | Refused, naming the sensitive ops (never their values; `SensitiveOpNames` redacts every resolved secret in the names, a short one an identity equals included). `-stdout -with-secrets` is the explicit export; the operator then owns wherever stdout goes. |
 | `gonf plan -redacted` | A human preview on stdout: JSONL headed by a `plan_preview` op, which no gonf version accepts as a plan, with every payload string of every sensitive op replaced wholesale (content, template data, member contents, argv, environment keys and values, lines, cron command and environment, guard and validator arguments, schedules and descriptions; environment keys become numbered `[redacted]-N`, so identities and metadata stay readable) and every remembered value in every payload and identity string replaced by `[redacted]`; metadata strings (op kind, owner, mode, ...) only for strong secrets, so a weak secret equal to `file` or `root` does not garble them. Strings are redacted as decoded values and re-encoded, so every line is valid JSON. It is not replayable and must not be labelled as a plan. It cannot be combined with `-stdout`, `-with-secrets` or `-o`. |
+| `gonf plan -o dir -seal [-recipient r]…` | Task 2b2 (docs/plan-encryption.md). Records into an in-memory store (never plaintext `plan.jsonl`/`blobs/`), age-encrypts the GONF-PUSH/1 push frame (`plan/seal.Seal`, task 1b2) to the union of `-recipient` flags and the default recipients file, and writes only `dir/plan.age` (`0600`, same directory rules as `plan.jsonl`); `-seal -stdout` writes the sealed bytes to stdout instead, touching no disk. Refused with zero recipients (never a plaintext fallback) and with `-redacted` or `-with-secrets` (sealing and secret-revealing are mutually exclusive concepts). Warns, never deletes, when `dir` also holds a plaintext `plan.jsonl`/`blobs/` left over from an earlier unsealed run. Success is worded "wrote ... (N ops, M recipients)", never "verified" or "trusted": sealing is confidentiality only, never provenance (see plan-encryption.md, "Provenance", and task 7b2 for the not-yet-implemented signing design). |
 | `gonf <task>`, `push`, `cluster`, `fleet` | The plan stays in memory on the controller and travels over SSH stdin (`GONF-PUSH/1`), as before. |
 | Destination apply (`gonf apply`) | A failing file (`WithValidation`) or `ConfigSet` validator reports its exit status and only the size of its output ("validator output withheld (N bytes)"), because a validator that quotes the offending line would echo the secret; template parse/execute errors of a sensitive file (or of an entry of a sensitive synced tree) report the step only; a failing command or package-manager run of a sensitive op, and every failing `crontab` run, reports only its output sizes. Debug logs never print content digests (for any file: an unsalted sha256 of a low-entropy secret can be confirmed offline). |
 | Validation candidates | Unchanged and already private: a file candidate is a `0600` temp file in a parent that only root and the applying user can write; a config set stages below a private staging directory. Both are removed after validation. |
 
 **Git-worktree warning (task 0b2, phase 0 of the plan-encryption design,
 docs/plan-encryption.md; extended to cover `blobs/` by task zd2).**
-`plan.jsonl` written by `gonf plan -o dir` stays plaintext (gonf does not
-seal plans yet; sealing is task `2b2`, not implemented), and the default
-`-o .` is normally the recipe checkout, which backups, sync tools and an
-operator's own `git add -A` all read. A `WithSensitive` payload larger than
+`plan.jsonl` written by `gonf plan -o dir` (without `-seal`) stays
+plaintext, and the default `-o .` is normally the recipe checkout, which
+backups, sync tools and an operator's own `git add -A` all read. A
+`WithSensitive` payload larger than
 `plan.MaxInlineContent` is written as plaintext too, but not into
 `plan.jsonl` — it lands in `dir/blobs/<name>-<hash>` instead. After writing
 a secret-bearing plan, `gonf plan -o dir` therefore checks whether `dir`
@@ -495,9 +496,10 @@ first suggested fix (ignore `plan.jsonl`) ends up in.
   tell" for that path and stays silent for it, never a false warning.
 - When `plan.jsonl` and/or a written `blobs/` is not ignored, the warning
   names `dir` and which of the two paths are unignored, and suggests adding
-  a `.gitignore` entry for `plan.jsonl` (and `blobs/`) or writing the plan to
-  a private `-o <dir>` outside any checkout; it does not mention `-seal`,
-  since that flag does not exist until task `2b2` lands.
+  a `.gitignore` entry for `plan.jsonl` (and `blobs/`), writing the plan to
+  a private `-o <dir>` outside any checkout, or using `gonf plan -o <dir>
+  -seal` (task `2b2`) to write an encrypted `plan.age` instead — safe to
+  keep in a git worktree, a backup or a CI artifact store even unignored.
 - Like the secret-artifact warning above, this goes through the CLI's
   redacting stderr path (`eprintf`, `logger.Redact`), though the message
   itself carries only the output directory path and which of `plan.jsonl` /
@@ -535,6 +537,13 @@ first suggested fix (ignore `plan.jsonl`) ends up in.
   private `$TMPDIR` directory first; both are removed when the command
   returns or fails, but not when the process is killed by SIGKILL or
   crashes.
+- `dir/plan.age` written by `gonf plan -o dir -seal` (task 2b2) likewise
+  stays until the operator deletes it; sealing changes confidentiality at
+  rest, not retention. It has no forward secrecy (age has none): whoever
+  later obtains a recipient's private identity can decrypt every
+  `plan.age` ever sealed to it that still exists anywhere, so keys should
+  be rotated periodically (see docs/plan-encryption.md, "No forward
+  secrecy; rotate").
 - On the destination, embedded blobs are extracted into an owner-only run
   directory removed after the apply; leftovers of killed applies are swept
   after 24 hours. A multi-chunk push's sticky blob directory is removed
@@ -549,10 +558,20 @@ first suggested fix (ignore `plan.jsonl`) ends up in.
 
 ### Not provided
 
-Durable encrypted plans — recipient encryption of `plan.jsonl`, or a
-protected sidecar holding only the secret payloads — need their own accepted
-design (key management, recipients, what a destination decrypts with) and
-are not implied by sensitivity or by any provider. Until then an executable
-secret-bearing plan exists only under the private-filesystem protections
-above and for as long as the operator keeps it. The foostore provider
-(above) changes where secrets come from, not what the plan holds.
+Durable encrypted plans now have an accepted design
+(docs/plan-encryption.md, task w82) and a phase-1 implementation: `gonf
+plan -o dir -seal` (task 2b2, this document's "Where a sensitive plan goes"
+table) age-encrypts the GONF-PUSH/1 frame to operator-controlled
+`age1pq…` recipients and writes only `dir/plan.age`. Sealing is not
+automatic or implied by sensitivity — an operator must pass `-seal`
+explicitly, with at least one recipient — and it is confidentiality only,
+never provenance (plan-encryption.md, "Provenance"): nothing in gonf may
+apply a sealed plan unattended until task `7b2`'s signing design lands.
+Still not provided: per-destination sealed artifacts (`-for`, task 4b2),
+resolving the operator identity through a secret provider (task 5b2), and
+sealing a multi-chunk push's blob transport (task 6b2) — see
+plan-encryption.md's "Phased implementation" for the full list. Until each
+of those lands, an executable secret-bearing plan that is not sealed
+exists only under the private-filesystem protections above and for as
+long as the operator keeps it. The foostore provider (above) changes where
+secrets come from, not what the plan holds.

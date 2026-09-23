@@ -208,8 +208,8 @@ func TestHasBlobDir(t *testing.T) {
 }
 
 // A real git worktree that does NOT ignore plan.jsonl: the warning fires,
-// names the directory, and mentions .gitignore and -o as the fixes (and
-// never claims -seal exists, since 2b2 has not landed).
+// names the directory, and mentions .gitignore, -o and -seal (task 2b2,
+// now implemented) as the fixes.
 func TestWarnIfPlanUnignoredInGitWorktreeWarns(t *testing.T) {
 	repo := filepath.Join(t.TempDir(), "repo")
 	initGitDir(t, repo)
@@ -219,11 +219,9 @@ func TestWarnIfPlanUnignoredInGitWorktreeWarns(t *testing.T) {
 	}
 	out := testutil.CaptureStderr(t, func() { warnIfPlanUnignoredInGitWorktree(outDir) })
 	if !strings.Contains(out, outDir) || !strings.Contains(out, "not gitignored") ||
-		!strings.Contains(out, ".gitignore") || !strings.Contains(out, "-o <dir>") {
-		t.Fatalf("stderr = %q, want a warning naming %s, mentioning .gitignore and -o <dir>", out, outDir)
-	}
-	if strings.Contains(out, "-seal") && !strings.Contains(out, "not implemented") {
-		t.Fatalf("stderr = %q must not claim -seal exists (task 2b2 has not landed)", out)
+		!strings.Contains(out, ".gitignore") || !strings.Contains(out, "-o <dir>") ||
+		!strings.Contains(out, "-seal") {
+		t.Fatalf("stderr = %q, want a warning naming %s, mentioning .gitignore, -o <dir> and -seal", out, outDir)
 	}
 }
 

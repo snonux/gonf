@@ -641,7 +641,7 @@ import from an external `plan_test` file is fine.
 | Command | Effect |
 |---------|--------|
 | `gonf <task> [task…]` | Record + apply locally |
-| `gonf plan [-o dir\|-stdout [-with-secrets]\|-redacted] [-id name] <task>…` | Write `dir/plan.jsonl` (+ `blobs/`; `dir` defaults to `.`, is created `0700` when missing, is never chmod'ed when it exists and must be yours, not world-writable and not group-writable except by your private group, see "The output directory" below), or print JSONL to stdout (refused for a plan with `sensitive` ops unless `-with-secrets`), or print a redacted human preview that no gonf applies (`-redacted`); see "Secret material" below |
+| `gonf plan [-o dir\|-stdout [-with-secrets]\|-redacted] [-seal [-recipient r]…] [-id name] <task>…` | Write `dir/plan.jsonl` (+ `blobs/`; `dir` defaults to `.`, is created `0700` when missing, is never chmod'ed when it exists and must be yours, not world-writable and not group-writable except by your private group, see "The output directory" below), or print JSONL to stdout (refused for a plan with `sensitive` ops unless `-with-secrets`), or print a redacted human preview that no gonf applies (`-redacted`); with `-seal` (task 2b2), age-encrypt the GONF-PUSH/1 push frame instead and write only `dir/plan.age` (or, with `-stdout`, the sealed bytes to stdout) — see "Secret material" below and [plan-encryption.md](plan-encryption.md) |
 | `gonf apply [-n\|-dry-run\|-strict-preview] <plan.jsonl\|->` | Apply a plan file, or read **GONF-PUSH/1** / bare JSONL from stdin. The plan file must be a regular file and is not followed if it is a symlink (a FIFO or a symlinked `plan.jsonl` is refused; use `-` for piped input); its directory may be reached through symlinks |
 | `gonf push [-n\|-preview] [-id name] [-- ssh-args…] user@host <task>…` | Record in memory, stream over `ssh` to remote `gonf apply -` |
 | `gonf cluster [-n\|-preview] [-j N] [-id name] [-host-timeout 10m] <cluster> <task>…` | Resolve inventory cluster; record once; parallel push or strict preview to each host |
@@ -1322,6 +1322,17 @@ the encrypted SSH transport, because the destination must write it.
   classes).
 - A multi-chunk push refuses a sensitive blob-backed op in an elevated
   chunk, because its sticky blob directory belongs to the SSH login user.
+- `gonf plan -o dir -seal [-recipient r]…` (task 2b2, [plan-encryption.md](plan-encryption.md))
+  records into memory (never plaintext `plan.jsonl`/`blobs/`), age-encrypts
+  the GONF-PUSH/1 frame to the union of `-recipient` flags and the default
+  recipients file (`${XDG_CONFIG_HOME:-$HOME/.config}/gonf/recipients`, one
+  `age1pq…` recipient per line), and writes only `dir/plan.age` (`0600`,
+  same directory rules as `plan.jsonl`); `-seal -stdout` writes the same
+  sealed bytes to stdout instead. Refused with zero recipients (never a
+  plaintext fallback) and with `-redacted` or `-with-secrets`. Sealing is
+  confidentiality only, never provenance: a decrypting `plan.age` proves
+  only that whoever sealed it knew a recipient's public key, not who they
+  were (see plan-encryption.md, "Provenance").
 
 The full lifecycle and its limits are in [secrets.md](secrets.md). Never put
 secret values in task names, descriptions, paths or host values: identities
