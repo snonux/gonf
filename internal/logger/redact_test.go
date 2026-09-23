@@ -14,18 +14,28 @@ import (
 )
 
 // fakeRedactor replaces one synthetic secret; FlushPoint keeps back the
-// bytes an occurrence could still start in and never cuts through one.
+// bytes an occurrence could still start in and never cuts through one. It
+// has no self-overlapping-match escape hatch (secret.Values' one and only
+// caller for that), so unlike the real Redactor it always just redacts the
+// cut prefix directly rather than ever needing to hand back an opaque
+// whole-prefix marker.
 type fakeRedactor struct{ secret string }
 
 func (f fakeRedactor) Redact(s string) string { return strings.ReplaceAll(s, f.secret, "[redacted]") }
 
-func (f fakeRedactor) FlushPoint(s string) int {
+func (f fakeRedactor) FlushPoint(s string) (out string, consumed int) {
 	cut := len(s) - (len(f.secret) - 1)
 	if i := strings.LastIndex(s, f.secret); i >= 0 && i < cut && cut < i+len(f.secret) {
 		cut = i
 	}
-	return max(cut, 0)
+	cut = max(cut, 0)
+	return f.Redact(s[:cut]), cut
 }
+
+// MaxPending matches the real redactor's own maxPendingLine-sized default
+// closely enough for these tests, which install their own short secrets
+// rather than exercising the escape hatch at all.
+func (f fakeRedactor) MaxPending() int { return maxPendingLine }
 
 func installFake(t *testing.T, secret string) {
 	t.Helper()
@@ -116,6 +126,57 @@ func TestRedactingWriterBoundsSelfOverlappingSecret(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "x1x1x1x1x1") {
 		t.Fatal("raw secret leaked into forwarded output")
+	}
+}
+
+// TestRedactingWriterBoundsTwoSecretLeak is the end-to-end regression test
+// for task 3d2's confirmed leak: a shorter, periodic secret ("x1x1x1x1x1")
+// and a second, longer secret that starts with it. Before the fix, a single
+// large Write of the periodic secret's text (no newline yet, driving
+// forwardSafePrefix's forced flush past maxPendingLine while the longer
+// secret's tail had not arrived) made the escape hatch flush the ENTIRE
+// buffer with nothing held back, so the longer secret's tail, written next,
+// arrived with its matching prefix already gone and was forwarded raw. This
+// reproduces that exact shape through the real RedactingWriter (not just
+// secret.Values.FlushPoint directly, which secret.TestValuesFlushPointTwoSecretLeakRegression
+// covers) and confirms the fix: the output holds only redaction markers,
+// never a fragment of either secret.
+func TestRedactingWriterBoundsTwoSecretLeak(t *testing.T) {
+	var vals secret.Values
+	shorter := "x1x1x1x1x1"
+	longer := shorter + strings.Repeat("Q", 30)
+	vals.Add([]byte(shorter))
+	vals.Add([]byte(longer))
+	SetRedactor(&vals)
+	t.Cleanup(func() { SetRedactor(nil) })
+
+	var out strings.Builder
+	w := NewRedactingWriter(&out)
+	// One big write of pure periodic text, well past maxPendingLine, with
+	// no newline: this alone triggers a forced flush inside the Write call,
+	// before the longer secret's tail exists anywhere.
+	if _, err := w.Write([]byte(strings.Repeat("x1", 40000))); err != nil { // 80000 bytes
+		t.Fatal(err)
+	}
+	// The longer secret's tail, as its own separate write completing the
+	// line — exactly what a relayed child process writing in chunks would
+	// produce.
+	if _, err := w.Write([]byte(strings.Repeat("Q", 30) + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	got := out.String()
+	if strings.Contains(got, strings.Repeat("Q", 30)) {
+		t.Fatalf("raw tail of the longer secret leaked into forwarded output: %q", got)
+	}
+	if strings.Contains(got, shorter) {
+		t.Fatalf("raw shorter secret leaked into forwarded output: %q", got)
+	}
+	if !strings.Contains(got, secret.Redacted) {
+		t.Fatalf("output was not redacted at all: %q", got)
 	}
 }
 

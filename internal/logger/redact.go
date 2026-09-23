@@ -12,8 +12,17 @@ import (
 )
 
 // maxPendingLine bounds how much of an unterminated line a RedactingWriter
-// holds back; beyond it the writer forwards what the redactor says is safe
-// (Redactor.FlushPoint) and keeps only the rest.
+// holds back when no redactor is installed (Write uses
+// Redactor.MaxPending instead once SetRedactor installs one, so the real
+// threshold tracks the installed redactor's own split-guard rather than an
+// independent literal here — see Redactor.MaxPending and
+// secret.Values.MaxPending). internal/logger cannot import secret to share
+// its MaxSplitGuard constant directly: secret imports internal/safepath,
+// whose own tests import internal/testutil, which imports this package, so
+// internal/logger importing secret would close that cycle (go vet catches
+// it as "import cycle not allowed in test"). Routing the threshold through
+// the Redactor interface instead avoids the cycle and, per its own doc,
+// keeps a future second Redactor from duplicating the same literal.
 const maxPendingLine = 64 << 10
 
 // RelayWaitDelay bounds how long RunRelayed waits, after the relayed process
@@ -28,23 +37,44 @@ const RelayWaitDelay = 2 * time.Second
 // lengthened by tests only.
 var relayWaitDelay = RelayWaitDelay
 
-// Redactor rewrites text that may quote a secret. api installs the secret
-// registry (secret.Values) with SetRedactor.
+// Redactor rewrites text that may quote a secret and controls how
+// RedactingWriter forces a flush of an overlong unterminated line. api
+// installs the secret registry (secret.Values) with SetRedactor.
 type Redactor interface {
 	// Redact returns s with every secret it knows replaced.
 	Redact(s string) string
-	// FlushPoint returns how many leading bytes of s can be redacted and
-	// written now without splitting a secret that may continue in bytes
-	// not seen yet: no match of the redactor may cross it.
-	FlushPoint(s string) int
+	// FlushPoint returns the already-redacted text a relay may forward now
+	// (out) and how many of s's leading bytes that consumed (consumed; 0
+	// means nothing yet): no match of the redactor may start before
+	// consumed and cross it. FlushPoint computes the redaction itself
+	// instead of handing the caller a plain cut to redact independently,
+	// because a safe cut is not always one FlushPoint's own Redact can
+	// re-span correctly on the caller's side: forced past a self-overlapping
+	// match chain that never resolves (secret.Values.FlushPoint's escape
+	// hatch), it may need to treat the whole consumed prefix as one opaque
+	// redaction rather than let per-span matching run on just that prefix,
+	// which — missing the fuller context FlushPoint had — could leave a
+	// dangling unmatched fragment at the cut boundary.
+	FlushPoint(s string) (out string, consumed int)
+	// MaxPending is the longest an unterminated line RedactingWriter may
+	// buffer before forcing a flush through FlushPoint. It must be at least
+	// as large as the redactor's own split-guard threshold
+	// (secret.MaxSplitGuard for the production redactor): FlushPoint's
+	// escape hatch for a self-overlapping match chain only has a safe,
+	// progress-making answer once s already exceeds that threshold, so a
+	// smaller MaxPending would force a flush before FlushPoint can make one,
+	// returning no progress and reintroducing the unbounded buffer growth
+	// task mb2 fixed.
+	MaxPending() int
 }
 
 // RedactingWriter forwards what is written to it to its destination one
 // complete line at a time, each line passed through Redact first, so a
 // secret split across two writes is still redacted (a multi-line secret is
 // caught line by line: secret.Values tracks its strong lines as forms of
-// their own). An unterminated run longer than maxPendingLine is forwarded
-// only up to the redactor's FlushPoint. It is for output gonf relays but did
+// their own). An unterminated run longer than the installed redactor's
+// MaxPending (maxPendingLine with none installed) is forwarded only up to
+// the redactor's FlushPoint. It is for output gonf relays but did
 // not format itself: an elevated apply child or a remote gonf over ssh,
 // neither of which has the controller's secret registry. Close forwards the
 // rest. It is safe for concurrent use.
@@ -138,12 +168,22 @@ func (r *RedactingWriter) Write(p []byte) (int, error) {
 		}
 		r.pending = r.pending[i+1:]
 	}
-	if len(r.pending) > maxPendingLine {
+	if len(r.pending) > pendingLimit() {
 		if err := r.forwardSafePrefix(); err != nil {
 			return 0, err
 		}
 	}
 	return len(p), nil
+}
+
+// pendingLimit returns the installed redactor's Redactor.MaxPending, so the
+// forced-flush threshold tracks its split-guard, or maxPendingLine's default
+// with none installed (nothing to protect a cut from splitting then).
+func pendingLimit() int {
+	if red := currentRedactor(); red != nil {
+		return red.MaxPending()
+	}
+	return maxPendingLine
 }
 
 // Close forwards the final unterminated line, if any.
@@ -166,20 +206,29 @@ func (r redactedWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// forwardSafePrefix forwards the part of an overlong pending run that no
-// secret can still extend into (Redactor.FlushPoint), keeping the rest.
+// forwardSafePrefix forwards the already-redacted part of an overlong
+// pending run that no secret can still extend into (Redactor.FlushPoint
+// both finds and redacts it — see the interface doc for why the caller must
+// not redact that prefix itself), keeping the rest pending. With no
+// redactor installed there is nothing to protect, so it forwards (and
+// clears) everything pending.
 func (r *RedactingWriter) forwardSafePrefix() error {
-	cut := len(r.pending)
-	if red := currentRedactor(); red != nil {
-		cut = red.FlushPoint(string(r.pending))
-	}
-	if cut <= 0 {
+	red := currentRedactor()
+	if red == nil {
+		if err := r.forward(r.pending); err != nil {
+			return err
+		}
+		r.pending = nil
 		return nil
 	}
-	if err := r.forward(r.pending[:cut]); err != nil {
+	out, consumed := red.FlushPoint(string(r.pending))
+	if consumed <= 0 {
+		return nil
+	}
+	if _, err := io.WriteString(r.w, out); err != nil {
 		return err
 	}
-	r.pending = append([]byte(nil), r.pending[cut:]...)
+	r.pending = append([]byte(nil), r.pending[consumed:]...)
 	return nil
 }
 

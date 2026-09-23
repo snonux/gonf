@@ -236,36 +236,59 @@ func (v *Values) redact(s string, strongOnly bool) string {
 	return replaceSpans(s, spans)
 }
 
-// FlushPoint returns how many leading bytes of s a relay may redact and
-// forward now when s is the start of output that continues later (see
-// logger.RedactingWriter): an occurrence of the longest tracked form could
-// still start in the last len-1 bytes, so those stay, and the cut moves back
-// to the start of whichever merged run of overlapping matches crosses it, so
-// no secret is split between two redactions. Matches are merged in one
-// linear, start-position-sorted pass (mergeSpans) rather than chased
-// backward one overlapping match at a time: a secret whose repeat period is
-// shorter than its own length (e.g. "x1x1x1x1x1", which also matches itself
-// shifted by 2 bytes, at offsets 0, 2, 4, ...) chains arbitrarily many
-// overlapping occurrences together, and walking backward from one match to
-// the next, rescanning every span each step, is both quadratic and — because
-// the chain reaches all the way to offset 0 — never terminates above 0; a
-// long run of such a pattern would then never be forwarded and the caller's
-// pending buffer would grow without bound. When even the merged run's start
-// is 0 (the chain reaches the very beginning of s) and s already exceeds
-// MaxSplitGuard bytes — the same threshold logger.RedactingWriter's
-// maxPendingLine uses to decide a line is overlong enough to force a flush,
-// so every real call here already has len(s) that large — the whole run is
-// flushed through its end instead of held back forever: with s already this
-// large, the run's end is the end of an occurrence that is itself wholly
-// present in s (matchSpans only reports complete occurrences), so nothing
-// still pending can extend it, and any bytes after the run that are not yet
-// part of a complete match stay buffered as usual. The caller's Redact,
-// applied to the forwarded prefix, then replaces the whole run with one
-// marker, never a partial one. Forms longer than MaxSplitGuard are left out
-// of the keep-back (they are still redacted wherever a flushed chunk holds
-// them whole), so a huge secret cannot make the relay buffer without bound.
-// It implements logger.Redactor with Redact.
-func (v *Values) FlushPoint(s string) int {
+// FlushPoint returns the already-redacted text a relay may forward now
+// (out) and how many leading bytes of s that consumed (consumed), when s is
+// the start of output that continues later (see logger.RedactingWriter): an
+// occurrence of the longest tracked form could still start in the last
+// len-1 bytes, so those stay pending, and the cut moves back to the start of
+// whichever merged run of overlapping matches crosses it, so no secret is
+// split between two redactions. Matches are merged in one linear,
+// start-position-sorted pass (mergeSpans) rather than chased backward one
+// overlapping match at a time: a secret whose repeat period is shorter than
+// its own length (e.g. "x1x1x1x1x1", which also matches itself shifted by 2
+// bytes, at offsets 0, 2, 4, ...) chains arbitrarily many overlapping
+// occurrences together, and walking backward from one match to the next,
+// rescanning every span each step, is both quadratic and — because the chain
+// reaches all the way to offset 0 — never terminates above 0; a long run of
+// such a pattern would then never be forwarded and the caller's pending
+// buffer would grow without bound.
+//
+// When even the merged run's start is 0 (the chain reaches the very
+// beginning of s) and s already exceeds MaxSplitGuard bytes — the threshold
+// MaxPending reports, which logger.RedactingWriter uses to decide a line is
+// overlong enough to force a flush, so every real call here already has
+// len(s) that large — moving the cut back to the run's start (<= 0) would
+// mean no flush at all, forever: the escape hatch this guards against
+// reintroducing. It must NOT instead cut at the run's raw end (run[1]) as an
+// earlier, buggy version of this function did: run[1] can fall past the
+// len(s)-longest+1 keep-back, and a DIFFERENT, LONGER tracked form can start
+// inside this very run (e.g. a periodic S = "x1x1x1x1x1" whose bytes are
+// also the prefix of a longer L = S+tail) — matchSpans never reports that
+// still-incomplete occurrence, so cutting at run[1] would forward a prefix
+// that silently swallows L's leading bytes, and L's tail, arriving on a
+// later call with its matching prefix already gone, would then be forwarded
+// raw. So the escape hatch keeps the ordinary keep-back cut
+// (len(s)-longest+1) instead, preserving the same boundedness (every forced
+// flush still drains that many bytes) without ever losing the last
+// longest-1 bytes a longer, straddling secret might still need. Because the
+// crossing run starts at 0, the whole flushed prefix [0, cut) is run
+// material with nothing legitimate ahead of it, so it is redacted as a
+// single opaque Redacted marker instead of respanned: respanning only the
+// prefix (not the full run, which continues past cut) can leave a few
+// dangling, non-periodic-aligned bytes at the very end unmatched (matches
+// must be complete within the substring given to Redact), and always
+// redacting the whole flushed span is the safe side of that trade-off.
+// Outside the escape hatch, cutting at run[0] (the normal non-crossing-at-0
+// case) never has this problem: ordinary Redact, respanning the flushed
+// prefix itself, always produces the same single marker for it, since no
+// match found over the full s can straddle a cut that sits exactly at a
+// (disjoint, sorted) run boundary.
+//
+// Forms longer than MaxSplitGuard are left out of the keep-back (they are
+// still redacted wherever a flushed chunk holds them whole), so a huge
+// secret cannot make the relay buffer without bound. It implements
+// logger.Redactor with Redact and MaxPending.
+func (v *Values) FlushPoint(s string) (out string, consumed int) {
 	longest := 0
 	for _, e := range v.snapshot() {
 		if len(e.form) <= MaxSplitGuard {
@@ -274,7 +297,7 @@ func (v *Values) FlushPoint(s string) int {
 	}
 	cut := len(s) - max(longest-1, 0)
 	if cut <= 0 {
-		return 0
+		return "", 0
 	}
 	spans, _ := v.matchSpans(s, false)
 	for _, run := range mergeSpans(spans) {
@@ -287,12 +310,24 @@ func (v *Values) FlushPoint(s string) int {
 		// or before run[1] for the same reason. Either branch below is
 		// therefore final; no further scan or backward step is needed.
 		if run[0] <= 0 && len(s) > MaxSplitGuard {
-			return run[1]
+			return Redacted, cut
 		}
-		return run[0]
+		cut = run[0]
+		break
 	}
-	return cut
+	if cut <= 0 {
+		return "", 0
+	}
+	return v.Redact(s[:cut]), cut
 }
+
+// MaxPending implements logger.Redactor: RedactingWriter must not force a
+// flush before an unterminated line reaches MaxSplitGuard bytes, because
+// FlushPoint's escape hatch (see above) only has a safe, progress-making
+// answer once len(s) already exceeds it; forcing sooner would return "", 0
+// forever for a self-overlapping secret and reintroduce the unbounded
+// buffer growth task mb2 fixed.
+func (v *Values) MaxPending() int { return MaxSplitGuard }
 
 // matchSpans returns the byte ranges of every occurrence of every contained
 // form in s (strong ones only with strongOnly), overlaps included, and

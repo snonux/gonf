@@ -118,23 +118,24 @@ func TestValuesContainsStrong(t *testing.T) {
 	}
 }
 
-// FlushPoint keeps back the bytes the longest form could still start in and
-// never cuts through an occurrence.
+// FlushPoint keeps back the bytes the longest form could still start in,
+// never cuts through an occurrence, and returns the already-redacted text
+// for the bytes it does consume.
 func TestValuesFlushPoint(t *testing.T) {
 	t.Parallel()
 	var v Values
-	if got := v.FlushPoint("abc"); got != 3 {
-		t.Fatalf("FlushPoint without values = %d, want 3", got)
+	if out, got := v.FlushPoint("abc"); got != 3 || out != "abc" {
+		t.Fatalf("FlushPoint without values = (%q, %d), want (\"abc\", 3)", out, got)
 	}
 	v.Add([]byte("S3cr3tP@ss")) // 10 bytes: keep 9 back
 	s := strings.Repeat("x", 20) + "S3cr"
-	if got := v.FlushPoint(s); got != len(s)-9 {
-		t.Fatalf("FlushPoint = %d, want %d", got, len(s)-9)
+	if out, got := v.FlushPoint(s); got != len(s)-9 || out != s[:len(s)-9] {
+		t.Fatalf("FlushPoint = (%q, %d), want (%q, %d)", out, got, s[:len(s)-9], len(s)-9)
 	}
 	// A complete occurrence crossing the cut moves the cut to its start.
 	s = strings.Repeat("x", 20) + "S3cr3tP@ss" + "yyyy"
-	if got := v.FlushPoint(s); got != 20 {
-		t.Fatalf("FlushPoint = %d, want 20 (the occurrence start)", got)
+	if out, got := v.FlushPoint(s); got != 20 || out != s[:20] {
+		t.Fatalf("FlushPoint = (%q, %d), want (%q, 20)", out, got, s[:20])
 	}
 }
 
@@ -176,8 +177,8 @@ func TestValuesFlushPointIgnoresHugeForms(t *testing.T) {
 	var v Values
 	v.Add([]byte(strings.Repeat("Z9", MaxSplitGuard))) // 128 KiB secret
 	s := strings.Repeat("x", 70<<10)
-	if got := v.FlushPoint(s); got != len(s) {
-		t.Fatalf("FlushPoint = %d, want %d (huge forms are not split-guarded)", got, len(s))
+	if out, got := v.FlushPoint(s); got != len(s) || out != s {
+		t.Fatalf("FlushPoint = %d bytes, want %d (huge forms are not split-guarded)", got, len(s))
 	}
 }
 
@@ -191,8 +192,8 @@ func TestValuesFlushPointSelfOverlappingBelowBound(t *testing.T) {
 	var v Values
 	v.Add([]byte("x1x1x1x1x1")) // period 2, own length 10: overlaps itself
 	s := strings.Repeat("x1", 2048)
-	if got := v.FlushPoint(s); got != 0 {
-		t.Fatalf("FlushPoint = %d, want 0 (still below MaxSplitGuard, correctly conservative)", got)
+	if out, got := v.FlushPoint(s); got != 0 || out != "" {
+		t.Fatalf("FlushPoint = (%q, %d), want (\"\", 0) (still below MaxSplitGuard, correctly conservative)", out, got)
 	}
 }
 
@@ -201,38 +202,98 @@ func TestValuesFlushPointSelfOverlappingBelowBound(t *testing.T) {
 // overlapping match at a time and, for a periodic secret, that chain always
 // reaches offset 0, so FlushPoint returned 0 forever and the caller's
 // pending buffer (logger.RedactingWriter, bounded by maxPendingLine, the
-// same 64 KiB as MaxSplitGuard) grew without bound. The fix's escape hatch
-// must flush the run once s is already this large, and the flushed prefix
-// must redact to exactly one marker with no raw occurrence surviving,
-// because the whole run is one contiguous match.
+// same 64 KiB as MaxSplitGuard) grew without bound. The escape hatch fixing
+// that must flush the run once s is already this large, and — this is the
+// part task 3d2 fixed after a regression — it must keep the ordinary
+// longest-1 keep-back rather than sweeping the run's raw end into the
+// flush: the trailing tail below is appended directly (no filler gap), so
+// the run genuinely crosses the ordinary cut point and this test actually
+// exercises the escape-hatch branch (a prior version of this test placed
+// a non-matching gap before the tail, so the cut always landed past the
+// run and the branch was never entered — see task 5d2).
 func TestValuesFlushPointSelfOverlappingAboveBoundIsFlushedAndRedacted(t *testing.T) {
 	t.Parallel()
 	var v Values
-	v.Add([]byte("x1x1x1x1x1"))
+	v.Add([]byte("x1x1x1x1x1"))                         // 10 bytes: keep 9 back
 	run := strings.Repeat("x1", (MaxSplitGuard/2)+4096) // > MaxSplitGuard bytes, all one chain
-	tail := "yyyyyyyy" + "x1x1x1"                       // plain text, then an incomplete occurrence
+	tail := "x1x1x1"                                    // more of the same pattern: the chain runs right up to (and past) the cut
 	s := run + tail
 
-	cut := v.FlushPoint(s)
+	out, cut := v.FlushPoint(s)
 	if cut == 0 {
 		t.Fatal("FlushPoint stayed 0 above MaxSplitGuard: the buffer would grow without bound")
 	}
-	// Nothing past the last complete occurrence may be swept in: at least
-	// the trailing 6-byte incomplete occurrence must stay pending.
-	if cut > len(s)-len("x1x1x1") {
-		t.Fatalf("cut %d reaches into the incomplete trailing occurrence (len %d)", cut, len(s))
+	if out != Redacted {
+		t.Fatalf("the escape hatch must redact the flushed prefix as one opaque marker, got %q", out)
+	}
+	// At least the last 9 bytes (longest-1) must stay pending: the ordinary
+	// keep-back, not the run's raw (further) end.
+	if kept := len(s) - cut; kept < 9 {
+		t.Fatalf("only %d bytes kept back, want at least 9 (longest-1)", kept)
+	}
+	if cut <= 0 || cut > len(s) {
+		t.Fatalf("cut %d out of range for len(s) = %d", cut, len(s))
+	}
+	if strings.Contains(out, "x1x1x1x1x1") {
+		t.Fatalf("raw secret survived in the flushed marker: %q", out)
+	}
+}
+
+// TestValuesFlushPointTwoSecretLeakRegression is a permanent regression test
+// for the vulnerability the review found (task 3d2, a regression against
+// e87ca0a~1): a shorter, periodic secret S ("x1x1x1x1x1", period 2) chains
+// into one giant self-overlapping merged run, and a second, longer secret
+// L = S+tail starts with S's exact bytes. The buggy escape hatch returned
+// the merged run's raw end (run[1]) instead of the ordinary keep-back cut,
+// so once the buffer crossed MaxSplitGuard the WHOLE periodic run —
+// including the bytes that are also L's still-incomplete prefix — was
+// flushed with nothing held back. When L's tail then arrived on a later
+// write, it no longer had its matching prefix available to complete the
+// match against, so it was forwarded completely unredacted: a real,
+// exploitable leak of L's tail (this is exactly the shape a relayed child
+// process's chunked output goes through — see
+// internal/logger.RedactingWriter and its own
+// TestRedactingWriterBoundsTwoSecretLeak, the end-to-end version of this
+// same scenario). The fix keeps the ordinary longest-1 keep-back even on
+// the escape-hatch path, so L's prefix bytes stay pending here and are
+// available to complete the match once its tail arrives.
+func TestValuesFlushPointTwoSecretLeakRegression(t *testing.T) {
+	t.Parallel()
+	var v Values
+	s1 := "x1x1x1x1x1"                 // period 2, 10 bytes
+	s2 := s1 + strings.Repeat("Q", 30) // 40 bytes, starts with s1
+	v.Add([]byte(s1))
+	v.Add([]byte(s2))
+
+	// The buffer at the moment a real relay's forced flush fires: past
+	// MaxSplitGuard, still pure s1-periodic text (s2's tail has not been
+	// written yet).
+	buf := strings.Repeat("x1", 40000) // 80000 bytes, > MaxSplitGuard
+
+	out, consumed := v.FlushPoint(buf)
+	if consumed == 0 {
+		t.Fatal("FlushPoint made no progress above MaxSplitGuard: the buffer would grow without bound (the mb2 regression)")
+	}
+	if out != Redacted {
+		t.Fatalf("the escape hatch must redact the flushed prefix as one opaque marker, got %q", out)
+	}
+	// s2 is the longest tracked form (40 bytes): its 39-byte keep-back must
+	// survive, or its prefix is gone before its tail ever arrives.
+	if kept := len(buf) - consumed; kept < len(s2)-1 {
+		t.Fatalf("only %d bytes kept back, want at least %d (len(s2)-1)", kept, len(s2)-1)
 	}
 
-	flushed, pending := s[:cut], s[cut:]
-	if flushed+pending != s {
-		t.Fatal("flushed+pending must reconstruct s exactly")
+	// s2's tail arrives on a later write; the kept-back bytes plus the tail
+	// must still let Redact find and hide the complete secret — the whole
+	// point of keeping them pending instead of sweeping them into the
+	// escape hatch's flush.
+	pending := buf[consumed:] + strings.Repeat("Q", 30) + "\n"
+	redactedTail := v.Redact(pending)
+	if strings.Contains(redactedTail, strings.Repeat("Q", 30)) {
+		t.Fatalf("raw secret tail leaked: %q", redactedTail)
 	}
-	redacted := v.Redact(flushed)
-	if strings.Contains(redacted, "x1x1x1x1x1") {
-		t.Fatalf("raw secret survived redaction: %.40s...", redacted)
-	}
-	if got, want := strings.Count(redacted, Redacted), 1; got != want {
-		t.Fatalf("the contiguous run must collapse into exactly %d marker, got %d", want, got)
+	if !strings.Contains(redactedTail, Redacted) {
+		t.Fatalf("the completed secret was not redacted at all: %q", redactedTail)
 	}
 }
 
