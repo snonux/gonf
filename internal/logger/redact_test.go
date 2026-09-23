@@ -55,6 +55,21 @@ func (o overclaimRedactor) FlushPoint(s string) (out string, consumed int) {
 	return o.Redact(s), len(s) + 1_000_000
 }
 
+// shortOverclaimRedactor is overclaimRedactor's worse cousin: it also
+// overclaims consumed, but its out covers only a small fraction of what it
+// claims to have consumed (instead of, like overclaimRedactor, happening to
+// return an out that already covers the whole buffer). forwardSafePrefix
+// cannot re-verify a black-box Redactor's own redaction without redoing it
+// itself, so it trusts out exactly as returned: the bytes past what out
+// actually covers are silently dropped once consumed is clamped, never
+// forwarded raw. This pins that deliberate trade-off (silent loss over a
+// leak, see forwardSafePrefix's doc).
+type shortOverclaimRedactor struct{ fakeRedactor }
+
+func (shortOverclaimRedactor) FlushPoint(s string) (out string, consumed int) {
+	return "[redacted]", len(s) + 1_000_000
+}
+
 // nonProgressingRedactor's FlushPoint always reports consuming nothing (the
 // legitimate "no safe cut yet" answer FlushPoint's doc allows), so
 // RedactingWriter must leave everything pending rather than forward or drop
@@ -92,7 +107,10 @@ func (r *raceRedactor) MaxPending() int {
 
 // An overclaiming FlushPoint must not panic RedactingWriter.Write; consumed
 // is clamped to what is actually pending, so it is fully (and safely)
-// drained instead.
+// drained instead. This redactor's out happens to already cover the whole
+// buffer (o.Redact(s) redacts every occurrence in all of s), so the
+// forwarded output must be exactly that fully-redacted text -- proving out
+// reached the destination unmodified, not just that pending emptied out.
 func TestRedactingWriterClampsOverclaimingFlushPoint(t *testing.T) {
 	secretStr := "S3cr3tP@ss"
 	SetRedactor(overclaimRedactor{fakeRedactor{secret: secretStr}})
@@ -112,6 +130,35 @@ func TestRedactingWriterClampsOverclaimingFlushPoint(t *testing.T) {
 	}
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
+	}
+	if want, got := strings.Repeat("x", maxPendingLine)+secret.Redacted, out.String(); got != want {
+		t.Fatalf("output = %q, want %q (FlushPoint's own out forwarded verbatim)", got, want)
+	}
+}
+
+// A FlushPoint that overclaims consumed AND returns an out covering only a
+// fraction of it must never leak the uncovered surplus raw: forwardSafePrefix
+// forwards out exactly as given and silently drops the rest once consumed is
+// clamped (see forwardSafePrefix's doc on this trade-off). The destination
+// must therefore receive exactly shortOverclaimRedactor's own out and
+// nothing else -- in particular none of the raw "x" padding or the raw
+// secret that were pending but never covered by out.
+func TestRedactingWriterOverclaimingFlushPointNeverLeaksUncoveredSurplus(t *testing.T) {
+	secretStr := "S3cr3tP@ss"
+	SetRedactor(shortOverclaimRedactor{fakeRedactor{secret: secretStr}})
+	t.Cleanup(func() { SetRedactor(nil) })
+
+	var out strings.Builder
+	w := NewRedactingWriter(&out)
+	payload := strings.Repeat("x", maxPendingLine) + secretStr
+	if _, err := w.Write([]byte(payload)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); got != "[redacted]" {
+		t.Fatalf("output = %q, want exactly %q (nothing beyond FlushPoint's own out may reach the destination)", got, "[redacted]")
 	}
 }
 

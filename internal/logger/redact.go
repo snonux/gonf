@@ -231,7 +231,17 @@ func (r redactedWriter) Write(p []byte) (int, error) {
 // of the exported Redactor interface (SetRedactor takes any implementation),
 // so a third-party redactor that returns consumed > len(s) — buggy or
 // malicious — must not panic this relay goroutine mid-apply; it is instead
-// treated as "consume everything currently pending".
+// treated as "consume everything currently pending". out is written exactly
+// as FlushPoint returned it, never re-derived: forwardSafePrefix trusts out
+// to already be the correctly redacted text for the prefix FlushPoint claims
+// to have consumed (it has no way to re-verify a black-box redactor's own
+// redaction without redoing it, which would defeat the point of the
+// interface). A redactor whose out under-covers an overclaimed consumed —
+// the same misbehaviour the clamp above already tolerates, taken further —
+// therefore causes the uncovered surplus to be silently dropped once
+// consumed is clamped, rather than forwarded raw (a leak) or left pending
+// forever (unbounded growth): of the three, silent loss is the only one that
+// keeps both the confidentiality and the boundedness promise.
 func (r *RedactingWriter) forwardSafePrefix(red Redactor) error {
 	if red == nil {
 		if err := r.forward(nil, r.pending); err != nil {
