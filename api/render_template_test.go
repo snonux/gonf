@@ -1,6 +1,8 @@
 package api
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,6 +38,25 @@ func TestRenderTemplateMissingFileFails(t *testing.T) {
 	_, err := RenderTemplate(filepath.Join(t.TempDir(), "missing.tmpl"), map[string]any{})
 	if err == nil || !strings.Contains(err.Error(), "failed to read source file") {
 		t.Fatalf("RenderTemplate error = %v, want a read error", err)
+	}
+}
+
+// TestRenderTemplateMissingFilePreservesErrorIdentity reproduces task jf2's
+// probe: a missing template file carries no template data at all (it never
+// reaches text/template), so RedactSecrets has nothing to find and the
+// original *fmt.wrapError chain from readForSource's %w-wrapping of the
+// underlying fs.ErrNotExist must pass through untouched. Task 1f2's
+// unconditional errors.New(RedactSecrets(...)) flattened this into a bare
+// *errors.errorString with no wrapped chain, silently breaking the
+// idiomatic "if errors.Is(err, fs.ErrNotExist) { use a built-in default }"
+// fallback pattern for an optional template asset.
+func TestRenderTemplateMissingFilePreservesErrorIdentity(t *testing.T) {
+	_, err := RenderTemplate(filepath.Join(t.TempDir(), "missing.tmpl"), map[string]any{})
+	if err == nil {
+		t.Fatal("RenderTemplate: want an error for a missing template file")
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("RenderTemplate error = %v, want errors.Is(err, fs.ErrNotExist) to hold", err)
 	}
 }
 

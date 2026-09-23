@@ -28,24 +28,40 @@ import (
 // template variables, and the complete decoded value is also available as
 // .Data.
 //
-// A failed render's error is redacted (RedactSecrets) before it is
-// returned: file.RenderTemplateFile's underlying text/template error can
-// quote the offending value verbatim, including data built from
-// MustSecret/ResolveSecret, and unlike a destination render (a File's
-// Sensitive option) there is no resource here to flag as sensitive — see
-// resource/file/render.go's package doc comment. Redacting by known secret
-// value rather than withholding the whole message wholesale keeps a
-// non-sensitive template's error fully useful for debugging (it is
-// unaffected) while still closing the leak for a sensitive one, regardless
-// of whether the caller ever attaches WithSensitive downstream. Only a
-// resolved secret's tracked bytes disappear; the constructed error is a new
-// one carrying just the redacted text, deliberately not wrapping the
-// original (wrapping it would still let a caller reach the raw, secret-
-// bearing text through errors.Unwrap/errors.As).
+// A failed render's error is redacted (RedactSecrets) ONLY when redaction
+// actually finds something to remove: file.RenderTemplateFile's underlying
+// text/template PARSE/EXECUTE error can quote the offending value verbatim,
+// including data built from MustSecret/ResolveSecret, and unlike a
+// destination render (a File's Sensitive option) there is no resource here
+// to flag as sensitive — see resource/file/render.go's package doc comment.
+// Redacting by known secret value rather than withholding the whole message
+// wholesale keeps a non-sensitive template's error fully useful for
+// debugging (it is unaffected) while still closing the leak for a sensitive
+// one, regardless of whether the caller ever attaches WithSensitive
+// downstream. Only a resolved secret's tracked bytes disappear; a genuinely
+// redacted error is a new one carrying just the redacted text, deliberately
+// not wrapping the original (wrapping it would still let a caller reach the
+// raw, secret-bearing text through errors.Unwrap/errors.As).
+//
+// A read error (missing/unreadable template file, from readForSource) never
+// quotes any template data at all — there is nothing for RedactSecrets to
+// find — so it is left completely untouched, preserving its %w chain down
+// to the underlying fs.ErrNotExist etc. Task jf2: an earlier version of
+// this fix (task 1f2) flattened every failure into a plain errors.New
+// unconditionally, which incidentally destroyed errors.Is/errors.As on a
+// non-secret error such as a missing optional template asset — a
+// regression for the idiomatic "if errors.Is(err, fs.ErrNotExist) { use a
+// built-in default }" pattern. Comparing RedactSecrets' output against the
+// original message is what keeps that identity intact: when nothing was
+// redacted, the two strings are equal and the original error (with its
+// full chain) passes through unchanged.
 func RenderTemplate(path string, data any) (string, error) {
 	text, err := file.RenderTemplateFile(path, data)
 	if err != nil {
-		return "", errors.New(RedactSecrets(err.Error()))
+		if redacted := RedactSecrets(err.Error()); redacted != err.Error() {
+			return "", errors.New(redacted)
+		}
+		return "", err
 	}
 	return text, nil
 }
