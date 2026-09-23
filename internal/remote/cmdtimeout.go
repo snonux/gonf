@@ -38,11 +38,16 @@ import (
 // needs a password, refuses that probe; the probe then cannot tell anything
 // about the binary.
 //
-// Any verdict other than "accepted" leaves the flag out, so the apply runs
-// under the remote's own default command timeout, and never fails the push
-// (only an ssh failure does). The warning says why: a binary too old for the
-// flag (push, which upgrades a stale gonf, or reinstall it) differs from a
-// probe that could not run gonf at all (sudo/doas refused it, gonf missing).
+// Any verdict other than "accepted" — including the probe's own ssh round
+// trip failing — leaves the flag out, so the apply runs under the remote's
+// own default command timeout, and never fails the push or PushPayload:
+// forwarding -cmd-timeout is a nicety, not a hard requirement, so a probe
+// failure only warns and is folded into "unverified" like any other
+// inconclusive verdict (the same best-effort contract remoteReleaseIsStale
+// already keeps elsewhere in this package). The warning says why: a binary
+// too old for the flag (fixed by upgrading the gonf that resolves in that
+// privilege context) differs from a probe that could not run gonf at all
+// (sudo/doas refused it, gonf missing, the ssh round trip itself failed).
 
 // CmdTimeoutSupport is the verdict of a -cmd-timeout capability probe of one
 // remote gonf binary in one privilege context. The zero value is
@@ -109,50 +114,68 @@ func chunkContexts(chunks []plan.Chunk) (needLogin, needElevated bool) {
 // the controller's current command timeout (gexec.DefaultTimeout, set by
 // the CLI's -cmd-timeout or api.SetCommandTimeout). At the built-in default
 // it returns the zero value without any probe. Otherwise it probes each
-// needed privilege context (see the file comment); only an ssh failure is
-// an error, any other verdict than "accepted" is a warning.
-func (p *Pusher) resolveCmdTimeoutForward(ctx context.Context, t PushTarget, needLogin, needElevated bool) (cmdTimeoutForward, error) {
+// needed privilege context (see the file comment): every verdict, including
+// a probe ssh failure, only ever warns and forwards nothing for that
+// context, so this never fails the push/payload — there is no error to
+// return.
+func (p *Pusher) resolveCmdTimeoutForward(ctx context.Context, t PushTarget, needLogin, needElevated bool) cmdTimeoutForward {
 	f := cmdTimeoutForward{flag: gexec.CmdTimeoutFlag(gexec.DefaultTimeout())}
 	if f.flag == "" {
-		return f, nil
+		return f
 	}
-	var err error
 	if needLogin {
-		if f.login, err = p.acceptsCmdTimeout(ctx, t, ProbeLogin, f.flag); err != nil {
-			return cmdTimeoutForward{}, err
-		}
+		f.login = p.acceptsCmdTimeout(ctx, t, ProbeLogin, f.flag)
 	}
 	if needElevated {
-		if f.elevated, err = p.acceptsCmdTimeout(ctx, t, ProbeElevated, f.flag); err != nil {
-			return cmdTimeoutForward{}, err
-		}
+		f.elevated = p.acceptsCmdTimeout(ctx, t, ProbeElevated, f.flag)
 	}
-	return f, nil
+	return f
 }
 
 // acceptsCmdTimeout runs p.CmdTimeoutProber for one privilege context and
 // warns, worded by verdict, when the flag will not be forwarded there. A
 // nil prober (a hand-built Pusher) cannot verify support, so nothing is
-// forwarded.
-func (p *Pusher) acceptsCmdTimeout(ctx context.Context, t PushTarget, pc ProbeContext, flag string) (bool, error) {
+// forwarded. A prober error (the probe's ssh round trip itself failing, as
+// opposed to the remote command merely failing) is folded into the
+// CmdTimeoutUnverified case rather than returned: -cmd-timeout forwarding is
+// a nicety, so a transient ssh failure here must warn and continue rather
+// than fail the whole push/payload (the caller has no error branch left to
+// handle it).
+func (p *Pusher) acceptsCmdTimeout(ctx context.Context, t PushTarget, pc ProbeContext, flag string) bool {
 	verdict, detail := CmdTimeoutUnverified, "no capability prober"
 	if p.CmdTimeoutProber != nil {
 		var err error
 		if verdict, detail, err = p.CmdTimeoutProber(ctx, t, pc, flag); err != nil {
-			return false, fmt.Errorf("push %s: probe -cmd-timeout support: %w", t.Destination(), err)
+			verdict, detail = CmdTimeoutUnverified, firstLine(err.Error())
 		}
 	}
 	switch verdict {
 	case CmdTimeoutAccepted:
-		return true, nil
+		return true
 	case CmdTimeoutUnknownFlag:
-		logger.Warn("push %s: the %s gonf is too old for %s; its apply runs with the remote default command timeout "+
-			"(push to upgrade gonf there)", t.Destination(), probeContextLabel(pc), flag)
+		warnCmdTimeoutTooOld(t, pc, flag)
 	default:
 		logger.Warn("push %s: could not run gonf in the %s context to check %s support (%s); its apply runs "+
 			"without it, with the remote default command timeout", t.Destination(), probeContextLabel(pc), flag, detail)
 	}
-	return false, nil
+	return false
+}
+
+// warnCmdTimeoutTooOld logs the CmdTimeoutUnknownFlag warning, worded by
+// privilege context: a login probe was fixed by the very push that just
+// ran (push upgrades the login binary), but an elevated probe answers for
+// whatever gonf sudo/doas's secure_path resolves — a path EnsureRemoteGonf
+// never installs or upgrades — so telling the operator to "push" there
+// would send them to repeat a step that cannot touch that binary at all.
+func warnCmdTimeoutTooOld(t PushTarget, pc ProbeContext, flag string) {
+	if pc == ProbeElevated {
+		logger.Warn("push %s: the gonf sudo/doas resolves at %q is older than the one push installs; its apply runs "+
+			"with the remote default command timeout (upgrade or align it, e.g. sudo's secure_path, so it resolves the same gonf push installs)",
+			t.Destination(), remoteGonfBin(t))
+		return
+	}
+	logger.Warn("push %s: the %s gonf is too old for %s; its apply runs with the remote default command timeout "+
+		"(push to upgrade gonf there)", t.Destination(), probeContextLabel(pc), flag)
 }
 
 // probeContextLabel names pc in a warning: the SSH login's gonf or the one
@@ -167,7 +190,8 @@ func probeContextLabel(pc ProbeContext) string {
 // probeCmdTimeoutSupport is the production CmdTimeoutProber: it runs
 // "gonf <flag> -plan-version" in pc and classifies the result
 // (classifyCmdTimeoutProbe). Only an ssh failure (or the push context
-// ending) is an error.
+// ending) is an error; acceptsCmdTimeout treats even that as an unverified
+// verdict rather than a push-ending failure (see its doc comment).
 func probeCmdTimeoutSupport(ctx context.Context, t PushTarget, pc ProbeContext, flag string) (CmdTimeoutSupport, string, error) {
 	cmd, err := remoteProbeCmd(t, pc, flag+" -plan-version")
 	if err != nil {

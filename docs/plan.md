@@ -873,6 +873,29 @@ the elevated one does not. At the default timeout no probe runs at all and
 the remote command is unchanged; `-preview` and `api.PushPayload` never
 upgrade gonf, so there an old remote simply keeps its own default.
 
+**Fixed-argument sudoers/doas rules (local elevated re-exec and remote
+alike).** The capability probe above only ever gates whether the REMOTE
+flag support is known before adding `-cmd-timeout`/`-profile` to a remote
+`gonf apply` argv; it says nothing about whether the wrapper's own rule
+still matches that argv. The LOCAL elevated re-exec (`api.elevatedApplyArgv`,
+wrapped with `privilege.WrapArgv` and run by `api`'s `defaultElevatedApply`/
+`runElevatedCmd` — the `Privileged()` task path, re-executing this same
+binary as `gonf apply -cancel-pipe <path>`) has no probe at all — it always
+adds a non-default `-cmd-timeout` and any `-profile` override before
+`apply`, because the child is this very binary and always understands both
+flags. A sudoers/doas rule restricted to a fixed command line (e.g. `gonf
+apply *`) matches on the full argument list, not just flag support, so once
+either flag lands in argv before `apply` the whole elevated re-exec is
+refused with a bare sudo/doas permission error that never mentions
+`-cmd-timeout` or `-profile` — this is not new (the same `gonf apply
+*`-style rule already refuses the plain `Privileged()` re-exec argv
+whenever either flag is non-default) and it is not gated by anything
+described above. Operators using a fixed-argument sudoers/doas rule (local
+`Privileged()` re-exec or a remote host's wrapper) must widen the rule to
+allow the flags (or a wildcard command line), or leave `-cmd-timeout` and
+`-profile` at their defaults, or the elevated apply fails outright instead
+of degrading gracefully.
+
 `gonf -list` lists **activated** tasks (After `When*` filtering for display);
 plan recording still uses the full candidate set.
 

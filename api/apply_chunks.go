@@ -89,9 +89,16 @@ type chunkLabel func(i int, ch plan.Chunk) string
 // applied in the root chunk, i.e. by this child). Like "-profile" it is a
 // global flag and precedes "apply"; gexec.CmdTimeoutFlag leaves it out when
 // cmdTimeout is the built-in default. The child is this very binary, so
-// unlike the remote apply (internal/remote cmdtimeout.go) no capability
-// check is needed before passing it. elevatedCancelGrace() relies on this
-// forwarding: the child's validators are bound by the same timeout the
+// unlike the remote apply (internal/remote cmdtimeout.go) no FLAG-SUPPORT
+// capability check is needed before passing it: this binary always parses
+// its own "-cmd-timeout". That is not the same as sudoers/doas ARGUMENT
+// matching, though (pre-existing, not new here, and shared with
+// "-profile"): a rule restricted to a fixed command line (e.g. "gonf apply
+// *") refuses the whole elevated re-exec the moment either flag lands in
+// argv before "apply", with a bare sudo/doas refusal that never mentions
+// -cmd-timeout or -profile — see docs/plan.md's note on fixed-argument
+// sudoers rules. elevatedCancelGrace() relies on the forwarding that does
+// go through: the child's validators are bound by the same timeout the
 // grace is derived from.
 func elevatedApplyArgv(exe, path string, dryRun bool, profileOverride string, cmdTimeout time.Duration) []string {
 	argv := []string{exe}

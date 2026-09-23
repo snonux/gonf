@@ -110,8 +110,10 @@ func TestRemoteApplyCmdCmdTimeoutForward(t *testing.T) {
 }
 
 // At the built-in default no probe runs and nothing is forwarded; a
-// non-default timeout probes exactly the needed contexts, and a probe (ssh)
-// failure fails the resolution.
+// non-default timeout probes exactly the needed contexts. A probe (ssh)
+// failure is best-effort (task cc2 finding a): it never surfaces as an
+// error, only as an inactive forward for that context, exactly like any
+// other unverified verdict.
 func TestResolveCmdTimeoutForward(t *testing.T) {
 	target := PushTarget{Host: "h.example", Privilege: privilege.Doas}
 	var seen []ProbeContext
@@ -127,29 +129,33 @@ func TestResolveCmdTimeoutForward(t *testing.T) {
 	}}
 
 	setCmdTimeout(t, gexec.BuiltinDefaultTimeout)
-	if f, err := p.resolveCmdTimeoutForward(context.Background(), target, true, true); err != nil || f.active() || len(seen) != 0 {
-		t.Fatalf("default timeout: fwd=%+v err=%v probes=%v, want nothing", f, err, seen)
+	if f := p.resolveCmdTimeoutForward(context.Background(), target, true, true); f.active() || len(seen) != 0 {
+		t.Fatalf("default timeout: fwd=%+v probes=%v, want nothing", f, seen)
 	}
 
 	setCmdTimeout(t, 45*time.Second)
-	f, err := p.resolveCmdTimeoutForward(context.Background(), target, true, true)
-	if err != nil || !f.login || f.elevated || len(seen) != 2 {
-		t.Fatalf("fwd=%+v err=%v probes=%v, want login only after two probes", f, err, seen)
+	f := p.resolveCmdTimeoutForward(context.Background(), target, true, true)
+	if !f.login || f.elevated || len(seen) != 2 {
+		t.Fatalf("fwd=%+v probes=%v, want login only after two probes", f, seen)
 	}
 	seen = nil
-	if _, err := p.resolveCmdTimeoutForward(context.Background(), target, false, true); err != nil || len(seen) != 1 || seen[0] != ProbeElevated {
-		t.Fatalf("elevated-only: err=%v probes=%v, want one elevated probe", err, seen)
+	if f := p.resolveCmdTimeoutForward(context.Background(), target, false, true); f.active() || len(seen) != 1 || seen[0] != ProbeElevated {
+		t.Fatalf("elevated-only: fwd=%+v probes=%v, want one elevated probe and nothing forwarded", f, seen)
 	}
 
+	// A probe ssh failure (the prober itself erroring, as opposed to
+	// answering CmdTimeoutUnverified) must not propagate: it is folded into
+	// "unverified" so the caller (prepareRemote, payloadApplyCmd) never
+	// fails the push/payload over it.
 	boom := errors.New("ssh boom")
 	p.CmdTimeoutProber = func(context.Context, PushTarget, ProbeContext, string) (CmdTimeoutSupport, string, error) {
 		return CmdTimeoutUnverified, "", boom
 	}
-	if _, err := p.resolveCmdTimeoutForward(context.Background(), target, true, false); !errors.Is(err, boom) {
-		t.Fatalf("probe failure = %v, want %v", err, boom)
+	if f := p.resolveCmdTimeoutForward(context.Background(), target, true, false); f.active() {
+		t.Fatalf("probe ssh failure: fwd=%+v, want nothing forwarded (not an error)", f)
 	}
-	if f, err := (&Pusher{}).resolveCmdTimeoutForward(context.Background(), target, true, true); err != nil || f.active() {
-		t.Fatalf("nil prober: fwd=%+v err=%v, want nothing forwarded", f, err)
+	if f := (&Pusher{}).resolveCmdTimeoutForward(context.Background(), target, true, true); f.active() {
+		t.Fatalf("nil prober: fwd=%+v, want nothing forwarded", f)
 	}
 }
 
@@ -211,17 +217,27 @@ func TestClassifyCmdTimeoutProbe(t *testing.T) {
 	}
 }
 
-// The two non-forwarding verdicts must be worded apart: an old gonf is
-// fixed by upgrading it, a refused probe was never about the binary.
+// The non-forwarding verdicts must be worded apart, and (task cc2 finding
+// b) an old-gonf verdict must itself be worded apart by privilege context:
+// a login probe is fixed by the very push that ran it, but an elevated
+// probe answers for whatever gonf sudo/doas's secure_path resolves, a
+// binary EnsureRemoteGonf never installs or upgrades, so telling the
+// operator to "push" there would point at a step that cannot fix it.
 func TestCmdTimeoutWarningWording(t *testing.T) {
 	tests := []struct {
-		name    string
-		kind    remoteKind
-		want    string
-		notWant string
+		name                    string
+		kind                    remoteKind
+		needLogin, needElevated bool
+		want, notWant           string
 	}{
-		{"old gonf", remoteOld, "too old for -cmd-timeout=30s", "could not run gonf"},
-		{"sudo refuses", remoteSudoRefuses, "could not run gonf in the elevated (sudo/doas) context", "too old"},
+		{"old gonf, login context", remoteOld, true, false,
+			"too old for -cmd-timeout=30s; its apply runs with the remote default command timeout (push to upgrade gonf there)",
+			"sudo/doas resolves"},
+		{"old gonf, elevated context", remoteOld, false, true,
+			`the gonf sudo/doas resolves at "gonf" is older than the one push installs`,
+			"push to upgrade gonf there"},
+		{"sudo refuses", remoteSudoRefuses, false, true,
+			"could not run gonf in the elevated (sudo/doas) context", "too old"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -229,9 +245,9 @@ func TestCmdTimeoutWarningWording(t *testing.T) {
 			setCmdTimeout(t, 30*time.Second)
 			out := testutil.CaptureLog(t, logger.LevelWarn)
 			target := PushTarget{Host: "h.example", Privilege: privilege.Sudo}
-			fwd, err := defaultPusher.resolveCmdTimeoutForward(context.Background(), target, false, true)
-			if err != nil || fwd.active() {
-				t.Fatalf("fwd=%+v err=%v, want nothing forwarded", fwd, err)
+			fwd := defaultPusher.resolveCmdTimeoutForward(context.Background(), target, tc.needLogin, tc.needElevated)
+			if fwd.active() {
+				t.Fatalf("fwd=%+v, want nothing forwarded", fwd)
 			}
 			if got := out(); !strings.Contains(got, tc.want) || strings.Contains(got, tc.notWant) {
 				t.Fatalf("warning = %q, want it to contain %q and not %q", got, tc.want, tc.notWant)
@@ -315,9 +331,9 @@ func TestCmdTimeoutWarningRedactsProbeStderr(t *testing.T) {
 	setCmdTimeout(t, 30*time.Second)
 	out := testutil.CaptureLog(t, logger.LevelWarn)
 	target := PushTarget{Host: "h.example", Privilege: privilege.Doas}
-	fwd, err := defaultPusher.resolveCmdTimeoutForward(context.Background(), target, false, true)
-	if err != nil || fwd.active() {
-		t.Fatalf("fwd=%+v err=%v, want nothing forwarded", fwd, err)
+	fwd := defaultPusher.resolveCmdTimeoutForward(context.Background(), target, false, true)
+	if fwd.active() {
+		t.Fatalf("fwd=%+v, want nothing forwarded", fwd)
 	}
 	warning := out()
 	if !strings.Contains(warning, secret.Redacted) {
@@ -452,5 +468,53 @@ func TestPushPayloadForwardsCmdTimeoutOnlyToCapableRemote(t *testing.T) {
 		if got := r.cmds(); len(got) != 1 || got[0] != want {
 			t.Fatalf("kind=%v: remote cmds = %v, want %q", kind, got, want)
 		}
+	}
+}
+
+// Task cc2 finding (a): a probe's own ssh round trip can fail (a transient
+// network blip, a host that dropped the connection) independently of what
+// the remote gonf would have answered. That must not fail the whole
+// push/PushPayload — forwarding -cmd-timeout is a nicety, not a hard
+// requirement — it must instead warn and fall back to the remote's default
+// command timeout, exactly like any other unverified verdict (contrast with
+// remoteReleaseIsStale elsewhere in this package, which has always been
+// best-effort this way). Both delivery.go's prepareRemote (via a Push) and
+// remote.go's payloadApplyCmd (via PushPayloadContext) go through
+// resolveCmdTimeoutForward, so both are exercised here.
+func TestCmdTimeoutProbeSSHFailureIsBestEffort(t *testing.T) {
+	r := installDeliveryRecorder(t)
+	setCmdTimeout(t, 30*time.Second)
+	boom := errors.New("ssh: connect to host h.example port 22: connection refused")
+	oldProber := defaultPusher.CmdTimeoutProber
+	defaultPusher.CmdTimeoutProber = func(context.Context, PushTarget, ProbeContext, string) (CmdTimeoutSupport, string, error) {
+		return CmdTimeoutUnverified, "", boom
+	}
+	t.Cleanup(func() { defaultPusher.CmdTimeoutProber = oldProber })
+
+	out := testutil.CaptureLog(t, logger.LevelWarn)
+	ops := []plan.Op{
+		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "p"},
+		{Op: plan.KindFile, Path: "/tmp/unpriv-out", Mode: "0600", ContentB64: "aGVsbG8K"},
+		{Op: plan.KindFile, Path: "/tmp/priv-out", Mode: "0600", ContentB64: "aGVsbG8K", Elevate: true},
+	}
+	target := PushTarget{Host: "h.example", Privilege: privilege.Sudo}
+	if err := pushToHost(context.Background(), target, "p", ops, nil); err != nil {
+		t.Fatalf("push failed on a probe ssh failure, want best-effort (warn, omit, continue): %v", err)
+	}
+	want := []string{"gonf apply -", "sudo -n gonf apply -"}
+	if got := r.cmds(); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("remote apply cmds = %v, want -cmd-timeout left out of both: %v", got, want)
+	}
+	if got := out(); !strings.Contains(got, boom.Error()) {
+		t.Fatalf("warning = %q, want it to mention the probe failure %q", got, boom.Error())
+	}
+
+	// PushPayloadContext is the other caller of resolveCmdTimeoutForward
+	// (it never installs gonf, so it is not covered by the push above).
+	if err := PushPayloadContext(context.Background(), target, []byte("GONF-PUSH/1"), true, ""); err != nil {
+		t.Fatalf("PushPayloadContext failed on a probe ssh failure, want best-effort: %v", err)
+	}
+	if got := r.cmds(); got[len(got)-1] != "sudo -n gonf apply -" {
+		t.Fatalf("PushPayloadContext remote cmd = %q, want -cmd-timeout left out", got[len(got)-1])
 	}
 }

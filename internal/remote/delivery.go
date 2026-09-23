@@ -240,10 +240,7 @@ func (d Delivery) prepareRemote(ctx context.Context, t PushTarget, chunks []plan
 		return t, nil, err
 	}
 	needLogin, needElevated := chunkContexts(chunks)
-	fwd, err := defaultPusher.resolveCmdTimeoutForward(ctx, t, needLogin, needElevated)
-	if err != nil {
-		return t, nil, err
-	}
+	fwd := defaultPusher.resolveCmdTimeoutForward(ctx, t, needLogin, needElevated)
 	if installed == "" && !fwd.active() {
 		return t, remotes, nil
 	}

@@ -176,9 +176,9 @@ func payloadApplyCmd(ctx context.Context, t PushTarget, elevate bool, applyDir s
 	if err != nil {
 		return "", err
 	}
-	fwd, err := defaultPusher.resolveCmdTimeoutForward(ctx, t, !elevate, elevate)
-	if err != nil || !fwd.active() {
-		return remote, err
+	fwd := defaultPusher.resolveCmdTimeoutForward(ctx, t, !elevate, elevate)
+	if !fwd.active() {
+		return remote, nil
 	}
 	return remoteApplyCmd(elevate, t, applyDir, Push, fwd)
 }
