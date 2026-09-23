@@ -109,6 +109,27 @@ type Pusher struct {
 // outside this package never need to know Pusher exists.
 var defaultPusher = NewPusher()
 
+// relayedMinRelease is the minimum remote gonf release that accepts the
+// unconditional "apply -relayed" flag PushPayloadContext always sends (task
+// 7d2, docs/plan.md's "Fixed-argument sudoers/doas rules"). It is a fixed
+// floor, not a moving target tied to the controller's own internal.Version:
+// -relayed has been stable since this release, so a remote at or above it is
+// fully capable regardless of how many further controller releases have
+// shipped since. RequireRemoteRelayed compares against this constant instead
+// of internal.Version for exactly that reason (task ne2, narrowing task
+// ud2's fix — see RequireRemoteRelayed's doc comment).
+const relayedMinRelease = "0.16.3"
+
+// relayedMinVersion is relayedMinRelease's parsed [3]int form. It is computed
+// once here, at package init, rather than by calling parseReleaseVersion on
+// every RequireRemoteRelayed call (task mf2, tidying task ne2's per-call
+// parse): relayedMinRelease is a fixed literal, so nothing about this value
+// can change between calls. Its correctness rides on the exact-floor tests
+// in push_test.go (0.16.2 refused, 0.16.3 accepted) rather than on a runtime
+// parse-error path that relayedMinRelease, being a literal, could never
+// actually take.
+var relayedMinVersion = [3]int{0, 16, 3}
+
 // NewPusher returns a Pusher wired to the real ssh/scp/go-build
 // implementations, with a fresh (empty) build cache.
 func NewPusher() *Pusher {
@@ -224,20 +245,10 @@ func (p *Pusher) RequireRemoteGonf(ctx context.Context, t PushTarget, pc ProbeCo
 	if remoteStrictPreviewVersion < internal.StrictPreviewVersion {
 		return fmt.Errorf("remote preview: remote gonf strict-preview capability %d is older than controller capability %d; preview does not install or update gonf, run push first", remoteStrictPreviewVersion, internal.StrictPreviewVersion)
 	}
-	if p.ReleaseVersionProber == nil {
-		return fmt.Errorf("remote preview: cannot verify remote gonf release version; preview does not install or update gonf, run push first")
-	}
 
-	remoteRelease, err := p.ReleaseVersionProber(ctx, t, pc)
+	remoteRelease, remoteVersion, err := p.probeRemoteReleaseVersion(ctx, t, pc, "remote preview")
 	if err != nil {
-		return fmt.Errorf("remote preview: probe gonf release version: %w", err)
-	}
-	if remoteRelease == "" {
-		return fmt.Errorf("remote preview: remote gonf did not report a release version; preview does not install or update gonf, run push first")
-	}
-	remoteVersion, err := parseReleaseVersion(remoteRelease)
-	if err != nil {
-		return fmt.Errorf("remote preview: remote gonf release version %q: %w", remoteRelease, err)
+		return err
 	}
 	controllerVersion, err := parseReleaseVersion(internal.Version)
 	if err != nil {
@@ -248,17 +259,6 @@ func (p *Pusher) RequireRemoteGonf(ctx context.Context, t PushTarget, pc ProbeCo
 	}
 	return nil
 }
-
-// relayedMinRelease is the minimum remote gonf release that accepts the
-// unconditional "apply -relayed" flag PushPayloadContext always sends (task
-// 7d2, docs/plan.md's "Fixed-argument sudoers/doas rules"). It is a fixed
-// floor, not a moving target tied to the controller's own internal.Version:
-// -relayed has been stable since this release, so a remote at or above it is
-// fully capable regardless of how many further controller releases have
-// shipped since. RequireRemoteRelayed compares against this constant instead
-// of internal.Version for exactly that reason (task ne2, narrowing task
-// ud2's fix — see RequireRemoteRelayed's doc comment).
-const relayedMinRelease = "0.16.3"
 
 // RequireRemoteRelayed verifies that t's remote gonf binary is new enough to
 // accept the "apply -relayed" flag that PushPayloadContext's payloadApplyCmd
@@ -294,31 +294,11 @@ func (p *Pusher) RequireRemoteRelayed(ctx context.Context, t PushTarget, pc Prob
 	if t.Host == "" {
 		return fmt.Errorf("push: empty host")
 	}
-	if p.ReleaseVersionProber == nil {
-		return fmt.Errorf("push: cannot verify remote gonf release version; -relayed requires release %s or newer", relayedMinRelease)
-	}
-	remoteRelease, err := p.ReleaseVersionProber(ctx, t, pc)
+	remoteRelease, remoteVersion, err := p.probeRemoteReleaseVersion(ctx, t, pc, "push")
 	if err != nil {
-		return fmt.Errorf("push: probe gonf release version: %w", err)
+		return err
 	}
-	if remoteRelease == "" {
-		return fmt.Errorf("push: remote gonf did not report a release version; -relayed requires release %s or newer, run push once against a version-verified path or upgrade the remote gonf binary manually first", relayedMinRelease)
-	}
-	remoteVersion, err := parseReleaseVersion(remoteRelease)
-	if err != nil {
-		return fmt.Errorf("push: remote gonf release version %q: %w", remoteRelease, err)
-	}
-	minVersion, err := parseReleaseVersion(relayedMinRelease)
-	if err != nil {
-		// relayedMinRelease is a package constant literal, never remote
-		// input, so this can only be a self-inflicted typo — but library
-		// code never panics for recipe/input errors (AGENTS.md's
-		// registration-time contract; the caller here is a runtime push,
-		// not a declaration), so it is reported the same conservative way
-		// as any other unverifiable case, instead of crashing the process.
-		return fmt.Errorf("push: internal relayedMinRelease %q does not parse: %w", relayedMinRelease, err)
-	}
-	if releaseVersionLess(remoteVersion, minVersion) {
+	if releaseVersionLess(remoteVersion, relayedMinVersion) {
 		return fmt.Errorf("push: remote gonf release %s is older than the minimum %s required for -relayed; upgrade the remote gonf binary first", remoteRelease, relayedMinRelease)
 	}
 	return nil
@@ -360,6 +340,40 @@ func (p *Pusher) EnsureRemoteGonf(ctx context.Context, t PushTarget) (installedP
 		return "", fmt.Errorf("ensure gonf: %w", err)
 	}
 	return p.installRemoteGonf(ctx, t, goos, goarch)
+}
+
+// probeRemoteReleaseVersion probes t's remote gonf release version in
+// privilege context pc and parses it into [3]int form, returning the raw
+// probed string alongside it so a caller's own refusal message can still
+// quote the exact remote-reported version. It is the shared mechanics
+// RequireRemoteGonf and RequireRemoteRelayed both need before their own,
+// distinct floor comparison and refusal wording (the controller's own
+// release for RequireRemoteGonf, the fixed relayedMinRelease for
+// RequireRemoteRelayed): the nil-prober check, the probe call, the
+// empty-output check and the parse (task mf2, tidying ne2's duplicated
+// block). prefix labels every message here with the caller's name ("remote
+// preview" or "push"), matching each gate's own existing wording for the
+// probe-failure and parse-failure cases, which never carried any further
+// caller-specific guidance. The nil-prober and empty-output cases keep only
+// their common wording here; each gate's own distinct-policy guidance
+// belongs in its "compare" step below, not in this shared, mechanical part.
+func (p *Pusher) probeRemoteReleaseVersion(ctx context.Context, t PushTarget, pc ProbeContext, prefix string) (string, [3]int, error) {
+	var v [3]int
+	if p.ReleaseVersionProber == nil {
+		return "", v, fmt.Errorf("%s: cannot verify remote gonf release version", prefix)
+	}
+	remoteRelease, err := p.ReleaseVersionProber(ctx, t, pc)
+	if err != nil {
+		return "", v, fmt.Errorf("%s: probe gonf release version: %w", prefix, err)
+	}
+	if remoteRelease == "" {
+		return "", v, fmt.Errorf("%s: remote gonf did not report a release version", prefix)
+	}
+	v, err = parseReleaseVersion(remoteRelease)
+	if err != nil {
+		return "", v, fmt.Errorf("%s: remote gonf release version %q: %w", prefix, remoteRelease, err)
+	}
+	return remoteRelease, v, nil
 }
 
 // currentPlanVersion, currentReleaseVersion and currentStrictPreviewVersion
