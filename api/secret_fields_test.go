@@ -16,6 +16,13 @@ import (
 // fillValue sets every string, slice, map and pointer reachable from v to a
 // non-empty value, so a walk over it meets every field path. A kind the
 // walker does not know fails the test, like it would panic the walker.
+//
+// The struct case skips a field literally named "Payload": Op.Payload
+// (task yd2) is polymorphic — one Op value holds at most one concrete
+// OpPayload at a time — so filling every kind's exclusive fields takes one
+// pass per kind instead of one shared pass here; see
+// TestOpFieldClassesAreExhaustive, which drives those passes itself using
+// plan.OpPayloadExamples.
 func fillValue(t *testing.T, v reflect.Value, path string) {
 	t.Helper()
 	switch {
@@ -35,9 +42,11 @@ func fillValue(t *testing.T, v reflect.Value, path string) {
 		v.Set(m)
 	case v.Kind() == reflect.Struct:
 		for i := range v.NumField() {
-			if f := v.Type().Field(i); f.IsExported() {
-				fillValue(t, v.Field(i), path+"."+f.Name)
+			f := v.Type().Field(i)
+			if !f.IsExported() || f.Name == "Payload" {
+				continue
 			}
+			fillValue(t, v.Field(i), path+"."+f.Name)
 		}
 	case isScalar(v.Kind()):
 	default:
@@ -49,14 +58,40 @@ func fillValue(t *testing.T, v reflect.Value, path string) {
 // fully populated plan.Op must yield exactly the classified paths, so a new
 // string-bearing field fails here until it is classified as payload,
 // identity or metadata, and a removed one fails as stale.
+//
+// Since task yd2, Op.Payload is polymorphic (one Op value holds at most one
+// concrete OpPayload), so a single fillValue pass can no longer reach every
+// kind's exclusive fields at once: the base pass below fills every core
+// field with Payload left nil (fillValue skips it by name), and one further
+// pass per plan.OpPayloadExamples entry fills that kind's own payload and
+// walks an Op carrying it, so every kind-exclusive field is reached exactly
+// once across the union of passes.
 func TestOpFieldClassesAreExhaustive(t *testing.T) {
-	var op plan.Op
-	fillValue(t, reflect.ValueOf(&op).Elem(), "")
 	seen := map[string]bool{}
-	walkOpStrings(&op, func(path, s string) string {
-		seen[path] = true
-		return s
-	})
+	record := func(op plan.Op) {
+		t.Helper()
+		walkOpStrings(&op, func(path, s string) string {
+			seen[path] = true
+			return s
+		})
+	}
+
+	var base plan.Op
+	fillValue(t, reflect.ValueOf(&base).Elem(), "")
+	record(base)
+
+	for kind, example := range plan.OpPayloadExamples() {
+		pv := reflect.New(reflect.TypeOf(example)).Elem()
+		fillValue(t, pv, "")
+		op := plan.Op{Op: kind}
+		var ok bool
+		op.Payload, ok = pv.Interface().(plan.OpPayload)
+		if !ok {
+			t.Fatalf("plan.OpPayloadExamples()[%q] = %T does not implement plan.OpPayload", kind, example)
+		}
+		record(op)
+	}
+
 	for path := range seen {
 		if _, ok := opFieldClasses[path]; !ok {
 			t.Errorf("plan.Op field %q is not classified in opFieldClasses", path)

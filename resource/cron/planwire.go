@@ -31,16 +31,18 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		return plan.Op{}, fmt.Errorf("cron: draft missing cron.Payload (got %T)", d.Payload)
 	}
 	return plan.Op{
-		Op:            plan.KindCron,
-		ID:            d.ID,
-		Name:          d.Name,
-		Absent:        d.Absent,
-		CronUser:      p.CronUser,
-		Command:       d.Command,
-		LegacyCommand: p.LegacyCommand,
-		Schedule:      p.Schedule,
-		CronEnv:       slices.Clone(p.CronEnv),
-		Deps:          slices.Clone(d.Deps),
+		Op:      plan.KindCron,
+		ID:      d.ID,
+		Name:    d.Name,
+		Absent:  d.Absent,
+		Command: d.Command,
+		Deps:    slices.Clone(d.Deps),
+		Payload: plan.CronPayload{
+			CronUser:      p.CronUser,
+			LegacyCommand: p.LegacyCommand,
+			Schedule:      p.Schedule,
+			CronEnv:       slices.Clone(p.CronEnv),
+		},
 	}, nil
 }
 
@@ -50,25 +52,32 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if op.Name == "" {
 		return fmt.Errorf("cron: missing name")
 	}
+	// A comma-ok assertion, not a "missing payload" error: unlike ToOp (fed
+	// only trusted draft data planDraft() always populates), Apply may see
+	// an op decoded from an arbitrary plan.jsonl. A nil or mistyped Payload
+	// degrades to the zero CronPayload — every cron-exclusive field reads
+	// as unset, which the schedule check below already turns into a clean
+	// error for a present job, and is simply inert for an absent one.
+	p, _ := op.Payload.(plan.CronPayload)
 	var opts []opt.CronOption
 	if op.Absent {
 		opts = append(opts, opt.IsAbsent)
 	}
-	if op.CronUser != "" {
-		opts = append(opts, opt.WithCronUser(op.CronUser))
+	if p.CronUser != "" {
+		opts = append(opts, opt.WithCronUser(p.CronUser))
 	}
 	if op.Command != "" {
 		opts = append(opts, opt.WithCommand(op.Command))
 	}
-	if op.LegacyCommand != "" {
-		opts = append(opts, opt.WithLegacyCommand(op.LegacyCommand))
+	if p.LegacyCommand != "" {
+		opts = append(opts, opt.WithLegacyCommand(p.LegacyCommand))
 	}
 	// A present cron job needs a schedule: silently falling back to the
 	// resource default (* * * * *, every minute) would run the command far
 	// more often than the plan author intended.
-	fields := strings.Fields(op.Schedule)
+	fields := strings.Fields(p.Schedule)
 	if !op.Absent && len(fields) != 5 {
-		return fmt.Errorf("cron: schedule %q must contain 5 whitespace-separated fields", op.Schedule)
+		return fmt.Errorf("cron: schedule %q must contain 5 whitespace-separated fields", p.Schedule)
 	}
 	if len(fields) == 5 {
 		opts = append(opts,
@@ -79,7 +88,7 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 			opt.WithWeekday(fields[4]),
 		)
 	}
-	for _, kv := range op.CronEnv {
+	for _, kv := range p.CronEnv {
 		opts = append(opts, opt.WithCronEnv(kv))
 	}
 	// A sensitive op (scan-detected or WithSensitive at record time)

@@ -220,20 +220,22 @@ func TestOpJSONTagsMatchPlanExamples(t *testing.T) {
 		{
 			name: "cron with env",
 			op: Op{
-				Op:            KindCron,
-				Name:          "backup",
-				CronUser:      "root",
-				Command:       "/usr/local/bin/backup.sh",
-				LegacyCommand: "/usr/local/bin/old-backup.sh",
-				Schedule:      "0 2 * * *",
-				CronEnv:       []string{"PATH=/usr/bin:/bin"},
-				ID:            "Cron[root/backup]",
+				Op:      KindCron,
+				Name:    "backup",
+				Command: "/usr/local/bin/backup.sh",
+				ID:      "Cron[root/backup]",
+				Payload: CronPayload{
+					CronUser:      "root",
+					LegacyCommand: "/usr/local/bin/old-backup.sh",
+					Schedule:      "0 2 * * *",
+					CronEnv:       []string{"PATH=/usr/bin:/bin"},
+				},
 			},
 			want: `{"op":"cron","id":"Cron[root/backup]","name":"backup","cron_user":"root","command":"/usr/local/bin/backup.sh","legacy_command":"/usr/local/bin/old-backup.sh","schedule":"0 2 * * *","cron_env":["PATH=/usr/bin:/bin"]}`,
 		},
 		{
 			name: "cron absent",
-			op:   Op{Op: KindCron, Name: "old", CronUser: "paul", Absent: true},
+			op:   Op{Op: KindCron, Name: "old", Absent: true, Payload: CronPayload{CronUser: "paul"}},
 			want: `{"op":"cron","absent":true,"name":"old","cron_user":"paul"}`,
 		},
 		{
@@ -254,17 +256,19 @@ func TestOpJSONTagsMatchPlanExamples(t *testing.T) {
 		{
 			name: "systemd_timer",
 			op: Op{
-				Op:                 KindSystemdTimer,
-				Name:               "fit-job",
-				Command:            "/bin/true",
-				OnCalendar:         "*-*-* *:05:00",
-				OnBootSec:          "10min",
-				Persistent:         true,
-				Description:        "fit timer",
-				ServiceDescription: "fit oneshot",
-				After:              []string{"network-online.target"},
-				Wants:              []string{"network-online.target"},
-				ID:                 "SystemdTimer[fit-job]",
+				Op:      KindSystemdTimer,
+				Name:    "fit-job",
+				Command: "/bin/true",
+				ID:      "SystemdTimer[fit-job]",
+				Payload: SystemdTimerPayload{
+					OnCalendar:         "*-*-* *:05:00",
+					OnBootSec:          "10min",
+					Persistent:         true,
+					Description:        "fit timer",
+					ServiceDescription: "fit oneshot",
+					After:              []string{"network-online.target"},
+					Wants:              []string{"network-online.target"},
+				},
 			},
 			want: `{"op":"systemd_timer","id":"SystemdTimer[fit-job]","name":"fit-job","command":"/bin/true","on_calendar":"*-*-* *:05:00","on_boot_sec":"10min","persistent":true,"description":"fit timer","service_description":"fit oneshot","after":["network-online.target"],"wants":["network-online.target"]}`,
 		},
@@ -419,6 +423,46 @@ func TestOpZeroValueOmitemptyReady(t *testing.T) {
 	var op Op
 	if op.Unless != nil || op.OnlyIf != nil || op.All != nil || op.Args != nil || op.Env != nil || op.Deps != nil {
 		t.Fatalf("zero Op has non-nil omitempty fields: %+v", op)
+	}
+}
+
+// TestWirePayloadTagsMatch pins that every concrete OpPayload type's json
+// tags name the same wire key wireOp's own field of the same name does.
+// Those tags are never consulted by encoding/json (Op.MarshalJSON always
+// merges onto a wireOp and marshals that, never a payload type directly —
+// see op_payload.go's toWire/applyToWire) but api's secret-scan reflection
+// walker (walkOpStrings) descends straight into a payload's concrete value
+// and computes each leaf's opFieldClasses path from THESE tags, so a
+// payload tag that drifts from wireOp's would silently misclassify (or
+// stop scanning) that field — exactly the class of bug
+// TestOpFieldClassesAreExhaustive (api/secret_fields_test.go) already
+// guards from the other direction. This test guards the tag SOURCE the
+// walker trusts, field by field, so a typo'd or forgotten payload tag fails
+// here instead of only showing up as a missing opFieldClasses entry with no
+// clue where the mismatch actually is.
+func TestWirePayloadTagsMatch(t *testing.T) {
+	t.Parallel()
+	wireTags := map[string]string{}
+	wt := reflect.TypeOf(wireOp{})
+	for i := range wt.NumField() {
+		f := wt.Field(i)
+		wireTags[f.Name] = f.Tag.Get("json")
+	}
+
+	for kind, example := range OpPayloadExamples() {
+		pt := reflect.TypeOf(example)
+		for i := range pt.NumField() {
+			f := pt.Field(i)
+			wantTag, ok := wireTags[f.Name]
+			if !ok {
+				t.Errorf("%s.%s: no wireOp field named %q to match against", pt, f.Name, f.Name)
+				continue
+			}
+			gotTag := f.Tag.Get("json")
+			if gotTag != wantTag {
+				t.Errorf("kind %q: %s.%s json tag = %q, want %q (wireOp.%s)", kind, pt, f.Name, gotTag, wantTag, f.Name)
+			}
+		}
 	}
 }
 

@@ -243,14 +243,18 @@ func TestRecordPlanLowersCronAndService(t *testing.T) {
 	if cronOp.ID != wantID {
 		t.Fatalf("cron id = %q, want %q (IDs must stay stable for DependsOn)", cronOp.ID, wantID)
 	}
-	if cronOp.Name != "zzjob" || cronOp.CronUser != "root" || cronOp.Command != "true" || cronOp.LegacyCommand != "old-true" {
+	cronPayload, ok := cronOp.Payload.(plan.CronPayload)
+	if !ok {
+		t.Fatalf("cron op missing plan.CronPayload: %#v", cronOp)
+	}
+	if cronOp.Name != "zzjob" || cronPayload.CronUser != "root" || cronOp.Command != "true" || cronPayload.LegacyCommand != "old-true" {
 		t.Fatalf("cron payload = %#v", cronOp)
 	}
-	if cronOp.Schedule != "7 3 * * *" {
-		t.Fatalf("cron schedule = %q, want %q", cronOp.Schedule, "7 3 * * *")
+	if cronPayload.Schedule != "7 3 * * *" {
+		t.Fatalf("cron schedule = %q, want %q", cronPayload.Schedule, "7 3 * * *")
 	}
-	if !reflect.DeepEqual(cronOp.CronEnv, []string{"FOO=1"}) {
-		t.Fatalf("cron env = %#v", cronOp.CronEnv)
+	if !reflect.DeepEqual(cronPayload.CronEnv, []string{"FOO=1"}) {
+		t.Fatalf("cron env = %#v", cronPayload.CronEnv)
 	}
 
 	svcOp := ops[2]
@@ -394,7 +398,11 @@ func TestRecordPlanLowersNoCronAndNoService(t *testing.T) {
 		t.Fatalf("ops kinds = %v", opsKinds(ops))
 	}
 	cronOp := ops[1]
-	if cronOp.ID != "Cron[paul/gone]" || !cronOp.Absent || cronOp.CronUser != "paul" || cronOp.Command != "" {
+	cronPayload, ok := cronOp.Payload.(plan.CronPayload)
+	if !ok {
+		t.Fatalf("cron op missing plan.CronPayload: %#v", cronOp)
+	}
+	if cronOp.ID != "Cron[paul/gone]" || !cronOp.Absent || cronPayload.CronUser != "paul" || cronOp.Command != "" {
 		t.Fatalf("absent cron = %#v", cronOp)
 	}
 	svcOp := ops[2]
@@ -608,15 +616,19 @@ func TestRecordPlanLowersSystemdTimer(t *testing.T) {
 		t.Fatalf("ops kinds = %v, want %v", opsKinds(ops), wantKinds)
 	}
 	op := ops[1]
+	timerPayload, ok := op.Payload.(plan.SystemdTimerPayload)
+	if !ok {
+		t.Fatalf("systemd_timer op missing plan.SystemdTimerPayload: %#v", op)
+	}
 	if op.Name != "fit-job" ||
 		op.Command != "/bin/true" ||
-		op.OnCalendar != "*-*-* *:05:00" ||
-		op.OnBootSec != "10min" ||
-		!op.Persistent ||
-		op.Description != "fit timer" ||
-		op.ServiceDescription != "fit oneshot" ||
-		!reflect.DeepEqual(op.After, []string{"network-online.target"}) ||
-		!reflect.DeepEqual(op.Wants, []string{"network-online.target"}) {
+		timerPayload.OnCalendar != "*-*-* *:05:00" ||
+		timerPayload.OnBootSec != "10min" ||
+		!timerPayload.Persistent ||
+		timerPayload.Description != "fit timer" ||
+		timerPayload.ServiceDescription != "fit oneshot" ||
+		!reflect.DeepEqual(timerPayload.After, []string{"network-online.target"}) ||
+		!reflect.DeepEqual(timerPayload.Wants, []string{"network-online.target"}) {
 		t.Fatalf("systemd_timer op = %#v", op)
 	}
 	if op.ID != "SystemdTimer[fit-job]" {

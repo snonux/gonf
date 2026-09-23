@@ -11,11 +11,13 @@ import (
 )
 
 // EncodeOp marshals a single plan line to JSON without a trailing newline.
+// The actual field merge and normalization (core Op fields plus Payload's
+// kind-exclusive ones, trimmed to the same canonical shape pre-yd2 code
+// produced) happens in Op.MarshalJSON (types.go) via wireOp (wire.go).
 func EncodeOp(op Op) ([]byte, error) {
 	if op.Op == "" {
 		return nil, fmt.Errorf("plan: encode: missing op")
 	}
-	normalizeOp(&op)
 	b, err := json.Marshal(op)
 	if err != nil {
 		return nil, fmt.Errorf("plan: encode %s: %w", op.Op, err)
@@ -23,7 +25,9 @@ func EncodeOp(op Op) ([]byte, error) {
 	return b, nil
 }
 
-// DecodeOp unmarshals one JSONL plan line into an Op.
+// DecodeOp unmarshals one JSONL plan line into an Op. The actual field
+// split (wireOp into Op's core fields plus a concrete Payload) happens in
+// Op.UnmarshalJSON (types.go).
 func DecodeOp(line []byte) (Op, error) {
 	line = bytes.TrimSpace(line)
 	if len(line) == 0 {
@@ -36,64 +40,7 @@ func DecodeOp(line []byte) (Op, error) {
 	if op.Op == "" {
 		return Op{}, fmt.Errorf("plan: decode: missing op")
 	}
-	normalizeOp(&op)
 	return op, nil
-}
-
-func normalizeOp(op *Op) {
-	if len(op.Args) == 0 {
-		op.Args = nil
-	}
-	if len(op.Env) == 0 {
-		op.Env = nil
-	}
-	if len(op.All) == 0 {
-		op.All = nil
-	}
-	if len(op.CronEnv) == 0 {
-		op.CronEnv = nil
-	}
-	if len(op.SupplementaryGroups) == 0 {
-		op.SupplementaryGroups = nil
-	}
-	if len(op.Deps) == 0 {
-		op.Deps = nil
-	}
-	if len(op.AddLines) == 0 {
-		op.AddLines = nil
-	}
-	if len(op.RemoveLines) == 0 {
-		op.RemoveLines = nil
-	}
-	if len(op.KeyedLines) == 0 {
-		op.KeyedLines = nil
-	}
-	if len(op.ValidationArgs) == 0 {
-		op.ValidationArgs = nil
-	}
-	if op.Unless != nil {
-		// Copy before normalizing: op.Unless is a pointer that may be shared
-		// with other Op values referencing the same underlying Guard (e.g.
-		// every per-host goroutine in a fleet/cluster push encodes its own
-		// copy of the same ops slice). Normalizing in place would mutate that
-		// shared Guard through the pointer — a data race under concurrent
-		// encoding (see internal/remote/fleet.go Fanout). Encoding must stay
-		// side-effect-free with respect to the caller's ops.
-		g := *op.Unless
-		normalizeGuard(&g)
-		op.Unless = &g
-	}
-	if op.OnlyIf != nil {
-		g := *op.OnlyIf
-		normalizeGuard(&g)
-		op.OnlyIf = &g
-	}
-}
-
-func normalizeGuard(g *Guard) {
-	if len(g.Args) == 0 {
-		g.Args = nil
-	}
 }
 
 // EncodePlan writes ops as JSONL (each line one Op, including trailing newline

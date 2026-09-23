@@ -29,22 +29,24 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		return plan.Op{}, fmt.Errorf("systemd_timer: draft missing systemdtimer.Payload (got %T)", d.Payload)
 	}
 	return plan.Op{
-		Op:                 plan.KindSystemdTimer,
-		ID:                 d.ID,
-		Name:               d.Name,
-		Absent:             d.Absent,
-		User:               d.User,
-		Restart:            d.Restart,
-		EnableOnly:         d.EnableOnly,
-		Command:            d.Command,
-		OnCalendar:         p.OnCalendar,
-		OnBootSec:          p.OnBootSec,
-		Persistent:         p.Persistent,
-		Description:        p.Description,
-		ServiceDescription: p.ServiceDescription,
-		After:              slices.Clone(p.After),
-		Wants:              slices.Clone(p.Wants),
-		Deps:               slices.Clone(d.Deps),
+		Op:         plan.KindSystemdTimer,
+		ID:         d.ID,
+		Name:       d.Name,
+		Absent:     d.Absent,
+		User:       d.User,
+		Restart:    d.Restart,
+		EnableOnly: d.EnableOnly,
+		Command:    d.Command,
+		Deps:       slices.Clone(d.Deps),
+		Payload: plan.SystemdTimerPayload{
+			OnCalendar:         p.OnCalendar,
+			OnBootSec:          p.OnBootSec,
+			Persistent:         p.Persistent,
+			Description:        p.Description,
+			ServiceDescription: p.ServiceDescription,
+			After:              slices.Clone(p.After),
+			Wants:              slices.Clone(p.Wants),
+		},
 	}, nil
 }
 
@@ -55,6 +57,10 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if op.Name == "" {
 		return fmt.Errorf("systemd_timer: missing name")
 	}
+	// See resource/cron/planwire.go's Apply for why this is comma-ok rather
+	// than an error: Apply may see an op decoded from an arbitrary
+	// plan.jsonl, and a nil or mistyped Payload degrades cleanly to
+	// presentOptions' own "missing on_calendar" refusal below.
 	opts := []opt.SystemdTimerOption{opt.IsAbsent}
 	if !op.Absent {
 		var err error
@@ -87,27 +93,29 @@ func presentOptions(op plan.Op) ([]opt.SystemdTimerOption, error) {
 	if op.Command == "" {
 		return nil, fmt.Errorf("systemd_timer: missing command")
 	}
-	if op.OnCalendar == "" {
+	// Comma-ok, not an error: see Apply's doc comment above.
+	p, _ := op.Payload.(plan.SystemdTimerPayload)
+	if p.OnCalendar == "" {
 		return nil, fmt.Errorf("systemd_timer: missing on_calendar")
 	}
-	opts := []opt.SystemdTimerOption{opt.WithCommand(op.Command), opt.WithOnCalendar(op.OnCalendar)}
-	if op.OnBootSec != "" {
-		opts = append(opts, opt.WithOnBootSec(op.OnBootSec))
+	opts := []opt.SystemdTimerOption{opt.WithCommand(op.Command), opt.WithOnCalendar(p.OnCalendar)}
+	if p.OnBootSec != "" {
+		opts = append(opts, opt.WithOnBootSec(p.OnBootSec))
 	}
-	if op.Persistent {
+	if p.Persistent {
 		opts = append(opts, opt.WithPersistent)
 	}
-	if op.Description != "" {
-		opts = append(opts, opt.WithDescription(op.Description))
+	if p.Description != "" {
+		opts = append(opts, opt.WithDescription(p.Description))
 	}
-	if op.ServiceDescription != "" {
-		opts = append(opts, opt.WithServiceDescription(op.ServiceDescription))
+	if p.ServiceDescription != "" {
+		opts = append(opts, opt.WithServiceDescription(p.ServiceDescription))
 	}
-	if len(op.After) > 0 {
-		opts = append(opts, opt.WithAfter(op.After...))
+	if len(p.After) > 0 {
+		opts = append(opts, opt.WithAfter(p.After...))
 	}
-	if len(op.Wants) > 0 {
-		opts = append(opts, opt.WithWants(op.Wants...))
+	if len(p.Wants) > 0 {
+		opts = append(opts, opt.WithWants(p.Wants...))
 	}
 	return opts, nil
 }

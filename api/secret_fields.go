@@ -98,7 +98,11 @@ func classOf(path string) fieldClass {
 // exactly the kinds plan.Op is built from (strings, bools, numbers,
 // pointers, slices, structs, map[string]string, json.RawMessage) and panics
 // on any other (an interface, array, other map or []byte field), a
-// programming error that TestOpFieldClassesAreExhaustive catches first.
+// programming error that TestOpFieldClassesAreExhaustive catches first. The
+// one interface field Op actually has, Payload (task yd2), never reaches
+// this generic panic-on-interface path at all: walkStruct special-cases it
+// by name and descends into its concrete value's own fields directly, at
+// the same path its fields had on the wire before the split.
 func walkOpStrings(op *plan.Op, fn func(path, s string) string) {
 	walkValue(reflect.ValueOf(op).Elem(), "", fn)
 }
@@ -160,11 +164,38 @@ func isScalar(k reflect.Kind) bool {
 	return false
 }
 
-// walkStruct walks every exported field under its JSON name.
+// walkStruct walks every exported field under its JSON name. Op.Payload
+// (task yd2, "Layer 2" of the PlanDraft/Op god-struct split) is special:
+// its json tag is "-" because Op never marshals itself by default struct
+// reflection (see Op.MarshalJSON), but its concrete value's OWN fields
+// (plan.CronPayload, plan.SystemdTimerPayload, ...) still sit at the OP'S
+// top level on the wire — that is exactly what Op.MarshalJSON's wireOp
+// merge reproduces. So the walk must reach them at the SAME path, not
+// nested under a "Payload" segment that never existed on the wire and that
+// opFieldClasses knows nothing about; it is named, not type-matched,
+// because plan.OpPayload's one method is unexported (only the plan package
+// can implement it), so this package cannot spell the interface type to
+// compare against.
 func walkStruct(v reflect.Value, path string, fn func(path, s string) string) {
 	t := v.Type()
 	for i := range t.NumField() {
 		f := t.Field(i)
+		if f.Name == "Payload" && f.Type.Kind() == reflect.Interface {
+			fv := v.Field(i)
+			if fv.IsNil() {
+				continue
+			}
+			// fv.Elem() (the interface's dynamic value) is a copy and not
+			// addressable, so a redaction pass (fn rewriting a string via
+			// SetString) cannot mutate it in place — copy it to an
+			// addressable local, walk that, then write the (possibly
+			// rewritten) copy back into the interface field.
+			concrete := reflect.New(fv.Elem().Type()).Elem()
+			concrete.Set(fv.Elem())
+			walkValue(concrete, path, fn)
+			fv.Set(concrete)
+			continue
+		}
 		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
 		if name == "-" || !f.IsExported() {
 			continue

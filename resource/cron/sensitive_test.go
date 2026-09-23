@@ -21,8 +21,9 @@ func TestCrontabFailureOutputIsWithheldForEveryJob(t *testing.T) {
 	for _, readFails := range []bool{true, false} {
 		for _, sensitive := range []bool{true, false} {
 			stubFailingCrontab(t, readFails)
-			op := plan.Op{Op: plan.KindCron, ID: "Cron[u/plain]", Name: "plain", CronUser: currentCronUser(t),
-				Command: "/bin/true", Schedule: "5 * * * *", Sensitive: sensitive}
+			op := plan.Op{Op: plan.KindCron, ID: "Cron[u/plain]", Name: "plain",
+				Command: "/bin/true", Sensitive: sensitive,
+				Payload: plan.CronPayload{CronUser: currentCronUser(t), Schedule: "5 * * * *"}}
 			err := planHandler{}.Apply(op, plan.ApplyContext{})
 			if err == nil || !strings.Contains(err.Error(), "output withheld") || strings.Contains(err.Error(), fakeCronSecret) {
 				t.Fatalf("read fails=%v sensitive=%v: err = %v, want the withheld failure without the secret",

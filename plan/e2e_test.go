@@ -504,7 +504,7 @@ func TestApplyCronRejectsMissingSchedule(t *testing.T) {
 	// Absent ops legitimately carry no schedule.
 	absent := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "cron"},
-		{Op: plan.KindCron, Name: "zzjob", CronUser: current.Username, Absent: true},
+		{Op: plan.KindCron, Name: "zzjob", Absent: true, Payload: plan.CronPayload{CronUser: current.Username}},
 	}
 	testseam.FakeCrontab(t, testseam.Crontab{
 		Read: func(name string, args ...string) (string, string, int, error) {

@@ -272,8 +272,24 @@ type Guard struct {
 	ExpectExit *int `json:"expect_exit,omitempty"`
 }
 
-// Op is one JSONL plan line. Fields are selected by Kind; unused fields stay zero
-// and are omitted via omitempty for a stable canonical encoding.
+// Op is one JSONL plan line. Fields are selected by Kind. Op holds the
+// "core" fields — the plan header/control fields, plus every resource field
+// two or more kinds genuinely share with identical meaning (Path, Mode,
+// Owner, Group, Command, Deps, Sensitive, ...) — while a field EXCLUSIVE to
+// one kind lives on that kind's own OpPayload, set on Payload (task yd2,
+// "Layer 2" of the PlanDraft/Op god-struct split; see docs/plan.md, "The
+// PlanDraft/Op split", and resource.PlanDraft's identical Layer 1 rule).
+// Unused fields stay zero and are omitted via wireOp's omitempty for a
+// stable canonical encoding; Op's own JSON is produced by MarshalJSON /
+// UnmarshalJSON (op_payload.go), not by encoding/json's default struct
+// reflection over Op itself, so the wire stays byte-for-byte the flat shape
+// it always was regardless of this Go-level split — see wireOp's doc
+// comment (wire.go) for exactly how.
+//
+// As of task yd2's first slice, only the cron and systemd_timer kinds have
+// migrated their exclusive fields onto a payload (CronPayload,
+// SystemdTimerPayload, op_payload.go); every other kind's fields are still
+// flat here, unchanged, pending follow-up tasks (see docs/plan.md).
 type Op struct {
 	Op      Kind   `json:"op"`
 	Version int    `json:"version,omitempty"`
@@ -422,32 +438,12 @@ type Op struct {
 	// OnlyIf runs KindCommand only when the guard probe succeeds.
 	OnlyIf *Guard `json:"only_if,omitempty"`
 
-	// CronUser is the crontab owner for KindCron (default root).
-	CronUser string `json:"cron_user,omitempty"`
-	// Command is the crontab command for KindCron.
+	// Command is the crontab command for KindCron, and the companion
+	// oneshot .service ExecStart command for KindSystemdTimer: two kinds
+	// genuinely sharing one "the command to run" meaning, so it stays a
+	// core field rather than moving onto either kind's own OpPayload (see
+	// resource/draft.go's identical note about resource.PlanDraft.Command).
 	Command string `json:"command,omitempty"`
-	// LegacyCommand opts KindCron into adopting one exact unmanaged command.
-	LegacyCommand string `json:"legacy_command,omitempty"`
-	// Schedule holds the five space-separated cron time fields
-	// (minute hour monthday month weekday) for KindCron.
-	Schedule string `json:"schedule,omitempty"`
-	// CronEnv lists KEY=VAL environment lines above the KindCron job.
-	CronEnv []string `json:"cron_env,omitempty"`
-
-	// OnCalendar is the systemd OnCalendar= expression for KindSystemdTimer.
-	OnCalendar string `json:"on_calendar,omitempty"`
-	// OnBootSec is the systemd OnBootSec= delay for KindSystemdTimer.
-	OnBootSec string `json:"on_boot_sec,omitempty"`
-	// Persistent sets Persistent=true on KindSystemdTimer units.
-	Persistent bool `json:"persistent,omitempty"`
-	// Description is the [Unit] Description for KindSystemdTimer.
-	Description string `json:"description,omitempty"`
-	// ServiceDescription is the companion oneshot .service Description.
-	ServiceDescription string `json:"service_description,omitempty"`
-	// After lists After= dependencies on the companion oneshot .service.
-	After []string `json:"after,omitempty"`
-	// Wants lists Wants= dependencies on the companion oneshot .service.
-	Wants []string `json:"wants,omitempty"`
 
 	// User selects systemd --user for KindTimer / KindDaemonReload / KindService / KindSystemdTimer.
 	User bool `json:"user,omitempty"`
@@ -537,4 +533,41 @@ type Op struct {
 	// decides every requirement before the first mutation, so a refused plan
 	// — dry run included — writes and predicts nothing. Schema version 20.
 	Require string `json:"require,omitempty"`
+
+	// Payload holds the fields exclusive to Op's own Kind (task yd2, "Layer
+	// 2"): nil for a control kind or a kind that has not migrated any field
+	// off Op yet, otherwise a concrete type from op_payload.go (CronPayload
+	// for KindCron, SystemdTimerPayload for KindSystemdTimer). It is
+	// json:"-" because Op never marshals itself by default reflection — see
+	// MarshalJSON/UnmarshalJSON below — but api's secret-scan reflection
+	// walker (walkOpStrings) still reaches its fields: it special-cases the
+	// "Payload" field by name and descends into it at the SAME path its
+	// fields had on the wire, since that is where they still sit (see
+	// api/secret_fields.go).
+	Payload OpPayload `json:"-"`
+}
+
+// MarshalJSON produces the exact flat JSON plan.Op always has, by merging
+// Op's core fields with Payload's kind-exclusive ones onto a wireOp and
+// marshaling that (see wire.go's doc comment for why this keeps the wire
+// byte-for-byte identical to before task yd2's split).
+func (op Op) MarshalJSON() ([]byte, error) {
+	w := op.toWire()
+	normalizeWire(&w)
+	return json.Marshal(w)
+}
+
+// UnmarshalJSON is MarshalJSON's mirror: decode the flat JSON into a
+// wireOp (one json.Unmarshal reaches every field, core and
+// kind-exclusive alike, exactly as it always has), normalize it, then
+// split it into Op's core fields plus a concrete Payload built by
+// payloadFromWire.
+func (op *Op) UnmarshalJSON(data []byte) error {
+	var w wireOp
+	if err := json.Unmarshal(data, &w); err != nil {
+		return err
+	}
+	normalizeWire(&w)
+	*op = fromWire(w)
+	return nil
 }

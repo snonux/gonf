@@ -521,11 +521,16 @@ class of bug that motivated task j5.
    re-deriving `opt.Option`s from `Op` fields by hand. `ToOp` copies every
    slice, map and pointer it takes from the draft (`slices.Clone`,
    `maps.Clone`), so the op never aliases the draft (task 882;
-   `TestHandlersToOpDoNotAliasDraft` in api checks every kind). `Op` itself
-   is still one flat struct (see the "PlanDraft/Op split" note below), so a
-   new `plan.Op` field is still added directly there and cloning it is still
-   `slices.Clone`/`maps.Clone` in `ToOp` — only the DRAFT side (step 4) has
-   moved to per-kind payload types.
+   `TestHandlersToOpDoNotAliasDraft` in api checks every kind). Most of
+   `Op` is still flat fields (see the "PlanDraft/Op split" note below): for
+   a kind that has not migrated yet, a new field is added directly to `Op`
+   and cloned with `slices.Clone`/`maps.Clone` in `ToOp`, same as always.
+   `cron` and `systemd_timer` (task yd2, Layer 2's first slice) instead have
+   their own `plan.CronPayload`/`plan.SystemdTimerPayload`, set on
+   `Op.Payload`; a NEW exclusive field on an ALREADY-migrated kind goes on
+   that kind's payload type instead of back onto `Op` (mirroring step 4's
+   rule below, now also for `Op`), still cloned in `ToOp` before being
+   assigned into the payload literal.
 3. **Resource draft** — the resource package: set the new draft `Kind` string
    in its `planDraft()` and call `resource.RecordPlanDraft` from `Present`
    (the register-without-draft guard fails the record otherwise). Map absent
@@ -621,6 +626,93 @@ stays flat on `PlanDraft` (see step 4's list). `resource/draft_clone.go`'s
 copies only the flat common core and delegates to `Payload.Clone()`, so a
 kind's own package (not this shared file) owns proving its own payload's
 copy-contract.
+
+**Layer 2 (task yd2): `plan.Op` itself, first slice.** The design set aside
+by w62 turned out simpler than "a draft/wire pair sharing one payload TYPE":
+`Op` keeps its own custom `MarshalJSON`/`UnmarshalJSON`, but they merge
+into (and split out of) a private, unexported mirror struct, `wireOp`
+(`plan/wire.go`) — an exact, frozen copy of Op's OLD flat field list, same
+declaration order, same json tags. `MarshalJSON` builds a `wireOp` from
+Op's core fields plus `op.Payload.applyToWire`, normalizes it (the same
+trimming `plan/codec.go`'s old `normalizeOp` did, moved and renamed
+`normalizeWire`, since it now runs once on the merged shape instead of on
+Op directly) and marshals THAT; `UnmarshalJSON` is the mirror: one
+`json.Unmarshal` into `wireOp` reaches every field exactly as it always
+did, then `fromWire` splits it into Op's core fields plus a concrete
+`OpPayload` built by `payloadFromWire`. Because `encoding/json.Marshal`
+always emits a struct's fields in declaration order, keeping `wireOp`'s
+order frozen (append-only, like `Op`'s own pre-split history) makes
+byte-for-byte wire stability a property of the type instead of something a
+runtime merge step has to get right — no map-based merging, no key-order
+risk. `TestGoldenDecodeReencode` (plan/golden_test.go) already did a
+literal `bytes.Equal` between a golden fixture and its decode-then-reencode
+output, and `TestOpJSONTagsMatchPlanExamples` (plan/types_test.go) already
+pinned literal encoded bytes per example op — both caught nothing broken
+here, confirming the mirror-struct approach honors them by construction
+rather than by luck.
+
+Every concrete `OpPayload` (`CronPayload`, `SystemdTimerPayload`,
+`plan/op_payload.go`) is declared IN the `plan` package itself, unlike a
+`resource.DraftPayload` — decode happens inside `plan`, which must never
+import a `resource/<kind>` package (see the layering note below), so `plan`
+cannot ask a resource package to build one. `applyToWire` is the interface's
+one, unexported method, so only a type declared in `plan` can implement
+`OpPayload` — the same closed-set discipline `TestSourcePayloadFitness`
+already enforces for `resource.DraftPayload`'s marker interfaces.
+
+One gotcha this slice hit, worth recording so a later kind's migration
+doesn't rediscover it: `api`'s secret-scan reflection walker
+(`walkOpStrings`/`opFieldClasses`, api/secret_fields.go) reflects directly
+over `plan.Op`'s Go struct, by JSON tag, to classify and (for redaction)
+rewrite every string-bearing field. Adding `Op.Payload` without teaching
+that walker about it would have been a silent regression, not a compile
+error: `Payload`'s `json:"-"` tag makes the walker's normal per-field loop
+skip it outright, so every cron/systemd_timer-exclusive field (a cron
+job's schedule and environment included) would have stopped being scanned
+for secrets and stopped being redacted from a preview — exactly the "a
+kind silently missing a checklist step" class of bug task 0e2's marker-
+interface gate was written to catch, just in a different mechanism.
+`walkStruct` now special-cases the `Payload` field by name (it cannot
+type-match `plan.OpPayload`: the interface's one method is unexported, so
+`api` cannot even spell it) and descends into its concrete value at the
+SAME path its fields had on the wire before the split — not nested under a
+"Payload" segment `opFieldClasses` knows nothing about. A second, sharper
+gotcha followed: `reflect.Value.Elem()` on an interface field yields the
+DYNAMIC value as an unaddressable copy, so the walker's redaction path
+(which rewrites a string in place via `SetString`) panicked
+(`TestRedactedPreviewWithholdsExplicitPayloads`) until the special case
+copies the payload to an addressable local, walks that, and writes the
+(possibly rewritten) copy back into the interface field. Both gotchas were
+caught by the existing fitness/regression tests immediately, not discovered
+later — `TestOpFieldClassesAreExhaustive` now also runs one pass per
+`plan.OpPayloadExamples()` entry (Op.Payload is polymorphic: one Op value
+holds at most one concrete payload, so a single fill-and-walk pass can no
+longer reach every kind's exclusive fields at once), and a new
+`TestWirePayloadTagsMatch` (plan/types_test.go) pins that each payload
+type's json tags — needed ONLY by this reflection walker, since
+`Op.MarshalJSON` never marshals a payload type directly — never drift from
+`wireOp`'s own tags for the same field.
+
+This slice migrated exactly two kinds' exclusive fields off `Op` onto a
+payload — `cron` (`CronPayload`: `CronUser`, `LegacyCommand`, `Schedule`,
+`CronEnv`) and `systemd_timer` (`SystemdTimerPayload`: `OnCalendar`,
+`OnBootSec`, `Persistent`, `Description`, `ServiceDescription`, `After`,
+`Wants`) — chosen for having small, cleanly contiguous field clusters with
+exactly one non-test call site each (`resource/cron/planwire.go`,
+`resource/systemdtimer/planwire.go`) to touch beyond the shared
+infrastructure, so the split's own machinery (`wireOp`, the merge/split
+methods, the secret-scan walker fix) could be proven end to end without
+also chasing edits across every kind's call sites in one pass. `Command`
+stays flat on Op's core despite reading as cron/systemd_timer-specific,
+for the same reason `resource.PlanDraft.Command` does (see step 4 above):
+both kinds genuinely share its "the command to run" meaning. Every other
+kind's fields are UNCHANGED, still flat on `Op` — `File`, `Dir`/`SyncDir`,
+`Link`/`LinkIfExists`, `Command`, `Package`, `Service`/`Timer`/
+`DaemonReload`, `EnsureDir`/`EnsureFile`, `User`, `ConfigSet`/
+`ConfigSetMember`, and `WhenBegin`/`WhenEnd` all remain exactly as they
+were pre-yd2, pending follow-up tasks scoped the same way (one or a few
+kinds per task, per this file's own "do not attempt it as one uninterrupted
+blind edit" guidance, matching w62's own incremental discipline).
 
 A resource package that registers a `plan.Handler` must never be imported by
 the `plan` package itself (that would reintroduce the cycle the registry
