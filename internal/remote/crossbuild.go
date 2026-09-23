@@ -55,14 +55,15 @@ import (
 // symlink — nothing is reused: the state is dropped with a warning, and a
 // NEW directory is created and the binary rebuilt.
 //
-// Cleanup: Close removes the directories (the CLI calls CleanupBuilds when
-// it returns; gonf library code never ends the process, so that deferred
-// call always runs on a normal or error return). A directory is only removed while it is still ours by identity (same inode,
-// real directory, owned by us — see isOurDir), so a planted replacement or a
-// symlink's target is never touched, while one of ours whose mode was merely
-// loosened is still cleaned up. A crash, SIGKILL, an uncaught signal such as
-// SIGHUP/SIGQUIT, or an api-only program that never calls CleanupBuilds can
-// leave one gonf-cross-* dir behind for the OS temp cleaner.
+// Cleanup: Close removes the directories (the CLI calls CleanupBuilds when it
+// returns; gonf library code never ends the process, so that deferred call
+// always runs on a normal or error return). A directory is only removed while
+// it is still ours by identity (same inode, real directory, owned by us — see
+// isOurDir), so a planted replacement or a symlink's target is never touched,
+// while one of ours whose mode was merely loosened is still cleaned up. A
+// crash, SIGKILL, an uncaught signal such as SIGHUP/SIGQUIT, or an api-only
+// program that never calls CleanupBuilds can leave one gonf-cross-* dir behind
+// for the OS temp cleaner.
 //
 // History: the cache used to be a FIXED path, $TMPDIR/gonf-cross-<goos>-
 // <goarch>/gonf, shared by every process. Concurrent processes overwrote

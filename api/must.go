@@ -23,8 +23,9 @@ func MustHostValue[T any](host, key string) T {
 }
 
 // lookupHostValue is the error-returning core of MustHostValue, shared with
-// ForHosts, which reports the same inventory errors with its own prefix. The error names the host, the key and, for a type
-// mismatch, both types; it never contains the value itself.
+// ForHosts, which reports the same inventory errors with its own prefix. The
+// error names the host, the key and, for a type mismatch, both types; it never
+// contains the value itself.
 func lookupHostValue[T any](host, key string) (T, error) {
 	var zero T
 	if key == "" {

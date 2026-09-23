@@ -23,14 +23,14 @@ import (
 // Staging closes that whole class at once: whatever makes the record fail, the
 // destination was never touched.
 //
-// The staging directory is created lazily (lazyStage), on the first blob
-// write, so a plan without blobs never touches $TMPDIR. It is removed on every
-// return path (refusal, error, success); DSL misuse in a task body is a
-// returned record error (internal/declerr), never a process exit, so the
-// deferred removal always runs. It is NOT removed when the process is killed (SIGKILL, SIGINT with no handler, a crash): the staging
-// directory (owner-only, 0700, like its blobs) then stays in $TMPDIR until the
-// operating system cleans it. Blob-less plans, the common case, never create
-// one.
+// The staging directory is created lazily (lazyStage), on the first blob write,
+// so a plan without blobs never touches $TMPDIR. It is removed on every return
+// path (refusal, error, success); DSL misuse in a task body is a returned
+// record error (internal/declerr), never a process exit, so the deferred
+// removal always runs. It is NOT removed when the process is killed (SIGKILL,
+// SIGINT with no handler, a crash): the staging directory (owner-only, 0700,
+// like its blobs) then stays in $TMPDIR until the operating system cleans it.
+// Blob-less plans, the common case, never create one.
 func stageBlobs(planID, planDir string, taskNames []string) ([]plan.Op, error) {
 	if err := checkPlanDirUsable(planDir); err != nil {
 		return nil, fmt.Errorf("RecordPlan: plan dir: %w", err)
