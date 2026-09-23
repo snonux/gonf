@@ -88,14 +88,29 @@ func chainBeforeCycle(n int) []plan.Op {
 }
 
 // TestCycleErrorLongChainBeforeCycle pins that chainBeforeCycle's refusal
-// names just the cycle, the chain being unblocked, at a size where the old
-// peel's O(n^2) passes took hundreds of milliseconds.
+// names just the cycle, the chain being unblocked, and guards against a
+// quadratic or worse regression in getting there: the old fixed-point peel
+// (peelBlocked) took hundreds of milliseconds at 40k ops on this shape
+// because each low-to-high pass retired only one link of the chain. Checking
+// the error text alone would not catch that regression coming back -- the
+// old peel produces the same text, just slowly -- so, like the ab2/pb2 perf
+// guards in api/apply_order_test.go, this also measures the same shape at a
+// base size and at 4x that size and asserts the time grows well below
+// quadratic (see assertGrowsSubQuadratically).
 func TestCycleErrorLongChainBeforeCycle(t *testing.T) {
-	ops := append([]plan.Op{orderHdr}, chainBeforeCycle(40000)...)
-	_, _, err := orderForPrivilegeSplit(ops)
 	want := "Apply: circular dependency: Command[x] -> Command[y] -> Command[x] (each depends on the next); " +
 		"refused before anything is applied"
-	if err == nil || err.Error() != want {
-		t.Fatalf("err = %v, want %q", err, want)
+	check := func(n int) func() error {
+		ops := append([]plan.Op{orderHdr}, chainBeforeCycle(n)...)
+		return func() error {
+			_, _, err := orderForPrivilegeSplit(ops)
+			if err == nil || err.Error() != want {
+				return fmt.Errorf("err = %v, want %q", err, want)
+			}
+			return nil
+		}
 	}
+	assertGrowsSubQuadratically(t,
+		fmt.Sprintf("chainBeforeCycle(%d)", 10000), check(10000),
+		fmt.Sprintf("chainBeforeCycle(%d)", 40000), check(40000))
 }

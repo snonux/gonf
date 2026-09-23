@@ -139,17 +139,33 @@ exec sleep 60`)
 	assertNoLiveTarget(t, target)
 }
 
-// The timeout kill is SIGKILL, not a catchable signal: a validator that
-// ignores SIGTERM still ends at the deadline, not ivalidator.WaitDelay later
-// (and never the full 60s sleep, which is what an uncaught SIGTERM-only kill
-// would leave running). The bound (timeout + WaitDelay + generous slack)
-// tolerates a busy host while staying far short of that 60s.
+// The timeout kill is SIGKILL, never a catchable signal: killTree (task b82,
+// proctree.go) SIGSTOPs the validator before it ever kills it, so a live
+// process never gets the chance to run a SIGTERM handler at all. A duration
+// bound cannot prove that on its own: a regression that sent a catchable
+// SIGTERM instead would still have this validator exit well within the
+// bound below (it traps and returns almost immediately), so the test would
+// keep passing on timing alone -- which is exactly why an earlier version of
+// this test (with a script that only ignored SIGTERM via an empty TERM
+// trap) missed it. Instead the validator traps SIGTERM to write a marker
+// file, and the assertion is that the marker is ABSENT afterward: proof no
+// SIGTERM ever reached it, independent of timing entirely. The sleep runs
+// backgrounded with an explicit `wait` (rather than a plain foreground
+// `sleep 60`, or `exec`ing into it) because a shell only runs a queued trap
+// once its current foreground job returns: `exec sleep 60` would also
+// discard the trap outright (exec resets a caught signal's disposition to
+// default), and a bare foreground `sleep 60` would leave the trap unrun
+// until that sleep itself ends, defeating the point. The elapsed bound is
+// kept too, as a sanity check that the kill still happens at the deadline
+// and not ivalidator.WaitDelay later or after the full 60s sleep.
 func TestValidationTimeoutKillIsUncatchable(t *testing.T) {
 	resource.ResetRepository()
 	setValidationCommandTimeout(t, time.Second)
 	target := filepath.Join(privateValidationDir(t), "service.conf")
-	validator := writeValidationScript(t, `trap '' TERM
-exec sleep 60`)
+	mark := filepath.Join(t.TempDir(), "term-caught")
+	validator := writeValidationScript(t, `trap 'echo x > "`+mark+`"' TERM
+sleep 60 &
+wait`)
 
 	elapsed, err := validateTimed(target, validator)
 	if limit := time.Second + ivalidator.WaitDelay + 10*time.Second; elapsed > limit {
@@ -159,6 +175,9 @@ exec sleep 60`)
 		t.Fatalf("error = %v, want a timeout", err)
 	}
 	assertNoLiveTarget(t, target)
+	if _, statErr := os.Stat(mark); !os.IsNotExist(statErr) {
+		t.Fatalf("TERM trap marker present: the kill delivered a catchable SIGTERM, want SIGKILL only")
+	}
 }
 
 // The validator's stdin is /dev/null, never gonf's own stdin (which carries
