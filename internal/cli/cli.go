@@ -583,19 +583,30 @@ func warnSensitivePlan(outPath string, ops []plan.Op) {
 // with exit 1. This is also the receiving end of a push, so a signal
 // reaching it stops its apply the same way. With "-cancel-pipe" (set only by
 // the local sudo/doas elevated re-exec; see api.elevatedApplyArgv), this is
-// also the elevated child: watchCancelPipe below wires an EOF on stdin into
-// the same ctx cancellation, so the parent (api.runElevatedCmd) can trigger
-// this child's graceful stop directly, out-of-band from process signalling —
-// which the parent no longer trusts alone, since it behaves inconsistently
-// across sudo/doas implementations (see runElevatedCmd's doc comment).
-// Canceling a push on the controller, however, only kills the local ssh:
-// nothing signals the remote gonf, which keeps applying until its next write
-// to the closed stdout fails; there is no end-to-end remote cancel. Either
-// way this is the relayed child's entry point (logger.RunRelayed), so it
-// ignores SIGPIPE before anything else runs — see
-// ignoreSIGPIPEForRelayedChild.
+// also the elevated child: watchCancelPipe below wires stdin into the same
+// ctx cancellation, canceling only once it actually reads the parent's
+// one-byte cancel signal (a bare close/EOF, with no byte ever read — e.g.
+// the parent process itself dying — does NOT cancel, task 6d2), so the
+// parent (api.runElevatedCmd) can trigger this child's graceful stop
+// directly, out-of-band from process signalling — which the parent no
+// longer trusts alone, since it behaves inconsistently across sudo/doas
+// implementations (see runElevatedCmd's doc comment). Canceling a push on
+// the controller, however, only kills the local ssh: nothing signals the
+// remote gonf, which keeps applying until its next write to the closed
+// stdout fails; there is no end-to-end remote cancel.
+//
+// cliApply is reached for every "gonf apply" invocation alike — the local
+// elevated re-exec, the receiving end of a push/preview over ssh, AND an
+// ordinary operator command such as `gonf apply plan.jsonl` or a manually
+// piped `gonf apply -` — so it does NOT ignore SIGPIPE unconditionally (task
+// 7d2 fixed this: it used to, on the wrong assumption that this function is
+// reached only as a relayed child's entry point, which broke the SIGPIPE
+// disposition, and hence any downstream backend command relying on it, for
+// every ordinary local apply too). It ignores SIGPIPE only when this really
+// is a relayed child: "-cancel-pipe" (the local elevated re-exec) or
+// "-relayed" (set only by internal/remote's remote apply command, for the
+// push/preview destination) — see ignoreSIGPIPEForRelayedChild.
 func cliApply(ctx context.Context, args []string) int {
-	ignoreSIGPIPEForRelayedChild()
 	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	dryRun := fs.Bool("dry-run", false, "Preview changes without applying them")
@@ -603,10 +614,25 @@ func cliApply(ctx context.Context, args []string) int {
 	strictPreview := fs.Bool("strict-preview", false, "Require a no-staging remote preview")
 	applyDir := fs.String("apply-dir", "", "sticky staging dir for multi-chunk push (skip wipe)")
 	cancelPipe := fs.Bool("cancel-pipe", false, "internal: treat stdin as an out-of-band cancel "+
-		"channel (EOF cancels this apply's context); set only by the local sudo/doas elevated "+
-		"re-exec (api.runElevatedCmd), never for interactive or piped-plan (\"-\") use")
+		"channel (a byte written to it, then closed, cancels this apply's context; a bare "+
+		"close/EOF with no byte ever read does not, task 6d2); set only by the local sudo/doas "+
+		"elevated re-exec (api.runElevatedCmd), never for interactive or piped-plan (\"-\") use")
+	relayed := fs.Bool("relayed", false, "internal: this apply's stdout/stderr are being relayed "+
+		"by another gonf process (the local elevated sudo/doas re-exec, which sets -cancel-pipe "+
+		"instead, or the receiving end of a push/preview over ssh) — ignore SIGPIPE for the "+
+		"whole run so that relaying process dying mid-apply (crash, OOM-kill) does not "+
+		"SIGPIPE-kill this one too; set only by internal/remote's remote apply command, never "+
+		"for an interactive or manually piped-plan (\"-\") local apply")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	// Ignore SIGPIPE only for a genuine relayed child (see
+	// ignoreSIGPIPEForRelayedChild's doc comment and cliApply's own doc
+	// comment above, task 7d2): neither marker is set for an ordinary local
+	// "gonf apply <plan.jsonl>" or a manually piped-plan "gonf apply -",
+	// which both keep the default SIGPIPE disposition.
+	if *cancelPipe || *relayed {
+		ignoreSIGPIPEForRelayedChild()
 	}
 	// Escalate-only: a top-level "gonf -n apply ..." already set this via
 	// CLI()'s unconditional call before dispatch; don't stomp it back to
@@ -642,12 +668,29 @@ func cliApply(ctx context.Context, args []string) int {
 }
 
 // ignoreSIGPIPEForRelayedChild makes this process ignore SIGPIPE for the
-// rest of its run. cliApply is reached only as the relayed child's entry
-// point: a local elevated sudo/doas re-exec (api.runElevatedCmd) or the
-// receiving end of a push over ssh (internal/remote's defaultSSHRunner) —
-// either way logger.RunRelayed owns the pipe (or, for push, the ssh
-// channel feeding one) this child's stdout and stderr are wired to, and the
-// controller is its only reader.
+// rest of its run. Call it only when this process genuinely IS a relayed
+// child: a local elevated sudo/doas re-exec (api.runElevatedCmd, marked by
+// "-cancel-pipe") or the receiving end of a push/preview over ssh
+// (internal/remote's remoteApplyCmd, marked by "-relayed") — either way
+// logger.RunRelayed owns the pipe (or, for push, the ssh channel feeding
+// one) this child's stdout and stderr are wired to, and the controller is
+// its only reader.
+//
+// cliApply itself is NOT that signal: it is also reached for an ordinary,
+// non-relayed local apply (`gonf apply <plan.jsonl>`, ALSO a documented
+// operator command, see docs/plan-encryption.md's "What travels where
+// today" table and docs/plan.md's plan/apply split) and for a plan piped in
+// manually (`gonf apply -`, likewise documented). Calling this
+// unconditionally from cliApply used to ignore SIGPIPE for every one of
+// those too (task lb2's own "scoped to the relayed process tree" claim was
+// wrong — measured directly: `gonf apply plan.jsonl` showed SIGPIPE ignored
+// in /proc/self/status when it should not have), which silently changed
+// how every backend command such an apply runs behaves (see below) and
+// broke early-exit behaviour for an operator piping this process's own
+// output, e.g. `gonf apply plan.jsonl | head` no longer stopping early when
+// head closed its end. cliApply's caller now gates this call on the
+// -cancel-pipe/-relayed markers instead (task 7d2), so only a genuine
+// relayed child reaches here.
 //
 // RunRelayed's detached-cat hand-off already keeps a descendant alive once
 // it outlives its own gonf's normal exit or a context-cancelled kill (the
@@ -696,21 +739,45 @@ func ignoreSIGPIPEForRelayedChild() {
 }
 
 // watchCancelPipe reads r (the elevated child's stdin, wired by
-// api.runElevatedCmd to the read end of its cancel pipe) until EOF or error,
-// then calls cancel. This is the child side of the parent-closes-the-pipe
-// cancellation cliApply's "-cancel-pipe" enables: closing the pipe reaches
-// this goroutine regardless of whether the sudo/doas wrapper in between
-// would have relayed (or withheld) a process signal correctly, so
+// api.runElevatedCmd to the read end of its cancel pipe) and calls cancel
+// only once it has actually read the parent's one-byte cancel signal
+// (api.wireElevatedCancelPipe writes exactly one byte, then closes the
+// write end). A bare EOF — the read returning 0 bytes with no byte ever
+// having arrived — means the parent's write end closed WITHOUT sending that
+// byte, i.e. the controller process itself vanished (SIGKILLed, OOM-killed,
+// crashed) rather than choosing to cancel; watchCancelPipe treats that as
+// "keep applying, do nothing" and returns without ever calling cancel (task
+// 6d2). Before this fix, any close — deliberate cancel or the controller
+// simply dying — was read as a cancel (io.Copy until EOF, "only the
+// close/EOF itself matters"), which defeated task lb2's whole point: the
+// elevated child must keep applying even if the controller dies, not treat
+// that death as a cancel and abort an in-flight privileged command.
+//
+// This works the same way regardless of whether the sudo/doas wrapper in
+// between would have relayed (or withheld) a process signal correctly, so
 // cancellation works the same way under sudo, OpenDoas and native OpenBSD
 // doas. cancel is a context.CancelFunc, safe to call more than once (e.g.
-// this fires while a real SIGTERM also reached the child directly), and any
-// bytes read before EOF are discarded — only the close/EOF itself matters.
-// A normal, uncanceled apply leaves this goroutine parked on the read until
-// the process exits (cmd.Stdin's fd is then closed by the OS), which is
-// harmless.
+// this fires while a real SIGTERM also reached the child directly). A
+// normal, uncanceled apply leaves this goroutine parked on the read until
+// the process exits (cmd.Stdin's fd is then closed by the OS, delivering a
+// bare EOF here that is correctly ignored), which is harmless.
 func watchCancelPipe(r io.Reader, cancel context.CancelFunc) {
-	_, _ = io.Copy(io.Discard, r)
-	cancel()
+	var b [1]byte
+	for {
+		n, err := r.Read(b[:])
+		if n > 0 {
+			cancel()
+			return
+		}
+		if err != nil {
+			// Bare EOF (or any other read error): the parent's write end
+			// closed without ever sending the cancel byte. Do nothing.
+			return
+		}
+		// n == 0, err == nil: a spurious empty read some io.Reader
+		// implementations can return; retry rather than treating it as
+		// either a cancel or an EOF.
+	}
 }
 
 // cliApplyFile applies the plan file planPath, with its blobs/ sidecars next

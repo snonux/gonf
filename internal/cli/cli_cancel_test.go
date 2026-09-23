@@ -229,14 +229,17 @@ func TestCLIApplyFailureNotInterrupted(t *testing.T) {
 }
 
 // TestCLIApplyCancelPipeStopsLongRunningCommand: task 3c2's core fix on the
-// child side. "-cancel-pipe" makes cliApply treat stdin as an out-of-band
-// cancel channel (api.runElevatedCmd closes it, instead of relying on
-// sudo/doas to relay or withhold a signal correctly): closing it here
-// (standing in for that close, with no OS signal and no ctx cancellation at
-// all — context.Background()) must stop the long-running command through
-// the very same "apply: interrupted: …" path as a signal-based cancel does,
-// pinning that the pipe is only an alternate trigger, not a separate
-// cancellation mechanism.
+// child side, updated for task 6d2's cancel-BYTE protocol. "-cancel-pipe"
+// makes cliApply treat stdin as an out-of-band cancel channel
+// (api.wireElevatedCancelPipe writes one byte and then closes, instead of
+// relying on sudo/doas to relay or withhold a signal correctly): writing
+// that byte and closing here (standing in for the parent's real cancel,
+// with no OS signal and no ctx cancellation at all — context.Background())
+// must stop the long-running command through the very same "apply:
+// interrupted: …" path as a signal-based cancel does, pinning that the pipe
+// is only an alternate trigger, not a separate cancellation mechanism. A
+// bare close with no byte written does NOT cancel — see
+// TestCLIApplyCancelPipeBareEOFDoesNotCancel below.
 func TestCLIApplyCancelPipeStopsLongRunningCommand(t *testing.T) {
 	root := t.TempDir()
 	started, marker := filepath.Join(root, "started"), filepath.Join(root, "after")
@@ -252,7 +255,7 @@ func TestCLIApplyCancelPipeStopsLongRunningCommand(t *testing.T) {
 		os.Stdin = oldStdin
 		_ = r.Close()
 	})
-	whenStarted(t, started, func() { _ = w.Close() })
+	whenStarted(t, started, func() { _, _ = w.Write([]byte{1}); _ = w.Close() })
 
 	var code int
 	start := time.Now()
@@ -260,6 +263,48 @@ func TestCLIApplyCancelPipeStopsLongRunningCommand(t *testing.T) {
 		code = cliApply(context.Background(), []string{"-cancel-pipe", path})
 	})
 	requireInterrupted(t, code, time.Since(start), stderr, "apply: interrupted: ", marker)
+}
+
+// TestCLIApplyCancelPipeBareEOFDoesNotCancel is task 6d2's core regression
+// pin on the in-process path (see also TestSIGKilledCancelPipeChildIgnoresBareEOF
+// in cli_sigkill_controller_test.go for the real-SIGKILL, cross-process
+// version): closing the cancel pipe's write end WITHOUT ever writing the
+// one-byte cancel signal must leave the apply running to completion,
+// uncanceled — a bare close/EOF means the parent's write end vanished
+// (e.g. the controller process died) without the parent ever choosing to
+// cancel, and before this fix watchCancelPipe could not tell that apart
+// from a deliberate cancel. Uses sigkillProbeOps (a ~1s command, not the
+// 30s sleepThenTouchOps used above for cancellation tests) since this test
+// must let the apply run to completion rather than cut it short.
+func TestCLIApplyCancelPipeBareEOFDoesNotCancel(t *testing.T) {
+	root := t.TempDir()
+	started, marker := filepath.Join(root, "started"), filepath.Join(root, "marker")
+	path := writePlanFile(t, root, sigkillProbeOps(started, marker))
+
+	oldStdin := os.Stdin
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdin = r
+	t.Cleanup(func() {
+		os.Stdin = oldStdin
+		_ = r.Close()
+	})
+	// Close WITHOUT writing the cancel byte first, standing in for the
+	// controller process dying without ever choosing to cancel.
+	whenStarted(t, started, func() { _ = w.Close() })
+
+	var code int
+	stderr := testutil.CaptureStderr(t, func() {
+		code = cliApply(context.Background(), []string{"-cancel-pipe", path})
+	})
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 (a bare close/EOF with no cancel byte must not cancel); stderr:\n%s", code, stderr)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("apply did not run to completion: %v", err)
+	}
 }
 
 // TestCLIApplyFileIgnoresStdinWithoutCancelPipe is the regression guard for

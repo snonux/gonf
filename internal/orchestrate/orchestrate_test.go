@@ -78,8 +78,8 @@ func TestDeliverModeDecidesBootstrap(t *testing.T) {
 		wantBootstraps int32
 		wantCmd        string
 	}{
-		{remote.Push, 2, "gonf apply -"},
-		{remote.Preview, 0, "gonf apply -n -strict-preview -"},
+		{remote.Push, 2, "gonf apply -relayed -"},
+		{remote.Preview, 0, "gonf apply -relayed -n -strict-preview -"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.mode.String(), func(t *testing.T) {

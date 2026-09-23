@@ -132,9 +132,9 @@ func TestEntryPointsPinDeliveryMode(t *testing.T) {
 				t.Fatalf("%s: %v", tc.name, err)
 			}
 			checkSummary(t, tc, stderr)
-			wantCmd, bootstrapped := "gonf apply -", r.bootstraps.Load() > 0
+			wantCmd, bootstrapped := "gonf apply -relayed -", r.bootstraps.Load() > 0
 			if tc.preview {
-				wantCmd = "gonf apply -n -strict-preview -"
+				wantCmd = "gonf apply -relayed -n -strict-preview -"
 			}
 			if bootstrapped == tc.preview {
 				t.Fatalf("%s: bootstraps = %d, preview = %v", tc.name, r.bootstraps.Load(), tc.preview)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	gexec "github.com/snonux/gonf/internal/exec"
 )
@@ -24,10 +25,13 @@ const validatorWaitNotice = "gonf: interrupt received; waiting for the running v
 // would seem to hang silently for up to that timeout. A deadline is not an
 // interrupt and prints nothing. The returned stop disarms the notice and, if
 // it had already started (afterFuncJoined), blocks until it finishes; call
-// it when the apply returns. w is commonly os.Stderr (ApplyPlanContext), a
-// package-level variable other code (e.g. a test's CaptureStderr) may swap
-// concurrently, so joining here — instead of leaving the notice goroutine to
-// finish on its own time — matters, not just tidiness (task 1d2).
+// it when the apply returns. Safe to call more than once (afterFuncJoined's
+// stop is idempotent, task 8d2): a caller of noteValidatorWait may combine a
+// deferred call with an earlier one on some other return path. w is
+// commonly os.Stderr (ApplyPlanContext), a package-level variable other code
+// (e.g. a test's CaptureStderr) may swap concurrently, so joining here —
+// instead of leaving the notice goroutine to finish on its own time —
+// matters, not just tidiness (task 1d2).
 func noteValidatorWait(ctx context.Context, w io.Writer, running func() bool) (stop func()) {
 	return afterFuncJoined(ctx, func() {
 		if errors.Is(ctx.Err(), context.Canceled) && running() {
@@ -50,15 +54,34 @@ func noteValidatorWait(ctx context.Context, w io.Writer, running func() bool) (s
 // -race -shuffle=on (task 1d2). Joining here bounds f's lifetime to the
 // call that registered it, closing that hazard structurally rather than
 // coordinating around it at each call site.
+//
+// The returned stop is idempotent-safe: call it any number of times (both
+// existing call sites here only ever defer it once, but noteValidatorWait
+// hands its stop back to ITS OWN caller as a return value, so a future
+// caller is free to also call it early alongside an existing deferred call
+// without auditing this function first). Without the sync.Once below, a
+// second call would hang forever: context.AfterFunc's own rawStop returns
+// false both when f already started AND when stop was already called
+// before — this wrapper's body only handled the first meaning, so a second
+// call would see rawStop() return false again (now meaning "already
+// stopped", not "already started") and block on <-done past the point
+// where f (and its close(done)) will ever run again — confirmed directly
+// with a real stop(); stop() probe (task 8d2) rather than assumed from
+// context.AfterFunc's doc prose alone. sync.Once makes every call after the
+// first a no-op that returns immediately, exactly like calling an
+// already-fired context.CancelFunc a second time.
 func afterFuncJoined(ctx context.Context, f func()) (stop func()) {
 	done := make(chan struct{})
 	rawStop := context.AfterFunc(ctx, func() {
 		defer close(done)
 		f()
 	})
+	var once sync.Once
 	return func() {
-		if !rawStop() {
-			<-done
-		}
+		once.Do(func() {
+			if !rawStop() {
+				<-done
+			}
+		})
 	}
 }

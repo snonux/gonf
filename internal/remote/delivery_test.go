@@ -140,8 +140,8 @@ func TestFanoutModeDecidesBootstrap(t *testing.T) {
 		wantCmd        string
 		wantSummary    string
 	}{
-		{Push, 2, "gonf apply -", "pushed p (2 ops) to c (2/2 hosts)\n"},
-		{Preview, 0, "gonf apply -n -strict-preview -", "previewed p (2 ops) to c (2/2 hosts)\n"},
+		{Push, 2, "gonf apply -relayed -", "pushed p (2 ops) to c (2/2 hosts)\n"},
+		{Preview, 0, "gonf apply -relayed -n -strict-preview -", "previewed p (2 ops) to c (2/2 hosts)\n"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.mode.String(), func(t *testing.T) {

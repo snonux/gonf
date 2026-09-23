@@ -455,7 +455,7 @@ func TestPushClusterDryRun(t *testing.T) {
 	if err := PushCluster("dryf", "dry"); err != nil {
 		t.Fatal(err)
 	}
-	if sawRemote != "gonf apply -n -" {
+	if sawRemote != "gonf apply -relayed -n -" {
 		t.Fatalf("remote=%q", sawRemote)
 	}
 }

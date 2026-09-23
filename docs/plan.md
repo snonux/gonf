@@ -925,11 +925,33 @@ refused with a bare sudo/doas permission error that never mentions
 `-cmd-timeout` or `-profile` — this is not new (the same `gonf apply
 *`-style rule already refuses the plain `Privileged()` re-exec argv
 whenever either flag is non-default) and it is not gated by anything
-described above. Operators using a fixed-argument sudoers/doas rule (local
+described above.
+
+Two more arguments are **always** part of the elevated/relayed argv and have
+no default-off escape hatch at all, unlike `-cmd-timeout`/`-profile`:
+`-cancel-pipe` (LOCAL elevated re-exec, `elevatedApplyArgv`, task 3c2) and
+`-relayed` (REMOTE push/preview apply, `internal/remote`'s `remoteApplyCmd`,
+task 7d2) are both appended unconditionally, every time, to every elevated
+local re-exec and every remote apply command respectively — there is no
+flag or setting that removes them, so "leave it at its default" is not an
+option for either. A fixed-argument sudoers/doas rule must therefore always
+include them in its allowed pattern (e.g. `gonf apply -cancel-pipe *` locally,
+or `gonf apply -relayed *` — or, more robustly, a rule that matches the
+whole `apply ...` tail loosely rather than one fixed flag sequence — on a
+remote host), in addition to whatever it does for `-cmd-timeout`/`-profile`
+below. Operators using a fixed-argument sudoers/doas rule (local
 `Privileged()` re-exec or a remote host's wrapper) must widen the rule to
-allow the flags (or a wildcard command line), or leave `-cmd-timeout` and
-`-profile` at their defaults, or the elevated apply fails outright instead
-of degrading gracefully.
+allow `-cancel-pipe`/`-relayed` unconditionally, and either also allow
+`-cmd-timeout`/`-profile` (or a wildcard command line) or leave those two
+specifically at their defaults, or the elevated apply fails outright instead
+of degrading gracefully. A remote host also needs its gonf upgraded to a
+release that knows `-relayed` before a fixed-argument rule can match it at
+all (an older gonf rejects the flag itself with "flag provided but not
+defined: -relayed", the same failure mode as an unknown `-cmd-timeout`);
+an ordinary `push` self-heals this via `EnsureRemoteGonf`'s release-version
+upgrade once the release carrying task 7d2 lands, and `-preview` refuses
+outright against a stale remote (`RequireRemoteGonf`) rather than surfacing
+that raw error.
 
 `gonf -list` lists **activated** tasks (After `When*` filtering for display);
 plan recording still uses the full candidate set.
@@ -968,10 +990,14 @@ Design decisions:
   the CLI's signal context (SIGINT, SIGTERM, and SIGHUP unless it is ignored,
   so `nohup gonf …` survives a logout; `api.RunContext`,
   `api.ApplyPlanContext`). The elevated re-exec child additionally derives
-  its context from `-cancel-pipe` (`cliApply`'s `watchCancelPipe`): EOF on
-  its stdin cancels it exactly like a delivered signal would, and is the
-  parent's actual, reliable cancellation trigger — see "Elevated re-exec"
-  below. `plan.ApplyWithContext` binds that context to
+  its context from `-cancel-pipe` (`cliApply`'s `watchCancelPipe`): a
+  successful read of the one-byte cancel signal the parent writes to its
+  stdin (then closes) cancels it exactly like a delivered signal would, and
+  is the parent's actual, reliable cancellation trigger — see "Elevated
+  re-exec" below. A bare close/EOF with no byte ever read (e.g. the parent
+  process itself dying before choosing to cancel) does NOT cancel it (task
+  6d2) — the child keeps applying instead of wrongly treating the parent's
+  death as a cancel signal. `plan.ApplyWithContext` binds that context to
   `internal/exec` for the duration of the apply, so a signal stops the
   backend command in flight, no further op starts, and the command fails
   with `interrupted: … context canceled` and exit 1. Stopping is graceful:
@@ -1018,13 +1044,24 @@ Design decisions:
   but only for sudo (a harmless, cheap defense-in-depth there); never for
   doas, since that signal is what triggers OpenDoas's premature kill in the
   first place. Either way, the wrapper itself is SIGKILLed only after that
-  same grace period if it has not already exited behind its child, so a
-  validator running in the child can finish and its op be aborted cleanly
-  instead of leaving an orphaned root child writing the file afterwards.
+  same grace period if it has not already exited behind its child AND gonf
+  can actually still signal it by then (task 9d2): an unprivileged SIGKILL
+  of a still-root-owned native OpenBSD doas process fails with EPERM (see
+  "elevatedCancelGrace" above), so for that one wrapper there is in fact no
+  enforced bound on the wrapper itself at all — gonf simply waits for it to
+  exit on its own, bounded only by however long that takes. The bound is
+  therefore "wherever gonf may signal the wrapper" (sudo, OpenDoas), not
+  uniformly "always", even though telling the CHILD to stop (via the pipe)
+  is itself uniform across all three. A validator running in the child can
+  finish and its op be aborted cleanly instead of leaving an orphaned root
+  child writing the file afterwards, in the cases where the bound applies.
 - **No end-to-end remote cancel.** Canceling a push (`push`, `cluster`,
   `fleet`) kills only the local `ssh`. Nothing signals the remote `gonf
   apply`: it keeps applying until its next write to the now closed stdout
-  fails.
+  fails — a plain, discarded EPIPE rather than a SIGPIPE kill, since the
+  remote apply command always carries `-relayed` (task 7d2, see "Fixed-
+  argument sudoers/doas rules" above), so it keeps applying to completion
+  even though nothing on the controller is reading its output any more.
 
 Plan schema **version 11** extends `if_changed` / `watch` from
 `daemon_reload` to `command`, `service`, and `timer` ops. `OnChange(res…)`

@@ -91,7 +91,7 @@ func TestPreviewDeliveryNeverBootstrapsAndUsesStrictDryRun(t *testing.T) {
 	if err := previewToHost(context.Background(), PushTarget{Host: "preview.example"}, "preview", ops, nil); err != nil {
 		t.Fatalf("previewToHost() = %v", err)
 	}
-	if remoteCmd != "gonf apply -n -strict-preview -" {
+	if remoteCmd != "gonf apply -relayed -n -strict-preview -" {
 		t.Fatalf("remote command = %q", remoteCmd)
 	}
 }

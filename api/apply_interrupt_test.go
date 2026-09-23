@@ -5,6 +5,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -143,5 +144,53 @@ func TestAfterFuncJoinedStopWaitsForAlreadyStartedFunc(t *testing.T) {
 	}
 	if !finished {
 		t.Fatal("stop() returned before f actually set finished = true")
+	}
+}
+
+// TestAfterFuncJoinedStopCalledTwiceIsSafe pins task 8d2: calling the
+// returned stop a second time must never hang, including after a first call
+// that disarmed f before ctx was ever canceled.
+//
+// Calling stop twice AFTER ctx is already done (as in
+// TestAfterFuncJoinedStopWaitsForAlreadyStartedFunc's shape) does not, on
+// its own, reproduce a hang: done is closed once f finishes, and receiving
+// from an already-closed channel never blocks — so a naive "cancel ctx, then
+// stop(); stop()" probe would misleadingly pass even against the unfixed
+// code. The real hang needs stop() to disarm f BEFORE ctx is ever canceled:
+// go's context.AfterFunc shares one sync.Once between "stop wins the race
+// and prevents f from starting" and "the context firing has already
+// consumed f's once" (see context.AfterFunc's source) — so the first stop()
+// call here consumes that once and f never runs, meaning done never closes.
+// The unfixed wrapper's `if !rawStop() { <-done }` then has no way to tell
+// "f already started" from "stop already fired": rawStop() reports false
+// either way, so an unguarded second call falls into <-done and blocks
+// forever, because nothing will ever close it. This is the review's probed
+// outcome (stop(); stop() hangs), reproduced directly here rather than
+// trusted from its reasoning alone (which the task description itself
+// flagged as possibly imprecise).
+func TestAfterFuncJoinedStopCalledTwiceIsSafe(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var ran int32
+	stop := afterFuncJoined(ctx, func() { atomic.AddInt32(&ran, 1) })
+	stop() // disarm while ctx is still live: f must never run
+
+	done := make(chan struct{})
+	go func() {
+		stop() // must return immediately: must not hang waiting for a
+		// done that (f having been successfully disarmed) will now never
+		// be closed
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second stop() call hung")
+	}
+
+	cancel() // now let ctx finish; f must still never run
+	if got := atomic.LoadInt32(&ran); got != 0 {
+		t.Fatalf("f ran %d times, want 0 (disarmed before ctx was ever canceled)", got)
 	}
 }

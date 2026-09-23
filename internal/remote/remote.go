@@ -76,10 +76,14 @@ func defaultSSHRunner(ctx context.Context, stdin io.Reader, argv []string) error
 	// stderr (RunRelayed). If this controller process itself dies while ssh
 	// is still relaying (SIGKILLed, OOM-killed, crashed), that hand-off
 	// never runs and ssh's own next write here fails; regardless of what
-	// that does to ssh, the remote `gonf apply -` on the far end of it
-	// survives that same failure independently, by ignoring SIGPIPE for
-	// its own run (internal/cli's cliApply, ignoreSIGPIPEForRelayedChild,
-	// task lb2).
+	// that does to ssh, the remote `gonf apply -relayed -` on the far end
+	// of it survives that same failure independently, by ignoring SIGPIPE
+	// for its own run (internal/cli's cliApply, ignoreSIGPIPEForRelayedChild;
+	// remoteApplyCmd's "-relayed" is what marks that this genuinely is a
+	// relayed session rather than an ordinary local apply, task 7d2 — task
+	// lb2 originally ignored SIGPIPE for every cliApply invocation
+	// unconditionally, which also wrongly caught ordinary, non-relayed local
+	// applies).
 	err := logger.RunRelayed(cmd, os.Stderr)
 	if err != nil && ctx.Err() != nil {
 		// Killed by the push context (abort or deadline), not an ssh failure.
@@ -280,15 +284,40 @@ func streamChunks(ctx context.Context, t PushTarget, chunks []plan.Chunk, remote
 
 // remoteApplyCmd builds the remote shell command for one apply session in
 // the given delivery mode (Mode.applyStdinArg picks the stdin argument):
-// "gonf [-cmd-timeout=<d>] apply [-apply-dir <dir>] <stdin arg>", wrapped in
-// sudo/doas for an elevated session. fwd decides whether the global
-// -cmd-timeout flag precedes "apply" for this session's privilege context
-// (see cmdtimeout.go); its zero value never adds it.
+// "gonf [-cmd-timeout=<d>] apply -relayed [-apply-dir <dir>] <stdin arg>",
+// wrapped in sudo/doas for an elevated session. fwd decides whether the
+// global -cmd-timeout flag precedes "apply" for this session's privilege
+// context (see cmdtimeout.go); its zero value never adds it.
+//
+// "-relayed" (an apply-subcommand flag, so it follows "apply" like
+// "-apply-dir") tells the destination gonf (internal/cli's cliApply) that
+// its own stdout/stderr are being relayed back to the controller over this
+// ssh session, so it should ignore SIGPIPE for its whole run — otherwise
+// the controller dying mid-relay (crash, OOM-kill) would SIGPIPE-kill this
+// destination process too, on its very next log write, aborting an
+// in-flight apply for no reason other than the controller no longer being
+// there to watch it (task 7d2; mirrors "-cancel-pipe" wiring the local
+// elevated re-exec's own SIGPIPE-immunity, see api.elevatedApplyArgv). It
+// is added unconditionally, exactly like "-cancel-pipe" is for the LOCAL
+// re-exec: unlike "-cmd-timeout" (cmdtimeout.go), which is gated behind a
+// capability probe because it changes actual apply BEHAVIOUR (the command
+// timeout) and an older remote binary would apply under the wrong one
+// silently if the probe were skipped, "-relayed" only changes a resilience
+// nicety (whether a controller crash aborts an otherwise-fine apply) and,
+// like "-cancel-pipe", is a plain apply-subcommand flag an older remote
+// gonf (one that predates task 7d2) would reject outright ("flag provided
+// but not defined: -relayed") rather than silently misbehave — see
+// docs/plan.md's "Fixed-argument sudoers/doas rules" section, which this
+// unconditional flag is now also subject to, same as "-cancel-pipe": an
+// ordinary `push` self-heals this via EnsureRemoteGonf's release-version
+// upgrade (once the release carrying this fix bumps internal.Version), and
+// `-preview` already refuses outright against a stale remote
+// (RequireRemoteGonf) rather than surfacing a raw "unknown flag" error.
 func remoteApplyCmd(elevate bool, t PushTarget, applyDir string, mode Mode, fwd cmdTimeoutForward) (string, error) {
 	stdinArg := mode.applyStdinArg()
-	args := "apply " + stdinArg
+	args := "apply -relayed " + stdinArg
 	if applyDir != "" {
-		args = "apply -apply-dir " + applyDir + " " + stdinArg
+		args = "apply -relayed -apply-dir " + applyDir + " " + stdinArg
 	}
 	return privilege.WrapApplyBinCmd(t.privilegeMode(), elevate, remoteGonfBin(t), fwd.prefix(elevate)+args)
 }

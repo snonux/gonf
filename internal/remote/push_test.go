@@ -15,7 +15,7 @@ import (
 // TestRemoteApplyCmdPrivilegeNoneElevateErrors covers the remote wrapping
 // decision: it must not depend on the controller's euid. -privilege=none with
 // an elevated chunk is an error even when gonf itself runs as root. Previously
-// the root controller silently sent a plain `gonf apply -` to the remote,
+// the root controller silently sent a plain `gonf apply -relayed -` to the remote,
 // under-applying on non-root SSH logins.
 func TestRemoteApplyCmdPrivilegeNoneElevateErrors(t *testing.T) {
 	tests := []struct {
@@ -25,10 +25,10 @@ func TestRemoteApplyCmdPrivilegeNoneElevateErrors(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{"none_plain", privilege.None, false, "gonf apply -", false},
+		{"none_plain", privilege.None, false, "gonf apply -relayed -", false},
 		{"none_elevate", privilege.None, true, "", true},
-		{"sudo_elevate", privilege.Sudo, true, "sudo -n gonf apply -", false},
-		{"doas_elevate", privilege.Doas, true, "doas gonf apply -", false},
+		{"sudo_elevate", privilege.Sudo, true, "sudo -n gonf apply -relayed -", false},
+		{"doas_elevate", privilege.Doas, true, "doas gonf apply -relayed -", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -63,7 +63,7 @@ func firstConnectTimeout(argv []string) string {
 // otherwise hang the push forever. The remote apply itself is deliberately
 // not bounded by it — applies are long by nature.
 func TestSSHArgvConnectTimeout(t *testing.T) {
-	argv := PushTarget{Host: "h.example"}.sshArgv("gonf apply -")
+	argv := PushTarget{Host: "h.example"}.sshArgv("gonf apply -relayed -")
 	if got := firstConnectTimeout(argv); got != "ConnectTimeout=15" {
 		t.Fatalf("argv=%v: first ConnectTimeout=%q, want ConnectTimeout=15", argv, got)
 	}
@@ -74,7 +74,7 @@ func TestSSHArgvConnectTimeout(t *testing.T) {
 // first.
 func TestSSHArgvConnectTimeoutOverride(t *testing.T) {
 	targ := PushTarget{Host: "h.example", ExtraSSH: []string{"-o", "ConnectTimeout=5"}}
-	argv := targ.sshArgv("gonf apply -")
+	argv := targ.sshArgv("gonf apply -relayed -")
 	if got := firstConnectTimeout(argv); got != "ConnectTimeout=5" {
 		t.Fatalf("argv=%v: first ConnectTimeout=%q, want the explicit 5s", argv, got)
 	}
@@ -100,7 +100,7 @@ func firstOption(argv []string, prefix string) string {
 // that case independently (task x5: "generated ssh has no
 // ServerAliveInterval, so a network-level hang ... isn't detected").
 func TestSSHArgvServerAliveKeepalive(t *testing.T) {
-	argv := PushTarget{Host: "h.example"}.sshArgv("gonf apply -")
+	argv := PushTarget{Host: "h.example"}.sshArgv("gonf apply -relayed -")
 	if got := firstOption(argv, "ServerAliveInterval="); got != "ServerAliveInterval=15" {
 		t.Fatalf("argv=%v: ServerAliveInterval=%q, want ServerAliveInterval=15", argv, got)
 	}
@@ -114,7 +114,7 @@ func TestSSHArgvServerAliveKeepalive(t *testing.T) {
 // occurrence on the command line, and ExtraSSH comes first.
 func TestSSHArgvServerAliveOverride(t *testing.T) {
 	targ := PushTarget{Host: "h.example", ExtraSSH: []string{"-o", "ServerAliveInterval=5"}}
-	argv := targ.sshArgv("gonf apply -")
+	argv := targ.sshArgv("gonf apply -relayed -")
 	if got := firstOption(argv, "ServerAliveInterval="); got != "ServerAliveInterval=5" {
 		t.Fatalf("argv=%v: ServerAliveInterval=%q, want the explicit 5s", argv, got)
 	}

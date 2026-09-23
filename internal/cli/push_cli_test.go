@@ -208,7 +208,7 @@ func TestCLIPushGlobalDryRun(t *testing.T) {
 	if code := cliPush(context.Background(), []string{"host", "push_dry"}); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
-	if len(saw) < 3 || saw[len(saw)-1] != "gonf apply -n -" {
+	if len(saw) < 3 || saw[len(saw)-1] != "gonf apply -relayed -n -" {
 		t.Fatalf("argv=%v want remote dry-run", saw)
 	}
 }
@@ -234,7 +234,7 @@ func TestCLIPushStrictPreview(t *testing.T) {
 	if code := cliPush(context.Background(), []string{"-preview", "host", "push_preview"}); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
-	if remoteCmd != "gonf apply -n -strict-preview -" {
+	if remoteCmd != "gonf apply -relayed -n -strict-preview -" {
 		t.Fatalf("remote=%q", remoteCmd)
 	}
 }
@@ -284,7 +284,7 @@ func TestCLIPushForwardsCmdTimeout(t *testing.T) {
 	if got := api.CommandTimeout(); got != 30*time.Second {
 		t.Fatalf("CommandTimeout() = %v, want 30s", got)
 	}
-	if len(remoteCmds) != 1 || remoteCmds[0] != "gonf -cmd-timeout=30s apply -" {
+	if len(remoteCmds) != 1 || remoteCmds[0] != "gonf -cmd-timeout=30s apply -relayed -" {
 		t.Fatalf("remote cmds = %q, want the forwarded -cmd-timeout before apply", remoteCmds)
 	}
 }

@@ -143,7 +143,7 @@ func TestPushUploadsBlobsBeforeElevatedChunks(t *testing.T) {
 		t.Fatalf("calls=%d remotes=%v", len(*calls), remotes(*calls))
 	}
 	// Session 0: blob upload, plain apply, never wrapped.
-	if got := (*calls)[0].remote; got != "gonf apply -apply-dir "+sticky+" -" {
+	if got := (*calls)[0].remote; got != "gonf apply -relayed -apply-dir "+sticky+" -" {
 		t.Fatalf("blob upload remote=%q", got)
 	}
 	if strings.Contains((*calls)[0].remote, "sudo") || strings.Contains((*calls)[0].remote, "doas") {
@@ -151,10 +151,10 @@ func TestPushUploadsBlobsBeforeElevatedChunks(t *testing.T) {
 	}
 	// Session 1/2: apply chunks carry -apply-dir; only the elevated chunk is
 	// wrapped.
-	if got := (*calls)[1].remote; got != "doas gonf apply -apply-dir "+sticky+" -" {
+	if got := (*calls)[1].remote; got != "doas gonf apply -relayed -apply-dir "+sticky+" -" {
 		t.Fatalf("elevated chunk remote=%q", got)
 	}
-	if got := (*calls)[2].remote; got != "gonf apply -apply-dir "+sticky+" -" {
+	if got := (*calls)[2].remote; got != "gonf apply -relayed -apply-dir "+sticky+" -" {
 		t.Fatalf("unprivileged chunk remote=%q", got)
 	}
 
@@ -215,13 +215,13 @@ func TestPushUploadsBlobsBeforeUnprivilegedFirstChunks(t *testing.T) {
 	if len(*calls) != 4 {
 		t.Fatalf("calls=%d remotes=%v", len(*calls), remotes(*calls))
 	}
-	if got := (*calls)[0].remote; got != "gonf apply -apply-dir "+sticky+" -" {
+	if got := (*calls)[0].remote; got != "gonf apply -relayed -apply-dir "+sticky+" -" {
 		t.Fatalf("blob upload remote=%q", got)
 	}
-	if got := (*calls)[1].remote; got != "gonf apply -apply-dir "+sticky+" -" {
+	if got := (*calls)[1].remote; got != "gonf apply -relayed -apply-dir "+sticky+" -" {
 		t.Fatalf("unprivileged chunk remote=%q", got)
 	}
-	if got := (*calls)[2].remote; got != "doas gonf apply -apply-dir "+sticky+" -" {
+	if got := (*calls)[2].remote; got != "doas gonf apply -relayed -apply-dir "+sticky+" -" {
 		t.Fatalf("elevated chunk remote=%q", got)
 	}
 	if strings.Contains((*calls)[0].remote, "sudo") || strings.Contains((*calls)[0].remote, "doas") {
@@ -255,7 +255,7 @@ func TestPushSingleChunkKeepsEmbeddedBlobs(t *testing.T) {
 	if len(*calls) != 1 {
 		t.Fatalf("calls=%d remotes=%v", len(*calls), remotes(*calls))
 	}
-	if got := (*calls)[0].remote; got != "gonf apply -" {
+	if got := (*calls)[0].remote; got != "gonf apply -relayed -" {
 		t.Fatalf("remote=%q want plain apply without -apply-dir", got)
 	}
 	if !strings.HasPrefix(string((*calls)[0].stdin), "GONF-PUSH/1\nblobs 1\n") {

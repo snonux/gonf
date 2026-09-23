@@ -68,7 +68,7 @@ func TestCLIClusterStrictPreview(t *testing.T) {
 	if code := cliCluster(context.Background(), []string{"-preview", "cli_preview", "cli_preview_task"}); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
-	if remoteCmd != "gonf apply -n -strict-preview -" {
+	if remoteCmd != "gonf apply -relayed -n -strict-preview -" {
 		t.Fatalf("remote=%q", remoteCmd)
 	}
 }

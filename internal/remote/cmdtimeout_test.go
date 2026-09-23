@@ -93,11 +93,11 @@ func TestRemoteApplyCmdCmdTimeoutForward(t *testing.T) {
 		fwd     cmdTimeoutForward
 		want    string
 	}{
-		{"none", false, "", cmdTimeoutForward{}, "gonf apply -"},
-		{"login", false, "", both, "gonf -cmd-timeout=30s apply -"},
-		{"elevated", true, "/tmp/s", both, "sudo -n gonf -cmd-timeout=30s apply -apply-dir /tmp/s -"},
-		{"elevated not accepted", true, "", loginOnly, "sudo -n gonf apply -"},
-		{"login not accepted", false, "", cmdTimeoutForward{flag: "-cmd-timeout=30s", elevated: true}, "gonf apply -"},
+		{"none", false, "", cmdTimeoutForward{}, "gonf apply -relayed -"},
+		{"login", false, "", both, "gonf -cmd-timeout=30s apply -relayed -"},
+		{"elevated", true, "/tmp/s", both, "sudo -n gonf -cmd-timeout=30s apply -relayed -apply-dir /tmp/s -"},
+		{"elevated not accepted", true, "", loginOnly, "sudo -n gonf apply -relayed -"},
+		{"login not accepted", false, "", cmdTimeoutForward{flag: "-cmd-timeout=30s", elevated: true}, "gonf apply -relayed -"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -356,9 +356,9 @@ func TestToHostForwardsCmdTimeoutOnlyToCapableRemote(t *testing.T) {
 		kind remoteKind
 		want []string
 	}{
-		{"capable remote", remoteCurrent, []string{"gonf -cmd-timeout=30s apply -", "sudo -n gonf -cmd-timeout=30s apply -"}},
-		{"old remote", remoteOld, []string{"gonf apply -", "sudo -n gonf apply -"}},
-		{"sudo refuses the probe", remoteSudoRefuses, []string{"gonf -cmd-timeout=30s apply -", "sudo -n gonf apply -"}},
+		{"capable remote", remoteCurrent, []string{"gonf -cmd-timeout=30s apply -relayed -", "sudo -n gonf -cmd-timeout=30s apply -relayed -"}},
+		{"old remote", remoteOld, []string{"gonf apply -relayed -", "sudo -n gonf apply -relayed -"}},
+		{"sudo refuses the probe", remoteSudoRefuses, []string{"gonf -cmd-timeout=30s apply -relayed -", "sudo -n gonf apply -relayed -"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -394,16 +394,16 @@ func TestPreviewToHostForwardsCmdTimeoutOnlyToCapableRemote(t *testing.T) {
 		want []string
 	}{
 		{"capable remote", remoteCurrent, []string{
-			"gonf -cmd-timeout=30s apply -n -strict-preview -",
-			"sudo -n gonf -cmd-timeout=30s apply -n -strict-preview -",
+			"gonf -cmd-timeout=30s apply -relayed -n -strict-preview -",
+			"sudo -n gonf -cmd-timeout=30s apply -relayed -n -strict-preview -",
 		}},
 		{"old remote", remoteOld, []string{
-			"gonf apply -n -strict-preview -",
-			"sudo -n gonf apply -n -strict-preview -",
+			"gonf apply -relayed -n -strict-preview -",
+			"sudo -n gonf apply -relayed -n -strict-preview -",
 		}},
 		{"sudo refuses the probe", remoteSudoRefuses, []string{
-			"gonf -cmd-timeout=30s apply -n -strict-preview -",
-			"sudo -n gonf apply -n -strict-preview -",
+			"gonf -cmd-timeout=30s apply -relayed -n -strict-preview -",
+			"sudo -n gonf apply -relayed -n -strict-preview -",
 		}},
 	}
 	for _, tc := range tests {
@@ -442,7 +442,7 @@ func TestToHostDefaultCmdTimeoutNotForwarded(t *testing.T) {
 	if err := pushToHost(context.Background(), PushTarget{Host: "h.example"}, "demo", deliveryOps(), nil); err != nil {
 		t.Fatalf("push: %v", err)
 	}
-	if got := r.cmds(); len(got) != 1 || got[0] != "gonf apply -" {
+	if got := r.cmds(); len(got) != 1 || got[0] != "gonf apply -relayed -" {
 		t.Fatalf("remote cmds = %v, want the plain apply", got)
 	}
 	if got := f.probeCmds(); len(got) != 0 {
@@ -461,9 +461,9 @@ func TestPushPayloadForwardsCmdTimeoutOnlyToCapableRemote(t *testing.T) {
 		if err := PushPayloadContext(context.Background(), target, []byte("GONF-PUSH/1"), true, ""); err != nil {
 			t.Fatalf("kind=%v: push: %v", kind, err)
 		}
-		want := "doas gonf apply -"
+		want := "doas gonf apply -relayed -"
 		if kind == remoteCurrent {
-			want = "doas gonf -cmd-timeout=30s apply -"
+			want = "doas gonf -cmd-timeout=30s apply -relayed -"
 		}
 		if got := r.cmds(); len(got) != 1 || got[0] != want {
 			t.Fatalf("kind=%v: remote cmds = %v, want %q", kind, got, want)
@@ -501,7 +501,7 @@ func TestCmdTimeoutProbeSSHFailureIsBestEffort(t *testing.T) {
 	if err := pushToHost(context.Background(), target, "p", ops, nil); err != nil {
 		t.Fatalf("push failed on a probe ssh failure, want best-effort (warn, omit, continue): %v", err)
 	}
-	want := []string{"gonf apply -", "sudo -n gonf apply -"}
+	want := []string{"gonf apply -relayed -", "sudo -n gonf apply -relayed -"}
 	if got := r.cmds(); strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("remote apply cmds = %v, want -cmd-timeout left out of both: %v", got, want)
 	}
@@ -514,7 +514,7 @@ func TestCmdTimeoutProbeSSHFailureIsBestEffort(t *testing.T) {
 	if err := PushPayloadContext(context.Background(), target, []byte("GONF-PUSH/1"), true, ""); err != nil {
 		t.Fatalf("PushPayloadContext failed on a probe ssh failure, want best-effort: %v", err)
 	}
-	if got := r.cmds(); got[len(got)-1] != "sudo -n gonf apply -" {
+	if got := r.cmds(); got[len(got)-1] != "sudo -n gonf apply -relayed -" {
 		t.Fatalf("PushPayloadContext remote cmd = %q, want -cmd-timeout left out", got[len(got)-1])
 	}
 }

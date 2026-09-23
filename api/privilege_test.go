@@ -89,10 +89,10 @@ func TestPushSplitsPrivilegeChunks(t *testing.T) {
 	if len(remotes) != 2 {
 		t.Fatalf("remotes=%v", remotes)
 	}
-	if remotes[0] != "gonf apply -" {
+	if remotes[0] != "gonf apply -relayed -" {
 		t.Fatalf("unpriv remote=%q", remotes[0])
 	}
-	if remotes[1] != "doas gonf apply -" {
+	if remotes[1] != "doas gonf apply -relayed -" {
 		t.Fatalf("priv remote=%q", remotes[1])
 	}
 }

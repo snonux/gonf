@@ -328,7 +328,18 @@ On the controller these outputs pass through the registry:
   of a pipe. Both relayed children instead ignore SIGPIPE for their whole
   run (`internal/cli`'s `cliApply`, `ignoreSIGPIPEForRelayedChild`, task
   lb2), so such a write fails with a plain, discarded error and the apply
-  keeps going.
+  keeps going. This is scoped to only a genuine relayed child, not every
+  `cliApply` invocation: `cliApply` also runs for an ordinary, non-relayed
+  `gonf apply <plan.jsonl>` and a manually piped `gonf apply -`, neither of
+  which should have its SIGPIPE disposition touched at all (task lb2's
+  original fix ignored it unconditionally there too, which a later review
+  found measurably wrong — `gonf apply plan.jsonl` showed SIGPIPE ignored
+  in `/proc/self/status` when it should not have been). `cliApply` now
+  calls `ignoreSIGPIPEForRelayedChild` only when this process is actually
+  marked as a relayed child: `-cancel-pipe` for the local elevated re-exec
+  (`api.elevatedApplyArgv`, always set there) or `-relayed` for the
+  destination end of a push/preview over ssh (`internal/remote`'s
+  `remoteApplyCmd`, also always set there) — task 7d2.
 
 Not redacted, because they carry no op IDs or values: flag usage text and
 the output of the `scp` and `go build` runs that install the gonf binary.
