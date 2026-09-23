@@ -391,6 +391,221 @@ held in memory on both sides, as a push already is. Per-host sealing
 The implementation task adds a benchmark over a representative conf plan
 (`frontends`/`garage_config`) rather than relying on these estimates.
 
+## Phase 4 design: sealed multi-chunk sticky-dir blobs (task `6b2`)
+
+Status: **design only, expanded here by task `6b2`; not implemented.** Task
+`6b2` (this design's own phase-4 entry) read this section's earlier
+one-line table summary, task `062`'s refusal it would lift, and the
+sticky-dir/chunk-stdin code it would touch, in full, and decided — because
+of the phase's "optional" framing, its genuine complexity, and this
+codebase's established rigor for privileged-apply/secret-handling changes
+(`062` alone took eight review rounds for a narrower change with no new
+crypto or wire version) — that landing an untested-by-review, one-pass
+implementation of this in a single session was the wrong call. This section
+is the thorough design the task's own scope-discipline guidance asked for
+instead, concrete enough that the follow-up tasks below do not need to
+re-derive it.
+
+### What this closes
+
+`062` added `internal/remote/delivery.go`'s `refuseSensitiveStickyBlobs`:
+`Delivery.ToHost` refuses, before any SSH traffic, a multi-chunk plan whose
+elevated chunk carries a sensitive op with blob content
+(`plan.SensitiveElevatedBlobs`), because that blob would be staged
+plaintext into `/tmp/gonf-apply-sticky-<plan>-<host>` — a directory created
+and owned by the SSH **login** user (`uploadSticky`/`pushBlobs` in
+`internal/remote/remote.go`, always unprivileged, "even when the first
+chunk is elevated" per `ToHost`'s own doc comment) — before the elevated
+chunk (root, via sudo/doas) ever reads it. Today the operator's only way
+around the refusal is to keep such content under `plan.MaxInlineContent` (a
+single-chunk plan embeds blobs in its own frame, extracted by the elevated
+apply itself) or push the privileged task alone. This phase seals the
+sticky-dir blob instead of forbidding it, so the login user's directory
+never holds plaintext secret content.
+
+### Key insight: reuse phase-1/3's "decrypt into a private run dir" pattern, not a new decrypt-on-read path
+
+An early read of this design looked for the smallest change and considered
+making `plan.ReadFile` (`plan/blob.go`, the single-file blob reader
+`resource/file/planwire.go`'s `fileContent` calls) and
+`resource/dir/planwire.go`'s `syncDirBlobTree` (the **tree**-blob reader a
+sensitive `sync_dir` op also reaches — `plan.SensitiveElevatedBlobs` checks
+`op.Blob != ""` for any op kind, not only `file`) each transparently detect
+and decrypt an age-sealed blob in place. That would touch two independent
+resource packages' read paths (and every future blob-consuming kind after
+them), duplicate the sealed-file detection logic, and leave the tree case
+awkward: a tree blob is many entries (`plan.BlobEntry`: file/dir/symlink)
+under one ref, and sealing only the file entries' content while leaving
+directory/symlink structure exposed under the sticky dir is a second,
+narrower design of its own.
+
+**Recommended instead:** seal each blob **ref** (a whole `file` blob, or a
+whole `sync_dir` tree ref, exactly the unit `writeTreeTar`/`writeBlobsGzipTar`
+already emit as one tar member) as one opaque age stream per ref, uploaded
+into the sticky dir as sealed bytes rather than as tar entries a resource
+package walks directly. The destination's elevated chunk, once it holds the
+ephemeral identity (below), decrypts every sealed ref its own ops need into
+a **fresh, private, root-owned run directory** — reusing
+`plan.NewSealedApplyRunDir()` (`plan/staging.go`, already built and
+reviewed for phase-1/3's own "sealed plan with blobs" case: `0700`,
+`sealed-run-<pid>-*` naming, immediate sweep of dead-PID leftovers instead
+of the lazy 24h rule) — and points that chunk's `plan.ApplyContext.PlanDir`
+at the private directory instead of the sticky one for the ops that need
+it, before `plan.ApplyWithContext` runs. **`resource/file` and
+`resource/dir` need no change at all**: they keep reading an ordinary
+plaintext blob from whatever `PlanDir` they are given, exactly as today.
+This also reuses an already-reviewed sweep/lifecycle mechanism instead of
+inventing a second one, and keeps the blast radius close to the task's own
+`6b2` Scope annotation (`internal/remote/delivery.go`,
+`plan/sensitive.go`), plus the two files that pattern requires touching on
+top of it: `plan/pushwire.go` (wire extension) and `internal/cli/cli.go`
+(the destination-side decrypt-before-apply step, which phase-1/3's own
+sealed-apply already lives in).
+
+### Wire extension: no conflict with the cancel-pipe protocol
+
+The task brief flagged the existing stdin cancel-byte protocol
+(`internal/applyproto.CancelPipeFlag`/`CancelByte`, tasks 6d2/xd2) as a
+coexistence risk to check. Reading `api/apply_chunks.go` end to end: that
+protocol belongs **only** to the **local** elevated sudo/doas re-exec
+(`runElevatedCmd`/`wireElevatedCancelPipe`), used when a task with
+`Privileged()` ops is applied locally (`api.Run` → `ApplyChunksContext`).
+There the child's stdin is dedicated to the cancel pipe and the plan is
+passed by **path** (`chunk-elevated.jsonl`), never by stdin. The **remote**
+multi-chunk push path (`internal/remote`, this phase's actual scope) is a
+different flag entirely (`applyproto.RelayedFlag`) and a different stdin
+use: each chunk's stdin is the `GONF-PUSH/1` frame itself
+(`plan.EncodePush`/`streamChunks`), with no cancel-byte multiplexing on it
+at all. **The two protocols never share a process or a stdin stream, so
+there is nothing to multiplex or conflict with** — the wire extension below
+is free to extend the `GONF-PUSH/1` frame however it needs to, independent
+of `internal/applyproto`.
+
+The frame itself already reserves room for this: after the `"blobs 0\n"` /
+`"blobs 1\n"` line and before the `"plan\n"` marker (`EncodePush`/
+`DecodePush` in `plan/pushwire.go`) is a natural, backward-extensible slot
+for one optional line, e.g. `"key <base64 age1pq ephemeral identity>\n"`,
+present only on a chunk that needs to decrypt a sealed sticky ref. Whether
+to spell this as a new line inside `GONF-PUSH/1` (simplest: `DecodePush`
+already reads line by line and an absent line is just skipped by an older
+reader that does not know to look for it, **except an older reader does not
+skip an unrecognized line — it would fail parsing `"plan\n"` where it found
+`"key ...\n"` instead**, so this cannot be silently forward-compatible) or a
+new `GONF-PUSH/2` magic (clean version bump; `DecodePush`'s existing
+`pushMagic` string-equality check already refuses anything but exactly
+`"GONF-PUSH/1"`, so a `/2` frame is refused outright by every gonf that
+predates this phase, with no silent misparse) is the first concrete
+decision the implementation task must make and test both directions of
+(old remote receiving a new frame, new remote receiving an old one) — this
+design recommends the `/2` bump, because "refuse cleanly" is a strictly
+safer failure mode for a security-relevant field than "hope every reader
+skips unknown lines correctly," and it composes with the capability gate
+below exactly like `RequireRemoteRelayed` already does for `-relayed`.
+
+### Key lifecycle
+
+- **Generation.** `Delivery.ToHost` (or `uploadSticky`) generates one fresh
+  hybrid identity per push via `age.GenerateHybridIdentity()`
+  (`filippo.io/age`, already a dependency since `1b2`; `plan/seal` has no
+  ephemeral-generation helper today and needs one —
+  `seal.GenerateEphemeral() (Identity, Recipient, error)`, wrapping that
+  call and building `plan/seal`'s own `Identity`/`Recipient` wrapper types
+  around it, entirely in memory). Per the task's revised scope note (added
+  after the `w82` design review): this key is internal to gonf, not an
+  operator recipient, so the `age1pq`-only *operator* recipient policy does
+  not constrain it — but it uses the same hybrid type for consistency
+  unless a measured cost argues otherwise (`### Performance` above already
+  measures hybrid overhead as small: ~1.46 KiB header, one KEM
+  encapsulation).
+- **Never touches disk.** The identity is held only in the `Delivery`/push
+  call stack's memory (controller side) and the elevated chunk-apply call
+  stack's memory (destination side, after being read off stdin); neither
+  side ever calls `plan/seal.LoadIdentities` (the file-backed loader,
+  which is for operator/destination long-lived identities, not this one) or
+  writes it to a temp file. `plan/seal` needs one new encode/decode pair
+  for the wire line — a single-line textual form (mirroring the
+  `AGE-SECRET-KEY-PQ-1…` identity-file line format `parseIdentityLine`
+  already parses) rather than reusing `LoadIdentities`, since that
+  function's contract is inseparable from its file-ownership/no-follow
+  checks, which make no sense for a value that arrives over stdin.
+- **Never logged.** Every place this design's key line passes through
+  (`streamChunks`'s buffer, `SSHRunner`'s relayed stderr, `internal/cli`'s
+  arg/flag parsing) must be audited the way `062`'s `logger.Redact`/
+  `RedactingWriter` already audits secret payloads — the key line is a
+  **new** line the existing redactor does not know about by construction
+  (it is not a plan op payload), so it needs its own explicit "never
+  printed, never included in an error" review, not an assumption that the
+  existing secret redaction happens to cover it.
+- **Single use.** One identity per `Delivery.ToHost` call (one push to one
+  host); a retried or re-run push generates a new one. No rotation
+  mechanics are needed (unlike the operator/destination identities in
+  phases 1-3): there is nothing to rotate, since nothing durable was ever
+  sealed to it — `pushRemoveSticky` already removes the sticky dir (sealed
+  bytes and all) after the last chunk, same as today.
+- **Capability gate.** A new `internal/remote` capability check (e.g.
+  `RequireRemoteSealedSticky`), following `RequireRemoteRelayed`'s exact
+  pattern (`internal/remote/sync_gonf.go`: a fixed release floor, checked
+  before `ToHost` decides to seal rather than refuse) — `EnsureRemoteGonf`
+  self-heals an old remote for `push` (installs/upgrades before the sealed
+  path is used), and `Preview` mode is unaffected (it already refuses any
+  blob-backed plan outright, `hasBlobs && d.Mode == Preview`, before this
+  code is ever reached).
+
+### Lifting the 062 refusal
+
+`refuseSensitiveStickyBlobs` is removed unconditionally once the sealed
+path lands — this phase's whole point is that the condition it refused
+(plaintext secret content in a login-user-owned directory) no longer holds,
+not that sealing becomes an opt-in flag the refusal falls back to. Precisely:
+
+- `plan.SensitiveElevatedBlobs` keeps identifying which ops need sealing
+  (unchanged) — `ToHost` uses it to decide *which* blob refs to seal (only
+  the ones an elevated, sensitive op needs), not merely whether to refuse.
+- Every OTHER sticky ref (non-sensitive, or elevated-but-not-blob) uploads
+  exactly as today, unsealed — this phase changes what happens to the
+  refs `plan.SensitiveElevatedBlobs` already names, nothing else, so a
+  plan with no such refs is byte-identical on the wire to today (the
+  062-era client-gate invariant: "non-blob-sealing apply paths remain
+  byte-identical" from this task's own gate instructions).
+- `internal/remote/delivery_test.go` (or wherever `062` pinned the refusal)
+  loses that refusal test and gains: a round-trip test through the real
+  sticky-upload/chunk-apply path with a sensitive elevated blob (proving it
+  applies correctly and that the sticky dir's on-disk bytes are NOT the
+  plaintext at any point during the test), a tamper test (corrupted sealed
+  ref refuses cleanly, applies nothing), a missing-key test (an elevated
+  chunk whose `GONF-PUSH/2` frame lacks the key line but whose ops need a
+  sealed ref refuses with a message naming the ref, never key material),
+  and old-remote compatibility (a remote below the capability floor is
+  upgraded by `EnsureRemoteGonf` before ever seeing a sealed ref).
+
+### Threat-model update
+
+Extends the table in "Threat model" above, specifically for T7/T8's sticky-
+dir case:
+
+| # | Adversary / exposure | Today (062 refuses instead) | With phase 4 |
+|---|---|---|---|
+| T7' | SSH login user reading the sticky dir | n/a (refused before upload) | sealed bytes only; readable plaintext only after the elevated chunk decrypts its own copy into a `0700` root-owned `sealed-run-*` dir, removed on return like phase-1/3's own sealed-apply blobs |
+| T8' | Local elevated re-exec | n/a | not reached — this phase is the *remote* push path only; the local `api/apply_chunks.go` re-exec is untouched (see "no conflict" above) |
+
+Unchanged: no forward secrecy is needed here (the key is single-use and
+never durable), and this is confidentiality only, same caveat as every
+other phase — a sealed sticky ref proves nothing about who staged it.
+
+### Follow-up tasks (this phase's own sub-phases)
+
+Mirroring how phases 0-3 were split, rather than landing all of the above
+as one unreviewed change:
+
+| Step | Content |
+|------|---------|
+| 4a | `plan/seal`: `GenerateEphemeral()` (in-memory hybrid identity + recipient, no disk), plus a stdin-safe single-line identity encode/parse pair distinct from the file-backed `LoadIdentities`. Small, self-contained, unit-testable without any remote/wire code. Depends on `1b2`. |
+| 4b | Wire + delivery: `plan/pushwire.go`'s `GONF-PUSH/2` extension (old/new compatibility tested both directions), `internal/remote` seals only the specific `plan.SensitiveElevatedBlobs` refs an elevated chunk needs and sends the ephemeral identity only on that chunk's own stdin frame, `RequireRemoteSealedSticky` capability gate wired into `EnsureRemoteGonf`. Depends on 4a. |
+| 4c | Destination staging + refusal removal + full rigor: `internal/cli` decrypts needed sealed refs into `plan.NewSealedApplyRunDir()` before the chunk applies (no `resource/file`/`resource/dir` changes); removes `refuseSensitiveStickyBlobs`; full gate suite (build/vet/gofmt/`go test -race -shuffle=on`/staticcheck/errcheck-zero/4x GOOS vet); client gate (temporary `go.work` with dotfiles + conf, confirming non-sealing paths byte-identical); revert-and-retest self-review; docs (`secrets.md`, this file, `plan.md`). Depends on 4b. |
+
+None of these three may start without the user's explicit approval, same as
+every other phase in this design.
+
 ## Out of scope
 
 - **Encrypting push, cluster or fleet transport.** SSH already provides
@@ -428,8 +643,10 @@ bumps gonf, is expected and noted, not a failure).
 | 1 | `3b2` | `gonf apply [-identity]… <plan.age\|->`: magic sniff, root requires `-identity`, read to EOF before apply, in-memory decode without blobs, `sealed-run-*` run dir with dead-owner sweep, single-process apply via `api.ApplyPlan`, "decrypted" wording, `gonf -sealed-version`. |
 | 2 | `4b2` | Destination recipients: `WithPlanRecipient` on `Host`; `-for host\|cluster\|fleet` records once per host with that host's selection and writes `plan-<host>.age` per host. |
 | 3 | `5b2` | Optional, needs a user decision: `-seal` default for sensitive plans when an operator recipients file exists, and/or the operator identity through the secret provider. |
-| 4 | `6b2` | Optional: seal a multi-chunk push's sticky-dir blobs to an ephemeral per-push key sent only on each chunk's stdin, lifting 062's refusal of sensitive blobs in elevated chunks. |
+| 4 | `6b2` | Optional: seal a multi-chunk push's sticky-dir blobs to an ephemeral per-push key sent only on each chunk's stdin, lifting 062's refusal of sensitive blobs in elevated chunks. **Scoped down to design only** (see "Phase 4 design: sealed multi-chunk sticky-dir blobs" above) rather than a one-session implementation of security-sensitive privileged-apply plumbing; split into its own sub-phases `yf2` (ephemeral seal primitive) → `zf2` (wire extension + delivery) → `0g2` (destination staging, refusal removal, full gates, self-review). |
 | - | `7b2` | Design (not implement) signed plan artifacts; until it is implemented, unattended sealed apply stays blocked. |
 
 Dependencies: `2b2`, `3b2` and `6b2` need `1b2`; `4b2` and `5b2` need `2b2`
-and `3b2`; `0b2` needs only 062; `7b2` needs only w82.
+and `3b2`; `0b2` needs only 062; `7b2` needs only w82. `6b2`'s own
+sub-phases: `zf2` needs `yf2`, `0g2` needs `zf2`, `yf2` needs `1b2` (same as
+`6b2` itself).
