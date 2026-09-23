@@ -158,14 +158,14 @@ func TestConfigSetWireRejectsMisconfiguredSets(t *testing.T) {
 	crafted := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion},
 		{Op: plan.KindConfigSet, ID: "ConfigSet[x]", Name: "x",
-			Members: []plan.ConfigMember{{Key: "x", Path: target, ContentB64: "eAo="}}},
+			Payload: plan.ConfigSetPayload{Members: []plan.ConfigMember{{Key: "x", Path: target, ContentB64: "eAo="}}}},
 	}
 	if err := plan.Apply(crafted, plan.Facts{}, ""); err == nil || !strings.Contains(err.Error(), "validator") {
 		t.Fatalf("apply of a set without validators: %v", err)
 	}
 	orphan := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion},
-		{Op: plan.KindConfigSetMember, ID: "ConfigSetMember[x/x]", Name: "x", Member: "x", Path: target},
+		{Op: plan.KindConfigSetMember, ID: "ConfigSetMember[x/x]", Name: "x", Payload: plan.ConfigSetMemberPayload{Member: "x"}, Path: target},
 	}
 	if err := plan.Apply(orphan, plan.Facts{}, ""); err == nil {
 		t.Fatal("a member handle whose set did not apply must fail rather than never firing")

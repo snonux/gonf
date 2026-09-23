@@ -527,12 +527,13 @@ class of bug that motivated task j5.
    and cloned with `slices.Clone`/`maps.Clone` in `ToOp`, same as always.
    `cron`, `systemd_timer` (task yd2, Layer 2's first slice), `user` (task
    6e2), `link`, `link_if_exists`, `package` (task 5e2, Layer 2's second
-   slice), and `command` (task 7e2, Layer 2's third slice) instead have
-   their own
+   slice), `command` (task 7e2, Layer 2's third slice), and
+   `config_set`/`config_set_member` (task 8e2, Layer 2's fourth slice)
+   instead have their own
    `plan.CronPayload`/`plan.SystemdTimerPayload`/`plan.UserPayload`/
    `plan.LinkPayload`/`plan.LinkIfExistsPayload`/`plan.PackagePayload`/
-   `plan.CommandPayload`, set
-   on `Op.Payload`; a NEW exclusive field on an ALREADY-migrated kind goes
+   `plan.CommandPayload`/`plan.ConfigSetPayload`/`plan.ConfigSetMemberPayload`,
+   set on `Op.Payload`; a NEW exclusive field on an ALREADY-migrated kind goes
    on that kind's payload type instead of back onto `Op` (mirroring step
    4's rule below, now also for `Op`), still cloned in `ToOp` before being
    assigned into the payload literal.
@@ -798,7 +799,8 @@ on `Op` — `File`, `Dir`/`SyncDir`, `Command`, `Service`/`Timer`/
 `WhenBegin`/`WhenEnd` — pending the remaining follow-up tasks (7e2, 8e2,
 9e2, ae2) scoped the same way (one or a few kinds per task, per this file's
 own "do not attempt it as one uninterrupted blind edit" guidance, matching
-w62's own incremental discipline). Task 7e2 (below) migrated `command` next.
+w62's own incremental discipline). Task 7e2 (below) migrated `command` next,
+and task 8e2 (also below) migrated `config_set`/`config_set_member` after it.
 
 **Task 7e2: `command`, Layer 2's third slice.** Following yd2's pattern
 exactly, `KindCommand`'s exclusive fields — `Bin`, `Args`, `Dir`, `Creates`,
@@ -830,6 +832,53 @@ before. The race test (updated to build its fixture op via
 continues to pass under `-race`, including run repeatedly and against a
 saved pre-migration patch reverted and reapplied, as direct proof the fix
 was preserved rather than merely re-typed.
+
+**Task 8e2: `config_set`/`config_set_member`, Layer 2's fourth slice.**
+The fourth of six sibling follow-up tasks (5e2, 6e2, 7e2, 8e2, 9e2, ae2)
+migrated `KindConfigSet`'s exclusive fields — `Members`, `Validators`,
+`Chroot`, `StagingDir` — onto `ConfigSetPayload`, and
+`KindConfigSetMember`'s one exclusive field — `Member` — onto
+`ConfigSetMemberPayload` (both `plan/op_payload.go`), the first slice to
+split TWO kinds sharing one package in one task. This is the `plan.Op`
+("Layer 2") counterpart of a split `resource/configset` already had at
+"Layer 1" (task w62): `resource/configset/payload.go`'s `SetPayload` and
+`MemberPayload` already carried these same fields on the DRAFT side before
+this task touched anything; 8e2 only added the WIRE-side twin, following
+the exact two-kinds-one-package shape that file already established, and
+changed nothing about the draft-side types. `wireOp` itself (wire.go) is
+UNCHANGED in shape (frozen, append-only field order); only its doc comment
+on the `Members`/`Validators`/`Chroot`/`StagingDir`/`Member` block now marks
+which of the two new payload types owns which field, the same way every
+earlier slice's doc comments were updated.
+`resource/configset/planwire.go` (the one non-test call site, already
+shaped around the Layer 1 `SetPayload`/`MemberPayload` split) was updated
+so `setHandler.ToOp` builds `Op.Payload = plan.ConfigSetPayload{...}` and
+`memberHandler.ToOp` builds `Op.Payload = plan.ConfigSetMemberPayload{...}`
+instead of the flat `Op` fields; `specFromOp` (shared by `setHandler.Apply`
+and `setHandler.ToOp`'s own re-validation) and `memberHandler.Apply` now
+read their kind's payload through the same comma-ok
+`op.Payload.(plan.XPayload)` assertion every earlier slice established,
+degrading to the zero payload (an empty set, or a member with an empty key
+refused by the existing "missing set name or member key" check) for an op
+decoded from an arbitrary `plan.jsonl`, never panicking.
+`plan.OpPayloadExamples()` gained `KindConfigSet` and
+`KindConfigSetMember` entries; `api`'s `TestOpFieldClassesAreExhaustive`
+and `plan`'s `TestWirePayloadTagsMatch` needed no other change — like 6e2's
+`user` slice, this surfaced no new call-site gotcha, since `opFieldClasses`
+(`api/secret_fields.go`) already classified `"members[].key"`/
+`"members[].path"`/`"chroot"`/`"staging_dir"`/`"member"` as `classIdentity`,
+`"members[].mode"`/`"members[].owner"`/`"members[].group"` as
+`classMetadata`, `"members[].content_b64"` as `classContent`, and
+`"validators[].bin"`/`"validators[].args[]"` as
+`classIdentity`/`classPayload` from before this split — the JSON path is
+unchanged either way, since `walkStruct` computes it from the payload's own
+json tag, not from Go struct nesting. Call sites hand-building a
+`plan.Op{Op: plan.KindConfigSet, ...}` or
+`plan.Op{Op: plan.KindConfigSetMember, ...}` literal directly (a handful of
+tests in `api/configset_test.go` and `resource/configset/*_test.go`) moved
+their `Members`/`Member` values onto an explicit
+`Payload: plan.ConfigSetPayload{...}`/`Payload: plan.ConfigSetMemberPayload{...}`,
+the same literal-migration 5e2's note above describes.
 
 A resource package that registers a `plan.Handler` must never be imported by
 the `plan` package itself (that would reintroduce the cycle the registry

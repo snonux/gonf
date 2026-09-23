@@ -81,10 +81,12 @@ func memberDraft(id, name string, m memberSpec, set string) resource.PlanDraft {
 // ToOp lowers a set draft. The spec is re-validated here so a malformed set
 // fails `gonf plan` on the controller, and members larger than the inline
 // limit are refused: a set is published from its plan line, never from
-// blobs. The exclusive fields come from d.Payload (SetPayload, task w62
-// Layer 1); a "config_set" draft without one is a record-time bug
-// (planDraft always sets it), reported like any other handler error
-// rather than panicking.
+// blobs. The draft's exclusive fields come from d.Payload (SetPayload, task
+// w62 Layer 1); a "config_set" draft without one is a record-time bug
+// (planDraft always sets it), reported like any other handler error rather
+// than panicking. The op's own exclusive fields are built onto
+// plan.ConfigSetPayload (task 8e2, Layer 2), the wire-side counterpart of
+// the same draft-side split.
 func (setHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 	p, ok := d.Payload.(SetPayload)
 	if !ok {
@@ -92,20 +94,22 @@ func (setHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 	}
 	op := plan.Op{
 		Op: plan.KindConfigSet, ID: d.ID, Name: d.Name,
-		Chroot: p.Chroot, StagingDir: p.StagingDir, Deps: slices.Clone(d.Deps),
+		Deps: slices.Clone(d.Deps),
 	}
+	payload := plan.ConfigSetPayload{Chroot: p.Chroot, StagingDir: p.StagingDir}
 	for _, m := range p.ConfigMembers {
 		if len(m.Content) > plan.MaxInlineContent {
 			return plan.Op{}, fmt.Errorf("config set %s: member %s exceeds the %d byte inline limit", d.Name, m.Key, plan.MaxInlineContent)
 		}
-		op.Members = append(op.Members, plan.ConfigMember{
+		payload.Members = append(payload.Members, plan.ConfigMember{
 			Key: m.Key, Path: m.Path, ContentB64: base64.StdEncoding.EncodeToString(m.Content),
 			Mode: m.Mode, Owner: m.Owner, Group: m.Group,
 		})
 	}
 	for _, v := range p.Validators {
-		op.Validators = append(op.Validators, plan.Argv{Bin: v.Bin, Args: slices.Clone(v.Args)})
+		payload.Validators = append(payload.Validators, plan.Argv{Bin: v.Bin, Args: slices.Clone(v.Args)})
 	}
+	op.Payload = payload
 	if _, err := specFromOp(op); err != nil {
 		return plan.Op{}, err
 	}
@@ -124,20 +128,25 @@ func (h setHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	return s.apply()
 }
 
-// specFromOp decodes and validates a config_set op.
+// specFromOp decodes and validates a config_set op. p degrades to the zero
+// plan.ConfigSetPayload (an empty set with no chroot/staging override) for
+// an op whose Payload is nil or mistyped — an op decoded from an arbitrary
+// plan.jsonl — rather than panicking, the same comma-ok contract
+// resource/cron/planwire.go's Apply established.
 func specFromOp(op plan.Op) (*spec, error) {
 	if op.Name == "" {
 		return nil, fmt.Errorf("config_set: missing name")
 	}
-	s := &spec{name: op.Name, chroot: op.Chroot, stagingDir: op.StagingDir, sensitive: op.Sensitive}
-	for _, m := range op.Members {
+	p, _ := op.Payload.(plan.ConfigSetPayload)
+	s := &spec{name: op.Name, chroot: p.Chroot, stagingDir: p.StagingDir, sensitive: op.Sensitive}
+	for _, m := range p.Members {
 		ms, err := memberFromWire(m)
 		if err != nil {
 			return nil, fmt.Errorf("config set %s: member %s: %w", op.Name, m.Key, err)
 		}
 		s.members = append(s.members, ms)
 	}
-	for _, v := range op.Validators {
+	for _, v := range p.Validators {
 		s.validators = append(s.validators, resource.PlanArgv{Bin: v.Bin, Args: slices.Clone(v.Args)})
 	}
 	if err := s.validate(); err != nil {
@@ -167,7 +176,9 @@ func memberFromWire(m plan.ConfigMember) (memberSpec, error) {
 // ToOp lowers a member handle draft. Member comes from d.Payload
 // (MemberPayload, task w62 Layer 1); a "config_set_member" draft without
 // one is a record-time bug, reported like any other handler error rather
-// than panicking.
+// than panicking. The op's own Member field is built onto
+// plan.ConfigSetMemberPayload (task 8e2, Layer 2), the wire-side
+// counterpart of the same draft-side split.
 func (memberHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 	p, ok := d.Payload.(MemberPayload)
 	if !ok {
@@ -175,15 +186,20 @@ func (memberHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 	}
 	return plan.Op{
 		Op: plan.KindConfigSetMember, ID: d.ID, Name: d.Name,
-		Member: p.Member, Path: d.Path, Deps: slices.Clone(d.Deps),
+		Payload: plan.ConfigSetMemberPayload{Member: p.Member},
+		Path:    d.Path, Deps: slices.Clone(d.Deps),
 	}, nil
 }
 
 // Apply notes the member handle's result from its set's apply, read from the
-// store the paired setHandler recorded it in.
+// store the paired setHandler recorded it in. Member comes from op.Payload
+// (plan.ConfigSetMemberPayload, task 8e2), comma-ok so an op whose Payload
+// is nil or mistyped degrades to an empty member key (missing, refused
+// below) instead of panicking.
 func (h memberHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
-	if op.Name == "" || op.Member == "" {
+	p, _ := op.Payload.(plan.ConfigSetMemberPayload)
+	if op.Name == "" || p.Member == "" {
 		return fmt.Errorf("config_set_member: missing set name or member key")
 	}
-	return applyMember(h.outcomes, op.Name, op.Member)
+	return applyMember(h.outcomes, op.Name, p.Member)
 }

@@ -373,7 +373,7 @@ func TestPlanHandlerPairsShareOnlyTheirOwnStore(t *testing.T) {
 	if err := set.Apply(op, plan.ApplyContext{}); err != nil {
 		t.Fatal(err)
 	}
-	memberOp := plan.Op{Op: plan.KindConfigSetMember, Name: "mail", Member: "aliases"}
+	memberOp := plan.Op{Op: plan.KindConfigSetMember, Name: "mail", Payload: plan.ConfigSetMemberPayload{Member: "aliases"}}
 	if err := member.Apply(memberOp, plan.ApplyContext{}); err != nil {
 		t.Fatalf("paired member handler: %v", err)
 	}

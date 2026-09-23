@@ -76,8 +76,9 @@ func TestPlanDryRunWithMissingAccount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lowering a set owned by a not-yet-existing account: %v", err)
 	}
-	if op.Members[0].Owner != missingAccount || op.Members[0].Group != missingAccount {
-		t.Fatalf("op member ownership = %q:%q, want the recorded account", op.Members[0].Owner, op.Members[0].Group)
+	payload, ok := op.Payload.(plan.ConfigSetPayload)
+	if !ok || payload.Members[0].Owner != missingAccount || payload.Members[0].Group != missingAccount {
+		t.Fatalf("op member ownership = %q:%q, want the recorded account", payload.Members[0].Owner, payload.Members[0].Group)
 	}
 	resource.SetDryRun(true)
 	t.Cleanup(func() { resource.SetDryRun(false) })
@@ -89,7 +90,7 @@ func TestPlanDryRunWithMissingAccount(t *testing.T) {
 	if !resource.AnyChanged(setID("mail")) {
 		t.Fatal("plan dry-run must report would-change for the set")
 	}
-	memberOp := plan.Op{Op: plan.KindConfigSetMember, Name: "mail", Member: "aliases"}
+	memberOp := plan.Op{Op: plan.KindConfigSetMember, Name: "mail", Payload: plan.ConfigSetMemberPayload{Member: "aliases"}}
 	if err := member.Apply(memberOp, plan.ApplyContext{}); err != nil || !resource.AnyChanged(memberID("mail", "aliases")) {
 		t.Fatalf("the paired member handler must report would-change for aliases (err=%v)", err)
 	}

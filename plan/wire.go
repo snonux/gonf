@@ -129,6 +129,13 @@ type wireOp struct {
 	Sensitive bool `json:"sensitive,omitempty"`
 	Elevate   bool `json:"elevate,omitempty"`
 
+	// ConfigSet-exclusive (plan.ConfigSetPayload): Members, Validators,
+	// Chroot, StagingDir. ConfigSetMember-exclusive (plan.ConfigSetMemberPayload):
+	// Member. Task 8e2 moved these off Op onto the two payload types (the
+	// same two-kinds-one-package shape resource/configset's own
+	// SetPayload/MemberPayload already has at Layer 1); this block's
+	// position stays frozen like every other field in this struct — see
+	// this type's own doc comment.
 	Members    []ConfigMember `json:"members,omitempty"`
 	Validators []Argv         `json:"validators,omitempty"`
 	Chroot     string         `json:"chroot,omitempty"`

@@ -228,6 +228,75 @@ func (p CommandPayload) applyToWire(w *wireOp) {
 	w.OnlyIf = p.OnlyIf
 }
 
+// ConfigSetPayload holds the wire fields exclusive to KindConfigSet (task
+// 8e2). resource/configset's planwire.go is the only other package that
+// constructs or reads one — its setHandler always sets a non-nil
+// ConfigSetPayload on a "config_set" op's Payload (record side: ToOp; apply
+// side: specFromOp comma-ok type-asserts it, degrading to the zero value for
+// an op decoded from an arbitrary plan.jsonl, the same contract
+// CronPayload's doc comment describes), so a decoded or freshly lowered
+// KindConfigSet op's Payload is never nil in the normal path.
+//
+// This is the plan.Op ("Layer 2") counterpart of resource/configset's own
+// SetPayload ("Layer 1", resource/configset/payload.go): both split the same
+// two-kinds-one-package shape (KindConfigSet/KindConfigSetMember), one on
+// the draft side and one on the wire side.
+//
+// Its json tags are never consulted by encoding/json — Op.MarshalJSON merges
+// these fields onto a wireOp and marshals THAT, never this struct directly —
+// but api's secret-scan reflection walker (walkOpStrings/opFieldClasses)
+// still needs them: it descends into Op.Payload's concrete value at the
+// op's own top-level path (see api/secret_fields.go's walkStruct), and
+// computes each leaf's classification path from THESE tags. They must
+// therefore keep naming the same wire keys wireOp's own fields do;
+// TestWirePayloadTagsMatch (types_test.go) pins that the two never drift
+// apart.
+//
+// Field docs (unchanged from Op's pre-8e2 flat field comments):
+type ConfigSetPayload struct {
+	// Members are the files of a KindConfigSet op, in declaration order
+	// (schema v21). Content may reference other members' staged or live
+	// paths through gonf-owned tokens; see ConfigMember.
+	Members []ConfigMember `json:"members,omitempty"`
+	// Validators are the argv commands a KindConfigSet op runs, in order,
+	// against the complete staged candidate set before any live write.
+	Validators []Argv `json:"validators,omitempty"`
+	// Chroot is the optional chroot directory every KindConfigSet member and
+	// its staging directory must live under; chroot-relative member tokens
+	// are rendered relative to it.
+	Chroot string `json:"chroot,omitempty"`
+	// StagingDir is the KindConfigSet directory that receives the private
+	// staging directory. Empty means the members' deepest common directory.
+	StagingDir string `json:"staging_dir,omitempty"`
+}
+
+func (p ConfigSetPayload) applyToWire(w *wireOp) {
+	w.Members = p.Members
+	w.Validators = p.Validators
+	w.Chroot = p.Chroot
+	w.StagingDir = p.StagingDir
+}
+
+// ConfigSetMemberPayload holds the wire field exclusive to
+// KindConfigSetMember (task 8e2). resource/configset's planwire.go is the
+// only other package that constructs or reads one, always non-nil on a
+// "config_set_member" op's Payload in the normal path, for the same reason
+// ConfigSetPayload's doc comment gives.
+//
+// This is the plan.Op ("Layer 2") counterpart of resource/configset's own
+// MemberPayload ("Layer 1", resource/configset/payload.go) — see
+// ConfigSetPayload's doc comment above for the shared two-kinds-one-package
+// shape both split.
+type ConfigSetMemberPayload struct {
+	// Member is the member key of a KindConfigSetMember op; the op's Name is
+	// the owning set's name.
+	Member string `json:"member,omitempty"`
+}
+
+func (p ConfigSetMemberPayload) applyToWire(w *wireOp) {
+	w.Member = p.Member
+}
+
 // toWire copies every Op core field onto a fresh wireOp and, when op.Payload
 // is set, layers its kind-exclusive fields on top. It does not normalize;
 // callers (MarshalJSON) do that once, after the merge.
@@ -277,12 +346,6 @@ func (op Op) toWire() wireOp {
 
 		Sensitive: op.Sensitive,
 		Elevate:   op.Elevate,
-
-		Members:    op.Members,
-		Validators: op.Validators,
-		Chroot:     op.Chroot,
-		StagingDir: op.StagingDir,
-		Member:     op.Member,
 
 		Deps: op.Deps,
 
@@ -343,12 +406,6 @@ func fromWire(w wireOp) Op {
 
 		Sensitive: w.Sensitive,
 		Elevate:   w.Elevate,
-
-		Members:    w.Members,
-		Validators: w.Validators,
-		Chroot:     w.Chroot,
-		StagingDir: w.StagingDir,
-		Member:     w.Member,
 
 		Deps: w.Deps,
 
@@ -417,6 +474,17 @@ func payloadFromWire(w wireOp) OpPayload {
 			Unless:  w.Unless,
 			OnlyIf:  w.OnlyIf,
 		}
+	case KindConfigSet:
+		return ConfigSetPayload{
+			Members:    w.Members,
+			Validators: w.Validators,
+			Chroot:     w.Chroot,
+			StagingDir: w.StagingDir,
+		}
+	case KindConfigSetMember:
+		return ConfigSetMemberPayload{
+			Member: w.Member,
+		}
 	default:
 		return nil
 	}
@@ -433,12 +501,14 @@ func payloadFromWire(w wireOp) OpPayload {
 // AllKinds's role for Kind itself).
 func OpPayloadExamples() map[Kind]OpPayload {
 	return map[Kind]OpPayload{
-		KindCron:         CronPayload{},
-		KindSystemdTimer: SystemdTimerPayload{},
-		KindUser:         UserPayload{},
-		KindLink:         LinkPayload{},
-		KindLinkIfExists: LinkIfExistsPayload{},
-		KindPackage:      PackagePayload{},
-		KindCommand:      CommandPayload{},
+		KindCron:            CronPayload{},
+		KindSystemdTimer:    SystemdTimerPayload{},
+		KindUser:            UserPayload{},
+		KindLink:            LinkPayload{},
+		KindLinkIfExists:    LinkIfExistsPayload{},
+		KindPackage:         PackagePayload{},
+		KindCommand:         CommandPayload{},
+		KindConfigSet:       ConfigSetPayload{},
+		KindConfigSetMember: ConfigSetMemberPayload{},
 	}
 }

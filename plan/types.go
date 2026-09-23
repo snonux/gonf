@@ -286,10 +286,11 @@ type Guard struct {
 // it always was regardless of this Go-level split — see wireOp's doc
 // comment (wire.go) for exactly how.
 //
-// As of task 7e2, the cron, systemd_timer, user, link, link_if_exists,
-// package and command kinds have migrated their exclusive fields onto a
-// payload (CronPayload, SystemdTimerPayload, UserPayload, LinkPayload,
-// LinkIfExistsPayload, PackagePayload, CommandPayload, op_payload.go);
+// As of task 8e2, the cron, systemd_timer, user, link, link_if_exists,
+// package, command, config_set and config_set_member kinds have migrated
+// their exclusive fields onto a payload (CronPayload, SystemdTimerPayload,
+// UserPayload, LinkPayload, LinkIfExistsPayload, PackagePayload,
+// CommandPayload, ConfigSetPayload, ConfigSetMemberPayload, op_payload.go);
 // every other kind's fields are still flat here, unchanged, pending
 // follow-up tasks (see docs/plan.md).
 type Op struct {
@@ -476,23 +477,25 @@ type Op struct {
 	// Controllers use this to split apply into user vs sudo/doas gonf invocations.
 	Elevate bool `json:"elevate,omitempty"`
 
-	// Members are the files of a KindConfigSet op, in declaration order
-	// (schema v21). Content may reference other members' staged or live
-	// paths through gonf-owned tokens; see ConfigMember.
-	Members []ConfigMember `json:"members,omitempty"`
-	// Validators are the argv commands a KindConfigSet op runs, in order,
-	// against the complete staged candidate set before any live write.
-	Validators []Argv `json:"validators,omitempty"`
-	// Chroot is the optional chroot directory every KindConfigSet member and
-	// its staging directory must live under; chroot-relative member tokens
-	// are rendered relative to it.
-	Chroot string `json:"chroot,omitempty"`
-	// StagingDir is the KindConfigSet directory that receives the private
-	// staging directory. Empty means the members' deepest common directory.
-	StagingDir string `json:"staging_dir,omitempty"`
-	// Member is the member key of a KindConfigSetMember op; its Name is the
-	// owning set's name.
-	Member string `json:"member,omitempty"`
+	// Members, Validators, Chroot, StagingDir (KindConfigSet-exclusive) and
+	// Member (KindConfigSetMember-exclusive) moved onto
+	// ConfigSetPayload/ConfigSetMemberPayload (task 8e2, "Layer 2" of the
+	// PlanDraft/Op god-struct split — see docs/plan.md, "The PlanDraft/Op
+	// split"; and CronPayload's doc comment in op_payload.go for why the
+	// wire itself is unaffected). Field docs (unchanged from here):
+	// ConfigSetPayload.Members are the files of a KindConfigSet op, in
+	// declaration order (schema v21); content may reference other members'
+	// staged or live paths through gonf-owned tokens, see ConfigMember.
+	// ConfigSetPayload.Validators are the argv commands a KindConfigSet op
+	// runs, in order, against the complete staged candidate set before any
+	// live write. ConfigSetPayload.Chroot is the optional chroot directory
+	// every KindConfigSet member and its staging directory must live under;
+	// chroot-relative member tokens are rendered relative to it.
+	// ConfigSetPayload.StagingDir is the KindConfigSet directory that
+	// receives the private staging directory (empty means the members'
+	// deepest common directory). ConfigSetMemberPayload.Member is the
+	// member key of a KindConfigSetMember op; the op's Name is the owning
+	// set's name.
 
 	// Deps lists the resource IDs (op IDs such as "File[/etc/foo]") this op
 	// depends on, recorded from the resource DependsOn option. Plan apply
