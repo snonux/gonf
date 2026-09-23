@@ -212,12 +212,20 @@ func TestMayManageUnit(t *testing.T) {
 		// SYSTEM path) was already in unitSearchDirs, but not this
 		// per-user runtime one.
 		{"File[/run/user/1000/systemd/user/service.d/x.conf]", "a.service", true},
+		// Positive (pe2): the SYSTEM-side twin of od2's widening --
+		// a drop-in written under an alternate root or container
+		// rootfs (e.g. /mnt/newroot/... or /srv/chroot/...) still
+		// ends in "/systemd/system", so the widened suffix match
+		// catches it even though it is not one of the literal
+		// unitSearchDirs entries (which can never enumerate every
+		// possible alternate-root mount point).
+		{"File[/mnt/newroot/etc/systemd/system/service.d/x.conf]", "a.service", true},
 		// Negative (od2 regression guard): the widened suffix match
 		// must not start matching the dbus-transient directories
 		// (*.control, transient, generator[.early|.late]) dd2
 		// deliberately excluded -- none of them end in
-		// "/systemd/user", so they stay excluded before and after
-		// this widening.
+		// "/systemd/user" or "/systemd/system", so they stay
+		// excluded before and after this widening (and pe2's).
 		{"File[/run/systemd/transient/service.d/x.conf]", "a.service", false},
 		{"File[/run/systemd/generator/service.d/x.conf]", "a.service", false},
 		{"File[/run/systemd/generator.early/service.d/x.conf]", "a.service", false},

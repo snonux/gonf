@@ -187,34 +187,43 @@ var unitSearchDirs = []string{
 
 // isUnitSearchDir reports whether dir is one of the standard systemd unit
 // load directories (unitSearchDirs), or any directory ending in
-// "/systemd/user": every per-user search directory in systemd.unit(5)'s
-// Table 2 that is NOT one of the fixed system-wide paths already listed in
-// unitSearchDirs sits under some environment variable's value and ends this
-// way -- $XDG_CONFIG_HOME/systemd/user, $XDG_DATA_HOME/systemd/user, each
+// "/systemd/user" or "/systemd/system". The user-side suffix covers every
+// per-user search directory in systemd.unit(5)'s Table 2 that is NOT one of
+// the fixed system-wide paths already listed in unitSearchDirs: those sit
+// under some environment variable's value and end this way --
+// $XDG_CONFIG_HOME/systemd/user, $XDG_DATA_HOME/systemd/user, each
 // $XDG_DATA_DIRS entry's systemd/user, and $XDG_RUNTIME_DIR/systemd/user --
 // so matching the suffix directly covers every one of them at once,
 // including a host's non-default XDG_CONFIG_HOME/XDG_DATA_HOME (od2), not
 // just the documented defaults ~/.config/systemd/user and
-// ~/.local/share/systemd/user (dd2).
+// ~/.local/share/systemd/user (dd2). The system-side suffix (pe2) covers the
+// same case for the system paths already in unitSearchDirs, but reached
+// through an alternate root or container rootfs the literal list can never
+// enumerate -- e.g. /mnt/newroot/etc/systemd/system or
+// /srv/chroot/.../etc/systemd/system -- so a File drop-in written there
+// (plus a same-bus DaemonReload) is refused a join exactly like the
+// standard /etc/systemd/system case, instead of under-refusing it.
 //
-// This still does not read any environment variable: mayManageUnit runs
-// while a recipe declares its resources, on the controller process, which
-// has no per-destination-host environment to consult (a recipe is declared
-// once and applied to any number of destination hosts, each with its own).
-// Reading the controller's own environment variables here would silently
-// check the wrong host's settings, so the suffix match -- now covering
-// every documented "/systemd/user" spelling instead of enumerating each
-// one -- stays the right tool for a controller-side, host-agnostic check.
-// It can only ever widen mayManageUnit's true matches (the safe direction:
-// this check exists to REFUSE a join, so a false positive here costs an
-// extra reload at worst, never a stale-definition start), never narrow
-// them, so it stays safe even where it is more permissive than any single
-// real host's actual search path.
+// This still does not read any environment variable, nor the destination
+// host's actual root: mayManageUnit runs while a recipe declares its
+// resources, on the controller process, which has no per-destination-host
+// environment or mount namespace to consult (a recipe is declared once and
+// applied to any number of destination hosts, each with its own). Reading
+// the controller's own environment variables or filesystem here would
+// silently check the wrong host's settings, so the suffix match -- now
+// covering every documented "/systemd/user" spelling and any
+// "/systemd/system" location instead of enumerating each one -- stays the
+// right tool for a controller-side, host-agnostic check. It can only ever
+// widen mayManageUnit's true matches (the safe direction: this check exists
+// to REFUSE a join, so a false positive here costs an extra reload at
+// worst, never a stale-definition start), never narrow them, so it stays
+// safe even where it is more permissive than any single real host's actual
+// search path.
 func isUnitSearchDir(dir string) bool {
 	if slices.Contains(unitSearchDirs, dir) {
 		return true
 	}
-	return strings.HasSuffix(dir, "/systemd/user")
+	return strings.HasSuffix(dir, "/systemd/user") || strings.HasSuffix(dir, "/systemd/system")
 }
 
 // dropinDirs returns the drop-in directory names systemd additionally
