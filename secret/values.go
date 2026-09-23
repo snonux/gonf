@@ -36,12 +36,45 @@ const maxWordLen = 12
 // logger.RedactingWriter, which buffers an unterminated line up to whatever
 // MaxPending returns rather than carrying a separate, independently-sized
 // threshold of its own, so the two can never drift apart. FlushPoint also
-// uses it as the threshold past which it must stop waiting for a
-// self-overlapping match chain to resolve and flush what it has (see
-// FlushPoint), since every real caller only asks it to find a cut point
-// once its own buffer already exceeds this many bytes (guaranteed by
-// MaxPending being the relay's flush threshold).
+// uses it as the threshold past which its escape hatch may run for a
+// self-overlapping match chain that reaches back to the very start of the
+// buffer (see FlushPoint): below it, FlushPoint either makes ordinary
+// keep-back progress or correctly has too little data yet to keep back its
+// longest tracked form, never a stall; only above it can the escape hatch's
+// own stall-then-cap sequence run, since every real caller only asks it to
+// find a cut point once its own buffer already exceeds this many bytes
+// (guaranteed by MaxPending being the relay's flush threshold). The escape
+// hatch does not itself flush at this threshold — it keeps stalling
+// (returning no progress) until flushStallCap, a multiple of this value,
+// forces it to (see flushStallCap and FlushPoint's doc; task le2 corrected
+// an earlier version of this comment that wrongly implied it flushed here).
 const MaxSplitGuard = 64 << 10
+
+// flushStallCap bounds how large s (an already-overlong, still-unterminated
+// pending line) may grow while FlushPoint's escape hatch keeps finding no
+// safe cut at all (protectedCrossing's crossed result, see FlushPoint):
+// once len(s) reaches this cap, FlushPoint stops waiting for a gap that a
+// sufficiently dense, self-overlapping chain of protected occurrences may
+// never produce, and instead forwards the whole buffer as one Redacted
+// marker (safe: every byte in a chain this dense is itself part of some
+// tracked occurrence, so blanket-redacting all of it, with nothing left
+// raw in pending afterward, leaks nothing already in the buffer -- the
+// only residual is the same, already-accepted class of risk documented for
+// forms longer than MaxSplitGuard: a still-open occurrence whose start was
+// just swept away by this forced flush is not recognisable from its
+// continuation alone on a later call). This restores the bounded-pending,
+// roughly-linear-cost invariant task mb2 established: without a cap, a
+// caller such as logger.RedactingWriter never shrinks pending on a "", 0
+// result (see forwardSafePrefix), so every later Write re-scans the whole,
+// still-growing buffer -- task rd2's own leak fix correctly refused the
+// unsafe guess that used to bound this stall, which reintroduced mb2's
+// unbounded growth for this one input shape until this cap closed it again
+// (task le2). Set well above MaxSplitGuard (4x here) so the ordinary,
+// non-degenerate keep-back path -- which already keeps pending near
+// MaxSplitGuard between calls -- never reaches it; only the escape hatch's
+// own stall does, and only for an input dense enough to keep failing to
+// find a gap across that many bytes.
+const flushStallCap = 4 * MaxSplitGuard
 
 // Redacted replaces every recognised secret occurrence in redacted output.
 // It is deliberately not valid base64, so a redacted content_b64 can never
@@ -300,11 +333,16 @@ func (v *Values) redact(s string, strongOnly bool) string {
 // that stays unresolved for its entire self-overlapping length, e.g.
 // "x1x1x1x1x1" repeated with no break anywhere in s -- see
 // protectedCrossing), FlushPoint makes NO progress at all this call
-// (consumed 0) rather than ever retain a raw fragment: a stall is always
-// safe (the caller keeps buffering and retries once more data crosses
-// MaxSplitGuard again -- the same "stay conservative" answer already used
-// below the threshold), while forwarding any fragment of a protected
-// occurrence never is. Only when nothing protected crosses cut at all --
+// (consumed 0) rather than ever retain a raw fragment -- UNLESS s has
+// already grown past flushStallCap, in which case it stops stalling and
+// forwards the WHOLE of s as one Redacted marker instead (see
+// flushStallCap for why that is still safe): below the cap, a stall is
+// always safe (the caller keeps buffering and retries once more data
+// crosses MaxSplitGuard again -- the same "stay conservative" answer
+// already used below the threshold), while forwarding any fragment of a
+// protected occurrence never is, and above the cap the buffer is treated
+// as entirely secret material rather than left to grow without bound.
+// Only when nothing protected crosses cut at all --
 // the crossing is caused solely by a form longer than MaxSplitGuard, which
 // the keep-back was never sized to protect in the first place (see below)
 // -- does the plain keep-back cut stand as computed, its long-accepted
@@ -356,8 +394,15 @@ func (v *Values) FlushPoint(s string) (out string, consumed int) {
 			switch {
 			case snap > 0:
 				cut = snap
-			case crossed:
+			case crossed && len(s) < flushStallCap:
+				// Still short of the cap: keep waiting for a gap
+				// rather than guess (see flushStallCap's doc).
 				return "", 0
+			case crossed:
+				// Past the cap with no gap ever found: stop stalling
+				// and consume everything, so nothing raw is left
+				// pending for a later call to leak.
+				cut = len(s)
 			}
 			return Redacted, cut
 		}
@@ -435,13 +480,21 @@ func (v *Values) protectedSpans(s string) [][2]int {
 // (see its doc), the caller's pending buffer keeps growing and
 // protectedSpans/protectedCrossing rescan it from scratch on every later
 // call, since nothing was ever forwarded to shrink it — cost proportional
-// to len(s), repeated on every still-unresolved call, so total cost grows
+// to len(s), repeated on every still-unresolved call, so cost would grow
 // roughly with the square of how long a genuinely never-breaking chain
-// persists. This is the accepted cost of never leaking rather than a new
-// hang (each individual call still terminates quickly): it can only arise
-// when literally no gap exists anywhere in the buffer given so far (a
-// perfectly, densely self-overlapping run), which the fix above already
-// finds and exploits every gap to avoid whenever one exists.
+// persists if the stall were allowed to continue unbounded. It is not: once
+// s reaches flushStallCap, FlushPoint stops calling protectedCrossing
+// altogether and forwards the whole buffer as one Redacted marker instead
+// (see flushStallCap), so the quadratic-shaped cost is itself capped at
+// O(flushStallCap²) before it resets to an empty pending buffer and starts
+// over — a bounded, repeating cost rather than one that keeps compounding
+// for as long as a pathological stream continues (task le2; an earlier
+// version of this comment called the unbounded growth "accepted", which
+// task rd2's leak fix had reintroduced as a live regression rather than a
+// deliberate trade-off). It can only arise when literally no gap exists
+// anywhere in the buffer given so far (a perfectly, densely
+// self-overlapping run), which the fix above already finds and exploits
+// every gap to avoid whenever one exists.
 func protectedCrossing(spans [][2]int, cut int) (snap int, crossed bool) {
 	frontier := 0
 	for _, sp := range spans {
@@ -464,10 +517,16 @@ func protectedCrossing(spans [][2]int, cut int) (snap int, crossed bool) {
 
 // MaxPending implements logger.Redactor: RedactingWriter must not force a
 // flush before an unterminated line reaches MaxSplitGuard bytes, because
-// FlushPoint's escape hatch (see above) only has a safe, progress-making
-// answer once len(s) already exceeds it; forcing sooner would return "", 0
-// forever for a self-overlapping secret and reintroduce the unbounded
-// buffer growth task mb2 fixed.
+// below that threshold FlushPoint cannot even keep back its longest
+// tracked form (len(s) - (longest-1) <= 0) and would return "", 0 on every
+// call, growing pending without bound (the bug task mb2 fixed). Reaching
+// MaxSplitGuard does not by itself guarantee progress on every later call,
+// though: FlushPoint's escape hatch (see above) can still stall past it for
+// a densely self-overlapping match chain that keeps finding no safe cut —
+// what bounds THAT stall is flushStallCap, not MaxPending (task le2: task
+// rd2's leak fix correctly made the escape hatch refuse an unsafe cut here,
+// which reintroduced mb2's unbounded growth for this one input shape until
+// flushStallCap capped it).
 func (v *Values) MaxPending() int { return MaxSplitGuard }
 
 // matchSpans returns the byte ranges of every occurrence of every contained

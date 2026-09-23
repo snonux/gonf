@@ -2,6 +2,7 @@ package secret
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -230,6 +231,46 @@ func TestValuesFlushPointSelfOverlappingAboveBoundStallsRatherThanLeak(t *testin
 	out, cut := v.FlushPoint(s)
 	if cut != 0 || out != "" {
 		t.Fatalf("FlushPoint = (%q, %d), want (\"\", 0): an unbroken self-overlapping chain has no safe cut to return", out, cut)
+	}
+}
+
+// TestValuesFlushPointStallCapBoundary is the regression test for task le2:
+// rd2's leak fix made the case above correctly stall rather than guess at an
+// unsafe cut, but with nothing else added, that stall never ends for an
+// unbroken self-overlapping chain -- reintroducing, for this exact input
+// shape, the unbounded pending-buffer growth (and roughly quadratic rescan
+// cost, since matchSpans and protectedSpans rescan the whole, still-growing
+// buffer on every call that makes no progress) task mb2 fixed. This pins the
+// fix's boundary precisely: one byte short of flushStallCap the escape hatch
+// still stalls exactly as before (never guessing at an unsafe cut), but at
+// flushStallCap it stops waiting and forwards the WHOLE buffer as one opaque
+// Redacted marker, so nothing raw is ever left pending to leak later, and
+// the caller's buffer (see internal/logger.RedactingWriter) cannot grow past
+// this cap.
+func TestValuesFlushPointStallCapBoundary(t *testing.T) {
+	t.Parallel()
+	var v Values
+	v.Add([]byte("x1x1x1x1x1")) // 10 bytes, period 2: self-overlapping
+
+	below := strings.Repeat("x1", flushStallCap/2)[:flushStallCap-1] // one byte short of the cap
+	if len(below) != flushStallCap-1 {
+		t.Fatalf("test setup: len(below) = %d, want %d", len(below), flushStallCap-1)
+	}
+	out, cut := v.FlushPoint(below)
+	if cut != 0 || out != "" {
+		t.Fatalf("FlushPoint(len=%d, one byte short of flushStallCap) = (%q, %d), want (\"\", 0): still below the cap, must keep stalling", len(below), out, cut)
+	}
+
+	atCap := strings.Repeat("x1", flushStallCap/2) // exactly the cap
+	if len(atCap) != flushStallCap {
+		t.Fatalf("test setup: len(atCap) = %d, want %d", len(atCap), flushStallCap)
+	}
+	out, cut = v.FlushPoint(atCap)
+	if cut != len(atCap) {
+		t.Fatalf("FlushPoint(len=%d, exactly flushStallCap) consumed = %d, want %d (the whole buffer): the cap must force full progress", len(atCap), cut, len(atCap))
+	}
+	if out != Redacted {
+		t.Fatalf("FlushPoint at the cap = %q, want the single opaque marker %q", out, Redacted)
 	}
 }
 
@@ -564,5 +605,31 @@ func TestValuesConcurrentUse(t *testing.T) {
 	wg.Wait()
 	if !v.Contains([]byte(strings.Repeat("s", 12))) {
 		t.Fatal("a concurrently added value is missing")
+	}
+}
+
+// BenchmarkValuesFlushPointDenseChain measures FlushPoint's cost on the
+// realistic shape task le2's annotation measured: a credentials file's
+// "====...=" divider line (here added directly as the tracked secret,
+// standing in for the redact-only form strongLines would derive from a real
+// multi-line secret) against an unterminated "="-only progress-bar line,
+// which never gives the escape hatch a gap to snap to. Run at a few sizes
+// (go test -bench BenchmarkValuesFlushPointDenseChain -benchtime <n>x) to see
+// the shape of the cost: pre-flushStallCap (task le2) this grew roughly with
+// the square of b.N's byte count once past MaxSplitGuard, matching the
+// measured 128 KiB/512 KiB/2 MiB numbers in the task's annotation; with the
+// cap, cost per byte stays bounded because the escape hatch never scans past
+// flushStallCap before forcing a fresh start.
+func BenchmarkValuesFlushPointDenseChain(b *testing.B) {
+	for _, size := range []int{MaxSplitGuard / 2, 2 * MaxSplitGuard, 8 * MaxSplitGuard} {
+		b.Run(fmt.Sprintf("%dKiB", size/1024), func(b *testing.B) {
+			var v Values
+			v.Add([]byte(strings.Repeat("=", 40)))
+			s := strings.Repeat("=", size)
+			b.ResetTimer()
+			for range b.N {
+				v.FlushPoint(s)
+			}
+		})
 	}
 }

@@ -59,12 +59,17 @@ type Redactor interface {
 	// MaxPending is the longest an unterminated line RedactingWriter may
 	// buffer before forcing a flush through FlushPoint. It must be at least
 	// as large as the redactor's own split-guard threshold
-	// (secret.MaxSplitGuard for the production redactor): FlushPoint's
-	// escape hatch for a self-overlapping match chain only has a safe,
-	// progress-making answer once s already exceeds that threshold, so a
-	// smaller MaxPending would force a flush before FlushPoint can make one,
-	// returning no progress and reintroducing the unbounded buffer growth
-	// task mb2 fixed.
+	// (secret.MaxSplitGuard for the production redactor): below that
+	// threshold FlushPoint cannot even keep back its longest tracked form,
+	// so a smaller MaxPending would force a flush FlushPoint can only
+	// answer with no progress, growing pending without bound (the bug task
+	// mb2 fixed). Reaching the split-guard threshold does not by itself
+	// guarantee progress on every call, though: a densely self-overlapping
+	// match chain can still make FlushPoint's escape hatch stall past it
+	// (task le2, see secret.Values.FlushPoint and secret.flushStallCap for
+	// what bounds that stall instead); MaxPending only has to be large
+	// enough for FlushPoint to have a chance at a keep-back cut, not large
+	// enough to guarantee one on every single call.
 	MaxPending() int
 }
 

@@ -369,6 +369,72 @@ func TestRedactingWriterSelfOverlappingSecretResolvesOnceChainBreaks(t *testing.
 	}
 }
 
+// TestRedactingWriterStallCapForcesProgress is the end-to-end regression
+// test for task le2: rd2's leak fix correctly made secret.Values.FlushPoint's
+// escape hatch refuse an unsafe cut for a densely, self-overlappingly
+// matched chain that never finds a safe boundary (see
+// secret.TestValuesFlushPointSelfOverlappingAboveBoundStallsRatherThanLeak),
+// but a stall that never ends means RedactingWriter's pending buffer (see
+// forwardSafePrefix) never shrinks either, so every later Write rescans the
+// whole, still-growing buffer -- reintroducing, for this one input shape,
+// the exact unbounded-growth/quadratic-cost bug task mb2 fixed. This
+// reproduces the measured real-world shape from task le2's own annotation (a
+// credentials file's "====...=" divider line, which strongLines tracks as a
+// strong contained form on its own, against an unterminated "="-only
+// progress-bar line with no newline -- the annotation measured 2 MiB taking
+// 9.99s with zero bytes forwarded pre-fix) chunked exactly like a relayed
+// child's output (io.Copy's 32 KiB default buffer). The primary assertion is
+// direct and deterministic rather than a timing race: pending must never grow
+// past a bound close to secret.flushStallCap (unexported; 4x
+// secret.MaxSplitGuard, mirrored here), proving the escape hatch forces a
+// real flush instead of buffering without bound; a generous wall-clock
+// deadline is kept as a secondary sanity net for a hang the bound alone
+// might not catch (e.g. a bug that loops without growing pending).
+func TestRedactingWriterStallCapForcesProgress(t *testing.T) {
+	var vals secret.Values
+	// The divider line is tracked directly as the secret; feeding the same
+	// repeating character as the "progress bar" is what makes every
+	// position in the stream part of some overlapping occurrence -- the
+	// exact shape FlushPoint's escape hatch can never find a safe cut in.
+	vals.Add([]byte(strings.Repeat("=", 40)))
+	SetRedactor(&vals)
+	t.Cleanup(func() { SetRedactor(nil) })
+
+	var out strings.Builder
+	w := NewRedactingWriter(&out)
+	const chunk = 32 << 10                 // io.Copy's default buffer size
+	const total = 6 * secret.MaxSplitGuard // well past secret.flushStallCap (4x MaxSplitGuard)
+	// One chunk of slack beyond secret.flushStallCap's own 4x MaxSplitGuard
+	// for whatever a single Write call appends before it is checked.
+	const pendingBound = 4*secret.MaxSplitGuard + chunk
+	deadline := time.Now().Add(20 * time.Second)
+	for written := 0; written < total; written += chunk {
+		end := min(chunk, total-written)
+		if _, err := w.Write([]byte(strings.Repeat("=", end))); err != nil {
+			t.Fatal(err)
+		}
+		w.mu.Lock()
+		pending := len(w.pending)
+		w.mu.Unlock()
+		if pending > pendingBound {
+			t.Fatalf("pending buffer grew to %d bytes (> %d) after %d of %d bytes written: the escape hatch must force progress once secret.flushStallCap is crossed instead of buffering without bound", pending, pendingBound, written+end, total)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("writing stalled (wall-clock, not just buffered) after %d of %d bytes", written+end, total)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, secret.Redacted) {
+		t.Fatalf("output was not redacted at all: %d bytes", len(got))
+	}
+	if raw := strings.Repeat("=", 100); strings.Contains(got, raw) {
+		t.Fatalf("a long run of raw secret material leaked into forwarded output (%d bytes total)", len(got))
+	}
+}
+
 // TestRedactingWriterBoundsTwoSecretLeak is the end-to-end regression test
 // for task 3d2's confirmed leak: a shorter, periodic secret ("x1x1x1x1x1")
 // and a second, longer secret that starts with it. Before the fix, a single
