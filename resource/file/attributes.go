@@ -156,6 +156,10 @@ func (f *File) applyAttributesViaPath(path string, openErr error) error {
 // strings pass through strconv.Atoi, anything else is looked up by name via
 // os/user (works with and without cgo on the supported unix targets). Both
 // paths wrap failures with the offending group name.
+//
+// The numeric path is load-bearing for options.Root, which records the group
+// as "0" so the destination's kernel, not a name lookup, picks its root group
+// (root on Linux, wheel on the BSDs and darwin).
 func resolveGroupID(group string) (int, error) {
 	gidInt, err := strconv.Atoi(group)
 	if err == nil {

@@ -216,6 +216,8 @@ resource is not registered.
 | `WithSensitive` | File, Dir/SyncDir, ConfigSet and `ConfigFile`, Command (needs `WithName`), Package, Cron, SystemdTimer | Mark the op as secret-bearing (see [Secrets](#secrets)). Other kinds refuse it at compile time. |
 | `OnChange(res...)` | Command, Service, Timer, DaemonReload | Change gate plus ordering (see [Change gates](#change-gates)). |
 | `WatchChanges(ids...)` | same | Gate on resource IDs, no ordering. |
+| `Perm(mode, owner)` | File, Dir and every wrapper taking their options (`EnsureFile`, `InstallFile`, `SecretFile`, `EnsureDir`, `SyncDir`, `ConfigFile`) | `WithMode` + `WithOwner` + `WithGroup` in one: `owner` is `"user:group"`, `"user"` or `":group"`. Records the exact same plan. A malformed owner is a declaration error. |
+| `Root` | owner spec for `Perm` and `WithOwner` | root and the destination's root group (root on Linux, wheel on the BSDs and macOS). Recorded as group `0`, so the destination picks the name, never the controller. |
 
 `options.Option` (`func(any)`) is the untyped legacy form. Convert a stored
 `[]options.Option` with `ToFileOptions`, `ToDirOptions`, and so on; the
@@ -228,7 +230,7 @@ File("/etc/motd", WithContent("hello\n"), WithMode(0o644))
 File("/etc/app.conf", WithSource("assets/app.conf.tmpl"), WithTemplateData(cfg))
 File("/etc/lines.conf", WithLines("a=1", "b=2"), WithoutLines("stale"))
 File("/root/.profile", WithKeyedLine("export PKG_PATH=", `export PKG_PATH="https://repo/"`),
-    WithMode(0o644), WithOwner("root"), WithGroup("wheel"))
+    Perm(0o644, Root))
 File("/etc/httpd.conf", WithContent(conf), WithValidation("httpd", List("-n", "-f", CandidatePath)))
 NoFile("/tmp/old.txt")
 ```
@@ -243,7 +245,7 @@ NoFile("/tmp/old.txt")
 | `WithKeyedLine(key, line)` | Own the line starting with `key` (below). |
 | `WithValidation(bin, args)` | Validate a candidate before publishing (below). |
 | `WithMode(m)` | Mode. Setuid/setgid/sticky accepted as raw octal or `os.Mode*` flags. Bits above `0o7777` are refused. |
-| `WithOwner(u)` / `WithGroup(g)` | Owner name; group name or numeric gid. Only explicitly set ownership is recorded. |
+| `WithOwner(u)` / `WithGroup(g)` | Owner name; group name or numeric gid. Only explicitly set ownership is recorded. `WithOwner("u:g")` and `WithOwner(Root)` set both, like `Perm`. |
 | `WithName(n)` | ID becomes `File[n]` while still managing the path. Needed for several declarations on one file. |
 | `WithParam(v)` | Override `{{.Param}}`. |
 

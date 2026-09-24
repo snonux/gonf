@@ -98,6 +98,11 @@ var optionCases = []optionCase{
 	{"WithSupplementaryGroups", WithSupplementaryGroups("audio", "video"), []string{"LocalUser"}, one("AddSupplementaryGroups", []string{"audio", "video"})},
 	{"WithUserGroup", WithUserGroup("wheel"), []string{"LocalUser"}, one("AddSupplementaryGroups", []string{"wheel"})},
 	{"WithMode", WithMode(0o644), famFileDir, one("SetMode", os.FileMode(0o644))},
+	{"Perm", Perm(0o750, "svc:staff"), famFileDir, []setterCall{
+		{method: "SetMode", value: os.FileMode(0o750)},
+		{method: "SetOwner", value: "svc"},
+		{method: "SetGroup", value: "staff"},
+	}},
 	{"WithSource", WithSource("/srv/src"), famFileDir, one("SetSource", "/srv/src")},
 	{"WithSourceGlob", WithSourceGlob("*.conf"), []string{"Dir"}, one("SetSourceGlob", "*.conf")},
 	{"WithParam", WithParam("stable"), []string{"File"}, one("SetParam", "stable")},

@@ -3,6 +3,22 @@
 Release notes for gonf. Each release is also an annotated `v*` tag; for
 releases before v0.17.0 the tag message and the git log are the notes.
 
+## Unreleased
+
+Plan schema 24 (unchanged).
+
+- `Perm(mode, owner)` sets mode and ownership in one option wherever
+  `WithMode`/`WithOwner`/`WithGroup` are accepted: `Perm(0o640, "root:wheel")`.
+  `owner` is `"user:group"`, `"user"` or `":group"`; a malformed one is a
+  declaration error. The recorded plan is byte-identical to the three-option
+  form.
+- `Root` is the owner "root plus the destination's root group" (root on
+  Linux, wheel on the BSDs and macOS): `Perm(0o755, Root)` or
+  `WithOwner(Root)`. It records group `0`, which every destination already
+  applies, so older destination binaries apply such plans unchanged.
+- `WithOwner` accepts the same `"user:group"` spec. A plain user name records
+  exactly as before; an owner with a colon used to fail at apply time.
+
 ## v0.19.0 (2026-09-24)
 
 Plan schema 24 (unchanged).

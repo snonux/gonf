@@ -46,6 +46,13 @@ var misuseCases = []struct {
 	{"empty WithWatch outside daemon-reload", func() any { return &watchOnly{} }, func(t any) { WithWatch().Apply(t) }, "*options.watchOnly does not support WithWatch"},
 	{"NormalizeMode above 0o7777", func() any { return nil }, func(any) { NormalizeMode(0o10000) }, "outside 0o7777"},
 	{"WithMode with a type bit", func() any { return &recorder{} }, func(t any) { WithMode(os.ModeDir | 0o755).Apply(t) }, "outside 0o7777"},
+	{"Perm with an empty owner", func() any { return &recorder{} }, func(t any) { Perm(0o644, "").Apply(t) }, "Perm owner is empty"},
+	{"Perm with an empty group", func() any { return &recorder{} }, func(t any) { Perm(0o644, "root:").Apply(t) }, "has an empty group"},
+	{"Perm with a lone colon", func() any { return &recorder{} }, func(t any) { Perm(0o644, ":").Apply(t) }, "has an empty group"},
+	{"Perm with two colons", func() any { return &recorder{} }, func(t any) { Perm(0o644, "a:b:c").Apply(t) }, "more than one colon"},
+	{"Perm with a type bit", func() any { return &recorder{} }, func(t any) { Perm(os.ModeDir|0o755, Root).Apply(t) }, "outside 0o7777"},
+	{"WithOwner spec with an empty group", func() any { return &recorder{} }, func(t any) { WithOwner("root:").Apply(t) }, "WithOwner owner \"root:\" has an empty group"},
+	{"Perm without the capability", func() any { return struct{}{} }, func(t any) { Perm(0o644, "x").Apply(t) }, "struct {} does not support Perm"},
 	{"WithFileMode with a type bit", func() any { return &recorder{} }, func(t any) { WithFileMode(os.ModeSymlink | 0o644).Apply(t) }, "outside 0o7777"},
 }
 

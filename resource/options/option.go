@@ -456,10 +456,23 @@ func DependsOn(deps ...resource.Dependency) allResourceOption {
 	})
 }
 
-// WithOwner sets the owning user of a file or directory resource.
+// WithOwner sets the owning user of a file or directory resource. An owner
+// containing a colon is a chown-style spec parsed exactly as Perm parses it
+// ("user:group", ":group", or Root), so WithOwner("root:wheel") is
+// WithOwner("root") plus WithGroup("wheel"); a malformed spec is misuse. A
+// plain user name (no colon) is set unchanged, as before specs existed.
 func WithOwner(owner string) fileDirOption {
 	return fileDirOption(func(target any) {
-		requires(target, "WithOwner", func(r Owner) { r.SetOwner(owner) })
+		if !strings.Contains(owner, ":") {
+			requires(target, "WithOwner", func(r Owner) { r.SetOwner(owner) })
+			return
+		}
+		usr, group, err := parseOwnerSpec("WithOwner", owner)
+		if err != nil {
+			misuse(target, err)
+			return
+		}
+		setOwnership(target, "WithOwner", usr, group)
 	})
 }
 
@@ -526,14 +539,7 @@ func WithUserGroup(group string) userAccountOption {
 // WithMode sets a resource's own file mode.
 func WithMode(mode os.FileMode) fileDirOption {
 	return fileDirOption(func(target any) {
-		requires(target, "WithMode", func(r Moded) {
-			normalized, err := normalizeMode(mode)
-			if err != nil {
-				misuse(target, err)
-				return
-			}
-			r.SetMode(normalized)
-		})
+		setMode(target, "WithMode", mode)
 	})
 }
 

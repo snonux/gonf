@@ -140,6 +140,7 @@ var (
 // inline content, line edits and directory pruning.
 var (
 	WithMode         = resourceoptions.WithMode
+	Perm             = resourceoptions.Perm
 	WithSource       = resourceoptions.WithSource
 	WithSourceGlob   = resourceoptions.WithSourceGlob
 	WithParam        = resourceoptions.WithParam
@@ -235,3 +236,7 @@ var (
 // CandidatePath is the sole placeholder allowed in WithValidation arguments;
 // it is replaced at apply time with the private staged candidate's path.
 const CandidatePath = resourceoptions.CandidatePath
+
+// Root is the owner spec for root and the destination OS's root group, for
+// Perm and WithOwner.
+const Root = resourceoptions.Root
