@@ -14,9 +14,9 @@ import (
 	"github.com/snonux/gonf/plan/seal"
 )
 
-// This file is task 4b2 (w82 phase 2, docs/plan-encryption.md): `gonf plan
+// This file is task 4b2 (w82 phase 2, docs/design/plan-encryption.md): `gonf plan
 // -seal -for host|cluster|fleet`. The central property under test —
-// docs/plan-encryption.md's whole reason for recording once per host — is
+// docs/design/plan-encryption.md's whole reason for recording once per host — is
 // TestCLIPlanSealForIsolatesHostSecrets: a host's ForHosts-only secret must
 // never reach another host's plan-<host>.age, even though both are recorded
 // from the same recipe in the same command.
@@ -30,7 +30,7 @@ import (
 // one registered host's name or SSHHost is a substring of another's, the
 // OTHER host's ForHosts body is pulled into the recording too, and its
 // secret material physically lands in the target host's sealed artifact —
-// see api.RecordPlanForHost's doc comment and docs/plan-encryption.md's
+// see api.RecordPlanForHost's doc comment and docs/design/plan-encryption.md's
 // "Runbook" for the qualified guarantee and the operator-facing warning
 // these two tests pin.
 
@@ -39,7 +39,7 @@ import (
 // secrets/<host>/token, a cluster "edge" containing both, a fleet
 // "edge-fleet" wrapping a solo cluster containing only hostA, and one task
 // (cli_seal_for_task) that writes each visited host's own secret into
-// <work>/<host>-out via ForHosts — the shape docs/plan-encryption.md's
+// <work>/<host>-out via ForHosts — the shape docs/design/plan-encryption.md's
 // "records once per host" rule exists to protect.
 func registerSealForInventory(t *testing.T) (work string, recipient, identity map[string]string) {
 	t.Helper()
@@ -387,7 +387,7 @@ func TestCLIPlanSealForStdoutRefusesMultipleHosts(t *testing.T) {
 
 // TestCLIPlanSealForRefusesHostWithoutRecipient: a target host missing
 // api.WithPlanRecipient is refused BY NAME before anything is written —
-// docs/plan-encryption.md's "-for" row's own rule.
+// docs/design/plan-encryption.md's "-for" row's own rule.
 func TestCLIPlanSealForRefusesHostWithoutRecipient(t *testing.T) {
 	isolateXDGConfig(t)
 	api.ResetForTest()

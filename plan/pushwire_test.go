@@ -163,7 +163,7 @@ func TestDecodePushBadMagic(t *testing.T) {
 }
 
 // TestDecodePushRejectsSealedPlanAgeSkewWording pins the exact "old-gonf
-// given a sealed plan.age on stdin" wording docs/plan-encryption.md
+// given a sealed plan.age on stdin" wording docs/design/plan-encryption.md
 // documents ("Schema, versioning and remote skew"): a gonf binary that
 // predates the sealed-apply sniff (internal/cli, task 3b2) would still call
 // DecodePush directly on whatever stdin holds, and age's own cleartext

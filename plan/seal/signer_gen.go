@@ -11,7 +11,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// This file makes a new signer (task 7g2, docs/plan-signing.md "Keys": the
+// This file makes a new signer (task 7g2, docs/design/plan-signing.md "Keys": the
 // `gonf plan-signer-keygen` convenience, since unlike age there is no
 // external keygen tool for this format). GenerateSigner draws a fresh
 // Ed25519 key and WriteSignerFile stores it as a signer file LoadSigner
@@ -31,7 +31,7 @@ var ErrSignerFileExists = errors.New("signer file already exists; refusing to ov
 
 // signerFileHeader opens every file WriteSignerFile writes; the "#" lines
 // are comments LoadSigner ignores.
-const signerFileHeader = "# gonf plan signer secret key (docs/plan-signing.md). Keep this file private.\n"
+const signerFileHeader = "# gonf plan signer secret key (docs/design/plan-signing.md). Keep this file private.\n"
 
 // GenerateSigner returns a new Signer with a random Ed25519 key from
 // crypto/rand.

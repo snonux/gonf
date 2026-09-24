@@ -16,7 +16,7 @@ import (
 // meant to be shared) can produce a perfectly valid, uncorrupted plan.age.
 // That is a provenance property this package does not have and does not
 // claim; see the package doc's "Confidentiality only, never provenance" and
-// docs/plan-encryption.md "Provenance". Do not read a passing test here as
+// docs/design/plan-encryption.md "Provenance". Do not read a passing test here as
 // evidence of authenticity — it only proves age's AEAD notices when bytes
 // change after sealing.
 

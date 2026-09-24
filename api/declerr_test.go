@@ -14,7 +14,7 @@ import (
 	"github.com/snonux/gonf/resource"
 )
 
-// These tests pin the declaration-error contract (docs/plan.md, "Error
+// These tests pin the declaration-error contract (docs/design/plan.md, "Error
 // handling contract"): DSL misuse never ends the process. It is reported to
 // internal/declerr, the constructor returns an inert value so later
 // declarations keep running, and the FIRST error surfaces from RecordPlan,

@@ -54,7 +54,7 @@ func TestCLIApplyPlainAndSealedWithoutNewFlagsUnchanged(t *testing.T) {
 }
 
 // TestCLIApplySignedWithoutFlagsUsesDefaultTrust pins how a signed plan
-// behaves with no signing flag at all (docs/plan-signing.md "Verification
+// behaves with no signing flag at all (docs/design/plan-signing.md "Verification
 // order" step 2): it is still verified, against the non-root default
 // ${XDG_CONFIG_HOME}/gonf/trusted-signers, and refused before decryption
 // when that file is missing. It is never unwrapped unchecked.

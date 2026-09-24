@@ -415,4 +415,4 @@ and every entry on darwin — fall back to a plain rename: a non-empty
 directory planted at `path.old` then fails the conversion loudly, while a
 planted empty one is lost (the accepted residual race).
 
-See also [examples/examples.go](../examples/examples.go).
+See also [examples/examples.go](../../examples/examples.go).

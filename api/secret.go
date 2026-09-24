@@ -20,7 +20,7 @@ import (
 // individual MustSecret/OptionalSecret paths (this func's logical path
 // argument, unchanged either way) from one store to another one reference at
 // a time, without touching call sites or the bytes they resolve to (see
-// docs/secrets.md, "secret.NewFallback").
+// docs/design/secrets.md, "secret.NewFallback").
 //
 // A leading slash is accepted for compatibility with the Rex convention:
 // MustSecret("/var/nsd/key") reads secrets/var/nsd/key, not /var/nsd/key on
@@ -31,7 +31,7 @@ import (
 // the op carrying it is marked sensitive (ResolveSecret remembers the
 // value), so it is kept off stdout, out of previews and out of validator
 // and command errors; a strong secret in an op's identity refuses the
-// record (see docs/secrets.md for the rules and limits).
+// record (see docs/design/secrets.md for the rules and limits).
 func MustSecret(path string) string {
 	data, err := ResolveSecret(context.Background(), secret.Ref(path))
 	if err != nil {

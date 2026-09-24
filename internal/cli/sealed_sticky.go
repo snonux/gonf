@@ -14,7 +14,7 @@ import (
 )
 
 // Sealed sticky-dir refs, destination side (w82 phase 4 step 3, task 0g2;
-// docs/plan-encryption.md, "Phase 4 design: sealed multi-chunk sticky-dir
+// docs/design/plan-encryption.md, "Phase 4 design: sealed multi-chunk sticky-dir
 // blobs").
 //
 // A multi-chunk push uploads its blobs to a sticky dir owned by the SSH

@@ -377,7 +377,7 @@ func TestWithKeyedLineToleratesLeadingWhitespace(t *testing.T) {
 // tolerated. Extra internal whitespace and a differently-cased key are not
 // matched, so the existing line is left untouched and the new line is
 // appended beside it as a second, conflicting assignment -- the known,
-// documented gap (docs/file-dir-link.md, "What counts as a match"), not a
+// documented gap (docs/design/file-dir-link.md, "What counts as a match"), not a
 // silent regression.
 func TestWithKeyedLineLeavesInternalWhitespaceAndCaseUnmatched(t *testing.T) {
 	cases := []struct{ name, before string }{

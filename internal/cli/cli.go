@@ -634,7 +634,7 @@ func writePlanJSONL(outDir string, ops []plan.Op) int {
 // a sensitive plan.jsonl written here is plaintext, and if outDir sits
 // inside a git worktree that does not already ignore plan.jsonl, a later
 // `git add`/`git commit` by the operator could put it into history
-// (docs/plan-encryption.md, threat T2). That warning's own fix advice now
+// (docs/design/plan-encryption.md, threat T2). That warning's own fix advice now
 // includes -seal as an alternative to a .gitignore entry or a private -o
 // directory.
 func warnSensitivePlan(outPath, outDir string, ops []plan.Op) {
@@ -738,7 +738,7 @@ const applyUsage = "gonf apply [-n|-dry-run|-strict-preview] [-apply-dir dir] [-
 // applying a plan). identityPaths (task 3b2) is not part of that shared
 // producer/consumer wire contract — neither producer ever sets -identity,
 // since sealed apply is never reached through the elevated re-exec or a
-// push/preview session (docs/plan-encryption.md: sealed apply is always a
+// push/preview session (docs/design/plan-encryption.md: sealed apply is always a
 // direct, interactive/scripted `gonf apply` of a file or manually piped
 // stdin) — so it is not registered through internal/applyproto.
 type applyFlags struct {
@@ -819,8 +819,8 @@ func parseApplyFlags(args []string) (applyFlags, []string, error) {
 //
 // cliApply itself is NOT that signal: it is also reached for an ordinary,
 // non-relayed local apply (`gonf apply <plan.jsonl>`, ALSO a documented
-// operator command, see docs/plan-encryption.md's "What travels where
-// today" table and docs/plan.md's plan/apply split) and for a plan piped in
+// operator command, see docs/design/plan-encryption.md's "What travels where
+// today" table and docs/design/plan.md's plan/apply split) and for a plan piped in
 // manually (`gonf apply -`, likewise documented). Calling this
 // unconditionally from cliApply used to ignore SIGPIPE for every one of
 // those too (task lb2's own "scoped to the relayed process tree" claim was
@@ -922,8 +922,8 @@ func watchCancelPipe(r io.Reader, cancel context.CancelFunc) {
 }
 
 // cliApplyFile applies the plan file planPath, with its blobs/ sidecars next
-// to it. planPath may also be a sealed plan.age (docs/plan-encryption.md,
-// task 3b2) or a signed envelope around one (docs/plan-signing.md, task
+// to it. planPath may also be a sealed plan.age (docs/design/plan-encryption.md,
+// task 3b2) or a signed envelope around one (docs/design/plan-signing.md, task
 // 8g2): the first line is sniffed (classifyPlanInput) before anything is
 // decoded, so a plan.jsonl, a plan.age and a signed plan take separate
 // paths from the first line on. A signed plan is verified, and -require-signed
@@ -965,7 +965,7 @@ func cliApplyFile(ctx context.Context, planPath string, f applyFlags) int {
 
 // cliApplySealedFile decrypts raw (planPath's full, already-read bytes, a
 // sealed plan.age) and applies it, printing the "decrypted and applied ..."
-// wording docs/plan-encryption.md's "Provenance" section requires (never
+// wording docs/design/plan-encryption.md's "Provenance" section requires (never
 // "verified"/"authenticated": sealing here is confidentiality only).
 func cliApplySealedFile(ctx context.Context, planPath string, raw []byte, identityPaths []string) int {
 	payload, cleanup, err := decryptAndDecodeSealedPush(bytes.NewReader(raw), identityPaths)
@@ -1006,7 +1006,7 @@ func applyPlanOps(ctx context.Context, ops []plan.Op, planDir string) error {
 // before reading it, and -strict-preview and -apply-dir, which only make
 // sense for the unsealed push/preview paths, are refused up front for a
 // sealed or signed stream instead of being silently ignored
-// (docs/plan-encryption.md: a sealed apply is single-process file-apply
+// (docs/design/plan-encryption.md: a sealed apply is single-process file-apply
 // semantics, never the strict-preview remote-capability check or the
 // multi-chunk sticky dir).
 func cliApplyStdin(ctx context.Context, f applyFlags) int {
@@ -1200,7 +1200,7 @@ func cliPreviewStdin(ctx context.Context, applyDir string, r io.Reader) int {
 // identity before decrypting anything). cliApplyFile/cliApplyStdin sniff
 // this exact line to tell a sealed plan.age from a plaintext
 // plan.jsonl/push frame/bare JSONL before deciding how to read the rest of
-// the input at all (docs/plan-encryption.md, "Recommended design": `gonf
+// the input at all (docs/design/plan-encryption.md, "Recommended design": `gonf
 // apply` "sniffs the first line").
 const ageMagicLine = "age-encryption.org/v1"
 
@@ -1212,7 +1212,7 @@ const ageMagicLine = "age-encryption.org/v1"
 // is no way to stream-decode a sealed apply. Without a cap, a crafted or
 // corrupted plan.age drives an unbounded io.ReadAll: task be2 measured
 // ~10.5 GB peak RSS from a 3.0 MB plan.age whose plan section was a gzip
-// bomb (docs/plan-encryption.md, threat T10: recipients are public, so
+// bomb (docs/design/plan-encryption.md, threat T10: recipients are public, so
 // anyone can produce a plan.age that decrypts). 512 MiB comfortably covers
 // a legitimate sealed frame, including one carrying tar+gzip blobs — this
 // cap bounds them in their still-compressed, on-the-wire form, not their
@@ -1256,7 +1256,7 @@ func isSealedPlanBytes(data []byte) bool {
 // as a sealed age stream and reads the WHOLE decrypted frame into memory
 // before looking at any of it: age authenticates only its final 64 KiB
 // segment once that segment has actually been read
-// (docs/plan-encryption.md, "Failure handling"), so io.ReadAll-ing the
+// (docs/design/plan-encryption.md, "Failure handling"), so io.ReadAll-ing the
 // decrypt reader to completion — succeeding only once the whole stream has
 // authenticated — is what makes "a truncated, bit-flipped, or
 // no-matching-identity input applies nothing" true: no run directory is
@@ -1266,7 +1266,7 @@ func isSealedPlanBytes(data []byte) bool {
 // Once the decrypted frame is fully in hand, plan.PushHasBlobs decides
 // whether it needs a run directory for the blob-unpacking side effect of
 // plan.DecodePush: without blobs (the common case: every conf secret today
-// is inline content, docs/plan-encryption.md "Plaintext after decryption"),
+// is inline content, docs/design/plan-encryption.md "Plaintext after decryption"),
 // DecodePush decodes straight from memory and no plaintext ever touches
 // disk on the destination beyond what the ops themselves go on to write.
 // With blobs, plan.NewSealedApplyRunDir provides a dedicated
@@ -1349,7 +1349,7 @@ func readSealedFrame(dr io.Reader, max int64) ([]byte, error) {
 // and XDG_CONFIG_HOME are the invoking user's or root's own depends on
 // env_reset, always_set_home and the doas keepenv/setenv rules, so a
 // default here could silently read an unexpected file — or none — instead
-// of the operator's actual identity (docs/plan-encryption.md, "Keys", "No
+// of the operator's actual identity (docs/design/plan-encryption.md, "Keys", "No
 // default identity for root").
 //
 // None of the errors below carry their own "apply: " prefix: every caller
@@ -1385,7 +1385,7 @@ func loadSealedIdentities(paths []string) ([]seal.Identity, error) {
 }
 
 // defaultIdentityPath returns the non-root default identity file path,
-// ${XDG_CONFIG_HOME:-$HOME/.config}/gonf/identity (docs/plan-encryption.md,
+// ${XDG_CONFIG_HOME:-$HOME/.config}/gonf/identity (docs/design/plan-encryption.md,
 // "Keys"), the same default gonf plan -seal (task 2b2) uses for its
 // recipients file's own directory.
 func defaultIdentityPath() (string, error) {

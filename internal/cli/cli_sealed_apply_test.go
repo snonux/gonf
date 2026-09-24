@@ -177,7 +177,7 @@ func isolateSealedStagingRoot(t *testing.T) string {
 
 // requireNoLeftoverSealedRunDirs fails if root holds any sealed-run-*
 // entry: the invariant every sealed apply (success or failure) must leave
-// true (docs/plan-encryption.md, "Failure handling": "run dir removed").
+// true (docs/design/plan-encryption.md, "Failure handling": "run dir removed").
 func requireNoLeftoverSealedRunDirs(t *testing.T, root string) {
 	t.Helper()
 	entries, err := os.ReadDir(root)
@@ -545,7 +545,7 @@ func TestCLIApplySealedCorruptedBlobsFramePlaintextCleansUpRunDir(t *testing.T) 
 }
 
 // TestCLIApplyRootRequiresIdentityForSealedInput pins the "no default
-// identity for root" rule (docs/plan-encryption.md, "Keys"): euid is faked
+// identity for root" rule (docs/design/plan-encryption.md, "Keys"): euid is faked
 // via the package's geteuid seam (internal/privilege's geteuid is the
 // established pattern this module already uses for the same problem — a
 // test cannot actually become root to exercise this).
@@ -907,7 +907,7 @@ func TestReadSealedFrameWithinCapUnaffected(t *testing.T) {
 
 // TestCLIApplySealedLargeLegitimatePlanSucceeds is task be2's "the fix must
 // not break normal usage" regression: a legitimate plan with many sizable
-// ops (docs/plan.md and this task's own maxSealedFrameBytes/
+// ops (docs/design/plan.md and this task's own maxSealedFrameBytes/
 // plan.MaxDecompressedPushPlan doc comments both note "plans with many
 // blob-backed ops can run to tens of MB") must still apply successfully,
 // well within both of this task's caps, through the REAL constants — unlike

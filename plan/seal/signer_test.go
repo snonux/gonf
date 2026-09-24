@@ -296,7 +296,7 @@ func TestLoadTrustedSignersRefusals(t *testing.T) {
 }
 
 // TestLoadTrustedSignersHardening reproduces task ce2's probes against the
-// trusted-signers file from day one (docs/plan-signing.md threat S4).
+// trusted-signers file from day one (docs/design/plan-signing.md threat S4).
 func TestLoadTrustedSignersHardening(t *testing.T) {
 	s, _ := genSigner(t)
 	for _, tc := range hardeningCases(0o644) {

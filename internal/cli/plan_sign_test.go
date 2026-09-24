@@ -71,7 +71,7 @@ func signerSecret(t *testing.T, path string) string {
 }
 
 // requireNoSecret fails when any output holds the secret seed, or claims
-// verification (docs/plan-signing.md: signing output never says
+// verification (docs/design/plan-signing.md: signing output never says
 // "verified").
 func requireNoSecret(t *testing.T, secret string, outputs ...string) {
 	t.Helper()

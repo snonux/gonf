@@ -25,12 +25,12 @@ const pushMagic = "GONF-PUSH/1"
 // decompressed OUTPUT, a crafted or corrupted frame can inflate to gigabytes
 // in memory before DecodePlanBytes ever gets a chance to reject it as
 // malformed JSON — task be2 measured ~10.5 GB peak RSS from a 3 MB plan.age
-// built this way (docs/plan-encryption.md, threat T10: recipients are
+// built this way (docs/design/plan-encryption.md, threat T10: recipients are
 // public, so anyone can produce a plan.age that decrypts).
 //
 // be2 originally set this to 256 MiB. Task 3g2 lowered it to 64 MiB: this
 // constant's own comment already said a legitimate plan's JSONL runs "to
-// tens of MB" (docs/plan.md), so 256 MiB was 4x more headroom than any real
+// tens of MB" (docs/design/plan.md), so 256 MiB was 4x more headroom than any real
 // plan needs — and every extra MiB of headroom is also extra MiB an
 // attacker's gzip bomb gets to inflate to inside the "policy-compliant"
 // zone, since io.ReadAll's own doubling growth (see readCapped, which
@@ -66,10 +66,10 @@ var ErrPushPlanTooLarge = errors.New("plan push: decompressed plan section excee
 // ceiling of ~512 GiB given maxSealedFrameBytes' own 512 MiB cap (see that
 // constant's doc comment, corrected by task 2g2 to no longer wave this case
 // off). The threat is the same class be2 already named for the plan section:
-// docs/plan-encryption.md, T2/T10 — anyone who can write the operator's
+// docs/design/plan-encryption.md, T2/T10 — anyone who can write the operator's
 // plan.age or push stream (backup restore, CI artifact store, a shared
 // directory) can fill "/" or $TMPDIR on the controller or the target
-// mid-apply. 1 GiB comfortably covers a legitimate blob set (docs/plan.md:
+// mid-apply. 1 GiB comfortably covers a legitimate blob set (docs/design/plan.md:
 // only files over plan.MaxInlineContent, 512 KiB, become blobs at all, and a
 // realistic config tree runs to tens of MB) while staying far below what
 // would meaningfully threaten a typical disk. Named here, not inlined, so it

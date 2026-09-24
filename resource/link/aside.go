@@ -93,7 +93,7 @@ func replaceWithLink(path string, create func() error) error {
 // overwrites the destination: a non-empty directory planted at old makes
 // the move fail loudly (ENOTEMPTY), while an empty planted one is silently
 // lost. That is the accepted residual race for directories and darwin; see
-// docs/file-dir-link.md.
+// docs/design/file-dir-link.md.
 func moveAsideNoReplace(path, old string) error {
 	info, err := os.Lstat(path)
 	if err != nil {

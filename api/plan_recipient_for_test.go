@@ -10,7 +10,7 @@ import (
 	"github.com/snonux/gonf/plan"
 )
 
-// This file is task 4b2 (w82 phase 2, docs/plan-encryption.md): the api-level
+// This file is task 4b2 (w82 phase 2, docs/design/plan-encryption.md): the api-level
 // pieces `gonf plan -seal -for` (internal/cli/plan_seal_for.go) is built on —
 // WithPlanRecipient, HostPlanRecipient, PlanRecipientTargetHosts and
 // RecordPlanForHost. The CLI-level host-isolation proof (a per-host sealed

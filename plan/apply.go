@@ -359,7 +359,7 @@ func whenActive(stack []bool) bool {
 
 // applyActive dispatches an active (non-control) op to its resource kind's
 // registered plan.Handler (see handler.go). Every resource kind registers
-// one from its own package's init() — see docs/plan.md, "Adding a resource
+// one from its own package's init() — see docs/design/plan.md, "Adding a resource
 // kind" — so this package needs no resource/<kind> imports: it only knows
 // the Handler interface, never a concrete resource kind. (plan does import
 // the kind-neutral resource core and resource/options, e.g. for the apply

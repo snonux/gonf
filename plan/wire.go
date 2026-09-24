@@ -6,7 +6,7 @@ import "encoding/json"
 // ever put on the wire, across every schema version, in the SAME
 // declaration order and with the SAME json tags plan.Op itself carried
 // before task yd2 ("Layer 2" of the PlanDraft/Op god-struct split — see
-// docs/plan.md, "The PlanDraft/Op split"). Op's own Go-level shape now
+// docs/design/plan.md, "The PlanDraft/Op split"). Op's own Go-level shape now
 // separates the fields two or more kinds share (its "core") from a
 // per-kind OpPayload, the same rule task w62 ("Layer 1") applied to
 // resource.PlanDraft; wireOp is what makes that split invisible on the
@@ -30,7 +30,7 @@ import "encoding/json"
 // byte-for-byte (TestGoldenDecodeReencode); plan/types_test.go's
 // TestOpJSONTagsMatchPlanExamples additionally pins literal encoded bytes
 // per example op. Both are the safety net for this type: touch it only to
-// append a new field (with a schema version bump per docs/plan.md), never
+// append a new field (with a schema version bump per docs/design/plan.md), never
 // to reorder or remove one — a historical plan must keep decoding exactly
 // as it always did.
 type wireOp struct {

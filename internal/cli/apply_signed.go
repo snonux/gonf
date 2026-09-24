@@ -11,7 +11,7 @@ import (
 )
 
 // This file is the verifying half of plan signing (task 8g2, phase
-// signing-3; docs/plan-signing.md "Verification order and interaction with
+// signing-3; docs/design/plan-signing.md "Verification order and interaction with
 // existing decryption"): the signed-plan policy `gonf apply` and `gonf
 // plan-verify` share. It runs IN FRONT of the existing sealed-apply path
 // (tasks 3b2/be2), which it does not change:
@@ -44,7 +44,7 @@ import (
 
 // defaultMaxSignedAge is -max-signed-age's default: how old a signed plan's
 // signed-at time may be, by this host's clock, and still be applied. A day
-// is the upper end of docs/plan-signing.md "Replay and rollback"'s "an hour
+// is the upper end of docs/design/plan-signing.md "Replay and rollback"'s "an hour
 // to a day": long enough for a plan signed in the morning to be applied
 // that evening or the next morning, short enough that a restored backup of
 // last week's plan is refused. An unattended entry point that applies more

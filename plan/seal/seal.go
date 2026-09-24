@@ -1,8 +1,8 @@
 // Package seal wraps filippo.io/age to encrypt and decrypt gonf plan
-// artifacts (docs/plan-encryption.md, task w82, phase 1 of that design). It
+// artifacts (docs/design/plan-encryption.md, task w82, phase 1 of that design). It
 // is the only package in this module that imports filippo.io/age, so CLI
 // and api code depend only on this package's own Recipient and Identity
-// types, and a later change of cryptographic backend (docs/plan-encryption.md
+// types, and a later change of cryptographic backend (docs/design/plan-encryption.md
 // option C', the stdlib crypto/hpke fallback) would touch only this
 // package.
 //
@@ -10,7 +10,7 @@
 // (internal/cli, tasks 2b2 and 3b2); this package is the one reviewed
 // place anything that seals or opens a plan artifact goes through.
 //
-// It also owns plan signing (docs/plan-signing.md, tasks 6g2 and 7g2):
+// It also owns plan signing (docs/design/plan-signing.md, tasks 6g2 and 7g2):
 // Sign/SignAt, Verify, LoadSigner, LoadTrustedSigners and
 // GenerateSigner/WriteSignerFile, with their own Signer and TrustedSigner
 // types, so crypto/ed25519 is likewise imported here only. The CLI signs
@@ -23,7 +23,7 @@
 // Besides file-backed operator identities (LoadIdentities), it offers
 // GenerateEphemeral, EncodeEphemeral and ParseEphemeral: a single-use,
 // in-memory-only identity with a one-line text form for stdin delivery
-// (docs/plan-encryption.md, phase 4 design, "Key lifecycle").
+// (docs/design/plan-encryption.md, phase 4 design, "Key lifecycle").
 //
 // # Recipient policy: age1pq (hybrid ML-KEM-768 + X25519) only
 //
@@ -52,13 +52,13 @@
 // changed after it was sealed. They are not, and must never be read or
 // described as, an authenticity or provenance guarantee: anyone can seal a
 // fresh, uncorrupted, perfectly valid plan.age to a public recipient and
-// substitute it for the real one. See docs/plan-encryption.md, section
+// substitute it for the real one. See docs/design/plan-encryption.md, section
 // "Provenance". Provenance is a separate, optional layer around the sealed
-// bytes: [Sign] and [Verify] (sign.go, docs/plan-signing.md, task 6g2)
+// bytes: [Sign] and [Verify] (sign.go, docs/design/plan-signing.md, task 6g2)
 // wrap them in an Ed25519-signed GONF-SIGNED-PLAN/1 envelope that a
 // destination checks against its own trusted signers before decrypting.
 // That library alone lifts nothing: nothing in gonf may apply a sealed
-// plan unattended until an entry point meets docs/plan-signing.md's "The
+// plan unattended until an entry point meets docs/design/plan-signing.md's "The
 // unblocking condition".
 package seal
 
@@ -112,7 +112,7 @@ func Seal(w io.Writer, recipients []Recipient) (io.WriteCloser, error) {
 // list).
 //
 // age's AEAD authenticates the final 64 KiB segment only once it has been
-// read, at EOF (docs/plan-encryption.md "Failure handling"). A caller that
+// read, at EOF (docs/design/plan-encryption.md "Failure handling"). A caller that
 // must trust the whole plaintext before acting on any part of it — as a
 // sealed gonf apply does, one op at a time — has to read Open's Reader to
 // EOF and check its error before doing anything with what it already read;

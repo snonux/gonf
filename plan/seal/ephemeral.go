@@ -26,7 +26,7 @@ var ErrEphemeralZeroIdentity = errors.New("plan/seal: zero identity cannot be en
 // GenerateEphemeral generates a fresh age1pq hybrid (ML-KEM-768 + X25519)
 // key pair ENTIRELY IN MEMORY and returns it as this package's own Identity
 // and Recipient. It is the primitive for a per-push, single-use key (see
-// docs/plan-encryption.md, "Phase 4 design: sealed multi-chunk sticky-dir
+// docs/design/plan-encryption.md, "Phase 4 design: sealed multi-chunk sticky-dir
 // blobs", "Key lifecycle"): the recipient seals data on the controller and
 // the identity, delivered to the elevated child over stdin, opens it there.
 //

@@ -23,7 +23,7 @@ const gitCheckIgnoreTimeout = 5 * time.Second
 // plan.MaxInlineContent, a plaintext blob under outDir/blobs/ (plan/blob.go,
 // Store.openBlobsDir) - into a directory that is itself inside a git
 // worktree, where an operator's later `git add -A` / `git commit` could put
-// either into history (docs/plan-encryption.md, threat T2). Both paths are
+// either into history (docs/design/plan-encryption.md, threat T2). Both paths are
 // probed, not just plan.jsonl: a repo that ignores plan.jsonl but not
 // blobs/ is the worse case in practice, since plan.jsonl then carries no
 // secret bytes at all while blobs/ holds the cleartext, and an operator who
@@ -63,7 +63,7 @@ func warnIfPlanUnignoredInGitWorktree(outDir string) {
 		"a git add/commit could put this secret-bearing plan into version-control history. "+
 		"Add plan.jsonl (and blobs/) to .gitignore, write the plan to a private -o <dir> "+
 		"outside any git checkout, or use gonf plan -o <dir> -seal to write an encrypted "+
-		"plan.age instead (docs/plan-encryption.md)\n",
+		"plan.age instead (docs/design/plan-encryption.md)\n",
 		outDir, describeUnignored(unignored), isAre(unignored))
 }
 

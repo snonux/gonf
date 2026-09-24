@@ -18,7 +18,7 @@
 // The contract only resolves bytes. Plans become secret-aware through
 // Values: api.ResolveSecret remembers every value it returns, and plan
 // recording marks the ops that still carry one as sensitive (see
-// docs/secrets.md). The value itself stays in the plan in clear text.
+// docs/design/secrets.md). The value itself stays in the plan in clear text.
 package secret
 
 import (

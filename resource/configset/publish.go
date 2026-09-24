@@ -26,7 +26,7 @@ import (
 // may already have happened) are restored in reverse order. A crash or kill
 // between two renames cannot be rolled back; the pending marker each member
 // gets right before its rename makes the next apply report it as changed
-// while it converges forward (see marker.go and docs/config-set.md).
+// while it converges forward (see marker.go and docs/design/config-set.md).
 type publication struct {
 	set     *spec
 	stage   *stage

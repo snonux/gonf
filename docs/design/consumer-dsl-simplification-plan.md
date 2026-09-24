@@ -231,7 +231,7 @@ failure before either frontend task uses it.
 
 The NSD legacy-cleanup predicates in `maildns.go` (lines 25–41) protect markers
 named `Cron[root/frontend-nsd-failover]`. Core
-[cron.go](../resource/cron/cron.go) emits `Cron[frontend-nsd-failover]` markers;
+[cron.go](../../resource/cron/cron.go) emits `Cron[frontend-nsd-failover]` markers;
 the user-qualified resource ID is not the crontab marker name. Consequently, an
 already managed command is detected as legacy, removed, and recreated on the
 next apply.
@@ -250,7 +250,7 @@ access. External crontab writers still need an operational ownership rule.
 
 ### F4 — PF validation happens after replacing the live file (high; source-confirmed)
 
-`Web.PF` in [web.go](../../conf/gonf/frontends/web.go) (line 113) installs
+`Web.PF` in [web.go](../../../conf/gonf/frontends/web.go) (line 113) installs
 `/etc/pf.conf`, then runs `pfctl -n -f /etc/pf.conf`. A rejected candidate has
 already replaced the persistent live configuration, even though loading it into
 the kernel is blocked. Validate a separate candidate before the live write.
@@ -262,7 +262,7 @@ candidate is actually created with mode 0644.
 
 ### F5 — Gogios checks depend on a physical host instead of the master role (high)
 
-`addHostChecks` in [monitoring.go](../../conf/gonf/frontends/monitoring.go)
+`addHostChecks` in [monitoring.go](../../../conf/gonf/frontends/monitoring.go)
 (line 256) uses `MustServer(Master).FQDN` for non-standby HTTP/TLS dependencies.
 The Rex template uses `master.buetow.org`; other Go-generated checks still use
 that role name. During failover, ordinary service checks can be suppressed by a
@@ -288,7 +288,7 @@ GOOS/profile/hostname rules; test both local selection and remote recording.
 
 ### F7 — ACME's change detection and certificate selection are misleading (medium)
 
-In [acme.sh.tmpl](../../conf/gonf/frontends/assets/acme.sh.tmpl), `handle_cert`
+In [acme.sh.tmpl](../../../conf/gonf/frontends/assets/acme.sh.tmpl), `handle_cert`
 prints a skip message and uses bare `return` (lines 27–40). That returns the
 successful `echo` status, and callers set `has_update=yes`. Even skipped work can
 therefore trigger relayd reload/restart and SMTPD restart. Successful invocation
@@ -594,7 +594,7 @@ Garage cluster's shared RPC identity or revoke other credentials.
 
 Status (z52): the resolver contract exists — package `secret` (`Provider`,
 typed `*secret.Error` kinds, the compatible `FileProvider`, `Snapshot`) with
-`api.SetSecretProvider` / `api.ResolveSecret`; see `docs/secrets.md`.
+`api.SetSecretProvider` / `api.ResolveSecret`; see `docs/design/secrets.md`.
 Status (062): plans are secret-aware — schema 22 marks every op carrying a
 provider-resolved value `sensitive` (found in file content, template data,
 config set members and argv even after trimming/interpolation), `SecretFile`
@@ -602,7 +602,7 @@ is the typed file entry point, `gonf plan -stdout` refuses secret-bearing
 plans unless `-with-secrets`, `-redacted` prints a non-replayable preview,
 destinations withhold validator output and template error details, and a
 push refuses login-user staging of elevated secret blobs; see the lifecycle
-and its limits in `docs/secrets.md`.
+and its limits in `docs/design/secrets.md`.
 Status (162): package `secret/foostore` is the argv-based adapter — it runs
 `foostore read` (the y52 machine read contract, checked once per provider
 via `read --help`), maps logical references through an explicit table,
@@ -610,7 +610,7 @@ passes only logical names in argv, classifies exit codes into the typed
 kinds, never quotes foostore output, runs without terminal/stdin/inherited
 environment, kills its process group on timeout or cancellation, and is
 wrapped in `secret.Snapshot` for one read per reference and invocation; see
-`docs/secrets.md`. Status (2026-09-24): durable plan encryption was designed
+`docs/design/secrets.md`. Status (2026-09-24): durable plan encryption was designed
 separately (`w82`, [plan-encryption.md](plan-encryption.md)). Sealed plans
 shipped in v0.17.0; `gonf plan -seal -sign`, `gonf plan-signer-keygen` and
 `gonf plan-verify` (tasks `7g2` and `8g2`) in v0.18.0. The P9 cutover has

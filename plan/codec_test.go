@@ -315,7 +315,7 @@ func TestDecodeOpRejectsEmpty(t *testing.T) {
 }
 
 // TestDecodePlanBytesRejectsSealedPlanAgeSkewWording pins the file-path half
-// of docs/plan-encryption.md's "old-gonf given a sealed input" table: a
+// of docs/design/plan-encryption.md's "old-gonf given a sealed input" table: a
 // gonf binary that predates the sealed-apply sniff (internal/cli, task 3b2)
 // would call DecodePlanBytes directly on `gonf apply <plan.age>`'s file
 // bytes, and age's own cleartext version banner is not valid JSON — so it

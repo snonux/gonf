@@ -359,7 +359,7 @@ func partialApplyError(err error, chunks []plan.Chunk, i int) error {
 // controller crash aborts an otherwise-fine apply) and, like "-cancel-pipe",
 // is a plain apply-subcommand flag an older remote gonf (one that predates
 // task 7d2) would reject outright ("flag provided but not defined:
-// -relayed") rather than silently misbehave — see docs/plan.md's
+// -relayed") rather than silently misbehave — see docs/design/plan.md's
 // "Fixed-argument sudoers/doas rules" section, which this unconditional
 // flag is now also subject to, same as "-cancel-pipe": an ordinary `push`
 // self-heals this via EnsureRemoteGonf's release-version upgrade (once the

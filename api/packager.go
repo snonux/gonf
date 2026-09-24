@@ -238,7 +238,7 @@ func (p draftPackager) draftError(d resource.PlanDraft, err error) error {
 // draft kind's registered plan.Handler (see plan/handler.go): the resource
 // package owns its own wire form and this method only folds in the
 // packager's elevate flag and the draft's explicit sensitivity. Every
-// resource kind registers a Handler (see docs/plan.md, "Adding a resource
+// resource kind registers a Handler (see docs/design/plan.md, "Adding a resource
 // kind"), so an unmapped kind is always a programming error (typo, or a new
 // resource kind that forgot to register) and fails the record loudly here
 // instead of silently forwarding an unknown op to the wire, where it would
@@ -246,7 +246,7 @@ func (p draftPackager) draftError(d resource.PlanDraft, err error) error {
 func (p draftPackager) draftToOp(d resource.PlanDraft) (plan.Op, error) {
 	h, ok := plan.HandlerFor(plan.Kind(d.Kind))
 	if !ok {
-		return plan.Op{}, fmt.Errorf("RecordPlan: draft %q: unknown draft kind %q (no registered plan.Handler; see docs/plan.md kind checklist)",
+		return plan.Op{}, fmt.Errorf("RecordPlan: draft %q: unknown draft kind %q (no registered plan.Handler; see docs/design/plan.md kind checklist)",
 			d.ID, d.Kind)
 	}
 	op, err := h.ToOp(d)

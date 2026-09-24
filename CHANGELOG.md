@@ -10,7 +10,7 @@ Plan schema 24 (unchanged).
 - `gonf plan-signer-keygen -h` prints its usage line (it printed an empty
   flag list), plus a documentation pass over every feature since v0.16.6.
 
-Tasks and aggregates ([docs/tasks.md](docs/tasks.md), "Destination guards")
+Tasks and aggregates ([docs/design/tasks.md](docs/design/tasks.md), "Destination guards")
 - Approved behaviour change (8h2, approved by the user 2026-09-24):
   serializable task guards (`WhenLinux`, `WhenProfile`,
   `WhenHostnameContains`, also through `WithGroupWhen`) are evaluated on the
@@ -36,7 +36,7 @@ Tasks and aggregates ([docs/tasks.md](docs/tasks.md), "Destination guards")
 Plan schema 24 (unchanged); `-sealed-version` 1, `-signed-version` 1.
 The v0.18.0 tag message carries no notes; this entry was added afterwards.
 
-Signed plans ([docs/plan-signing.md](docs/plan-signing.md))
+Signed plans ([docs/design/plan-signing.md](docs/design/plan-signing.md))
 - Signing phase 2 (7g2): `gonf plan -seal -sign <signer-file>` wraps each
   sealed artifact (every host's with `-for`) in a `GONF-SIGNED-PLAN/1`
   envelope with a signed `signed-at` time; `gonf plan-signer-keygen <file>`
@@ -55,7 +55,7 @@ Signed plans ([docs/plan-signing.md](docs/plan-signing.md))
 - Signing phases 4-6 (anti-replay counter, threshold signers, an unattended
   entry point) were declined; unattended sealed apply stays blocked.
 
-Sealed plans ([docs/plan-encryption.md](docs/plan-encryption.md))
+Sealed plans ([docs/design/plan-encryption.md](docs/design/plan-encryption.md))
 - Behaviour change (5b2): `gonf plan -o dir` writes a plan carrying secret
   material as a sealed `dir/plan.age` by default when an operator
   recipients file exists (`~/.config/gonf/recipients` or

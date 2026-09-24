@@ -13,7 +13,7 @@ import (
 // and prune keep-set (pruneGlob). The canonical implementation lives in
 // plan.GlobMatchCounts (also used by plan's own glob blob packaging,
 // plan.scanGlob) — dir delegates rather than redefining it, since dir may
-// import plan but plan must never import dir back (see docs/plan.md on the
+// import plan but plan must never import dir back (see docs/design/plan.md on the
 // plan/resource package split). A glob match counts when it is a regular
 // file or a symlink that resolves to a regular file (read through into
 // content); directories, dangling links, and other non-regular entries are

@@ -16,7 +16,7 @@ import (
 	"github.com/snonux/gonf/plan/seal"
 )
 
-// This file is task 2b2 (w82 phase 1, second half, docs/plan-encryption.md
+// This file is task 2b2 (w82 phase 1, second half, docs/design/plan-encryption.md
 // "Recommended design"/"Phased implementation"): `gonf plan -o dir -seal`
 // and `gonf plan -seal -stdout`. It writes ONLY an age-encrypted GONF-PUSH/1
 // frame (dir/plan.age, or the same bytes on stdout), never plan.jsonl or
@@ -25,7 +25,7 @@ import (
 // the frame is built with plan.EncodePush and sealed with plan/seal.Seal
 // (task 1b2), the one package in this module that imports filippo.io/age.
 // Sealing gives confidentiality only, never provenance (see plan/seal's
-// package doc and docs/plan-encryption.md "Provenance"): every message this
+// package doc and docs/design/plan-encryption.md "Provenance"): every message this
 // file prints on success says "wrote", never "verified" or "trusted".
 //
 // -for (per-host recipient targeting, phase 2, task 4b2) is implemented in
@@ -97,7 +97,7 @@ func planSealedEntry(req sealRequest, signFile string) int {
 
 // planSealed is gonf plan -seal, both output forms (dir and -stdout): it
 // resolves recipients once (the union of -recipient flags and the
-// recipients file, docs/plan-encryption.md "Keys") and refuses up front
+// recipients file, docs/design/plan-encryption.md "Keys") and refuses up front
 // with zero of them, before any task body runs, so a plan that could never
 // be sealed is never even recorded — no silent plaintext fallback.
 func planSealed(req sealRequest) int {
@@ -108,7 +108,7 @@ func planSealed(req sealRequest) int {
 	}
 	if len(recipients) == 0 {
 		eprintf("plan: -seal refused: no recipients; pass -recipient age1pq..., "+
-			"or create %s with one age1pq recipient per line (docs/plan-encryption.md)\n",
+			"or create %s with one age1pq recipient per line (docs/design/plan-encryption.md)\n",
 			recipientsFileLabel())
 		return 1
 	}
@@ -185,7 +185,7 @@ func writeSealedDir(outDir string, data []byte, report artifactReport) int {
 // writeSealedStdout is -seal -stdout's write: the sealed (and with -sign
 // signed) bytes go straight to stdout, binary age with no armor — a sealed
 // stream is as safe on a pipe or in a CI log store as in a file
-// (docs/plan-encryption.md "Artifact"), and this is the natural form for
+// (docs/design/plan-encryption.md "Artifact"), and this is the natural form for
 // `gonf plan -seal -stdout | ssh host gonf apply -identity ... -`. No
 // plan.jsonl, blobs/ or plan.age ever touches disk on this path; an
 // explicit -o is ignored, exactly as it already is for plain -stdout
@@ -274,7 +274,7 @@ func sealPushFrame(ops []plan.Op, mem *plan.MemoryStore, recipients []seal.Recip
 	return buf.Bytes(), nil
 }
 
-// defaultRecipientsPath is the operator recipients file docs/plan-encryption.md
+// defaultRecipientsPath is the operator recipients file docs/design/plan-encryption.md
 // "Keys" names: $XDG_CONFIG_HOME/gonf/recipients, or
 // $HOME/.config/gonf/recipients when XDG_CONFIG_HOME is unset (the same XDG
 // base-directory convention the operator identity default, task 3b2, will
@@ -359,7 +359,7 @@ func loadRecipientsFileLines(recipientsFilePath string, noDefaultRecipients bool
 // then concatenates the results (flags first, in the order given, then the
 // file's own recipients — the same effective order the pre-de2 version
 // got by unioning the two slices before validating). ParseRecipientsFrom
-// enforces the age1pq-only policy (docs/plan-encryption.md "Recipient
+// enforces the age1pq-only policy (docs/design/plan-encryption.md "Recipient
 // policy") and names any refused line's class, never its content.
 //
 // Validating each source on its own is what lets a refusal name the
@@ -411,7 +411,7 @@ func recipientFileLabel(path string) func(i int) string {
 // warnPreexistingPlaintextPlan tells the operator, without touching
 // anything, that outDir still holds an earlier plaintext plan.jsonl and/or
 // blobs/ next to the plan.age this sealed run just wrote
-// (docs/plan-encryption.md "Operator UX" table: "Warns ... never deletes
+// (docs/design/plan-encryption.md "Operator UX" table: "Warns ... never deletes
 // it: the operator's file"). Sealing cannot tell whether that leftover is
 // still needed, so this is warn-only, the same fail-safe shape
 // warnIfPlanUnignoredInGitWorktree already has for the plaintext path.

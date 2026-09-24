@@ -48,7 +48,7 @@ import (
 // creation normally unlinks the marker again, so a member that was never
 // published is not signalled; only if that unlink fails too (reported in the
 // error) can a later apply signal it. Pruning directory syncs over a member
-// directory delete markers (see docs/config-set.md).
+// directory delete markers (see docs/design/config-set.md).
 
 // markerPrefix starts every marker name.
 const markerPrefix = ".gonf-pending."

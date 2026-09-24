@@ -3,7 +3,7 @@ package options
 import resourceoptions "github.com/snonux/gonf/resource/options"
 
 // Explicit sensitivity (see resource/options WithSensitive and
-// docs/secrets.md): the option, the family set that accepts it (File, Dir,
+// docs/design/secrets.md): the option, the family set that accepts it (File, Dir,
 // Package, Cron, SystemdTimer, Command, ConfigSet and ConfigFile members)
 // and its capability interface.
 type (

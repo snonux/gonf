@@ -144,7 +144,7 @@ func NewApplyRunDir() (dir string, cleanup func(), err error) {
 const sealedRunDirPrefix = "sealed-run-"
 
 // NewSealedApplyRunDir creates a fresh 0700 run directory for one sealed
-// apply's blob extraction (docs/plan-encryption.md, "Plaintext after
+// apply's blob extraction (docs/design/plan-encryption.md, "Plaintext after
 // decryption"), named sealed-run-<pid>-* so a leftover from a killed or
 // crashed sealed apply can be identified by its owning PID. Before creating
 // the new directory it sweeps this uid's staging root: every sealed-run-*
@@ -164,7 +164,7 @@ const sealedRunDirPrefix = "sealed-run-"
 // original apply somehow still running, so it treats the PID as alive and
 // leaves the leftover to the ordinary 24h rule instead of removing it
 // immediately. This is the same class of residual risk the design doc
-// documents rather than hides (docs/plan-encryption.md, "Plaintext after
+// documents rather than hides (docs/design/plan-encryption.md, "Plaintext after
 // decryption": "a leftover until the next sealed apply of that uid").
 func NewSealedApplyRunDir() (dir string, cleanup func(), err error) {
 	root, err := ApplyStagingRoot()

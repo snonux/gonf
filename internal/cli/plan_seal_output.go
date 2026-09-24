@@ -157,7 +157,7 @@ func (o *sealedOutput) commit() error {
 }
 
 // reportSealedWrite prints the one "wrote" report every sealed artifact
-// written to a directory gets. Wording note (docs/plan-encryption.md
+// written to a directory gets. Wording note (docs/design/plan-encryption.md
 // "Provenance"): "wrote", never "verified" or "trusted" — an artifact that
 // decrypts proves only that whoever sealed it knew a recipient's PUBLIC
 // key, not who they were. The resolved recipients are printed, not just a

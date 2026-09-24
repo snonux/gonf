@@ -26,7 +26,7 @@ type ConfigSetResource = configset.Handle
 //
 // Member content refers to other members through MemberPath or
 // MemberChrootPath, never through literal staged paths. See
-// docs/config-set.md for the validation, locking and rollback guarantees.
+// docs/design/config-set.md for the validation, locking and rollback guarantees.
 func ConfigSet(name string, opts ...options.ConfigSetOption) ConfigSetResource {
 	return configset.Present(name, opts...)
 }

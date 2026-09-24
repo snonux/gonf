@@ -99,7 +99,7 @@ func redactRenderError(err error) error {
 // so the caller hands the result to a plain WithContent the same way it
 // would hand over any other literal string, instead of shipping a template
 // plus data for WithTemplateData to render on the destination. See
-// docs/file-dir-link.md, "Template data and destination facts", for that
+// docs/design/file-dir-link.md, "Template data and destination facts", for that
 // separate destination-render path.
 //
 // data must be JSON-compatible the same way WithTemplateData's data must

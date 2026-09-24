@@ -1,6 +1,6 @@
 // Package sealeddir carries, for exactly one apply, the private directory
 // that holds the decrypted copies of a push's sealed sticky-dir refs (w82
-// phase 4, task 0g2; docs/plan-encryption.md, "Phase 4 design: sealed
+// phase 4, task 0g2; docs/design/plan-encryption.md, "Phase 4 design: sealed
 // multi-chunk sticky-dir blobs").
 //
 // A multi-chunk push stages its blobs in one sticky directory owned by the

@@ -20,7 +20,7 @@ import "encoding/json"
 // added the template/template_param fields to file ops (a File whose
 // WithSource/path declared a ".tmpl" suffix now carries that intent onto the
 // wire, so plan apply renders it on the destination instead of writing the
-// raw template text — see docs/file-dir-link.md); version 10 added the
+// raw template text — see docs/design/file-dir-link.md); version 10 added the
 // latest field to package ops (a Package configured with IsLatest now
 // carries that intent onto the wire, so plan apply runs the backend's
 // upgrade-check path — dnf update / pkg upgrade / pkg_add -u / pkgin
@@ -277,7 +277,7 @@ type Guard struct {
 // two or more kinds genuinely share with identical meaning (Path, Mode,
 // Owner, Group, Command, Deps, Sensitive, ...) — while a field EXCLUSIVE to
 // one kind lives on that kind's own OpPayload, set on Payload (task yd2,
-// "Layer 2" of the PlanDraft/Op god-struct split; see docs/plan.md, "The
+// "Layer 2" of the PlanDraft/Op god-struct split; see docs/design/plan.md, "The
 // PlanDraft/Op split", and resource.PlanDraft's identical Layer 1 rule).
 // Unused fields stay zero and are omitted via wireOp's omitempty for a
 // stable canonical encoding; Op's own JSON is produced by MarshalJSON /
@@ -292,7 +292,7 @@ type Guard struct {
 // SystemdTimerPayload, UserPayload, LinkPayload, LinkIfExistsPayload,
 // PackagePayload, CommandPayload, ConfigSetPayload, ConfigSetMemberPayload,
 // SyncDirPayload, FilePayload, op_payload.go); every other kind's fields are
-// still flat here, unchanged, pending follow-up tasks (see docs/plan.md).
+// still flat here, unchanged, pending follow-up tasks (see docs/design/plan.md).
 // Two exceptions are worth flagging: sync_dir's Prune field did NOT move to
 // SyncDirPayload, because KindDir genuinely shares it (see Prune's own
 // field doc below); and KindEnsureFile does NOT reuse FilePayload despite
@@ -312,7 +312,7 @@ type Op struct {
 	// Symlink (KindLink-exclusive) and Target (KindLinkIfExists-exclusive)
 	// and Hardlink (KindLink-exclusive) moved onto LinkPayload/
 	// LinkIfExistsPayload (task 5e2, "Layer 2" of the PlanDraft/Op
-	// god-struct split — see docs/plan.md, "The PlanDraft/Op split"; and
+	// god-struct split — see docs/design/plan.md, "The PlanDraft/Op split"; and
 	// CronPayload's doc comment in op_payload.go for why the wire itself is
 	// unaffected). Field docs (unchanged from here): LinkPayload.Symlink is
 	// the symlink target for KindLink; LinkIfExistsPayload.Target is the
@@ -324,7 +324,7 @@ type Op struct {
 	// metadata.
 	Mode string `json:"mode,omitempty"`
 	// FileMode (KindSyncDir-exclusive) moved onto SyncDirPayload (task 9e2,
-	// "Layer 2" of the PlanDraft/Op god-struct split — see docs/plan.md,
+	// "Layer 2" of the PlanDraft/Op god-struct split — see docs/design/plan.md,
 	// "The PlanDraft/Op split"; and CronPayload's doc comment in
 	// op_payload.go for why the wire itself is unaffected). Field doc
 	// (unchanged): SyncDirPayload.FileMode is an octal permission string
@@ -344,7 +344,7 @@ type Op struct {
 	// ContentB64, HasContent, Template, TemplateParam, TemplateData,
 	// ValidationBin and ValidationArgs (KindFile-exclusive) moved onto
 	// FilePayload (task ae2, "Layer 2" of the PlanDraft/Op god-struct split
-	// — see docs/plan.md, "The PlanDraft/Op split"; and CronPayload's doc
+	// — see docs/design/plan.md, "The PlanDraft/Op split"; and CronPayload's doc
 	// comment in op_payload.go for why the wire itself is unaffected).
 	// Field docs (unchanged from here): FilePayload.ContentB64 is base64
 	// file content for KindFile (InstallFile-style) — a legitimately empty
@@ -372,7 +372,7 @@ type Op struct {
 	Blob string `json:"blob,omitempty"`
 	// SourceDir and Glob (KindSyncDir-exclusive) moved onto SyncDirPayload
 	// (task 9e2, Layer 2's fifth slice — see SyncDirPayload's own doc
-	// comment in op_payload.go and docs/plan.md's "Task 9e2" section, both
+	// comment in op_payload.go and docs/design/plan.md's "Task 9e2" section, both
 	// of which agree with 9e2's own landed commit message; this comment
 	// previously said "fourth", which was 8e2's ordinal, not 9e2's).
 	// Field docs (unchanged from here):
@@ -416,7 +416,7 @@ type Op struct {
 	Absent bool `json:"absent,omitempty"`
 	// Latest (KindPackage-exclusive, schema v10) moved onto PackagePayload
 	// (task 5e2, "Layer 2" of the PlanDraft/Op god-struct split — see
-	// docs/plan.md, "The PlanDraft/Op split"). Field doc (unchanged):
+	// docs/design/plan.md, "The PlanDraft/Op split"). Field doc (unchanged):
 	// PackagePayload.Latest marks KindPackage as configured with IsLatest:
 	// destination apply must run the backend's upgrade-check path (dnf
 	// update / pkg upgrade / pkg_add -u / pkgin install) instead of a plain
@@ -509,7 +509,7 @@ type Op struct {
 	// Members, Validators, Chroot, StagingDir (KindConfigSet-exclusive) and
 	// Member (KindConfigSetMember-exclusive) moved onto
 	// ConfigSetPayload/ConfigSetMemberPayload (task 8e2, "Layer 2" of the
-	// PlanDraft/Op god-struct split — see docs/plan.md, "The PlanDraft/Op
+	// PlanDraft/Op god-struct split — see docs/design/plan.md, "The PlanDraft/Op
 	// split"; and CronPayload's doc comment in op_payload.go for why the
 	// wire itself is unaffected). Field docs (unchanged from here):
 	// ConfigSetPayload.Members are the files of a KindConfigSet op, in

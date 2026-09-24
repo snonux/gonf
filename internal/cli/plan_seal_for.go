@@ -11,13 +11,13 @@ import (
 	"github.com/snonux/gonf/plan/seal"
 )
 
-// This file is task 4b2 (w82 phase 2, docs/plan-encryption.md "Phased
+// This file is task 4b2 (w82 phase 2, docs/design/plan-encryption.md "Phased
 // implementation"): `gonf plan -o dir -seal -for host|cluster|fleet` and
 // `gonf plan -seal -stdout -for host`. Unlike planSealed (plan_seal.go),
 // which records the whole plan once with no host selection, -for records
 // ONCE PER TARGET HOST (api.RecordPlanForHost) so a ForHosts body written
 // for an unrelated host's secrets does not end up in this host's artifact —
-// see docs/plan-encryption.md "Operator UX", the `-for` row. Every host's
+// see docs/design/plan-encryption.md "Operator UX", the `-for` row. Every host's
 // plan is recorded, sealed and staged (a hidden, 0600, sealed staging file,
 // see plan_seal_output.go) before any final plan-<host>.age is published,
 // so a failure partway through (a bad task body, a missing recipient, a
@@ -32,7 +32,7 @@ import (
 // host whose name or SSHHost is a substring of the target's (or vice versa)
 // is included in the recording too, so its ForHosts body — and any secret
 // it reads — can physically land in the target's sealed artifact (task ng2;
-// see docs/plan-encryption.md's "Runbook" for the operator-facing caveat).
+// see docs/design/plan-encryption.md's "Runbook" for the operator-facing caveat).
 // This is not a new exposure relative to a plain `gonf push` to the same
 // target; it means -for's isolation is a best-effort superset, not an exact
 // single-host guarantee.
@@ -66,7 +66,7 @@ type sealedHostPlan struct {
 // ONLY, never the operator's own — an artifact the operator who just
 // created it cannot open, contradicting plan/seal.ErrNoRecipients' own
 // invariant ("a caller can never silently produce an artifact nobody, not
-// even the operator, can open") and docs/plan-encryption.md's "Keys"
+// even the operator, can open") and docs/design/plan-encryption.md's "Keys"
 // section ("A sealed write with zero recipients is refused, never degraded
 // to plaintext"). Host-only sealing was never a documented, deliberate
 // posture: nothing in the design doc describes it as a stronger-security
@@ -98,7 +98,7 @@ func planSealedFor(req sealRequest) int {
 		// would be sealed to that host's own recipient ONLY, which the
 		// operator who just ran this command cannot open (task mg2).
 		eprintf("plan: -for refused: no recipients; pass -recipient age1pq..., "+
-			"or create %s with one age1pq recipient per line (docs/plan-encryption.md)\n",
+			"or create %s with one age1pq recipient per line (docs/design/plan-encryption.md)\n",
 			recipientsFileLabel())
 		return 1
 	}
@@ -142,7 +142,7 @@ func lackVerb(missing []string) string {
 
 // hostsMissingPlanRecipient returns, in order, every host of hosts that has
 // no api.WithPlanRecipient set — the check planSealedFor runs before
-// recording or sealing anything (docs/plan-encryption.md "Operator UX":
+// recording or sealing anything (docs/design/plan-encryption.md "Operator UX":
 // "refuse ... before anything is written").
 func hostsMissingPlanRecipient(hosts []string) []string {
 	var missing []string

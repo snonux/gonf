@@ -151,7 +151,7 @@ func TestSIGPIPEIgnoredForRelayed(t *testing.T) {
 }
 
 // TestSIGPIPENotIgnoredForStdinPipedPlan pins the other documented,
-// non-relayed local shape: a manually piped `gonf apply -` (docs/plan.md's
+// non-relayed local shape: a manually piped `gonf apply -` (docs/design/plan.md's
 // "apply file or GONF-PUSH/1 stdin"), with neither marker set, must also
 // leave SIGPIPE alone.
 func TestSIGPIPENotIgnoredForStdinPipedPlan(t *testing.T) {

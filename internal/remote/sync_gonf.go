@@ -111,7 +111,7 @@ var defaultPusher = NewPusher()
 
 // relayedMinRelease is the minimum remote gonf release that accepts the
 // unconditional "apply -relayed" flag PushPayloadContext always sends (task
-// 7d2, docs/plan.md's "Fixed-argument sudoers/doas rules"). It is a fixed
+// 7d2, docs/design/plan.md's "Fixed-argument sudoers/doas rules"). It is a fixed
 // floor, not a moving target tied to the controller's own internal.Version:
 // -relayed has been stable since this release, so a remote at or above it is
 // fully capable regardless of how many further controller releases have
@@ -169,7 +169,7 @@ var sealedStickyMinVersion = mustParseReleaseVersion(sealedStickyMinRelease)
 // parse failure here can only mean a typo in this file's own source — a
 // genuine, documented programmer-bug invariant that no recipe or input can
 // reach, which is the one case AGENTS.md's "Registration-time contract"
-// (and docs/plan.md's "Error handling contract" list of such sites) accepts
+// (and docs/design/plan.md's "Error handling contract" list of such sites) accepts
 // a panic for. It fires once, at package init, long before any recipe or
 // apply runs.
 func mustParseReleaseVersion(s string) [3]int {

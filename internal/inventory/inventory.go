@@ -41,9 +41,9 @@ type Host struct {
 	GOARCH    string
 	GonfPath  string
 	// PlanRecipient is this host's age1pq recipient for `gonf plan -seal
-	// -for` (task 4b2, w82 phase 2, docs/plan-encryption.md "Keys"): the
+	// -for` (task 4b2, w82 phase 2, docs/design/plan-encryption.md "Keys"): the
 	// destination decrypts a plan sealed to it with the matching identity
-	// (its own /etc/gonf/identity, see docs/plan-encryption.md "Runbook").
+	// (its own /etc/gonf/identity, see docs/design/plan-encryption.md "Runbook").
 	// Set by api.WithPlanRecipient, which validates it with
 	// plan/seal.ParseRecipients before storing it here, so every non-empty
 	// value is already a well-formed age1pq hybrid recipient. Empty means

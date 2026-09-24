@@ -18,7 +18,7 @@ import (
 // functions (join, lower, upper, trim, replace) and the same strict
 // "missingkey=error" handling, so a typo'd field name fails loudly at
 // record time instead of silently rendering empty. See
-// docs/file-dir-link.md, "Template data and destination facts", for the
+// docs/design/file-dir-link.md, "Template data and destination facts", for the
 // destination-render path this deliberately does not replace, and
 // resource/file/render.go for why the two paths do not share every detail
 // (no process environment, no {{.Gonf}} destination facts here — there is

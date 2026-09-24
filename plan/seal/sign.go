@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// This file is the envelope half of plan signing (docs/plan-signing.md,
+// This file is the envelope half of plan signing (docs/design/plan-signing.md,
 // "Recommended design", task 6g2, phase signing-1): Sign wraps the bytes
 // Seal produced in a GONF-SIGNED-PLAN/1 envelope carrying an Ed25519
 // signature over them and the time they were signed, and Verify checks that
@@ -41,7 +41,7 @@ import (
 // signature line: "GONF-SIGNED-PLAN/1\n" || "signed-at <time>\n" ||
 // plan.age. It therefore covers the signing time (so a replayed envelope
 // cannot be given a fresher one), every byte of the age header, every
-// recipient stanza and the whole ciphertext (docs/plan-signing.md threat
+// recipient stanza and the whole ciphertext (docs/design/plan-signing.md threat
 // S5: a replaced or edited ciphertext invalidates it), and the envelope
 // version too, so a signature cannot be relabelled under another envelope
 // version or format that signs the bare payload. Ed25519 itself binds the
@@ -53,7 +53,7 @@ import (
 // # Freshness: carried here, enforced by the caller
 //
 // The signed-at time was added to /1 by task 7g2, before any gonf binary
-// produced a /1 envelope, as docs/plan-signing.md "Replay and rollback"
+// produced a /1 envelope, as docs/design/plan-signing.md "Replay and rollback"
 // requires. (v0.17.0's library-only Sign wrote the undated layout; Verify
 // refuses such an envelope as malformed, since its fourth line is the age
 // header, and its signature covers another message.) Verify authenticates
@@ -66,7 +66,7 @@ import (
 
 // SignedPlanMagic is the envelope's first line, without its "\n". A
 // caller sniffing an input's first line uses it to decide whether to call
-// Verify at all (docs/plan-signing.md "Verification order").
+// Verify at all (docs/design/plan-signing.md "Verification order").
 const SignedPlanMagic = "GONF-SIGNED-PLAN/1"
 
 // ageHeaderLine is how every age v1 stream, and so every Seal output,
@@ -84,7 +84,7 @@ const signedPlanFamily = "GONF-SIGNED-PLAN/"
 const SignedSniffLen = len(signedPlanFamily)
 
 // LooksSigned reports whether b starts like a signed-plan envelope of any
-// version ("GONF-SIGNED-PLAN/"). It is the sniff docs/plan-signing.md
+// version ("GONF-SIGNED-PLAN/"). It is the sniff docs/design/plan-signing.md
 // "Verification order" step 1 runs before any other: an input for which it
 // is true must go to Verify (which refuses another version or a malformed
 // header as ErrEnvelopeMalformed) and never to the unsigned sealed or
@@ -143,7 +143,7 @@ type Verified struct {
 	// SignedAt is the envelope's signed-at time, in UTC at second
 	// precision. It is authenticated (covered by the signature) but not
 	// checked against any clock: a freshness window is the caller's policy
-	// (docs/plan-signing.md "Replay and rollback", task 8g2).
+	// (docs/design/plan-signing.md "Replay and rollback", task 8g2).
 	SignedAt time.Time
 }
 

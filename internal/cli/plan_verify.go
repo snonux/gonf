@@ -10,7 +10,7 @@ import (
 )
 
 // This file is `gonf plan-verify`, the verify-only unwrap helper of task
-// 8g2 (docs/plan-signing.md "Emergency path"; the design sketched it as
+// 8g2 (docs/design/plan-signing.md "Emergency path"; the design sketched it as
 // `gonf plan -verify-only`, and it landed as its own subcommand so it does
 // not overload `gonf plan`'s task arguments). A signed plan is no longer a
 // bare age stream, so the emergency path `age -d -i key plan.age | gonf

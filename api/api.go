@@ -231,7 +231,7 @@ func NoTimer[T Path](name T, opts ...options.TimerOption) Resource {
 // DaemonReload (or a SystemdUnits composition) on the same bus in the same
 // task body or when-fragment merges into the first (union of watches and
 // deps, change-gated only if every declaration is) and returns that same
-// resource. See docs/service.md for when a merge is refused.
+// resource. See docs/design/service.md for when a merge is refused.
 func DaemonReload(opts ...options.DaemonReloadOption) Resource {
 	return systemd.Present(opts...)
 }

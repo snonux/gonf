@@ -80,11 +80,11 @@ func WithPrivilege(mode privilege.Mode) HostOption {
 }
 
 // WithPlanRecipient sets this host's age1pq recipient for `gonf plan -seal
-// -for host|cluster|fleet` (task 4b2, w82 phase 2, docs/plan-encryption.md
+// -for host|cluster|fleet` (task 4b2, w82 phase 2, docs/design/plan-encryption.md
 // "Keys" and "Operator UX"): a per-host sealed artifact (dir/plan-<host>.age)
 // is sealed to this recipient in addition to the operator's own, so the
 // destination can decrypt it with the matching identity it holds (typically
-// /etc/gonf/identity — see docs/plan-encryption.md "Runbook"). The recipient
+// /etc/gonf/identity — see docs/design/plan-encryption.md "Runbook"). The recipient
 // is validated with plan/seal.ParseRecipients right here, at registration:
 // a malformed value or one that is not an age1pq hybrid recipient (a classic
 // X25519, ssh, or plugin recipient) is registration-time misuse, reported as

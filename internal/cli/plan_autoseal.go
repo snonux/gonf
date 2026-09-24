@@ -11,7 +11,7 @@ import (
 	"github.com/snonux/gonf/plan/seal"
 )
 
-// This file is task 5b2 (w82 phase 3, docs/plan-encryption.md "Operator
+// This file is task 5b2 (w82 phase 3, docs/design/plan-encryption.md "Operator
 // UX" and "Phased implementation"), an approved behaviour correction
 // (approved by the user 2026-09-24): `gonf plan -o dir` without -seal
 // SEALS BY DEFAULT when both

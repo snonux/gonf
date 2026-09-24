@@ -735,7 +735,7 @@ func TestPresentSymlinkReplacesNonEmptyDirKeepsBackup(t *testing.T) {
 
 	// A retry converges: the idempotency check recognizes the created link
 	// before the aside assert runs, so the run succeeds with the residue
-	// still present (documented in docs/file-dir-link.md).
+	// still present (documented in docs/design/file-dir-link.md).
 	resource.ResetRepository()
 	resource.ResetReport()
 	Present(path, WithSymlink(target))

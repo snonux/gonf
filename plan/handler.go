@@ -67,7 +67,7 @@ type Handler interface {
 
 // handlers maps every Kind to the resource package's Handler. Every resource
 // kind registers itself here from its own package's init() (see
-// docs/plan.md, "Adding a resource kind"); api/packager.go's draftToOp and
+// docs/design/plan.md, "Adding a resource kind"); api/packager.go's draftToOp and
 // plan/apply.go's applyActive both fail loudly on an unmapped Kind instead of
 // carrying a fallback case, so a new kind that forgets to register is caught
 // immediately instead of silently falling through to dead code.

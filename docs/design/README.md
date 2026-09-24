@@ -1,4 +1,9 @@
-# Documentation index
+# Design notes
+
+Long-form design notes, background and history behind gonf's features.
+The terse quick reference is [../reference.md](../reference.md).
+
+## Documentation index
 
 | Doc | Topic |
 |-----|--------|
@@ -21,7 +26,7 @@
 | [plan-signing.md](plan-signing.md) | Signed plans: `gonf plan -seal -sign`, `gonf plan-signer-keygen`, `gonf apply -trusted-signers` / `-require-signed`, `gonf plan-verify` |
 | [conf-rex-gaps.md](conf-rex-gaps.md) | Gaps vs `~/git/conf` Rex (remote fleet) |
 | [consumer-dsl-simplification-plan.md](consumer-dsl-simplification-plan.md) | Consumer DSL simplification plan and its task status |
-| [../CHANGELOG.md](../CHANGELOG.md) | Release notes (also in each release's annotated tag) |
+| [../../CHANGELOG.md](../../CHANGELOG.md) | Release notes (also in each release's annotated tag) |
 
 ## Release checklist
 
@@ -42,7 +47,7 @@ was skipped again for v0.18.0: its bump commit `8fb7a4e` touched only
 `internal/version.go` and was tagged as is, so the v0.18.0 tag predates the
 refresh of [conf-rex-gaps.md](conf-rex-gaps.md) to v0.18.0 (the tagged copy
 still reads v0.17.0), and its tag message carries no release notes (the
-v0.18.0 entry in [CHANGELOG.md](../CHANGELOG.md) was added afterwards). The
+v0.18.0 entry in [CHANGELOG.md](../../CHANGELOG.md) was added afterwards). The
 tag is already in the Go module proxy and stays where it is:
 
 - [ ] **Fold the version-and-schema doc update into the SAME commit as the
@@ -51,7 +56,7 @@ tag is already in the Go module proxy and stays where it is:
       line(s) in [conf-rex-gaps.md](conf-rex-gaps.md) (near the top, the
       capability matrix heading, and the acceptance-criteria section) to the
       new `internal.Version` and `plan.CurrentVersion`.
-- [ ] Add the release's entry to [CHANGELOG.md](../CHANGELOG.md) in the
+- [ ] Add the release's entry to [CHANGELOG.md](../../CHANGELOG.md) in the
       same commit, and use it as the annotated tag's message.
 - [ ] If `plan.CurrentVersion` moved, confirm [plan.md](plan.md) has a
       "Plan schema **version N**" paragraph for every version up to the new
@@ -72,7 +77,7 @@ tag is already in the Go module proxy and stays where it is:
       tagged.** If the doc refresh ever does end up in a separate, later
       commit despite the rule above, do NOT create the version tag until
       that doc commit has also landed — the tag must point at a commit
-      where `git show <tag>:docs/conf-rex-gaps.md` already shows the new
+      where `git show <tag>:docs/design/conf-rex-gaps.md` already shows the new
       version. A tag created at the bump commit (before the doc commit
       exists) is immutable once pushed and cannot be repaired afterward,
       which is exactly how v0.16.5 shipped with stale docs baked into its

@@ -85,7 +85,7 @@ func SetSecretProvider(p secret.Provider) {
 // material: a plan op with the value (verbatim or with surrounding
 // whitespace or a final newline trimmed, see secret.Values) in any of its
 // strings is recorded as sensitive, and one with a strong secret in an
-// identity is refused (see docs/secrets.md for the classification and its
+// identity is refused (see docs/design/secrets.md for the classification and its
 // limits); everything the controller prints redacts it.
 func ResolveSecret(ctx context.Context, ref secret.Ref) ([]byte, error) {
 	data, err := secret.Resolve(ctx, useSecretProvider(), ref)

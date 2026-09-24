@@ -107,7 +107,7 @@ type Config struct {
 	// bytes. The bytes are passed as they are, but foostore strips exactly
 	// one trailing line terminator ("\n" or "\r\n") from what it reads, so a
 	// passphrase that really ends in one needs it twice. The returned slice
-	// is overwritten after use (best effort: see docs/secrets.md).
+	// is overwritten after use (best effort: see docs/design/secrets.md).
 	Passphrase func(ctx context.Context) ([]byte, error)
 }
 

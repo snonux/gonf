@@ -12,7 +12,7 @@ import (
 	"unicode/utf8"
 )
 
-// This file is the key half of plan signing (docs/plan-signing.md, "Keys",
+// This file is the key half of plan signing (docs/design/plan-signing.md, "Keys",
 // task 6g2): the Ed25519 signer identity that signs a sealed plan (Signer,
 // LoadSigner) and the destination's own list of public keys it will accept
 // a signature from (TrustedSigner, LoadTrustedSigners). The envelope itself
@@ -61,7 +61,7 @@ import (
 // the trusted-signers file holds only public keys and gets the recipients
 // file's narrower 0o022 (group/other WRITE) rule, since whoever can write
 // it, or plant a symlink at its path, chooses which signatures a
-// destination accepts (docs/plan-signing.md threat S4). No error from
+// destination accepts (docs/design/plan-signing.md threat S4). No error from
 // either loader ever includes a byte of the file's content.
 
 // signerSecretType and signerPublicType are the type words that open a

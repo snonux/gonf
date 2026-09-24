@@ -155,7 +155,7 @@ func wantForPayloadOffset(off int) error {
 	return ErrSignatureInvalid
 }
 
-// TestVerifyRefusesReplacedPayload is docs/plan-signing.md threat S5: a
+// TestVerifyRefusesReplacedPayload is docs/design/plan-signing.md threat S5: a
 // valid signature kept, with a different, validly sealed ciphertext.
 func TestVerifyRefusesReplacedPayload(t *testing.T) {
 	f := newSignedFixture(t)

@@ -5,7 +5,7 @@
 // report-only handle resource so OnChange can react to one member (e.g.
 // newaliases for the aliases table) instead of to the whole set.
 //
-// See docs/config-set.md for the exact validation, serialization and
+// See docs/design/config-set.md for the exact validation, serialization and
 // partial-publication guarantees.
 package configset
 

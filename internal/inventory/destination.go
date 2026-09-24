@@ -12,7 +12,7 @@ import (
 //
 // The controller cannot see a push target's live hostname, so push
 // selections are approximated from inventory data under one documented
-// assumption (also stated in api.ForHosts and docs/helpers.md): a machine's
+// assumption (also stated in api.ForHosts and docs/design/helpers.md): a machine's
 // live hostname contains no inventory name other than those appearing in its
 // own inventory name or SSH host, and one machine is registered under one SSH
 // host (aliases share the SSHHost, compared case-insensitively like any DNS

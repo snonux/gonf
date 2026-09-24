@@ -78,7 +78,7 @@ func ParseRecipients(lines []string) ([]Recipient, error) {
 // malformed entry, never on an all-valid or comment-only input: an
 // embedder passing nil would ship and then crash the first time a
 // recipients file happened to hold, say, a classic age1 line. A panic on
-// input is forbidden by the error-handling contract (docs/plan.md), so the
+// input is forbidden by the error-handling contract (docs/design/plan.md), so the
 // nil case is defined rather than documented as a precondition.
 func ParseRecipientsFrom(lines []string, label func(i int) string) ([]Recipient, error) {
 	if label == nil {

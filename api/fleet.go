@@ -137,7 +137,7 @@ func PushFleet(name string, tasks ...string) error {
 // higher, unrelated concurrency just because it was reached via a fleet.
 // Earlier code always used defaultClusterParallelism for the entire fleet
 // fan-out, silently discarding every member cluster's own Parallel(n); see
-// docs/plan.md "Fleet parallelism semantics" and the regression test
+// docs/design/plan.md "Fleet parallelism semantics" and the regression test
 // TestPushFleetHonorsClusterParallel (api/cluster_test.go), which fails
 // against that earlier behavior.
 //
@@ -154,9 +154,9 @@ func PushFleet(name string, tasks ...string) error {
 // shared context, not from ctx directly) and aborts their in-flight — and
 // not-yet-started — hosts too. This restores the pre-existing whole-fleet
 // fail-fast contract ("a failing host cancels its in-flight siblings ... the
-// fleet error reports the abort reason once", docs/plan.md "Timeouts and
+// fleet error reports the abort reason once", docs/design/plan.md "Timeouts and
 // cancellation") on top of the per-cluster parallelism fix: parallelism is
-// per-cluster, but failure cancellation is whole-fleet. See docs/plan.md
+// per-cluster, but failure cancellation is whole-fleet. See docs/design/plan.md
 // "Fleet parallelism semantics" and TestPushFleetFailureCancelsOtherClusters
 // (api/cluster_test.go).
 func PushFleetRun(ctx context.Context, name, planID string, parallelOverride int, hostTimeout time.Duration, tasks ...string) error {

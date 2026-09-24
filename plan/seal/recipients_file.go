@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// This file is task ce2 (docs/plan-encryption.md "Keys"): the operator
+// This file is task ce2 (docs/design/plan-encryption.md "Keys"): the operator
 // recipients file used to be read with a plain os.ReadFile by
 // internal/cli/plan_seal.go, with no ownership, permission or symlink
 // check at all — unlike the identity file (LoadIdentities, identities.go),

@@ -52,7 +52,7 @@ func (f *planFlags) defineOutputFlags() {
 
 // defineSealFlags defines -seal and the flags that only apply with it.
 func (f *planFlags) defineSealFlags() {
-	f.seal = f.fs.Bool("seal", false, "age-encrypt the plan (docs/plan-encryption.md) instead of writing it in the "+
+	f.seal = f.fs.Bool("seal", false, "age-encrypt the plan (docs/design/plan-encryption.md) instead of writing it in the "+
 		"clear: writes dir/plan.age (or, with -stdout, the sealed bytes to stdout) to the union of -recipient flags "+
 		"and the recipients file; refused with zero recipients (never falls back to plaintext), and cannot "+
 		"combine with -redacted or -with-secrets")
@@ -76,7 +76,7 @@ func (f *planFlags) defineSealFlags() {
 		"host or is refused")
 	f.sign = f.fs.String("sign", "", "with -seal: sign each sealed artifact (every host's, with -for) with the "+
 		"Ed25519 signer in this file, wrapping it in a GONF-SIGNED-PLAN/1 envelope with a signed-at time "+
-		"(docs/plan-signing.md); make one with gonf plan-signer-keygen. The file must be a regular file owned "+
+		"(docs/design/plan-signing.md); make one with gonf plan-signer-keygen. The file must be a regular file owned "+
 		"by you with no group or other permission bit; no default path")
 }
 
@@ -173,7 +173,7 @@ func plaintextConflict(plaintext, sealed, stdout, redacted bool) string {
 // -redacted is an output of its own so combining it with -stdout,
 // -with-secrets, -o or -seal is refused instead of silently picking one,
 // and -seal is refused together with -with-secrets (a sealed export needs
-// no plaintext override; task 2b2, docs/plan-encryption.md "Operator UX")
+// no plaintext override; task 2b2, docs/design/plan-encryption.md "Operator UX")
 // regardless of -stdout. (-stdout with an explicit -o keeps its
 // long-standing meaning: -o is ignored; -seal -stdout is allowed — the
 // natural CI/pipe form for a sealed plan.)

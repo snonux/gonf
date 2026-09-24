@@ -41,7 +41,7 @@ type result struct {
 // caller refuses an overflowing result instead. It grows its array itself
 // and overwrites each array it outgrows, so no stale copy of the bytes is
 // left behind by growth (the copy buffer os/exec reads the pipe through is
-// beyond its reach; see docs/secrets.md: overwriting is best effort).
+// beyond its reach; see docs/design/secrets.md: overwriting is best effort).
 type boundedBuffer struct {
 	buf      []byte
 	max      int

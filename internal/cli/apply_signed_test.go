@@ -13,7 +13,7 @@ import (
 
 // Tests for task 8g2 (signing phase 3): `gonf apply -trusted-signers
 // [-require-signed] [-max-signed-age]` on files and stdin, driven through
-// the real CLI entry point. docs/plan-signing.md "Verification order" is
+// the real CLI entry point. docs/design/plan-signing.md "Verification order" is
 // the contract: a signed plan is verified BEFORE any decryption, its
 // freshness is checked only once the signature verified, -require-signed
 // refuses unsigned input outright, and without the new flags unsigned

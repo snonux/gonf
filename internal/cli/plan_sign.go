@@ -11,7 +11,7 @@ import (
 	"github.com/snonux/gonf/plan/seal"
 )
 
-// This file is task 7g2 (signing phase 2, docs/plan-signing.md "Phased
+// This file is task 7g2 (signing phase 2, docs/design/plan-signing.md "Phased
 // implementation"): `gonf plan -seal -sign <signer-file>` and `gonf
 // plan-signer-keygen <signer-file>`. -sign wraps each sealed artifact the
 // -seal paths already build (plain, -stdout and -for, per host) in a
@@ -19,7 +19,7 @@ import (
 // printed, so a signed plan.age is written through exactly the same write
 // path as an unsigned one. Signing proves only which key produced the
 // bytes, and nothing here checks a signature, so every message says
-// "signed", never "verified" or "trusted" (docs/plan-signing.md
+// "signed", never "verified" or "trusted" (docs/design/plan-signing.md
 // "Verification order", plan-encryption.md "Provenance"). The key material
 // stays inside plan/seal: this file handles a seal.Signer value, whose
 // printed form is only its public key, and never the secret line.

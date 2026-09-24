@@ -33,7 +33,7 @@ type payloadCase struct {
 
 // payloadCases is every resource.DraftPayload implementation in the module
 // (task w62 Layer 1 moved each kind's exclusive plan-draft fields off
-// resource.PlanDraft into its own per-kind payload type; see docs/plan.md,
+// resource.PlanDraft into its own per-kind payload type; see docs/design/plan.md,
 // "The PlanDraft/Op split"). Task 1e2 restores a mechanical Clone-coverage
 // guard over these real payloads: TestPayloadCloneContract and
 // TestPayloadClonePreservesNilAndEmpty below replace the seven
@@ -45,7 +45,7 @@ type payloadCase struct {
 // way to enumerate DraftPayload implementers across packages (Go has no
 // interface-implementer registry), so a new resource/<kind> package that
 // adds one must add its entry here by hand, the same way a new plan.Kind
-// needs a kindFitnessTable entry (docs/plan.md, "Draft payload" step).
+// needs a kindFitnessTable entry (docs/design/plan.md, "Draft payload" step).
 var payloadCases = []payloadCase{
 	{name: "cmd.Payload", typ: reflect.TypeFor[cmd.Payload]()},
 	{name: "configset.SetPayload", typ: reflect.TypeFor[configset.SetPayload]()},

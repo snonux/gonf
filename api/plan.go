@@ -526,7 +526,7 @@ func validateRecordedPlan(ops []plan.Op) error {
 // PushFleetRun call this right after RecordPlanTo and before streaming
 // anything over SSH, so an unsafe plan is refused before any destination is
 // touched — consistent with the rest of RecordPlan's record-before-mutate
-// error contract (docs/plan.md "Error handling contract"). action names the
+// error contract (docs/design/plan.md "Error handling contract"). action names the
 // caller for the error message (e.g. "push", "cluster \"web\"").
 //
 // Local Run / gonf plan do not call this: they apply (or hand the plan to
@@ -884,7 +884,7 @@ func blobIdentityKey(d resource.PlanDraft) string {
 // shortHash returns a short, fixed-width hex fingerprint of key, used to
 // disambiguate blob refs that would otherwise share a human-readable
 // basename. It is not required to be stable across gonf versions or plan
-// runs — docs/plan.md already treats blob paths as ephemeral, record-time
+// runs — docs/design/plan.md already treats blob paths as ephemeral, record-time
 // artifacts, e.g. the source_dir field exists precisely so destination apply
 // never depends on the blob path staying the same between runs.
 func shortHash(key string) string {

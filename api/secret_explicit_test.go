@@ -14,7 +14,7 @@ import (
 
 // payloadKindsBody declares one resource of every kind WithSensitive
 // accepts, each carrying a base64 form of the resolved secret, which the
-// scan cannot recognise (docs/secrets.md, "Limits of the scan"). With mark
+// scan cannot recognise (docs/design/secrets.md, "Limits of the scan"). With mark
 // each gets WithSensitive (through marked); without, the body is the plain
 // recipe. tree is a controller-local source directory for the synced tree.
 func payloadKindsBody(tree string, mark bool) func() {

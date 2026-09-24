@@ -39,7 +39,7 @@ import (
 // means "use the real runner" for that kind: handlers check for nil before
 // consulting a field, so a Set that only overrides one kind (e.g. Command)
 // leaves every other kind's real backend untouched. A new kind with such a
-// touch point adds its own field here (see docs/plan.md's Test seams note
+// touch point adds its own field here (see docs/design/plan.md's Test seams note
 // and AGENTS.md's Test seams section).
 type Set struct {
 	// Command overrides resource/cmd's Cmd (the "command" plan kind).

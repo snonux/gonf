@@ -573,7 +573,7 @@ func TestPushFleetHonorsClusterParallel(t *testing.T) {
 // follow-up fix: giving each member cluster its own remote.Fanout call (so
 // its own Parallel(n) governs its own concurrency independently) must not
 // narrow the pre-existing whole-fleet fail-fast contract documented in
-// docs/plan.md "Timeouts and cancellation" ("a failing host cancels its
+// docs/design/plan.md "Timeouts and cancellation" ("a failing host cancels its
 // in-flight siblings ... the fleet error reports the abort reason once").
 // Cluster "bad" (Parallel(1)) and cluster "good" (Parallel(2), a distinct
 // value, so this also re-confirms each group still gets its OWN concurrency

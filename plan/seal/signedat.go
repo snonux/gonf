@@ -6,7 +6,7 @@ import (
 )
 
 // This file is the signed-at line of the GONF-SIGNED-PLAN/1 envelope
-// (sign.go, task 7g2; docs/plan-signing.md "Replay and rollback"):
+// (sign.go, task 7g2; docs/design/plan-signing.md "Replay and rollback"):
 //
 //	signed-at 2026-09-24T10:50:51Z\n
 //

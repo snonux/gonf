@@ -12,7 +12,7 @@ import (
 
 // GONF-PUSH/2 is GONF-PUSH/1 with exactly one extra line, right after the
 // magic, carrying a per-push ephemeral age1pq identity (w82 phase 4, task
-// zf2; docs/plan-encryption.md, "Phase 4 design: sealed multi-chunk
+// zf2; docs/design/plan-encryption.md, "Phase 4 design: sealed multi-chunk
 // sticky-dir blobs", "Wire extension"):
 //
 //	GONF-PUSH/2\n

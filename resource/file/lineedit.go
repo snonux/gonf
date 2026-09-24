@@ -53,7 +53,7 @@ func appendUniqueLines(dst []string, lines ...string) []string {
 // terminator (see currentLines/dominantTerminator), instead of a hard-coded
 // "\n": otherwise a CRLF-terminated shared file would be silently rewritten
 // to LF by any keyed/added/removed-line edit, breaking
-// docs/file-dir-link.md's "every other line ... left alone" promise for line
+// docs/design/file-dir-link.md's "every other line ... left alone" promise for line
 // endings too (task bc2 finding (a)). A brand-new file (missing before this
 // edit) is written with "\n", matching the prior behavior.
 func (f *File) resolveLine() (path string, content []byte, noop bool, err error) {
@@ -128,7 +128,7 @@ func (f *File) currentLines(path string) (lines []string, term string, exists bo
 // uniform terminator). A file with no line breaks, or with equally many of
 // each, keeps "\n". A mixed-ending file's minority-style lines are therefore
 // normalized to the majority style, same as a homogeneously-terminated file
-// keeps its own terminator; see docs/file-dir-link.md's keyed-line section.
+// keeps its own terminator; see docs/design/file-dir-link.md's keyed-line section.
 func dominantTerminator(raw []byte) string {
 	crlf := bytes.Count(raw, []byte("\r\n"))
 	lf := bytes.Count(raw, []byte("\n")) - crlf
@@ -154,7 +154,7 @@ func dominantTerminator(raw []byte) string {
 // untouched, with edit.Line appended as a second, conflicting line — safely
 // normalizing those would need real parsing (word-splitting, case folding a
 // key that might itself be case-sensitive shell syntax) this feature does
-// not attempt; see docs/file-dir-link.md's keyed-line section, which
+// not attempt; see docs/design/file-dir-link.md's keyed-line section, which
 // documents the gap. An owned, indented line is replaced by edit.Line
 // unindented: the key now owns the line's position, not its original
 // indentation.

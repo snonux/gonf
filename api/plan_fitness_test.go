@@ -26,7 +26,7 @@ import (
 // emits) AND survive an encode/decode round-trip. Adding a plan.Kind without
 // a fixture, or a draftToOp case without a declared kind, fails this test —
 // it is the executable form of the "Adding a resource kind" checklist in
-// docs/plan.md.
+// docs/design/plan.md.
 type kindFixture struct {
 	// draft is the resource draft lowering to this plan.Kind. Nil marks a
 	// header/control kind that no resource emits.
@@ -205,7 +205,7 @@ func TestPlanKindFitness(t *testing.T) {
 	// Every declared Kind must have exactly one fixture.
 	for _, k := range kinds {
 		if _, ok := table[k]; !ok {
-			t.Errorf("no fitness fixture for plan.Kind %q (add one to kindFitnessTable; see docs/plan.md)", k)
+			t.Errorf("no fitness fixture for plan.Kind %q (add one to kindFitnessTable; see docs/design/plan.md)", k)
 		}
 	}
 	if len(table) != len(kinds) {

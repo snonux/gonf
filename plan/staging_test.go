@@ -298,7 +298,7 @@ func mkSealedRunDir(t *testing.T, root string, pid int, suffix string) string {
 }
 
 // TestSweepSealedApplyRunsRemovesDeadOwnerRegardlessOfAge is the core
-// docs/plan-encryption.md "Plaintext after decryption" guarantee: a
+// docs/design/plan-encryption.md "Plaintext after decryption" guarantee: a
 // sealed-run-* leftover of a process that is no longer alive is removed
 // even when it was created moments ago, unlike an ordinary run-* directory
 // (which only ever gets removed after applyRunTTL).

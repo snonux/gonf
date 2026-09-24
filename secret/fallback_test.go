@@ -51,7 +51,7 @@ func TestFallbackConsultsSecondaryOnNotFound(t *testing.T) {
 // entire reason to exist: a primary that is locked, unreadable, invalid or
 // otherwise broken for a reference it DOES map must fail loudly. Falling
 // back to secondary's possibly stale copy in this case is exactly the silent
-// stale-fallback bug Fallback must not have (see docs/secrets.md and task
+// stale-fallback bug Fallback must not have (see docs/design/secrets.md and task
 // 262's self-review). secondary.calls == 0 proves it was never even asked,
 // not merely that its answer was discarded.
 func TestFallbackDoesNotConsultSecondaryOnNonNotFound(t *testing.T) {

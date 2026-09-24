@@ -146,7 +146,7 @@ mechanism for backend runners: `internal/testseam` holds no fakes any more,
 only the no-parallel guard the remaining global test hooks (log capture,
 `internal/cli`'s base context) use. See `AGENTS.md`, "Test seams", for the
 full contract (the `newXWith`/`ensureWith` per-kind constructor shape,
-which hook to use from which kind of test) and `docs/plan.md`'s "Test seams
+which hook to use from which kind of test) and `docs/design/plan.md`'s "Test seams
 note" for the `ApplyContext.Runners` field itself.
 
 `resource/cmd` (the `command` plan kind) migrated first (task qb2); task 4e2

@@ -392,7 +392,7 @@ func conformanceGroups(count int) []string {
 }
 
 // TestDeclaredCapabilities pins each platform's declaration (documented in
-// docs/user.md), so a declaration cannot drift together with its behaviour
+// docs/design/user.md), so a declaration cannot drift together with its behaviour
 // unnoticed.
 func TestDeclaredCapabilities(t *testing.T) {
 	want := map[string]Capabilities{

@@ -78,7 +78,7 @@ func writeIdentityFile(t *testing.T, path, identityLine string) {
 // (registerOutDirProbe, plan_outdir_test.go: a SyncDir source, which the
 // plaintext -o path would write into dir/blobs/). Sealing packages that same
 // blob straight into the in-memory GONF-PUSH/1 frame instead
-// (docs/plan-encryption.md "Artifact": recording goes to a plan.MemoryStore,
+// (docs/design/plan-encryption.md "Artifact": recording goes to a plan.MemoryStore,
 // so no plaintext blob ever lands in dir).
 func TestCLIPlanSealWritesOnlyPlanAge(t *testing.T) {
 	isolateXDGConfig(t)
@@ -201,7 +201,7 @@ func TestCLIPlanSealRoundTripWrongIdentityFails(t *testing.T) {
 // TestCLIPlanSealRefusesZeroRecipients: -seal with no -recipient flags and
 // no (or empty) default recipients file is refused, exit non-zero, and
 // nothing is written — never a silent plaintext fallback
-// (docs/plan-encryption.md "Keys": "A sealed write with zero recipients is
+// (docs/design/plan-encryption.md "Keys": "A sealed write with zero recipients is
 // refused, never degraded to plaintext").
 func TestCLIPlanSealRefusesZeroRecipients(t *testing.T) {
 	isolateXDGConfig(t)
@@ -221,7 +221,7 @@ func TestCLIPlanSealRefusesZeroRecipients(t *testing.T) {
 
 // TestCLIPlanSealStdoutWritesSealedBytesNoDisk: -seal -stdout writes the
 // sealed (binary age, no armor) bytes to stdout and touches no file at all
-// — the pipe form docs/plan-encryption.md "Operator UX" documents
+// — the pipe form docs/design/plan-encryption.md "Operator UX" documents
 // (`gonf plan -seal -stdout | ssh host gonf apply -identity ... -`).
 func TestCLIPlanSealStdoutWritesSealedBytesNoDisk(t *testing.T) {
 	isolateXDGConfig(t)
@@ -292,7 +292,7 @@ func TestCLIPlanSealRejectsRedactedAndWithSecrets(t *testing.T) {
 // TestCLIPlanSealWarnsAboutPreexistingPlaintext: sealing into a directory
 // that still holds a plaintext plan.jsonl (and/or blobs/) from an earlier,
 // unsealed run warns about it on stderr and leaves it exactly as it was —
-// never deletes it (docs/plan-encryption.md "Operator UX" table).
+// never deletes it (docs/design/plan-encryption.md "Operator UX" table).
 func TestCLIPlanSealWarnsAboutPreexistingPlaintext(t *testing.T) {
 	isolateXDGConfig(t)
 	registerSealTask(t)

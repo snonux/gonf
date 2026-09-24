@@ -10,7 +10,7 @@ import (
 )
 
 // Sealed sticky-dir blobs, controller side (w82 phase 4 step 2, task zf2;
-// docs/plan-encryption.md, "Phase 4 design: sealed multi-chunk sticky-dir
+// docs/design/plan-encryption.md, "Phase 4 design: sealed multi-chunk sticky-dir
 // blobs").
 //
 // A multi-chunk push with blobs uploads them once to a sticky dir owned by

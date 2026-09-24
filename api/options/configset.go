@@ -3,7 +3,7 @@ package options
 import resourceoptions "github.com/snonux/gonf/resource/options"
 
 // ConfigSetOption configures api.ConfigSet. See resource/options for the
-// full contract and docs/config-set.md for the publication guarantees.
+// full contract and docs/design/config-set.md for the publication guarantees.
 type ConfigSetOption = resourceoptions.ConfigSetOption
 
 // Capability interfaces of the config-set options.

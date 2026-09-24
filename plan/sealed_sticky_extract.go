@@ -12,7 +12,7 @@ import (
 )
 
 // Destination side of sealed sticky-dir refs (w82 phase 4 step 3, task
-// 0g2; docs/plan-encryption.md, "Phase 4 design: sealed multi-chunk
+// 0g2; docs/design/plan-encryption.md, "Phase 4 design: sealed multi-chunk
 // sticky-dir blobs"). The controller seals each ref's WriteRefArchive
 // output as one age stream (sealed_sticky.go); the elevated chunk that
 // reads it decrypts the stream (plan/seal, in internal/cli, since plan

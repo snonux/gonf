@@ -114,7 +114,7 @@ type chunkLabel func(i int, ch plan.Chunk) string
 // "-profile"): a rule restricted to a fixed command line (e.g. "gonf apply
 // *") refuses the whole elevated re-exec the moment either flag lands in
 // argv before "apply", with a bare sudo/doas refusal that never mentions
-// -cmd-timeout or -profile — see docs/plan.md's note on fixed-argument
+// -cmd-timeout or -profile — see docs/design/plan.md's note on fixed-argument
 // sudoers rules. elevatedCancelGrace() relies on the forwarding that does
 // go through: the child's validators are bound by the same timeout the
 // grace is derived from.
@@ -221,7 +221,7 @@ func elevatedCancelGrace() time.Duration {
 // (plausible but, per sudo's own "use_pty has no effect [unless] sudo is
 // running in a terminal" doc, NOT reproduced against gonf's own
 // non-interactive, piped invocation; still unverified either way, see
-// docs/plan.md's "Fixed-argument sudoers/doas rules" section) a sudoers
+// docs/design/plan.md's "Fixed-argument sudoers/doas rules" section) a sudoers
 // "use_pty" wrapper whose pty relay might not propagate a single stdin byte
 // the same way a pipe does. It is deliberately NOT sent for doas: an
 // unprivileged SIGTERM to a doas process reaches OpenDoas's own

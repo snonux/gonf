@@ -9,7 +9,7 @@ import (
 )
 
 // OpPayload holds the wire fields exclusive to one Op's Kind (task yd2,
-// "Layer 2" of the PlanDraft/Op god-struct split — see docs/plan.md, "The
+// "Layer 2" of the PlanDraft/Op god-struct split — see docs/design/plan.md, "The
 // PlanDraft/Op split", and resource.DraftPayload's identical Layer 1 role
 // for resource.PlanDraft). Decode must build one without importing a
 // resource/<kind> package (plan/layering_test.go's TestPlanImportsOnlyResourceCore
@@ -777,7 +777,7 @@ var payloadConstructors = map[Kind]func(wireOp) OpPayload{
 // exclusive field (e.g. a "cron" line with "on_calendar" set, which is
 // SystemdTimerPayload's) has that field read here, discarded, and never
 // reachable again. Before task 2f2 that was a silent encode/decode
-// fidelity bug (see docs/plan.md, "Adding a resource kind (checklist)",
+// fidelity bug (see docs/design/plan.md, "Adding a resource kind (checklist)",
 // task 9e2's note, and the task 2f2 annotation for the probe that found
 // it): UnmarshalJSON (types.go) now calls checkForeignPayload, below,
 // BEFORE reaching this function, and refuses a line carrying any such
@@ -820,7 +820,7 @@ type payloadFieldOwner struct {
 // added without its wireOp counterpart) that no plan line can cause.
 // TestPayloadFieldOwnersResolve fails on it. checkForeignPayload then
 // refuses every decode with it, rather than panicking or silently skipping
-// the check: plan never panics for input (docs/plan.md, "Error handling
+// the check: plan never panics for input (docs/design/plan.md, "Error handling
 // contract"), and a package-init panic would kill every binary importing
 // plan, including ones that never decode.
 var payloadFieldOwners, errPayloadFieldOwners = buildPayloadFieldOwners(OpPayloadExamples())

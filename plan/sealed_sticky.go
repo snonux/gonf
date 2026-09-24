@@ -6,7 +6,7 @@ import (
 	"sort"
 )
 
-// Sealed sticky-dir refs (w82 phase 4, task zf2; docs/plan-encryption.md,
+// Sealed sticky-dir refs (w82 phase 4, task zf2; docs/design/plan-encryption.md,
 // "Phase 4 design: sealed multi-chunk sticky-dir blobs").
 //
 // A multi-chunk push stages every blob in one sticky directory owned by the
