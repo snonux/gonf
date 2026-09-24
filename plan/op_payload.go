@@ -395,11 +395,12 @@ func (p SyncDirPayload) applyToWire(w *wireOp) {
 // FilePayload holds the wire fields exclusive to KindFile (task ae2, Layer
 // 2's sixth and largest slice — file is gonf's most-used resource kind).
 // resource/file's planwire.go is the only other non-test package that
-// constructs or reads one, always non-nil on a "file" op's Payload (record
-// side: planHandler.ToOp; apply side: planHandler.Apply and its helpers
-// comma-ok assert it), so a decoded or freshly lowered KindFile op's Payload
-// is never nil, keeping encode/decode round trips symmetric (see
-// payloadFromWire).
+// constructs one, always non-nil on a "file" op's Payload (record side:
+// planHandler.ToOp; apply side: planHandler.Apply reads it through
+// PayloadOf), so a decoded or freshly lowered KindFile op's Payload is never
+// nil, keeping encode/decode round trips symmetric (see payloadFromWire).
+// Packaging a recorded source file into an already-built op goes through
+// SetFileContentB64 below, never a hand-written assert-and-write-back.
 //
 // KindEnsureFile does NOT get a FilePayload, despite resource/file's
 // draft-side Payload (resource/file/payload.go, task w62 Layer 1) being
@@ -483,6 +484,29 @@ type FilePayload struct {
 	// and apply.
 	AddLine    string `json:"add_line,omitempty"`
 	RemoveLine string `json:"remove_line,omitempty"`
+}
+
+// SetFileContentB64 sets b64 onto op's FilePayload.ContentB64 in place. It
+// is the one home for this knowledge (task eg2): api's packager and
+// internal/testapply both package a recorded source file into an op AFTER
+// its handler's ToOp built it, and each used to keep a verbatim copy of
+// this body. ContentB64 lives on FilePayload since task ae2 and FilePayload
+// is stored in op.Payload as a VALUE, so a caller cannot assign the field
+// directly: it must assert, mutate a local copy and write that copy back.
+// Dropping the write-back still compiles and silently loses the content,
+// which is why two drifting copies were dangerous.
+//
+// An op without a FilePayload is left untouched. That covers an
+// "ensure_file" op, whose ToOp never sets one (see FilePayload's doc
+// comment): ensureFileHandler.Apply never reads ContentB64, so the field
+// was already dead wire data on that kind before ae2 moved it.
+func SetFileContentB64(op *Op, b64 string) {
+	fp, ok := op.Payload.(FilePayload)
+	if !ok {
+		return
+	}
+	fp.ContentB64 = b64
+	op.Payload = fp
 }
 
 func (p FilePayload) applyToWire(w *wireOp) {

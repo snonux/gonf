@@ -225,11 +225,11 @@ func packageSource(op plan.Op, d resource.PlanDraft, store plan.BlobStore, name 
 			return op, fmt.Errorf("package file %s: %w", sourcePath, err)
 		}
 		if len(data) <= plan.MaxInlineContent {
-			setFileContentB64(&op, base64.StdEncoding.EncodeToString(data))
+			plan.SetFileContentB64(&op, base64.StdEncoding.EncodeToString(data))
 			op.Blob = ""
 			return op, nil
 		}
-		setFileContentB64(&op, "")
+		plan.SetFileContentB64(&op, "")
 		op.Blob, err = store.WriteFile(name, data)
 	case sourceGlob != "":
 		op.Blob, err = store.WriteGlob(name, sourceGlob)
@@ -237,20 +237,6 @@ func packageSource(op plan.Op, d resource.PlanDraft, store plan.BlobStore, name 
 		op.Blob, err = store.WriteTree(name, sourceDir)
 	}
 	return op, err
-}
-
-// setFileContentB64 sets b64 onto op's FilePayload.ContentB64 in place,
-// mirroring api/packager.go's identical helper (see its doc comment for why
-// ContentB64 can no longer be assigned directly onto op after task ae2, and
-// why the comma-ok assertion's no-op degrade for an "ensure_file" op is not
-// a behaviour change).
-func setFileContentB64(op *plan.Op, b64 string) {
-	fp, ok := op.Payload.(plan.FilePayload)
-	if !ok {
-		return
-	}
-	fp.ContentB64 = b64
-	op.Payload = fp
 }
 
 // applyOps runs the whole-plan pre-flight and applies ops with the local

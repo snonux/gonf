@@ -580,3 +580,28 @@ func TestWireFieldRoundTripOwnership(t *testing.T) {
 		})
 	}
 }
+
+// TestSetFileContentB64 pins the one shared helper api's packager and
+// internal/testapply use to package source-file content (task eg2): the
+// mutated FilePayload must be written back onto op.Payload (dropping the
+// write-back compiles but silently loses the content), the rest of the
+// payload must survive, and an op without a FilePayload (an ensure_file op)
+// must be left untouched rather than gaining one.
+func TestSetFileContentB64(t *testing.T) {
+	op := Op{Op: KindFile, Payload: FilePayload{HasContent: true, ContentB64: "old"}}
+	SetFileContentB64(&op, "bmV3")
+	got := PayloadOf[FilePayload](op)
+	if got.ContentB64 != "bmV3" || !got.HasContent {
+		t.Fatalf("file op payload = %+v, want ContentB64 %q with HasContent kept", got, "bmV3")
+	}
+	SetFileContentB64(&op, "")
+	if got := PayloadOf[FilePayload](op).ContentB64; got != "" {
+		t.Fatalf("cleared ContentB64 = %q, want empty", got)
+	}
+
+	ensure := Op{Op: KindEnsureFile}
+	SetFileContentB64(&ensure, "bmV3")
+	if ensure.Payload != nil {
+		t.Fatalf("ensure_file op gained payload %#v, want nil", ensure.Payload)
+	}
+}

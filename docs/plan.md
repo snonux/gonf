@@ -552,7 +552,8 @@ class of bug that motivated task j5.
    6e2), `link`, `link_if_exists`, `package` (task 5e2, Layer 2's second
    slice), `command` (task 7e2, Layer 2's third slice),
    `config_set`/`config_set_member` (task 8e2, Layer 2's fourth slice),
-   `sync_dir` (task 9e2, Layer 2's fifth slice), and `file` (task ae2)
+   `sync_dir` (task 9e2, Layer 2's fifth slice), and `file` (task ae2,
+   Layer 2's sixth slice)
    instead have their own
    `plan.CronPayload`/`plan.SystemdTimerPayload`/`plan.UserPayload`/
    `plan.LinkPayload`/`plan.LinkIfExistsPayload`/`plan.PackagePayload`/

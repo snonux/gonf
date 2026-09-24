@@ -82,10 +82,10 @@ func (ensureFileHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 // Apply writes, edits, or removes the destination file, mirroring the
 // resource's own content/template/line-edit/mode/ownership handling exactly
 // (it calls the same Ensure entry point a direct, non-plan use would). The
-// file-exclusive fields come from op.Payload (plan.FilePayload, task ae2);
-// the comma-ok assertion degrades to the zero payload for an op decoded
-// from an arbitrary plan.jsonl, never panicking, the same contract every
-// other migrated kind's Apply follows (see resource/cron/planwire.go).
+// file-exclusive fields come from op.Payload (plan.FilePayload, task ae2),
+// read through plan.PayloadOf like every other migrated kind's Apply (task
+// eg2); see PayloadOf's doc comment for why a missing or mistyped payload
+// reads as the zero FilePayload instead of an error.
 func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	path, err := plan.ExpandPath(op.Path)
 	if err != nil {
@@ -94,7 +94,7 @@ func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	if path == "" {
 		return fmt.Errorf("file: missing path")
 	}
-	p, _ := op.Payload.(plan.FilePayload)
+	p := plan.PayloadOf[plan.FilePayload](op)
 	if err := validatePlanValidation(path, op, p); err != nil {
 		return err
 	}
