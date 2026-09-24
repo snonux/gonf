@@ -241,7 +241,7 @@ func TestValuesFlushPointSelfOverlappingAboveBoundStallsRatherThanLeak(t *testin
 // unsafe cut, but with nothing else added, that stall never ends for an
 // unbroken self-overlapping chain -- reintroducing, for this exact input
 // shape, the unbounded pending-buffer growth (and roughly quadratic rescan
-// cost, since matchSpans and protectedSpans rescan the whole, still-growing
+// cost, since matchSpans and protectedFormSpans rescan the whole, still-growing
 // buffer on every call that makes no progress) task mb2 fixed. This pins the
 // fix's boundary precisely: one byte short of flushStallCap the escape hatch
 // still stalls exactly as before (never guessing at an unsafe cut), but at
@@ -1196,6 +1196,149 @@ func TestValuesFlushPointForthFormFormingPrefixMidSpan(t *testing.T) {
 		}
 		if !strings.Contains(red, Redacted) {
 			t.Fatalf("completed secret was not redacted at all: %q", red)
+		}
+	}
+}
+
+// TestValuesFlushPointDriverExemptionResolvesEmbeddedFormRegression is a
+// permanent regression test for task sg2 (task 1g2 round 5's own
+// documented residual, closed by the "self-healing driver exemption" fix
+// in resolveForcedFlushCut). It is an independent reconstruction of task
+// sg2's "CONFIRMED REPRO 2 of 2" (the independent reviewer's construction),
+// built from the ask task's annotation text alone and verified against the
+// PRE-fix code before trusting it (see this task's own self-review): the
+// reconstruction produced the exact pre-fix outcome the annotation
+// reported (kMax=7, naive cut=299993, splitting a G occurrence at
+// [299991,299995)) before this fix landed, and this test now pins the
+// fixed behaviour.
+//
+// Shapes: unit ("RMNOP", 5 bytes) drives a dense, self-overlapping filler
+// chain once tracked as its own doubled form c = unit+unit (10 bytes,
+// matching at every 5-byte-aligned offset -- overlapping continuously, so
+// protectedCrossing can never find a gap anywhere in c's own coverage: the
+// "driver" this escape hatch cannot avoid splitting no matter the cut). g
+// ("MNOP", 4 bytes) is a SEPARATE tracked secret nested at a fixed phase
+// (offset 1) inside every occurrence of unit -- unlike c, g's own
+// occurrences are NOT gapless (each leaves the 1 byte at the start of the
+// next unit uncovered, e.g. the "R" between two "MNOP"s), so a safe cut
+// exists between any two of them. h is the literal last 7 bytes of a
+// 300000-byte c-periodic filler plus one distinguishing byte (a PROPER
+// prefix only, so it never itself matches anything) -- engineered so
+// longestKeepBackForForcedFlush's own byte-suffix cut (kMax=7) retreats
+// past the MOST RECENT g occurrence into the one before it, which (before
+// this fix) split it: front half "MN" swept into the blanket [redacted]
+// marker, back half "OP" left raw in the retained tail with no complete
+// "MNOP" left to recognise and redact it by.
+func TestValuesFlushPointDriverExemptionResolvesEmbeddedFormRegression(t *testing.T) {
+	t.Parallel()
+	v := &Values{}
+	unit := "RMNOP"
+	c := unit + unit // 10 bytes: gapless, self-overlapping driver
+	g := "MNOP"      // 4 bytes: nested at offset 1 of every unit
+	v.Add([]byte(c))
+	v.Add([]byte(g))
+
+	fillerLen := 300000
+	filler := strings.Repeat(unit, fillerLen/len(unit)+1)[:fillerLen]
+	last7 := filler[len(filler)-7:]
+	h := last7 + "X" // 8 bytes: proper prefix only, engineered to retreat kMax past the most recent g
+	v.Add([]byte(h))
+
+	s := filler
+	if len(s) <= flushStallCap {
+		t.Fatalf("test setup: len(s) = %d, want > flushStallCap (%d)", len(s), flushStallCap)
+	}
+
+	// Pin the exact pre-fix numbers task sg2's own independent
+	// reconstruction confirmed, so this test still catches a regression
+	// even if some unrelated future change happens to stop this exact
+	// shape from leaking for a different reason.
+	if kMax := v.longestKeepBackForForcedFlush(s); kMax != 7 {
+		t.Fatalf("test setup: longestKeepBackForForcedFlush = %d, want 7 (task sg2 annotation's own stated value)", kMax)
+	}
+	if naiveCut := len(s) - v.longestKeepBackForForcedFlush(s); naiveCut != 299993 {
+		t.Fatalf("test setup: naive kMax-derived cut = %d, want 299993 (the confirmed pre-fix leak's cut)", naiveCut)
+	}
+
+	var gSpans [][2]int
+	for from := 0; from < len(s); {
+		i := strings.Index(s[from:], g)
+		if i < 0 {
+			break
+		}
+		start := from + i
+		gSpans = append(gSpans, [2]int{start, start + len(g)})
+		from = start + 1
+	}
+
+	out, consumed := v.FlushPoint(s)
+	if out != Redacted {
+		t.Fatalf("FlushPoint = (%q, %d), want the single opaque marker %q as out", out, consumed, Redacted)
+	}
+	for _, sp := range gSpans {
+		if sp[0] < consumed && consumed < sp[1] {
+			t.Fatalf("cut=%d splits g's occurrence at [%d,%d) (task sg2 / task 1g2 round 5's residual)", consumed, sp[0], sp[1])
+		}
+	}
+
+	if consumed < len(s) {
+		tail := s[consumed:]
+		red := v.Redact(tail)
+		// Every "MN" or "OP" substring in this filler's alphabet can only
+		// ever occur as part of a g occurrence ("R","M","N","O","P" with g
+		// = "MNOP"): a complete one redacts cleanly to Redacted, so any
+		// raw "MN" or "OP" surviving Redact can only be a split fragment
+		// of one that did not.
+		for _, frag := range []string{"MN", "OP"} {
+			if strings.Contains(red, frag) {
+				t.Fatalf("retained tail %q, Redact(tail) = %q: leaked raw fragment %q of a split g occurrence", tail, red, frag)
+			}
+		}
+	}
+}
+
+// TestValuesFlushPointDriverExemptionMechanismRepro1 is a permanent
+// regression test for task sg2's "CONFIRMED REPRO 1 of 2" from the task's
+// own annotation, reconstructed independently. Unlike repro 2 above, the
+// annotation itself is explicit that this construction "happens to land
+// safely in THIS specific numeric setup" -- it illustrates the same
+// underlying mechanism (an unrelated tracked form H's own byte-suffix
+// figure retreating the forced-flush cut by more than the naive
+// longest-1 keep-back would) without actually splitting anything in this
+// particular alignment. This test's own independent reconstruction
+// confirms that same "no leak" outcome (both before and after the
+// resolveForcedFlushCut fix), and pins it so a future change cannot
+// silently start leaking on this shape either.
+func TestValuesFlushPointDriverExemptionMechanismRepro1(t *testing.T) {
+	t.Parallel()
+	v := &Values{}
+	fillerForm := "AAAA"
+	g := "db-password-42" // 14 bytes
+	gap := strings.Repeat("A", 50)
+	v.Add([]byte(fillerForm))
+	v.Add([]byte(g))
+
+	filler := strings.Repeat("A", 300000)
+	s := filler + g + gap
+	// h = the literal last 58 bytes of s, plus one extra byte, so it stays
+	// a PROPER prefix (never itself matches).
+	last58 := s[len(s)-58:]
+	h := last58 + "B"
+	v.Add([]byte(h))
+
+	if len(s) <= flushStallCap {
+		t.Fatalf("test setup: len(s) = %d, want > flushStallCap (%d)", len(s), flushStallCap)
+	}
+
+	out, consumed := v.FlushPoint(s)
+	if out != Redacted {
+		t.Fatalf("FlushPoint = (%q, %d), want the single opaque marker %q as out", out, consumed, Redacted)
+	}
+	if consumed < len(s) {
+		tail := s[consumed:]
+		red := v.Redact(tail)
+		if strings.Contains(red, "db-password-42") {
+			t.Fatalf("retained tail %q leaked the raw secret unredacted: Redact(tail) = %q", tail, red)
 		}
 	}
 }
