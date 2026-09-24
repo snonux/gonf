@@ -615,3 +615,52 @@ func TestControlOpsAreScanned(t *testing.T) {
 	}
 	requireNoSecret(t, "control-op refusal", []byte(err.Error()))
 }
+
+// unexportedPayloadProbe stands in for a plan.Op whose Payload field was
+// renamed to an unexported name in a future refactor (task xf2 finding (c)):
+// an unexported field of the sealed payload interface type next to an
+// exported string. scanStruct and redactStruct match the payload by TYPE
+// (payloadFieldType), so without the export check FIRST they would treat
+// this field as the payload and redactStruct's fv.Set would panic ("using
+// value obtained using unexported field"). Both must instead skip it like
+// any other unexported field.
+type unexportedPayloadProbe struct {
+	Name    string
+	payload plan.OpPayload
+}
+
+func TestWalkersSkipAnUnexportedPayloadTypedField(t *testing.T) {
+	newProbe := func() unexportedPayloadProbe {
+		return unexportedPayloadProbe{Name: "visible", payload: plan.CronPayload{Schedule: "hidden"}}
+	}
+	rewrite := func(seen *[]string) func(path, s string) string {
+		return func(path, s string) string {
+			*seen = append(*seen, path+"="+s)
+			return "X" + s
+		}
+	}
+
+	t.Run("redact", func(t *testing.T) {
+		probe := newProbe()
+		var seen []string
+		redactValue(reflect.ValueOf(&probe).Elem(), "", rewrite(&seen))
+		if !slices.Equal(seen, []string{"Name=visible"}) {
+			t.Fatalf("redact visited %v, want only the exported Name field", seen)
+		}
+		if probe.Name != "Xvisible" {
+			t.Fatalf("Name = %q, want the rewritten value", probe.Name)
+		}
+		if got := probe.payload.(plan.CronPayload).Schedule; got != "hidden" {
+			t.Fatalf("unexported payload was rewritten to %q, want it left alone", got)
+		}
+	})
+
+	t.Run("scan", func(t *testing.T) {
+		probe := newProbe()
+		var seen []string
+		scanValue(reflect.ValueOf(&probe).Elem(), "", rewrite(&seen))
+		if !slices.Equal(seen, []string{"Name=visible"}) {
+			t.Fatalf("scan visited %v, want only the exported Name field", seen)
+		}
+	})
+}

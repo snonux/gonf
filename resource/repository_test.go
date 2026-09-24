@@ -1,7 +1,9 @@
 package resource
 
 import (
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -66,5 +68,38 @@ func TestPushWhenContextScopedToItsOwnRepositoryInstance(t *testing.T) {
 	pop()
 	if got := getRepository().currentWhenContext(); got != "" {
 		t.Fatalf("currentWhenContext() after pop = %q, want empty again", got)
+	}
+}
+
+// TestWhenStackAccessIsLockedAgainstRegister pins task xf2 finding (b):
+// whenStack sits on the repository next to the mutex-protected maps, and
+// register() reads it while holding r.mu, so pushWhenContext and its pop
+// must take r.mu as well. Concurrent push/register/pop calls on one
+// repository are not something the DSL does (it is single-goroutine), and
+// their LIFO labelling would be meaningless, but under -race they must at
+// least not be a data race; before the fix the unlocked append/reslice
+// raced register()'s locked read of the slice.
+func TestWhenStackAccessIsLockedAgainstRegister(t *testing.T) {
+	r := newRepository()
+
+	var wg sync.WaitGroup
+	for g := range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range 100 {
+				pop := r.pushWhenContext(`WhenHostname("race")`)
+				res := Resource{Type: "File", Name: fmt.Sprintf("/tmp/race-%d-%d", g, i)}
+				if err := r.register(res); err != nil {
+					t.Errorf("register %v: %v", res, err)
+				}
+				pop()
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got := len(r.registeredIDs()); got != 800 {
+		t.Fatalf("registered %d resources, want 800", got)
 	}
 }

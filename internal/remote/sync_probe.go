@@ -46,6 +46,24 @@ const (
 // real ssh connection.
 var sshCaptureExec = defaultSSHCaptureExec
 
+// releaseVersionPattern matches a WHOLE line shaped like a release version:
+// an optional leading "v"/"V" (parseReleaseVersion's own tolerated prefix),
+// MAJOR[.MINOR[.PATCH]] digits (captured in group 1, the part
+// parseReleaseVersion actually parses), and an optional trailing build or
+// pre-release tag such as "-dev" or "+build3" (dropped: it names extra
+// metadata about the same release, not a different one, so keeping it would
+// only make an otherwise-valid version string fail to parse). The pattern is
+// anchored at BOTH ends — task uf2, since an end-anchor-free match (task
+// lf2's fix) accepted any line merely STARTING with digits, so ssh/login
+// noise such as "3 updates can be applied immediately.", "2026-09-24", or
+// "10:42:01 up 3 days" was wrongly parsed as a version ("3", "2026", "10")
+// and could fail RequireRemoteRelayed open — precisely the raw failure that
+// gate exists to prevent. A full end-anchor also rejects a fourth dotted
+// segment (e.g. "0.16.6.1") instead of silently truncating it, matching
+// parseReleaseVersion's own documented more-than-three-segments-is-an-error
+// rule.
+var releaseVersionPattern = regexp.MustCompile(`^([vV]?\d+(?:\.\d+){0,2})(?:[-+][0-9A-Za-z][0-9A-Za-z.]*)?$`)
+
 // probePlanVersion returns the remote binary's plan wire-schema version (as
 // reported by "gonf -plan-version"), or 0 with a nil error when the binary
 // is missing entirely (empty stdout — a normal, expected probe outcome that
@@ -172,24 +190,6 @@ func lastNonEmptyLine(s string) string {
 	}
 	return ""
 }
-
-// releaseVersionPattern matches a WHOLE line shaped like a release version:
-// an optional leading "v"/"V" (parseReleaseVersion's own tolerated prefix),
-// MAJOR[.MINOR[.PATCH]] digits (captured in group 1, the part
-// parseReleaseVersion actually parses), and an optional trailing build or
-// pre-release tag such as "-dev" or "+build3" (dropped: it names extra
-// metadata about the same release, not a different one, so keeping it would
-// only make an otherwise-valid version string fail to parse). The pattern is
-// anchored at BOTH ends — task uf2, since an end-anchor-free match (task
-// lf2's fix) accepted any line merely STARTING with digits, so ssh/login
-// noise such as "3 updates can be applied immediately.", "2026-09-24", or
-// "10:42:01 up 3 days" was wrongly parsed as a version ("3", "2026", "10")
-// and could fail RequireRemoteRelayed open — precisely the raw failure that
-// gate exists to prevent. A full end-anchor also rejects a fourth dotted
-// segment (e.g. "0.16.6.1") instead of silently truncating it, matching
-// parseReleaseVersion's own documented more-than-three-segments-is-an-error
-// rule.
-var releaseVersionPattern = regexp.MustCompile(`^([vV]?\d+(?:\.\d+){0,2})(?:[-+][0-9A-Za-z][0-9A-Za-z.]*)?$`)
 
 // versionPrefix returns line's release-version-shaped numeric part (group 1
 // of releaseVersionPattern, with any build/pre-release tag stripped), or ""

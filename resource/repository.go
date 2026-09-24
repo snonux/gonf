@@ -231,21 +231,34 @@ func PushWhenContext(desc string) (pop func()) {
 }
 
 // pushWhenContext is PushWhenContext's implementation, scoped to this one
-// repository instance. Registration is single-goroutine by the same DSL
-// invariant the rest of this file relies on (see the package doc comment
-// above), so no lock guards whenStack: the returned pop closes over r and
-// the pushed index directly, so it stays correct even if getRepository()
-// later hands out a different instance.
+// repository instance. whenStack sits beside the mutex-protected maps and
+// register() reads it (currentWhenContext) while holding r.mu, so the push
+// and the returned pop take r.mu too: every access to the repository's
+// fields then follows one rule, instead of a comment-only single-goroutine
+// exemption for this one slice (task xf2). The DSL is still
+// single-goroutine (see the package doc comment above), so the lock never
+// contends; it only keeps a future concurrent caller from turning the
+// field's placement into a -race failure. The returned pop closes over r
+// and the pushed index directly, so it stays correct even if
+// getRepository() later hands out a different instance.
 func (r *repository) pushWhenContext(desc string) (pop func()) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	r.whenStack = append(r.whenStack, desc)
 	i := len(r.whenStack) - 1
-	return func() { r.whenStack = r.whenStack[:i] }
+	return func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		r.whenStack = r.whenStack[:i]
+	}
 }
 
 // currentWhenContext returns the innermost active When*/WhenPathExists
 // condition on this repository, or "" when nothing is running inside one (a
 // plain top-level registration, or the recording path, which never
-// pushes).
+// pushes). The caller must hold r.mu: register() already does, and locking
+// here as well would self-deadlock.
 func (r *repository) currentWhenContext() string {
 	if len(r.whenStack) == 0 {
 		return ""

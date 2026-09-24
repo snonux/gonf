@@ -83,6 +83,36 @@ var opFieldClasses = map[string]fieldClass{
 	"template_data{}": classTemplateData, "template_data{key}": classPayload,
 }
 
+// rawMessageType is the reflected type of json.RawMessage (template_data),
+// which the walkers decode instead of treating as a plain byte slice.
+var rawMessageType = reflect.TypeOf(json.RawMessage(nil))
+
+// payloadFieldType is the reflected interface type of plan.Op's Payload
+// field: plan.OpPayload itself. scanStruct and redactStruct key their
+// Payload special-casing on a field's TYPE matching this, instead of on its
+// Go field name matching the string "Payload" — a real contract instead of
+// a name match, because plan.OpPayload is a sealed interface (its one
+// method, applyToWire, is unexported, so only a type plan itself declares
+// can implement it; see OpPayload's doc comment in plan/op_payload.go). A
+// field of this exact type can therefore only ever be Op's own Payload
+// field, whatever it happens to be named in a future refactor — unlike the
+// old f.Name == "Payload" check, which silently stopped matching (and so
+// silently stopped walking into the payload at all) the moment that field
+// was renamed, with nothing to catch the drift. This was task 6f2 finding
+// (a); it does not depend on or conflict with task rf2's separate
+// plan.PayloadOf[T] generic accessor (aimed at the many per-kind
+// `p, _ := op.Payload.(plan.XPayload)` call sites, not at this reflective
+// walker, which does not know any single concrete T up front since it
+// walks every kind's op the same way).
+//
+// The type match is only ever combined with an f.IsExported() check, and
+// the export check comes FIRST in scanStruct and redactStruct: reflect
+// refuses Set on a value obtained through an unexported field, so a future
+// rename of Op.Payload to an unexported name would otherwise let
+// redactStruct's fv.Set(concrete) panic instead of the field being skipped
+// like every other unexported field (task xf2).
+var payloadFieldType = reflect.TypeOf((*plan.OpPayload)(nil)).Elem()
+
 // classOf returns the class of path, identity for an unclassified one.
 func classOf(path string) fieldClass {
 	if c, ok := opFieldClasses[path]; ok {
@@ -115,27 +145,6 @@ func copyOp(op plan.Op) (plan.Op, error) {
 	}
 	return plan.DecodeOp(line)
 }
-
-var rawMessageType = reflect.TypeOf(json.RawMessage(nil))
-
-// payloadFieldType is the reflected interface type of plan.Op's Payload
-// field: plan.OpPayload itself. scanStruct and redactStruct key their
-// Payload special-casing on a field's TYPE matching this, instead of on its
-// Go field name matching the string "Payload" — a real contract instead of
-// a name match, because plan.OpPayload is a sealed interface (its one
-// method, applyToWire, is unexported, so only a type plan itself declares
-// can implement it; see OpPayload's doc comment in plan/op_payload.go). A
-// field of this exact type can therefore only ever be Op's own Payload
-// field, whatever it happens to be named in a future refactor — unlike the
-// old f.Name == "Payload" check, which silently stopped matching (and so
-// silently stopped walking into the payload at all) the moment that field
-// was renamed, with nothing to catch the drift. This was task 6f2 finding
-// (a); it does not depend on or conflict with task rf2's separate
-// plan.PayloadOf[T] generic accessor (aimed at the many per-kind
-// `p, _ := op.Payload.(plan.XPayload)` call sites, not at this reflective
-// walker, which does not know any single concrete T up front since it
-// walks every kind's op the same way).
-var payloadFieldType = reflect.TypeOf((*plan.OpPayload)(nil)).Elem()
 
 // isStringMap reports whether t is a map from a string kind to a string
 // kind (map[string]string).
@@ -239,7 +248,7 @@ func scanStruct(v reflect.Value, path string, fn func(path, s string) string) {
 	t := v.Type()
 	for i := range t.NumField() {
 		f := t.Field(i)
-		if f.Type == payloadFieldType {
+		if f.IsExported() && f.Type == payloadFieldType {
 			fv := v.Field(i)
 			if fv.IsNil() {
 				continue
@@ -374,7 +383,7 @@ func redactStruct(v reflect.Value, path string, fn func(path, s string) string) 
 	t := v.Type()
 	for i := range t.NumField() {
 		f := t.Field(i)
-		if f.Type == payloadFieldType {
+		if f.IsExported() && f.Type == payloadFieldType {
 			fv := v.Field(i)
 			if fv.IsNil() {
 				continue
