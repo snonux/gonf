@@ -54,6 +54,9 @@ compute any content Perl closures could (see
 
 ## Conf Rexfile inventory
 
+The Rexfiles below were all removed in conf task v42 (2026-09-24); the
+table records what they covered.
+
 | Path | Tasks | Role |
 |------|-------|------|
 | `Rexfile` | 0 | Aggregator: `require for <'*/Rexfile'>` + explicit `f3s/*` requires |
@@ -329,14 +332,20 @@ conf-consumer work tagged to a gonf release; each port flips task ownership from
 Rex to gonf (comment out the Rex task or delete it once the live deploy
 converges).
 
-Retirement status (2026-09-22): the mapping has no operational Rex task left
-without a Gonf owner or an explicit exclusion, but the Rexfiles are not
-retired. `conf/Rexfile`, `frontends/Rexfile`, `f3s/r-nodes/Rexfile` and
-`playground/Rexfile` stay until authorized live rollout, a second
-idempotent apply and failover checks have passed (conf task v42); the
-frontends Rexfile is marked legacy and must not be run. dotfiles'
-`pkg_fedora` still installs the `Rex` package for them. Removing the Rexfiles
-and the Perl `.tpl` templates no Gonf recipe reads is the last step.
+Retirement status (2026-09-24): **done**. Once gonf task y42 had verified
+every conf host natively (first and second apply convergence, service
+health, failover), conf task v42 removed `conf/Rexfile`,
+`frontends/Rexfile`, `f3s/r-nodes/Rexfile` and `playground/Rexfile` together
+with the Perl `.tpl` templates that gonf had ported (conf e4c8334, 13e3026).
+Follow-up conf task 4h2 (conf ffc8e87) removed the last Rex mentions from
+host-deployed files (the nfs-mount-monitor units, the OpenBSD
+`unattended-upgrade` wrapper) and applied them live with a converged second
+apply. It also deleted `frontends/etc/hosts.wg.append`, which only Rex read.
+The tables below keep the Rex task names as a record of the migration.
+Kept on purpose: the `.tpl` files gonf still reads, the DTail package-build
+inputs (see Exclusions), the disabled Gorum templates, the `rex` SSH account
+and the Rex-era secret copies. dotfiles' `pkg_fedora` still installs the
+`Rex` package.
 
 ## Rex task mapping
 
@@ -358,7 +367,7 @@ so the plan has no login-owned `/tmp` secret staging step.
 | `commons` (run_task aggregator) | `AggregateTasks("frontends", …, frontendSetupTasks()...)` | **Done** (consumer; task n52, conf c5ed357). The explicit list is still a superset of Rex `commons`' 18-task subset; `frontends_acme_invoke`, `frontends_irc_bouncer` and (owner decision 2026-09-22, conf 747d90b) the `frontends_ping` diagnostic are `Operational()` and listed as exclusions, and a registration-time check panics when a `frontends_*` task is in neither list, so a new task cannot silently fall out of setup runs |
 | `id`, `dump_info` | — | **Excluded** (interactive diagnostics; `Command("id", nil)` ad hoc) |
 | `base` (6× pkg present; `pkg_scripts="…"` append to `/etc/rc.conf.local` (znc added on the ircbouncer host); `touch /etc/rc.local`; `/etc/myname` from closure template; `tmux-edit-send` source file) | `frontends_base`: `Package` ×6, `/etc/rc.local` (0644 root:wheel), and the `pkg_scripts` line exactly as `rcctl` writes it (task i82); `frontends_myname`: `/etc/myname` from inventory via `ForHosts` | **Consumer** — tasks 44b2ee4, o52, i82. `tmux-edit-send` is **retired**, not ported: its source was removed in conf e4638ec, neither frontend has `/usr/local/bin/tmux-edit-send`, and the dangling Rex file block was dropped (task 462) |
-| `hosts_wg` (append `etc/hosts.wg.append` lines, skip comments/blanks) | `frontends_wire_guard_hosts`: `File("/etc/hosts", WithLines(...))` from shared inventory | **Consumer** — task 44b2ee4; local plan verified, live rollout remains explicit |
+| `hosts_wg` (append `etc/hosts.wg.append` lines, skip comments/blanks) | `frontends_wire_guard_hosts`: `File("/etc/hosts", WithLines(...))` from shared inventory | **Consumer** — task 44b2ee4. Only Rex read the static `etc/hosts.wg.append`, so conf task 4h2 deleted it |
 | `uptimed` | `frontends_uptimed`: `Package("uptimed")` + `Service("uptimed")` | **Consumer** — task 44b2ee4; local plan verified, live rollout remains explicit |
 | `goprecords_upload` (token from secrets → `/etc/goprecords-upload.token` 0600; script; `daily.local` append; old script absent; old daily.local line stripped) | `frontends_goprecords`: `Package("curl")` + optional controller secret + `File` + `InstallFile` + `File(WithLine)` + `WithoutLine` + `NoFile` | **Consumer** — task 44b2ee4; local plan verified, live rollout remains explicit |
 | `rsync` (pkg; rsyncd.conf + rsync.sh templates; root crontab rebuilt via temp files + run) | `frontends_rsync`: `Package("rsync")` + 2× Go-computed template content + `Cron("frontend-rsync", WithCommand("-ns /usr/local/bin/rsync.sh"), WithLegacyCommand("-ns /usr/local/bin/rsync.sh"), WithMinute("*/5"))` | **Consumer** — task g52; the legacy root crontab line is adopted by exact command match (user defaults to root; OpenBSD `-ns` flags ride in the verbatim command field). Live rollout remains an explicit operator action |
@@ -407,8 +416,16 @@ so the plan has no login-owned `/tmp` secret staging step.
 - `conf/rcm` — unrelated to Rex.
 - `id` / `dump_info` diagnostics tasks.
 - `playground/Rexfile` — experiment; superseded by the consumer canary.
-- Unused NetBSD/FreeBSD dserver + nsd slave templates in `frontends/etc`
-  (`dserver-netbsd.tpl`, `dserver-freebsd.tpl`, `nsd.conf.slave.tpl`, …).
+- The DTail `.tpl` files are package-build inputs, not unused Rex
+  templates: conf `packages/Makefile` copies
+  `frontends/etc/rc.d/dserver{,-freebsd,-netbsd}.tpl`,
+  `frontends/etc/dserver/dtail{,-freebsd,-netbsd}.json.tpl` and
+  `frontends/scripts/dserver-update-key-cache{,-freebsd,-netbsd}.sh.tpl`
+  into the DTail packages, so a change reaches hosts only with the next
+  package build. No gonf task deploys them. On the OpenBSD frontends,
+  `frontends_d_tail` separately manages `/etc/dserver/dtail.json` from its
+  own asset. The NSD slave template was ported to `frontends_nsd` and
+  removed during the retirement (conf task v42).
 - Dead code: the FreeBSD branch of `gogios_install` (frontends group is
   OpenBSD-only) — collapse at port time.
 - Interactive sudo/doas passwords — out of scope for gonf; conf hosts use
