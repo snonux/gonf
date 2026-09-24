@@ -306,23 +306,42 @@ itself the accidental public test seam this section forbids. Task 3f2
 unexported it (`internal/testapply.ApplyWithRunners` already covered every
 caller outside `api`) rather than adding it to the allowed-seam list above.
 
-Only `resource/cmd` (the `command` plan kind) has migrated to this mechanism
-so far. The other six kinds — `cron`, `package`, `service`, `timer`,
-`systemdtimer`, `daemon_reload` — remain on the older `internal/testseam`
-mechanism below, under open task `4e2`: a known, in-progress migration, not
-an inconsistency to fix ad-hoc. `internal/runners.Set` gains one field per
-kind as it migrates (see that type's own doc comment).
+`resource/cmd` (the `command` plan kind, task qb2) and, as of task 4e2, the
+four kinds that funnel through `resource/systemd`'s shared systemctl client —
+`service`, `timer`, `daemon_reload` and `systemd_timer` — have migrated to
+this mechanism. `cron` and `package` remain on the older `internal/testseam`
+mechanism below, under open follow-up task(s): a known, in-progress
+migration, not an inconsistency to fix ad-hoc. `internal/runners.Set` gains
+one field per kind (or, for the systemd-4 slice, one shared field) as it
+migrates (see that type's own doc comment).
+
+The systemd-4 slice shares ONE injection point instead of four: every
+systemctl call in the module (`resource/systemd`'s `IsActive`, `IsEnabled`,
+`Run` and `Command`) funnels through a `resource/systemd.Client` value (its
+zero value: the real `internal/exec` runner), built with `NewClient(sr)`
+from a `*runners.SystemdRunners` (`internal/runners.Set.Systemd`). Service's
+systemd backend, Timer and DaemonReload each hold or build a `Client` from
+their own `newXWith`/`newReloadWith` constructor; DaemonReload and Timer
+additionally export `EnsureWith(sr *runners.SystemdRunners, ...)` (unlike
+`resource/cmd`'s unexported `ensureWith`) because, like `resource/dir`'s
+composed `file.EnsureWithPlanFacts`, another resource package composes them
+— `resource/systemdtimer` threads its own injected `*runners.SystemdRunners`
+into both, and into its own exported `EnsureWith`. `resource/service` also
+carries a second, service-specific override, `*runners.ServiceRunners`
+(`Run` for the BSD backends' command runner, `Manager` for
+`detectServiceManager`), consulted by `Service.run()`/`detectManager()`
+instead of a process-global fake; its own `EnsureWith` takes both.
 
 A backend's host-command runner or host detector, for a kind not yet
-migrated to `internal/runners`, is an unexported function that consults the
-module-internal `internal/testseam` fake first and otherwise calls the real
-`internal/exec` runner or detector (e.g. `resource/systemd`'s `runCmd`).
-Tests anywhere in the module install fakes with `testseam.Fake*(t, ...)`;
-each fake is one layer removed by `t`'s cleanup. In-package tests may instead
-hand a backend its runner directly (as `applyWith` in pkg and service, or
-`newUserWith` in resource/user). Log capture is `internal/testutil.
-CaptureLog`. A newly migrated kind follows the `internal/runners` pattern
-above instead of adding another `testseam` fake.
+migrated to `internal/runners` (`cron`, `package`), is an unexported
+function that consults the module-internal `internal/testseam` fake first
+and otherwise calls the real `internal/exec` runner or detector. Tests
+anywhere in the module install fakes with `testseam.Fake*(t, ...)`; each
+fake is one layer removed by `t`'s cleanup. In-package tests may instead
+hand a backend its runner directly (as `applyWith` in pkg, or `newUserWith`
+in resource/user). Log capture is `internal/testutil.CaptureLog`. A newly
+migrated kind follows the `internal/runners` pattern above instead of adding
+another `testseam` fake.
 
 The fakes and the log capture are process-global, so a test using them must
 not run in parallel. They enforce it: each calls `t.Setenv`

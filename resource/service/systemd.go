@@ -6,13 +6,15 @@ import (
 	"github.com/snonux/gonf/resource/systemd"
 )
 
-// systemdBackend converges services via systemctl, through the shared
-// mechanics in resource/systemd (whose runner testseam.FakeServiceRunner also
-// fakes).
-// Unlike Timer, Service performs no unit-name validation here — the name is
-// passed to systemctl as given. That drift is deliberate for now: validation
-// stays with the callers that had it.
-type systemdBackend struct{}
+// systemdBackend converges services via systemctl, through client, the
+// systemd runner override selectBackend wired it with (task 4e2: the zero
+// Client reaches the real runner). Unlike Timer, Service performs no
+// unit-name validation here — the name is passed to systemctl as given.
+// That drift is deliberate for now: validation stays with the callers that
+// had it.
+type systemdBackend struct {
+	client systemd.Client
+}
 
 var _ backend = systemdBackend{}
 
@@ -25,17 +27,20 @@ var errUserNeedsSystemd = errors.New("WithUser is only supported on systemd")
 // userSupport returns nil: systemd has a per-user instance.
 func (systemdBackend) userSupport() error { return nil }
 
-func (systemdBackend) running(u unit) (bool, error) { return systemd.IsActive(u.name, u.user) }
+func (b systemdBackend) running(u unit) (bool, error) { return b.client.IsActive(u.name, u.user) }
 
-func (systemdBackend) enabled(u unit) (bool, error) { return systemd.IsEnabled(u.name, u.user) }
+func (b systemdBackend) enabled(u unit) (bool, error) { return b.client.IsEnabled(u.name, u.user) }
 
-func (systemdBackend) do(u unit, v verb) error { return command(u, v).Do() }
+func (b systemdBackend) do(u unit, v verb) error { return b.command(u, v).Do() }
 
-func (systemdBackend) describe(u unit, v verb) (would, did string) { return command(u, v).Describe() }
+func (b systemdBackend) describe(u unit, v verb) (would, did string) {
+	return b.command(u, v).Describe()
+}
 
 // command returns the systemctl invocation performing v on u (with --user
-// for a per-user unit). Timer builds its actions from the same
-// systemd.Command, so both render and run systemctl identically.
-func command(u unit, v verb) systemd.Command {
-	return systemd.Command(systemd.Args(u.user, string(v), u.name))
+// for a per-user unit), through b's client. Timer builds its actions from
+// the same systemd.Client.Command, so both render and run systemctl
+// identically.
+func (b systemdBackend) command(u unit, v verb) systemd.Command {
+	return b.client.Command(systemd.Args(u.user, string(v), u.name))
 }

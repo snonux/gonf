@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/snonux/gonf/resource"
+	"github.com/snonux/gonf/resource/systemd"
 )
 
 // The lifecycle verbs the convergence policy can ask for (see verb).
@@ -19,20 +20,19 @@ const (
 
 var _ resource.Action = backendAction{}
 
-// backends maps each detector name to a constructor for its backend. This
-// table is the single place a manager name becomes an implementation:
-// supporting another service manager is one new backend file plus one entry
-// here, with no change to the policy. The BSD constructors hand the backend
-// runCmd, which resolves a test fake (internal/testseam.FakeServiceRunner)
-// per call; in-package tests may build backends with their own runner
-// instead. The name indirection stays because detection, and the
-// internal/testseam.FakeServiceManager fake the resource fitness tests use,
-// speak in names.
-var backends = map[string]func() backend{
-	"systemd": func() backend { return systemdBackend{} },
-	"rcctl":   func() backend { return rcctlBackend{run: runCmd} },
-	"freebsd": func() backend { return freebsdBackend{run: runCmd} },
-	"netbsd":  func() backend { return netbsdBackend{run: runCmd, rcConfD: netbsdRcConfD} },
+// backends maps each detector name to a constructor for its backend, given
+// the run and systemd client a Service resolved (Service.run,
+// Service.sysClient): the real ones, or the ones injected through
+// newServiceWith for one apply (task 4e2). This table is the single place a
+// manager name becomes an implementation: supporting another service
+// manager is one new backend file plus one entry here, with no change to
+// the policy. In-package tests may build backends directly with their own
+// runner instead.
+var backends = map[string]func(run runner, sc systemd.Client) backend{
+	"systemd": func(_ runner, sc systemd.Client) backend { return systemdBackend{client: sc} },
+	"rcctl":   func(run runner, _ systemd.Client) backend { return rcctlBackend{run: run} },
+	"freebsd": func(run runner, _ systemd.Client) backend { return freebsdBackend{run: run} },
+	"netbsd":  func(run runner, _ systemd.Client) backend { return netbsdBackend{run: run, rcConfD: netbsdRcConfD} },
 }
 
 // unit identifies the service a backend acts on: its name and whether it
@@ -86,11 +86,12 @@ func (a backendAction) Do() error { return a.b.do(a.u, a.v) }
 // Describe returns the backend's log text for the verb.
 func (a backendAction) Describe() (would, did string) { return a.b.describe(a.u, a.v) }
 
-// selectBackend detects the host's service manager and returns its backend.
+// selectBackend detects the host's service manager and returns its backend,
+// wired with s's injected runner and systemd client (nil: the real ones).
 // Detection runs per apply (a GOOS switch plus, on Linux, one stat), which
-// keeps the detector and runner test seams effective for every apply.
-func selectBackend() (backend, error) {
-	name, err := detectSvcManager()
+// keeps s's injected detector and runner effective for every apply.
+func (s *Service) selectBackend() (backend, error) {
+	name, err := s.detectManager()
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +99,7 @@ func selectBackend() (backend, error) {
 	if !ok {
 		return nil, errors.New("unsupported service manager")
 	}
-	return newBackend(), nil
+	return newBackend(s.run(), s.sysClient), nil
 }
 
 // probeExitZero runs a probe whose exit status answers the question: 0 means

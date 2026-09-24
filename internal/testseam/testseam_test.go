@@ -50,6 +50,15 @@ func stdout(run Run) string {
 	return out
 }
 
+// detectName calls d and returns its name, or "real" for a nil detector.
+func detectName(d Detect) string {
+	if d == nil {
+		return "real"
+	}
+	name, _ := d()
+	return name
+}
+
 // TestFakeMergesAndRestoresInOrder pins the slot contract every Fake* call
 // relies on: a nil field keeps the runner in effect, each call sets the
 // parallel guard, and cleanups unwind nested fakes back to the previous
@@ -84,15 +93,15 @@ func TestFakeMergesAndRestoresInOrder(t *testing.T) {
 // newer fake nor lets it survive its own cleanup.
 func TestCleanupOutOfOrderRemovesOnlyItsLayer(t *testing.T) {
 	var first, second fakeCleaner
-	FakeSystemctl(&first, named("first"))
-	FakeSystemctl(&second, named("second"))
+	FakePackageManager(&first, func() (string, error) { return "first", nil })
+	FakePackageManager(&second, func() (string, error) { return "second", nil })
 	first.run()
-	if got := stdout(Systemctl()); got != "second" {
+	if got := detectName(PackageManager()); got != "second" {
 		t.Fatalf("after the older cleanup: %q, want the newer fake kept", got)
 	}
 	second.run()
-	if got := stdout(Systemctl()); got != "real" {
-		t.Fatalf("after both cleanups: %q, want the real runner", got)
+	if got := detectName(PackageManager()); got != "real" {
+		t.Fatalf("after both cleanups: %q, want the real detector", got)
 	}
 }
 
@@ -105,12 +114,7 @@ func TestSingleSlotFakes(t *testing.T) {
 		install func(Cleaner)
 		active  func() bool
 	}{
-		{"systemctl", func(c Cleaner) { FakeSystemctl(c, named("ctl")) }, func() bool { return stdout(Systemctl()) == "ctl" }},
-		{"service runner", func(c Cleaner) { FakeServiceRunner(c, named("svc")) }, func() bool {
-			return stdout(ServiceRunner()) == "svc" && stdout(Systemctl()) == "svc"
-		}},
 		{"package manager", func(c Cleaner) { FakePackageManager(c, detect) }, func() bool { return PackageManager() != nil }},
-		{"service manager", func(c Cleaner) { FakeServiceManager(c, detect) }, func() bool { return ServiceManager() != nil }},
 		{"package runner", func(c Cleaner) { FakePackageRunner(c, Package{Run: named("pkg")}) }, func() bool {
 			return stdout(PackageFakes().Run) == "pkg" && PackageFakes().RunEnv == nil
 		}},
@@ -179,5 +183,5 @@ func TestParallelFakeHelper(t *testing.T) {
 		t.Skip("helper for TestFakeRefusesParallelTest")
 	}
 	t.Parallel()
-	FakeSystemctl(t, named("parallel"))
+	FakePackageManager(t, func() (string, error) { return "parallel", nil })
 }

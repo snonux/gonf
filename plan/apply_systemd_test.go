@@ -9,10 +9,11 @@ package plan_test
 // apply_pkg_test.go.
 
 import (
+	"context"
 	"runtime"
 	"testing"
 
-	"github.com/snonux/gonf/internal/testseam"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/plan"
 )
 
@@ -25,18 +26,19 @@ func TestApplyTimerRestartLowering(t *testing.T) {
 	}
 
 	var invoked [][]string
-	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
+	sr := &runners.SystemdRunners{Run: func(name string, args ...string) (string, string, int, error) {
 		if name == "systemctl" {
 			invoked = append(invoked, args)
 		}
 		return "", "", 0, nil
-	})
+	}}
 
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "timers"},
 		{Op: plan.KindTimer, Name: "zzfit.timer", User: true, Restart: true},
 	}
-	if err := plan.Apply(ops, plan.Facts{GOOS: "linux"}, ""); err != nil {
+	ctx := runners.WithSet(context.Background(), &runners.Set{Systemd: sr})
+	if err := plan.ApplyWithContext(ctx, ops, plan.Facts{GOOS: "linux"}, ""); err != nil {
 		t.Fatalf("plan.Apply: %v", err)
 	}
 

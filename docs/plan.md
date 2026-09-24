@@ -468,10 +468,12 @@ fake: a `*Set` travels scoped to one apply only (`internal/runners.WithSet`
 puts it on the `context.Context` passed to `ApplyWithContext`/`ApplyPlan`),
 and its type lives under `internal/`, so an external recipe module can only
 ever observe the nil zero value — "use the real runner" — never construct or
-inject one of its own. Only `resource/cmd` (the `command` kind) has migrated
-onto this seam so far; the other kinds still consult the older
-process-global `internal/testseam` fakes (open task `4e2`). The full
-contract — which module-internal hooks exist to reach this from a test,
+inject one of its own. `resource/cmd` (the `command` kind, task qb2) and,
+since task 4e2, `service`, `timer`, `daemon_reload` and `systemd_timer` (the
+four kinds sharing `resource/systemd`'s systemctl `Client`) have migrated
+onto this seam; `cron` and `package` still consult the older process-global
+`internal/testseam` fakes (open follow-up task(s)). The full contract —
+which module-internal hooks exist to reach this from a test,
 `newXWith`/`ensureWith` per-kind constructors, and the exact relationship to
 `internal/testseam` — is documented in `AGENTS.md`, "Test seams", which this
 note defers to rather than duplicating.

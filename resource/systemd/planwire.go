@@ -3,6 +3,7 @@ package systemd
 import (
 	"slices"
 
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 	opt "github.com/snonux/gonf/resource/options"
@@ -37,8 +38,10 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 // gated kind shares: a gated op with no watch ids is an error (it could
 // never reload), and an ungated op's recorded watch ids are ignored. The
 // recorded watch list already includes the DependsOn fallback, so the
-// rebuilt reload needs no deps.
-func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
+// rebuilt reload needs no deps. ctx.Runners.Systemd, when this apply had
+// one injected (task 4e2; nil in every real apply), replaces the real
+// internal/exec runner.
+func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	var opts []opt.DaemonReloadOption
 	if op.User {
 		opts = append(opts, opt.WithUser)
@@ -50,5 +53,5 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if gate != nil {
 		opts = append(opts, gate)
 	}
-	return Ensure(opts...)
+	return EnsureWith(runners.SystemdOf(ctx.Runners), opts...)
 }

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -8,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
-	"github.com/snonux/gonf/internal/testseam"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/systemd"
@@ -118,9 +119,10 @@ func dryRunChunks(t *testing.T, chunks []plan.Chunk) {
 	t.Helper()
 	resource.SetDryRun(true)
 	t.Cleanup(func() { resource.SetDryRun(false) })
-	testseam.FakeSystemctl(t, func(string, ...string) (string, string, int, error) { return "", "", 0, nil })
+	sysR := &runners.SystemdRunners{Run: func(string, ...string) (string, string, int, error) { return "", "", 0, nil }}
+	ctx := runners.WithSet(context.Background(), &runners.Set{Systemd: sysR})
 	for i, ch := range chunks {
-		if err := plan.Apply(ch.Ops, plan.Facts{GOOS: runtime.GOOS}, ""); err != nil {
+		if err := plan.ApplyWithContext(ctx, ch.Ops, plan.Facts{GOOS: runtime.GOOS}, ""); err != nil {
 			t.Fatalf("dry-run apply of chunk %d: %v", i, err)
 		}
 	}

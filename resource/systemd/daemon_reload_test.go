@@ -5,22 +5,29 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/internal/testapply"
-	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
+
+// systemdSet builds a *runners.Set injecting fake as the systemctl runner
+// for one testapply.ApplyWithRunners call, replacing the process-global
+// internal/testseam.FakeSystemctl fake these tests used before task 4e2.
+func systemdSet(fake RunFunc) *runners.Set {
+	return &runners.Set{Systemd: &runners.SystemdRunners{Run: fake}}
+}
 
 func TestDaemonReloadRunsSystemctl(t *testing.T) {
 	resource.ResetRepository()
 
 	var saw []string
-	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
+	rs := systemdSet(func(name string, args ...string) (string, string, int, error) {
 		saw = append(saw, name+" "+strings.Join(args, " "))
 		return "", "", 0, nil
 	})
 
 	Present()
-	if err := testapply.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatal(err)
 	}
 	if len(saw) != 1 || saw[0] != "systemctl daemon-reload" {
@@ -32,13 +39,13 @@ func TestDaemonReloadWithUser(t *testing.T) {
 	resource.ResetRepository()
 
 	var saw string
-	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
+	rs := systemdSet(func(name string, args ...string) (string, string, int, error) {
 		saw = name + " " + strings.Join(args, " ")
 		return "", "", 0, nil
 	})
 
 	Present(opt.WithUser)
-	if err := testapply.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatal(err)
 	}
 	if saw != "systemctl --user daemon-reload" {
@@ -50,14 +57,14 @@ func TestDaemonReloadIfChangedSkips(t *testing.T) {
 	resource.ResetRepository()
 
 	called := false
-	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
+	rs := systemdSet(func(name string, args ...string) (string, string, int, error) {
 		called = true
 		return "", "", 0, nil
 	})
 
 	noop := testapply.Register("File", "/tmp/stable", testapply.Noting(resource.StatusOK, "File[/tmp/stable]"))
 	Present(opt.DependsOn(noop), opt.IfChanged)
-	if err := testapply.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatal(err)
 	}
 	if called {
@@ -69,14 +76,14 @@ func TestDaemonReloadIfChangedRuns(t *testing.T) {
 	resource.ResetRepository()
 
 	called := false
-	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
+	rs := systemdSet(func(name string, args ...string) (string, string, int, error) {
 		called = true
 		return "", "", 0, nil
 	})
 
 	changed := testapply.Register("File", "/tmp/unit", testapply.Noting(resource.StatusChanged, "File[/tmp/unit]"))
 	Present(opt.DependsOn(changed), opt.IfChanged)
-	if err := testapply.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatal(err)
 	}
 	if !called {
@@ -106,14 +113,14 @@ func TestDaemonReloadOnChangeAndWithWatchMergeRegardlessOfOptionOrder(t *testing
 			resource.ResetRepository()
 
 			called := false
-			testseam.FakeSystemctl(t, func(string, ...string) (string, string, int, error) {
+			rs := systemdSet(func(string, ...string) (string, string, int, error) {
 				called = true
 				return "", "", 0, nil
 			})
 			changed := testapply.Register("File", "changed", testapply.Noting(resource.StatusChanged, "File[changed]"))
 			unchanged := testapply.Register("File", "unchanged", testapply.Noting(resource.StatusOK, "File[unchanged]"))
 			Present(tc.opts(changed, unchanged)...)
-			if err := testapply.Apply(); err != nil {
+			if err := testapply.ApplyWithRunners(rs); err != nil {
 				t.Fatalf("Apply: %v", err)
 			}
 			if !called {
@@ -127,7 +134,7 @@ func TestDaemonReloadIfChangedSeesDirectoryChildFile(t *testing.T) {
 	resource.ResetRepository()
 
 	called := false
-	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
+	rs := systemdSet(func(name string, args ...string) (string, string, int, error) {
 		called = true
 		return "", "", 0, nil
 	})
@@ -139,7 +146,7 @@ func TestDaemonReloadIfChangedSeesDirectoryChildFile(t *testing.T) {
 		return nil
 	})
 	Present(opt.DependsOn(units), opt.IfChanged)
-	if err := testapply.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatal(err)
 	}
 	if !called {
@@ -152,12 +159,12 @@ func TestDaemonReloadDryRun(t *testing.T) {
 	resource.SetDryRun(true)
 	t.Cleanup(func() { resource.SetDryRun(false) })
 
-	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
+	rs := systemdSet(func(name string, args ...string) (string, string, int, error) {
 		t.Fatal("dry-run must not call systemctl")
 		return "", "", 0, nil
 	})
 	Present()
-	if err := testapply.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatal(err)
 	}
 }

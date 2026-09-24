@@ -1,6 +1,7 @@
 package plan_test
 
 import (
+	"context"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
@@ -205,9 +207,11 @@ func TestE2ECronAndServicePlanApply(t *testing.T) {
 		},
 	})
 
-	// Fake systemctl: service already running + enabled; record mutation calls.
+	// Fake systemctl (the systemd backend Service selects on this GOOS==
+	// linux-only test, task 4e2's runners.Set injection): service already
+	// running + enabled; record mutation calls.
 	var ctlCalls [][]string
-	testseam.FakeServiceRunner(t, func(name string, args ...string) (string, string, int, error) {
+	sysR := &runners.SystemdRunners{Run: func(name string, args ...string) (string, string, int, error) {
 		if name != "systemctl" {
 			return "", "unexpected bin " + name, 1, nil
 		}
@@ -216,7 +220,7 @@ func TestE2ECronAndServicePlanApply(t *testing.T) {
 			return "", "", 0, nil
 		}
 		return "", "", 0, nil
-	})
+	}}
 
 	api.Task("cron_svc", "cron and service e2e", func() {
 		api.Cron("zzjob",
@@ -254,7 +258,8 @@ func TestE2ECronAndServicePlanApply(t *testing.T) {
 	}
 
 	facts := plan.Facts{GOOS: runtime.GOOS, Profile: "test", Hostname: "localhost"}
-	if err := plan.Apply(decoded, facts, planDir); err != nil {
+	ctx := runners.WithSet(context.Background(), &runners.Set{Systemd: sysR})
+	if err := plan.ApplyWithContext(ctx, decoded, facts, planDir); err != nil {
 		t.Fatalf("plan.Apply: %v", err)
 	}
 

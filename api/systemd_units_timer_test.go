@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -9,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
-	"github.com/snonux/gonf/internal/testseam"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource/systemd"
 )
@@ -71,7 +72,7 @@ func (f *timerJoinFixture) apply(t *testing.T, body func()) []plan.Op {
 	}
 	ops := systemdUnitsFixture(t, body)
 	f.invoked = nil
-	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
+	sysR := &runners.SystemdRunners{Run: func(name string, args ...string) (string, string, int, error) {
 		if name != "systemctl" {
 			return "", "", 0, nil
 		}
@@ -82,8 +83,9 @@ func (f *timerJoinFixture) apply(t *testing.T, body func()) []plan.Op {
 			}
 		}
 		return "", "", 0, nil
-	})
-	if err := plan.Apply(ops, plan.Facts{GOOS: runtime.GOOS}, ""); err != nil {
+	}}
+	ctx := runners.WithSet(context.Background(), &runners.Set{Systemd: sysR})
+	if err := plan.ApplyWithContext(ctx, ops, plan.Facts{GOOS: runtime.GOOS}, ""); err != nil {
 		t.Fatalf("plan.Apply: %v", err)
 	}
 	return ops
@@ -272,14 +274,15 @@ func TestSystemdTimerOwnDropInReloadsBeforeRestart(t *testing.T) {
 			apply := func() {
 				ops := systemdUnitsFixture(t, body)
 				invoked = nil
-				testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
+				sysR := &runners.SystemdRunners{Run: func(name string, args ...string) (string, string, int, error) {
 					if name != "systemctl" {
 						return "", "", 0, nil
 					}
 					invoked = append(invoked, args)
 					return "", "", 0, nil
-				})
-				if err := plan.Apply(ops, plan.Facts{GOOS: runtime.GOOS}, ""); err != nil {
+				}}
+				ctx := runners.WithSet(context.Background(), &runners.Set{Systemd: sysR})
+				if err := plan.ApplyWithContext(ctx, ops, plan.Facts{GOOS: runtime.GOOS}, ""); err != nil {
 					t.Fatalf("plan.Apply: %v", err)
 				}
 			}

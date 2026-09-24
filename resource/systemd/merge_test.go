@@ -7,7 +7,6 @@ import (
 
 	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/testapply"
-	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -140,11 +139,11 @@ func TestPresentMergedReloadAppliesOnSecondInput(t *testing.T) {
 	Present(opt.OnChange(b))
 
 	var saw []string
-	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
+	rs := systemdSet(func(name string, args ...string) (string, string, int, error) {
 		saw = append(saw, name+" "+strings.Join(args, " "))
 		return "", "", 0, nil
 	})
-	if err := testapply.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatal(err)
 	}
 	if len(saw) != 1 || saw[0] != "systemctl daemon-reload" {

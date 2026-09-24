@@ -814,9 +814,13 @@ func dryRunPkgOpenBSDAbsent(t *testing.T, tmp string) {
 func dryRunService(t *testing.T, tmp string) {
 	requireSystemd(t)
 	var mutated bool
-	testseam.FakeServiceRunner(t, fakeSystemctlRunner(&mutated))
+	rs := &runners.Set{Systemd: &runners.SystemdRunners{Run: fakeSystemctlRunner(&mutated)}}
 	service.Present("fit-service")
-	if err := api.Apply(); err != nil {
+	// testapply.ApplyWithRunners injects the fake systemctl runner directly
+	// (task 4e2), replacing the process-global internal/testseam fake this
+	// used before; see dryRunCmd's own comment for why this cross-package
+	// test cannot reach api's unexported applyWithRunners.
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatal(err)
 	}
 	if mutated {
@@ -837,9 +841,8 @@ func dryRunService(t *testing.T, tmp string) {
 // single Linux CI host instead of only on the backend's own OS.
 func dryRunServiceBackend(t *testing.T, mgr string, classify func(args []string) string) {
 	t.Helper()
-	testseam.FakeServiceManager(t, func() (string, error) { return mgr, nil })
 	var mutated bool
-	testseam.FakeServiceRunner(t, func(name string, args ...string) (string, string, int, error) {
+	fake := func(name string, args ...string) (string, string, int, error) {
 		switch classify(args) {
 		case "running":
 			return "", "", 1, nil // not running
@@ -849,9 +852,13 @@ func dryRunServiceBackend(t *testing.T, mgr string, classify func(args []string)
 			mutated = true
 			return "", "", 0, nil
 		}
-	})
+	}
+	rs := &runners.Set{Service: &runners.ServiceRunners{
+		Run:     fake,
+		Manager: func() (string, error) { return mgr, nil },
+	}}
 	service.Present("fit-service")
-	if err := api.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatal(err)
 	}
 	if mutated {
@@ -904,9 +911,9 @@ func dryRunServiceRcctl(t *testing.T, tmp string) {
 func dryRunDaemonReload(t *testing.T, tmp string) {
 	requireSystemd(t)
 	var mutated bool
-	testseam.FakeSystemctl(t, fakeSystemctlRunner(&mutated))
+	rs := &runners.Set{Systemd: &runners.SystemdRunners{Run: fakeSystemctlRunner(&mutated)}}
 	systemd.Present()
-	if err := api.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatal(err)
 	}
 	if mutated {
@@ -917,9 +924,9 @@ func dryRunDaemonReload(t *testing.T, tmp string) {
 func dryRunTimer(t *testing.T, tmp string) {
 	requireSystemd(t)
 	var mutated bool
-	testseam.FakeSystemctl(t, fakeSystemctlRunner(&mutated))
+	rs := &runners.Set{Systemd: &runners.SystemdRunners{Run: fakeSystemctlRunner(&mutated)}}
 	timer.Present("fit-timer")
-	if err := api.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatal(err)
 	}
 	if mutated {
@@ -934,13 +941,13 @@ func dryRunSystemdTimer(t *testing.T, tmp string) {
 	// os.UserHomeDir(), never a hardcoded /etc path, when WithUser is set.
 	t.Setenv("HOME", tmp)
 	var mutated bool
-	testseam.FakeSystemctl(t, fakeSystemctlRunner(&mutated))
+	rs := &runners.Set{Systemd: &runners.SystemdRunners{Run: fakeSystemctlRunner(&mutated)}}
 	systemdtimer.Present("fit-systemdtimer",
 		opt.WithUser,
 		opt.WithCommand("/bin/true"),
 		opt.WithOnCalendar("*-*-* *:00:00"),
 	)
-	if err := api.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatal(err)
 	}
 	if mutated {

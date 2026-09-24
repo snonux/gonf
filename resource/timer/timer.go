@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
 	opt "github.com/snonux/gonf/resource/options"
@@ -35,6 +36,12 @@ type Timer struct {
 	restart    bool
 	user       bool // systemctl --user
 	enableOnly bool // enable/disable only; skip start/stop
+	// client is the systemctl runner override this timer was built with
+	// (buildWith); the zero Client reaches the real runner. Set by the plan
+	// handler from its ApplyContext.Runners.Systemd (task 4e2) and directly
+	// by this package's own tests, instead of a process-global
+	// internal/testseam fake.
+	client systemd.Client
 }
 
 // SetRestart requests a restart of an already-active present timer on each
@@ -65,17 +72,37 @@ func Present(name string, opts ...opt.TimerOption) resource.Resource {
 
 // Ensure builds and applies a timer without registering or recording a draft.
 func Ensure(name string, opts ...opt.TimerOption) error {
-	t, err := build(name, opts)
+	return EnsureWith(nil, name, opts...)
+}
+
+// EnsureWith is Ensure with sr's systemd runner (nil: the real one)
+// injected — the plan handler's apply-time entry (task 4e2, mirroring
+// resource/cmd's ensureWith from qb2) and resource/systemdtimer's own
+// composition, instead of a process-global internal/testseam fake.
+// Exported (unlike resource/cmd's unexported ensureWith) because, unlike
+// Cmd, Timer is composed by another resource package (SystemdTimer), the
+// same reason resource/dir's file composition exports
+// file.EnsureWithPlanFacts.
+func EnsureWith(sr *runners.SystemdRunners, name string, opts ...opt.TimerOption) error {
+	t, err := buildWith(sr, name, opts)
 	if err != nil {
 		return err
 	}
 	return t.apply()
 }
 
-// build applies opts to a new Timer. An option misuse collected while
-// applying them (embed.Misuse) is its error.
+// build applies opts to a new Timer, using the real systemctl runner.
 func build(name string, opts []opt.TimerOption) (*Timer, error) {
-	t := &Timer{name: normalizeUnit(name)}
+	return buildWith(nil, name, opts)
+}
+
+// buildWith is build with sr's systemd runner injected (nil: the real one,
+// via Client): the timer plan.Handler's apply-time constructor (task 4e2)
+// and this package's own tests use it directly instead of a package-global
+// fake. An option misuse collected while applying opts (embed.Misuse) is
+// its error.
+func buildWith(sr *runners.SystemdRunners, name string, opts []opt.TimerOption) (*Timer, error) {
+	t := &Timer{name: normalizeUnit(name), client: systemd.NewClient(sr)}
 	for _, o := range opts {
 		o.Apply(t)
 	}
@@ -133,11 +160,11 @@ func (t *Timer) apply() error {
 		return fmt.Errorf("%s: %w", id, err)
 	}
 
-	active, err := systemd.IsActive(t.name, t.user)
+	active, err := t.client.IsActive(t.name, t.user)
 	if err != nil {
 		return err
 	}
-	enabled, err := systemd.IsEnabled(t.name, t.user)
+	enabled, err := t.client.IsEnabled(t.name, t.user)
 	if err != nil {
 		return err
 	}
@@ -187,7 +214,7 @@ func (t *Timer) actions(id string, active, enabled bool) (actions []resource.Act
 // command returns the systemctl Action performing verb on t's unit, on the
 // --user bus when WithUser is set.
 func (t *Timer) command(verb string) resource.Action {
-	return systemd.Command(systemd.Args(t.user, verb, t.name))
+	return t.client.Command(systemd.Args(t.user, verb, t.name))
 }
 
 // validate is Timer-specific: unlike Service, timer unit names are checked

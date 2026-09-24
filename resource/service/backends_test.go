@@ -10,9 +10,10 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/internal/testapply"
-	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
+	"github.com/snonux/gonf/resource/systemd"
 )
 
 // svcCall records one invocation of the swapped command runner.
@@ -165,12 +166,6 @@ type svcState struct {
 func TestApplySystemdFake(t *testing.T) {
 	oldDry := resource.DryRun()
 	defer resource.SetDryRun(oldDry)
-	// Install a failing guard before the table, so a case that forgets its
-	// own fake cannot reach the real systemctl; t's cleanup restores it.
-	testseam.FakeServiceRunner(t, func(name string, args ...string) (string, string, int, error) {
-		t.Fatalf("unfaked service runner reached: %s %v", name, args)
-		return "", "", -1, nil
-	})
 
 	tests := []struct {
 		name       string
@@ -305,9 +300,9 @@ func TestApplySystemdFake(t *testing.T) {
 			resource.SetDryRun(tt.state.dryRun)
 
 			var calls []svcCall
-			testseam.FakeServiceRunner(t, fakeSystemdCtl(tt.state.running, tt.state.enabled, tt.state.probeErr, tt.state.enabledErr, tt.state.failAction, tt.state.actionErr, &calls))
+			fake := fakeSystemdCtl(tt.state.running, tt.state.enabled, tt.state.probeErr, tt.state.enabledErr, tt.state.failAction, tt.state.actionErr, &calls)
 
-			err := tt.svc.applyWith(systemdBackend{})
+			err := tt.svc.applyWith(systemdBackend{client: systemd.NewClient(&runners.SystemdRunners{Run: fake})})
 
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
@@ -788,11 +783,13 @@ func TestServiceEnsureAndAbsentFake(t *testing.T) {
 	oldDry := resource.DryRun()
 	defer resource.SetDryRun(oldDry)
 
-	// Ensure with WithReload on a running unit reloads it.
+	// Ensure with WithReload on a running unit reloads it. EnsureWith
+	// injects the fake systemd runner directly (task 4e2) instead of a
+	// process-global internal/testseam fake.
 	var calls []svcCall
-	testseam.FakeServiceRunner(t, fakeSystemdCtl(true, true, false, false, false, false, &calls))
-	if err := Ensure("sshd", opt.WithReload); err != nil {
-		t.Fatalf("Ensure: %v", err)
+	sysR := &runners.SystemdRunners{Run: fakeSystemdCtl(true, true, false, false, false, false, &calls)}
+	if err := EnsureWith(nil, sysR, "sshd", opt.WithReload); err != nil {
+		t.Fatalf("EnsureWith: %v", err)
 	}
 	assertSvcActions(t, calls, [][]string{{"systemctl", "reload", "sshd"}}, func(args []string) bool {
 		return contains(args, "is-active") || contains(args, "is-enabled")
@@ -800,9 +797,9 @@ func TestServiceEnsureAndAbsentFake(t *testing.T) {
 
 	// Ensure with WithUser routes through the user bus.
 	calls = nil
-	testseam.FakeServiceRunner(t, fakeSystemdCtl(false, false, false, false, false, false, &calls))
-	if err := Ensure("sshd", opt.WithUser); err != nil {
-		t.Fatalf("Ensure with user bus: %v", err)
+	sysR = &runners.SystemdRunners{Run: fakeSystemdCtl(false, false, false, false, false, false, &calls)}
+	if err := EnsureWith(nil, sysR, "sshd", opt.WithUser); err != nil {
+		t.Fatalf("EnsureWith with user bus: %v", err)
 	}
 	assertSvcActions(t, calls, [][]string{{"systemctl", "--user", "enable", "sshd"}, {"systemctl", "--user", "start", "sshd"}},
 		func(args []string) bool {
@@ -812,9 +809,9 @@ func TestServiceEnsureAndAbsentFake(t *testing.T) {
 	// Absent registers a service that stops and disables on Apply.
 	resource.ResetRepository()
 	calls = nil
-	testseam.FakeServiceRunner(t, fakeSystemdCtl(true, true, false, false, false, false, &calls))
+	sysR = &runners.SystemdRunners{Run: fakeSystemdCtl(true, true, false, false, false, false, &calls)}
 	Absent("sshd")
-	if err := testapply.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(&runners.Set{Systemd: sysR}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	assertSvcActions(t, calls, [][]string{{"systemctl", "stop", "sshd"}, {"systemctl", "disable", "sshd"}},

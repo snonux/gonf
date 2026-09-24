@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -9,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
-	"github.com/snonux/gonf/internal/testseam"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -347,16 +348,17 @@ func TestSystemdUnitsRecordedPlanApplies(t *testing.T) {
 	}
 
 	var invoked [][]string
-	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
+	sysR := &runners.SystemdRunners{Run: func(name string, args ...string) (string, string, int, error) {
 		if name == "systemctl" {
 			invoked = append(invoked, args)
 		}
 		// Report every queried unit as active and enabled so the only
 		// possible mutating action is the gated timer restart.
 		return "", "", 0, nil
-	})
+	}}
 
-	if err := plan.Apply(ops, plan.Facts{GOOS: runtime.GOOS}, ""); err != nil {
+	ctx := runners.WithSet(context.Background(), &runners.Set{Systemd: sysR})
+	if err := plan.ApplyWithContext(ctx, ops, plan.Facts{GOOS: runtime.GOOS}, ""); err != nil {
 		t.Fatalf("plan.Apply: %v", err)
 	}
 
@@ -391,7 +393,7 @@ func TestSystemdUnitsRecordedPlanApplies(t *testing.T) {
 	// A second apply of unchanged inputs must hold the gate: no reload, no
 	// restart, no enable/start.
 	invoked = nil
-	if err := plan.Apply(ops, plan.Facts{GOOS: runtime.GOOS}, ""); err != nil {
+	if err := plan.ApplyWithContext(ctx, ops, plan.Facts{GOOS: runtime.GOOS}, ""); err != nil {
 		t.Fatalf("second plan.Apply: %v", err)
 	}
 	for _, args := range invoked {

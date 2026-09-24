@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/internal/testapply"
-	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/internal/testutil"
 
 	opt "github.com/snonux/gonf/api/options"
@@ -67,7 +67,7 @@ func TestChangeGateOutcomes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			resource.ResetRepository()
 			resource.SetDryRun(tc.dryRun)
-			verbs := fakeTimerSystemctl(t, tc.enabled)
+			verbs, rs := fakeTimerSystemctl(tc.enabled)
 			var opts []opt.TimerOption
 			if !tc.noRestart {
 				opts = append(opts, opt.WithRestart)
@@ -79,13 +79,13 @@ func TestChangeGateOutcomes(t *testing.T) {
 			// the gate's own "never noted holds" rule is only reachable there.
 			if !tc.noted {
 				resource.ResetReport()
-				if err := Ensure("fstrim", append(opts, opt.WatchChanges(tc.watch))...); err != nil {
+				if err := EnsureWith(rs.Systemd, "fstrim", append(opts, opt.WatchChanges(tc.watch))...); err != nil {
 					t.Fatalf("Ensure: %v", err)
 				}
 			} else {
 				watched := testapply.Register("File", "unit", testapply.Noting(tc.watchNote, "File[unit]"))
 				Present("fstrim", append(opts, opt.OnChange(watched))...)
-				if err := testapply.Apply(); err != nil {
+				if err := testapply.ApplyWithRunners(rs); err != nil {
 					t.Fatalf("Apply: %v", err)
 				}
 			}
@@ -101,12 +101,14 @@ func TestChangeGateOutcomes(t *testing.T) {
 	}
 }
 
-// fakeTimerSystemctl installs a systemctl fake (until t ends) that reports
-// the timer as active (and enabled when enabled is true) and records every
-// mutating verb.
-func fakeTimerSystemctl(t *testing.T, enabled bool) *[]string {
+// fakeTimerSystemctl builds a systemd runner (wrapped in a *runners.Set for
+// testapply.ApplyWithRunners/EnsureWith) that reports the timer as active
+// (and enabled when enabled is true) and records every mutating verb, for
+// one apply (task 4e2, replacing the process-global
+// internal/testseam.FakeSystemctl fake these tests used before).
+func fakeTimerSystemctl(enabled bool) (*[]string, *runners.Set) {
 	verbs := &[]string{}
-	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
+	fake := func(name string, args ...string) (string, string, int, error) {
 		switch {
 		case contains(args, "is-active"):
 			return "", "", 0, nil
@@ -122,8 +124,8 @@ func fakeTimerSystemctl(t *testing.T, enabled bool) *[]string {
 			}
 		}
 		return "", "", 0, nil
-	})
-	return verbs
+	}
+	return verbs, &runners.Set{Systemd: &runners.SystemdRunners{Run: fake}}
 }
 
 // TestPlanDraftChangeGate pins the timer draft wiring: an armed gate
@@ -155,12 +157,12 @@ func TestHeldGateLogLine(t *testing.T) {
 		t.Skip("Timer is Linux-only")
 	}
 	resource.ResetRepository()
-	fakeTimerSystemctl(t, true)
+	_, rs := fakeTimerSystemctl(true)
 	output := testutil.CaptureLog(t, logger.LevelDebug)
 
 	unchanged := testapply.Register("File", "unit", testapply.Noting(resource.StatusOK, "File[unit]"))
 	Present("fstrim", opt.WithRestart, opt.OnChange(unchanged))
-	if err := testapply.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	want := "Timer[fstrim.timer]: restart held by change gate (no watched dependency changed)"

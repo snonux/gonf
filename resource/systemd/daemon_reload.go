@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
 	opt "github.com/snonux/gonf/resource/options"
@@ -41,6 +42,12 @@ type DaemonReloadResource struct {
 	user        bool
 	legacyWatch []string // WithWatch ids until newReload folds them into Watch
 	joiners     []reloadJoiner
+	// client is the systemctl runner override this declaration was built
+	// with (newReloadWith); the zero Client reaches the real runner. Set by
+	// the plan handler from its ApplyContext.Runners.Systemd (task 4e2) and
+	// directly by this package's own tests, instead of a process-global
+	// internal/testseam fake.
+	client Client
 }
 
 // reloadJoiner is one successful JoinRegisteredReload: the joiner's ID and
@@ -90,7 +97,19 @@ func Present(opts ...opt.DaemonReloadOption) resource.Resource {
 // (IfChanged with no WithWatch ids and no DependsOn) could never reload and
 // is refused (CheckWatch) instead of being skipped.
 func Ensure(opts ...opt.DaemonReloadOption) error {
-	d := newReload(opts)
+	return EnsureWith(nil, opts...)
+}
+
+// EnsureWith is Ensure with sr's systemd runner (nil: the real one)
+// injected — the plan handler's apply-time entry (task 4e2, mirroring
+// resource/cmd's ensureWith from qb2) and resource/systemdtimer's own
+// composition, instead of a process-global internal/testseam fake.
+// Exported (unlike resource/cmd's unexported ensureWith) because, unlike
+// Cmd, DaemonReload is composed by another resource package (SystemdTimer),
+// the same reason resource/dir's file composition exports
+// file.EnsureWithPlanFacts.
+func EnsureWith(sr *runners.SystemdRunners, opts ...opt.DaemonReloadOption) error {
+	d := newReloadWith(sr, opts)
 	if err := d.MisuseErr(); err != nil {
 		return err
 	}
@@ -100,15 +119,24 @@ func Ensure(opts ...opt.DaemonReloadOption) error {
 	return d.apply()
 }
 
-// newReload builds a daemon-reload with opts applied and its watch list
-// resolved in the order recorded plans have always carried: the
-// OnChange/WatchChanges ids first, then the legacy WithWatch ids, and when
-// neither named any, the DependsOn ids (first seen first), armed or not.
-// Resolving once, after every option ran, makes the list independent of
-// option order and lets apply, planDraft and merging read one list. An
-// option misuse is left in its embed.Misuse for the caller to check.
+// newReload builds a daemon-reload with opts applied, using the real
+// systemctl runner.
 func newReload(opts []opt.DaemonReloadOption) *DaemonReloadResource {
-	d := &DaemonReloadResource{}
+	return newReloadWith(nil, opts)
+}
+
+// newReloadWith is newReload with sr's systemctl runner injected (nil: the
+// real one, via Client): the daemon_reload plan.Handler's apply-time
+// constructor (task 4e2) and this package's own tests use it directly
+// instead of a process-global fake. Its watch list is resolved in the order
+// recorded plans have always carried: the OnChange/WatchChanges ids first,
+// then the legacy WithWatch ids, and when neither named any, the DependsOn
+// ids (first seen first), armed or not. Resolving once, after every option
+// ran, makes the list independent of option order and lets apply, planDraft
+// and merging read one list. An option misuse is left in its embed.Misuse
+// for the caller to check.
+func newReloadWith(sr *runners.SystemdRunners, opts []opt.DaemonReloadOption) *DaemonReloadResource {
+	d := &DaemonReloadResource{client: NewClient(sr)}
 	for _, o := range opts {
 		o.Apply(d)
 	}
@@ -170,7 +198,7 @@ func (d *DaemonReloadResource) apply() error {
 	args := Args(d.user, "daemon-reload")
 	would, did := Describe(args)
 	return resource.Mutate(id, would, func() error {
-		if err := Run(args...); err != nil {
+		if err := d.client.Run(args...); err != nil {
 			return fmt.Errorf("%s: %w", id, err)
 		}
 		logger.Info("%s", did)

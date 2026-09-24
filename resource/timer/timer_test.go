@@ -9,11 +9,18 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/internal/testapply"
-	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/systemd"
 )
+
+// systemdSet builds a *runners.Set injecting fake as the systemctl runner
+// for one testapply.ApplyWithRunners call, replacing the process-global
+// internal/testseam.FakeSystemctl fake these tests used before task 4e2.
+func systemdSet(fake func(string, ...string) (string, string, int, error)) *runners.Set {
+	return &runners.Set{Systemd: &runners.SystemdRunners{Run: fake}}
+}
 
 func TestNormalizeUnit(t *testing.T) {
 	cases := []struct{ in, want string }{
@@ -63,10 +70,10 @@ func TestPresentIdempotentWithFakeRunner(t *testing.T) {
 		t.Skip("Timer is Linux-only")
 	}
 	resource.ResetRepository()
-	testseam.FakeSystemctl(t, fakeSystemdAlreadyOK)
+	rs := systemdSet(fakeSystemdAlreadyOK)
 
 	Present("fstrim")
-	if err := testapply.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -78,7 +85,7 @@ func TestPresentEnablesAndStartsWhenInactive(t *testing.T) {
 	resource.ResetRepository()
 
 	var saw []string
-	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
+	rs := systemdSet(func(name string, args ...string) (string, string, int, error) {
 		if name != "systemctl" {
 			return "", "", 1, nil
 		}
@@ -94,7 +101,7 @@ func TestPresentEnablesAndStartsWhenInactive(t *testing.T) {
 	})
 
 	Present("fstrim.timer")
-	if err := testapply.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatal(err)
 	}
 	if !containsStr(saw, "enable") || !containsStr(saw, "start") {
@@ -109,7 +116,7 @@ func TestPresentEnableOnlySkipsStart(t *testing.T) {
 	resource.ResetRepository()
 
 	var saw []string
-	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
+	rs := systemdSet(func(name string, args ...string) (string, string, int, error) {
 		if name != "systemctl" {
 			return "", "", 1, nil
 		}
@@ -125,7 +132,7 @@ func TestPresentEnableOnlySkipsStart(t *testing.T) {
 	})
 
 	Present("fstrim.timer", opt.WithEnableOnly)
-	if err := testapply.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatal(err)
 	}
 	if !containsStr(saw, "enable") {
@@ -143,7 +150,7 @@ func TestAbsentStopsAndDisables(t *testing.T) {
 	resource.ResetRepository()
 
 	var saw []string
-	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
+	rs := systemdSet(func(name string, args ...string) (string, string, int, error) {
 		if name != "systemctl" {
 			return "", "", 1, nil
 		}
@@ -159,7 +166,7 @@ func TestAbsentStopsAndDisables(t *testing.T) {
 	})
 
 	Absent("fstrim")
-	if err := testapply.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatal(err)
 	}
 	if !containsStr(saw, "stop") || !containsStr(saw, "disable") {
@@ -174,7 +181,7 @@ func TestWithRestartIssuesRestart(t *testing.T) {
 	resource.ResetRepository()
 
 	var sawRestart bool
-	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
+	rs := systemdSet(func(name string, args ...string) (string, string, int, error) {
 		if contains(args, "restart") {
 			sawRestart = true
 		}
@@ -182,7 +189,7 @@ func TestWithRestartIssuesRestart(t *testing.T) {
 	})
 
 	Present("fstrim", opt.WithRestart)
-	if err := testapply.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatal(err)
 	}
 	if !sawRestart {
@@ -205,13 +212,13 @@ func TestOnChangeGatesRestart(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			resource.ResetRepository()
 			var sawRestart bool
-			testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
+			rs := systemdSet(func(name string, args ...string) (string, string, int, error) {
 				sawRestart = sawRestart || name == "systemctl" && contains(args, "restart")
 				return fakeSystemdAlreadyOK(name, args...)
 			})
 			watched := testapply.Register("File", "unit", testapply.Noting(tc.watchStatus, "File[unit]"))
 			Present("fstrim", opt.WithRestart, opt.OnChange(watched))
-			if err := testapply.Apply(); err != nil {
+			if err := testapply.ApplyWithRunners(rs); err != nil {
 				t.Fatalf("Apply: %v", err)
 			}
 			if sawRestart != tc.wantRestart {
@@ -228,7 +235,7 @@ func TestWithUserPassesUserFlag(t *testing.T) {
 	resource.ResetRepository()
 
 	var sawUser bool
-	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
+	rs := systemdSet(func(name string, args ...string) (string, string, int, error) {
 		if contains(args, "--user") {
 			sawUser = true
 		}
@@ -236,7 +243,7 @@ func TestWithUserPassesUserFlag(t *testing.T) {
 	})
 
 	Present("myjob", opt.WithUser)
-	if err := testapply.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatal(err)
 	}
 	if !sawUser {
@@ -250,7 +257,7 @@ func TestPresentFailsWhenSystemctlMutateErrors(t *testing.T) {
 	}
 	resource.ResetRepository()
 
-	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
+	rs := systemdSet(func(name string, args ...string) (string, string, int, error) {
 		if contains(args, "is-active") || contains(args, "is-enabled") {
 			return "", "", 1, nil
 		}
@@ -261,7 +268,7 @@ func TestPresentFailsWhenSystemctlMutateErrors(t *testing.T) {
 	})
 
 	Present("fstrim")
-	if err := testapply.Apply(); err == nil {
+	if err := testapply.ApplyWithRunners(rs); err == nil {
 		t.Fatal("expected apply error when enable fails")
 	}
 }
@@ -275,7 +282,7 @@ func TestDryRunSkipsMutations(t *testing.T) {
 	defer resource.SetDryRun(false)
 
 	var mutated bool
-	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
+	rs := systemdSet(func(name string, args ...string) (string, string, int, error) {
 		if contains(args, "enable") || contains(args, "start") {
 			mutated = true
 		}
@@ -286,7 +293,7 @@ func TestDryRunSkipsMutations(t *testing.T) {
 	})
 
 	Present("fstrim")
-	if err := testapply.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatal(err)
 	}
 	if mutated {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 	opt "github.com/snonux/gonf/resource/options"
@@ -47,8 +48,10 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 }
 
 // Apply starts/stops/enables/disables the named service, mirroring
-// resource/service's own Present/Absent option handling.
-func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
+// resource/service's own Present/Absent option handling. ctx.Runners.
+// Service and .Systemd, when this apply had them injected (task 4e2; nil in
+// every real apply), replace the real runners.
+func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	if op.Name == "" {
 		return fmt.Errorf("service: missing name")
 	}
@@ -74,5 +77,5 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if gate != nil {
 		opts = append(opts, gate)
 	}
-	return Ensure(op.Name, opts...)
+	return EnsureWith(runners.ServiceOf(ctx.Runners), runners.SystemdOf(ctx.Runners), op.Name, opts...)
 }

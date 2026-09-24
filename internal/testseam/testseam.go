@@ -1,15 +1,19 @@
 // Package testseam holds the module-internal overrides that let this
-// module's tests fake the host commands resource backends run (crontab,
-// package-manager, service-manager and systemctl invocations) and the
-// host's package- and service-manager detection, for the resource kinds
-// that have not yet migrated to internal/runners' per-apply injection (see
-// that package's doc comment, and AGENTS.md's "Test seams" section) —
-// task qb2 shrinks this package one migrated kind at a time instead of
-// deleting it in one step, since a kind is only removed here once its own
-// production path and every test that faked it have moved to a *runners.Set
-// built and passed per apply. resource/cmd (the "command" plan kind)
-// migrated first, task qb2's first slice; Command/RunOpts/FakeCommand/
-// CommandFakes lived here until then.
+// module's tests fake the host commands resource backends run (crontab and
+// package-manager invocations) and the host's package-manager detection,
+// for the resource kinds that have not yet migrated to internal/runners'
+// per-apply injection (see that package's doc comment, and AGENTS.md's
+// "Test seams" section) — task qb2 shrinks this package one migrated kind
+// at a time instead of deleting it in one step, since a kind is only
+// removed here once its own production path and every test that faked it
+// have moved to a *runners.Set built and passed per apply. resource/cmd
+// (the "command" plan kind) migrated first, task qb2's first slice;
+// Command/RunOpts/FakeCommand/CommandFakes lived here until then. Task 4e2
+// migrated service, timer, daemon_reload and systemd_timer next, all
+// through resource/systemd's shared systemctl Client: the Crontab/
+// FakeCrontab/CrontabInProcessLock slots (resource/cron) and the Package/
+// FakePackageRunner/FakePackageManager slots (resource/pkg) remain here,
+// tracked by follow-up task(s) for cron and package.
 //
 // It replaces the exported *ForTest setters the resource packages used to
 // carry: being internal, it is importable only from inside this module, so
@@ -112,9 +116,6 @@ var (
 	crontabLock    slot[lockChoice]
 	pkgRunners     slot[Package]
 	packageManager slot[Detect]
-	serviceRun     slot[Run]
-	serviceManager slot[Detect]
-	systemctl      slot[Run]
 )
 
 // FakeCrontab installs f's non-nil crontab runners for resource/cron until
@@ -187,38 +188,6 @@ func FakePackageManager(c Cleaner, d Detect) {
 
 // PackageManager returns the resource/pkg detector fake in effect, or nil.
 func PackageManager() Detect { return packageManager.get() }
-
-// FakeServiceRunner installs run as resource/service's command runner until
-// c's cleanup: for the BSD backends (rcctl, service(8)) and, through
-// FakeSystemctl, for the systemctl backend, so a service follows the fake
-// whichever backend the host selects.
-func FakeServiceRunner(c Cleaner, run Run) {
-	serviceRun.push(c, func(Run) Run { return run })
-	FakeSystemctl(c, run)
-}
-
-// ServiceRunner returns the BSD service backends' runner fake, or nil.
-func ServiceRunner() Run { return serviceRun.get() }
-
-// FakeServiceManager makes resource/service's backend selection use d
-// instead of detecting the host's service manager, until c's cleanup.
-func FakeServiceManager(c Cleaner, d Detect) {
-	serviceManager.push(c, func(Detect) Detect { return d })
-}
-
-// ServiceManager returns the resource/service detector fake in effect, or
-// nil.
-func ServiceManager() Detect { return serviceManager.get() }
-
-// FakeSystemctl installs run as the shared systemctl runner in
-// resource/systemd (used by services on systemd, timers, systemd timers and
-// DaemonReload) until c's cleanup.
-func FakeSystemctl(c Cleaner, run Run) {
-	systemctl.push(c, func(Run) Run { return run })
-}
-
-// Systemctl returns the systemctl runner fake in effect, or nil.
-func Systemctl() Run { return systemctl.get() }
 
 // get returns the slot's value: every installed layer applied, oldest first,
 // to the zero value.

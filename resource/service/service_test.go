@@ -6,10 +6,22 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/internal/testapply"
-	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
+
+// bothRunnerSet builds a *runners.Set injecting fake as both resource/
+// service's BSD-backend runner and resource/systemd's shared systemctl
+// runner, so whichever backend detectServiceManager selects on this host
+// reaches the fake (task 4e2, replacing internal/testseam.FakeServiceRunner,
+// which faked both the same way through one call).
+func bothRunnerSet(fake func(string, ...string) (string, string, int, error)) *runners.Set {
+	return &runners.Set{
+		Service: &runners.ServiceRunners{Run: fake},
+		Systemd: &runners.SystemdRunners{Run: fake},
+	}
+}
 
 func TestDetectServiceManager(t *testing.T) {
 	mgr, err := detectServiceManager()
@@ -39,21 +51,22 @@ func TestDetectServiceManager(t *testing.T) {
 func TestPresentIdempotentWithFakeRunner(t *testing.T) {
 	resource.ResetRepository()
 
+	var rs *runners.Set
 	switch runtime.GOOS {
 	case "linux":
-		testseam.FakeServiceRunner(t, fakeSystemdAlreadyOK)
+		rs = bothRunnerSet(fakeSystemdAlreadyOK)
 	case "openbsd":
-		testseam.FakeServiceRunner(t, fakeRcctlAlreadyOK)
+		rs = bothRunnerSet(fakeRcctlAlreadyOK)
 	case "freebsd":
-		testseam.FakeServiceRunner(t, fakeFreeBSDAlreadyOK)
+		rs = bothRunnerSet(fakeFreeBSDAlreadyOK)
 	case "netbsd":
-		testseam.FakeServiceRunner(t, fakeNetBSDAlreadyOK)
+		rs = bothRunnerSet(fakeNetBSDAlreadyOK)
 	default:
 		t.Skip("unsupported GOOS")
 	}
 
 	Present("uptimed")
-	if err := testapply.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -62,30 +75,31 @@ func TestWithRestartIssuesRestart(t *testing.T) {
 	resource.ResetRepository()
 
 	var sawRestart bool
+	var rs *runners.Set
 	switch runtime.GOOS {
 	case "linux":
-		testseam.FakeServiceRunner(t, func(name string, args ...string) (string, string, int, error) {
+		rs = bothRunnerSet(func(name string, args ...string) (string, string, int, error) {
 			if name == "systemctl" && contains(args, "restart") {
 				sawRestart = true
 			}
 			return fakeSystemdAlreadyOK(name, args...)
 		})
 	case "openbsd":
-		testseam.FakeServiceRunner(t, func(name string, args ...string) (string, string, int, error) {
+		rs = bothRunnerSet(func(name string, args ...string) (string, string, int, error) {
 			if name == "rcctl" && len(args) > 0 && args[0] == "restart" {
 				sawRestart = true
 			}
 			return fakeRcctlAlreadyOK(name, args...)
 		})
 	case "freebsd":
-		testseam.FakeServiceRunner(t, func(name string, args ...string) (string, string, int, error) {
+		rs = bothRunnerSet(func(name string, args ...string) (string, string, int, error) {
 			if name == "service" && contains(args, "restart") {
 				sawRestart = true
 			}
 			return fakeFreeBSDAlreadyOK(name, args...)
 		})
 	case "netbsd":
-		testseam.FakeServiceRunner(t, func(name string, args ...string) (string, string, int, error) {
+		rs = bothRunnerSet(func(name string, args ...string) (string, string, int, error) {
 			if name == netbsdService && contains(args, "restart") {
 				sawRestart = true
 			}
@@ -96,7 +110,7 @@ func TestWithRestartIssuesRestart(t *testing.T) {
 	}
 
 	Present("uptimed", opt.WithRestart)
-	if err := testapply.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatal(err)
 	}
 	if !sawRestart {
@@ -116,24 +130,25 @@ func TestOnChangeGatesRestartButNotServiceConvergence(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			resource.ResetRepository()
 			var sawRestart bool
+			var rs *runners.Set
 			switch runtime.GOOS {
 			case "linux":
-				testseam.FakeServiceRunner(t, func(name string, args ...string) (string, string, int, error) {
+				rs = bothRunnerSet(func(name string, args ...string) (string, string, int, error) {
 					sawRestart = sawRestart || name == "systemctl" && contains(args, "restart")
 					return fakeSystemdAlreadyOK(name, args...)
 				})
 			case "openbsd":
-				testseam.FakeServiceRunner(t, func(name string, args ...string) (string, string, int, error) {
+				rs = bothRunnerSet(func(name string, args ...string) (string, string, int, error) {
 					sawRestart = sawRestart || name == "rcctl" && contains(args, "restart")
 					return fakeRcctlAlreadyOK(name, args...)
 				})
 			case "freebsd":
-				testseam.FakeServiceRunner(t, func(name string, args ...string) (string, string, int, error) {
+				rs = bothRunnerSet(func(name string, args ...string) (string, string, int, error) {
 					sawRestart = sawRestart || name == "service" && contains(args, "restart")
 					return fakeFreeBSDAlreadyOK(name, args...)
 				})
 			case "netbsd":
-				testseam.FakeServiceRunner(t, func(name string, args ...string) (string, string, int, error) {
+				rs = bothRunnerSet(func(name string, args ...string) (string, string, int, error) {
 					sawRestart = sawRestart || name == netbsdService && contains(args, "restart")
 					return fakeNetBSDAlreadyOK(name, args...)
 				})
@@ -143,7 +158,7 @@ func TestOnChangeGatesRestartButNotServiceConvergence(t *testing.T) {
 
 			watched := testapply.Register("File", "unit", testapply.Noting(tc.watchStatus, "File[unit]"))
 			Present("uptimed", opt.WithRestart, opt.OnChange(watched))
-			if err := testapply.Apply(); err != nil {
+			if err := testapply.ApplyWithRunners(rs); err != nil {
 				t.Fatalf("Apply: %v", err)
 			}
 			if sawRestart != tc.wantRestart {

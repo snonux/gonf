@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 	opt "github.com/snonux/gonf/resource/options"
@@ -52,8 +53,10 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 
 // Apply installs/enables/starts, restarts, or stops/disables/removes the
 // declarative timer + oneshot service pair, mirroring the resource's own
-// option handling exactly.
-func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
+// option handling exactly. ctx.Runners.Systemd, when this apply had one
+// injected (task 4e2; nil in every real apply), replaces the real
+// internal/exec runner throughout the composed Timer and DaemonReload.
+func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	if op.Name == "" {
 		return fmt.Errorf("systemd_timer: missing name")
 	}
@@ -82,7 +85,7 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if op.Sensitive {
 		opts = append(opts, opt.WithSensitive)
 	}
-	return Ensure(op.Name, opts...)
+	return EnsureWith(runners.SystemdOf(ctx.Runners), op.Name, opts...)
 }
 
 // presentOptions translates a present systemd_timer op's unit fields into

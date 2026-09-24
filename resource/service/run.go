@@ -1,34 +1,12 @@
 package service
 
-import (
-	"github.com/snonux/gonf/internal/exec"
-	"github.com/snonux/gonf/internal/testseam"
-)
+import "github.com/snonux/gonf/internal/exec"
 
-// runCmd is the runner the BSD backends (rcctl and service(8)) are
-// constructed with when selectBackend picks them: the real runner, or the
-// fake a test in this module installed with
-// internal/testseam.FakeServiceRunner. In-package tests may instead give a
-// backend its own runner. The systemctl backend does not use it: it routes
-// through the shared runner in resource/systemd, which FakeServiceRunner
-// fakes alongside this one.
+// runCmd is the real runner the BSD backends (rcctl and service(8)) use
+// when a Service was built without an injected runners.ServiceRunners
+// override (Service.run): it always reaches the host directly. The systemd
+// backend does not use it: it routes through resource/systemd's Client
+// (Service.sysClient, injected separately from a runners.SystemdRunners).
 func runCmd(name string, args ...string) (string, string, int, error) {
-	if fake := testseam.ServiceRunner(); fake != nil {
-		return fake(name, args...)
-	}
 	return exec.Run(name, args...)
-}
-
-// detectSvcManager names the host's service manager; selectBackend maps the
-// name to a backend. A test in this module can force a name with
-// internal/testseam.FakeServiceManager (mirroring resource/pkg's
-// detectPkgManager), so the fitness test drives the BSD/rcctl backends on
-// any single host instead of only ever reaching whichever backend
-// runtime.GOOS happens to select. In-package tests may instead hand a
-// backend to applyWith directly.
-func detectSvcManager() (string, error) {
-	if fake := testseam.ServiceManager(); fake != nil {
-		return fake()
-	}
-	return detectServiceManager()
 }

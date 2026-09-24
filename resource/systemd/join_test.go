@@ -7,7 +7,7 @@ import (
 
 	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/declerr"
-	"github.com/snonux/gonf/internal/testseam"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -114,17 +114,17 @@ func TestGatedReloadCoalescesWithEarlierSameBusReload(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ran := false
-			testseam.FakeSystemctl(t, func(string, ...string) (string, string, int, error) {
+			sr := &runners.SystemdRunners{Run: func(string, ...string) (string, string, int, error) {
 				ran = true
 				return "", "", 0, nil
-			})
+			}}
 			resource.ResetReport()
 			t.Cleanup(resource.ResetReport)
 			for _, n := range tc.notes {
 				resource.Note(n[0], resource.StatusChanged)
 			}
-			if err := Ensure(opt.WithUser, opt.WatchChanges("File[a]")); err != nil {
-				t.Fatalf("Ensure: %v", err)
+			if err := EnsureWith(sr, opt.WithUser, opt.WatchChanges("File[a]")); err != nil {
+				t.Fatalf("EnsureWith: %v", err)
 			}
 			if ran != tc.want {
 				t.Fatalf("daemon-reload ran=%v, want %v", ran, tc.want)

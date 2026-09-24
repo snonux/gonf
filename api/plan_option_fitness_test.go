@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
@@ -60,6 +62,15 @@ import (
 // task/resource registries first so option-fitness cases never leak state
 // into each other.
 func recordApplyOption(t *testing.T, taskName string, build func()) {
+	recordApplyOptionWithRunners(t, taskName, nil, build)
+}
+
+// recordApplyOptionWithRunners is recordApplyOption with rs injected into
+// the destination apply through runners.WithSet (task 4e2), for a kind that
+// migrated off internal/testseam: a nil rs is a no-op
+// (runners.WithSet(ctx, nil) returns ctx unchanged), so this exactly
+// matches recordApplyOption's behaviour for every kind still on testseam.
+func recordApplyOptionWithRunners(t *testing.T, taskName string, rs *runners.Set, build func()) {
 	t.Helper()
 	ResetTasks()
 	resource.ResetRepository()
@@ -85,7 +96,8 @@ func recordApplyOption(t *testing.T, taskName string, build func()) {
 		t.Fatalf("DecodePlanBytes: %v", err)
 	}
 	facts := plan.Facts{GOOS: runtime.GOOS, Profile: "test", Hostname: "localhost"}
-	if err := plan.Apply(decoded, facts, planDir); err != nil {
+	ctx := runners.WithSet(context.Background(), rs)
+	if err := plan.ApplyWithContext(ctx, decoded, facts, planDir); err != nil {
 		t.Fatalf("plan.Apply: %v", err)
 	}
 }
@@ -367,14 +379,14 @@ func TestPlanOptionFitness_Service(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			var directCalls [][]string
-			testseam.FakeSystemctl(t, fakeSystemctl(&directCalls, c.active, c.enabled))
-			if err := svc.Ensure("optfitsvc", c.opts...); err != nil {
+			directSysR := &runners.SystemdRunners{Run: fakeSystemctl(&directCalls, c.active, c.enabled)}
+			if err := svc.EnsureWith(nil, directSysR, "optfitsvc", c.opts...); err != nil {
 				t.Fatalf("direct Ensure: %v", err)
 			}
 
 			var planCalls [][]string
-			testseam.FakeSystemctl(t, fakeSystemctl(&planCalls, c.active, c.enabled))
-			recordApplyOption(t, "service_opt_"+c.name, func() {
+			planSysR := &runners.SystemdRunners{Run: fakeSystemctl(&planCalls, c.active, c.enabled)}
+			recordApplyOptionWithRunners(t, "service_opt_"+c.name, &runners.Set{Systemd: planSysR}, func() {
 				Service("optfitsvc", c.opts...)
 			})
 
@@ -386,14 +398,14 @@ func TestPlanOptionFitness_Service(t *testing.T) {
 
 	t.Run("Absent", func(t *testing.T) {
 		var directCalls [][]string
-		testseam.FakeSystemctl(t, fakeSystemctl(&directCalls, true, true))
-		if err := svc.Ensure("optfitsvc", opt.IsAbsent); err != nil {
+		directSysR := &runners.SystemdRunners{Run: fakeSystemctl(&directCalls, true, true)}
+		if err := svc.EnsureWith(nil, directSysR, "optfitsvc", opt.IsAbsent); err != nil {
 			t.Fatalf("direct Ensure: %v", err)
 		}
 
 		var planCalls [][]string
-		testseam.FakeSystemctl(t, fakeSystemctl(&planCalls, true, true))
-		recordApplyOption(t, "service_opt_Absent", func() {
+		planSysR := &runners.SystemdRunners{Run: fakeSystemctl(&planCalls, true, true)}
+		recordApplyOptionWithRunners(t, "service_opt_Absent", &runners.Set{Systemd: planSysR}, func() {
 			Service("optfitsvc", opt.IsAbsent)
 		})
 
@@ -407,9 +419,9 @@ func TestPlanOptionFitness_Service(t *testing.T) {
 
 	t.Run("OnChangeRestart", func(t *testing.T) {
 		var planCalls [][]string
-		testseam.FakeSystemctl(t, fakeSystemctl(&planCalls, true, true))
+		planSysR := &runners.SystemdRunners{Run: fakeSystemctl(&planCalls, true, true)}
 		path := filepath.Join(t.TempDir(), "service.conf")
-		recordApplyOption(t, "service_opt_on_change", func() {
+		recordApplyOptionWithRunners(t, "service_opt_on_change", &runners.Set{Systemd: planSysR}, func() {
 			conf := File(path, opt.WithContent("managed\n"))
 			Service("optfitsvc", opt.WithRestart, opt.OnChange(conf))
 		})
@@ -450,14 +462,13 @@ func TestPlanOptionFitness_Timer(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			var directCalls [][]string
-			testseam.FakeSystemctl(t, fakeSystemctl(&directCalls, c.active, c.enabled))
-			if err := timer.Ensure("optfit.timer", c.opts...); err != nil {
+			if err := timer.EnsureWith(&runners.SystemdRunners{Run: fakeSystemctl(&directCalls, c.active, c.enabled)}, "optfit.timer", c.opts...); err != nil {
 				t.Fatalf("direct Ensure: %v", err)
 			}
 
 			var planCalls [][]string
-			testseam.FakeSystemctl(t, fakeSystemctl(&planCalls, c.active, c.enabled))
-			recordApplyOption(t, "timer_opt_"+c.name, func() {
+			planSysR := &runners.SystemdRunners{Run: fakeSystemctl(&planCalls, c.active, c.enabled)}
+			recordApplyOptionWithRunners(t, "timer_opt_"+c.name, &runners.Set{Systemd: planSysR}, func() {
 				Timer("optfit.timer", c.opts...)
 			})
 
@@ -469,14 +480,13 @@ func TestPlanOptionFitness_Timer(t *testing.T) {
 
 	t.Run("Absent", func(t *testing.T) {
 		var directCalls [][]string
-		testseam.FakeSystemctl(t, fakeSystemctl(&directCalls, true, true))
-		if err := timer.Ensure("optfit.timer", opt.IsAbsent); err != nil {
+		if err := timer.EnsureWith(&runners.SystemdRunners{Run: fakeSystemctl(&directCalls, true, true)}, "optfit.timer", opt.IsAbsent); err != nil {
 			t.Fatalf("direct Ensure: %v", err)
 		}
 
 		var planCalls [][]string
-		testseam.FakeSystemctl(t, fakeSystemctl(&planCalls, true, true))
-		recordApplyOption(t, "timer_opt_Absent", func() {
+		planSysR := &runners.SystemdRunners{Run: fakeSystemctl(&planCalls, true, true)}
+		recordApplyOptionWithRunners(t, "timer_opt_Absent", &runners.Set{Systemd: planSysR}, func() {
 			Timer("optfit.timer", opt.IsAbsent)
 		})
 
@@ -487,9 +497,9 @@ func TestPlanOptionFitness_Timer(t *testing.T) {
 
 	t.Run("OnChangeRestart", func(t *testing.T) {
 		var planCalls [][]string
-		testseam.FakeSystemctl(t, fakeSystemctl(&planCalls, true, true))
+		planSysR := &runners.SystemdRunners{Run: fakeSystemctl(&planCalls, true, true)}
 		path := filepath.Join(t.TempDir(), "timer.conf")
-		recordApplyOption(t, "timer_opt_on_change", func() {
+		recordApplyOptionWithRunners(t, "timer_opt_on_change", &runners.Set{Systemd: planSysR}, func() {
 			conf := File(path, opt.WithContent("managed\n"))
 			Timer("optfit.timer", opt.WithRestart, opt.OnChange(conf))
 		})
@@ -520,15 +530,14 @@ func TestPlanOptionFitness_DaemonReload(t *testing.T) {
 	}
 
 	var directCalls [][]string
-	testseam.FakeSystemctl(t, fake(&directCalls))
 	resource.ResetReport()
-	if err := systemd.Ensure(opt.WithUser); err != nil {
+	if err := systemd.EnsureWith(&runners.SystemdRunners{Run: fake(&directCalls)}, opt.WithUser); err != nil {
 		t.Fatalf("direct Ensure: %v", err)
 	}
 
 	var planCalls [][]string
-	testseam.FakeSystemctl(t, fake(&planCalls))
-	recordApplyOption(t, "daemon_reload_opt", func() {
+	planSysR := &runners.SystemdRunners{Run: fake(&planCalls)}
+	recordApplyOptionWithRunners(t, "daemon_reload_opt", &runners.Set{Systemd: planSysR}, func() {
 		DaemonReload(opt.WithUser)
 	})
 
@@ -541,9 +550,9 @@ func TestPlanOptionFitness_DaemonReload(t *testing.T) {
 
 	t.Run("OnChangeAndLegacyIfChangedWatch", func(t *testing.T) {
 		var calls [][]string
-		testseam.FakeSystemctl(t, fake(&calls))
+		callsSysR := &runners.SystemdRunners{Run: fake(&calls)}
 		path := filepath.Join(t.TempDir(), "unit.service")
-		recordApplyOption(t, "daemon_reload_opt_on_change", func() {
+		recordApplyOptionWithRunners(t, "daemon_reload_opt_on_change", &runners.Set{Systemd: callsSysR}, func() {
 			unit := File(path, opt.WithContent("[Unit]\n"))
 			DaemonReload(opt.IfChanged, opt.WithWatch(unit.ID()), opt.OnChange(unit))
 		})
@@ -601,16 +610,15 @@ func TestPlanOptionFitness_SystemdTimer(t *testing.T) {
 
 	t.Setenv("HOME", homeDirect)
 	var directCalls [][]string
-	testseam.FakeSystemctl(t, fakeCtl(&directCalls))
 	resource.ResetReport()
-	if err := systemdtimer.Ensure("optfit", opts...); err != nil {
+	if err := systemdtimer.EnsureWith(&runners.SystemdRunners{Run: fakeCtl(&directCalls)}, "optfit", opts...); err != nil {
 		t.Fatalf("direct Ensure: %v", err)
 	}
 
 	t.Setenv("HOME", homePlan)
 	var planCalls [][]string
-	testseam.FakeSystemctl(t, fakeCtl(&planCalls))
-	recordApplyOption(t, "systemd_timer_opt_KitchenSink", func() {
+	planSysR := &runners.SystemdRunners{Run: fakeCtl(&planCalls)}
+	recordApplyOptionWithRunners(t, "systemd_timer_opt_KitchenSink", &runners.Set{Systemd: planSysR}, func() {
 		SystemdTimer("optfit", opts...)
 	})
 

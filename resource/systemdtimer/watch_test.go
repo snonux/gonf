@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
-	"github.com/snonux/gonf/internal/testseam"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/systemd"
 )
@@ -41,21 +41,22 @@ func applyWithCurrentUnitFiles(t *testing.T, timerConverged bool) bool {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	tm := newTimer("job", testTimerOpts(true)...)
-	dir := filepath.Join(home, ".config/systemd/user")
-	writeUnit(t, filepath.Join(dir, "job.service"), tm.serviceUnit())
-	writeUnit(t, filepath.Join(dir, "job.timer"), tm.timerUnit())
 
 	var ran [][]string
-	testseam.FakeSystemctl(t, func(_ string, args ...string) (string, string, int, error) {
+	sysR := &runners.SystemdRunners{Run: func(_ string, args ...string) (string, string, int, error) {
 		ran = append(ran, args)
 		if !timerConverged && (slices.Contains(args, "is-active") || slices.Contains(args, "is-enabled")) {
 			return "", "", 1, nil
 		}
 		return "", "", 0, nil
-	})
-	ensureReload = func(...opt.DaemonReloadOption) error { return nil }
-	t.Cleanup(func() { ensureReload = systemd.Ensure })
+	}}
+	tm := newTimerWith(sysR, "job", testTimerOpts(true)...)
+	dir := filepath.Join(home, ".config/systemd/user")
+	writeUnit(t, filepath.Join(dir, "job.service"), tm.serviceUnit())
+	writeUnit(t, filepath.Join(dir, "job.timer"), tm.timerUnit())
+
+	ensureReload = func(*runners.SystemdRunners, ...opt.DaemonReloadOption) error { return nil }
+	t.Cleanup(func() { ensureReload = systemd.EnsureWith })
 
 	resource.ResetReport()
 	t.Cleanup(resource.ResetReport)

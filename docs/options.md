@@ -148,10 +148,14 @@ full contract (the `newXWith`/`ensureWith` per-kind constructor shape,
 which hook to use from which kind of test) and `docs/plan.md`'s "Test seams
 note" for the `ApplyContext.Runners` field itself.
 
-Only `resource/cmd` (the `command` plan kind) has migrated so far. The
-other six kinds — `cron`, `package`, `service`, `timer`, `systemdtimer`,
-`daemon_reload` — still use the `internal/testseam` fakes described above;
-that migration is open task `4e2`, not an inconsistency to fix ad-hoc.
+`resource/cmd` (the `command` plan kind) migrated first (task qb2); task 4e2
+then migrated `service`, `timer`, `daemon_reload` and `systemd_timer` — the
+four kinds that funnel through `resource/systemd`'s shared systemctl
+`Client` (`NewClient` from a `*runners.SystemdRunners`), plus `service`'s
+own `*runners.ServiceRunners` for its BSD backends and manager detection.
+`cron` and `package` still use the `internal/testseam` fakes described
+above; that migration is tracked by open follow-up task(s), not an
+inconsistency to fix ad-hoc.
 
 A public `api.ApplyWithRunners` briefly existed for this (task qb2's first
 slice) so a cross-package test outside `api` (`resource/

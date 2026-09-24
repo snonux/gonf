@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -181,8 +180,10 @@ func TestApplyWithUserReachesUserCapableBackend(t *testing.T) {
 }
 
 // TestSelectBackend pins the name-to-backend table: each detector name
-// yields its backend type (BSD backends wired to the package runner, NetBSD
-// to /etc/rc.conf.d), and an unknown name or detector error is refused.
+// yields its backend type (BSD backends wired to the injected/real runner,
+// NetBSD to /etc/rc.conf.d), and an unknown name or detector error is
+// refused. The manager is forced by injecting svcManager directly (task
+// 4e2) instead of a process-global internal/testseam fake.
 func TestSelectBackend(t *testing.T) {
 	want := map[string]backend{
 		"systemd": systemdBackend{},
@@ -194,8 +195,8 @@ func TestSelectBackend(t *testing.T) {
 		t.Fatalf("backends table has %d entries, want %d", len(backends), len(want))
 	}
 	for name, wantB := range want {
-		testseam.FakeServiceManager(t, func() (string, error) { return name, nil })
-		got, err := selectBackend()
+		s := &Service{svcManager: func() (string, error) { return name, nil }}
+		got, err := s.selectBackend()
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -205,12 +206,12 @@ func TestSelectBackend(t *testing.T) {
 		assertWired(t, got)
 	}
 
-	testseam.FakeServiceManager(t, func() (string, error) { return "launchd", nil })
-	if _, err := selectBackend(); err == nil || !strings.Contains(err.Error(), "unsupported service manager") {
+	unknown := &Service{svcManager: func() (string, error) { return "launchd", nil }}
+	if _, err := unknown.selectBackend(); err == nil || !strings.Contains(err.Error(), "unsupported service manager") {
 		t.Errorf("unknown manager err = %v, want unsupported service manager", err)
 	}
-	testseam.FakeServiceManager(t, func() (string, error) { return "", errors.New("detect boom") })
-	if _, err := selectBackend(); err == nil || !strings.Contains(err.Error(), "detect boom") {
+	failing := &Service{svcManager: func() (string, error) { return "", errors.New("detect boom") }}
+	if _, err := failing.selectBackend(); err == nil || !strings.Contains(err.Error(), "detect boom") {
 		t.Errorf("detector err = %v, want detect boom", err)
 	}
 }

@@ -42,6 +42,16 @@ import (
 type Set struct {
 	// Command overrides resource/cmd's Cmd (the "command" plan kind).
 	Command *CommandRunners
+	// Systemd overrides resource/systemd's shared systemctl Client (task
+	// 4e2): consulted by Service's systemd backend, Timer and DaemonReload
+	// directly, and by SystemdTimer through its Timer/DaemonReload
+	// composition.
+	Systemd *SystemdRunners
+	// Service overrides resource/service's own touch points beyond the
+	// shared systemd client (task 4e2): the BSD backends' (rcctl,
+	// FreeBSD/NetBSD service(8)) command runner and the host
+	// service-manager detector.
+	Service *ServiceRunners
 }
 
 // CommandRunners overrides resource/cmd's two external touch points: Run
@@ -52,6 +62,24 @@ type Set struct {
 type CommandRunners struct {
 	Run   func(opts exec.Opts, name string, args ...string) (stdout, stderr string, exitCode int, err error)
 	Probe func(name string, args ...string) (stdout, stderr string, exitCode int, err error)
+}
+
+// SystemdRunners overrides resource/systemd's shared systemctl invocation
+// (the same shape internal/exec.Run has, and resource/systemd's own
+// RunFunc): every systemctl helper in that package (IsActive, IsEnabled,
+// Run, Command) funnels through it via a resource/systemd.Client built with
+// NewClient(sr).
+type SystemdRunners struct {
+	Run func(name string, args ...string) (stdout, stderr string, exitCode int, err error)
+}
+
+// ServiceRunners overrides resource/service's own touch points that do not
+// go through resource/systemd's Client: Run drives the BSD backends (rcctl,
+// FreeBSD/NetBSD service(8)) the same way internal/exec.Run would, Manager
+// overrides host service-manager detection (detectServiceManager).
+type ServiceRunners struct {
+	Run     func(name string, args ...string) (stdout, stderr string, exitCode int, err error)
+	Manager func() (name string, err error)
 }
 
 // ctxKey is the unexported type of the context key WithSet/FromContext
@@ -89,4 +117,20 @@ func CommandOf(s *Set) *CommandRunners {
 		return nil
 	}
 	return s.Command
+}
+
+// SystemdOf returns s.Systemd, nil-safe for a nil s.
+func SystemdOf(s *Set) *SystemdRunners {
+	if s == nil {
+		return nil
+	}
+	return s.Systemd
+}
+
+// ServiceOf returns s.Service, nil-safe for a nil s.
+func ServiceOf(s *Set) *ServiceRunners {
+	if s == nil {
+		return nil
+	}
+	return s.Service
 }

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -8,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
-	"github.com/snonux/gonf/internal/testseam"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/systemd"
@@ -22,11 +23,16 @@ type mergedApplyFixture struct {
 	// must never run before it exists.
 	lastInput string
 	invoked   [][]string
+	// sysR is the injected systemctl runner (task 4e2, replacing
+	// internal/testseam.FakeSystemctl) applyBody threads into every apply
+	// through runners.WithSet.
+	sysR *runners.SystemdRunners
 }
 
 // newMergedApplyFixture skips off systemd hosts, prepares the sources and
-// stubs systemctl, recording every invocation. The stub flags a
-// daemon-reload that runs before lastInput (default: dst/b.service) exists.
+// builds the systemctl runner injected into every apply, recording every
+// invocation. It flags a daemon-reload that runs before lastInput (default:
+// dst/b.service) exists.
 func newMergedApplyFixture(t *testing.T) *mergedApplyFixture {
 	t.Helper()
 	if runtime.GOOS != "linux" || !systemd.Detected() {
@@ -34,7 +40,7 @@ func newMergedApplyFixture(t *testing.T) *mergedApplyFixture {
 	}
 	f := &mergedApplyFixture{src: twoUnitSources(t), dst: t.TempDir()}
 	f.lastInput = filepath.Join(f.dst, "b.service")
-	testseam.FakeSystemctl(t, func(name string, args ...string) (string, string, int, error) {
+	f.sysR = &runners.SystemdRunners{Run: func(name string, args ...string) (string, string, int, error) {
 		if name != "systemctl" {
 			return "", "", 0, nil
 		}
@@ -45,7 +51,7 @@ func newMergedApplyFixture(t *testing.T) *mergedApplyFixture {
 			}
 		}
 		return "", "", 0, nil
-	})
+	}}
 	return f
 }
 
@@ -66,7 +72,8 @@ func (f *mergedApplyFixture) applyBody(t *testing.T, body func()) {
 	t.Helper()
 	ops := systemdUnitsFixture(t, body)
 	f.invoked = nil
-	if err := plan.Apply(ops, plan.Facts{GOOS: runtime.GOOS}, ""); err != nil {
+	ctx := runners.WithSet(context.Background(), &runners.Set{Systemd: f.sysR})
+	if err := plan.ApplyWithContext(ctx, ops, plan.Facts{GOOS: runtime.GOOS}, ""); err != nil {
 		t.Fatalf("plan.Apply: %v", err)
 	}
 }

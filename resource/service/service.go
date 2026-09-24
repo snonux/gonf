@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"slices"
 
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
 	opt "github.com/snonux/gonf/resource/options"
@@ -34,12 +35,34 @@ type Service struct {
 	restart bool
 	reload  bool
 	user    bool // systemd --user only
+	// svcRun and svcManager are the injected overrides (nil: the real ones)
+	// of runCmd and detectServiceManager, used by the BSD backends and
+	// service-manager detection (see run(), detectManager()). sysClient is
+	// the systemd runner override the systemd backend uses. Set by
+	// newServiceWith from an injected *runners.ServiceRunners/
+	// *runners.SystemdRunners (task 4e2, mirroring resource/cmd.Cmd.runFn
+	// from qb2) instead of a process-global internal/testseam fake.
+	svcRun     runner
+	svcManager func() (string, error)
+	sysClient  systemd.Client
 }
 
-// newService builds a Service with opts applied. An option misuse is left in
-// its embed.Misuse for the caller to check.
+// newService builds a Service with opts applied, using the real runners. An
+// option misuse is left in its embed.Misuse for the caller to check.
 func newService(name string, opts []opt.ServiceOption) *Service {
-	s := &Service{name: name}
+	return newServiceWith(nil, nil, name, opts)
+}
+
+// newServiceWith is newService with sr/sysR's runners injected (nil: the
+// real ones): the service plan.Handler's apply-time constructor (task 4e2,
+// mirroring resource/cmd's newCmdWith from qb2) and this package's own
+// tests use it directly instead of a package-global fake.
+func newServiceWith(sr *runners.ServiceRunners, sysR *runners.SystemdRunners, name string, opts []opt.ServiceOption) *Service {
+	s := &Service{name: name, sysClient: systemd.NewClient(sysR)}
+	if sr != nil {
+		s.svcRun = sr.Run
+		s.svcManager = sr.Manager
+	}
 	for _, o := range opts {
 		o.Apply(s)
 	}
@@ -76,7 +99,18 @@ func Present(name string, opts ...opt.ServiceOption) resource.Resource {
 // Ensure applies a service without registering it or recording a plan draft.
 // An option misuse is returned instead of applied around.
 func Ensure(name string, opts ...opt.ServiceOption) error {
-	s := newService(name, opts)
+	return EnsureWith(nil, nil, name, opts...)
+}
+
+// EnsureWith is Ensure with sr/sysR's runners (nil: the real ones) injected
+// — the plan handler's apply-time entry (task 4e2, mirroring resource/cmd's
+// ensureWith from qb2), instead of a process-global internal/testseam fake.
+// Exported (unlike resource/cmd's unexported ensureWith) so a cross-package
+// caller that must fake resource/service's backends without a process
+// global — such as api's own option-fitness tests — can inject them the
+// same way a plan apply does.
+func EnsureWith(sr *runners.ServiceRunners, sysR *runners.SystemdRunners, name string, opts ...opt.ServiceOption) error {
+	s := newServiceWith(sr, sysR, name, opts)
 	if err := s.MisuseErr(); err != nil {
 		return err
 	}
@@ -92,11 +126,28 @@ func Absent(name string, opts ...opt.ServiceOption) resource.Resource {
 // apply selects the host's backend and converges s through it. The shared
 // policy lives in applyWith (converge.go); backends are in backend.go.
 func (s *Service) apply() error {
-	b, err := selectBackend()
+	b, err := s.selectBackend()
 	if err != nil {
 		return err
 	}
 	return s.applyWith(b)
+}
+
+// run returns s's injected BSD-backend runner, or the real one.
+func (s *Service) run() runner {
+	if s.svcRun != nil {
+		return s.svcRun
+	}
+	return runCmd
+}
+
+// detectManager returns s's injected service-manager detector, or the real
+// one (detectServiceManager).
+func (s *Service) detectManager() (string, error) {
+	if s.svcManager != nil {
+		return s.svcManager()
+	}
+	return detectServiceManager()
 }
 
 // planDraft records s as a "service" plan draft under id, including its

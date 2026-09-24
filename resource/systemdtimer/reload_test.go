@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	opt "github.com/snonux/gonf/api/options"
-	"github.com/snonux/gonf/internal/testseam"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/systemd"
 )
@@ -62,13 +62,13 @@ func TestApplyPathsBothEnsureGatedReload(t *testing.T) {
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	testseam.FakeSystemctl(t, func(string, ...string) (string, string, int, error) { return "", "", 0, nil })
+	sysR := &runners.SystemdRunners{Run: func(string, ...string) (string, string, int, error) { return "", "", 0, nil }}
 	var calls [][]opt.DaemonReloadOption
-	ensureReload = func(opts ...opt.DaemonReloadOption) error {
+	ensureReload = func(_ *runners.SystemdRunners, opts ...opt.DaemonReloadOption) error {
 		calls = append(calls, opts)
 		return nil
 	}
-	t.Cleanup(func() { ensureReload = systemd.Ensure })
+	t.Cleanup(func() { ensureReload = systemd.EnsureWith })
 
 	dir := filepath.Join(home, ".config/systemd/user")
 	wantWatch := []string{"File[" + filepath.Join(dir, "job.service") + "]", "File[" + filepath.Join(dir, "job.timer") + "]"}
@@ -79,7 +79,7 @@ func TestApplyPathsBothEnsureGatedReload(t *testing.T) {
 			opts = append(opts, opt.IsAbsent)
 		}
 		resource.ResetReport()
-		if err := newTimer("job", opts...).apply(); err != nil {
+		if err := newTimerWith(sysR, "job", opts...).apply(); err != nil {
 			t.Fatalf("absent=%t apply: %v", absent, err)
 		}
 		if len(calls) != 1 {

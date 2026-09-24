@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
 	"github.com/snonux/gonf/resource/file"
@@ -38,9 +39,10 @@ var (
 	_ opt.Sensitivable           = (*SystemdTimer)(nil)
 )
 
-// ensureReload applies a daemon-reload; tests swap it to observe the options
-// both apply paths hand it without running systemctl.
-var ensureReload = systemd.Ensure
+// ensureReload applies a daemon-reload through systemd.EnsureWith with the
+// caller's injected systemd runner (nil: the real one); tests swap it to
+// observe the options both apply paths hand it without running systemctl.
+var ensureReload = systemd.EnsureWith
 
 // SystemdTimer manages a named systemd .timer with a companion oneshot .service.
 //
@@ -67,14 +69,30 @@ type SystemdTimer struct {
 	user               bool
 	restart            bool
 	enableOnly         bool
+	// sysR is the systemd runner override (nil: the real one) this timer
+	// was built with (newTimerWith); it is threaded into the Timer and
+	// DaemonReload it composes (applyPresent, applyAbsent,
+	// ensureDaemonReload). Set by the plan handler from its
+	// ApplyContext.Runners.Systemd (task 4e2) and directly by this
+	// package's own tests, instead of a process-global internal/testseam
+	// fake.
+	sysR *runners.SystemdRunners
 }
 
 // newTimer builds a SystemdTimer for name (with or without a .timer or
-// .service suffix) and applies opts. An option misuse is left in its
-// embed.Misuse for the caller to check.
+// .service suffix) and applies opts, using the real systemd runner.
 func newTimer(name string, opts ...opt.SystemdTimerOption) *SystemdTimer {
+	return newTimerWith(nil, name, opts...)
+}
+
+// newTimerWith is newTimer with sysR's systemd runner injected (nil: the
+// real one): the systemd_timer plan.Handler's apply-time constructor (task
+// 4e2) and this package's own tests use it directly instead of a
+// package-global fake. An option misuse is left in its embed.Misuse for the
+// caller to check.
+func newTimerWith(sysR *runners.SystemdRunners, name string, opts ...opt.SystemdTimerOption) *SystemdTimer {
 	base, unit := normalizeName(name)
-	t := &SystemdTimer{name: unit, base: base}
+	t := &SystemdTimer{name: unit, base: base, sysR: sysR}
 	for _, o := range opts {
 		o.Apply(t)
 	}
@@ -169,7 +187,18 @@ func Present(name string, opts ...opt.SystemdTimerOption) resource.Resource {
 // Ensure builds and applies a systemd timer without registering or recording
 // a draft. An option misuse is returned instead of applied around.
 func Ensure(name string, opts ...opt.SystemdTimerOption) error {
-	t := newTimer(name, opts...)
+	return EnsureWith(nil, name, opts...)
+}
+
+// EnsureWith is Ensure with sysR's systemd runner (nil: the real one)
+// injected — the plan handler's apply-time entry (task 4e2, mirroring
+// resource/cmd's ensureWith from qb2), instead of a process-global
+// internal/testseam fake. Exported (unlike resource/cmd's unexported
+// ensureWith) so a cross-package caller that must fake this composite's
+// systemctl calls without a process global — such as api's own
+// option-fitness tests — can inject them the same way a plan apply does.
+func EnsureWith(sysR *runners.SystemdRunners, name string, opts ...opt.SystemdTimerOption) error {
+	t := newTimerWith(sysR, name, opts...)
 	if err := t.MisuseErr(); err != nil {
 		return err
 	}
@@ -261,7 +290,7 @@ func (t *SystemdTimer) apply() error {
 // files changed. Shared by the present and absent paths so both gate the
 // reload identically.
 func (t *SystemdTimer) ensureDaemonReload(svcID, timerFileID string) error {
-	return ensureReload(t.daemonReloadOpts(svcID, timerFileID)...)
+	return ensureReload(t.sysR, t.daemonReloadOpts(svcID, timerFileID)...)
 }
 
 // daemonReloadOpts is the daemon-reload configuration for t's unit files:
@@ -307,7 +336,7 @@ func (t *SystemdTimer) applyPresent(dir, svcPath, timerPath, svcID, timerFileID 
 	if t.enableOnly {
 		timerOpts = append(timerOpts, opt.WithEnableOnly)
 	}
-	return timer.Ensure(t.name, timerOpts...)
+	return timer.EnsureWith(t.sysR, t.name, timerOpts...)
 }
 
 // applyAbsent stops and disables the timer (best effort), removes both unit
@@ -321,7 +350,7 @@ func (t *SystemdTimer) applyAbsent(svcPath, timerPath, svcID, timerFileID string
 		timerOpts = append(timerOpts, opt.WithEnableOnly)
 	}
 	// Best-effort stop/disable before removing unit files.
-	if err := timer.Ensure(t.name, timerOpts...); err != nil {
+	if err := timer.EnsureWith(t.sysR, t.name, timerOpts...); err != nil {
 		logger.Debug("SystemdTimer[%s]: stop/disable before remove: %v", t.base, err)
 	}
 
