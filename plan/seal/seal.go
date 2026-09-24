@@ -11,6 +11,11 @@
 // anything else that needs to seal or open a plan artifact, have one
 // reviewed place to do it.
 //
+// Besides file-backed operator identities (LoadIdentities), it offers
+// GenerateEphemeral, EncodeEphemeral and ParseEphemeral: a single-use,
+// in-memory-only identity with a one-line text form for stdin delivery
+// (docs/plan-encryption.md, phase 4 design, "Key lifecycle").
+//
 // # Recipient policy: age1pq (hybrid ML-KEM-768 + X25519) only
 //
 // age refuses to encrypt one file to both hybrid post-quantum and classic
