@@ -849,3 +849,67 @@ func TestRunRelayedOrphanOutlivesGonf(t *testing.T) {
 		t.Fatalf("helper stderr = %q, want the orphan's late line", got)
 	}
 }
+
+// relayStraddle runs an orphan that writes head, waits for the test's gate
+// file, then writes rest and touches a done marker, relayed by RunRelayed to
+// a file with a 100ms relay delay, so releaseOrphan's deadline always falls
+// between head and rest. path, when not empty, replaces the test process's
+// PATH for handOff's cat lookup. It returns the destination's content once
+// it ends in a newline (or after 5s).
+func relayStraddle(t *testing.T, head, rest, path string) string {
+	t.Helper()
+	t.Cleanup(RedirectUnprefixed(&syncBuilder{}, LevelInfo)) // swallow the hand-off warning
+	setRelayWaitDelay(t, 100*time.Millisecond)
+	dir := t.TempDir()
+	gate, marker := filepath.Join(dir, "go"), filepath.Join(dir, "done")
+	dst, err := os.Create(filepath.Join(dir, "stderr"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dst.Close() }()
+	script := "(printf '%s' '" + head + "'; while [ ! -e " + gate + " ]; do sleep 0.05; done; " +
+		"printf '%s' '" + rest + "' && touch " + marker + ") & exit 0"
+	cmd := exec.Command("/bin/sh", "-c", script)
+	cmd.Env = []string{"PATH=/usr/bin:/bin"}
+	if path != "" {
+		t.Setenv("PATH", path)
+	}
+	if err := RunRelayed(cmd, dst); err != nil {
+		t.Fatalf("RunRelayed = %v", err)
+	}
+	if err := os.WriteFile(gate, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !waitForFile(t, marker, 5*time.Second) {
+		t.Fatal("the orphan never wrote its rest")
+	}
+	var got []byte
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		if got, _ = os.ReadFile(dst.Name()); strings.HasSuffix(string(got), "\n") {
+			break
+		}
+	}
+	return string(got)
+}
+
+// A secret straddling releaseOrphan's deadline stays whole when the cat
+// hand-off fails (task zg2): the fallback resumes with the unterminated
+// tail still pending, so the line is redacted once it completes. Before the
+// fix relayPipe flushed the tail on the deadline, so both halves went out
+// raw, one before and one after the failed hand-off.
+func TestRunRelayedFallbackKeepsStraddlingSecretWhole(t *testing.T) {
+	installFake(t, "hunter2-db-password-42")
+	got := relayStraddle(t, "connecting with hunter2-db-", "password-42 done\n", t.TempDir())
+	if got != "connecting with [redacted] done\n" {
+		t.Fatalf("destination = %q, want the straddling secret redacted whole", got)
+	}
+}
+
+// A successful cat hand-off still forwards the unterminated tail exactly
+// once, before anything cat copies (task zg2 moved that flush from
+// relayPipe's deadline branch into handOff).
+func TestRunRelayedHandOffFlushesTailOnceInOrder(t *testing.T) {
+	if got := relayStraddle(t, "head-", "rest\n", ""); got != "head-rest\n" {
+		t.Fatalf("destination = %q, want the tail once, before cat's output", got)
+	}
+}

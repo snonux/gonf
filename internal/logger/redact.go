@@ -280,19 +280,26 @@ func (r *RedactingWriter) forwardSafePrefix() error {
 	return nil
 }
 
-// relayPipe copies pr through out until end of file (it then closes pr) or
-// until pr's read deadline stops it (pr stays open for handOff), and reports
-// on stopped whether it reached end of file. Either way it closes out,
-// flushing the unterminated tail before cat may take over the pipe; a
-// RedactingWriter stays usable after Close, which releaseOrphan's fallback
-// relies on to continue with the same writer (and so the same redactor).
+// relayPipe copies pr through out until end of file (or another read or
+// write error; it then closes out, flushing the unterminated tail, and pr)
+// or until pr's read deadline stops it, and reports on stopped whether it
+// reached end of file.
+//
+// On the deadline it leaves both pr (for handOff) and out's pending tail
+// alone (task zg2): the tail may end in the first half of a secret whose
+// rest the orphan has not written yet, and Redact cannot match half a
+// secret. Only releaseOrphan learns whether cat takes over (handOff then
+// flushes the tail right before starting cat) or the relay resumes (the
+// same out then still holds the tail, so the line is redacted whole once it
+// completes). relayPipe used to close out on the deadline as well, which on
+// that fallback sent the two halves out raw, one on each side of it.
 func relayPipe(pr *os.File, out *RedactingWriter, stopped chan<- bool) {
 	_, err := io.Copy(out, pr)
-	_ = out.Close()
 	if errors.Is(err, os.ErrDeadlineExceeded) {
 		stopped <- false
 		return
 	}
+	_ = out.Close()
 	_ = pr.Close()
 	stopped <- true
 }
@@ -303,8 +310,11 @@ func relayPipe(pr *os.File, out *RedactingWriter, stopped chan<- bool) {
 // draining through out in the background. A failed hand-off resumes with the
 // same out rather than a fresh RedactingWriter, which would re-read the
 // package-global redactor and forward raw had it been cleared meanwhile
-// (task 5g2); the first relayPipe has already returned (it sent on stopped),
-// so the two never write concurrently.
+// (task 5g2), and with out's unterminated tail still pending when the
+// hand-off failed before flushing it (cat not on PATH), so a secret
+// straddling the deadline is redacted whole (task zg2). The first relayPipe
+// has already returned (it sent on stopped), so the two never write
+// concurrently.
 func releaseOrphan(name string, pr *os.File, out *RedactingWriter, stopped chan bool) {
 	f, isFile := out.w.(*os.File)
 	if !isFile || pr.SetReadDeadline(time.Now()) != nil {
@@ -314,7 +324,7 @@ func releaseOrphan(name string, pr *os.File, out *RedactingWriter, stopped chan 
 	if eof := <-stopped; eof {
 		return // the orphan closed the pipe meanwhile
 	}
-	if err := handOff(pr, f); err != nil {
+	if err := handOff(pr, f, out); err != nil {
 		Warn("%s exited but a process it started still holds its output, and handing it over failed (%v); relaying it while gonf runs", name, err)
 		_ = pr.SetReadDeadline(time.Time{})
 		go relayPipe(pr, out, stopped)
@@ -330,10 +340,27 @@ func releaseOrphan(name string, pr *os.File, out *RedactingWriter, stopped chan 
 // then killed by the hangup once gonf exits, leaving the orphan to die of
 // SIGPIPE). It then closes gonf's copy of pr and reaps cat in the
 // background. cat exits when the last writer of the pipe closes it.
-func handOff(pr, f *os.File) error {
+//
+// handOff also flushes out's unterminated tail (out.Close, redacted as far
+// as a partial line allows), and only once the hand-off is nearly certain:
+// after cat resolved on PATH and right before starting it (task zg2).
+// Flushing after Start would race cat, which could copy the orphan's next
+// bytes ahead of the tail; flushing before the lookup would, if it fails,
+// leave the fallback relay resuming mid-line with the tail's first half of
+// a straddling secret already gone out raw. A lookup failure therefore
+// returns with the tail still pending. What cat copies afterwards is
+// unredacted anyway (see RunRelayed). The one residual window is a Start
+// that fails after a successful lookup (a fork or exec failure): the tail
+// has gone out by then, so a secret straddling the deadline can still
+// escape as two halves there.
+func handOff(pr, f *os.File, out *RedactingWriter) error {
 	helper := exec.Command("cat")
+	if helper.Err != nil {
+		return helper.Err // cat not found: the tail stays pending
+	}
 	helper.Stdin, helper.Stdout, helper.Stderr = pr, f, f
 	helper.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	_ = out.Close() // flush the tail ahead of anything cat copies
 	if err := helper.Start(); err != nil {
 		return err
 	}
