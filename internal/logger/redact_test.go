@@ -87,11 +87,12 @@ func (nonProgressingRedactor) FlushPoint(s string) (out string, consumed int) {
 // which calls MaxPending) and its forced-flush decision (forwardSafePrefix)
 // -- the same r.mu-guarded critical section, and exactly the ordering a
 // test's t.Cleanup(func() { SetRedactor(nil) }) can produce concurrently in
-// production code paths that share this writer. Before the fix, Write's two
-// independent currentRedactor() reads meant forwardSafePrefix would then see
-// the redactor as already nil and forward its whole pending buffer
-// unredacted; the fix reads currentRedactor() once, up front, so
-// forwardSafePrefix keeps using the same redactor Write already captured.
+// production code paths that share this writer. Before task sd2's fix,
+// Write's two independent currentRedactor() reads meant forwardSafePrefix
+// would then see the redactor as already nil and forward its whole pending
+// buffer unredacted. sd2 read currentRedactor() once per Write; task 5g2
+// went further and fixes the redactor at construction, so neither Write nor
+// Close consults the global at all.
 type raceRedactor struct {
 	fakeRedactor
 	cleared bool
@@ -189,12 +190,13 @@ func TestRedactingWriterNonPositiveConsumedIsNoOp(t *testing.T) {
 // (b)'s fix: a single Write call never straddles two different redactor
 // states. raceRedactor clears the installed redactor (as a test's
 // t.Cleanup(func(){ SetRedactor(nil) }) does concurrently in production)
-// from inside the very first of Write's redactor reads (MaxPending, via
-// pendingLimit) -- the same seam finding (b) identified. Before the fix,
-// forwardSafePrefix's own, independent currentRedactor() read would then see
-// nil and dump the whole pending buffer -- including the secret -- raw. With
-// the fix, Write captured the redactor once before pendingLimit ran, so
-// forwardSafePrefix still redacts through it.
+// from inside Write's first redactor call (MaxPending, via pendingLimit) --
+// the same seam finding (b) identified. Before the fix, forwardSafePrefix's
+// own, independent currentRedactor() read would then see nil and dump the
+// whole pending buffer -- including the secret -- raw. Now the writer holds
+// the redactor it was built with (task 5g2), so forwardSafePrefix still
+// redacts through it. TestRedactingWriterKeepsOneRedactorForItsLifetime
+// covers the same guarantee across calls (Write, then Close).
 func TestRedactingWriterWriteUsesOneRedactorPerCall(t *testing.T) {
 	secretStr := "S3cr3tP@ss"
 	red := &raceRedactor{fakeRedactor: fakeRedactor{secret: secretStr}}
@@ -206,8 +208,7 @@ func TestRedactingWriterWriteUsesOneRedactorPerCall(t *testing.T) {
 	// The secret sits well before the forced-flush cut (near the very end),
 	// so it is part of what forwardSafePrefix forwards this Write call, not
 	// what it holds back -- the leak (or lack of one) is visible without a
-	// Close, which runs under a separate, later currentRedactor() read and
-	// so is not part of this call's TOCTOU window.
+	// Close.
 	payload := secretStr + strings.Repeat("x", maxPendingLine)
 	if _, err := w.Write([]byte(payload)); err != nil {
 		t.Fatal(err)
@@ -218,6 +219,89 @@ func TestRedactingWriterWriteUsesOneRedactorPerCall(t *testing.T) {
 	got := out.String()
 	if strings.Contains(got, secretStr) {
 		t.Fatalf("forwardSafePrefix used the just-cleared (nil) redactor instead of Write's single captured read: raw secret leaked: %q", got)
+	}
+}
+
+// TestRedactingWriterKeepsOneRedactorForItsLifetime pins task 5g2: a
+// RedactingWriter redacts with the redactor installed when it was built,
+// for every Write and for Close, even after SetRedactor(nil) removes it
+// (a test's t.Cleanup can do that while a relayPipe that releaseOrphan kept
+// alive is still draining). Before the fix Write and Close each re-read the
+// package-global, so a secret written or held pending across the clear was
+// forwarded raw: Close's unterminated tail and any later Write's complete
+// line alike. Each subtest clears the redactor at a different point of the
+// writer's life.
+func TestRedactingWriterKeepsOneRedactorForItsLifetime(t *testing.T) {
+	const secretStr = "S3cr3tP@ss"
+	cases := []struct {
+		name  string
+		steps func(t *testing.T, w *RedactingWriter)
+	}{
+		{"clear between last Write and Close", func(t *testing.T, w *RedactingWriter) {
+			mustWrite(t, w, "tail "+secretStr)
+			SetRedactor(nil)
+		}},
+		{"clear before a Write", func(t *testing.T, w *RedactingWriter) {
+			SetRedactor(nil)
+			mustWrite(t, w, "line "+secretStr+"\n")
+		}},
+		{"clear mid-line", func(t *testing.T, w *RedactingWriter) {
+			mustWrite(t, w, "split S3cr")
+			SetRedactor(nil)
+			mustWrite(t, w, "3tP@ss\n")
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			installFake(t, secretStr)
+			var out strings.Builder
+			w := NewRedactingWriter(&out)
+			tc.steps(t, w)
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if got := out.String(); strings.Contains(got, secretStr) || !strings.Contains(got, "[redacted]") {
+				t.Fatalf("output = %q, want the secret redacted by the redactor installed at construction", got)
+			}
+		})
+	}
+}
+
+// TestRedactingWriterCloseRacingSetRedactor drives the same lifetime
+// guarantee under real concurrency (run with -race): one goroutine clears
+// the redactor while another writes an unterminated secret and closes. In
+// every interleaving the output must stay redacted. Whether the clear lands
+// before Close is up to the scheduler, so this is a race-detector and
+// smoke check; TestRedactingWriterKeepsOneRedactorForItsLifetime is the
+// deterministic proof of the leak and its fix.
+func TestRedactingWriterCloseRacingSetRedactor(t *testing.T) {
+	const secretStr = "S3cr3tP@ss"
+	for range 50 {
+		installFake(t, secretStr)
+		var out strings.Builder
+		w := NewRedactingWriter(&out)
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			SetRedactor(nil)
+		}()
+		mustWrite(t, w, "tail "+secretStr)
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		wg.Wait()
+		if got := out.String(); strings.Contains(got, secretStr) {
+			t.Fatalf("raw secret leaked across a concurrent SetRedactor(nil): %q", got)
+		}
+	}
+}
+
+// mustWrite writes s to w and fails the test on an error.
+func mustWrite(t *testing.T, w *RedactingWriter, s string) {
+	t.Helper()
+	if _, err := w.Write([]byte(s)); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -674,6 +758,49 @@ func TestRunRelayedHandsOrphanToFile(t *testing.T) {
 	}
 	if string(got) != "hi\nlate\n" {
 		t.Fatalf("destination = %q, want both lines", got)
+	}
+}
+
+// When handing the orphan to cat fails (here: no cat on PATH), the relay
+// keeps draining in the background, and it must keep the redactor it
+// started with (task 5g2). The orphan writes its secret-bearing line only
+// after the test cleared the redactor; before the fix, releaseOrphan's
+// fallback built a fresh RedactingWriter, which re-read the now-nil global
+// and forwarded that line raw.
+func TestRunRelayedFallbackKeepsRedactorAfterClear(t *testing.T) {
+	const secretStr = "S3cr3tP@ss"
+	installFake(t, secretStr)
+	t.Cleanup(RedirectUnprefixed(&syncBuilder{}, LevelInfo)) // swallow the hand-off warning
+	setRelayWaitDelay(t, 100*time.Millisecond)
+	dir := t.TempDir()
+	gate, marker := filepath.Join(dir, "go"), filepath.Join(dir, "done")
+	dst, err := os.Create(filepath.Join(dir, "stderr"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dst.Close() }()
+	script := "(while [ ! -e " + gate + " ]; do sleep 0.05; done; echo late " + secretStr + " && touch " + marker + ") & exit 0"
+	cmd := exec.Command("/bin/sh", "-c", script)
+	cmd.Env = []string{"PATH=/usr/bin:/bin"}
+	t.Setenv("PATH", t.TempDir()) // handOff's cat cannot be found
+	if err := RunRelayed(cmd, dst); err != nil {
+		t.Fatalf("RunRelayed = %v", err)
+	}
+	SetRedactor(nil)
+	if err := os.WriteFile(gate, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !waitForFile(t, marker, 5*time.Second) {
+		t.Fatal("the orphan never wrote its late line")
+	}
+	var got []byte
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		if got, _ = os.ReadFile(dst.Name()); strings.Contains(string(got), "late") {
+			break
+		}
+	}
+	if s := string(got); strings.Contains(s, secretStr) || !strings.Contains(s, "late [redacted]") {
+		t.Fatalf("destination = %q, want the late line redacted by the relay's original redactor", s)
 	}
 }
 

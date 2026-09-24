@@ -12,9 +12,9 @@ import (
 )
 
 // maxPendingLine bounds how much of an unterminated line a RedactingWriter
-// holds back when no redactor is installed (Write uses
-// Redactor.MaxPending instead once SetRedactor installs one, so the real
-// threshold tracks the installed redactor's own split-guard rather than an
+// holds back when it was built with no redactor installed (Write uses its
+// redactor's Redactor.MaxPending instead when SetRedactor had installed one,
+// so the real threshold tracks that redactor's own split-guard rather than an
 // independent literal here — see Redactor.MaxPending and
 // secret.Values.MaxPending). internal/logger cannot import secret to share
 // its MaxSplitGuard constant directly: secret imports internal/safepath,
@@ -78,23 +78,41 @@ type Redactor interface {
 // secret split across two writes is still redacted (a multi-line secret is
 // caught line by line: secret.Values tracks its strong lines as forms of
 // their own). An unterminated run longer than the installed redactor's
-// MaxPending (maxPendingLine with none installed) is forwarded only up to
+// MaxPending (maxPendingLine with none) is forwarded only up to
 // the redactor's FlushPoint. It is for output gonf relays but did
 // not format itself: an elevated apply child or a remote gonf over ssh,
 // neither of which has the controller's secret registry. Close forwards the
 // rest. It is safe for concurrent use.
+//
+// A RedactingWriter redacts with one redactor for its whole lifetime: the
+// one installed (SetRedactor) when NewRedactingWriter built it. Every Write
+// decision (each forwarded line, the MaxPending threshold, the forced
+// FlushPoint cut) and Close's final tail all use that same value. Production
+// installs the redactor once, in api's init, and never clears it, but tests
+// do (SetRedactor(nil) via t.Cleanup) while a relayPipe that releaseOrphan
+// kept alive may still be draining. Re-reading the package-global per call
+// (as Write and Close once did) let such a clear land between two calls, so
+// a later Write forwarded a complete line, or Close the final unterminated
+// line, unredacted (task 5g2); re-reading it within one call could even mix
+// one redactor's MaxPending with forwardSafePrefix's no-redactor branch,
+// which forwards the whole pending buffer raw (task sd2). The flip side is
+// that a writer built before any redactor is installed never redacts, which
+// production's init-time installation rules out.
 type RedactingWriter struct {
 	mu      sync.Mutex
 	w       io.Writer
+	red     Redactor // fixed at construction; nil forwards unchanged
 	pending []byte
 }
 
 // redactedWriter is NewRedactedWriter's writer.
 type redactedWriter struct{ w io.Writer }
 
-// NewRedactingWriter returns a RedactingWriter forwarding to w.
+// NewRedactingWriter returns a RedactingWriter forwarding to w, redacting
+// with the redactor installed right now for its whole lifetime (see
+// RedactingWriter).
 func NewRedactingWriter(w io.Writer) *RedactingWriter {
-	return &RedactingWriter{w: w}
+	return &RedactingWriter{w: w, red: currentRedactor()}
 }
 
 // Redact applies the redactor installed with SetRedactor to s, or returns s
@@ -138,13 +156,17 @@ func RunRelayed(cmd *exec.Cmd, w io.Writer) error {
 		return err
 	}
 	_ = pw.Close() // the child holds its own copy
+	// One RedactingWriter serves the whole relay, including releaseOrphan's
+	// fallback continuation, so the relay redacts with one redactor for its
+	// whole lifetime (see RedactingWriter).
+	out := NewRedactingWriter(w)
 	stopped := make(chan bool, 1)
-	go relayPipe(pr, w, stopped)
+	go relayPipe(pr, out, stopped)
 	err = cmd.Wait()
 	select {
 	case <-stopped:
 	case <-time.After(relayWaitDelay):
-		releaseOrphan(cmd.Path, pr, w, stopped)
+		releaseOrphan(cmd.Path, pr, out, stopped)
 	}
 	return err
 }
@@ -158,60 +180,50 @@ func NewRedactedWriter(w io.Writer) io.Writer {
 }
 
 // Write buffers p and forwards every completed line, redacted. It reports
-// len(p) unless the destination fails.
-//
-// currentRedactor is read exactly once, up front, and that single value is
-// threaded through every decision this call makes (each forward, the
-// pendingLimit threshold, and forwardSafePrefix). Production never clears
-// the installed redactor, but tests do (SetRedactor(nil) via t.Cleanup); if
-// Write instead re-read the package-global at each step, a SetRedactor
-// landing mid-call could make it pick pendingLimit's threshold from one
-// redactor and then, past that threshold, take forwardSafePrefix's nil
-// branch — which forwards the entire pending buffer unredacted. Reading
-// once makes that impossible: this call sees one redactor state throughout.
+// len(p) unless the destination fails. It never consults the package-global
+// redactor: it uses r.red, fixed at construction (see RedactingWriter).
 func (r *RedactingWriter) Write(p []byte) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	red := currentRedactor()
 	r.pending = append(r.pending, p...)
 	for {
 		i := bytes.IndexByte(r.pending, '\n')
 		if i < 0 {
 			break
 		}
-		if err := r.forward(red, r.pending[:i+1]); err != nil {
+		if err := r.forward(r.pending[:i+1]); err != nil {
 			return 0, err
 		}
 		r.pending = r.pending[i+1:]
 	}
-	if len(r.pending) > pendingLimit(red) {
-		if err := r.forwardSafePrefix(red); err != nil {
+	if len(r.pending) > r.pendingLimit() {
+		if err := r.forwardSafePrefix(); err != nil {
 			return 0, err
 		}
 	}
 	return len(p), nil
 }
 
-// pendingLimit returns red's Redactor.MaxPending, so the forced-flush
-// threshold tracks its split-guard, or maxPendingLine's default when red is
-// nil (nothing to protect a cut from splitting then). red is the caller's
-// single currentRedactor() read (see Write's doc), not re-read here, so this
-// always agrees with whatever redactor state the rest of the same call used.
-func pendingLimit(red Redactor) int {
-	if red != nil {
-		return red.MaxPending()
+// pendingLimit returns r.red's Redactor.MaxPending, so the forced-flush
+// threshold tracks its split-guard, or maxPendingLine's default when r.red
+// is nil (nothing to protect a cut from splitting then).
+func (r *RedactingWriter) pendingLimit() int {
+	if r.red != nil {
+		return r.red.MaxPending()
 	}
 	return maxPendingLine
 }
 
-// Close forwards the final unterminated line, if any.
+// Close forwards the final unterminated line, if any, redacted with the
+// same r.red every Write used: a SetRedactor(nil) landing after the last
+// Write cannot make the tail go out raw (task 5g2).
 func (r *RedactingWriter) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if len(r.pending) == 0 {
 		return nil
 	}
-	err := r.forward(currentRedactor(), r.pending)
+	err := r.forward(r.pending)
 	r.pending = nil
 	return err
 }
@@ -227,10 +239,11 @@ func (r redactedWriter) Write(p []byte) (int, error) {
 // forwardSafePrefix forwards the already-redacted part of an overlong
 // pending run that no secret can still extend into (Redactor.FlushPoint
 // both finds and redacts it — see the interface doc for why the caller must
-// not redact that prefix itself), keeping the rest pending. red is nil when
-// no redactor is installed, in which case there is nothing to protect, so it
-// forwards (and clears) everything pending; red is the caller's single
-// currentRedactor() read (see Write's doc), never re-read here.
+// not redact that prefix itself), keeping the rest pending. r.red is nil
+// when the writer was built with no redactor installed, in which case there
+// is nothing to protect, so it forwards (and clears) everything pending. It
+// never re-reads the package-global: a redactor cleared since construction
+// cannot route it into that raw branch (see RedactingWriter).
 //
 // consumed is clamped to len(r.pending) before it slices: FlushPoint is part
 // of the exported Redactor interface (SetRedactor takes any implementation),
@@ -247,15 +260,15 @@ func (r redactedWriter) Write(p []byte) (int, error) {
 // consumed is clamped, rather than forwarded raw (a leak) or left pending
 // forever (unbounded growth): of the three, silent loss is the only one that
 // keeps both the confidentiality and the boundedness promise.
-func (r *RedactingWriter) forwardSafePrefix(red Redactor) error {
-	if red == nil {
-		if err := r.forward(nil, r.pending); err != nil {
+func (r *RedactingWriter) forwardSafePrefix() error {
+	if r.red == nil {
+		if err := r.forward(r.pending); err != nil {
 			return err
 		}
 		r.pending = nil
 		return nil
 	}
-	out, consumed := red.FlushPoint(string(r.pending))
+	out, consumed := r.red.FlushPoint(string(r.pending))
 	if consumed <= 0 {
 		return nil
 	}
@@ -267,11 +280,13 @@ func (r *RedactingWriter) forwardSafePrefix(red Redactor) error {
 	return nil
 }
 
-// relayPipe copies pr to w through a RedactingWriter until end of file (it
-// then closes pr) or until pr's read deadline stops it (pr stays open for
-// handOff), and reports on stopped whether it reached end of file.
-func relayPipe(pr *os.File, w io.Writer, stopped chan<- bool) {
-	out := NewRedactingWriter(w)
+// relayPipe copies pr through out until end of file (it then closes pr) or
+// until pr's read deadline stops it (pr stays open for handOff), and reports
+// on stopped whether it reached end of file. Either way it closes out,
+// flushing the unterminated tail before cat may take over the pipe; a
+// RedactingWriter stays usable after Close, which releaseOrphan's fallback
+// relies on to continue with the same writer (and so the same redactor).
+func relayPipe(pr *os.File, out *RedactingWriter, stopped chan<- bool) {
 	_, err := io.Copy(out, pr)
 	_ = out.Close()
 	if errors.Is(err, os.ErrDeadlineExceeded) {
@@ -284,10 +299,14 @@ func relayPipe(pr *os.File, w io.Writer, stopped chan<- bool) {
 
 // releaseOrphan is RunRelayed's path for a pipe still held after the relay
 // delay: stop the relay (a read deadline) and hand pr to a detached cat
-// writing to w; when that is impossible, let the relay keep draining in the
-// background.
-func releaseOrphan(name string, pr *os.File, w io.Writer, stopped chan bool) {
-	f, isFile := w.(*os.File)
+// writing to out's destination; when that is impossible, let the relay keep
+// draining through out in the background. A failed hand-off resumes with the
+// same out rather than a fresh RedactingWriter, which would re-read the
+// package-global redactor and forward raw had it been cleared meanwhile
+// (task 5g2); the first relayPipe has already returned (it sent on stopped),
+// so the two never write concurrently.
+func releaseOrphan(name string, pr *os.File, out *RedactingWriter, stopped chan bool) {
+	f, isFile := out.w.(*os.File)
 	if !isFile || pr.SetReadDeadline(time.Now()) != nil {
 		Debug("%s exited but a process it started still holds its output; relaying it in the background while gonf runs", name)
 		return
@@ -298,7 +317,7 @@ func releaseOrphan(name string, pr *os.File, w io.Writer, stopped chan bool) {
 	if err := handOff(pr, f); err != nil {
 		Warn("%s exited but a process it started still holds its output, and handing it over failed (%v); relaying it while gonf runs", name, err)
 		_ = pr.SetReadDeadline(time.Time{})
-		go relayPipe(pr, w, stopped)
+		go relayPipe(pr, out, stopped)
 		return
 	}
 	Debug("%s exited but a process it started still holds its output; handed it to the terminal unredacted", name)
@@ -323,14 +342,13 @@ func handOff(pr, f *os.File) error {
 	return nil
 }
 
-// forward writes one chunk to the destination, redacted with red (nil
-// forwards it unchanged). red is the caller's single currentRedactor() read
-// (see Write's doc) rather than a fresh lookup here, so every chunk a single
-// Write or Close call forwards is redacted against the same redactor state.
-func (r *RedactingWriter) forward(red Redactor, line []byte) error {
+// forward writes one chunk to the destination, redacted with r.red (nil
+// forwards it unchanged), so every chunk the writer ever forwards is
+// redacted against the same redactor (see RedactingWriter).
+func (r *RedactingWriter) forward(line []byte) error {
 	s := string(line)
-	if red != nil {
-		s = red.Redact(s)
+	if r.red != nil {
+		s = r.red.Redact(s)
 	}
 	_, err := io.WriteString(r.w, s)
 	return err
