@@ -530,8 +530,9 @@ and lifting the refusal) landed** — see "As landed (task `zf2`)" and "As
 landed (task `0g2`)" at the end of this section for the exact wire format,
 API and destination behaviour. The controller's release floor
 (`sealedStickyMinRelease`) is `0.17.0`, the release chosen to ship 0g2
-(task `yg2`): until v0.17.0 is tagged and `internal.Version` bumped to it,
-a push that seals a sticky ref is refused before any upload.
+(task `yg2`), shipped in v0.17.0: a remote older than v0.17.0 is refused
+before any upload, so a push that would seal a sticky ref fails closed
+until the remote gonf is upgraded (`EnsureRemoteGonf` does that first).
 Originally design only, expanded
 here by task `6b2`. Task
 `6b2` (this design's own phase-4 entry) read this section's earlier
@@ -864,8 +865,8 @@ wipes now; chunk sessions leave what it staged.
 **Controller.** `refuseSensitiveStickyBlobs`, `refuseStickyBlobs` and their
 tests are gone; `plan.SensitiveElevatedBlobs` stays as the description of
 the sealed ops. `sealedStickyMinRelease` is `0.17.0`, the release chosen to
-ship this (task `yg2`, pinned by `TestSealedStickyFloorIsReleaseShipping0g2`);
-bump `internal.Version` to it when v0.17.0 is tagged. A push with nothing to seal
+ship this (task `yg2`, pinned by `TestSealedStickyFloorIsReleaseShipping0g2`),
+and v0.17.0 is that release. A push with nothing to seal
 is byte-identical on the wire (GONF-PUSH/1 only, no floor probe).
 
 **Tests.** `internal/cli/sealed_sticky_test.go` (upload through the real

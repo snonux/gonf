@@ -1,6 +1,6 @@
 # Replacing `~/git/conf` Rex with gonf — gap audit
 
-Refreshed 2026-09-23 against **gonf v0.16.6**; this release uses plan schema 24.
+Refreshed 2026-09-24 against **gonf v0.17.0**; this release uses plan schema 24.
 This document is the canonical plan for porting the
 [`~/git/conf`](https://codeberg.org/snonux/conf)
 Rexfiles to gonf. Earlier revisions claimed gonf "still lacks Rex-style sudo/doas"
@@ -79,9 +79,9 @@ One plan engine serves local and remote runs, so a recipe cannot diverge between
 
 ## Current capability matrix
 
-Status against every conf Rex primitive in v0.16.6 (plan schema 24):
+Status against every conf Rex primitive in v0.17.0 (plan schema 24):
 
-| Conf Rex capability | gonf v0.16.6 | Status |
+| Conf Rex capability | gonf v0.17.0 | Status |
 |---------------------|--------------|--------|
 | `group x => 'h:2', …`, `user`, `parallelism 5` | `Host(name, WithSSHUser, WithSSHHost, WithSSHPort, WithSSHIdentity)` + `Cluster(name, hosts…)`, `cluster.Parallel(n)`; `gonf hosts`/`clusters`/`fleets` | **Done** |
 | `sudo TRUE` / `auth for => group (user, sudo)` | `Task(…, Privileged())` (or `RequiresRoot`) + `Host(WithPrivilege(PrivilegeSudo|Doas|None))`; apply splits plain/elevated chunks; remote elevated chunk wraps `sudo -n gonf apply` / `doas gonf apply`; `-privilege=none` + elevated op refuses to push | **Done** |

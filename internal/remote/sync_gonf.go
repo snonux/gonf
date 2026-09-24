@@ -149,10 +149,10 @@ var relayedMinVersion = mustParseReleaseVersion(relayedMinRelease)
 //
 // The floor is v0.17.0: the release the user chose (task yg2, 2026-09-24)
 // to ship task 0g2's destination side. It is deliberately a real release
-// number, not a moving value: until v0.17.0 is tagged and internal.Version
-// is bumped to it at tagging time, the gate refuses every remote, even one
-// EnsureRemoteGonf just upgraded to the controller's own (older) release,
-// so a push that would seal a sticky ref fails closed before any upload.
+// number, not a moving value: v0.17.0 ships 0g2, so the gate refuses any
+// remote older than it and a push that would seal a sticky ref fails
+// closed before any upload, until EnsureRemoteGonf has upgraded the remote
+// to at least v0.17.0.
 // Every release up to v0.16.6 lacks 0g2 and must stay below the floor;
 // TestSealedStickyFloorIsReleaseShipping0g2 pins both facts.
 const sealedStickyMinRelease = "0.17.0"
@@ -227,8 +227,7 @@ func AssumeRemotePlanCurrent() func() {
 // AssumeRemoteSealedStickyForTest is a test seam for callers outside this
 // package that fake SSHRunner and push a plan with sealed sticky refs: it
 // makes defaultPusher's release probe report sealedStickyMinRelease, so
-// RequireRemoteSealedSticky passes without any ssh probe even while
-// internal.Version is still below the v0.17.0 floor (see
+// RequireRemoteSealedSticky passes without any ssh probe (see
 // sealedStickyMinRelease). It only makes
 // sense with ObserveBootstrapForTest (which skips EnsureRemoteGonf, whose
 // release comparison it would otherwise confuse). internal/cli's

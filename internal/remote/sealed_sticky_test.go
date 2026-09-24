@@ -14,7 +14,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/snonux/gonf/internal"
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/internal/testutil"
@@ -226,9 +225,11 @@ func TestToHostSealedStickyKeyIsPerPush(t *testing.T) {
 // self-heal) runs first, and a remote still below the sealed-sticky floor
 // after it is refused before any SSH traffic: no blob, sealed or not, is
 // uploaded and no chunk runs. The probe runs in the elevated context,
-// which decodes the keyed frame.
+// which decodes the keyed frame. The remote reports v0.16.6, the last
+// release without 0g2's decrypt support: pinned explicitly rather than
+// taken from internal.Version, which has reached the floor since v0.17.0.
 func TestToHostSealedStickyRefusesRemoteBelowFloor(t *testing.T) {
-	h := installSealedPushHarness(t, internal.Version)
+	h := installSealedPushHarness(t, "0.16.6")
 	calls, err := sealedPush(t, h)
 	if err == nil || !strings.Contains(err.Error(), "sealed sticky-dir blobs") {
 		t.Fatalf("push = %v, want the sealed-sticky capability refusal", err)
