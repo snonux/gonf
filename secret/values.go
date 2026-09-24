@@ -64,8 +64,10 @@ const MaxSplitGuard = 64 << 10
 // pending peaks near the cap plus one write -- not the unbounded growth
 // task mb2 fixed.
 //
-// This restores the bounded-pending, roughly-linear-cost invariant task
-// mb2 established: without a cap, a caller such as logger.RedactingWriter
+// This restores the bounded-pending, bounded-rescan invariant task mb2
+// established (bounded, not linear: see FlushPoint's "Cost" paragraph for
+// what a dense self-overlapping form and small writes still cost within
+// it): without a cap, a caller such as logger.RedactingWriter
 // never shrinks pending on a "", 0 result (see forwardSafePrefix), so
 // every later Write re-scans the whole, still-growing buffer -- task rd2's
 // own leak fix correctly refused the unsafe guess that used to bound this
@@ -126,7 +128,9 @@ type Values struct {
 	mu sync.Mutex
 	// forms maps every tracked form (and its JSON escaping) to its matching
 	// mode. A form shared by several secrets gets the strongest mode. The
-	// set only grows, except for Reset.
+	// set only grows, except for Reset, and a form's mode only gains
+	// matching (merge): the forced flush's leak-freedom induction relies on
+	// that (see resolveForcedFlushCut).
 	forms map[string]formMode
 	// sorted caches the forms longest first for Redact and Contains; nil
 	// after every change, never modified in place once built.
@@ -301,8 +305,8 @@ func (v *Values) redact(s string, strongOnly bool) string {
 // occurrence of the longest tracked form could still start in the last
 // len-1 bytes, so those stay pending, and the cut moves back to the start of
 // whichever merged run of overlapping matches crosses it, so no secret is
-// split between two redactions. Matches are merged in one linear,
-// start-position-sorted pass (mergeSpans) rather than chased backward one
+// split between two redactions. Matches are sorted by start and merged in
+// one linear pass (mergeSpans) rather than chased backward one
 // overlapping match at a time: a secret whose repeat period is shorter than
 // its own length (e.g. "x1x1x1x1x1", which also matches itself shifted by 2
 // bytes, at offsets 0, 2, 4, ...) chains arbitrarily many overlapping
@@ -397,8 +401,25 @@ func (v *Values) redact(s string, strongOnly bool) string {
 // secret cannot make the relay buffer without bound; protectedCrossing
 // leaves their occurrences out of its safety check for the same reason --
 // protecting them was never promised, so refusing to make progress on
-// their account would defeat the point of excluding them. It implements
-// logger.Redactor with Redact and MaxPending.
+// their account would defeat the point of excluding them.
+//
+// Cost: one call scans s once per contained form (matchSpans), scans the
+// flushed prefix again (Redact) or, on the escape hatch, s again
+// (protectedSpans), and sorts the occurrences found (mergeSpans), so it is
+// O(len(s)) per form only while occurrences are sparse. formOccurrences
+// restarts strings.Index one byte past each occurrence and verifies every
+// overlapping occurrence afresh, so a densely self-overlapping form of
+// length L (such as a run of '=') costs O(len(s)*L) per call: relaying
+// 1 MiB of '=' in 32 KiB writes with a 32 KiB '=' secret took about 6 s
+// (13.6 s in task tg2's review; measured for task 0h2). The relay
+// also calls FlushPoint on every Write while its unterminated line exceeds
+// MaxSplitGuard, and while the escape hatch stalls (from there up to
+// flushStallCap) each of those calls rescans the whole pending buffer, so
+// small writes multiply the cost: a 40-byte '=' secret over 1 MiB of '='
+// took about 0.3 s at 32 KiB writes, 2 s at 4 KiB and 15 s at 512 B
+// (0.75 s, 4.8 s and 27 s in that review). Both are bounded, since pending
+// never passes flushStallCap plus one write, but neither is linear. It
+// implements logger.Redactor with Redact and MaxPending.
 func (v *Values) FlushPoint(s string) (out string, consumed int) {
 	longest := 0
 	for _, e := range v.snapshot() {
@@ -527,7 +548,11 @@ func mergeByStart(a, b [][2]int) [][2]int {
 // included) of form alone in s, in start order (the underlying Index scan
 // already produces them left to right). It is the one place that walks a
 // single form's occurrences, shared by protectedSpans and matchSpans (each
-// unions it over every tracked form).
+// unions it over every tracked form). Each Index call restarts one byte
+// past the previous occurrence and verifies the next one from scratch, so
+// the cost is roughly O(len(s) + occurrences*len(form)): linear for sparse
+// matches, O(len(s)*len(form)) for a densely self-overlapping form
+// (FlushPoint's "Cost" paragraph).
 func formOccurrences(form, s string) [][2]int {
 	var spans [][2]int
 	for from := 0; from < len(s); {
@@ -575,25 +600,30 @@ func formOccurrences(form, s string) [][2]int {
 // When FlushPoint returns "no progress" because no safe point exists at all
 // (see its doc), the caller's pending buffer keeps growing and
 // protectedSpans/protectedCrossing rescan it from scratch on every later
-// call, since nothing was ever forwarded to shrink it — cost proportional
-// to len(s), repeated on every still-unresolved call, so cost would grow
-// roughly with the square of how long a genuinely never-breaking chain
-// persists if the stall were allowed to continue unbounded. It is not: once
-// s reaches flushStallCap, FlushPoint stops calling protectedCrossing
-// altogether and redacts the crossing run's flushed prefix, [0, cut), as
-// one opaque Redacted marker instead, keeping the same longest-1-byte
-// keep-back the ordinary path always retains rather than consuming
-// everything (see flushStallCap), so the quadratic-shaped cost is itself
-// capped at O(flushStallCap²) before pending drops back near that
-// keep-back size and the cost starts over — a bounded, repeating cost
-// rather than one that keeps compounding for as long as a pathological
-// stream continues (task le2; an earlier version of this comment called
-// the unbounded growth "accepted", which task rd2's leak fix had
-// reintroduced as a live regression rather than a deliberate trade-off).
-// It can only arise when literally no gap exists anywhere in the buffer
-// given so far (a perfectly, densely self-overlapping run), which the fix
-// above already finds and exploits every gap to avoid whenever one
-// exists.
+// call, since nothing was ever forwarded to shrink it — a full scan of s
+// (see FlushPoint's "Cost" paragraph), repeated on every still-unresolved
+// call, so cost would grow roughly with the square of how long a genuinely
+// never-breaking chain persists if the stall were allowed to continue
+// unbounded. It is not: escapeHatchFlush still calls protectedCrossing
+// first on every call, but once s reaches flushStallCap a crossed result no
+// longer stalls. It forces progress instead: it keeps back
+// longestKeepBackForForcedFlush's kMax trailing bytes, retreats that cut to
+// a leak-free one (resolveForcedFlushCut, which retains fewer than
+// 2*MaxSplitGuard bytes), and redacts the flushed prefix [0, cut) as one
+// opaque Redacted marker rather than consuming everything (see
+// flushStallCap). The stall's rescanning is therefore capped per cycle:
+// with writes of w bytes, about flushStallCap/w stalled calls each scan up
+// to flushStallCap bytes, before pending drops back below 2*MaxSplitGuard
+// and the cycle starts over — a bounded, repeating cost rather than one
+// that keeps compounding for as long as a pathological stream continues
+// (task le2; an earlier version of this comment called the unbounded
+// growth "accepted", which task rd2's leak fix had reintroduced as a live
+// regression rather than a deliberate trade-off). Bounded is not cheap,
+// though: small writes pay that rescan many times per cycle (FlushPoint's
+// "Cost" paragraph has the figures). It can only arise when literally no
+// gap exists anywhere in the buffer given so far (a perfectly, densely
+// self-overlapping run), which the fix above already finds and exploits
+// every gap to avoid whenever one exists.
 func protectedCrossing(spans [][2]int, cut int) (snap int, crossed bool) {
 	frontier := 0
 	for _, sp := range spans {
@@ -664,10 +694,10 @@ func protectedCrossing(spans [][2]int, cut int) (snap int, crossed bool) {
 // regardless of whether any complete match happens to start or end
 // nearby. It is computed via the standard KMP failure-function technique
 // (longestPrefixSuffixOverlap) per tracked form, keeping the largest
-// result, in O(len(form)) time per form -- bounded by MaxSplitGuard, and
-// by a small, fixed number of tracked forms, so this stays within the
-// same roughly-linear-per-call budget FlushPoint already spends on
-// protectedSpans/protectedCrossing for the very same call.
+// result, in O(len(form)) time per form -- O(sum of form lengths) per
+// call, each form bounded by MaxSplitGuard and independent of len(s), so
+// it is small next to the scan of s that protectedSpans already did for
+// the very same call (see FlushPoint's "Cost" paragraph).
 //
 // This function only keeps a not-yet-complete occurrence from being
 // stranded; on its own, cut = len(s) - this result can still split a
@@ -705,11 +735,27 @@ func (v *Values) longestKeepBackForForcedFlush(s string) int {
 // before c (a straddler) but to no complete occurrence inside s[c:] would
 // be forwarded raw, because Redact never matches a partial occurrence (a
 // later occurrence might happen to cover it, but nothing guarantees one).
-// A byte that IS covered by a complete occurrence inside s[c:] is safe: the
-// retained tail is later either redacted whole (Close) or flushed again by
-// FlushPoint, whose ordinary path only cuts between merged runs and whose
-// escape hatch applies this same rule to the new buffer, so by induction
-// every byte of a split occurrence ends up redacted. A cut c is
+// A byte that IS covered by a complete occurrence inside s[c:] is safe. The
+// retained tail (which holds no newline: the relay only forces a flush of
+// an unterminated line) later leaves the relay by one of three paths, and
+// each keeps that covering occurrence whole:
+//   - Close redacts whatever is pending in one Redact call;
+//   - a newline arriving later makes the relay forward pending up to and
+//     including it as one line through Redact (logger.RedactingWriter's
+//     Write); the whole tail lies inside that line, since the newline comes
+//     after it;
+//   - FlushPoint runs again on the grown buffer: its ordinary path only cuts
+//     between merged runs, and its escape hatch always emits the flushed
+//     prefix as one opaque Redacted marker and applies this same rule to
+//     the new buffer.
+//
+// So by induction every byte of a split occurrence ends up redacted. The
+// induction assumes the covering occurrence is still matched later, which
+// holds because a Values' forms only ever grow: Add inserts forms and
+// merges modes (formMode.merge only turns contained on, never off), and
+// never removes one. Reset breaks it: forgetting the forms between two
+// writes of one relayed line (tests only) can forward a retained tail's
+// split bytes raw. A cut c is
 // therefore leak-free when the contiguous coverage of [c, ...) by complete
 // occurrences starting at or after c (coverFrom) reaches the farthest end of
 // any straddler (straddlerReach). This admits the cuts task sg2 documented
@@ -742,10 +788,17 @@ func (v *Values) longestKeepBackForForcedFlush(s string) int {
 //     the retained tail is shorter than kMax + longest < 2*MaxSplitGuard,
 //     and len(s) >= flushStallCap = 4*MaxSplitGuard makes c >
 //     2*MaxSplitGuard > 0. Every forced call therefore drains all but that
-//     bounded tail (invariant B). The cost is one binary search plus
-//     O(longest * forms) span visits per step, on top of the O(len(s))
-//     scan protectedSpans already did. And c strictly decreases, so the
-//     loop terminates even if this argument had a flaw.
+//     bounded tail (invariant B).
+//   - Cost: each step is two binary searches plus O(forms * longest) span
+//     visits (straddlerReach inspects starts in (c-longest, c), coverFrom
+//     starts in [c, need) with need <= c+longest, and each protected form
+//     has at most one occurrence per start), and there are at most forms
+//     steps (one per distinct length), so the retreat costs
+//     O(forms^2 * longest) per forced call, longest <= MaxSplitGuard. That
+//     comes on top of longestKeepBackForForcedFlush's O(sum of form
+//     lengths) and the scan of s protectedSpans already did (see
+//     FlushPoint's "Cost" paragraph). And c strictly decreases, so the loop
+//     terminates even if this argument had a flaw.
 func (v *Values) resolveForcedFlushCut(s string, spans [][2]int) int {
 	longest := 0
 	for _, sp := range spans {

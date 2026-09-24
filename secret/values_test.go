@@ -730,8 +730,11 @@ func simulateRelay(v *Values, data []byte, chunk int) (forwarded string, maxPend
 //     whole run completes within a generous wall-clock ceiling that scales
 //     with size. A quadratic blow-up (mb2's and le2's own regressions, both
 //     confirmed to take seconds per MiB once unbounded) blows straight
-//     through this ceiling even with the slack; genuinely linear cost (the
-//     actual target of every fix in this file) comfortably clears it.
+//     through this ceiling even with the slack; cost linear in size (the
+//     actual target of every fix in this file) comfortably clears it. It is
+//     linear here only because the chunk size and the shapes' forms are
+//     fixed: FlushPoint's "Cost" paragraph has how smaller writes and longer
+//     self-overlapping forms raise the per-byte factor.
 func TestValuesFlushPointHistoricalShapesBoundedAndLeakFree(t *testing.T) {
 	t.Parallel()
 	const chunk = 32 << 10 // io.Copy's default buffer size, matching a real relay's chunking
