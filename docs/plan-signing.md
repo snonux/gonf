@@ -1,8 +1,10 @@
 # Signed plan artifacts (design, task 7b2)
 
 Status: **accepted (user approval 2026-09-24); phases signing-1 (task
-`6g2`), signing-2 (task `7g2`) and signing-3 (task `8g2`) implemented,
-later phases open.**
+`6g2`, v0.17.0 library only), signing-2 (task `7g2`) and signing-3 (task
+`8g2`) implemented (both v0.18.0); signing-4 to signing-6 (tasks `9g2`,
+`ag2`, `bg2`) were declined by the user on 2026-09-24 and are not
+planned.**
 `plan/seal` has `Sign`/`SignAt`, `Verify`, `LoadSigner`,
 `LoadTrustedSigners`, `GenerateSigner`/`WriteSignerFile` and the
 `GONF-SIGNED-PLAN/1` envelope (with its signed `signed-at` time), and the
@@ -13,8 +15,8 @@ before decrypting it (`-trusted-signers`, `-require-signed`,
 exact choices the implementation made for the points this design left
 open are in the "As landed" sections for `6g2`, `7g2` and `8g2` at the end
 of "Recommended design". Nothing here lifts plan-encryption.md's gate: no
-unattended entry point exists yet (see "The unblocking condition"). The
-follow-up tasks are listed in the last section.
+unattended entry point exists, and none is planned (see "The unblocking
+condition"). The phases and their status are listed in the last section.
 
 **Relationship to plan-encryption.md.** That design (task `w82`, phases
 `0b2`-`3b2` implemented and merged) gives sealed plans (`plan.age`)
@@ -350,7 +352,8 @@ extra piece of destination-side state — the first persistent,
 apply-affecting state this whole feature area would introduce — and is
 therefore left for a dedicated, separately-approved follow-up rather than
 folded into the first signing task; see "Phased implementation," phase
-signing-4.
+signing-4, which the user declined (task `9g2`): only the freshness window
+is implemented.
 
 ### Verification order and interaction with existing decryption
 
@@ -617,8 +620,9 @@ gonf -signed-version                                                            
   apply -` is the emergency path. It decrypts nothing and writes nothing
   for a refused input.
 - **Not lifted.** `-require-signed` is only a flag an operator may pass;
-  no timer, cron or pull agent sets it. plan-encryption.md's gate stays
-  until signing phase 6 wires such an entry point (task `bg2`).
+  no timer, cron or pull agent sets it. plan-encryption.md's gate stays:
+  signing phase 6 (task `bg2`), which would have wired such an entry
+  point, was declined.
 
 ### Schema, versioning and remote skew
 
@@ -672,8 +676,8 @@ implying it by omission.
   where and when that edit is applied.
 - **Does not fully close replay/rollback on its own** — only the baseline
   freshness window does, and only within its own tolerance; the stronger
-  monotonic-counter option is a separate, later, explicitly-approved task
-  (see "Replay and rollback").
+  monotonic-counter option needed a separate, explicitly-approved task,
+  which was declined (`9g2`; see "Replay and rollback").
 - **Does not add any new authorization model on the destination.** Exactly
   as plan-encryption.md's "Operator UX" section states (its "Privilege:
   single process, as plain file apply" bullet) for sealed apply, a
@@ -696,7 +700,7 @@ implying it by omission.
   availability protection only).
 - **Does not itself decide the multi-signer/threshold question** (a
   destination requiring N of M signatures) — flagged as a real, useful,
-  separately-sized extension in "Keys," left for a later task.
+  separately-sized extension in "Keys" (signing-5, declined, `ag2`).
 
 ## Phased implementation (follow-up tasks)
 
@@ -711,9 +715,9 @@ creation only, not approval to begin.
 | signing-1 | `plan/seal` gains `Sign`/`Verify`, `LoadSigner`, `LoadTrustedSigners`, the `GONF-SIGNED-PLAN/1` envelope; tests for round trip, wrong signer, tampered ciphertext, unsigned input handling, and the same hardened-file probes `ce2` ran against the recipients file, run here against the trusted-signers file from day one. No CLI changes, mirroring `1b2`. |
 | signing-2 | `gonf plan -seal -sign <signer-identity>` CLI wiring; a `gonf plan-signer-keygen` convenience command; docs. Mirrors `2b2`. **Done (task `7g2`)**, together with the envelope's `signed-at` field. |
 | signing-3 | `gonf apply -trusted-signers ... [-require-signed]` CLI wiring, sniff-dispatch extension, the freshness-window check, `gonf -signed-version`; the `gonf plan -verify-only` unwrap helper for the emergency path. Mirrors `3b2`. This is the task the "unblocking condition" section's six checks land in, but landing it still does **not** by itself unblock any unattended path — no such path exists yet. **Done (task `8g2`)**; the helper landed as `gonf plan-verify`. |
-| signing-4 (optional, needs a user decision) | Monotonic anti-replay counter (destination-side persistent state); this is the first piece of apply-affecting persistent state this feature area would add, so it is deliberately not bundled into signing-3. |
-| signing-5 (optional, needs a user decision) | Multi-signer/threshold trust (require N of M pinned signers); per-destination signer pinning via inventory (`WithPlanSigner`, mirroring `4b2`'s `WithPlanRecipient`) once `4b2` itself lands. |
-| signing-6 (optional, needs a user decision, and needs signing-3) | An actual unattended entry point (a documented timer unit / cron / pull-agent recipe) that sets `-require-signed` unconditionally and satisfies every item in "The unblocking condition" — the task that would finally lift plan-encryption.md's gate, for that one specific path, not as a side effect of any earlier phase. |
+| signing-4 (optional; **declined**, task `9g2`, not planned) | Monotonic anti-replay counter (destination-side persistent state); this is the first piece of apply-affecting persistent state this feature area would add, so it is deliberately not bundled into signing-3. |
+| signing-5 (optional; **declined**, task `ag2`, not planned) | Multi-signer/threshold trust (require N of M pinned signers); per-destination signer pinning via inventory (`WithPlanSigner`, mirroring `4b2`'s `WithPlanRecipient`) once `4b2` itself lands. |
+| signing-6 (optional, needs signing-3; **declined**, task `bg2`, not planned) | An actual unattended entry point (a documented timer unit / cron / pull-agent recipe) that sets `-require-signed` unconditionally and satisfies every item in "The unblocking condition" — the task that would finally lift plan-encryption.md's gate, for that one specific path, not as a side effect of any earlier phase. |
 
 Dependencies: signing-2 and signing-3 need signing-1; signing-4 and
 signing-5 need signing-3; signing-6 needs signing-3 (and signing-4/5 if the

@@ -1,21 +1,22 @@
 # Sealed plan artifacts (design, task w82)
 
-Status: **phases 0-2 implemented** (tasks `0b2`, `1b2`, `2b2`, `3b2`, `4b2`):
-`gonf plan -seal` (whole-plan and per-destination `-for`) and `gonf apply
--identity` both exist. Phase 3 (`5b2`) is implemented as its default-seal
-half only: `gonf plan -o dir` seals a sensitive plan by default when an
-operator recipients file exists (see "Default seal for sensitive plans"
-below); the operator identity through the secret provider was declined.
-The "Phased implementation" table at the end of this document tracks exact
-status per task (`6b2` and `7b2` included).
+Status: **phases 0-2 and 4 implemented** (tasks `0b2`, `1b2`, `2b2`,
+`3b2`, `4b2`; phase 4 as `yf2`/`zf2`/`0g2`, shipped in v0.17.0): `gonf plan
+-seal` (whole-plan and per-destination `-for`) and `gonf apply -identity`
+both exist, and a multi-chunk push seals sensitive sticky-dir blobs for its
+elevated chunks. Phase 3 (`5b2`, v0.18.0) is implemented as its
+default-seal half only: `gonf plan -o dir` seals a sensitive plan by
+default when an operator recipients file exists (see "Default seal for
+sensitive plans" below); the operator identity through the secret provider
+was declined. Signing (`7b2`, [plan-signing.md](plan-signing.md)) is
+implemented through its phase 3 (v0.18.0). The "Phased implementation"
+table at the end of this document tracks exact status per task.
 
-**Merge order.** This design builds on task 062 (secret-aware plans, plan
-schema v22), which is not merged into main yet (branch
-`worktree-agent-aa9271605948d966b`). The secrets.md sections cited below
-("What reaches the plan", "Limits of the scan", "Where a sensitive plan
+**Builds on 062.** This design builds on task 062 (secret-aware plans, plan
+schema v22), merged before any of its phases. The secrets.md sections cited
+below ("What reaches the plan", "Limits of the scan", "Where a sensitive plan
 goes", "Retention and cancellation", "Not provided") and the plan.md
-schema-22 text exist only on that branch until it lands; this document is
-meant to be read, and its tasks started, after 062 is merged. 062 marks
+schema-22 text describe it. 062 marks
 secret-bearing ops `sensitive`, keeps `plan.jsonl` plaintext under
 private-filesystem protections, refuses `gonf plan -stdout` for such plans
 unless `-with-secrets`, and states that durable encryption needs its own
@@ -267,7 +268,8 @@ as **confidentiality only, never provenance**:
   anything by itself: `-require-signed` is a flag an operator chooses, and
   the gate lifts only for a specific unattended entry point that meets
   every item of that document's "The unblocking condition" (signing phase
-  6, task `bg2`).
+  6, task `bg2`, which the user declined on 2026-09-24: no such entry point
+  is planned, so the gate stays).
 
 ### Operator UX
 
@@ -858,8 +860,8 @@ there is something to seal) before any SSH traffic;
 `prepareRuntime` requires `RequireRemoteSealedSticky(ProbeElevated)` after
 `EnsureRemoteGonf`'s self-heal; `stream`/`streamChunks` upload the sealed
 set and encode each chunk with `stickySeal.encodeChunk`. The fixed floor
-`sealedStickyMinRelease` is `0.17.0`, above every release so far, so the
-gate refuses every remote until the release shipping 0g2 exists; task `yg2`
+`sealedStickyMinRelease` is `0.17.0`, above every release at the time, so
+the gate refused every remote until the release shipping 0g2 existed; task `yg2`
 confirmed `0.17.0` as that release and
 `TestSealedStickyFloorIsReleaseShipping0g2` pins it. The key is
 never on argv or in the environment, never logged, never in an error
@@ -921,9 +923,10 @@ and `resource/dir` are unchanged.
 **Sticky-dir wipe.** Task 0g2's end-to-end test found that every
 `-apply-dir` session wiped the sticky dir (`wipeDirContents`, added for
 stale-blob resurrection), so every chunk after the upload lost its blobs
-("missing blob") — a multi-chunk push with blobs had not worked since.
-Only a session whose frame carries blobs (the upload, which runs first)
-wipes now; chunk sessions leave what it staged.
+("missing blob") — a multi-chunk push with blobs had not worked since
+v0.12.2. Only a session whose frame carries blobs (the upload, which runs
+first) wipes now; chunk sessions leave what it staged. The fix shipped in
+v0.17.0.
 
 **Controller.** `refuseSensitiveStickyBlobs`, `refuseStickyBlobs` and their
 tests are gone; `plan.SensitiveElevatedBlobs` stays as the description of
@@ -981,7 +984,7 @@ bumps gonf, is expected and noted, not a failure).
 | 2 | `4b2` (done) | Destination recipients: `api.WithPlanRecipient` on `Host`; `gonf plan -seal -for host\|cluster\|fleet` records once per host (`api.RecordPlanForHost`) and writes `plan-<host>.age` per host, sealed to that host's recipient plus the operator's; refuses up front when a target host lacks a recipient, when the operator's own base recipients (`-recipient`/recipients-file) are empty (task `mg2`), or when two hosts would sanitize to the same filename; `-for` with `-stdout` only when it resolves to exactly one host. See "Runbook: host keys and shipped plan.age" above. |
 | 3 | `5b2` (done, default seal only) | `gonf plan -o dir` seals a sensitive plan by default when an operator recipients file exists, `-plaintext` opts out, `-plaintext -seal` is a usage error, and an existing but unusable recipients file refuses a sensitive plan (approved by the user 2026-09-24, task 5b2; see "Default seal for sensitive plans"). The operator identity through the secret provider (`-identity-ref`) was declined by the user on 2026-09-24 and is not implemented. |
 | 4 | `6b2` | Optional: seal a multi-chunk push's sticky-dir blobs to an ephemeral per-push key sent only on each chunk's stdin, lifting 062's refusal of sensitive blobs in elevated chunks. **Scoped down to design only** (see "Phase 4 design: sealed multi-chunk sticky-dir blobs" above) rather than a one-session implementation of security-sensitive privileged-apply plumbing; split into its own sub-phases `yf2` (ephemeral seal primitive, done: `seal.GenerateEphemeral`, `seal.EncodeEphemeral`, `seal.ParseEphemeral` in `plan/seal/ephemeral.go`) → `zf2` (wire extension + delivery, done: GONF-PUSH/2 `plan.EncodePushWithKey`/`DecodePushWithKey`, sealed refs at `sealed/<ref>.age`, `RequireRemoteSealedSticky`) → `0g2` (done: destination decrypt into `plan.NewSealedApplyRunDir()`, `refuseSensitiveStickyBlobs` removed, see "As landed (task `0g2`)" above; floor `sealedStickyMinRelease` = `0.17.0`, task `yg2`). |
-| - | `7b2` | Design (not implement) signed plan artifacts; until it is implemented, unattended sealed apply stays blocked. |
+| - | `7b2` (done) | Design signed plan artifacts ([plan-signing.md](plan-signing.md), accepted); its phases signing-1 to signing-3 (`6g2`, `7g2`, `8g2`) are implemented, signing-4 to signing-6 (`9g2`, `ag2`, `bg2`) were declined, so unattended sealed apply stays blocked. |
 
 Dependencies: `2b2`, `3b2` and `6b2` need `1b2`; `4b2` and `5b2` need `2b2`
 and `3b2`; `0b2` needs only 062; `7b2` needs only w82. `6b2`'s own

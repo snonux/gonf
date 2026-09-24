@@ -16,8 +16,12 @@
 | [cron.md](cron.md) | `Cron` / `NoCron` (per-user + root crontab) |
 | [helpers.md](helpers.md) | Paths, sync, symlinks, predicates, `GitGlobal`, `List` |
 | [options.md](options.md) | Shared options cheat-sheet |
-| [secrets.md](secrets.md) | `MustSecret` / `OptionalSecret` / `ResolveSecret`, the file provider, typed errors, `SetSecretProvider` |
+| [secrets.md](secrets.md) | `MustSecret` / `OptionalSecret` / `ResolveSecret`, the file provider, typed errors, `SetSecretProvider`, `secret.NewFallback`, the foostore provider |
+| [plan-encryption.md](plan-encryption.md) | Sealed plans: `gonf plan -seal` / `-for`, `gonf apply -identity`, the recipients file, sealing by default, sealed multi-chunk blobs |
+| [plan-signing.md](plan-signing.md) | Signed plans: `gonf plan -seal -sign`, `gonf plan-signer-keygen`, `gonf apply -trusted-signers` / `-require-signed`, `gonf plan-verify` |
 | [conf-rex-gaps.md](conf-rex-gaps.md) | Gaps vs `~/git/conf` Rex (remote fleet) |
+| [consumer-dsl-simplification-plan.md](consumer-dsl-simplification-plan.md) | Consumer DSL simplification plan and its task status |
+| [../CHANGELOG.md](../CHANGELOG.md) | Release notes (also in each release's annotated tag) |
 
 ## Release checklist
 
@@ -33,7 +37,13 @@ permanently reads "Refreshed ... against gonf v0.16.4", the exact drift oc2's
 checklist exists to prevent. Contrast the very next release, v0.16.6
 (`deb324a`): the version bump and the `conf-rex-gaps.md` refresh landed in
 that ONE commit, so the tag it carries is accurate. `deb324a`'s pattern —
-not "before or in the same commit" — is the model to follow:
+not "before or in the same commit" — is the model to follow. The checklist
+was skipped again for v0.18.0: its bump commit `8fb7a4e` touched only
+`internal/version.go` and was tagged as is, so the v0.18.0 tag predates the
+refresh of [conf-rex-gaps.md](conf-rex-gaps.md) to v0.18.0 (the tagged copy
+still reads v0.17.0), and its tag message carries no release notes (the
+v0.18.0 entry in [CHANGELOG.md](../CHANGELOG.md) was added afterwards). The
+tag is already in the Go module proxy and stays where it is:
 
 - [ ] **Fold the version-and-schema doc update into the SAME commit as the
       version bump** (like `deb324a`, not the two-commit `8405f57`/`79af441`
@@ -41,6 +51,8 @@ not "before or in the same commit" — is the model to follow:
       line(s) in [conf-rex-gaps.md](conf-rex-gaps.md) (near the top, the
       capability matrix heading, and the acceptance-criteria section) to the
       new `internal.Version` and `plan.CurrentVersion`.
+- [ ] Add the release's entry to [CHANGELOG.md](../CHANGELOG.md) in the
+      same commit, and use it as the annotated tag's message.
 - [ ] If `plan.CurrentVersion` moved, confirm [plan.md](plan.md) has a
       "Plan schema **version N**" paragraph for every version up to the new
       current one — a version can ship without a bump (see v23/`keyed_lines`,

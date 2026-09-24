@@ -247,6 +247,28 @@ was not fully written, so a descendant holding the pipe unread cannot block
 the lookup. The passphrase is never in argv or the environment. Production unlock material
 is outside gonf's tests: they run a fake foostore.
 
+**Operator prerequisites** (controller side, for the default
+`kdbx_pass_file` unlock):
+
+- a `foostore` new enough for the read contract above, on the controller's
+  `PATH` (or named by `Config.Binary`);
+- `~/.config/foostore.json` in the home directory of the user running gonf
+  (the child gets only `HOME`; an unreadable or malformed file is foostore
+  exit 8, `ErrUnavailable`). It must set `kdbx_pass_file` explicitly:
+  foostore's built-in `~/.master.pass` default is never used for machine
+  reads, so without it every read is exit 6. `kdbx_path` names the store
+  (foostore's default `~/Documents/Keepass/master.kdbx`; `Config.KDBXPath`
+  overrides it per provider);
+- the pass file itself: a regular file owned by that user with no group or
+  other permission bits (`0600`, or `0400`). A missing, lax, foreign-owned
+  or empty pass file is foostore exit 6, `ErrUnavailable`, so a mapped
+  reference fails the record instead of falling back.
+
+Check the setup without gonf with `foostore read --backend keepass --exact
+--raw --non-interactive --field Password -- <reference> >/dev/null; echo $?`
+(0 means readable, the exit codes are the table's above; the value goes to
+`/dev/null`, never to the terminal).
+
 **Cancellation and time.** `Config.Timeout` (default 30 s) is passed to
 foostore as `--timeout`; if the process still runs 2 s after that, the
 adapter kills its whole process group (`ErrUnavailable`); a process that
@@ -260,6 +282,42 @@ most once per gonf invocation, so every task, host and privilege chunk of a
 plan sees the same bytes, and a not-found is remembered too. The file
 provider stays the default and is unchanged: a consumer that does not call
 `SetSecretProvider` keeps reading `secrets/`.
+
+**Staged cutover (example).** To move an existing file-provider consumer to
+foostore one secret at a time, put the vault in front of the file provider
+with `secret.NewFallback` (see "Configuring another provider" above). This
+is conf's `cmd/gonf/main.go` (conf tasks ze2 and its goprecords follow-up),
+which maps four references and leaves every other one on `secrets/`:
+
+```go
+func setSecretProvider() error {
+    items, err := foostore.Items(map[secret.Ref]foostore.Item{
+        "frontends/var/nsd/etc/nsd_key.txt":         foostore.Field("Infra/nsd-tsig-key", "Password"),
+        "garage/rpc_secret":                         foostore.Field("Infra/garage-rpc", "Password"),
+        "frontends/etc/goprecords/blowfish.token":   foostore.Field("Infra/goprecords-token-blowfish", "Password"),
+        "frontends/etc/goprecords/fishfinger.token": foostore.Field("Infra/goprecords-token-fishfinger", "Password"),
+    })
+    if err != nil {
+        return err
+    }
+    vault, err := foostore.New(foostore.Config{Lookup: items})
+    if err != nil {
+        return err
+    }
+    api.SetSecretProvider(secret.NewSnapshot(secret.NewFallback(vault, secret.FileProvider{})))
+    return nil
+}
+```
+
+Recipes are unchanged (`MustSecret("garage/rpc_secret")`); migrating one
+more secret is one more table row. A mapped reference whose vault read
+fails for any reason but not-found (locked store, missing `foostore`) fails
+the record instead of reading a possibly stale `secrets/` copy, and a
+consumer that has proved the cutover (conf compared every recorded plan
+byte for byte with the file-only baseline) can delete the legacy file
+copies as a separate step. `main` returns a construction error before
+`cli.CLI` runs; the provider is only consulted when a task resolves a
+secret, so `-list` and secret-free tasks never run foostore.
 
 ## What reaches the plan: secret-aware plans (task 062)
 
@@ -483,7 +541,7 @@ Limits of the scan, by design:
 | `gonf plan -o dir -seal [-recipient r]…` | Task 2b2 (docs/plan-encryption.md). Records into an in-memory store (never plaintext `plan.jsonl`/`blobs/`), age-encrypts the GONF-PUSH/1 push frame (`plan/seal.Seal`, task 1b2) to the union of `-recipient` flags and the default recipients file, and writes only `dir/plan.age` (`0600`, same directory rules as `plan.jsonl`); `-seal -stdout` writes the sealed bytes to stdout instead, touching no disk. Refused with zero recipients (never a plaintext fallback) and with `-redacted` or `-with-secrets` (sealing and secret-revealing are mutually exclusive concepts). Warns, never deletes, when `dir` also holds a plaintext `plan.jsonl`/`blobs/` left over from an earlier unsealed run. Success is worded "wrote ... (N ops, M recipients)", never "verified" or "trusted": sealing is confidentiality only, never provenance (see plan-encryption.md, "Provenance"). `-seal -sign signer-file` (task 7g2, docs/plan-signing.md) signs each sealed artifact in a `GONF-SIGNED-PLAN/1` envelope with a signed-at time; `gonf plan-signer-keygen signer-file` makes the `0600` signer file and prints its public trusted-signers line. The signer secret is never printed, and a refused signer file is never echoed. `gonf apply -trusted-signers f [-require-signed]` (task 8g2) verifies a signed plan and its signed-at freshness (`-max-signed-age`, default 24h) before decrypting it, and `gonf plan-verify` unwraps one for the `age -d` emergency path. |
 | `gonf plan -o dir -seal -for host\|cluster\|fleet …` | Task 4b2 (docs/plan-encryption.md, "Operator UX" and "Runbook: host keys and shipped plan.age"). Like the row above, but records and seals **once per target host** (`api.RecordPlanForHost`), so a `ForHosts` body written for a host outside that host's `inventory.SelectionForHosts` selection is never resolved while recording another host's plan; writes `dir/plan-<host>.age` per host, each sealed to that host's own `api.WithPlanRecipient` plus the union of `-recipient`/recipients-file. Refuses before writing anything when a resolved host has no recipient (naming it), when the `-recipient`/recipients-file union is empty (same zero-recipient refusal the row above has, task `mg2` — otherwise each artifact would be sealed to its destination host's recipient only, unopenable by the operator who sealed it), or when two resolved hosts' names would sanitize to the same filename. `-for` needs `-seal`; with `-stdout` it needs to resolve to exactly one host. **Not an exact single-host guarantee** (task ng2): the selection is the same substring-based superset `gonf push` itself uses, so a host whose name or SSHHost is a substring of the target's (or vice versa) is included too, and its `ForHosts` secret can physically land in the target's artifact — see plan-encryption.md's "Runbook" for the naming caveat and the two regression tests in `internal/cli/plan_seal_for_test.go` that pin it. |
 | `gonf <task>`, `push`, `cluster`, `fleet` | The plan stays in memory on the controller and travels over SSH stdin (`GONF-PUSH/1`), as before. |
-| Multi-chunk `push` with a sensitive blob in an elevated chunk | Tasks zf2/0g2 (docs/plan-encryption.md, "Phase 4 design"). The controller seals each such blob ref to a fresh per-push ephemeral `age1pq` key held only in memory and uploads only the sealed stream (`sealed/<ref>.age`) to the login user's sticky dir; the key travels only on the reading elevated chunk's own stdin (a `GONF-PUSH/2` frame), never on argv, in the environment, a log or an error. That chunk decrypts every sealed ref its ops read into a fresh `0700` `sealed-run-<pid>-*` directory (dead-owner sweep like a sealed `plan.age` apply) before any op applies, reads those refs only from there, and removes the directory when it returns, failed or not. A missing, tampered, truncated, swapped or over-full sealed ref, a keyed frame with no sealed op, and an op reading a sealed ref without a key are all refused before anything applies, naming ops by position only. Needs a remote at or above the sealed-sticky release floor (placeholder until the release carrying 0g2 is tagged, so refused until then). |
+| Multi-chunk `push` with a sensitive blob in an elevated chunk | Tasks zf2/0g2 (docs/plan-encryption.md, "Phase 4 design"). The controller seals each such blob ref to a fresh per-push ephemeral `age1pq` key held only in memory and uploads only the sealed stream (`sealed/<ref>.age`) to the login user's sticky dir; the key travels only on the reading elevated chunk's own stdin (a `GONF-PUSH/2` frame), never on argv, in the environment, a log or an error. That chunk decrypts every sealed ref its ops read into a fresh `0700` `sealed-run-<pid>-*` directory (dead-owner sweep like a sealed `plan.age` apply) before any op applies, reads those refs only from there, and removes the directory when it returns, failed or not. A missing, tampered, truncated, swapped or over-full sealed ref, a keyed frame with no sealed op, and an op reading a sealed ref without a key are all refused before anything applies, naming ops by position only. Needs a remote gonf at or above the sealed-sticky release floor, v0.17.0 (task yg2): an older remote is refused before any upload. |
 | Destination apply (`gonf apply`) | A failing file (`WithValidation`) or `ConfigSet` validator reports its exit status and only the size of its output ("validator output withheld (N bytes)"), because a validator that quotes the offending line would echo the secret; template parse/execute errors of a sensitive file (or of an entry of a sensitive synced tree) report the step only; a failing command or package-manager run of a sensitive op, and every failing `crontab` run, reports only its output sizes. Debug logs never print content digests (for any file: an unsalted sha256 of a low-entropy secret can be confirmed offline). |
 | Validation candidates | Unchanged and already private: a file candidate is a `0600` temp file in a parent that only root and the applying user can write; a config set stages below a private staging directory. Both are removed after validation. |
 
@@ -598,7 +656,7 @@ first suggested fix (ignore `plan.jsonl`) ends up in.
 ### Not provided
 
 Durable encrypted plans now have an accepted design
-(docs/plan-encryption.md, task w82) and a phase-1 implementation, both
+(docs/plan-encryption.md, task w82), implemented on both
 sides: `gonf plan -o dir -seal` (task 2b2, this document's "Where a
 sensitive plan goes" table) age-encrypts the GONF-PUSH/1 frame to
 operator-controlled `age1pq…` recipients and writes only `dir/plan.age`,
@@ -611,10 +669,12 @@ explicit `-seal` with at least one recipient. Either way it is
 confidentiality only, never provenance (plan-encryption.md,
 "Provenance"): `gonf apply` of a sealed plan never prints "verified" or
 "authenticated", and nothing in gonf may apply a sealed plan unattended
-until an entry point meets plan-signing.md's "The unblocking condition"
-(task `7b2`'s design; task `6g2` added only the `plan/seal` `Sign`/`Verify`
-library and task `7g2` only the signing side of the CLI, `gonf plan -seal
--sign` and `gonf plan-signer-keygen`; nothing verifies yet). A protected sidecar holding only
+until an entry point meets plan-signing.md's "The unblocking condition".
+Signing itself exists (`gonf plan -seal -sign`, `gonf plan-signer-keygen`,
+and `gonf apply -trusted-signers [-require-signed]` verifying before it
+decrypts, tasks `6g2`/`7g2`/`8g2`), but only for an operator-chosen file:
+the unattended entry point (signing phase 6, task `bg2`) was declined and
+is not planned. A protected sidecar holding only
 the secret payloads (rather than sealing the whole artifact) was
 considered and rejected — plan-encryption.md's "Options compared", option
 E. Per-destination sealed artifacts now exist too: `gonf plan -o dir -seal

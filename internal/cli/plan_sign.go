@@ -111,6 +111,9 @@ func signerDisplay(pub seal.TrustedSigner) string {
 func cliPlanSignerKeygen(args []string) int {
 	fs := flag.NewFlagSet("plan-signer-keygen", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
+	// The command has no flags, so -h prints the usage line (with its
+	// positional argument) instead of flag's empty "Usage of" listing.
+	fs.Usage = func() { eprintln("usage: " + planSignerKeygenUsage) }
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}

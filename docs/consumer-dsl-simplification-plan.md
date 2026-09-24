@@ -612,12 +612,13 @@ environment, kills its process group on timeout or cancellation, and is
 wrapped in `secret.Snapshot` for one read per reference and invocation; see
 `docs/secrets.md`. Status (2026-09-24): durable plan encryption was designed
 separately (`w82`, [plan-encryption.md](plan-encryption.md)). Sealed plans
-shipped in v0.17.0. The `gonf plan -sign` and `gonf plan-verify` commands
-(tasks `7g2` and `8g2`) are on main but not released yet. The P9 cutover has
-its mechanism in place (`262`: `secret.NewFallback` and conf's written
-cutover policy). Wiring the real foostore mapping in conf and running the
-equality and recovery exercise is conf task `ze2`, which is waiting for
-vault-access authorization.
+shipped in v0.17.0; `gonf plan -seal -sign`, `gonf plan-signer-keygen` and
+`gonf plan-verify` (tasks `7g2` and `8g2`) in v0.18.0. The P9 cutover has
+its mechanism in place (`262`: `secret.NewFallback`) and is done in conf:
+conf task `ze2` wired the real foostore mapping and ran the equality and
+recovery exercise, and conf now maps four references (NSD TSIG key, Garage
+RPC secret, both goprecords upload tokens) with every other one still on
+the file provider (see secrets.md, "Staged cutover").
 
 Configure a provider once at the consumer composition root. Use a small
 context-aware resolver contract returning bytes and typed errors. Integrate

@@ -272,8 +272,17 @@ func main() { os.Exit(cli.CLI()) }
 | `-dry-run` / `-n` | Preview without mutating |
 | `-verbose` / `-quiet` | Log level |
 | `<task>…` | **RecordPlan + Apply** locally |
-| `plan [-o dir] [-id name] <task>…` | Write `plan.jsonl` (+ blobs) only |
-| `apply [-n] <plan.jsonl>` | Apply a plan file |
+| `plan [-o dir] [-id name] <task>…` | Write `plan.jsonl` (+ blobs) only, or a sealed `plan.age` (`-seal`, or by default for a plan carrying secrets when a recipients file exists) |
+| `apply [-n] <plan.jsonl\|plan.age>` | Apply a plan file (sealed and signed ones too) |
+
+The full command and flag list (push, cluster, fleet, sealing, signing,
+`plan-verify`, `plan-signer-keygen`) is in [plan.md](plan.md), "CLI".
+
+Each `CLI()` call scopes the settings its flags change — dry-run, log level,
+`-privilege`, `-profile` and `-cmd-timeout` — to that call and restores them
+when it returns (tasks vg2, xg2), so a program that calls `CLI()` more than
+once, or calls `Run` / `Apply` after it, never inherits an earlier
+invocation's `-n` or `-privilege`.
 
 `Activate(DetectFacts())` runs inside `CLI` so `-list` and profile overrides
 see the final Facts. Task **execution** still records candidates with their
