@@ -6,6 +6,17 @@ whether the constructor registers:
 - `Present` and `Absent` (plus variants such as `file.PresentEnsure`) build
   the resource, register it with `resource.Register` and record its plan draft
   (`resource.RecordPlanDraft`). The caller must not register it again.
+  Recording the draft is gated on `Register`'s `ok` (task sf2):
+  `r, ok := resource.Register(...); if ok { resource.RecordPlanDraft(...) }`.
+  `ok` is false for a duplicate ID, which `Register` reports as a
+  declaration error without registering; an ungated `RecordPlanDraft` would
+  then overwrite the FIRST declaration's draft under that ID, so the
+  repository would apply the refused declaration. The same gate covers
+  every other per-ID side effect of a registration (`systemdtimer.Present`'s
+  `systemd.JoinRegisteredReload`, `testapply.Register`'s `fixtures` entry)
+  and, in a composite that registers several resources for one declaration,
+  every member registration: `configset.Present` registers no member when
+  the set's own `Register` returned `!ok`.
 - `Ensure` (plus variants such as `file.EnsurePresent` and
   `file.EnsureWithPlanFacts`) builds and applies the resource immediately
   WITHOUT registering it or recording a draft. It exists for composition: plan
