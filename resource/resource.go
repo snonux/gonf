@@ -134,7 +134,24 @@ func Refuse(type_, name string, err error) Resource {
 // (WhenHostname/WhenPathExists, or a plain duplicate Present/Register call)
 // is safe, because nothing about the colliding registration attempt itself
 // changed any OTHER resource's registered state — the recipe's earlier,
-// successful registrations are exactly as declared. A failed
+// successful registrations are exactly as declared. That "nothing else
+// changed" half of the claim holds only for a LEAF resource, whose one
+// Register call is the whole declaration. For a COMPOSITE resource — one
+// whose registering constructor makes several resource.Register calls for a
+// single recipe declaration, such as configset.Present registering the set
+// plus one handle per member — the same colliding attempt can still let its
+// OTHER calls succeed and register unless the constructor explicitly guards
+// them on the first call's ok: a refused set whose member loop is not gated
+// on the set's own ok would leave the refused declaration's members
+// registered with a draft, which a subsequent apply then finds with no
+// applied set to attach to (task ig2, confirmed by probe against
+// configset.go before its member loop was gated this way). Present
+// constructors are audited to hold this invariant (see
+// resource/configset/configset.go's Present), so ResetDeclarationError's
+// clear-and-continue collision remedy is safe fleet-wide today — but that
+// safety comes from each composite's own internal guard, not for free from
+// this function, and a new composite resource must gate every one of its
+// extra Register calls on the outer call's ok the same way. A failed
 // MustSecret/OptionalSecret/ResolveSecret lookup is NOT safe to clear and
 // continue from: MustSecret cannot return an error, so a recipe that calls
 // it inline (e.g. WithContent("password="+MustSecret(...))) has ALREADY

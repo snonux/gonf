@@ -204,11 +204,17 @@ func (h Handle) Members(keys ...string) []resource.Dependency {
 
 // Present registers the config set and one handle resource per member, and
 // records their plan drafts. A misconfigured set is reported as a declaration
-// error (resource.Refuse), which fails the record. Nothing applies the
-// registered values through the repository since task e72 retired that path
-// (Register's registered parameter is now purely informational, see
-// resource.Registered); applying goes through the plan handlers and their
-// own outcome store (see newHandlers).
+// error (resource.Refuse), which fails the record. A set whose own
+// resource.Register call is refused (e.g. a duplicate ConfigSet name
+// colliding with an earlier declaration) registers no members either: the
+// member loop only runs once the set itself is known to be registered, so a
+// refused declaration cannot leave any of its members behind (AGENTS.md:
+// "Never register a refused declaration" — task ig2, closing a gap sf2's
+// leaf-only Register/ok audit did not cover for this composite resource).
+// Nothing applies the registered values through the repository since task
+// e72 retired that path (Register's registered parameter is now purely
+// informational, see resource.Registered); applying goes through the plan
+// handlers and their own outcome store (see newHandlers).
 func Present(name string, opts ...opt.ConfigSetOption) Handle {
 	c, err := build(name, opts)
 	if err != nil {
@@ -224,9 +230,13 @@ func Present(name string, opts ...opt.ConfigSetOption) Handle {
 	// methods of its own and is passed by value everywhere else in this
 	// package (markerName, hasMarker, pathResolver, ...).
 	set, setOK := resource.Register("ConfigSet", name, &sp, c.DependsOn.IDs...)
-	if setOK {
-		resource.RecordPlanDraft(sp.planDraft(set.ID(), c.DependsOn.SortedIDs()))
+	if !setOK {
+		// Same shape as the build-error return above: a nil members map, so
+		// Member/Members report every key through the refusal instead of
+		// registering any member under the collided set.
+		return Handle{Resource: set, name: name}
 	}
+	resource.RecordPlanDraft(sp.planDraft(set.ID(), c.DependsOn.SortedIDs()))
 
 	h := Handle{Resource: set, name: name, members: map[string]resource.Resource{}}
 	for _, m := range sp.members {
