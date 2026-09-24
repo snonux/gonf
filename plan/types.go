@@ -78,7 +78,19 @@ import "encoding/json"
 // recorded plan declares v24 only when it has a pruning glob sync_dir op
 // (RequiredVersion): without prune both semantics install the same files,
 // so an older destination still applies it faithfully.
-const CurrentVersion = 24
+// Version 25 adds flags/has_flags to service ops (WithFlags) and the noop
+// kind (see VersionServiceFlags). An older destination would ignore the
+// flags and report the service converged with its old flags, or reach the
+// unknown noop kind mid-plan after earlier ops had mutated the host, so it
+// must refuse v25 at the header gate. A recorded plan declares v25 only
+// when it has a service op with WithFlags or a noop op (RequiredVersion).
+const CurrentVersion = 25
+
+// VersionServiceFlags is the plan schema version that introduced the
+// service op flags/has_flags fields and the noop kind. Tests pin it so a
+// merge that loses the bump (and so lets an older destination silently
+// skip a service's flags) fails loudly.
+const VersionServiceFlags = 25
 
 // VersionKeyedLines is the plan schema version that introduced the file op
 // keyed_lines field. Tests pin it so a merge that loses the bump (and so
@@ -145,6 +157,7 @@ var supportedVersions = map[int]struct{}{
 	21:             {},
 	22:             {},
 	23:             {},
+	24:             {},
 	CurrentVersion: {},
 }
 
@@ -185,6 +198,9 @@ const (
 	// KindConfigSetMember is a report-only handle for one config_set member:
 	// it gives the member its own op ID so OnChange can watch it.
 	KindConfigSetMember Kind = "config_set_member"
+	// KindNoop is a named op that changes nothing and always reports ok
+	// (api.Noop), e.g. to verify the push pipeline to a host.
+	KindNoop Kind = "noop"
 )
 
 // allKinds lists every Kind constant in stable declaration order.
@@ -209,6 +225,7 @@ var allKinds = []Kind{
 	KindUser,
 	KindConfigSet,
 	KindConfigSetMember,
+	KindNoop,
 }
 
 // AllKinds returns a copy of every Kind constant in stable declaration order.

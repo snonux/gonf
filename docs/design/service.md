@@ -29,8 +29,46 @@ Service("httpd", WithRestart, OnChange(conf))
 For dedicated systemd timer units, prefer [`Timer` / `NoTimer`](timer.md).
 
 `Run`, `push`, `apply`, and `fleet` all go through the one apply engine:
-Service records a `service` plan op (name, absent, restart/reload, user) that
-is applied like any other resource (see [plan.md](plan.md)).
+Service records a `service` plan op (name, absent, restart/reload, user,
+flags) that is applied like any other resource (see [plan.md](plan.md)).
+
+## Startup flags
+
+`WithFlags(flags)` manages a daemon's rc flags on the BSD backends:
+
+```go
+Service("httpd", WithFlags(""), WithRestart, OnChange(conf))
+Service("nsd", WithFlags("-c /var/nsd/etc/nsd.conf"))
+```
+
+| Backend | Probe | Set |
+|---------|-------|-----|
+| OpenBSD | `rcctl get NAME flags` | `rcctl set NAME flags FLAGS` (stored in `/etc/rc.conf.local`) |
+| FreeBSD | `sysrc -n -i NAME_flags` | `sysrc NAME_flags=FLAGS` |
+| NetBSD | last `NAME_flags=` in `/etc/rc.conf.d/NAME`, `/etc/rc.conf`, `/etc/defaults/rc.conf` | `NAME_flags='FLAGS'` in `/etc/rc.conf`, replacing every assignment there |
+| systemd | refused at apply, before any probe | |
+
+- The flags are set after an enable and before start/restart/reload, and
+  only when the probe differs. A service that was not enabled always gets
+  them, since enabling can rewrite them.
+- A flags change is a change of the service: it notes `Service[NAME]`
+  changed and fires its `WithRestart`/`WithReload` even while its
+  `OnChange` gate holds. Flags are daemon arguments, so pair them with
+  `WithRestart`; a reload does not apply them.
+- OpenBSD empty flags pass no argument: rcctl writes the plain `NAME_flags=`
+  line for a base daemon that is off by default (httpd, relayd, nsd, ...),
+  the line `rcctl enable` writes too, and drops the line otherwise. So
+  `Service("httpd", WithFlags(""))` replaces
+  `File("/etc/rc.conf.local", WithLine("httpd_flags="))` plus
+  `OnChange(flags)` with no change on a host that already has the line.
+  A package daemon whose rc.d script sets default flags keeps them: rcctl
+  cannot store "empty" for it, so its empty flags never converge.
+- FreeBSD and NetBSD treat an unset variable as empty flags. NetBSD refuses
+  a differing `NAME_flags` in `/etc/rc.conf.d/NAME` (it would override
+  `/etc/rc.conf`), and rewrites an assignment it cannot evaluate
+  (expansions, several statements).
+- `WithFlags` on `NoService`, or with a line break, is a declaration error.
+- A plan with `WithFlags` declares schema 25.
 
 ## DaemonReload
 

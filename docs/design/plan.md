@@ -1881,6 +1881,19 @@ files, so such a plan keeps its older header and still applies unchanged on
 an older destination. This binary keeps applying v1–23 plans, whose
 `sync_dir` ops carry no `glob` field and therefore keep tree semantics.
 
+Plan schema **version 25** adds `flags`/`has_flags` to `service` operations
+(`WithFlags`, carried on `plan.ServicePayload`, see
+[service.md](service.md), "Startup flags") and the `noop` kind (`Noop(name)`,
+`resource/noop`: an op that changes nothing and notes `Noop[name]` ok). An
+older binary would ignore the flags and report the service converged with
+its old ones, or reach the unknown `noop` kind mid-plan after earlier ops
+had already mutated the host, so it must refuse v25 at the header gate.
+Like v22–v24 it is declared on demand: only a plan with a flags-managing
+`service` op or a `noop` op declares v25 (`plan.RequiredVersion`); every
+other plan keeps its older header and encodes exactly as before (a
+`service` op without `WithFlags` carries neither field). This binary keeps
+applying v1–24 plans.
+
 ### Secret material
 
 `MustSecret(path)` reads a required non-empty file below the controller

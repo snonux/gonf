@@ -137,6 +137,8 @@ var optionCases = []optionCase{
 	{"WithMonth", WithMonth("8"), []string{"Cron"}, one("SetMonth", "8")},
 	{"WithWeekday", WithWeekday("1"), []string{"Cron"}, one("SetWeekday", "1")},
 	{"WithCronEnv", WithCronEnv("K=V"), []string{"Cron"}, one("AddCronEnv", "K=V")},
+	{"WithSchedule", WithSchedule("10 6 * * *"), []string{"Cron"}, one("SetSchedule", "10 6 * * *")},
+	{"WithFlags", WithFlags("-v"), []string{"Service"}, one("SetFlags", "-v")},
 	{"WithOnCalendar", WithOnCalendar("daily"), []string{"SystemdTimer"}, one("SetOnCalendar", "daily")},
 	{"WithOnBootSec", WithOnBootSec("5min"), []string{"SystemdTimer"}, one("SetOnBootSec", "5min")},
 	{"WithPersistent", WithPersistent, []string{"SystemdTimer"}, one("SetPersistent", nil)},

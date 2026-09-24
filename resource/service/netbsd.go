@@ -15,10 +15,13 @@ const netbsdRcConfD = "/etc/rc.conf.d"
 
 // netbsdBackend converges services with NetBSD service(8). NetBSD's
 // service(8) has no enable/disable verbs, so those write an rc.conf.d
-// override (NAME=YES|NO) instead of running a command.
+// override (NAME=YES|NO) instead of running a command. WithFlags edits
+// NAME_flags in rcConf (netbsd_flags.go).
 type netbsdBackend struct {
-	run     runner
-	rcConfD string // override directory, netbsdRcConfD in production
+	run            runner
+	rcConfD        string // override directory, netbsdRcConfD in production
+	rcConf         string // netbsdRcConf in production
+	rcConfDefaults string // netbsdRcConfDefaults in production
 }
 
 var _ backend = netbsdBackend{}

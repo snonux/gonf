@@ -24,12 +24,13 @@ func TestSensitiveIDs(t *testing.T) {
 
 // TestRequiredVersion pins the on-demand header: v22 only with a sensitive
 // op, v23 with a keyed line edit (sensitive or not), v24 only with a
-// pruning glob sync_dir op (the highest wins). It also pins CurrentVersion,
+// pruning glob sync_dir op, v25 with a flags-managing service op or a noop
+// op (the highest wins). It also pins CurrentVersion,
 // so a later bump must revisit RequiredVersion instead of silently emitting
 // too old a header.
 func TestRequiredVersion(t *testing.T) {
 	t.Parallel()
-	if CurrentVersion != VersionSyncDirGlob {
+	if CurrentVersion != VersionServiceFlags {
 		t.Fatalf("CurrentVersion %d: extend RequiredVersion for the new schema", CurrentVersion)
 	}
 	plain := Op{Op: KindFile, Path: "/a"}
@@ -77,6 +78,11 @@ func TestRequiredVersion(t *testing.T) {
 		{"glob prune", []Op{plain, globPrune}, VersionSyncDirGlob},
 		{"glob prune before sensitive", []Op{globPrune, sensitive}, VersionSyncDirGlob},
 		{"sensitive before glob prune", []Op{sensitive, globPrune}, VersionSyncDirGlob},
+		{"service without flags", []Op{{Op: KindService, Name: "s", Payload: ServicePayload{}}}, VersionConfigSet},
+		{"service flags", []Op{plain, {Op: KindService, Name: "s", Payload: ServicePayload{HasFlags: true}}}, VersionServiceFlags},
+		{"service flags after glob prune", []Op{globPrune, {Op: KindService, Name: "s", Payload: ServicePayload{HasFlags: true}}}, VersionServiceFlags},
+		{"flags payload on non-service op", []Op{{Op: KindTimer, Name: "t", Payload: ServicePayload{HasFlags: true}}}, VersionConfigSet},
+		{"noop", []Op{sensitive, {Op: KindNoop, Name: "ping", ID: "Noop[ping]"}}, VersionServiceFlags},
 	}
 	for _, tc := range cases {
 		if got := RequiredVersion(tc.ops); got != tc.want {

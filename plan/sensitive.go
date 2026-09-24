@@ -10,8 +10,8 @@ import "fmt"
 const PreviewKind Kind = "plan_preview"
 
 // RequiredVersion is the plan schema a recorded plan's header declares: the
-// lowest version whose destinations apply ops faithfully. Schemas 22, 23 and
-// 24 only add fields whose absence older destinations would silently
+// lowest version whose destinations apply ops faithfully. Schemas 22 to 25
+// only add fields or a kind whose absence older destinations would silently
 // misinterpret, so each is declared only when a plan uses it:
 //   - v22 (sensitive) when an op is marked sensitive;
 //   - v23 (keyed_lines) when a file op has a keyed line edit (WithKeyedLine);
@@ -19,17 +19,21 @@ const PreviewKind Kind = "plan_preview"
 //     destination would tree-prune it and delete unmanaged subdirectories.
 //     A non-pruning glob sync_dir installs the same files under both
 //     semantics, so it does not raise the header.
+//   - v25 (service flags, noop kind) when a service op has WithFlags or the
+//     plan has a noop op (requiresServiceFlags).
 //
 // Otherwise the header stays v21 and the plan still applies on a v0.15.0
 // destination. Every earlier bump was emitted unconditionally, so v21 is the
-// floor. v24 is the highest on-demand schema, so an op that needs it ends
-// the scan early; the other two can only raise the version further (never
-// past v24), so the loop keeps checking every remaining op for them. A
-// future bump must extend this (TestRequiredVersion pins it to
-// CurrentVersion).
+// floor. v25 is the highest on-demand schema, so an op that needs it ends
+// the scan early; the others can only raise the version further (never past
+// v25), so the loop keeps checking every remaining op for them. A future
+// bump must extend this (TestRequiredVersion pins it to CurrentVersion).
 func RequiredVersion(ops []Op) int {
 	version := VersionConfigSet
 	for _, op := range ops {
+		if requiresServiceFlags(op) {
+			return VersionServiceFlags // the highest on-demand schema
+		}
 		// Glob moved onto SyncDirPayload (task 9e2); Prune stayed a flat Op
 		// field (KindDir shares it — see Op.Prune's own doc comment in
 		// types.go), so only Glob needs the payload read here. The Kind
@@ -55,7 +59,7 @@ func RequiredVersion(ops []Op) int {
 		// place of this guard.
 		if op.Op == KindSyncDir {
 			if p := PayloadOf[SyncDirPayload](op); p.Glob && op.Prune {
-				return VersionSyncDirGlob // the highest on-demand schema
+				version = VersionSyncDirGlob
 			}
 		}
 		// KeyedLines moved onto FilePayload (task ae2). Before task rf2 this
@@ -84,6 +88,20 @@ func RequiredVersion(ops []Op) int {
 		}
 	}
 	return version
+}
+
+// requiresServiceFlags reports whether op needs schema v25: a noop op, or a
+// service op whose payload manages flags. Like the other arms of
+// RequiredVersion it checks op.Op before trusting the payload.
+func requiresServiceFlags(op Op) bool {
+	switch op.Op {
+	case KindNoop:
+		return true
+	case KindService:
+		return PayloadOf[ServicePayload](op).HasFlags
+	default:
+		return false
+	}
 }
 
 // SensitiveIDs returns the identity of every op marked Sensitive, in plan

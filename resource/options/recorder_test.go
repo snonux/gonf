@@ -69,6 +69,8 @@ func (r *recorder) SetMonthday(v string)       { r.record("SetMonthday", v) }
 func (r *recorder) SetMonth(v string)          { r.record("SetMonth", v) }
 func (r *recorder) SetWeekday(v string)        { r.record("SetWeekday", v) }
 func (r *recorder) AddCronEnv(v string)        { r.record("AddCronEnv", v) }
+func (r *recorder) SetSchedule(v string)       { r.record("SetSchedule", v) }
+func (r *recorder) SetFlags(v string)          { r.record("SetFlags", v) }
 func (r *recorder) SetHome(v string)           { r.record("SetHome", v) }
 func (r *recorder) SetCreateHome()             { r.record("SetCreateHome", nil) }
 func (r *recorder) SetShell(v string)          { r.record("SetShell", v) }

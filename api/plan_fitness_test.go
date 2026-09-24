@@ -139,7 +139,13 @@ func kindFitnessTable() map[plan.Kind]kindFixture {
 			Kind:    "service",
 			Name:    "fitsvc",
 			Restart: true,
-			Payload: service.Payload{},
+			Payload: service.Payload{Flags: "-v", HasFlags: true},
+		}},
+		plan.KindNoop: {draft: &resource.PlanDraft{
+			Kind: "noop",
+			ID:   "Noop[fit-ping]",
+			Name: "fit-ping",
+			Deps: []string{"Package[fit-base]"},
 		}},
 		plan.KindSystemdTimer: {draft: &resource.PlanDraft{
 			Kind:    "systemd_timer",

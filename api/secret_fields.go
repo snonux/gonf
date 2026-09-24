@@ -71,6 +71,8 @@ var opFieldClasses = map[string]fieldClass{
 	"command": classPayload, "legacy_command": classPayload, "schedule": classPayload,
 	"cron_env[]": classPayload, "on_calendar": classPayload, "on_boot_sec": classPayload,
 	"description": classPayload, "service_description": classPayload,
+	// Service startup flags (WithFlags) are argv the daemon starts with.
+	"flags": classPayload,
 	// template_param is the {{.Param}} value: the literal content itself for
 	// a template without a source file.
 	"template_param":    classPayload,

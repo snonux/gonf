@@ -124,15 +124,23 @@ func Package[T Path](name T, opts ...options.PackageOption) Resource {
 	case string:
 		return pkg.Present(v, opts...)
 	case []string:
-		return Packages(v, opts...)
+		return packages(v, opts)
 	default:
 		panic("unreachable: Package: Path is string or []string")
 	}
 }
 
-// Packages is Package for a list of names: it returns one Multi resource
-// containing a package resource per name.
-func Packages(names []string, opts ...options.PackageOption) Resource {
+// Packages installs several packages without options: Packages("git",
+// "tmux") is Package(List("git", "tmux")). It returns one Multi resource
+// containing a package resource per name. Pass options through Package
+// with a List, e.g. Package(List("git", "tmux"), IsLatest).
+func Packages(names ...string) Resource {
+	return packages(names, nil)
+}
+
+// packages returns one Multi resource containing a package resource per
+// name, each with opts.
+func packages(names []string, opts []options.PackageOption) Resource {
 	var resources []resource.Resource
 	for _, name := range names {
 		resources = append(resources, pkg.Present(name, opts...))
@@ -185,8 +193,20 @@ func NoService[T Path](name T, opts ...options.ServiceOption) Resource {
 // Cron ensures a named crontab entry for a user (default root).
 // Schedule fields default to "*". Requires WithCommand unless absent.
 // Inspired by Puppet's cron type (command, user, minute/hour/monthday/month/weekday, env).
+// CronAt is the compact spelling with the schedule and command inline.
 func Cron(name string, opts ...options.CronOption) Resource {
 	return cron.Present(name, opts...)
+}
+
+// CronAt ensures a named crontab entry from a crontab-style five-field
+// schedule and a command: CronAt("backup", "10 6 * * *", "/usr/local/bin/backup")
+// is Cron("backup", WithSchedule("10 6 * * *"), WithCommand("/usr/local/bin/backup"))
+// and records the identical plan op. opts add the remaining Cron options
+// (WithCronUser, WithCronEnv, DependsOn, ...). A bad schedule is a
+// declaration error (see WithSchedule).
+func CronAt(name, schedule, command string, opts ...options.CronOption) Resource {
+	all := append([]options.CronOption{options.WithSchedule(schedule), options.WithCommand(command)}, opts...)
+	return cron.Present(name, all...)
 }
 
 // NoCron removes a named crontab entry (use WithCronUser for non-root).

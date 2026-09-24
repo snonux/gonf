@@ -5,7 +5,10 @@ releases before v0.17.0 the tag message and the git log are the notes.
 
 ## Unreleased
 
-Plan schema 24 (unchanged). DSL ergonomics, all additive: existing recipes record the same plans.
+Plan schema 25, declared only by a plan that uses `WithFlags` or `Noop`;
+every other plan keeps its older header and encodes exactly as before. DSL
+ergonomics: existing recipes record the same plans (the one behaviour
+change is Cron's identical-entry adoption, below).
 
 Ownership ([docs/reference.md](docs/reference.md), "Shared options")
 - `Perm(mode, owner)` sets mode and ownership in one option wherever
@@ -44,6 +47,36 @@ Inventory ([docs/reference.md](docs/reference.md), "Inventory")
   `EachHost[T](func(T))`, `EachHostNamed[T](func(host, T))` and
   `HostData[T](host)` read it with `ForHosts`' and `MustHostValue`'s
   semantics (a member without a value is an error).
+
+Resource keywords ([docs/reference.md](docs/reference.md), approved by the
+user 2026-09-24)
+- `CronAt(name, "10 6 * * *", command, opts...)` and `WithSchedule("10 6 * *
+  *")` spell a cron schedule in one string. Both record the same plan op as
+  the per-field options, which keep working. A schedule that is not five
+  portable fields (`@reboot` included) is a declaration error.
+- Behaviour change: a present `Cron` now adopts an unmanaged entry that is
+  identical to it (same five fields and exact command, in its own user's
+  crontab) instead of leaving it to run twice. It never adopts for a job
+  with `WithCronEnv`, or an entry followed by a `NAME=value` line
+  ([docs/design/cron.md](docs/design/cron.md), "Adopting existing
+  entries"). `WithLegacyCommand` stays for a different command or schedule;
+  passing it with the job's own command records and does exactly what it
+  did.
+- `Sh("systemctl restart foo", opts...)` is `Command` with a shell-words
+  argv: quotes and backslashes work, no shell runs, nothing expands, and
+  unquoted shell syntax is a declaration error. Same plan and default ID as
+  the `Command` it spells.
+- `Noop(name)` registers `Noop[name]`, which runs nothing and reports ok (new
+  `noop` plan kind), replacing `Command("true", nil, Unless("true", nil),
+  WithName(name))`.
+- `Service(name, WithFlags(flags))` manages BSD rc startup flags (rcctl,
+  sysrc, NetBSD `/etc/rc.conf`). A flags change fires `WithRestart` even
+  behind `OnChange`; OpenBSD `WithFlags("")` matches the `NAME_flags=` line
+  of the `File(..., WithLine("httpd_flags="))` pattern it replaces. Refused
+  on systemd at apply ([docs/design/service.md](docs/design/service.md)).
+- `Packages("git", "tmux")` now takes names (it took a `[]string` plus
+  options and had no callers outside `Package`); options go through
+  `Package(List(...), opts...)`.
 
 ## v0.19.0 (2026-09-24)
 

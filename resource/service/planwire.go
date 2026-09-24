@@ -20,10 +20,12 @@ func init() {
 	plan.RegisterHandler(plan.KindService, planHandler{})
 }
 
-// ToOp lowers a "service" resource draft to a plan.Op. Reload comes from
-// d.Payload (Payload, task w62 Layer 1); a "service" draft without one is a
-// record-time bug (planDraft always sets it), reported like any other
-// handler error rather than panicking.
+// ToOp lowers a "service" resource draft to a plan.Op. Reload and the
+// WithFlags flags come from d.Payload (Payload, task w62 Layer 1); a
+// "service" draft without one is a record-time bug (planDraft always sets
+// it), reported like any other handler error rather than panicking. Reload
+// stays a flat plan.Op field, the flags travel in plan.ServicePayload
+// (schema v25), which ToOp always sets, like every payload-carrying kind.
 func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 	p, ok := d.Payload.(Payload)
 	if !ok {
@@ -38,6 +40,7 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		Reload:  p.Reload,
 		User:    d.User,
 		Deps:    slices.Clone(d.Deps),
+		Payload: plan.ServicePayload{Flags: p.Flags, HasFlags: p.HasFlags},
 	}
 	// Change gate (schema v11): OnChange arms IfChanged with the watched ids.
 	if d.IfChanged {
@@ -67,6 +70,11 @@ func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	}
 	if op.User {
 		opts = append(opts, opt.WithUser)
+	}
+	// Managed flags (schema v25) rebuild WithFlags, empty flags included; a
+	// decoded op without a ServicePayload reads as unmanaged flags.
+	if p := plan.PayloadOf[plan.ServicePayload](op); p.HasFlags {
+		opts = append(opts, opt.WithFlags(p.Flags))
 	}
 	// The recorded gate is rebuilt by the rule every gated kind shares
 	// (opt.RecordedChangeGate): a gated op without watch ids is an error.

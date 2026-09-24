@@ -90,11 +90,13 @@ func sampleOps() []Op {
 			Restart: true,
 			User:    true,
 			ID:      "Service[uptimed]",
+			Payload: ServicePayload{},
 		},
 		{
-			Op:     KindService,
-			Name:   "olddaemon",
-			Absent: true,
+			Op:      KindService,
+			Name:    "olddaemon",
+			Absent:  true,
+			Payload: ServicePayload{},
 		},
 		{
 			Op:      KindCommand,

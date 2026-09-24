@@ -1,19 +1,56 @@
 package cron
 
 // Crontab text transformations: mergeCrontab replaces or removes the named
-// Gonf block, and adoptLegacyCommand drops unmanaged entries that a Gonf
-// block now owns. Both work on the text read by readCrontab (crontab.go)
-// while Cron.apply holds the crontab write lock (lock.go); marker parsing
-// lives in crontab_markers.go and entry parsing in crontab_fields.go.
+// Gonf block, and adoptUnmanaged drops unmanaged entries that a Gonf block
+// now owns. Both work on the text read by readCrontab (crontab.go) while
+// Cron.apply holds the crontab write lock (lock.go); marker parsing lives in
+// crontab_markers.go and entry parsing in crontab_fields.go.
 
 import "strings"
 
-// adoptLegacyCommand removes unmanaged cron entries whose parsed command is an
-// exact match for legacyCommand. An empty legacyCommand opts out. Lines inside
-// every valid Gonf block are protected, and any malformed Gonf marker disables
-// adoption for this pass rather than guessing which lines are safe to remove.
+// adoption selects the unmanaged crontab entries a present job takes over
+// (removes) before its own block is written. Cron.adoption builds it.
+//
+// There are two independent matchers, and an entry matching either one is
+// adopted:
+//   - legacy (WithLegacyCommand): every entry whose parsed command equals
+//     legacy exactly, whatever its schedule. This is the explicit opt-in for
+//     a DIFFERENT old command line, or the same command on another schedule.
+//   - identical (the default for every present job without WithCronEnv): an
+//     entry that is the job itself, i.e. the same five schedule fields
+//     (byte-equal after splitting on blanks, so "0  6" matches "0 6" but
+//     "00 6" does not) and exactly the same command. Such a line would
+//     otherwise keep running beside the managed block, so the job would run
+//     twice. It is only adopted while no environment assignment follows it
+//     in the table (see adoptUnmanaged): the managed block is appended at
+//     the end, and moving the entry past a later NAME=value line would
+//     change the environment it runs with.
+type adoption struct {
+	legacy    string
+	identical *cronEntry
+}
+
+// cronEntry is one parsed crontab entry: its five schedule fields and its
+// command.
+type cronEntry struct {
+	fields  [5]string
+	command string
+}
+
+// adoptLegacyCommand removes unmanaged cron entries whose parsed command is
+// an exact match for legacyCommand (adoption.legacy alone). An empty
+// legacyCommand opts out.
 func adoptLegacyCommand(current, legacyCommand string) (string, bool) {
-	if legacyCommand == "" {
+	return adoptUnmanaged(current, adoption{legacy: legacyCommand})
+}
+
+// adoptUnmanaged removes the unmanaged cron entries a selects (see
+// adoption). Only lines of the one crontab being rewritten are ever
+// considered, so another user's crontab is never touched. Lines inside every
+// valid Gonf block are protected, and any malformed Gonf marker disables
+// adoption for this pass rather than guessing which lines are safe to remove.
+func adoptUnmanaged(current string, a adoption) (string, bool) {
+	if a.legacy == "" && a.identical == nil {
 		return current, false
 	}
 
@@ -22,12 +59,12 @@ func adoptLegacyCommand(current, legacyCommand string) (string, bool) {
 	if !wellFormed {
 		return current, false
 	}
+	lastEnv := lastEnvAssignment(lines)
 
 	out := make([]string, 0, len(lines))
 	changed := false
 	for i, line := range lines {
-		command, isCronEntry := cronEntryCommand(line)
-		if !protected[i] && isCronEntry && command == legacyCommand {
+		if !protected[i] && a.adopts(line, i > lastEnv) {
 			changed = true
 			continue
 		}
@@ -37,6 +74,34 @@ func adoptLegacyCommand(current, legacyCommand string) (string, bool) {
 		return current, false
 	}
 	return joinCrontabLines(out), true
+}
+
+// adopts reports whether a takes over line. envStable says no environment
+// assignment follows line in the table, which the identical matcher needs.
+func (a adoption) adopts(line string, envStable bool) bool {
+	fields, command, ok := cronEntryParts(line)
+	if !ok {
+		return false
+	}
+	if a.legacy != "" && command == a.legacy {
+		return true
+	}
+	return a.identical != nil && envStable &&
+		fields == a.identical.fields && command == a.identical.command
+}
+
+// lastEnvAssignment returns the index of the last line that may set a
+// crontab environment variable (isCrontabEnvAssignment), protected Gonf
+// block lines included since cron applies them to every later entry too, or
+// -1 when there is none.
+func lastEnvAssignment(lines []string) int {
+	last := -1
+	for i, line := range lines {
+		if isCrontabEnvAssignment(line) {
+			last = i
+		}
+	}
+	return last
 }
 
 // mergeCrontab replaces or removes all named GONF blocks. desired empty → remove.

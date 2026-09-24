@@ -11,7 +11,17 @@ Cron("backup",
     WithCronEnv("PATH=/usr/bin:/bin"),
 )
 NoCron("backup", WithCronUser("root"))
+
+// Compact spelling, the identical plan op:
+CronAt("backup", "0 2 * * *", "/usr/local/bin/backup.sh",
+    WithCronUser("root"), WithCronEnv("PATH=/usr/bin:/bin"))
 ```
+
+`CronAt(name, schedule, command, opts...)` is `Cron(name,
+WithSchedule(schedule), WithCommand(command), opts...)`; `WithSchedule("0 2 *
+* *")` sets the five fields in one option (a later per-field option overrides
+its field). A schedule that is not five portable fields is a declaration
+error; `@reboot` and the other `@` directives stay unsupported.
 
 Jobs are stored in the target user's crontab between markers:
 
@@ -43,8 +53,34 @@ rejects `-u` for your own account without privileges). Other users still use
 | `WithCronUser` | Crontab owner (default `root`) |
 | `WithMinute` / `WithHour` / `WithMonthday` / `WithMonth` / `WithWeekday` | Schedule fields (default `*`) |
 | `WithCronEnv` | Environment line `KEY=VAL` above the job |
-| `WithLegacyCommand` | Remove one exact unmanaged command from a valid cron entry before creating this job; cannot be used with `NoCron` |
+| `WithSchedule("m h dom mon dow")` | All five schedule fields at once |
+| `WithLegacyCommand` | Remove unmanaged entries with this exact command, on any schedule, before creating this job; cannot be used with `NoCron` |
 | `IsAbsent` / `NoCron` | Remove the named job |
+
+## Adopting existing entries
+
+A present job adopts (removes, then writes its own block) the unmanaged
+entries that are already this job, so migrating a hand-written line into
+gonf does not leave it running twice. An entry is identical when, in the
+crontab of the job's own user only:
+
+- it is a portable five-field entry outside every valid Gonf block;
+- its five schedule fields equal the job's, compared as text after
+  splitting on blanks (`0  6` matches `0 6`, `00 6` does not);
+- its command equals `WithCommand` exactly, byte for byte;
+- the job has no `WithCronEnv` (its lines would change the environment);
+- no environment assignment follows the entry anywhere in the table, since
+  the block is appended at the end, where a later `NAME=value` would apply.
+
+Anything else is left alone. `WithLegacyCommand(cmd)` is the explicit
+opt-in for a different old command or the same command on another
+schedule: it matches the command only, whatever the schedule and the
+environment lines. Passing `WithLegacyCommand` with the job's own command
+still works exactly as before (and keeps `legacy_command` in the plan);
+dropping it now relies on the default, which is stricter: the old line's
+schedule must match too, and dropping it removes `legacy_command` from the
+recorded op. A malformed Gonf marker disables both kinds of adoption for
+that apply. `NoCron` adopts nothing.
 
 Each reconciliation holds an advisory lock for that crontab across its
 read/merge/write transaction. This prevents two Gonf processes from losing

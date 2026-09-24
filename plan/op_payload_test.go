@@ -314,6 +314,8 @@ func TestPayloadOfMatchesEveryMigratedKind(t *testing.T) {
 				checkPayloadOf(t, kind, SystemdTimerPayload{OnCalendar: "daily"})
 			case UserPayload:
 				checkPayloadOf(t, kind, UserPayload{Home: "/home/x", CreateHome: true})
+			case ServicePayload:
+				checkPayloadOf(t, kind, ServicePayload{Flags: "-v", HasFlags: true})
 			case LinkPayload:
 				checkPayloadOf(t, kind, LinkPayload{Symlink: "/x"})
 			case LinkIfExistsPayload:

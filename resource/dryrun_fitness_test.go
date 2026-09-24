@@ -147,6 +147,7 @@ func TestDryRunFitness(t *testing.T) {
 		{"service-freebsd", dryRunServiceFreeBSD},
 		{"service-netbsd", dryRunServiceNetBSD},
 		{"service-rcctl", dryRunServiceRcctl},
+		{"service-rcctl-flags", dryRunServiceRcctlFlags},
 		{"daemon_reload", dryRunDaemonReload},
 		{"timer", dryRunTimer},
 		{"systemdtimer", dryRunSystemdTimer},
@@ -912,6 +913,37 @@ func dryRunServiceRcctl(t *testing.T, tmp string) {
 		}
 		return ""
 	})
+}
+
+// dryRunServiceRcctlFlags pins that a WithFlags change is only reported in
+// a dry run: rcctl get NAME flags probes, rcctl set never runs, and the
+// service is noted would-change.
+func dryRunServiceRcctlFlags(t *testing.T, _ string) {
+	var mutated bool
+	fake := func(name string, args ...string) (string, string, int, error) {
+		switch {
+		case args[0] == "check", args[0] == "get" && args[2] == "status":
+			return "", "", 0, nil // running and enabled
+		case args[0] == "get" && args[2] == "flags":
+			return "-old\n", "", 0, nil
+		}
+		mutated = true
+		return "", "", 0, nil
+	}
+	rs := &runners.Set{Service: &runners.ServiceRunners{
+		Run:     fake,
+		Manager: func() (string, error) { return "rcctl", nil },
+	}}
+	service.Present("fit-service", opt.WithFlags("-new"), opt.WithRestart)
+	if err := testapply.ApplyWithRunners(rs); err != nil {
+		t.Fatal(err)
+	}
+	if mutated {
+		t.Fatal("dry-run must not run rcctl set or restart")
+	}
+	if !resource.AnyChanged("Service[fit-service]") {
+		t.Fatal("dry-run flags change was not reported")
+	}
 }
 
 func dryRunDaemonReload(t *testing.T, tmp string) {

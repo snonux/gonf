@@ -171,6 +171,27 @@ func (p UserPayload) applyToWire(w *wireOp) {
 	w.ManageHome = p.ManageHome
 }
 
+// ServicePayload holds the wire fields exclusive to KindService (schema
+// v25, VersionServiceFlags). resource/service's planwire.go is the only
+// other package that constructs or reads one, always non-nil on a
+// "service" op's Payload, for the same reason CronPayload is (see its doc
+// comment). Reload stays a flat Op field: it predates the payload split and
+// keeps its wire position. Its json tags exist for the same secret-scan
+// reflection reason CronPayload's do.
+type ServicePayload struct {
+	// Flags are the service's startup flags (WithFlags) for the BSD rc
+	// backends.
+	Flags string `json:"flags,omitempty"`
+	// HasFlags says Flags is managed at all, so managed empty flags differ
+	// from unmanaged ones on the wire.
+	HasFlags bool `json:"has_flags,omitempty"`
+}
+
+func (p ServicePayload) applyToWire(w *wireOp) {
+	w.Flags = p.Flags
+	w.HasFlags = p.HasFlags
+}
+
 // LinkPayload holds the wire fields exclusive to KindLink.
 // resource/link's planwire.go is the only other package that constructs or
 // reads one (its ToOp/Apply for the "link" kind specifically —
@@ -710,6 +731,9 @@ var payloadConstructors = map[Kind]func(wireOp) OpPayload{
 			ManageHome:          w.ManageHome,
 		}
 	},
+	KindService: func(w wireOp) OpPayload {
+		return ServicePayload{Flags: w.Flags, HasFlags: w.HasFlags}
+	},
 	KindLink: func(w wireOp) OpPayload {
 		return LinkPayload{Symlink: w.Symlink, Hardlink: w.Hardlink}
 	},
@@ -916,6 +940,7 @@ func OpPayloadExamples() map[Kind]OpPayload {
 		KindCron:            CronPayload{},
 		KindSystemdTimer:    SystemdTimerPayload{},
 		KindUser:            UserPayload{},
+		KindService:         ServicePayload{},
 		KindLink:            LinkPayload{},
 		KindLinkIfExists:    LinkIfExistsPayload{},
 		KindPackage:         PackagePayload{},

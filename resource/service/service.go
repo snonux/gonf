@@ -22,6 +22,7 @@ var (
 	_ opt.UserService     = (*Service)(nil)
 	_ opt.Dependable      = (*Service)(nil)
 	_ opt.ChangeWatchable = (*Service)(nil)
+	_ opt.Flaggable       = (*Service)(nil)
 	_ opt.MisuseReporter  = (*Service)(nil)
 )
 
@@ -35,6 +36,11 @@ type Service struct {
 	restart bool
 	reload  bool
 	user    bool // systemd --user only
+	// flags and hasFlags back WithFlags: hasFlags says the flags are managed
+	// at all, so WithFlags("") (manage them to empty) differs from no
+	// WithFlags (leave them alone).
+	flags    string
+	hasFlags bool
 	// svcRun and svcManager are the injected overrides (nil: the real ones)
 	// of runCmd and detectServiceManager, used by the BSD backends and
 	// service-manager detection (see run(), detectManager()). sysClient is
@@ -81,12 +87,27 @@ func (s *Service) SetReload() { s.reload = true }
 // Backends without a user bus reject it at apply time.
 func (s *Service) SetUser() { s.user = true }
 
+// SetFlags manages the service's startup flags (see opt.WithFlags).
+func (s *Service) SetFlags(flags string) {
+	s.flags = flags
+	s.hasFlags = true
+}
+
+// declarationErr returns the first option misuse, or the WithFlags
+// declaration check (checkFlagsDeclaration), for Present and EnsureWith.
+func (s *Service) declarationErr() error {
+	if err := s.MisuseErr(); err != nil {
+		return err
+	}
+	return s.checkFlagsDeclaration()
+}
+
 // Present registers a service that should be running and enabled at boot. An
 // option misuse is reported as a declaration error (resource.Refuse) and
 // nothing is registered.
 func Present(name string, opts ...opt.ServiceOption) resource.Resource {
 	s := newService(name, opts)
-	if err := s.MisuseErr(); err != nil {
+	if err := s.declarationErr(); err != nil {
 		return resource.Refuse("Service", name, err)
 	}
 	r, ok := resource.Register("Service", s.name, s, s.DependsOn.IDs...)
@@ -111,7 +132,7 @@ func Ensure(name string, opts ...opt.ServiceOption) error {
 // same way a plan apply does.
 func EnsureWith(sr *runners.ServiceRunners, sysR *runners.SystemdRunners, name string, opts ...opt.ServiceOption) error {
 	s := newServiceWith(sr, sysR, name, opts)
-	if err := s.MisuseErr(); err != nil {
+	if err := s.declarationErr(); err != nil {
 		return err
 	}
 	return s.apply()
@@ -151,8 +172,8 @@ func (s *Service) detectManager() (string, error) {
 }
 
 // planDraft records s as a "service" plan draft under id, including its
-// dependencies and OnChange gate. Reload, service's one exclusive field,
-// travels in Payload (see Payload, task w62 Layer 1).
+// dependencies and OnChange gate. Reload and the WithFlags flags, service's
+// exclusive fields, travel in Payload (see Payload, task w62 Layer 1).
 func (s *Service) planDraft(id string) resource.PlanDraft {
 	d := resource.PlanDraft{
 		Kind:    "service",
@@ -160,7 +181,7 @@ func (s *Service) planDraft(id string) resource.PlanDraft {
 		Name:    s.name,
 		Absent:  s.Absent,
 		Restart: s.restart,
-		Payload: Payload{Reload: s.reload},
+		Payload: Payload{Reload: s.reload, Flags: s.flags, HasFlags: s.hasFlags},
 		User:    s.user,
 		Deps:    s.DependsOn.SortedIDs(),
 	}

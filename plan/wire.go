@@ -157,6 +157,11 @@ type wireOp struct {
 
 	All     []Predicate `json:"all,omitempty"`
 	Require string      `json:"require,omitempty"`
+
+	// Service-exclusive (plan.ServicePayload, schema v25). See its own
+	// field docs. Appended last, like every field added after the split.
+	Flags    string `json:"flags,omitempty"`
+	HasFlags bool   `json:"has_flags,omitempty"`
 }
 
 // normalizeWire trims every wireOp slice from empty-but-non-nil to nil, so

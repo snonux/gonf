@@ -73,6 +73,8 @@ func TestEveryExportedOptionHasAResourceFamily(t *testing.T) {
 		{"WithMonth", func() { acceptCron(WithMonth("*")) }},
 		{"WithWeekday", func() { acceptCron(WithWeekday("*")) }},
 		{"WithCronEnv", func() { acceptCron(WithCronEnv("KEY=value")) }},
+		{"WithSchedule", func() { acceptCron(WithSchedule("10 6 * * *")) }},
+		{"WithFlags", func() { acceptService(WithFlags("-v")) }},
 		{"WithOnCalendar", func() { acceptSystemdTimer(WithOnCalendar("daily")) }},
 		{"WithOnBootSec", func() { acceptSystemdTimer(WithOnBootSec("1min")) }},
 		{"WithPersistent", func() { acceptSystemdTimer(WithPersistent) }},
@@ -199,6 +201,8 @@ func TestSharedOptionsHaveCompleteFamilyMatrix(t *testing.T) {
 	acceptCron(WithMonth("*"))
 	acceptCron(WithWeekday("*"))
 	acceptCron(WithCronEnv("KEY=value"))
+	acceptCron(WithSchedule("10 6 * * *"))
+	acceptService(WithFlags("-v"))
 	acceptSystemdTimer(WithOnCalendar("daily"))
 	acceptSystemdTimer(WithOnBootSec("1min"))
 	acceptSystemdTimer(WithPersistent)

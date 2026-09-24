@@ -242,9 +242,9 @@ Other helpers:
 
 Constructors return a `Resource` (pass it to `DependsOn`/`OnChange`).
 Constructors with a `Path` type parameter accept a `string` or `List(...)`;
-`Files`, `Dirs`, `Links`, `Packages`, `Services`, `Timers` take a
-`[]string`. Options are typed per resource family, so an unsupported option
-is a compile error. An invalid combination is a declaration error and the
+`Files`, `Dirs`, `Links`, `Services`, `Timers` take a `[]string`,
+`Packages` takes names (`Packages("git", "tmux")`). Options are typed per
+resource family, so an unsupported option is a compile error. An invalid combination is a declaration error and the
 resource is not registered.
 
 ### Shared options
@@ -415,6 +415,8 @@ NoLink("/tmp/stale-link")
 Command("touch", List("/tmp/marker"), Creates("/tmp/marker"), WithName("touch-marker"))
 Command("true", nil, Unless("test", List("-f", "/tmp/skip")), OnlyIf("test", List("-d", "/opt/app")))
 Command("newaliases", List(), OnChange(aliases))
+Sh("systemctl restart 'my unit'", OnChange(unit))  // Command("systemctl", List("restart", "my unit"))
+Noop("ping")                                      // changes nothing, reports ok
 ```
 
 | Option | Meaning |
@@ -430,11 +432,24 @@ Command("newaliases", List(), OnChange(aliases))
 
 Guards run on the destination. Prefer a first-class resource when one fits.
 
+`Sh(line, opts...)` splits `line` into argv like a shell (`'...'`, `"..."`,
+`\`) but runs no shell and expands nothing. The plan is the same as the
+`Command` it spells, and so is the default ID (the words joined by spaces).
+An unquoted `` | & ; < > ( ) $ ` * ? [ ``, a leading `#` or `~`, or `$`/`` ` ``
+in double quotes is a declaration error. For real shell syntax use
+`Command("sh", List("-c", ...))`.
+
+`Noop(name)` registers `Noop[name]`: it runs nothing, always reports ok, and
+can be a `DependsOn`/`OnChange` target. Use it instead of
+`Command("true", nil, Unless("true", nil), WithName(name))`. It needs a
+schema 25 destination.
+
 ### Package
 
 ```go
 Package("rsync")
 Package(List("git", "tmux"), IsLatest)
+Packages("git", "tmux")                            // Package(List("git", "tmux"))
 Package("dtail", WithEnv(map[string]string{"PKG_PATH": "https://repo/openbsd/"}))
 NoPackage("oldpkg")
 ```
@@ -448,6 +463,7 @@ NoPackage("oldpkg")
 
 `IsLatest` runs the upgrade path (`dnf update`, `pkg upgrade`, `pkg_add -u`,
 `pkgin install`). `WithEnv` applies to probes and mutations. Needs root.
+`Packages(names...)` takes no options; pass them via `Package(List(...), ...)`.
 
 ### Service and DaemonReload
 
@@ -456,6 +472,7 @@ Service("httpd")                                  // started + enabled
 Service("httpd", WithRestart, OnChange(conf))     // restart only when conf changed
 Service("httpd", WithReload)
 Service("foo", WithUser)                          // systemctl --user
+Service("httpd", WithFlags(""), WithRestart)      // BSD rc flags
 NoService("olddaemon")                            // stopped + disabled
 ```
 
@@ -471,6 +488,14 @@ NoService("olddaemon")                            // stopped + disabled
 | `WithRestart` | Restart once when already running. |
 | `WithReload` | Reload once when already running. No restart fallback. |
 | `WithUser` | systemd user bus. Refused on BSD backends. |
+| `WithFlags(f)` | BSD startup flags: `rcctl set NAME flags f`, `sysrc NAME_flags=f`, NetBSD `NAME_flags='f'` in `/etc/rc.conf`. Refused on systemd at apply. |
+
+`WithFlags` sets the flags after enable and before start, only when they
+differ. A flags change counts as a change of the service: it fires
+`WithRestart` even when `OnChange` holds. OpenBSD `WithFlags("")` writes the
+`NAME_flags=` line `rcctl enable` writes for a base daemon, so it replaces
+`File("/etc/rc.conf.local", WithLine("httpd_flags="))` + `OnChange(flags)`
+without touching the host. Needs a schema 25 destination.
 
 `DaemonReload(opts...)` (Linux) runs `systemctl daemon-reload`:
 
@@ -562,6 +587,7 @@ Cron("backup",
     WithCronUser("root"), WithMinute("0"), WithHour("2"),
     WithCronEnv("PATH=/usr/bin:/bin"))
 NoCron("backup", WithCronUser("root"))
+CronAt("backup", "0 2 * * *", "/usr/local/bin/backup.sh", WithCronUser("root"))  // same op
 ```
 
 | Option | Meaning |
@@ -569,12 +595,18 @@ NoCron("backup", WithCronUser("root"))
 | `WithCommand` | Job command, required unless absent. |
 | `WithCronUser` | Crontab owner, default `root`. |
 | `WithMinute`, `WithHour`, `WithMonthday`, `WithMonth`, `WithWeekday` | Schedule fields, default `*`. |
+| `WithSchedule("0 2 * * *")` | All five fields. A bad schedule is a declaration error. |
 | `WithCronEnv("K=V")` | Environment line above the job. |
-| `WithLegacyCommand(cmd)` | Remove this exact unmanaged command before adding the job. Not with `NoCron`. |
+| `WithLegacyCommand(cmd)` | Remove unmanaged entries with this exact command, any schedule, before adding the job. Not with `NoCron`. |
 
 - The job lives between `# BEGIN GONF Cron[name]` and `# END GONF Cron[name]`.
 - Five-field syntax: numbers, `*`, lists, ranges, `/step`, three-letter
   month and weekday names. `@` directives are refused.
+- An unmanaged entry identical to the job (same five fields and exact
+  command, in that user's crontab) is adopted by default, so it does not run
+  twice. Not when the job has `WithCronEnv`, or a `NAME=value` line follows
+  the entry. `WithLegacyCommand` is only needed for a different command or
+  schedule.
 - Own user: no `crontab -u`. Other users: `crontab -u USER`, needs root.
 - An advisory lock covers read/merge/write per crontab, between gonf
   processes only.
@@ -857,7 +889,7 @@ redacted against resolved secrets.
 | `-privilege m` | `none` | `none`, `sudo` or `doas` for local elevated chunks. |
 | `-cmd-timeout d` | `5m` | Per backend command and validator. SIGTERM on expiry, SIGKILL 10s later. `0` or negative keeps the default. Non-default values are forwarded to the elevated re-exec and to remote gonf versions that accept the flag. |
 | `-version` | | Release version. |
-| `-plan-version` | | Plan schema this binary emits and applies (24). |
+| `-plan-version` | | Plan schema this binary emits and applies (25). |
 | `-strict-preview-version` | | Strict-preview capability (1). |
 | `-sealed-version` | | Sealed-plan capability (1). |
 | `-signed-version` | | Signed-envelope version (1). |
@@ -944,7 +976,8 @@ Output directory rules:
 ```
 
 - The header version is the lowest schema that can carry the plan. A plan
-  without sensitive ops, keyed lines or pruning glob syncs declares 21.
+  without sensitive ops, keyed lines, pruning glob syncs, service flags or
+  noops declares 21.
 - A destination refuses a newer schema before any change.
 - Ops apply in dependency order within each run between `when_*`
   boundaries, parent directories included (see [Shared options](#shared-options));
@@ -981,6 +1014,7 @@ Schema versions (what an older destination refuses):
 | 22 | `sensitive` (only declared when present) |
 | 23 | `file.keyed_lines` (only when present) |
 | 24 | `sync_dir.glob` (only for a pruning glob sync) |
+| 25 | `service.flags`/`has_flags`, `noop` (only when present) |
 
 ### Pre-flight
 

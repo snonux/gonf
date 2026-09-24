@@ -46,7 +46,9 @@ var backends = map[string]func(d backendDeps) backend{
 	"systemd": func(d backendDeps) backend { return systemdBackend{client: d.systemd} },
 	"rcctl":   func(d backendDeps) backend { return rcctlBackend{run: d.run} },
 	"freebsd": func(d backendDeps) backend { return freebsdBackend{run: d.run} },
-	"netbsd":  func(d backendDeps) backend { return netbsdBackend{run: d.run, rcConfD: netbsdRcConfD} },
+	"netbsd": func(d backendDeps) backend {
+		return netbsdBackend{run: d.run, rcConfD: netbsdRcConfD, rcConf: netbsdRcConf, rcConfDefaults: netbsdRcConfDefaults}
+	},
 }
 
 // unit identifies the service a backend acts on: its name and whether it

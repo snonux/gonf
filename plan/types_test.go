@@ -22,21 +22,23 @@ func TestSupportsVersion(t *testing.T) {
 	}
 }
 
-// TestSchemaBumpsArePinned pins the config_set, sensitive, keyed_lines and
-// sync_dir glob bumps: a merge that loses one would let an older destination
+// TestSchemaBumpsArePinned pins the config_set, sensitive, keyed_lines,
+// sync_dir glob and service flags bumps: a merge that loses one would let an older destination
 // accept a plan whose config_set op it only discovers mid-apply, after
 // earlier ops already mutated the host, apply a secret-bearing op while
 // echoing its validator's output, silently ignore a keyed line edit, or
-// tree-prune a glob sync_dir and delete unmanaged subdirectories. Every
+// tree-prune a glob sync_dir and delete unmanaged subdirectories, or skip a
+// service's WithFlags (or a noop op it does not know). Every
 // version 1..CurrentVersion staying supported is pinned by
 // TestWhenRequireVersionPinned (require_test.go).
 func TestSchemaBumpsArePinned(t *testing.T) {
 	t.Parallel()
 	if VersionUserManageHome != 19 || VersionWhenRequire != 20 || VersionConfigSet != 21 ||
 		VersionSensitive != 22 || VersionKeyedLines != 23 || VersionSyncDirGlob != 24 ||
-		CurrentVersion != VersionSyncDirGlob {
-		t.Fatalf("versions: manage_home=%d require=%d config_set=%d sensitive=%d keyed_lines=%d sync_dir_glob=%d current=%d, want 19/20/21/22/23/24/24",
-			VersionUserManageHome, VersionWhenRequire, VersionConfigSet, VersionSensitive, VersionKeyedLines, VersionSyncDirGlob, CurrentVersion)
+		VersionServiceFlags != 25 || CurrentVersion != VersionServiceFlags {
+		t.Fatalf("versions: manage_home=%d require=%d config_set=%d sensitive=%d keyed_lines=%d sync_dir_glob=%d service_flags=%d current=%d, want 19/20/21/22/23/24/25/25",
+			VersionUserManageHome, VersionWhenRequire, VersionConfigSet, VersionSensitive, VersionKeyedLines, VersionSyncDirGlob,
+			VersionServiceFlags, CurrentVersion)
 	}
 }
 
@@ -64,6 +66,8 @@ func TestAllKindsExhaustiveAndUnique(t *testing.T) {
 		// Schema v21 (VersionConfigSet).
 		KindConfigSet:       "config_set",
 		KindConfigSetMember: "config_set_member",
+		// Schema v25 (VersionServiceFlags).
+		KindNoop: "noop",
 	}
 	kinds := AllKinds()
 	if len(kinds) != len(want) {
@@ -243,13 +247,28 @@ func TestOpJSONTagsMatchPlanExamples(t *testing.T) {
 		},
 		{
 			name: "service restart",
-			op:   Op{Op: KindService, Name: "httpd", Restart: true, ID: "Service[httpd]"},
+			op:   Op{Op: KindService, Name: "httpd", Restart: true, ID: "Service[httpd]", Payload: ServicePayload{}},
 			want: `{"op":"service","id":"Service[httpd]","name":"httpd","restart":true}`,
 		},
 		{
 			name: "service absent user",
-			op:   Op{Op: KindService, Name: "foo", User: true, Reload: true, Absent: true},
+			op:   Op{Op: KindService, Name: "foo", User: true, Reload: true, Absent: true, Payload: ServicePayload{}},
 			want: `{"op":"service","absent":true,"name":"foo","user":true,"reload":true}`,
+		},
+		{
+			name: "service flags",
+			op:   Op{Op: KindService, Name: "httpd", ID: "Service[httpd]", Payload: ServicePayload{Flags: "-v", HasFlags: true}},
+			want: `{"op":"service","id":"Service[httpd]","name":"httpd","flags":"-v","has_flags":true}`,
+		},
+		{
+			name: "service empty flags",
+			op:   Op{Op: KindService, Name: "httpd", ID: "Service[httpd]", Payload: ServicePayload{HasFlags: true}},
+			want: `{"op":"service","id":"Service[httpd]","name":"httpd","has_flags":true}`,
+		},
+		{
+			name: "noop",
+			op:   Op{Op: KindNoop, Name: "ping", ID: "Noop[ping]"},
+			want: `{"op":"noop","id":"Noop[ping]","name":"ping"}`,
 		},
 		{
 			name: "timer restart",

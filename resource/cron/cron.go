@@ -36,6 +36,7 @@ var (
 	_ opt.Monthable             = (*Cron)(nil)
 	_ opt.Weekdayable           = (*Cron)(nil)
 	_ opt.CronEnvable           = (*Cron)(nil)
+	_ opt.Scheduleable          = (*Cron)(nil)
 	_ opt.Sensitivable          = (*Cron)(nil)
 	_ opt.MisuseReporter        = (*Cron)(nil)
 )
@@ -109,9 +110,23 @@ func newCronWith(cr *runners.CronRunners, name string, opts []opt.CronOption) *C
 // SetCronUser sets the account whose crontab is managed (default root).
 func (c *Cron) SetCronUser(u string) { c.user = u }
 
-// SetLegacyCommand opts into adopting one unmanaged crontab line whose parsed
-// command is exactly cmd (see opt.WithLegacyCommand).
+// SetLegacyCommand opts into adopting the unmanaged crontab lines whose
+// parsed command is exactly cmd, on any schedule (see opt.WithLegacyCommand
+// and adoption). An identical line is adopted without it.
 func (c *Cron) SetLegacyCommand(cmd string) { c.legacy = cmd }
+
+// SetSchedule sets all five schedule fields from one crontab-style string
+// ("10 6 * * *", see opt.WithSchedule). A schedule that is not five portable
+// fields is option misuse, reported to the job's embed.Misuse, and leaves
+// the fields unchanged. A later per-field option still overrides its field.
+func (c *Cron) SetSchedule(schedule string) {
+	fields, err := splitSchedule(schedule)
+	if err != nil {
+		c.ReportMisuse(fmt.Errorf("WithSchedule: %w", err))
+		return
+	}
+	c.minute, c.hour, c.monthday, c.month, c.weekday = fields[0], fields[1], fields[2], fields[3], fields[4]
+}
 
 // SetCommand sets the command the cron job runs.
 func (c *Cron) SetCommand(cmd string) { c.command = cmd }
@@ -245,7 +260,7 @@ func (c *Cron) reconcile(id string) error {
 		desired = c.block()
 	}
 
-	adopted, adoptedChanged := adoptLegacyCommand(current, c.legacy)
+	adopted, adoptedChanged := adoptUnmanaged(current, c.adoption())
 	newTab, changed := mergeCrontab(adopted, c.name, desired)
 	changed = changed || adoptedChanged
 	if !changed {
@@ -261,6 +276,23 @@ func (c *Cron) reconcile(id string) error {
 		logger.Info("updated crontab for %s (job %s)", c.user, c.name)
 		return nil
 	})
+}
+
+// adoption returns the unmanaged entries c takes over (see adoption): its
+// WithLegacyCommand, plus, for a present job without WithCronEnv, any
+// entry identical to its own schedule and command. A job with WithCronEnv
+// runs with extra variables, so an unmanaged line without them is not the
+// same job and is left alone (pass WithLegacyCommand to adopt it anyway).
+// An absent job adopts nothing: NoCron removes only its own block.
+func (c *Cron) adoption() adoption {
+	a := adoption{legacy: c.legacy}
+	if !c.Absent && len(c.env) == 0 {
+		a.identical = &cronEntry{
+			fields:  [5]string{c.minute, c.hour, c.monthday, c.month, c.weekday},
+			command: c.command,
+		}
+	}
+	return a
 }
 
 func (c *Cron) validate() error {

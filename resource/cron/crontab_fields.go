@@ -3,29 +3,40 @@ package cron
 // Crontab entry and schedule-field validation for the portable Linux/BSD
 // five-field subset: splitting an entry into its fields and command, and
 // checking each field against its range and names. Cron's option validation
-// (cron.go) checks its schedule with it, and legacy adoption
-// (crontab_merge.go) relies on it to prove a line is a cron entry before it
-// may delete it.
+// (cron.go) and WithSchedule (splitSchedule) check a schedule with it, and
+// adoption (crontab_merge.go) relies on it to prove a line is a cron entry
+// before it may delete it.
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 )
 
 // cronEntryCommand returns the command portion of a portable five-field
-// crontab entry. It deliberately rejects comments, @directives, environment
-// assignments, and syntax outside the Linux/BSD cron subset. Legacy adoption
-// must leave a line in place when it cannot prove that it is a cron entry,
-// because this parser decides which unmanaged lines get deleted.
+// crontab entry (see cronEntryParts).
+func cronEntryCommand(line string) (string, bool) {
+	_, command, ok := cronEntryParts(line)
+	return command, ok
+}
+
+// cronEntryParts splits a portable five-field crontab entry into its schedule
+// fields and its command. It deliberately rejects comments, @directives,
+// environment assignments, and syntax outside the Linux/BSD cron subset.
+// Adoption (crontab_merge.go) must leave a line in place when it cannot prove
+// that it is a cron entry, because this parser decides which unmanaged lines
+// get deleted.
 //
 // Fields are separated only by crontab(5) "blanks" (ASCII space and tab); see
 // isCrontabBlank for why Unicode whitespace is deliberately not a separator.
-func cronEntryCommand(line string) (string, bool) {
+// The command is the rest of the line after the blanks that follow the fifth
+// field, verbatim (trailing blanks included).
+func cronEntryParts(line string) ([5]string, string, bool) {
+	var fields [5]string
 	i := skipCrontabBlanks(line, 0)
 	if i == len(line) || line[i] == '#' || line[i] == '@' {
-		return "", false
+		return fields, "", false
 	}
-	fields := [5]string{}
 	for field := range fields {
 		i = skipCrontabBlanks(line, i)
 		start := i
@@ -33,20 +44,61 @@ func cronEntryCommand(line string) (string, bool) {
 			i++
 		}
 		if start == i {
-			return "", false
+			return fields, "", false
 		}
 		fields[field] = line[start:i]
 	}
 	for field, value := range fields {
 		if !validCronField(value, cronFieldRangeByIndex(field)) {
-			return "", false
+			return fields, "", false
 		}
 	}
 	i = skipCrontabBlanks(line, i)
 	if i == len(line) {
-		return "", false
+		return fields, "", false
 	}
-	return line[i:], true
+	return fields, line[i:], true
+}
+
+// isCrontabEnvAssignment reports whether line may set a crontab environment
+// variable (NAME=value; some crons allow blanks around "="). It is
+// deliberately generous: every non-blank, non-comment line that is neither a
+// cron entry nor an @directive and contains "=" counts, because identical-
+// entry adoption (crontab_merge.go) must refuse whenever it cannot prove
+// that moving an entry to the end of the table keeps its environment.
+func isCrontabEnvAssignment(line string) bool {
+	i := skipCrontabBlanks(line, 0)
+	if i == len(line) || line[i] == '#' || line[i] == '@' {
+		return false
+	}
+	if _, _, ok := cronEntryParts(line); ok {
+		return false
+	}
+	return strings.Contains(line, "=")
+}
+
+// splitSchedule splits a five-field schedule such as "10 6 * * *" on
+// crontab blanks (space and tab) and checks every field with the same
+// portable-syntax rule the five per-field options are held to
+// (validCronField). WithSchedule's setter (Cron.SetSchedule) uses it, so a
+// bad compact schedule is declaration-time misuse. @ directives such as
+// @reboot are refused, as everywhere else in this resource.
+func splitSchedule(schedule string) ([5]string, error) {
+	var fields [5]string
+	if strings.HasPrefix(strings.TrimLeft(schedule, " \t"), "@") {
+		return fields, fmt.Errorf("schedule %q: @ directives such as @reboot are not supported, use five fields", schedule)
+	}
+	parts := strings.FieldsFunc(schedule, func(r rune) bool { return r == ' ' || r == '\t' })
+	if len(parts) != len(fields) {
+		return fields, fmt.Errorf("schedule %q must have 5 fields (minute hour monthday month weekday), got %d", schedule, len(parts))
+	}
+	for i, value := range parts {
+		if !validCronField(value, cronFieldRangeByIndex(i)) {
+			return fields, fmt.Errorf("schedule %q: %s field %q must use portable cron syntax", schedule, cronFieldLabels[i], value)
+		}
+		fields[i] = value
+	}
+	return fields, nil
 }
 
 // isCrontabBlank reports whether b separates crontab fields. crontab(5) on
@@ -103,8 +155,11 @@ func cronFieldRange(label string) cronRange {
 	}
 }
 
+// cronFieldLabels names the five schedule fields in crontab order.
+var cronFieldLabels = [5]string{"minute", "hour", "monthday", "month", "weekday"}
+
 func cronFieldRangeByIndex(field int) cronRange {
-	return cronFieldRange([]string{"minute", "hour", "monthday", "month", "weekday"}[field])
+	return cronFieldRange(cronFieldLabels[field])
 }
 
 func validCronField(value string, r cronRange) bool {

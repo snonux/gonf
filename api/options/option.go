@@ -72,6 +72,8 @@ type (
 	Monthable              = resourceoptions.Monthable
 	Weekdayable            = resourceoptions.Weekdayable
 	CronEnvable            = resourceoptions.CronEnvable
+	Scheduleable           = resourceoptions.Scheduleable
+	Flaggable              = resourceoptions.Flaggable
 	Homeable               = resourceoptions.Homeable
 	CreateHomeable         = resourceoptions.CreateHomeable
 	Shellable              = resourceoptions.Shellable
@@ -167,6 +169,7 @@ var (
 	IsLatest       = resourceoptions.IsLatest
 	WithRestart    = resourceoptions.WithRestart
 	WithReload     = resourceoptions.WithReload
+	WithFlags      = resourceoptions.WithFlags
 	WithUser       = resourceoptions.WithUser
 	WithEnableOnly = resourceoptions.WithEnableOnly
 	IfChanged      = resourceoptions.IfChanged
@@ -187,6 +190,7 @@ var (
 	WithMonth         = resourceoptions.WithMonth
 	WithWeekday       = resourceoptions.WithWeekday
 	WithCronEnv       = resourceoptions.WithCronEnv
+	WithSchedule      = resourceoptions.WithSchedule
 )
 
 // Systemd timer unit options.

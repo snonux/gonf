@@ -73,6 +73,8 @@ func (c *capTarget) SetMonthday(v string)       { c.record("SetMonthday", v) }
 func (c *capTarget) SetMonth(v string)          { c.record("SetMonth", v) }
 func (c *capTarget) SetWeekday(v string)        { c.record("SetWeekday", v) }
 func (c *capTarget) AddCronEnv(v string)        { c.record("AddCronEnv", v) }
+func (c *capTarget) SetSchedule(v string)       { c.record("SetSchedule", v) }
+func (c *capTarget) SetFlags(v string)          { c.record("SetFlags", v) }
 func (c *capTarget) SetSymlink(v string)        { c.record("SetSymlink", v) }
 func (c *capTarget) SetHardlink(v string)       { c.record("SetHardlink", v) }
 func (c *capTarget) SetName(v string)           { c.record("SetName", v) }
@@ -212,6 +214,8 @@ func TestOptionsReachTheirSetters(t *testing.T) {
 		{"WithMonth", WithMonth("8"), "SetMonth", "8"},
 		{"WithWeekday", WithWeekday("9"), "SetWeekday", "9"},
 		{"WithCronEnv", WithCronEnv("K=V"), "AddCronEnv", "K=V"},
+		{"WithSchedule", WithSchedule("10 6 * * *"), "SetSchedule", "10 6 * * *"},
+		{"WithFlags", WithFlags("-v"), "SetFlags", "-v"},
 		{"WithSymlink", WithSymlink("/target"), "SetSymlink", "/target"},
 		{"WithHardlink", WithHardlink("/target"), "SetHardlink", "/target"},
 		{"WithName", WithName("renamed"), "SetName", "renamed"},
