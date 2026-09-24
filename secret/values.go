@@ -66,8 +66,8 @@ const MaxSplitGuard = 64 << 10
 //
 // This restores the bounded-pending, bounded-rescan invariant task mb2
 // established (bounded, not linear: see FlushPoint's "Cost" paragraph for
-// what a dense self-overlapping form and small writes still cost within
-// it): without a cap, a caller such as logger.RedactingWriter
+// what small writes against a dense self-overlapping form still cost
+// within it): without a cap, a caller such as logger.RedactingWriter
 // never shrinks pending on a "", 0 result (see forwardSafePrefix), so
 // every later Write re-scans the whole, still-growing buffer -- task rd2's
 // own leak fix correctly refused the unsafe guess that used to bound this
@@ -405,21 +405,24 @@ func (v *Values) redact(s string, strongOnly bool) string {
 //
 // Cost: one call scans s once per contained form (matchSpans), scans the
 // flushed prefix again (Redact) or, on the escape hatch, s again
-// (protectedSpans), and sorts the occurrences found (mergeSpans), so it is
-// O(len(s)) per form only while occurrences are sparse. formOccurrences
-// restarts strings.Index one byte past each occurrence and verifies every
-// overlapping occurrence afresh, so a densely self-overlapping form of
-// length L (such as a run of '=') costs O(len(s)*L) per call: relaying
-// 1 MiB of '=' in 32 KiB writes with a 32 KiB '=' secret took about 6 s
-// (13.6 s in task tg2's review; measured for task 0h2). The relay
-// also calls FlushPoint on every Write while its unterminated line exceeds
-// MaxSplitGuard, and while the escape hatch stalls (from there up to
-// flushStallCap) each of those calls rescans the whole pending buffer, so
-// small writes multiply the cost: a 40-byte '=' secret over 1 MiB of '='
-// took about 0.3 s at 32 KiB writes, 2 s at 4 KiB and 15 s at 512 B
-// (0.75 s, 4.8 s and 27 s in that review). Both are bounded, since pending
-// never passes flushStallCap plus one write, but neither is linear. It
-// implements logger.Redactor with Redact and MaxPending.
+// (protectedSpans), and sorts the occurrences found (mergeSpans). Each scan
+// is roughly O(len(s)+len(form)) per form (formOccurrences switches to KMP
+// once occurrences overlap), but a densely self-overlapping form still
+// yields up to one occurrence per byte of s, so the sort makes a dense call
+// O(n log n) in its n occurrences. Before task 0h2, formOccurrences
+// restarted strings.Index one byte past every occurrence, O(len(s)*L) for
+// a dense form of length L: relaying 1 MiB of '=' in 32 KiB writes with a
+// 32 KiB '=' secret took about 6 s (7 s under -race, 13.6 s in task tg2's
+// review) and takes about 0.2 s (1.3 s under -race) since. What task 0h2
+// did not change: the relay calls FlushPoint on every Write while its
+// unterminated line exceeds MaxSplitGuard, and while the escape hatch
+// stalls (from there up to flushStallCap) each of those calls rescans the
+// whole pending buffer, so the cost per relayed byte grows as writes
+// shrink: a 40-byte '=' secret over 1 MiB of '=' takes about 0.3 s at
+// 32 KiB writes, 2 s at 4 KiB and 15 s at 512 B (0.75 s, 4.8 s and 27 s in
+// that review). That is bounded, since pending never passes flushStallCap
+// plus one write, but not linear in the write count. It implements
+// logger.Redactor with Redact and MaxPending.
 func (v *Values) FlushPoint(s string) (out string, consumed int) {
 	longest := 0
 	for _, e := range v.snapshot() {
@@ -545,14 +548,26 @@ func mergeByStart(a, b [][2]int) [][2]int {
 }
 
 // formOccurrences returns the byte ranges of every occurrence (overlaps
-// included) of form alone in s, in start order (the underlying Index scan
-// already produces them left to right). It is the one place that walks a
-// single form's occurrences, shared by protectedSpans and matchSpans (each
-// unions it over every tracked form). Each Index call restarts one byte
-// past the previous occurrence and verifies the next one from scratch, so
-// the cost is roughly O(len(s) + occurrences*len(form)): linear for sparse
-// matches, O(len(s)*len(form)) for a densely self-overlapping form
-// (FlushPoint's "Cost" paragraph).
+// included) of form alone in s, in start order. It is the one place that
+// walks a single form's occurrences, shared by protectedSpans and matchSpans
+// (each unions it over every tracked form).
+//
+// It scans with strings.Index, restarting one byte past each occurrence,
+// for as long as the occurrences found are disjoint: each Index call then
+// re-reads at most one occurrence's bytes, so the scan stays roughly
+// O(len(s)) and keeps Index's speed for the usual sparse matches. Restarting
+// Index would instead re-verify every overlapping occurrence from scratch,
+// O(len(s)*len(form)) for a dense run such as a 32 KiB '=' secret over a
+// run of '=' (task 0h2), so the first occurrence that overlaps the one
+// before it switches the rest of the scan to KMP, which finds every
+// remaining occurrence in one pass, O(len(s)+len(form)) (kmpOccurrences).
+// The result is exactly the former all-Index loop's
+// (TestFormOccurrencesMatchesIndexOracleRandomized): up to the switch the
+// loop is unchanged, and from the overlapping occurrence's start on KMP
+// reports every occurrence starting there or later, in order. An
+// overlapping occurrence needs a form of at least two bytes (it starts
+// after the previous one and before its end), so the empty form never
+// switches.
 func formOccurrences(form, s string) [][2]int {
 	var spans [][2]int
 	for from := 0; from < len(s); {
@@ -561,8 +576,34 @@ func formOccurrences(form, s string) [][2]int {
 			break
 		}
 		start := from + i
+		if len(spans) > 0 && start < spans[len(spans)-1][1] {
+			return append(spans, kmpOccurrences(form, s, start, kmpFailureFunction(form))...)
+		}
 		spans = append(spans, [2]int{start, start + len(form)})
 		from = start + 1
+	}
+	return spans
+}
+
+// kmpOccurrences returns every occurrence, overlaps included, of a
+// non-empty form in s that starts at or after first, in start order, with
+// the KMP search automaton (failure is form's kmpFailureFunction array).
+// After a full match it falls back to failure's last entry rather than to
+// 0, so a later occurrence overlapping this one is still found.
+func kmpOccurrences(form, s string, first int, failure []int) [][2]int {
+	var spans [][2]int
+	match := 0
+	for i := first; i < len(s); i++ {
+		for match > 0 && s[i] != form[match] {
+			match = failure[match-1]
+		}
+		if s[i] == form[match] {
+			match++
+		}
+		if match == len(form) {
+			spans = append(spans, [2]int{i + 1 - len(form), i + 1})
+			match = failure[match-1]
+		}
 	}
 	return spans
 }

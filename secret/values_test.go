@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -733,8 +734,8 @@ func simulateRelay(v *Values, data []byte, chunk int) (forwarded string, maxPend
 //     through this ceiling even with the slack; cost linear in size (the
 //     actual target of every fix in this file) comfortably clears it. It is
 //     linear here only because the chunk size and the shapes' forms are
-//     fixed: FlushPoint's "Cost" paragraph has how smaller writes and longer
-//     self-overlapping forms raise the per-byte factor.
+//     fixed: FlushPoint's "Cost" paragraph has how smaller writes raise
+//     the per-byte factor.
 func TestValuesFlushPointHistoricalShapesBoundedAndLeakFree(t *testing.T) {
 	t.Parallel()
 	const chunk = 32 << 10 // io.Copy's default buffer size, matching a real relay's chunking
@@ -1451,6 +1452,67 @@ func TestLongestPrefixSuffixOverlapRandomized(t *testing.T) {
 		want := naiveLongestPrefixSuffixOverlap(form, s)
 		if got != want {
 			t.Fatalf("seed %d: longestPrefixSuffixOverlap(%q, %q) = %d, want %d (naive)", seed, form, s, got, want)
+		}
+	}
+}
+
+// formOccurrencesIndexOracle is formOccurrences as it was before task 0h2:
+// strings.Index restarted one byte past every occurrence. It is slow for a
+// densely self-overlapping form but obviously complete, so the one-pass
+// scans formOccurrences now uses are checked against it.
+func formOccurrencesIndexOracle(form, s string) [][2]int {
+	var spans [][2]int
+	for from := 0; from < len(s); {
+		i := strings.Index(s[from:], form)
+		if i < 0 {
+			break
+		}
+		start := from + i
+		spans = append(spans, [2]int{start, start + len(form)})
+		from = start + 1
+	}
+	return spans
+}
+
+// TestFormOccurrencesMatchesIndexOracleRandomized is task 0h2's differential
+// test: formOccurrences (strings.Index while occurrences are disjoint, KMP
+// from the first overlapping one) must return exactly the old Index loop's
+// occurrences.
+// Small alphabets and periodic forms and streams make borders, overlaps and
+// near-misses common; the empty form and empty s are included too.
+func TestFormOccurrencesMatchesIndexOracleRandomized(t *testing.T) {
+	t.Parallel()
+	rng := rand.New(rand.NewPCG(0x0b2, 0x5ec))
+	alphabets := []string{"a", "ab", "abc", "abAB=-"}
+	for iter := range 20000 {
+		alphabet := alphabets[iter%len(alphabets)]
+		maxForm, maxS := 12, 200
+		if iter%100 == 0 {
+			maxForm, maxS = 300, 4096
+		}
+		form := randomText(rng, alphabet, rng.IntN(maxForm+1))
+		if iter%3 == 0 && form != "" {
+			// A periodic form: a short unit repeated, cut at any length.
+			unit := form[:1+rng.IntN(min(len(form), 4))]
+			form = strings.Repeat(unit, len(form)/len(unit)+1)[:len(form)]
+		}
+		s := randomText(rng, alphabet, rng.IntN(maxS+1))
+		if iter%2 == 0 && form != "" {
+			// A stream mostly made of the form's own pieces, with noise.
+			var b strings.Builder
+			for b.Len() < len(s) {
+				if rng.IntN(4) == 0 {
+					b.WriteString(randomText(rng, alphabet, 1+rng.IntN(3)))
+				} else {
+					b.WriteString(form[rng.IntN(len(form)):])
+					b.WriteString(form)
+				}
+			}
+			s = b.String()
+		}
+		got, want := formOccurrences(form, s), formOccurrencesIndexOracle(form, s)
+		if !slices.Equal(got, want) {
+			t.Fatalf("iter %d: formOccurrences(%q, %q) = %v, want %v (Index oracle)", iter, form, s, got, want)
 		}
 	}
 }
