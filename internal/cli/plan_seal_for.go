@@ -45,10 +45,28 @@ type sealedHostPlan struct {
 }
 
 // planSealedFor is gonf plan -seal -for's entry point: resolve forTarget to
-// its host names, refuse up front if any lacks a plan recipient or if the
+// its host names, refuse up front if any lacks a plan recipient, if the
+// base recipients (the -recipient flags and recipients file, the same
+// resolvePlanRecipients call planSealed makes) are empty, or if the
 // -stdout/-for combination cannot resolve to exactly one file, seal every
 // host's plan in memory, then write the results out (a file per host, or
 // the one host's bytes on stdout).
+//
+// The zero-base-recipients refusal (task mg2) mirrors planSealed's own
+// (plan_seal.go): without it, a first-time operator with no
+// ~/.config/gonf/recipients file and no -recipient flags got a SILENT
+// "success" that sealed each artifact to its destination host's recipient
+// ONLY, never the operator's own — an artifact the operator who just
+// created it cannot open, contradicting plan/seal.ErrNoRecipients' own
+// invariant ("a caller can never silently produce an artifact nobody, not
+// even the operator, can open") and docs/plan-encryption.md's "Keys"
+// section ("A sealed write with zero recipients is refused, never degraded
+// to plaintext"). Host-only sealing was never a documented, deliberate
+// posture: nothing in the design doc describes it as a stronger-security
+// option, and the Runbook's own worked example never creates a recipients
+// file before running -for, so a first-time operator following it verbatim
+// hit this silently. -for now refuses the identical way plain -seal always
+// has, before -for existed.
 func planSealedFor(outDir, planID string, tasks []string, toStdout bool, forTarget string,
 	recipientFlags []string, recipientsFilePath string, noDefaultRecipients bool) int {
 	hosts, err := api.PlanRecipientTargetHosts(forTarget)
@@ -69,6 +87,16 @@ func planSealedFor(outDir, planID string, tasks []string, toStdout bool, forTarg
 	baseRecipients, err := resolvePlanRecipients(recipientFlags, recipientsFilePath, noDefaultRecipients)
 	if err != nil {
 		eprintf("plan: %v\n", err)
+		return 1
+	}
+	if len(baseRecipients) == 0 {
+		// Mirrors planSealed's own zero-recipient refusal (plan_seal.go)
+		// verbatim in message style: without this, each host's artifact
+		// would be sealed to that host's own recipient ONLY, which the
+		// operator who just ran this command cannot open (task mg2).
+		eprintf("plan: -for refused: no recipients; pass -recipient age1pq..., "+
+			"or create %s with one age1pq recipient per line (docs/plan-encryption.md)\n",
+			recipientsFileLabel())
 		return 1
 	}
 	files, err := sanitizeHostFilenames(hosts)

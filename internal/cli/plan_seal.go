@@ -282,7 +282,8 @@ func loadRecipientsFileLines(recipientsFilePath string, noDefaultRecipients bool
 // (task de2).
 //
 // resolvePlanRecipients does not itself refuse an empty result: planSealed
-// does that, at the point sealing would otherwise produce an unreadable
+// and planSealedFor (plan_seal_for.go, task mg2) each do that at their own
+// call site, at the point sealing would otherwise produce an unreadable
 // artifact.
 func resolvePlanRecipients(flagRecipients []string, recipientsFilePath string, noDefaultRecipients bool) ([]seal.Recipient, error) {
 	fromFlags, err := seal.ParseRecipientsFrom(flagRecipients, recipientFlagLabel)

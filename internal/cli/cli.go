@@ -483,7 +483,9 @@ func cliPlan(args []string) int {
 		"artifact — name a registered host, cluster or fleet. Records once per host (a ForHosts body for another "+
 		"host is never resolved) and writes dir/plan-<host>.age per host, sealed to that host's "+
 		"api.WithPlanRecipient plus the union of -recipient/recipients-file; refuses before writing anything if "+
-		"any resolved host lacks a recipient; with -stdout, resolves to exactly one host or is refused")
+		"any resolved host lacks a recipient, or if that union is empty (same zero-recipient refusal as plain "+
+		"-seal, so the operator can always open what they just sealed); with -stdout, resolves to exactly one "+
+		"host or is refused")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}

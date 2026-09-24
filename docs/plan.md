@@ -1869,9 +1869,13 @@ the encrypted SSH transport, because the destination must write it.
   of the target's (or vice versa) is included too, and its `ForHosts`
   secret can physically land in the target's artifact — see
   plan-encryption.md's "Runbook" for the naming caveat. Refused up front
-  (nothing written) when a target host has no recipient or when two
-  resolved hosts' names collide after filename sanitization; `-for`
-  requires `-seal` and, with `-stdout`, must resolve to exactly one host.
+  (nothing written) when a target host has no recipient, when the base
+  `-recipient`/recipients-file union is empty (the same zero-recipient
+  refusal plain `-seal` has, task mg2 — without it each artifact would be
+  sealed to its destination host's own recipient only, which the operator
+  who just sealed it could not open), or when two resolved hosts' names
+  collide after filename sanitization; `-for` requires `-seal` and, with
+  `-stdout`, must resolve to exactly one host.
 
 The full lifecycle and its limits are in [secrets.md](secrets.md). Never put
 secret values in task names, descriptions, paths or host values: identities

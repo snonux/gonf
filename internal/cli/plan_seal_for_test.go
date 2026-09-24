@@ -155,9 +155,15 @@ func containsSubstring(vals []string, want string) bool {
 func TestCLIPlanSealForIsolatesHostSecrets(t *testing.T) {
 	isolateXDGConfig(t)
 	_, _, identity := registerSealForInventory(t)
+	// An operator base recipient (task mg2: -for now refuses with none, the
+	// same as plain -seal, so every test that expects success must supply
+	// one) — also used below to confirm the operator can open BOTH per-host
+	// artifacts, the "host's recipient plus the operator's" property the
+	// docs promise.
+	operatorRecipient, operatorIdentity := genSealKeyPair(t)
 	dir := filepath.Join(t.TempDir(), "out")
 
-	code, stderr := runGonf(t, "plan", "-o", dir, "-seal", "-for", "edge", "cli_seal_for_task")
+	code, stderr := runGonf(t, "plan", "-o", dir, "-seal", "-recipient", operatorRecipient, "-for", "edge", "cli_seal_for_task")
 	if code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, stderr)
 	}
@@ -177,6 +183,18 @@ func TestCLIPlanSealForIsolatesHostSecrets(t *testing.T) {
 	}
 	if !containsSubstring(contentsB, "secret-for-hostB") || containsSubstring(contentsB, "secret-for-hostA") {
 		t.Fatalf("plan-hostB.age file contents = %v; want only hostB's own secret", contentsB)
+	}
+
+	// Both artifacts also open with the operator's own identity (task mg2's
+	// fix): each is sealed to its host's recipient PLUS the operator's base
+	// recipient, not the host's alone.
+	opsAForOperator := decryptSealedPlanOps(t, filepath.Join(dir, "plan-hostA.age"), operatorIdentity)
+	if !containsSubstring(fileOpContents(t, opsAForOperator), "secret-for-hostA") {
+		t.Fatalf("plan-hostA.age did not open with the operator's own identity")
+	}
+	opsBForOperator := decryptSealedPlanOps(t, filepath.Join(dir, "plan-hostB.age"), operatorIdentity)
+	if !containsSubstring(fileOpContents(t, opsBForOperator), "secret-for-hostB") {
+		t.Fatalf("plan-hostB.age did not open with the operator's own identity")
 	}
 
 	// Cross-identity refusal: hostA's artifact does not open with hostB's
@@ -217,6 +235,8 @@ func TestCLIPlanSealForNameSubstringCarriesOtherHostsSecret(t *testing.T) {
 
 	rWeb, _ := genSealKeyPair(t)
 	rWeb01, idWeb01 := genSealKeyPair(t)
+	// Operator base recipient (task mg2): -for now refuses with none.
+	operatorRecipient, _ := genSealKeyPair(t)
 	writeHostSecretFile(t, "web", "secret-for-web")
 	writeHostSecretFile(t, "web01", "secret-for-web01")
 
@@ -230,7 +250,7 @@ func TestCLIPlanSealForNameSubstringCarriesOtherHostsSecret(t *testing.T) {
 	}, api.WithTaskCluster("edge"))
 
 	dir := filepath.Join(t.TempDir(), "out")
-	code, stderr := runGonf(t, "plan", "-o", dir, "-seal", "-for", "web01", "cli_seal_for_substring_name")
+	code, stderr := runGonf(t, "plan", "-o", dir, "-seal", "-recipient", operatorRecipient, "-for", "web01", "cli_seal_for_substring_name")
 	if code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, stderr)
 	}
@@ -273,6 +293,8 @@ func TestCLIPlanSealForSSHHostSubstringCarriesUnrelatedHostsSecret(t *testing.T)
 	t.Chdir(work)
 
 	rWeb, idWeb := genSealKeyPair(t)
+	// Operator base recipient (task mg2): -for now refuses with none.
+	operatorRecipient, _ := genSealKeyPair(t)
 	writeHostSecretFile(t, "web", "secret-for-web")
 	writeHostSecretFile(t, "db", "SECRET-DB-ONLY")
 
@@ -289,7 +311,7 @@ func TestCLIPlanSealForSSHHostSubstringCarriesUnrelatedHostsSecret(t *testing.T)
 	}, api.WithTaskCluster("edge"))
 
 	dir := filepath.Join(t.TempDir(), "out")
-	code, stderr := runGonf(t, "plan", "-o", dir, "-seal", "-for", "web", "cli_seal_for_substring_sshhost")
+	code, stderr := runGonf(t, "plan", "-o", dir, "-seal", "-recipient", operatorRecipient, "-for", "web", "cli_seal_for_substring_sshhost")
 	if code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, stderr)
 	}
@@ -312,10 +334,12 @@ func TestCLIPlanSealForSSHHostSubstringCarriesUnrelatedHostsSecret(t *testing.T)
 func TestCLIPlanSealForFleetTargetSingleHost(t *testing.T) {
 	isolateXDGConfig(t)
 	_, _, identity := registerSealForInventory(t)
+	// Operator base recipient (task mg2): -for now refuses with none.
+	operatorRecipient, _ := genSealKeyPair(t)
 	var code int
 	var stderr string
 	out := captureStdout(t, func() {
-		code, stderr = runGonf(t, "plan", "-seal", "-stdout", "-for", "edge-fleet", "cli_seal_for_task")
+		code, stderr = runGonf(t, "plan", "-seal", "-stdout", "-recipient", operatorRecipient, "-for", "edge-fleet", "cli_seal_for_task")
 	})
 	if code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, stderr)
@@ -396,6 +420,90 @@ func TestCLIPlanSealForRefusesHostWithoutRecipient(t *testing.T) {
 	}
 }
 
+// TestCLIPlanSealForRefusesZeroRecipients is task mg2's own regression
+// probe: reproduces the exact reported gap. Before the fix,
+// `gonf plan -o out -seal -for host …` with no ~/.config/gonf/recipients
+// file (isolateXDGConfig, an empty XDG_CONFIG_HOME) and no -recipient flags
+// exited 0 and wrote out/plan-<host>.age sealed to EXACTLY ONE recipient —
+// the destination host's own — so the operator's own identity could never
+// open it ("plan/seal: open: identity did not match any of the
+// recipients"). The fix makes -for refuse the same way plain -seal already
+// does (TestCLIPlanSealRefusesZeroRecipients, plan_seal_test.go), before
+// anything is written, rather than silently producing an artifact nobody,
+// not even the operator, can open (plan/seal.ErrNoRecipients' own doc
+// comment).
+func TestCLIPlanSealForRefusesZeroRecipients(t *testing.T) {
+	isolateXDGConfig(t)
+	api.ResetForTest()
+	api.ResetInventory()
+	t.Cleanup(func() {
+		api.ResetForTest()
+		api.ResetInventory()
+	})
+	work := t.TempDir()
+	t.Chdir(work)
+	recipient, _ := genSealKeyPair(t)
+	api.Host("hostA", api.WithPlanRecipient(recipient))
+	api.Task("cli_seal_for_zero_base", "", func() {})
+
+	dir := filepath.Join(t.TempDir(), "out")
+	code, stderr := runGonf(t, "plan", "-o", dir, "-seal", "-for", "hostA", "cli_seal_for_zero_base")
+	if code == 0 {
+		t.Fatalf("exit 0, want a refusal; stderr %q", stderr)
+	}
+	if !strings.Contains(stderr, "no recipients") {
+		t.Fatalf("stderr %q, want it to say there are no recipients (matching planSealed's own message)", stderr)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("output directory %s exists (err=%v); nothing should have been written", dir, err)
+	}
+}
+
+// TestCLIPlanSealForNoDefaultRecipientsRefusesZeroRecipients: the probe's
+// second reported path. -no-default-recipients (task ce2) with no
+// -recipient flags reaches the identical zero-base-recipients refusal
+// deterministically, even when an ambient recipients file DOES exist (it is
+// just not consulted) — so -no-default-recipients can never be used to
+// silently reach the host-only, operator-excluded state either.
+func TestCLIPlanSealForNoDefaultRecipientsRefusesZeroRecipients(t *testing.T) {
+	xdgDir := isolateXDGConfig(t)
+	api.ResetForTest()
+	api.ResetInventory()
+	t.Cleanup(func() {
+		api.ResetForTest()
+		api.ResetInventory()
+	})
+	work := t.TempDir()
+	t.Chdir(work)
+	recipient, _ := genSealKeyPair(t)
+	api.Host("hostA", api.WithPlanRecipient(recipient))
+	api.Task("cli_seal_for_no_default_recipients", "", func() {})
+
+	// An ambient default recipients file DOES exist here (unlike the sibling
+	// test above), to prove -no-default-recipients is what makes this
+	// refuse, not merely an absent file.
+	ambientRecipient, _ := genSealKeyPair(t)
+	recipientsDir := filepath.Join(xdgDir, "gonf")
+	if err := os.MkdirAll(recipientsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(recipientsDir, "recipients"), []byte(ambientRecipient+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := filepath.Join(t.TempDir(), "out")
+	code, stderr := runGonf(t, "plan", "-o", dir, "-seal", "-no-default-recipients", "-for", "hostA", "cli_seal_for_no_default_recipients")
+	if code == 0 {
+		t.Fatalf("exit 0, want a refusal; stderr %q", stderr)
+	}
+	if !strings.Contains(stderr, "no recipients") {
+		t.Fatalf("stderr %q, want it to say there are no recipients", stderr)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("output directory %s exists (err=%v); nothing should have been written", dir, err)
+	}
+}
+
 // TestCLIPlanSealForRequiresSeal: -for without -seal is a static usage
 // error (exit 2), not a runtime refusal.
 func TestCLIPlanSealForRequiresSeal(t *testing.T) {
@@ -435,13 +543,17 @@ func TestCLIPlanSealForPrintsDeclarationLocation(t *testing.T) {
 	work := t.TempDir()
 	t.Chdir(work)
 	recipient, _ := genSealKeyPair(t)
+	// Operator base recipient (task mg2): -for now refuses with none, before
+	// this test's actual target (the missing-secret record failure) is ever
+	// reached.
+	operatorRecipient, _ := genSealKeyPair(t)
 	api.Host("hostA", api.WithPlanRecipient(recipient))
 	api.Task("cli_seal_for_missing_secret", "", func() {
 		api.MustSecret("nope/missing")
 	})
 
 	dir := filepath.Join(t.TempDir(), "out")
-	code, stderr := runGonf(t, "plan", "-o", dir, "-seal", "-for", "hostA", "cli_seal_for_missing_secret")
+	code, stderr := runGonf(t, "plan", "-o", dir, "-seal", "-recipient", operatorRecipient, "-for", "hostA", "cli_seal_for_missing_secret")
 	if code == 0 {
 		t.Fatalf("exit 0, want a refusal; stderr %q", stderr)
 	}
@@ -472,13 +584,16 @@ func TestCLIPlanSealForFilenameCollisionRefused(t *testing.T) {
 	t.Chdir(work)
 	r1, _ := genSealKeyPair(t)
 	r2, _ := genSealKeyPair(t)
+	// Operator base recipient (task mg2): -for now refuses with none, before
+	// this test's actual target (the filename collision) is ever reached.
+	operatorRecipient, _ := genSealKeyPair(t)
 	h1 := api.Host("h/a", api.WithPlanRecipient(r1))
 	h2 := api.Host("h*a", api.WithPlanRecipient(r2))
 	api.Cluster("collide", h1, h2)
 	api.Task("cli_seal_for_collide", "", func() {})
 
 	dir := filepath.Join(t.TempDir(), "out")
-	code, stderr := runGonf(t, "plan", "-o", dir, "-seal", "-for", "collide", "cli_seal_for_collide")
+	code, stderr := runGonf(t, "plan", "-o", dir, "-seal", "-recipient", operatorRecipient, "-for", "collide", "cli_seal_for_collide")
 	if code == 0 {
 		t.Fatalf("exit 0, want a refusal; stderr %q", stderr)
 	}
