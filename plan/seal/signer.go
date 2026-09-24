@@ -36,6 +36,22 @@ import (
 // exactly the trusted-signers line, so an operator copies a signer's public
 // line into a destination's file verbatim.
 //
+// Fields are separated by ASCII spaces and tabs only, and a trailing CR
+// (a CRLF file) is ignored. Any other white space — a CR inside a line, as
+// in a CR-only file, or a Unicode space — is not a separator, so it can
+// never silently join two lines into one. In the trusted-signers file:
+//
+//   - a key must be a strong Ed25519 public key (strongPublicKey,
+//     edpoint.go: canonical and not of small order), since a small-order
+//     key such as the all-zero placeholder lets anyone forge a signature
+//     for it (ErrTrustedSignerWeakKey);
+//   - a key may appear only once (ErrTrustedSignerDuplicate);
+//   - a label must be printable (no control, format or non-ASCII space
+//     character) and must not contain a type word or a key-shaped field,
+//     which would mean two entries were folded into one line.
+//
+// A file starting with a UTF-8 byte-order mark is refused (ErrKeyFileBOM).
+//
 // # Hardening
 //
 // Both loaders open their file with the same keyFileKind policy
@@ -85,11 +101,18 @@ var (
 	ErrTrustedSignersWritable   = errors.New("trusted-signers file is writable by group or other")
 	ErrTrustedSignerRefused     = errors.New("trusted signer refused: expected a " + signerPublicType + " line")
 	ErrTrustedSignerMalformed   = errors.New("malformed " + signerPublicType + " line")
+	ErrTrustedSignerWeakKey     = errors.New("trusted signer refused: small-order or non-canonical Ed25519 key")
+	ErrTrustedSignerDuplicate   = errors.New("trusted signer listed twice")
 )
 
 // ErrKeyFileTooLarge marks a signer or trusted-signers file larger than
 // maxKeyFileBytes.
 var ErrKeyFileTooLarge = errors.New("key file too large")
+
+// ErrKeyFileBOM marks a signer or trusted-signers file that starts with a
+// UTF-8 byte-order mark, which an editor may add invisibly; it is refused
+// with this clear error rather than as an unrecognized first line.
+var ErrKeyFileBOM = errors.New("key file starts with a UTF-8 byte-order mark; save it without one")
 
 // signerFile is the signer file's hardened-open policy: private key
 // material, so the identity file's rule (no group or other bit at all).
@@ -118,15 +141,34 @@ var trustedSignersFile = keyFileKind{
 // Signer is a validated Ed25519 signing identity, as returned by LoadSigner
 // and accepted by Sign. The zero value is not valid (Sign refuses it).
 //
-// Signer implements fmt.Formatter so that no verb (%v, %+v, %#v, %s, %x,
-// ...) ever prints the private key: a Signer that ends up in a log line or
-// an error message shows only its public key.
+// A Signer never prints its private key. Printed directly, it implements
+// fmt.Formatter and shows only its public key under every verb (%v, %+v,
+// %#v, %s, %x, ...). Printed as part of something else, fmt may not call
+// Format: it cannot for a Signer in an unexported struct field, and prints
+// that field's own fields instead, following pointers (a bad verb such as
+// %s prints the pointed-to struct, so a pointer alone would not hide it).
+// So the key is held only by a closure: fmt prints a func value as an
+// address and can never reach what the closure captured.
 type Signer struct {
-	key ed25519.PrivateKey
+	key func() ed25519.PrivateKey
+}
+
+// newSigner wraps key, which must be a complete Ed25519 private key. The
+// key is never modified afterwards, so copies of a Signer may share it.
+func newSigner(key ed25519.PrivateKey) Signer {
+	return Signer{key: func() ed25519.PrivateKey { return key }}
+}
+
+// privateKey returns s's private key, or nil for a zero Signer.
+func (s Signer) privateKey() ed25519.PrivateKey {
+	if s.key == nil {
+		return nil
+	}
+	return s.key()
 }
 
 // valid reports whether s holds a complete Ed25519 private key.
-func (s Signer) valid() bool { return len(s.key) == ed25519.PrivateKeySize }
+func (s Signer) valid() bool { return len(s.privateKey()) == ed25519.PrivateKeySize }
 
 // Public returns s's public key as a TrustedSigner with no label: the
 // entry a destination adds to its trusted-signers file (String prints the
@@ -136,7 +178,7 @@ func (s Signer) Public() TrustedSigner {
 	if !s.valid() {
 		return TrustedSigner{}
 	}
-	pub, _ := s.key.Public().(ed25519.PublicKey)
+	pub, _ := s.privateKey().Public().(ed25519.PublicKey)
 	return TrustedSigner{Key: bytes.Clone(pub)}
 }
 
@@ -205,7 +247,7 @@ func parseSignerFile(data []byte) (Signer, error) {
 		if err != nil {
 			return Signer{}, fmt.Errorf("line %d: %w", n, err)
 		}
-		signer = Signer{key: key}
+		signer = newSigner(key)
 	}
 	if !signer.valid() {
 		return Signer{}, ErrSignerCount
@@ -216,7 +258,7 @@ func parseSignerFile(data []byte) (Signer, error) {
 // parseSignerLine validates one non-blank, non-comment signer-file line,
 // never including line (private key material) in an error.
 func parseSignerLine(line []byte) (ed25519.PrivateKey, error) {
-	fields := bytes.Fields(line)
+	fields := keyLineFields(line)
 	if string(fields[0]) != signerSecretType {
 		return nil, ErrSignerRefused
 	}
@@ -251,6 +293,9 @@ func LoadTrustedSigners(path string) ([]TrustedSigner, error) {
 			continue
 		}
 		ts, err := parseTrustedSignerLine(line)
+		if err == nil && containsKey(out, ts.Key) {
+			err = ErrTrustedSignerDuplicate
+		}
 		if err != nil {
 			return nil, trustedSignersFile.errorf(path, fmt.Errorf("line %d: %w", n, err))
 		}
@@ -268,7 +313,7 @@ func LoadTrustedSigners(path string) ([]TrustedSigner, error) {
 // logs later, so one that is not valid UTF-8 or holds a non-printable
 // character (a terminal escape, say) is refused rather than passed on.
 func parseTrustedSignerLine(line []byte) (TrustedSigner, error) {
-	fields := bytes.Fields(line)
+	fields := keyLineFields(line)
 	if string(fields[0]) != signerPublicType {
 		return TrustedSigner{}, ErrTrustedSignerRefused
 	}
@@ -279,15 +324,52 @@ func parseTrustedSignerLine(line []byte) (TrustedSigner, error) {
 	if err != nil {
 		return TrustedSigner{}, ErrTrustedSignerMalformed
 	}
-	label := string(bytes.Join(fields[2:], []byte(" ")))
-	if !printableLabel(label) {
+	if !strongPublicKey(key) {
+		return TrustedSigner{}, ErrTrustedSignerWeakKey
+	}
+	if !validLabel(fields[2:]) {
 		return TrustedSigner{}, ErrTrustedSignerMalformed
 	}
-	return TrustedSigner{Key: key, Label: label}, nil
+	return TrustedSigner{Key: key, Label: string(bytes.Join(fields[2:], []byte(" ")))}, nil
+}
+
+// validLabel reports whether a label's fields are printable and none of
+// them looks like the start of another entry: a type word or a string
+// that decodes as a 32-byte key (see "File formats").
+func validLabel(fields [][]byte) bool {
+	for _, f := range fields {
+		switch {
+		case !printableLabel(string(f)):
+			return false
+		case string(f) == signerPublicType || string(f) == signerSecretType:
+			return false
+		}
+		if _, err := decodeKey(f, ed25519.PublicKeySize); err == nil {
+			return false
+		}
+	}
+	return true
+}
+
+// containsKey reports whether list already holds key.
+func containsKey(list []TrustedSigner, key []byte) bool {
+	for _, t := range list {
+		if bytes.Equal(t.Key, key) {
+			return true
+		}
+	}
+	return false
+}
+
+// keyLineFields splits a key-file line on ASCII spaces and tabs only (see
+// "File formats"), never on other white space.
+func keyLineFields(line []byte) [][]byte {
+	return bytes.FieldsFunc(line, func(r rune) bool { return r == ' ' || r == '\t' })
 }
 
 // printableLabel reports whether label is valid UTF-8 made only of
-// printable characters (spaces included).
+// printable characters (unicode.IsPrint: the ASCII space, but no control,
+// format or other space character).
 func printableLabel(label string) bool {
 	if !utf8.ValidString(label) {
 		return false
@@ -318,7 +400,8 @@ func decodeKey(src []byte, size int) ([]byte, error) {
 }
 
 // readKeyFile opens path with kind's hardened policy and reads at most
-// maxKeyFileBytes of it (ErrKeyFileTooLarge beyond that).
+// maxKeyFileBytes of it (ErrKeyFileTooLarge beyond that), refusing a
+// leading byte-order mark (ErrKeyFileBOM).
 func readKeyFile(kind keyFileKind, path string) ([]byte, error) {
 	f, err := kind.openChecked(path)
 	if err != nil {
@@ -334,17 +417,22 @@ func readKeyFile(kind keyFileKind, path string) ([]byte, error) {
 		clear(data)
 		return nil, kind.errorf(path, ErrKeyFileTooLarge)
 	}
+	if bytes.HasPrefix(data, []byte("\ufeff")) {
+		clear(data)
+		return nil, kind.errorf(path, ErrKeyFileBOM)
+	}
 	return data, nil
 }
 
-// keyFileLines yields data's lines numbered from 1, with surrounding white
-// space trimmed and "#" comment lines reported as empty so callers skip
+// keyFileLines yields data's lines numbered from 1, with surrounding ASCII
+// spaces, tabs and a CRLF file's CR trimmed (never other white space, see
+// "File formats") and "#" comment lines reported as empty so callers skip
 // them like blank lines while line numbers stay those an editor shows. The
 // yielded slices alias data (no copy of a secret is made).
 func keyFileLines(data []byte) func(yield func(int, []byte) bool) {
 	return func(yield func(int, []byte) bool) {
 		for i, line := range bytes.Split(data, []byte("\n")) {
-			line = bytes.TrimSpace(line)
+			line = bytes.Trim(line, " \t\r")
 			if bytes.HasPrefix(line, []byte("#")) {
 				line = nil
 			}

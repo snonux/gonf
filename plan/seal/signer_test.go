@@ -25,7 +25,7 @@ func genSigner(t testing.TB) (Signer, string) {
 		t.Fatalf("generate ed25519 key: %v", err)
 	}
 	line := signerSecretType + " " + keyEncoding.EncodeToString(priv.Seed())
-	return Signer{key: priv}, line
+	return newSigner(priv), line
 }
 
 // writeKeyFile writes content to dir/name with exactly perm (os.WriteFile's
@@ -51,7 +51,7 @@ func TestLoadSignerAcceptsOwnedStrictFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadSigner: %v", err)
 	}
-	if !bytes.Equal(got.key, want.key) {
+	if !bytes.Equal(got.privateKey(), want.privateKey()) {
 		t.Fatal("LoadSigner returned a different key than the file holds")
 	}
 }
@@ -213,7 +213,7 @@ func TestSignerFileRefusesForeignOwner(t *testing.T) {
 func TestSignerFormatNeverPrintsPrivateKey(t *testing.T) {
 	s, secret := genSigner(t)
 	seed := strings.Fields(secret)[1]
-	forbidden := []string{seed, fmt.Sprintf("%x", []byte(s.key)), fmt.Sprintf("%v", []byte(s.key))}
+	forbidden := []string{seed, fmt.Sprintf("%x", []byte(s.privateKey())), fmt.Sprintf("%v", []byte(s.privateKey()))}
 	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%x", "%X", "%q", "%d"} {
 		out := fmt.Sprintf(verb, s) + fmt.Sprintf(verb, &s) + fmt.Sprintf(verb, []Signer{s})
 		for _, f := range forbidden {

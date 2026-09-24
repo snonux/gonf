@@ -73,7 +73,8 @@ var (
 	// ErrEnvelopeMalformed is returned by Verify for an input that starts
 	// like an envelope but is not a well-formed GONF-SIGNED-PLAN/1 one: an
 	// unsupported version, a truncated header, or a key or signature line
-	// of the wrong length or encoding.
+	// of the wrong length or encoding, or a signer key that is not a strong
+	// Ed25519 public key (small order or non-canonical, edpoint.go).
 	ErrEnvelopeMalformed = errors.New("plan/seal: malformed signed-plan envelope")
 	// ErrPayloadNotSealed is returned by Sign, and by Verify, when the
 	// payload does not start with the age header line.
@@ -104,7 +105,7 @@ func Sign(sealed []byte, signer Signer) ([]byte, error) {
 	if !bytes.HasPrefix(sealed, []byte(ageHeaderLine)) {
 		return nil, ErrPayloadNotSealed
 	}
-	sig := ed25519.Sign(signer.key, signedMessage(sealed))
+	sig := ed25519.Sign(signer.privateKey(), signedMessage(sealed))
 	pub := signer.Public().Key
 	env := make([]byte, 0, envelopeHeaderLen+len(sealed))
 	env = append(env, SignedPlanMagic+"\n"...)
@@ -126,9 +127,12 @@ func Sign(sealed []byte, signer Signer) ([]byte, error) {
 // fails closed on every other outcome, each with its own error and none
 // naming key material: an empty trusted set (ErrNoTrustedSigners), an input
 // that is not an envelope (ErrNotSigned), a malformed, truncated or
-// other-version envelope (ErrEnvelopeMalformed), a payload that is not a
-// sealed plan (ErrPayloadNotSealed), a key not in trusted
-// (ErrSignatureUnrecognizedSigner) and a signature that does not verify —
+// other-version envelope, or one naming a small-order or non-canonical
+// signer key (ErrEnvelopeMalformed), a payload that is not a sealed plan
+// (ErrPayloadNotSealed), a key not in trusted, or matching only a trusted
+// entry whose own key is weak (ErrSignatureUnrecognizedSigner; findTrusted
+// applies the same strongPublicKey check LoadTrustedSigners does, so a
+// caller-built entry cannot bypass it) and a signature that does not verify —
 // a tampered payload, or a key line swapped for another trusted key
 // (ErrSignatureInvalid).
 //
@@ -167,7 +171,7 @@ func parseEnvelope(env []byte) (pub, sig, payload []byte, err error) {
 		}
 		return nil, nil, nil, ErrNotSigned
 	}
-	if pub, rest, ok = cutKeyLine(rest, ed25519.PublicKeySize); !ok {
+	if pub, rest, ok = cutKeyLine(rest, ed25519.PublicKeySize); !ok || !strongPublicKey(pub) {
 		return nil, nil, nil, ErrEnvelopeMalformed
 	}
 	if sig, rest, ok = cutKeyLine(rest, ed25519.SignatureSize); !ok {
@@ -196,12 +200,15 @@ func cutKeyLine(b []byte, size int) (decoded, rest []byte, ok bool) {
 }
 
 // findTrusted returns the first entry of trusted whose key is exactly pub.
-// An entry whose key is not a complete Ed25519 public key can never match
-// (pub always is one), so a malformed caller-built entry cannot reach
-// ed25519.Verify, which would panic on it.
+// An entry whose key is not a strong Ed25519 public key (strongPublicKey,
+// edpoint.go) can never match, so neither a malformed caller-built entry
+// (which would make ed25519.Verify panic) nor a small-order one (which
+// would let anyone forge a signature for it) is ever used, even when a
+// caller builds the TrustedSigner itself instead of loading it with
+// LoadTrustedSigners.
 func findTrusted(trusted []TrustedSigner, pub []byte) (TrustedSigner, bool) {
 	for _, t := range trusted {
-		if len(t.Key) == ed25519.PublicKeySize && bytes.Equal(t.Key, pub) {
+		if bytes.Equal(t.Key, pub) && strongPublicKey(t.Key) {
 			return TrustedSigner{Key: bytes.Clone(t.Key), Label: t.Label}, true
 		}
 	}

@@ -185,7 +185,7 @@ func TestVerifyRefusesAlgorithmConfusion(t *testing.T) {
 	digest := sha512.Sum512(msg)
 	ctxSig := mustSign(t, f.signer, msg, &ed25519.Options{Context: SignedPlanMagic})
 	phSig := mustSign(t, f.signer, digest[:], &ed25519.Options{Hash: crypto.SHA512})
-	bareSig := ed25519.Sign(f.signer.key, f.sealed) // no magic prefix: no domain separation
+	bareSig := ed25519.Sign(f.signer.privateKey(), f.sealed) // no magic prefix: no domain separation
 	for name, sig := range map[string][]byte{"Ed25519ctx": ctxSig, "Ed25519ph": phSig, "unprefixed message": bareSig} {
 		t.Run(name, func(t *testing.T) {
 			requireRefused(t, withSignature(f, sig), f.trusted(), ErrSignatureInvalid)
@@ -221,7 +221,7 @@ func TestVerifyRefusesAlgorithmConfusion(t *testing.T) {
 
 func mustSign(t *testing.T, s Signer, msg []byte, opts crypto.SignerOpts) []byte {
 	t.Helper()
-	sig, err := s.key.Sign(nil, msg, opts)
+	sig, err := s.privateKey().Sign(nil, msg, opts)
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestVerifyRefusesUnsignedInput(t *testing.T) {
 func TestVerifyRefusesSignedNonSealedPayload(t *testing.T) {
 	f := newSignedFixture(t)
 	for _, payload := range [][]byte{[]byte(`{"kind":"file"}` + "\n"), f.env} {
-		sig := ed25519.Sign(f.signer.key, signedMessage(payload))
+		sig := ed25519.Sign(f.signer.privateKey(), signedMessage(payload))
 		env := append(bytes.Clone(f.env[:envelopeHeaderLen]), payload...)
 		env = withSignature(signedFixture{env: env}, sig)
 		requireRefused(t, env, f.trusted(), ErrPayloadNotSealed)
@@ -282,7 +282,7 @@ func TestSignRefusesNonSealedInput(t *testing.T) {
 
 func TestSignRefusesInvalidSigner(t *testing.T) {
 	f := newSignedFixture(t)
-	for _, s := range []Signer{{}, {key: f.signer.key[:32]}} {
+	for _, s := range []Signer{{}, newSigner(f.signer.privateKey()[:32])} {
 		if _, err := Sign(f.sealed, s); !errors.Is(err, ErrSignerInvalid) {
 			t.Fatalf("Sign with an invalid signer: got %v, want ErrSignerInvalid", err)
 		}

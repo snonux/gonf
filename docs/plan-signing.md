@@ -437,8 +437,11 @@ for the shared file hardening), with the choices this design left open:
   `LoadTrustedSigners(path) ([]TrustedSigner, error)`, plus
   `Signer.Public()` (the trusted-signers entry for that key),
   `TrustedSigner.String()` (its exact file line) and the exported
-  `SignedPlanMagic` for a caller's sniff. A `Signer` prints only its public
-  key under every `fmt` verb.
+  `SignedPlanMagic` for a caller's sniff. A `Signer` never prints its
+  private key: printed directly it shows only its public key under every
+  `fmt` verb, and the key is held only by a closure, so it cannot be
+  reached when the `Signer` sits nested in an unexported struct field,
+  where `fmt` cannot call its `Format` method.
 - **Envelope lines:** the magic, then the 32-byte key and the 64-byte
   signature each as one line of unpadded standard base64 (43 and 86
   characters), decoded strictly and at their exact length, so an envelope
@@ -450,12 +453,29 @@ for the shared file hardening), with the choices this design left open:
   (RFC 8032). The magic prefix binds the envelope version, so a signature
   cannot be reused under another version or a format that signs the bare
   bytes; an Ed25519ctx/Ed25519ph signature of the same message is refused.
+- **Weak keys refused.** Go's `ed25519.Verify` accepts a small-order public
+  key, and for one of those anyone can forge a signature without a private
+  key: R=identity, S=0 verifies every message for the identity point, and
+  a random R=[S]B verifies for the all-zero key (a likely placeholder)
+  about one try in four. So a trusted key must be canonical and must not
+  have small order ([8]A is not the identity, as "Taming the many EdDSAs"
+  recommends). The check uses `math/big` (`plan/seal/edpoint.go`) instead
+  of adding `filippo.io/edwards25519` as a dependency. It runs when the
+  file is loaded (`ErrTrustedSignerWeakKey`), on the envelope's own key
+  (`ErrEnvelopeMalformed`) and on every trusted entry `Verify` matches, so
+  a `TrustedSigner` a caller builds itself cannot get around it.
 - **Key files:** `GONF-SIGNER-SECRET-ED25519 <base64 seed>` (exactly one per
   signer file) and `gonf-signer-ed25519 <base64 key> [label...]` (one per
   trusted signer; at least one, or `ErrNoTrustedSigners`). Blank lines and
   `#` comments are ignored, a file is read up to 64 KiB, and a key of any
   other type (an age key, an `ssh-ed25519` line, the other file's line) is
-  refused by class. Both files go through the identity/recipients files'
+  refused by class. Fields are split on ASCII spaces and tabs only, and a
+  CRLF line ending is accepted. Any other white space inside a line (a CR,
+  as in a CR-only file, or a Unicode space) is refused, so two entries can
+  never fold into one line. A trusted key may not repeat
+  (`ErrTrustedSignerDuplicate`). A label must be printable and must not
+  contain a type word or a key-shaped field. A leading UTF-8 byte-order
+  mark gets its own error (`ErrKeyFileBOM`). Both files go through the identity/recipients files'
   no-follow walk and owner check; the signer file refuses any group/other
   bit (0o077), the trusted-signers file only group/other write (0o022).
   Every refusal names the path, line number and class, never content.
