@@ -41,13 +41,14 @@ import (
 //     sentinels and I/O errors, never from the key or the frame bytes
 //     (plan.EncodePushWithKey and plan/seal guarantee the same for theirs).
 //   - disk: never on the controller. On the destination only the sealed
-//     streams land in the sticky dir; step 3 (task 0g2) decrypts them into a
-//     private run dir.
+//     streams land in the sticky dir; the elevated chunk decrypts them into
+//     its own private run dir before it applies (internal/cli's
+//     stageSealedStickyRefs, task 0g2), which replaced task 062's refusal
+//     of such plans.
 //
-// Until task 0g2 lands the destination side, refuseSensitiveStickyBlobs
-// still refuses every plan this would seal (see Delivery.ToHost), so in
-// production this path is unreachable: it is built and tested here, then
-// enabled by 0g2 together with the destination that can open what it seals.
+// The path is gated on the remote release (RequireRemoteSealedSticky,
+// sealedStickyMinRelease): a remote that cannot decrypt is refused before
+// any blob is uploaded, after EnsureRemoteGonf had its chance to upgrade it.
 
 // stickySeal is one push's sealed sticky-dir state: the ephemeral identity
 // the keyed chunks receive, and the blob set to upload in place of the

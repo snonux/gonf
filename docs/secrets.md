@@ -483,6 +483,7 @@ Limits of the scan, by design:
 | `gonf plan -o dir -seal [-recipient r]…` | Task 2b2 (docs/plan-encryption.md). Records into an in-memory store (never plaintext `plan.jsonl`/`blobs/`), age-encrypts the GONF-PUSH/1 push frame (`plan/seal.Seal`, task 1b2) to the union of `-recipient` flags and the default recipients file, and writes only `dir/plan.age` (`0600`, same directory rules as `plan.jsonl`); `-seal -stdout` writes the sealed bytes to stdout instead, touching no disk. Refused with zero recipients (never a plaintext fallback) and with `-redacted` or `-with-secrets` (sealing and secret-revealing are mutually exclusive concepts). Warns, never deletes, when `dir` also holds a plaintext `plan.jsonl`/`blobs/` left over from an earlier unsealed run. Success is worded "wrote ... (N ops, M recipients)", never "verified" or "trusted": sealing is confidentiality only, never provenance (see plan-encryption.md, "Provenance", and task 7b2 for the not-yet-implemented signing design). |
 | `gonf plan -o dir -seal -for host\|cluster\|fleet …` | Task 4b2 (docs/plan-encryption.md, "Operator UX" and "Runbook: host keys and shipped plan.age"). Like the row above, but records and seals **once per target host** (`api.RecordPlanForHost`), so a `ForHosts` body written for a host outside that host's `inventory.SelectionForHosts` selection is never resolved while recording another host's plan; writes `dir/plan-<host>.age` per host, each sealed to that host's own `api.WithPlanRecipient` plus the union of `-recipient`/recipients-file. Refuses before writing anything when a resolved host has no recipient (naming it), when the `-recipient`/recipients-file union is empty (same zero-recipient refusal the row above has, task `mg2` — otherwise each artifact would be sealed to its destination host's recipient only, unopenable by the operator who sealed it), or when two resolved hosts' names would sanitize to the same filename. `-for` needs `-seal`; with `-stdout` it needs to resolve to exactly one host. **Not an exact single-host guarantee** (task ng2): the selection is the same substring-based superset `gonf push` itself uses, so a host whose name or SSHHost is a substring of the target's (or vice versa) is included too, and its `ForHosts` secret can physically land in the target's artifact — see plan-encryption.md's "Runbook" for the naming caveat and the two regression tests in `internal/cli/plan_seal_for_test.go` that pin it. |
 | `gonf <task>`, `push`, `cluster`, `fleet` | The plan stays in memory on the controller and travels over SSH stdin (`GONF-PUSH/1`), as before. |
+| Multi-chunk `push` with a sensitive blob in an elevated chunk | Tasks zf2/0g2 (docs/plan-encryption.md, "Phase 4 design"). The controller seals each such blob ref to a fresh per-push ephemeral `age1pq` key held only in memory and uploads only the sealed stream (`sealed/<ref>.age`) to the login user's sticky dir; the key travels only on the reading elevated chunk's own stdin (a `GONF-PUSH/2` frame), never on argv, in the environment, a log or an error. That chunk decrypts every sealed ref its ops read into a fresh `0700` `sealed-run-<pid>-*` directory (dead-owner sweep like a sealed `plan.age` apply) before any op applies, reads those refs only from there, and removes the directory when it returns, failed or not. A missing, tampered, truncated, swapped or over-full sealed ref, a keyed frame with no sealed op, and an op reading a sealed ref without a key are all refused before anything applies, naming ops by position only. Needs a remote at or above the sealed-sticky release floor (placeholder until the release carrying 0g2 is tagged, so refused until then). |
 | Destination apply (`gonf apply`) | A failing file (`WithValidation`) or `ConfigSet` validator reports its exit status and only the size of its output ("validator output withheld (N bytes)"), because a validator that quotes the offending line would echo the secret; template parse/execute errors of a sensitive file (or of an entry of a sensitive synced tree) report the step only; a failing command or package-manager run of a sensitive op, and every failing `crontab` run, reports only its output sizes. Debug logs never print content digests (for any file: an unsalted sha256 of a low-entropy secret can be confirmed offline). |
 | Validation candidates | Unchanged and already private: a file candidate is a `0600` temp file in a parent that only root and the applying user can write; a config set stages below a private staging directory. Both are removed after validation. |
 
@@ -552,11 +553,16 @@ first suggested fix (ignore `plan.jsonl`) ends up in.
   strict preview (`push -preview`) refuses an older remote, whatever the
   plan holds.
 - A multi-chunk push with blobs stages every blob in one sticky directory
-  owned by the SSH login user. A sensitive op with blob content (a
-  secret-bearing file above 512 KiB) in an elevated chunk is therefore
-  refused before any SSH traffic: the login user could read it. Push the
-  privileged task separately (a single chunk embeds its blobs in the stream
-  the elevated apply extracts itself) or keep the content inline.
+  owned by the SSH login user. The blob of a sensitive op with blob content
+  (a secret-bearing file above 512 KiB) in an elevated chunk therefore never
+  lands there as plaintext: it is sealed to a per-push ephemeral key and
+  decrypted only by that elevated chunk, into its own private run
+  directory (w82 phase 4, tasks zf2/0g2; this replaced 062's refusal of
+  such plans, see "Where a sensitive plan goes" below). Until the release
+  carrying task 0g2 is tagged, the controller's sealed-sticky release floor
+  refuses every remote, so such a push still fails closed before any
+  upload; pushing the privileged task separately, or keeping its content
+  inline, avoids the sticky dir altogether.
 
 ### Retention and cancellation
 
@@ -577,7 +583,11 @@ first suggested fix (ignore `plan.jsonl`) ends up in.
   directory removed after the apply; leftovers of killed applies are swept
   after 24 hours. A multi-chunk push's sticky blob directory is removed
   after a successful push only; after a failed or cancelled push it stays
-  until the next push of the same plan to that host wipes it.
+  until the next push of the same plan to that host wipes it (it then holds
+  only the sealed form of a sensitive elevated blob, never its plaintext).
+  An elevated chunk's private `sealed-run-*` directory with the decrypted
+  copies is removed when the chunk returns; a killed chunk's leftover is
+  swept by the next sealed apply of that uid once its PID is dead.
 - Cancelling a push (SIGINT/SIGTERM, a host timeout) kills the in-flight
   `ssh` session; the push payload only ever existed in memory and on that
   stream.

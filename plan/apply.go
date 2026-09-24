@@ -10,6 +10,7 @@ import (
 
 	gexec "github.com/snonux/gonf/internal/exec"
 	"github.com/snonux/gonf/internal/runners"
+	"github.com/snonux/gonf/internal/sealeddir"
 	"github.com/snonux/gonf/resource"
 	opt "github.com/snonux/gonf/resource/options"
 )
@@ -373,9 +374,17 @@ func applyActive(op Op, planDir string) error {
 // every real apply, or the *runners.Set a test attached to ctx via
 // internal/runners.WithSet before calling ApplyWithContext, scoped to this
 // one call only.
+//
+// PlanDir is planDir, except for an op whose blob is a sealed sticky-dir
+// ref an elevated push chunk decrypted into its private run dir
+// (internal/cli, task 0g2): internal/sealeddir.Resolve maps exactly those
+// refs to that private directory, so they are never read from the login
+// user's sticky dir, while the chunk's other refs still are. Without such
+// an override on ctx, Resolve returns planDir unchanged.
 func applyActiveWithFacts(ctx context.Context, op Op, planDir string, facts Facts) error {
 	if h, ok := HandlerFor(op.Op); ok {
-		return h.Apply(op, ApplyContext{PlanDir: planDir, Facts: facts, Runners: runners.FromContext(ctx)})
+		dir := sealeddir.Resolve(ctx, op.Blob, planDir)
+		return h.Apply(op, ApplyContext{PlanDir: dir, Facts: facts, Runners: runners.FromContext(ctx)})
 	}
 	return fmt.Errorf("unknown op %q", op.Op)
 }

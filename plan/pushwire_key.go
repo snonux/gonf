@@ -2,6 +2,7 @@ package plan
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -126,6 +127,15 @@ func EncodePushWithKey(w io.Writer, ops []Op, mem BlobReader, key PushKey) error
 // DecodePush instead, which refuses the frame.
 func DecodePushWithKey(r io.Reader, planDir string) (*PushPayload, error) {
 	return decodePush(r, planDir, true)
+}
+
+// PushIsKeyed reports whether data, the start of a push stream (a peek is
+// enough), begins with the GONF-PUSH/2 magic line: a frame carrying a
+// per-push ephemeral key. The apply CLI uses it, with PushHasBlobs, to
+// decide how to stage a frame before decoding it; the decoder itself stays
+// the authority on whether the frame is well-formed.
+func PushIsKeyed(data []byte) bool {
+	return bytes.HasPrefix(data, []byte(pushMagicV2+"\n"))
 }
 
 // readPushKeyLine reads a GONF-PUSH/2 key line. It strips exactly the "\n"

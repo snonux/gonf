@@ -26,7 +26,9 @@ import (
 // its own stdin, in a GONF-PUSH/2 frame (pushwire_key.go). Which chunks
 // need it is decided from the plan alone (ChunkNeedsStickyKey), so the
 // frame lists no refs: a destination that holds the key derives the same
-// selection from the ops it applies.
+// selection from the ops it applies (KeyedChunkSealedOps), decrypts each
+// ref and unpacks it into its private run dir with SealedRefExtractor
+// (sealed_sticky_extract.go, task 0g2).
 
 // sealedStickyDir is the sticky-dir subdirectory that holds sealed refs.
 // Every real blob ref starts with "blobs/" (validateBlobRef), so nothing
@@ -58,6 +60,23 @@ func ChunkNeedsStickyKey(ch Chunk) bool {
 		}
 	}
 	return false
+}
+
+// KeyedChunkSealedOps returns the positions (indexes into ops) of the ops
+// whose blob is a sealed sticky ref, for ops that arrived as one chunk in a
+// GONF-PUSH/2 frame. The destination does not see the chunk's Elevate flag,
+// but only an elevated chunk ever receives the key (ChunkNeedsStickyKey),
+// so it applies sealsStickyBlob as if the chunk were elevated: exactly the
+// ops the controller's SealedStickyRefs selected in this chunk.
+func KeyedChunkSealedOps(ops []Op) []int {
+	keyed := Chunk{Elevate: true, Ops: ops}
+	var idx []int
+	for i, op := range ops {
+		if sealsStickyBlob(keyed, op) {
+			idx = append(idx, i)
+		}
+	}
+	return idx
 }
 
 // SealedStickyRefs returns, sorted and without duplicates, every blob ref a

@@ -1085,14 +1085,39 @@ func cliApplyStdin(ctx context.Context, applyDir string, strictPreview bool, ide
 	if strictPreview {
 		return cliPreviewStdin(ctx, applyDir, br)
 	}
-	runDir, cleanup, err := prepareApplyRunDir(applyDir)
+	return cliApplyPushStdin(ctx, br, applyDir)
+}
+
+// pushHeadPeek is how many bytes cliApplyPushStdin peeks to read a push
+// frame's header lines (magic, GONF-PUSH/2's key line of at most 512
+// bytes, blobs line) before deciding how to stage the frame.
+const pushHeadPeek = 1024
+
+// cliApplyPushStdin applies an unsealed push frame or bare JSONL from br:
+// the plain "gonf apply [-apply-dir dir] -" path.
+//
+// A sticky -apply-dir is wiped only for a frame that itself carries blobs
+// (the push's blob upload, which extracts into it): a plan-only chunk frame
+// must not wipe the blobs, sealed or not, that the upload staged for it
+// (prepareApplyRunDir). Only with -apply-dir is a keyed GONF-PUSH/2 frame
+// accepted (plan.DecodePushWithKey), and only without embedded blobs: its
+// sealed refs are then decrypted into a private run dir before any op
+// applies (stageSealedStickyRefs, sealed_sticky.go). Without -apply-dir,
+// plan.DecodePush refuses a keyed frame.
+func cliApplyPushStdin(ctx context.Context, br *bufio.Reader, applyDir string) int {
+	head, _ := br.Peek(pushHeadPeek)
+	keyed, hasBlobs := plan.PushIsKeyed(head), plan.PushHasBlobs(head)
+	if keyed && hasBlobs {
+		eprintf("apply: %v\n", errKeyedFrameWithBlobs)
+		return 1
+	}
+	runDir, cleanup, err := prepareApplyRunDir(applyDir, hasBlobs)
 	if err != nil {
 		eprintln(err)
 		return 1
 	}
 	defer cleanup()
-
-	payload, err := plan.DecodePush(br, runDir)
+	payload, err := decodeApplyPush(br, runDir, applyDir)
 	if err != nil {
 		eprintf("apply: %v\n", err)
 		return 1
@@ -1101,7 +1126,13 @@ func cliApplyStdin(ctx context.Context, applyDir string, strictPreview bool, ide
 	if planDir == "" && applyDir != "" {
 		planDir = applyDir
 	}
-	if err := applyPlanOps(ctx, payload.Ops, planDir); err != nil {
+	applyCtx, removeSealed, err := stageSealedStickyRefs(ctx, payload, applyDir)
+	defer removeSealed()
+	if err != nil {
+		eprintf("apply: %v\n", err)
+		return 1
+	}
+	if err := applyPlanOps(applyCtx, payload.Ops, planDir); err != nil {
 		return 1
 	}
 	src := "stdin"
@@ -1110,6 +1141,19 @@ func cliApplyStdin(ctx context.Context, applyDir string, strictPreview bool, ide
 	}
 	eprintf("applied %s (%d ops)\n", src, len(payload.Ops))
 	return 0
+}
+
+// decodeApplyPush decodes a push stream for cliApplyPushStdin, unpacking
+// any embedded blobs into runDir. Only a sticky -apply-dir chunk, the one
+// place a GONF-PUSH/2 frame is ever sent, decodes with DecodePushWithKey,
+// and so is the one caller that commits to honouring the key; every other
+// case keeps plan.DecodePush, which refuses a keyed frame before reading
+// its key line.
+func decodeApplyPush(br *bufio.Reader, runDir, applyDir string) (*plan.PushPayload, error) {
+	if applyDir != "" {
+		return plan.DecodePushWithKey(br, runDir)
+	}
+	return plan.DecodePush(br, runDir)
 }
 
 // cliApplySealedStdin decrypts and applies a sealed plan.age stream whose
@@ -1380,7 +1424,12 @@ func defaultIdentityPath() (string, error) {
 	return filepath.Join(dir, "gonf", "identity"), nil
 }
 
-func prepareApplyRunDir(applyDir string) (string, func(), error) {
+// prepareApplyRunDir returns the directory a push frame's embedded blobs
+// unpack into, with its cleanup: a fresh plan.NewApplyRunDir without
+// -apply-dir, otherwise the sticky applyDir (whose lifecycle the controller
+// owns, so its cleanup is a no-op). wipe (the frame carries blobs) empties
+// the sticky dir first; see prepareStickyApplyDir.
+func prepareApplyRunDir(applyDir string, wipe bool) (string, func(), error) {
 	if applyDir == "" {
 		runDir, cleanup, err := plan.NewApplyRunDir()
 		if err != nil {
@@ -1388,13 +1437,21 @@ func prepareApplyRunDir(applyDir string) (string, func(), error) {
 		}
 		return runDir, cleanup, nil
 	}
-	if err := prepareStickyApplyDir(applyDir); err != nil {
+	if err := prepareStickyApplyDir(applyDir, wipe); err != nil {
 		return "", nil, err
 	}
 	return applyDir, func() {}, nil
 }
 
-func prepareStickyApplyDir(applyDir string) error {
+// prepareStickyApplyDir creates the sticky applyDir 0700 and verifies it
+// (verifyStickyDirOwned) for every session of a multi-chunk push. Only the
+// session whose frame carries blobs (wipe: the blob upload, which runs
+// first) also wipes its contents before extracting; a plan-only chunk
+// session must not, or it would delete the blobs, and the sealed refs, the
+// upload just staged for it. An earlier version wiped on every session,
+// which left every chunk after the upload without its blobs ("missing
+// blob"; found by task 0g2's end-to-end test).
+func prepareStickyApplyDir(applyDir string, wipe bool) error {
 	if err := os.MkdirAll(applyDir, 0o700); err != nil {
 		return fmt.Errorf("apply: apply-dir: %w", err)
 	}
@@ -1409,7 +1466,12 @@ func prepareStickyApplyDir(applyDir string) error {
 	}
 	// The directory slot is reused across pushes, but its contents must not
 	// be reused: otherwise stale blobs could resurrect files removed from the
-	// source tree. Ownership is verified before wiping the contents.
+	// source tree. Ownership is verified before wiping the contents. The
+	// upload session of every push carries all its blobs, so wiping there
+	// alone starts each push from an empty dir.
+	if !wipe {
+		return nil
+	}
 	if err := wipeDirContents(applyDir); err != nil {
 		return fmt.Errorf("apply: apply-dir %s: wipe stale contents: %w", applyDir, err)
 	}

@@ -27,29 +27,9 @@ func sensitiveStickyOps(t *testing.T, elevate bool) ([]plan.Op, *plan.MemoryStor
 	return ops, mem
 }
 
-// A multi-chunk push would stage every blob in the SSH login user's sticky
-// dir; a sensitive elevated op's blob is refused before any SSH traffic or
-// bootstrap, and the error locates the op by kind and position, never by
-// its identity or content.
-func TestToHostRefusesSensitiveElevatedStickyBlob(t *testing.T) {
-	r := installDeliveryRecorder(t)
-	ops, mem := sensitiveStickyOps(t, true)
-	target := PushTarget{Host: "h.example", Privilege: privilege.Sudo}
-	err := pushToHost(context.Background(), target, "p", ops, mem)
-	if err == nil || !strings.Contains(err.Error(), "elevated file op 1 of chunk 2") || !strings.Contains(err.Error(), "SSH login user") ||
-		strings.Contains(err.Error(), "/etc/secret.conf") {
-		t.Fatalf("push = %v, want the sensitive sticky blob refusal", err)
-	}
-	if strings.Contains(err.Error(), "blob-content") {
-		t.Fatalf("refusal leaks blob content: %v", err)
-	}
-	if got := r.cmds(); len(got) != 0 || r.bootstraps.Load() != 0 {
-		t.Fatalf("refused push reached the remote: cmds=%v bootstraps=%d", got, r.bootstraps.Load())
-	}
-}
-
-// The refusal is narrow: a sensitive blob in an unprivileged chunk (the
-// login user owns that content anyway) still pushes through the sticky dir.
+// Sealing is narrow: a sensitive blob in an unprivileged chunk (the login
+// user owns that content anyway) still pushes through the sticky dir as
+// plaintext.
 func TestToHostAllowsSensitiveUnprivilegedStickyBlob(t *testing.T) {
 	r := installDeliveryRecorder(t)
 	ops, mem := sensitiveStickyOps(t, false)

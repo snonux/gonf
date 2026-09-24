@@ -10,7 +10,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -31,24 +30,25 @@ type sshCall struct {
 }
 
 // sealedPushHarness fakes SSH (capturing every call's argv and stdin), the
-// remote release probe and the Push bootstrap, and steps past the
-// production refusal (refuseStickyBlobs) so the sealed sticky path the
-// refusal still blocks can be exercised end to end. release is the release
-// the remote reports; probed records each probe's privilege context.
+// remote release probe and the Push bootstrap, so the production sealed
+// sticky path (task 062's refusal is gone since task 0g2) can be exercised
+// end to end. release is the release the remote reports; probed records
+// each probe's privilege context.
 type sealedPushHarness struct {
 	mu     sync.Mutex
 	calls  []sshCall
 	probed []ProbeContext
 	sshErr func(remote string) error
+	// recorder observes the Push bootstrap (EnsureRemoteGonf's self-heal).
+	recorder *deliveryRecorder
 }
 
 func installSealedPushHarness(t *testing.T, release string) *sealedPushHarness {
 	t.Helper()
 	h := &sealedPushHarness{}
-	installDeliveryRecorder(t) // probes current, bootstrap observed, SSH restored on cleanup
-	oldRefuse, oldRelease := refuseStickyBlobs, defaultPusher.ReleaseVersionProber
-	t.Cleanup(func() { refuseStickyBlobs, defaultPusher.ReleaseVersionProber = oldRefuse, oldRelease })
-	refuseStickyBlobs = func(string, []plan.Chunk) error { return nil }
+	h.recorder = installDeliveryRecorder(t) // probes current, bootstrap observed, SSH restored on cleanup
+	oldRelease := defaultPusher.ReleaseVersionProber
+	t.Cleanup(func() { defaultPusher.ReleaseVersionProber = oldRelease })
 	defaultPusher.ReleaseVersionProber = func(_ context.Context, _ PushTarget, pc ProbeContext) (string, error) {
 		h.mu.Lock()
 		defer h.mu.Unlock()
@@ -222,10 +222,11 @@ func TestToHostSealedStickyKeyIsPerPush(t *testing.T) {
 	}
 }
 
-// A remote below the sealed-sticky floor, even after the bootstrap step, is
-// refused before any SSH traffic: no blob, sealed or not, is uploaded and
-// no chunk runs. The probe runs in the elevated context, which decodes the
-// keyed frame.
+// Old-remote compatibility: the bootstrap step (EnsureRemoteGonf's
+// self-heal) runs first, and a remote still below the sealed-sticky floor
+// after it is refused before any SSH traffic: no blob, sealed or not, is
+// uploaded and no chunk runs. The probe runs in the elevated context,
+// which decodes the keyed frame.
 func TestToHostSealedStickyRefusesRemoteBelowFloor(t *testing.T) {
 	h := installSealedPushHarness(t, internal.Version)
 	calls, err := sealedPush(t, h)
@@ -237,6 +238,9 @@ func TestToHostSealedStickyRefusesRemoteBelowFloor(t *testing.T) {
 	}
 	if len(h.probed) != 1 || h.probed[0] != ProbeElevated {
 		t.Fatalf("probe contexts = %v, want one ProbeElevated probe", h.probed)
+	}
+	if n := h.recorder.bootstraps.Load(); n != 1 {
+		t.Fatalf("bootstraps = %d, want the self-heal step to run before the floor check", n)
 	}
 }
 
@@ -283,16 +287,6 @@ func TestToHostWithoutSealedRefsStaysV1(t *testing.T) {
 	}
 }
 
-// The production refusal is still in place (TODO(0g2)): without the test
-// override, a sensitive elevated sticky blob is refused before anything is
-// sealed or sent.
-func TestToHostSealedStickyStillRefusedInProduction(t *testing.T) {
-	if reflect.ValueOf(refuseStickyBlobs).Pointer() != reflect.ValueOf(refuseSensitiveStickyBlobs).Pointer() {
-		t.Fatal("refuseStickyBlobs no longer is refuseSensitiveStickyBlobs; task 0g2 removes the refusal, not a test")
-	}
-	TestToHostRefusesSensitiveElevatedStickyBlob(t)
-}
-
 // RequireRemoteSealedSticky mirrors RequireRemoteRelayed: at the floor
 // passes, one patch below refuses, a probe error refuses.
 func TestRequireRemoteSealedStickyFloor(t *testing.T) {
@@ -311,8 +305,10 @@ func TestRequireRemoteSealedStickyFloor(t *testing.T) {
 }
 
 // The floor is derived from its literal (task wf2's drift guard) and stays
-// above the current release until task 0g2 ships the destination side and
-// sets it to that release: until then no remote can pass the gate.
+// above the current release until the release shipping task 0g2's
+// destination side is tagged: until then no remote can pass the gate. When
+// that release is cut, sealedStickyMinRelease is set to it and this test
+// flips to pin floor <= internal.Version.
 func TestSealedStickyFloorAboveCurrentRelease(t *testing.T) {
 	want, err := parseReleaseVersion(sealedStickyMinRelease)
 	if err != nil || sealedStickyMinVersion != want {
@@ -323,7 +319,7 @@ func TestSealedStickyFloorAboveCurrentRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !releaseVersionLess(current, sealedStickyMinVersion) {
-		t.Fatalf("sealedStickyMinRelease %s <= internal.Version %s: set the floor to the release that ships task 0g2 and update this test",
+		t.Fatalf("sealedStickyMinRelease %s <= internal.Version %s: set the floor to the release that ships task 0g2 and flip this test",
 			sealedStickyMinRelease, internal.Version)
 	}
 }

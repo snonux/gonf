@@ -13,11 +13,11 @@ import (
 	"github.com/snonux/gonf/plan/seal"
 )
 
-// Until task 0g2 teaches the destination to decrypt sealed sticky refs,
-// every "gonf apply -" path decodes with plan.DecodePush, which refuses a
-// keyed GONF-PUSH/2 frame (task zf2) before extracting or applying
-// anything: a keyed frame reaching this gonf fails closed, applies no op,
-// and the refusal on stderr never carries the key.
+// Only a sticky "-apply-dir" chunk accepts a keyed GONF-PUSH/2 frame (task
+// 0g2, sealed_sticky.go); every other "gonf apply -" path decodes with
+// plan.DecodePush, which refuses it (task zf2) before extracting or
+// applying anything: a keyed frame without -apply-dir fails closed,
+// applies no op, and the refusal on stderr never carries the key.
 func TestCLIApplyStdinRefusesKeyedPushFrame(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "out")

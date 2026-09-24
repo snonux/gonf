@@ -1319,11 +1319,21 @@ identity>` (`plan.EncodePushWithKey` / `plan.DecodePushWithKey`, opaque
 `plan.PushKey`). A multi-chunk push sends it only on the stdin of an
 elevated chunk whose sensitive op reads a blob sealed in the sticky dir
 (`plan.ChunkNeedsStickyKey`); every other frame stays byte-identical
-GONF-PUSH/1. `plan.DecodePush`, which every current `apply -` path uses,
-refuses a /2 frame (`plan.ErrPushKeyNotAccepted`) before reading the key or
-extracting anything, and a gonf older than /2 refuses it on the magic. The
-controller side is built but still unreachable: `refuseSensitiveStickyBlobs`
-refuses such plans until task 0g2 lands the destination decrypt. See
+GONF-PUSH/1. Only a sticky `apply -apply-dir <dir> -` chunk decodes with
+`plan.DecodePushWithKey` (task 0g2): it decrypts every sealed ref its
+sensitive blob ops read (`sealed/<ref>.age` in the sticky dir) into a fresh
+private `sealed-run-*` directory before any op applies, reads exactly those
+refs from there (`internal/sealeddir`) and its other refs from the sticky
+dir, and removes the private directory when the chunk returns. Every other
+`apply -` path uses `plan.DecodePush`, which refuses a /2 frame
+(`plan.ErrPushKeyNotAccepted`) before reading the key or extracting
+anything, and a gonf older than /2 refuses it on the magic. The
+controller only sends /2 to a remote at or above the sealed-sticky release
+floor (`RequireRemoteSealedSticky`, after `EnsureRemoteGonf`'s self-heal);
+until the release carrying 0g2 is tagged the floor stays above every
+release, so such a push still fails closed before any upload. A sticky dir
+is wiped only by the upload session (the one frame that carries blobs), so
+chunk sessions keep what it staged. See
 [plan-encryption.md](plan-encryption.md), "Phase 4 design".
 
 `PushCluster` records and encodes **once**, then fans the same bytes out over SSH
@@ -1859,8 +1869,11 @@ the encrypted SSH transport, because the destination must write it.
   (8+ bytes and not word-like) is refused at record time; every string field
   of every op, control ops included, is scanned (see secrets.md for the
   classes).
-- A multi-chunk push refuses a sensitive blob-backed op in an elevated
-  chunk, because its sticky blob directory belongs to the SSH login user.
+- A multi-chunk push seals the blob of a sensitive blob-backed op in an
+  elevated chunk to a per-push ephemeral key instead of staging it as
+  plaintext, because its sticky blob directory belongs to the SSH login
+  user; only that elevated chunk gets the key (GONF-PUSH/2) and decrypts it
+  into a private run dir (task 0g2, replacing 062's refusal of such plans).
 - `gonf plan -o dir -seal [-recipient r]…` (task 2b2, [plan-encryption.md](plan-encryption.md))
   records into memory (never plaintext `plan.jsonl`/`blobs/`), age-encrypts
   the GONF-PUSH/1 frame to the union of `-recipient` flags and the default

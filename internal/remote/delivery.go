@@ -3,7 +3,6 @@ package remote
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -114,16 +113,17 @@ func (m Mode) Validate() error {
 // The sticky dir's path is deterministic per plan ID (Fanout suffixes it per
 // host, see forHost) and reused across pushes to the same host. Reuse only
 // stays safe because cliApplyStdin (internal/cli) wipes the dir's CONTENTS
-// before extracting into it, so ToHost does not care whether the dir was
-// empty, fresh, or left over from an interrupted run. Because that dir is
-// the login user's, a sensitive op with blob content in an elevated chunk is
-// refused before any SSH traffic (refuseSensitiveStickyBlobs). The sealed
-// alternative that will replace that refusal is already wired in behind it
-// (task zf2, sealed_sticky.go): such refs are sealed to a per-push
-// ephemeral key, uploaded sealed, and the key sent only on the reading
-// elevated chunk's own GONF-PUSH/2 stdin frame, after the remote passed
-// RequireRemoteSealedSticky; task 0g2 removes the refusal once the
-// destination decrypts them.
+// before the upload extracts into it (only the upload, whose frame carries
+// the blobs: a plan-only chunk session leaves them in place), so ToHost
+// does not care whether the dir was empty, fresh, or left over from an
+// interrupted run. Because that dir is the login user's, a blob that a
+// sensitive op of an elevated chunk reads must not sit there as plaintext:
+// such refs are sealed to a per-push ephemeral key (sealed_sticky.go, task
+// zf2), uploaded sealed, and the key sent only on the reading elevated
+// chunk's own GONF-PUSH/2 stdin frame, after the remote passed
+// RequireRemoteSealedSticky; that chunk decrypts them into its own private
+// run dir before it applies (internal/cli, task 0g2). This replaced task
+// 062's refusal of such plans (refuseSensitiveStickyBlobs, removed by 0g2).
 //
 // Preview mode: a blob-backed plan is refused before any remote probe, and
 // the remote gonf is only verified (every privilege context that will apply
@@ -145,15 +145,6 @@ func (d Delivery) ToHost(ctx context.Context, t PushTarget) error {
 	sticky := ""
 	var sealing *stickySeal
 	if hasBlobs && len(chunks) > 1 {
-		// TODO(0g2): remove this refusal once the destination side (w82
-		// phase 4 step 3, task 0g2) decrypts sealed sticky refs. Until then
-		// it still refuses every plan newStickySeal below would seal, so the
-		// sealed path (sealed_sticky.go) is unreachable in production:
-		// lifting it before the destination can open what the controller
-		// seals would only trade the refusal for a far-end failure.
-		if err := refuseStickyBlobs(d.PlanID, chunks); err != nil {
-			return err
-		}
 		sticky = "/tmp/gonf-apply-sticky-" + sanitizeID(d.PlanID)
 		var err error
 		if sealing, err = newStickySeal(chunks, d.Mem); err != nil {
@@ -165,29 +156,6 @@ func (d Delivery) ToHost(ctx context.Context, t PushTarget) error {
 		return err
 	}
 	return d.stream(ctx, t, chunks, remotes, sticky, sealing)
-}
-
-// refuseStickyBlobs is refuseSensitiveStickyBlobs as ToHost calls it. It is
-// a variable only so this package's tests can step past the refusal to
-// exercise the sealed sticky path it still blocks in production (see
-// ToHost's TODO(0g2)); production code never reassigns it.
-var refuseStickyBlobs = refuseSensitiveStickyBlobs
-
-// refuseSensitiveStickyBlobs refuses, before any SSH traffic, a multi-chunk
-// plan whose elevated chunks carry a sensitive op with blob content: the
-// sticky dir that would stage its blob belongs to the SSH login user, who
-// could then read secret material meant only for a privileged file. Such a
-// secret-bearing file above plan.MaxInlineContent has to be split off into
-// its own push (a single-chunk plan embeds its blobs in the frame the
-// elevated apply extracts itself) or made smaller, so it travels inline.
-func refuseSensitiveStickyBlobs(planID string, chunks []plan.Chunk) error {
-	ids := plan.SensitiveElevatedBlobs(chunks)
-	if len(ids) == 0 {
-		return nil
-	}
-	return fmt.Errorf("push: plan %q: secret-bearing blob content for the elevated %s would be staged in a directory owned by the SSH login user "+
-		"(gonf plan -redacted shows which); push the privileged task separately or keep its content under %d bytes",
-		planID, strings.Join(ids, ", "), plan.MaxInlineContent)
 }
 
 // ObserveBootstrapForTest is a test seam: until the returned restore func

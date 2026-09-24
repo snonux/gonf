@@ -519,10 +519,14 @@ then delete it).
 
 ## Phase 4 design: sealed multi-chunk sticky-dir blobs (task `6b2`)
 
-Status: **steps 4a (`yf2`) and 4b (`zf2`) landed; step 4c (`0g2`,
-destination decrypt and lifting the refusal) is open, so the sealed path is
-not yet reachable** — see "As landed (task `zf2`)" at the end of this
-section for the exact wire format and API. Originally design only, expanded
+Status: **steps 4a (`yf2`), 4b (`zf2`) and 4c (`0g2`, destination decrypt
+and lifting the refusal) landed** — see "As landed (task `zf2`)" and "As
+landed (task `0g2`)" at the end of this section for the exact wire format,
+API and destination behaviour. **Open:** the controller's release floor
+(`sealedStickyMinRelease`) is still a `0.17.0` placeholder above every
+release, so a push that seals a sticky ref is refused before any upload
+until the release carrying 0g2 is tagged and the floor is set to it.
+Originally design only, expanded
 here by task `6b2`. Task
 `6b2` (this design's own phase-4 entry) read this section's earlier
 one-line table summary, task `062`'s refusal it would lift, and the
@@ -790,16 +794,83 @@ pins it above `internal.Version`); 0g2 sets it to that release. The key is
 never on argv or in the environment, never logged, never in an error
 (tests pin argv, log capture, chunk-failure errors, fmt of `PushKey`).
 
-**Still refused.** `refuseSensitiveStickyBlobs` stays in `ToHost` (behind
-`refuseStickyBlobs`, a test-only variable that lets tests exercise the
-sealed path), with a `TODO(0g2)`. For 0g2: switch `cliApplyStdin` (only the
-plain `-apply-dir` push path) to `DecodePushWithKey`, parse the key, and for
-every op `plan.ChunkNeedsStickyKey`'s selection covers, require
-`sealed/<ref>.age` (refusing a missing one, naming the op by position),
-open it and extract it into `plan.NewSealedApplyRunDir()`; then decide how
-that chunk's `PlanDir` resolves both the private dir (sealed refs) and the
-sticky dir (unsealed refs); set `sealedStickyMinRelease`; remove the
-refusal and `refuseStickyBlobs`.
+**Still refused (until 0g2).** `refuseSensitiveStickyBlobs` stayed in
+`ToHost` (behind `refuseStickyBlobs`, a test-only variable that let tests
+exercise the sealed path), with a `TODO(0g2)`; task 0g2 removed both.
+
+### As landed (task `0g2`, step 4c)
+
+**Destination.** `internal/cli`'s `cliApplyPushStdin` (the plain
+`gonf apply [-apply-dir dir] -` path) peeks the frame header first
+(`plan.PushIsKeyed`, `plan.PushHasBlobs`). Only with `-apply-dir` does it
+decode with `plan.DecodePushWithKey`; every other path keeps
+`plan.DecodePush`, so sealed `plan.age` and `-strict-preview` still refuse
+`/2`. Then `stageSealedStickyRefs` (`internal/cli/sealed_sticky.go`), before
+any op applies:
+
+- a `/2` frame that embeds blobs is refused before extraction (sealed refs
+  come only from the sticky dir);
+- a `/2` frame whose ops read no sealed ref is refused (the controller sends
+  the key only where it is needed); the destination's selection is
+  `plan.KeyedChunkSealedOps`, the same `sealsStickyBlob` predicate applied
+  as if the chunk were elevated, since only an elevated chunk gets the key;
+- the key line goes through `seal.ParseEphemeral`; a malformed one is
+  refused with a fixed message;
+- for each distinct ref, `sealed/<ref>.age` is opened below the sticky dir
+  through `os.Root` (no symlink can lead outside it), refusing a missing
+  one, a symlink (`Lstat`, then `O_NOFOLLOW`) or anything but a regular file
+  (`O_NONBLOCK` + `fstat` against a FIFO); it is decrypted with `seal.Open`
+  and streamed straight into `plan.SealedRefExtractor`, which unpacks it
+  into one fresh `plan.NewSealedApplyRunDir()` with the push extractor
+  (`extractTarHeader`: zip-slip and ancestor-symlink checks, the
+  `MaxExtractedPushBlobs` budget shared across all of the chunk's refs). It
+  refuses (`plan.ErrSealedRefArchive`) any member outside that ref (after
+  `path.Clean`), so another ref's stream swapped in under this ref's path —
+  which decrypts, every ref of a push being sealed to one key — or an extra
+  member is caught; it refuses unsupported member types and anything after
+  the gzip stream, and reads the age stream to its end so the final segment
+  authenticates (truncation and tampering fail there). Memory stays
+  bounded: nothing is buffered whole;
+- a keyless frame whose op reads a ref the sticky dir holds sealed is
+  refused (a sealed op without a key).
+
+Every refusal names ops by position only, never a ref, a member, a path
+below the private dir or the key (`redactSealedRefErr` keeps only a class
+and an errno). The private dir's cleanup is deferred on every path; a
+killed chunk's leftover falls to `NewSealedApplyRunDir`'s dead-PID sweep.
+
+**PlanDir resolution.** `plan.ApplyWithContext` still takes one `planDir`
+(the sticky dir). The private dir travels on the apply's context
+(`internal/sealeddir.With`, an unexported key an external module cannot
+set), and `plan`'s `applyActiveWithFacts` gives an op whose `Blob` is one of
+the decrypted refs the private dir as its `ApplyContext.PlanDir`
+(`sealeddir.Resolve`); every other op keeps the sticky dir. `resource/file`
+and `resource/dir` are unchanged.
+
+**Sticky-dir wipe.** Task 0g2's end-to-end test found that every
+`-apply-dir` session wiped the sticky dir (`wipeDirContents`, added for
+stale-blob resurrection), so every chunk after the upload lost its blobs
+("missing blob") — a multi-chunk push with blobs had not worked since.
+Only a session whose frame carries blobs (the upload, which runs first)
+wipes now; chunk sessions leave what it staged.
+
+**Controller.** `refuseSensitiveStickyBlobs`, `refuseStickyBlobs` and their
+tests are gone; `plan.SensitiveElevatedBlobs` stays as the description of
+the sealed ops. `sealedStickyMinRelease` is still the `0.17.0` placeholder:
+set it to the release that ships this and flip
+`TestSealedStickyFloorAboveCurrentRelease` then. A push with nothing to seal
+is byte-identical on the wire (GONF-PUSH/1 only, no floor probe).
+
+**Tests.** `internal/cli/sealed_sticky_test.go` (upload through the real
+CLI, then the keyed chunk: success from the private dir with a plain ref
+from the sticky dir, tampered, truncated, missing, swapped, extra member,
+symlinked, wrong key, malformed key, key without sealed op, sealed op
+without key, keyed frame with blobs, apply failure after decrypt, chunk
+session keeps uploaded blobs), `internal/cli/sealed_sticky_e2e_test.go` (the
+real `remote.Delivery.ToHost` driving the real destination in-process via
+`remote.AssumeRemoteSealedStickyForTest`: no plaintext in the sticky dir
+after any session, key on no argv/log/env), `plan/sealed_sticky_extract_test.go`
+and `internal/sealeddir`.
 
 ## Out of scope
 
@@ -838,7 +909,7 @@ bumps gonf, is expected and noted, not a failure).
 | 1 | `3b2` | `gonf apply [-identity]… <plan.age\|->`: magic sniff, root requires `-identity`, read to EOF before apply, in-memory decode without blobs, `sealed-run-*` run dir with dead-owner sweep, single-process apply via `api.ApplyPlan`, "decrypted" wording, `gonf -sealed-version`. |
 | 2 | `4b2` (done) | Destination recipients: `api.WithPlanRecipient` on `Host`; `gonf plan -seal -for host\|cluster\|fleet` records once per host (`api.RecordPlanForHost`) and writes `plan-<host>.age` per host, sealed to that host's recipient plus the operator's; refuses up front when a target host lacks a recipient, when the operator's own base recipients (`-recipient`/recipients-file) are empty (task `mg2`), or when two hosts would sanitize to the same filename; `-for` with `-stdout` only when it resolves to exactly one host. See "Runbook: host keys and shipped plan.age" above. |
 | 3 | `5b2` | Optional, needs a user decision: `-seal` default for sensitive plans when an operator recipients file exists, and/or the operator identity through the secret provider. |
-| 4 | `6b2` | Optional: seal a multi-chunk push's sticky-dir blobs to an ephemeral per-push key sent only on each chunk's stdin, lifting 062's refusal of sensitive blobs in elevated chunks. **Scoped down to design only** (see "Phase 4 design: sealed multi-chunk sticky-dir blobs" above) rather than a one-session implementation of security-sensitive privileged-apply plumbing; split into its own sub-phases `yf2` (ephemeral seal primitive, done: `seal.GenerateEphemeral`, `seal.EncodeEphemeral`, `seal.ParseEphemeral` in `plan/seal/ephemeral.go`) → `zf2` (wire extension + delivery, done: GONF-PUSH/2 `plan.EncodePushWithKey`/`DecodePushWithKey`, sealed refs at `sealed/<ref>.age`, `RequireRemoteSealedSticky`; unreachable until 0g2, see "As landed" above) → `0g2` (destination staging, refusal removal, full gates, self-review). |
+| 4 | `6b2` | Optional: seal a multi-chunk push's sticky-dir blobs to an ephemeral per-push key sent only on each chunk's stdin, lifting 062's refusal of sensitive blobs in elevated chunks. **Scoped down to design only** (see "Phase 4 design: sealed multi-chunk sticky-dir blobs" above) rather than a one-session implementation of security-sensitive privileged-apply plumbing; split into its own sub-phases `yf2` (ephemeral seal primitive, done: `seal.GenerateEphemeral`, `seal.EncodeEphemeral`, `seal.ParseEphemeral` in `plan/seal/ephemeral.go`) → `zf2` (wire extension + delivery, done: GONF-PUSH/2 `plan.EncodePushWithKey`/`DecodePushWithKey`, sealed refs at `sealed/<ref>.age`, `RequireRemoteSealedSticky`) → `0g2` (done: destination decrypt into `plan.NewSealedApplyRunDir()`, `refuseSensitiveStickyBlobs` removed, see "As landed (task `0g2`)" above; open: set `sealedStickyMinRelease` to the release that ships it). |
 | - | `7b2` | Design (not implement) signed plan artifacts; until it is implemented, unattended sealed apply stays blocked. |
 
 Dependencies: `2b2`, `3b2` and `6b2` need `1b2`; `4b2` and `5b2` need `2b2`

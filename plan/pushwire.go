@@ -175,8 +175,10 @@ func writePushBlobs(w io.Writer, mem BlobReader) error {
 // pushwire_key.go) is refused with ErrPushKeyNotAccepted right after its
 // magic line: before the key line is read and before any blob is
 // extracted. Only a caller that can honour the key, and says so by calling
-// DecodePushWithKey, ever receives one. Every existing decode path (plain
-// apply, strict preview, the sealed plan.age apply) therefore stays
+// DecodePushWithKey, ever receives one: today only internal/cli's sticky
+// "-apply-dir" chunk path (task 0g2), which decrypts the sealed refs
+// before applying. Every other decode path (plain apply without
+// -apply-dir, strict preview, the sealed plan.age apply) therefore stays
 // fail-closed against a keyed frame instead of applying ops that would read
 // sealed bytes as if they were plaintext content.
 func DecodePush(r io.Reader, planDir string) (*PushPayload, error) {
