@@ -274,6 +274,35 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 		}
 	}()
 	ops, err := recordPlanBody(planID, store, taskNames)
+	if err == nil {
+		// A declaration error can land on the process-wide sticky slot even
+		// though recordPlanBody itself returned no error: something running
+		// inside a task body during this very call (e.g. a defensive
+		// resource.ResetForTest or resource.ResetDeclarationError call —
+		// both are documented as meant for BETWEEN records, never during
+		// one, but nothing before this check enforced that) can tear down
+		// the capture sink enterRecordMode installed above
+		// (declerr.Capture(stashBodyError)), so a LATER declaration error in
+		// the same body — a failed MustSecret chief among them — misses
+		// stashBodyError entirely and lands on declerr.First() instead. That
+		// used to go unnoticed: recordPlanBody's own return was already nil
+		// by then, and nothing afterward re-checked declerr.First(), so a
+		// resource built from the failed call's inert zero-value return
+		// (e.g. a File whose content embeds an empty MustSecret result) was
+		// recorded and later applied as if nothing had gone wrong — see
+		// ResetFirst's doc comment (internal/declerr) for the exact,
+		// reproduced shape of this bug (task hg2), building on tf2's
+		// narrower ResetFirst fix, which closed one specific route
+		// (ResetDeclarationError) into it. Re-checking here instead closes
+		// the whole class regardless of how the sink was lost — a
+		// structural fix rather than chasing each future route one at a
+		// time. ops is discarded along with recordPlanBody's own nil
+		// return: whatever it packaged cannot be trusted once a declaration
+		// error surfaced anywhere during this call.
+		if derr := declerr.First(); derr != nil {
+			ops, err = nil, derr
+		}
+	}
 	// Either outcome restores the repository to exactly what was
 	// registered before this call started (tasks ad2/bd2, id2): this
 	// record attempt's own registrations are done being useful to the

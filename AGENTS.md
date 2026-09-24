@@ -212,16 +212,33 @@ inventory and resources is a declaration error (`internal/declerr`):
   mid-recording — its own doc comment always framed the supported use as the
   direct-apply path, not mid-recording, but nothing enforced that — silently
   tore down that sink too: a LATER declaration error in the same body (e.g.
-  a failed `MustSecret`) then missed the recording's capture, landed on the
-  process-wide sticky slot instead, and nothing re-checks `declerr.First()`
-  after a record completes (`RecordPlanTo` checks it only before recording
-  starts; `ApplyChunksContext` never checks it at all) — so the record
-  finished as if nothing had failed, silently writing a credentials file
-  with an empty secret and returning a nil error. Fixed by giving
-  `internal/declerr` a narrower `ResetFirst` that clears only the sticky
-  first error and never the sink; `ResetDeclarationError` now calls that
-  instead, and `resource.ResetForTest` calls the broader `declerr.Reset`
-  directly (it still needs the full wipe between tests). (2) Even outside a
+  a failed `MustSecret`) then missed the recording's capture and landed on the
+  process-wide sticky slot instead — and, at the time, nothing re-checked
+  `declerr.First()` after a record completed (`RecordPlanTo` checked it only
+  before recording started), so the record finished as if nothing had
+  failed, silently writing a credentials file with an empty secret and
+  returning a nil error. Fixed by giving `internal/declerr` a narrower
+  `ResetFirst` that clears only the sticky first error and never the sink;
+  `ResetDeclarationError` now calls that instead, and `resource.ResetForTest`
+  calls the broader `declerr.Reset` directly (it still needs the full wipe
+  between tests). tf2 closed only THIS route into the sink, though:
+  `resource.ResetForTest` still calls the broader `declerr.Reset` by design,
+  so a task body that mis-calls `resource.ResetForTest()` (rather than
+  `ResetDeclarationError`) mid-recording still tears down the sink the exact
+  same way — task hg2 found and closed that second route, structurally
+  rather than by patching this one further: `api.RecordPlanTo` now
+  re-checks `declerr.First()` once more right after `recordPlanBody`
+  returns a nil error, and fails the record with whatever it finds — so a
+  lost sink is caught regardless of which reset call (`ResetForTest`,
+  `ResetDeclarationError`, or any future code with the same effect) caused
+  it, rather than chasing each route one at a time. `ApplyChunksContext`
+  still runs no check of its own and does not need one: every path that
+  reaches it locally (`api.Run`) only does so after a `RecordPlanTo` call in
+  the very same process already returned cleanly — and this same, now
+  doubly-checked `declerr.First()` guard — so a plan built from a
+  poisoned recording never reaches it in the first place; a plan decoded
+  from a file or shipped from a different process carries no relationship
+  to this process's `declerr` state at all. (2) Even outside a
   recording, `declerr` carries EVERY declaration-error class through the
   same one sticky slot, and `ResetDeclarationError` could not distinguish
   which class it was clearing: a collided resource ID is safe to clear and

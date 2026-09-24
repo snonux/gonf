@@ -167,15 +167,27 @@ func Reset() {
 // every declaration error reported by the REST of that same body — e.g. a
 // MustSecret call placed right after the reset — then missed the recording
 // session's capture entirely and went to the process-wide sticky first slot
-// instead. Nothing re-checks First() after a record completes
-// (api/plan.go's RecordPlanTo checks it only before, and
-// ApplyChunksContext never checks it at all), so the record finished as if
-// nothing had failed: a File built from that failed MustSecret's empty
-// return value was written to disk with an empty secret, and RecordPlanTo/
-// Run returned nil. ResetFirst fixes this at the root by never touching
-// sink: a later report inside the same recording body still reaches
-// stashBodyError and correctly fails the record, exactly as it would have
-// without the ResetDeclarationError() call in between.
+// instead. At the time, nothing re-checked First() after a record completed
+// (api/plan.go's RecordPlanTo checked it only before), so the record
+// finished as if nothing had failed: a File built from that failed
+// MustSecret's empty return value was written to disk with an empty secret,
+// and RecordPlanTo/Run returned nil. ResetFirst fixes ONE route to this at
+// the root by never touching sink: a later report inside the same recording
+// body still reaches stashBodyError and correctly fails the record, exactly
+// as it would have without the ResetDeclarationError() call in between.
+//
+// tf2 did not close the whole class, though: resource.ResetForTest (by
+// design — it must wipe the sink for its own, legitimate between-tests use)
+// still calls the broader Reset, which nils an active recording's sink the
+// same way, and a task body that (mis-)uses it mid-recording instead of
+// ResetDeclarationError reaches the identical silent-empty-secret outcome.
+// Task hg2 closed the class structurally at the other end instead of
+// patching that route too: api/plan.go's RecordPlanTo now re-checks First()
+// once more right after recordPlanBody returns a nil error, and fails the
+// record with whatever landed there in the meantime — catching a lost sink
+// regardless of which reset call (or future code path with the same effect)
+// caused it. ApplyChunksContext still runs no such check of its own; it
+// does not need one; see api/plan.go's RecordPlanTo for why.
 func ResetFirst() {
 	mu.Lock()
 	defer mu.Unlock()
