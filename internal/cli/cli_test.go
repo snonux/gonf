@@ -666,7 +666,10 @@ func TestParallelBaseContextHelper(t *testing.T) {
 // default per-command timeout without touching resource-package code. The
 // flag is additive (a new optional top-level flag with a sensible default
 // equal to the prior process-wide default), so this test does not need to
-// exercise every existing CLI flag combination for regressions.
+// exercise every existing CLI flag combination for regressions. The task
+// body observes the timeout while CLI() runs it, because the setting is
+// scoped to the invocation (scopeCLISettings, task xg2) and is back at its
+// entry value once CLI() returned.
 func TestCLICmdTimeoutFlag(t *testing.T) {
 	orig := api.CommandTimeout()
 	t.Cleanup(func() { api.SetCommandTimeout(orig) })
@@ -678,7 +681,9 @@ func TestCLICmdTimeoutFlag(t *testing.T) {
 	resource.ResetRepository()
 	root := t.TempDir()
 	target := filepath.Join(root, "x")
+	var during time.Duration
 	api.Task("cli_cmd_timeout", "", func() {
+		during = api.CommandTimeout()
 		api.File(target, options.WithContent("ok"))
 	})
 
@@ -686,8 +691,11 @@ func TestCLICmdTimeoutFlag(t *testing.T) {
 	if code := CLI(); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
-	if got := api.CommandTimeout(); got != 50*time.Millisecond {
-		t.Fatalf("CommandTimeout() = %v, want 50ms", got)
+	if during != 50*time.Millisecond {
+		t.Fatalf("CommandTimeout() = %v during the run, want 50ms", during)
+	}
+	if got := api.CommandTimeout(); got != orig {
+		t.Fatalf("CommandTimeout() = %v after CLI returned, want the entry value %v", got, orig)
 	}
 }
 

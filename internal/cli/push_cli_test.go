@@ -9,7 +9,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/api/options"
@@ -281,8 +280,10 @@ func TestCLIPushForwardsCmdTimeout(t *testing.T) {
 	if code := CLI(); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
-	if got := api.CommandTimeout(); got != 30*time.Second {
-		t.Fatalf("CommandTimeout() = %v, want 30s", got)
+	// The flag is scoped to the invocation (scopeCLISettings, task xg2): the
+	// forwarded argv below is what proves it was in effect during the push.
+	if got := api.CommandTimeout(); got != orig {
+		t.Fatalf("CommandTimeout() = %v after CLI returned, want the entry value %v", got, orig)
 	}
 	if len(remoteCmds) != 1 || remoteCmds[0] != "gonf -cmd-timeout=30s apply -relayed -" {
 		t.Fatalf("remote cmds = %q, want the forwarded -cmd-timeout before apply", remoteCmds)

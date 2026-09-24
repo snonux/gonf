@@ -80,6 +80,13 @@ func CLI() int {
 		reportDeclarationError(err)
 		return 1
 	}
+	// configureCLI sets five process-wide settings from this invocation's
+	// flags (dry-run, log level, privilege mode, profile override, command
+	// timeout); put back whatever each was before on return, so none of them
+	// outlives this call (see scopeCLISettings, tasks vg2/xg2). Deferred
+	// first so it runs last: every other deferred cleanup below still runs
+	// under this invocation's settings (e.g. its -verbose log level).
+	defer scopeCLISettings()()
 	// This binary's main hands its arguments to the CLI, so the local
 	// elevated re-exec (`<this binary> apply <chunk>`) is safe while the CLI
 	// runs; api refuses it in any process (or phase of a process) that is not
@@ -90,11 +97,6 @@ func CLI() int {
 	// Remove the private dir the gonf binary was cross-compiled into for
 	// remote hosts (if any push needed one) once this run is over.
 	defer func() { _ = cleanupRemoteBuilds() }()
-
-	// configureCLI sets resource's process-wide dry-run flag from this
-	// invocation's -n; put back whatever it was before on return, so the flag
-	// never outlives this call (see scopeDryRun, task vg2).
-	defer scopeDryRun()()
 
 	options, err := parseCLIFlags(os.Args[0], os.Args[1:])
 	if err != nil {
@@ -241,6 +243,15 @@ func parseCLIFlags(program string, args []string) (cliOptions, error) {
 	}, nil
 }
 
+// configureCLI applies this invocation's top-level flags to the process-wide
+// settings the rest of gonf reads: the command timeout, the log level,
+// dry-run, the privilege mode and the profile override. CLI() snapshotted
+// all five before calling it (scopeCLISettings) and restores them on
+// return, so each setting here is scoped to the invocation instead of being
+// left behind for the next in-process caller. The timeout and the profile
+// are only set when their flag was given; otherwise they keep the value
+// found on entry (the built-in default, or whatever an in-process caller
+// set before calling CLI()).
 func configureCLI(options cliOptions) error {
 	if options.cmdTimeout > 0 {
 		api.SetCommandTimeout(options.cmdTimeout)
@@ -261,9 +272,7 @@ func configureCLI(options cliOptions) error {
 	// repeated CLI() calls in the same process (e.g. under `go test
 	// -shuffle`). Subcommand handlers (cliApply/cliPush/cliCluster/
 	// cliFleet) escalate-only, so a top-level "gonf -n <subcmd> ..." set
-	// here survives their own flag parsing. CLI() restores the flag's
-	// previous value on return (scopeDryRun), so this setting is scoped to
-	// the invocation rather than left behind for the next caller.
+	// here survives their own flag parsing.
 	resource.SetDryRun(options.dryRun)
 	m, err := privilege.ParseMode(options.privilege)
 	if err != nil {
@@ -274,46 +283,6 @@ func configureCLI(options cliOptions) error {
 		api.SetProfileOverride(options.profile)
 	}
 	return nil
-}
-
-// scopeDryRun snapshots resource's process-wide dry-run flag and returns a
-// func that puts the snapshot back. Every CLI entry point that may change
-// the flag (CLI() itself and the subcommand handlers, via escalateDryRun)
-// defers the returned func, so a dry-run invocation never leaks the flag
-// past its own return.
-//
-// In the real binary the process exits right after CLI() returns, so the
-// restore changes nothing there. It matters for any in-process caller that
-// runs several invocations in turn — above all this package's tests, which
-// call CLI() and the handlers (cliApply, cliPush, ...) directly under
-// `go test -shuffle=on`. Before task vg2 the handlers only ever escalated
-// the flag to true and left it set, so every test passing -n or
-// -strict-preview had to remember its own t.Cleanup reset. One that did not
-// (TestCLIApplySealedStdinRefusesStrictPreview: cliApply escalates before
-// it refuses the sealed stream) left dry-run on, and whichever test next
-// called a handler directly without going through CLI() (which resets the
-// flag) silently ran in dry-run mode — e.g.
-// TestCLIApplyFileIgnoresStdinWithoutCancelPipe then never touched its
-// marker file. Whether it failed depended on the shuffled order, hence the
-// intermittent flake. Scoping the flag here fixes the whole class instead
-// of adding one more per-test reset.
-func scopeDryRun() (restore func()) {
-	prev := resource.DryRun()
-	return func() { resource.SetDryRun(prev) }
-}
-
-// escalateDryRun is the subcommand handlers' escalate-only dry-run setting:
-// it turns the flag on when on is true and never turns it off, so a
-// top-level "gonf -n <subcmd> ..." (already set by configureCLI before
-// dispatch, or pre-set by an in-process caller) survives a subcommand whose
-// own flags did not repeat -n. Like scopeDryRun, the returned func restores
-// the value found on entry; the handler defers it.
-func escalateDryRun(on bool) (restore func()) {
-	restore = scopeDryRun()
-	if on {
-		resource.SetDryRun(true)
-	}
-	return restore
 }
 
 // reportDeclarationError logs a declaration error found before CLI started
