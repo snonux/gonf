@@ -1400,3 +1400,54 @@ func TestPushPayloadContextRefusesGenuinelyStaleRemoteWithoutSSH(t *testing.T) {
 		t.Fatal("PushPayloadContext opened an ssh session against a genuinely stale remote; want it refused first")
 	}
 }
+
+// TestRelayedMinVersionDerivedFromRelayedMinRelease reproduces task mf2's
+// mutation probe as a real test: mf2 originally hand-transcribed
+// relayedMinVersion as a second, independent [3]int literal, so editing
+// relayedMinRelease without also editing relayedMinVersion left this
+// package's tests green while RequireRemoteRelayed kept enforcing the OLD
+// floor (a fail-open drift into `go test`'s blind spot, since the
+// exact-floor tests below only pin outcomes at specific version numbers,
+// never that relayedMinVersion tracks relayedMinRelease at all). Task wf2
+// replaced the hand-transcription with mustParseReleaseVersion(
+// relayedMinRelease), so relayedMinVersion is now DERIVED from
+// relayedMinRelease by construction: this assertion holds for exactly that
+// reason and cannot be defeated by editing only one of the two literals,
+// because there is only one literal left to edit. It stays as a regression
+// guard against a future change reintroducing a second, independent literal.
+func TestRelayedMinVersionDerivedFromRelayedMinRelease(t *testing.T) {
+	t.Parallel()
+	want, err := parseReleaseVersion(relayedMinRelease)
+	if err != nil {
+		t.Fatalf("parseReleaseVersion(relayedMinRelease=%q) = %v, want a valid release literal", relayedMinRelease, err)
+	}
+	if relayedMinVersion != want {
+		t.Fatalf("relayedMinVersion = %v, want %v derived from relayedMinRelease %q", relayedMinVersion, want, relayedMinRelease)
+	}
+}
+
+// TestMustParseReleaseVersion sanity-checks mustParseReleaseVersion's happy
+// path: relayedMinVersion's derivation (above) already exercises this at
+// package init, but a direct test pins the exact mapping independent of
+// that global.
+func TestMustParseReleaseVersion(t *testing.T) {
+	t.Parallel()
+	if got := mustParseReleaseVersion("1.2.3"); got != [3]int{1, 2, 3} {
+		t.Fatalf(`mustParseReleaseVersion("1.2.3") = %v, want {1 2 3}`, got)
+	}
+}
+
+// TestMustParseReleaseVersionPanicsOnInvalidLiteral confirms
+// mustParseReleaseVersion panics rather than silently returning a zero
+// value on a malformed literal — the behavior relayedMinVersion's derivation
+// relies on to make a bad relayedMinRelease edit fail loudly at package
+// init instead of shipping a wrong, silently-zeroed floor.
+func TestMustParseReleaseVersionPanicsOnInvalidLiteral(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		if recover() == nil {
+			t.Fatal(`mustParseReleaseVersion("not-a-version") did not panic`)
+		}
+	}()
+	mustParseReleaseVersion("not-a-version")
+}

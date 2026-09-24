@@ -120,15 +120,41 @@ var defaultPusher = NewPusher()
 // ud2's fix — see RequireRemoteRelayed's doc comment).
 const relayedMinRelease = "0.16.3"
 
-// relayedMinVersion is relayedMinRelease's parsed [3]int form. It is computed
-// once here, at package init, rather than by calling parseReleaseVersion on
-// every RequireRemoteRelayed call (task mf2, tidying task ne2's per-call
-// parse): relayedMinRelease is a fixed literal, so nothing about this value
-// can change between calls. Its correctness rides on the exact-floor tests
-// in push_test.go (0.16.2 refused, 0.16.3 accepted) rather than on a runtime
-// parse-error path that relayedMinRelease, being a literal, could never
-// actually take.
-var relayedMinVersion = [3]int{0, 16, 3}
+// relayedMinVersion is relayedMinRelease's parsed [3]int form, DERIVED from
+// it at package init via mustParseReleaseVersion (task wf2) rather than
+// hand-transcribed as a second literal (task mf2's original version here,
+// "var relayedMinVersion = [3]int{0, 16, 3}"): a hand-copied sibling value
+// can silently drift from relayedMinRelease when only one of the two is ever
+// edited — confirmed by a mutation probe that changed relayedMinRelease to
+// "0.17.0" and left the transcribed relayedMinVersion at {0, 16, 3}, which
+// left `go test ./internal/remote/` fully green while RequireRemoteRelayed
+// kept enforcing the OLD floor (a fail-open drift: a 0.16.5 remote was still
+// accepted even though the declared floor had moved to 0.17.0), because the
+// exact-floor tests in push_test.go pin the OUTCOME at specific version
+// numbers, not that this value tracks relayedMinRelease. Deriving it here
+// instead of merely testing it makes that drift class structurally
+// impossible rather than absent-but-untested; parseReleaseVersion still runs
+// once, at package init, not on every RequireRemoteRelayed call (mf2's
+// original goal).
+var relayedMinVersion = mustParseReleaseVersion(relayedMinRelease)
+
+// mustParseReleaseVersion parses a hard-coded release-version literal into
+// its [3]int form, panicking on a malformed one. It exists solely to derive
+// relayedMinVersion above from relayedMinRelease: relayedMinRelease is a
+// fixed, author-controlled source literal, never a value a recipe, remote
+// probe result, or other input can influence, so a parse failure here can
+// only mean a typo in this file's own source — a genuine, documented
+// programmer-bug invariant that no recipe or input can reach, which is the
+// one case AGENTS.md's "Registration-time contract" (and docs/plan.md's
+// "Error handling contract" list of such sites) accepts a panic for. It
+// fires once, at package init, long before any recipe or apply runs.
+func mustParseReleaseVersion(s string) [3]int {
+	v, err := parseReleaseVersion(s)
+	if err != nil {
+		panic(fmt.Sprintf("internal/remote: relayedMinRelease %q: %v", s, err))
+	}
+	return v
+}
 
 // NewPusher returns a Pusher wired to the real ssh/scp/go-build
 // implementations, with a fresh (empty) build cache.

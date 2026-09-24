@@ -245,9 +245,12 @@ binary's `main` exits, with the code `cli.CLI` returns.
   switch in `api`, a duplicate `plan.RegisterHandler` for one op kind (two
   gonf packages claiming one wire kind at `init`), an op field type the
   secret walker does not classify (`walkOpStrings`, guarded by a fitness
-  test), the test-binary exec guard in `internal/remote` and misuse of the
-  test-only `internal/testutil` helpers. None of them is
-  reachable from a recipe or from input data.
+  test), the test-binary exec guard in `internal/remote`, misuse of the
+  test-only `internal/testutil` helpers, and `internal/remote`'s
+  `mustParseReleaseVersion` (task wf2), which derives the package-init
+  `relayedMinVersion` from the hard-coded `relayedMinRelease` literal instead
+  of a second, hand-transcribed value that could silently drift from it.
+  None of them is reachable from a recipe or from input data.
 - **Record-time failures return errors**: unknown tasks, recursion cycles,
   packaging failures, registered resources without plan drafts, dangling or
   cross-privilege-chunk `DependsOn` / `OnChange` targets, an `Alias` with an
