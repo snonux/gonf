@@ -56,13 +56,21 @@ Service("nsd", WithFlags("-c /var/nsd/etc/nsd.conf"))
   `OnChange` gate holds. Flags are daemon arguments, so pair them with
   `WithRestart`; a reload does not apply them.
 - OpenBSD empty flags pass no argument: rcctl writes the plain `NAME_flags=`
-  line for a base daemon that is off by default (httpd, relayd, nsd, ...),
-  the line `rcctl enable` writes too, and drops the line otherwise. So
+  line for a base daemon that is off by default and has no default flags
+  (httpd, relayd, inetd, ...), the line `rcctl enable` writes too, and drops
+  the line otherwise. So
   `Service("httpd", WithFlags(""))` replaces
   `File("/etc/rc.conf.local", WithLine("httpd_flags="))` plus
   `OnChange(flags)` with no change on a host that already has the line.
-  A package daemon whose rc.d script sets default flags keeps them: rcctl
-  cannot store "empty" for it, so its empty flags never converge.
+  A daemon whose rc.d script sets default flags keeps them, base daemons
+  included: `rcctl get nsd flags` reports `-c /var/nsd/etc/nsd.conf` even
+  with a plain `nsd_flags=` line, so `WithFlags("")` never converges for nsd.
+  Pass the flags you want (as in the nsd example above) or keep managing the
+  `NAME_flags=` line yourself.
+- A service whose only change input is its flags has no way to restart on a
+  flags change alone: `WithRestart` without `OnChange` restarts on every
+  apply. Keep an `OnChange` on the config the daemon reads; a flags change
+  fires the restart too.
 - FreeBSD and NetBSD treat an unset variable as empty flags. NetBSD refuses
   a differing `NAME_flags` in `/etc/rc.conf.d/NAME` (it would override
   `/etc/rc.conf`), and rewrites an assignment it cannot evaluate

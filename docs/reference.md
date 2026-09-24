@@ -79,6 +79,11 @@ Both dot-imports are the intended style.
 | `WithTaskCluster(name)` | Bind the task to a cluster for `ClusterHosts` / `ForHosts` / `EachHost`. |
 | `Needs(tasks...)` | Record these tasks right before this one (see [Needs](#needs)). |
 
+An `OptsX` companion replaces the struct defaults (`RequiresRoot`, `Opts()`)
+for that method; it does not add to them. So when you add `Needs` to a task
+of a `RequiresRoot` struct, repeat `Privileged()`:
+`TaskOptions{Privileged(), Needs("script")}`.
+
 `TaskOptions` is an alias for `[]TaskOption`.
 
 ### Where guards are evaluated
@@ -495,7 +500,10 @@ differ. A flags change counts as a change of the service: it fires
 `WithRestart` even when `OnChange` holds. OpenBSD `WithFlags("")` writes the
 `NAME_flags=` line `rcctl enable` writes for a base daemon, so it replaces
 `File("/etc/rc.conf.local", WithLine("httpd_flags="))` + `OnChange(flags)`
-without touching the host. Needs a schema 25 destination.
+without touching the host. Not for daemons whose rc.d script sets default
+flags (e.g. nsd): empty never converges there. `WithRestart` without
+`OnChange` restarts on every apply, so keep an `OnChange` on the daemon's
+config. Needs a schema 25 destination.
 
 `DaemonReload(opts...)` (Linux) runs `systemctl daemon-reload`:
 
