@@ -18,7 +18,9 @@ gonf -list
 gonf -version
 gonf [-n] <task> [task…]           # RecordPlan + Apply locally
 gonf plan -o out -id demo <task>…  # write out/plan.jsonl (+ blobs/); out is yours, not world-writable,
-                                   # not group-writable except by your private group (a UPG 0775 checkout is fine; root has none)
+                                   # not group-writable except by your private group (a UPG 0775 checkout is fine; root has none);
+                                   # a plan carrying secrets is sealed to out/plan.age by default when
+                                   # ~/.config/gonf/recipients exists (-plaintext opts out; docs/plan-encryption.md)
 gonf plan -stdout <task>…          # print plan JSONL to stdout (refused when it carries secrets,
                                    # unless -with-secrets; see docs/secrets.md)
 gonf plan -redacted <task>…        # print a redacted, non-replayable preview

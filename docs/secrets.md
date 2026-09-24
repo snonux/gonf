@@ -477,7 +477,7 @@ Limits of the scan, by design:
 
 | Output | Behaviour |
 |--------|-----------|
-| `gonf plan -o dir` | `plan.jsonl` is written `0600` in a `0700`-created, owner-checked directory, as every plan; a secret-bearing plan also gets a stderr warning naming the sensitive ops: it is an executable secret artifact, delete it once applied. A blob-backed secret file's blob lands in `dir/blobs/` with the same protections. When `dir` sits inside a git worktree that does not already ignore `plan.jsonl` and/or a `blobs/` directory the plan actually wrote, a second stderr warning fires, naming which one(s) (below). |
+| `gonf plan -o dir` | When an operator recipients file exists and `-plaintext` is not given, a secret-bearing plan is sealed by default to `dir/plan.age` instead (task 5b2, approved by the user 2026-09-24; plan-encryption.md "Default seal for sensitive plans"), and an unusable recipients file refuses it rather than falling back to plaintext. Otherwise `plan.jsonl` is written `0600` in a `0700`-created, owner-checked directory, as every plan; a secret-bearing plan also gets a stderr warning naming the sensitive ops: it is an executable secret artifact, delete it once applied. A blob-backed secret file's blob lands in `dir/blobs/` with the same protections. When `dir` sits inside a git worktree that does not already ignore `plan.jsonl` and/or a `blobs/` directory the plan actually wrote, a second stderr warning fires, naming which one(s) (below). |
 | `gonf plan -stdout` | Refused, naming the sensitive ops (never their values; `SensitiveOpNames` redacts every resolved secret in the names, a short one an identity equals included). `-stdout -with-secrets` is the explicit export; the operator then owns wherever stdout goes. |
 | `gonf plan -redacted` | A human preview on stdout: JSONL headed by a `plan_preview` op, which no gonf version accepts as a plan, with every payload string of every sensitive op replaced wholesale (content, template data, member contents, argv, environment keys and values, lines, cron command and environment, guard and validator arguments, schedules and descriptions; environment keys become numbered `[redacted]-N`, so identities and metadata stay readable) and every remembered value in every payload and identity string replaced by `[redacted]`; metadata strings (op kind, owner, mode, ...) only for strong secrets, so a weak secret equal to `file` or `root` does not garble them. Strings are redacted as decoded values and re-encoded, so every line is valid JSON. It is not replayable and must not be labelled as a plan. It cannot be combined with `-stdout`, `-with-secrets` or `-o`. |
 | `gonf plan -o dir -seal [-recipient r]…` | Task 2b2 (docs/plan-encryption.md). Records into an in-memory store (never plaintext `plan.jsonl`/`blobs/`), age-encrypts the GONF-PUSH/1 push frame (`plan/seal.Seal`, task 1b2) to the union of `-recipient` flags and the default recipients file, and writes only `dir/plan.age` (`0600`, same directory rules as `plan.jsonl`); `-seal -stdout` writes the sealed bytes to stdout instead, touching no disk. Refused with zero recipients (never a plaintext fallback) and with `-redacted` or `-with-secrets` (sealing and secret-revealing are mutually exclusive concepts). Warns, never deletes, when `dir` also holds a plaintext `plan.jsonl`/`blobs/` left over from an earlier unsealed run. Success is worded "wrote ... (N ops, M recipients)", never "verified" or "trusted": sealing is confidentiality only, never provenance (see plan-encryption.md, "Provenance"). `-seal -sign signer-file` (task 7g2, docs/plan-signing.md) signs each sealed artifact in a `GONF-SIGNED-PLAN/1` envelope with a signed-at time; `gonf plan-signer-keygen signer-file` makes the `0600` signer file and prints its public trusted-signers line. The signer secret is never printed, and a refused signer file is never echoed. `gonf apply -trusted-signers f [-require-signed]` (task 8g2) verifies a signed plan and its signed-at freshness (`-max-signed-age`, default 24h) before decrypting it, and `gonf plan-verify` unwraps one for the `age -d` emergency path. |
@@ -604,9 +604,11 @@ sensitive plan goes" table) age-encrypts the GONF-PUSH/1 frame to
 operator-controlled `age1pq…` recipients and writes only `dir/plan.age`,
 and `gonf apply -identity file... <plan.age|->` (task 3b2) decrypts and
 applies it with the same single-process, file-apply semantics as a
-plaintext plan. Sealing is not automatic or implied by sensitivity — an
-operator must pass `-seal` explicitly, with at least one recipient — and
-it is confidentiality only, never provenance (plan-encryption.md,
+plaintext plan. Since task 5b2 (approved by the user 2026-09-24), `gonf plan -o dir`
+seals a secret-bearing plan by default once an operator recipients file
+exists (`-plaintext` opts out); without such a file, sealing still needs an
+explicit `-seal` with at least one recipient. Either way it is
+confidentiality only, never provenance (plan-encryption.md,
 "Provenance"): `gonf apply` of a sealed plan never prints "verified" or
 "authenticated", and nothing in gonf may apply a sealed plan unattended
 until an entry point meets plan-signing.md's "The unblocking condition"
@@ -618,11 +620,11 @@ considered and rejected — plan-encryption.md's "Options compared", option
 E. Per-destination sealed artifacts now exist too: `gonf plan -o dir -seal
 -for host|cluster|fleet` (task 4b2, this document's "Where a sensitive plan
 goes" table and plan-encryption.md's "Runbook") seals one `plan-<host>.age`
-per destination, each to that host's own `api.WithPlanRecipient`. Still not
+per destination, each to that host's own `api.WithPlanRecipient`. Not
 provided: resolving the operator identity through a secret provider (task
-5b2), and sealing a multi-chunk push's blob transport (task 6b2) — see
-plan-encryption.md's "Phased implementation" for the full list. Without
-`-seal`/`-identity`, nothing here changes: `gonf plan -o dir` still writes
-a plaintext `plan.jsonl` under the private-filesystem protections above,
-for as long as the operator keeps it. The foostore provider (above)
+5b2's second option, declined by the user on 2026-09-24) — see
+plan-encryption.md's "Phased implementation" for the full list. Without a
+recipients file, `-seal` or `-identity`, nothing here changes: `gonf plan -o
+dir` still writes a plaintext `plan.jsonl` under the private-filesystem
+protections above, for as long as the operator keeps it. The foostore provider (above)
 changes where secrets come from, not what the plan holds either way.

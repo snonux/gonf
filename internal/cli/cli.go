@@ -70,7 +70,7 @@ var cleanupRemoteBuilds = remote.CleanupBuilds
 //	gonf -profile=fedora
 //	gonf -verbose | -quiet
 //	gonf -dry-run | -n
-//	gonf plan [-o dir|-stdout [-with-secrets]|-redacted] [-seal [-recipient r]... [-recipients-file f] [-no-default-recipients] [-for host|cluster|fleet] [-sign signer-file]] [-id name] <task>...  # emit plan.jsonl (or stdout), or seal to plan.age (or plan-<host>.age per host with -for), signed with -sign
+//	gonf plan [-o dir [-plaintext]|-stdout [-with-secrets]|-redacted] [-seal [-recipient r]... [-recipients-file f] [-no-default-recipients] [-for host|cluster|fleet] [-sign signer-file]] [-id name] <task>...  # emit plan.jsonl (or stdout; a sensitive plan is sealed to plan.age by default when a recipients file exists, -plaintext opts out), or seal to plan.age (or plan-<host>.age per host with -for), signed with -sign
 //	gonf plan-signer-keygen <signer-file>             # create a plan signer key; prints its trusted-signers line
 //	gonf plan-verify [-trusted-signers file]... <signed-plan|->  # verify a signed plan; write its bare plan.age to stdout
 //	gonf apply [-n] [-identity file]... [-trusted-signers file]... [-require-signed] <plan.jsonl|plan.age|->  # apply file/sealed/signed file or stdin (GONF-PUSH/1, sealed, signed, or bare JSONL)
@@ -567,6 +567,10 @@ func planToStdout(planID string, tasks []string, withSecrets bool) int {
 // refusals and a few packaging errors start with "RecordPlan: ", while an
 // unknown task ("unknown task ...") or a cycle/body error does not; this
 // command only adds its own "plan: " in front of whatever it got.
+//
+// This is the plaintext path planToDirDefault (plan_autoseal.go, task 5b2)
+// takes with -plaintext or when no operator recipients file exists; with
+// one, a sensitive plan is sealed by default instead (planAutoSeal).
 func planToDir(outDir, planID string, tasks []string) int {
 	// An empty -o means the current directory, like the default ".". It must
 	// be spelled "." for RecordPlan: its empty planDir means "no plan
@@ -579,6 +583,16 @@ func planToDir(outDir, planID string, tasks []string) int {
 		eprintErr("plan", err)
 		return 1
 	}
+	return writePlanJSONL(outDir, ops)
+}
+
+// writePlanJSONL is the plaintext tail of `gonf plan -o dir`, once the
+// blobs are in outDir: it writes outDir/plan.jsonl (plan.SecureDir, then
+// plan.WritePrivateFile: 0600), prints the "wrote" line and, for a
+// sensitive plan, the secret-artifact warning (warnSensitivePlan). It is
+// shared by planToDir and planAutoSeal's non-sensitive outcome (task 5b2,
+// plan_autoseal.go), so both write the same bytes the same way.
+func writePlanJSONL(outDir string, ops []plan.Op) int {
 	raw, err := plan.EncodePlan(ops)
 	if err != nil {
 		eprintf("plan: encode: %v\n", err)
@@ -606,7 +620,9 @@ func planToDir(outDir, planID string, tasks []string) int {
 // secret material. When there is secret material, it also runs the 0b2
 // git-worktree check (warnIfPlanUnignoredInGitWorktree, git_worktree_warn.go)
 // on outDir: this is the plaintext -o path (no -seal, which planSealed
-// handles separately and writes only an encrypted plan.age — task 2b2), so
+// handles separately and writes only an encrypted plan.age — task 2b2 —
+// and, since task 5b2, reached with a sensitive plan only through
+// -plaintext or when no operator recipients file exists), so
 // a sensitive plan.jsonl written here is plaintext, and if outDir sits
 // inside a git worktree that does not already ignore plan.jsonl, a later
 // `git add`/`git commit` by the operator could put it into history

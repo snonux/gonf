@@ -281,6 +281,17 @@ func writableRefusal(path string, err error) error {
 // with the store's own "plan: " prefix dropped (recordCommitError), so the
 // message has one package prefix, not a "plan dir: ... plan: ..." chain.
 func commitStagedBlobs(ops []plan.Op, stage, planDir string) error {
+	return commitBlobs(ops, planDir, func(dest *plan.Store, ref string) error {
+		return copyStagedBlob(stage, dest, ref)
+	})
+}
+
+// commitBlobs is commitStagedBlobs with the blob source abstracted away:
+// copyBlob writes one referenced ref into the verified dest. Staged blobs
+// (copyStagedBlob, RecordPlan) and blobs held in memory (copyMemoryBlob,
+// DeferredPlan.CommitBlobs, task 5b2) share every check and the
+// once-per-ref walk over ops, so the two commit paths cannot drift apart.
+func commitBlobs(ops []plan.Op, planDir string, copyBlob func(dest *plan.Store, ref string) error) error {
 	// OpenSecureStore runs SecureDir's no-follow walk and keeps the descriptor
 	// of the directory it verified: every blob is written relative to it, so a
 	// planDir swapped for a symlink after this check cannot redirect them.
@@ -304,7 +315,7 @@ func commitStagedBlobs(ops []plan.Op, stage, planDir string) error {
 			continue
 		}
 		copied[op.Blob] = true
-		if err := copyStagedBlob(stage, dest, op.Blob); err != nil {
+		if err := copyBlob(dest, op.Blob); err != nil {
 			return recordCommitError(err)
 		}
 	}

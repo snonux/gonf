@@ -2,10 +2,12 @@
 
 Status: **phases 0-2 implemented** (tasks `0b2`, `1b2`, `2b2`, `3b2`, `4b2`):
 `gonf plan -seal` (whole-plan and per-destination `-for`) and `gonf apply
--identity` both exist. Phases 3+ (`5b2` optional default flip / provider
-identity, `6b2` optional sealed sticky-dir blobs, `7b2` signing design) are
-still design-only follow-ups; the "Phased implementation" table at the end
-of this document tracks exact status per task.
+-identity` both exist. Phase 3 (`5b2`) is implemented as its default-seal
+half only: `gonf plan -o dir` seals a sensitive plan by default when an
+operator recipients file exists (see "Default seal for sensitive plans"
+below); the operator identity through the secret provider was declined.
+The "Phased implementation" table at the end of this document tracks exact
+status per task (`6b2` and `7b2` included).
 
 **Merge order.** This design builds on task 062 (secret-aware plans, plan
 schema v22), which is not merged into main yet (branch
@@ -91,7 +93,7 @@ every artifact shares one key: one leak opens all of them, and rotation
 re-keys everything. A destination could only decrypt with that key on disk,
 a store credential in disguise. Its one advantage (no key files) is also
 available for option C by resolving the operator's age identity through the
-provider (optional, phase 3).
+provider (optional, phase 3; declined by the user on 2026-09-24, task `5b2`).
 
 **C (age).** age is a small, specified, audited format by a Go cryptography
 maintainer: hybrid ML-KEM-768 + X25519 recipients (`age-keygen -pq`, age
@@ -274,6 +276,11 @@ as **confidentiality only, never provenance**:
 gonf plan -o out -seal frontends_nsd
 gonf apply -identity ~/.config/gonf/identity out/plan.age
 
+# phase 3 (task 5b2): with ~/.config/gonf/recipients present, a plan carrying
+# secret material is sealed by default; -plaintext opts out
+gonf plan -o out frontends_nsd                # out/plan.age if sensitive, else out/plan.jsonl
+gonf plan -o out -plaintext frontends_nsd     # out/plan.jsonl, the pre-5b2 behaviour
+
 # seal per destination (phase 2): one artifact per host, each holding only that host's plan
 gonf plan -o out -seal -for frontends frontends_nsd      # out/plan-blowfish.age, out/plan-fishfinger.age
 scp out/plan-blowfish.age rex@blowfish:
@@ -293,11 +300,60 @@ gonf plan-verify -trusted-signers signers out/plan.age | age -d -i key.txt | gon
 | `gonf plan -o dir -seal [-recipient r]…` | records into memory, encodes the push frame, seals to the union of `-recipient` and the operator recipients file; writes `dir/plan.age`; prints `wrote dir/plan.age (N ops, M recipients)`, then one `  recipient age1pq1…<last 8> sha256:<16 hex>` line per recipient (the full public key instead under the top-level `-verbose`). Warns when `dir` still holds a `plan.jsonl` or `blobs/` from an earlier plaintext run (never deletes it: the operator's file). |
 | `gonf plan -seal -stdout …` | the same sealed bytes on stdout. |
 | `gonf plan -o dir -seal -for host\|cluster\|fleet …` (task 4b2) | **records once per host** (`api.RecordPlanForHost`, `internal/cli/plan_seal_for.go`), with the same push-alias host selection `PushHost` would use for that host (`inventory.SelectionForHosts([]string{host})`), so a `ForHosts` body for a host **outside that substring-based selection** is not in the artifact; every host's plan is recorded, sealed and staged (a hidden, sealed `0600` staging file per host, only one host's frame in memory at a time, task `qg2`) before any `plan-<host>.age` is published, so a failure partway through leaves nothing written. This is a superset, not an exact single-host match (same caveat as a plain `gonf push`, see "Runbook" below): a host whose name or SSHHost is a substring of the target's (or vice versa) IS in the selection, and its `ForHosts` body — and any secret it reads — can physically land in the target's artifact. Seals each host's plan to that host's `api.WithPlanRecipient` plus the union of `-recipient`/recipients-file; writes `dir/plan-<host>.age` per host (the host name sanitized to `[A-Za-z0-9._-]`). Refuses before writing anything when any resolved host lacks a recipient (naming it), when the `-recipient`/recipients-file union is empty (same zero-recipient refusal `-seal` alone has, task `mg2`: sealing to the destination host's recipient only would produce an artifact the operator who just ran the command cannot open), or when two resolved hosts would sanitize to the same filename. `-for` requires `-seal` (a static usage error otherwise) and, with `-stdout`, is refused unless it resolves to exactly one host. A plain `gonf plan` without `-for` records every `ForHosts` member (no selection), which is why a multi-host sealed artifact is never produced. |
-| `gonf plan -o dir` (no `-seal`) | unchanged (062 behaviour, plaintext + warning); the warning gains a hint `use -seal`. Whether `-seal` becomes the default for sensitive plans when a recipients file exists is a separate, user-approved decision (phase 3). |
+| `gonf plan -o dir` (no `-seal`) | **Changed by task `5b2` (phase 3; approved by the user 2026-09-24, task 5b2):** a plan carrying secret material is sealed by default to `dir/plan.age` when an operator recipients file exists (the ambient default, or `-recipients-file`); stderr then says `plan: sealed by default: ...` naming the secret-bearing ops and the file. A recipients file that exists but is unusable refuses such a plan (never a plaintext fallback). Otherwise — no recipients file, a non-sensitive plan, or `-plaintext` — unchanged (062 behaviour, plaintext + warning for a sensitive plan; the warning gains a hint `use -seal`). See "Default seal for sensitive plans" below. |
+| `gonf plan -o dir -plaintext` (task `5b2`) | the pre-5b2 plaintext `plan.jsonl` (+ `blobs/`) even for a sensitive plan with a recipients file present. With `-seal` a usage error (exit 2); with `-stdout` or `-redacted` too, since neither ever seals by default. |
 | `gonf apply [-identity f]… file` | sniffs the first line: `age-encryption.org/v1` means sealed, anything else is the existing JSONL path. The whole decrypted frame is decoded before anything is applied; the plan is then applied exactly like a plaintext plan file (`api.ApplyPlan`). |
 | `gonf apply [-identity f] -` | the same sniff on stdin (a sealed stream, a GONF-PUSH/1 frame, or bare JSONL). |
 | `gonf apply [-identity f]… [-trusted-signers f]… [-require-signed] [-max-signed-age d] <file\|->` (task 8g2) | a `GONF-SIGNED-PLAN/` first line is sniffed before the age header: the envelope is verified against the trusted-signers file and its `signed-at` checked against the window (default 24h back, 5 minutes ahead) before anything is decrypted; the verified `plan.age` then takes the row above unchanged. `-require-signed` refuses unsigned input. See [plan-signing.md](plan-signing.md) "As landed (task `8g2`)". |
 | `push`, `cluster`, `fleet`, `-preview` | unchanged: plans stay in memory and on SSH. |
+
+### Default seal for sensitive plans (phase 3, task `5b2`)
+
+**An approved behaviour correction (approved by the user 2026-09-24, task
+5b2).** Before it, `gonf plan -o dir` always wrote a plaintext
+`plan.jsonl`, even when the operator had already set up a recipients file
+and so could have opened a sealed one; only a stderr warning said the file
+was an executable secret artifact. Now:
+
+| Plan | Recipients file | Flag | Result |
+|------|-----------------|------|--------|
+| not sensitive | any (absent, valid, unusable) | none or `-plaintext` | `dir/plan.jsonl` (+ `blobs/`), byte-identical to before; an unusable file only adds a warning that the next sensitive plan would be refused (none with `-plaintext`) |
+| sensitive | absent | none or `-plaintext` | `dir/plan.jsonl`, the plaintext secret-artifact warning, as before |
+| sensitive | valid | none | **`dir/plan.age`**, sealed to the union of `-recipient` flags and the file, exactly as `-seal` writes it, then `plan: sealed by default: the plan carries secret material in <ops> and the recipients file <path> exists, so <dir>/plan.age was written instead of a plaintext plan.jsonl; decrypt it with gonf apply -identity <file>, or pass -plaintext to write plaintext instead` on stderr |
+| sensitive | valid or unusable | `-plaintext` | `dir/plan.jsonl` + warning, as before |
+| sensitive | unusable (unsafe owner/mode, a symlink, a malformed line, no recipient in it, a missing `-recipients-file`) | none | **refused**, exit 1, nothing written: `plan: sealing by default refused (the plan carries secret material in <ops>): <reason>; not written in plaintext by default — ...` |
+| any | any | `-seal` | unchanged (`2b2`): `dir/plan.age` or the zero-recipient / recipients-file refusal |
+| any | any | `-seal -plaintext` | usage error, exit 2 |
+
+Details:
+
+- **Sensitivity** is the signal every other plaintext guard already uses:
+  an op marked `sensitive` (`api.SensitiveOpNames`, the ops `-stdout`
+  refuses and the plaintext warning names). It is only known once every
+  task body ran, so a plain `-o` run with a recipients file present records
+  into memory (`api.RecordPlanDeferred`, after the usual up-front
+  output-directory check) and decides afterwards: sealed, with no plaintext
+  blob ever on disk (as `-seal`), or plaintext, committing the in-memory
+  blobs with RecordPlan's own commit rules (`DeferredPlan.CommitBlobs`). A
+  run with no recipients file takes the unchanged `RecordPlan` path.
+- **"A recipients file exists"** means `-recipients-file` was given (named
+  deliberately, so a missing one refuses a sensitive plan like `-seal`
+  refuses it), or the ambient default path is present (anything but "does
+  not exist" counts, so an unreadable file is refused rather than taken as
+  absent). `-no-default-recipients` without `-recipients-file` means no
+  file, so plaintext. `-recipient` flags are unioned in when sealing, but
+  alone do not trigger it.
+- **Never a silent plaintext fallback**, following the 1b2 recipient policy
+  (the revised 5b2 scope): the operator created a recipients file, so a
+  plaintext secret artifact is exactly what they asked not to get.
+- **Interplay.** Only the `-o` output seals by default. `-stdout` keeps its
+  refusal of a sensitive plan (switching a pipe from JSONL to binary age
+  behind its consumer's back would break it; `-seal -stdout` stays the
+  explicit pipe form). `-for` and `-sign` still need an explicit `-seal`
+  (exit 2 otherwise): `-for` changes how the plan is recorded, before
+  sensitivity is known, and `-sign` on a run that turns out plaintext would
+  be silently ignored. `4b2`, `mg2`, `ng2` and `7g2` behaviour is
+  therefore unchanged.
 
 **Privilege: single process, as plain file apply.** `gonf apply <file>`
 today calls `api.ApplyPlan` → `plan.Apply` directly (`api/plan.go`,
@@ -923,7 +979,7 @@ bumps gonf, is expected and noted, not a failure).
 | 1 | `2b2` | `gonf plan -o dir -seal [-recipient]…` and `-seal -stdout`; writes only `plan.age` from a `MemoryStore` push frame. |
 | 1 | `3b2` | `gonf apply [-identity]… <plan.age\|->`: magic sniff, root requires `-identity`, read to EOF before apply, in-memory decode without blobs, `sealed-run-*` run dir with dead-owner sweep, single-process apply via `api.ApplyPlan`, "decrypted" wording, `gonf -sealed-version`. |
 | 2 | `4b2` (done) | Destination recipients: `api.WithPlanRecipient` on `Host`; `gonf plan -seal -for host\|cluster\|fleet` records once per host (`api.RecordPlanForHost`) and writes `plan-<host>.age` per host, sealed to that host's recipient plus the operator's; refuses up front when a target host lacks a recipient, when the operator's own base recipients (`-recipient`/recipients-file) are empty (task `mg2`), or when two hosts would sanitize to the same filename; `-for` with `-stdout` only when it resolves to exactly one host. See "Runbook: host keys and shipped plan.age" above. |
-| 3 | `5b2` | Optional, needs a user decision: `-seal` default for sensitive plans when an operator recipients file exists, and/or the operator identity through the secret provider. |
+| 3 | `5b2` (done, default seal only) | `gonf plan -o dir` seals a sensitive plan by default when an operator recipients file exists, `-plaintext` opts out, `-plaintext -seal` is a usage error, and an existing but unusable recipients file refuses a sensitive plan (approved by the user 2026-09-24, task 5b2; see "Default seal for sensitive plans"). The operator identity through the secret provider (`-identity-ref`) was declined by the user on 2026-09-24 and is not implemented. |
 | 4 | `6b2` | Optional: seal a multi-chunk push's sticky-dir blobs to an ephemeral per-push key sent only on each chunk's stdin, lifting 062's refusal of sensitive blobs in elevated chunks. **Scoped down to design only** (see "Phase 4 design: sealed multi-chunk sticky-dir blobs" above) rather than a one-session implementation of security-sensitive privileged-apply plumbing; split into its own sub-phases `yf2` (ephemeral seal primitive, done: `seal.GenerateEphemeral`, `seal.EncodeEphemeral`, `seal.ParseEphemeral` in `plan/seal/ephemeral.go`) → `zf2` (wire extension + delivery, done: GONF-PUSH/2 `plan.EncodePushWithKey`/`DecodePushWithKey`, sealed refs at `sealed/<ref>.age`, `RequireRemoteSealedSticky`) → `0g2` (done: destination decrypt into `plan.NewSealedApplyRunDir()`, `refuseSensitiveStickyBlobs` removed, see "As landed (task `0g2`)" above; floor `sealedStickyMinRelease` = `0.17.0`, task `yg2`). |
 | - | `7b2` | Design (not implement) signed plan artifacts; until it is implemented, unattended sealed apply stays blocked. |
 

@@ -185,6 +185,19 @@ func (s *Store) WriteGlob(name, pattern string) (string, error) {
 	return s.writeEntries(name, "glob", entries)
 }
 
+// WriteEntries writes an already-packaged tree manifest (a BlobReader's
+// TreeBlob, e.g. a MemoryStore's) as blobs/<name>/ and returns the ref. It
+// is how a plan recorded into memory is committed to a plan directory
+// afterwards (api.DeferredPlan.CommitBlobs, task 5b2): the entries are the
+// same neutral manifest WriteTree/WriteGlob would have scanned from the
+// source, so the tree written here is identical to a direct write.
+func (s *Store) WriteEntries(name string, entries []BlobEntry) (string, error) {
+	if err := s.usable(); err != nil {
+		return "", err
+	}
+	return s.writeEntries(name, "tree", entries)
+}
+
 // writeEntries replaces the tree blob blobs/<name>/ with entries (what names
 // the blob kind in errors) and returns its ref. Like WriteFile it works
 // relative to the verified blobs/ descriptor from start to end: the old tree
