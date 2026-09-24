@@ -72,7 +72,18 @@ func ParseRecipients(lines []string) ([]Recipient, error) {
 // nothing wrong with it (task de2). Calling ParseRecipientsFrom once per
 // source, each with its own label, reports the entry's true origin
 // regardless of how the caller went on to merge the results.
+//
+// A nil label falls back to ParseRecipients' generic "recipient line %d"
+// (task jg2). Calling a nil label used to panic, and only on a refused or
+// malformed entry, never on an all-valid or comment-only input: an
+// embedder passing nil would ship and then crash the first time a
+// recipients file happened to hold, say, a classic age1 line. A panic on
+// input is forbidden by the error-handling contract (docs/plan.md), so the
+// nil case is defined rather than documented as a precondition.
 func ParseRecipientsFrom(lines []string, label func(i int) string) ([]Recipient, error) {
+	if label == nil {
+		label = recipientLineLabel
+	}
 	return parseRecipients(lines, label)
 }
 

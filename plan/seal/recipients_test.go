@@ -179,3 +179,15 @@ func requireRecipientRefusal(t *testing.T, err error, offendingLine, lineDesc st
 		t.Fatalf("error %q echoes the offending line's content", msg)
 	}
 }
+
+// TestParseRecipientsFromNilLabelDefaults pins task jg2: a nil label used
+// to panic with a nil-pointer dereference, but only once an entry was
+// refused — an all-valid or comment-only input returned cleanly — so an
+// embedder passing nil shipped fine and crashed on the first recipients
+// file that happened to hold a classic age1 line. A nil label now falls
+// back to ParseRecipients' generic "recipient line %d" wording.
+func TestParseRecipientsFromNilLabelDefaults(t *testing.T) {
+	classic := mustClassicRecipientLine(t)
+	_, err := ParseRecipientsFrom([]string{"# comment", classic}, nil)
+	requireRecipientRefusal(t, err, classic, "recipient line 2")
+}
