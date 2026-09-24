@@ -295,6 +295,44 @@ func TestCLIPlanSealForUnknownTarget(t *testing.T) {
 	}
 }
 
+// TestCLIPlanSealForPrintsDeclarationLocation is task og2's own regression
+// probe: a per-host task body failure (here api.MustSecret on a
+// deliberately missing secret, inside sealPerHostPlans' RecordPlanForHost
+// call) must print the recipe's declared-at location on stderr, exactly
+// like plain -seal already does (planToSealedDir's eprintErr) -- before the
+// fix, planSealedFor used eprintf and silently dropped that second line.
+func TestCLIPlanSealForPrintsDeclarationLocation(t *testing.T) {
+	isolateXDGConfig(t)
+	api.ResetForTest()
+	api.ResetInventory()
+	t.Cleanup(func() {
+		api.ResetForTest()
+		api.ResetInventory()
+	})
+	work := t.TempDir()
+	t.Chdir(work)
+	recipient, _ := genSealKeyPair(t)
+	api.Host("hostA", api.WithPlanRecipient(recipient))
+	api.Task("cli_seal_for_missing_secret", "", func() {
+		api.MustSecret("nope/missing")
+	})
+
+	dir := filepath.Join(t.TempDir(), "out")
+	code, stderr := runGonf(t, "plan", "-o", dir, "-seal", "-for", "hostA", "cli_seal_for_missing_secret")
+	if code == 0 {
+		t.Fatalf("exit 0, want a refusal; stderr %q", stderr)
+	}
+	if !strings.Contains(stderr, `"nope/missing"`) {
+		t.Fatalf("stderr %q, want it to name the missing secret", stderr)
+	}
+	if !strings.Contains(stderr, "declared at ") || !strings.Contains(stderr, "plan_seal_for_test.go:") {
+		t.Fatalf("stderr %q, want the recipe's declared-at location (the gap task og2 fixes)", stderr)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("output directory %s exists (err=%v); nothing should have been written on a record failure", dir, err)
+	}
+}
+
 // TestCLIPlanSealForFilenameCollisionRefused: two hosts whose names
 // sanitize to the same dir/plan-<name>.age fragment are refused before
 // anything is written, rather than one silently overwriting the other's

@@ -67,7 +67,14 @@ func planSealedFor(outDir, planID string, tasks []string, toStdout bool, forTarg
 	}
 	results, err := sealPerHostPlans(hosts, planID, tasks, baseRecipients)
 	if err != nil {
-		eprintf("plan: %v\n", err)
+		// eprintErr (not eprintf), matching planToSealedDir/planToSealedStdout
+		// (plan_seal.go): sealPerHostPlans' error wraps api.RecordPlanForHost,
+		// which can fail with a declaration error from inside a per-host
+		// ForHosts task body (e.g. a MustSecret lookup) -- exactly the new
+		// failure mode -for introduces (see sealPerHostPlans' own doc
+		// comment). eprintErr appends the recipe's declared-at location for
+		// that case; a plain eprintf silently dropped it (task og2).
+		eprintErr("plan", err)
 		return 1
 	}
 	if toStdout {
