@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/snonux/gonf/api"
+	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/plan/seal"
 )
@@ -115,10 +118,11 @@ func planToSealedDir(outDir, planID string, tasks []string, recipients []seal.Re
 	// Wording note (docs/plan-encryption.md "Provenance"): "wrote", never
 	// "verified" or "trusted" — a plan.age that decrypts proves only that
 	// whoever sealed it knew a recipient's PUBLIC key, not who they were.
-	// The resolved keys are printed, not just a count (task ce2): they are
-	// public, safe to echo, and printing them is what actually lets an
-	// operator reviewing output notice an unexpected extra recipient.
-	fmt.Printf("wrote %s (%d ops, %d recipients: %s)\n",
+	// The resolved recipients are printed, not just a count (task ce2): they
+	// are public, safe to echo, and printing them is what actually lets an
+	// operator reviewing output notice an unexpected extra recipient. One
+	// per line, fingerprinted unless -verbose (formatRecipients, task 4g2).
+	fmt.Printf("wrote %s (%d ops, %d recipients)\n%s",
 		filepath.Join(outDir, "plan.age"), len(ops), len(recipients), formatRecipients(recipients))
 	warnPreexistingPlaintextPlan(outDir)
 	return 0
@@ -148,22 +152,54 @@ func planToSealedStdout(planID string, tasks []string, recipients []seal.Recipie
 		eprintf("plan: write stdout: %v\n", err)
 		return 1
 	}
-	eprintf("wrote stdout (%d ops, %d recipients, sealed: %s)\n", len(ops), len(recipients), formatRecipients(recipients))
+	eprintf("wrote stdout (%d ops, %d recipients, sealed)\n%s", len(ops), len(recipients), formatRecipients(recipients))
 	return 0
 }
 
-// formatRecipients renders recipients as their age1pq… public-key
-// strings, comma separated, for the "wrote ..." messages above (task ce2):
-// printing the actual resolved list, not only a count, is what gives an
-// operator a real chance of noticing an unexpected extra recipient — a
+// formatRecipients renders recipients for the "wrote ..." messages (task
+// ce2): printing the actual resolved list, not only a count, is what gives
+// an operator a real chance of noticing an unexpected extra recipient — a
 // bare count is not something anyone realistically checks against an
 // expected value.
+//
+// Each recipient gets a line of its own, "  recipient <display>\n", right
+// under the "wrote ..." line (task 4g2). The ce2 version joined the full
+// keys onto that one line, but an age1pq key is ~1,800 characters, so two
+// recipients made a single ~3.7 KB line: the opposite of reviewable. The
+// display is therefore recipientFingerprint's short form, and the full
+// public key only under the top-level -verbose flag (debug log level), for
+// an operator who wants to compare it byte for byte. Both are public-key
+// material only, safe to print.
 func formatRecipients(recipients []seal.Recipient) string {
-	keys := make([]string, len(recipients))
-	for i, r := range recipients {
-		keys[i] = r.String()
+	full := logger.GetLevel() >= logger.LevelDebug
+	var b strings.Builder
+	for _, r := range recipients {
+		key := r.String()
+		if !full {
+			key = recipientFingerprint(key)
+		}
+		b.WriteString("  recipient ")
+		b.WriteString(key)
+		b.WriteString("\n")
 	}
-	return strings.Join(keys, ", ")
+	return b.String()
+}
+
+// recipientFingerprint shortens an age1pq recipient key to a stable,
+// reviewable form: the fixed "age1pq1" prefix, an ellipsis, the key's last
+// 8 characters and the first 16 hex digits (64 bits) of the key's SHA-256.
+// The tail lets an operator match it against a key file at a glance; the
+// hash is what makes two different keys practically never collide, and an
+// operator can reproduce it with `printf %s KEY | sha256sum`. A key too
+// short to shorten (never the case for a validated age1pq key) is kept
+// whole rather than sliced out of range.
+func recipientFingerprint(key string) string {
+	const prefix, tail = "age1pq1", 8
+	if len(key) <= len(prefix)+tail {
+		return key
+	}
+	sum := sha256.Sum256([]byte(key))
+	return prefix + "…" + key[len(key)-tail:] + " sha256:" + hex.EncodeToString(sum[:])[:16]
 }
 
 // sealPushFrame builds the GONF-PUSH/1 frame for ops/mem (plan.EncodePush,
@@ -259,7 +295,12 @@ func loadRecipientsFileLines(recipientsFilePath string, noDefaultRecipients bool
 		if errors.Is(err, os.ErrNotExist) && !explicit {
 			return path, nil, nil
 		}
-		return "", nil, fmt.Errorf("recipients file %s: %w", path, err)
+		// Unwrapped: LoadRecipientsFile's error already reads "plan/seal:
+		// recipients file <path>: <reason>", so wrapping it again printed
+		// the path twice (task 4g2, the same doubled-wrap class de2 fixed
+		// for loadSealedIdentities); planSealed's own "plan: " prefix is
+		// the only one it needs.
+		return "", nil, err
 	}
 	return path, lines, nil
 }

@@ -264,7 +264,7 @@ func writeSealedForDir(outDir string, hosts []string, files map[string]string, r
 			eprintf("plan: write %s: %v\n", filepath.Join(outDir, name), err)
 			return 1
 		}
-		fmt.Printf("wrote %s (%d ops, %d recipients: %s)\n",
+		fmt.Printf("wrote %s (%d ops, %d recipients)\n%s",
 			filepath.Join(outDir, name), r.ops, len(r.recipients), formatRecipients(r.recipients))
 	}
 	warnPreexistingPlaintextPlan(outDir)
@@ -278,7 +278,7 @@ func writeSealedForStdout(host string, r sealedHostPlan) int {
 		eprintf("plan: write stdout: %v\n", err)
 		return 1
 	}
-	eprintf("wrote stdout (%d ops, %d recipients, sealed for host %s: %s)\n",
+	eprintf("wrote stdout (%d ops, %d recipients, sealed for host %s)\n%s",
 		r.ops, len(r.recipients), host, formatRecipients(r.recipients))
 	return 0
 }

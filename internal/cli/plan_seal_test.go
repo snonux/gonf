@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -484,25 +486,107 @@ func TestCLIPlanSealNoDefaultRecipientsExcludesDefaultFile(t *testing.T) {
 }
 
 // TestCLIPlanSealPrintsResolvedRecipientKeys: the "wrote ..." output names
-// the actual resolved recipient public keys, not only a count (task ce2),
-// so an operator reviewing output has a real chance of noticing an
-// unexpected extra recipient.
+// each resolved recipient, not only a count (task ce2), so an operator
+// reviewing output has a real chance of noticing an unexpected extra
+// recipient. Task 4g2 made that readable: a full age1pq key is ~1,800
+// characters, so printing every key inline on one line (the ce2 version)
+// produced a multi-KB line nobody reads. Each recipient now gets its own
+// line with a short, stable fingerprint (recipientFingerprint), and no
+// full key appears by default.
 func TestCLIPlanSealPrintsResolvedRecipientKeys(t *testing.T) {
 	isolateXDGConfig(t)
 	registerSealTask(t)
 	r1, _ := genSealKeyPair(t)
 	r2, _ := genSealKeyPair(t)
+	out := runPlanSealTwoRecipients(t, r1, r2)
+	for _, r := range []string{r1, r2} {
+		if strings.Contains(out, r) {
+			t.Fatalf("stdout echoes a full %d-character key without -verbose: %.200q", len(r), out)
+		}
+		if !strings.Contains(out, "\n  recipient "+recipientFingerprint(r)+"\n") {
+			t.Fatalf("stdout %q, want a line of its own naming %s", out, recipientFingerprint(r))
+		}
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if len(line) > 200 {
+			t.Fatalf("stdout line of %d characters, want every line short: %.200q", len(line), line)
+		}
+	}
+}
+
+// TestCLIPlanSealVerbosePrintsFullRecipientKeys: -verbose keeps the full
+// keys available (task 4g2), still one recipient per line.
+func TestCLIPlanSealVerbosePrintsFullRecipientKeys(t *testing.T) {
+	isolateXDGConfig(t)
+	registerSealTask(t)
+	r1, _ := genSealKeyPair(t)
+	r2, _ := genSealKeyPair(t)
+	out := runPlanSealTwoRecipients(t, r1, r2, "-verbose")
+	for _, r := range []string{r1, r2} {
+		if !strings.Contains(out, "\n  recipient "+r+"\n") {
+			t.Fatalf("stdout %.300q, want a line of its own naming the full key under -verbose", out)
+		}
+	}
+}
+
+// TestRecipientFingerprintShape pins recipientFingerprint's format: the
+// fixed "age1pq1" prefix, an ellipsis, the key's last 8 characters and the
+// first 16 hex digits of the key's SHA-256 — reproducible by an operator
+// with `printf %s KEY | sha256sum`.
+func TestRecipientFingerprintShape(t *testing.T) {
+	key := "age1pq1" + strings.Repeat("q", 40) + "tail5678"
+	sum := sha256.Sum256([]byte(key))
+	want := "age1pq1…tail5678 sha256:" + hex.EncodeToString(sum[:])[:16]
+	if got := recipientFingerprint(key); got != want {
+		t.Fatalf("recipientFingerprint = %q, want %q", got, want)
+	}
+}
+
+// runPlanSealTwoRecipients runs gonf [globalFlags...] plan -o <tmp> -seal
+// with r1 and r2 as -recipient flags, fails the test on a non-zero exit
+// and returns stdout.
+func runPlanSealTwoRecipients(t *testing.T, r1, r2 string, globalFlags ...string) string {
+	t.Helper()
 	dir := filepath.Join(t.TempDir(), "out")
+	args := make([]string, 0, len(globalFlags)+8)
+	args = append(args, globalFlags...)
+	args = append(args, "plan", "-o", dir, "-seal", "-recipient", r1, "-recipient", r2, "cli_seal_task")
 	var code int
 	var stderr string
-	out := captureStdout(t, func() {
-		code, stderr = runGonf(t, "plan", "-o", dir, "-seal", "-recipient", r1, "-recipient", r2, "cli_seal_task")
-	})
+	out := captureStdout(t, func() { code, stderr = runGonf(t, args...) })
 	if code != 0 {
 		t.Fatalf("exit %d, stdout %q, stderr %q", code, out, stderr)
 	}
-	if !strings.Contains(out, r1) || !strings.Contains(out, r2) {
-		t.Fatalf("stdout %q, want both resolved recipient public keys printed, not only a count", out)
+	return out
+}
+
+// TestCLIPlanSealRecipientsFileRefusalNamesPathOnce pins task 4g2 (a):
+// loadRecipientsFileLines used to wrap plan/seal.LoadRecipientsFile's
+// error, which already reads "plan/seal: recipients file <path>: ...", in
+// a second "recipients file <path>: ", printing the path twice on every
+// refusal: the same doubled-wrap class task de2 fixed for the identity
+// path.
+func TestCLIPlanSealRecipientsFileRefusalNamesPathOnce(t *testing.T) {
+	isolateXDGConfig(t)
+	registerSealTask(t)
+	recipient, _ := genSealKeyPair(t)
+	recipientsFile := filepath.Join(t.TempDir(), "recipients")
+	if err := os.WriteFile(recipientsFile, []byte(recipient+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(recipientsFile, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "out")
+	code, stderr := runGonf(t, "plan", "-o", dir, "-seal", "-recipients-file", recipientsFile, "cli_seal_task")
+	if code == 0 {
+		t.Fatalf("exit 0, want a refusal for a world-writable recipients file; stderr %q", stderr)
+	}
+	if n := strings.Count(stderr, recipientsFile); n != 1 {
+		t.Fatalf("stderr %q names the recipients file %d times, want once", stderr, n)
+	}
+	if want := "plan: plan/seal: recipients file " + recipientsFile + ": "; !strings.HasPrefix(stderr, want) {
+		t.Fatalf("stderr %q, want it to start with the single prefix %q", stderr, want)
 	}
 }
 
@@ -526,8 +610,8 @@ func TestCLIPlanSealRecipientsFileFlagReadsExplicitPath(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d, stdout %q, stderr %q", code, out, stderr)
 	}
-	if !strings.Contains(out, "1 recipients") || !strings.Contains(out, explicit) {
-		t.Fatalf("stdout %q, want 1 recipients naming %s", out, explicit)
+	if !strings.Contains(out, "1 recipients") || !strings.Contains(out, recipientFingerprint(explicit)) {
+		t.Fatalf("stdout %q, want 1 recipients naming %s", out, recipientFingerprint(explicit))
 	}
 }
 
@@ -579,8 +663,8 @@ func TestCLIPlanSealRecipientsFileCRLFAccepted(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d, stdout %q, stderr %q", code, out, stderr)
 	}
-	if !strings.Contains(out, "1 recipients") || !strings.Contains(out, recipient) {
-		t.Fatalf("stdout %q, want 1 recipients naming %s", out, recipient)
+	if !strings.Contains(out, "1 recipients") || !strings.Contains(out, recipientFingerprint(recipient)) {
+		t.Fatalf("stdout %q, want 1 recipients naming %s", out, recipientFingerprint(recipient))
 	}
 }
 
