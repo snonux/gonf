@@ -13,6 +13,7 @@ package inventory
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 	"sync"
 
@@ -28,7 +29,10 @@ const DefaultClusterParallelism = 5
 // the value LookupHost/HostInfos return and that gets copied into the hosts
 // map has no transient validation-error channel and no way to reach one —
 // registration-time misuse is threaded through HostOption's own return value
-// instead (see AddHost), never stashed on a Host field.
+// instead (see AddHost), never stashed on a Host field. The one transient
+// field, defaults (which WithValue/WithData keys a HostDefaults bundle set,
+// so a later option may override them), lives only while AddHost applies
+// options and is cleared before the record is stored.
 type Host struct {
 	Name      string
 	User      string
@@ -37,9 +41,13 @@ type Host struct {
 	Identity  string
 	Privilege privilege.Mode
 	Values    map[string]any // arbitrary per-host recipe values (WithValue / SetValue)
-	GOOS      string
-	GOARCH    string
-	GonfPath  string
+	// Data holds typed per-host recipe values (WithData), keyed by each
+	// value's concrete type, so a recipe reads them by type (api.EachHost)
+	// instead of by a string key.
+	Data     map[reflect.Type]any
+	GOOS     string
+	GOARCH   string
+	GonfPath string
 	// PlanRecipient is this host's age1pq recipient for `gonf plan -seal
 	// -for` (task 4b2, w82 phase 2, docs/design/plan-encryption.md "Keys"): the
 	// destination decrypts a plan sealed to it with the matching identity
@@ -50,6 +58,10 @@ type Host struct {
 	// the host has none, which `-for` refuses to seal for (naming the
 	// host) rather than silently skipping it.
 	PlanRecipient string
+
+	// defaults is option-application scratch state (see hostDefaults), set
+	// only while AddHost applies options and always nil in a stored record.
+	defaults *hostDefaults
 }
 
 // HostOption configures a Host at registration (mirrors api.HostOption). An
@@ -106,6 +118,7 @@ func AddHost(name string, opts ...HostOption) (Host, error) {
 			optErr = err
 		}
 	}
+	rec.defaults = nil // the stored record carries no option scratch state
 	if optErr != nil {
 		return Host{}, optErr
 	}

@@ -113,6 +113,15 @@ type recordingSession struct {
 	// and aliases have no options of their own, so everything inside one
 	// scope is recorded under the same guards and deduplication is exact.
 	aggregateSeen map[string]bool
+
+	// needs is the Needs dedupe scope of the Run(...) list currently being
+	// recorded (see needsScope in api/task_needs.go): which tasks that list
+	// already recorded, so a needed task records once, before its first
+	// dependent. recordTaskBodies installs a fresh scope per list, and a
+	// non-aggregate task body starts with none (enterAggregateScope), for
+	// the same envelope reason as aggregateSeen. It stays empty for plans
+	// without Needs, whose recording it never changes.
+	needs *needsScope
 }
 
 // recSession is the process-wide plan recording session. Single-goroutine
@@ -132,6 +141,7 @@ func (s *recordingSession) reset() {
 	s.recordedBlobRefs = map[string]string{}
 	s.recordedOpaqueOnlyTasks = nil
 	s.aggregateSeen = nil
+	s.needs = nil
 }
 
 // packager returns the draftPackager for a draft recorded right now in this
@@ -554,12 +564,20 @@ func RefuseOpaqueOnlyPush(action string) error {
 
 // recordTaskBodies appends ops for taskNames into the current plan session.
 // Packaging failures from the session's draft recorder are shared through
-// recordingPackErr, so nested Run bodies see the real error too.
+// recordingPackErr, so nested Run bodies see the real error too. The list
+// is its own Needs scope: a name a Needs already recorded earlier in the
+// list is skipped (skipNeeded), every other name records exactly as it did
+// before Needs existed.
 func recordTaskBodies(taskNames []string) error {
+	defer enterNeedsScope()()
 	for _, name := range taskNames {
+		if skipNeeded(name) {
+			continue
+		}
 		if err := recordTaskName(name); err != nil {
 			return err
 		}
+		noteRecorded(name)
 	}
 	return nil
 }
@@ -588,6 +606,12 @@ func recordTaskName(name string) error {
 	}()
 	if isAlias {
 		return recordTaskName(target)
+	}
+	// Needed tasks record first, outside this task's own when_begin and
+	// privilege, while name is on the stack so a need that leads back to it
+	// is a cycle (recordNeeds).
+	if err := recordNeeds(name); err != nil {
+		return err
 	}
 	return recordSingleTaskBody(name)
 }

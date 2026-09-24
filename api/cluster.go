@@ -131,20 +131,14 @@ func WithGonfPath(path string) HostOption {
 // WithValue stores an arbitrary recipe value under key on this host (e.g. a
 // cron window or OnCalendar expression). An empty key or a key already set on
 // the same host is registration-time misuse: Host reports it as a declaration
-// error (internal/declerr) and does not register the host. Read with
-// MustHostValue[T] from task bodies.
+// error (internal/declerr) and does not register the host. The one exception
+// is a key set by a HostDefaults bundle, which a later option replaces. Read
+// with MustHostValue[T] or ForHosts from task bodies.
 func WithValue(key string, value any) HostOption {
 	return func(h *inventory.Host) error {
-		if key == "" {
-			return fmt.Errorf("WithValue: key must not be empty")
+		if err := h.PutValue(key, value); err != nil {
+			return fmt.Errorf("WithValue: %w", err)
 		}
-		if _, exists := h.Values[key]; exists {
-			return fmt.Errorf("WithValue: key %q already set", key)
-		}
-		if h.Values == nil {
-			h.Values = map[string]any{}
-		}
-		h.Values[key] = value
 		return nil
 	}
 }

@@ -78,6 +78,12 @@ type taskCandidate struct {
 	// members is AggregateTasks' explicit member list (nil for a pattern
 	// Aggregate), used by the registration checks and containsOperational.
 	members []string
+	// needs lists the task names given to Needs, as written; needsPrefix is
+	// the RegisterMethods WithPrefix they are resolved relative to first
+	// (resolveNeedName). Both are resolved at record time, since a needed
+	// task may be registered after its dependent.
+	needs       []string
+	needsPrefix string
 }
 
 // TaskOption configures a deferred task candidate.
@@ -208,8 +214,9 @@ func WhenHostnameContains(substr string) TaskOption {
 // aggregates and aliases share one namespace — is registration-time misuse,
 // always a recipe bug: it is reported as a declaration error
 // (internal/declerr), the task is not queued, and RecordPlan, Run, Apply and
-// the CLI refuse to run with the error. Activation (filtering by the opaque
-// When predicates only) happens in Activate / CLI / Run.
+// the CLI refuse to run with the error; so is a bad Needs list (checkNeeds).
+// Activation (filtering by the opaque When predicates only) happens in
+// Activate / CLI / Run.
 func Task(name, description string, fn func(), opts ...TaskOption) {
 	if name == "" {
 		declerr.Reportf("Task: name must not be empty")
@@ -223,6 +230,10 @@ func Task(name, description string, fn func(), opts ...TaskOption) {
 	c := taskCandidate{name: name, description: description, fn: fn}
 	for _, o := range opts {
 		o(&c)
+	}
+	if err := checkNeeds(c); err != nil {
+		declerr.Report(err)
+		return
 	}
 	if c.cluster != "" {
 		clusterName := c.cluster

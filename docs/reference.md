@@ -76,7 +76,8 @@ Both dot-imports are the intended style.
 | `When(func(Facts) bool)` | Opaque predicate, evaluated on the controller only. Cannot travel in a plan. |
 | `Privileged()` | Ops from this task apply as root (see [Privilege](#privilege)). |
 | `Operational()` | Explicit action (cert request, one-shot, diagnostic). Never joins a pattern `Aggregate`. |
-| `WithTaskCluster(name)` | Bind the task to a cluster for `ClusterHosts` / `ForHosts`. |
+| `WithTaskCluster(name)` | Bind the task to a cluster for `ClusterHosts` / `ForHosts` / `EachHost`. |
+| `Needs(tasks...)` | Record these tasks right before this one (see [Needs](#needs)). |
 
 `TaskOptions` is an alias for `[]TaskOption`.
 
@@ -121,10 +122,28 @@ RegisterMethods(Home{}, WithPrefix("home_"), WithGroupWhen(WhenLinux()))
 | `WithPrefix(p)` | Prefix for every task name. |
 | `WithGroupWhen(opts...)` | Options applied to every method, before the struct default. |
 | `WithCluster(name)` | Bind every method to a cluster. |
+| `OnCluster(name)` | `WithCluster(name)` plus a destination guard: hostname contains one of the cluster's host names. |
 
 A companion with the wrong signature is a declaration error and that method
 is not registered. Name methods for the action (`Unattended.Script`, not
 `Unattended.UnattendedScript`).
+
+`OnCluster` replaces the `WhenHostname(ClusterHosts(), func() { ... })`
+wrapper in every body:
+
+```go
+RegisterMethods(Unattended{}, WithPrefix("freebsd_"), OnCluster("freebsd"))
+```
+
+- Same match as the wrapper: case-insensitive substring, any member.
+- Recorded as one task-level `when_begin` (`hostname_contains`, `In` over
+  the members, `Eq` for one host), not one fragment per host. The body runs
+  once; `ForHosts`/`EachHost` fragments nest inside it.
+- Off-cluster, `-list` shows `[destination-guarded: hostname_contains=f0|f1]`
+  and a local run's pattern aggregate skips the task.
+- The cluster must be registered before `RegisterMethods`. An unknown
+  cluster, or a `WithCluster` naming another one, is a declaration error
+  and registers nothing.
 
 ### Aggregates and aliases
 
@@ -146,6 +165,27 @@ is not registered. Name methods for the action (`Unattended.Script`, not
 - Errors carry the chain: `aggregate outer: aggregate inner: ...`.
 - A nested `Run` failure fails the enclosing record even if the body handles
   the returned error. Decide optional work before calling `Run`.
+
+### Needs
+
+```go
+Task("web", "", web, Needs("pf", "base"))
+Run("web")         // pf, base, web
+Run("base", "web") // base, pf, web
+```
+
+| Rule | Behaviour |
+|------|-----------|
+| Resolution | Under `RegisterMethods(..., WithPrefix("fe_"))`, `"pf"` tries `fe_pf`, then `pf`. Elsewhere a full name. Aliases resolve to their target. Resolved at record time. |
+| Order | Needs record before the task, in declaration order, their own needs first. |
+| Guards | A need records with its own guards and privilege, outside the task's `when_begin`. |
+| Dedupe | Once per `Run(...)` list or aggregate tree; a later explicit name a need already recorded is skipped. A body's own `Run` starts a new scope. |
+| Operational | A task that needs `Operational()` work never joins a pattern `Aggregate`. |
+| No `Needs` | Plan unchanged. |
+
+An unknown need fails the record. An empty name, a self need or a cycle
+(`a -> b -> a`, aliases followed) is a declaration error and the task is not
+registered.
 
 ### Facts
 
@@ -678,7 +718,9 @@ Fleet("homelab", edge, other)
 | `WithPrivilege(PrivilegeNone \| PrivilegeSudo \| PrivilegeDoas)` | How elevated chunks are wrapped on this host. Default none. |
 | `WithGOOS`, `WithGOARCH` | Cross-compile target for the remote binary. Default: `uname`. |
 | `WithGonfPath(p)` | Remote install path, default `/usr/local/bin/gonf`. |
-| `WithValue(key, v)` / `h.SetValue(key, v)` | Typed per-host data. |
+| `WithValue(key, v)` / `h.SetValue(key, v)` | Per-host data under a string key. |
+| `WithData(v)` | Per-host data keyed by `v`'s concrete type. Use a struct type of your own. |
+| `HostDefaults(opts...)` | Bundle options into one `HostOption` (see [Host defaults](#host-defaults)). |
 | `WithPlanRecipient("age1pq...")` | Host's recipient for `plan -seal -for`. Validated at registration. |
 
 - `Host`, `Cluster`, `Fleet` register themselves. Duplicates are declaration
@@ -691,7 +733,24 @@ Fleet("homelab", edge, other)
   keeps its own `.Parallel(n)`.
 - `MustHostValue[T](host, key)` reads a value; missing or wrong type is a
   declaration error.
+- `HostData[T](host)` reads a `WithData` value; a missing value or an
+  interface `T` is a declaration error.
 - `ResetInventory()` clears the inventory.
+
+### Host defaults
+
+```go
+freebsd := HostDefaults(WithSSHUser("paul"), WithPrivilege(PrivilegeDoas),
+    WithData(Window{Hour: "3"}))
+Host("f0", freebsd, WithSSHHost("f0.lan"))
+Host("f1", freebsd, WithData(Window{Hour: "4"})) // replaces the default
+```
+
+- Options apply in order, bundles expanded in place: later wins.
+- A `WithValue` key or `WithData` type a bundle set may be replaced by any
+  later option. Set twice outside a bundle, or by a bundle after an explicit
+  option, is still a declaration error: pass bundles first.
+- Bundles nest.
 
 ### Per-host fragments
 
@@ -708,9 +767,13 @@ func (Edge) Cron() {
 
 - `ForHosts[T](key, fn)` iterates the task's cluster in registration order
   and runs `fn` inside `WhenHostname(host, ...)`.
+- `EachHost[T](func(v T))` does the same with each host's `WithData` value
+  of type `T`; `EachHostNamed[T](func(host string, v T))` also passes the
+  name. Everything below applies to both.
 - Every member's value is type-checked before any fragment is recorded.
-- Misuse (no cluster, empty key, nil `fn`, missing or mistyped value) fails
-  the record.
+- Misuse (no cluster, empty key, nil `fn`, missing or mistyped value, an
+  interface `T`) fails the record. A member without a value is an error,
+  not a skip.
 - `fn` runs only for hosts the entry point targets, so a single-host push
   reads only that host's secrets. Read per-host secrets inside `fn`.
 

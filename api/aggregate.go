@@ -155,7 +155,8 @@ func skipLocalMember(aggregate, n string) bool {
 
 // containsOperational reports whether recording name could record an
 // Operational task: name is operational itself, an alias of operational
-// work, or an AggregateTasks listing operational work at any depth. Every
+// work, an AggregateTasks listing operational work at any depth, or a task
+// that Needs operational work (it would record that work first). Every
 // listed member counts, active or not, so the answer does not depend on the
 // controller's facts. A pattern Aggregate needs no descent: it applies this
 // same filter to its own members. visited guards against registration
@@ -175,7 +176,9 @@ func containsOperational(name string, visited map[string]bool) bool {
 	if c.aliasOf != "" {
 		return containsOperational(c.aliasOf, visited)
 	}
-	for _, m := range c.members {
+	// A task's Needs record wherever it records, so needed operational
+	// work counts as contained, like an AggregateTasks member.
+	for _, m := range append(c.resolvedNeeds(), c.members...) {
 		if containsOperational(m, visited) {
 			return true
 		}
@@ -238,6 +241,7 @@ func recordAggregate(name string, names []string, emptyReason string) {
 			return
 		}
 		recSession.aggregateSeen[target] = true
+		noteRecorded(target) // a later Needs in the same list is satisfied
 	}
 }
 
@@ -246,14 +250,15 @@ func recordAggregate(name string, names []string, emptyReason string) {
 // keeps the enclosing scope, so nested aggregates deduplicate together. Any
 // other body gets a fresh (nil) scope: it may carry its own When/Privileged
 // envelope, so an aggregate it runs must not skip a member merely because an
-// outer aggregate recorded that member under different guards.
+// outer aggregate recorded that member under different guards. The Needs
+// scope (recSession.needs) follows the same rule for the same reason.
 func enterAggregateScope(isAggregate bool) (restore func()) {
 	if isAggregate {
 		return func() {}
 	}
-	saved := recSession.aggregateSeen
-	recSession.aggregateSeen = nil
-	return func() { recSession.aggregateSeen = saved }
+	savedSeen, savedNeeds := recSession.aggregateSeen, recSession.needs
+	recSession.aggregateSeen, recSession.needs = nil, nil
+	return func() { recSession.aggregateSeen, recSession.needs = savedSeen, savedNeeds }
 }
 
 // activeTask returns the activated entry for name, activating the registry

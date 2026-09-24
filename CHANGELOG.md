@@ -5,8 +5,9 @@ releases before v0.17.0 the tag message and the git log are the notes.
 
 ## Unreleased
 
-Plan schema 24 (unchanged).
+Plan schema 24 (unchanged). DSL ergonomics, all additive: existing recipes record the same plans.
 
+Ownership ([docs/reference.md](docs/reference.md), "Shared options")
 - `Perm(mode, owner)` sets mode and ownership in one option wherever
   `WithMode`/`WithOwner`/`WithGroup` are accepted: `Perm(0o640, "root:wheel")`.
   `owner` is `"user:group"`, `"user"` or `":group"`; a malformed one is a
@@ -18,6 +19,26 @@ Plan schema 24 (unchanged).
   applies, so older destination binaries apply such plans unchanged.
 - `WithOwner` accepts the same `"user:group"` spec. A plain user name records
   exactly as before; an owner with a colon used to fail at apply time.
+
+Tasks ([docs/reference.md](docs/reference.md), "Tasks")
+- `OnCluster(name)` RegisterOption: `WithCluster` plus a task-level
+  destination guard (hostname contains one of the cluster's hosts, the
+  match `WhenHostname(ClusterHosts(), ...)` uses), so bodies drop that
+  wrapper. Recorded as one `when_begin` per task, not one fragment per host;
+  `-list` marks it destination-guarded off-cluster. An unknown cluster is a
+  declaration error.
+- `Needs(tasks...)` TaskOption: needed tasks record right before the task,
+  once per `Run` list or aggregate tree, each with its own guards. Names
+  resolve relative to the `RegisterMethods` prefix first, then as full
+  names. A cycle is a declaration error; an unknown need fails the record.
+
+Inventory ([docs/reference.md](docs/reference.md), "Inventory")
+- `HostDefaults(opts...)` bundles host options; later options override
+  earlier ones, including a bundle's `WithValue` keys and `WithData` types.
+- Typed host data: `WithData(v)` stores a value by its concrete type;
+  `EachHost[T](func(T))`, `EachHostNamed[T](func(host, T))` and
+  `HostData[T](host)` read it with `ForHosts`' and `MustHostValue`'s
+  semantics (a member without a value is an error).
 
 ## v0.19.0 (2026-09-24)
 

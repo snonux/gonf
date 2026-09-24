@@ -7,6 +7,8 @@ import (
 	"unicode"
 
 	"github.com/snonux/gonf/internal/declerr"
+	"github.com/snonux/gonf/internal/inventory"
+	"github.com/snonux/gonf/plan"
 )
 
 // RegisterOption configures RegisterMethods.
@@ -16,6 +18,10 @@ type registerConfig struct {
 	prefix    string
 	groupWhen TaskOptions
 	cluster   string
+	// guardCluster is OnCluster's cluster: besides setting cluster, every
+	// task of the call gets that cluster's hostname destination guard
+	// (clusterGuard). Empty for WithCluster, which only sets cluster.
+	guardCluster string
 }
 
 // WithPrefix prepends prefix to each CamelCase→snake_case method name.
@@ -28,6 +34,39 @@ func WithPrefix(prefix string) RegisterOption {
 // the cluster again. The cluster must already be registered.
 func WithCluster(name string) RegisterOption {
 	return func(c *registerConfig) { c.cluster = name }
+}
+
+// OnCluster is WithCluster plus a destination guard: every method registered
+// in this call applies only on the cluster's hosts. The guard is the
+// serializable hostname_contains predicate over the cluster's member names
+// (case-insensitive substring, OR over the members: the same test
+// WhenHostname(ClusterHosts(), ...) applies to each of its fragments),
+// recorded as the task's own when_begin and evaluated on each destination:
+//
+//	RegisterMethods(freebsd.Unattended{}, WithPrefix("freebsd_"), OnCluster("freebsd"))
+//
+// so the bodies drop their WhenHostname(ClusterHosts(), func() { ... })
+// wrapper. ForHosts/EachHost inside such a body keep working: their
+// per-host fragments nest inside the task guard.
+//
+// Plan shape (a deliberate choice): one task-level when_begin whose
+// predicate lists every member (In; Eq for a one-host cluster), not the N
+// per-host fragments of the body wrapper. The body runs once instead of
+// once per member, a ForHosts body is not multiplied N times, -list marks
+// the task "[destination-guarded: hostname_contains=h1|h2]" off-cluster,
+// and a local Run's pattern aggregate skips it on a non-member host like
+// any other destination-guarded member. The ops therefore differ from the
+// wrapper's, but every destination converges to the same state.
+//
+// The cluster must be registered before RegisterMethods runs (its members
+// are read then). An unknown cluster, or OnCluster combined with a
+// WithCluster naming another cluster, is a declaration error and registers
+// nothing of v.
+func OnCluster(name string) RegisterOption {
+	return func(c *registerConfig) {
+		c.cluster = name
+		c.guardCluster = name
+	}
 }
 
 // WithGroupWhen applies TaskOptions (typically When*) to every method
@@ -65,12 +104,20 @@ func WithGroupWhen(opts ...TaskOption) RegisterOption {
 // Methods named Desc*, When*, or Opts* are not registered as tasks.
 //
 // Misuse — v not a struct or non-nil pointer to one, a companion with the
-// wrong signature — is reported as a declaration error (internal/declerr,
-// which RecordPlan, Run, Apply and the CLI refuse to run with). A bad receiver
-// or struct-level companion registers nothing of v; a bad per-method
-// companion skips only that method's task.
+// wrong signature, an unknown OnCluster cluster — is reported as a
+// declaration error (internal/declerr, which RecordPlan, Run, Apply and the
+// CLI refuse to run with). A bad receiver, OnCluster or struct-level
+// companion registers nothing of v; a bad per-method companion skips only
+// that method's task.
+//
+// A Needs("x") in an OptsX companion (or WithGroupWhen) is resolved relative
+// to this call's WithPrefix first: see Needs.
 func RegisterMethods(v any, opts ...RegisterOption) {
-	cfg := registerConfigFor(opts)
+	cfg, err := registerConfigFor(opts)
+	if err != nil {
+		declerr.Report(err)
+		return
+	}
 	rv, rt, err := registerReceiver(v)
 	if err != nil {
 		declerr.Report(err)
@@ -79,12 +126,46 @@ func RegisterMethods(v any, opts ...RegisterOption) {
 	registerMethodTasks(rv, rt, cfg)
 }
 
-func registerConfigFor(opts []RegisterOption) registerConfig {
+// registerConfigFor applies opts and resolves OnCluster's guard into
+// groupWhen, so every method of the call carries it. An unknown OnCluster
+// cluster, or one contradicting WithCluster, is returned as an error.
+func registerConfigFor(opts []RegisterOption) (registerConfig, error) {
 	cfg := registerConfig{}
 	for _, o := range opts {
 		o(&cfg)
 	}
-	return cfg
+	if cfg.guardCluster == "" {
+		return cfg, nil
+	}
+	if cfg.cluster != cfg.guardCluster {
+		return cfg, fmt.Errorf("RegisterMethods: OnCluster(%q) and WithCluster(%q) name different clusters",
+			cfg.guardCluster, cfg.cluster)
+	}
+	guard, err := clusterGuard(cfg.guardCluster)
+	if err != nil {
+		return cfg, fmt.Errorf("RegisterMethods: OnCluster: %w", err)
+	}
+	cfg.groupWhen = append(cfg.groupWhen, guard)
+	return cfg, nil
+}
+
+// clusterGuard returns the TaskOption guarding a task with cluster name's
+// hostname_contains predicate: Eq for a one-host cluster (the exact
+// predicate WhenHostname(host) records), In over the members otherwise
+// (plan.EvalPredicates matches In as "contains any entry", case
+// insensitive, like Eq).
+func clusterGuard(name string) (TaskOption, error) {
+	rec, ok := inventory.LookupCluster(name)
+	if !ok {
+		return nil, fmt.Errorf("Cluster %q is not registered", name)
+	}
+	pred := plan.Predicate{Fact: "hostname_contains"}
+	if len(rec.Hosts) == 1 {
+		pred.Eq = rec.Hosts[0]
+	} else {
+		pred.In = append([]string(nil), rec.Hosts...)
+	}
+	return func(c *taskCandidate) { c.planWhen = append(c.planWhen, pred) }, nil
 }
 
 // registerReceiver returns the addressable receiver RegisterMethods reads
@@ -163,14 +244,18 @@ func registerMethodTasks(rv reflect.Value, rt reflect.Type, cfg registerConfig) 
 }
 
 // methodTaskOptions assembles the TaskOptions of method name: the call's
-// WithGroupWhen and WithCluster options, then its OptsX companion (or the
-// struct-level default) and its WhenX guard. A companion with the wrong
-// signature is returned as an error.
+// WithGroupWhen (which carries OnCluster's guard) and WithCluster options,
+// the call's prefix for resolving relative Needs names, then its OptsX
+// companion (or the struct-level default) and its WhenX guard. A companion
+// with the wrong signature is returned as an error.
 func methodTaskOptions(rv reflect.Value, name string, cfg registerConfig, structOpts TaskOptions) (TaskOptions, error) {
 	var taskOpts TaskOptions
 	taskOpts = append(taskOpts, cfg.groupWhen...)
 	if cfg.cluster != "" {
 		taskOpts = append(taskOpts, WithTaskCluster(cfg.cluster))
+	}
+	if cfg.prefix != "" {
+		taskOpts = append(taskOpts, needsPrefix(cfg.prefix))
 	}
 	methodOpts, err := resolveOpts(rv, name, structOpts)
 	if err != nil {

@@ -119,9 +119,28 @@ func currentClusterHosts() ([]string, error) {
 // names its own hostname contains, which is exact. Read host-specific inputs
 // inside fn, not before calling ForHosts.
 func ForHosts[T any](key string, fn func(host string, value T)) {
-	hosts, values, err := forHostsValues[T](key, fn != nil)
+	var argErr error
+	if key == "" {
+		argErr = fmt.Errorf("key must not be empty")
+	}
+	visitClusterHosts("ForHosts", argErr, fn, func(host string) (T, error) {
+		return lookupHostValue[T](host, key)
+	})
+}
+
+// visitClusterHosts is the shared core of ForHosts and EachHost: it resolves
+// every current cluster member's value with lookup, then runs fn inside
+// WhenHostname(host, ...) for each selected member (see ForHosts for the
+// full contract). argErr is the caller's own argument check, reported
+// before the nil-fn check. Any failure records nothing and is reported as a
+// declaration error prefixed with caller.
+func visitClusterHosts[T any](caller string, argErr error, fn func(host string, v T), lookup func(host string) (T, error)) {
+	hosts, values, err := clusterHostValues(argErr, fn != nil, lookup)
 	if err != nil {
-		failForHosts(err)
+		// Captured into the current recording session (the record then
+		// fails with it, see stashBodyError) or, outside recording, kept
+		// for Apply and the CLI.
+		declerr.Report(fmt.Errorf("%s: %w", caller, err))
 		return
 	}
 	for i, host := range hosts {
@@ -132,13 +151,13 @@ func ForHosts[T any](key string, fn func(host string, value T)) {
 	}
 }
 
-// forHostsValues validates ForHosts' arguments and resolves every current
-// cluster member's value under key, in member order. Resolving all values
-// first means a bad entry for a later host can never leave a partially
-// recorded set of fragments behind it.
-func forHostsValues[T any](key string, haveFn bool) ([]string, []T, error) {
-	if key == "" {
-		return nil, nil, fmt.Errorf("key must not be empty")
+// clusterHostValues validates the arguments and resolves every current
+// cluster member's value, in member order. Resolving all values first means
+// a bad entry for a later host can never leave a partially recorded set of
+// fragments behind it.
+func clusterHostValues[T any](argErr error, haveFn bool, lookup func(host string) (T, error)) ([]string, []T, error) {
+	if argErr != nil {
+		return nil, nil, argErr
 	}
 	if !haveFn {
 		return nil, nil, fmt.Errorf("fn must not be nil")
@@ -149,18 +168,11 @@ func forHostsValues[T any](key string, haveFn bool) ([]string, []T, error) {
 	}
 	values := make([]T, len(hosts))
 	for i, host := range hosts {
-		if values[i], err = lookupHostValue[T](host, key); err != nil {
+		if values[i], err = lookup(host); err != nil {
 			return nil, nil, err
 		}
 	}
 	return hosts, values, nil
-}
-
-// failForHosts reports a ForHosts error as a declaration error: captured into
-// the current recording session (the record then fails with it, see
-// stashBodyError) or, outside recording, kept for Apply and the CLI.
-func failForHosts(err error) {
-	declerr.Report(fmt.Errorf("ForHosts: %w", err))
 }
 
 // hostSelection is the record-time set of inventory host names the current
