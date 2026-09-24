@@ -10,10 +10,12 @@
 // (internal/cli, tasks 2b2 and 3b2); this package is the one reviewed
 // place anything that seals or opens a plan artifact goes through.
 //
-// It also owns plan signing (docs/plan-signing.md, task 6g2): Sign,
-// Verify, LoadSigner and LoadTrustedSigners, with their own Signer and
-// TrustedSigner types, so crypto/ed25519 is likewise imported here only.
-// Signing has no CLI surface yet (tasks 7g2, 8g2). All four key files the
+// It also owns plan signing (docs/plan-signing.md, tasks 6g2 and 7g2):
+// Sign/SignAt, Verify, LoadSigner, LoadTrustedSigners and
+// GenerateSigner/WriteSignerFile, with their own Signer and TrustedSigner
+// types, so crypto/ed25519 is likewise imported here only. The CLI signs
+// (`gonf plan -seal -sign`, `gonf plan-signer-keygen`, task 7g2) but does
+// not verify yet (task 8g2). All four key files the
 // package reads (identity, recipients, signer and trusted-signers) share
 // one hardened-open policy (keyfile.go).
 //

@@ -1150,7 +1150,8 @@ import from an external `plan_test` file is fine.
 | Command | Effect |
 |---------|--------|
 | `gonf <task> [task…]` | Record + apply locally |
-| `gonf plan [-o dir\|-stdout [-with-secrets]\|-redacted] [-seal [-recipient r]… [-for host\|cluster\|fleet]] [-id name] <task>…` | Write `dir/plan.jsonl` (+ `blobs/`; `dir` defaults to `.`, is created `0700` when missing, is never chmod'ed when it exists and must be yours, not world-writable and not group-writable except by your private group, see "The output directory" below), or print JSONL to stdout (refused for a plan with `sensitive` ops unless `-with-secrets`), or print a redacted human preview that no gonf applies (`-redacted`); with `-seal` (task 2b2), age-encrypt the GONF-PUSH/1 push frame instead and write only `dir/plan.age` (or, with `-stdout`, the sealed bytes to stdout); with `-seal -for` (task 4b2) also, write one `dir/plan-<host>.age` per destination host instead, each sealed to that host's own recipient — see "Secret material" below and [plan-encryption.md](plan-encryption.md) |
+| `gonf plan [-o dir\|-stdout [-with-secrets]\|-redacted] [-seal [-recipient r]… [-for host\|cluster\|fleet] [-sign signer-file]] [-id name] <task>…` | Write `dir/plan.jsonl` (+ `blobs/`; `dir` defaults to `.`, is created `0700` when missing, is never chmod'ed when it exists and must be yours, not world-writable and not group-writable except by your private group, see "The output directory" below), or print JSONL to stdout (refused for a plan with `sensitive` ops unless `-with-secrets`), or print a redacted human preview that no gonf applies (`-redacted`); with `-seal` (task 2b2), age-encrypt the GONF-PUSH/1 push frame instead and write only `dir/plan.age` (or, with `-stdout`, the sealed bytes to stdout); with `-seal -for` (task 4b2) also, write one `dir/plan-<host>.age` per destination host instead, each sealed to that host's own recipient; with `-seal -sign signer-file` (task 7g2), sign each sealed artifact (every host's, with `-for`) in a `GONF-SIGNED-PLAN/1` envelope — see "Secret material" below, [plan-encryption.md](plan-encryption.md) and [plan-signing.md](plan-signing.md) |
+| `gonf plan-signer-keygen <signer-file>` | Create a new Ed25519 plan signer key as `signer-file` (task 7g2; mode `0600`, never replacing an existing file or following a symlink) and print its `gonf-signer-ed25519 …` trusted-signers line on stdout — see [plan-signing.md](plan-signing.md) |
 | `gonf apply [-n\|-dry-run\|-strict-preview] [-identity file]... <plan.jsonl\|plan.age\|->` | Apply a plan file, or read **GONF-PUSH/1** / bare JSONL / a sealed `plan.age` stream from stdin. Sealed input (`age-encryption.org/v1` sniffed as the first line — task 3b2, see docs/plan-encryption.md) is decrypted with `-identity` (repeatable; default for a non-root invocation `${XDG_CONFIG_HOME:-$HOME/.config}/gonf/identity`; root must pass `-identity` explicitly) and applied with the SAME single-process, file-apply semantics as a plaintext plan — no privilege split, `elevate` ignored exactly as for `plan.jsonl` today. `-apply-dir`/`-strict-preview` cannot combine with sealed stdin input. The plan file must be a regular file and is not followed if it is a symlink (a FIFO or a symlinked `plan.jsonl`/`plan.age` is refused; use `-` for piped input); its directory may be reached through symlinks |
 | `gonf push [-n\|-preview] [-id name] [-- ssh-args…] user@host <task>…` | Record in memory, stream over `ssh` to remote `gonf apply -` |
 | `gonf cluster [-n\|-preview] [-j N] [-id name] [-host-timeout 10m] <cluster> <task>…` | Resolve inventory cluster; record once; parallel push or strict preview to each host |
@@ -1905,6 +1906,20 @@ the encrypted SSH transport, because the destination must write it.
   who just sealed it could not open), or when two resolved hosts' names
   collide after filename sanitization; `-for` requires `-seal` and, with
   `-stdout`, must resolve to exactly one host.
+- `gonf plan -seal -sign signer-file …` (task 7g2,
+  [plan-signing.md](plan-signing.md) "As landed (task `7g2`)") signs each
+  sealed artifact (plain, `-stdout`, or every `-for` host's own) right
+  after sealing: the file holds a `GONF-SIGNED-PLAN/1` envelope (magic,
+  signer key, signature, `signed-at` time, then the untouched `plan.age`
+  bytes). `-sign` requires `-seal` and a path (no default); a signer file
+  that is missing, not yours, readable by group or other, or malformed is
+  refused before anything is recorded or written, and the refusal never
+  echoes the file's content. The report adds `signed <time>` and a
+  `signer gonf-signer-ed25519 <key> sha256:<fingerprint>` line; like
+  sealing, it says "signed", never "verified". Make a signer file with
+  `gonf plan-signer-keygen signer-file`. No `gonf apply` verifies a
+  signature yet (task 8g2), so a signed artifact cannot be applied until
+  then except by stripping its four header lines by hand.
 
 The full lifecycle and its limits are in [secrets.md](secrets.md). Never put
 secret values in task names, descriptions, paths or host values: identities
@@ -1920,7 +1935,8 @@ reason the bullet above states. Unattended sealed apply (a timer, cron
 job, pull agent or CI step picking up `plan.age` on its own) stays blocked
 until an entry point meets docs/plan-signing.md's "The unblocking
 condition" (design task 7b2; task 6g2 added only the plan/seal Sign/Verify
-library, which lifts nothing by itself). Reading the decrypted stream is
+library and task 7g2 only the signing CLI, which lift nothing by
+themselves). Reading the decrypted stream is
 size-capped (task be2, `maxSealedFrameBytes` 512 MiB in
 `internal/cli/cli.go` for the whole frame, `plan.MaxDecompressedPushPlan`
 64 MiB by default in `plan/pushwire.go`, overridable, for the plan

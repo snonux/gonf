@@ -56,8 +56,31 @@ type sealedOutput struct {
 // report says about it.
 type stagedArtifact struct {
 	name, staging string
-	ops           int
-	recipients    []seal.Recipient
+	report        artifactReport
+}
+
+// artifactReport is what a "wrote" report says about one sealed artifact:
+// its op count, the recipients it was sealed to and, with -sign (task
+// 7g2), who signed it and when (nil when unsigned). Every sealed write,
+// to a directory or stdout, words its report from this one value, so the
+// dir, -stdout and -for paths cannot drift apart.
+type artifactReport struct {
+	ops        int
+	recipients []seal.Recipient
+	signature  *artifactSignature
+}
+
+// summary is the report's parenthesised part after "wrote <where> (": the
+// counts, then extra (e.g. ", sealed"; may be ""), then ", signed <time>"
+// for a signed artifact. An unsigned summary is exactly the pre-7g2 one.
+func (r artifactReport) summary(extra string) string {
+	return fmt.Sprintf("%d ops, %d recipients%s%s", r.ops, len(r.recipients), extra, r.signature.signedNote())
+}
+
+// details is the lines under the "wrote" line: one per recipient
+// (formatRecipients), then the signer's for a signed artifact.
+func (r artifactReport) details() string {
+	return formatRecipients(r.recipients) + r.signature.detailLine()
 }
 
 // newSealedOutput returns an output for dir ("" meaning the current
@@ -80,11 +103,12 @@ func stagingName(name string) string {
 // path is name's path below the output directory, for messages.
 func (o *sealedOutput) path(name string) string { return filepath.Join(o.dir, name) }
 
-// stage writes sealed as name's hidden staging file (plan.WritePrivateFile:
-// 0600, symlink-safe, in the directory plan.SecureDir verified) and records
-// it for commit, so the caller can drop sealed right away. Its errors are
-// worded without the leading "plan: " the caller prints.
-func (o *sealedOutput) stage(name string, sealed []byte, ops int, recipients []seal.Recipient) error {
+// stage writes sealed (the sealed, and with -sign signed, artifact bytes)
+// as name's hidden staging file (plan.WritePrivateFile: 0600,
+// symlink-safe, in the directory plan.SecureDir verified) and records it
+// for commit with report, so the caller can drop sealed right away. Its
+// errors are worded without the leading "plan: " the caller prints.
+func (o *sealedOutput) stage(name string, sealed []byte, report artifactReport) error {
 	if err := o.secure(); err != nil {
 		return err
 	}
@@ -92,7 +116,7 @@ func (o *sealedOutput) stage(name string, sealed []byte, ops int, recipients []s
 	if err := plan.WritePrivateFile(o.dir, staging, sealed); err != nil {
 		return fmt.Errorf("write %s: %w", o.path(name), err)
 	}
-	o.staged = append(o.staged, stagedArtifact{name: name, staging: staging, ops: ops, recipients: recipients})
+	o.staged = append(o.staged, stagedArtifact{name: name, staging: staging, report: report})
 	return nil
 }
 
@@ -125,7 +149,7 @@ func (o *sealedOutput) commit() error {
 			o.staged = nil
 			return o.commitError(rest, i, err)
 		}
-		reportSealedWrite(o.path(a.name), a.ops, a.recipients)
+		reportSealedWrite(o.path(a.name), a.report)
 	}
 	o.staged = nil
 	warnPreexistingPlaintextPlan(o.dir)
@@ -140,9 +164,12 @@ func (o *sealedOutput) commit() error {
 // count (task ce2): they are public, safe to echo, and printing them is
 // what actually lets an operator reviewing output notice an unexpected
 // extra recipient. One per line, fingerprinted unless -verbose
-// (formatRecipients, task 4g2).
-func reportSealedWrite(path string, ops int, recipients []seal.Recipient) {
-	fmt.Printf("wrote %s (%d ops, %d recipients)\n%s", path, ops, len(recipients), formatRecipients(recipients))
+// (formatRecipients, task 4g2). A signed artifact (task 7g2) adds its
+// signed-at time to the summary and a "  signer ..." line naming the
+// public key; "signed" states what was done to the bytes, and still
+// nothing here claims the artifact was verified.
+func reportSealedWrite(path string, report artifactReport) {
+	fmt.Printf("wrote %s (%s)\n%s", path, report.summary(""), report.details())
 }
 
 // commitError words a failed commit of staged[failed]. A one-artifact

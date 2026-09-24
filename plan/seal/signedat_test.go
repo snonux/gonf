@@ -146,3 +146,19 @@ func TestVerifyRefusesAlteredSignedAt(t *testing.T) {
 		requireRefused(t, env, f.trusted(), ErrSignatureInvalid)
 	}
 }
+
+// TestVerifyRefusesUndatedV0170Envelope: v0.17.0's library Sign wrote /1
+// without a signed-at line (magic, key, signature, payload). This build
+// refuses that layout as malformed, fail closed, rather than reading the
+// age header as a time.
+func TestVerifyRefusesUndatedV0170Envelope(t *testing.T) {
+	f := newSignedFixture(t)
+	sig := ed25519.Sign(f.signer.privateKey(), append([]byte(SignedPlanMagic+"\n"), f.sealed...))
+	env := []byte(SignedPlanMagic + "\n")
+	env = keyEncoding.AppendEncode(env, f.signer.Public().Key)
+	env = append(env, '\n')
+	env = keyEncoding.AppendEncode(env, sig)
+	env = append(env, '\n')
+	env = append(env, f.sealed...)
+	requireRefused(t, env, f.trusted(), ErrEnvelopeMalformed)
+}

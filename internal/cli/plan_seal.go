@@ -29,9 +29,12 @@ import (
 // file prints on success says "wrote", never "verified" or "trusted".
 //
 // -for (per-host recipient targeting, phase 2, task 4b2) is implemented in
-// plan_seal_for.go: planSealed itself, unchanged here, always records every
-// ForHosts member, the same "whole plan" selection the plaintext -o and
-// -stdout paths use — a -for run never reaches this file's functions.
+// plan_seal_for.go: planSealed itself always records every ForHosts
+// member, the same "whole plan" selection the plaintext -o and -stdout
+// paths use; a -for run shares only sealAndSign and the write helpers
+// with it. -sign (task 7g2, plan_sign.go) signs the sealed bytes in
+// sealAndSign, so every path signs the same way; its report says
+// "signed", still never "verified".
 
 // stringSliceFlag collects every occurrence of a repeatable flag, in the
 // order given, so `-recipient r1 -recipient r2` accumulates both instead of
@@ -55,17 +58,50 @@ func (s *stringSliceFlag) Set(v string) error {
 	return nil
 }
 
+// sealRequest is one `gonf plan -seal` invocation's parsed flags, as
+// planSealed and planSealedFor (plan_seal_for.go) consume them: where and
+// how to write, which tasks to record, the recipient sources
+// (resolvePlanRecipients) and -sign's signer (nil when not given; task
+// 7g2).
+type sealRequest struct {
+	outDir, planID string
+	tasks          []string
+	toStdout       bool
+	forTarget      string // -for; "" for a whole-plan artifact
+	// recipientFlags, recipientsFile and noDefaultRecipients are
+	// -recipient, -recipients-file (empty for the ambient default) and
+	// -no-default-recipients (skip that default; an explicit
+	// -recipients-file is still read, see loadRecipientsFileLines).
+	recipientFlags      []string
+	recipientsFile      string
+	noDefaultRecipients bool
+	signer              *artifactSigner
+}
+
+// planSealedEntry is `gonf plan -seal`'s entry point once the flags
+// parsed: it loads -sign's signer file first (signFile, "" when -sign was
+// not given), refusing before anything is recorded when it cannot be
+// loaded, then hands the request to planSealedFor (-for) or planSealed.
+func planSealedEntry(req sealRequest, signFile string) int {
+	signer, err := loadArtifactSigner(signFile)
+	if err != nil {
+		eprintf("plan: -sign refused: %v; nothing written\n", err)
+		return 1
+	}
+	req.signer = signer
+	if req.forTarget != "" {
+		return planSealedFor(req)
+	}
+	return planSealed(req)
+}
+
 // planSealed is gonf plan -seal, both output forms (dir and -stdout): it
 // resolves recipients once (the union of -recipient flags and the
 // recipients file, docs/plan-encryption.md "Keys") and refuses up front
 // with zero of them, before any task body runs, so a plan that could never
 // be sealed is never even recorded — no silent plaintext fallback.
-// recipientsFilePath is -recipients-file (empty for the ambient default);
-// noDefaultRecipients is -no-default-recipients, which skips the ambient
-// default file entirely (an explicit -recipients-file is still read even
-// when it is set — see loadRecipientsFileLines).
-func planSealed(outDir, planID string, tasks []string, toStdout bool, recipientFlags []string, recipientsFilePath string, noDefaultRecipients bool) int {
-	recipients, err := resolvePlanRecipients(recipientFlags, recipientsFilePath, noDefaultRecipients)
+func planSealed(req sealRequest) int {
+	recipients, err := resolvePlanRecipients(req.recipientFlags, req.recipientsFile, req.noDefaultRecipients)
 	if err != nil {
 		eprintf("plan: %v\n", err)
 		return 1
@@ -76,41 +112,65 @@ func planSealed(outDir, planID string, tasks []string, toStdout bool, recipientF
 			recipientsFileLabel())
 		return 1
 	}
-	if toStdout {
-		return planToSealedStdout(planID, tasks, recipients)
+	data, report, err := recordAndSeal(req, recipients)
+	if err != nil {
+		eprintErr("plan", err)
+		return 1
 	}
-	return planToSealedDir(outDir, planID, tasks, recipients)
+	if req.toStdout {
+		return writeSealedStdout(data, report, "")
+	}
+	return writeSealedDir(req.outDir, data, report)
 }
 
-// planToSealedDir records into memory (as planToStdout and push already do:
-// no plaintext blob ever lands on disk), builds the GONF-PUSH/1 push frame
-// (the same frame push/cluster/fleet stream) and seals it to recipients,
-// writing dir/plan.age with the same private-file rules plaintext
-// plan.jsonl gets (plan.SecureDir, then plan.WritePrivateFile — 0600, and
-// an existing dir is verified and left exactly as it is, never chmod'ed).
-// It never creates plan.jsonl or blobs/ in dir. When dir already holds one
-// from an earlier, unsealed run of the same recipe, warnPreexistingPlaintextPlan
-// warns about it on stderr without touching it: that file is the operator's,
-// and sealing does not know whether it is still needed.
+// recordAndSeal records the whole plan into memory (as planToStdout and
+// push already do: no plaintext blob ever lands on disk), builds the
+// GONF-PUSH/1 push frame (the same frame push/cluster/fleet stream), seals
+// it to recipients and, with -sign, signs the sealed bytes (sealAndSign).
+// A recording error is returned as it is, so the caller's eprintErr can
+// add a declaration error's recipe location.
+func recordAndSeal(req sealRequest, recipients []seal.Recipient) ([]byte, artifactReport, error) {
+	mem := plan.NewMemoryStore()
+	ops, err := api.RecordPlanTo(req.planID, mem, req.tasks...)
+	if err != nil {
+		return nil, artifactReport{}, err
+	}
+	return sealAndSign(ops, mem, recipients, req.signer)
+}
+
+// sealAndSign seals ops/mem to recipients (sealPushFrame) and, when signer
+// is set, wraps the sealed bytes in a signed envelope (artifactSigner.sign),
+// returning the bytes to write and their "wrote" report. Signing covers the
+// exact sealed bytes, so it happens after sealing and before any write:
+// every -seal path (dir, -stdout, -for per host) goes through here.
+func sealAndSign(ops []plan.Op, mem *plan.MemoryStore, recipients []seal.Recipient, signer *artifactSigner) ([]byte, artifactReport, error) {
+	sealed, err := sealPushFrame(ops, mem, recipients)
+	if err != nil {
+		return nil, artifactReport{}, err
+	}
+	data, sig, err := signer.sign(sealed)
+	if err != nil {
+		return nil, artifactReport{}, err
+	}
+	return data, artifactReport{ops: len(ops), recipients: recipients, signature: sig}, nil
+}
+
+// writeSealedDir writes data as dir/plan.age with the same private-file
+// rules plaintext plan.jsonl gets (plan.SecureDir, then
+// plan.WritePrivateFile — 0600, and an existing dir is verified and left
+// exactly as it is, never chmod'ed). It never creates plan.jsonl or blobs/
+// in dir. When dir already holds one from an earlier, unsealed run of the
+// same recipe, warnPreexistingPlaintextPlan warns about it on stderr
+// without touching it: that file is the operator's, and sealing does not
+// know whether it is still needed.
 //
 // The write itself (SecureDir, the private-file write, the "wrote" report
 // and the plaintext warning) is sealedOutput (plan_seal_output.go, task
 // qg2), the one write path -for's per-host artifacts go through too, so the
 // two cannot drift apart in wording or permissions.
-func planToSealedDir(outDir, planID string, tasks []string, recipients []seal.Recipient) int {
-	mem := plan.NewMemoryStore()
-	ops, err := api.RecordPlanTo(planID, mem, tasks...)
-	if err != nil {
-		eprintErr("plan", err)
-		return 1
-	}
-	sealed, err := sealPushFrame(ops, mem, recipients)
-	if err != nil {
-		eprintf("plan: %v\n", err)
-		return 1
-	}
+func writeSealedDir(outDir string, data []byte, report artifactReport) int {
 	out := newSealedOutput(outDir)
-	if err := out.stage("plan.age", sealed, len(ops), recipients); err != nil {
+	if err := out.stage("plan.age", data, report); err != nil {
 		out.discard()
 		eprintf("plan: %v\n", err)
 		return 1
@@ -122,31 +182,25 @@ func planToSealedDir(outDir, planID string, tasks []string, recipients []seal.Re
 	return 0
 }
 
-// planToSealedStdout is -seal -stdout: records into memory (as
-// planToSealedDir does) and writes the sealed bytes straight to stdout,
-// binary age with no armor — a sealed stream is as safe on a pipe or in a
-// CI log store as in a file (docs/plan-encryption.md "Artifact"), and this
-// is the natural form for `gonf plan -seal -stdout | ssh host gonf apply
-// -identity ... -`. No plan.jsonl, blobs/ or plan.age ever touches disk on
-// this path; an explicit -o is ignored, exactly as it already is for plain
-// -stdout (planOutputConflict's own doc comment).
-func planToSealedStdout(planID string, tasks []string, recipients []seal.Recipient) int {
-	mem := plan.NewMemoryStore()
-	ops, err := api.RecordPlanTo(planID, mem, tasks...)
-	if err != nil {
-		eprintErr("plan", err)
-		return 1
-	}
-	sealed, err := sealPushFrame(ops, mem, recipients)
-	if err != nil {
-		eprintf("plan: %v\n", err)
-		return 1
-	}
-	if _, err := os.Stdout.Write(sealed); err != nil {
+// writeSealedStdout is -seal -stdout's write: the sealed (and with -sign
+// signed) bytes go straight to stdout, binary age with no armor — a sealed
+// stream is as safe on a pipe or in a CI log store as in a file
+// (docs/plan-encryption.md "Artifact"), and this is the natural form for
+// `gonf plan -seal -stdout | ssh host gonf apply -identity ... -`. No
+// plan.jsonl, blobs/ or plan.age ever touches disk on this path; an
+// explicit -o is ignored, exactly as it already is for plain -stdout
+// (planOutputConflict's own doc comment). The "wrote" report goes to
+// stderr; host is -for's single target ("" for a whole-plan artifact).
+func writeSealedStdout(data []byte, report artifactReport, host string) int {
+	if _, err := os.Stdout.Write(data); err != nil {
 		eprintf("plan: write stdout: %v\n", err)
 		return 1
 	}
-	eprintf("wrote stdout (%d ops, %d recipients, sealed)\n%s", len(ops), len(recipients), formatRecipients(recipients))
+	extra := ", sealed"
+	if host != "" {
+		extra = ", sealed for host " + host
+	}
+	eprintf("wrote stdout (%s)\n%s", report.summary(extra), report.details())
 	return 0
 }
 

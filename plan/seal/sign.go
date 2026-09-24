@@ -52,9 +52,11 @@ import (
 //
 // # Freshness: carried here, enforced by the caller
 //
-// The signed-at time was added to /1 by task 7g2 before any gonf release
+// The signed-at time was added to /1 by task 7g2, before any gonf binary
 // produced a /1 envelope, as docs/plan-signing.md "Replay and rollback"
-// requires. Verify authenticates it and returns it (Verified.SignedAt) but
+// requires. (v0.17.0's library-only Sign wrote the undated layout; Verify
+// refuses such an envelope as malformed, since its fourth line is the age
+// header, and its signature covers another message.) Verify authenticates it and returns it (Verified.SignedAt) but
 // enforces no freshness window: that policy, against the destination's own
 // clock, is the caller's (phase signing-3, task 8g2). A Verify success on
 // its own says only which trusted key produced these exact bytes and when

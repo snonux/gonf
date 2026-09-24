@@ -68,7 +68,8 @@ var cleanupRemoteBuilds = remote.CleanupBuilds
 //	gonf -profile=fedora
 //	gonf -verbose | -quiet
 //	gonf -dry-run | -n
-//	gonf plan [-o dir|-stdout [-with-secrets]|-redacted] [-seal [-recipient r]... [-recipients-file f] [-no-default-recipients] [-for host|cluster|fleet]] [-id name] <task>...  # emit plan.jsonl (or stdout), or seal to plan.age (or plan-<host>.age per host with -for)
+//	gonf plan [-o dir|-stdout [-with-secrets]|-redacted] [-seal [-recipient r]... [-recipients-file f] [-no-default-recipients] [-for host|cluster|fleet] [-sign signer-file]] [-id name] <task>...  # emit plan.jsonl (or stdout), or seal to plan.age (or plan-<host>.age per host with -for), signed with -sign
+//	gonf plan-signer-keygen <signer-file>             # create a plan signer key; prints its trusted-signers line
 //	gonf apply [-n] [-identity file]... <plan.jsonl|plan.age|->  # apply file/sealed file or stdin (GONF-PUSH/1, sealed, or bare JSONL)
 //	gonf <task> [task...]                            # RecordPlan + Apply locally
 func CLI() int {
@@ -349,6 +350,8 @@ func runSubcommand(ctx context.Context, name string, args []string) (code int, o
 		return cliDNSZoneSerial(args), true
 	case "plan":
 		return cliPlan(args), true
+	case "plan-signer-keygen":
+		return cliPlanSignerKeygen(args), true
 	case "apply":
 		return cliApply(ctx, args), true
 	case "push":
@@ -467,92 +470,6 @@ func listLine(t api.TaskInfo) string {
 		return t.Name
 	}
 	return t.Name + "\t" + desc
-}
-
-func cliPlan(args []string) int {
-	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	outDir := fs.String("o", ".", "output directory for plan.jsonl and blobs/ (\".\" is the current directory); "+
-		"created 0700 when missing; an existing one is left as it is but must be yours, not world-writable "+
-		"and not group-writable except by your private group")
-	stdout := fs.Bool("stdout", false, "print plan JSONL to stdout instead of writing plan.jsonl "+
-		"(refused for a plan carrying secret material unless -with-secrets is given)")
-	withSecrets := fs.Bool("with-secrets", false, "with -stdout: print a plan carrying secret material anyway, "+
-		"as an executable secret artifact")
-	redacted := fs.Bool("redacted", false, "print a redacted, non-replayable human preview to stdout instead of a plan")
-	planID := fs.String("id", "plan", "plan id written into the header")
-	sealFlag := fs.Bool("seal", false, "age-encrypt the plan (docs/plan-encryption.md) instead of writing it in the "+
-		"clear: writes dir/plan.age (or, with -stdout, the sealed bytes to stdout) to the union of -recipient flags "+
-		"and the recipients file; refused with zero recipients (never falls back to plaintext), and cannot "+
-		"combine with -redacted or -with-secrets")
-	var recipientFlags stringSliceFlag
-	fs.Var(&recipientFlags, "recipient", "an age1pq recipient to seal to with -seal (repeatable); unioned with the "+
-		"recipients file (${XDG_CONFIG_HOME:-$HOME/.config}/gonf/recipients by default, one age1pq recipient per "+
-		"line, # comments allowed, hardened the same way as -identity: must be a regular file, owned by you, "+
-		"not writable by group or other) unless -no-default-recipients is given")
-	recipientsFile := fs.String("recipients-file", "", "read the recipients file from this path instead of the "+
-		"ambient default; still unioned with -recipient flags; a missing file here is an error, not silently empty")
-	noDefaultRecipients := fs.Bool("no-default-recipients", false, "do not read the ambient default recipients "+
-		"file; seal only to -recipient flags (and -recipients-file, if also given)")
-	forTarget := fs.String("for", "", "with -seal: seal one artifact per destination host instead of one whole-plan "+
-		"artifact — name a registered host, cluster or fleet. Records once per host (a ForHosts body for another "+
-		"host is never resolved) and writes dir/plan-<host>.age per host, sealed to that host's "+
-		"api.WithPlanRecipient plus the union of -recipient/recipients-file; refuses before writing anything if "+
-		"any resolved host lacks a recipient, or if that union is empty (same zero-recipient refusal as plain "+
-		"-seal, so the operator can always open what they just sealed); with -stdout, resolves to exactly one "+
-		"host or is refused")
-	if err := fs.Parse(args); err != nil {
-		return 2
-	}
-	tasks := fs.Args()
-	if len(tasks) == 0 {
-		eprintln("usage: gonf plan [-o dir|-stdout [-with-secrets]|-redacted] " +
-			"[-seal [-recipient r]... [-recipients-file f] [-no-default-recipients] [-for host|cluster|fleet]] [-id name] <task> [task...]")
-		return 2
-	}
-	if msg := planOutputConflict(fs, *stdout, *withSecrets, *redacted, *sealFlag); msg != "" {
-		eprintln("plan: " + msg)
-		return 2
-	}
-	if *forTarget != "" && !*sealFlag {
-		eprintln("plan: -for only applies to -seal")
-		return 2
-	}
-
-	switch {
-	case *redacted:
-		return planPreview(*planID, tasks)
-	case *sealFlag && *forTarget != "":
-		return planSealedFor(*outDir, *planID, tasks, *stdout, *forTarget, recipientFlags, *recipientsFile, *noDefaultRecipients)
-	case *sealFlag:
-		return planSealed(*outDir, *planID, tasks, *stdout, recipientFlags, *recipientsFile, *noDefaultRecipients)
-	case *stdout:
-		return planToStdout(*planID, tasks, *withSecrets)
-	}
-	return planToDir(*outDir, *planID, tasks)
-}
-
-// planOutputConflict returns why the plan output flags contradict each
-// other, or "" when they do not: -with-secrets only modifies -stdout,
-// -redacted is an output of its own so combining it with -stdout,
-// -with-secrets, -o or -seal is refused instead of silently picking one,
-// and -seal is refused together with -with-secrets (a sealed export needs
-// no plaintext override; task 2b2, docs/plan-encryption.md "Operator UX")
-// regardless of -stdout. (-stdout with an explicit -o keeps its
-// long-standing meaning: -o is ignored; -seal -stdout is allowed — the
-// natural CI/pipe form for a sealed plan.)
-func planOutputConflict(fs *flag.FlagSet, stdout, withSecrets, redacted, sealed bool) string {
-	outSet := false
-	fs.Visit(func(f *flag.Flag) { outSet = outSet || f.Name == "o" })
-	switch {
-	case redacted && (stdout || withSecrets || outSet || sealed):
-		return "-redacted prints a preview instead of a plan; it cannot combine with -stdout, -with-secrets, -o or -seal"
-	case sealed && withSecrets:
-		return "-seal cannot combine with -with-secrets: a sealed plan needs no plaintext override"
-	case withSecrets && !stdout:
-		return "-with-secrets only applies to -stdout"
-	}
-	return ""
 }
 
 // planPreview records into memory (as push does) and prints the redacted
@@ -1507,8 +1424,8 @@ func verifyStickyDirOwned(path string) error {
 
 func printUsage() {
 	eprintln("usage: gonf [-list] [-version] [-plan-version] [-strict-preview-version] [-sealed-version] [-profile=...] [-verbose|-quiet] [-dry-run|-n] [-privilege=none|sudo|doas] [-cmd-timeout 5m] <task> [task...]")
-	eprintln("       gonf plan [-o dir|-stdout [-with-secrets]|-redacted] " +
-		"[-seal [-recipient r]... [-recipients-file f] [-no-default-recipients] [-for host|cluster|fleet]] [-id name] <task> [task...]")
+	eprintln("       " + planUsage)
+	eprintln("       " + planSignerKeygenUsage)
 	eprintln("       gonf apply [-n|-dry-run|-strict-preview] [-apply-dir dir] [-identity file]... <plan.jsonl|plan.age|->")
 	eprintln("       gonf push [-n|-dry-run|-preview] [-id name] [-privilege=...] [-- ssh-args...] user@host <task> [task...]")
 	eprintln("       gonf cluster [-n|-dry-run|-preview] [-j N] [-id name] [-host-timeout 10m] <cluster> <task> [task...]")
