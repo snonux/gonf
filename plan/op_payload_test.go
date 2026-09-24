@@ -359,6 +359,67 @@ func TestCheckForeignPayloadCoversEveryMigratedKind(t *testing.T) {
 	}
 }
 
+// TestPayloadFieldOwnersResolve pins task dg2's init-time resolution: every
+// OpPayloadExamples() field resolved to a wireOp field index without error,
+// and that index points at the same-named wireOp field. checkForeignPayload
+// reads fields by these indexes, so a wrong index would check the wrong
+// field silently.
+func TestPayloadFieldOwnersResolve(t *testing.T) {
+	t.Parallel()
+	if errPayloadFieldOwners != nil {
+		t.Fatalf("buildPayloadFieldOwners: %v", errPayloadFieldOwners)
+	}
+	wt := reflect.TypeFor[wireOp]()
+	for name, owner := range payloadFieldOwners {
+		if got := wt.Field(owner.index).Name; got != name {
+			t.Errorf("payloadFieldOwners[%q].index = %d names wireOp.%s", name, owner.index, got)
+		}
+	}
+}
+
+// driftedPayload is a stand-in OpPayload whose field has no wireOp
+// counterpart: the drift that, before task dg2, made checkForeignPayload's
+// by-name lookup return an invalid reflect.Value and panic on every decode.
+type driftedPayload struct {
+	NoSuchWireField string `json:"no_such_wire_field,omitempty"`
+}
+
+func (driftedPayload) applyToWire(*wireOp) {}
+
+// TestBuildPayloadFieldOwnersReportsDrift pins that such a drift is reported
+// once, by buildPayloadFieldOwners, as an error naming the offending
+// payload field, while the resolvable fields are still indexed.
+func TestBuildPayloadFieldOwnersReportsDrift(t *testing.T) {
+	t.Parallel()
+	owners, err := buildPayloadFieldOwners(map[Kind]OpPayload{
+		KindCron:    driftedPayload{},
+		KindPackage: PackagePayload{},
+	})
+	if err == nil {
+		t.Fatal("buildPayloadFieldOwners: want an error for driftedPayload.NoSuchWireField, got nil")
+	}
+	if want := "driftedPayload.NoSuchWireField"; !strings.Contains(err.Error(), want) {
+		t.Errorf("error = %q, want it to name %q", err, want)
+	}
+	if _, ok := owners["NoSuchWireField"]; ok {
+		t.Error("unresolvable field must not get an owner entry")
+	}
+	if want := reflect.TypeFor[PackagePayload]().NumField(); len(owners) != want {
+		t.Errorf("len(owners) = %d, want %d (PackagePayload's fields)", len(owners), want)
+	}
+}
+
+// BenchmarkCheckForeignPayload measures the per-decoded-op ownership check
+// (task dg2 cut it about 4x by resolving field indexes at init).
+func BenchmarkCheckForeignPayload(b *testing.B) {
+	w := wireOp{Op: KindFile, Path: "/etc/plain.conf", Mode: "0644"}
+	for b.Loop() {
+		if err := checkForeignPayload(w); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // wireRawMessageType is fillEveryWireField's special case for wireOp's one
 // json.RawMessage field (TemplateData): its Kind() is Slice (RawMessage is
 // defined as []byte), so it must be matched before the general

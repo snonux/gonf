@@ -768,33 +768,67 @@ func payloadFromWire(w wireOp) OpPayload {
 }
 
 // payloadFieldOwner records which Kind's OpPayload a wireOp field (keyed by
-// its Go field name, e.g. "OnCalendar") is exclusive to, plus the json tag
-// checkForeignPayload's error should name it by. It is built once, by
-// reflecting OpPayloadExamples() (task 2f2's own single source of truth for
-// "which kind owns which wire field," already trusted by
-// TestWirePayloadTagsMatch), so a follow-up task that extends
-// OpPayloadExamples() to migrate one more kind is automatically covered
-// here too — nothing in this file needs a second, hand-maintained list of
-// exclusive fields that could drift from the first the way the yd2-era
-// kind-dispatch switch above silently could.
+// its Go field name, e.g. "OnCalendar") is exclusive to, the json tag
+// checkForeignPayload's error should name it by, and the field's index in
+// wireOp. It is built once, by reflecting OpPayloadExamples() (task 2f2's
+// own single source of truth for "which kind owns which wire field,"
+// already trusted by TestWirePayloadTagsMatch), so a follow-up task that
+// extends OpPayloadExamples() to migrate one more kind is automatically
+// covered here too — nothing in this file needs a second, hand-maintained
+// list of exclusive fields that could drift from the first the way the
+// yd2-era kind-dispatch switch above silently could.
+//
+// index is resolved once, at package init (task dg2), instead of looking the
+// field up by name on every decode. The by-name lookup
+// (reflect.Value.FieldByName over wireOp's ~70 fields, for each of ~50
+// owners) made DecodeOp about 4x slower. Worse, FieldByName returns the
+// invalid zero Value for a payload field with no wireOp counterpart, and
+// IsZero PANICS on that Value, so such a drift crashed every decode of
+// every OTHER kind instead of being reported.
 type payloadFieldOwner struct {
-	kind Kind
-	tag  string
+	kind  Kind
+	tag   string
+	index int
 }
 
-var payloadFieldOwners = buildPayloadFieldOwners()
+// payloadFieldOwners and errPayloadFieldOwners are built together at init.
+// A non-nil errPayloadFieldOwners is a programmer bug (a payload field
+// added without its wireOp counterpart) that no plan line can cause.
+// TestPayloadFieldOwnersResolve fails on it. checkForeignPayload then
+// refuses every decode with it, rather than panicking or silently skipping
+// the check: plan never panics for input (docs/plan.md, "Error handling
+// contract"), and a package-init panic would kill every binary importing
+// plan, including ones that never decode.
+var payloadFieldOwners, errPayloadFieldOwners = buildPayloadFieldOwners(OpPayloadExamples())
 
-func buildPayloadFieldOwners() map[string]payloadFieldOwner {
+// buildPayloadFieldOwners maps every field of every example payload to its
+// owning kind, json tag and wireOp field index. It returns an error naming
+// each payload field without a same-named, top-level (not promoted) wireOp
+// field, so the drift surfaces once, with a clear message, instead of at
+// decode time. The examples are a parameter so a test can feed in a
+// deliberately drifted payload type.
+func buildPayloadFieldOwners(examples map[Kind]OpPayload) (map[string]payloadFieldOwner, error) {
+	wt := reflect.TypeFor[wireOp]()
 	owners := make(map[string]payloadFieldOwner)
-	for kind, example := range OpPayloadExamples() {
+	var missing []string
+	for kind, example := range examples {
 		pt := reflect.TypeOf(example)
 		for i := range pt.NumField() {
 			f := pt.Field(i)
+			wf, ok := wt.FieldByName(f.Name)
+			if !ok || len(wf.Index) != 1 {
+				missing = append(missing, pt.Name()+"."+f.Name)
+				continue
+			}
 			tag, _, _ := strings.Cut(f.Tag.Get("json"), ",")
-			owners[f.Name] = payloadFieldOwner{kind: kind, tag: tag}
+			owners[f.Name] = payloadFieldOwner{kind: kind, tag: tag, index: wf.Index[0]}
 		}
 	}
-	return owners
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return owners, fmt.Errorf("plan: payload field(s) with no wireOp counterpart: %s", strings.Join(missing, ", "))
+	}
+	return owners, nil
 }
 
 // checkForeignPayload refuses a decoded wireOp that carries a non-zero
@@ -822,13 +856,18 @@ func buildPayloadFieldOwners() map[string]payloadFieldOwner {
 // Op, since a payload's applyToWire (above) only ever writes ITS OWN
 // kind's fields.
 func checkForeignPayload(w wireOp) error {
+	if errPayloadFieldOwners != nil {
+		return fmt.Errorf("%s op: cannot check for foreign-kind fields: %w", w.Op, errPayloadFieldOwners)
+	}
 	wv := reflect.ValueOf(w)
 	var bad []string
-	for name, owner := range payloadFieldOwners {
+	for _, owner := range payloadFieldOwners {
 		if owner.kind == w.Op {
 			continue // w.Op's own exclusive field; payloadFromWire keeps it.
 		}
-		if !wv.FieldByName(name).IsZero() {
+		// owner.index was resolved against wireOp at init, so Field cannot
+		// hit an out-of-range or invalid Value here (task dg2).
+		if !wv.Field(owner.index).IsZero() {
 			bad = append(bad, fmt.Sprintf("%s (%s-exclusive)", owner.tag, owner.kind))
 		}
 	}
