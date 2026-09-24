@@ -437,8 +437,8 @@ func TestRedactingWriterStallCapForcesProgress(t *testing.T) {
 
 // TestRedactingWriterBoundsTwoSecretLeak is the end-to-end regression test
 // for task 3d2's confirmed leak: a shorter, periodic secret ("x1x1x1x1x1")
-// and a second, longer secret that starts with it. Before the fix, a single
-// large Write of the periodic secret's text (no newline yet, driving
+// and a second, longer secret that starts with it. Before the 3d2 fix, a
+// single large Write of the periodic secret's text (no newline yet, driving
 // forwardSafePrefix's forced flush past maxPendingLine while the longer
 // secret's tail had not arrived) made the escape hatch flush the ENTIRE
 // buffer with nothing held back, so the longer secret's tail, written next,
@@ -447,6 +447,14 @@ func TestRedactingWriterStallCapForcesProgress(t *testing.T) {
 // secret.Values.FlushPoint directly, which secret.TestValuesFlushPointTwoSecretLeakRegression
 // covers) and confirms the fix: the output holds only redaction markers,
 // never a fragment of either secret.
+//
+// The write is sized past secret.flushStallCap (262144 bytes), not merely
+// past maxPendingLine (65536): task le2's own stall-cap fix reopened this
+// exact leak in a new shape (task 1g2) by consuming the ENTIRE buffer with
+// no keep-back once the cap forced a flush, but only past the cap -- a
+// write between maxPendingLine and flushStallCap never drives that code
+// path at all and stayed green throughout le2's regression, which is
+// exactly the coverage hole task 1g2 closes here.
 func TestRedactingWriterBoundsTwoSecretLeak(t *testing.T) {
 	var vals secret.Values
 	shorter := "x1x1x1x1x1"
@@ -458,10 +466,11 @@ func TestRedactingWriterBoundsTwoSecretLeak(t *testing.T) {
 
 	var out strings.Builder
 	w := NewRedactingWriter(&out)
-	// One big write of pure periodic text, well past maxPendingLine, with
-	// no newline: this alone triggers a forced flush inside the Write call,
-	// before the longer secret's tail exists anywhere.
-	if _, err := w.Write([]byte(strings.Repeat("x1", 40000))); err != nil { // 80000 bytes
+	// One big write of pure periodic text, well past flushStallCap, with no
+	// newline: this alone triggers the escape hatch's capped forced flush
+	// inside the Write call, before the longer secret's tail exists
+	// anywhere.
+	if _, err := w.Write([]byte(strings.Repeat("x1", 150000))); err != nil { // 300000 bytes
 		t.Fatal(err)
 	}
 	// The longer secret's tail, as its own separate write completing the

@@ -1,11 +1,13 @@
 package secret
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // fakeTokenValue is synthetic secret material; it never names a real secret.
@@ -243,14 +245,33 @@ func TestValuesFlushPointSelfOverlappingAboveBoundStallsRatherThanLeak(t *testin
 // buffer on every call that makes no progress) task mb2 fixed. This pins the
 // fix's boundary precisely: one byte short of flushStallCap the escape hatch
 // still stalls exactly as before (never guessing at an unsafe cut), but at
-// flushStallCap it stops waiting and forwards the WHOLE buffer as one opaque
-// Redacted marker, so nothing raw is ever left pending to leak later, and
-// the caller's buffer (see internal/logger.RedactingWriter) cannot grow past
-// this cap.
+// flushStallCap it stops waiting and makes progress.
+//
+// With only ONE tracked form (10 bytes, period 2, self-overlapping), the
+// cap forces progress via longestKeepBackForForcedFlush (see FlushPoint):
+// it retains exactly the longest proper prefix of "x1x1x1x1x1" that is
+// also a suffix of the buffer -- 8 bytes here (see
+// TestLongestPrefixSuffixOverlap's "periodic self-overlap" case for the
+// same computation pinned directly), not the full 10, because parity
+// breaks the 9-byte candidate. This is MORE than the bare minimum a
+// special-cased "nothing else is tracked, so nothing could be stranded"
+// argument would need (which would justify consuming everything, cut =
+// len(atCap)) -- deliberately: rounds 2 and 3 of this exact function both
+// broke by reasoning about SPANS and "is this the registry's single
+// longest form" as special cases; the byte-suffix computation used here
+// has no such special case at all, checking every tracked form's own
+// self-overlap uniformly regardless of how many other forms are
+// registered, which is what makes it correct across all of
+// TestValuesFlushPointHistoricalShapesBoundedAndLeakFree's shapes,
+// including the two-, three- and four-form ones where a "nothing else is
+// tracked" argument could never apply in the first place. See
+// TestValuesFlushPointTwoSecretLeakRegression and
+// TestValuesFlushPointHistoricalShapesBoundedAndLeakFree for those.
 func TestValuesFlushPointStallCapBoundary(t *testing.T) {
 	t.Parallel()
 	var v Values
-	v.Add([]byte("x1x1x1x1x1")) // 10 bytes, period 2: self-overlapping
+	form := "x1x1x1x1x1" // 10 bytes, period 2: self-overlapping
+	v.Add([]byte(form))
 
 	below := strings.Repeat("x1", flushStallCap/2)[:flushStallCap-1] // one byte short of the cap
 	if len(below) != flushStallCap-1 {
@@ -266,8 +287,10 @@ func TestValuesFlushPointStallCapBoundary(t *testing.T) {
 		t.Fatalf("test setup: len(atCap) = %d, want %d", len(atCap), flushStallCap)
 	}
 	out, cut = v.FlushPoint(atCap)
-	if cut != len(atCap) {
-		t.Fatalf("FlushPoint(len=%d, exactly flushStallCap) consumed = %d, want %d (the whole buffer): the cap must force full progress", len(atCap), cut, len(atCap))
+	wantKeepBack := longestPrefixSuffixOverlap(form, atCap)
+	wantCut := len(atCap) - wantKeepBack
+	if cut != wantCut {
+		t.Fatalf("FlushPoint(len=%d, exactly flushStallCap) consumed = %d, want %d (len(atCap) - the longest proper prefix of %q that is also a suffix of atCap, %d bytes)", len(atCap), cut, wantCut, form, wantKeepBack)
 	}
 	if out != Redacted {
 		t.Fatalf("FlushPoint at the cap = %q, want the single opaque marker %q", out, Redacted)
@@ -311,16 +334,20 @@ func TestValuesFlushPointSelfOverlappingResolvesOnceChainBreaks(t *testing.T) {
 // prefix — was flushed with nothing held back, and L's tail, arriving on a
 // later write with its matching prefix already gone, was forwarded raw (see
 // internal/logger.TestRedactingWriterBoundsTwoSecretLeak for the end-to-end
-// version). This exact buffer (pure S-periodic text, L's tail not yet
-// written) is ALSO an unbroken self-overlapping chain with no safe
-// occurrence-boundary cut anywhere in it yet (see
-// TestValuesFlushPointSelfOverlappingAboveBoundStallsRatherThanLeak): under
-// the current (task rd2) contract FlushPoint makes no progress on it at all
-// rather than guess at any cut, plain or run[1]-based — a strictly stronger
-// guarantee than 3d2's original fix (which still returned a plain,
-// non-occurrence-aware cut here). The real point this test pins either way:
-// L's prefix bytes are never swept away, so once L's tail actually arrives,
-// Redact still finds and hides the complete secret.
+// version).
+//
+// The buffer is sized past flushStallCap (300000 > 262144), not merely past
+// MaxSplitGuard (65536): below flushStallCap this exact shape is an
+// unbroken self-overlapping chain with no safe occurrence-boundary cut
+// anywhere in it, so FlushPoint correctly makes no progress at all (see
+// TestValuesFlushPointSelfOverlappingAboveBoundStallsRatherThanLeak) — a
+// size that never drives the escape hatch's stall-cap branch and so never
+// exercised it. Task le2's own stall-cap fix reopened this exact leak in a
+// new shape once the buffer crosses flushStallCap: it set cut = len(s),
+// consuming the WHOLE buffer with nothing held back, which is exactly
+// 3d2's original bug reincarnated one level up (task 1g2 fixes it by
+// keeping the ordinary keep-back on the capped path too). This size is
+// what actually exercises that path and pins the fix.
 func TestValuesFlushPointTwoSecretLeakRegression(t *testing.T) {
 	t.Parallel()
 	var v Values
@@ -329,21 +356,29 @@ func TestValuesFlushPointTwoSecretLeakRegression(t *testing.T) {
 	v.Add([]byte(s1))
 	v.Add([]byte(s2))
 
-	// The buffer at the moment a real relay's forced flush fires: past
-	// MaxSplitGuard, still pure s1-periodic text (s2's tail has not been
-	// written yet) — an unbroken self-overlapping chain, so FlushPoint must
-	// make no progress on it yet rather than guess at an unsafe cut.
-	buf := strings.Repeat("x1", 40000) // 80000 bytes, > MaxSplitGuard
+	// The buffer at the moment the escape hatch's stall cap forces a flush:
+	// past flushStallCap, still pure s1-periodic text (s2's tail has not
+	// been written yet) — an unbroken self-overlapping chain, so the
+	// escape hatch must stop stalling here and make progress, but without
+	// ever sweeping away the whole buffer.
+	buf := strings.Repeat("x1", 150000) // 300000 bytes, > flushStallCap
 
 	out, consumed := v.FlushPoint(buf)
-	if consumed != 0 || out != "" {
-		t.Fatalf("FlushPoint = (%q, %d), want (\"\", 0): an unbroken self-overlapping chain has no safe cut, so s2's prefix must stay fully pending rather than risk a partial cut", out, consumed)
+	if consumed <= 0 {
+		t.Fatalf("FlushPoint = (%q, %d), want consumed > 0: past flushStallCap the escape hatch must stop stalling and make progress", out, consumed)
+	}
+	if consumed >= len(buf) {
+		t.Fatalf("FlushPoint consumed the entire buffer (%d of %d bytes): the ordinary keep-back must survive the stall cap, or a longer secret's prefix swept up in this flush is unrecoverable on the next call (task 1g2)", consumed, len(buf))
+	}
+	if strings.Contains(out, strings.Repeat("Q", 30)) {
+		t.Fatalf("raw secret tail leaked into FlushPoint's own output: %q", out)
 	}
 
-	// s2's tail arrives on a later write; the whole buffer (nothing was
-	// flushed) plus the tail must still let Redact find and hide the
-	// complete secret — the whole point of never sweeping any of it away.
-	pending := buf + strings.Repeat("Q", 30) + "\n"
+	// s2's tail arrives on a later write; the retained pending bytes
+	// (buf[consumed:], the surviving keep-back) plus the tail must still
+	// let Redact find and hide the complete secret — the whole point of
+	// keeping the keep-back through the capped flush.
+	pending := buf[consumed:] + strings.Repeat("Q", 30) + "\n"
 	redactedTail := v.Redact(pending)
 	if strings.Contains(redactedTail, strings.Repeat("Q", 30)) {
 		t.Fatalf("raw secret tail leaked: %q", redactedTail)
@@ -631,5 +666,623 @@ func BenchmarkValuesFlushPointDenseChain(b *testing.B) {
 				v.FlushPoint(s)
 			}
 		})
+	}
+}
+
+// simulateRelay reproduces internal/logger.RedactingWriter's own
+// Write/forwardSafePrefix/Close loop directly against v, so a test can
+// measure the real caller contract rather than calling FlushPoint in
+// isolation: secret must not import internal/logger (see that package's own
+// doc comment on the import cycle this would close through
+// internal/safepath and internal/testutil), so the loop is reimplemented
+// here rather than imported. data is fed in chunk-sized writes, exactly like
+// a relayed child's output arriving through io.Copy's 32 KiB default
+// buffer; each completed line is forwarded through Redact, and an overlong
+// unterminated remainder is forced through FlushPoint exactly as
+// forwardSafePrefix does (out written as FlushPoint returned it, never
+// re-derived — see forwardSafePrefix's own doc for why); whatever remains
+// pending once data runs out is forwarded through Redact, mirroring Close.
+// It returns everything forwarded, concatenated, and the largest pending
+// buffer ever held at once (invariant B's own measurement).
+func simulateRelay(v *Values, data []byte, chunk int) (forwarded string, maxPending int) {
+	var out strings.Builder
+	var pending []byte
+	for start := 0; start < len(data); start += chunk {
+		end := min(start+chunk, len(data))
+		pending = append(pending, data[start:end]...)
+		for {
+			i := bytes.IndexByte(pending, '\n')
+			if i < 0 {
+				break
+			}
+			out.WriteString(v.Redact(string(pending[:i+1])))
+			pending = pending[i+1:]
+		}
+		if len(pending) > v.MaxPending() {
+			redOut, consumed := v.FlushPoint(string(pending))
+			consumed = min(max(consumed, 0), len(pending))
+			if consumed > 0 {
+				out.WriteString(redOut)
+				pending = append([]byte(nil), pending[consumed:]...)
+			}
+		}
+		maxPending = max(maxPending, len(pending))
+	}
+	if len(pending) > 0 {
+		out.WriteString(v.Redact(string(pending)))
+	}
+	return out.String(), maxPending
+}
+
+// TestValuesFlushPointHistoricalShapesBoundedAndLeakFree is a permanent,
+// consolidated regression test for every shape FlushPoint's escape hatch has
+// broken on across its five rounds of fixes so far (mb2, 3d2, rd2, le2,
+// 1g2). It drives each shape through simulateRelay (the same
+// Write/forwardSafePrefix/Close loop a real relay uses) at four sizes
+// spanning well below and well past flushStallCap, and checks BOTH
+// invariants this one function must hold AT ONCE, in one place, per task
+// 1g2's explicit request: every round so far fixed one of these two while
+// breaking the other, and no single test in this suite asserted both
+// together across every historical shape before this one.
+//   - Invariant (A): no raw fragment of any tracked secret ever reaches the
+//     forwarded output. Checked per shape by that shape's own leak probe
+//     (a substring that can only appear if a real occurrence's bytes were
+//     forwarded without being replaced by Redacted).
+//   - Invariant (B): the retained pending buffer never exceeds a generous
+//     but still-bounded ceiling (flushStallCap, plus the shape's own
+//     longest protected form, plus one chunk of in-flight slack), and the
+//     whole run completes within a generous wall-clock ceiling that scales
+//     with size. A quadratic blow-up (mb2's and le2's own regressions, both
+//     confirmed to take seconds per MiB once unbounded) blows straight
+//     through this ceiling even with the slack; genuinely linear cost (the
+//     actual target of every fix in this file) comfortably clears it.
+func TestValuesFlushPointHistoricalShapesBoundedAndLeakFree(t *testing.T) {
+	t.Parallel()
+	const chunk = 32 << 10 // io.Copy's default buffer size, matching a real relay's chunking
+
+	type shape struct {
+		name string
+		// build returns a fresh Values with this shape's forms tracked,
+		// and total bytes of data split into filler (the bulk, always
+		// safe on its own) and tail (the trailing bytes that only
+		// resolve into a leak-relevant secret once combined with
+		// filler's own trailing bytes). tail is empty for a shape with
+		// no distinct nested/trailing secret of its own.
+		build func(total int) (v *Values, filler, tail []byte)
+		// leaked reports whether forwarded holds a raw fragment that
+		// could only appear via a leak of this shape's secret material.
+		leaked func(forwarded string) bool
+	}
+
+	shapes := []shape{
+		{
+			// mb2 / le2: a credentials file's divider line against an
+			// unterminated "="-only progress bar. The tracked form is
+			// uniform (every byte the same), so occurrences overlap at
+			// literally every offset -- the densest possible
+			// self-overlapping chain, which never gives the escape
+			// hatch a gap to snap to anywhere in the filler.
+			name: "divider-vs-progress-bar",
+			build: func(total int) (*Values, []byte, []byte) {
+				v := &Values{}
+				v.Add([]byte(strings.Repeat("=", 40)))
+				return v, []byte(strings.Repeat("=", total)), nil
+			},
+			leaked: func(forwarded string) bool {
+				return strings.Contains(strings.ReplaceAll(forwarded, Redacted, ""), strings.Repeat("=", 40))
+			},
+		},
+		{
+			// 3d2 / 1g2: a shorter, periodic secret that is also the
+			// exact prefix of a longer one -- the shape that leaked in
+			// two different ways (3d2's run[1] cut, then 1g2's
+			// cut=len(s)) across two different fixes to this same
+			// escape hatch.
+			name: "periodic-prefix-of-longer",
+			build: func(total int) (*Values, []byte, []byte) {
+				v := &Values{}
+				shorter := "x1x1x1x1x1"
+				tail := strings.Repeat("Q", 30)
+				v.Add([]byte(shorter))
+				v.Add([]byte(shorter + tail))
+				// filler must stay an even number of bytes: the "x1"
+				// pattern only reads as complete shorter/longer
+				// occurrences at even offsets, so an odd filler length
+				// shifts tail out of phase and the longer form never
+				// actually occurs (sizes here are all even already,
+				// and len(tail) is even, so this holds for every size).
+				filler := total - len(tail)
+				return v, []byte(strings.Repeat("x1", filler/2+1)[:filler]), []byte(tail)
+			},
+			leaked: func(forwarded string) bool {
+				return strings.Contains(forwarded, strings.Repeat("Q", 10))
+			},
+		},
+		{
+			// rd2: a single strong, non-periodic secret repeated
+			// back-to-back, forming one merged run purely from
+			// touching (not overlapping) occurrences.
+			name: "repeated-single-secret",
+			build: func(total int) (*Values, []byte, []byte) {
+				v := &Values{}
+				secretVal := "db-password-42"
+				v.Add([]byte(secretVal))
+				reps := total / len(secretVal)
+				return v, []byte(strings.Repeat(secretVal, reps)), nil
+			},
+			leaked: func(forwarded string) bool {
+				return strings.Contains(strings.ReplaceAll(forwarded, Redacted, ""), "password")
+			},
+		},
+		{
+			// 3d2 / 1g2 verbatim: a short prefix token nested inside a
+			// longer credential that starts with it -- named in task
+			// 1g2's own annotation as reproduced at the 3d2 round and
+			// again here (the "AAAA"/"AAAAdb-password-42" shape). This
+			// is the shape task 1g2's own round-2 review found: the
+			// filler-only buffer ends in a way that makes a COMPLETE
+			// occurrence of the longer, 18-byte form land exactly where
+			// the plain keep-back cut would fall once tail is appended.
+			name: "prefix-token-nested-in-credential",
+			build: func(total int) (*Values, []byte, []byte) {
+				v := &Values{}
+				v.Add([]byte("AAAA"))
+				v.Add([]byte("AAAAdb-password-42"))
+				tail := "db-password-42"
+				filler := total - len(tail)
+				return v, []byte(strings.Repeat("A", filler)), []byte(tail)
+			},
+			leaked: func(forwarded string) bool {
+				return strings.Contains(forwarded, "db-password-42")
+			},
+		},
+		{
+			// A four-level nested chain (n1 inside n2 inside n3 inside
+			// n4, each tracked separately) appended after a dense
+			// filler of n1's own periodic pattern -- stresses
+			// protectedCrossing across several simultaneously-open
+			// protected spans of different lengths at once, not just
+			// two.
+			name: "four-level-nested-chain",
+			build: func(total int) (*Values, []byte, []byte) {
+				v := &Values{}
+				n1 := "N1N1"
+				n2 := n1 + "N2N2"
+				n3 := n2 + "N3N3"
+				n4 := n3 + "N4N4"
+				v.Add([]byte(n1))
+				v.Add([]byte(n2))
+				v.Add([]byte(n3))
+				v.Add([]byte(n4))
+				tail := "N2N2N3N3N4N4"
+				filler := total - len(tail)
+				return v, []byte(strings.Repeat("N1", filler/2+1)[:filler]), []byte(tail)
+			},
+			leaked: func(forwarded string) bool {
+				stripped := strings.ReplaceAll(forwarded, Redacted, "")
+				return strings.Contains(stripped, "N2N2") || strings.Contains(stripped, "N3N3") || strings.Contains(stripped, "N4N4")
+			},
+		},
+		{
+			// task 1g2 round 3 (found by independent review during this
+			// task's own self-review, before round 2's fix ever
+			// shipped): a periodic filler driver p, the registry's
+			// longest tracked form l ending mid-buffer, and a THIRD,
+			// shorter, UNRELATED form m whose occurrence overlaps l's
+			// own tail and extends past l's end. Resolving past only
+			// occurrences of length == longest (an earlier version of
+			// the round-2 fix) stops at l's end and leaves m split;
+			// resolving past any occurrence that is not itself a
+			// prefix of something longer -- the actual fix -- resolves
+			// past both in one pass, since m is not a prefix of l or p
+			// either.
+			name: "third-form-overlaps-maximal-occurrence",
+			build: func(total int) (*Values, []byte, []byte) {
+				v := &Values{}
+				p := "ABAB"
+				l := "ABAB" + strings.Repeat("Q", 16) // 20 bytes: longest
+				m := "QQQQQ" + "42Pas"                // 10 bytes: overlaps l's tail
+				v.Add([]byte(p))
+				v.Add([]byte(l))
+				v.Add([]byte(m))
+				tail := strings.Repeat("Q", 16) + "42Pas" // l's non-filler suffix + m's own trailing bytes
+				filler := total - len(tail)
+				return v, []byte(strings.Repeat("AB", filler/2+1)[:filler]), []byte(tail)
+			},
+			leaked: func(forwarded string) bool {
+				return strings.Contains(forwarded, "42Pas")
+			},
+		},
+		{
+			// task 1g2 round 4: p ("AAAA") is both the filler driver AND
+			// q's own prefix, forcing crossed==true exactly like round
+			// 2's shape. q ("AAAA"+"Y"*16) is the registry's own longest
+			// tracked form, so a span-level "is q's full text a prefix
+			// of something longer" check (round 3's fix) judges it
+			// trivially safe to resolve past in full. But n
+			// ("Y"*8+"ZZZZ") is a separate, shorter tracked form whose
+			// forming prefix hides inside q's own last 8 bytes -- a
+			// span-level check never considers a form starting partway
+			// through another span, only found by checking every
+			// trailing-byte-count of s directly against every tracked
+			// form's own prefix (longestKeepBackForForcedFlush).
+			name: "fourth-form-forming-prefix-mid-span",
+			build: func(total int) (*Values, []byte, []byte) {
+				v := &Values{}
+				p := "AAAA"
+				q := "AAAA" + strings.Repeat("Y", 16) // 20 bytes: registry's own longest
+				n := strings.Repeat("Y", 8) + "ZZZZ"  // 12 bytes: hides inside q's own last 8 bytes
+				v.Add([]byte(p))
+				v.Add([]byte(q))
+				v.Add([]byte(n))
+				tail := strings.Repeat("Y", 16) + "ZZZZ" // q's non-filler suffix + n's own completing bytes
+				filler := total - len(tail)
+				return v, []byte(strings.Repeat("A", filler)), []byte(tail)
+			},
+			leaked: func(forwarded string) bool {
+				return strings.Contains(strings.ReplaceAll(forwarded, Redacted, ""), "ZZZZ")
+			},
+		},
+	}
+
+	sizes := []int{80 << 10, 256 << 10, 512 << 10, 2 << 20} // below flushStallCap, at it, and twice further past it
+
+	for _, sh := range shapes {
+		for _, size := range sizes {
+			t.Run(fmt.Sprintf("%s/%dKiB", sh.name, size>>10), func(t *testing.T) {
+				// Check 1 (cross-call / task 1g2 round 1's shape): call
+				// FlushPoint on the FILLER ALONE first -- the tail has
+				// not arrived yet, exactly like a relay whose child
+				// hasn't written the rest of the line -- forcing the cap
+				// or the dense chain to resolve without the tail in
+				// view. Only afterward is the retained remainder
+				// combined with tail and redacted, mimicking the tail
+				// arriving on a later Write. This is the shape every
+				// dedicated 3d2/rd2/1g2-round-1 regression test above
+				// uses, and is essential: with the tail already baked
+				// into one buffer (checks 2 and 3 below), a capped flush
+				// can swallow filler and tail together in one opaque
+				// marker with nothing left pending to leak later, which
+				// does not exercise this failure mode at all.
+				splitV, splitFiller, splitTail := sh.build(size)
+				splitOut, splitConsumed := splitV.FlushPoint(string(splitFiller))
+				var splitForwarded strings.Builder
+				var splitRemainder []byte
+				if splitConsumed > 0 {
+					splitForwarded.WriteString(splitOut)
+					splitRemainder = splitFiller[splitConsumed:]
+				} else {
+					splitRemainder = splitFiller
+				}
+				splitRemainder = append(append([]byte(nil), splitRemainder...), splitTail...)
+				splitForwarded.WriteString(splitV.Redact(string(splitRemainder)))
+				if sh.leaked(splitForwarded.String()) {
+					t.Fatalf("invariant (A) violated on the split (filler-then-tail) path: a raw secret fragment leaked into forwarded output (%d of %d bytes)", splitForwarded.Len(), size)
+				}
+
+				// Check 2 (within-call / task 1g2 round 2's shape):
+				// filler and tail already combined into ONE buffer
+				// before the very first FlushPoint call, so a complete
+				// occurrence ending exactly where the naive keep-back
+				// cut would fall is visible from the start -- the shape
+				// every dedicated round-2 repro (see
+				// extendPastCompleteLongestOccurrences) uses.
+				direct, directFiller, directTail := sh.build(size)
+				directData := append(append([]byte(nil), directFiller...), directTail...)
+				directOut, directConsumed := direct.FlushPoint(string(directData))
+				directForwarded := directOut
+				if directConsumed > 0 && directConsumed < len(directData) {
+					directForwarded += direct.Redact(string(directData[directConsumed:]))
+				} else if directConsumed <= 0 {
+					directForwarded = direct.Redact(string(directData))
+				}
+				if sh.leaked(directForwarded) {
+					t.Fatalf("invariant (A) violated on the direct single-call path: a raw secret fragment leaked into forwarded output (%d of %d bytes)", len(directForwarded), size)
+				}
+
+				// Check 3: the realistic end-to-end path, chunked
+				// exactly like a real relay (32 KiB, io.Copy's
+				// default), which also measures invariant (B).
+				v, relayFiller, relayTail := sh.build(size)
+				data := append(append([]byte(nil), relayFiller...), relayTail...)
+				start := time.Now()
+				forwarded, maxPending := simulateRelay(v, data, chunk)
+				elapsed := time.Since(start)
+
+				if sh.leaked(forwarded) {
+					t.Fatalf("invariant (A) violated: a raw secret fragment leaked into forwarded output (%d of %d bytes)", len(forwarded), size)
+				}
+
+				longest := 0
+				for _, e := range v.snapshot() {
+					if e.contained && len(e.form) <= MaxSplitGuard {
+						longest = max(longest, len(e.form))
+					}
+				}
+				bound := flushStallCap + longest + chunk
+				if maxPending > bound {
+					t.Fatalf("invariant (B) violated: pending reached %d bytes, want <= %d (flushStallCap=%d + longest=%d + chunk=%d)", maxPending, bound, flushStallCap, longest, chunk)
+				}
+
+				// A generous ceiling that scales with size: comfortably
+				// clears genuinely linear cost, but a quadratic blow-up
+				// (mb2/le2's own regressions, seconds per MiB once
+				// unbounded) blows straight through it even at this
+				// slack.
+				deadline := 5*time.Second + time.Duration(float64(size)/(1<<20)*3)*time.Second
+				if elapsed > deadline {
+					t.Fatalf("invariant (B) violated: took %s for %d bytes, want <= %s (roughly-linear cost, not quadratic)", elapsed, size, deadline)
+				}
+			})
+		}
+	}
+}
+
+// TestValuesFlushPointDividerTailAlignmentSweep is a permanent regression
+// test for the exact breadth the task 1g2 annotation's own probe reported:
+// a "="*40 divider registered alongside a longer form ending in
+// "TAILSECRET99" leaked at 24 of 40 tested filler alignments against the
+// then-shipped code (0 of 40 at the pre-le2 parent). It sweeps filler
+// length across many alignments (more than the original 40) at a size past
+// flushStallCap, and asserts zero leaks at every one -- not just the one
+// alignment the other shapes above happen to hit.
+func TestValuesFlushPointDividerTailAlignmentSweep(t *testing.T) {
+	t.Parallel()
+	const divider = "===================================" + "=====" // 40 bytes, self-overlapping
+	const tail = "TAILSECRET99"
+	if len(divider) != 40 {
+		t.Fatalf("test setup: len(divider) = %d, want 40", len(divider))
+	}
+	longer := divider + tail // 52 bytes
+
+	leakCount := 0
+	for alignment := range 64 {
+		v := &Values{}
+		v.Add([]byte(divider))
+		v.Add([]byte(longer))
+
+		base := flushStallCap + 4096 // comfortably past the cap
+		filler := strings.Repeat("=", base+alignment)
+
+		// Split path: filler alone first (tail not yet arrived), then
+		// combine whatever's retained with the tail -- the shape that
+		// actually exercises the cap-forced flush before the longer
+		// occurrence is even visible.
+		out, consumed := v.FlushPoint(filler)
+		var forwarded strings.Builder
+		var remainder string
+		if consumed > 0 {
+			forwarded.WriteString(out)
+			remainder = filler[consumed:]
+		} else {
+			remainder = filler
+		}
+		forwarded.WriteString(v.Redact(remainder + tail))
+
+		if strings.Contains(forwarded.String(), tail) {
+			leakCount++
+			t.Errorf("alignment %d: raw tail leaked: ...%q", alignment, forwarded.String()[max(0, forwarded.Len()-40):])
+		}
+	}
+	if leakCount > 0 {
+		t.Fatalf("%d of 64 alignments leaked (want 0; task 1g2's annotation reported 24 of 40 leaking pre-fix)", leakCount)
+	}
+}
+
+// TestValuesFlushPointThirdFormOverlapsMaximalOccurrence is a permanent
+// regression test for task 1g2 round 3: an independent review, performed as
+// part of this task's own mandated self-review BEFORE round 2's fix ever
+// shipped, found that extending cut past only occurrences of the registry's
+// single longest tracked length is not enough. With three (or more) tracked
+// forms, resolving past one maximal-length occurrence can land the
+// resulting cut inside a SEPARATE, shorter, unrelated occurrence that
+// independently overlaps and extends past the maximal one's own end,
+// leaving THAT occurrence split instead -- the same class of leak as round
+// 2's, just one level removed. Shapes:
+//   - p ("ABAB", 4 bytes): a periodic filler driver, matching at every even
+//     offset in a repeated "AB" stream, so it forms one dense,
+//     self-overlapping, gapless chain from offset 0 -- the same mechanism
+//     every crossed/capped shape in this file relies on to reach the escape
+//     hatch at all.
+//   - l ("ABAB"+"Q"*16, 20 bytes): the registry's longest tracked form,
+//     landing so its naive keep-back cut falls inside it (exactly like
+//     round 2's "AAAAdb-password-42").
+//   - m ("QQQQQ"+"42Pas", 10 bytes): a shorter, INDEPENDENT tracked form
+//     that is NOT a prefix of l or p, whose occurrence starts inside l's
+//     own tail and extends 5 bytes past l's end.
+//
+// A version of the fix that only extends past occurrences of length ==
+// longest resolves past l (landing cut at l's own end) but then leaves m
+// split there, stranding m's trailing "42Pas" -- unrecognisable on its own
+// -- in pending forever. The fix that extends past any occurrence NOT a
+// prefix of something longer (regardless of its length) resolves past both
+// l and m in the same single pass, since m is not a prefix of any longer
+// tracked form either.
+func TestValuesFlushPointThirdFormOverlapsMaximalOccurrence(t *testing.T) {
+	t.Parallel()
+	v := &Values{}
+	p := "ABAB"
+	l := "ABAB" + strings.Repeat("Q", 16) // 20 bytes: longest
+	m := "QQQQQ" + "42Pas"                // 10 bytes: overlaps l's tail, extends past it
+	v.Add([]byte(p))
+	v.Add([]byte(l))
+	v.Add([]byte(m))
+
+	fillerLen := flushStallCap
+	filler := strings.Repeat("AB", fillerLen/2+1)[:fillerLen]
+	s := filler + l + "42Pas" // l immediately followed by m's own trailing bytes
+	if len(s) <= flushStallCap {
+		t.Fatalf("test setup: len(s) = %d, want > flushStallCap (%d)", len(s), flushStallCap)
+	}
+
+	out, consumed := v.FlushPoint(s)
+	if out != Redacted {
+		t.Fatalf("FlushPoint = (%q, %d), want the single opaque marker %q as out", out, consumed, Redacted)
+	}
+	if consumed < len(s) {
+		tail := s[consumed:]
+		red := v.Redact(tail)
+		if red == tail && tail != "" {
+			t.Fatalf("retained tail %q forwarded completely unredacted: raw fragment of a tracked secret leaked (task 1g2 round 3)", tail)
+		}
+		if strings.Contains(red, "42Pas") {
+			t.Fatalf("m's trailing bytes leaked raw: retained tail %q, Redact() = %q", tail, red)
+		}
+	}
+}
+
+// TestValuesFlushPointForthFormFormingPrefixMidSpan is a permanent
+// regression test for task 1g2 round 4, found through this task's own
+// hand-derivation immediately after round 3 (extendPastResolvableOccurrences)
+// landed, before it ever shipped: round 3 judged a matched SPAN safe to
+// extend past whenever that span's own FULL text was not a prefix of some
+// other, longer tracked form -- but a DIFFERENT tracked form's forming
+// prefix can start PARTWAY THROUGH that span, not at the span's own start,
+// which a span-level check never examines at all.
+//
+// Shapes: p ("AAAA", 4 bytes) is both the periodic filler driver AND q's
+// own prefix, so the filler's dense "AAAA" chain flows seamlessly into q
+// with no natural gap, forcing crossed==true exactly like round 2's
+// "AAAAdb-password-42" shape. q ("AAAA"+"Y"*16, 20 bytes) is the
+// registry's own longest tracked form, so round 3's check judged it
+// trivially safe to extend past (nothing is longer than it). But n
+// ("Y"*8+"ZZZZ", 12 bytes) is a separate, shorter tracked form whose
+// forming prefix ("Y"*8) is hiding inside q's own last 8 bytes -- n is
+// longer than that specific 8-byte chunk, but shorter than q as a whole,
+// so round 3's "is q's full text a prefix of something longer" check
+// never considered n at all. Round 3's fix swept q's entire 20 bytes,
+// including n's forming prefix, stranding it; the byte-suffix fix
+// (longestKeepBackForForcedFlush) correctly retains exactly the last 8
+// bytes ("YYYYYYYY"), independent of q's own span boundaries.
+func TestValuesFlushPointForthFormFormingPrefixMidSpan(t *testing.T) {
+	t.Parallel()
+	v := &Values{}
+	p := "AAAA"
+	q := "AAAA" + strings.Repeat("Y", 16) // 20 bytes: registry's own longest
+	n := strings.Repeat("Y", 8) + "ZZZZ"  // 12 bytes: matches q's own last 8 bytes as ITS prefix
+	v.Add([]byte(p))
+	v.Add([]byte(q))
+	v.Add([]byte(n)) // n's own completion never arrives in this call
+
+	filler := strings.Repeat("A", flushStallCap)
+	s := filler + q // q ends exactly at len(s)
+	if len(s) <= flushStallCap {
+		t.Fatalf("test setup: len(s) = %d, want > flushStallCap (%d)", len(s), flushStallCap)
+	}
+
+	out, consumed := v.FlushPoint(s)
+	if out != Redacted {
+		t.Fatalf("FlushPoint = (%q, %d), want the single opaque marker %q as out", out, consumed, Redacted)
+	}
+
+	qStart := len(s) - len(q)
+	nPrefixStart := qStart + 12 // q's offset 12: where the last 8 "Y"s (== n's forming prefix) begin
+	if consumed > nPrefixStart {
+		t.Fatalf("consumed=%d swept past n's forming-prefix start (%d): if n's remaining bytes ('ZZZZ') arrive on a later call, they leak raw with no 'YYYYYYYY' prefix left in pending to recognise them by (task 1g2 round 4)", consumed, nPrefixStart)
+	}
+	// Positive check: once n's completion DOES arrive (a later write), the
+	// retained tail combined with it must be fully recognised and
+	// redacted -- the retained tail alone is deliberately NOT expected to
+	// redact to anything on its own here, since by construction it is
+	// only n's still-incomplete forming prefix ("YYYYYYYY"), not a
+	// complete occurrence of anything; asserting otherwise would be
+	// testing the wrong thing.
+	if consumed < len(s) {
+		tail := s[consumed:]
+		completed := tail + "ZZZZ" // n's own completing bytes, arriving on a later write
+		red := v.Redact(completed)
+		if strings.Contains(red, "ZZZZ") {
+			t.Fatalf("n's completion did not get redacted once combined with the retained tail: retained=%q, Redact(retained+\"ZZZZ\")=%q", tail, red)
+		}
+		if !strings.Contains(red, Redacted) {
+			t.Fatalf("completed secret was not redacted at all: %q", red)
+		}
+	}
+}
+
+// TestLongestPrefixSuffixOverlap unit-tests longestPrefixSuffixOverlap (the
+// KMP failure-function helper longestKeepBackForForcedFlush relies on)
+// directly: the length of the longest PROPER prefix of form that is also a
+// suffix of s. Each case also cross-checks against a naive O(n^2)
+// reference implementation, since this exact kind of off-by-one has
+// repeatedly been the root cause of leaks in this file's history.
+func TestLongestPrefixSuffixOverlap(t *testing.T) {
+	cases := []struct {
+		name string
+		form string
+		s    string
+		want int
+	}{
+		{"no overlap", "abcdef", "xyzxyz", 0},
+		{"form longer than s, no overlap", "abcdefgh", "xyz", 0},
+		{"exact proper-prefix suffix match", "abcdef", "xxxabcde", 5}, // "abcde" (5 of 6 bytes, the max proper prefix) is a suffix of s
+		{"only 1-byte overlap", "abcdef", "xxxxxa", 1},
+		{"s shorter than form's max prefix", "abcdefgh", "cde", 0},        // "cde" doesn't match any prefix of form
+		{"s shorter than form's max prefix, matches", "cdefgh", "xxc", 1}, // form starts with "c"; s ends with "c"
+		{"empty form", "", "abc", 0},
+		{"single-byte form", "a", "xyz", 0},                                   // maxK = len(form)-1 = 0
+		{"periodic self-overlap", "x1x1x1x1x1", strings.Repeat("x1", 100), 8}, // longest proper prefix (9 bytes "x1x1x1x1x") is NOT a suffix due to parity; 8 bytes "x1x1x1x1" is
+		{"full buffer equals form's proper prefix", "abcdefgh", "abcdefg", 7}, // s IS exactly form's 7-byte proper prefix
+		{"s exactly one byte", "abcdef", "a", 1},
+		{"s exactly one byte, no match", "abcdef", "z", 0},
+		{"repeated pattern, full overlap up to maxK", "AAAA", strings.Repeat("A", 50), 3}, // maxK=3, "AAA" is a suffix
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := longestPrefixSuffixOverlap(tc.form, tc.s)
+			if got != tc.want {
+				t.Fatalf("longestPrefixSuffixOverlap(%q, %q) = %d, want %d", tc.form, tc.s, got, tc.want)
+			}
+			// Cross-check against a naive O(n^2) reference implementation.
+			want := naiveLongestPrefixSuffixOverlap(tc.form, tc.s)
+			if got != want {
+				t.Fatalf("longestPrefixSuffixOverlap(%q, %q) = %d, disagrees with naive reference %d", tc.form, tc.s, got, want)
+			}
+		})
+	}
+}
+
+// naiveLongestPrefixSuffixOverlap is longestPrefixSuffixOverlap's O(n^2)
+// reference: try every k from the largest possible down to 1 and check
+// directly with strings.HasSuffix. Used only to cross-check the KMP-based
+// implementation in tests, never in the production path.
+func naiveLongestPrefixSuffixOverlap(form, s string) int {
+	maxK := len(form) - 1
+	if maxK > len(s) {
+		maxK = len(s)
+	}
+	for k := maxK; k >= 1; k-- {
+		if strings.HasSuffix(s, form[:k]) {
+			return k
+		}
+	}
+	return 0
+}
+
+// TestLongestPrefixSuffixOverlapRandomized cross-checks the KMP-based
+// implementation against the naive O(n^2) reference over many small random
+// inputs, to catch any off-by-one the hand-derived cases above might not
+// happen to exercise.
+func TestLongestPrefixSuffixOverlapRandomized(t *testing.T) {
+	alphabet := "abAB"
+	gen := func(seed, n int) string {
+		b := make([]byte, n)
+		x := seed*2654435761 + 1
+		for i := range b {
+			x = x*1103515245 + 12345
+			b[i] = alphabet[(x>>16)&3]
+		}
+		return string(b)
+	}
+	for seed := 0; seed < 500; seed++ {
+		formLen := 1 + seed%12
+		sLen := seed % 20
+		form := gen(seed, formLen)
+		s := gen(seed+9999, sLen)
+		got := longestPrefixSuffixOverlap(form, s)
+		want := naiveLongestPrefixSuffixOverlap(form, s)
+		if got != want {
+			t.Fatalf("seed %d: longestPrefixSuffixOverlap(%q, %q) = %d, want %d (naive)", seed, form, s, got, want)
+		}
 	}
 }

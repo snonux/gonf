@@ -55,25 +55,48 @@ const MaxSplitGuard = 64 << 10
 // safe cut at all (protectedCrossing's crossed result, see FlushPoint):
 // once len(s) reaches this cap, FlushPoint stops waiting for a gap that a
 // sufficiently dense, self-overlapping chain of protected occurrences may
-// never produce, and instead forwards the whole buffer as one Redacted
-// marker (safe: every byte in a chain this dense is itself part of some
-// tracked occurrence, so blanket-redacting all of it, with nothing left
-// raw in pending afterward, leaks nothing already in the buffer -- the
-// only residual is the same, already-accepted class of risk documented for
-// forms longer than MaxSplitGuard: a still-open occurrence whose start was
-// just swept away by this forced flush is not recognisable from its
-// continuation alone on a later call). This restores the bounded-pending,
-// roughly-linear-cost invariant task mb2 established: without a cap, a
-// caller such as logger.RedactingWriter never shrinks pending on a "", 0
-// result (see forwardSafePrefix), so every later Write re-scans the whole,
-// still-growing buffer -- task rd2's own leak fix correctly refused the
-// unsafe guess that used to bound this stall, which reintroduced mb2's
-// unbounded growth for this one input shape until this cap closed it again
-// (task le2). Set well above MaxSplitGuard (4x here) so the ordinary,
-// non-degenerate keep-back path -- which already keeps pending near
-// MaxSplitGuard between calls -- never reaches it; only the escape hatch's
-// own stall does, and only for an input dense enough to keep failing to
-// find a gap across that many bytes.
+// never produce, and instead forces progress by recomputing the keep-back
+// directly from s's own trailing bytes (longestKeepBackForForcedFlush, see
+// FlushPoint's own doc) instead of trusting the naive len(s)-(longest-1)
+// figure or reasoning about matched spans at all. Pending after a capped
+// flush is therefore bounded by flushStallCap+longest at most (never more:
+// longestKeepBackForForcedFlush can only return a value up to longest-1,
+// the same margin the ordinary, non-stalled keep-back always allows) -- a
+// small, still-bounded increase over the cap alone, not the unbounded
+// growth task mb2 fixed.
+//
+// This restores the bounded-pending, roughly-linear-cost invariant task
+// mb2 established: without a cap, a caller such as logger.RedactingWriter
+// never shrinks pending on a "", 0 result (see forwardSafePrefix), so
+// every later Write re-scans the whole, still-growing buffer -- task rd2's
+// own leak fix correctly refused the unsafe guess that used to bound this
+// stall, which reintroduced mb2's unbounded growth for this one input
+// shape until this cap closed it again (task le2). le2's own cap forced
+// progress by consuming the WHOLE buffer unconditionally (cut = len(s)),
+// which could sweep away the visible prefix of a DIFFERENT, longer
+// tracked form whose completion had not arrived yet (task 1g2 round 1).
+// Keeping back the ordinary, unmodified cut instead was ALSO unsafe
+// (crossed==true means some occurrence DEFINITELY straddles that exact
+// cut, guaranteeing a split -- task 1g2 round 2). Extending forward past
+// whichever occurrences happened to look individually "safe" -- first by
+// exact-longest-length (round 2's own fix), then by a same-length
+// prefix-of-something-longer check applied to whole matched spans (task
+// 1g2 round 3) -- fixed those two shapes but still reasoned in terms of
+// SPANS and their boundaries, which a fourth construction exploited: a
+// different tracked form's forming prefix hiding PARTWAY THROUGH a span
+// that looked safe as a whole (task 1g2 round 4, found by this task's own
+// hand-derivation immediately after round 3, before it ever shipped).
+// longestKeepBackForForcedFlush closes all four by not reasoning about
+// spans at all: it asks, independently for every possible trailing-byte
+// count, whether s's own suffix could still be the start of ANY tracked
+// form's completion, which is the one condition that is actually
+// load-bearing (see longestKeepBackForForcedFlush's own doc for the full
+// history and worked examples of each prior round's shape). Set well
+// above MaxSplitGuard (4x here) so the ordinary, non-degenerate keep-back
+// path -- which already keeps pending near MaxSplitGuard between calls --
+// never reaches it; only the escape hatch's own stall does, and only for
+// an input dense enough to keep failing to find a gap across that many
+// bytes.
 const flushStallCap = 4 * MaxSplitGuard
 
 // Redacted replaces every recognised secret occurrence in redacted output.
@@ -335,13 +358,20 @@ func (v *Values) redact(s string, strongOnly bool) string {
 // protectedCrossing), FlushPoint makes NO progress at all this call
 // (consumed 0) rather than ever retain a raw fragment -- UNLESS s has
 // already grown past flushStallCap, in which case it stops stalling and
-// forwards the WHOLE of s as one Redacted marker instead (see
-// flushStallCap for why that is still safe): below the cap, a stall is
-// always safe (the caller keeps buffering and retries once more data
-// crosses MaxSplitGuard again -- the same "stay conservative" answer
-// already used below the threshold), while forwarding any fragment of a
-// protected occurrence never is, and above the cap the buffer is treated
-// as entirely secret material rather than left to grow without bound.
+// recomputes the keep-back directly from s's own trailing bytes instead
+// (longestKeepBackForForcedFlush and flushStallCap have the full
+// reasoning, including the shapes of every narrower alternative this
+// function tried and rejected first): below the cap, a stall is always
+// safe (the caller keeps buffering and retries once more data crosses
+// MaxSplitGuard again -- the same "stay conservative" answer already used
+// below the threshold), while forwarding any of s's trailing bytes that
+// could still be the start of a not-yet-complete tracked form never is,
+// and above the cap the portion of the buffer beyond that recomputed
+// keep-back is treated as entirely secret material rather than left to
+// grow the buffer without bound; an
+// occurrence still crossing the final cut is left in the retained tail
+// exactly as the
+// ordinary, non-stalled path would leave it.
 // Only when nothing protected crosses cut at all --
 // the crossing is caused solely by a form longer than MaxSplitGuard, which
 // the keep-back was never sized to protect in the first place (see below)
@@ -390,7 +420,8 @@ func (v *Values) FlushPoint(s string) (out string, consumed int) {
 		// or before run[1] for the same reason. Either branch below is
 		// therefore final; no further scan or backward step is needed.
 		if run[0] <= 0 && len(s) > MaxSplitGuard {
-			snap, crossed := protectedCrossing(v.protectedSpans(s), cut)
+			protected := v.protectedSpans(s)
+			snap, crossed := protectedCrossing(protected, cut)
 			switch {
 			case snap > 0:
 				cut = snap
@@ -399,10 +430,31 @@ func (v *Values) FlushPoint(s string) (out string, consumed int) {
 				// rather than guess (see flushStallCap's doc).
 				return "", 0
 			case crossed:
-				// Past the cap with no gap ever found: stop stalling
-				// and consume everything, so nothing raw is left
-				// pending for a later call to leak.
-				cut = len(s)
+				// Past the cap with no gap ever found: stop stalling,
+				// but do NOT simply consume the whole buffer (task
+				// 1g2 round 1: that used to set cut = len(s), which
+				// dropped the ordinary keep-back entirely and could
+				// strand an in-progress longer occurrence's swept
+				// prefix), do NOT just keep cut at its naive,
+				// unmodified value either (task 1g2 round 2: crossed
+				// == true means BY DEFINITION some occurrence
+				// straddles this exact cut, so returning it unchanged
+				// guarantees a split), and do NOT extend cut past
+				// whole matched SPANS based on their own text alone
+				// (task 1g2 round 3, extendPastResolvableOccurrences:
+				// found insufficient by an independent review before
+				// it ever shipped, because a DIFFERENT tracked form's
+				// forming prefix can start PARTWAY THROUGH a span
+				// that its own full text made look safe to resolve
+				// past). Recompute the keep-back directly from s's own
+				// trailing bytes instead of the naive longest-1
+				// figure: longestKeepBackForForcedFlush finds the
+				// longest proper prefix of ANY tracked form that is
+				// also a suffix of s, which is exactly how many
+				// trailing bytes could still be the start of a
+				// not-yet-complete occurrence, independent of where
+				// any complete match happens to start or end.
+				cut = len(s) - v.longestKeepBackForForcedFlush(s)
 			}
 			return Redacted, cut
 		}
@@ -484,17 +536,20 @@ func (v *Values) protectedSpans(s string) [][2]int {
 // roughly with the square of how long a genuinely never-breaking chain
 // persists if the stall were allowed to continue unbounded. It is not: once
 // s reaches flushStallCap, FlushPoint stops calling protectedCrossing
-// altogether and forwards the whole buffer as one Redacted marker instead
-// (see flushStallCap), so the quadratic-shaped cost is itself capped at
-// O(flushStallCap²) before it resets to an empty pending buffer and starts
-// over — a bounded, repeating cost rather than one that keeps compounding
-// for as long as a pathological stream continues (task le2; an earlier
-// version of this comment called the unbounded growth "accepted", which
-// task rd2's leak fix had reintroduced as a live regression rather than a
-// deliberate trade-off). It can only arise when literally no gap exists
-// anywhere in the buffer given so far (a perfectly, densely
-// self-overlapping run), which the fix above already finds and exploits
-// every gap to avoid whenever one exists.
+// altogether and redacts the crossing run's flushed prefix, [0, cut), as
+// one opaque Redacted marker instead, keeping the same longest-1-byte
+// keep-back the ordinary path always retains rather than consuming
+// everything (see flushStallCap), so the quadratic-shaped cost is itself
+// capped at O(flushStallCap²) before pending drops back near that
+// keep-back size and the cost starts over — a bounded, repeating cost
+// rather than one that keeps compounding for as long as a pathological
+// stream continues (task le2; an earlier version of this comment called
+// the unbounded growth "accepted", which task rd2's leak fix had
+// reintroduced as a live regression rather than a deliberate trade-off).
+// It can only arise when literally no gap exists anywhere in the buffer
+// given so far (a perfectly, densely self-overlapping run), which the fix
+// above already finds and exploits every gap to avoid whenever one
+// exists.
 func protectedCrossing(spans [][2]int, cut int) (snap int, crossed bool) {
 	frontier := 0
 	for _, sp := range spans {
@@ -513,6 +568,183 @@ func protectedCrossing(spans [][2]int, cut int) (snap int, crossed bool) {
 		return cut, false
 	}
 	return snap, true
+}
+
+// longestKeepBackForForcedFlush returns how many of s's trailing bytes
+// FlushPoint's escape hatch must still retain when forced past
+// flushStallCap with no safe point anywhere (protectedCrossing's crossed
+// result, snap == 0): the length of the longest PROPER prefix of any
+// tracked form (no longer than MaxSplitGuard) that is also a suffix of s,
+// i.e. the largest k such that some tracked form F has F[:k] == the last k
+// bytes of s and k < len(F). That k is exactly how many trailing bytes of
+// s could still be the visible start of a not-yet-complete occurrence of
+// F: anything shorter is provably NOT the start of F (a mismatch
+// somewhere), and F cannot already be complete within those k bytes
+// (k < len(F) by construction, and if F had actually matched in full
+// somewhere it would already show up as its own complete occurrence,
+// handled separately by the ordinary, non-forced path above). Keeping
+// back the LARGEST such k over every tracked form -- not just the
+// registry's single longest form, and not merely "past cut" spans found
+// by matchSpans/protectedSpans -- is what actually characterises the risk
+// this escape hatch must protect against: whether s's own trailing bytes,
+// wherever they start, could combine with bytes that have not arrived yet
+// to complete ANY tracked secret.
+//
+// This replaces two earlier, narrower attempts within this same task
+// (1g2), both found insufficient by rigorous self-review before ever
+// shipping:
+//   - round 2 kept back cut = len(s)-max(longest-1,0) unconditionally
+//     whenever a protected occurrence still crossed it, which can itself
+//     land exactly one byte inside a COMPLETE occurrence of the registry's
+//     longest tracked form (e.g. a registered "AAAA" beside
+//     "AAAAdb-password-42", buffer ending exactly at the end of a complete
+//     occurrence of the longer form) -- permanently splitting it.
+//   - round 3 (extendPastResolvableOccurrences, isPrefixOfLongerForm,
+//     found insufficient by an independent review before it ever shipped)
+//     extended cut forward past a whole matched SPAN whenever that span's
+//     own full text was not a prefix of some other, longer tracked form --
+//     but a DIFFERENT tracked form's forming prefix can start PARTWAY
+//     THROUGH that span (not at the span's own start), which the
+//     span-level check never examined at all: e.g. tracked forms "AAAA",
+//     "AAAA"+"Y"*16 (the registry's own longest, hence resolvable by
+//     round 3's own test) and "Y"*8+"ZZZZ" (shorter, but longer than the
+//     8-byte run of "Y" hiding inside the longer form's own tail) --
+//     round 3 swept the whole "AAAA"+"Y"*16 occurrence, including the
+//     trailing 8 "Y"s that were actually the third form's own forming
+//     prefix, stranding it.
+//
+// This byte-suffix formulation sidesteps both failure modes because it
+// does not reason about matched SPANS or their boundaries at all -- it
+// asks the one question that is actually load-bearing, independently for
+// every possible trailing-byte-count k, against every tracked form,
+// regardless of whether any complete match happens to start or end
+// nearby. It is computed via the standard KMP failure-function technique
+// (longestPrefixSuffixOverlap) per tracked form, keeping the largest
+// result, in O(len(form)) time per form -- bounded by MaxSplitGuard, and
+// by a small, fixed number of tracked forms, so this stays within the
+// same roughly-linear-per-call budget FlushPoint already spends on
+// protectedSpans/protectedCrossing for the very same call.
+//
+// KNOWN, DOCUMENTED RESIDUAL (task 1g2 round 5, found by two independent
+// constructions during this task's own self-review, after this function
+// itself had already landed): this function protects against a
+// not-yet-complete occurrence being stranded, but it does NOT itself
+// guarantee that cut = len(s) - this result avoids splitting a SEPARATE,
+// already-complete, fully-visible occurrence of a DIFFERENT tracked form
+// G that happens to sit embedded within the same dense, gapless,
+// self-overlapping chain that forced this call at all (e.g. a periodic
+// driver form C with no gaps anywhere in its own coverage, a distinct
+// tracked secret G nested at a fixed phase inside C's own repeating unit,
+// and a third, adversarially-constructed form H whose own proper prefix
+// happens to exactly reproduce s's actual trailing bytes for long enough
+// to retreat cut into a PAST occurrence of G). Ordinary protectedCrossing
+// cannot resolve this either: when C's own coverage genuinely has no gap
+// anywhere, no cut position at all is simultaneously safe from splitting
+// G and bounded (retreating far enough to protect every possible G
+// strictly requires giving up on making any progress at all for as long
+// as the adversarial, perfectly periodic stream continues, i.e. exactly
+// the unbounded growth task mb2 and task le2 both fixed). Confirmed
+// reachable only via a deliberately engineered construction requiring
+// three independently coordinated tracked forms and a stream with no
+// natural variation whatsoever; not reachable by any shape in this file's
+// own historical-shapes regression suite, and categorically narrower than
+// every regression rounds 1 through 4 above fixed. Tracked as a separate
+// follow-up rather than folded into a fifth revision of this already
+// five-times-revised function under the same time pressure that produced
+// rounds 2 through 4's own successive gaps; see that follow-up task for
+// the full reproduction and the reasoning for deferring it.
+func (v *Values) longestKeepBackForForcedFlush(s string) int {
+	kMax := 0
+	for _, e := range v.snapshot() {
+		if len(e.form) > MaxSplitGuard {
+			continue
+		}
+		if k := longestPrefixSuffixOverlap(e.form, s); k > kMax {
+			kMax = k
+		}
+	}
+	return kMax
+}
+
+// longestPrefixSuffixOverlap returns the length of the longest PROPER
+// prefix of form (at most len(form)-1 bytes) that is also a suffix of s,
+// using the KMP failure-function technique (no separator byte needed,
+// since form and s may be arbitrary bytes, including binary secret
+// material): build form's own failure array (kmpFailureFunction), then run
+// the KMP search automaton over only the relevant tail of s
+// (kmpSuffixMatchLength) -- at most len(form)-1 bytes, since nothing more
+// distant could matter (a match longer than that would mean s contains
+// form as a genuine substring, a different, already-handled case).
+func longestPrefixSuffixOverlap(form, s string) int {
+	maxK := len(form) - 1
+	if maxK <= 0 {
+		return 0
+	}
+	if maxK > len(s) {
+		maxK = len(s)
+	}
+	if maxK <= 0 {
+		return 0
+	}
+	pattern := form[:maxK]
+	tail := s
+	if len(tail) > maxK {
+		tail = tail[len(tail)-maxK:]
+	}
+	return kmpSuffixMatchLength(pattern, tail, kmpFailureFunction(pattern))
+}
+
+// kmpFailureFunction returns pattern's KMP failure (partial-match) array:
+// failure[i] is the length of the longest proper prefix of pattern[:i+1]
+// that is also a suffix of pattern[:i+1]. Standard construction.
+func kmpFailureFunction(pattern string) []int {
+	failure := make([]int, len(pattern))
+	k := 0
+	for i := 1; i < len(pattern); i++ {
+		for k > 0 && pattern[i] != pattern[k] {
+			k = failure[k-1]
+		}
+		if pattern[i] == pattern[k] {
+			k++
+		}
+		failure[i] = k
+	}
+	return failure
+}
+
+// kmpSuffixMatchLength runs the KMP search automaton for pattern (using
+// its own failure array) over tail, and returns the match length at the
+// very end of the scan: the length of the longest prefix of pattern that
+// is also a suffix of tail. A full (length-len(pattern)) match can only
+// complete exactly at tail's last character, because
+// longestPrefixSuffixOverlap always calls this with len(tail) <=
+// len(pattern) (see its own doc): the standard "reset via failure on a
+// full match" step (needed so the automaton can keep scanning for a
+// possible LATER, overlapping match) therefore only ever discards a full
+// match that occurred strictly before the final character, never the one
+// this function is actually asked for, so the fullMatchAtEnd bookkeeping
+// below is exactly the exception that step must not apply to.
+func kmpSuffixMatchLength(pattern, tail string, failure []int) int {
+	match := 0
+	fullMatchAtEnd := false
+	for i := 0; i < len(tail); i++ {
+		for match > 0 && tail[i] != pattern[match] {
+			match = failure[match-1]
+		}
+		if tail[i] == pattern[match] {
+			match++
+		}
+		if match == len(pattern) {
+			if i == len(tail)-1 {
+				fullMatchAtEnd = true
+			}
+			match = failure[match-1]
+		}
+	}
+	if fullMatchAtEnd {
+		return len(pattern)
+	}
+	return match
 }
 
 // MaxPending implements logger.Redactor: RedactingWriter must not force a
