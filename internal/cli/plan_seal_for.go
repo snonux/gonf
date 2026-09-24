@@ -36,6 +36,12 @@ import (
 // target; it means -for's isolation is a best-effort superset, not an exact
 // single-host guarantee.
 
+// forFilenameUnsafe matches every byte sanitizeHostFilename replaces with
+// "_": everything except a conservative filename alphabet. It is this
+// file's only package-level variable, kept at the top with the file's type
+// (task rg2) so the state the -for path carries is visible at a glance.
+var forFilenameUnsafe = regexp.MustCompile(`[^A-Za-z0-9._-]`)
+
 // sealedHostPlan is one target host's recorded-and-sealed plan, held in
 // memory until every host in the -for run has succeeded (see planSealedFor).
 type sealedHostPlan struct {
@@ -197,10 +203,6 @@ func sealPerHostPlans(hosts []string, planID string, tasks []string, base []seal
 	}
 	return out, nil
 }
-
-// forFilenameUnsafe matches every byte sanitizeHostFilename replaces with
-// "_": everything except a conservative filename alphabet.
-var forFilenameUnsafe = regexp.MustCompile(`[^A-Za-z0-9._-]`)
 
 // sanitizeHostFilename turns a registered host name into dir/plan-<name>.age's
 // <name> fragment. An inventory host name is recipe-authored, not attacker

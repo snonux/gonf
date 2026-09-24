@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -213,6 +214,38 @@ func TestSelectBackend(t *testing.T) {
 	failing := &Service{svcManager: func() (string, error) { return "", errors.New("detect boom") }}
 	if _, err := failing.selectBackend(); err == nil || !strings.Contains(err.Error(), "detect boom") {
 		t.Errorf("detector err = %v, want detect boom", err)
+	}
+}
+
+// TestSelectBackendWiresInjectedDeps pins that selectBackend hands each
+// backend the dependency it uses from Service.backendDeps (task rg2): the
+// systemd backend probes through the injected systemd runner, every BSD
+// backend through the injected service runner, and neither reaches the
+// other's (nor the real one). Each probe is answered by exactly one of the
+// two fakes, which records which one ran.
+func TestSelectBackendWiresInjectedDeps(t *testing.T) {
+	for name, wantVia := range map[string]string{
+		"systemd": "systemd", "rcctl": "service", "freebsd": "service", "netbsd": "service",
+	} {
+		var via []string
+		fake := func(tag string) func(string, ...string) (string, string, int, error) {
+			return func(string, ...string) (string, string, int, error) {
+				via = append(via, tag)
+				return "", "", 0, nil
+			}
+		}
+		sr := &runners.ServiceRunners{Run: fake("service"), Manager: func() (string, error) { return name, nil }}
+		s := newServiceWith(sr, &runners.SystemdRunners{Run: fake("systemd")}, "d", nil)
+		b, err := s.selectBackend()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if _, err := b.running(unit{name: "d"}); err != nil {
+			t.Fatalf("%s: running: %v", name, err)
+		}
+		if len(via) != 1 || via[0] != wantVia {
+			t.Errorf("%s backend probed via %v, want only the injected %s runner", name, via, wantVia)
+		}
 	}
 }
 
