@@ -282,7 +282,7 @@ age -d -i key.txt out/plan.age | gonf apply -
 |---------|-----------|
 | `gonf plan -o dir -seal [-recipient r]…` | records into memory, encodes the push frame, seals to the union of `-recipient` and the operator recipients file; writes `dir/plan.age`; prints `wrote dir/plan.age (N ops, M recipients)`. Warns when `dir` still holds a `plan.jsonl` or `blobs/` from an earlier plaintext run (never deletes it: the operator's file). |
 | `gonf plan -seal -stdout …` | the same sealed bytes on stdout. |
-| `gonf plan -o dir -seal -for host\|cluster\|fleet …` (task 4b2) | **records once per host** (`api.RecordPlanForHost`, `internal/cli/plan_seal_for.go`), with the same push-alias host selection `PushHost` would use for that host (`inventory.SelectionForHosts([]string{host})`), so a `ForHosts` body for another host is not in the artifact; every host's plan is fully recorded and sealed in memory before anything is written. Seals each host's plan to that host's `api.WithPlanRecipient` plus the union of `-recipient`/recipients-file; writes `dir/plan-<host>.age` per host (the host name sanitized to `[A-Za-z0-9._-]`). Refuses before writing anything when any resolved host lacks a recipient (naming it) or when two resolved hosts would sanitize to the same filename. `-for` requires `-seal` (a static usage error otherwise) and, with `-stdout`, is refused unless it resolves to exactly one host. A plain `gonf plan` without `-for` records every `ForHosts` member (no selection), which is why a multi-host sealed artifact is never produced. |
+| `gonf plan -o dir -seal -for host\|cluster\|fleet …` (task 4b2) | **records once per host** (`api.RecordPlanForHost`, `internal/cli/plan_seal_for.go`), with the same push-alias host selection `PushHost` would use for that host (`inventory.SelectionForHosts([]string{host})`), so a `ForHosts` body for a host **outside that substring-based selection** is not in the artifact; every host's plan is fully recorded and sealed in memory before anything is written. This is a superset, not an exact single-host match (same caveat as a plain `gonf push`, see "Runbook" below): a host whose name or SSHHost is a substring of the target's (or vice versa) IS in the selection, and its `ForHosts` body — and any secret it reads — can physically land in the target's artifact. Seals each host's plan to that host's `api.WithPlanRecipient` plus the union of `-recipient`/recipients-file; writes `dir/plan-<host>.age` per host (the host name sanitized to `[A-Za-z0-9._-]`). Refuses before writing anything when any resolved host lacks a recipient (naming it) or when two resolved hosts would sanitize to the same filename. `-for` requires `-seal` (a static usage error otherwise) and, with `-stdout`, is refused unless it resolves to exactly one host. A plain `gonf plan` without `-for` records every `ForHosts` member (no selection), which is why a multi-host sealed artifact is never produced. |
 | `gonf plan -o dir` (no `-seal`) | unchanged (062 behaviour, plaintext + warning); the warning gains a hint `use -seal`. Whether `-seal` becomes the default for sensitive plans when a recipients file exists is a separate, user-approved decision (phase 3). |
 | `gonf apply [-identity f]… file` | sniffs the first line: `age-encryption.org/v1` means sealed, anything else is the existing JSONL path. The whole decrypted frame is decoded before anything is applied; the plan is then applied exactly like a plaintext plan file (`api.ApplyPlan`). |
 | `gonf apply [-identity f] -` | the same sniff on stdin (a sealed stream, a GONF-PUSH/1 frame, or bare JSONL). |
@@ -430,6 +430,23 @@ api.Host("blowfish",
 `age1pq`-only, hybrid-only policy every recipient in this design follows);
 a malformed or non-hybrid value is refused immediately as a declaration
 error, naming the host, never silently accepted.
+
+**Naming hosts so an artifact stays exactly one host's (task ng2):** `-for`'s
+per-host recording uses `inventory.SelectionForHosts`, the same
+substring-based selection a plain `gonf push` relies on (see "Operator UX"'s
+`-for` row and `internal/inventory/destination.go`) — it is a superset, not
+an exact single-host match. If `blowfish`'s inventory name or SSHHost is a
+substring of another registered host's (or vice versa — e.g. `web` and
+`web01`, or a host whose SSHHost is `web.db.example` next to an unrelated
+host named `db`), that other host's `ForHosts` body, including any secret it
+reads, is recorded alongside `blowfish`'s and physically ends up inside
+`plan-blowfish.age`, even though a `when_begin`/`hostname_contains` guard
+keeps it from ever actually applying there. Where an artifact must contain
+exactly one host's secrets — e.g. it will be shipped to a different admin,
+team or CI system than the one that controls the other host — avoid
+registering host names or SSH hosts that are substrings of one another, or
+audit `inventory.SelectionForHosts([]string{"blowfish"})`'s result before
+shipping.
 
 **3. Seal and ship the per-host artifact:**
 

@@ -1858,9 +1858,15 @@ the encrypted SSH transport, because the destination must write it.
   at a specific destination: `Host(..., api.WithPlanRecipient("age1pq…"))`
   names a host's own recipient, and `-for` records and seals ONCE PER
   TARGET HOST, writing `dir/plan-<host>.age` per host instead of one
-  `dir/plan.age` — so a `ForHosts` body written for one host's secrets is
-  never resolved while another host's artifact is being built. Refused up
-  front (nothing written) when a target host has no recipient or when two
+  `dir/plan.age` — so a `ForHosts` body written for a host outside the
+  target's `inventory.SelectionForHosts` selection is never resolved while
+  another host's artifact is being built. That selection is the same
+  substring-based superset a plain `gonf push` uses, not an exact
+  single-host match (task ng2): a host whose name or SSHHost is a substring
+  of the target's (or vice versa) is included too, and its `ForHosts`
+  secret can physically land in the target's artifact — see
+  plan-encryption.md's "Runbook" for the naming caveat. Refused up front
+  (nothing written) when a target host has no recipient or when two
   resolved hosts' names collide after filename sanitization; `-for`
   requires `-seal` and, with `-stdout`, must resolve to exactly one host.
 

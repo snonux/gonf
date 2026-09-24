@@ -18,12 +18,23 @@ import (
 // `gonf plan -seal -stdout -for host`. Unlike planSealed (plan_seal.go),
 // which records the whole plan once with no host selection, -for records
 // ONCE PER TARGET HOST (api.RecordPlanForHost) so a ForHosts body written
-// for one host's secrets never ends up in another host's artifact — see
-// docs/plan-encryption.md "Operator UX", the `-for` row. Every host's plan
-// is fully recorded and sealed in memory before anything is written to
+// for an unrelated host's secrets does not end up in this host's artifact —
+// see docs/plan-encryption.md "Operator UX", the `-for` row. Every host's
+// plan is fully recorded and sealed in memory before anything is written to
 // disk, so a failure partway through (a bad task body, a missing recipient,
 // a filename collision) leaves nothing behind for the hosts already
 // processed.
+//
+// The per-host isolation is bounded by the SAME substring-based host
+// selection `gonf push` itself uses (api.RecordPlanForHost ->
+// inventory.SelectionForHosts, see internal/inventory/destination.go): a
+// host whose name or SSHHost is a substring of the target's (or vice versa)
+// is included in the recording too, so its ForHosts body — and any secret
+// it reads — can physically land in the target's sealed artifact (task ng2;
+// see docs/plan-encryption.md's "Runbook" for the operator-facing caveat).
+// This is not a new exposure relative to a plain `gonf push` to the same
+// target; it means -for's isolation is a best-effort superset, not an exact
+// single-host guarantee.
 
 // sealedHostPlan is one target host's recorded-and-sealed plan, held in
 // memory until every host in the -for run has succeeded (see planSealedFor).

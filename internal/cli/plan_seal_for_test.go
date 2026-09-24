@@ -20,6 +20,19 @@ import (
 // TestCLIPlanSealForIsolatesHostSecrets: a host's ForHosts-only secret must
 // never reach another host's plan-<host>.age, even though both are recorded
 // from the same recipe in the same command.
+//
+// TestCLIPlanSealForNameSubstringCarriesOtherHostsSecret and
+// TestCLIPlanSealForSSHHostSubstringCarriesUnrelatedHostsSecret (task ng2)
+// pin the flip side of that property, deliberately: -for's record-time host
+// selection is inventory.SelectionForHosts, the same substring-based
+// push-alias expansion `gonf push` itself relies on (see
+// internal/inventory/destination.go), not an exact single-host match. When
+// one registered host's name or SSHHost is a substring of another's, the
+// OTHER host's ForHosts body is pulled into the recording too, and its
+// secret material physically lands in the target host's sealed artifact —
+// see api.RecordPlanForHost's doc comment and docs/plan-encryption.md's
+// "Runbook" for the qualified guarantee and the operator-facing warning
+// these two tests pin.
 
 // registerSealForInventory registers two hosts (hostA, hostB), each with its
 // own generated age1pq recipient/identity pair and its own secret file under
@@ -180,6 +193,116 @@ func TestCLIPlanSealForIsolatesHostSecrets(t *testing.T) {
 	}
 	if _, err := seal.Open(bytes.NewReader(sealedA), idsB); err == nil {
 		t.Fatal("plan-hostA.age opened with hostB's identity; want a refusal")
+	}
+}
+
+// TestCLIPlanSealForNameSubstringCarriesOtherHostsSecret pins a real,
+// documented limitation of -for's per-host isolation (task ng2): the
+// record-time selection is inventory.SelectionForHosts, which expands a
+// target to every registered host whose NAME is a substring of it, not an
+// exact single-host match. Here "web" is a substring of "web01", so
+// `-for web01` pulls web's ForHosts body into the same recording and web's
+// secret physically ends up inside plan-web01.age, alongside web01's own
+// secret.
+func TestCLIPlanSealForNameSubstringCarriesOtherHostsSecret(t *testing.T) {
+	isolateXDGConfig(t)
+	api.ResetForTest()
+	api.ResetInventory()
+	t.Cleanup(func() {
+		api.ResetForTest()
+		api.ResetInventory()
+	})
+	work := t.TempDir()
+	t.Chdir(work)
+
+	rWeb, _ := genSealKeyPair(t)
+	rWeb01, idWeb01 := genSealKeyPair(t)
+	writeHostSecretFile(t, "web", "secret-for-web")
+	writeHostSecretFile(t, "web01", "secret-for-web01")
+
+	hWeb := api.Host("web", api.WithPlanRecipient(rWeb), api.WithValue("secretkey", "web/token"))
+	hWeb01 := api.Host("web01", api.WithPlanRecipient(rWeb01), api.WithValue("secretkey", "web01/token"))
+	api.Cluster("edge", hWeb, hWeb01)
+	api.Task("cli_seal_for_substring_name", "", func() {
+		api.ForHosts("secretkey", func(host string, key string) {
+			api.File(filepath.Join(work, host+"-out"), options.WithContent(api.MustSecret(key)))
+		})
+	}, api.WithTaskCluster("edge"))
+
+	dir := filepath.Join(t.TempDir(), "out")
+	code, stderr := runGonf(t, "plan", "-o", dir, "-seal", "-for", "web01", "cli_seal_for_substring_name")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, stderr)
+	}
+	// -for web01 resolves to exactly one TARGET host (PlanRecipientTargetHosts
+	// does not expand a plain host name), so only plan-web01.age is written —
+	// even though the RECORDING selection pulled web in too.
+	if _, err := os.Stat(filepath.Join(dir, "plan-web.age")); !os.IsNotExist(err) {
+		t.Fatalf("plan-web.age unexpectedly written (err=%v)", err)
+	}
+	ops := decryptSealedPlanOps(t, filepath.Join(dir, "plan-web01.age"), idWeb01)
+	contents := fileOpContents(t, ops)
+	if !containsSubstring(contents, "secret-for-web01") {
+		t.Fatalf("plan-web01.age contents = %v; missing web01's own secret", contents)
+	}
+	if !containsSubstring(contents, "secret-for-web") {
+		t.Fatalf("plan-web01.age contents = %v; want it to ALSO carry web's secret "+
+			`(pins the substring-selection limitation: SelectionForHosts([]string{"web01"}) `+
+			`includes "web" because "web" is a substring of "web01")`, contents)
+	}
+}
+
+// TestCLIPlanSealForSSHHostSubstringCarriesUnrelatedHostsSecret pins the
+// second probed shape of the same limitation (task ng2): the substring test
+// also runs over a host's SSHHost, not just its inventory name, so an
+// otherwise wholly unrelated host can be pulled in. web's SSHHost is
+// "web.db.example", which contains "db", so `-for web` pulls db's ForHosts
+// body into the recording too — wrapped in a when_begin/hostname_contains
+// "db" guard that will never actually match web's real live hostname, but
+// db's secret material is still physically present in plan-web.age, so
+// web's root could read it directly from the decoded artifact.
+func TestCLIPlanSealForSSHHostSubstringCarriesUnrelatedHostsSecret(t *testing.T) {
+	isolateXDGConfig(t)
+	api.ResetForTest()
+	api.ResetInventory()
+	t.Cleanup(func() {
+		api.ResetForTest()
+		api.ResetInventory()
+	})
+	work := t.TempDir()
+	t.Chdir(work)
+
+	rWeb, idWeb := genSealKeyPair(t)
+	writeHostSecretFile(t, "web", "secret-for-web")
+	writeHostSecretFile(t, "db", "SECRET-DB-ONLY")
+
+	hWeb := api.Host("web", api.WithSSHHost("web.db.example"), api.WithPlanRecipient(rWeb),
+		api.WithValue("secretkey", "web/token"))
+	// db is otherwise unrelated to web and is never a -for target itself, so
+	// it needs no api.WithPlanRecipient of its own.
+	hDb := api.Host("db", api.WithValue("secretkey", "db/token"))
+	api.Cluster("edge", hWeb, hDb)
+	api.Task("cli_seal_for_substring_sshhost", "", func() {
+		api.ForHosts("secretkey", func(host string, key string) {
+			api.File(filepath.Join(work, host+"-out"), options.WithContent(api.MustSecret(key)))
+		})
+	}, api.WithTaskCluster("edge"))
+
+	dir := filepath.Join(t.TempDir(), "out")
+	code, stderr := runGonf(t, "plan", "-o", dir, "-seal", "-for", "web", "cli_seal_for_substring_sshhost")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, stderr)
+	}
+	ops := decryptSealedPlanOps(t, filepath.Join(dir, "plan-web.age"), idWeb)
+	contents := fileOpContents(t, ops)
+	if !containsSubstring(contents, "secret-for-web") {
+		t.Fatalf("plan-web.age contents = %v; missing web's own secret", contents)
+	}
+	if !containsSubstring(contents, "SECRET-DB-ONLY") {
+		t.Fatalf("plan-web.age contents = %v; want it to ALSO carry db's secret "+
+			`(pins the substring-selection limitation: web's SSHHost "web.db.example" `+
+			`contains "db", so SelectionForHosts([]string{"web"}) includes db even `+
+			`though db is otherwise unrelated to web)`, contents)
 	}
 }
 

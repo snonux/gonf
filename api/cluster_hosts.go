@@ -229,11 +229,23 @@ func recordPlanForHosts(hosts []string, planID string, store plan.BlobStore, tas
 // inventory name that could match the same machine at apply time, exactly
 // like PushHost/runHost). It is `gonf plan -seal -for`'s (task 4b2, w82
 // phase 2) recording entry point: called once per target host, so a
-// ForHosts body for another host is never resolved and its inputs (e.g. a
-// per-host MustSecret read inside it) are never read into THIS host's
-// artifact — see docs/plan-encryption.md "Operator UX", the `-for` row's
-// "records once per host" rule, which exists specifically so a per-host
-// sealed artifact cannot carry another host's secret material.
+// ForHosts body for a host outside that selection is never resolved and its
+// inputs (e.g. a per-host MustSecret read inside it) are never read into
+// THIS host's artifact — see docs/plan-encryption.md "Operator UX", the
+// `-for` row's "records once per host" rule, which exists specifically so a
+// per-host sealed artifact does not carry an unrelated host's secret
+// material. This is NOT a guarantee that only THIS host's own ForHosts body
+// is ever resolved: SelectionForHosts is a substring-based superset, the same
+// one PushHost/runHost themselves rely on (internal/inventory/destination.go),
+// so a host whose name or SSHHost is a substring of host's (or vice versa)
+// is IN the selection too, and its ForHosts body — and any secret it reads —
+// physically lands in host's sealed artifact, typically wrapped in a
+// when_begin/hostname_contains guard that will not match host's real live
+// hostname at apply time (task ng2; see docs/plan-encryption.md's "Runbook"
+// for the operator-facing caveat and
+// TestCLIPlanSealForNameSubstringCarriesOtherHostsSecret /
+// TestCLIPlanSealForSSHHostSubstringCarriesUnrelatedHostsSecret for the
+// pinned regression cases).
 func RecordPlanForHost(host, planID string, store plan.BlobStore, tasks ...string) ([]plan.Op, error) {
 	return recordPlanForHosts(inventory.SelectionForHosts([]string{host}), planID, store, tasks...)
 }
