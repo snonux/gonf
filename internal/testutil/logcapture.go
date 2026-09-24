@@ -21,9 +21,9 @@ type logBuffer struct {
 // without timestamps so lines can be compared exactly
 // (logger.RedirectUnprefixed), until t's cleanup restores the previous
 // destination and level. output returns what was logged so far. The capture
-// is process-global, so a test using it must not run in parallel: like the
-// internal/testseam fakes it calls t.Setenv (testseam.ParallelGuardEnv), and
-// testing then panics in a parallel test.
+// is process-global, so a test using it must not run in parallel: like
+// every intentionally global test hook it calls t.Setenv
+// (testseam.ParallelGuardEnv), and testing then panics in a parallel test.
 func CaptureLog(t testing.TB, l logger.Level) (output func() string) {
 	t.Helper()
 	t.Setenv(testseam.ParallelGuardEnv, "1")

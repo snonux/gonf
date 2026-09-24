@@ -9,7 +9,7 @@ import (
 	"slices"
 
 	"github.com/snonux/gonf/internal/exec"
-	"github.com/snonux/gonf/internal/testseam"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
 	opt "github.com/snonux/gonf/resource/options"
@@ -37,6 +37,41 @@ type Package struct {
 	name   string
 	latest bool
 	env    map[string]string
+	// runFn, runEnvFn and managerFn are the injected overrides of the
+	// package-manager runners and the host package-manager detector (see
+	// runCmd, runCmdWithEnv and detectPkgManager; nil: the real ones), set
+	// by buildWith from a *runners.PackageRunners (task fg2, replacing
+	// internal/testseam's process-global FakePackageRunner and
+	// FakePackageManager).
+	runFn     func(string, ...string) (string, string, int, error)
+	runEnvFn  func([]string, string, ...string) (string, string, int, error)
+	managerFn func() (string, error)
+}
+
+// build applies opts to a new Package using the real runners and detector.
+// An option misuse collected while applying them (embed.Misuse) is its
+// error.
+func build(name string, opts []opt.PackageOption) (*Package, error) {
+	return buildWith(nil, name, opts)
+}
+
+// buildWith is build with pr's runners and detector injected (nil: the real
+// ones): the constructor EnsureWith, and so the package plan.Handler, builds
+// with (task fg2, mirroring resource/cmd's newCmdWith).
+func buildWith(pr *runners.PackageRunners, name string, opts []opt.PackageOption) (*Package, error) {
+	p := &Package{name: name}
+	if pr != nil {
+		p.runFn = pr.Run
+		p.runEnvFn = pr.RunEnv
+		p.managerFn = pr.Manager
+	}
+	for _, o := range opts {
+		o.Apply(p)
+	}
+	if err := p.MisuseErr(); err != nil {
+		return nil, err
+	}
+	return p, nil
 }
 
 // SetLatest upgrades the package to the newest available version instead of
@@ -71,7 +106,18 @@ func Present(name string, opts ...opt.PackageOption) resource.Resource {
 // Ensure builds and applies a package resource without registering it or
 // recording a plan draft.
 func Ensure(name string, opts ...opt.PackageOption) error {
-	p, err := build(name, opts)
+	return EnsureWith(nil, name, opts...)
+}
+
+// EnsureWith is Ensure with pr's runners and detector (nil: the real ones).
+// The plan handler applies through it with this apply's
+// plan.ApplyContext.Runners.Package (task fg2). It is exported, unlike
+// resource/cmd's ensureWith, for the same reason as cron.EnsureWith: api's
+// option-fitness test compares a direct apply against a plan round trip
+// with a faked package manager. Only this module can build a
+// *runners.PackageRunners, so an external caller can pass nil only.
+func EnsureWith(pr *runners.PackageRunners, name string, opts ...opt.PackageOption) error {
+	p, err := buildWith(pr, name, opts)
 	if err != nil {
 		return err
 	}
@@ -84,23 +130,10 @@ func Absent(name string, opts ...opt.PackageOption) resource.Resource {
 	return Present(name, opts...)
 }
 
-// build applies opts to a new Package. An option misuse collected while
-// applying them (embed.Misuse) is its error.
-func build(name string, opts []opt.PackageOption) (*Package, error) {
-	p := &Package{name: name}
-	for _, o := range opts {
-		o.Apply(p)
-	}
-	if err := p.MisuseErr(); err != nil {
-		return nil, err
-	}
-	return p, nil
-}
-
 // apply selects the host's backend and converges p through it with p's own
 // runner (which carries WithEnv). The shared policy lives in applyWith.
 func (p *Package) apply() error {
-	b, err := selectBackend()
+	b, err := p.selectBackend()
 	if err != nil {
 		return err
 	}
@@ -169,9 +202,9 @@ func (p *Package) run(bin string, args ...string) (string, string, int, error) {
 // runCmdWithEnv for a package with WithEnv (see run).
 func (p *Package) runRaw(bin string, args ...string) (string, string, int, error) {
 	if p.env == nil {
-		return runCmd(bin, args...)
+		return p.runCmd(bin, args...)
 	}
-	return runCmdWithEnv(exec.MergeEnv(p.env), bin, args...)
+	return p.runCmdWithEnv(exec.MergeEnv(p.env), bin, args...)
 }
 
 // withheldOutput is the stand-in for a sensitive package command's failure
@@ -181,34 +214,32 @@ func withheldOutput(stdout, stderr string) string {
 		len(stdout), len(stderr))
 }
 
-// runCmd runs a package-manager command for a package without WithEnv: the
-// real runner, or the fake a test in this module installed with
-// internal/testseam.FakePackageRunner (cross-package apply tests reach the
-// backend's dnf/pkg/pkg_add/pkgin invocations that way).
-func runCmd(name string, args ...string) (string, string, int, error) {
-	if fake := testseam.PackageFakes().Run; fake != nil {
-		return fake(name, args...)
+// runCmd runs a package-manager command for a package without WithEnv:
+// p.runFn when injected, else the real internal/exec runner.
+func (p *Package) runCmd(name string, args ...string) (string, string, int, error) {
+	if p.runFn != nil {
+		return p.runFn(name, args...)
 	}
 	return exec.Run(name, args...)
 }
 
 // runCmdWithEnv runs a package-manager command with env, a complete
 // environment (the inherited one with the package's WithEnv values
-// overlaid): the real runner, or a testseam.FakePackageRunner fake.
-func runCmdWithEnv(env []string, name string, args ...string) (string, string, int, error) {
-	if fake := testseam.PackageFakes().RunEnv; fake != nil {
-		return fake(env, name, args...)
+// overlaid): p.runEnvFn when injected, else the real internal/exec runner.
+func (p *Package) runCmdWithEnv(env []string, name string, args ...string) (string, string, int, error) {
+	if p.runEnvFn != nil {
+		return p.runEnvFn(env, name, args...)
 	}
 	return exec.RunWith(exec.Opts{Env: env}, name, args...)
 }
 
 // detectPkgManager names the host's package manager; selectBackend maps the
-// name to a backend. A test in this module can force a name with
-// internal/testseam.FakePackageManager (CI runners are often Ubuntu);
-// in-package tests may instead hand a backend to applyWith directly.
-func detectPkgManager() (string, error) {
-	if fake := testseam.PackageManager(); fake != nil {
-		return fake()
+// name to a backend. An injected p.managerFn forces a name (CI runners are
+// often Ubuntu); in-package tests may instead hand a backend to applyWith
+// directly.
+func (p *Package) detectPkgManager() (string, error) {
+	if p.managerFn != nil {
+		return p.managerFn()
 	}
 	return detectPackageManager()
 }

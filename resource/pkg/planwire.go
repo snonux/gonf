@@ -5,6 +5,7 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 	opt "github.com/snonux/gonf/resource/options"
@@ -44,8 +45,11 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 
 // Apply installs, upgrades, or removes the named package, mirroring the
 // resource's own Present/Absent/IsLatest option handling exactly (it calls
-// the same Ensure entry point a direct, non-plan use would).
-func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
+// the same Ensure entry point a direct, non-plan use would, through
+// EnsureWith). ctx.Runners.Package, when this apply had one injected (task
+// fg2), fakes the package-manager runners and detector for this apply only;
+// nil (every production apply) uses the real ones.
+func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	if op.Name == "" {
 		return fmt.Errorf("package: missing name")
 	}
@@ -68,5 +72,5 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if op.Sensitive {
 		opts = append(opts, opt.WithSensitive)
 	}
-	return Ensure(op.Name, opts...)
+	return EnsureWith(runners.PackageOf(ctx.Runners), op.Name, opts...)
 }

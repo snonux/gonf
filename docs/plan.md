@@ -474,8 +474,8 @@ ever observe the nil zero value — "use the real runner" — never construct or
 inject one of its own. `resource/cmd` (the `command` kind, task qb2) and,
 since task 4e2, `service`, `timer`, `daemon_reload` and `systemd_timer` (the
 four kinds sharing `resource/systemd`'s systemctl `Client`) and, since task
-fg2, `cron` have migrated onto this seam; `package` still consults the older
-process-global `internal/testseam` fakes (fg2's package slice). The full contract —
+fg2, `cron` and `package` have migrated onto this seam; no kind consults a
+process-global `internal/testseam` fake any more. The full contract —
 which module-internal hooks exist to reach this from a test,
 `newXWith`/`ensureWith` per-kind constructors, and the exact relationship to
 `internal/testseam` — is documented in `AGENTS.md`, "Test seams", which this

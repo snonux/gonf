@@ -171,16 +171,15 @@ func baseContext() context.Context {
 // test and restores the previous value (nil, in practice) on c's cleanup.
 // Test-only, like testBaseContext itself: cli_test.go is its only caller.
 //
-// It mirrors internal/testseam's Fake* helpers (internal/testseam.go) on the
-// one property that matters here: it sets the same parallel guard they do
-// (testseam.ParallelGuardEnv, through c.Setenv) itself, rather than leaning
-// on the caller to remember it by hand. Before this helper existed, the one
+// It sets the module's shared no-parallel guard (testseam.ParallelGuardEnv,
+// through c.Setenv) itself, rather than leaning on the caller to remember it
+// by hand, as every intentionally global test hook does (see
+// internal/testseam's doc comment). Before this helper existed, the one
 // caller that used testBaseContext set that guard manually right next to the
 // assignment — correct today, but nothing tied the two together, so a later
 // test could assign testBaseContext directly, forget the guard, and race
-// silently against another parallel test instead of panicking loudly the way
-// every testseam.Fake* call already does. Routing the assignment through
-// this helper closes that gap the same way testseam's own slot.push does.
+// silently against another parallel test instead of panicking loudly.
+// Routing the assignment through this helper closes that gap.
 func setTestBaseContext(c testseam.Cleaner, ctx context.Context) {
 	c.Setenv(testseam.ParallelGuardEnv, "1")
 	old := testBaseContext

@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -37,19 +36,18 @@ func TestPackageWithEnvReachesEveryBackendProbeAndAction(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var calls []envPkgCall
-			testseam.FakePackageRunner(t, testseam.Package{Run: func(string, ...string) (string, string, int, error) {
+			p := &Package{name: "dtail", latest: tt.latest}
+			p.runFn = func(string, ...string) (string, string, int, error) {
 				t.Fatal("unset runner used for package with WithEnv")
 				return "", "", 1, nil
-			}})
-			testseam.FakePackageRunner(t, testseam.Package{RunEnv: func(env []string, bin string, args ...string) (string, string, int, error) {
+			}
+			p.runEnvFn = func(env []string, bin string, args ...string) (string, string, int, error) {
 				calls = append(calls, envPkgCall{append([]string(nil), env...), bin, append([]string(nil), args...)})
 				if isPackageProbe(bin, args) {
 					return "", "not installed", 1, nil
 				}
 				return "", "", 0, nil
-			}})
-
-			p := &Package{name: "dtail", latest: tt.latest}
+			}
 			p.SetEnv(map[string]string{"PKG_PATH": "https://pkgrepo.example/openbsd/"})
 			if err := tt.apply(p); err != nil {
 				t.Fatalf("apply: %v", err)
@@ -78,19 +76,20 @@ func TestPackageWithoutEnvUsesLegacyRunner(t *testing.T) {
 	resource.SetDryRun(false)
 
 	var legacyCalls int
-	testseam.FakePackageRunner(t, testseam.Package{Run: func(bin string, args ...string) (string, string, int, error) {
+	p := &Package{name: "dtail"}
+	p.runFn = func(bin string, args ...string) (string, string, int, error) {
 		legacyCalls++
 		if isPackageProbe(bin, args) {
 			return "", "not installed", 1, nil
 		}
 		return "", "", 0, nil
-	}})
-	testseam.FakePackageRunner(t, testseam.Package{RunEnv: func([]string, string, ...string) (string, string, int, error) {
+	}
+	p.runEnvFn = func([]string, string, ...string) (string, string, int, error) {
 		t.Fatal("environment runner used without WithEnv")
 		return "", "", 1, nil
-	}})
+	}
 
-	if err := applyVia(openbsdBackend{})(&Package{name: "dtail"}); err != nil {
+	if err := applyVia(openbsdBackend{})(p); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if legacyCalls != 2 {

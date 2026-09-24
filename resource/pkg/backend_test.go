@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -144,8 +143,8 @@ func TestApplyWithFakeBackendErrors(t *testing.T) {
 
 // TestBackendsRunThroughInjectedRunner shows a real backend needs no global
 // seam either: the runner handed to applyWith receives the probe and the
-// action, while the default runners (faked through testseam) are trapped to
-// fail the test.
+// action, while the Package's own runners (injected as traps) fail the test
+// if reached.
 func TestBackendsRunThroughInjectedRunner(t *testing.T) {
 	oldDry := resource.DryRun()
 	t.Cleanup(func() { resource.SetDryRun(oldDry) })
@@ -154,13 +153,12 @@ func TestBackendsRunThroughInjectedRunner(t *testing.T) {
 		t.Fatalf("package-level runner reached with %s %v", bin, args)
 		return "", "", -1, nil
 	}
-	testseam.FakePackageRunner(t, testseam.Package{
-		Run:    trap,
-		RunEnv: func(_ []string, bin string, args ...string) (string, string, int, error) { return trap(bin, args...) },
-	})
-
 	var calls []pkgCall
-	p := &Package{name: "rsync"}
+	p := &Package{
+		name:     "rsync",
+		runFn:    trap,
+		runEnvFn: func(_ []string, bin string, args ...string) (string, string, int, error) { return trap(bin, args...) },
+	}
 	if err := p.applyWith(openbsdBackend{}, fakePkgRunner(false, false, false, &calls)); err != nil {
 		t.Fatalf("applyWith: %v", err)
 	}
@@ -241,8 +239,7 @@ func TestSelectBackend(t *testing.T) {
 		t.Fatalf("backends table has %d entries, want %d", len(backends), len(want))
 	}
 	for name, wantB := range want {
-		testseam.FakePackageManager(t, func() (string, error) { return name, nil })
-		got, err := selectBackend()
+		got, err := managedBy(func() (string, error) { return name, nil }).selectBackend()
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -251,14 +248,25 @@ func TestSelectBackend(t *testing.T) {
 		}
 	}
 
-	testseam.FakePackageManager(t, func() (string, error) { return "brew", nil })
-	if _, err := selectBackend(); err == nil || !strings.Contains(err.Error(), "unsupported package manager") {
+	if _, err := managedBy(func() (string, error) { return "brew", nil }).selectBackend(); err == nil || !strings.Contains(err.Error(), "unsupported package manager") {
 		t.Errorf("unknown manager err = %v, want unsupported package manager", err)
 	}
-	testseam.FakePackageManager(t, func() (string, error) { return "", errors.New("detect boom") })
-	if _, err := selectBackend(); err == nil || !strings.Contains(err.Error(), "detect boom") {
+	if _, err := managedBy(func() (string, error) { return "", errors.New("detect boom") }).selectBackend(); err == nil || !strings.Contains(err.Error(), "detect boom") {
 		t.Errorf("detector err = %v, want detect boom", err)
 	}
+}
+
+// managedBy returns a Package whose package-manager detection is injected
+// as detect, as buildWith would from runners.PackageRunners.Manager.
+func managedBy(detect func() (string, error)) *Package {
+	return &Package{name: "rsync", managerFn: detect}
+}
+
+// ranBy returns a copy of p whose plain package-manager runner is injected
+// as run, as buildWith would from runners.PackageRunners.Run.
+func ranBy(p Package, run runner) *Package {
+	p.runFn = run
+	return &p
 }
 
 func absentPkg(name string) Package {

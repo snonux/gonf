@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/internal/testapply"
-	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 	opt "github.com/snonux/gonf/resource/options"
 )
@@ -26,7 +26,7 @@ func TestWithEnvCopiesCallerMap(t *testing.T) {
 	var recorded []resource.PlanDraft
 	resource.SetPlanDraftRecorder(func(d resource.PlanDraft) { recorded = append(recorded, d) })
 	t.Cleanup(func() { resource.SetPlanDraftRecorder(nil) })
-	calls := stubOpenBSDEnvRunner(t)
+	calls, rs := stubOpenBSDEnvRunner(t)
 
 	env := maps.Clone(wantCopiedEnv)
 	Present("dtail", opt.WithEnv(env))
@@ -51,7 +51,7 @@ func TestWithEnvCopiesCallerMap(t *testing.T) {
 	draft.Env["PKG_PATH"] = "https://draft-mutated.example/"
 	assertEnv(t, "plan op after draft mutation", op.Env)
 
-	if err := testapply.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if len(*calls) != 2 {
@@ -69,30 +69,32 @@ func TestWithEnvCopiesCallerMap(t *testing.T) {
 	}
 }
 
-// stubOpenBSDEnvRunner pins the OpenBSD backend and captures the environment
-// of every package-manager call; the legacy runner must stay unused because
-// the package has WithEnv. The seams are restored when t ends.
-func stubOpenBSDEnvRunner(t *testing.T) *[][]string {
+// stubOpenBSDEnvRunner returns runners pinning the OpenBSD backend and
+// capturing the environment of every package-manager call; the legacy runner
+// must stay unused because the package has WithEnv.
+func stubOpenBSDEnvRunner(t *testing.T) (*[][]string, *runners.Set) {
 	t.Helper()
 	oldDry := resource.DryRun()
 	t.Cleanup(func() {
 		resource.SetDryRun(oldDry)
 	})
 	resource.SetDryRun(false)
-	testseam.FakePackageManager(t, func() (string, error) { return "openbsd", nil })
 	calls := &[][]string{}
-	testseam.FakePackageRunner(t, testseam.Package{Run: func(string, ...string) (string, string, int, error) {
-		t.Error("unset runner used for package with WithEnv")
-		return "", "", 1, nil
-	}})
-	testseam.FakePackageRunner(t, testseam.Package{RunEnv: func(env []string, bin string, args ...string) (string, string, int, error) {
-		*calls = append(*calls, slices.Clone(env))
-		if isPackageProbe(bin, args) {
-			return "", "not installed", 1, nil
-		}
-		return "", "", 0, nil
-	}})
-	return calls
+	pr := &runners.PackageRunners{
+		Manager: func() (string, error) { return "openbsd", nil },
+		Run: func(string, ...string) (string, string, int, error) {
+			t.Error("unset runner used for package with WithEnv")
+			return "", "", 1, nil
+		},
+		RunEnv: func(env []string, bin string, args ...string) (string, string, int, error) {
+			*calls = append(*calls, slices.Clone(env))
+			if isPackageProbe(bin, args) {
+				return "", "not installed", 1, nil
+			}
+			return "", "", 0, nil
+		},
+	}
+	return calls, &runners.Set{Package: pr}
 }
 
 func assertEnv(t *testing.T, what string, got map[string]string) {

@@ -309,14 +309,14 @@ supported way for a library embedder to clear the sticky declaration-error
 refusal (see "Registration-time contract") without going through the
 test-scoped `resource.ResetForTest`.
 
-**Preferred mechanism for a migrated kind (task qb2): per-apply runner
-injection through `plan.ApplyContext.Runners`.** Instead of a process-global
-fake, a `*internal/runners.Set` travels down from the context passed to one
+**The mechanism for every kind's backend runners (tasks qb2, 4e2, fg2):
+per-apply runner injection through `plan.ApplyContext.Runners`.** Instead of
+a process-global fake, a `*internal/runners.Set` travels down from the context passed to one
 apply (`internal/runners.WithSet`/`FromContext`, an unexported context key —
 an external recipe module can observe only the nil zero value, i.e. "use the
 real runner"), threaded by `plan.ApplyWithContext` into every
-`plan.Handler.Apply` call for that run. A migrated concrete resource type
-gains unexported runner fields (e.g. `resource/cmd`'s `Cmd.runFn`/`probeFn`)
+`plan.Handler.Apply` call for that run. A concrete resource type with a
+host-command runner or host detector carries unexported runner fields (e.g. `resource/cmd`'s `Cmd.runFn`/`probeFn`)
 that a `newXWith` constructor sets from an injected `*runners.Set`, mirroring
 `resource/user`'s `newUserWith` (task 372); the exported `Ensure` funnels
 through an unexported `ensureWith` both `newXWith` and the plan handler call.
@@ -338,23 +338,30 @@ itself the accidental public test seam this section forbids. Task 3f2
 unexported it (`internal/testapply.ApplyWithRunners` already covered every
 caller outside `api`) rather than adding it to the allowed-seam list above.
 
-`resource/cmd` (the `command` plan kind, task qb2), as of task 4e2 the
-four kinds that funnel through `resource/systemd`'s shared systemctl client —
-`service`, `timer`, `daemon_reload` and `systemd_timer` — and, as of task
-fg2, `cron` have migrated to this mechanism. `package` remains on the older
-`internal/testseam` mechanism below until task fg2's package slice lands:
-a known, in-progress migration, not an inconsistency to fix ad-hoc.
+Every kind that runs a host command or detects a host manager uses this
+mechanism: `resource/cmd` (the `command` plan kind, task qb2), the four
+kinds that funnel through `resource/systemd`'s shared systemctl client —
+`service`, `timer`, `daemon_reload` and `systemd_timer` (task 4e2) — and
+`cron` and `package` (task fg2). `internal/runners.Set` has one field per
+kind (one shared field for the systemd-4 slice; see that type's own doc
+comment); a new kind with such a touch point adds its own field there.
 
-`cron` folds its lock strategy into the same injection instead of keeping
-a global lock seam: a non-nil `*runners.CronRunners` means the crontab is
-faked, so the transaction takes an in-process lock (a faked crontab is not
-shared with other processes, and the real flock would create state in the
-test user's home directory); `CrossProcessLock` keeps the real lock, which
-`resource/cron`'s own lock tests use with a private lock directory.
-`cron.EnsureWith` is exported, like `timer.EnsureWith`, because `api`'s
-option-fitness test compares a direct apply with a plan round trip. `internal/runners.Set` gains
-one field per kind (or, for the systemd-4 slice, one shared field) as it
-migrates (see that type's own doc comment).
+`cron` (`*runners.CronRunners`: `Read`, `Write`) folds its lock strategy
+into the same injection instead of keeping a global lock seam: a non-nil
+`*runners.CronRunners` means the crontab is faked, so the transaction takes
+an in-process lock (a faked crontab is not shared with other processes, and
+the real flock would create state in the test user's home directory);
+`CrossProcessLock` keeps the real lock, which `resource/cron`'s own tests
+use with a private lock directory (`useTestLockDir`). The lock-only tests
+(`lock_test.go`, `lock_parent_test.go`, `lock_system_parent_test.go`) call
+`lockCrontabIn`/`lockCrontabWithin` directly and need no seam at all.
+`package` (`*runners.PackageRunners`: `Run`, `RunEnv`, `Manager`) keeps
+`Package.applyWith`'s explicit backend and runner parameters as its
+in-package direct-injection seam; the injected fields only replace what
+`Package.apply` falls back to (`runCmd`, `runCmdWithEnv`,
+`detectPkgManager`, now `Package` methods). `cron.EnsureWith` and
+`pkg.EnsureWith` are exported, like `timer.EnsureWith`, because `api`'s
+option-fitness test compares a direct apply with a plan round trip.
 
 The systemd-4 slice shares ONE injection point instead of four: every
 systemctl call in the module (`resource/systemd.Client`'s `IsActive`,
@@ -378,18 +385,17 @@ carries a second, service-specific override, `*runners.ServiceRunners`
 `detectServiceManager`), consulted by `Service.run()`/`detectManager()`
 instead of a process-global fake; its own `EnsureWith` takes both.
 
-A backend's host-command runner or host detector, for a kind not yet
-migrated to `internal/runners` (`package`), is an unexported
-function that consults the module-internal `internal/testseam` fake first
-and otherwise calls the real `internal/exec` runner or detector. Tests
-anywhere in the module install fakes with `testseam.Fake*(t, ...)`; each
-fake is one layer removed by `t`'s cleanup. In-package tests may instead
-hand a backend its runner directly (as `applyWith` in pkg, or `newUserWith`
-in resource/user). Log capture is `internal/testutil.CaptureLog`. A newly
-migrated kind follows the `internal/runners` pattern above instead of adding
-another `testseam` fake.
+In-package tests may also hand a backend its runner directly (as
+`applyWith` in pkg, or `newUserWith` in resource/user). Log capture is
+`internal/testutil.CaptureLog`. A new kind follows the `internal/runners`
+pattern above; there is no process-global runner fake left to extend
+(task fg2 removed the last ones, and `internal/testseam` now holds only
+the no-parallel guard below).
 
-The fakes and the log capture are process-global, so a test using them must
-not run in parallel. They enforce it: each calls `t.Setenv`
-(`testseam.ParallelGuardEnv`), so testing panics when that test or one of
-its ancestors calls `t.Parallel`.
+The few test hooks that stay intentionally global — the log capture
+(`internal/testutil.CaptureLog`, the logger is one process-wide
+destination) and `internal/cli`'s `setTestBaseContext` (the CLI entry point
+no test can hand a context to) — must not run in parallel. They enforce
+it: each calls `t.Setenv` (`testseam.ParallelGuardEnv`), so testing panics
+when that test or one of its ancestors calls `t.Parallel`. Runners injected
+through `internal/runners` need no such guard: they are scoped to one apply.

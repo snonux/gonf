@@ -14,7 +14,6 @@ import (
 
 	opt "github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/runners"
-	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -69,7 +68,8 @@ func recordApplyOption(t *testing.T, taskName string, build func()) {
 // the destination apply through runners.WithSet (task 4e2), for a kind that
 // migrated off internal/testseam: a nil rs is a no-op
 // (runners.WithSet(ctx, nil) returns ctx unchanged), so this exactly
-// matches recordApplyOption's behaviour for every kind still on testseam.
+// matches recordApplyOption's behaviour for a kind whose case injects
+// nothing (a nil rs uses every real runner).
 func recordApplyOptionWithRunners(t *testing.T, taskName string, rs *runners.Set, build func()) {
 	t.Helper()
 	ResetTasks()
@@ -117,7 +117,7 @@ func argsContainOpt(args []string, want string) bool {
 // ---------------------------------------------------------------------------
 
 func TestPlanOptionFitness_Package(t *testing.T) {
-	testseam.FakePackageManager(t, func() (string, error) { return "dnf", nil })
+	dnf := func() (string, error) { return "dnf", nil }
 
 	fakeDNF := func(calls *[][]string) func(name string, args ...string) (string, string, int, error) {
 		return func(name string, args ...string) (string, string, int, error) {
@@ -145,14 +145,14 @@ func TestPlanOptionFitness_Package(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			var directCalls [][]string
-			testseam.FakePackageRunner(t, testseam.Package{Run: fakeDNF(&directCalls)})
-			if err := pkg.Ensure("demo-pkg", c.opts...); err != nil {
+			directPR := &runners.PackageRunners{Manager: dnf, Run: fakeDNF(&directCalls)}
+			if err := pkg.EnsureWith(directPR, "demo-pkg", c.opts...); err != nil {
 				t.Fatalf("direct Ensure: %v", err)
 			}
 
 			var planCalls [][]string
-			testseam.FakePackageRunner(t, testseam.Package{Run: fakeDNF(&planCalls)})
-			recordApplyOption(t, "pkg_opt_"+c.name, func() {
+			planRS := &runners.Set{Package: &runners.PackageRunners{Manager: dnf, Run: fakeDNF(&planCalls)}}
+			recordApplyOptionWithRunners(t, "pkg_opt_"+c.name, planRS, func() {
 				Package("demo-pkg", c.opts...)
 			})
 
@@ -183,7 +183,7 @@ func TestPlanOptionFitness_PackageWithEnv(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			testseam.FakePackageManager(t, func() (string, error) { return tt.mgr, nil })
+			mgr := func() (string, error) { return tt.mgr, nil }
 
 			fake := func(calls *[][]string) func([]string, string, ...string) (string, string, int, error) {
 				return func(env []string, name string, args ...string) (string, string, int, error) {
@@ -197,14 +197,14 @@ func TestPlanOptionFitness_PackageWithEnv(t *testing.T) {
 
 			opts := []opt.PackageOption{opt.WithEnv(map[string]string{"PKG_PATH": "https://pkgrepo.example/"})}
 			var directCalls [][]string
-			testseam.FakePackageRunner(t, testseam.Package{RunEnv: fake(&directCalls)})
-			if err := pkg.Ensure("dtail", opts...); err != nil {
+			directPR := &runners.PackageRunners{Manager: mgr, RunEnv: fake(&directCalls)}
+			if err := pkg.EnsureWith(directPR, "dtail", opts...); err != nil {
 				t.Fatalf("direct Ensure: %v", err)
 			}
 
 			var planCalls [][]string
-			testseam.FakePackageRunner(t, testseam.Package{RunEnv: fake(&planCalls)})
-			recordApplyOption(t, "pkg_env_"+tt.name, func() {
+			planRS := &runners.Set{Package: &runners.PackageRunners{Manager: mgr, RunEnv: fake(&planCalls)}}
+			recordApplyOptionWithRunners(t, "pkg_env_"+tt.name, planRS, func() {
 				Package("dtail", opts...)
 			})
 

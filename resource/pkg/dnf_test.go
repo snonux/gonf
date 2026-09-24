@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
 )
@@ -197,9 +196,7 @@ func TestApplyDNFFake(t *testing.T) {
 			resource.SetDryRun(tt.dryRun)
 
 			var calls []dnfInvocation
-			testseam.FakePackageRunner(t, testseam.Package{Run: fakeDNFRunner(tt.installed, &calls)})
-
-			if err := applyVia(dnfBackend{})(&tt.pkg); err != nil {
+			if err := applyVia(dnfBackend{})(ranBy(tt.pkg, fakeDNFRunner(tt.installed, &calls))); err != nil {
 				t.Fatalf("dnf apply: %v", err)
 			}
 
@@ -264,16 +261,15 @@ func assertPkgNote(t *testing.T, name string, want resource.Status) {
 // TestApplyDNFActionStartError pins the dnf-specific wrapper for an action
 // that fails to start (e.g. dnf missing), as opposed to a non-zero exit.
 func TestApplyDNFActionStartError(t *testing.T) {
-	testseam.FakePackageRunner(t, testseam.Package{Run: func(name string, args ...string) (string, string, int, error) {
+	run := func(name string, args ...string) (string, string, int, error) {
 		if name == "rpm" {
 			return "", "", 1, nil // not installed
 		}
 		return "", "", -1, errors.New("exec: dnf not found")
-	}})
+	}
 
 	resource.ResetReport()
-	p := Package{name: "rsync"}
-	err := applyVia(dnfBackend{})(&p)
+	err := applyVia(dnfBackend{})(ranBy(Package{name: "rsync"}, run))
 	if err == nil || !strings.Contains(err.Error(), "failed to execute dnf") {
 		t.Errorf("dnf apply should wrap the dnf start failure, got: %v", err)
 	}
@@ -282,13 +278,12 @@ func TestApplyDNFActionStartError(t *testing.T) {
 // TestApplyDNFProbeStartError pins that a probe which fails to start (e.g.
 // rpm missing) is an error, unlike a non-zero rpm exit (not installed).
 func TestApplyDNFProbeStartError(t *testing.T) {
-	testseam.FakePackageRunner(t, testseam.Package{Run: func(string, ...string) (string, string, int, error) {
+	run := func(string, ...string) (string, string, int, error) {
 		return "", "", -1, errors.New("exec: rpm not found")
-	}})
+	}
 
 	resource.ResetReport()
-	p := Package{name: "rsync"}
-	if err := applyVia(dnfBackend{})(&p); err == nil {
+	if err := applyVia(dnfBackend{})(ranBy(Package{name: "rsync"}, run)); err == nil {
 		t.Error("dnf apply should fail when the rpm probe fails to start")
 	}
 }
@@ -296,16 +291,15 @@ func TestApplyDNFProbeStartError(t *testing.T) {
 // TestApplyDNFActionFailure pins the dnf-specific error message for a
 // non-zero dnf exit.
 func TestApplyDNFActionFailure(t *testing.T) {
-	testseam.FakePackageRunner(t, testseam.Package{Run: func(name string, args ...string) (string, string, int, error) {
+	run := func(name string, args ...string) (string, string, int, error) {
 		if name == "rpm" {
 			return "", "", 1, nil // not installed
 		}
 		return "some stdout", "some stderr", 3, nil
-	}})
+	}
 
 	resource.ResetReport()
-	p := Package{name: "rsync"}
-	err := applyVia(dnfBackend{})(&p)
+	err := applyVia(dnfBackend{})(ranBy(Package{name: "rsync"}, run))
 	if err == nil {
 		t.Fatal("dnf apply should fail when dnf exits non-zero")
 	}

@@ -582,8 +582,8 @@ const parallelHelperEnv = "GONF_CLI_PARALLEL_HELPER"
 // TestParallelBaseContextHelper in a child test binary: a parallel test
 // calling setTestBaseContext must fail through testing's Setenv check
 // instead of racing other tests on the package-global testBaseContext.
-// This mirrors internal/testseam's TestFakeRefusesParallelTest — the exact
-// guard-enforcement precedent setTestBaseContext was added to match (see its
+// It mirrors the child-binary test internal/testseam carried for its
+// process-global fakes until task fg2 removed them (see setTestBaseContext's
 // doc comment in cli.go). Before setTestBaseContext existed, the one caller
 // set testseam.ParallelGuardEnv by hand right next to the raw
 // testBaseContext assignment; nothing forced a later caller to repeat that,

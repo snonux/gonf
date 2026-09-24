@@ -1,7 +1,8 @@
 package plan_test
 
 // These two package-kind apply tests live in the external plan_test package
-// (not plan) because they stub resource/pkg's command runner directly, and
+// (not plan) because they inject resource/pkg's command runner (through
+// runners.WithSet, task fg2) and exercise its real plan.Handler, and
 // resource/pkg registers a plan.Handler (see resource/pkg/planwire.go) —
 // importing resource/pkg from an internal plan test would be an import
 // cycle (plan -> resource/pkg -> plan). Every resource kind now registers a
@@ -10,9 +11,10 @@ package plan_test
 // apply_systemd_test.go's TestApplyTimerRestartLowering.
 
 import (
+	"context"
 	"testing"
 
-	"github.com/snonux/gonf/internal/testseam"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
@@ -21,16 +23,23 @@ func pkgHeader() plan.Op {
 	return plan.Op{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "apply-test"}
 }
 
+// applyPkgOps applies ops with pr injected as this apply's package runners.
+func applyPkgOps(ops []plan.Op, pr *runners.PackageRunners) error {
+	ctx := runners.WithSet(context.Background(), &runners.Set{Package: pr})
+	return plan.ApplyWithContext(ctx, ops, plan.Facts{}, "")
+}
+
+// dnfManager forces the dnf backend whatever the host is.
+func dnfManager() (string, error) { return "dnf", nil }
+
 func TestApplyPackageDryRun(t *testing.T) {
 	resource.SetDryRun(true)
 	t.Cleanup(func() { resource.SetDryRun(false) })
-	testseam.FakePackageManager(t, func() (string, error) { return "dnf", nil })
-
 	ops := []plan.Op{
 		pkgHeader(),
 		{Op: plan.KindPackage, Name: "tig"},
 	}
-	if err := plan.Apply(ops, plan.Facts{}, ""); err != nil {
+	if err := applyPkgOps(ops, &runners.PackageRunners{Manager: dnfManager}); err != nil {
 		t.Fatalf("dry-run package: %v", err)
 	}
 }
@@ -43,12 +52,10 @@ func TestApplyPackageDryRun(t *testing.T) {
 // op.Latest at all, so IsLatest was silently dropped on every plan/push run.
 // Since j5, the package kind's apply behavior lives in
 // resource/pkg/planwire.go's Handler.Apply; this test still pins the
-// observable behavior through the public plan.Apply entry point.
+// observable behavior through the public plan.ApplyWithContext entry point.
 func TestApplyPackageLatestRunsUpgradePath(t *testing.T) {
-	testseam.FakePackageManager(t, func() (string, error) { return "dnf", nil })
-
 	var dnfCalls [][]string
-	testseam.FakePackageRunner(t, testseam.Package{Run: func(name string, args ...string) (string, string, int, error) {
+	run := func(name string, args ...string) (string, string, int, error) {
 		switch name {
 		case "rpm":
 			// Report the package as already installed: a plain "package"
@@ -60,13 +67,13 @@ func TestApplyPackageLatestRunsUpgradePath(t *testing.T) {
 		default:
 			return "", "unexpected " + name, 1, nil
 		}
-	}})
+	}
 
 	ops := []plan.Op{
 		pkgHeader(),
 		{Op: plan.KindPackage, Name: "rsync", Payload: plan.PackagePayload{Latest: true}},
 	}
-	if err := plan.Apply(ops, plan.Facts{}, ""); err != nil {
+	if err := applyPkgOps(ops, &runners.PackageRunners{Manager: dnfManager, Run: run}); err != nil {
 		t.Fatalf("apply package latest: %v", err)
 	}
 

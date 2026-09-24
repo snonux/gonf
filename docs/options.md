@@ -141,9 +141,10 @@ default, i.e. "use the real runner"). Two narrow module-internal hooks carry
 a `*runners.Set` into one whole apply for a test that cannot build
 `plan.ApplyContext` itself: `internal/testapply.ApplyWithRunners` and, for
 `api`'s own package and its tests, its unexported `applyWithRunners`
-(`api.Apply` calls it with `nil`). This is the PREFERRED mechanism for any
-newly migrated kind; `internal/testseam` is not being extended further and
-should shrink as each kind converts. See `AGENTS.md`, "Test seams", for the
+(`api.Apply` calls it with `nil`). Since task fg2 this is the ONLY
+mechanism for backend runners: `internal/testseam` holds no fakes any more,
+only the no-parallel guard the remaining global test hooks (log capture,
+`internal/cli`'s base context) use. See `AGENTS.md`, "Test seams", for the
 full contract (the `newXWith`/`ensureWith` per-kind constructor shape,
 which hook to use from which kind of test) and `docs/plan.md`'s "Test seams
 note" for the `ApplyContext.Runners` field itself.
@@ -153,10 +154,11 @@ then migrated `service`, `timer`, `daemon_reload` and `systemd_timer` — the
 four kinds that funnel through `resource/systemd`'s shared systemctl
 `Client` (`NewClient` from a `*runners.SystemdRunners`), plus `service`'s
 own `*runners.ServiceRunners` for its BSD backends and manager detection.
-Task fg2 migrated `cron` (`*runners.CronRunners`, which also selects the
-crontab lock strategy; `FakeCrontab` and `FakeCrontabLock` are gone).
-`package` still uses the `internal/testseam` fakes described above until
-fg2's package slice lands; not an inconsistency to fix ad-hoc.
+Task fg2 migrated the last two kinds: `cron` (`*runners.CronRunners`,
+which also selects the crontab lock strategy) and `package`
+(`*runners.PackageRunners`, runners plus manager detection), exporting
+`cron.EnsureWith` and `pkg.EnsureWith` (nil runners only, from outside this
+module). Every `internal/testseam.Fake*` function described above is gone.
 
 A public `api.ApplyWithRunners` briefly existed for this (task qb2's first
 slice) so a cross-package test outside `api` (`resource/
