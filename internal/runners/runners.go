@@ -66,9 +66,10 @@ type CommandRunners struct {
 
 // SystemdRunners overrides resource/systemd's shared systemctl invocation
 // (the same shape internal/exec.Run has, and resource/systemd's own
-// RunFunc): every systemctl helper in that package (IsActive, IsEnabled,
-// Run, Command) funnels through it via a resource/systemd.Client built with
-// NewClient(sr).
+// RunFunc): every systemctl helper in that package (the Client methods
+// IsActive, IsEnabled, Run and Command; there are no package-level
+// shortcuts that could bypass it) funnels through it via a
+// resource/systemd.Client built with NewClient(sr).
 type SystemdRunners struct {
 	Run func(name string, args ...string) (stdout, stderr string, exitCode int, err error)
 }

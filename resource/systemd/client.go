@@ -1,6 +1,12 @@
 // Shared systemctl client: every resource that shells out to systemctl
 // (service, timer, DaemonReload, and SystemdTimer through them) routes
-// through these helpers instead of hand-rolling its own query/run wrappers.
+// through Client's methods instead of hand-rolling its own query/run
+// wrappers. There are deliberately no package-level IsActive/IsEnabled/Run
+// shortcuts (task pg2 removed them): they hard-coded the zero Client, so a
+// call site reaching for one silently ignored the per-apply
+// ctx.Runners.Systemd injection and, in a test, hit the host's real
+// systemctl. A caller that truly wants the real runner writes Client{}
+// explicitly, which keeps the bypass visible at the call site.
 
 package systemd
 
@@ -90,13 +96,6 @@ func (c Client) Run(args ...string) error {
 func (c Client) Command(args []string) Command {
 	return Command{args: args, run: c.run}
 }
-
-// IsActive, IsEnabled and Run are the real-runner convenience wrappers of
-// Client's methods (the zero Client), for callers that never inject an
-// override: live tests and any other direct, unfaked use.
-func IsActive(name string, user bool) (bool, error)  { return Client{}.IsActive(name, user) }
-func IsEnabled(name string, user bool) (bool, error) { return Client{}.IsEnabled(name, user) }
-func Run(args ...string) error                       { return Client{}.Run(args...) }
 
 // Require fails when systemd unit management is unavailable on this host:
 // a non-Linux GOOS or no detectable systemctl. what names the calling

@@ -333,10 +333,15 @@ one field per kind (or, for the systemd-4 slice, one shared field) as it
 migrates (see that type's own doc comment).
 
 The systemd-4 slice shares ONE injection point instead of four: every
-systemctl call in the module (`resource/systemd`'s `IsActive`, `IsEnabled`,
-`Run` and `Command`) funnels through a `resource/systemd.Client` value (its
-zero value: the real `internal/exec` runner), built with `NewClient(sr)`
-from a `*runners.SystemdRunners` (`internal/runners.Set.Systemd`). Service's
+systemctl call in the module (`resource/systemd.Client`'s `IsActive`,
+`IsEnabled`, `Run` and `Command` methods) funnels through a
+`resource/systemd.Client` value (its zero value: the real `internal/exec`
+runner), built with `NewClient(sr)` from a `*runners.SystemdRunners`
+(`internal/runners.Set.Systemd`). The package has no package-level
+`IsActive`/`IsEnabled`/`Run` shortcuts (task pg2 removed them, since they
+hard-coded `Client{}` and so silently bypassed the injection); a caller that
+really wants the real runner, such as a live test, writes `Client{}`
+explicitly (`TestNoPackageLevelClientBypass` pins this). Service's
 systemd backend, Timer and DaemonReload each hold or build a `Client` from
 their own `newXWith`/`newReloadWith` constructor; DaemonReload and Timer
 additionally export `EnsureWith(sr *runners.SystemdRunners, ...)` (unlike

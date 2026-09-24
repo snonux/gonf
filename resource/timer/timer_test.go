@@ -466,24 +466,30 @@ func removeLiveUnits(t *testing.T, dir string, userBus bool) {
 	ctlLive(t, userBus, "daemon-reload")
 }
 
+// ctlLive runs systemctl against the host's real systemd. It deliberately
+// uses the zero systemd.Client (the real internal/exec runner): this is a
+// live test, and spelling Client{} out keeps the injection bypass visible
+// (task pg2 removed the package-level shortcuts that hid it).
 func ctlLive(t *testing.T, userBus bool, args ...string) {
 	t.Helper()
 	full := args
 	if userBus {
 		full = append([]string{"--user"}, args...)
 	}
-	if err := systemd.Run(full...); err != nil {
+	if err := (systemd.Client{}).Run(full...); err != nil {
 		t.Fatalf("ctlLive %v: %v", full, err)
 	}
 }
 
+// assertLiveState checks unit's live active/enabled state through the real
+// runner (the zero systemd.Client, as in ctlLive).
 func assertLiveState(t *testing.T, userBus bool, unit string, wantActive, wantEnabled bool) {
 	t.Helper()
-	active, err := systemd.IsActive(unit, userBus)
+	active, err := systemd.Client{}.IsActive(unit, userBus)
 	if err != nil {
 		t.Fatal(err)
 	}
-	enabled, err := systemd.IsEnabled(unit, userBus)
+	enabled, err := systemd.Client{}.IsEnabled(unit, userBus)
 	if err != nil {
 		t.Fatal(err)
 	}
