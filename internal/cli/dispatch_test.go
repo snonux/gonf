@@ -21,9 +21,18 @@ func TestCLIProfileActivates(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d", code)
 	}
+	// Task 8h2: -profile decides the destination-guarded mark, not
+	// membership: both tasks stay matchable, pkg_fedora is marked.
 	got := api.Matching("^pkg_")
-	if !reflect.DeepEqual(got, []string{"pkg_rocky"}) {
+	if !reflect.DeepEqual(got, []string{"pkg_fedora", "pkg_rocky"}) {
 		t.Fatalf("got %v", got)
+	}
+	guards := map[string]string{}
+	for _, info := range api.Tasks() {
+		guards[info.Name] = info.DestinationGuard
+	}
+	if want := map[string]string{"pkg_fedora": "profile=fedora", "pkg_rocky": ""}; !reflect.DeepEqual(guards, want) {
+		t.Fatalf("guards = %v, want %v", guards, want)
 	}
 }
 

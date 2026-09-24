@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
-	"strings"
 	"sync"
 
 	"github.com/snonux/gonf/internal/declerr"
@@ -20,6 +19,15 @@ type TaskInfo struct {
 	// AliasOf is the target task name when Name was registered with Alias,
 	// and empty for ordinary tasks and aggregates.
 	AliasOf string
+	// DestinationGuard is non-empty for a destination-guarded task: its
+	// serializable When* guard (for an alias, its target's) does not hold
+	// for the facts the registry was activated with, e.g.
+	// "hostname_contains=rocky". Such a task is still listed and still
+	// joins pattern aggregates; its ops are recorded inside a when_begin
+	// that each destination evaluates, so it applies only where the guard
+	// holds (task 8h2). Empty when the task has no serializable guard or
+	// the guard holds here.
+	DestinationGuard string
 }
 
 // task is one activated entry of the public task map. Aliases are activated
@@ -30,18 +38,30 @@ type task struct {
 	description string
 	fn          func()
 	aliasOf     string
+	// destinationGuard is the rendered serializable guard when it does not
+	// hold for the activation facts (see TaskInfo.DestinationGuard).
+	destinationGuard string
 }
 
 type taskCandidate struct {
 	name        string
 	description string
 	fn          func()
-	when        []func(Facts) bool
-	// planWhen is the AND list of serializable predicates for RecordPlan.
+	// planWhen is the AND list of serializable guards (WhenLinux,
+	// WhenProfile, WhenHostnameContains). They travel in the plan as a
+	// when_begin around the task's ops and are evaluated per destination, so
+	// they never decide activation (task 8h2): a task whose guard does not
+	// hold on the controller is still listed and still a pattern member. On
+	// the controller they only mark the -list row (unmetGuard) and, for a
+	// local Run, resolve aggregate membership at record time
+	// (skippedOnLocalDestination).
 	planWhen []plan.Predicate
-	// opaqueWhen is true when a custom When(func) was used and cannot be
-	// lowered into plan recipes.
-	opaqueWhen bool
+	// opaque holds the controller-only predicates, those with no
+	// serializable form: a custom When(func), a RegisterMethods WhenX
+	// companion, and a WhenProfile() without profiles. They alone decide
+	// activation, and recording refuses a task whose opaque predicates fail
+	// on the controller (planWhenForCandidate).
+	opaque []func(Facts) bool
 	// privileged tags recorded ops with elevate=true for split apply.
 	privileged bool
 	// cluster is the inventory cluster name for ClusterHosts() (WithCluster).
@@ -118,43 +138,52 @@ func Operational() TaskOption {
 	return func(c *taskCandidate) { c.operational = true }
 }
 
-// When skips activating the task unless pred(facts) is true.
-// Custom predicates are not serializable for remote plans; prefer WhenLinux,
-// WhenProfile, or WhenHostnameContains when recording plans. A When(func)
-// combined with a serializable guard (WhenLinux etc.) still ships that
-// guard — the opaque predicate is only an extra controller-side filter, it
-// never suppresses the serializable one. A task whose When is opaque ONLY
-// (no serializable guard at all) records fine for local Run/gonf plan, but
-// PushTo/PushClusterRun/PushFleetRun refuse it: shipping such a plan would
-// silently drop the guard and apply the task unconditionally on the
+// When skips activating the task unless pred(facts) is true on the
+// controller. A custom predicate is opaque: it cannot travel in a plan, so it
+// is the one kind of When* option evaluated on the controller — it decides
+// whether the task is listed (-list, Tasks, Matching), whether pattern
+// aggregates pick it up, and whether it may be recorded at all (naming it
+// while the predicate fails is a record error). Prefer WhenLinux,
+// WhenProfile, or WhenHostnameContains, which are evaluated on each
+// destination instead. A When(func) combined with a serializable guard still
+// ships that guard — the opaque predicate is only an extra controller-side
+// filter, it never suppresses the serializable one (the serializable guard
+// is not evaluated on the controller: task 8h2). A task whose When is opaque
+// ONLY (no serializable guard at all) records fine for local Run/gonf plan,
+// but PushTo/PushClusterRun/PushFleetRun refuse it: shipping such a plan
+// would silently drop the guard and apply the task unconditionally on the
 // destination.
 func When(pred func(Facts) bool) TaskOption {
 	return func(c *taskCandidate) {
 		if pred != nil {
-			c.when = append(c.when, pred)
-			c.opaqueWhen = true
+			c.opaque = append(c.opaque, pred)
 		}
 	}
 }
 
-// WhenLinux is When(func(f Facts) bool { return f.GOOS == "linux" }).
+// WhenLinux guards the task with the serializable predicate goos == linux.
+// Like every serializable guard it travels in the plan as a when_begin and
+// is evaluated on each destination at apply time; it does not hide the task
+// on a non-Linux controller (see TaskInfo.DestinationGuard).
 func WhenLinux() TaskOption {
 	return func(c *taskCandidate) {
-		c.when = append(c.when, func(f Facts) bool { return f.GOOS == "linux" })
 		c.planWhen = append(c.planWhen, plan.Predicate{Fact: "goos", Eq: "linux"})
 	}
 }
 
-// WhenProfile activates only when Facts.Profile is one of profiles.
-// A single profile lowers to a plan fact predicate with Eq; multiple
-// profiles lower to the same predicate with In (OR-of-values) — both forms
-// are fully serializable, so WhenProfile never marks a task opaque.
+// WhenProfile guards the task with Facts.Profile being one of profiles,
+// evaluated on each destination like WhenLinux. A single profile lowers to
+// a plan fact predicate with Eq; multiple profiles lower to the same
+// predicate with In (OR-of-values) — both forms are fully serializable. With
+// no profiles at all nothing can match and nothing can be lowered, so the
+// option becomes an opaque controller-side predicate that never holds: the
+// task is never activated, and naming it fails the record instead of
+// applying it unguarded.
 func WhenProfile(profiles ...string) TaskOption {
 	return func(c *taskCandidate) {
-		c.when = append(c.when, ProfileIs(profiles...))
 		switch len(profiles) {
 		case 0:
-			return
+			c.opaque = append(c.opaque, ProfileIs())
 		case 1:
 			c.planWhen = append(c.planWhen, plan.Predicate{Fact: "profile", Eq: profiles[0]})
 		default:
@@ -166,12 +195,10 @@ func WhenProfile(profiles ...string) TaskOption {
 	}
 }
 
-// WhenHostnameContains activates when Facts.Hostname contains substr.
+// WhenHostnameContains guards the task with Facts.Hostname containing substr
+// (case insensitive), evaluated on each destination like WhenLinux.
 func WhenHostnameContains(substr string) TaskOption {
 	return func(c *taskCandidate) {
-		c.when = append(c.when, func(f Facts) bool {
-			return strings.Contains(strings.ToLower(f.Hostname), strings.ToLower(substr))
-		})
 		c.planWhen = append(c.planWhen, plan.Predicate{Fact: "hostname_contains", Eq: substr})
 	}
 }
@@ -181,8 +208,8 @@ func WhenHostnameContains(substr string) TaskOption {
 // aggregates and aliases share one namespace — is registration-time misuse,
 // always a recipe bug: it is reported as a declaration error
 // (internal/declerr), the task is not queued, and RecordPlan, Run, Apply and
-// the CLI refuse to run with the error. Activation (When filtering) happens in
-// Activate / CLI / Run.
+// the CLI refuse to run with the error. Activation (filtering by the opaque
+// When predicates only) happens in Activate / CLI / Run.
 func Task(name, description string, fn func(), opts ...TaskOption) {
 	if name == "" {
 		declerr.Reportf("Task: name must not be empty")
@@ -233,16 +260,20 @@ func queueCandidate(c taskCandidate) {
 	activated = false // new candidates require re-activation
 }
 
-// Activate commits queued candidates whose When predicates pass for facts.
-// It is safe to call multiple times; each call rebuilds the active task map
-// from the full candidate list.
+// Activate commits queued candidates whose opaque When predicates pass for
+// facts. Serializable guards (WhenLinux, WhenProfile, WhenHostnameContains)
+// do not filter: they are evaluated per destination, and facts only decide
+// which activated tasks are marked destination-guarded
+// (TaskInfo.DestinationGuard). It is safe to call multiple times; each call
+// rebuilds the active task map from the full candidate list.
 func Activate(facts Facts) {
 	tasksMu.Lock()
 	defer tasksMu.Unlock()
 	activateLocked(facts)
 }
 
-// Matching returns activated task names matching pattern (sorted). An invalid
+// Matching returns activated task names matching pattern (sorted),
+// destination-guarded tasks included (see Activate). An invalid
 // pattern is recipe misuse: it is reported as a declaration error
 // (internal/declerr) and Matching returns nil.
 func Matching(pattern string) []string {
@@ -267,7 +298,8 @@ func Matching(pattern string) []string {
 	return names
 }
 
-// Tasks returns all activated tasks sorted by name.
+// Tasks returns all activated tasks sorted by name, destination-guarded ones
+// included and marked (TaskInfo.DestinationGuard).
 func Tasks() []TaskInfo {
 	ensureActivated()
 
@@ -276,7 +308,8 @@ func Tasks() []TaskInfo {
 
 	out := make([]TaskInfo, 0, len(tasks))
 	for _, t := range tasks {
-		out = append(out, TaskInfo{Name: t.name, Description: t.description, AliasOf: t.aliasOf})
+		out = append(out, TaskInfo{Name: t.name, Description: t.description, AliasOf: t.aliasOf,
+			DestinationGuard: t.destinationGuard})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
@@ -329,7 +362,11 @@ func RunContext(ctx context.Context, names ...string) error {
 	// so nothing survives a refusal and staging would only copy large blobs
 	// twice.
 	// The plan applies on this machine, so ForHosts only resolves the hosts
-	// whose destination guard this hostname satisfies (localHostSelection).
+	// whose destination guard this hostname satisfies (localHostSelection),
+	// and aggregates resolve their members' serializable guards against this
+	// host's facts, the ones the apply below evaluates when_begin with
+	// (setLocalDestination; see api/destination_guard.go for why).
+	defer setLocalDestination(DetectFacts())()
 	ops, err := recordPlanForHosts(localHostSelection(), "local", plan.NewStore(planDir), names...)
 	if err != nil {
 		return err
@@ -354,11 +391,15 @@ func ResetTasks() {
 }
 
 // activateLocked rebuilds the active task map. Real tasks are activated by
-// their own When predicates. An alias has none of its own: it is active
-// exactly when its target is an active real task, so -list and Matching never
-// offer an alias that could not record. A broken alias (unknown target, or an
-// alias of an alias) is therefore absent from the list, and naming it
-// explicitly fails the record with the reason (resolveAlias).
+// their own opaque When predicates only; a serializable guard never hides a
+// task (it travels to the destination as a when_begin, task 8h2) and only
+// sets the task's destinationGuard mark when it does not hold for facts. An
+// alias has no conditions of its own: it is active exactly when its target
+// is an active real task, and carries the target's mark, so -list and
+// Matching never offer an alias that could not record. A broken alias
+// (unknown target, or an alias of an alias) is therefore absent from the
+// list, and naming it explicitly fails the record with the reason
+// (resolveAlias).
 func activateLocked(facts Facts) {
 	tasks = map[string]task{}
 	var aliases []taskCandidate
@@ -367,10 +408,11 @@ func activateLocked(facts Facts) {
 			aliases = append(aliases, c)
 			continue
 		}
-		if !whenPasses(c.when, facts) {
+		if !whenPasses(c.opaque, facts) {
 			continue
 		}
-		tasks[c.name] = task{name: c.name, description: c.description, fn: c.fn}
+		tasks[c.name] = task{name: c.name, description: c.description, fn: c.fn,
+			destinationGuard: unmetGuard(c.planWhen, facts)}
 	}
 	// Aliases go in only after every real task so registration order does
 	// not matter. They are inserted as this loop runs, so the aliasOf check
@@ -380,11 +422,14 @@ func activateLocked(facts Facts) {
 		if !ok || target.aliasOf != "" {
 			continue
 		}
-		tasks[c.name] = task{name: c.name, description: c.description, aliasOf: c.aliasOf}
+		tasks[c.name] = task{name: c.name, description: c.description, aliasOf: c.aliasOf,
+			destinationGuard: target.destinationGuard}
 	}
 	activated = true
 }
 
+// whenPasses reports whether every controller-side (opaque) predicate holds
+// for facts.
 func whenPasses(preds []func(Facts) bool, facts Facts) bool {
 	for _, p := range preds {
 		if !p(facts) {
@@ -393,6 +438,10 @@ func whenPasses(preds []func(Facts) bool, facts Facts) bool {
 	}
 	return true
 }
+
+// hasOpaqueWhen reports whether c carries a controller-only predicate (see
+// taskCandidate.opaque).
+func (c taskCandidate) hasOpaqueWhen() bool { return len(c.opaque) > 0 }
 
 func ensureActivated() {
 	tasksMu.Lock()

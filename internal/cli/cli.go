@@ -469,11 +469,19 @@ func cliList() int {
 // when there is no description. An alias keeps its own description verbatim
 // (a migrated legacy alias lists exactly as the task it replaces did); only
 // an alias without one gets "alias of <target>", so it never shows as an
-// unexplained bare name.
+// unexplained bare name. A destination-guarded task (its serializable guard
+// does not hold on this host, api.TaskInfo.DestinationGuard) gets a
+// "[destination-guarded: <guard>]" suffix on its description: it is listed
+// and joins aggregates, but applies only where the guard holds (task 8h2).
+// Every other row is unchanged, so scripts cutting the name column keep
+// working.
 func listLine(t api.TaskInfo) string {
 	desc := t.Description
 	if desc == "" && t.AliasOf != "" {
 		desc = "alias of " + t.AliasOf
+	}
+	if t.DestinationGuard != "" {
+		desc = strings.TrimSpace(desc + " [destination-guarded: " + t.DestinationGuard + "]")
 	}
 	if desc == "" {
 		return t.Name

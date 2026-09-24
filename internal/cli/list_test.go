@@ -55,3 +55,30 @@ func captureList(t *testing.T) string {
 	}
 	return string(out)
 }
+
+// TestCLIListMarksDestinationGuardedTasks pins task 8h2's -list rows: a task
+// whose serializable guard does not hold on this host is listed (it joins
+// pattern aggregates and applies on matching destinations) with a
+// "[destination-guarded: …]" suffix, an alias of it carries the same mark,
+// a guard that holds here and an unguarded task list unchanged, and a task
+// hidden by an opaque When predicate stays hidden.
+func TestCLIListMarksDestinationGuardedTasks(t *testing.T) {
+	api.ResetForTest()
+	t.Cleanup(api.ResetForTest)
+	api.Task("home_base", "Base", func() {})
+	api.Task("home_tmux_rocky", "Tmux on rocky", func() {}, api.WhenHostnameContains("no-such-host-8h2"))
+	api.Task("bare", "", func() {}, api.WhenHostnameContains("no-such-host-8h2"))
+	api.Task("here", "Here", func() {}, api.WhenHostnameContains(""))
+	api.Task("hidden", "", func() {}, api.When(func(api.Facts) bool { return false }))
+	api.Alias("tmux_legacy", "", "home_tmux_rocky")
+
+	got := captureList(t)
+	want := "bare\t[destination-guarded: hostname_contains=no-such-host-8h2]\n" +
+		"here\tHere\n" +
+		"home_base\tBase\n" +
+		"home_tmux_rocky\tTmux on rocky [destination-guarded: hostname_contains=no-such-host-8h2]\n" +
+		"tmux_legacy\talias of home_tmux_rocky [destination-guarded: hostname_contains=no-such-host-8h2]\n"
+	if got != want {
+		t.Fatalf("-list output:\n%q\nwant:\n%q", got, want)
+	}
+}

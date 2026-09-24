@@ -11,6 +11,14 @@ import (
 // pattern (via Matching), in sorted name order.
 //
 // Membership rules, applied when the aggregate is recorded:
+//   - a member's serializable guard (WhenLinux, WhenProfile,
+//     WhenHostnameContains) does not decide membership: the member is
+//     recorded inside its when_begin and each destination decides (task
+//     8h2), so `gonf push host home` includes a member whose guard only
+//     matches host. Only an opaque When predicate failing on the controller
+//     leaves a task out (it is not activated). A local Run is the one
+//     exception: its destination is this host, so it skips a member whose
+//     guard does not hold here at record time (skippedOnLocalDestination);
 //   - the aggregate itself is excluded, whether matched by its own name or
 //     through an Alias of it (a pattern such as ".*" would otherwise recurse
 //     into itself);
@@ -47,16 +55,18 @@ func Aggregate(name, description, pattern string) {
 // is included, because listing it is explicit — but that makes this
 // aggregate operational work for pattern aggregates, which then skip it.
 //
-// A member whose When predicates exclude it on the controller is skipped,
-// exactly as a pattern Aggregate would skip it; a member name that is not
-// registered at all, or a broken alias, fails the record (a typo must not
-// shrink a setup run silently), as does a list whose members are all
-// inactive. The list itself is checked at registration: no members, an empty
-// member name, a duplicate member, or a member that is the aggregate itself —
-// by name or through an already registered Alias — is reported as a
-// declaration error (internal/declerr) and the aggregate is not registered.
-// Alias applies the same check from the other side, so registration order
-// does not matter.
+// Members follow the same condition rules as a pattern Aggregate: a member
+// whose opaque When predicate excludes it on the controller is skipped, one
+// with only a serializable guard is recorded inside its when_begin (a local
+// Run skips it when the guard does not hold on this host); a member name
+// that is not registered at all, or a broken alias, fails the record (a
+// typo must not shrink a setup run silently), as does a list whose members
+// are all skipped. The list itself is checked at registration: no members,
+// an empty member name, a duplicate member, or a member that is the
+// aggregate itself — by name or through an already registered Alias — is
+// reported as a declaration error (internal/declerr) and the aggregate is
+// not registered. Alias applies the same check from the other side, so
+// registration order does not matter.
 func AggregateTasks(name, description string, members ...string) {
 	if err := checkAggregateMembers(name, members); err != nil {
 		declerr.Report(err)
@@ -64,7 +74,7 @@ func AggregateTasks(name, description string, members ...string) {
 	}
 	list := append([]string(nil), members...)
 	Task(name, description, func() {
-		names, err := activeMembers(list)
+		names, err := activeMembers(name, list)
 		if err != nil {
 			stashAggregateError(name, err)
 			return
@@ -106,8 +116,8 @@ func checkAggregateMembers(name string, members []string) error {
 }
 
 // patternMembers returns the activated tasks matching pattern, minus the
-// aggregate itself (directly or through an alias) and all operational work
-// (see Aggregate).
+// aggregate itself (directly or through an alias), all operational work and,
+// on a local Run, members whose guard does not hold here (see Aggregate).
 func patternMembers(name, pattern string) []string {
 	var names []string
 	for _, n := range Matching(pattern) {
@@ -124,9 +134,23 @@ func patternMembers(name, pattern string) []string {
 			logger.Debug("aggregate %s: skipping %q: it is or contains an Operational task", name, n)
 			continue
 		}
+		if skipLocalMember(name, n) {
+			continue
+		}
 		names = append(names, n)
 	}
 	return names
+}
+
+// skipLocalMember reports whether aggregate must skip member n on a local
+// Run because n's serializable guard does not hold on this host; the debug
+// line (-verbose) explains why a matched name did not run.
+func skipLocalMember(aggregate, n string) bool {
+	guard, skip := skippedOnLocalDestination(n)
+	if skip {
+		logger.Debug("aggregate %s: skipping %q: its guard %s does not hold on this host", aggregate, n, guard)
+	}
+	return skip
 }
 
 // containsOperational reports whether recording name could record an
@@ -159,11 +183,12 @@ func containsOperational(name string, visited map[string]bool) bool {
 	return false
 }
 
-// activeMembers returns the explicitly listed members that are active for
-// the controller's facts, in list order. A member with no registration at
+// activeMembers returns the members aggregate lists that are active for
+// the controller's facts (their opaque predicates hold) and, on a local Run,
+// whose guard holds here, in list order. A member with no registration at
 // all, or a broken alias (which is never active and so would otherwise be
 // skipped quietly), is an error rather than a skip.
-func activeMembers(members []string) ([]string, error) {
+func activeMembers(aggregate string, members []string) ([]string, error) {
 	var names []string
 	for _, m := range members {
 		if _, ok := findCandidate(m); !ok {
@@ -172,7 +197,7 @@ func activeMembers(members []string) ([]string, error) {
 		if _, _, err := resolveAlias(m); err != nil {
 			return nil, err
 		}
-		if _, ok := activeTask(m); ok {
+		if _, ok := activeTask(m); ok && !skipLocalMember(aggregate, m) {
 			names = append(names, m)
 		}
 	}

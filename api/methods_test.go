@@ -12,6 +12,9 @@ import (
 	"github.com/snonux/gonf/resource"
 )
 
+// TestActivateWhenFilters pins task 8h2's activation rule: only an opaque
+// When predicate hides a task; a serializable guard that does not hold for
+// the activation facts marks the task destination-guarded instead.
 func TestActivateWhenFilters(t *testing.T) {
 	ResetTasks()
 
@@ -19,20 +22,31 @@ func TestActivateWhenFilters(t *testing.T) {
 	Task("linux_only", "l", func() {}, WhenLinux())
 	Task("fedora_only", "f", func() {}, WhenProfile("fedora"))
 	Task("rocky_host", "r", func() {}, WhenHostnameContains("rocky"))
+	Task("opaque_linux", "o", func() {}, When(func(f Facts) bool { return f.GOOS == "linux" }))
 
 	Activate(Facts{Profile: "fedora", GOOS: "linux", Hostname: "earth"})
-	got := taskNames(t)
-	want := []string{"always", "fedora_only", "linux_only"}
-	if !reflect.DeepEqual(got, want) {
+	want := map[string]string{"always": "", "fedora_only": "", "linux_only": "",
+		"opaque_linux": "", "rocky_host": "hostname_contains=rocky"}
+	if got := taskGuards(t); !reflect.DeepEqual(got, want) {
 		t.Fatalf("fedora/linux = %v, want %v", got, want)
 	}
 
 	Activate(Facts{Profile: "rocky", GOOS: "darwin", Hostname: "rocky-box"})
-	got = taskNames(t)
-	want = []string{"always", "rocky_host"}
-	if !reflect.DeepEqual(got, want) {
+	want = map[string]string{"always": "", "fedora_only": "profile=fedora",
+		"linux_only": "goos=linux", "rocky_host": ""}
+	if got := taskGuards(t); !reflect.DeepEqual(got, want) {
 		t.Fatalf("rocky/darwin = %v, want %v", got, want)
 	}
+}
+
+// taskGuards maps every listed task to its DestinationGuard mark.
+func taskGuards(t *testing.T) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for _, info := range Tasks() {
+		out[info.Name] = info.DestinationGuard
+	}
+	return out
 }
 
 func taskNames(t *testing.T) []string {
@@ -93,9 +107,16 @@ func TestRegisterMethodsGroupWhen(t *testing.T) {
 		t.Fatalf("fedora: %v", got)
 	}
 
+	// Task 8h2: a WithGroupWhen(WhenProfile) guard travels to the
+	// destination, so a controller of another profile still matches the
+	// task (a pattern aggregate pushed from it records the member) and
+	// lists it as destination-guarded.
 	Activate(Facts{Profile: "rocky"})
-	if got := Matching("^pkg_"); len(got) != 0 {
-		t.Fatalf("rocky should skip pkg: %v", got)
+	if got := Matching("^pkg_"); !reflect.DeepEqual(got, []string{"pkg_fedora"}) {
+		t.Fatalf("rocky must still match the destination-guarded task: %v", got)
+	}
+	if got := taskGuards(t)["pkg_fedora"]; got != "profile=fedora" {
+		t.Fatalf("rocky: DestinationGuard = %q, want profile=fedora", got)
 	}
 }
 
@@ -150,12 +171,12 @@ func TestRegisterMethodsOptsCompanion(t *testing.T) {
 
 	RegisterMethods(optsCompanion{dir: t.TempDir()}, WithPrefix("demo_"))
 
-	// Both tasks queued as candidates, but only demo_ping is active on a
-	// host whose name does not contain "rocky": the serializable
-	// WhenHostnameContains option gates activation locally.
+	// Both tasks are active on a host whose name does not contain "rocky":
+	// the serializable WhenHostnameContains option only marks demo_rocky_cron
+	// destination-guarded there (task 8h2); it travels as a when_begin.
 	Activate(Facts{Hostname: "earth"})
-	got := taskNames(t)
-	want := []string{"demo_ping"}
+	got := taskGuards(t)
+	want := map[string]string{"demo_ping": "", "demo_rocky_cron": "hostname_contains=rocky"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("tasks on earth = %v, want %v", got, want)
 	}

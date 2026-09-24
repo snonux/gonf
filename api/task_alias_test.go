@@ -101,13 +101,16 @@ func TestAliasRecordsTargetOpsExactly(t *testing.T) {
 
 // TestAliasListedWithTargetActivation pins the listing contract: an alias is
 // a public name with its own description and AliasOf, active exactly when
-// its target is, and it matches patterns like any task.
+// its target is (and destination-guarded exactly when it is), and it matches
+// patterns like any task.
 func TestAliasListedWithTargetActivation(t *testing.T) {
 	dir := resetAliasTest(t)
 	fileTask(dir, "home_agents")
-	fileTask(dir, "fedora_only", WhenProfile("fedora"))
+	fileTask(dir, "fedora_only", When(ProfileIs("fedora")))
+	fileTask(dir, "guarded", WhenProfile("fedora"))
 	Alias("home_prompts", "Legacy alias for home_agents", "home_agents")
 	Alias("fedora_alias", "", "fedora_only")
+	Alias("guarded_alias", "", "guarded")
 
 	SetProfileOverride("rocky")
 	Activate(DetectFacts())
@@ -124,6 +127,9 @@ func TestAliasListedWithTargetActivation(t *testing.T) {
 	}
 	if _, ok := got["fedora_alias"]; ok {
 		t.Fatal("alias of an inactive target must not be listed")
+	}
+	if g := got["guarded_alias"].DestinationGuard; g != "profile=fedora" {
+		t.Fatalf("alias of a destination-guarded target: DestinationGuard = %q, want profile=fedora", g)
 	}
 	if m := Matching("^home_"); !reflect.DeepEqual(m, []string{"home_agents", "home_prompts"}) {
 		t.Fatalf("Matching = %v", m)
@@ -260,12 +266,13 @@ func TestAggregateTasksDeclaredOrderAndDedupe(t *testing.T) {
 }
 
 // TestAggregateTasksSkipsInactiveMembers pins that explicit membership keeps
-// the controller-side activation filter a pattern aggregate applies, and
-// that a list with no active member fails like an empty pattern match.
+// the controller-side activation filter a pattern aggregate applies (opaque
+// When predicates only, task 8h2), and that a list with no active member
+// fails like an empty pattern match.
 func TestAggregateTasksSkipsInactiveMembers(t *testing.T) {
 	dir := resetAliasTest(t)
 	always := fileTask(dir, "always")
-	fileTask(dir, "fedora_only", WhenProfile("fedora"))
+	fileTask(dir, "fedora_only", When(ProfileIs("fedora")))
 	AggregateTasks("setup", "", "fedora_only", "always")
 	AggregateTasks("fedora_setup", "", "fedora_only")
 

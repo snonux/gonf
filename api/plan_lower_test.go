@@ -876,13 +876,9 @@ func TestRecordPlanWhenProfileMultiLowersToInPredicate(t *testing.T) {
 // predicate is only an extra controller-side filter, never a reason to drop
 // the serializable one. This is the exact h5 regression scenario — before
 // the fix, planWhenForCandidate returned nil here because c.opaqueWhen was
-// true, silently dropping the OS guard.
+// true, silently dropping the OS guard. Since task 8h2 WhenLinux is not
+// evaluated on the controller at all, so this runs on every controller OS.
 func TestRecordPlanOpaqueWhenKeepsSerializableGuard(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		// WhenLinux's own injected controller-side check needs a real
-		// linux host to pass; see the opaque-filter comment below.
-		t.Skip("WhenLinux's controller-side check requires a linux host")
-	}
 	ResetTasks()
 	resource.ResetRepository()
 	t.Cleanup(func() {

@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -372,10 +371,10 @@ func TestPushRemovesStickyDirOnChunkFailure(t *testing.T) {
 // in-process RecordPlan result (api/plan_lower_test.go already covers
 // that). Before the fix, the opaque predicate made planWhenForCandidate
 // return nil, so the pushed plan applied unconditionally on every OS.
+//
+// Since task 8h2 only the opaque half is evaluated on the controller, so the
+// test runs on any controller OS: the goos guard travels either way.
 func TestPushKeepsSerializableGuardAlongsideOpaqueWhen(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("WhenLinux's controller-side check requires a linux host")
-	}
 	ResetTasks()
 	ResetInventory()
 	resource.ResetRepository()

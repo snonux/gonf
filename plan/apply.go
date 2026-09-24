@@ -425,6 +425,18 @@ func GuardOptions(g *Guard, unless bool) []opt.CommandOption {
 	return []opt.CommandOption{opt.OnlyIf(g.Bin, append([]string(nil), g.Args...), gopts...)}
 }
 
+// EvalPredicates reports whether every predicate of preds holds for facts,
+// with exactly the semantics a when_begin op's All list has at apply time
+// (an empty list holds). It lets a controller ask the question a destination
+// will answer — api uses it to mark -list rows whose serializable task guard
+// does not hold on this host and, for a local Run, to resolve aggregate
+// membership at record time — without a second, drifting copy of the fact
+// matching rules. An unknown fact or an unreadable path_exists path is an
+// error, as it is at apply time.
+func EvalPredicates(preds []Predicate, facts Facts) (bool, error) {
+	return evalAll(preds, facts)
+}
+
 func evalAll(preds []Predicate, facts Facts) (bool, error) {
 	for _, p := range preds {
 		ok, err := evalPredicate(p, facts)

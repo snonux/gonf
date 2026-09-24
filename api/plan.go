@@ -633,7 +633,7 @@ func recordSingleTaskBody(name string) error {
 	if err != nil {
 		return err
 	}
-	if c.opaqueWhen && len(wrapWhen) == 0 {
+	if c.hasOpaqueWhen() && len(wrapWhen) == 0 {
 		// Passed the controller-side opaque filter (planWhenForCandidate
 		// would have errored otherwise) but has no serializable guard to
 		// ship: see recordedOpaqueOnlyTasks.
@@ -795,30 +795,23 @@ func ApplyPlan(ops []plan.Op, planDir string) error {
 // in-process chunks of ApplyChunksContext run.
 func ApplyPlanContext(ctx context.Context, ops []plan.Op, planDir string) error {
 	defer noteValidatorWait(ctx, os.Stderr, validator.Running)()
-	f := DetectFacts()
-	return plan.ApplyWithContext(ctx, ops, plan.Facts{
-		GOOS:     f.GOOS,
-		Profile:  f.Profile,
-		Hostname: f.Hostname,
-	}, planDir)
+	return plan.ApplyWithContext(ctx, ops, toPlanFacts(DetectFacts()), planDir)
 }
 
 // planWhenForCandidate returns the serializable when predicates to record as
-// a when_begin guard, or nil when the task has no When predicates at all
-// (or none of them are serializable).
+// a when_begin guard, or nil when the task has none.
 //
-// Any opaque (non-serializable, e.g. a custom When(func)) predicate in
-// c.when is evaluated here as an extra controller-side filter: it gates
-// whether recording proceeds at all (an error when it fails), but it never
-// takes the place of the serializable guards — those are always emitted
-// when present, even alongside an opaque predicate. This matters because
-// c.when accumulates every When call regardless of serializability, so a
-// task built with WhenLinux() + When(fn) must still ship its goos guard.
+// The opaque (non-serializable, e.g. a custom When(func)) predicates in
+// c.opaque are evaluated here as a controller-side filter: they gate whether
+// recording proceeds at all (an error when one fails), but they never take
+// the place of the serializable guards — those are always emitted when
+// present, even alongside an opaque predicate, so a task built with
+// WhenLinux() + When(fn) still ships its goos guard. The serializable guards
+// themselves are not evaluated on the controller (task 8h2): a mixed task
+// records on a controller where only its opaque part holds, and the
+// destination decides the rest.
 func planWhenForCandidate(c taskCandidate) ([]plan.Predicate, error) {
-	if len(c.when) == 0 {
-		return nil, nil
-	}
-	if c.opaqueWhen && !whenPasses(c.when, DetectFacts()) {
+	if c.hasOpaqueWhen() && !whenPasses(c.opaque, DetectFacts()) {
 		return nil, fmt.Errorf("RecordPlan: task %q When predicates fail on controller and are not serializable", c.name)
 	}
 	if len(c.planWhen) == 0 {

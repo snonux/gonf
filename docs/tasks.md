@@ -17,6 +17,50 @@ recipes in the plan and are evaluated on the **destination** at apply time
 (local or remote). Opaque `When(func(Facts) bool)` cannot travel in a plan;
 recording requires them to pass on the controller.
 
+### Destination guards (task 8h2)
+
+A serializable guard (`WhenLinux`, `WhenProfile`, `WhenHostnameContains`) is a
+question about the destination, so the controller does not answer it when
+deciding which tasks exist. Only opaque predicates (`When(func)`, a
+`RegisterMethods` `WhenFoo` companion, a `WhenProfile()` without profiles)
+activate or hide a task on the controller. A task whose serializable guard
+does not hold on the controller is still listed, still a pattern-aggregate
+and `AggregateTasks` member, and its ops travel inside its `when_begin`, so
+`gonf push host home` records a member guarded for `host` even from a
+controller the guard excludes: record once, evaluate per destination.
+
+This is an approved behaviour correction (approved by the user 2026-09-24,
+task 8h2). Before it, the controller also filtered by serializable guards,
+so a push silently dropped every aggregate member whose guard only matched
+the destination (dotfiles' former `home_tmux_rocky`, pushed from earth), and
+a `WithGroupWhen(WhenProfile(...))` group pushed from a controller of
+another profile lost all its tasks.
+
+| Task guards | Controller (activation, `-list`, aggregates) | Destination |
+|---|---|---|
+| none | active | always applies |
+| serializable only | active; `-list` marks it `[destination-guarded: …]` when the guard does not hold here | `when_begin` decides |
+| opaque only | active only when the predicate holds here | no guard travels; push refuses the plan |
+| mixed | active only when the opaque part holds here | the serializable part decides |
+
+Naming a guarded task explicitly records it with its `when_begin`, as
+before. An `Alias` carries its target's guard (and mark), and a member
+reached through an alias or a nested aggregate records exactly like the
+member named directly.
+
+**Local runs** (`gonf home` on the machine itself, `Run`) keep their outcome
+and their plan unchanged: their destination is this host, so an aggregate
+resolves each member's serializable guard against this host's facts at
+record time and skips a member it excludes (a `-verbose` debug line names
+it), exactly as before. Recording that member into a `when_begin` instead
+would converge the same resources, but a `Privileged()` member that cannot
+apply here would still split off an elevated chunk — a sudo/doas re-exec
+that changes nothing, an extra empty summary, or a refusal under
+`-privilege none`. The summary counts and output wording of a local run are
+therefore identical. `gonf plan` and every push, cluster or fleet run record
+the member inside its `when_begin`, so their op counts grow by the formerly
+dropped members.
+
 | Helper | Meaning |
 |--------|---------|
 | `When(pred)` | Custom `func(Facts) bool` (not serializable) |
@@ -163,10 +207,26 @@ these rules:
   recorded is a cycle and fails the record instead of being skipped.
 - **Aliases** stay visible: members are recorded under their public names,
   so a cycle error names the alias in the chain.
-- **Conditions** stay the members' own: a member whose `When*` options exclude
-  it on the controller is skipped (the same activation filter as `-list`),
-  and serializable guards still become `when_begin` recipes. Privilege chunks
-  (`Privileged()`) are per member, as for a direct run.
+- **Conditions** stay the members' own: a member whose opaque `When`
+  predicate excludes it on the controller is skipped (the same activation
+  filter as `-list`); a serializable guard never drops a member, it becomes
+  the member's `when_begin` recipe, evaluated per destination (see
+  *Destination guards* above; a local run skips a member whose guard does
+  not hold on this host). Privilege chunks (`Privileged()`) are per member,
+  as for a direct run.
+
+  The push consequence (approved behaviour change, 2026-09-24, task 8h2):
+  before 8h2, `gonf push paul@rocky home` run from the controller earth
+  silently dropped dotfiles' `home_tmux_rocky`, because its
+  `WhenHostnameContains("rocky")` was evaluated on the controller, where it
+  fails — although naming the task explicitly recorded it with its
+  `when_begin` and it applied on rocky (dotfiles worked around it on branch
+  `e2e-tmux-rocky`, commit b092675). Now the guard is evaluated on the
+  destination: `home` records `home_tmux_rocky` inside
+  `when_begin{hostname_contains: rocky}` on every controller, rocky applies
+  it, and every other destination skips it. Likewise a
+  `WithGroupWhen(WhenProfile("fedora"))` group joins a pattern aggregate
+  pushed from a rocky controller, guarded by the profile.
 - **Errors propagate**: a member that fails to record, a broken alias, or an
   empty member set fails the whole record with the aggregate chain in the
   message (`aggregate outer: aggregate inner: …`). Cycles are detected across
@@ -253,8 +313,10 @@ type Facts struct {
 ```
 
 Built by `DetectFacts()`. Profile comes from hostname heuristics / `/etc/os-release`,
-or `-profile=...` / `SetProfileOverride`. Used by `-list` activation and by
-`ApplyPlan` when interpreting `when_begin` fact predicates.
+or `-profile=...` / `SetProfileOverride`. Used by activation (opaque
+predicates, and the `-list` destination-guarded mark), by a local run's
+aggregate membership, and by `ApplyPlan` when interpreting `when_begin` fact
+predicates.
 
 `ProfileIs("fedora")` is a ready-made predicate for custom `When` / `And` / `Or`.
 
@@ -266,7 +328,7 @@ func main() { os.Exit(cli.CLI()) }
 
 | Invocation | Meaning |
 |------------|---------|
-| `-list` | Print activated tasks (display filter via Facts) |
+| `-list` | Print activated tasks; a task whose serializable guard does not hold here is marked `[destination-guarded: <guard>]` |
 | `-version` | Print library version |
 | `-profile=` | Override Facts.Profile |
 | `-dry-run` / `-n` | Preview without mutating |
@@ -286,7 +348,9 @@ invocation's `-n` or `-privilege`.
 
 `Activate(DetectFacts())` runs inside `CLI` so `-list` and profile overrides
 see the final Facts. Task **execution** still records candidates with their
-`When*` recipes rather than dropping tasks at activation time.
+`When*` recipes rather than dropping tasks at activation time, and
+activation drops only tasks whose opaque `When` fails (see *Destination
+guards*).
 
 ## Programmatic run
 
@@ -300,9 +364,11 @@ if err := ApplyPlan(ops, planDir); err != nil { /* … */ }
 ```
 
 `Matching("home\\..*")` returns activated task names matching a regex,
-aliases and operational tasks included (`Aggregate` filters and resolves them
-afterwards). `Activate` only filters the list for display /
-matching — it does not apply configuration by itself.
+aliases, operational and destination-guarded tasks included (`Aggregate`
+filters and resolves them afterwards). `Activate` only filters the list for
+display / matching by opaque predicates — it does not apply configuration by
+itself. `Tasks()` reports the destination-guarded mark as
+`TaskInfo.DestinationGuard`.
 
 `api.Apply()` snapshots registered drafts and uses the plan engine (the
 direct `resource.Apply()` repository path was retired in task e72),

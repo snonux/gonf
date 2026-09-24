@@ -310,6 +310,13 @@ ops, err := RecordPlan("my-plan", planDir, "home_helix", "home_tmux")
 
 - Looks up **candidates** (not Activate-filtered) so serializable `When*`
   become `when_begin` / `when_end` recipes evaluated on the destination.
+  Aggregates do not filter their members by serializable guards either
+  (task 8h2): a member guarded for the destination is recorded inside its
+  `when_begin` even when the guard does not hold on the controller. Only a
+  local `Run` resolves member guards at record time, against this host (see
+  [tasks.md](tasks.md), *Destination guards*). No schema change: the
+  `when_begin` fact predicates (`goos`, `profile`, `hostname_contains`, `in`
+  since v8) already carry every task guard.
 - Task bodies run with a draft recorder: `File` / `Dir` / `Link` / `Command` /
   … emit ops instead of applying.
 - Every draft must map through a registered `plan.Handler` (`api/plan.go`'s
@@ -402,7 +409,10 @@ ops, err := RecordPlan("my-plan", planDir, "home_helix", "home_tmux")
 OR-list instead: `{"fact":"profile","in":["a","b"]}` — the destination
 matches if the fact equals *any* entry of `in` (schema v8; `hostname_contains`
 supports `in` the same way, as a substring-OR). Multiple profiles are just as
-serializable as one; `WhenProfile` never marks a task opaque.
+serializable as one; `WhenProfile` with at least one profile never marks a task
+opaque (`WhenProfile()` with none can match nothing and has no serializable
+form, so it is an opaque predicate that never holds: the task is never
+activated and naming it fails the record instead of applying it unguarded).
 
 Opaque `When(func(Facts) bool)` cannot be serialized — it has no declarative
 equivalent. `RecordPlan` requires opaque predicates to pass on the

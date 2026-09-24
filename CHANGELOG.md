@@ -3,6 +3,31 @@
 Release notes for gonf. Each release is also an annotated `v*` tag; for
 releases before v0.17.0 the tag message and the git log are the notes.
 
+## Unreleased
+
+Plan schema 24 (unchanged).
+
+Tasks and aggregates ([docs/tasks.md](docs/tasks.md), "Destination guards")
+- Approved behaviour change (8h2, approved by the user 2026-09-24):
+  serializable task guards (`WhenLinux`, `WhenProfile`,
+  `WhenHostnameContains`, also through `WithGroupWhen`) are evaluated on the
+  destination, not the controller. A pattern `Aggregate` or `AggregateTasks`
+  records such a member inside its `when_begin` on every controller, so
+  `gonf push paul@rocky home` from earth now includes dotfiles'
+  `home_tmux_rocky` (`WhenHostnameContains("rocky")`), which it used to drop
+  silently. Only opaque predicates (`When(func)`, `WhenFoo` companions) hide
+  a task on the controller; a mixed task's opaque part filters there and its
+  serializable part travels. Aliases and nested aggregates behave the same.
+- `-list` shows such tasks with a `[destination-guarded: <guard>]` suffix
+  instead of hiding them (`TaskInfo.DestinationGuard`); other rows are
+  unchanged.
+- A local run (`gonf home`, `Run`) is unchanged: it resolves member guards
+  against this host at record time, so its plan, summaries and outcome are
+  identical. `gonf plan` and push/cluster/fleet plans grow by the formerly
+  dropped members, each wrapped in `when_begin`/`when_end`.
+- `WhenProfile()` without profiles is now an opaque never-true predicate:
+  naming such a task fails the record instead of applying it unguarded.
+
 ## v0.18.0
 
 Plan schema 24 (unchanged); `-sealed-version` 1, `-signed-version` 1.
