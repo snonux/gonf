@@ -522,10 +522,10 @@ then delete it).
 Status: **steps 4a (`yf2`), 4b (`zf2`) and 4c (`0g2`, destination decrypt
 and lifting the refusal) landed** — see "As landed (task `zf2`)" and "As
 landed (task `0g2`)" at the end of this section for the exact wire format,
-API and destination behaviour. **Open:** the controller's release floor
-(`sealedStickyMinRelease`) is still a `0.17.0` placeholder above every
-release, so a push that seals a sticky ref is refused before any upload
-until the release carrying 0g2 is tagged and the floor is set to it.
+API and destination behaviour. The controller's release floor
+(`sealedStickyMinRelease`) is `0.17.0`, the release chosen to ship 0g2
+(task `yg2`): until v0.17.0 is tagged and `internal.Version` bumped to it,
+a push that seals a sticky ref is refused before any upload.
 Originally design only, expanded
 here by task `6b2`. Task
 `6b2` (this design's own phase-4 entry) read this section's earlier
@@ -789,8 +789,9 @@ there is something to seal) before any SSH traffic;
 `EnsureRemoteGonf`'s self-heal; `stream`/`streamChunks` upload the sealed
 set and encode each chunk with `stickySeal.encodeChunk`. The fixed floor
 `sealedStickyMinRelease` is `0.17.0`, above every release so far, so the
-gate refuses every remote until the release shipping 0g2 exists (a test
-pins it above `internal.Version`); 0g2 sets it to that release. The key is
+gate refuses every remote until the release shipping 0g2 exists; task `yg2`
+confirmed `0.17.0` as that release and
+`TestSealedStickyFloorIsReleaseShipping0g2` pins it. The key is
 never on argv or in the environment, never logged, never in an error
 (tests pin argv, log capture, chunk-failure errors, fmt of `PushKey`).
 
@@ -856,9 +857,9 @@ wipes now; chunk sessions leave what it staged.
 
 **Controller.** `refuseSensitiveStickyBlobs`, `refuseStickyBlobs` and their
 tests are gone; `plan.SensitiveElevatedBlobs` stays as the description of
-the sealed ops. `sealedStickyMinRelease` is still the `0.17.0` placeholder:
-set it to the release that ships this and flip
-`TestSealedStickyFloorAboveCurrentRelease` then. A push with nothing to seal
+the sealed ops. `sealedStickyMinRelease` is `0.17.0`, the release chosen to
+ship this (task `yg2`, pinned by `TestSealedStickyFloorIsReleaseShipping0g2`);
+bump `internal.Version` to it when v0.17.0 is tagged. A push with nothing to seal
 is byte-identical on the wire (GONF-PUSH/1 only, no floor probe).
 
 **Tests.** `internal/cli/sealed_sticky_test.go` (upload through the real
@@ -909,7 +910,7 @@ bumps gonf, is expected and noted, not a failure).
 | 1 | `3b2` | `gonf apply [-identity]… <plan.age\|->`: magic sniff, root requires `-identity`, read to EOF before apply, in-memory decode without blobs, `sealed-run-*` run dir with dead-owner sweep, single-process apply via `api.ApplyPlan`, "decrypted" wording, `gonf -sealed-version`. |
 | 2 | `4b2` (done) | Destination recipients: `api.WithPlanRecipient` on `Host`; `gonf plan -seal -for host\|cluster\|fleet` records once per host (`api.RecordPlanForHost`) and writes `plan-<host>.age` per host, sealed to that host's recipient plus the operator's; refuses up front when a target host lacks a recipient, when the operator's own base recipients (`-recipient`/recipients-file) are empty (task `mg2`), or when two hosts would sanitize to the same filename; `-for` with `-stdout` only when it resolves to exactly one host. See "Runbook: host keys and shipped plan.age" above. |
 | 3 | `5b2` | Optional, needs a user decision: `-seal` default for sensitive plans when an operator recipients file exists, and/or the operator identity through the secret provider. |
-| 4 | `6b2` | Optional: seal a multi-chunk push's sticky-dir blobs to an ephemeral per-push key sent only on each chunk's stdin, lifting 062's refusal of sensitive blobs in elevated chunks. **Scoped down to design only** (see "Phase 4 design: sealed multi-chunk sticky-dir blobs" above) rather than a one-session implementation of security-sensitive privileged-apply plumbing; split into its own sub-phases `yf2` (ephemeral seal primitive, done: `seal.GenerateEphemeral`, `seal.EncodeEphemeral`, `seal.ParseEphemeral` in `plan/seal/ephemeral.go`) → `zf2` (wire extension + delivery, done: GONF-PUSH/2 `plan.EncodePushWithKey`/`DecodePushWithKey`, sealed refs at `sealed/<ref>.age`, `RequireRemoteSealedSticky`) → `0g2` (done: destination decrypt into `plan.NewSealedApplyRunDir()`, `refuseSensitiveStickyBlobs` removed, see "As landed (task `0g2`)" above; open: set `sealedStickyMinRelease` to the release that ships it). |
+| 4 | `6b2` | Optional: seal a multi-chunk push's sticky-dir blobs to an ephemeral per-push key sent only on each chunk's stdin, lifting 062's refusal of sensitive blobs in elevated chunks. **Scoped down to design only** (see "Phase 4 design: sealed multi-chunk sticky-dir blobs" above) rather than a one-session implementation of security-sensitive privileged-apply plumbing; split into its own sub-phases `yf2` (ephemeral seal primitive, done: `seal.GenerateEphemeral`, `seal.EncodeEphemeral`, `seal.ParseEphemeral` in `plan/seal/ephemeral.go`) → `zf2` (wire extension + delivery, done: GONF-PUSH/2 `plan.EncodePushWithKey`/`DecodePushWithKey`, sealed refs at `sealed/<ref>.age`, `RequireRemoteSealedSticky`) → `0g2` (done: destination decrypt into `plan.NewSealedApplyRunDir()`, `refuseSensitiveStickyBlobs` removed, see "As landed (task `0g2`)" above; floor `sealedStickyMinRelease` = `0.17.0`, task `yg2`). |
 | - | `7b2` | Design (not implement) signed plan artifacts; until it is implemented, unattended sealed apply stays blocked. |
 
 Dependencies: `2b2`, `3b2` and `6b2` need `1b2`; `4b2` and `5b2` need `2b2`

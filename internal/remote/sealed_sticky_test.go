@@ -304,22 +304,23 @@ func TestRequireRemoteSealedStickyFloor(t *testing.T) {
 	}
 }
 
-// The floor is derived from its literal (task wf2's drift guard) and stays
-// above the current release until the release shipping task 0g2's
-// destination side is tagged: until then no remote can pass the gate. When
-// that release is cut, sealedStickyMinRelease is set to it and this test
-// flips to pin floor <= internal.Version.
-func TestSealedStickyFloorAboveCurrentRelease(t *testing.T) {
+// The floor is derived from its literal (task wf2's drift guard) and is
+// exactly v0.17.0, the release the user chose to ship task 0g2's
+// destination side (task yg2). v0.16.6, the last release without 0g2, must
+// stay below it, so no remote lacking the decrypt support can pass the gate.
+func TestSealedStickyFloorIsReleaseShipping0g2(t *testing.T) {
 	want, err := parseReleaseVersion(sealedStickyMinRelease)
 	if err != nil || sealedStickyMinVersion != want {
 		t.Fatalf("sealedStickyMinVersion = %v, want %v derived from %q (%v)", sealedStickyMinVersion, want, sealedStickyMinRelease, err)
 	}
-	current, err := parseReleaseVersion(internal.Version)
+	if sealedStickyMinRelease != "0.17.0" {
+		t.Fatalf("sealedStickyMinRelease = %q, want 0.17.0 (the release chosen to ship 0g2, task yg2)", sealedStickyMinRelease)
+	}
+	lastWithout0g2, err := parseReleaseVersion("0.16.6")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !releaseVersionLess(current, sealedStickyMinVersion) {
-		t.Fatalf("sealedStickyMinRelease %s <= internal.Version %s: set the floor to the release that ships task 0g2 and flip this test",
-			sealedStickyMinRelease, internal.Version)
+	if !releaseVersionLess(lastWithout0g2, sealedStickyMinVersion) {
+		t.Fatalf("v0.16.6 (no 0g2) must stay below the floor %s", sealedStickyMinRelease)
 	}
 }

@@ -147,16 +147,14 @@ var relayedMinVersion = mustParseReleaseVersion(relayedMinRelease)
 // it for the same reason RequireRemoteRelayed compares against
 // relayedMinRelease.
 //
-// The destination side landed with task 0g2, but no release carrying it
-// has been tagged yet, so the floor is still a placeholder above every
-// release so far (0.17.0; internal.Version is below it): until the release
-// that ships 0g2 is cut, the gate refuses every remote, even one
-// EnsureRemoteGonf just upgraded to the controller's own release, and a
-// push that would seal a sticky ref fails closed before any upload. OPEN:
-// when that release is tagged, set this to exactly its version and bump
-// internal.Version with it; TestSealedStickyFloorAboveCurrentRelease pins
-// the floor above internal.Version until then and must be flipped to pin
-// floor <= internal.Version at that point.
+// The floor is v0.17.0: the release the user chose (task yg2, 2026-09-24)
+// to ship task 0g2's destination side. It is deliberately a real release
+// number, not a moving value: until v0.17.0 is tagged and internal.Version
+// is bumped to it at tagging time, the gate refuses every remote, even one
+// EnsureRemoteGonf just upgraded to the controller's own (older) release,
+// so a push that would seal a sticky ref fails closed before any upload.
+// Every release up to v0.16.6 lacks 0g2 and must stay below the floor;
+// TestSealedStickyFloorIsReleaseShipping0g2 pins both facts.
 const sealedStickyMinRelease = "0.17.0"
 
 // sealedStickyMinVersion is sealedStickyMinRelease's parsed form, derived at
@@ -229,8 +227,9 @@ func AssumeRemotePlanCurrent() func() {
 // AssumeRemoteSealedStickyForTest is a test seam for callers outside this
 // package that fake SSHRunner and push a plan with sealed sticky refs: it
 // makes defaultPusher's release probe report sealedStickyMinRelease, so
-// RequireRemoteSealedSticky passes without any ssh probe while the floor is
-// still above internal.Version (see sealedStickyMinRelease). It only makes
+// RequireRemoteSealedSticky passes without any ssh probe even while
+// internal.Version is still below the v0.17.0 floor (see
+// sealedStickyMinRelease). It only makes
 // sense with ObserveBootstrapForTest (which skips EnsureRemoteGonf, whose
 // release comparison it would otherwise confuse). internal/cli's
 // end-to-end sealed push test uses it to drive the real controller against
