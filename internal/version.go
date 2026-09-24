@@ -2,7 +2,7 @@
 package internal
 
 // Version is the gonf release version, reported by `gonf -version`.
-const Version = "0.19.0"
+const Version = "0.20.0"
 
 // StrictPreviewVersion is the remote capability version required for
 // `gonf apply -strict-preview`. It is separate from the plan wire version:

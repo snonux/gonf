@@ -1,6 +1,6 @@
 # Replacing `~/git/conf` Rex with gonf — gap audit
 
-Refreshed 2026-09-24 against **gonf v0.19.0**; this release uses plan schema 24.
+Refreshed 2026-09-25 against **gonf v0.20.0**; this release uses plan schema 25.
 This document is the canonical plan for porting the
 [`~/git/conf`](https://codeberg.org/snonux/conf)
 Rexfiles to gonf. Earlier revisions claimed gonf "still lacks Rex-style sudo/doas"
@@ -30,7 +30,7 @@ compute any content Perl closures could (see
   `gonf/secrets` root resolves, and passes its arguments through verbatim;
   it works from any directory, conf 63e83a8).
 - **One consumer module per repository**, depending on `github.com/snonux/gonf`
-  (conf and dotfiles both pin v0.19.0; any later consumer upgrade is a
+  (conf and dotfiles both pin v0.20.0; any later consumer upgrade is a
   deliberate compatibility change). Multi-Rexfile composition maps to Go
   packages + `RegisterMethods` + `Aggregate` / `AggregateTasks` (in conf's
   `gonf/tasks/tasks.go`), not to multiple Rexfiles.
@@ -82,9 +82,9 @@ One plan engine serves local and remote runs, so a recipe cannot diverge between
 
 ## Current capability matrix
 
-Status against every conf Rex primitive in v0.19.0 (plan schema 24):
+Status against every conf Rex primitive in v0.20.0 (plan schema 25):
 
-| Conf Rex capability | gonf v0.19.0 | Status |
+| Conf Rex capability | gonf v0.20.0 | Status |
 |---------------------|--------------|--------|
 | `group x => 'h:2', …`, `user`, `parallelism 5` | `Host(name, WithSSHUser, WithSSHHost, WithSSHPort, WithSSHIdentity)` + `Cluster(name, hosts…)`, `cluster.Parallel(n)`; `gonf hosts`/`clusters`/`fleets` | **Done** |
 | `sudo TRUE` / `auth for => group (user, sudo)` | `Task(…, Privileged())` (or `RequiresRoot`) + `Host(WithPrivilege(PrivilegeSudo|Doas|None))`; apply splits plain/elevated chunks; remote elevated chunk wraps `sudo -n gonf apply` / `doas gonf apply`; `-privilege=none` + elevated op refuses to push | **Done** |
@@ -449,7 +449,7 @@ so the plan has no login-owned `/tmp` secret staging step.
 For this document:
 
 - Every capability row names the gonf API that exists today (verified
-  against v0.19.0, plan schema 24) — no "fleet needs transport" or
+  against v0.20.0, plan schema 25) — no "fleet needs transport" or
   missing-feature claims survive.
 - All Rexfiles (four tracked, plus the retired `f3s/garage` one) are
   inventoried and every task appears exactly once in the
