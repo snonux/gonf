@@ -91,6 +91,11 @@ func CLI() int {
 	// remote hosts (if any push needed one) once this run is over.
 	defer func() { _ = cleanupRemoteBuilds() }()
 
+	// configureCLI sets resource's process-wide dry-run flag from this
+	// invocation's -n; put back whatever it was before on return, so the flag
+	// never outlives this call (see scopeDryRun, task vg2).
+	defer scopeDryRun()()
+
 	options, err := parseCLIFlags(os.Args[0], os.Args[1:])
 	if err != nil {
 		return 2
@@ -256,7 +261,9 @@ func configureCLI(options cliOptions) error {
 	// repeated CLI() calls in the same process (e.g. under `go test
 	// -shuffle`). Subcommand handlers (cliApply/cliPush/cliCluster/
 	// cliFleet) escalate-only, so a top-level "gonf -n <subcmd> ..." set
-	// here survives their own flag parsing.
+	// here survives their own flag parsing. CLI() restores the flag's
+	// previous value on return (scopeDryRun), so this setting is scoped to
+	// the invocation rather than left behind for the next caller.
 	resource.SetDryRun(options.dryRun)
 	m, err := privilege.ParseMode(options.privilege)
 	if err != nil {
@@ -267,6 +274,46 @@ func configureCLI(options cliOptions) error {
 		api.SetProfileOverride(options.profile)
 	}
 	return nil
+}
+
+// scopeDryRun snapshots resource's process-wide dry-run flag and returns a
+// func that puts the snapshot back. Every CLI entry point that may change
+// the flag (CLI() itself and the subcommand handlers, via escalateDryRun)
+// defers the returned func, so a dry-run invocation never leaks the flag
+// past its own return.
+//
+// In the real binary the process exits right after CLI() returns, so the
+// restore changes nothing there. It matters for any in-process caller that
+// runs several invocations in turn — above all this package's tests, which
+// call CLI() and the handlers (cliApply, cliPush, ...) directly under
+// `go test -shuffle=on`. Before task vg2 the handlers only ever escalated
+// the flag to true and left it set, so every test passing -n or
+// -strict-preview had to remember its own t.Cleanup reset. One that did not
+// (TestCLIApplySealedStdinRefusesStrictPreview: cliApply escalates before
+// it refuses the sealed stream) left dry-run on, and whichever test next
+// called a handler directly without going through CLI() (which resets the
+// flag) silently ran in dry-run mode — e.g.
+// TestCLIApplyFileIgnoresStdinWithoutCancelPipe then never touched its
+// marker file. Whether it failed depended on the shuffled order, hence the
+// intermittent flake. Scoping the flag here fixes the whole class instead
+// of adding one more per-test reset.
+func scopeDryRun() (restore func()) {
+	prev := resource.DryRun()
+	return func() { resource.SetDryRun(prev) }
+}
+
+// escalateDryRun is the subcommand handlers' escalate-only dry-run setting:
+// it turns the flag on when on is true and never turns it off, so a
+// top-level "gonf -n <subcmd> ..." (already set by configureCLI before
+// dispatch, or pre-set by an in-process caller) survives a subcommand whose
+// own flags did not repeat -n. Like scopeDryRun, the returned func restores
+// the value found on entry; the handler defers it.
+func escalateDryRun(on bool) (restore func()) {
+	restore = scopeDryRun()
+	if on {
+		resource.SetDryRun(true)
+	}
+	return restore
 }
 
 // reportDeclarationError logs a declaration error found before CLI started
@@ -724,12 +771,9 @@ func cliApply(ctx context.Context, args []string) int {
 	if f.cancelPipe || f.relayed {
 		ignoreSIGPIPEForRelayedChild()
 	}
-	// Escalate-only: a top-level "gonf -n apply ..." already set this via
-	// CLI()'s unconditional call before dispatch; don't stomp it back to
-	// false just because this subcommand's own flags didn't repeat -n.
-	if f.dryRun || f.strictPreview {
-		resource.SetDryRun(true)
-	}
+	// Escalate-only (a top-level "gonf -n apply ..." survives), and scoped
+	// to this call: see escalateDryRun.
+	defer escalateDryRun(f.dryRun || f.strictPreview)()
 	if len(rest) != 1 {
 		eprintln("usage: gonf apply [-n|-dry-run] [-strict-preview] [-apply-dir dir] [-identity file]... <plan.jsonl|plan.age|->")
 		return 2

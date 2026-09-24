@@ -10,7 +10,6 @@ import (
 
 	"github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/internal/remote"
-	"github.com/snonux/gonf/resource"
 )
 
 func cliHosts() int {
@@ -119,12 +118,9 @@ func cliFleet(ctx context.Context, args []string) int {
 	if !ok {
 		return exitCode
 	}
-	// Escalate-only: a top-level "gonf -n fleet ..." already set this via
-	// CLI()'s unconditional call before dispatch; don't stomp it back to
-	// false just because this subcommand's own flags didn't repeat -n.
-	if pf.dryRun {
-		resource.SetDryRun(true)
-	}
+	// Escalate-only (a top-level "gonf -n fleet ..." survives), and scoped
+	// to this call: see escalateDryRun.
+	defer escalateDryRun(pf.dryRun)()
 	var err error
 	if pf.strictPreview {
 		err = api.PreviewFleetRun(ctx, pf.name, pf.planID, pf.jobs, pf.hostTimeout, pf.tasks...)
@@ -143,10 +139,8 @@ func cliCluster(ctx context.Context, args []string) int {
 	if !ok {
 		return exitCode
 	}
-	// Escalate-only: see cliFleet.
-	if pf.dryRun {
-		resource.SetDryRun(true)
-	}
+	// Escalate-only and scoped to this call: see escalateDryRun.
+	defer escalateDryRun(pf.dryRun)()
 	var err error
 	if pf.strictPreview {
 		err = api.PreviewClusterRun(ctx, pf.name, pf.planID, pf.jobs, pf.hostTimeout, pf.tasks...)

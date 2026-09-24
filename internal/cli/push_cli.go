@@ -8,7 +8,6 @@ import (
 
 	"github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/internal/privilege"
-	"github.com/snonux/gonf/resource"
 )
 
 func cliPush(ctx context.Context, args []string) int {
@@ -34,13 +33,9 @@ func cliPush(ctx context.Context, args []string) int {
 		return 2
 	}
 
-	// Escalate-only: a top-level "gonf -n push ..." already set this via
-	// CLI()'s unconditional call before dispatch (or a caller pre-set the
-	// global directly); don't stomp it back to false just because this
-	// subcommand's own flags didn't repeat -n.
-	if *dryRun || *dryRunShort {
-		resource.SetDryRun(true)
-	}
+	// Escalate-only (a top-level "gonf -n push ..." or a caller's pre-set
+	// global survives), and scoped to this call: see escalateDryRun.
+	defer escalateDryRun(*dryRun || *dryRunShort)()
 	mode := api.Privilege()
 	if *privFlag != "" {
 		m, err := privilege.ParseMode(*privFlag)

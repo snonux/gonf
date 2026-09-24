@@ -489,6 +489,52 @@ func TestCLIApplyDryRun(t *testing.T) {
 	}
 }
 
+// TestCLIDryRunScopedToInvocation is task vg2's regression guard: no CLI
+// entry point may leave resource's process-wide dry-run flag changed after
+// it returns, whatever path it returns by. Each case turns dry-run on and
+// then fails (usage error, refused input, unknown target) AFTER the point
+// where it escalates the flag — the exact shape of the leak that made
+// TestCLIApplyFileIgnoresStdinWithoutCancelPipe run in dry-run mode after
+// TestCLIApplySealedStdinRefusesStrictPreview under -shuffle=on. The
+// "pre-set" half pins the other direction: the restore puts back the value
+// found on entry, so a flag an outer caller set stays set (escalate-only).
+func TestCLIDryRunScopedToInvocation(t *testing.T) {
+	t.Cleanup(func() { resource.SetDryRun(false) })
+	api.ResetInventory()
+	api.ResetTasks()
+	resource.ResetRepository()
+	ctx := context.Background()
+	cases := []struct {
+		name string
+		run  func() int
+	}{
+		{"CLI -n -version", func() int {
+			oldArgs := os.Args
+			defer func() { os.Args = oldArgs }()
+			os.Args = []string{"gonf", "-n", "-version"}
+			var code int
+			_ = captureStdout(t, func() { code = CLI() })
+			return code
+		}},
+		{"apply -n usage error", func() int { return cliApply(ctx, []string{"-n"}) }},
+		{"apply -strict-preview usage error", func() int { return cliApply(ctx, []string{"-strict-preview"}) }},
+		{"push -n unknown task", func() int { return cliPush(ctx, []string{"-n", "host", "vg2_no_such_task"}) }},
+		{"cluster -n unknown cluster", func() int { return cliCluster(ctx, []string{"-n", "vg2_no_such_cluster", "t"}) }},
+		{"fleet -n unknown fleet", func() int { return cliFleet(ctx, []string{"-n", "vg2_no_such_fleet", "t"}) }},
+	}
+	for _, preset := range []bool{false, true} {
+		for _, tc := range cases {
+			resource.SetDryRun(preset)
+			var code int
+			_ = testutil.CaptureStderr(t, func() { code = tc.run() })
+			if got := resource.DryRun(); got != preset {
+				t.Fatalf("%s (pre-set %v, exit %d): dry-run = %v after return, want %v",
+					tc.name, preset, code, got, preset)
+			}
+		}
+	}
+}
+
 func TestCLIUsageDocumentsStrictPreview(t *testing.T) {
 	oldArgs := os.Args
 	oldStderr := os.Stderr

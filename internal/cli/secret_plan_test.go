@@ -10,7 +10,6 @@ import (
 	"github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/plan"
-	"github.com/snonux/gonf/resource"
 )
 
 // TestCLIPlanOutDirWarnsAboutUnignoredGitWorktree wires the 0b2/zd2
@@ -122,13 +121,9 @@ func TestCLIPlanRedactedPreview(t *testing.T) {
 	if err := os.WriteFile(preview, []byte(out), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// cliApply (unlike CLI()'s own configureCLI) is escalate-only: its -n
-	// sets resource's process-wide dry-run flag but never clears it, so it
-	// survives this call. Reset it, like every other test in this package
-	// that turns dry-run on, or a later test calling a subcommand handler
-	// directly (bypassing CLI(), e.g. cli_cancel_test.go's
-	// TestCLIApplyFileCanceledByContext) could inherit it under -shuffle=on.
-	t.Cleanup(func() { resource.SetDryRun(false) })
+	// apply -n no longer leaks resource's process-wide dry-run flag: CLI()
+	// and cliApply both restore it on return (scopeDryRun/escalateDryRun,
+	// task vg2), so this test needs no reset of its own.
 	if code, stderr := runGonf(t, "apply", "-n", preview); code == 0 || !strings.Contains(stderr, "first op must be") {
 		t.Fatalf("apply of a preview: exit %d, stderr %q; want the header refusal", code, stderr)
 	}
