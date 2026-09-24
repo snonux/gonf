@@ -728,33 +728,24 @@ func simulateRelay(v *Values, data []byte, chunk int) (forwarded string, maxPend
 //   - Invariant (B): the retained pending buffer never exceeds a generous
 //     but still-bounded ceiling (flushStallCap, plus the shape's own
 //     longest protected form, plus one chunk of in-flight slack), and the
-//     whole run completes within a generous wall-clock ceiling that scales
-//     with size. A quadratic blow-up (mb2's and le2's own regressions, both
-//     confirmed to take seconds per MiB once unbounded) blows straight
-//     through this ceiling even with the slack; cost linear in size (the
-//     actual target of every fix in this file) comfortably clears it. It is
-//     linear here only because the chunk size and the shapes' forms are
-//     fixed: FlushPoint's "Cost" paragraph has how smaller writes raise
-//     the per-byte factor.
+//     relay's cost grows roughly linearly with size
+//     (checkHistoricalShapeLinearCost). When the input grows 8x, from
+//     flushStallCap to 2 MiB, cost linear in size (the actual target of
+//     every fix in this file) grows about 8x, while a quadratic blow-up
+//     (mb2's and le2's own regressions, both confirmed to take seconds per
+//     MiB once unbounded) grows it about 50x. The cost is linear here only
+//     because the chunk size and the shapes' forms are fixed: FlushPoint's
+//     "Cost" paragraph has how smaller writes raise the per-byte factor.
+//
+// Invariant (B)'s cost check used to be an absolute wall-clock deadline per
+// size (5s plus 3s per MiB). That failed under -race whenever other suites
+// loaded the machine, even on unchanged code (task 2h2), so it is now a
+// same-process cost ratio measured in thread CPU time (see
+// checkHistoricalShapeLinearCost).
 func TestValuesFlushPointHistoricalShapesBoundedAndLeakFree(t *testing.T) {
 	t.Parallel()
-	const chunk = 32 << 10 // io.Copy's default buffer size, matching a real relay's chunking
 
-	type shape struct {
-		name string
-		// build returns a fresh Values with this shape's forms tracked,
-		// and total bytes of data split into filler (the bulk, always
-		// safe on its own) and tail (the trailing bytes that only
-		// resolve into a leak-relevant secret once combined with
-		// filler's own trailing bytes). tail is empty for a shape with
-		// no distinct nested/trailing secret of its own.
-		build func(total int) (v *Values, filler, tail []byte)
-		// leaked reports whether forwarded holds a raw fragment that
-		// could only appear via a leak of this shape's secret material.
-		leaked func(forwarded string) bool
-	}
-
-	shapes := []shape{
+	shapes := []historicalShape{
 		{
 			// mb2 / le2: a credentials file's divider line against an
 			// unterminated "="-only progress bar. The tracked form is
@@ -950,95 +941,182 @@ func TestValuesFlushPointHistoricalShapesBoundedAndLeakFree(t *testing.T) {
 	}
 
 	sizes := []int{80 << 10, 256 << 10, 512 << 10, 2 << 20} // below flushStallCap, at it, and twice further past it
+	largest := sizes[len(sizes)-1]
 
 	for _, sh := range shapes {
 		for _, size := range sizes {
 			t.Run(fmt.Sprintf("%s/%dKiB", sh.name, size>>10), func(t *testing.T) {
-				// Check 1 (cross-call / task 1g2 round 1's shape): call
-				// FlushPoint on the FILLER ALONE first -- the tail has
-				// not arrived yet, exactly like a relay whose child
-				// hasn't written the rest of the line -- forcing the cap
-				// or the dense chain to resolve without the tail in
-				// view. Only afterward is the retained remainder
-				// combined with tail and redacted, mimicking the tail
-				// arriving on a later Write. This is the shape every
-				// dedicated 3d2/rd2/1g2-round-1 regression test above
-				// uses, and is essential: with the tail already baked
-				// into one buffer (checks 2 and 3 below), a capped flush
-				// can swallow filler and tail together in one opaque
-				// marker with nothing left pending to leak later, which
-				// does not exercise this failure mode at all.
-				splitV, splitFiller, splitTail := sh.build(size)
-				splitOut, splitConsumed := splitV.FlushPoint(string(splitFiller))
-				var splitForwarded strings.Builder
-				var splitRemainder []byte
-				if splitConsumed > 0 {
-					splitForwarded.WriteString(splitOut)
-					splitRemainder = splitFiller[splitConsumed:]
-				} else {
-					splitRemainder = splitFiller
-				}
-				splitRemainder = append(append([]byte(nil), splitRemainder...), splitTail...)
-				splitForwarded.WriteString(splitV.Redact(string(splitRemainder)))
-				if sh.leaked(splitForwarded.String()) {
-					t.Fatalf("invariant (A) violated on the split (filler-then-tail) path: a raw secret fragment leaked into forwarded output (%d of %d bytes)", splitForwarded.Len(), size)
-				}
-
-				// Check 2 (within-call / task 1g2 round 2's shape):
-				// filler and tail already combined into ONE buffer
-				// before the very first FlushPoint call, so a complete
-				// occurrence ending exactly where the naive keep-back
-				// cut would fall is visible from the start -- the shape
-				// every dedicated round-2 repro (see
-				// extendPastCompleteLongestOccurrences) uses.
-				direct, directFiller, directTail := sh.build(size)
-				directData := append(append([]byte(nil), directFiller...), directTail...)
-				directOut, directConsumed := direct.FlushPoint(string(directData))
-				directForwarded := directOut
-				if directConsumed > 0 && directConsumed < len(directData) {
-					directForwarded += direct.Redact(string(directData[directConsumed:]))
-				} else if directConsumed <= 0 {
-					directForwarded = direct.Redact(string(directData))
-				}
-				if sh.leaked(directForwarded) {
-					t.Fatalf("invariant (A) violated on the direct single-call path: a raw secret fragment leaked into forwarded output (%d of %d bytes)", len(directForwarded), size)
-				}
-
-				// Check 3: the realistic end-to-end path, chunked
-				// exactly like a real relay (32 KiB, io.Copy's
-				// default), which also measures invariant (B).
-				v, relayFiller, relayTail := sh.build(size)
-				data := append(append([]byte(nil), relayFiller...), relayTail...)
-				start := time.Now()
-				forwarded, maxPending := simulateRelay(v, data, chunk)
-				elapsed := time.Since(start)
-
-				if sh.leaked(forwarded) {
-					t.Fatalf("invariant (A) violated: a raw secret fragment leaked into forwarded output (%d of %d bytes)", len(forwarded), size)
-				}
-
-				longest := 0
-				for _, e := range v.snapshot() {
-					if e.contained && len(e.form) <= MaxSplitGuard {
-						longest = max(longest, len(e.form))
-					}
-				}
-				bound := flushStallCap + longest + chunk
-				if maxPending > bound {
-					t.Fatalf("invariant (B) violated: pending reached %d bytes, want <= %d (flushStallCap=%d + longest=%d + chunk=%d)", maxPending, bound, flushStallCap, longest, chunk)
-				}
-
-				// A generous ceiling that scales with size: comfortably
-				// clears genuinely linear cost, but a quadratic blow-up
-				// (mb2/le2's own regressions, seconds per MiB once
-				// unbounded) blows straight through it even at this
-				// slack.
-				deadline := 5*time.Second + time.Duration(float64(size)/(1<<20)*3)*time.Second
-				if elapsed > deadline {
-					t.Fatalf("invariant (B) violated: took %s for %d bytes, want <= %s (roughly-linear cost, not quadratic)", elapsed, size, deadline)
+				checkHistoricalShapeSplitPath(t, sh, size)
+				checkHistoricalShapeDirectPath(t, sh, size)
+				relayCost := checkHistoricalShapeRelayPath(t, sh, size)
+				// The cost ratio is taken once per shape, at the largest
+				// size, against a fresh run at 1/linearScaleFactor of it
+				// (see linearScaleFactor for why that baseline sits at
+				// flushStallCap).
+				if size == largest {
+					checkHistoricalShapeLinearCost(t, sh, size, relayCost)
 				}
 			})
 		}
+	}
+}
+
+// historicalShapeChunk is io.Copy's default buffer size, matching a real
+// relay's chunking; TestValuesFlushPointHistoricalShapesBoundedAndLeakFree's
+// relay runs feed their data in writes of this size.
+const historicalShapeChunk = 32 << 10
+
+// historicalShape is one shape FlushPoint's escape hatch has broken on, as
+// driven by TestValuesFlushPointHistoricalShapesBoundedAndLeakFree.
+type historicalShape struct {
+	name string
+	// build returns a fresh Values with this shape's forms tracked, and
+	// total bytes of data split into filler (the bulk, always safe on its
+	// own) and tail (the trailing bytes that only resolve into a
+	// leak-relevant secret once combined with filler's own trailing
+	// bytes). tail is empty for a shape with no distinct nested/trailing
+	// secret of its own.
+	build func(total int) (v *Values, filler, tail []byte)
+	// leaked reports whether forwarded holds a raw fragment that could
+	// only appear via a leak of this shape's secret material.
+	leaked func(forwarded string) bool
+}
+
+// checkHistoricalShapeSplitPath is invariant (A)'s cross-call check (task
+// 1g2 round 1's shape): it calls FlushPoint on the FILLER ALONE first -- the
+// tail has not arrived yet, exactly like a relay whose child hasn't written
+// the rest of the line -- forcing the cap or the dense chain to resolve
+// without the tail in view. Only afterward is the retained remainder
+// combined with tail and redacted, mimicking the tail arriving on a later
+// Write. This is the shape every dedicated 3d2/rd2/1g2-round-1 regression
+// test uses, and is essential: with the tail already baked into one buffer
+// (the direct and relay checks), a capped flush can swallow filler and tail
+// together in one opaque marker with nothing left pending to leak later,
+// which does not exercise this failure mode at all.
+func checkHistoricalShapeSplitPath(t *testing.T, sh historicalShape, size int) {
+	t.Helper()
+	v, filler, tail := sh.build(size)
+	out, consumed := v.FlushPoint(string(filler))
+	var forwarded strings.Builder
+	remainder := filler
+	if consumed > 0 {
+		forwarded.WriteString(out)
+		remainder = filler[consumed:]
+	}
+	remainder = append(append([]byte(nil), remainder...), tail...)
+	forwarded.WriteString(v.Redact(string(remainder)))
+	if sh.leaked(forwarded.String()) {
+		t.Fatalf("invariant (A) violated on the split (filler-then-tail) path: a raw secret fragment leaked into forwarded output (%d of %d bytes)", forwarded.Len(), size)
+	}
+}
+
+// checkHistoricalShapeDirectPath is invariant (A)'s within-call check (task
+// 1g2 round 2's shape): filler and tail are already combined into ONE buffer
+// before the very first FlushPoint call, so a complete occurrence ending
+// exactly where the naive keep-back cut would fall is visible from the
+// start -- the shape every dedicated round-2 repro (see
+// extendPastCompleteLongestOccurrences) uses.
+func checkHistoricalShapeDirectPath(t *testing.T, sh historicalShape, size int) {
+	t.Helper()
+	v, filler, tail := sh.build(size)
+	data := append(append([]byte(nil), filler...), tail...)
+	out, consumed := v.FlushPoint(string(data))
+	forwarded := out
+	if consumed > 0 && consumed < len(data) {
+		forwarded += v.Redact(string(data[consumed:]))
+	} else if consumed <= 0 {
+		forwarded = v.Redact(string(data))
+	}
+	if sh.leaked(forwarded) {
+		t.Fatalf("invariant (A) violated on the direct single-call path: a raw secret fragment leaked into forwarded output (%d of %d bytes)", len(forwarded), size)
+	}
+}
+
+// checkHistoricalShapeRelayPath runs the realistic end-to-end path, chunked
+// exactly like a real relay (historicalShapeChunk), and checks invariant (A)
+// on its output plus invariant (B)'s pending-buffer bound. It returns the
+// run's cost (measureCost) for checkHistoricalShapeLinearCost. The bound is
+// reported with Errorf, not Fatalf, so a regression that breaks both halves
+// of invariant (B) at once (an unbounded stall grows pending AND makes the
+// cost quadratic) is reported by both checks rather than hiding the cost
+// check behind the bound.
+func checkHistoricalShapeRelayPath(t *testing.T, sh historicalShape, size int) time.Duration {
+	t.Helper()
+	v, filler, tail := sh.build(size)
+	data := append(append([]byte(nil), filler...), tail...)
+	var forwarded string
+	var maxPending int
+	cost := measureCost(t, func() {
+		forwarded, maxPending = simulateRelay(v, data, historicalShapeChunk)
+	})
+
+	if sh.leaked(forwarded) {
+		t.Fatalf("invariant (A) violated: a raw secret fragment leaked into forwarded output (%d of %d bytes)", len(forwarded), size)
+	}
+
+	longest := 0
+	for _, e := range v.snapshot() {
+		if e.contained && len(e.form) <= MaxSplitGuard {
+			longest = max(longest, len(e.form))
+		}
+	}
+	bound := flushStallCap + longest + historicalShapeChunk
+	if maxPending > bound {
+		t.Errorf("invariant (B) violated: pending reached %d bytes, want <= %d (flushStallCap=%d + longest=%d + chunk=%d)", maxPending, bound, flushStallCap, longest, historicalShapeChunk)
+	}
+	return cost
+}
+
+// Invariant (B)'s cost-scaling limits (checkHistoricalShapeLinearCost).
+// The baseline run is 1/linearScaleFactor of the largest size, 256 KiB =
+// flushStallCap: it never passes the cap, so its cost is one stall cycle
+// (pending growing to the cap) that every correct or broken escape hatch
+// pays alike, while the largest run is about linearScaleFactor such cycles
+// when the cap bounds pending. Linear cost therefore scales by about
+// linearScaleFactor (measured 7.3x-10x across the shapes under -race), and
+// a quadratic regression by far more, since only the larger run exposes it
+// (an unbounded-stall mutation of escapeHatchFlush, le2's regression,
+// measured 48x-63x). A baseline past the cap would itself be inflated by
+// the regression and shrink that gap: at a 4x step (512 KiB vs 2 MiB) the
+// same mutation measured as little as 7x against 4x for linear cost.
+// maxLinearCostRatio sits between the two measured ranges with a margin of
+// about 2x to each, leaving room for noise either way.
+// linearCostSlack is an absolute allowance on top: for the shapes whose
+// whole run costs only tens of milliseconds (repeated-single-secret),
+// scheduler and GC noise is a large fraction of the figure, while a
+// quadratic run of any shape here costs seconds and dwarfs it.
+const (
+	linearScaleFactor  = 8
+	maxLinearCostRatio = 20
+	linearCostSlack    = 150 * time.Millisecond
+)
+
+// checkHistoricalShapeLinearCost is invariant (B)'s cost check. It compares
+// relayCost, the relay run at size, against a fresh relay run of the same
+// shape at size/linearScaleFactor, and fails if the larger run costs more
+// than maxLinearCostRatio times the smaller one (plus linearCostSlack):
+// roughly linear cost passes, a quadratic blow-up fails.
+//
+// It asserts a ratio of two measurements taken in the same process moments
+// apart, not an absolute deadline, and measures thread CPU time
+// (measureCost), not wall-clock time: the absolute wall-clock deadlines it
+// replaced failed under -race whenever other suites loaded the machine,
+// even on unchanged code (task 2h2). CPU time the scheduler gives to other
+// processes or goroutines is not counted, and a slowdown that affects both
+// runs alike (the race detector, a busy sibling hyperthread, a slower
+// clock) cancels out of the ratio.
+func checkHistoricalShapeLinearCost(t *testing.T, sh historicalShape, size int, relayCost time.Duration) {
+	t.Helper()
+	baseSize := size / linearScaleFactor
+	v, filler, tail := sh.build(baseSize)
+	data := append(append([]byte(nil), filler...), tail...)
+	baseCost := measureCost(t, func() {
+		simulateRelay(v, data, historicalShapeChunk)
+	})
+	limit := maxLinearCostRatio*baseCost + linearCostSlack
+	t.Logf("relay cost: %s for %d bytes vs %s for %d bytes (ratio %.2f, limit %s)", relayCost, size, baseCost, baseSize, float64(relayCost)/float64(max(baseCost, 1)), limit)
+	if relayCost > limit {
+		t.Errorf("invariant (B) violated: relay cost %s for %d bytes exceeds %dx the %s for %d bytes plus %s slack (limit %s): cost grows faster than linearly (quadratic?)", relayCost, size, maxLinearCostRatio, baseCost, baseSize, linearCostSlack, limit)
 	}
 }
 
