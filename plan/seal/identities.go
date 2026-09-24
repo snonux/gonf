@@ -8,8 +8,6 @@ import (
 	"strings"
 
 	"filippo.io/age"
-	"github.com/snonux/gonf/internal/safepath"
-	"golang.org/x/sys/unix"
 )
 
 // ErrIdentityRefused marks a line LoadIdentities refuses because it names
@@ -50,7 +48,7 @@ type Identity struct {
 // keys only (see the package doc's "Recipient policy").
 //
 // path is opened component by component with internal/safepath's no-follow
-// walk: no component, including the final file, is ever resolved through a
+// walk (keyFileKind.openChecked, keyfile.go): no component, including the final file, is ever resolved through a
 // symlink, so a swapped component cannot smuggle in a different file
 // between a check and the read that follows it. The final component must
 // additionally be a regular file, owned by the current effective uid, with
@@ -60,92 +58,24 @@ type Identity struct {
 // refusal naming a line number and class); none of them include any byte
 // of the file's content, since every line here is private key material.
 func LoadIdentities(path string) ([]Identity, error) {
-	f, err := openIdentityFile(path)
+	f, err := identityFile.openChecked(path)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = f.Close() }()
-	if err := checkIdentityOwnerAndMode(f, path); err != nil {
-		return nil, err
-	}
 	return parseIdentityFile(f, path)
 }
 
-// openIdentityFile opens path's final component as a regular file, walking
-// every directory above it with safepath's no-follow Walk (see LoadIdentities).
-func openIdentityFile(path string) (*os.File, error) {
-	base, parts := safepath.Split(path)
-	if len(parts) == 0 {
-		return nil, fmt.Errorf("plan/seal: identity file %s: not a file path", path)
-	}
-	dirParts, name := parts[:len(parts)-1], parts[len(parts)-1]
-	dirFD, err := safepath.Walk{}.Open(base, dirParts)
-	if err != nil {
-		return nil, identityPathError(path, err)
-	}
-	defer func() { _ = unix.Close(dirFD) }()
-	f, err := safepath.OpenRegularAt(dirFD, name, path)
-	if err != nil {
-		return nil, identityPathError(path, err)
-	}
-	return f, nil
-}
-
-// identityPathError classifies a failure to open or walk to path into one
-// of the package's named classes, discarding the safepath error's own
-// wording (which may name a component but never file content, so this is
-// about consistent phrasing, not secrecy).
-func identityPathError(path string, err error) error {
-	switch {
-	case errors.Is(err, safepath.ErrSymlink):
-		return fmt.Errorf("plan/seal: identity file %s: %w", path, ErrIdentitySymlink)
-	case errors.Is(err, safepath.ErrNotRegular):
-		return fmt.Errorf("plan/seal: identity file %s: %w", path, ErrIdentityNotRegular)
-	case errors.Is(err, unix.ENOENT):
-		return fmt.Errorf("plan/seal: identity file %s: not found", path)
-	case errors.Is(err, safepath.ErrInvalidComponent):
-		return fmt.Errorf("plan/seal: identity file %s: invalid path component", path)
-	default:
-		return fmt.Errorf("plan/seal: identity file %s: %w", path, unwrapComponentError(err))
-	}
-}
-
-// unwrapComponentError strips safepath's *ComponentError wrapper (which
-// carries the path and name safepath already produced) down to its cause,
-// so identityPathError's own "identity file %s: " prefix is not doubled.
-func unwrapComponentError(err error) error {
-	var ce *safepath.ComponentError
-	if errors.As(err, &ce) {
-		return ce.Err
-	}
-	return err
-}
-
-// checkIdentityOwnerAndMode requires f (already known regular and reached
-// without following a symlink) to be owned by the current effective uid
-// with no group or other permission bits.
-func checkIdentityOwnerAndMode(f *os.File, path string) error {
-	info, err := safepath.Fstat(int(f.Fd()))
-	if err != nil {
-		return fmt.Errorf("plan/seal: identity file %s: %w", path, err)
-	}
-	return checkOwnerAndMode(info, path, unix.Geteuid())
-}
-
-// checkOwnerAndMode is the ownership and permission-bit policy itself,
-// taking info and the expected effective uid as plain values (rather than
-// calling unix.Fstat/unix.Geteuid directly) so a test can exercise "wrong
-// owner" with a fabricated safepath.Info instead of needing root to chown a
-// real file — the same technique internal/remote/crossbuild_identity_test.go
-// uses for a directory's owner.
-func checkOwnerAndMode(info safepath.Info, path string, euid int) error {
-	if info.UID != uint32(euid) {
-		return fmt.Errorf("plan/seal: identity file %s: %w", path, ErrIdentityNotOwned)
-	}
-	if info.Perm()&0o077 != 0 {
-		return fmt.Errorf("plan/seal: identity file %s: %w", path, ErrIdentityMode)
-	}
-	return nil
+// identityFile is the identity file's hardened-open policy (keyfile.go):
+// private key material, so no group or other permission bit at all.
+var identityFile = keyFileKind{
+	label:         "identity file",
+	errSymlink:    ErrIdentitySymlink,
+	errNotRegular: ErrIdentityNotRegular,
+	errNotOwned:   ErrIdentityNotOwned,
+	errMode:       ErrIdentityMode,
+	modeMask:      0o077,
+	missing:       errKeyFileNotFound,
 }
 
 // parseIdentityFile reads f, already open and positioned at its start, one

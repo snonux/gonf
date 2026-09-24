@@ -176,7 +176,7 @@ func TestCheckOwnerAndModeRefusesForeignOwner(t *testing.T) {
 	foreign := me + 1
 	info := safepath.Info{Mode: unix.S_IFREG | 0o600, UID: uint32(foreign)}
 
-	err := checkOwnerAndMode(info, "/fake/identity", me)
+	err := identityFile.checkOwnerAndMode(info, "/fake/identity", me)
 	if !errors.Is(err, ErrIdentityNotOwned) {
 		t.Fatalf("got %v, want ErrIdentityNotOwned", err)
 	}
@@ -185,7 +185,7 @@ func TestCheckOwnerAndModeRefusesForeignOwner(t *testing.T) {
 func TestCheckOwnerAndModeAcceptsOwnFileWithStrictMode(t *testing.T) {
 	me := unix.Geteuid()
 	info := safepath.Info{Mode: unix.S_IFREG | 0o600, UID: uint32(me)}
-	if err := checkOwnerAndMode(info, "/fake/identity", me); err != nil {
-		t.Fatalf("checkOwnerAndMode rejected an own 0600 file: %v", err)
+	if err := identityFile.checkOwnerAndMode(info, "/fake/identity", me); err != nil {
+		t.Fatalf("identityFile.checkOwnerAndMode rejected an own 0600 file: %v", err)
 	}
 }

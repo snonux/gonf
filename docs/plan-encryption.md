@@ -257,7 +257,11 @@ as **confidentiality only, never provenance**:
   applies it, and no gonf-provided recipe for one. That stays blocked until
   a signing design exists and is implemented (task `7b2`: e.g. a
   stdlib `crypto/ed25519` signer key pinned per destination, verified before
-  decryption).
+  decryption). The design is [plan-signing.md](plan-signing.md) (accepted);
+  its library half, `plan/seal`'s `Sign`/`Verify`, landed in task `6g2`
+  with no CLI surface, and lifts nothing by itself: the gate lifts only for
+  a specific unattended entry point that meets every item of that
+  document's "The unblocking condition" (signing phase 6, task `bg2`).
 
 ### Operator UX
 
@@ -506,7 +510,9 @@ rm plan-blowfish.age                  # delete once applied; see "Retention"
 `gonf apply` here prints `decrypted and applied plan-blowfish.age (N ops)`
 — confidentiality only, never a claim of authenticity (see "Provenance"):
 nothing about this step is, or should be, automated or unattended (no
-timer, cron job or pull agent) until task `7b2`'s signing design exists.
+timer, cron job or pull agent) until an entry point meets
+[plan-signing.md](plan-signing.md)'s "The unblocking condition" (see
+"Provenance").
 
 **5. Rotate the key periodically:** at least yearly, whenever the host is
 rebuilt or changes hands, and immediately on suspected compromise (see "No

@@ -609,7 +609,9 @@ operator must pass `-seal` explicitly, with at least one recipient — and
 it is confidentiality only, never provenance (plan-encryption.md,
 "Provenance"): `gonf apply` of a sealed plan never prints "verified" or
 "authenticated", and nothing in gonf may apply a sealed plan unattended
-until task `7b2`'s signing design lands. A protected sidecar holding only
+until an entry point meets plan-signing.md's "The unblocking condition"
+(task `7b2`'s design; task `6g2` added only the `plan/seal` `Sign`/`Verify`
+library, with no CLI surface). A protected sidecar holding only
 the secret payloads (rather than sealing the whole artifact) was
 considered and rejected — plan-encryption.md's "Options compared", option
 E. Per-destination sealed artifacts now exist too: `gonf plan -o dir -seal

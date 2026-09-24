@@ -1918,7 +1918,9 @@ full design. `gonf apply` prints `decrypted and applied plan.age (N ops)`,
 never "verified" or "authenticated", for the same confidentiality-only
 reason the bullet above states. Unattended sealed apply (a timer, cron
 job, pull agent or CI step picking up `plan.age` on its own) stays blocked
-until a signing design exists (task 7b2). Reading the decrypted stream is
+until an entry point meets docs/plan-signing.md's "The unblocking
+condition" (design task 7b2; task 6g2 added only the plan/seal Sign/Verify
+library, which lifts nothing by itself). Reading the decrypted stream is
 size-capped (task be2, `maxSealedFrameBytes` 512 MiB in
 `internal/cli/cli.go` for the whole frame, `plan.MaxDecompressedPushPlan`
 64 MiB by default in `plan/pushwire.go`, overridable, for the plan

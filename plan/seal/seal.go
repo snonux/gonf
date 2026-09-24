@@ -6,10 +6,16 @@
 // option C', the stdlib crypto/hpke fallback) would touch only this
 // package.
 //
-// This package has no CLI surface yet: gonf plan -seal and gonf apply
-// -identity are later tasks (2b2, 3b2). It exists so those tasks, and
-// anything else that needs to seal or open a plan artifact, have one
-// reviewed place to do it.
+// Its CLI callers are gonf plan -seal and gonf apply -identity
+// (internal/cli, tasks 2b2 and 3b2); this package is the one reviewed
+// place anything that seals or opens a plan artifact goes through.
+//
+// It also owns plan signing (docs/plan-signing.md, task 6g2): Sign,
+// Verify, LoadSigner and LoadTrustedSigners, with their own Signer and
+// TrustedSigner types, so crypto/ed25519 is likewise imported here only.
+// Signing has no CLI surface yet (tasks 7g2, 8g2). All four key files the
+// package reads (identity, recipients, signer and trusted-signers) share
+// one hardened-open policy (keyfile.go).
 //
 // Besides file-backed operator identities (LoadIdentities), it offers
 // GenerateEphemeral, EncodeEphemeral and ParseEphemeral: a single-use,
@@ -44,9 +50,13 @@
 // described as, an authenticity or provenance guarantee: anyone can seal a
 // fresh, uncorrupted, perfectly valid plan.age to a public recipient and
 // substitute it for the real one. See docs/plan-encryption.md, section
-// "Provenance", and task 7b2 for the (not yet implemented, and not
-// attempted here) signing design that would add one. Until 7b2 lands,
-// nothing in gonf may apply a sealed plan unattended.
+// "Provenance". Provenance is a separate, optional layer around the sealed
+// bytes: [Sign] and [Verify] (sign.go, docs/plan-signing.md, task 6g2)
+// wrap them in an Ed25519-signed GONF-SIGNED-PLAN/1 envelope that a
+// destination checks against its own trusted signers before decrypting.
+// That library alone lifts nothing: nothing in gonf may apply a sealed
+// plan unattended until an entry point meets docs/plan-signing.md's "The
+// unblocking condition".
 package seal
 
 import (

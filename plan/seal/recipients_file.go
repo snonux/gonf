@@ -6,9 +6,6 @@ import (
 	"io"
 	"os"
 	"strings"
-
-	"github.com/snonux/gonf/internal/safepath"
-	"golang.org/x/sys/unix"
 )
 
 // This file is task ce2 (docs/plan-encryption.md "Keys"): the operator
@@ -21,8 +18,9 @@ import (
 // world-writable recipients file let an attacker silently become a
 // permanent recipient (see the task's annotation for the reproduction).
 // LoadRecipientsFile closes it by giving the recipients file the same
-// walk LoadIdentities uses, adjusted for the one place their trust models
-// differ (ErrRecipientsFileWritable's doc comment).
+// walk LoadIdentities uses (keyFileKind, keyfile.go, shared since task
+// 6g2), adjusted for the one place their trust models differ
+// (ErrRecipientsFileWritable's doc comment).
 
 // ErrRecipientsFileNotRegular marks a recipients file path whose final
 // component is not a regular file (a directory, FIFO, device, or socket).
@@ -77,83 +75,26 @@ var ErrRecipientsFileWritable = errors.New("recipients file is writable by group
 // key, so omitting it is about matching LoadIdentities' habit for
 // consistency, not secrecy.
 func LoadRecipientsFile(path string) ([]string, error) {
-	f, err := openRecipientsFile(path)
+	f, err := recipientsFile.openChecked(path)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = f.Close() }()
-	if err := checkRecipientsFileOwnerAndMode(f, path); err != nil {
-		return nil, err
-	}
 	return readRecipientsFileLines(f, path)
 }
 
-// openRecipientsFile opens path's final component as a regular file,
-// walking every directory above it with safepath's no-follow Walk — the
-// same technique openIdentityFile (identities.go) uses.
-func openRecipientsFile(path string) (*os.File, error) {
-	base, parts := safepath.Split(path)
-	if len(parts) == 0 {
-		return nil, fmt.Errorf("plan/seal: recipients file %s: not a file path", path)
-	}
-	dirParts, name := parts[:len(parts)-1], parts[len(parts)-1]
-	dirFD, err := safepath.Walk{}.Open(base, dirParts)
-	if err != nil {
-		return nil, recipientsFilePathError(path, err)
-	}
-	defer func() { _ = unix.Close(dirFD) }()
-	f, err := safepath.OpenRegularAt(dirFD, name, path)
-	if err != nil {
-		return nil, recipientsFilePathError(path, err)
-	}
-	return f, nil
-}
-
-// recipientsFilePathError classifies a failure to open or walk to path,
-// mirroring identityPathError (identities.go) but wrapping a missing file
-// with %w os.ErrNotExist instead of a bare "not found" string, so a
-// caller can distinguish a genuinely missing file from every other
-// refusal with errors.Is — see LoadRecipientsFile's doc comment.
-func recipientsFilePathError(path string, err error) error {
-	switch {
-	case errors.Is(err, safepath.ErrSymlink):
-		return fmt.Errorf("plan/seal: recipients file %s: %w", path, ErrRecipientsFileSymlink)
-	case errors.Is(err, safepath.ErrNotRegular):
-		return fmt.Errorf("plan/seal: recipients file %s: %w", path, ErrRecipientsFileNotRegular)
-	case errors.Is(err, unix.ENOENT):
-		return fmt.Errorf("plan/seal: recipients file %s: %w", path, os.ErrNotExist)
-	case errors.Is(err, safepath.ErrInvalidComponent):
-		return fmt.Errorf("plan/seal: recipients file %s: invalid path component", path)
-	default:
-		return fmt.Errorf("plan/seal: recipients file %s: %w", path, unwrapComponentError(err))
-	}
-}
-
-// checkRecipientsFileOwnerAndMode requires f (already known regular and
-// reached without following a symlink) to be owned by the current
-// effective uid with no group- or other-write permission bit.
-func checkRecipientsFileOwnerAndMode(f *os.File, path string) error {
-	info, err := safepath.Fstat(int(f.Fd()))
-	if err != nil {
-		return fmt.Errorf("plan/seal: recipients file %s: %w", path, err)
-	}
-	return checkRecipientsOwnerAndMode(info, path, unix.Geteuid())
-}
-
-// checkRecipientsOwnerAndMode is the ownership and permission-bit policy
-// itself, taking info and the expected effective uid as plain values
-// (rather than calling unix.Fstat/unix.Geteuid directly) so a test can
-// exercise "wrong owner" or "group-writable" with a fabricated
-// safepath.Info instead of needing root — the same technique
-// identities.go's checkOwnerAndMode uses.
-func checkRecipientsOwnerAndMode(info safepath.Info, path string, euid int) error {
-	if info.UID != uint32(euid) {
-		return fmt.Errorf("plan/seal: recipients file %s: %w", path, ErrRecipientsFileNotOwned)
-	}
-	if info.Perm()&0o022 != 0 {
-		return fmt.Errorf("plan/seal: recipients file %s: %w", path, ErrRecipientsFileWritable)
-	}
-	return nil
+// recipientsFile is the recipients file's hardened-open policy
+// (keyfile.go): public keys, so only group- and other-write are refused
+// (see ErrRecipientsFileWritable), and a missing file wraps os.ErrNotExist
+// so the caller can tell "absent" from "refused" (see LoadRecipientsFile).
+var recipientsFile = keyFileKind{
+	label:         "recipients file",
+	errSymlink:    ErrRecipientsFileSymlink,
+	errNotRegular: ErrRecipientsFileNotRegular,
+	errNotOwned:   ErrRecipientsFileNotOwned,
+	errMode:       ErrRecipientsFileWritable,
+	modeMask:      0o022,
+	missing:       os.ErrNotExist,
 }
 
 // readRecipientsFileLines reads f, already open and positioned at its

@@ -151,7 +151,7 @@ func TestCheckRecipientsOwnerAndModeRefusesForeignOwner(t *testing.T) {
 	foreign := me + 1
 	info := safepath.Info{Mode: unix.S_IFREG | 0o644, UID: uint32(foreign)}
 
-	err := checkRecipientsOwnerAndMode(info, "/fake/recipients", me)
+	err := recipientsFile.checkOwnerAndMode(info, "/fake/recipients", me)
 	if !errors.Is(err, ErrRecipientsFileNotOwned) {
 		t.Fatalf("got %v, want ErrRecipientsFileNotOwned", err)
 	}
@@ -160,15 +160,15 @@ func TestCheckRecipientsOwnerAndModeRefusesForeignOwner(t *testing.T) {
 func TestCheckRecipientsOwnerAndModeAcceptsReadableNotWritable(t *testing.T) {
 	me := unix.Geteuid()
 	info := safepath.Info{Mode: unix.S_IFREG | 0o644, UID: uint32(me)}
-	if err := checkRecipientsOwnerAndMode(info, "/fake/recipients", me); err != nil {
-		t.Fatalf("checkRecipientsOwnerAndMode rejected an own 0644 file: %v", err)
+	if err := recipientsFile.checkOwnerAndMode(info, "/fake/recipients", me); err != nil {
+		t.Fatalf("recipientsFile.checkOwnerAndMode rejected an own 0644 file: %v", err)
 	}
 }
 
 func TestCheckRecipientsOwnerAndModeRefusesWritable(t *testing.T) {
 	me := unix.Geteuid()
 	info := safepath.Info{Mode: unix.S_IFREG | 0o606, UID: uint32(me)}
-	err := checkRecipientsOwnerAndMode(info, "/fake/recipients", me)
+	err := recipientsFile.checkOwnerAndMode(info, "/fake/recipients", me)
 	if !errors.Is(err, ErrRecipientsFileWritable) {
 		t.Fatalf("got %v, want ErrRecipientsFileWritable", err)
 	}

@@ -1,10 +1,14 @@
 # Signed plan artifacts (design, task 7b2)
 
-Status: **design only, not implemented.** Nothing below exists in gonf yet.
-Implementation needs this design accepted and the user's explicit approval,
-exactly as [plan-encryption.md](plan-encryption.md) (task `w82`) required
-before its own follow-ups (`0b2`-`6b2`) could start. The follow-up tasks are
-listed in the last section.
+Status: **accepted (user approval 2026-09-24); phase signing-1
+implemented (task `6g2`), later phases open.** `plan/seal` has `Sign`,
+`Verify`, `LoadSigner` and `LoadTrustedSigners` and the
+`GONF-SIGNED-PLAN/1` envelope, with no CLI surface; the exact formats it
+picked for the points this design left to the implementation are in "As
+landed (task `6g2`)" at the end of "Recommended design". Nothing in gonf
+signs or verifies a plan yet, and nothing here lifts plan-encryption.md's
+gate (see "The unblocking condition"). The follow-up tasks are listed in
+the last section.
 
 **Relationship to plan-encryption.md.** That design (task `w82`, phases
 `0b2`-`3b2` implemented and merged) gives sealed plans (`plan.age`)
@@ -421,6 +425,45 @@ the operator-approved unblocking plan-encryption.md's "Provenance" section
 asked for. This document does not itself unblock anything; it is the
 prerequisite `1b2`-shaped library work that such a future task would build
 on, the same relationship `w82`'s design had to `1b2`.
+
+### As landed (task `6g2`, phase signing-1)
+
+The library half, in `plan/seal` (`sign.go`, `signer.go`, and `keyfile.go`
+for the shared file hardening), with the choices this design left open:
+
+- **API**, as sketched: `Sign(sealed []byte, signer Signer) ([]byte,
+  error)`, `Verify(env []byte, trusted []TrustedSigner) (sealed []byte,
+  signer TrustedSigner, err error)`, `LoadSigner(path) (Signer, error)`,
+  `LoadTrustedSigners(path) ([]TrustedSigner, error)`, plus
+  `Signer.Public()` (the trusted-signers entry for that key),
+  `TrustedSigner.String()` (its exact file line) and the exported
+  `SignedPlanMagic` for a caller's sniff. A `Signer` prints only its public
+  key under every `fmt` verb.
+- **Envelope lines:** the magic, then the 32-byte key and the 64-byte
+  signature each as one line of unpadded standard base64 (43 and 86
+  characters), decoded strictly and at their exact length, so an envelope
+  has one accepted spelling; the payload must start with
+  `age-encryption.org/v1\n` (`Sign` refuses anything else, and `Verify`
+  never returns anything else, so a signed plaintext plan or a nested
+  envelope cannot come out as "sealed").
+- **Signed message:** `"GONF-SIGNED-PLAN/1\n" || plan.age`, pure Ed25519
+  (RFC 8032). The magic prefix binds the envelope version, so a signature
+  cannot be reused under another version or a format that signs the bare
+  bytes; an Ed25519ctx/Ed25519ph signature of the same message is refused.
+- **Key files:** `GONF-SIGNER-SECRET-ED25519 <base64 seed>` (exactly one per
+  signer file) and `gonf-signer-ed25519 <base64 key> [label...]` (one per
+  trusted signer; at least one, or `ErrNoTrustedSigners`). Blank lines and
+  `#` comments are ignored, a file is read up to 64 KiB, and a key of any
+  other type (an age key, an `ssh-ed25519` line, the other file's line) is
+  refused by class. Both files go through the identity/recipients files'
+  no-follow walk and owner check; the signer file refuses any group/other
+  bit (0o077), the trusted-signers file only group/other write (0o022).
+  Every refusal names the path, line number and class, never content.
+- **No freshness field.** `GONF-SIGNED-PLAN/1` is exactly the three fields
+  above; the signed-at timestamp of "Replay and rollback" is phase
+  signing-3 (task `8g2`), which therefore has to change the envelope and
+  so its magic (or, if no `/1` envelope has shipped in a release by then,
+  redefine `/1` before one does).
 
 ### Schema, versioning and remote skew
 
