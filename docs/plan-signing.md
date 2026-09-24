@@ -144,7 +144,9 @@ GONF-SIGNED-PLAN/1\n
 line, matching how `age` itself writes its own header lines — is an
 implementation detail the phase-1 task picks; what matters for this design
 is the three logical fields and that everything after them is the
-untouched, existing sealed artifact.)
+untouched, existing sealed artifact. As landed, a fourth, signed field
+follows the signature: the `signed-at` time "Replay and rollback" needs;
+see "As landed".)
 
 - The magic `GONF-SIGNED-PLAN/1` is a new, distinct first line, chosen so it
   is neither `age-encryption.org/v1` (a bare sealed plan) nor the first
@@ -431,9 +433,12 @@ on, the same relationship `w82`'s design had to `1b2`.
 The library half, in `plan/seal` (`sign.go`, `signer.go`, and `keyfile.go`
 for the shared file hardening), with the choices this design left open:
 
-- **API**, as sketched: `Sign(sealed []byte, signer Signer) ([]byte,
-  error)`, `Verify(env []byte, trusted []TrustedSigner) (sealed []byte,
-  signer TrustedSigner, err error)`, `LoadSigner(path) (Signer, error)`,
+- **API**, as sketched, except that `Verify` returns a struct since task
+  `7g2` added the signing time: `Sign(sealed []byte, signer Signer)
+  ([]byte, error)` (the current time) and `SignAt(sealed, signer, at
+  time.Time)` (an injected clock), `Verify(env []byte, trusted
+  []TrustedSigner) (Verified, error)` with `Verified{Sealed, Signer,
+  SignedAt}`, `LoadSigner(path) (Signer, error)`,
   `LoadTrustedSigners(path) ([]TrustedSigner, error)`, plus
   `Signer.Public()` (the trusted-signers entry for that key),
   `TrustedSigner.String()` (its exact file line) and the exported
@@ -444,15 +449,43 @@ for the shared file hardening), with the choices this design left open:
   where `fmt` cannot call its `Format` method.
 - **Envelope lines:** the magic, then the 32-byte key and the 64-byte
   signature each as one line of unpadded standard base64 (43 and 86
-  characters), decoded strictly and at their exact length, so an envelope
-  has one accepted spelling; the payload must start with
+  characters), decoded strictly and at their exact length, then the
+  signed-at line (below), so an envelope has one accepted spelling:
+
+  ```
+  GONF-SIGNED-PLAN/1\n
+  <43-character base64 public key>\n
+  <86-character base64 signature>\n
+  signed-at 2026-09-24T10:50:51Z\n
+  <plan.age bytes, to EOF>
+  ```
+
+  The payload must start with
   `age-encryption.org/v1\n` (`Sign` refuses anything else, and `Verify`
   never returns anything else, so a signed plaintext plan or a nested
   envelope cannot come out as "sealed").
-- **Signed message:** `"GONF-SIGNED-PLAN/1\n" || plan.age`, pure Ed25519
-  (RFC 8032). The magic prefix binds the envelope version, so a signature
-  cannot be reused under another version or a format that signs the bare
-  bytes; an Ed25519ctx/Ed25519ph signature of the same message is refused.
+- **Signed-at (task `7g2`).** `signed-at <time>`, where the time is RFC
+  3339 in one spelling only: UTC with a literal upper-case `Z`, second
+  precision, no fraction, a four-digit year (`YYYY-MM-DDTHH:MM:SSZ`, 20
+  characters). `SignAt` converts to UTC and truncates to the second, and
+  refuses the zero time or a UTC year outside 0000-9999
+  (`ErrSignedAtInvalid`). `Verify` accepts only a line that formats back to
+  itself byte for byte, so a lower-case `z`, a numeric offset, a fraction,
+  a missing field or an out-of-range one (month 13, second 60) is
+  `ErrEnvelopeMalformed` even when correctly signed. `Verify` returns the
+  time (`Verified.SignedAt`, UTC) but enforces no freshness window; that
+  check, against the destination's clock, is task `8g2`. The field was
+  added to `/1` itself, not as a `/2`, because no gonf release had
+  produced a `/1` envelope yet: `7g2` added it before the first producer
+  (`gonf plan -seal -sign`) existed.
+- **Signed message:** the magic line, then every byte after the signature
+  line: `"GONF-SIGNED-PLAN/1\n" || "signed-at <time>\n" || plan.age`, pure
+  Ed25519 (RFC 8032). So the time is authenticated (a replayed envelope
+  cannot be relabelled as fresher), and the magic prefix binds the envelope
+  version, so a signature cannot be reused under another version or a
+  format that signs the bare bytes; an Ed25519ctx/Ed25519ph signature of
+  the same message, and one over the message without the signed-at line,
+  are refused.
 - **Weak keys refused.** Go's `ed25519.Verify` accepts a small-order public
   key, and for one of those anyone can forge a signature without a private
   key: R=identity, S=0 verifies every message for the identity point, and
@@ -479,11 +512,6 @@ for the shared file hardening), with the choices this design left open:
   no-follow walk and owner check; the signer file refuses any group/other
   bit (0o077), the trusted-signers file only group/other write (0o022).
   Every refusal names the path, line number and class, never content.
-- **No freshness field.** `GONF-SIGNED-PLAN/1` is exactly the three fields
-  above; the signed-at timestamp of "Replay and rollback" is phase
-  signing-3 (task `8g2`), which therefore has to change the envelope and
-  so its magic (or, if no `/1` envelope has shipped in a release by then,
-  redefine `/1` before one does).
 
 ### Schema, versioning and remote skew
 

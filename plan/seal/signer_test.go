@@ -359,10 +359,11 @@ func TestLoadedKeysSignAndVerify(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
-	got, who, err := Verify(env, trusted)
+	v, err := Verify(env, trusted)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
+	got, who := v.Sealed, v.Signer
 	if !bytes.Equal(got, sealed) || who.Label != "laptop" {
 		t.Fatalf("Verify returned label %q and %d bytes, want laptop and the sealed bytes", who.Label, len(got))
 	}

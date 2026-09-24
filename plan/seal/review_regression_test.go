@@ -23,14 +23,16 @@ import (
 func identityKey() []byte { k := make([]byte, 32); k[0] = 1; return k }
 func zeroKey() []byte     { return make([]byte, 32) }
 
-// envelopeWith builds an envelope naming key and carrying sig over sealed,
-// bypassing Sign (a forger has no Signer).
-func envelopeWith(key, sig, sealed []byte) []byte {
+// envelopeWith builds an envelope naming key and carrying sig, the
+// signed-at line for stamp and sealed, bypassing Sign (a forger has no
+// Signer).
+func envelopeWith(key, sig []byte, stamp string, sealed []byte) []byte {
 	env := []byte(SignedPlanMagic + "\n")
 	env = keyEncoding.AppendEncode(env, key)
 	env = append(env, '\n')
 	env = keyEncoding.AppendEncode(env, sig)
 	env = append(env, '\n')
+	env = appendSignedAtLine(env, stamp)
 	return append(env, sealed...)
 }
 
@@ -71,11 +73,11 @@ func forgeForSmallOrderKey(t *testing.T, key, msg []byte) []byte {
 // load-time check ran) still never verifies a forged envelope.
 func TestVerifyRefusesForgeryForSmallOrderKey(t *testing.T) {
 	f := newSignedFixture(t)
-	msg := signedMessage(f.sealed)
+	msg := signedMessage(f.stamp, f.sealed)
 	for name, key := range map[string][]byte{"identity": identityKey(), "all-zero": zeroKey()} {
 		t.Run(name, func(t *testing.T) {
 			sig := forgeForSmallOrderKey(t, key, msg)
-			env := envelopeWith(key, sig, f.sealed)
+			env := envelopeWith(key, sig, f.stamp, f.sealed)
 			requireRefused(t, env, []TrustedSigner{{Key: key, Label: "placeholder"}}, ErrEnvelopeMalformed)
 			if _, ok := findTrusted([]TrustedSigner{{Key: key}}, key); ok {
 				t.Fatal("findTrusted matched a small-order caller-built entry")
@@ -88,7 +90,7 @@ func TestVerifyRefusesForgeryForSmallOrderKey(t *testing.T) {
 	if !ed25519.Verify(identityKey(), msg, sig) {
 		t.Fatal("test premise: R=identity, S=0 should verify for the identity key")
 	}
-	requireRefused(t, envelopeWith(identityKey(), sig, f.sealed), []TrustedSigner{{Key: identityKey()}}, ErrEnvelopeMalformed)
+	requireRefused(t, envelopeWith(identityKey(), sig, f.stamp, f.sealed), []TrustedSigner{{Key: identityKey()}}, ErrEnvelopeMalformed)
 }
 
 func TestLoadTrustedSignersRefusesWeakKeys(t *testing.T) {
@@ -190,8 +192,8 @@ func TestKeyFilesAcceptTabsAndCRLF(t *testing.T) {
 }
 
 // TestVerifyRefusesEveryHeaderByteMutation is the review's probe P4: every
-// single-byte flip, insertion and deletion across the envelope header and
-// the start of the age header fails, as does a trailing newline and the
+// single-byte flip, insertion and deletion across the envelope header
+// (the signed-at line included) and the start of the age header fails, as does a trailing newline and the
 // malleable S+L spelling of a valid signature.
 func TestVerifyRefusesEveryHeaderByteMutation(t *testing.T) {
 	f := newSignedFixture(t)
@@ -200,19 +202,19 @@ func TestVerifyRefusesEveryHeaderByteMutation(t *testing.T) {
 		for _, d := range []byte{1, 0x20, 0x80, 0xff} {
 			m := bytes.Clone(f.env)
 			m[i] ^= d
-			if _, _, err := Verify(m, f.trusted()); err == nil {
+			if _, err := Verify(m, f.trusted()); err == nil {
 				t.Fatalf("flip at %d (^%#x) verified", i, d)
 			}
 		}
 		ins := append(append(bytes.Clone(f.env[:i]), ' '), f.env[i:]...)
 		del := append(bytes.Clone(f.env[:i]), f.env[i+1:]...)
 		for name, m := range map[string][]byte{"insertion": ins, "deletion": del} {
-			if _, _, err := Verify(m, f.trusted()); err == nil {
+			if _, err := Verify(m, f.trusted()); err == nil {
 				t.Fatalf("%s at %d verified", name, i)
 			}
 		}
 	}
-	if _, _, err := Verify(append(bytes.Clone(f.env), '\n'), f.trusted()); err == nil {
+	if _, err := Verify(append(bytes.Clone(f.env), '\n'), f.trusted()); err == nil {
 		t.Fatal("trailing newline verified")
 	}
 	requireRefused(t, withSignature(f, sigPlusL(t, f)), f.trusted(), ErrSignatureInvalid)
@@ -222,7 +224,7 @@ func TestVerifyRefusesEveryHeaderByteMutation(t *testing.T) {
 // same value mod L, which a lax verifier would accept.
 func sigPlusL(t *testing.T, f signedFixture) []byte {
 	t.Helper()
-	off := len(SignedPlanMagic) + 1 + 44
+	off := sigLineOff
 	raw, err := keyEncoding.DecodeString(string(f.env[off : off+86]))
 	if err != nil {
 		t.Fatal(err)

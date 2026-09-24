@@ -9,6 +9,21 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
+)
+
+// fixtureSignedAt is the fixed signing time newSignedFixture injects
+// (SignAt), and fixtureStamp its signed-at timestamp text.
+var fixtureSignedAt = time.Date(2026, 9, 24, 10, 50, 51, 0, time.UTC)
+
+const fixtureStamp = "2026-09-24T10:50:51Z"
+
+// Offsets into an envelope: the key line starts after the magic line, the
+// signature line after the key line, the signed-at line after that.
+var (
+	keyLineOff      = len(SignedPlanMagic) + 1
+	sigLineOff      = keyLineOff + 43 + 1
+	signedAtLineOff = sigLineOff + 86 + 1
 )
 
 // signedFixture seals a small plan to a fresh recipient and signs it,
@@ -18,6 +33,7 @@ type signedFixture struct {
 	identity Identity
 	sealed   []byte
 	env      []byte
+	stamp    string // the envelope's signed-at timestamp text
 }
 
 func newSignedFixture(t *testing.T) signedFixture {
@@ -25,11 +41,11 @@ func newSignedFixture(t *testing.T) signedFixture {
 	signer, _ := genSigner(t)
 	recipient, identity := genKeyPair(t)
 	sealed := sealBytes(t, "GONF-PUSH/1 plan bytes", []Recipient{recipient})
-	env, err := Sign(sealed, signer)
+	env, err := SignAt(sealed, signer, fixtureSignedAt)
 	if err != nil {
-		t.Fatalf("Sign: %v", err)
+		t.Fatalf("SignAt: %v", err)
 	}
-	return signedFixture{signer: signer, identity: identity, sealed: sealed, env: env}
+	return signedFixture{signer: signer, identity: identity, sealed: sealed, env: env, stamp: fixtureStamp}
 }
 
 func (f signedFixture) trusted() []TrustedSigner { return []TrustedSigner{f.signer.Public()} }
@@ -37,12 +53,12 @@ func (f signedFixture) trusted() []TrustedSigner { return []TrustedSigner{f.sign
 // requireRefused asserts Verify fails with want and returns nothing usable.
 func requireRefused(t *testing.T, env []byte, trusted []TrustedSigner, want error) {
 	t.Helper()
-	sealed, who, err := Verify(env, trusted)
+	v, err := Verify(env, trusted)
 	if !errors.Is(err, want) {
 		t.Fatalf("Verify: got %v, want %v", err, want)
 	}
-	if sealed != nil || who.Key != nil || who.Label != "" {
-		t.Fatalf("refused Verify still returned data: %d bytes, signer %v", len(sealed), who)
+	if v.Sealed != nil || v.Signer.Key != nil || v.Signer.Label != "" || !v.SignedAt.IsZero() {
+		t.Fatalf("refused Verify still returned data: %d bytes, signer %v, signed at %v", len(v.Sealed), v.Signer, v.SignedAt)
 	}
 }
 
@@ -51,9 +67,13 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 	other, _ := genSigner(t)
 	mine := f.signer.Public()
 	mine.Label = "operator"
-	sealed, who, err := Verify(f.env, []TrustedSigner{other.Public(), mine})
+	v, err := Verify(f.env, []TrustedSigner{other.Public(), mine})
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
+	}
+	sealed, who := v.Sealed, v.Signer
+	if !v.SignedAt.Equal(fixtureSignedAt) || v.SignedAt.Location() != time.UTC {
+		t.Fatalf("Verify returned signed-at %v, want %v in UTC", v.SignedAt, fixtureSignedAt)
 	}
 	if !bytes.Equal(sealed, f.sealed) {
 		t.Fatal("Verify did not return the exact sealed bytes Sign was given")
@@ -74,9 +94,10 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 
 func TestSignEnvelopeLayout(t *testing.T) {
 	f := newSignedFixture(t)
-	lines := strings.SplitN(string(f.env), "\n", 4)
-	if lines[0] != SignedPlanMagic || len(lines[1]) != 43 || len(lines[2]) != 86 {
-		t.Fatalf("unexpected header lines %q", lines[:3])
+	lines := strings.SplitN(string(f.env), "\n", 5)
+	if lines[0] != SignedPlanMagic || len(lines[1]) != 43 || len(lines[2]) != 86 ||
+		lines[3] != "signed-at "+fixtureStamp {
+		t.Fatalf("unexpected header lines %q", lines[:4])
 	}
 	if lines[1] != strings.Fields(f.signer.Public().String())[1] {
 		t.Fatal("envelope key line is not the signer's public key")
@@ -105,7 +126,7 @@ func TestVerifyIgnoresMalformedTrustedEntries(t *testing.T) {
 	pub := f.signer.Public().Key
 	bad := []TrustedSigner{{}, {Key: pub[:31]}, {Key: append(bytes.Clone(pub), 0)}}
 	requireRefused(t, f.env, bad, ErrSignatureUnrecognizedSigner)
-	if _, _, err := Verify(f.env, append(bad, f.signer.Public())); err != nil {
+	if _, err := Verify(f.env, append(bad, f.signer.Public())); err != nil {
 		t.Fatalf("Verify with a valid entry after malformed ones: %v", err)
 	}
 }
@@ -147,7 +168,7 @@ func TestVerifyRefusesReplacedPayload(t *testing.T) {
 func TestVerifyRefusesTamperedSignature(t *testing.T) {
 	f := newSignedFixture(t)
 	env := bytes.Clone(f.env)
-	sigAt := len(SignedPlanMagic) + 1 + 43 + 1 + 40
+	sigAt := sigLineOff + 40
 	env[sigAt] = flipBase64(env[sigAt])
 	requireRefused(t, env, f.trusted(), ErrSignatureInvalid)
 }
@@ -158,20 +179,22 @@ func TestVerifyRefusesSwappedKeyLine(t *testing.T) {
 	f := newSignedFixture(t)
 	other, _ := genSigner(t)
 	env := bytes.Clone(f.env)
-	copy(env[len(SignedPlanMagic)+1:], strings.Fields(other.Public().String())[1])
+	copy(env[keyLineOff:], strings.Fields(other.Public().String())[1])
 	requireRefused(t, env, []TrustedSigner{other.Public(), f.signer.Public()}, ErrSignatureInvalid)
 }
 
 // TestVerifyRefusesEveryTruncation cuts the envelope at every length
 // short of whole: none verifies, whether the cut lands in the magic, a key
-// or signature line, the age header, or the ciphertext.
+// or signature line, the signed-at line, the age header, or the ciphertext.
 func TestVerifyRefusesEveryTruncation(t *testing.T) {
 	f := newSignedFixture(t)
 	for n := range len(f.env) {
-		if _, _, err := Verify(f.env[:n], f.trusted()); err == nil {
+		if _, err := Verify(f.env[:n], f.trusted()); err == nil {
 			t.Fatalf("Verify accepted the envelope truncated to %d of %d bytes", n, len(f.env))
 		}
 	}
+	requireRefused(t, f.env[:signedAtLineOff-1], f.trusted(), ErrEnvelopeMalformed)
+	requireRefused(t, f.env[:signedAtLineOff], f.trusted(), ErrEnvelopeMalformed)
 	requireRefused(t, f.env[:envelopeHeaderLen-1], f.trusted(), ErrEnvelopeMalformed)
 	requireRefused(t, f.env[:envelopeHeaderLen], f.trusted(), ErrPayloadNotSealed)
 }
@@ -181,12 +204,17 @@ func TestVerifyRefusesEveryTruncation(t *testing.T) {
 // they were made or labelled: each must be refused, never reinterpreted.
 func TestVerifyRefusesAlgorithmConfusion(t *testing.T) {
 	f := newSignedFixture(t)
-	msg := signedMessage(f.sealed)
+	msg := signedMessage(f.stamp, f.sealed)
 	digest := sha512.Sum512(msg)
 	ctxSig := mustSign(t, f.signer, msg, &ed25519.Options{Context: SignedPlanMagic})
 	phSig := mustSign(t, f.signer, digest[:], &ed25519.Options{Hash: crypto.SHA512})
 	bareSig := ed25519.Sign(f.signer.privateKey(), f.sealed) // no magic prefix: no domain separation
-	for name, sig := range map[string][]byte{"Ed25519ctx": ctxSig, "Ed25519ph": phSig, "unprefixed message": bareSig} {
+	// The 6g2 message, before task 7g2 added the signed-at line: a
+	// signature that does not cover the time must not verify.
+	undatedSig := ed25519.Sign(f.signer.privateKey(), append([]byte(SignedPlanMagic+"\n"), f.sealed...))
+	for name, sig := range map[string][]byte{
+		"Ed25519ctx": ctxSig, "Ed25519ph": phSig, "unprefixed message": bareSig, "undated message": undatedSig,
+	} {
 		t.Run(name, func(t *testing.T) {
 			requireRefused(t, withSignature(f, sig), f.trusted(), ErrSignatureInvalid)
 		})
@@ -205,6 +233,11 @@ func TestVerifyRefusesAlgorithmConfusion(t *testing.T) {
 		"key line terminator": relabel(keyLine+"\n", keyLine+" "),
 		"signature line terminator": func() []byte {
 			env := bytes.Clone(f.env)
+			env[signedAtLineOff-1] = ' '
+			return env
+		}(),
+		"signed-at line terminator": func() []byte {
+			env := bytes.Clone(f.env)
 			env[envelopeHeaderLen-1] = ' '
 			return env
 		}(),
@@ -213,7 +246,7 @@ func TestVerifyRefusesAlgorithmConfusion(t *testing.T) {
 	}
 	t.Run("non-canonical key", func(t *testing.T) {
 		env := bytes.Clone(f.env)
-		last := len(SignedPlanMagic) + 1 + 42 // the key line's final character
+		last := keyLineOff + 42 // the key line's final character
 		env[last] = nonCanonical(string(env[last : last+1]))[0]
 		requireRefused(t, env, f.trusted(), ErrEnvelopeMalformed)
 	})
@@ -231,7 +264,7 @@ func mustSign(t *testing.T, s Signer, msg []byte, opts crypto.SignerOpts) []byte
 // withSignature returns f's envelope with its signature line replaced.
 func withSignature(f signedFixture, sig []byte) []byte {
 	env := bytes.Clone(f.env)
-	copy(env[len(SignedPlanMagic)+1+43+1:], keyEncoding.EncodeToString(sig))
+	copy(env[sigLineOff:], keyEncoding.EncodeToString(sig))
 	return env
 }
 
@@ -260,7 +293,7 @@ func TestVerifyRefusesUnsignedInput(t *testing.T) {
 func TestVerifyRefusesSignedNonSealedPayload(t *testing.T) {
 	f := newSignedFixture(t)
 	for _, payload := range [][]byte{[]byte(`{"kind":"file"}` + "\n"), f.env} {
-		sig := ed25519.Sign(f.signer.privateKey(), signedMessage(payload))
+		sig := ed25519.Sign(f.signer.privateKey(), signedMessage(f.stamp, payload))
 		env := append(bytes.Clone(f.env[:envelopeHeaderLen]), payload...)
 		env = withSignature(signedFixture{env: env}, sig)
 		requireRefused(t, env, f.trusted(), ErrPayloadNotSealed)
@@ -294,14 +327,15 @@ func TestSignRefusesInvalidSigner(t *testing.T) {
 func TestSignLeavesInputAndVerifyOutputIsolated(t *testing.T) {
 	f := newSignedFixture(t)
 	before := bytes.Clone(f.sealed)
-	if _, err := Sign(f.sealed, f.signer); err != nil || !bytes.Equal(f.sealed, before) {
+	if _, err := SignAt(f.sealed, f.signer, fixtureSignedAt); err != nil || !bytes.Equal(f.sealed, before) {
 		t.Fatalf("Sign modified its input or failed: %v", err)
 	}
 	env := append(bytes.Clone(f.env), "tail"...)[:len(f.env)]
-	sealed, _, err := Verify(env, f.trusted())
+	v, err := Verify(env, f.trusted())
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
+	sealed := v.Sealed
 	if cap(sealed) != len(sealed) {
 		t.Fatalf("Verify's result has spare capacity %d, so an append would write into the caller's buffer", cap(sealed)-len(sealed))
 	}
@@ -318,7 +352,7 @@ func TestSignVerifyErrorsNameNoKeyMaterial(t *testing.T) {
 	lines := strings.SplitN(string(f.env), "\n", 4)
 	other, _ := genSigner(t)
 	for _, trusted := range [][]TrustedSigner{nil, {other.Public()}} {
-		_, _, err := Verify(f.env, trusted)
+		_, err := Verify(f.env, trusted)
 		if err == nil || strings.Contains(err.Error(), lines[1]) || strings.Contains(err.Error(), lines[2]) {
 			t.Fatalf("Verify error names key material or is nil: %v", err)
 		}
