@@ -2,11 +2,13 @@ package plan
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
 	"strings"
@@ -145,7 +147,8 @@ func TestDecodePushBareJSONL(t *testing.T) {
 
 func TestDecodePushRejectsZipSlip(t *testing.T) {
 	dir := t.TempDir()
-	err := extractTarHeader(dir, &tar.Header{Name: "../evil", Typeflag: tar.TypeReg, Size: 0}, bytes.NewReader(nil))
+	var written int64
+	err := extractTarHeader(dir, &tar.Header{Name: "../evil", Typeflag: tar.TypeReg, Size: 0}, bytes.NewReader(nil), &written, MaxExtractedPushBlobs)
 	if err == nil || !strings.Contains(err.Error(), "zip-slip") {
 		t.Fatalf("want zip-slip error, got %v", err)
 	}
@@ -327,6 +330,175 @@ func TestMaybeGunzipCapsDecompressedOutputBoundsMemory(t *testing.T) {
 // TestMaybeGunzipWithinCapUnaffected pins that a legitimate payload well
 // under the cap decodes exactly as before this task's fix: the cap must
 // never truncate or otherwise alter a stream that never approaches it.
+// buildBlobsBombFrame builds a standalone gzip+tar stream — exactly the
+// shape writeBlobsGzipTar produces and readBlobsGzipTarCapped consumes,
+// without going through the full GONF-PUSH/1 frame — containing one regular
+// file entry named name whose declared tar header Size is size but whose
+// actual data is a highly compressible run of zero bytes: a few MB of zeros
+// collapses to a few KB once gzipped (the same trick gzipBomb above uses for
+// the plan-section cap's own regression test), so this stays small and fast
+// to build without approaching the multi-gigabyte scale task 2g2's own probe
+// measured against the real binary.
+func buildBlobsBombFrame(t *testing.T, name string, size int) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+	if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o600, Size: int64(size)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(make([]byte, size)); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// dirEntryNames lists dir's entries recursively (relative, slash-joined),
+// for asserting exactly what a refused or successful extraction left behind
+// on disk.
+func dirEntryNames(t *testing.T, dir string) []string {
+	t.Helper()
+	var names []string
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if path == dir {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		names = append(names, filepath.ToSlash(rel))
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return names
+}
+
+// TestReadBlobsGzipTarCapsExtractedBytes is task 2g2's regression test for
+// the disk-exhaustion DoS: readBlobsGzipTar used to call extractTarFile with
+// an unbounded io.Copy and never checked hdr.Size before extracting, so a
+// single tar entry whose declared size alone exceeds the budget must now be
+// refused loudly and IMMEDIATELY — before any of its bytes are written — and
+// must leave the destination directory completely empty, not a
+// partially-extracted bomb.
+func TestReadBlobsGzipTarCapsExtractedBytes(t *testing.T) {
+	const bombSize = 8 << 20 // 8 MiB of zeros
+	frame := buildBlobsBombFrame(t, "blobs/bomb", bombSize)
+	if len(frame) > 64<<10 {
+		t.Fatalf("bomb compressed to %d bytes, expected a high compression ratio", len(frame))
+	}
+
+	const testCap = 64 << 10 // artificially low test-only cap, well under bombSize
+	dir := t.TempDir()
+	err := readBlobsGzipTarCapped(bufio.NewReader(bytes.NewReader(frame)), dir, testCap)
+	if !errors.Is(err, ErrPushBlobsTooLarge) {
+		t.Fatalf("readBlobsGzipTarCapped over cap error = %v, want ErrPushBlobsTooLarge", err)
+	}
+	if got := dirEntryNames(t, dir); len(got) != 0 {
+		t.Fatalf("refused extraction left behind %v, want an empty directory", got)
+	}
+}
+
+// TestReadBlobsGzipTarCapsCumulativeAcrossEntries proves the budget is a
+// single RUNNING counter shared across every entry in the archive, not a
+// per-file check alone: two entries that each individually fit under the cap
+// still trip it once their sizes add up past it, and the entry that trips it
+// leaves nothing partial behind (only the entries that genuinely fit within
+// budget before it are present).
+func TestReadBlobsGzipTarCapsCumulativeAcrossEntries(t *testing.T) {
+	const perEntry = 40 << 10 // 40 KiB each
+	const testCap = 64 << 10  // two entries (80 KiB) together exceed this
+
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+	names := []string{"blobs/a", "blobs/b"}
+	for _, name := range names {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o600, Size: perEntry}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(bytes.Repeat([]byte{'x'}, perEntry)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	err := readBlobsGzipTarCapped(bufio.NewReader(bytes.NewReader(buf.Bytes())), dir, testCap)
+	if !errors.Is(err, ErrPushBlobsTooLarge) {
+		t.Fatalf("readBlobsGzipTarCapped over cumulative cap error = %v, want ErrPushBlobsTooLarge", err)
+	}
+	got := dirEntryNames(t, dir)
+	sort.Strings(got)
+	want := []string{"blobs", "blobs/a"} // the parent dir extractTarFile's MkdirAll creates, plus the one entry that fit
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("cumulative refusal left %v, want exactly %v (only the entry that fit before the cap tripped, no trace of blobs/b)", got, want)
+	}
+}
+
+// TestReadBlobsGzipTarWithinCapExtractsFully pins that a legitimate blob set
+// well within the cap is entirely unaffected by this task's fix: every file
+// extracts completely, with the exact content and byte count it had before.
+func TestReadBlobsGzipTarWithinCapExtractsFully(t *testing.T) {
+	mem := NewMemoryStore()
+	refA, err := mem.WriteFile("a", bytes.Repeat([]byte("legit-a"), 1000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	refB, err := mem.WriteFile("b", bytes.Repeat([]byte("legit-b"), 2000))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if err := writeBlobsGzipTar(&buf, mem); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// MaxExtractedPushBlobs (1 GiB) comfortably covers this small legitimate
+	// set; use the real exported constant here (unlike the two capped tests
+	// above) to also prove the public readBlobsGzipTar/DecodePush path — not
+	// just the max-parameterized test seam — extracts a normal push cleanly.
+	if err := readBlobsGzipTarCapped(bufio.NewReader(&buf), dir, MaxExtractedPushBlobs); err != nil {
+		t.Fatalf("readBlobsGzipTarCapped within cap: %v", err)
+	}
+
+	gotA, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(refA)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotA) != strings.Repeat("legit-a", 1000) {
+		t.Fatalf("blob a content mismatch, got %d bytes", len(gotA))
+	}
+	gotB, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(refB)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotB) != strings.Repeat("legit-b", 2000) {
+		t.Fatalf("blob b content mismatch, got %d bytes", len(gotB))
+	}
+}
+
 func TestMaybeGunzipWithinCapUnaffected(t *testing.T) {
 	ops := []Op{{Op: KindPlan, Version: CurrentVersion, ID: "small"}}
 	raw, err := EncodePlan(ops)

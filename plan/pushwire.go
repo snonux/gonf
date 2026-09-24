@@ -39,6 +39,44 @@ const MaxDecompressedPushPlan = 256 << 20 // 256 MiB
 // immediate: no partial or truncated plan is ever handed to DecodePlanBytes.
 var ErrPushPlanTooLarge = errors.New("plan push: decompressed plan section exceeds size limit")
 
+// MaxExtractedPushBlobs bounds the total bytes readBlobsGzipTar will write to
+// planDir across every file in the GONF-PUSH/1 frame's blobs tar+gzip
+// section. Unlike the plan section (gzip-decompressed into memory and capped
+// by MaxDecompressedPushPlan above), the blobs section is streamed straight
+// to disk — so neither that cap nor maxSealedFrameBytes (internal/cli),
+// which only bounds the frame's still-compressed, on-the-wire size, does
+// anything to stop a small, highly compressible tar entry (e.g. one header
+// declaring a multi-gigabyte file of repeated bytes) from exhausting disk
+// space instead of RAM. Task 2g2 measured this exactly: a 6,264,885 byte
+// (~6.3 MB) sealed plan.age whose blobs section was such a bomb drove disk
+// usage to 2154 MB at t=1s, 3677 MB at t=2s and 5481 MB at t=3s (~1.8 GB/s),
+// then cleanup ran and the apply still REPORTED SUCCESS with no refusal at
+// any point — a measured ~1000x disk-amplification DoS, with a theoretical
+// ceiling of ~512 GiB given maxSealedFrameBytes' own 512 MiB cap (see that
+// constant's doc comment, corrected by task 2g2 to no longer wave this case
+// off). The threat is the same class be2 already named for the plan section:
+// docs/plan-encryption.md, T2/T10 — anyone who can write the operator's
+// plan.age or push stream (backup restore, CI artifact store, a shared
+// directory) can fill "/" or $TMPDIR on the controller or the target
+// mid-apply. 1 GiB comfortably covers a legitimate blob set (docs/plan.md:
+// only files over plan.MaxInlineContent, 512 KiB, become blobs at all, and a
+// realistic config tree runs to tens of MB) while staying far below what
+// would meaningfully threaten a typical disk. Named here, not inlined, so it
+// is easy to find and raise if a legitimate blob set ever needs more.
+const MaxExtractedPushBlobs = 1 << 30 // 1 GiB
+
+// ErrPushBlobsTooLarge is returned when extracting the GONF-PUSH/1 frame's
+// blobs tar+gzip section would write more than MaxExtractedPushBlobs bytes
+// to planDir. The refusal is loud and immediate: extractTarFile checks each
+// entry's own declared hdr.Size against the REMAINING budget before writing
+// any of that entry's bytes, so an oversized entry is refused up front
+// rather than only caught after it has already been written; a running,
+// cumulative counter (threaded across every extractTarHeader call in one
+// readBlobsGzipTar run) also catches many smaller entries that together
+// exceed the cap. No partial file is left behind by the entry that trips
+// the cap: its target is never opened before the size check runs.
+var ErrPushBlobsTooLarge = errors.New("plan push: extracted blobs exceed size limit")
+
 // PushPayload is the decoded result of a GONF-PUSH/1 stream.
 type PushPayload struct {
 	Ops     []Op
@@ -89,7 +127,10 @@ func EncodePush(w io.Writer, ops []Op, mem BlobReader) error {
 // section's gzip decompression is capped at MaxDecompressedPushPlan
 // (ErrPushPlanTooLarge past it, see that constant's doc comment); blob
 // extraction (readBlobsGzipTar) streams straight to planDir on disk rather
-// than buffering in memory, so it is not part of this in-memory cap.
+// than buffering in memory, so it is not part of this in-memory cap — it has
+// its own, separate disk-bytes-written cap, MaxExtractedPushBlobs
+// (ErrPushBlobsTooLarge past it; see that constant's doc comment for why an
+// in-memory-only cap does nothing to stop a disk-exhaustion DoS here).
 func DecodePush(r io.Reader, planDir string) (*PushPayload, error) {
 	br := bufio.NewReader(r)
 	peek, err := br.Peek(1)
@@ -319,6 +360,20 @@ func writeTreeTar(tw *tar.Writer, ref string, tree []BlobEntry) error {
 }
 
 func readBlobsGzipTar(r *bufio.Reader, planDir string) error {
+	return readBlobsGzipTarCapped(r, planDir, MaxExtractedPushBlobs)
+}
+
+// readBlobsGzipTarCapped is readBlobsGzipTar's implementation, taking max as
+// a parameter (not a direct read of MaxExtractedPushBlobs) so this package's
+// own tests can exercise the cap mechanism against a small, fast bomb
+// instead of writing a genuine gigabyte to a test's temp dir — mirroring how
+// maybeGunzip takes its own max parameter for the same reason (task be2).
+// written is a single counter shared, by pointer, across every tar entry in
+// this one archive: the cap bounds the CUMULATIVE bytes extracted from the
+// whole blobs section, not any one file in isolation, so many smaller
+// entries that together exceed max are refused exactly as a single huge one
+// would be.
+func readBlobsGzipTarCapped(r *bufio.Reader, planDir string, max int64) error {
 	// Blob phase is a gzip stream; after it ends, "plan\n" follows.
 	// Use a tee approach: gzip.Reader reads until EOF of the gzip member.
 	gr, err := gzip.NewReader(r)
@@ -328,6 +383,7 @@ func readBlobsGzipTar(r *bufio.Reader, planDir string) error {
 	gr.Multistream(false)
 	defer func() { _ = gr.Close() }()
 	tr := tar.NewReader(gr)
+	var written int64
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -336,14 +392,14 @@ func readBlobsGzipTar(r *bufio.Reader, planDir string) error {
 		if err != nil {
 			return fmt.Errorf("plan push: blobs tar: %w", err)
 		}
-		if err := extractTarHeader(planDir, hdr, tr); err != nil {
+		if err := extractTarHeader(planDir, hdr, tr, &written, max); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func extractTarHeader(planDir string, hdr *tar.Header, r io.Reader) error {
+func extractTarHeader(planDir string, hdr *tar.Header, r io.Reader, written *int64, max int64) error {
 	target, err := tarTarget(planDir, hdr.Name)
 	if err != nil {
 		return err
@@ -368,7 +424,7 @@ func extractTarHeader(planDir string, hdr *tar.Header, r io.Reader) error {
 	if hdr.Typeflag == tar.TypeSymlink {
 		return extractTarSymlink(target, hdr.Linkname)
 	}
-	return extractTarFile(target, r)
+	return extractTarFile(target, r, hdr.Size, written, max)
 }
 
 func tarTarget(planDir, name string) (string, error) {
@@ -405,7 +461,22 @@ func extractTarSymlink(target, linkname string) error {
 	return nil
 }
 
-func extractTarFile(target string, r io.Reader) error {
+// extractTarFile writes one tar entry's data to target, refusing before it
+// opens the target at all when size (the entry's own declared hdr.Size)
+// alone would push *written past max — the immediate half of
+// MaxExtractedPushBlobs' enforcement (see that constant's doc comment): no
+// bytes of an oversized entry are ever written, not even a partial file.
+// Once past that check, io.CopyN(f, r, size) — not the unbounded io.Copy
+// this replaced — is the per-file bounded read the same doc comment
+// describes: defense-in-depth so a single entry can never write more than
+// its own declared size even if archive/tar's own per-entry accounting were
+// ever bypassed. written is advanced by exactly what CopyN actually wrote,
+// so a later entry's remaining-budget check always reflects real disk usage.
+func extractTarFile(target string, r io.Reader, size int64, written *int64, max int64) error {
+	remaining := max - *written
+	if size > remaining {
+		return fmt.Errorf("%w (%d byte limit)", ErrPushBlobsTooLarge, max)
+	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 		return err
 	}
@@ -415,7 +486,8 @@ func extractTarFile(target string, r io.Reader) error {
 	if err != nil {
 		return err
 	}
-	_, copyErr := io.Copy(f, r)
+	n, copyErr := io.CopyN(f, r, size)
+	*written += n
 	closeErr := f.Close()
 	if copyErr != nil {
 		return copyErr

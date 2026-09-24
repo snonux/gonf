@@ -165,7 +165,8 @@ func TestExtractTarHeaderReplacesPreExistingForSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	hdr := &tar.Header{Name: "blobs/app/rel-link", Typeflag: tar.TypeSymlink, Linkname: "a.conf"}
-	if err := extractTarHeader(planDir, hdr, bytes.NewReader(nil)); err != nil {
+	var written int64
+	if err := extractTarHeader(planDir, hdr, bytes.NewReader(nil), &written, MaxExtractedPushBlobs); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := os.Readlink(existing); err != nil || got != "a.conf" {

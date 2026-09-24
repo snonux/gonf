@@ -1143,6 +1143,17 @@ const ageMagicLine = "age-encryption.org/v1"
 // so it is easy to find and raise if a legitimate sealed plan ever needs
 // more. See also plan.MaxDecompressedPushPlan, the separate cap on the
 // plan section's OWN gzip decompression inside the frame this bounds.
+//
+// Streaming blob extraction straight to disk instead of buffering it in
+// memory only moves the amplification target from RAM to disk — it does not
+// eliminate it: an earlier version of this comment stopped here, as if
+// "streams to disk" were itself the mitigation, until task 2g2 measured the
+// consequence directly (a 6.3 MB sealed plan.age driving disk usage past
+// 5.4 GB in three seconds via readBlobsGzipTar, apply still reporting
+// success). readBlobsGzipTar now enforces its own separate cap on that
+// unpacked size, plan.MaxExtractedPushBlobs (see its doc comment) — this
+// constant bounds only what arrives over the wire compressed; that one
+// bounds what actually lands on disk.
 const maxSealedFrameBytes = 512 << 20 // 512 MiB
 
 // errSealedFrameTooLarge is returned when the decrypted sealed frame would
