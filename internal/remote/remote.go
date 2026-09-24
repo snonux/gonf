@@ -282,27 +282,26 @@ func uploadSticky(ctx context.Context, t PushTarget, chunks []plan.Chunk, mem pl
 // the sticky dir (its blobs were consumed or are now unusable) and reports
 // how many ops from earlier chunks already landed on the host, without
 // masking the underlying error.
-func streamChunks(ctx context.Context, t PushTarget, chunks []plan.Chunk, remotes []string, mem plan.BlobReader, sticky string) error {
+//
+// sealing (nil when the push seals nothing) picks each chunk's frame: a
+// chunk that reads a sealed sticky ref gets a GONF-PUSH/2 frame carrying
+// the ephemeral key, every other chunk the unchanged GONF-PUSH/1 frame
+// (stickySeal.encodeChunk). The frame buffer is private key material for
+// such a chunk: it goes only to SSHRunner's stdin and never into a log
+// line or an error (the errors below carry only the chunk index, its
+// elevation and SSHRunner's own error, which never includes its stdin).
+func streamChunks(ctx context.Context, t PushTarget, chunks []plan.Chunk, remotes []string, mem plan.BlobReader, sticky string, sealing *stickySeal) error {
 	for i, ch := range chunks {
 		chunkMem := mem
 		if sticky != "" {
 			chunkMem = nil // plan-only; blobs already in the sticky dir
 		}
 		var buf bytes.Buffer
-		if err := plan.EncodePush(&buf, ch.Ops, chunkMem); err != nil {
+		if err := sealing.encodeChunk(&buf, ch, chunkMem); err != nil {
 			return fmt.Errorf("encode chunk %d: %w", i, err)
 		}
 		if err := SSHRunner(ctx, bytes.NewReader(buf.Bytes()), t.sshArgv(remotes[i])); err != nil {
-			err = fmt.Errorf("chunk %d (elevate=%v): %w", i, ch.Elevate, err)
-			if len(chunks) > 1 && i > 0 {
-				// Any chunk failure after the first leaves the host partially
-				// applied: earlier chunks already ran.
-				applied := 0
-				for _, prev := range chunks[:i] {
-					applied += len(prev.Ops) - 1 // minus the header
-				}
-				err = fmt.Errorf("%w (host left partially applied: %d ops from %d earlier chunks)", err, applied, i)
-			}
+			err = partialApplyError(fmt.Errorf("chunk %d (elevate=%v): %w", i, ch.Elevate, err), chunks, i)
 			if sticky != "" {
 				// The sticky dir is no longer needed: its blobs were consumed
 				// or are now unusable. Best-effort removal, never masking the
@@ -313,6 +312,20 @@ func streamChunks(ctx context.Context, t PushTarget, chunks []plan.Chunk, remote
 		}
 	}
 	return nil
+}
+
+// partialApplyError adds to err, the failure of chunk i, how many ops the
+// earlier chunks already applied: any chunk failure after the first leaves
+// the host partially applied.
+func partialApplyError(err error, chunks []plan.Chunk, i int) error {
+	if len(chunks) <= 1 || i == 0 {
+		return err
+	}
+	applied := 0
+	for _, prev := range chunks[:i] {
+		applied += len(prev.Ops) - 1 // minus the header
+	}
+	return fmt.Errorf("%w (host left partially applied: %d ops from %d earlier chunks)", err, applied, i)
 }
 
 // remoteApplyCmd builds the remote shell command for one apply session in

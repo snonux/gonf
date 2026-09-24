@@ -113,14 +113,15 @@ func SensitiveIDs(ops []Op) []string {
 // such a blob — secret material destined for a privileged file — would be
 // readable by that less privileged user. Positions rather than IDs are
 // returned because plan cannot redact: an ID may equal a short secret.
+//
+// The selection is sealsStickyBlob (sealed_sticky.go), shared with
+// SealedStickyRefs and ChunkNeedsStickyKey: the ops described here are
+// exactly the ones whose refs the sealed sticky-dir path seals (task zf2).
 func SensitiveElevatedBlobs(chunks []Chunk) []string {
 	var ops []string
 	for i, c := range chunks {
-		if !c.Elevate {
-			continue
-		}
 		for j, op := range c.Ops {
-			if op.Sensitive && op.Blob != "" {
+			if sealsStickyBlob(c, op) {
 				ops = append(ops, fmt.Sprintf("%s op %d of chunk %d", op.Op, j, i+1))
 			}
 		}

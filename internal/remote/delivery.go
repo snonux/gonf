@@ -117,7 +117,13 @@ func (m Mode) Validate() error {
 // before extracting into it, so ToHost does not care whether the dir was
 // empty, fresh, or left over from an interrupted run. Because that dir is
 // the login user's, a sensitive op with blob content in an elevated chunk is
-// refused before any SSH traffic (refuseSensitiveStickyBlobs).
+// refused before any SSH traffic (refuseSensitiveStickyBlobs). The sealed
+// alternative that will replace that refusal is already wired in behind it
+// (task zf2, sealed_sticky.go): such refs are sealed to a per-push
+// ephemeral key, uploaded sealed, and the key sent only on the reading
+// elevated chunk's own GONF-PUSH/2 stdin frame, after the remote passed
+// RequireRemoteSealedSticky; task 0g2 removes the refusal once the
+// destination decrypts them.
 //
 // Preview mode: a blob-backed plan is refused before any remote probe, and
 // the remote gonf is only verified (every privilege context that will apply
@@ -137,18 +143,35 @@ func (d Delivery) ToHost(ctx context.Context, t PushTarget) error {
 	// Sticky dir for multi-chunk plans with blobs: uploaded once, referenced
 	// read-only by every chunk. A concrete remote path; the ID is sanitized.
 	sticky := ""
+	var sealing *stickySeal
 	if hasBlobs && len(chunks) > 1 {
-		if err := refuseSensitiveStickyBlobs(d.PlanID, chunks); err != nil {
+		// TODO(0g2): remove this refusal once the destination side (w82
+		// phase 4 step 3, task 0g2) decrypts sealed sticky refs. Until then
+		// it still refuses every plan newStickySeal below would seal, so the
+		// sealed path (sealed_sticky.go) is unreachable in production:
+		// lifting it before the destination can open what the controller
+		// seals would only trade the refusal for a far-end failure.
+		if err := refuseStickyBlobs(d.PlanID, chunks); err != nil {
 			return err
 		}
 		sticky = "/tmp/gonf-apply-sticky-" + sanitizeID(d.PlanID)
+		var err error
+		if sealing, err = newStickySeal(chunks, d.Mem); err != nil {
+			return fmt.Errorf("push: plan %q: %w", d.PlanID, err)
+		}
 	}
-	t, remotes, err := d.prepareRemote(ctx, t, chunks, sticky)
+	t, remotes, err := d.prepareRemote(ctx, t, chunks, sticky, sealing != nil)
 	if err != nil {
 		return err
 	}
-	return d.stream(ctx, t, chunks, remotes, sticky)
+	return d.stream(ctx, t, chunks, remotes, sticky, sealing)
 }
+
+// refuseStickyBlobs is refuseSensitiveStickyBlobs as ToHost calls it. It is
+// a variable only so this package's tests can step past the refusal to
+// exercise the sealed sticky path it still blocks in production (see
+// ToHost's TODO(0g2)); production code never reassigns it.
+var refuseStickyBlobs = refuseSensitiveStickyBlobs
 
 // refuseSensitiveStickyBlobs refuses, before any SSH traffic, a multi-chunk
 // plan whose elevated chunks carry a sensitive op with blob content: the
@@ -230,12 +253,16 @@ func (d Delivery) forHost(label string) Delivery {
 // (resolveCmdTimeoutForward, see cmdtimeout.go): only then can the probe
 // see a freshly installed binary. The commands are rebuilt whenever the
 // binary path changed or the flag is forwarded to some chunk.
-func (d Delivery) prepareRemote(ctx context.Context, t PushTarget, chunks []plan.Chunk, sticky string) (PushTarget, []string, error) {
+//
+// sealed reports that this push seals sticky refs (ToHost's stickySeal):
+// the settled runtime must then also pass RequireRemoteSealedSticky (see
+// prepareRuntime).
+func (d Delivery) prepareRemote(ctx context.Context, t PushTarget, chunks []plan.Chunk, sticky string, sealed bool) (PushTarget, []string, error) {
 	remotes, err := buildRemoteCmds(chunks, t, sticky, d.Mode, cmdTimeoutForward{})
 	if err != nil {
 		return t, nil, err
 	}
-	t, installed, err := d.prepareRuntime(ctx, t, chunks)
+	t, installed, err := d.prepareRuntime(ctx, t, chunks, sealed)
 	if err != nil {
 		return t, nil, err
 	}
@@ -259,7 +286,14 @@ func (d Delivery) prepareRemote(ctx context.Context, t PushTarget, chunks []plan
 // chunk; Push installs or upgrades it when needed (ensureRuntime). installed
 // is the path of a freshly installed binary when the returned target now
 // points at it (GonfPath was empty), "" otherwise.
-func (d Delivery) prepareRuntime(ctx context.Context, t PushTarget, chunks []plan.Chunk) (PushTarget, string, error) {
+//
+// When sealed (the push seals sticky refs, see sealed_sticky.go), the
+// settled runtime — after ensureRuntime's self-heal, against the binary the
+// chunks will actually run — must also pass RequireRemoteSealedSticky in
+// the elevated context, the one that decodes the GONF-PUSH/2 frame; a
+// refusal there stops the push before any blob is uploaded. Preview never
+// gets here with sealed set: ToHost refuses a blob-backed preview first.
+func (d Delivery) prepareRuntime(ctx context.Context, t PushTarget, chunks []plan.Chunk, sealed bool) (PushTarget, string, error) {
 	if d.Mode == Preview {
 		return t, "", requireRemoteGonfForChunks(ctx, t, chunks)
 	}
@@ -268,22 +302,31 @@ func (d Delivery) prepareRuntime(ctx context.Context, t PushTarget, chunks []pla
 		return t, "", err
 	}
 	if installed == "" || t.GonfPath != "" {
-		return t, "", nil
+		installed = ""
+	} else {
+		t.GonfPath = installed
 	}
-	t.GonfPath = installed
+	if sealed {
+		if err := RequireRemoteSealedSticky(ctx, t, ProbeElevated); err != nil {
+			return t, "", err
+		}
+	}
 	return t, installed, nil
 }
 
 // stream uploads the blobs to the sticky dir (when there is one), streams
 // every chunk, and best-effort removes the sticky dir afterwards. A
-// Preview delivery never has a sticky dir: ToHost refused its blobs.
-func (d Delivery) stream(ctx context.Context, t PushTarget, chunks []plan.Chunk, remotes []string, sticky string) error {
+// Preview delivery never has a sticky dir: ToHost refused its blobs. With
+// sealing set, the upload carries the sealed refs in place of their
+// plaintext and the chunks that read them get a keyed GONF-PUSH/2 frame
+// (see sealed_sticky.go); a nil sealing changes nothing.
+func (d Delivery) stream(ctx context.Context, t PushTarget, chunks []plan.Chunk, remotes []string, sticky string, sealing *stickySeal) error {
 	if sticky != "" {
-		if err := uploadSticky(ctx, t, chunks, d.Mem, sticky); err != nil {
+		if err := uploadSticky(ctx, t, chunks, sealing.uploadBlobs(d.Mem), sticky); err != nil {
 			return err
 		}
 	}
-	if err := streamChunks(ctx, t, chunks, remotes, d.Mem, sticky); err != nil {
+	if err := streamChunks(ctx, t, chunks, remotes, d.Mem, sticky, sealing); err != nil {
 		return err
 	}
 	if sticky != "" {

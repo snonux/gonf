@@ -138,20 +138,42 @@ const relayedMinRelease = "0.16.3"
 // original goal).
 var relayedMinVersion = mustParseReleaseVersion(relayedMinRelease)
 
+// sealedStickyMinRelease is the minimum remote gonf release whose elevated
+// "apply -relayed -apply-dir <sticky> -" accepts a GONF-PUSH/2 frame and
+// decrypts the sealed sticky-dir refs its ops read (w82 phase 4; the wire
+// and controller side landed in task zf2, the destination side is task
+// 0g2). Like relayedMinRelease it is a fixed floor, not the controller's
+// own moving internal.Version: RequireRemoteSealedSticky compares against
+// it for the same reason RequireRemoteRelayed compares against
+// relayedMinRelease.
+//
+// No released gonf decrypts sealed sticky refs yet (0g2 has not landed),
+// so this floor is deliberately above every release so far: the gate
+// refuses every remote until the release that ships 0g2 exists. Task 0g2
+// must set it to exactly that release (TestSealedStickyFloorAboveCurrentRelease
+// pins that it stays above internal.Version until then, and must be updated
+// with it).
+const sealedStickyMinRelease = "0.17.0"
+
+// sealedStickyMinVersion is sealedStickyMinRelease's parsed form, derived at
+// package init exactly like relayedMinVersion (task wf2's drift guard).
+var sealedStickyMinVersion = mustParseReleaseVersion(sealedStickyMinRelease)
+
 // mustParseReleaseVersion parses a hard-coded release-version literal into
 // its [3]int form, panicking on a malformed one. It exists solely to derive
-// relayedMinVersion above from relayedMinRelease: relayedMinRelease is a
-// fixed, author-controlled source literal, never a value a recipe, remote
-// probe result, or other input can influence, so a parse failure here can
-// only mean a typo in this file's own source — a genuine, documented
-// programmer-bug invariant that no recipe or input can reach, which is the
-// one case AGENTS.md's "Registration-time contract" (and docs/plan.md's
-// "Error handling contract" list of such sites) accepts a panic for. It
-// fires once, at package init, long before any recipe or apply runs.
+// relayedMinVersion and sealedStickyMinVersion above from their release
+// literals: each is a fixed, author-controlled source literal, never a
+// value a recipe, remote probe result, or other input can influence, so a
+// parse failure here can only mean a typo in this file's own source — a
+// genuine, documented programmer-bug invariant that no recipe or input can
+// reach, which is the one case AGENTS.md's "Registration-time contract"
+// (and docs/plan.md's "Error handling contract" list of such sites) accepts
+// a panic for. It fires once, at package init, long before any recipe or
+// apply runs.
 func mustParseReleaseVersion(s string) [3]int {
 	v, err := parseReleaseVersion(s)
 	if err != nil {
-		panic(fmt.Sprintf("internal/remote: relayedMinRelease %q: %v", s, err))
+		panic(fmt.Sprintf("internal/remote: release floor %q: %v", s, err))
 	}
 	return v
 }
@@ -330,6 +352,43 @@ func (p *Pusher) RequireRemoteRelayed(ctx context.Context, t PushTarget, pc Prob
 	return nil
 }
 
+// RequireRemoteSealedSticky verifies that t's remote gonf, in privilege
+// context pc, is at least sealedStickyMinRelease: new enough to accept a
+// GONF-PUSH/2 frame and decrypt the sealed sticky-dir refs its elevated
+// chunk reads. A thin wrapper over defaultPusher's method, mirroring
+// RequireRemoteRelayed.
+func RequireRemoteSealedSticky(ctx context.Context, t PushTarget, pc ProbeContext) error {
+	return defaultPusher.RequireRemoteSealedSticky(ctx, t, pc)
+}
+
+// RequireRemoteSealedSticky is the Pusher-scoped implementation of the
+// package-level RequireRemoteSealedSticky, built exactly like
+// RequireRemoteRelayed: only the remote release against a fixed floor
+// (sealedStickyMinRelease), and a missing, unparseable or too-old release
+// is a refusal.
+//
+// Delivery.ToHost calls it for a push that seals sticky refs only AFTER
+// the Push-mode bootstrap (EnsureRemoteGonf) had its chance to self-heal a
+// stale remote, and in ProbeElevated context, because the elevated chunk
+// is the one that decodes the /2 frame (sudo/doas may resolve a different
+// binary than the login user's). A remote still below the floor after that
+// is refused before any blob, sealed or not, is uploaded: sending it a /2
+// frame would only fail at the far end, and it must never be handed sealed
+// refs it cannot open.
+func (p *Pusher) RequireRemoteSealedSticky(ctx context.Context, t PushTarget, pc ProbeContext) error {
+	if t.Host == "" {
+		return fmt.Errorf("push: empty host")
+	}
+	remoteRelease, remoteVersion, err := p.probeRemoteReleaseVersion(ctx, t, pc, "push")
+	if err != nil {
+		return err
+	}
+	if releaseVersionLess(remoteVersion, sealedStickyMinVersion) {
+		return fmt.Errorf("push: remote gonf release %s is older than the minimum %s required to decrypt sealed sticky-dir blobs; upgrade the remote gonf binary first", remoteRelease, sealedStickyMinRelease)
+	}
+	return nil
+}
+
 // EnsureRemoteGonf is the Pusher-scoped implementation of the package-level
 // EnsureRemoteGonf above (see its doc comment for the full behavior). It
 // reads only p's own fields (SCPRunner, GoBuildRunner, PlanVersionProber,
@@ -372,10 +431,11 @@ func (p *Pusher) EnsureRemoteGonf(ctx context.Context, t PushTarget) (installedP
 // privilege context pc and parses it into [3]int form, returning the raw
 // probed string alongside it so a caller's own refusal message can still
 // quote the exact remote-reported version. It is the shared mechanics
-// RequireRemoteGonf and RequireRemoteRelayed both need before their own,
-// distinct floor comparison and refusal wording (the controller's own
-// release for RequireRemoteGonf, the fixed relayedMinRelease for
-// RequireRemoteRelayed): the nil-prober check, the probe call, the
+// RequireRemoteGonf, RequireRemoteRelayed and RequireRemoteSealedSticky all
+// need before their own, distinct floor comparison and refusal wording (the
+// controller's own release for RequireRemoteGonf, the fixed
+// relayedMinRelease / sealedStickyMinRelease for the other two): the
+// nil-prober check, the probe call, the
 // empty-output check and the parse (task mf2, tidying ne2's duplicated
 // block). prefix labels every message here with the caller's name ("remote
 // preview" or "push"), matching each gate's own existing wording for the

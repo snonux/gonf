@@ -248,8 +248,10 @@ binary's `main` exits, with the code `cli.CLI` returns.
   test), the test-binary exec guard in `internal/remote`, misuse of the
   test-only `internal/testutil` helpers, and `internal/remote`'s
   `mustParseReleaseVersion` (task wf2), which derives the package-init
-  `relayedMinVersion` from the hard-coded `relayedMinRelease` literal instead
-  of a second, hand-transcribed value that could silently drift from it.
+  `relayedMinVersion` from the hard-coded `relayedMinRelease` literal (and,
+  since task zf2, `sealedStickyMinVersion` from `sealedStickyMinRelease`)
+  instead of a second, hand-transcribed value that could silently drift from
+  it.
   None of them is reachable from a recipe or from input data.
 - **Record-time failures return errors**: unknown tasks, recursion cycles,
   packaging failures, registered resources without plan drafts, dangling or
@@ -1310,6 +1312,19 @@ Host("blowfish", WithSSHUser("rex"), WithSSHHost("blowfish.buetow.org"),
 Remote `apply -` stages under `$TMPDIR/gonf-apply/<uid>/`, sweeps stale dirs on
 startup, applies, then wipes the run dir. Inline content threshold is **512 KiB**
 (`plan.MaxInlineContent`); larger files become blobs in the push stream.
+
+**GONF-PUSH/2** (task zf2, w82 phase 4 step 2) is the same frame with the
+magic bumped and one mandatory line right after it, `key <age1pq ephemeral
+identity>` (`plan.EncodePushWithKey` / `plan.DecodePushWithKey`, opaque
+`plan.PushKey`). A multi-chunk push sends it only on the stdin of an
+elevated chunk whose sensitive op reads a blob sealed in the sticky dir
+(`plan.ChunkNeedsStickyKey`); every other frame stays byte-identical
+GONF-PUSH/1. `plan.DecodePush`, which every current `apply -` path uses,
+refuses a /2 frame (`plan.ErrPushKeyNotAccepted`) before reading the key or
+extracting anything, and a gonf older than /2 refuses it on the magic. The
+controller side is built but still unreachable: `refuseSensitiveStickyBlobs`
+refuses such plans until task 0g2 lands the destination decrypt. See
+[plan-encryption.md](plan-encryption.md), "Phase 4 design".
 
 `PushCluster` records and encodes **once**, then fans the same bytes out over SSH
 in parallel (errgroup limit from the cluster or `-j`). The fan-out runs under a

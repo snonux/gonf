@@ -88,32 +88,46 @@ const MaxExtractedPushBlobs = 1 << 30 // 1 GiB
 // the cap: its target is never opened before the size check runs.
 var ErrPushBlobsTooLarge = errors.New("plan push: extracted blobs exceed size limit")
 
-// PushPayload is the decoded result of a GONF-PUSH/1 stream.
+// PushPayload is the decoded result of a GONF-PUSH/1 or GONF-PUSH/2 stream.
 type PushPayload struct {
 	Ops     []Op
 	PlanDir string // non-empty when blobs were unpacked into Dir
+	// Key is the per-push ephemeral identity a GONF-PUSH/2 frame carries
+	// (see pushwire_key.go), nil for a GONF-PUSH/1 frame or bare JSONL.
+	// Only DecodePushWithKey ever sets it: DecodePush refuses a /2 frame.
+	// It is private key material: PushKey prints a placeholder for every
+	// fmt verb, and a stray %v of the payload prints only this pointer.
+	Key *PushKey
 }
 
 // EncodePush writes a GONF-PUSH/1 frame to w: optional gzip+tar blobs from
 // mem, then gzip-compressed plan JSONL. mem only needs to satisfy
 // BlobReader (a nil BlobReader is treated as "no blobs"): callers pass
-// *MemoryStore today, but any read-back implementation works.
+// *MemoryStore today, but any read-back implementation works. Its bytes
+// are unchanged by the GONF-PUSH/2 extension: a push that needs no
+// ephemeral key keeps sending exactly this frame (EncodePushWithKey in
+// pushwire_key.go is the /2 form).
 func EncodePush(w io.Writer, ops []Op, mem BlobReader) error {
-	if _, err := io.WriteString(w, pushMagic+"\n"); err != nil {
+	return encodePushFrame(w, pushMagic, "", ops, mem)
+}
+
+// encodePushFrame writes one push frame: the magic line, the key line when
+// keyLine is non-empty (GONF-PUSH/2 only, see EncodePushWithKey), the blobs
+// line and optional blobs section, then the plan marker and the
+// gzip-compressed plan JSONL. Errors come only from w, the tar/gzip
+// writers and EncodePlan, never from keyLine's content, so none of them
+// can carry the key.
+func encodePushFrame(w io.Writer, magic, keyLine string, ops []Op, mem BlobReader) error {
+	if _, err := io.WriteString(w, magic+"\n"); err != nil {
 		return err
 	}
-	hasBlobs := mem != nil && mem.HasBlobs()
-	if hasBlobs {
-		if _, err := io.WriteString(w, "blobs 1\n"); err != nil {
+	if keyLine != "" {
+		if _, err := io.WriteString(w, pushKeyPrefix+keyLine+"\n"); err != nil {
 			return err
 		}
-		if err := writeBlobsGzipTar(w, mem); err != nil {
-			return err
-		}
-	} else {
-		if _, err := io.WriteString(w, "blobs 0\n"); err != nil {
-			return err
-		}
+	}
+	if err := writePushBlobs(w, mem); err != nil {
+		return err
 	}
 	if _, err := io.WriteString(w, "plan\n"); err != nil {
 		return err
@@ -130,6 +144,20 @@ func EncodePush(w io.Writer, ops []Op, mem BlobReader) error {
 	return gz.Close()
 }
 
+// writePushBlobs writes the frame's blobs line ("blobs 0" or "blobs 1") and,
+// for "blobs 1", the gzip+tar blobs section from mem (a nil BlobReader, or
+// one without blobs, is "blobs 0").
+func writePushBlobs(w io.Writer, mem BlobReader) error {
+	if mem == nil || !mem.HasBlobs() {
+		_, err := io.WriteString(w, "blobs 0\n")
+		return err
+	}
+	if _, err := io.WriteString(w, "blobs 1\n"); err != nil {
+		return err
+	}
+	return writeBlobsGzipTar(w, mem)
+}
+
 // DecodePush reads either a GONF-PUSH/1 frame or bare JSONL from r.
 // When blobs are present they are unpacked under planDir (must be an existing
 // empty owner-only directory) and the payload reports that path in PlanDir.
@@ -142,53 +170,114 @@ func EncodePush(w io.Writer, ops []Op, mem BlobReader) error {
 // its own, separate disk-bytes-written cap, MaxExtractedPushBlobs
 // (ErrPushBlobsTooLarge past it; see that constant's doc comment for why an
 // in-memory-only cap does nothing to stop a disk-exhaustion DoS here).
+//
+// A GONF-PUSH/2 frame (one carrying a per-push ephemeral key, see
+// pushwire_key.go) is refused with ErrPushKeyNotAccepted right after its
+// magic line: before the key line is read and before any blob is
+// extracted. Only a caller that can honour the key, and says so by calling
+// DecodePushWithKey, ever receives one. Every existing decode path (plain
+// apply, strict preview, the sealed plan.age apply) therefore stays
+// fail-closed against a keyed frame instead of applying ops that would read
+// sealed bytes as if they were plaintext content.
 func DecodePush(r io.Reader, planDir string) (*PushPayload, error) {
+	return decodePush(r, planDir, false)
+}
+
+// decodePush implements DecodePush (acceptKey false) and DecodePushWithKey
+// (acceptKey true): the header (the magic plus, for /2, the key line), the
+// blobs phase, then the plan section.
+func decodePush(r io.Reader, planDir string, acceptKey bool) (*PushPayload, error) {
 	br := bufio.NewReader(r)
 	peek, err := br.Peek(1)
 	if err != nil {
 		return nil, fmt.Errorf("plan push: read: %w", err)
 	}
 	if peek[0] == '{' || peek[0] == '\n' {
-		raw, err := io.ReadAll(br)
-		if err != nil {
-			return nil, err
-		}
-		ops, err := DecodePlanBytes(raw)
-		if err != nil {
-			return nil, err
-		}
-		return &PushPayload{Ops: ops}, nil
+		return decodeBareJSONL(br)
 	}
+	var out PushPayload
+	if err := readPushHeader(br, acceptKey, &out); err != nil {
+		return nil, err
+	}
+	if err := readPushBlobsPhase(br, planDir, &out); err != nil {
+		return nil, err
+	}
+	ops, err := readPushPlanSection(br)
+	if err != nil {
+		return nil, err
+	}
+	out.Ops = ops
+	return &out, nil
+}
 
+// decodeBareJSONL decodes a push stream that is plain plan JSONL (no frame).
+func decodeBareJSONL(br *bufio.Reader) (*PushPayload, error) {
+	raw, err := io.ReadAll(br)
+	if err != nil {
+		return nil, err
+	}
+	ops, err := DecodePlanBytes(raw)
+	if err != nil {
+		return nil, err
+	}
+	return &PushPayload{Ops: ops}, nil
+}
+
+// readPushHeader reads the magic line and, for GONF-PUSH/2, the key line
+// into out.Key. A /2 frame is refused before its key line is read unless
+// acceptKey (see DecodePush). The bad-magic error quotes the magic line:
+// it is always the frame's first line, which never holds key material.
+func readPushHeader(br *bufio.Reader, acceptKey bool, out *PushPayload) error {
 	magic, err := br.ReadString('\n')
 	if err != nil {
-		return nil, fmt.Errorf("plan push: magic: %w", err)
+		return fmt.Errorf("plan push: magic: %w", err)
 	}
-	if strings.TrimSpace(magic) != pushMagic {
-		return nil, fmt.Errorf("plan push: bad magic %q", strings.TrimSpace(magic))
+	switch strings.TrimSpace(magic) {
+	case pushMagic:
+		return nil
+	case pushMagicV2:
+		if !acceptKey {
+			return ErrPushKeyNotAccepted
+		}
+		key, err := readPushKeyLine(br)
+		if err != nil {
+			return err
+		}
+		out.Key = &key
+		return nil
+	default:
+		return fmt.Errorf("plan push: bad magic %q", strings.TrimSpace(magic))
 	}
+}
 
+// readPushBlobsPhase reads the blobs line and, for "blobs 1", extracts the
+// blobs section under planDir (recorded in out.PlanDir).
+func readPushBlobsPhase(br *bufio.Reader, planDir string, out *PushPayload) error {
 	blobsLine, err := br.ReadString('\n')
 	if err != nil {
-		return nil, fmt.Errorf("plan push: blobs line: %w", err)
+		return fmt.Errorf("plan push: blobs line: %w", err)
 	}
 	blobsLine = strings.TrimSpace(blobsLine)
-	var out PushPayload
 	switch blobsLine {
 	case "blobs 0":
-		// no blob phase
+		return nil // no blob phase
 	case "blobs 1":
 		if planDir == "" {
-			return nil, fmt.Errorf("plan push: blobs present but no plan dir")
+			return fmt.Errorf("plan push: blobs present but no plan dir")
 		}
 		if err := readBlobsGzipTar(br, planDir); err != nil {
-			return nil, err
+			return err
 		}
 		out.PlanDir = planDir
+		return nil
 	default:
-		return nil, fmt.Errorf("plan push: unexpected blobs line %q", blobsLine)
+		return fmt.Errorf("plan push: unexpected blobs line %q", blobsLine)
 	}
+}
 
+// readPushPlanSection reads the plan marker and decodes the (normally
+// gzip-compressed) plan JSONL that follows it.
+func readPushPlanSection(br *bufio.Reader) ([]Op, error) {
 	planLine, err := br.ReadString('\n')
 	if err != nil {
 		return nil, fmt.Errorf("plan push: plan marker: %w", err)
@@ -200,15 +289,10 @@ func DecodePush(r io.Reader, planDir string) (*PushPayload, error) {
 	if err != nil {
 		return nil, err
 	}
-	ops, err := DecodePlanBytes(raw)
-	if err != nil {
-		return nil, err
-	}
-	out.Ops = ops
-	return &out, nil
+	return DecodePlanBytes(raw)
 }
 
-// PushHasBlobs reports whether data — an already fully-read GONF-PUSH/1
+// PushHasBlobs reports whether data — an already fully-read GONF-PUSH/1 or /2
 // frame, or bare JSONL, exactly as DecodePush itself would receive it as its
 // r argument — declares a blobs phase, using the same first-byte and
 // blobs-line checks DecodePush performs while streaming, without mutating or
@@ -226,11 +310,15 @@ func PushHasBlobs(data []byte) bool {
 	if len(data) == 0 || data[0] == '{' || data[0] == '\n' {
 		return false // bare JSONL (or empty): DecodePush never unpacks blobs for it
 	}
-	lines := bytes.SplitN(data, []byte("\n"), 3)
-	if len(lines) < 2 {
+	lines := bytes.SplitN(data, []byte("\n"), 4)
+	blobsIdx := 1
+	if strings.TrimSpace(string(lines[0])) == pushMagicV2 {
+		blobsIdx = 2 // a GONF-PUSH/2 frame's key line precedes its blobs line
+	}
+	if len(lines) <= blobsIdx {
 		return false
 	}
-	return strings.TrimSpace(string(lines[1])) == "blobs 1"
+	return strings.TrimSpace(string(lines[blobsIdx])) == "blobs 1"
 }
 
 func readGzipOrRaw(r io.Reader) ([]byte, error) {
