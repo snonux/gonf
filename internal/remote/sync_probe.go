@@ -292,11 +292,26 @@ func remoteGonfBin(t PushTarget) string {
 	return "gonf"
 }
 
+// probeUname detects the remote GOOS/GOARCH over one ssh round trip. It asks
+// for "uname -p" as well as "uname -m" because on NetBSD "uname -m" names the
+// port (machine), not the CPU: a Raspberry Pi 3 running NetBSD/evbarm-aarch64
+// reports "evbarm" for -m and "aarch64" for -p (found natively on pi0/pi1,
+// task y42). parseUname falls back to -p only when -m is not recognised, so
+// every host that worked before resolves exactly as before.
 func probeUname(ctx context.Context, t PushTarget) (goos, goarch string, err error) {
-	out, err := sshCapture(ctx, t, "uname -s; uname -m")
+	out, err := sshCapture(ctx, t, "uname -s; uname -m; uname -p 2>/dev/null || true")
 	if err != nil {
 		return "", "", fmt.Errorf("uname: %w", err)
 	}
+	return parseUname(out)
+}
+
+// parseUname maps the "uname -s; uname -m; uname -p" output lines to a
+// GOOS/GOARCH pair. The machine line (-m) wins; the processor line (-p) is
+// consulted only when -m is unknown (NetBSD's "evbarm", "evbmips", ...). A
+// missing -p line (an old caller or a uname that prints nothing for -p)
+// keeps the original -m-only behaviour and error.
+func parseUname(out string) (goos, goarch string, err error) {
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	if len(lines) < 2 {
 		return "", "", fmt.Errorf("uname: unexpected output %q", out)
@@ -306,10 +321,17 @@ func probeUname(ctx context.Context, t PushTarget) (goos, goarch string, err err
 		return "", "", err
 	}
 	goarch, err = mapUnameGOARCH(strings.TrimSpace(lines[1]))
-	if err != nil {
-		return "", "", err
+	if err == nil {
+		return goos, goarch, nil
 	}
-	return goos, goarch, nil
+	if len(lines) >= 3 {
+		if pArch, pErr := mapUnameGOARCH(strings.TrimSpace(lines[2])); pErr == nil {
+			return goos, pArch, nil
+		}
+		return "", "", fmt.Errorf("unsupported uname -m %q / uname -p %q (set Host WithGOARCH)",
+			strings.TrimSpace(lines[1]), strings.TrimSpace(lines[2]))
+	}
+	return "", "", err
 }
 
 func mapUnameGOOS(s string) (string, error) {

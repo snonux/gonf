@@ -39,6 +39,49 @@ func TestMapUname(t *testing.T) {
 	}
 }
 
+// TestParseUnameNativeOutputs pins parseUname against the exact
+// "uname -s; uname -m; uname -p" output captured on the real fleet (task
+// y42). NetBSD on a Raspberry Pi 3 reports its port name "evbarm" for -m;
+// before the -p fallback a plain "gonf push" to such a host failed with
+// `unsupported uname -m "evbarm"` before syncing gonf.
+func TestParseUnameNativeOutputs(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name, out, wantOS, wantArch string
+	}{
+		{"rocky-amd64", "Linux\nx86_64\nx86_64\n", "linux", "amd64"},
+		{"rocky-pi-arm64", "Linux\naarch64\naarch64\n", "linux", "arm64"},
+		{"linux-unknown-p", "Linux\nx86_64\nunknown\n", "linux", "amd64"},
+		{"freebsd-amd64", "FreeBSD\namd64\namd64\n", "freebsd", "amd64"},
+		{"openbsd-amd64", "OpenBSD\namd64\namd64\n", "openbsd", "amd64"},
+		{"netbsd-evbarm-aarch64", "NetBSD\nevbarm\naarch64\n", "netbsd", "arm64"},
+		{"two-lines-still-work", "OpenBSD\namd64\n", "openbsd", "amd64"},
+	}
+	for _, tc := range cases {
+		goos, goarch, err := parseUname(tc.out)
+		if err != nil || goos != tc.wantOS || goarch != tc.wantArch {
+			t.Errorf("%s: parseUname(%q) = %q, %q, %v; want %q, %q", tc.name, tc.out, goos, goarch, err, tc.wantOS, tc.wantArch)
+		}
+	}
+}
+
+// An unknown -m with an unknown -p still fails, naming both values, and an
+// unknown -m without a -p line keeps the original -m-only error.
+func TestParseUnameUnsupported(t *testing.T) {
+	t.Parallel()
+	_, _, err := parseUname("NetBSD\nevbarm\nearmv7hf\n")
+	if err == nil || !strings.Contains(err.Error(), `"evbarm"`) || !strings.Contains(err.Error(), `"earmv7hf"`) {
+		t.Fatalf("evbarm/earmv7hf: err = %v, want both values named", err)
+	}
+	_, _, err = parseUname("NetBSD\nevbarm\n")
+	if err == nil || !strings.Contains(err.Error(), `unsupported uname -m "evbarm"`) {
+		t.Fatalf("evbarm without -p: err = %v", err)
+	}
+	if _, _, err = parseUname("NetBSD\n"); err == nil {
+		t.Fatal("one line: want error")
+	}
+}
+
 func TestRemoteInstallCmdPrivilege(t *testing.T) {
 	t.Parallel()
 	if plan.CurrentVersion < 1 {
