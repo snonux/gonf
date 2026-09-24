@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"testing"
@@ -241,7 +242,7 @@ func TestValuesFlushPointSelfOverlappingAboveBoundStallsRatherThanLeak(t *testin
 // unsafe cut, but with nothing else added, that stall never ends for an
 // unbroken self-overlapping chain -- reintroducing, for this exact input
 // shape, the unbounded pending-buffer growth (and roughly quadratic rescan
-// cost, since matchSpans and protectedFormSpans rescan the whole, still-growing
+// cost, since matchSpans and protectedSpans rescan the whole, still-growing
 // buffer on every call that makes no progress) task mb2 fixed. This pins the
 // fix's boundary precisely: one byte short of flushStallCap the escape hatch
 // still stalls exactly as before (never guessing at an unsafe cut), but at
@@ -249,24 +250,15 @@ func TestValuesFlushPointSelfOverlappingAboveBoundStallsRatherThanLeak(t *testin
 //
 // With only ONE tracked form (10 bytes, period 2, self-overlapping), the
 // cap forces progress via longestKeepBackForForcedFlush (see FlushPoint):
-// it retains exactly the longest proper prefix of "x1x1x1x1x1" that is
-// also a suffix of the buffer -- 8 bytes here (see
-// TestLongestPrefixSuffixOverlap's "periodic self-overlap" case for the
-// same computation pinned directly), not the full 10, because parity
-// breaks the 9-byte candidate. This is MORE than the bare minimum a
-// special-cased "nothing else is tracked, so nothing could be stranded"
-// argument would need (which would justify consuming everything, cut =
-// len(atCap)) -- deliberately: rounds 2 and 3 of this exact function both
-// broke by reasoning about SPANS and "is this the registry's single
-// longest form" as special cases; the byte-suffix computation used here
-// has no such special case at all, checking every tracked form's own
-// self-overlap uniformly regardless of how many other forms are
-// registered, which is what makes it correct across all of
-// TestValuesFlushPointHistoricalShapesBoundedAndLeakFree's shapes,
-// including the two-, three- and four-form ones where a "nothing else is
-// tracked" argument could never apply in the first place. See
-// TestValuesFlushPointTwoSecretLeakRegression and
-// TestValuesFlushPointHistoricalShapesBoundedAndLeakFree for those.
+// the keep-back cut kMaxCut retains the longest proper prefix of
+// "x1x1x1x1x1" that is also a suffix of the buffer, 8 bytes here (parity
+// breaks the 9-byte candidate). Those 8 bytes are also the tail of the
+// complete occurrence ending the buffer, so cutting there would forward
+// them raw once the line ends. Before task tg2 this test pinned exactly
+// that cut (sg2's driver exemption accepted splitting the driver);
+// resolveForcedFlushCut now retreats to the start of that last complete
+// occurrence, 2 bytes further back, so the retained tail is one whole
+// occurrence that Redact hides.
 func TestValuesFlushPointStallCapBoundary(t *testing.T) {
 	t.Parallel()
 	var v Values
@@ -287,13 +279,17 @@ func TestValuesFlushPointStallCapBoundary(t *testing.T) {
 		t.Fatalf("test setup: len(atCap) = %d, want %d", len(atCap), flushStallCap)
 	}
 	out, cut = v.FlushPoint(atCap)
-	wantKeepBack := longestPrefixSuffixOverlap(form, atCap)
-	wantCut := len(atCap) - wantKeepBack
-	if cut != wantCut {
-		t.Fatalf("FlushPoint(len=%d, exactly flushStallCap) consumed = %d, want %d (len(atCap) - the longest proper prefix of %q that is also a suffix of atCap, %d bytes)", len(atCap), cut, wantCut, form, wantKeepBack)
+	if wantKeepBack := longestPrefixSuffixOverlap(form, atCap); wantKeepBack != 8 {
+		t.Fatalf("test setup: keep-back = %d, want 8", wantKeepBack)
+	}
+	if wantCut := len(atCap) - len(form); cut != wantCut {
+		t.Fatalf("FlushPoint(len=%d, exactly flushStallCap) consumed = %d, want %d (the start of the last complete occurrence of %q)", len(atCap), cut, wantCut, form)
 	}
 	if out != Redacted {
 		t.Fatalf("FlushPoint at the cap = %q, want the single opaque marker %q", out, Redacted)
+	}
+	if red := v.Redact(atCap[cut:]); red != Redacted {
+		t.Fatalf("Redact(retained tail %q) = %q, want %q: a split occurrence leaked", atCap[cut:], red, Redacted)
 	}
 }
 
@@ -716,8 +712,8 @@ func simulateRelay(v *Values, data []byte, chunk int) (forwarded string, maxPend
 
 // TestValuesFlushPointHistoricalShapesBoundedAndLeakFree is a permanent,
 // consolidated regression test for every shape FlushPoint's escape hatch has
-// broken on across its five rounds of fixes so far (mb2, 3d2, rd2, le2,
-// 1g2). It drives each shape through simulateRelay (the same
+// broken on across its rounds of fixes so far (mb2, 3d2, rd2, le2, 1g2,
+// sg2, tg2). It drives each shape through simulateRelay (the same
 // Write/forwardSafePrefix/Close loop a real relay uses) at four sizes
 // spanning well below and well past flushStallCap, and checks BOTH
 // invariants this one function must hold AT ONCE, in one place, per task
@@ -921,6 +917,30 @@ func TestValuesFlushPointHistoricalShapesBoundedAndLeakFree(t *testing.T) {
 			},
 			leaked: func(forwarded string) bool {
 				return strings.Contains(strings.ReplaceAll(forwarded, Redacted, ""), "ZZZZ")
+			},
+		},
+		{
+			// task tg2: the driver "RMNOP"+"RMNOP" plus two nested forms,
+			// "MNOP" and "PRMN", whose occurrences tile the driver's unit
+			// between them, so no gap-free cut exists anywhere. h is a
+			// proper-prefix form matching the stream's last 12 bytes
+			// whenever a buffer ends at a unit boundary, retreating the
+			// forced cut by 12 bytes into the tiling. Before tg2, the
+			// relay forwarded a split "MNOP"'s raw "O" (and a split
+			// driver's "R"). The stream is whole units, so every byte lies
+			// inside a driver occurrence: any raw letter is a leak.
+			name: "nested-forms-tile-driver-unit",
+			build: func(total int) (*Values, []byte, []byte) {
+				v := &Values{}
+				unit := "RMNOP"
+				v.Add([]byte(unit + unit))
+				v.Add([]byte("MNOP"))
+				v.Add([]byte("PRMN"))
+				v.Add([]byte("OPRMNOPRMNOP" + "X"))
+				return v, []byte(strings.Repeat(unit, total/len(unit))), nil
+			},
+			leaked: func(forwarded string) bool {
+				return strings.ContainsAny(strings.ReplaceAll(forwarded, Redacted, ""), "RMNOP")
 			},
 		},
 	}
@@ -1202,8 +1222,10 @@ func TestValuesFlushPointForthFormFormingPrefixMidSpan(t *testing.T) {
 
 // TestValuesFlushPointDriverExemptionResolvesEmbeddedFormRegression is a
 // permanent regression test for task sg2 (task 1g2 round 5's own
-// documented residual, closed by the "self-healing driver exemption" fix
-// in resolveForcedFlushCut). It is an independent reconstruction of task
+// documented residual, first closed by sg2's "self-healing driver
+// exemption" in resolveForcedFlushCut, which task tg2 replaced with the
+// leak-free-cut search; the test keeps its sg2 name and pins the shape
+// under the new criterion). It is an independent reconstruction of task
 // sg2's "CONFIRMED REPRO 2 of 2" (the independent reviewer's construction),
 // built from the ask task's annotation text alone and verified against the
 // PRE-fix code before trusting it (see this task's own self-review): the
@@ -1428,4 +1450,196 @@ func TestLongestPrefixSuffixOverlapRandomized(t *testing.T) {
 			t.Fatalf("seed %d: longestPrefixSuffixOverlap(%q, %q) = %d, want %d (naive)", seed, form, s, got, want)
 		}
 	}
+}
+
+// TestValuesFlushPointNestedFormsTileDriverUnitRegression is the permanent
+// regression test for task tg2 (the residual task sg2's own review
+// documented): driver "RMNOP"+"RMNOP" with nested "MNOP" ([5k+1,5k+5)) and
+// "PRMN" ([5k+4,5k+8)) tiling its unit, so every cut splits some occurrence.
+// For every buffer phase and every keep-back an engineered proper-prefix
+// form h can force (k trailing bytes), the forced flush must retain no raw
+// byte: the buffer ends at a unit boundary, so every retained byte lies in
+// a driver occurrence and any letter left after Redact is a split fragment.
+// Phases 2 and 3 are left out: their leading "NO"/"O" belongs to no
+// occurrence, so the ordinary path flushes it instead of the escape hatch.
+// Before tg2, phases 1 and 4 leaked for 9 of the 13 keep-backs (e.g. k=8
+// retained "NOPRMNOP", whose "NO" survived Redact, and k=0 retained
+// "RMNOP", a split driver's raw "R"), and phase 0 consumed a single byte.
+// It also pins the retained tail below 2*longest (26 bytes, h being 13
+// long at k=12), the progress bound resolveForcedFlushCut proves.
+func TestValuesFlushPointNestedFormsTileDriverUnitRegression(t *testing.T) {
+	t.Parallel()
+	unit := "RMNOP"
+	for _, phase := range []int{0, 1, 4} {
+		for k := 0; k <= 12; k++ {
+			s := strings.Repeat(unit, 300000/len(unit)+2)[phase:]
+			v := &Values{}
+			v.Add([]byte(unit + unit))
+			v.Add([]byte("MNOP"))
+			v.Add([]byte("PRMN"))
+			if k > 0 {
+				v.Add([]byte(s[len(s)-k:] + "X"))
+			}
+			out, consumed := v.FlushPoint(s)
+			if out != Redacted || consumed <= 0 {
+				t.Fatalf("phase=%d k=%d: FlushPoint = (%q, %d), want a forced flush", phase, k, out, consumed)
+			}
+			tail := s[consumed:]
+			if red := strings.ReplaceAll(v.Redact(tail), Redacted, ""); strings.ContainsAny(red, unit) {
+				t.Errorf("phase=%d k=%d: retained tail %.30q redacts to %.30q: a split occurrence leaked", phase, k, tail, red)
+			}
+			if len(tail) >= 2*13 {
+				t.Errorf("phase=%d k=%d: retained %d bytes, want < 2*longest (26)", phase, k, len(tail))
+			}
+		}
+	}
+}
+
+// leakFreeCutViolation is the brute-force oracle for resolveForcedFlushCut's
+// criterion: it returns a retained byte p >= c that belongs to an
+// occurrence starting before c yet to no occurrence lying entirely in
+// [c, sLen), or -1 when there is none (c is leak-free).
+func leakFreeCutViolation(spans [][2]int, sLen, c int) int {
+	split := make([]bool, sLen)
+	covered := make([]bool, sLen)
+	for _, sp := range spans {
+		for p := max(sp[0], c); p < sp[1]; p++ {
+			if sp[0] < c {
+				split[p] = true
+			} else {
+				covered[p] = true
+			}
+		}
+	}
+	for p := c; p < sLen; p++ {
+		if split[p] && !covered[p] {
+			return p
+		}
+	}
+	return -1
+}
+
+// TestResolveForcedFlushCutLeakFreeRandomized checks resolveForcedFlushCut
+// against the brute-force oracle over many random dense buffers: periodic
+// text over a small alphabet with sparse mutations, one to four tracked
+// forms cut from it (so they nest, overlap and tile each other), and an
+// optional proper-prefix form of the buffer's own tail to move the
+// keep-back cut kMaxCut. Every result must be leak-free and lie in
+// (kMaxCut-longest, kMaxCut], the progress bound resolveForcedFlushCut's
+// doc proves.
+func TestResolveForcedFlushCutLeakFreeRandomized(t *testing.T) {
+	t.Parallel()
+	rng := rand.New(rand.NewPCG(20260924, 7))
+	for trial := range 4000 {
+		unit := randomText(rng, "ABC", 2+rng.IntN(6))
+		s := []byte(strings.Repeat(unit, 400/len(unit)+1)[:400])
+		for range rng.IntN(4) {
+			s[rng.IntN(len(s))] = "ABC"[rng.IntN(3)]
+		}
+		v := &Values{}
+		for range 1 + rng.IntN(4) {
+			n := 4 + rng.IntN(12)
+			at := rng.IntN(len(s) - n)
+			v.Add(s[at : at+n])
+		}
+		if rng.IntN(2) == 0 {
+			v.Add(append(append([]byte(nil), s[len(s)-1-rng.IntN(14):]...), 'Z'))
+		}
+		spans := v.protectedSpans(string(s))
+		longest := 0
+		for _, sp := range spans {
+			longest = max(longest, sp[1]-sp[0])
+		}
+		kMaxCut := len(s) - v.longestKeepBackForForcedFlush(string(s))
+		c := v.resolveForcedFlushCut(string(s), spans)
+		if c > kMaxCut || (c != kMaxCut && c <= kMaxCut-longest) {
+			t.Fatalf("trial %d: cut %d outside (kMaxCut-longest, kMaxCut] = (%d, %d]", trial, c, kMaxCut-longest, kMaxCut)
+		}
+		if p := leakFreeCutViolation(spans, len(s), c); p >= 0 {
+			t.Fatalf("trial %d: cut %d leaks byte %d of s=%q (spans %v)", trial, c, p, s, spans)
+		}
+	}
+}
+
+// randomText returns n bytes drawn uniformly from alphabet.
+func randomText(rng *rand.Rand, alphabet string, n int) string {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = alphabet[rng.IntN(len(alphabet))]
+	}
+	return string(b)
+}
+
+// TestValuesFlushPointTilingShapesRelayLeakFree is task tg2's adversarial
+// end-to-end check: forced-flush floods through simulateRelay whose tracked
+// forms tile a periodic unit between them without any one short form
+// covering it -- three nested forms, a tiling with no driver at all,
+// overlapping tilings of different lengths, and a driver plus a longer
+// form. What survives outside the Redacted markers must be a subsequence of
+// the stream's bytes that lie in no occurrence at all (uncoveredBytes; for
+// these whole-unit streams only a few bytes at the very start), so any
+// other surviving letter is a leak. Pending must stay within the
+// historical-shapes test's invariant-B bound.
+func TestValuesFlushPointTilingShapesRelayLeakFree(t *testing.T) {
+	t.Parallel()
+	shapes := []struct {
+		name, unit string
+		forms      []string
+	}{
+		{"three-nested-forms", "ABCDEFG", []string{"ABCDEFGABCDEFG", "BCDE", "EFGA", "GABC"}},
+		{"tiling-without-driver", "RMNOP", []string{"MNOP", "PRMN"}},
+		{"overlapping-tilings", "ABCDEFGH", []string{"BCDEF", "EFGHAB", "HABCD", "CDEFGHA"}},
+		{"driver-plus-longer-form", "RMNOP", []string{"RMNOPRMNOP", "MNOP", "PRMN", "NOPRMNOPRMNOPRM"}},
+	}
+	for _, sh := range shapes {
+		for _, chunk := range []int{32 << 10, 32771} {
+			v := &Values{}
+			stream := strings.Repeat(sh.unit, (1<<20)/len(sh.unit))
+			// A proper-prefix form matching the stream's own tail
+			// retreats every forced cut into the tiling.
+			forms := append([]string{stream[len(stream)-11:] + "z"}, sh.forms...)
+			longest := 0
+			for _, f := range forms {
+				v.Add([]byte(f))
+				longest = max(longest, len(f))
+			}
+			forwarded, maxPending := simulateRelay(v, []byte(stream), chunk)
+			raw := strings.ReplaceAll(forwarded, Redacted, "")
+			if free := uncoveredBytes(v, stream); !isSubsequence(raw, free) {
+				t.Fatalf("%s/chunk=%d: raw output %.40q is not a subsequence of the uncovered bytes %.40q: a fragment leaked", sh.name, chunk, raw, free)
+			}
+			if bound := flushStallCap + longest + chunk; maxPending > bound {
+				t.Fatalf("%s/chunk=%d: pending reached %d, want <= %d", sh.name, chunk, maxPending, bound)
+			}
+		}
+	}
+}
+
+// uncoveredBytes returns, in order, the bytes of s that lie in no occurrence
+// of any protected form: the only bytes a leak-free relay may forward raw.
+func uncoveredBytes(v *Values, s string) string {
+	covered := make([]bool, len(s))
+	for _, sp := range v.protectedSpans(s) {
+		for p := sp[0]; p < sp[1]; p++ {
+			covered[p] = true
+		}
+	}
+	var b strings.Builder
+	for p := range len(s) {
+		if !covered[p] {
+			b.WriteByte(s[p])
+		}
+	}
+	return b.String()
+}
+
+// isSubsequence reports whether sub can be obtained from s by deleting bytes.
+func isSubsequence(sub, s string) bool {
+	i := 0
+	for j := 0; i < len(sub) && j < len(s); j++ {
+		if sub[i] == s[j] {
+			i++
+		}
+	}
+	return i == len(sub)
 }

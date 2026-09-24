@@ -55,15 +55,14 @@ const MaxSplitGuard = 64 << 10
 // safe cut at all (protectedCrossing's crossed result, see FlushPoint):
 // once len(s) reaches this cap, FlushPoint stops waiting for a gap that a
 // sufficiently dense, self-overlapping chain of protected occurrences may
-// never produce, and instead forces progress by recomputing the keep-back
+// never produce, and instead forces progress: it recomputes the keep-back
 // directly from s's own trailing bytes (longestKeepBackForForcedFlush, see
 // FlushPoint's own doc) instead of trusting the naive len(s)-(longest-1)
-// figure or reasoning about matched spans at all. Pending after a capped
-// flush is therefore bounded by flushStallCap+longest at most (never more:
-// longestKeepBackForForcedFlush can only return a value up to longest-1,
-// the same margin the ordinary, non-stalled keep-back always allows) -- a
-// small, still-bounded increase over the cap alone, not the unbounded
-// growth task mb2 fixed.
+// figure, then retreats that cut to a leak-free one
+// (resolveForcedFlushCut). A capped flush retains fewer than
+// 2*MaxSplitGuard bytes (resolveForcedFlushCut proves the bound), so
+// pending peaks near the cap plus one write -- not the unbounded growth
+// task mb2 fixed.
 //
 // This restores the bounded-pending, roughly-linear-cost invariant task
 // mb2 established: without a cap, a caller such as logger.RedactingWriter
@@ -368,10 +367,12 @@ func (v *Values) redact(s string, strongOnly bool) string {
 // could still be the start of a not-yet-complete tracked form never is,
 // and above the cap the portion of the buffer beyond that recomputed
 // keep-back is treated as entirely secret material rather than left to
-// grow the buffer without bound; an
-// occurrence still crossing the final cut is left in the retained tail
-// exactly as the
-// ordinary, non-stalled path would leave it.
+// grow the buffer without bound. There the cut still splits some
+// occurrence (none can be avoided), so resolveForcedFlushCut retreats it to
+// a leak-free one: every byte of the retained tail that belongs to a split
+// occurrence is also covered by a complete occurrence inside that tail, so
+// a later Redact still hides it (task tg2; see that function for the
+// bounded-search proof).
 // Only when nothing protected crosses cut at all --
 // the crossing is caused solely by a form longer than MaxSplitGuard, which
 // the keep-back was never sized to protect in the first place (see below)
@@ -420,44 +421,7 @@ func (v *Values) FlushPoint(s string) (out string, consumed int) {
 		// or before run[1] for the same reason. Either branch below is
 		// therefore final; no further scan or backward step is needed.
 		if run[0] <= 0 && len(s) > MaxSplitGuard {
-			byForm := v.protectedFormSpans(s)
-			snap, crossed := protectedCrossing(flattenSorted(byForm), cut)
-			switch {
-			case snap > 0:
-				cut = snap
-			case crossed && len(s) < flushStallCap:
-				// Still short of the cap: keep waiting for a gap
-				// rather than guess (see flushStallCap's doc).
-				return "", 0
-			case crossed:
-				// Past the cap with no gap ever found: stop stalling,
-				// but do NOT simply consume the whole buffer (task
-				// 1g2 round 1: that used to set cut = len(s), which
-				// dropped the ordinary keep-back entirely and could
-				// strand an in-progress longer occurrence's swept
-				// prefix), do NOT just keep cut at its naive,
-				// unmodified value either (task 1g2 round 2: crossed
-				// == true means BY DEFINITION some occurrence
-				// straddles this exact cut, so returning it unchanged
-				// guarantees a split), and do NOT extend cut past
-				// whole matched SPANS based on their own text alone
-				// (task 1g2 round 3, extendPastResolvableOccurrences:
-				// found insufficient by an independent review before
-				// it ever shipped, because a DIFFERENT tracked form's
-				// forming prefix can start PARTWAY THROUGH a span
-				// that its own full text made look safe to resolve
-				// past). Recompute the keep-back directly from s's own
-				// trailing bytes instead of the naive longest-1 figure
-				// (longestKeepBackForForcedFlush, via
-				// resolveForcedFlushCut): task 1g2 round 5 / task sg2 found
-				// that the byte-suffix figure alone can still land inside a
-				// SEPARATE, already-complete occurrence of a DIFFERENT
-				// tracked form, so resolveForcedFlushCut retreats it further
-				// whenever a safe point exists (see that function's own doc
-				// for the full mechanism and proof sketch).
-				cut = v.resolveForcedFlushCut(s, byForm)
-			}
-			return Redacted, cut
+			return v.escapeHatchFlush(s, cut)
 		}
 		cut = run[0]
 		break
@@ -468,59 +432,102 @@ func (v *Values) FlushPoint(s string) (out string, consumed int) {
 	return v.Redact(s[:cut]), cut
 }
 
-// protectedFormSpans returns the occurrences of every tracked form no
-// longer than MaxSplitGuard in s, keyed by form: the ones FlushPoint's
-// keep-back is actually sized to protect (see FlushPoint's doc). It is a
-// deliberately separate, independent scan from matchSpans (some duplicated
-// work, not reused via a shared slice) rather than a filter applied after
-// the fact: matchSpans' result is sorted in place as a side effect of the
-// mergeSpans call FlushPoint already made on it, and a second,
-// differently-filtered view built by reordering or re-tagging that same
-// backing array would risk exactly the kind of subtle span/metadata desync
-// this file has already been burned by (see this function's own history).
-// A fresh, isolated scan has no such risk. Keyed by form rather than
-// flattened into one slice (as an earlier version of this function, then
-// named protectedSpans, returned) so FlushPoint's caller can pass the SAME
-// scan to both the ordinary protectedCrossing check (flattenSorted) and
-// resolveForcedFlushCut (which needs one form's occurrences in isolation,
-// to judge that form on its own rather than mixed into every other tracked
-// form's spans) without re-scanning s a second time for the same forms —
-// task sg2's own self-review found a second, independent per-form rescan
-// here measurably slower under `go test -race`, close enough to
-// TestValuesFlushPointHistoricalShapesBoundedAndLeakFree's own generous
-// deadline margin to flake past it.
-func (v *Values) protectedFormSpans(s string) map[string][][2]int {
-	spans := map[string][][2]int{}
-	for _, e := range v.snapshot() {
-		if !e.contained || len(e.form) > MaxSplitGuard {
-			continue
-		}
-		if occ := formOccurrences(e.form, s); len(occ) > 0 {
-			spans[e.form] = occ
-		}
+// escapeHatchFlush is FlushPoint's escape hatch, for a buffer longer than
+// MaxSplitGuard whose crossing merged run starts at 0 (see FlushPoint's doc):
+// cut is the ordinary keep-back cut, which that run crosses. It first looks
+// for a gap-free point at or before cut (protectedCrossing) and takes it
+// when one exists above 0. Without one it stalls (returns no progress) while
+// s is still short of flushStallCap, and past the cap it forces progress
+// through resolveForcedFlushCut. It must NOT simply consume the whole buffer
+// (task 1g2 round 1: cut = len(s) strands an in-progress longer occurrence's
+// swept prefix), keep the naive cut (round 2: crossed == true means some
+// occurrence straddles it by definition), or extend past whole matched
+// spans judged by their own text (round 3: a different form's forming
+// prefix can start partway through such a span). The flushed prefix is
+// always the single opaque Redacted marker: it is run material with nothing
+// legitimate ahead of it (see FlushPoint's doc).
+func (v *Values) escapeHatchFlush(s string, cut int) (out string, consumed int) {
+	spans := v.protectedSpans(s)
+	snap, crossed := protectedCrossing(spans, cut)
+	switch {
+	case snap > 0:
+		cut = snap
+	case crossed && len(s) < flushStallCap:
+		// Still short of the cap: keep waiting for a gap rather than
+		// guess (see flushStallCap's doc).
+		return "", 0
+	case crossed:
+		cut = v.resolveForcedFlushCut(s, spans)
 	}
-	return spans
+	if cut <= 0 {
+		// Unreachable past flushStallCap (resolveForcedFlushCut's doc
+		// proves cut > len(s)-2*MaxSplitGuard there); kept so a future
+		// change to the cap can only stall, never emit an empty flush.
+		return "", 0
+	}
+	return Redacted, cut
 }
 
-// flattenSorted unions every form's spans in byForm into one slice, sorted
-// by start as protectedCrossing requires (protectedFormSpans' doc explains
-// why the scan is kept keyed by form instead of flat in the first place).
-func flattenSorted(byForm map[string][][2]int) [][2]int {
-	var spans [][2]int
-	for _, occ := range byForm {
-		spans = append(spans, occ...)
+// protectedSpans returns the occurrences of every tracked, contained form no
+// longer than MaxSplitGuard in s, sorted by start: the ones FlushPoint's
+// keep-back is actually sized to protect (see FlushPoint's doc). It is a
+// deliberately separate, independent scan from matchSpans rather than a
+// filter applied to its result: matchSpans' slice is sorted in place as a
+// side effect of the mergeSpans call FlushPoint already made on it, and a
+// second, differently-filtered view built by reordering that same backing
+// array would risk a subtle span/metadata desync. The one sorted slice
+// serves both protectedCrossing and resolveForcedFlushCut, so s is scanned
+// once per escape-hatch call (task sg2 found a second per-form rescan
+// measurably slower under -race, close to the historical-shapes test's
+// deadline). Each form's occurrences already come out sorted, so they are
+// merged pairwise (mergeByStart, O(n log forms)) instead of re-sorted: task
+// tg2's profile showed the general sort as the largest single cost of a
+// dense escape-hatch call.
+func (v *Values) protectedSpans(s string) [][2]int {
+	var lists [][][2]int
+	for _, e := range v.snapshot() {
+		if e.contained && len(e.form) <= MaxSplitGuard {
+			if occ := formOccurrences(e.form, s); len(occ) > 0 {
+				lists = append(lists, occ)
+			}
+		}
 	}
-	slices.SortFunc(spans, func(a, b [2]int) int { return a[0] - b[0] })
-	return spans
+	for len(lists) > 1 {
+		merged := lists[:0:0]
+		for i := 0; i < len(lists); i += 2 {
+			if i+1 == len(lists) {
+				merged = append(merged, lists[i])
+			} else {
+				merged = append(merged, mergeByStart(lists[i], lists[i+1]))
+			}
+		}
+		lists = merged
+	}
+	if len(lists) == 0 {
+		return nil
+	}
+	return lists[0]
+}
+
+// mergeByStart merges two span lists that are each sorted by start into one
+// list sorted by start.
+func mergeByStart(a, b [][2]int) [][2]int {
+	out := make([][2]int, 0, len(a)+len(b))
+	for len(a) > 0 && len(b) > 0 {
+		if b[0][0] < a[0][0] {
+			out, b = append(out, b[0]), b[1:]
+		} else {
+			out, a = append(out, a[0]), a[1:]
+		}
+	}
+	return append(append(out, a...), b...)
 }
 
 // formOccurrences returns the byte ranges of every occurrence (overlaps
 // included) of form alone in s, in start order (the underlying Index scan
 // already produces them left to right). It is the one place that walks a
-// single form's occurrences, shared by protectedFormSpans and matchSpans
-// (each unions it over every tracked form) -- resolveForcedFlushCut reuses
-// protectedFormSpans' own per-form result directly rather than calling this
-// again, to judge each form in isolation without a second scan of s.
+// single form's occurrences, shared by protectedSpans and matchSpans (each
+// unions it over every tracked form).
 func formOccurrences(form, s string) [][2]int {
 	var spans [][2]int
 	for from := 0; from < len(s); {
@@ -535,9 +542,8 @@ func formOccurrences(form, s string) [][2]int {
 	return spans
 }
 
-// protectedCrossing scans spans (sorted by start, as flattenSorted or a
-// single form's own occurrences from protectedFormSpans provide them) and
-// returns the largest point at or before cut that no span reaches
+// protectedCrossing scans spans (sorted by start, as protectedSpans provides
+// them) and returns the largest point at or before cut that no span reaches
 // strictly across (snap; 0 when no such point exists beyond the trivially
 // safe start of s), and whether some span starts before cut and still ends
 // after it (crossed; false whenever a safe snap was found, including snap
@@ -568,7 +574,7 @@ func formOccurrences(form, s string) [][2]int {
 //
 // When FlushPoint returns "no progress" because no safe point exists at all
 // (see its doc), the caller's pending buffer keeps growing and
-// protectedFormSpans/protectedCrossing rescan it from scratch on every later
+// protectedSpans/protectedCrossing rescan it from scratch on every later
 // call, since nothing was ever forwarded to shrink it — cost proportional
 // to len(s), repeated on every still-unresolved call, so cost would grow
 // roughly with the square of how long a genuinely never-breaking chain
@@ -623,7 +629,7 @@ func protectedCrossing(spans [][2]int, cut int) (snap int, crossed bool) {
 // handled separately by the ordinary, non-forced path above). Keeping
 // back the LARGEST such k over every tracked form -- not just the
 // registry's single longest form, and not merely "past cut" spans found
-// by matchSpans/protectedFormSpans -- is what actually characterises the risk
+// by matchSpans/protectedSpans -- is what actually characterises the risk
 // this escape hatch must protect against: whether s's own trailing bytes,
 // wherever they start, could combine with bytes that have not arrived yet
 // to complete ANY tracked secret.
@@ -661,40 +667,17 @@ func protectedCrossing(spans [][2]int, cut int) (snap int, crossed bool) {
 // result, in O(len(form)) time per form -- bounded by MaxSplitGuard, and
 // by a small, fixed number of tracked forms, so this stays within the
 // same roughly-linear-per-call budget FlushPoint already spends on
-// protectedFormSpans/protectedCrossing for the very same call.
+// protectedSpans/protectedCrossing for the very same call.
 //
-// RESIDUAL, NARROWED (NOT CLOSED) BY resolveForcedFlushCut (task 1g2 round
-// 5 / task sg2): this function protects against a not-yet-complete
-// occurrence being stranded, but on its own it does NOT guarantee that
-// cut = len(s) - this result avoids splitting a SEPARATE, already-complete,
-// fully-visible occurrence of a DIFFERENT tracked form G that happens to
-// sit embedded within the same dense, gapless, self-overlapping chain that
-// forced this call at all (e.g. a periodic driver form C with no gaps
-// anywhere in its own coverage, a distinct tracked secret G nested at a
-// fixed phase inside C's own repeating unit, and a third, adversarially
-// constructed form H whose own proper prefix happens to exactly reproduce
-// s's actual trailing bytes for long enough to retreat cut into a PAST
-// occurrence of G). Ordinary protectedCrossing, run against every tracked
-// form's spans together, cannot resolve this either: when C's own coverage
-// genuinely has no gap anywhere, no cut position at all is simultaneously
-// safe from splitting G and bounded (retreating far enough to protect every
-// possible G strictly requires giving up on making any progress at all for
-// as long as the adversarial, perfectly periodic stream continues, i.e.
-// exactly the unbounded growth task mb2 and task le2 both fixed) --
-// PROVIDED protectedCrossing is asked to protect C too. The insight
-// resolveForcedFlushCut acts on is that it does not have to: C is exactly
-// the one form that can never be protected here no matter what, so
-// excusing it from the check (and it alone, judged form by form, not by
-// guessing which form is "the driver") lets protectedCrossing find G's own
-// natural gaps -- G's occurrences, considered on their own, are NOT
-// themselves gapless (a periodic driver's own repeat period is longer than
-// each nested form's length, e.g. G's own 4-byte occurrence leaves 1 byte
-// of C's 5-byte unit uncovered every cycle), so a cut can always retreat to
-// one of them without giving up boundedness. See resolveForcedFlushCut's
-// own doc for the mechanism (confirmed against both task sg2 repro
-// constructions, secret/values_test.go) and for the shape it still does not
-// close: several nested forms whose occurrences tile the driver's unit
-// between them, so no form is exempt yet their union has no gap either.
+// This function only keeps a not-yet-complete occurrence from being
+// stranded; on its own, cut = len(s) - this result can still split a
+// SEPARATE, already-complete occurrence inside the dense chain that forced
+// the call (task 1g2 round 5 / task sg2: a periodic driver with a form
+// nested at a fixed phase of its unit and an engineered proper-prefix form
+// retreating the cut into a past nested occurrence; task tg2: two nested
+// forms tiling the driver's unit so no gap-free cut exists at all).
+// resolveForcedFlushCut starts from that cut and retreats it to a leak-free
+// one; see its doc for the criterion and the bounded-search proof.
 func (v *Values) longestKeepBackForForcedFlush(s string) int {
 	kMax := 0
 	for _, e := range v.snapshot() {
@@ -708,89 +691,104 @@ func (v *Values) longestKeepBackForForcedFlush(s string) int {
 	return kMax
 }
 
-// resolveForcedFlushCut is the "self-healing driver exemption" fix for task
-// sg2 (task 1g2 round 5's documented residual, see
-// longestKeepBackForForcedFlush's own doc for the full history and proof
-// sketch). It starts from kMaxCut := len(s) -
-// longestKeepBackForForcedFlush(s), which already protects every tracked
-// form's own not-yet-visible completion, and additionally guards against
-// kMaxCut landing inside a SEPARATE, already-complete occurrence of a
-// DIFFERENT tracked form:
+// resolveForcedFlushCut returns the cut FlushPoint's escape hatch uses once
+// s has reached flushStallCap with no gap-free point anywhere (the protected
+// occurrences in spans, sorted by start, tile the whole region). It starts
+// from kMaxCut := len(s) - longestKeepBackForForcedFlush(s), which keeps
+// every not-yet-complete occurrence's visible start in the retained tail,
+// and retreats from there to the largest LEAK-FREE cut its search reaches.
 //
-//   - For every tracked form (no longer than MaxSplitGuard, as
-//     protectedFormSpans already restricts to), it judges that form ALONE against
-//     protectedCrossing, using ONLY that form's own occurrences and
-//     kMaxCut as the cut: snap == 0 && crossed == true means literally no
-//     point in [0, kMaxCut) clears even one occurrence of this form by
-//     itself -- it is a genuinely gapless, self-overlapping driver over the
-//     whole region (e.g. a periodic form C whose repeat period divides
-//     evenly, chaining every occurrence into the next with no byte ever
-//     left uncovered). No cut position can protect such a form without
-//     giving up bounded progress entirely (the same trade-off
-//     longestKeepBackForForcedFlush's doc already proves), so it is
-//     exempted from the check below -- and ONLY such a form: this is
-//     decided per form, independently, never by assuming "the longest
-//     form" or "the form that produced kMax" is the driver.
-//   - Every OTHER tracked form's occurrences are unioned (sorted by start,
-//     as protectedCrossing requires) and checked together with the same
-//     protectedCrossing frontier search FlushPoint already uses elsewhere:
-//     a form not exempted above is, by construction, not gapless on its
-//     own, so it has at least one real gap at or below kMaxCut (e.g. a
-//     form G nested at a fixed phase inside a driver's repeating unit
-//     leaves the rest of that unit uncovered every cycle) for
-//     protectedCrossing to snap back to -- exactly what task sg2's second
-//     repro construction needed: G's own occurrences are NOT gapless (a
-//     1-byte gap opens between consecutive ones), so this search retreats
-//     kMaxCut to the nearest such gap and G is never split.
+// No gap-free cut exists here, so the cut must split some occurrence; what
+// matters is only whether a raw byte of it can escape. The flushed prefix
+// [0, c) becomes one opaque Redacted marker, so only the retained tail
+// s[c:] can leak: a byte of it that belongs to an occurrence starting
+// before c (a straddler) but to no complete occurrence inside s[c:] would
+// be forwarded raw, because Redact never matches a partial occurrence (a
+// later occurrence might happen to cover it, but nothing guarantees one).
+// A byte that IS covered by a complete occurrence inside s[c:] is safe: the
+// retained tail is later either redacted whole (Close) or flushed again by
+// FlushPoint, whose ordinary path only cuts between merged runs and whose
+// escape hatch applies this same rule to the new buffer, so by induction
+// every byte of a split occurrence ends up redacted. A cut c is
+// therefore leak-free when the contiguous coverage of [c, ...) by complete
+// occurrences starting at or after c (coverFrom) reaches the farthest end of
+// any straddler (straddlerReach). This admits the cuts task sg2 documented
+// as missing (task tg2): driver "RMNOP"+"RMNOP" with nested "MNOP" and
+// "PRMN" tile the unit so that every cut splits something, but a cut at the
+// start of a driver occurrence is leak-free (that occurrence covers every
+// straddler's tail). It also retires sg2's per-form "gapless driver exemption", which
+// existed only because the old gap-free test could never protect a driver;
+// this test protects drivers like every other form.
 //
-// When that union search finds no safe point either (snap == 0: no single
-// form is individually gapless, yet their combined coverage has no shared
-// gap anywhere below kMaxCut), kMaxCut is used unchanged -- the same answer
-// this function replaces, so no regression, but NOT safe: KNOWN, STILL-OPEN
-// RESIDUAL (found by task sg2's own adversarial review). It needs no
-// engineered form at all, just two nested forms that together tile a
-// driver's unit: driver "RMNOP"+"RMNOP" with "MNOP" ([5k+1,5k+5)) and
-// "PRMN" ([5k+4,5k+8)) tracked leaves no point in the union that is not
-// strictly inside some occurrence, and for a buffer starting at phase 1 of
-// the unit, with a trailing proper-prefix form retaining 9 bytes, the cut
-// splits an "MNOP" and Redact of the retained tail leaves "NO" raw. Every cut
-// there splits some occurrence, so a clean cut does not exist, but a
-// leak-free one can: e.g. cutting at the START of a "PRMN" occurrence
-// strands only the split "MNOP"'s final "P", which is itself the first byte
-// of that complete, fully retained "PRMN" occurrence and so is still
-// redacted. A candidate criterion for a follow-up: pick the largest
-// occurrence start c <= kMaxCut such that every byte in [c, b) of each
-// occurrence [a, b) straddling c is covered by some complete occurrence
-// lying entirely in [c, len(s)). It is not implemented here; a naive search
-// is quadratic in the window, and bounding it soundly needs its own proof.
-// A small snap from this search (e.g. 1, when the union becomes gapless one
-// byte in) makes little progress on that call, but the retained buffer then
-// starts inside the gapless union, so the next forced call takes this
-// fallback and progresses: amortised pending stays bounded (measured at
-// flushStallCap+O(chunk) for 1 and 2 MiB of that shape).
-//
-// byForm is the SAME scan FlushPoint's caller already built
-// (protectedFormSpans) for the ordinary, pre-forced-flush protectedCrossing
-// check, passed in rather than re-scanned here: task sg2's own self-review
-// found that a second, independent per-form scan of s measurably slowed
-// this call under `go test -race` (see protectedFormSpans' own doc).
-func (v *Values) resolveForcedFlushCut(s string, byForm map[string][][2]int) int {
-	kMaxCut := len(s) - v.longestKeepBackForForcedFlush(s)
-	var nonExempt [][2]int
-	for _, spans := range byForm {
-		if snap, crossed := protectedCrossing(spans, kMaxCut); snap == 0 && crossed {
-			continue // Exempt: this form alone is a gapless driver here.
+// The search: while c is not leak-free, move c to the start of the
+// straddler with the farthest end, need(c). Why that is bounded and always
+// makes progress:
+//   - Each step moves to an occurrence O' that strictly contains the
+//     previous one, O: O' starts before c = start(O), and need(c) >
+//     coverFrom(c) >= end(O), because O itself starts at c. The first O
+//     already contains kMaxCut, so every O visited does too. Lengths strictly
+//     increase, so the search takes at most one step per distinct protected
+//     form length; each step inspects only occurrences starting within the
+//     longest protected form of c, found by binary search.
+//   - It always stops at a leak-free cut: if the visited O is at least as
+//     long as every straddler of its own start, each straddler [a, b) with a
+//     < c ends before a+len(O) <= c+len(O) = end(O), covered by O itself.
+//     Otherwise a longer straddler exists and the search takes one more
+//     step; the lengths cannot grow past the longest protected form.
+//   - The final c is kMaxCut itself or the start of an occurrence
+//     containing kMaxCut, so c > kMaxCut - longest, where longest is the
+//     longest protected occurrence in s. longestKeepBackForForcedFlush
+//     returns less than the longest form no longer than MaxSplitGuard, so
+//     the retained tail is shorter than kMax + longest < 2*MaxSplitGuard,
+//     and len(s) >= flushStallCap = 4*MaxSplitGuard makes c >
+//     2*MaxSplitGuard > 0. Every forced call therefore drains all but that
+//     bounded tail (invariant B). The cost is one binary search plus
+//     O(longest * forms) span visits per step, on top of the O(len(s))
+//     scan protectedSpans already did. And c strictly decreases, so the
+//     loop terminates even if this argument had a flaw.
+func (v *Values) resolveForcedFlushCut(s string, spans [][2]int) int {
+	longest := 0
+	for _, sp := range spans {
+		longest = max(longest, sp[1]-sp[0])
+	}
+	c := len(s) - v.longestKeepBackForForcedFlush(s)
+	for {
+		need, from := straddlerReach(spans, c, longest)
+		if need <= c || coverFrom(spans, c, need) >= need {
+			return c
 		}
-		nonExempt = append(nonExempt, spans...)
+		c = from
 	}
-	if len(nonExempt) == 0 {
-		return kMaxCut
+}
+
+// straddlerReach returns the farthest end (need) of any occurrence in spans
+// (sorted by start) that straddles c, i.e. [a, b) with a < c < b, and the
+// start (from) of the latest-starting straddler reaching that end; need is
+// c when nothing straddles c. A straddler is at most longest bytes long, so
+// only occurrences starting in (c-longest, c) are inspected.
+func straddlerReach(spans [][2]int, c, longest int) (need, from int) {
+	need, from = c, c
+	i, _ := slices.BinarySearchFunc(spans, c, func(sp [2]int, t int) int { return sp[0] - t })
+	for i--; i >= 0 && spans[i][0] > c-longest; i-- {
+		if spans[i][1] > need {
+			need, from = spans[i][1], spans[i][0]
+		}
 	}
-	slices.SortFunc(nonExempt, func(a, b [2]int) int { return a[0] - b[0] })
-	if snap, _ := protectedCrossing(nonExempt, kMaxCut); snap > 0 {
-		return snap
+	return need, from
+}
+
+// coverFrom returns how far the occurrences in spans (sorted by start) that
+// start at or after c cover [c, ...) without a hole, stopping early once
+// that reaches need: c itself when no occurrence starts at c. Occurrences
+// that merely touch ([x, y) then [y, z)) are contiguous, since the byte y
+// belongs to the second.
+func coverFrom(spans [][2]int, c, need int) int {
+	frontier := c
+	i, _ := slices.BinarySearchFunc(spans, c, func(sp [2]int, t int) int { return sp[0] - t })
+	for ; i < len(spans) && spans[i][0] <= frontier && frontier < need; i++ {
+		frontier = max(frontier, spans[i][1])
 	}
-	return kMaxCut
+	return frontier
 }
 
 // longestPrefixSuffixOverlap returns the length of the longest PROPER
