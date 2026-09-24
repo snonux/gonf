@@ -25,10 +25,10 @@ import (
 // there by one failing test would block every later test and -count
 // iteration. Tests that take the real lock through crontabLockLocation call
 // useTestLockDir for a directory of their own (the opt-in live tests,
-// GONF_RUN_CRON_TESTS=1, still use this shared root). (Ensure under a
-// testseam.FakeCrontab fake uses the in-process lock instead, unless
-// testseam.FakeCrontabLock(t, false) keeps the real one.) The lock directory itself does not exist yet: the lock code
-// creates it, exercising the production path.
+// GONF_RUN_CRON_TESTS=1, still use this shared root). (Ensure with an
+// injected *runners.CronRunners uses the in-process lock instead, unless
+// its CrossProcessLock keeps the real one.) The lock directory itself does
+// not exist yet: the lock code creates it, exercising the production path.
 func TestMain(m *testing.M) {
 	if os.Getenv(lockHelperEnv) == "1" {
 		configureLockHelperProcess()

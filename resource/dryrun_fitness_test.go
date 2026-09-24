@@ -685,7 +685,7 @@ func dryRunCmd(t *testing.T, tmp string) {
 
 func dryRunCron(t *testing.T, tmp string) {
 	var mutated bool
-	testseam.FakeCrontab(t, testseam.Crontab{
+	cr := &runners.CronRunners{
 		Read: func(name string, args ...string) (string, string, int, error) {
 			// crontab -l on an empty crontab: exit 0, empty stdout.
 			return "", "", 0, nil
@@ -694,9 +694,9 @@ func dryRunCron(t *testing.T, tmp string) {
 			mutated = true
 			return "", "", 0, nil
 		},
-	})
+	}
 	cron.Present("fit-job", opt.WithCommand("true"))
-	if err := api.Apply(); err != nil {
+	if err := testapply.ApplyWithRunners(&runners.Set{Cron: cr}); err != nil {
 		t.Fatal(err)
 	}
 	if mutated {

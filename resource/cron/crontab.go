@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"os/user"
 	"strings"
+
+	"github.com/snonux/gonf/internal/exec"
 )
 
 func crontabArgs(userName string, extra ...string) []string {
@@ -21,11 +23,11 @@ func crontabArgs(userName string, extra ...string) []string {
 	return append(args, extra...)
 }
 
-// readCrontab returns userName's crontab. A failure reports crontab's
+// readCrontab returns c's user's crontab. A failure reports crontab's
 // output sizes only (crontabFailure).
-func readCrontab(userName string) (string, error) {
-	args := crontabArgs(userName, "-l")
-	stdout, stderr, code, err := runCmd("crontab", args...)
+func (c *Cron) readCrontab() (string, error) {
+	args := crontabArgs(c.user, "-l")
+	stdout, stderr, code, err := c.runCrontabRead("crontab", args...)
 	if err != nil {
 		return "", fmt.Errorf("crontab %v: %w", args, err)
 	}
@@ -40,12 +42,12 @@ func readCrontab(userName string) (string, error) {
 	return stdout, nil
 }
 
-// writeCrontab replaces userName's crontab with content. A failure reports
+// writeCrontab replaces c's user's crontab with content. A failure reports
 // crontab's output sizes only (crontabFailure).
-func writeCrontab(userName, content string) error {
+func (c *Cron) writeCrontab(content string) error {
 	// crontab [-u USER] - reads from stdin on Linux/BSD.
-	args := crontabArgs(userName, "-")
-	stdout, stderr, code, err := runCmdWithStdin(content, "crontab", args...)
+	args := crontabArgs(c.user, "-")
+	stdout, stderr, code, err := c.runCrontabWrite(content, "crontab", args...)
 	if err != nil {
 		return fmt.Errorf("crontab %v: %w", args, err)
 	}
@@ -53,6 +55,24 @@ func writeCrontab(userName, content string) error {
 		return crontabFailure(args, code, stdout, stderr)
 	}
 	return nil
+}
+
+// runCrontabRead runs crontab -l: c.readFn when injected, else the real
+// internal/exec runner.
+func (c *Cron) runCrontabRead(name string, args ...string) (string, string, int, error) {
+	if c.readFn != nil {
+		return c.readFn(name, args...)
+	}
+	return exec.Run(name, args...)
+}
+
+// runCrontabWrite runs crontab - with stdin as the new table: c.writeFn
+// when injected, else the real internal/exec runner.
+func (c *Cron) runCrontabWrite(stdin, name string, args ...string) (string, string, int, error) {
+	if c.writeFn != nil {
+		return c.writeFn(stdin, name, args...)
+	}
+	return exec.RunWithStdin(stdin, name, args...)
 }
 
 // crontabFailure reports a crontab run that exited code with the sizes of

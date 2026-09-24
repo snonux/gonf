@@ -1,6 +1,6 @@
 // Package testseam holds the module-internal overrides that let this
-// module's tests fake the host commands resource backends run (crontab and
-// package-manager invocations) and the host's package-manager detection,
+// module's tests fake the host commands resource backends run
+// (package-manager invocations) and the host's package-manager detection,
 // for the resource kinds that have not yet migrated to internal/runners'
 // per-apply injection (see that package's doc comment, and AGENTS.md's
 // "Test seams" section) — task qb2 shrinks this package one migrated kind
@@ -10,10 +10,11 @@
 // (the "command" plan kind) migrated first, task qb2's first slice;
 // Command/RunOpts/FakeCommand/CommandFakes lived here until then. Task 4e2
 // migrated service, timer, daemon_reload and systemd_timer next, all
-// through resource/systemd's shared systemctl Client: the Crontab/
-// FakeCrontab/CrontabInProcessLock slots (resource/cron) and the Package/
-// FakePackageRunner/FakePackageManager slots (resource/pkg) remain here,
-// tracked by follow-up task(s) for cron and package.
+// through resource/systemd's shared systemctl Client. Task fg2 migrated
+// cron (its Crontab/FakeCrontab/FakeCrontabLock/CrontabInProcessLock slots
+// became runners.CronRunners, lock choice included): the Package/
+// FakePackageRunner/FakePackageManager slots (resource/pkg) remain here
+// until package migrates too.
 //
 // It replaces the exported *ForTest setters the resource packages used to
 // carry: being internal, it is importable only from inside this module, so
@@ -63,39 +64,14 @@ type Run func(name string, args ...string) (stdout, stderr string, exitCode int,
 // environment with a resource's values overlaid).
 type RunEnv func(env []string, name string, args ...string) (stdout, stderr string, exitCode int, err error)
 
-// RunStdin is the signature of internal/exec.RunWithStdin.
-type RunStdin func(stdin, name string, args ...string) (stdout, stderr string, exitCode int, err error)
-
 // Detect names a host manager ("dnf", "rcctl", "systemd", ...) or fails.
 type Detect func() (string, error)
-
-// Crontab fakes resource/cron's crontab(1) runners: Read runs crontab -l,
-// Write runs crontab - with the new table on stdin.
-type Crontab struct {
-	Read  Run
-	Write RunStdin
-}
 
 // Package fakes resource/pkg's package-manager runners: Run serves packages
 // without WithEnv, RunEnv packages with WithEnv.
 type Package struct {
 	Run    Run
 	RunEnv RunEnv
-}
-
-// crontabFake is the crontab slot's value: the fakes plus whether any
-// FakeCrontab layer is installed (which also selects the in-process lock
-// unless a FakeCrontabLock layer decides otherwise).
-type crontabFake struct {
-	Crontab
-	on bool
-}
-
-// lockChoice is the crontab-lock slot's value: whether a FakeCrontabLock
-// layer is installed and, if so, whether it asked for the in-process lock.
-type lockChoice struct {
-	set       bool
-	inProcess bool
 }
 
 // layer is one installed fake: update derives the slot's value from the
@@ -112,55 +88,9 @@ type slot[T any] struct {
 }
 
 var (
-	crontab        slot[crontabFake]
-	crontabLock    slot[lockChoice]
 	pkgRunners     slot[Package]
 	packageManager slot[Detect]
 )
-
-// FakeCrontab installs f's non-nil crontab runners for resource/cron until
-// c's cleanup (a nil field keeps the runner currently in effect). While any
-// crontab fake is installed, resource/cron takes an in-process crontab lock
-// instead of the cross-process one, unless FakeCrontabLock chose otherwise:
-// a faked crontab is not shared with other processes, and the real lock
-// would create state in the test user's home directory from every package
-// that fakes cron.
-func FakeCrontab(c Cleaner, f Crontab) {
-	crontab.push(c, func(cur crontabFake) crontabFake {
-		if f.Read != nil {
-			cur.Read = f.Read
-		}
-		if f.Write != nil {
-			cur.Write = f.Write
-		}
-		cur.on = true
-		return cur
-	})
-}
-
-// CrontabFakes returns the resource/cron fakes in effect (nil fields: real).
-func CrontabFakes() Crontab { return crontab.get().Crontab }
-
-// FakeCrontabLock decides, until c's cleanup, which lock resource/cron takes
-// for a crontab transaction: the in-process one (inProcess) or the real
-// cross-process one. resource/cron's own lock tests use it to keep the real
-// lock while the crontab runners are faked. Being its own slot, a later
-// FakeCrontab cannot silently change the choice.
-func FakeCrontabLock(c Cleaner, inProcess bool) {
-	crontabLock.push(c, func(lockChoice) lockChoice {
-		return lockChoice{set: true, inProcess: inProcess}
-	})
-}
-
-// CrontabInProcessLock reports whether resource/cron should take its
-// in-process lock: the FakeCrontabLock choice when one is installed,
-// otherwise whether any FakeCrontab is installed.
-func CrontabInProcessLock() bool {
-	if l := crontabLock.get(); l.set {
-		return l.inProcess
-	}
-	return crontab.get().on
-}
 
 // FakePackageRunner installs f's non-nil runners for resource/pkg until c's
 // cleanup; a nil field keeps the runner currently in effect for that slot.

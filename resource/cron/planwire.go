@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 	opt "github.com/snonux/gonf/resource/options"
@@ -47,8 +48,10 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 }
 
 // Apply installs or removes the named crontab entry, mirroring
-// resource/cron's own Present/Absent option handling.
-func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
+// resource/cron's own Present/Absent option handling. ctx.Runners.Cron,
+// when this apply had one injected (task fg2), fakes the crontab runners
+// for this apply only; nil (every production apply) uses the real ones.
+func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	if op.Name == "" {
 		return fmt.Errorf("cron: missing name")
 	}
@@ -108,5 +111,5 @@ func (planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	if op.Sensitive {
 		opts = append(opts, opt.WithSensitive)
 	}
-	return Ensure(op.Name, opts...)
+	return EnsureWith(runners.CronOf(ctx.Runners), op.Name, opts...)
 }

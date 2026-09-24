@@ -14,7 +14,6 @@ import (
 	"github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/runners"
-	"github.com/snonux/gonf/internal/testseam"
 	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -186,9 +185,10 @@ func TestE2ECronAndServicePlanApply(t *testing.T) {
 		plan.ResetRecord()
 	})
 
-	// Fake crontab: starts empty, stores what gonf writes.
+	// Fake crontab (injected with the systemctl runner below, task fg2):
+	// starts empty, stores what gonf writes.
 	tab := ""
-	testseam.FakeCrontab(t, testseam.Crontab{
+	cronR := &runners.CronRunners{
 		Read: func(name string, args ...string) (string, string, int, error) {
 			if name != "crontab" {
 				return "", "unexpected bin " + name, 1, nil
@@ -205,7 +205,7 @@ func TestE2ECronAndServicePlanApply(t *testing.T) {
 			tab = stdin
 			return "", "", 0, nil
 		},
-	})
+	}
 
 	// Fake systemctl (the systemd backend Service selects on this GOOS==
 	// linux-only test, task 4e2's runners.Set injection): service already
@@ -258,7 +258,7 @@ func TestE2ECronAndServicePlanApply(t *testing.T) {
 	}
 
 	facts := plan.Facts{GOOS: runtime.GOOS, Profile: "test", Hostname: "localhost"}
-	ctx := runners.WithSet(context.Background(), &runners.Set{Systemd: sysR})
+	ctx := runners.WithSet(context.Background(), &runners.Set{Systemd: sysR, Cron: cronR})
 	if err := plan.ApplyWithContext(ctx, decoded, facts, planDir); err != nil {
 		t.Fatalf("plan.Apply: %v", err)
 	}
@@ -511,15 +511,16 @@ func TestApplyCronRejectsMissingSchedule(t *testing.T) {
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "cron"},
 		{Op: plan.KindCron, Name: "zzjob", Absent: true, Payload: plan.CronPayload{CronUser: current.Username}},
 	}
-	testseam.FakeCrontab(t, testseam.Crontab{
+	noop := &runners.Set{Cron: &runners.CronRunners{
 		Read: func(name string, args ...string) (string, string, int, error) {
 			return "", "", 0, nil
 		},
 		Write: func(stdin string, name string, args ...string) (string, string, int, error) {
 			return "", "", 0, nil
 		},
-	})
-	if err := plan.Apply(absent, plan.Facts{GOOS: "linux"}, ""); err != nil {
+	}}
+	ctx := runners.WithSet(context.Background(), noop)
+	if err := plan.ApplyWithContext(ctx, absent, plan.Facts{GOOS: "linux"}, ""); err != nil {
 		t.Fatalf("absent cron without schedule must apply: %v", err)
 	}
 }

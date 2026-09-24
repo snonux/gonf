@@ -338,12 +338,21 @@ itself the accidental public test seam this section forbids. Task 3f2
 unexported it (`internal/testapply.ApplyWithRunners` already covered every
 caller outside `api`) rather than adding it to the allowed-seam list above.
 
-`resource/cmd` (the `command` plan kind, task qb2) and, as of task 4e2, the
+`resource/cmd` (the `command` plan kind, task qb2), as of task 4e2 the
 four kinds that funnel through `resource/systemd`'s shared systemctl client —
-`service`, `timer`, `daemon_reload` and `systemd_timer` — have migrated to
-this mechanism. `cron` and `package` remain on the older `internal/testseam`
-mechanism below, under open follow-up task(s): a known, in-progress
-migration, not an inconsistency to fix ad-hoc. `internal/runners.Set` gains
+`service`, `timer`, `daemon_reload` and `systemd_timer` — and, as of task
+fg2, `cron` have migrated to this mechanism. `package` remains on the older
+`internal/testseam` mechanism below until task fg2's package slice lands:
+a known, in-progress migration, not an inconsistency to fix ad-hoc.
+
+`cron` folds its lock strategy into the same injection instead of keeping
+a global lock seam: a non-nil `*runners.CronRunners` means the crontab is
+faked, so the transaction takes an in-process lock (a faked crontab is not
+shared with other processes, and the real flock would create state in the
+test user's home directory); `CrossProcessLock` keeps the real lock, which
+`resource/cron`'s own lock tests use with a private lock directory.
+`cron.EnsureWith` is exported, like `timer.EnsureWith`, because `api`'s
+option-fitness test compares a direct apply with a plan round trip. `internal/runners.Set` gains
 one field per kind (or, for the systemd-4 slice, one shared field) as it
 migrates (see that type's own doc comment).
 
@@ -370,7 +379,7 @@ carries a second, service-specific override, `*runners.ServiceRunners`
 instead of a process-global fake; its own `EnsureWith` takes both.
 
 A backend's host-command runner or host detector, for a kind not yet
-migrated to `internal/runners` (`cron`, `package`), is an unexported
+migrated to `internal/runners` (`package`), is an unexported
 function that consults the module-internal `internal/testseam` fake first
 and otherwise calls the real `internal/exec` runner or detector. Tests
 anywhere in the module install fakes with `testseam.Fake*(t, ...)`; each

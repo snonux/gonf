@@ -156,7 +156,8 @@ var inProcessCrontabLocks sync.Map
 
 // lockCrontabInProcess serialises crontab transactions within this process
 // only. acquireCrontabLock uses it while crontab itself is faked
-// (testseam.FakeCrontab), so tests keep the transaction's mutual exclusion
+// (a *runners.CronRunners injected without CrossProcessLock, see
+// Cron.acquireCrontabLock), so tests keep the transaction's mutual exclusion
 // without filesystem state.
 func lockCrontabInProcess(userName string) (func() error, error) {
 	value, _ := inProcessCrontabLocks.LoadOrStore(userName, &sync.Mutex{})

@@ -285,15 +285,14 @@ func TestPlanOptionFitness_Cron(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			directTab := c.seed
 			read, write := fakeCrontab(&directTab)
-			testseam.FakeCrontab(t, testseam.Crontab{Read: read, Write: write})
-			if err := cron.Ensure("optfit", c.opts...); err != nil {
+			if err := cron.EnsureWith(&runners.CronRunners{Read: read, Write: write}, "optfit", c.opts...); err != nil {
 				t.Fatalf("direct Ensure: %v", err)
 			}
 
 			planTab := c.seed
 			read2, write2 := fakeCrontab(&planTab)
-			testseam.FakeCrontab(t, testseam.Crontab{Read: read2, Write: write2})
-			recordApplyOption(t, "cron_opt_"+c.name, func() {
+			planRS := &runners.Set{Cron: &runners.CronRunners{Read: read2, Write: write2}}
+			recordApplyOptionWithRunners(t, "cron_opt_"+c.name, planRS, func() {
 				Cron("optfit", c.opts...)
 			})
 
@@ -314,15 +313,14 @@ func TestPlanOptionFitness_Cron(t *testing.T) {
 
 		directTab := seed
 		read, write := fakeCrontab(&directTab)
-		testseam.FakeCrontab(t, testseam.Crontab{Read: read, Write: write})
-		if err := cron.Ensure("optfit", opt.WithCronUser(current.Username), opt.IsAbsent); err != nil {
+		if err := cron.EnsureWith(&runners.CronRunners{Read: read, Write: write}, "optfit", opt.WithCronUser(current.Username), opt.IsAbsent); err != nil {
 			t.Fatalf("direct Ensure: %v", err)
 		}
 
 		planTab := seed
 		read2, write2 := fakeCrontab(&planTab)
-		testseam.FakeCrontab(t, testseam.Crontab{Read: read2, Write: write2})
-		recordApplyOption(t, "cron_opt_Absent", func() {
+		planRS := &runners.Set{Cron: &runners.CronRunners{Read: read2, Write: write2}}
+		recordApplyOptionWithRunners(t, "cron_opt_Absent", planRS, func() {
 			Cron("optfit", opt.WithCronUser(current.Username), opt.IsAbsent)
 		})
 

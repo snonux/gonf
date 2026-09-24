@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/snonux/gonf/internal/testseam"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
@@ -20,11 +20,11 @@ const fakeCronSecret = "fake-cron-token-3d9e"
 func TestCrontabFailureOutputIsWithheldForEveryJob(t *testing.T) {
 	for _, readFails := range []bool{true, false} {
 		for _, sensitive := range []bool{true, false} {
-			stubFailingCrontab(t, readFails)
+			rs := stubFailingCrontab(t, readFails)
 			op := plan.Op{Op: plan.KindCron, ID: "Cron[u/plain]", Name: "plain",
 				Command: "/bin/true", Sensitive: sensitive,
 				Payload: plan.CronPayload{CronUser: currentCronUser(t), Schedule: "5 * * * *"}}
-			err := planHandler{}.Apply(op, plan.ApplyContext{})
+			err := planHandler{}.Apply(op, plan.ApplyContext{Runners: rs})
 			if err == nil || !strings.Contains(err.Error(), "output withheld") || strings.Contains(err.Error(), fakeCronSecret) {
 				t.Fatalf("read fails=%v sensitive=%v: err = %v, want the withheld failure without the secret",
 					readFails, sensitive, err)
@@ -33,15 +33,16 @@ func TestCrontabFailureOutputIsWithheldForEveryJob(t *testing.T) {
 	}
 }
 
-// stubFailingCrontab fakes a crontab holding another job's secret-bearing
-// managed block, whose read (readFails) or write fails echoing the table.
-func stubFailingCrontab(t *testing.T, readFails bool) {
+// stubFailingCrontab returns a runners.Set faking a crontab holding another
+// job's secret-bearing managed block, whose read (readFails) or write fails
+// echoing the table.
+func stubFailingCrontab(t *testing.T, readFails bool) *runners.Set {
 	t.Helper()
 	resource.ResetForTest()
 	oldDry := resource.DryRun()
 	resource.SetDryRun(false)
 	table := beginMarker("upload") + "\n5 * * * * /bin/up " + fakeCronSecret + "\n# END GONF Cron[upload]\n"
-	testseam.FakeCrontab(t, testseam.Crontab{
+	cr := &runners.CronRunners{
 		Read: func(string, ...string) (string, string, int, error) {
 			if readFails {
 				return table, "crontab: bad line", 1, nil
@@ -51,9 +52,10 @@ func stubFailingCrontab(t *testing.T, readFails bool) {
 		Write: func(stdin string, _ string, _ ...string) (string, string, int, error) {
 			return "", "crontab: rejected " + stdin, 1, nil
 		},
-	})
+	}
 	t.Cleanup(func() {
 		resource.SetDryRun(oldDry)
 		resource.ResetForTest()
 	})
+	return &runners.Set{Cron: cr}
 }

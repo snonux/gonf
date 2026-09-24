@@ -65,25 +65,25 @@ func detectName(d Detect) string {
 // value and finally to none.
 func TestFakeMergesAndRestoresInOrder(t *testing.T) {
 	var outer, inner fakeCleaner
-	FakeCrontab(&outer, Crontab{Read: named("read-1")})
-	FakeCrontab(&inner, Crontab{Write: func(string, string, ...string) (string, string, int, error) {
-		return "write-2", "", 0, nil
+	FakePackageRunner(&outer, Package{Run: named("run-1")})
+	FakePackageRunner(&inner, Package{RunEnv: func([]string, string, ...string) (string, string, int, error) {
+		return "env-2", "", 0, nil
 	}})
 	if outer.env[ParallelGuardEnv] != "1" || inner.env[ParallelGuardEnv] != "1" {
 		t.Fatalf("Fake* did not set the parallel guard: %v %v", outer.env, inner.env)
 	}
-	if got := stdout(CrontabFakes().Read); got != "read-1" {
-		t.Fatalf("read after a Write-only fake = %q, want the kept read-1", got)
+	if got := stdout(PackageFakes().Run); got != "run-1" {
+		t.Fatalf("run after a RunEnv-only fake = %q, want the kept run-1", got)
 	}
-	if CrontabFakes().Write == nil {
-		t.Fatal("Write fake not installed")
+	if PackageFakes().RunEnv == nil {
+		t.Fatal("RunEnv fake not installed")
 	}
 	inner.run()
-	if CrontabFakes().Write != nil || stdout(CrontabFakes().Read) != "read-1" {
+	if PackageFakes().RunEnv != nil || stdout(PackageFakes().Run) != "run-1" {
 		t.Fatal("inner cleanup did not restore the outer fake")
 	}
 	outer.run()
-	if f := CrontabFakes(); f.Read != nil || f.Write != nil {
+	if f := PackageFakes(); f.Run != nil || f.RunEnv != nil {
 		t.Fatal("outer cleanup did not restore the real runners")
 	}
 }
@@ -131,33 +131,6 @@ func TestSingleSlotFakes(t *testing.T) {
 				t.Fatal("fake still in effect after cleanup")
 			}
 		})
-	}
-}
-
-// TestCrontabLockChoice: a crontab fake selects the in-process lock unless a
-// FakeCrontabLock layer chose the real one, and a later FakeCrontab cannot
-// override that choice.
-func TestCrontabLockChoice(t *testing.T) {
-	var c fakeCleaner
-	defer c.run()
-	if CrontabInProcessLock() {
-		t.Fatal("in-process lock chosen without any fake")
-	}
-	FakeCrontab(&c, Crontab{Read: named("tab")})
-	if f := CrontabFakes(); !CrontabInProcessLock() || stdout(f.Read) != "tab" || f.Write != nil {
-		t.Fatalf("after a Read fake: %+v, in-process %t", f, CrontabInProcessLock())
-	}
-	FakeCrontabLock(&c, false)
-	FakeCrontab(&c, Crontab{Write: func(string, string, ...string) (string, string, int, error) { return "", "", 0, nil }})
-	if CrontabInProcessLock() {
-		t.Fatal("a nested FakeCrontab turned the chosen real lock off")
-	}
-	if stdout(CrontabFakes().Read) != "tab" {
-		t.Fatal("the nested FakeCrontab lost the kept Read fake")
-	}
-	c.run()
-	if CrontabInProcessLock() || CrontabFakes().Read != nil {
-		t.Fatal("crontab still faked after cleanup")
 	}
 }
 

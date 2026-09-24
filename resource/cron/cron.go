@@ -7,9 +7,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/snonux/gonf/internal/exec"
 	"github.com/snonux/gonf/internal/logger"
-	"github.com/snonux/gonf/internal/testseam"
+	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
 	opt "github.com/snonux/gonf/resource/options"
@@ -64,11 +63,29 @@ type Cron struct {
 	month    string
 	weekday  string
 	env      []string
+	// readFn and writeFn are the injected overrides of the crontab -l and
+	// crontab - runners (see runCrontabRead/runCrontabWrite; nil: the real
+	// internal/exec ones), set by newCronWith from a *runners.CronRunners
+	// (task fg2, replacing internal/testseam's process-global FakeCrontab).
+	readFn  func(string, ...string) (string, string, int, error)
+	writeFn func(string, string, ...string) (string, string, int, error)
+	// inProcessLock selects lockCrontabInProcess over the real cross-process
+	// lock (acquireCrontabLock): set while the crontab is faked, unless the
+	// injected runners ask for the real lock (runners.CronRunners doc).
+	inProcessLock bool
 }
 
-// newCron builds a Cron with defaults applied, then applies opts. An option
-// misuse is left in its embed.Misuse for the caller to check.
+// newCron builds a Cron with defaults applied, then applies opts, using the
+// real crontab runners and lock. An option misuse is left in its
+// embed.Misuse for the caller to check.
 func newCron(name string, opts []opt.CronOption) *Cron {
+	return newCronWith(nil, name, opts)
+}
+
+// newCronWith is newCron with cr's runners injected (nil: the real ones):
+// the constructor EnsureWith, and so the cron plan.Handler, builds with
+// (task fg2, mirroring resource/cmd's newCmdWith).
+func newCronWith(cr *runners.CronRunners, name string, opts []opt.CronOption) *Cron {
 	c := &Cron{
 		name:     name,
 		user:     "root",
@@ -77,6 +94,11 @@ func newCron(name string, opts []opt.CronOption) *Cron {
 		monthday: "*",
 		month:    "*",
 		weekday:  "*",
+	}
+	if cr != nil {
+		c.readFn = cr.Read
+		c.writeFn = cr.Write
+		c.inProcessLock = !cr.CrossProcessLock
 	}
 	for _, o := range opts {
 		o.Apply(c)
@@ -130,7 +152,18 @@ func Present(name string, opts ...opt.CronOption) resource.Resource {
 // Ensure applies a cron job without registering it or recording a plan draft.
 // An option misuse is returned instead of applied around.
 func Ensure(name string, opts ...opt.CronOption) error {
-	c := newCron(name, opts)
+	return EnsureWith(nil, name, opts...)
+}
+
+// EnsureWith is Ensure with cr's crontab runners (nil: the real ones). The
+// plan handler applies through it with this apply's
+// plan.ApplyContext.Runners.Cron (task fg2). It is exported, unlike
+// resource/cmd's ensureWith, for the same reason as timer.EnsureWith: a
+// cross-package test (api's option-fitness test) compares a direct apply
+// against a plan round trip with a faked crontab. Only this module can
+// build a *runners.CronRunners, so an external caller can pass nil only.
+func EnsureWith(cr *runners.CronRunners, name string, opts ...opt.CronOption) error {
+	c := newCronWith(cr, name, opts)
 	if err := c.MisuseErr(); err != nil {
 		return err
 	}
@@ -192,7 +225,7 @@ func (c *Cron) apply() error {
 	// across the read/merge/write transaction so separate Gonf processes cannot
 	// discard each other's changes. lock.go documents where the lock lives and
 	// why a non-root apply for another account is refused here.
-	unlock, err := acquireCrontabLock(c.user)
+	unlock, err := c.acquireCrontabLock()
 	if err != nil {
 		return err
 	}
@@ -202,7 +235,7 @@ func (c *Cron) apply() error {
 }
 
 func (c *Cron) reconcile(id string) error {
-	current, err := readCrontab(c.user)
+	current, err := c.readCrontab()
 	if err != nil {
 		return err
 	}
@@ -222,7 +255,7 @@ func (c *Cron) reconcile(id string) error {
 
 	desc := fmt.Sprintf("update crontab for %s (job %s)", c.user, c.name)
 	return resource.Mutate(id, desc, func() error {
-		if err := writeCrontab(c.user, newTab); err != nil {
+		if err := c.writeCrontab(newTab); err != nil {
 			return err
 		}
 		logger.Info("updated crontab for %s (job %s)", c.user, c.name)
@@ -302,31 +335,13 @@ func (c *Cron) block() string {
 func beginMarker(name string) string { return beginMarkerPrefix + name + "]" }
 func endMarker(name string) string   { return endMarkerPrefix + name + "]" }
 
-// runCmd reads a crontab (crontab -l): the real runner, or the fake a test in
-// this module installed with internal/testseam.FakeCrontab.
-func runCmd(name string, args ...string) (string, string, int, error) {
-	if fake := testseam.CrontabFakes(); fake.Read != nil {
-		return fake.Read(name, args...)
+// acquireCrontabLock takes the write lock for c's crontab: the
+// cross-process lock (lock.go), or an in-process one (lockCrontabInProcess)
+// while c's crontab is faked and the injected runners did not ask for the
+// real lock (see runners.CronRunners).
+func (c *Cron) acquireCrontabLock() (func() error, error) {
+	if c.inProcessLock {
+		return lockCrontabInProcess(c.user)
 	}
-	return exec.Run(name, args...)
-}
-
-// runCmdWithStdin writes a crontab (crontab -, fed via stdin): the real
-// runner, or a testseam.FakeCrontab fake.
-func runCmdWithStdin(stdin, name string, args ...string) (string, string, int, error) {
-	if fake := testseam.CrontabFakes(); fake.Write != nil {
-		return fake.Write(stdin, name, args...)
-	}
-	return exec.RunWithStdin(stdin, name, args...)
-}
-
-// acquireCrontabLock takes the write lock for userName's crontab: the
-// cross-process lock (lock.go), or an in-process one (see
-// lockCrontabInProcess) while testseam.CrontabInProcessLock says so: a
-// FakeCrontab fake is installed and no FakeCrontabLock chose the real lock.
-func acquireCrontabLock(userName string) (func() error, error) {
-	if testseam.CrontabInProcessLock() {
-		return lockCrontabInProcess(userName)
-	}
-	return lockCrontab(userName)
+	return lockCrontab(c.user)
 }
