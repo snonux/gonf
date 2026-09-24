@@ -4,6 +4,14 @@ Date: 2026-09-20. Status: investigation and proposal. The P0 baseline is
 recorded below; it authorizes neither implementation nor deployment. Later
 work packages remain separately scoped.
 
+Status update (2026-09-24, closure gate `662`): tasks `b52`–`z52`,
+`062`–`562` and the native verification `y42` are completed. conf `v42`
+retired Rex in conf (see "Rex retirement status" below). One part of P9 is
+still open: conf task `ze2`, which wires a real foostore mapping and runs the
+equality and recovery exercise, is waiting for vault-access authorization.
+The findings and work packages below keep their original wording as the
+review record, and short status notes mark what has changed since.
+
 ## Recommendation
 
 Keep the existing Go DSL and its small primitives. Simplify the repeated
@@ -102,6 +110,10 @@ is a design correction: until `e52` is implemented, the current direct-file
 writers described above will remain in place and will not satisfy this
 contract. The statements below describe the future publisher, not current
 behaviour.
+
+Status (2026-09-24): `e52` has implemented this contract (gonf `decce48`,
+conf `c3b7780`). `y42` then forced a failover and a failback on the real
+frontends and verified both.
 
 #### DNS publication and SOA contract
 
@@ -359,7 +371,7 @@ relayd (task t52, conf 7ec3015), `User` `WithManageHome` (task s52, conf
 | Install existing systemd units/drop-ins, reload once, activate selected units | Core `SystemdUnits` composition; reuse `SystemdTimer` for generated simple timers | Next |
 | Create local users/groups; opt into updating specific existing attributes | Extend core User deliberately; add standalone Group only with an explicit group-only use case | Next |
 | `/etc/login.conf.d` installation plus database rebuild | Small BSD login-class resource with real platform behavior checked | Next |
-| Config lines in shared rc/profile/daily files | Core keyed/block editing where exact-line edits are insufficient; explicit ownership, not whole-file replacement. Status (r52): `WithKeyedLine(key, line)` (plan schema 23, declared on demand); shipped in gonf v0.16.0, conf adoption for the frontend PKG_PATH line is now unblocked | Next |
+| Config lines in shared rc/profile/daily files | Core keyed/block editing where exact-line edits are insufficient; explicit ownership, not whole-file replacement. Status (r52): `WithKeyedLine(key, line)` (plan schema 23, declared on demand); shipped in gonf v0.16.0, and conf adopted it for the frontend PKG_PATH line in conf `8d12a97` | Next |
 | Per-host typed data inside destination guards | API helper, e.g. `ForHosts[T](key, fn)` using current cluster inventory | Next |
 | Secrets from an external store | Provider interface plus sensitive references/content handling; foostore adapter outside recipe bodies | Parallel prerequisite track |
 | Zone publication and serial lifecycle | Frontend publisher wrapper; optional non-owning DNS-zone helper | `d52` contract; `e52` implementation |
@@ -598,8 +610,14 @@ passes only logical names in argv, classifies exit codes into the typed
 kinds, never quotes foostore output, runs without terminal/stdin/inherited
 environment, kills its process group on timeout or cancellation, and is
 wrapped in `secret.Snapshot` for one read per reference and invocation; see
-`docs/secrets.md`. Consumer cutover (P9) and durable plan encryption (a
-separate design) remain open.
+`docs/secrets.md`. Status (2026-09-24): durable plan encryption was designed
+separately (`w82`, [plan-encryption.md](plan-encryption.md)). Sealed plans
+shipped in v0.17.0. The `gonf plan -sign` and `gonf plan-verify` commands
+(tasks `7g2` and `8g2`) are on main but not released yet. The P9 cutover has
+its mechanism in place (`262`: `secret.NewFallback` and conf's written
+cutover policy). Wiring the real foostore mapping in conf and running the
+equality and recovery exercise is conf task `ze2`, which is waiting for
+vault-access authorization.
 
 Configure a provider once at the consumer composition root. Use a small
 context-aware resolver contract returning bytes and typed errors. Integrate
@@ -649,7 +667,14 @@ Handle the complete lifecycle:
 
 ## Rex retirement status and closure plan
 
-**No, the repositories are not fully cleaned up.**
+Status (2026-09-24): **the conf Rex retirement is done.** After `y42`'s native
+verification, conf `v42` removed the four Rexfiles below and the ported Perl
+templates (conf `e4c8334`, `13e3026`). conf `4h2` then removed the last Rex
+mentions from host-deployed files. dotfiles' `pkg_fedora` still installs the
+`Rex` package. [conf-rex-gaps.md](conf-rex-gaps.md) has the current record.
+The rest of this section is the review-time snapshot and is kept as history.
+
+At review time (2026-09-20): **No, the repositories are not fully cleaned up.**
 
 | Current tracked Rexfile | Disposition |
 | --- | --- |
@@ -801,6 +826,10 @@ validation follows from this evidence. The disposable workspace, plans, and
 synthetic files are removed after verification.
 
 ## Proposed implementation sequence (not started)
+
+Status (2026-09-24): P0–P8, P10 and P11 are done, through the tasks in the
+register below. P9 is done except for the vault cutover, conf `ze2` (see
+"Gonf side" above). The heading keeps its review-time wording.
 
 Every work package below inherits this mandatory compatibility gate:
 **all existing gonf tests and all existing gonf clients in both dotfiles and conf
