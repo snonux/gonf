@@ -83,3 +83,35 @@ func TestReportKeepsExistingLocation(t *testing.T) {
 		t.Fatalf("location %q, want the original %q", Location(First()), Location(got))
 	}
 }
+
+// TestTakeFirstReturnsClearsAndKeepsSink pins TakeFirst's contract (tasks
+// tf2/kg2): it returns exactly the sticky first error and clears it, returns
+// nil when nothing is pending, and never touches an installed sink — a
+// report after a TakeFirst inside a Capture still reaches the sink, not the
+// sticky slot.
+func TestTakeFirstReturnsClearsAndKeepsSink(t *testing.T) {
+	reset(t)
+	if err := TakeFirst(); err != nil {
+		t.Fatalf("TakeFirst() with nothing pending = %v, want nil", err)
+	}
+	Reportf("sticky")
+	if err := TakeFirst(); err == nil || err.Error() != "sticky" {
+		t.Fatalf("TakeFirst() = %v, want the sticky report", err)
+	}
+	if err := First(); err != nil {
+		t.Fatalf("First() after TakeFirst = %v, want nil", err)
+	}
+	var captured []error
+	restore := Capture(func(err error) { captured = append(captured, err) })
+	defer restore()
+	if err := TakeFirst(); err != nil {
+		t.Fatalf("TakeFirst() while capturing = %v, want nil", err)
+	}
+	Reportf("after take")
+	if len(captured) != 1 || captured[0].Error() != "after take" {
+		t.Fatalf("captured = %v, want the report after TakeFirst still routed to the sink", captured)
+	}
+	if err := First(); err != nil {
+		t.Fatalf("First() = %v, want nil: the sink must still swallow reports", err)
+	}
+}

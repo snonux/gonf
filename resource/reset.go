@@ -8,7 +8,7 @@ import "github.com/snonux/gonf/internal/declerr"
 // (internal/declerr.Reset) that DSL misuse reported, which every resource
 // constructor feeds. It calls declerr.Reset directly rather than going
 // through ResetDeclarationError: since task tf2, ResetDeclarationError only
-// clears the sticky first error (internal/declerr.ResetFirst), deliberately
+// clears the sticky first error (internal/declerr.TakeFirst), deliberately
 // leaving an active recording's capture sink alone — exactly the opposite of
 // what a between-tests wipe needs, since no test should leave a stale sink
 // installed for the next one to capture into by accident. ResetRepository,

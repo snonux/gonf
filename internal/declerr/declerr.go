@@ -113,7 +113,8 @@ func Reportf(format string, args ...any) {
 
 // First returns the first declaration error reported while no sink was
 // installed, or nil. It stays set for the life of the process (a broken
-// registration does not heal); tests clear it with Reset.
+// registration does not heal) until explicitly cleared: tests clear it with
+// Reset, a library embedder with resource.ResetDeclarationError (TakeFirst).
 func First() error {
 	mu.Lock()
 	defer mu.Unlock()
@@ -142,9 +143,9 @@ func Capture(fn func(error)) (restore func()) {
 // calls it directly for its full between-tests wipe, and must not run
 // concurrently with a recording. resource.ResetDeclarationError (task oe2's
 // production-safe escape hatch) used to call this too, but task tf2 moved it
-// onto ResetFirst instead — see ResetFirst's doc comment for why clearing
-// the sink as a side effect of that call was a real bug, not just an
-// over-broad reset.
+// onto a first-only clear (TakeFirst since task kg2) — see TakeFirst's doc
+// comment for why clearing the sink as a side effect of that call was a
+// real bug, not just an over-broad reset.
 func Reset() {
 	mu.Lock()
 	defer mu.Unlock()
@@ -152,46 +153,59 @@ func Reset() {
 	sink = nil
 }
 
-// ResetFirst clears only the sticky first error, leaving any installed sink
-// (Capture) completely untouched. resource.ResetDeclarationError (task oe2's
-// escape hatch) calls this instead of the broader Reset, specifically so it
-// can never tear down an active RecordPlanTo recording's capture sink.
+// TakeFirst atomically returns the sticky first error and clears it, under
+// ONE acquisition of mu, leaving any installed sink (Capture) completely
+// untouched. It returns nil when nothing was pending.
+// resource.ResetDeclarationError (task oe2's escape hatch) is exactly this
+// call.
 //
-// Before task tf2, ResetDeclarationError called Reset, which clears both
-// first AND sink unconditionally — including sink when a recording is
-// currently capturing into it (api/plan.go's enterRecordMode installs
+// Why one acquisition (task kg2): ResetDeclarationError used to read First()
+// and then clear the slot through a separate ResetFirst() call. mu was
+// released in between, so a Report landing in that window was cleared
+// without ever being returned — silently defeating task vf2's contract that
+// the caller sees everything it discards. The single-goroutine DSL
+// invariant made that window unreachable in practice, but the swap costs
+// nothing and makes "returned == cleared" hold by construction
+// (resource.TestResetDeclarationErrorNeverLosesConcurrentReport pins it).
+//
+// Why never the sink (task tf2): ResetDeclarationError once called Reset,
+// which clears both first AND sink — including the sink a recording is
+// currently capturing into (api/plan.go's enterRecordMode installs
 // declerr.Capture(stashBodyError) for the duration of RecordPlanTo). A task
 // body that defensively called resource.ResetDeclarationError() mid-recording
-// (its own doc comment warns this is meant for the direct-apply path, not
-// mid-recording, but nothing enforced that) silently cleared the sink too:
-// every declaration error reported by the REST of that same body — e.g. a
-// MustSecret call placed right after the reset — then missed the recording
-// session's capture entirely and went to the process-wide sticky first slot
-// instead. At the time, nothing re-checked First() after a record completed
-// (api/plan.go's RecordPlanTo checked it only before), so the record
-// finished as if nothing had failed: a File built from that failed
-// MustSecret's empty return value was written to disk with an empty secret,
-// and RecordPlanTo/Run returned nil. ResetFirst fixes ONE route to this at
-// the root by never touching sink: a later report inside the same recording
-// body still reaches stashBodyError and correctly fails the record, exactly
-// as it would have without the ResetDeclarationError() call in between.
+// silently cleared the sink too: every declaration error reported by the
+// REST of that same body — e.g. a MustSecret call placed right after the
+// reset — then missed the recording session's capture entirely and went to
+// the process-wide sticky first slot instead. At the time, nothing
+// re-checked First() after a record completed, so the record finished as if
+// nothing had failed: a File built from that failed MustSecret's empty
+// return value was written to disk with an empty secret, and
+// RecordPlanTo/Run returned nil. Leaving sink alone fixes that route at the
+// root: a later report inside the same recording body still reaches
+// stashBodyError and correctly fails the record, exactly as it would have
+// without the ResetDeclarationError() call in between. While a sink is
+// installed, Report never sets first, so a mid-recording TakeFirst returns
+// only a sticky error left over from before the recording started (which
+// RecordPlanTo refuses to start on, so in practice nil).
 //
 // tf2 did not close the whole class, though: resource.ResetForTest (by
 // design — it must wipe the sink for its own, legitimate between-tests use)
 // still calls the broader Reset, which nils an active recording's sink the
-// same way, and a task body that (mis-)uses it mid-recording instead of
-// ResetDeclarationError reaches the identical silent-empty-secret outcome.
-// Task hg2 closed the class structurally at the other end instead of
-// patching that route too: api/plan.go's RecordPlanTo now re-checks First()
-// once more right after recordPlanBody returns a nil error, and fails the
-// record with whatever landed there in the meantime — catching a lost sink
-// regardless of which reset call (or future code path with the same effect)
-// caused it. ApplyChunksContext still runs no such check of its own; it
-// does not need one; see api/plan.go's RecordPlanTo for why.
-func ResetFirst() {
+// same way, and a task body that (mis-)uses it mid-recording reaches the
+// identical silent-empty-secret outcome. Task hg2 closed the class
+// structurally at the other end instead: api/plan.go's RecordPlanTo
+// re-checks First() once more right after recordPlanBody returns a nil
+// error, and fails the record with whatever landed there in the meantime —
+// catching a lost sink regardless of which reset call (or future code path
+// with the same effect) caused it. ApplyChunksContext still runs no such
+// check of its own; it does not need one; see api/plan.go's RecordPlanTo
+// for why.
+func TakeFirst() error {
 	mu.Lock()
 	defer mu.Unlock()
+	err := first
 	first = nil
+	return err
 }
 
 // Location returns the recipe location recorded with err, or "" when err is

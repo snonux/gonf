@@ -290,9 +290,9 @@ func RecordPlanTo(planID string, store plan.BlobStore, taskNames ...string) ([]p
 		// resource built from the failed call's inert zero-value return
 		// (e.g. a File whose content embeds an empty MustSecret result) was
 		// recorded and later applied as if nothing had gone wrong — see
-		// ResetFirst's doc comment (internal/declerr) for the exact,
+		// TakeFirst's doc comment (internal/declerr) for the exact,
 		// reproduced shape of this bug (task hg2), building on tf2's
-		// narrower ResetFirst fix, which closed one specific route
+		// narrower first-only clear, which closed one specific route
 		// (ResetDeclarationError) into it. Re-checking here instead closes
 		// the whole class regardless of how the sink was lost — a
 		// structural fix rather than chasing each future route one at a

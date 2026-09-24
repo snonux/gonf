@@ -20,8 +20,8 @@ import (
 // of RecordPlanTo):
 //
 //   - tf2 closed ONE route (resource.ResetDeclarationError called mid-
-//     recording) by giving it a narrower ResetFirst that never touches the
-//     sink. resource.ResetForTest, by design, still calls the broader
+//     recording) by giving it a narrower first-only clear that never
+//     touches the sink (internal/declerr.TakeFirst since task kg2). resource.ResetForTest, by design, still calls the broader
 //     internal/declerr.Reset (it must wipe the sink for its own, legitimate
 //     between-tests use) — so a task body that mis-calls ResetForTest instead
 //     of ResetDeclarationError mid-recording reaches the identical outcome:

@@ -198,8 +198,9 @@ inventory and resources is a declaration error (`internal/declerr`):
   WAS missing (and what oe2 added) is a production-safe way out for a
   library embedder that does keep reusing the process after fixing the
   recipe that caused a declaration error: `resource.ResetDeclarationError`
-  clears only the sticky `declerr` first-error slot (`internal/declerr.
-  ResetFirst`, task tf2 — see below), unlike the test-only
+  clears only the sticky `declerr` first-error slot and returns what it
+  cleared, in one atomic swap (`internal/declerr.TakeFirst`, tasks tf2/kg2
+  — see below), unlike the test-only
   `resource.ResetForTest`, which also wipes the registered repository, its
   drafts, the apply report, dry-run, AND the `declerr` capture sink
   (`internal/declerr.Reset`).
@@ -218,8 +219,11 @@ inventory and resources is a declaration error (`internal/declerr`):
   before recording started), so the record finished as if nothing had
   failed, silently writing a credentials file with an empty secret and
   returning a nil error. Fixed by giving `internal/declerr` a narrower
-  `ResetFirst` that clears only the sticky first error and never the sink;
-  `ResetDeclarationError` now calls that instead, and `resource.ResetForTest`
+  first-only clear that never touches the sink (now `TakeFirst`, which
+  task kg2 made a single locked swap so a report racing the call cannot be
+  cleared without being returned); `ResetDeclarationError` is exactly that
+  call (mid-recording it returns nil and a later report still fails the
+  record), and `resource.ResetForTest`
   calls the broader `declerr.Reset` directly (it still needs the full wipe
   between tests). tf2 closed only THIS route into the sink, though:
   `resource.ResetForTest` still calls the broader `declerr.Reset` by design,

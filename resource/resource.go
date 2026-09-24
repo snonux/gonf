@@ -114,18 +114,25 @@ func Refuse(type_, name string, err error) Resource {
 // production-safe, single-purpose equivalent (task oe2): a library embedder
 // that confirmed the underlying recipe issue is fixed calls this to keep
 // applying in the same process, without discarding anything else it does
-// not need to. It clears only the sticky first error (internal/declerr.
-// ResetFirst, task tf2) and never the capture sink an active RecordPlanTo
-// recording installs, so calling it mid-recording cannot cause a later
-// report in the same task body to miss that recording's capture and land
-// back on the sticky slot instead — see ResetFirst's own doc comment for the
-// silent-empty-secret-written bug that shape used to cause. Even so, this
-// function's documented, supported use is the direct-apply path, not while
-// a recording is active; a caller that must clear it mid-recording anyway
-// should also confirm no report happens between the call and the body's
-// return, since a report the sink would have caught is still visible only
-// through the returned error below, not automatically retried against the
-// recording.
+// not need to. It is exactly one internal/declerr.TakeFirst call: it
+// returns and clears the sticky first error under a single lock
+// acquisition (task kg2), and never touches the capture sink an active
+// RecordPlanTo recording installs (task tf2).
+//
+// Its documented, supported use is the direct-apply path, between records.
+// Called mid-recording anyway it is harmless: while a recording's sink is
+// installed, declerr never sets the sticky slot (every report goes to the
+// sink), and RecordPlanTo refuses to start while one is already pending,
+// so the call returns nil and clears nothing. Because the sink stays in
+// place, a LATER report in the same task body is still captured and fails
+// the record normally, exactly as without the call —
+// api.TestResetDeclarationErrorMidRecordingDoesNotSwallowLaterFailure pins
+// that (see TakeFirst's doc comment for the silent-empty-secret bug the
+// earlier sink-clearing version caused). The one exception is a body that
+// has ALREADY lost the sink some other way (a mis-called ResetForTest): a
+// report then lands on the sticky slot, and a later call here returns and
+// clears it, so a body that discards the result also hides it from
+// RecordPlanTo's post-record re-check (task hg2). Never ignore the result.
 //
 // ResetDeclarationError returns the error it discarded (task vf2), or nil
 // when nothing was pending, so a caller that clears it must look at what it
@@ -170,12 +177,18 @@ func Refuse(type_, name string, err error) Resource {
 // "Registration-time contract" and api.Apply's own doc comment for the same
 // warning.
 //
-// Like every other repository primitive this is single-goroutine: call it
-// only while no registration, recording, or apply is in flight.
+// Unlike the repository primitives, this one is safe to call concurrently
+// with declerr reports: the read and the clear are one atomic swap
+// (declerr.TakeFirst), so whatever it clears is exactly what it returns. It
+// used to be First() followed by a separate ResetFirst(), releasing
+// declerr's lock in between, so a report landing in that window was cleared
+// without being returned (task kg2,
+// TestResetDeclarationErrorNeverLosesConcurrentReport). Registration itself
+// stays single-goroutine (see resource/repository.go); the atomicity only
+// removes a check-then-act window that the returned-error contract above
+// must not depend on that invariant for.
 func ResetDeclarationError() error {
-	err := declerr.First()
-	declerr.ResetFirst()
-	return err
+	return declerr.TakeFirst()
 }
 
 // String returns the resource's ID.

@@ -23,8 +23,9 @@ import (
 //     failed MustSecret) missed it and landed on the process-wide sticky slot
 //     instead — nothing re-checks that slot once a record completes, so the
 //     record finished as if nothing had failed, silently writing a
-//     credentials file with an empty secret. Fixed with internal/declerr.
-//     ResetFirst, which clears only the sticky first error.
+//     credentials file with an empty secret. Fixed with a first-only clear
+//     that never touches the sink (internal/declerr.TakeFirst since task
+//     kg2, which also makes the read-and-clear one atomic swap).
 //   - vf2 (MEDIUM): ResetDeclarationError could not tell a safe-to-clear
 //     declaration error (a resource-ID collision) from an unsafe one (a
 //     failed MustSecret/OptionalSecret/ResolveSecret lookup, whose resource
