@@ -358,3 +358,25 @@ func TestSignVerifyErrorsNameNoKeyMaterial(t *testing.T) {
 		}
 	}
 }
+
+// TestLooksSigned pins the sniff gonf apply runs first (task 8g2): every
+// envelope version is "signed" (and so goes to Verify, never to another
+// path), anything else is not.
+func TestLooksSigned(t *testing.T) {
+	for in, want := range map[string]bool{
+		SignedPlanMagic + "\n": true,
+		"GONF-SIGNED-PLAN/2":   true,
+		"GONF-SIGNED-PLAN/":    true,
+		"GONF-SIGNED-PLAN":     false,
+		ageHeaderLine:          false,
+		`{"op":"plan"}`:        false,
+		"":                     false,
+	} {
+		if got := LooksSigned([]byte(in)); got != want {
+			t.Errorf("LooksSigned(%q) = %v, want %v", in, got, want)
+		}
+	}
+	if SignedSniffLen != len("GONF-SIGNED-PLAN/") {
+		t.Fatalf("SignedSniffLen = %d", SignedSniffLen)
+	}
+}

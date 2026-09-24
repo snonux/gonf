@@ -1,17 +1,20 @@
 # Signed plan artifacts (design, task 7b2)
 
 Status: **accepted (user approval 2026-09-24); phases signing-1 (task
-`6g2`) and signing-2 (task `7g2`) implemented, later phases open.**
+`6g2`), signing-2 (task `7g2`) and signing-3 (task `8g2`) implemented,
+later phases open.**
 `plan/seal` has `Sign`/`SignAt`, `Verify`, `LoadSigner`,
 `LoadTrustedSigners`, `GenerateSigner`/`WriteSignerFile` and the
 `GONF-SIGNED-PLAN/1` envelope (with its signed `signed-at` time), and the
 CLI can make a signer key (`gonf plan-signer-keygen`) and sign what it
-seals (`gonf plan -seal -sign`). The exact formats the implementation
-picked for the points this design left open are in "As landed (task
-`6g2`)" and "As landed (task `7g2`)" at the end of "Recommended design".
-Nothing in gonf verifies a signed plan yet (`gonf apply` is task `8g2`),
-and nothing here lifts plan-encryption.md's gate (see "The unblocking
-condition"). The follow-up tasks are listed in the last section.
+seals (`gonf plan -seal -sign`), and `gonf apply` verifies a signed plan
+before decrypting it (`-trusted-signers`, `-require-signed`,
+`-max-signed-age`), with `gonf plan-verify` for the emergency path. The
+exact choices the implementation made for the points this design left
+open are in the "As landed" sections for `6g2`, `7g2` and `8g2` at the end
+of "Recommended design". Nothing here lifts plan-encryption.md's gate: no
+unattended entry point exists yet (see "The unblocking condition"). The
+follow-up tasks are listed in the last section.
 
 **Relationship to plan-encryption.md.** That design (task `w82`, phases
 `0b2`-`3b2` implemented and merged) gives sealed plans (`plan.age`)
@@ -388,7 +391,9 @@ that checks the signature and writes the unwrapped `plan.age` bytes back
 out, after which the original emergency path works unchanged. This is new
 surface the implementation phase must add; it is called out here so
 accepting this design means accepting that small addition too, not
-discovering it midway through `3b2`'s signing successor.
+discovering it midway through `3b2`'s signing successor. As landed (task
+`8g2`) it is its own subcommand, `gonf plan-verify`, rather than a `gonf
+plan` flag, because `gonf plan`'s positional arguments are task names.
 
 ### The unblocking condition
 
@@ -522,7 +527,7 @@ for the shared file hardening), with the choices this design left open:
 
 ### As landed (task `7g2`, phase signing-2)
 
-The signing half of the CLI, with no verifying side yet (task `8g2`):
+The signing half of the CLI (its verifying side is task `8g2`, below):
 
 - **Keygen.** `gonf plan-signer-keygen <signer-file>` generates a key
   (`seal.GenerateSigner`, `crypto/rand`) and creates the file with
@@ -552,6 +557,68 @@ The signing half of the CLI, with no verifying side yet (task `8g2`):
   reproducible with `printf %s 'gonf-signer-ed25519 KEY' | sha256sum`. The
   wording is "signed", never "verified": nothing on the producing side
   checks anything.
+
+### As landed (task `8g2`, phase signing-3)
+
+The verifying half of the CLI (`internal/cli/apply_signed.go`,
+`plan_verify.go`), in front of the unchanged `3b2`/`be2` sealed path:
+
+```text
+gonf apply [-identity f]... [-trusted-signers f]... [-require-signed] [-max-signed-age 24h] <plan.age|->
+gonf plan-verify [-trusted-signers f]... [-max-signed-age 24h] <signed-plan|->   # bare plan.age to stdout
+gonf -signed-version                                                             # prints 1
+```
+
+- **Sniff.** The first bytes decide the path, signed first: a
+  `GONF-SIGNED-PLAN/` prefix of any version (`seal.LooksSigned`) is the
+  signed path, so an envelope this binary cannot verify (another version,
+  v0.17.0's undated `/1`) is refused as malformed instead of falling
+  through to another decoder; then `age-encryption.org/v1` (unsigned
+  sealed); anything else is plaintext. The stdin peek is 21 bytes, which
+  covers both magics.
+- **Signed path.** Load the trusted signers, `seal.Verify`, then the
+  freshness window, all before `age.Decrypt` and before any run directory
+  exists; the verified `plan.age` then goes through the existing sealed
+  path byte for byte. A signed stdin stream is read to EOF first, capped
+  at `maxSignedEnvelopeBytes` (the 512 MiB frame cap plus 1/1024 plus
+  1 MiB, room for age's overhead), since the signature covers every byte.
+  `-strict-preview` and `-apply-dir` are refused with a signed stream
+  (exit 2), as with a sealed one.
+- **A signed plan is always verified.** Without `-trusted-signers` the
+  non-root default `${XDG_CONFIG_HOME:-$HOME/.config}/gonf/trusted-signers`
+  is used, and root must pass `-trusted-signers` (the `-identity` rule).
+  A signature is never stripped unchecked, with or without
+  `-require-signed`: before this task a signed envelope was refused as
+  undecodable, so verifying it is no new refusal for anyone.
+- **`-require-signed`** refuses an unsigned `plan.age`, a `plan.jsonl`, a
+  push frame and bare JSONL (exit 1, `apply: -require-signed: <src> is
+  ...; nothing decrypted or applied`), from a stdin peek alone. Without
+  it, unsigned input behaves exactly as before; with only
+  `-trusted-signers`, an unsigned input is applied with a warning naming
+  `-require-signed`, since the design keeps an unsigned `plan.age` valid
+  for interactive apply.
+- **Freshness window.** Checked only after the signature verified, against
+  this host's clock: refused when `signed-at` is more than
+  `-max-signed-age` (default 24h, the top of "an hour to a day"; must be
+  positive) in the past, or more than 5 minutes (`signedClockSkew`, fixed,
+  Kerberos' default tolerance) in the future. Exactly `-max-signed-age` old
+  is accepted. A bad signature on a stale envelope is reported as a bad
+  signature, never as stale.
+- **Wording.** A refusal is `apply: <src>: signed plan refused: <reason>;
+  nothing decrypted or applied`, exit 1; reasons name paths, line numbers,
+  classes and the (non-secret) times, never key material or plaintext. Only
+  after both checks pass does stderr say `signature verified: trusted
+  signer gonf-signer-ed25519 <key> sha256:<16 hex> [(label)], signed <time>
+  (within -max-signed-age <d>)`; the summary line after it is the
+  unchanged `decrypted and applied ...`.
+- **`gonf plan-verify`** runs the same checks and, only when they pass,
+  writes the untouched `plan.age` to stdout (the report goes to stderr),
+  so `gonf plan-verify -trusted-signers f signed.age | age -d -i key | gonf
+  apply -` is the emergency path. It decrypts nothing and writes nothing
+  for a refused input.
+- **Not lifted.** `-require-signed` is only a flag an operator may pass;
+  no timer, cron or pull agent sets it. plan-encryption.md's gate stays
+  until signing phase 6 wires such an entry point (task `bg2`).
 
 ### Schema, versioning and remote skew
 
@@ -643,7 +710,7 @@ creation only, not approval to begin.
 |-------|---------|
 | signing-1 | `plan/seal` gains `Sign`/`Verify`, `LoadSigner`, `LoadTrustedSigners`, the `GONF-SIGNED-PLAN/1` envelope; tests for round trip, wrong signer, tampered ciphertext, unsigned input handling, and the same hardened-file probes `ce2` ran against the recipients file, run here against the trusted-signers file from day one. No CLI changes, mirroring `1b2`. |
 | signing-2 | `gonf plan -seal -sign <signer-identity>` CLI wiring; a `gonf plan-signer-keygen` convenience command; docs. Mirrors `2b2`. **Done (task `7g2`)**, together with the envelope's `signed-at` field. |
-| signing-3 | `gonf apply -trusted-signers ... [-require-signed]` CLI wiring, sniff-dispatch extension, the freshness-window check, `gonf -signed-version`; the `gonf plan -verify-only` unwrap helper for the emergency path. Mirrors `3b2`. This is the task the "unblocking condition" section's six checks land in, but landing it still does **not** by itself unblock any unattended path — no such path exists yet. |
+| signing-3 | `gonf apply -trusted-signers ... [-require-signed]` CLI wiring, sniff-dispatch extension, the freshness-window check, `gonf -signed-version`; the `gonf plan -verify-only` unwrap helper for the emergency path. Mirrors `3b2`. This is the task the "unblocking condition" section's six checks land in, but landing it still does **not** by itself unblock any unattended path — no such path exists yet. **Done (task `8g2`)**; the helper landed as `gonf plan-verify`. |
 | signing-4 (optional, needs a user decision) | Monotonic anti-replay counter (destination-side persistent state); this is the first piece of apply-affecting persistent state this feature area would add, so it is deliberately not bundled into signing-3. |
 | signing-5 (optional, needs a user decision) | Multi-signer/threshold trust (require N of M pinned signers); per-destination signer pinning via inventory (`WithPlanSigner`, mirroring `4b2`'s `WithPlanRecipient`) once `4b2` itself lands. |
 | signing-6 (optional, needs a user decision, and needs signing-3) | An actual unattended entry point (a documented timer unit / cron / pull-agent recipe) that sets `-require-signed` unconditionally and satisfies every item in "The unblocking condition" — the task that would finally lift plan-encryption.md's gate, for that one specific path, not as a side effect of any earlier phase. |

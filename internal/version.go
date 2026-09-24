@@ -19,3 +19,12 @@ const StrictPreviewVersion = 1
 // strict-preview transport behavior, either of which can change without
 // this one moving.
 const SealedVersion = 1
+
+// SignedVersion is the signed-plan envelope version this binary can verify
+// (`gonf apply -trusted-signers ...`, `gonf plan-verify`; task 8g2), printed
+// by `gonf -signed-version` next to -sealed-version. It is the N of the
+// GONF-SIGNED-PLAN/N magic plan/seal verifies (docs/plan-signing.md,
+// "Schema, versioning and remote skew"), independent of SealedVersion: the
+// envelope wraps the sealed artifact without changing it. A binary that
+// could verify several versions would print each, one per line.
+const SignedVersion = 1

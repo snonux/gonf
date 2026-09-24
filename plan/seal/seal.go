@@ -14,8 +14,9 @@
 // Sign/SignAt, Verify, LoadSigner, LoadTrustedSigners and
 // GenerateSigner/WriteSignerFile, with their own Signer and TrustedSigner
 // types, so crypto/ed25519 is likewise imported here only. The CLI signs
-// (`gonf plan -seal -sign`, `gonf plan-signer-keygen`, task 7g2) but does
-// not verify yet (task 8g2). All four key files the
+// (`gonf plan -seal -sign`, `gonf plan-signer-keygen`, task 7g2) and
+// verifies (`gonf apply -trusted-signers`, `gonf plan-verify`, task 8g2)
+// only through these. All four key files the
 // package reads (identity, recipients, signer and trusted-signers) share
 // one hardened-open policy (keyfile.go).
 //

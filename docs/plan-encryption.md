@@ -258,10 +258,14 @@ as **confidentiality only, never provenance**:
   a signing design exists and is implemented (task `7b2`: e.g. a
   stdlib `crypto/ed25519` signer key pinned per destination, verified before
   decryption). The design is [plan-signing.md](plan-signing.md) (accepted);
-  its library half, `plan/seal`'s `Sign`/`Verify`, landed in task `6g2`
-  with no CLI surface, and lifts nothing by itself: the gate lifts only for
-  a specific unattended entry point that meets every item of that
-  document's "The unblocking condition" (signing phase 6, task `bg2`).
+  its library half, `plan/seal`'s `Sign`/`Verify`, landed in task `6g2`,
+  signing in task `7g2` (`gonf plan -seal -sign`) and verification in task
+  `8g2` (`gonf apply -trusted-signers [-require-signed]`, which verifies a
+  signed plan and its freshness before decrypting it). None of that lifts
+  anything by itself: `-require-signed` is a flag an operator chooses, and
+  the gate lifts only for a specific unattended entry point that meets
+  every item of that document's "The unblocking condition" (signing phase
+  6, task `bg2`).
 
 ### Operator UX
 
@@ -280,6 +284,8 @@ gonf plan -seal -stdout frontends_goprecords | ssh rex@fishfinger doas gonf appl
 
 # emergency path without gonf's decryption (any age identity, plugins included)
 age -d -i key.txt out/plan.age | gonf apply -
+# ... for a signed plan.age (task 8g2): verify and unwrap it first
+gonf plan-verify -trusted-signers signers out/plan.age | age -d -i key.txt | gonf apply -
 ```
 
 | Command | Behaviour |
@@ -290,6 +296,7 @@ age -d -i key.txt out/plan.age | gonf apply -
 | `gonf plan -o dir` (no `-seal`) | unchanged (062 behaviour, plaintext + warning); the warning gains a hint `use -seal`. Whether `-seal` becomes the default for sensitive plans when a recipients file exists is a separate, user-approved decision (phase 3). |
 | `gonf apply [-identity f]… file` | sniffs the first line: `age-encryption.org/v1` means sealed, anything else is the existing JSONL path. The whole decrypted frame is decoded before anything is applied; the plan is then applied exactly like a plaintext plan file (`api.ApplyPlan`). |
 | `gonf apply [-identity f] -` | the same sniff on stdin (a sealed stream, a GONF-PUSH/1 frame, or bare JSONL). |
+| `gonf apply [-identity f]… [-trusted-signers f]… [-require-signed] [-max-signed-age d] <file\|->` (task 8g2) | a `GONF-SIGNED-PLAN/` first line is sniffed before the age header: the envelope is verified against the trusted-signers file and its `signed-at` checked against the window (default 24h back, 5 minutes ahead) before anything is decrypted; the verified `plan.age` then takes the row above unchanged. `-require-signed` refuses unsigned input. See [plan-signing.md](plan-signing.md) "As landed (task `8g2`)". |
 | `push`, `cluster`, `fleet`, `-preview` | unchanged: plans stay in memory and on SSH. |
 
 **Privilege: single process, as plain file apply.** `gonf apply <file>`

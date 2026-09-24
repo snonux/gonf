@@ -44,6 +44,7 @@ type cliOptions struct {
 	planVersion          bool
 	strictPreviewVersion bool
 	sealedVersion        bool
+	signedVersion        bool
 	list                 bool
 	profile              string
 	verbose              bool
@@ -64,13 +65,15 @@ var cleanupRemoteBuilds = remote.CleanupBuilds
 //	gonf -plan-version
 //	gonf -strict-preview-version
 //	gonf -sealed-version
+//	gonf -signed-version
 //	gonf -list
 //	gonf -profile=fedora
 //	gonf -verbose | -quiet
 //	gonf -dry-run | -n
 //	gonf plan [-o dir|-stdout [-with-secrets]|-redacted] [-seal [-recipient r]... [-recipients-file f] [-no-default-recipients] [-for host|cluster|fleet] [-sign signer-file]] [-id name] <task>...  # emit plan.jsonl (or stdout), or seal to plan.age (or plan-<host>.age per host with -for), signed with -sign
 //	gonf plan-signer-keygen <signer-file>             # create a plan signer key; prints its trusted-signers line
-//	gonf apply [-n] [-identity file]... <plan.jsonl|plan.age|->  # apply file/sealed file or stdin (GONF-PUSH/1, sealed, or bare JSONL)
+//	gonf plan-verify [-trusted-signers file]... <signed-plan|->  # verify a signed plan; write its bare plan.age to stdout
+//	gonf apply [-n] [-identity file]... [-trusted-signers file]... [-require-signed] <plan.jsonl|plan.age|->  # apply file/sealed/signed file or stdin (GONF-PUSH/1, sealed, signed, or bare JSONL)
 //	gonf <task> [task...]                            # RecordPlan + Apply locally
 func CLI() int {
 	// Registration-time misuse in the recipe's main (an empty Task name, a
@@ -214,6 +217,7 @@ func parseCLIFlags(program string, args []string) (cliOptions, error) {
 	planVersion := fs.Bool("plan-version", false, "Print plan schema version this binary can emit/apply")
 	strictPreviewVersion := fs.Bool("strict-preview-version", false, "Print strict remote preview capability version")
 	sealedVersion := fs.Bool("sealed-version", false, "Print sealed-plan (plan.age) capability version this binary can decrypt/apply")
+	signedVersion := fs.Bool("signed-version", false, "Print signed-plan (GONF-SIGNED-PLAN) envelope version(s) this binary can verify")
 	list := fs.Bool("list", false, "List registered tasks")
 	profile := fs.String("profile", "", "Override detected profile (fedora, rocky, ...)")
 	verbose := fs.Bool("verbose", false, "Debug logging")
@@ -233,6 +237,7 @@ func parseCLIFlags(program string, args []string) (cliOptions, error) {
 		planVersion:          *planVersion,
 		strictPreviewVersion: *strictPreviewVersion,
 		sealedVersion:        *sealedVersion,
+		signedVersion:        *signedVersion,
 		list:                 *list,
 		profile:              *profile,
 		verbose:              *verbose,
@@ -321,7 +326,7 @@ func runCLI(ctx context.Context, options cliOptions) int {
 
 // printVersionInfo prints the value of the first set informational flag
 // (-version, then -plan-version, then -strict-preview-version, then
-// -sealed-version) to stdout and reports whether one was set. Those flags
+// -sealed-version, then -signed-version) to stdout and reports whether one was set. Those flags
 // short-circuit everything else and always exit 0.
 func printVersionInfo(options cliOptions) bool {
 	switch {
@@ -333,6 +338,8 @@ func printVersionInfo(options cliOptions) bool {
 		fmt.Println(internal.StrictPreviewVersion)
 	case options.sealedVersion:
 		fmt.Println(internal.SealedVersion)
+	case options.signedVersion:
+		fmt.Println(internal.SignedVersion)
 	default:
 		return false
 	}
@@ -352,6 +359,8 @@ func runSubcommand(ctx context.Context, name string, args []string) (code int, o
 		return cliPlan(args), true
 	case "plan-signer-keygen":
 		return cliPlanSignerKeygen(args), true
+	case "plan-verify":
+		return cliPlanVerify(args), true
 	case "apply":
 		return cliApply(ctx, args), true
 	case "push":
@@ -661,7 +670,11 @@ func cliApply(ctx context.Context, args []string) int {
 	// to this call: see escalateDryRun.
 	defer escalateDryRun(f.dryRun || f.strictPreview)()
 	if len(rest) != 1 {
-		eprintln("usage: gonf apply [-n|-dry-run] [-strict-preview] [-apply-dir dir] [-identity file]... <plan.jsonl|plan.age|->")
+		eprintln("usage: " + applyUsage)
+		return 2
+	}
+	if msg := f.signing.conflict(); msg != "" {
+		eprintln("apply: " + msg)
 		return 2
 	}
 	if rest[0] == "-" {
@@ -675,7 +688,7 @@ func cliApply(ctx context.Context, args []string) int {
 				"stdin already carries the push payload")
 			return 2
 		}
-		return cliApplyStdin(ctx, f.applyDir, f.strictPreview, f.identityPaths)
+		return cliApplyStdin(ctx, f)
 	}
 	if f.cancelPipe {
 		var cancel context.CancelFunc
@@ -683,8 +696,13 @@ func cliApply(ctx context.Context, args []string) int {
 		defer cancel()
 		go watchCancelPipe(os.Stdin, cancel)
 	}
-	return cliApplyFile(ctx, rest[0], f.identityPaths)
+	return cliApplyFile(ctx, rest[0], f)
 }
+
+// applyUsage is `gonf apply`'s usage line, shared by cliApply's own refusal
+// and printUsage.
+const applyUsage = "gonf apply [-n|-dry-run|-strict-preview] [-apply-dir dir] [-identity file]... " +
+	"[-trusted-signers file]... [-require-signed] [-max-signed-age 24h] <plan.jsonl|plan.age|->"
 
 // applyFlags is cliApply's own "apply" subcommand flags, parsed by
 // parseApplyFlags. Grouping them here (task xd2) keeps cliApply itself
@@ -706,6 +724,11 @@ type applyFlags struct {
 	cancelPipe    bool
 	relayed       bool
 	identityPaths []string
+	// signing is the signed-plan policy (-trusted-signers, -require-signed,
+	// -max-signed-age; task 8g2, apply_signed.go). Like -identity it is a
+	// local-only flag set, not part of the producer/consumer wire contract:
+	// neither producer ever passes a signed plan.
+	signing *signingFlags
 }
 
 // parseApplyFlags parses cliApply's "apply" subcommand flags from args and
@@ -717,8 +740,9 @@ type applyFlags struct {
 // spelling "cancel-pipe"/"relayed" as its own literals (see
 // internal/applyproto's doc comment for the failure that let a one-sided
 // rename slip past the whole test suite). -identity (task 3b2, repeatable:
-// only used when the positional argument sniffs as a sealed plan.age) is
-// this function's own flag, not part of that shared contract.
+// only used when the positional argument sniffs as a sealed plan.age) and
+// the signing flags (task 8g2, registerSigningFlags) are this function's
+// own flags, not part of that shared contract.
 func parseApplyFlags(args []string) (applyFlags, []string, error) {
 	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -745,6 +769,7 @@ func parseApplyFlags(args []string) (applyFlags, []string, error) {
 		identityPaths = append(identityPaths, v)
 		return nil
 	})
+	signing := registerSigningFlags(fs, true)
 	if err := fs.Parse(args); err != nil {
 		return applyFlags{}, nil, err
 	}
@@ -755,6 +780,7 @@ func parseApplyFlags(args []string) (applyFlags, []string, error) {
 		cancelPipe:    *cancelPipe,
 		relayed:       *relayed,
 		identityPaths: identityPaths,
+		signing:       signing,
 	}, fs.Args(), nil
 }
 
@@ -873,28 +899,33 @@ func watchCancelPipe(r io.Reader, cancel context.CancelFunc) {
 
 // cliApplyFile applies the plan file planPath, with its blobs/ sidecars next
 // to it. planPath may also be a sealed plan.age (docs/plan-encryption.md,
-// task 3b2): the first line is sniffed against the age format's own
-// cleartext version banner (isSealedPlanBytes) before anything is decoded
-// either way, so an older plan.jsonl and a sealed plan.age take completely
-// separate paths from the first line on.
-func cliApplyFile(ctx context.Context, planPath string, identityPaths []string) int {
+// task 3b2) or a signed envelope around one (docs/plan-signing.md, task
+// 8g2): the first line is sniffed (classifyPlanInput) before anything is
+// decoded, so a plan.jsonl, a plan.age and a signed plan take separate
+// paths from the first line on. A signed plan is verified, and -require-signed
+// enforced, by admitPlanInput before anything is decrypted; its verified
+// payload then takes the unchanged sealed path.
+func cliApplyFile(ctx context.Context, planPath string, f applyFlags) int {
 	// Read the plan file the way planToDir/2b2's sealed write wrote it:
 	// plan.ReadPrivateFilePath refuses a path that names a directory
 	// ("out/"), and a plan file that is a symlink or not a regular file (a
 	// FIFO), instead of following it as os.ReadFile would. The directory is
 	// reached the normal way: the elevated re-exec reads a chunk below
 	// $TMPDIR, which may be a symlinked path. Reading the whole file here
-	// also happens to satisfy, for the sealed case, the "read to EOF before
-	// applying anything" requirement for free: os.ReadFile-style reads
-	// already load every byte before this function does anything else with
-	// them.
+	// also happens to satisfy, for the sealed and signed cases, the "read to
+	// EOF before applying anything" requirement (and Verify's need for every
+	// byte) for free.
 	raw, err := plan.ReadPrivateFilePath(planPath)
 	if err != nil {
 		eprintf("apply: read %s: %v\n", planPath, err)
 		return 1
 	}
+	raw, ok := admitPlanInput(planPath, raw, classifyPlanInput(raw), f.signing)
+	if !ok {
+		return 1
+	}
 	if isSealedPlanBytes(raw) {
-		return cliApplySealedFile(ctx, planPath, raw, identityPaths)
+		return cliApplySealedFile(ctx, planPath, raw, f.identityPaths)
 	}
 	ops, err := plan.DecodePlanBytes(raw)
 	if err != nil {
@@ -944,34 +975,82 @@ func applyPlanOps(ctx context.Context, ops []plan.Op, planDir string) error {
 }
 
 // cliApplyStdin applies a push payload (plan plus blobs), a sealed plan.age
-// stream, or bare JSONL read from stdin, or only previews it with
-// strictPreview. The sealed sniff (isSealedPlanBytes) runs on a peek of
-// stdin before any of the three decode paths is chosen — see peekSealed —
-// so -strict-preview and -apply-dir, which only make sense for the
-// unsealed push/preview paths, are refused up front for a sealed stream
-// instead of being silently ignored (docs/plan-encryption.md: a sealed
-// apply is single-process file-apply semantics, never the strict-preview
-// remote-capability check or the multi-chunk sticky dir).
-func cliApplyStdin(ctx context.Context, applyDir string, strictPreview bool, identityPaths []string) int {
+// stream, a signed envelope around one, or bare JSONL read from stdin, or
+// only previews it with -strict-preview. The sniff (classifyPlanInput) runs
+// on a peek of stdin (planSniffLen bytes, enough for either magic) before
+// any decode path is chosen, so -require-signed refuses an unsigned stream
+// before reading it, and -strict-preview and -apply-dir, which only make
+// sense for the unsealed push/preview paths, are refused up front for a
+// sealed or signed stream instead of being silently ignored
+// (docs/plan-encryption.md: a sealed apply is single-process file-apply
+// semantics, never the strict-preview remote-capability check or the
+// multi-chunk sticky dir).
+func cliApplyStdin(ctx context.Context, f applyFlags) int {
 	br := bufio.NewReader(os.Stdin)
-	if isSealedPlanBytes(sealedPeek(br)) {
-		if strictPreview {
-			eprintln("apply: -strict-preview cannot be combined with a sealed plan.age stream " +
-				"(sealed apply is always a real, single-process apply, never a remote-capability preview)")
-			return 2
+	peek, _ := br.Peek(planSniffLen)
+	kind := classifyPlanInput(peek)
+	if kind != signedInput {
+		// -require-signed refuses an unsigned stream here, before any of it
+		// is read; otherwise this passes it through (the data argument is
+		// unused for an unsigned input).
+		if _, ok := admitPlanInput("stdin", nil, kind, f.signing); !ok {
+			return 1
 		}
-		if applyDir != "" {
-			eprintln("apply: -apply-dir cannot be combined with a sealed plan.age stream " +
-				"(a sealed apply with blobs stages into its own sealed-run-* directory, never the " +
-				"multi-chunk sticky dir)")
-			return 2
+	}
+	if kind == plainInput {
+		if f.strictPreview {
+			return cliPreviewStdin(ctx, f.applyDir, br)
 		}
-		return cliApplySealedStdin(ctx, br, identityPaths)
+		return cliApplyPushStdin(ctx, br, f.applyDir)
 	}
-	if strictPreview {
-		return cliPreviewStdin(ctx, applyDir, br)
+	if code, refused := refuseSealedStdinFlags(kind, f); refused {
+		return code
 	}
-	return cliApplyPushStdin(ctx, br, applyDir)
+	if kind == signedInput {
+		return cliApplySignedStdin(ctx, br, f)
+	}
+	return cliApplySealedStdin(ctx, br, f.identityPaths)
+}
+
+// refuseSealedStdinFlags refuses (exit 2, refused true) -strict-preview or
+// -apply-dir combined with a sealed or signed stdin stream. The wording for
+// a sealed stream is unchanged from task 3b2; a signed stream is named as
+// such (its verified payload is always a sealed plan.age, so the same
+// reasons apply).
+func refuseSealedStdinFlags(kind planInputKind, f applyFlags) (code int, refused bool) {
+	stream := "a sealed plan.age stream"
+	if kind == signedInput {
+		stream = "a signed plan stream"
+	}
+	switch {
+	case f.strictPreview:
+		eprintln("apply: -strict-preview cannot be combined with " + stream + " " +
+			"(sealed apply is always a real, single-process apply, never a remote-capability preview)")
+		return 2, true
+	case f.applyDir != "":
+		eprintln("apply: -apply-dir cannot be combined with " + stream + " " +
+			"(a sealed apply with blobs stages into its own sealed-run-* directory, never the " +
+			"multi-chunk sticky dir)")
+		return 2, true
+	}
+	return 0, false
+}
+
+// cliApplySignedStdin reads a signed envelope from br to EOF (capped at
+// maxSignedEnvelopeBytes), verifies it and checks its freshness
+// (admitPlanInput) before anything is decrypted, then hands the verified
+// plan.age to the unchanged sealed stdin path.
+func cliApplySignedStdin(ctx context.Context, br *bufio.Reader, f applyFlags) int {
+	env, err := readSignedStream(br, maxSignedEnvelopeBytes)
+	if err != nil {
+		eprintf("apply: stdin: signed plan refused: %v; nothing decrypted or applied\n", err)
+		return 1
+	}
+	sealed, ok := admitPlanInput("stdin", env, signedInput, f.signing)
+	if !ok {
+		return 1
+	}
+	return cliApplySealedStdin(ctx, bytes.NewReader(sealed), f.identityPaths)
 }
 
 // pushHeadPeek is how many bytes cliApplyPushStdin peeks to read a push
@@ -1042,14 +1121,15 @@ func decodeApplyPush(br *bufio.Reader, runDir, applyDir string) (*plan.PushPaylo
 	return plan.DecodePush(br, runDir)
 }
 
-// cliApplySealedStdin decrypts and applies a sealed plan.age stream whose
-// first bytes were already peeked (not consumed) from br by cliApplyStdin.
+// cliApplySealedStdin decrypts and applies a sealed plan.age stream: stdin,
+// whose first bytes were already peeked (not consumed) by cliApplyStdin, or
+// the verified payload of a signed stream (cliApplySignedStdin).
 // See decryptAndDecodeSealedPush for the read-to-EOF-before-applying and
 // run-dir logic shared with the file path (cliApplySealedFile); only the
 // source name in the printed summary differs here, matching the "stdin" /
 // "stdin+blobs" distinction the unsealed stdin path already makes.
-func cliApplySealedStdin(ctx context.Context, br *bufio.Reader, identityPaths []string) int {
-	payload, cleanup, err := decryptAndDecodeSealedPush(br, identityPaths)
+func cliApplySealedStdin(ctx context.Context, r io.Reader, identityPaths []string) int {
+	payload, cleanup, err := decryptAndDecodeSealedPush(r, identityPaths)
 	defer cleanup()
 	if err != nil {
 		eprintf("apply: %v\n", err)
@@ -1139,26 +1219,12 @@ var errSealedFrameTooLarge = errors.New("sealed plan: decrypted frame exceeds si
 // isSealedPlanBytes reports whether data's first line is exactly
 // ageMagicLine. data may be a full file's bytes (cliApplyFile, which has
 // already read the whole plan file) or only a short peek of a stream
-// (cliApplyStdin's sealedPeek); either way only the bytes up to the first
+// (cliApplyStdin's planSniffLen peek); either way only the bytes up to the first
 // newline (or all of data, when it is shorter than the magic line and
 // carries no newline yet) are compared.
 func isSealedPlanBytes(data []byte) bool {
 	line, _, _ := bytes.Cut(data, []byte("\n"))
 	return string(line) == ageMagicLine
-}
-
-// sealedPeek returns up to len(ageMagicLine) bytes from br without
-// consuming them (bufio.Reader.Peek), for isSealedPlanBytes to sniff before
-// cliApplyStdin decides which of the sealed/push/bare-JSONL paths to read
-// the rest of br through. A short read (less data currently buffered than
-// that — including none at all, e.g. genuinely empty stdin) simply yields
-// fewer bytes, which can never equal ageMagicLine: isSealedPlanBytes then
-// correctly reports "not sealed", and the ordinary (unsealed) decode path
-// goes on to produce its own read/EOF error for such input, exactly as it
-// already did before this sniff existed.
-func sealedPeek(br *bufio.Reader) []byte {
-	peek, _ := br.Peek(len(ageMagicLine))
-	return peek
 }
 
 // decryptAndDecodeSealedPush is the decrypt-then-decode core shared by
@@ -1299,6 +1365,14 @@ func loadSealedIdentities(paths []string) ([]seal.Identity, error) {
 // "Keys"), the same default gonf plan -seal (task 2b2) uses for its
 // recipients file's own directory.
 func defaultIdentityPath() (string, error) {
+	return defaultGonfConfigPath("identity")
+}
+
+// defaultGonfConfigPath returns ${XDG_CONFIG_HOME:-$HOME/.config}/gonf/name,
+// the non-root default location of a gonf key file (the identity, and the
+// trusted-signers file of task 8g2). Root never reaches it: its callers
+// refuse a default for euid 0 first.
+func defaultGonfConfigPath(name string) (string, error) {
 	dir := os.Getenv("XDG_CONFIG_HOME")
 	if dir == "" {
 		home, err := os.UserHomeDir()
@@ -1307,7 +1381,7 @@ func defaultIdentityPath() (string, error) {
 		}
 		dir = filepath.Join(home, ".config")
 	}
-	return filepath.Join(dir, "gonf", "identity"), nil
+	return filepath.Join(dir, "gonf", name), nil
 }
 
 // prepareApplyRunDir returns the directory a push frame's embedded blobs
@@ -1423,10 +1497,11 @@ func verifyStickyDirOwned(path string) error {
 }
 
 func printUsage() {
-	eprintln("usage: gonf [-list] [-version] [-plan-version] [-strict-preview-version] [-sealed-version] [-profile=...] [-verbose|-quiet] [-dry-run|-n] [-privilege=none|sudo|doas] [-cmd-timeout 5m] <task> [task...]")
+	eprintln("usage: gonf [-list] [-version] [-plan-version] [-strict-preview-version] [-sealed-version] [-signed-version] [-profile=...] [-verbose|-quiet] [-dry-run|-n] [-privilege=none|sudo|doas] [-cmd-timeout 5m] <task> [task...]")
 	eprintln("       " + planUsage)
 	eprintln("       " + planSignerKeygenUsage)
-	eprintln("       gonf apply [-n|-dry-run|-strict-preview] [-apply-dir dir] [-identity file]... <plan.jsonl|plan.age|->")
+	eprintln("       " + applyUsage)
+	eprintln("       " + planVerifyUsage)
 	eprintln("       gonf push [-n|-dry-run|-preview] [-id name] [-privilege=...] [-- ssh-args...] user@host <task> [task...]")
 	eprintln("       gonf cluster [-n|-dry-run|-preview] [-j N] [-id name] [-host-timeout 10m] <cluster> <task> [task...]")
 	eprintln("       gonf fleet [-n|-dry-run|-preview] [-j N] [-id name] [-host-timeout 10m] <fleet> <task> [task...]")

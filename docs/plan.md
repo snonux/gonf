@@ -1152,7 +1152,7 @@ import from an external `plan_test` file is fine.
 | `gonf <task> [task…]` | Record + apply locally |
 | `gonf plan [-o dir\|-stdout [-with-secrets]\|-redacted] [-seal [-recipient r]… [-for host\|cluster\|fleet] [-sign signer-file]] [-id name] <task>…` | Write `dir/plan.jsonl` (+ `blobs/`; `dir` defaults to `.`, is created `0700` when missing, is never chmod'ed when it exists and must be yours, not world-writable and not group-writable except by your private group, see "The output directory" below), or print JSONL to stdout (refused for a plan with `sensitive` ops unless `-with-secrets`), or print a redacted human preview that no gonf applies (`-redacted`); with `-seal` (task 2b2), age-encrypt the GONF-PUSH/1 push frame instead and write only `dir/plan.age` (or, with `-stdout`, the sealed bytes to stdout); with `-seal -for` (task 4b2) also, write one `dir/plan-<host>.age` per destination host instead, each sealed to that host's own recipient; with `-seal -sign signer-file` (task 7g2), sign each sealed artifact (every host's, with `-for`) in a `GONF-SIGNED-PLAN/1` envelope — see "Secret material" below, [plan-encryption.md](plan-encryption.md) and [plan-signing.md](plan-signing.md) |
 | `gonf plan-signer-keygen <signer-file>` | Create a new Ed25519 plan signer key as `signer-file` (task 7g2; mode `0600`, never replacing an existing file or following a symlink) and print its `gonf-signer-ed25519 …` trusted-signers line on stdout — see [plan-signing.md](plan-signing.md) |
-| `gonf apply [-n\|-dry-run\|-strict-preview] [-identity file]... <plan.jsonl\|plan.age\|->` | Apply a plan file, or read **GONF-PUSH/1** / bare JSONL / a sealed `plan.age` stream from stdin. Sealed input (`age-encryption.org/v1` sniffed as the first line — task 3b2, see docs/plan-encryption.md) is decrypted with `-identity` (repeatable; default for a non-root invocation `${XDG_CONFIG_HOME:-$HOME/.config}/gonf/identity`; root must pass `-identity` explicitly) and applied with the SAME single-process, file-apply semantics as a plaintext plan — no privilege split, `elevate` ignored exactly as for `plan.jsonl` today. `-apply-dir`/`-strict-preview` cannot combine with sealed stdin input. The plan file must be a regular file and is not followed if it is a symlink (a FIFO or a symlinked `plan.jsonl`/`plan.age` is refused; use `-` for piped input); its directory may be reached through symlinks |
+| `gonf apply [-n\|-dry-run\|-strict-preview] [-identity file]... [-trusted-signers file]... [-require-signed] [-max-signed-age d] <plan.jsonl\|plan.age\|->` | Apply a plan file, or read **GONF-PUSH/1** / bare JSONL / a sealed `plan.age` stream from stdin. Sealed input (`age-encryption.org/v1` sniffed as the first line — task 3b2, see docs/plan-encryption.md) is decrypted with `-identity` (repeatable; default for a non-root invocation `${XDG_CONFIG_HOME:-$HOME/.config}/gonf/identity`; root must pass `-identity` explicitly) and applied with the SAME single-process, file-apply semantics as a plaintext plan — no privilege split, `elevate` ignored exactly as for `plan.jsonl` today. `-apply-dir`/`-strict-preview` cannot combine with sealed stdin input. Signed input (task 8g2, docs/plan-signing.md "As landed (task `8g2`)"): a `GONF-SIGNED-PLAN/` first line is verified against `-trusted-signers` (repeatable; non-root default `${XDG_CONFIG_HOME:-$HOME/.config}/gonf/trusted-signers`; root must pass it) and its signed-at time checked (`-max-signed-age`, default `24h`, plus a fixed 5-minute future skew) before anything is decrypted, always, flags or not; `-require-signed` refuses any unsigned input (exit 1, nothing decrypted or applied). `gonf plan-verify [-trusted-signers f]… <signed-plan\|->` runs the same checks and writes the bare `plan.age` to stdout for the `age -d` emergency path. The plan file must be a regular file and is not followed if it is a symlink (a FIFO or a symlinked `plan.jsonl`/`plan.age` is refused; use `-` for piped input); its directory may be reached through symlinks |
 | `gonf push [-n\|-preview] [-id name] [-- ssh-args…] user@host <task>…` | Record in memory, stream over `ssh` to remote `gonf apply -` |
 | `gonf cluster [-n\|-preview] [-j N] [-id name] [-host-timeout 10m] <cluster> <task>…` | Resolve inventory cluster; record once; parallel push or strict preview to each host |
 | `gonf fleet [-n\|-preview] [-j N] [-id name] [-host-timeout 10m] <fleet> <task>…` | Resolve fleet (list of clusters); push or strict preview on unique hosts |
@@ -1465,7 +1465,11 @@ sealed `plan.age` has no such flag and refuses the input before any op runs
 regardless: `gonf apply -` fails in `plan.DecodePush` with `plan push: bad
 magic "age-encryption.org/v1"` (age's own cleartext version banner is not
 the `GONF-PUSH/1` magic); `gonf apply plan.age` fails decoding the first
-line as JSON in `plan.DecodePlanBytes`.
+line as JSON in `plan.DecodePlanBytes`. `gonf -signed-version` prints the
+signed-plan envelope version this binary verifies (`1`, the N of
+`GONF-SIGNED-PLAN/N`; task 8g2, docs/plan-signing.md); an older gonf has no
+such flag and refuses a signed envelope the same way it refuses any
+unknown first line.
 
 `push -n` / `cluster -n` / `fleet -n` retain their established compatibility
 behavior: they bootstrap a missing or stale remote gonf binary before running
@@ -1917,9 +1921,10 @@ the encrypted SSH transport, because the destination must write it.
   echoes the file's content. The report adds `signed <time>` and a
   `signer gonf-signer-ed25519 <key> sha256:<fingerprint>` line; like
   sealing, it says "signed", never "verified". Make a signer file with
-  `gonf plan-signer-keygen signer-file`. No `gonf apply` verifies a
-  signature yet (task 8g2), so a signed artifact cannot be applied until
-  then except by stripping its four header lines by hand.
+  `gonf plan-signer-keygen signer-file`. `gonf apply -trusted-signers
+  file` verifies such an artifact before decrypting it (task 8g2, see the
+  CLI table), and `gonf plan-verify` unwraps it for the `age -d`
+  emergency path.
 
 The full lifecycle and its limits are in [secrets.md](secrets.md). Never put
 secret values in task names, descriptions, paths or host values: identities

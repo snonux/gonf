@@ -56,9 +56,11 @@ import (
 // produced a /1 envelope, as docs/plan-signing.md "Replay and rollback"
 // requires. (v0.17.0's library-only Sign wrote the undated layout; Verify
 // refuses such an envelope as malformed, since its fourth line is the age
-// header, and its signature covers another message.) Verify authenticates it and returns it (Verified.SignedAt) but
-// enforces no freshness window: that policy, against the destination's own
-// clock, is the caller's (phase signing-3, task 8g2). A Verify success on
+// header, and its signature covers another message.) Verify authenticates
+// it and returns it (Verified.SignedAt) but enforces no freshness window:
+// that policy, against the destination's own clock, is the caller's (phase
+// signing-3, task 8g2: gonf apply and gonf plan-verify check it in
+// internal/cli/apply_signed.go, only after Verify succeeded). A Verify success on
 // its own says only which trusted key produced these exact bytes and when
 // that key's holder claims to have signed them.
 
@@ -75,6 +77,23 @@ const ageHeaderLine = "age-encryption.org/v1\n"
 // an input starting with it but not with the full magic line is a
 // malformed or unsupported envelope, not an unsigned input.
 const signedPlanFamily = "GONF-SIGNED-PLAN/"
+
+// SignedSniffLen is how many leading bytes LooksSigned needs to decide.
+// A caller peeking a stream (gonf apply -, task 8g2) peeks at least this
+// many bytes before choosing a path.
+const SignedSniffLen = len(signedPlanFamily)
+
+// LooksSigned reports whether b starts like a signed-plan envelope of any
+// version ("GONF-SIGNED-PLAN/"). It is the sniff docs/plan-signing.md
+// "Verification order" step 1 runs before any other: an input for which it
+// is true must go to Verify (which refuses another version or a malformed
+// header as ErrEnvelopeMalformed) and never to the unsigned sealed or
+// plaintext paths, so an envelope gonf cannot verify is refused instead of
+// being decoded some other way. It checks the prefix only and verifies
+// nothing.
+func LooksSigned(b []byte) bool {
+	return bytes.HasPrefix(b, []byte(signedPlanFamily))
+}
 
 var (
 	// ErrNotSigned is returned by Verify for an input that is not a signed
@@ -227,7 +246,7 @@ type envelope struct {
 func parseEnvelope(env []byte) (envelope, error) {
 	rest, ok := bytes.CutPrefix(env, []byte(SignedPlanMagic+"\n"))
 	if !ok {
-		if bytes.HasPrefix(env, []byte(signedPlanFamily)) {
+		if LooksSigned(env) {
 			return envelope{}, ErrEnvelopeMalformed
 		}
 		return envelope{}, ErrNotSigned
