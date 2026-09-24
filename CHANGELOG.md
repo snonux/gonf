@@ -3,9 +3,12 @@
 Release notes for gonf. Each release is also an annotated `v*` tag; for
 releases before v0.17.0 the tag message and the git log are the notes.
 
-## Unreleased
+## v0.19.0 (2026-09-24)
 
 Plan schema 24 (unchanged).
+
+- `gonf plan-signer-keygen -h` prints its usage line (it printed an empty
+  flag list), plus a documentation pass over every feature since v0.16.6.
 
 Tasks and aggregates ([docs/tasks.md](docs/tasks.md), "Destination guards")
 - Approved behaviour change (8h2, approved by the user 2026-09-24):
