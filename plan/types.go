@@ -530,7 +530,9 @@ type Op struct {
 	// depends on, recorded from the resource DependsOn option. Plan apply
 	// topologically sorts resource ops by deps within each contiguous run
 	// between control ops; ops are never reordered across when_*
-	// boundaries.
+	// boundaries. Parent-directory edges (pathdeps.go) are inferred from
+	// Path at apply time and never recorded here, so they do not change the
+	// plan bytes and the ValidateChunks pre-flight never sees them.
 	Deps []string `json:"deps,omitempty"`
 
 	// All is the conjunctive predicate list for KindWhenBegin.

@@ -259,6 +259,27 @@ resource is not registered.
 | `Perm(mode, owner)` | File, Dir and every wrapper taking their options (`EnsureFile`, `InstallFile`, `SecretFile`, `EnsureDir`, `SyncDir`, `ConfigFile`) | `WithMode` + `WithOwner` + `WithGroup` in one: `owner` is `"user:group"`, `"user"` or `":group"`. Records the exact same plan. A malformed owner is a declaration error. |
 | `Root` | owner spec for `Perm` and `WithOwner` | root and the destination's root group (root on Linux, wheel on the BSDs and macOS). Recorded as group `0`, so the destination picks the name, never the controller. |
 
+Parent directories are ordered for you. A resource creating something
+inside a directory the same plan creates (`Dir`, `SyncDir`, `EnsureDir`)
+applies after it, as if it had `DependsOn` on it:
+
+```go
+EnsureDir("/usr/local/sbin", WithMode(0o755))
+InstallFile("/usr/local/sbin/x", src, WithMode(0o755)) // no DependsOn needed
+```
+
+- Only the nearest declared ancestor counts; nested dirs chain.
+- Paths compare as written (cleaned, symlinks not resolved). A `Link` is
+  never a parent.
+- Absent resources get no edge. A present resource inside an absent
+  directory is a conflict gonf neither orders nor refuses.
+- Nothing moves across a `when_*` block or a recorded privilege chunk;
+  `api.Apply` orders across its own chunks.
+- An inferred edge that would close a cycle with your `DependsOn` is
+  dropped. An explicit `DependsOn` next to it is harmless.
+- Done at apply time, so plan files do not change. An older destination
+  gonf applies in declared order.
+
 `options.Option` (`func(any)`) is the untyped legacy form. Convert a stored
 `[]options.Option` with `ToFileOptions`, `ToDirOptions`, and so on; the
 adapter cannot check the family.
@@ -926,7 +947,8 @@ Output directory rules:
   without sensitive ops, keyed lines or pruning glob syncs declares 21.
 - A destination refuses a newer schema before any change.
 - Ops apply in dependency order within each run between `when_*`
-  boundaries; ties keep recorded order. Nothing moves across a boundary.
+  boundaries, parent directories included (see [Shared options](#shared-options));
+  ties keep recorded order. Nothing moves across a boundary.
 - Failed `when_begin` predicates skip the block. A `require` block refuses
   the whole apply instead, before any change.
 - Content up to 512 KiB is inline; larger files and synced trees are blobs

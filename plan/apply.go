@@ -30,8 +30,9 @@ type Facts struct {
 // requirement's scope uses a non-host-fact condition, or when its enclosing
 // scope is active but its predicates fail (see require.go).
 // Resource ops are topologically sorted by their deps within each contiguous
-// run between control ops (plan header, when_begin, when_end); dep-free
-// plans keep recorded order.
+// run between control ops (plan header, when_begin, when_end), plus an
+// inferred edge from a directory op to every op creating something inside it
+// (pathdeps.go); plans with neither keep recorded order.
 // Deps recorded in this body earlier, or applied by an earlier privilege
 // chunk or invocation, count as satisfied; a dep recorded later in this body
 // (later when-block) is refused before any mutation. A dep recorded nowhere
@@ -161,7 +162,8 @@ type planLine struct {
 
 // sortedApplyOrder returns the plan body in apply order: contiguous runs of
 // resource ops between control ops (plan header, when_begin, when_end) are
-// topologically sorted by their dep lists.
+// topologically sorted by their dep lists and the parent-directory edges
+// inferred from their paths within the run (see pathdeps.go).
 // Control ops keep their recorded position, so resource ops are never
 // reordered across when_* boundaries. A dep outside the current run is
 // classified: recorded earlier in this body → satisfied (placed); recorded
@@ -227,9 +229,10 @@ func sortedApplyOrder(body []Op) ([]planLine, error) {
 }
 
 // sortRunByDeps topologically orders one contiguous resource-op run by the
-// ops' dep lists (Kahn's algorithm, stable: among ready ops the earliest
-// recorded one is emitted first). Deps are matched against op IDs. A dep on
-// an op applied by an earlier run is satisfied. A dep whose first body
+// ops' dep lists plus the inferred parent-directory edges (addParentDirDeps),
+// with Kahn's algorithm, stable: among ready ops the earliest recorded one is
+// emitted first. Deps are matched against op IDs. A dep on an op applied by
+// an earlier run is satisfied. A dep whose first body
 // occurrence is after this run (bodyIDs first index >= runEnd) is refused —
 // apply cannot reorder it across the when_* boundary in between. A dep
 // recorded nowhere in this body is treated as satisfied: an earlier privilege
@@ -272,7 +275,30 @@ func sortRunByDeps(run []planLine, placed map[string]bool, bodyIDs map[string]in
 			}
 		}
 	}
+	addParentDirDeps(run, indeg, waiters)
 	return kahnStable(run, indeg, waiters)
+}
+
+// addParentDirDeps adds the run's inferred parent-directory edges
+// (InferParentDirDeps, pathdeps.go) to indeg and waiters, after the recorded
+// deps. The inference only accepts edges that close no cycle with the
+// recorded deps, so a run the recorded deps order still sorts, and a run
+// whose recorded deps are cyclic is still refused as circular. Scoping it to
+// one run keeps it inside one when-block body and one privilege chunk.
+func addParentDirDeps(run []planLine, indeg []int, waiters [][]int) {
+	ops := make([]Op, len(run))
+	for pos, l := range run {
+		ops[pos] = l.op
+	}
+	next := func(u int, visit func(v int)) {
+		for _, v := range waiters[u] {
+			visit(v)
+		}
+	}
+	for _, e := range InferParentDirDeps(ops, next) {
+		indeg[e.Dependent]++
+		waiters[e.Dep] = append(waiters[e.Dep], e.Dependent)
+	}
 }
 
 // kahnStable emits the run's ops in dependency order, breaking ties by

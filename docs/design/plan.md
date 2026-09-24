@@ -453,8 +453,14 @@ if err := ApplyPlan(ops, planDir); err != nil { /* … */ }
 - Applies resource ops in dependency order: each contiguous run between the
   header and `when_begin` / `when_end` boundaries is topologically sorted by
   the recorded `deps` (stable: among ready ops, recorded order wins), so a
-  resource always applies after its `DependsOn` targets. Dep-free plans keep
-  recorded order; ops are never reordered across `when_*` boundaries. A dep
+  resource always applies after its `DependsOn` targets. Within the same
+  run, an op creating something inside a directory another op creates
+  (`dir`, `sync_dir`, `ensure_dir`) also applies after it, as if it declared
+  `DependsOn` on it; these parent-directory edges are derived from the
+  recorded paths at apply time (`plan/pathdeps.go`), never written into
+  `deps`, so plans are byte-identical with or without them. Plans with
+  neither keep recorded order; ops are never reordered across `when_*`
+  boundaries. A dep
   outside the current run is classified by where it is recorded: in this body
   earlier, or in an earlier privilege chunk → satisfied; later in this body
   (a later when-block) → refused before any mutation; nowhere in this body →

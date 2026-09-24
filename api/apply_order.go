@@ -3,6 +3,7 @@ package api
 import (
 	"container/heap"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/snonux/gonf/plan"
@@ -70,8 +71,11 @@ func newDepGraph(body []plan.Op) depGraph {
 // level, and with it the chunk count, is the minimum for its starting class
 // (the class of level 0). Both starting classes are tried and the order with
 // fewer chunks is kept; ties keep the class of the lowest-indexed op without
-// deps, so the result is deterministic. The ops are then emitted level by
-// level in dependency order (levelOrder).
+// deps, so the result is deterministic. Dependencies here are the recorded
+// deps plus the parent-directory edges inferred from the ops' paths
+// (withParentDirDeps), so an op inside a directory another op creates lands
+// in its chunk or a later one without a DependsOn. The ops are then emitted
+// level by level in dependency order (levelOrder).
 //
 // Not every watch can be kept. One across privilege classes never shares a
 // chunk; one whose ends are forced apart by dependencies on the other class
@@ -110,6 +114,7 @@ func orderForPrivilegeSplit(ops []plan.Op) ([]plan.Op, watchConflicts, error) {
 	// Which watches can be kept does not depend on the starting class
 	// (see watchesSatisfiable), so both starts share one kept set.
 	kept, conflicts := g.keptWatches(body)
+	g = g.withParentDirDeps(body, kept)
 	first := body[g.firstReady()].Elevate
 	order := g.levelOrder(g.chunkLevels(body, first, kept))
 	if other := g.levelOrder(g.chunkLevels(body, !first, kept)); chunkCount(body, other) < chunkCount(body, order) {
@@ -121,6 +126,42 @@ func orderForPrivilegeSplit(ops []plan.Op) ([]plan.Op, watchConflicts, error) {
 		out = append(out, body[i])
 	}
 	return out, conflicts, nil
+}
+
+// withParentDirDeps returns g plus the parent-directory edges inferred from
+// the ops' paths (plan.InferParentDirDeps): an op creating something inside
+// a directory another op creates is placed after it, even across privilege
+// classes (an elevated Dir before an unprivileged File inside it), so the
+// chunk levels order it like a DependsOn. The inference sees the dependency
+// edges AND both directions of every kept watch, and accepts an edge only if
+// it closes no cycle there: no new strongly connected component forms, so the
+// kept watches stay satisfiable (chunkLevels) and the Kahn passes see an
+// acyclic graph, exactly as without the inferred edges. It runs after the
+// cycle check and keptWatches, which therefore see the recorded deps only:
+// a cycle refusal and the kept watch set (and so every pre-flight refusal)
+// are unchanged by inference. g itself is not modified.
+func (g depGraph) withParentDirDeps(body []plan.Op, kept []watchPair) depGraph {
+	lg := newLevelGraph(g, body, kept)
+	edges := plan.InferParentDirDeps(body, lg.each)
+	if len(edges) == 0 {
+		return g
+	}
+	out := depGraph{byID: g.byID, deps: cloneAdjacency(g.deps), waiters: cloneAdjacency(g.waiters)}
+	for _, e := range edges {
+		out.deps[e.Dependent] = append(out.deps[e.Dependent], e.Dep)
+		out.waiters[e.Dep] = append(out.waiters[e.Dep], e.Dependent)
+	}
+	return out
+}
+
+// cloneAdjacency deep-copies an adjacency list, so appending to the copy
+// never writes into the original's backing arrays.
+func cloneAdjacency(adj [][]int) [][]int {
+	out := make([][]int, len(adj))
+	for i, a := range adj {
+		out[i] = slices.Clone(a)
+	}
+	return out
 }
 
 // indegrees returns a fresh count of in-plan deps per op.

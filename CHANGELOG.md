@@ -19,6 +19,11 @@ Ownership ([docs/reference.md](docs/reference.md), "Shared options")
   applies, so older destination binaries apply such plans unchanged.
 - `WithOwner` accepts the same `"user:group"` spec. A plain user name records
   exactly as before; an owner with a colon used to fail at apply time.
+- Parent-directory ordering: a resource creating something inside a
+  directory the same plan creates (`Dir`, `SyncDir`, `EnsureDir`) applies
+  after it without `DependsOn`. The edges are inferred from the paths at
+  apply time, so plan files are byte-identical; conf and dotfiles apply in
+  the same order as before. See [docs/reference.md](docs/reference.md#shared-options).
 
 Tasks ([docs/reference.md](docs/reference.md), "Tasks")
 - `OnCluster(name)` RegisterOption: `WithCluster` plus a task-level
