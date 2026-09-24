@@ -130,6 +130,142 @@ func TestDecodeNormalLinesUnaffected(t *testing.T) {
 	}
 }
 
+// TestEncodeRefusesForeignKindPayload pins task cg2's fix: EncodeOp (via
+// Op.MarshalJSON's toWire) must refuse an Op whose Payload's concrete type
+// does not belong to its own Op.Op kind, instead of silently emitting a
+// wire line carrying that OTHER kind's exclusive fields — exactly the shape
+// TestDecodeRefusesForeignKindFields above proves DecodeOp already refuses
+// on the way back in. Before this fix, toWire ran op.Payload.applyToWire
+// for whatever payload op.Payload held, regardless of op.Op, so EncodeOp
+// returned a nil error and a syntactically valid but semantically wrong
+// line — one that gonf's own DecodeOp of that very output, or
+// api.EncodeRedactedPreview, or plan.RequiredVersion's header would then
+// treat inconsistently. The first case is the EXACT probe from the task
+// cg2 annotation: EncodeOp(Op{Op: KindDir, Payload: FilePayload{KeyedLines:
+// ...}}).
+func TestEncodeRefusesForeignKindPayload(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		op   Op
+		// wantContains are substrings the error must contain: enough to
+		// prove the refusal names the offending payload type and both the
+		// kind it was wrongly attached to and the kind that actually owns
+		// it — the encode-side mirror of checkForeignPayload's own
+		// "<field> (<kind>-exclusive)" style.
+		wantContains []string
+	}{
+		{
+			// The task cg2 annotation's own probe, verbatim.
+			name: "dir op holds a file payload (keyed_lines)",
+			op: Op{
+				Op:      KindDir,
+				ID:      "Directory[/d]",
+				Path:    "/d",
+				Payload: FilePayload{KeyedLines: []KeyedLine{{Key: "k", Line: "k=v"}}},
+			},
+			wantContains: []string{
+				"dir op holds a foreign-kind payload",
+				"FilePayload",
+				"exclusive to file",
+			},
+		},
+		{
+			name: "cron op holds a systemd_timer payload",
+			op: Op{
+				Op:      KindCron,
+				ID:      "Cron[root/backup]",
+				Payload: SystemdTimerPayload{OnCalendar: "daily"},
+			},
+			wantContains: []string{
+				"cron op holds a foreign-kind payload",
+				"SystemdTimerPayload",
+				"exclusive to systemd_timer",
+			},
+		},
+		{
+			name: "package op holds a user payload",
+			op: Op{
+				Op:      KindPackage,
+				ID:      "Package[helix]",
+				Payload: UserPayload{Home: "/home/x"},
+			},
+			wantContains: []string{
+				"package op holds a foreign-kind payload",
+				"UserPayload",
+				"exclusive to user",
+			},
+		},
+		{
+			// A kind with no migrated payload of its own at all (KindTimer
+			// has no OpPayloadExamples() entry) must be refused exactly the
+			// same way a wrong-kind pairing between two migrated kinds is —
+			// any non-nil Payload on such a kind is already a mismatch.
+			name: "control kind holds any payload at all",
+			op: Op{
+				Op:      KindTimer,
+				ID:      "Timer[x]",
+				Payload: LinkPayload{Symlink: "/x"},
+			},
+			wantContains: []string{
+				"timer op holds a foreign-kind payload",
+				"LinkPayload",
+				"exclusive to link",
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b, err := EncodeOp(tc.op)
+			if err == nil {
+				t.Fatalf("EncodeOp(%+v) = %s, <nil>; want a foreign-payload refusal", tc.op, b)
+			}
+			for _, want := range tc.wantContains {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("EncodeOp(%+v) error = %q, want it to contain %q", tc.op, err.Error(), want)
+				}
+			}
+		})
+	}
+}
+
+// TestEncodeRefusalPreventsForeignPayloadFromReachingDecode proves the
+// task cg2 annotation's full "confusing works-at-record-time,
+// fails-at-apply-time split" is closed end to end: the exact malformed Op
+// that used to encode successfully and then be refused on its OWN next
+// DecodeOp (the probe TestDecodeRefusesForeignKindFields's "keyed lines on
+// a dir op" case would refuse, if it were ever handed to Decode) is now
+// refused at EncodeOp itself — so DecodeOp is never even reached with it,
+// and api.EncodeRedactedPreview and plan.RequiredVersion's header, which
+// operate downstream of encode, are equally protected by construction: with
+// no wire line ever produced, there is nothing left for them to see.
+func TestEncodeRefusalPreventsForeignPayloadFromReachingDecode(t *testing.T) {
+	t.Parallel()
+	op := Op{Op: KindDir, ID: "Directory[/d]", Path: "/d", Payload: FilePayload{KeyedLines: []KeyedLine{{Key: "k", Line: "k=v"}}}}
+
+	b, encErr := EncodeOp(op)
+	if encErr == nil {
+		t.Fatalf("EncodeOp(%+v) unexpectedly succeeded: %s", op, b)
+	}
+	if len(b) != 0 {
+		t.Fatalf("EncodeOp(%+v) returned a non-empty line alongside its error: %s", op, b)
+	}
+
+	// The line DecodeOp would have refused, had EncodeOp not already
+	// refused it first (pre-fix wire shape, reconstructed by hand to show
+	// what used to reach the wire — see the task 2f2/cg2 annotations for
+	// the actual byte-identical probe output).
+	preFixLine := `{"op":"dir","id":"Directory[/d]","path":"/d","keyed_lines":[{"key":"k","line":"k=v"}]}`
+	if _, decErr := DecodeOp([]byte(preFixLine)); decErr == nil {
+		t.Fatalf("DecodeOp(%s) unexpectedly succeeded; checkForeignPayload should still refuse it", preFixLine)
+	} else if !strings.Contains(decErr.Error(), "keyed_lines (file-exclusive)") {
+		t.Fatalf("DecodeOp(%s) error = %q, want it to name keyed_lines as file-exclusive", preFixLine, decErr.Error())
+	}
+}
+
 // checkPayloadOf pins PayloadOf's contract (task rf2) for one concrete
 // OpPayload type T: the correctly-typed value round-trips unchanged, and
 // both a nil Payload and a different kind's payload degrade to the zero T
@@ -365,7 +501,13 @@ func TestWireFieldRoundTripOwnership(t *testing.T) {
 			// dispatch both key off.
 			w.Op = kind
 
-			got := fromWire(w).toWire()
+			got, err := fromWire(w).toWire()
+			if err != nil {
+				// fromWire always builds a payload matching its own w.Op via
+				// payloadFromWire/payloadConstructors, so toWire's ownership
+				// check (task cg2) must never refuse round-tripped output.
+				t.Fatalf("kind %q: toWire refused a legitimately round-tripped op: %v", kind, err)
+			}
 
 			wv := reflect.ValueOf(w)
 			gv := reflect.ValueOf(got)

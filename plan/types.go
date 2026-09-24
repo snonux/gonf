@@ -578,8 +578,16 @@ type Op struct {
 // Op's core fields with Payload's kind-exclusive ones onto a wireOp and
 // marshaling that (see wire.go's doc comment for why this keeps the wire
 // byte-for-byte identical to before task yd2's split).
+//
+// toWire (op_payload.go, task cg2) refuses before merging anything when
+// op.Payload's concrete type does not belong to op.Op's own kind — the
+// encode-side mirror of UnmarshalJSON's checkForeignPayload refusal below —
+// so that error, not a mismatched wire line, is what a caller sees.
 func (op Op) MarshalJSON() ([]byte, error) {
-	w := op.toWire()
+	w, err := op.toWire()
+	if err != nil {
+		return nil, err
+	}
 	normalizeWire(&w)
 	return json.Marshal(w)
 }

@@ -221,6 +221,29 @@ func TestRedactedPreviewHidesSecretsAndCannotApply(t *testing.T) {
 	}
 }
 
+// TestEncodeRedactedPreviewRefusesForeignKindPayload pins task cg2's
+// encode-side fix (plan.Op.toWire's ownership check, plan/op_payload.go) as
+// seen through EncodeRedactedPreview, the one other exported encoder that
+// calls plan.EncodeOp directly (redactOp/copyOp only deep-copy op.Payload —
+// they never validate its kind, so the fix must live below them, in
+// EncodeOp itself, to protect this caller too). Before task cg2,
+// EncodeRedactedPreview happily emitted a redacted preview line carrying a
+// foreign kind's exclusive fields for the same reason plain EncodeOp did
+// (see TestEncodeRefusesForeignKindPayload, plan/op_payload_test.go); now it
+// must refuse instead, with no line written for the forged op.
+func TestEncodeRedactedPreviewRefusesForeignKindPayload(t *testing.T) {
+	forged := []plan.Op{
+		{Op: plan.KindPlan, Version: plan.CurrentVersion},
+		{Op: plan.KindDir, ID: "Directory[/d]", Path: "/d",
+			Payload: plan.FilePayload{KeyedLines: []plan.KeyedLine{{Key: "k", Line: "k=v"}}}},
+	}
+	if _, err := EncodeRedactedPreview(forged); err == nil {
+		t.Fatal("EncodeRedactedPreview accepted an op holding a foreign-kind payload")
+	} else if !strings.Contains(err.Error(), "foreign-kind payload") {
+		t.Fatalf("EncodeRedactedPreview error = %q, want it to name a foreign-kind payload", err.Error())
+	}
+}
+
 // TestRedactOpCollapsesSensitiveTemplateDataWholesale pins redactOp's
 // wholesale template_data collapse (its own doc comment: "such an op may
 // carry secret material no resolved value matches ... its template_data

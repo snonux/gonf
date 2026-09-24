@@ -36,15 +36,23 @@ func RequiredVersion(ops []Op) int {
 		// check is NOT redundant with PayloadOf's own zero-value degrade: it
 		// held for every DECODED op (payloadFromWire only ever builds a
 		// SyncDirPayload for KindSyncDir), but not for an in-process
-		// Op{Op: KindDir, Payload: SyncDirPayload{Glob: true}} — nothing on
-		// the record path rules that shape out by construction, and it is
-		// exactly the shape this guard exists to reject. A mutation probe
-		// found this Kind check could be deleted with every test still
-		// green, because the only regression case then in
+		// Op{Op: KindDir, Payload: SyncDirPayload{Glob: true}} — RequiredVersion
+		// runs on the raw, freshly recorded []Op (plan.FinishRecord calls it
+		// to build the header) strictly before any op in that slice is ever
+		// encoded, so it cannot lean on toWire's own ownership check
+		// (op_payload.go, task cg2) to rule this shape out for it; it needs
+		// its own guard regardless of that later, independent safety net. A
+		// mutation probe found this Kind check could be deleted with every
+		// test still green, because the only regression case then in
 		// TestRequiredVersion had been rewritten (task 9e2) into a decoded
 		// line, which task 2f2's checkForeignPayload now refuses before
 		// RequiredVersion ever sees it; task pf2 restored a Go-literal case
-		// that reaches this exact guard.
+		// that reaches this exact guard. Task cg2 closed the matching
+		// encode-side gap (toWire now refuses to merge a mismatched payload
+		// onto the wire at all), so this shape can no longer reach a written
+		// plan.jsonl even if this Kind check were ever removed — but that
+		// protection fires downstream of RequiredVersion, at encode, not in
+		// place of this guard.
 		if op.Op == KindSyncDir {
 			if p := PayloadOf[SyncDirPayload](op); p.Glob && op.Prune {
 				return VersionSyncDirGlob // the highest on-demand schema
@@ -60,7 +68,12 @@ func RequiredVersion(ops []Op) int {
 		// TestRequiredVersion's "keyed lines on non-file op" case, which
 		// fails against the pre-rf2 code with got=23 want=21). The Kind
 		// check here closes that the same way the SyncDirPayload arm's
-		// already did.
+		// already did — and, like that arm's own guard, still runs before
+		// task cg2's encode-side ownership check (toWire, op_payload.go)
+		// ever sees this same Op, so it stays necessary rather than made
+		// redundant by it: an EncodeOp of the exact Op literal in this
+		// comment is refused, since task cg2, but RequiredVersion runs on
+		// it first and still needs its own correct answer regardless.
 		if op.Op == KindFile {
 			if fp := PayloadOf[FilePayload](op); len(fp.KeyedLines) != 0 && version < VersionKeyedLines {
 				version = VersionKeyedLines

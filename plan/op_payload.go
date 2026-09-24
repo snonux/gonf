@@ -500,10 +500,67 @@ func (p FilePayload) applyToWire(w *wireOp) {
 	w.RemoveLine = p.RemoveLine
 }
 
+// payloadKindsByType is the reverse of the Kind -> OpPayload mapping
+// OpPayloadExamples() builds (task cg2), keyed by each concrete OpPayload's
+// own reflect.Type. It lets toWire's encode-side ownership check, below,
+// name a mismatched payload's rightful kind the same way checkForeignPayload
+// (task 2f2) already names a mismatched wire FIELD's rightful kind — one
+// direction of the same OpPayloadExamples()-driven inventory, reflected the
+// other way around. Built once, like payloadFieldOwners, so a follow-up task
+// that extends OpPayloadExamples() to migrate one more kind is automatically
+// covered on the encode side too, with nothing here to hand-maintain.
+var payloadKindsByType = buildPayloadKindsByType()
+
+func buildPayloadKindsByType() map[reflect.Type]Kind {
+	kinds := make(map[reflect.Type]Kind)
+	for kind, example := range OpPayloadExamples() {
+		kinds[reflect.TypeOf(example)] = kind
+	}
+	return kinds
+}
+
 // toWire copies every Op core field onto a fresh wireOp and, when op.Payload
 // is set, layers its kind-exclusive fields on top. It does not normalize;
 // callers (MarshalJSON) do that once, after the merge.
-func (op Op) toWire() wireOp {
+//
+// Before doing so it refuses an op.Payload whose concrete type is not the
+// one op.Op's own kind owns (task cg2, the encode-side mirror of
+// checkForeignPayload's decode-side refusal below): applyToWire only ever
+// writes ITS OWN kind's wire fields (see each OpPayload implementation
+// above), so a mismatched pairing — e.g. Op{Op: KindDir, Payload:
+// FilePayload{...}} — used to reach here, apply FilePayload's fields onto a
+// "dir" wireOp regardless of op.Op, and marshal a syntactically valid but
+// semantically wrong line: one checkForeignPayload would then refuse on its
+// own very next decode (see the task 2f2/cg2 annotations for the probe that
+// found it — a "dir" line DecodeOp of its own EncodeOp output). Nothing on
+// the record path rules that pairing out by construction (plan/sensitive.go
+// RequiredVersion's own doc comments explain why it needs an identical Kind
+// guard for the same reason), so encode is the last, and therefore the
+// right, place to catch it — refusing here means an author of such a bug
+// (a future payload-assigning migration, an op clone/merge helper, or a
+// hand-built plan.Op in a consumer recipe) sees the error at the exact call
+// that produced the bad Op, not three steps downstream at DecodeOp, and
+// `gonf plan -o dir` can no longer succeed and write a plan.jsonl line that
+// gonf's own apply, push or preview would then refuse to read back.
+func (op Op) toWire() (wireOp, error) {
+	if op.Payload != nil {
+		gotType := reflect.TypeOf(op.Payload)
+		owner, known := payloadKindsByType[gotType]
+		if !known {
+			// Unreachable in production: OpPayload (above) is a closed set —
+			// only a type declared in this file can implement its unexported
+			// applyToWire — and OpPayloadExamples() lists every one of them,
+			// so payloadKindsByType always has an entry for any real
+			// op.Payload value. Kept as a defensive refusal, never a panic
+			// (AGENTS.md's registration-time contract), in case a future
+			// OpPayload implementation is added here without a matching
+			// OpPayloadExamples() entry.
+			return wireOp{}, fmt.Errorf("%s op holds a payload of unrecognized type %s", op.Op, gotType)
+		}
+		if owner != op.Op {
+			return wireOp{}, fmt.Errorf("%s op holds a foreign-kind payload: %s is exclusive to %s", op.Op, gotType.Name(), owner)
+		}
+	}
 	w := wireOp{
 		Op:      op.Op,
 		Version: op.Version,
@@ -542,7 +599,7 @@ func (op Op) toWire() wireOp {
 	if op.Payload != nil {
 		op.Payload.applyToWire(&w)
 	}
-	return w
+	return w, nil
 }
 
 // fromWire is toWire's mirror: split a decoded, normalized wireOp into Op's
