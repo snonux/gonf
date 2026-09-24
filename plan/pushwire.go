@@ -26,13 +26,24 @@ const pushMagic = "GONF-PUSH/1"
 // in memory before DecodePlanBytes ever gets a chance to reject it as
 // malformed JSON — task be2 measured ~10.5 GB peak RSS from a 3 MB plan.age
 // built this way (docs/plan-encryption.md, threat T10: recipients are
-// public, so anyone can produce a plan.age that decrypts). 256 MiB
-// comfortably covers a legitimate plan's JSONL (docs/plan.md notes plans
-// with many blob-backed ops can run to tens of MB) while staying far below
-// what would meaningfully threaten a typical machine's RAM. Named here, not
-// inlined, so it is easy to find and raise if a legitimate plan ever needs
-// more.
-const MaxDecompressedPushPlan = 256 << 20 // 256 MiB
+// public, so anyone can produce a plan.age that decrypts).
+//
+// be2 originally set this to 256 MiB. Task 3g2 lowered it to 64 MiB: this
+// constant's own comment already said a legitimate plan's JSONL runs "to
+// tens of MB" (docs/plan.md), so 256 MiB was 4x more headroom than any real
+// plan needs — and every extra MiB of headroom is also extra MiB an
+// attacker's gzip bomb gets to inflate to inside the "policy-compliant"
+// zone, since io.ReadAll's own doubling growth (see readCapped, which
+// replaced it) multiplies whatever size IS accepted. 64 MiB still
+// comfortably covers every real recorded plan checked when this was chosen
+// (a live conf/gonf plan.jsonl was 24 KB; this project's own test fixtures
+// are all a few KB) while cutting the amplification ceiling by 4x. It is a
+// var, not a const, so an embedder with a genuinely large legitimate plan
+// can raise it — e.g. `plan.MaxDecompressedPushPlan = 256 << 20` before
+// calling DecodePush — instead of hitting a hard, unfixable wall; do this
+// before any concurrent DecodePush call, since the var itself is not
+// synchronized.
+var MaxDecompressedPushPlan int64 = 64 << 20 // 64 MiB
 
 // ErrPushPlanTooLarge is returned when decompressing the GONF-PUSH/1 frame's
 // plan section would exceed MaxDecompressedPushPlan. The refusal is loud and
@@ -230,22 +241,22 @@ func readGzipOrRaw(r io.Reader) ([]byte, error) {
 	return maybeGunzip(raw, MaxDecompressedPushPlan)
 }
 
+// pushPlanReadChunk is how much readCapped reads between size checks: a
+// small, fixed amount unrelated to max (which the caller may set to tens of
+// MB), so that a stream which turns out to exceed max is refused after at
+// most one chunk's worth of bytes crossed the cap — not after the buffer
+// has grown anywhere near max. Matches secret.readChunk's convention
+// (secret/file.go) for a bounded chunked read.
+const pushPlanReadChunk = 32 << 10 // 32 KiB
+
 // maybeGunzip decompresses raw when it carries a gzip magic header,
 // otherwise returns it unchanged (the bare-JSONL plan section case). max
 // caps the DECOMPRESSED output, not just the compressed input — see
 // MaxDecompressedPushPlan's doc comment for why the two are not
-// interchangeable. It is a parameter rather than a direct read of that
-// constant so this package's own tests can exercise the cap mechanism at a
-// small scale (a few MB) instead of actually decompressing hundreds of
-// megabytes just to prove the check fires.
-//
-// The limited reader is given max+1: reading one byte past the cap is what
-// lets the check below tell "landed exactly on the limit" (max+1 bytes
-// requested, fewer came back: genuine EOF, no error) apart from "would have
-// kept going" (max+1 bytes came back: the stream had more) without needing
-// to read past max+1 to find out. Exceeding it fails loudly with
-// ErrPushPlanTooLarge; the plan is never silently truncated and handed to
-// DecodePlanBytes as if it were complete.
+// interchangeable. It is a parameter rather than a direct read of that var
+// so this package's own tests can exercise the cap mechanism at a small
+// scale (a few MB) instead of actually decompressing hundreds of megabytes
+// just to prove the check fires.
 func maybeGunzip(raw []byte, max int64) ([]byte, error) {
 	if len(raw) < 2 || raw[0] != 0x1f || raw[1] != 0x8b {
 		return raw, nil
@@ -255,14 +266,59 @@ func maybeGunzip(raw []byte, max int64) ([]byte, error) {
 		return nil, fmt.Errorf("plan push: gzip: %w", err)
 	}
 	defer func() { _ = gr.Close() }()
-	out, err := io.ReadAll(io.LimitReader(gr, max+1))
+	out, err := readCapped(gr, max)
 	if err != nil {
+		if errors.Is(err, ErrPushPlanTooLarge) {
+			// Already fully formatted (readCapped's own message); wrapping
+			// it again here would double up the "plan push: gzip:" prefix
+			// ErrPushPlanTooLarge's own message never had.
+			return nil, err
+		}
 		return nil, fmt.Errorf("plan push: gzip: %w", err)
 	}
-	if int64(len(out)) > max {
-		return nil, fmt.Errorf("%w (%d byte limit)", ErrPushPlanTooLarge, max)
-	}
 	return out, nil
+}
+
+// readCapped reads r to EOF in pushPlanReadChunk-sized chunks into a
+// bytes.Buffer pre-grown to just ONE chunk — not to max, which would
+// reintroduce, for a call about to be refused anyway, the same oversized
+// up-front allocation this function exists to avoid. It fails loudly with
+// ErrPushPlanTooLarge the moment the running byte count would exceed max,
+// before ever writing the bytes that crossed it into the buffer: the plan
+// is never silently truncated and handed to DecodePlanBytes as if it were
+// complete, and the refusal path never materializes anywhere near max
+// bytes, let alone past it.
+//
+// This replaces an earlier io.ReadAll(io.LimitReader(r, max+1)) (task be2):
+// io.ReadAll's internal buffer grows by repeated doubling, so by the time
+// its own post-hoc length check could run, it could already have
+// over-allocated up to ~2x the bytes it actually needed — for a stream well
+// past max, peak memory during that single ReadAll call could approach 2x
+// max before the caller ever learned the stream was too large. Checking the
+// running total after every small, fixed-size chunk instead means an
+// oversized stream is caught within pushPlanReadChunk bytes of crossing
+// max, independent of the buffer's own growth strategy.
+func readCapped(r io.Reader, max int64) ([]byte, error) {
+	var buf bytes.Buffer
+	buf.Grow(pushPlanReadChunk)
+	chunk := make([]byte, pushPlanReadChunk)
+	var total int64
+	for {
+		n, err := r.Read(chunk)
+		if n > 0 {
+			total += int64(n)
+			if total > max {
+				return nil, fmt.Errorf("%w (%d byte limit)", ErrPushPlanTooLarge, max)
+			}
+			buf.Write(chunk[:n])
+		}
+		if errors.Is(err, io.EOF) {
+			return buf.Bytes(), nil
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
 }
 
 func writeBlobsGzipTar(w io.Writer, mem BlobReader) error {

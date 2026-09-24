@@ -950,7 +950,7 @@ func TestCLIApplySealedLargeLegitimatePlanSucceeds(t *testing.T) {
 	frame := buf.Bytes()
 
 	sealed := sealFrame(t, frame, []string{recipientLine})
-	if len(sealed) > maxSealedFrameBytes || len(sealed) > plan.MaxDecompressedPushPlan {
+	if len(sealed) > maxSealedFrameBytes || int64(len(sealed)) > plan.MaxDecompressedPushPlan {
 		t.Fatalf("test construction error: sealed frame %d bytes already exceeds a cap, not a meaningful legitimate-plan check", len(sealed))
 	}
 	planPath := writeSealedPlanFile(t, dir, sealed)

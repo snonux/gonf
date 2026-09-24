@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -271,13 +272,12 @@ func gzipBomb(t *testing.T, n int) []byte {
 
 // TestMaybeGunzipCapsDecompressedOutput is task be2's regression test for
 // the memory-amplification DoS: without a decompressed-output cap,
-// maybeGunzip's io.ReadAll(gr) would read a gzip stream to completion no
-// matter how large it inflates to. This uses maybeGunzip's max parameter
-// (not the real MaxDecompressedPushPlan constant, task be2's own annotation
-// notes this deliberately: the mechanism is proven at a small, fast scale,
-// not by actually decompressing hundreds of megabytes in a test) to prove
-// the cap fires, loudly, before the bomb's true 5 MiB is ever fully
-// realized.
+// maybeGunzip would read a gzip stream to completion no matter how large it
+// inflates to. This uses maybeGunzip's max parameter (not the real
+// MaxDecompressedPushPlan var, task be2's own annotation notes this
+// deliberately: the mechanism is proven at a small, fast scale, not by
+// actually decompressing hundreds of megabytes in a test) to prove the cap
+// fires, loudly, before the bomb's true 5 MiB is ever fully realized.
 func TestMaybeGunzipCapsDecompressedOutput(t *testing.T) {
 	const bombSize = 5 << 20 // 5 MiB of zeros
 	bomb := gzipBomb(t, bombSize)
@@ -300,12 +300,12 @@ func TestMaybeGunzipCapsDecompressedOutput(t *testing.T) {
 // error" companion: it samples runtime.MemStats.TotalAlloc (a monotonic
 // cumulative counter, unaffected by when GC happens to run, unlike
 // HeapAlloc) around the same call and asserts the call did not allocate
-// anywhere near the bomb's true 5 MiB decompressed size — mathematically
-// guaranteed by construction (maybeGunzip wraps the gzip.Reader in
-// io.LimitReader(gr, max+1) before io.ReadAll, so the decompressor is never
-// asked to produce more than max+1 bytes regardless of what the compressed
-// stream could otherwise expand to), and this test is the empirical check
-// that the wiring actually behaves that way.
+// anywhere near the bomb's true 5 MiB decompressed size. readCapped (task
+// 3g2) reads in pushPlanReadChunk-sized chunks and refuses the moment the
+// running total exceeds the cap, so the decompressor is never asked to
+// produce more than about one chunk past testCap regardless of what the
+// compressed stream could otherwise expand to — this test is the empirical
+// check that the wiring actually behaves that way.
 func TestMaybeGunzipCapsDecompressedOutputBoundsMemory(t *testing.T) {
 	const bombSize = 5 << 20 // 5 MiB of zeros
 	bomb := gzipBomb(t, bombSize)
@@ -519,5 +519,99 @@ func TestMaybeGunzipWithinCapUnaffected(t *testing.T) {
 	}
 	if !bytes.Equal(out, raw) {
 		t.Fatalf("maybeGunzip within cap = %q, want %q", out, raw)
+	}
+}
+
+// TestDecodePushWithinLoweredCapEndToEnd is task 3g2's confirmation that
+// lowering MaxDecompressedPushPlan from 256 MiB to 64 MiB did not turn it
+// into a wall a real, legitimate push ever hits: it builds a push frame
+// whose decompressed plan section is a few MiB of genuine ops JSONL (well
+// beyond this repo's own real recorded plans, which run to tens of KB, but
+// still comfortably under the new cap) and round-trips it through the full
+// EncodePush/DecodePush path — the same path a real `gonf apply` or `gonf
+// push` uses — rather than calling maybeGunzip directly.
+func TestDecodePushWithinLoweredCapEndToEnd(t *testing.T) {
+	const wantFileOps = 20000 // JSONL for this many ops decompresses to a few MiB
+	ops := make([]Op, 0, wantFileOps+1)
+	ops = append(ops, Op{Op: KindPlan, Version: CurrentVersion, ID: "3g2"}) // required header op
+	for i := 0; i < wantFileOps; i++ {
+		ops = append(ops, Op{
+			Op:      KindFile,
+			Path:    fmt.Sprintf("/tmp/3g2/%d", i),
+			Payload: FilePayload{ContentB64: "aGVsbG8gd29ybGQK"}, // "hello world\n"
+		})
+	}
+	wantOps := len(ops)
+
+	var buf bytes.Buffer
+	if err := EncodePush(&buf, ops, nil); err != nil {
+		t.Fatal(err)
+	}
+	if int64(buf.Len()) >= MaxDecompressedPushPlan {
+		t.Fatalf("test setup: encoded frame %d bytes is not usefully smaller than the cap %d", buf.Len(), MaxDecompressedPushPlan)
+	}
+
+	got, err := DecodePush(&buf, "")
+	if err != nil {
+		t.Fatalf("DecodePush within lowered cap: %v", err)
+	}
+	if len(got.Ops) != wantOps {
+		t.Fatalf("DecodePush within lowered cap: got %d ops, want %d", len(got.Ops), wantOps)
+	}
+	if got.Ops[0].ID != ops[0].ID || got.Ops[1].Path != ops[1].Path || got.Ops[wantOps-1].Path != ops[wantOps-1].Path {
+		t.Fatalf("DecodePush within lowered cap: content mismatch, header=%q first=%q last=%q", got.Ops[0].ID, got.Ops[1].Path, got.Ops[wantOps-1].Path)
+	}
+}
+
+// TestMaxDecompressedPushPlanOverride is task 3g2's confirmation that the
+// override mechanism genuinely works: MaxDecompressedPushPlan is a var
+// precisely so an embedder with an unusually large legitimate plan can
+// raise it past the default before calling DecodePush, rather than hitting
+// a hard, unfixable wall. This builds a decompressed payload larger than
+// the DEFAULT cap but within a raised override, confirms it is refused at
+// the default and then confirms the SAME payload succeeds once the var is
+// raised, restoring the original value afterward so this test cannot leak
+// state into any other test in the package.
+func TestMaxDecompressedPushPlanOverride(t *testing.T) {
+	original := MaxDecompressedPushPlan
+	t.Cleanup(func() { MaxDecompressedPushPlan = original })
+
+	ops := []Op{{Op: KindPlan, Version: CurrentVersion, ID: "p"}}
+	raw, err := EncodePlan(ops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Pad the plan section's decompressed size past the default cap with a
+	// trailing run of a byte DecodePlanBytes would reject as malformed JSON
+	// were it ever reached — it never is here, since maybeGunzip's cap
+	// check happens before any of the decompressed bytes are decoded as a
+	// plan. Kept incompressible-ish (not literally, since gzip.Writer will
+	// still compress padding bytes efficiently, but the padding's CONTENT
+	// is irrelevant: only its decompressed LENGTH matters for this test) at
+	// default cap + 1 MiB, so it must be refused under the default and
+	// accepted only once the override raises the cap past it.
+	padded := append(append([]byte{}, raw...), bytes.Repeat([]byte{'x'}, int(original)+(1<<20)-len(raw))...)
+
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	if _, err := gw.Write(padded); err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	frame := buf.Bytes()
+
+	if _, err := maybeGunzip(frame, MaxDecompressedPushPlan); !errors.Is(err, ErrPushPlanTooLarge) {
+		t.Fatalf("maybeGunzip at default cap = %v, want ErrPushPlanTooLarge", err)
+	}
+
+	MaxDecompressedPushPlan = original + (2 << 20) // override: default cap + 2 MiB
+	out, err := maybeGunzip(frame, MaxDecompressedPushPlan)
+	if err != nil {
+		t.Fatalf("maybeGunzip under raised override: %v", err)
+	}
+	if !bytes.Equal(out, padded) {
+		t.Fatalf("maybeGunzip under raised override returned %d bytes, want %d", len(out), len(padded))
 	}
 }

@@ -327,9 +327,9 @@ needs more:
   fully-decrypted GONF-PUSH/1 frame `decryptAndDecodeSealedPush` reads
   from `seal.Open`'s reader — the read the paragraph above requires can
   still happen, but only up to this many bytes before it refuses loudly.
-- `plan.MaxDecompressedPushPlan` (`plan/pushwire.go`, 256 MiB) separately
-  bounds the plan section's OWN gzip decompression inside that frame
-  (`readGzipOrRaw`/`maybeGunzip`), which is where the 3 MB-to-10.5 GB
+- `plan.MaxDecompressedPushPlan` (`plan/pushwire.go`, 64 MiB by default)
+  separately bounds the plan section's OWN gzip decompression inside that
+  frame (`readGzipOrRaw`/`maybeGunzip`), which is where the 3 MB-to-10.5 GB
   amplification actually happens — this also fixes the pre-existing
   `gonf apply -` (stdin) case, which reached the same unbounded
   decompression even before sealed apply (task 3b2) existed.
@@ -339,6 +339,24 @@ Either cap refuses with a named sentinel error (`errSealedFrameTooLarge`,
 failures in this section — this is availability protection only, not a
 new trust boundary: a plan under both caps is exactly as untrusted as
 before (see "Provenance").
+
+**Amplification WITHIN the cap (task 3g2).** be2's own 256 MiB figure was
+still 4x more than this section's "tens of MB" legitimate envelope, and
+`io.ReadAll`'s internal doubling-growth buffer meant the moment its
+post-hoc length check ran, it could already have over-allocated close to
+2x the bytes it actually needed — so a stream ENTIRELY inside the accepted
+cap (no refusal at all) could still peak at roughly `2 * cap` in memory.
+Measured on the pre-3g2 code: a 254,845-byte compressed input decompressing
+to 250 MiB peaked at 855 MB RSS (~3,360x the compressed size), and a
+203,883-byte input decompressing to 200 MiB peaked at 752–961 MB
+(~3,700–4,700x) — both comfortably under the old 256 MiB cap, so nothing
+refused either one, and gonf's own fleet includes 1 GB-class SBCs this
+could genuinely OOM. Task 3g2 lowered `plan.MaxDecompressedPushPlan` to 64
+MiB (an exported `var`, raisable by an embedder with an unusually large
+legitimate plan) and replaced `maybeGunzip`'s `io.ReadAll` with `readCapped`,
+which reads in small fixed-size chunks and refuses the moment the running
+total would exceed the cap — so even a stream that is ultimately refused
+never grows the buffer anywhere near the cap, let alone past it.
 
 ### Plaintext after decryption
 
