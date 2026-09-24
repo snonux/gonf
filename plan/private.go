@@ -76,6 +76,62 @@ func WritePrivateFile(dir, name string, data []byte) error {
 	return nil
 }
 
+// RenamePrivateFile renames oldName to newName, both plain file names inside
+// dir, for a caller that stages several private files first and publishes
+// them together at the end (`gonf plan -seal -for`, task qg2). dir is opened
+// and verified exactly as WritePrivateFile opens it, and the rename runs
+// relative to that descriptor, so it lands in the verified directory even if
+// the path is swapped meanwhile. rename(2) never follows newName: a planted
+// symlink there is replaced, not written through, like WritePrivateFile's
+// own final rename. Its errors carry the package prefix "plan: " exactly
+// once.
+func RenamePrivateFile(dir, oldName, newName string) error {
+	if err := checkPrivateNames(oldName, newName); err != nil {
+		return fmt.Errorf("plan: %w", err)
+	}
+	dirFD, err := openSecureDir(dir)
+	if err != nil {
+		return fmt.Errorf("plan: open private directory: %w", err)
+	}
+	defer func() { _ = unix.Close(dirFD) }()
+	if err := unix.Renameat(dirFD, oldName, dirFD, newName); err != nil {
+		return fmt.Errorf("plan: rename private file: %w", err)
+	}
+	return nil
+}
+
+// RemovePrivateFile removes the plain file name inside dir, opened and
+// verified as RenamePrivateFile opens it; the counterpart that discards a
+// staged private file nobody will publish. A name that does not exist is not
+// an error (discarding is idempotent). Its errors carry the package prefix
+// "plan: " exactly once.
+func RemovePrivateFile(dir, name string) error {
+	if err := checkPrivateNames(name); err != nil {
+		return fmt.Errorf("plan: %w", err)
+	}
+	dirFD, err := openSecureDir(dir)
+	if err != nil {
+		return fmt.Errorf("plan: open private directory: %w", err)
+	}
+	defer func() { _ = unix.Close(dirFD) }()
+	if err := unix.Unlinkat(dirFD, name, 0); err != nil && !errors.Is(err, unix.ENOENT) {
+		return fmt.Errorf("plan: remove private file: %w", err)
+	}
+	return nil
+}
+
+// checkPrivateNames refuses any name that is not a single, real path
+// element ("", ".", "..", or anything containing a separator), so a rename
+// or remove relative to the verified directory can never reach outside it.
+func checkPrivateNames(names ...string) error {
+	for _, name := range names {
+		if name == "" || name == "." || name == ".." || filepath.Base(name) != name {
+			return fmt.Errorf("invalid private file name %q", name)
+		}
+	}
+	return nil
+}
+
 // ReadPrivateFile reads the plan file name below dir: the read counterpart of
 // WritePrivateFile, used by `gonf apply <plan.jsonl>`. name is opened without
 // following a symlink and without blocking, and must be a regular file, so a

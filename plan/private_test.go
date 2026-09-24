@@ -364,6 +364,55 @@ func TestWritePrivateFileRefusesWritableDir(t *testing.T) {
 	assertOwnerOnlyFile(t, filepath.Join(shared, "plan.jsonl"))
 }
 
+// TestRenameAndRemovePrivateFile pins the staging primitives task qg2 adds:
+// RenamePrivateFile replaces a planted symlink at the target instead of
+// writing through it, both refuse a name that is not one path element and a
+// world-writable directory, and RemovePrivateFile of a missing name is not an
+// error.
+func TestRenameAndRemovePrivateFile(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "out")
+	if err := WritePrivateFile(dir, ".staged", []byte("sealed")); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(t.TempDir(), "victim")
+	if err := os.Symlink(victim, filepath.Join(dir, "plan.age")); err != nil {
+		t.Fatal(err)
+	}
+	if err := RenamePrivateFile(dir, ".staged", "plan.age"); err != nil {
+		t.Fatal(err)
+	}
+	assertOwnerOnlyFile(t, filepath.Join(dir, "plan.age"))
+	if _, err := os.Lstat(victim); !os.IsNotExist(err) {
+		t.Fatalf("symlink target %s was written through (err=%v)", victim, err)
+	}
+	requireEntries(t, dir, "plan.age")
+
+	for _, bad := range []string{"", ".", "..", "../x", "a/b"} {
+		if err := RenamePrivateFile(dir, "plan.age", bad); err == nil {
+			t.Errorf("RenamePrivateFile to %q = nil, want a refusal", bad)
+		}
+		if err := RemovePrivateFile(dir, bad); err == nil {
+			t.Errorf("RemovePrivateFile(%q) = nil, want a refusal", bad)
+		}
+	}
+	if err := RemovePrivateFile(dir, "plan.age"); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemovePrivateFile(dir, "plan.age"); err != nil {
+		t.Fatalf("removing a missing file = %v, want nil", err)
+	}
+	requireEntries(t, dir)
+
+	unsafe := filepath.Join(t.TempDir(), "unsafe")
+	mkdirMode(t, unsafe, 0o777)
+	if err := RenamePrivateFile(unsafe, "a", "b"); err == nil {
+		t.Error("RenamePrivateFile in a world-writable directory = nil, want a refusal")
+	}
+	if err := RemovePrivateFile(unsafe, "a"); err == nil {
+		t.Error("RemovePrivateFile in a world-writable directory = nil, want a refusal")
+	}
+}
+
 // TestStoreWriteFileBlobsDirPolicy: Store.WriteFile creates blobs/ 0700 in a
 // plan directory it does not otherwise touch, keeps an existing blobs/ of
 // ours as it is (0755 included), and refuses one that others can write (the

@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -20,10 +19,13 @@ import (
 // ONCE PER TARGET HOST (api.RecordPlanForHost) so a ForHosts body written
 // for an unrelated host's secrets does not end up in this host's artifact —
 // see docs/plan-encryption.md "Operator UX", the `-for` row. Every host's
-// plan is fully recorded and sealed in memory before anything is written to
-// disk, so a failure partway through (a bad task body, a missing recipient,
-// a filename collision) leaves nothing behind for the hosts already
-// processed.
+// plan is recorded, sealed and staged (a hidden, 0600, sealed staging file,
+// see plan_seal_output.go) before any final plan-<host>.age is published,
+// so a failure partway through (a bad task body, a missing recipient, a
+// filename collision) leaves nothing behind for the hosts already
+// processed, while only one host's sealed frame is held in memory at a
+// time (task qg2; an earlier version held every host's frame until the
+// end).
 //
 // The per-host isolation is bounded by the SAME substring-based host
 // selection `gonf push` itself uses (api.RecordPlanForHost ->
@@ -42,8 +44,9 @@ import (
 // (task rg2) so the state the -for path carries is visible at a glance.
 var forFilenameUnsafe = regexp.MustCompile(`[^A-Za-z0-9._-]`)
 
-// sealedHostPlan is one target host's recorded-and-sealed plan, held in
-// memory until every host in the -for run has succeeded (see planSealedFor).
+// sealedHostPlan is one target host's recorded-and-sealed plan
+// (sealHostPlan), held in memory only until it is staged to disk
+// (sealForDir) or written to stdout (sealForStdout).
 type sealedHostPlan struct {
 	ops        int
 	recipients []seal.Recipient
@@ -54,9 +57,9 @@ type sealedHostPlan struct {
 // its host names, refuse up front if any lacks a plan recipient, if the
 // base recipients (the -recipient flags and recipients file, the same
 // resolvePlanRecipients call planSealed makes) are empty, or if the
-// -stdout/-for combination cannot resolve to exactly one file, seal every
-// host's plan in memory, then write the results out (a file per host, or
-// the one host's bytes on stdout).
+// -stdout/-for combination cannot resolve to exactly one file, then record
+// and seal each host's plan and write it out (a file per host through
+// sealForDir's stage-then-commit, or the one host's bytes on stdout).
 //
 // The zero-base-recipients refusal (task mg2) mirrors planSealed's own
 // (plan_seal.go): without it, a first-time operator with no
@@ -80,14 +83,7 @@ func planSealedFor(outDir, planID string, tasks []string, toStdout bool, forTarg
 		eprintf("plan: %v\n", err)
 		return 1
 	}
-	if missing := hostsMissingPlanRecipient(hosts); len(missing) > 0 {
-		eprintf("plan: -for refused: %s %s a plan recipient "+
-			"(Host(%q, api.WithPlanRecipient(\"age1pq...\"))); nothing written\n",
-			strings.Join(missing, ", "), lackVerb(missing), missing[0])
-		return 1
-	}
-	if toStdout && len(hosts) != 1 {
-		eprintf("plan: -for -stdout refused: %q resolves to %d hosts, not exactly one\n", forTarget, len(hosts))
+	if !forTargetsSealable(hosts, toStdout, forTarget) {
 		return 1
 	}
 	baseRecipients, err := resolvePlanRecipients(recipientFlags, recipientsFilePath, noDefaultRecipients)
@@ -110,22 +106,28 @@ func planSealedFor(outDir, planID string, tasks []string, toStdout bool, forTarg
 		eprintf("plan: %v\n", err)
 		return 1
 	}
-	results, err := sealPerHostPlans(hosts, planID, tasks, baseRecipients)
-	if err != nil {
-		// eprintErr (not eprintf), matching planToSealedDir/planToSealedStdout
-		// (plan_seal.go): sealPerHostPlans' error wraps api.RecordPlanForHost,
-		// which can fail with a declaration error from inside a per-host
-		// ForHosts task body (e.g. a MustSecret lookup) -- exactly the new
-		// failure mode -for introduces (see sealPerHostPlans' own doc
-		// comment). eprintErr appends the recipe's declared-at location for
-		// that case; a plain eprintf silently dropped it (task og2).
-		eprintErr("plan", err)
-		return 1
-	}
 	if toStdout {
-		return writeSealedForStdout(hosts[0], results[hosts[0]])
+		return sealForStdout(hosts[0], planID, tasks, baseRecipients)
 	}
-	return writeSealedForDir(outDir, hosts, files, results)
+	return sealForDir(newSealedOutput(outDir), hosts, files, planID, tasks, baseRecipients)
+}
+
+// forTargetsSealable runs -for's two host-level refusals before anything
+// is recorded or written, printing the refusal itself: a target host
+// without a plan recipient, and -stdout on a target that does not resolve
+// to exactly one host.
+func forTargetsSealable(hosts []string, toStdout bool, forTarget string) bool {
+	if missing := hostsMissingPlanRecipient(hosts); len(missing) > 0 {
+		eprintf("plan: -for refused: %s %s a plan recipient "+
+			"(Host(%q, api.WithPlanRecipient(\"age1pq...\"))); nothing written\n",
+			strings.Join(missing, ", "), lackVerb(missing), missing[0])
+		return false
+	}
+	if toStdout && len(hosts) != 1 {
+		eprintf("plan: -for -stdout refused: %q resolves to %d hosts, not exactly one\n", forTarget, len(hosts))
+		return false
+	}
+	return true
 }
 
 // lackVerb agrees "lacks"/"lack" with a one- or many-host missing list, so
@@ -164,7 +166,7 @@ func hostRecipients(host string, base []seal.Recipient) ([]seal.Recipient, error
 		// Unreachable in practice: planSealedFor already refused any host
 		// missing a recipient before calling this. Kept as a named error
 		// rather than a panic in case the two ever disagree (e.g. a future
-		// caller of sealPerHostPlans that skips the pre-check).
+		// caller of sealHostPlan that skips the pre-check).
 		return nil, fmt.Errorf("host %s has no plan recipient", host)
 	}
 	own, err := seal.ParseRecipients([]string{recipientLine})
@@ -176,32 +178,28 @@ func hostRecipients(host string, base []seal.Recipient) ([]seal.Recipient, error
 	return append(out, own...), nil
 }
 
-// sealPerHostPlans records (api.RecordPlanForHost) and seals (sealPushFrame,
-// plan_seal.go) every host's own plan, entirely in memory, before
-// planSealedFor writes anything out. Returning on the first error, with
-// nothing written for any host yet, is what makes "-for refuses before
-// writing anything" hold even for a failure this function's caller could
-// not have checked up front (an unknown task, a task body error on one
-// particular host's ForHosts branch, ...).
-func sealPerHostPlans(hosts []string, planID string, tasks []string, base []seal.Recipient) (map[string]sealedHostPlan, error) {
-	out := make(map[string]sealedHostPlan, len(hosts))
-	for _, host := range hosts {
-		recipients, err := hostRecipients(host, base)
-		if err != nil {
-			return nil, err
-		}
-		mem := plan.NewMemoryStore()
-		ops, err := api.RecordPlanForHost(host, planID, mem, tasks...)
-		if err != nil {
-			return nil, fmt.Errorf("host %s: %w", host, err)
-		}
-		sealed, err := sealPushFrame(ops, mem, recipients)
-		if err != nil {
-			return nil, fmt.Errorf("host %s: %w", host, err)
-		}
-		out[host] = sealedHostPlan{ops: len(ops), recipients: recipients, sealed: sealed}
+// sealHostPlan records (api.RecordPlanForHost) and seals (sealPushFrame,
+// plan_seal.go) one host's own plan in memory. Its error wraps
+// api.RecordPlanForHost's, which can be a declaration error from inside a
+// per-host ForHosts task body (e.g. a MustSecret lookup) -- exactly the new
+// failure mode -for introduces -- so callers print it with eprintErr (not
+// eprintf), which appends the recipe's declared-at location; a plain
+// eprintf silently dropped it (task og2).
+func sealHostPlan(host, planID string, tasks []string, base []seal.Recipient) (sealedHostPlan, error) {
+	recipients, err := hostRecipients(host, base)
+	if err != nil {
+		return sealedHostPlan{}, err
 	}
-	return out, nil
+	mem := plan.NewMemoryStore()
+	ops, err := api.RecordPlanForHost(host, planID, mem, tasks...)
+	if err != nil {
+		return sealedHostPlan{}, fmt.Errorf("host %s: %w", host, err)
+	}
+	sealed, err := sealPushFrame(ops, mem, recipients)
+	if err != nil {
+		return sealedHostPlan{}, fmt.Errorf("host %s: %w", host, err)
+	}
+	return sealedHostPlan{ops: len(ops), recipients: recipients, sealed: sealed}, nil
 }
 
 // sanitizeHostFilename turns a registered host name into dir/plan-<name>.age's
@@ -246,36 +244,47 @@ func sanitizeHostFilenames(hosts []string) (map[string]string, error) {
 	return files, nil
 }
 
-// writeSealedForDir writes one dir/plan-<host>.age per host, in hosts'
-// order, with the same private-file rules planToSealedDir uses for the
-// whole-plan case (plan.SecureDir once, then plan.WritePrivateFile per
-// file: 0600, symlink-safe). It warns (never touches) about a leftover
-// plaintext plan.jsonl/blobs/ exactly like planToSealedDir does.
-func writeSealedForDir(outDir string, hosts []string, files map[string]string, results map[string]sealedHostPlan) int {
-	if outDir == "" {
-		outDir = "."
-	}
-	if err := plan.SecureDir(outDir); err != nil {
-		eprintf("plan: secure output directory: %v\n", err)
-		return 1
-	}
+// sealForDir records, seals and stages each host's dir/plan-<host>.age in
+// hosts' order, then commits them all (task qg2; see plan_seal_output.go
+// for the write path, shared with plain -seal's planToSealedDir). Each
+// host's sealed frame is staged to disk and released before the next host
+// is recorded, so peak memory is one host's frame rather than all of them;
+// and since nothing is committed until every host succeeded, a failure
+// partway through (a task body error on one host's ForHosts branch, an
+// unwritable staging file, ...) discards what was staged and leaves
+// nothing written, the same promise every earlier -for refusal makes. Only
+// the final commit can fail partway, and its refusal then names what is
+// and is not written.
+func sealForDir(out *sealedOutput, hosts []string, files map[string]string, planID string, tasks []string, base []seal.Recipient) int {
 	for _, host := range hosts {
-		name := "plan-" + files[host] + ".age"
-		r := results[host]
-		if err := plan.WritePrivateFile(outDir, name, r.sealed); err != nil {
-			eprintf("plan: write %s: %v\n", filepath.Join(outDir, name), err)
+		r, err := sealHostPlan(host, planID, tasks, base)
+		if err != nil {
+			out.discard()
+			eprintErr("plan", err)
 			return 1
 		}
-		fmt.Printf("wrote %s (%d ops, %d recipients)\n%s",
-			filepath.Join(outDir, name), r.ops, len(r.recipients), formatRecipients(r.recipients))
+		if err := out.stage("plan-"+files[host]+".age", r.sealed, r.ops, r.recipients); err != nil {
+			out.discard()
+			eprintf("plan: %v; nothing written\n", err)
+			return 1
+		}
 	}
-	warnPreexistingPlaintextPlan(outDir)
+	if err := out.commit(); err != nil {
+		eprintf("plan: %v\n", err)
+		return 1
+	}
 	return 0
 }
 
-// writeSealedForStdout is -for -stdout's single-host write, matching
-// planToSealedStdout's wording and no-disk-touched behaviour.
-func writeSealedForStdout(host string, r sealedHostPlan) int {
+// sealForStdout is -for -stdout's single-host path: record and seal host's
+// plan, then write the bytes to stdout, matching planToSealedStdout's
+// wording and no-disk-touched behaviour.
+func sealForStdout(host, planID string, tasks []string, base []seal.Recipient) int {
+	r, err := sealHostPlan(host, planID, tasks, base)
+	if err != nil {
+		eprintErr("plan", err)
+		return 1
+	}
 	if _, err := os.Stdout.Write(r.sealed); err != nil {
 		eprintf("plan: write stdout: %v\n", err)
 		return 1

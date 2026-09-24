@@ -92,10 +92,12 @@ func planSealed(outDir, planID string, tasks []string, toStdout bool, recipientF
 // from an earlier, unsealed run of the same recipe, warnPreexistingPlaintextPlan
 // warns about it on stderr without touching it: that file is the operator's,
 // and sealing does not know whether it is still needed.
+//
+// The write itself (SecureDir, the private-file write, the "wrote" report
+// and the plaintext warning) is sealedOutput (plan_seal_output.go, task
+// qg2), the one write path -for's per-host artifacts go through too, so the
+// two cannot drift apart in wording or permissions.
 func planToSealedDir(outDir, planID string, tasks []string, recipients []seal.Recipient) int {
-	if outDir == "" {
-		outDir = "."
-	}
 	mem := plan.NewMemoryStore()
 	ops, err := api.RecordPlanTo(planID, mem, tasks...)
 	if err != nil {
@@ -107,24 +109,16 @@ func planToSealedDir(outDir, planID string, tasks []string, recipients []seal.Re
 		eprintf("plan: %v\n", err)
 		return 1
 	}
-	if err := plan.SecureDir(outDir); err != nil {
-		eprintf("plan: secure output directory: %v\n", err)
+	out := newSealedOutput(outDir)
+	if err := out.stage("plan.age", sealed, len(ops), recipients); err != nil {
+		out.discard()
+		eprintf("plan: %v\n", err)
 		return 1
 	}
-	if err := plan.WritePrivateFile(outDir, "plan.age", sealed); err != nil {
-		eprintf("plan: write %s: %v\n", filepath.Join(outDir, "plan.age"), err)
+	if err := out.commit(); err != nil {
+		eprintf("plan: %v\n", err)
 		return 1
 	}
-	// Wording note (docs/plan-encryption.md "Provenance"): "wrote", never
-	// "verified" or "trusted" — a plan.age that decrypts proves only that
-	// whoever sealed it knew a recipient's PUBLIC key, not who they were.
-	// The resolved recipients are printed, not just a count (task ce2): they
-	// are public, safe to echo, and printing them is what actually lets an
-	// operator reviewing output notice an unexpected extra recipient. One
-	// per line, fingerprinted unless -verbose (formatRecipients, task 4g2).
-	fmt.Printf("wrote %s (%d ops, %d recipients)\n%s",
-		filepath.Join(outDir, "plan.age"), len(ops), len(recipients), formatRecipients(recipients))
-	warnPreexistingPlaintextPlan(outDir)
 	return 0
 }
 
