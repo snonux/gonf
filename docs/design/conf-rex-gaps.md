@@ -30,7 +30,7 @@ compute any content Perl closures could (see
   `gonf/secrets` root resolves, and passes its arguments through verbatim;
   it works from any directory, conf 63e83a8).
 - **One consumer module per repository**, depending on `github.com/snonux/gonf`
-  (conf and dotfiles both pin v0.21.0; any later consumer upgrade is a
+  (conf pins v0.21.1, dotfiles v0.21.0; any later consumer upgrade is a
   deliberate compatibility change). Multi-Rexfile composition maps to Go
   packages + `RegisterMethods` + `Aggregate` / `AggregateTasks` (in conf's
   `gonf/tasks/tasks.go`), not to multiple Rexfiles.

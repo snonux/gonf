@@ -1,6 +1,6 @@
 # gonf quick reference
 
-Every user-facing feature in one place, current as of v0.21.0 (plan schema
+Every user-facing feature in one place, current as of v0.21.1 (plan schema
 26). Background, rationale and history live in [design/](design/README.md).
 
 ## Concepts
@@ -634,9 +634,9 @@ CronAt("backup", "0 2 * * *", "/usr/local/bin/backup.sh", WithCronUser("root")) 
   month and weekday names. `@` directives are refused.
 - An unmanaged entry identical to the job (same five fields and exact
   command, in that user's crontab) is adopted by default, so it does not run
-  twice. Not when the job has `WithCronEnv`, or a `NAME=value` line follows
-  the entry. `WithLegacyCommand` is only needed for a different command or
-  schedule.
+  twice: the block takes the entry's place, so the job keeps its
+  environment. Not when the job has `WithCronEnv`. `WithLegacyCommand` is
+  only needed for a different command or schedule.
 - Own user: no `crontab -u`. Other users: `crontab -u USER`, needs root.
 - An advisory lock covers read/merge/write per crontab, between gonf
   processes only.

@@ -3,6 +3,19 @@
 Release notes for gonf. Each release is also an annotated `v*` tag; for
 releases before v0.17.0 the tag message and the git log are the notes.
 
+## v0.21.1 (2026-09-25)
+
+Bug fix, no plan schema change.
+
+Cron ([docs/design/cron.md](docs/design/cron.md), "Adopting existing entries")
+- An unmanaged entry identical to a present job is now adopted even when a
+  `NAME=value` line follows it (another job's `WithCronEnv` block, say). The
+  job's block replaces the entry in place, so it keeps the environment it
+  ran with. v0.20.0 and v0.21.0 left such an entry alone and appended the
+  block, so the job ran twice.
+- A crontab left in that state is repaired on the next apply: an identical
+  unmanaged entry beside the job's existing block is removed.
+
 ## v0.21.0 (2026-09-25)
 
 macOS destinations. Plan schema 26, declared only by a `ConfigSet` with a
