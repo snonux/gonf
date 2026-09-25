@@ -3,6 +3,7 @@ package api
 import (
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
@@ -45,11 +46,21 @@ func TestRegisterMethodsEmbeddedRequiresRoot(t *testing.T) {
 	}
 }
 
-// A method's own OptsX companion REPLACES the embedded marker: the empty
-// opt-out must win over RequiresRoot.
-type markerWithOptOut struct{ dir string }
+// A method's own OptsX companion adds to the embedded marker, so
+// Unprivileged() is the opt-out that wins over RequiresRoot, while an OptsX
+// that only adds Needs keeps it.
+type markerWithOptOut struct {
+	RequiresRoot
+	dir string
+}
 
-func (markerWithOptOut) OptsSmoke() TaskOptions { return TaskOptions{} }
+func (markerWithOptOut) OptsSmoke() TaskOptions { return TaskOptions{Unprivileged()} }
+
+func (markerWithOptOut) OptsNeedy() TaskOptions { return TaskOptions{Needs("smoke")} }
+
+func (m markerWithOptOut) Needy() {
+	File(filepath.Join(m.dir, "needy.txt"), options.WithContent("x"))
+}
 
 func (m markerWithOptOut) Smoke() {
 	File(filepath.Join(m.dir, "smoke.txt"), options.WithContent("x"))
@@ -74,7 +85,21 @@ func TestRegisterMethodsMarkerOptsXOptOut(t *testing.T) {
 		t.Fatalf("ops = %v", opsKinds(ops))
 	}
 	if ops[1].Elevate {
-		t.Fatalf("OptsX empty must replace the embedded marker: %#v", ops[1])
+		t.Fatalf("Unprivileged in OptsX must win over the embedded marker: %#v", ops[1])
+	}
+
+	ops, err = RecordPlan("needy", "", "demo_needy")
+	if err != nil {
+		t.Fatalf("RecordPlan demo_needy: %v", err)
+	}
+	var needy *plan.Op
+	for i := range ops {
+		if ops[i].Op == plan.KindFile && strings.HasSuffix(ops[i].Path, "needy.txt") {
+			needy = &ops[i]
+		}
+	}
+	if needy == nil || !needy.Elevate {
+		t.Fatalf("OptsX adding Needs must keep RequiresRoot: %v", opsKinds(ops))
 	}
 }
 

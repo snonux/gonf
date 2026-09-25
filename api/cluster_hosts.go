@@ -275,7 +275,7 @@ func RecordPlanForHost(host, planID string, store plan.BlobStore, tasks ...strin
 // name, never silently treated as an empty selection.
 func PlanRecipientTargetHosts(name string) ([]string, error) {
 	if h, ok := LookupHost(name); ok {
-		return []string{h.name}, nil
+		return []string{h.Name()}, nil
 	}
 	if c, ok := LookupCluster(name); ok {
 		return c.HostNames(), nil

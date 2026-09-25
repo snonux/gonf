@@ -331,9 +331,9 @@ func TestDSLMisuseIsDeclarationError(t *testing.T) {
 		{"cluster-empty", `Cluster "c": must include at least one Host`, func() { Cluster("c") }},
 		{"cluster-dup-host", `Cluster "c": duplicate Host "h"`, func() { h := Host("h"); Cluster("c", h, h) }},
 		{"cluster-unknown-host", `Cluster "c": Host "ghost" is not registered`, func() { Cluster("c", unregisteredHost("ghost")) }},
-		{"parallel-unknown", `Cluster "x" is not registered`, func() { ClusterRef{name: "x"}.Parallel(3) }},
+		{"parallel-unknown", `Cluster "x" is not registered`, func() { unregisteredCluster("x").Parallel(3) }},
 		{"fleet-empty", `Fleet "f": must include at least one Cluster`, func() { Fleet("f") }},
-		{"fleet-unknown-cluster", `Fleet "f": Cluster "x" is not registered`, func() { Fleet("f", ClusterRef{name: "x"}) }},
+		{"fleet-unknown-cluster", `Fleet "f": Cluster "x" is not registered`, func() { Fleet("f", unregisteredCluster("x")) }},
 		{"must-host", `Host "x" is not registered`, func() { requireZero(MustHost("x").Name()) }},
 		{"must-cluster", `Cluster "x" is not registered`, func() { requireNil(MustCluster("x").HostNames()) }},
 		{"must-fleet", `Fleet "x" is not registered`, func() { requireNil(MustFleet("x").ClusterNames()) }},
@@ -637,7 +637,20 @@ func TestRunTaskBodyPanicDoesNotLeaveAHalfRegisteredSetForApply(t *testing.T) {
 
 // unregisteredHost returns a handle for name without looking it up, standing
 // in for a recipe that kept a handle whose registration was refused.
-func unregisteredHost(name string) HostRef { return HostRef{name: name} }
+// The handle types live in package inventory, so the handle is taken from a
+// real registration that ResetInventory then drops.
+func unregisteredHost(name string) HostRef {
+	h := Host(name)
+	ResetInventory()
+	return h
+}
+
+// unregisteredCluster is unregisteredHost for a cluster handle.
+func unregisteredCluster(name string) ClusterRef {
+	c := Cluster(name, Host(name+"-member"))
+	ResetInventory()
+	return c
+}
 
 // requireZero and requireNil panic (failing the test) when a refused Must*
 // lookup or accessor returned anything but its inert value.

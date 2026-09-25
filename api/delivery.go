@@ -122,11 +122,11 @@ func recordAndPush(ctx context.Context, mode remote.Mode, t PushTarget, planID s
 // runHost is PushHost/PreviewHost's shared body: resolve h, then record and
 // deliver in mode with h's ForHosts host selection.
 func runHost(mode remote.Mode, h HostRef, planID string, tasks []string) error {
-	t, err := h.pushTarget()
+	t, err := hostPushTarget(h)
 	if err != nil {
 		return err
 	}
-	return recordAndPush(context.Background(), mode, t, planID, inventory.SelectionForHosts([]string{h.name}), tasks...)
+	return recordAndPush(context.Background(), mode, t, planID, inventory.SelectionForHosts([]string{h.Name()}), tasks...)
 }
 
 // recordDelivery records tasks once with selected as the ForHosts host

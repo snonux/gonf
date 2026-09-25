@@ -10,7 +10,7 @@ import (
 // every task of that struct — the execution contract declared on the struct
 // itself. The engine composes all embedded StructOption fields (in
 // declaration order) plus the Opts() companion if present; a method's own
-// OptsX companion replaces the combined struct-level set.
+// OptsX companion adds to the combined struct-level set.
 //
 // gonf ships RequiresRoot as the ready-made marker for the common case.
 // Custom markers: define any type implementing this interface and embed it.
@@ -35,7 +35,7 @@ func (RequiresRoot) StructTaskOptions() TaskOptions { return TaskOptions{Privile
 // collectStructOptions gathers the struct-level default TaskOptions of a
 // registered struct: embedded StructOption markers first (declaration
 // order), then the Opts() companion if the struct defines one. A method's
-// own OptsX companion replaces the whole combined struct-level set.
+// own OptsX companion is appended to the whole combined struct-level set.
 //
 // Markers must be embedded (or added as) EXPORTED types: unexported
 // embedded markers are skipped here and fall through to their promoted
