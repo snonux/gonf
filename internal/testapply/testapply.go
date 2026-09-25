@@ -37,7 +37,6 @@
 package testapply
 
 import (
-	"bufio"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -47,6 +46,7 @@ import (
 	"strings"
 
 	"github.com/snonux/gonf/internal/declerr"
+	"github.com/snonux/gonf/internal/hostfacts"
 	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -256,51 +256,15 @@ func applyOps(ctx context.Context, ops []plan.Op, planDir string) error {
 
 // localFacts are the host facts plan.Apply evaluates when blocks and, for a
 // templated File/sync_dir entry, {{.Gonf.Profile}} against
-// (EnsureWithPlanFacts, resource/file/planwire.go). Profile is detected the
-// same way file.localTemplateProfile does, so a template rendered through
-// testapply.Apply matches what api.DetectFacts would report on this host;
-// testapply cannot import api or resource/file for the real helper (either
-// would cycle back through a resource/<kind> package's own test files, e.g.
-// resource/file/file_test.go, which import testapply), so the (small,
-// already duplicated between api.detectProfile and
-// file.localTemplateProfile) detection is repeated here rather than shared.
-// It ignores api.SetProfileOverride, which only a live CLI process sets.
+// (EnsureWithPlanFacts, resource/file/planwire.go). Profile comes from
+// internal/hostfacts, the same detection api.DetectFacts and resource/file's
+// template facts use, so a template rendered through testapply.Apply matches
+// what the real apply reports on this host. It ignores
+// api.SetProfileOverride, which only a live CLI process sets.
 func localFacts() plan.Facts {
 	host, err := os.Hostname()
 	if err != nil {
 		host = ""
 	}
-	return plan.Facts{GOOS: runtime.GOOS, Hostname: host, Profile: localProfile(host)}
-}
-
-// localProfile mirrors file.localTemplateProfile (resource/file/template.go):
-// a hostname containing "rocky" is the rocky profile; otherwise the
-// /etc/os-release ID= line, with the rocky-family IDs folded into "rocky"
-// and "unknown" when os-release is unreadable, empty, or has no ID= line.
-func localProfile(hostname string) string {
-	if strings.Contains(strings.ToLower(hostname), "rocky") {
-		return "rocky"
-	}
-	f, err := os.Open("/etc/os-release")
-	if err != nil {
-		return "unknown"
-	}
-	defer func() { _ = f.Close() }()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		if !strings.HasPrefix(scanner.Text(), "ID=") {
-			continue
-		}
-		id := strings.Trim(strings.TrimPrefix(scanner.Text(), "ID="), `"`)
-		switch id {
-		case "rocky", "centos", "rhel", "almalinux":
-			return "rocky"
-		case "":
-			return "unknown"
-		default:
-			return id
-		}
-	}
-	return "unknown"
+	return plan.Facts{GOOS: runtime.GOOS, Hostname: host, Profile: hostfacts.Profile(host, runtime.GOOS)}
 }

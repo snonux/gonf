@@ -84,7 +84,21 @@ import "encoding/json"
 // unknown noop kind mid-plan after earlier ops had mutated the host, so it
 // must refuse v25 at the header gate. A recorded plan declares v25 only
 // when it has a service op with WithFlags or a noop op (RequiredVersion).
-const CurrentVersion = 25
+// Version 26 expands path tokens (${HOME}) in config_set member paths,
+// chroot and staging_dir (see VersionHomeToken). An older destination would
+// refuse the unexpanded, non-absolute path only when it reached the
+// config_set op, after earlier ops had already mutated the host, so it must
+// refuse v26 at the header gate. A recorded plan declares v26 only when a
+// config_set op carries a token (RequiredVersion); every other destination
+// path field has expanded ${HOME} since schema v1, so a plan using DestHome
+// elsewhere keeps its older header.
+const CurrentVersion = 26
+
+// VersionHomeToken is the plan schema version that made config_set ops
+// expand ${HOME} in their member paths, chroot and staging_dir. Tests pin
+// it so a merge that loses the bump (and so lets an older destination hit a
+// literal "${HOME}" mid-apply) fails loudly.
+const VersionHomeToken = 26
 
 // VersionServiceFlags is the plan schema version that introduced the
 // service op flags/has_flags fields and the noop kind. Tests pin it so a
@@ -158,6 +172,7 @@ var supportedVersions = map[int]struct{}{
 	22:             {},
 	23:             {},
 	24:             {},
+	25:             {},
 	CurrentVersion: {},
 }
 

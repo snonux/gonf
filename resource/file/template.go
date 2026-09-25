@@ -7,7 +7,6 @@ package file
 // overrides them, see EnsureWithPlanFacts in planwire.go).
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -16,6 +15,8 @@ import (
 	"runtime"
 	"strings"
 	"text/template"
+
+	"github.com/snonux/gonf/internal/hostfacts"
 )
 
 // shouldRenderTemplate reports whether content should be rendered through
@@ -176,7 +177,8 @@ func decodeTemplateData(raw []byte) (any, error) {
 
 // localTemplateFacts is the fallback {{.Gonf.*}} source for the direct
 // (non-plan) Ensure path only, e.g. a composite resource converging a member
-// directly and unit tests. It mirrors api.DetectFacts but cannot
+// directly and unit tests. It shares api.DetectFacts' profile detection
+// (internal/hostfacts) but cannot
 // honor api.SetProfileOverride: this package sits below api (api imports
 // it), so it cannot call api.DetectFacts without an import cycle. Plan apply
 // therefore never renders from it: every plan handler that writes template
@@ -191,37 +193,9 @@ func localTemplateFacts() templateFacts {
 	}
 	return templateFacts{
 		GOOS:     runtime.GOOS,
-		Profile:  localTemplateProfile(hostname),
+		Profile:  hostfacts.Profile(hostname, runtime.GOOS),
 		Hostname: hostname,
 	}
-}
-
-func localTemplateProfile(hostname string) string {
-	if strings.Contains(strings.ToLower(hostname), "rocky") {
-		return "rocky"
-	}
-	f, err := os.Open("/etc/os-release")
-	if err != nil {
-		return "unknown"
-	}
-	defer func() { _ = f.Close() }()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		if !strings.HasPrefix(scanner.Text(), "ID=") {
-			continue
-		}
-		id := strings.Trim(strings.TrimPrefix(scanner.Text(), "ID="), `"`)
-		switch id {
-		case "rocky", "centos", "rhel", "almalinux":
-			return "rocky"
-		case "":
-			return "unknown"
-		default:
-			return id
-		}
-	}
-	return "unknown"
 }
 
 func templateFuncMap() template.FuncMap {

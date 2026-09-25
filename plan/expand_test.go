@@ -128,3 +128,34 @@ func TestApplyLinkIfExistsExpandsTokens(t *testing.T) {
 		t.Fatalf("symlink = %q, want %q", got, target)
 	}
 }
+
+// TestPreHomeTokenDestinationRefusesHomeTokenConfigSet simulates a v25
+// destination (schema v26, VersionHomeToken, unsupported): a plan whose
+// config_set carries ${HOME} declares v26, so that destination refuses it at
+// the header gate, before the earlier ensure_dir op mutates anything,
+// instead of meeting the literal "${HOME}" member path mid-apply.
+func TestPreHomeTokenDestinationRefusesHomeTokenConfigSet(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	body := []Op{
+		{Op: KindEnsureDir, Path: "${HOME}/first", Mode: "0750"},
+		{Op: KindConfigSet, Name: "app", Payload: ConfigSetPayload{
+			Members: []ConfigMember{{Key: "conf", Path: "${HOME}/app.conf"}},
+		}},
+	}
+	version := RequiredVersion(body)
+	if version != VersionHomeToken {
+		t.Fatalf("RequiredVersion = %d, want %d", version, VersionHomeToken)
+	}
+	delete(supportedVersions, VersionHomeToken)
+	t.Cleanup(func() { supportedVersions[VersionHomeToken] = struct{}{} })
+
+	ops := append([]Op{{Op: KindPlan, Version: version, ID: "home"}}, body...)
+	err := Apply(ops, Facts{}, "")
+	if err == nil || !strings.Contains(err.Error(), "version") {
+		t.Fatalf("Apply on a v25 destination = %v, want a version refusal", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "first")); statErr == nil {
+		t.Fatal("the version gate must refuse before the first op mutates the host")
+	}
+}

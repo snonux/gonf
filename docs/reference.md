@@ -70,7 +70,9 @@ Both dot-imports are the intended style.
 
 | Option | Meaning |
 |--------|---------|
-| `WhenLinux()` | Destination guard: `goos == linux`. |
+| `WhenLinux()`, `WhenDarwin()`, `WhenFreeBSD()`, `WhenOpenBSD()`, `WhenNetBSD()` | Destination guard: `goos` is that OS. |
+| `WhenBSD()` | Destination guard: `goos` is `freebsd`, `openbsd` or `netbsd`. |
+| `WhenOS(goos...)` | Destination guard: `goos` is one of the names, e.g. `WhenOS("linux", "darwin")`. Names other than `linux`, `darwin`, `freebsd`, `openbsd`, `netbsd`, or none at all, are a declaration error. |
 | `WhenProfile(p...)` | Destination guard: `Facts.Profile` is one of `p`. `WhenProfile()` with no profile never matches, and naming such a task fails the record. |
 | `WhenHostnameContains(s)` | Destination guard: hostname contains `s`. |
 | `When(func(Facts) bool)` | Opaque predicate, evaluated on the controller only. Cannot travel in a plan. |
@@ -196,15 +198,17 @@ registered.
 
 ```go
 type Facts struct {
-    Profile  string // fedora | rocky | os-release ID | "unknown"
-    GOOS     string
+    Profile  string // fedora | rocky | darwin | os-release ID | "unknown"
+    GOOS     string // linux | darwin | freebsd | openbsd | netbsd
     Hostname string
 }
 ```
 
-`DetectFacts()` fills them. Profile: `rocky` when the hostname contains
-"rocky", otherwise from `/etc/os-release` `ID` (`fedora`; `rocky`, `centos`,
-`rhel`, `almalinux` map to `rocky`; any other ID verbatim). Override with
+`DetectFacts()` fills them, the same way on the controller and on the
+destination at apply. Profile: `darwin` on macOS; else `rocky` when the
+hostname contains "rocky"; else from `/etc/os-release` `ID` (`fedora`;
+`rocky`, `centos`, `rhel`, `almalinux` map to `rocky`; any other ID
+verbatim); `unknown` without one (the BSDs). Override with
 `-profile` or `SetProfileOverride`. `-profile` is not forwarded to pushed
 destinations.
 
@@ -235,10 +239,28 @@ Other helpers:
 
 | API | Meaning |
 |-----|---------|
-| `Home(elem...)` | `$HOME/elem...` on the controller. |
-| `Expand(p)` | Expand a leading `~`. |
+| `Home(elem...)` | `$HOME/elem...` of the controller, where the recipe runs. For sources. |
+| `DestHome(elem...)` | `${HOME}/elem...`, expanded on the destination at apply. For targets. An element escaping the home (`..`) is a declaration error. |
+| `Expand(p)` | Expand a leading `~` (controller home, like `Home`). |
 | `List(a, b, ...)` | `[]string` for multi-path resources, `Command` args and key/value lists. |
 | `${HOME}` in a path | Expanded on the destination at apply. Any other `${...}` is an apply error. |
+
+The rule: `Home` = where the recipe runs (sources), `DestHome` = where the
+plan applies (targets). `Home` records the controller's home literally, so a
+push from `/home/paul` to a Mac would write into `/home/paul` there.
+
+`${HOME}` expands in every destination path: the path of every file, dir,
+link, sync and ensure op, `WithSymlink`/`WithHardlink` targets,
+`LinkIfExists`/`SymlinkMap` targets, `WithDir` and `Creates` of a `Command`,
+`WhenPathExists`, and `ConfigSet` member paths, `WithChroot` and
+`WithStagingDir` (schema 26, declared only by such a set; older binaries
+refuse it). It does not expand in argv (`Command` args, validators) or file
+content. It is the applying process's `$HOME`, else its user database entry;
+an empty or relative home fails the apply. In an elevated chunk (sudo/doas)
+that is whatever home the elevation tool leaves, usually root's, so keep
+`DestHome` targets in unprivileged tasks. Controller-side sources
+(`WithSource`, `WithSourceGlob`, `WithSourceBase`, `InstallFile`/`SyncDir`
+sources) and `WithHome` refuse the token as a declaration error.
 | `EachKV(list, fn)` | Call `fn(k, v)` per pair. Odd length is a declaration error and calls nothing. |
 | `ParseKV(list)` | Same, returning `[][2]string, error`. |
 | `RenderTemplate(path, data)` | Render a template on the controller (see [Templates](#templates)). |
@@ -897,7 +919,7 @@ redacted against resolved secrets.
 | `-privilege m` | `none` | `none`, `sudo` or `doas` for local elevated chunks. |
 | `-cmd-timeout d` | `5m` | Per backend command and validator. SIGTERM on expiry, SIGKILL 10s later. `0` or negative keeps the default. Non-default values are forwarded to the elevated re-exec and to remote gonf versions that accept the flag. |
 | `-version` | | Release version. |
-| `-plan-version` | | Plan schema this binary emits and applies (25). |
+| `-plan-version` | | Plan schema this binary emits and applies (26). |
 | `-strict-preview-version` | | Strict-preview capability (1). |
 | `-sealed-version` | | Sealed-plan capability (1). |
 | `-signed-version` | | Signed-envelope version (1). |

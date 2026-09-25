@@ -38,7 +38,9 @@ func EnsureDir(path string, opts ...options.DirOption) Resource {
 		resource.RecordPlanDraft(draft)
 		return resource.Multi(nil)
 	}
-	info, err := os.Stat(p)
+	// Direct mode: this host is the destination, so its home resolves a
+	// ${HOME} token (DestHome) here.
+	info, err := os.Stat(localPath(p))
 	if err == nil && info.IsDir() {
 		return resource.Multi(nil)
 	}

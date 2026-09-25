@@ -167,18 +167,8 @@ func When(pred func(Facts) bool) TaskOption {
 	}
 }
 
-// WhenLinux guards the task with the serializable predicate goos == linux.
-// Like every serializable guard it travels in the plan as a when_begin and
-// is evaluated on each destination at apply time; it does not hide the task
-// on a non-Linux controller (see TaskInfo.DestinationGuard).
-func WhenLinux() TaskOption {
-	return func(c *taskCandidate) {
-		c.planWhen = append(c.planWhen, plan.Predicate{Fact: "goos", Eq: "linux"})
-	}
-}
-
 // WhenProfile guards the task with Facts.Profile being one of profiles,
-// evaluated on each destination like WhenLinux. A single profile lowers to
+// evaluated on each destination like WhenOS. A single profile lowers to
 // a plan fact predicate with Eq; multiple profiles lower to the same
 // predicate with In (OR-of-values) — both forms are fully serializable. With
 // no profiles at all nothing can match and nothing can be lowered, so the
@@ -187,17 +177,11 @@ func WhenLinux() TaskOption {
 // applying it unguarded.
 func WhenProfile(profiles ...string) TaskOption {
 	return func(c *taskCandidate) {
-		switch len(profiles) {
-		case 0:
+		if len(profiles) == 0 {
 			c.opaque = append(c.opaque, ProfileIs())
-		case 1:
-			c.planWhen = append(c.planWhen, plan.Predicate{Fact: "profile", Eq: profiles[0]})
-		default:
-			c.planWhen = append(c.planWhen, plan.Predicate{
-				Fact: "profile",
-				In:   append([]string(nil), profiles...),
-			})
+			return
 		}
+		c.planWhen = append(c.planWhen, factPredicate("profile", profiles))
 	}
 }
 

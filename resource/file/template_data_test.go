@@ -118,7 +118,7 @@ func TestPlanApplyRendersLocalFactsIncludingProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// localTemplateProfile (what localTemplateFacts uses) never returns "":
+	// hostfacts.Profile (what localTemplateFacts uses) never returns "":
 	// an empty /etc/os-release ID= is itself mapped to "unknown", so this
 	// comparison cannot pass by both sides coincidentally being empty and
 	// does catch testapply's Profile being left unfilled.

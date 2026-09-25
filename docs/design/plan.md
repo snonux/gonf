@@ -482,7 +482,14 @@ if err := ApplyPlan(ops, planDir); err != nil { /* … */ }
   enclosing it may only use host facts (`goos`, `profile`,
   `hostname_contains`); one nested under `path_exists` (or any other
   condition) is refused by the pre-check, before anything is applied.
-- Expands `${HOME}` on the destination; unknown `${…}` is a hard error.
+- Expands `${HOME}` (`api.DestHome`) on the destination in every
+  destination path field (`plan.ExpandPath`, `internal/pathtoken`): op
+  paths, link symlink/hardlink and link_if_exists targets, command
+  dir/creates, the path_exists predicate and, since schema 26
+  (`VersionHomeToken`, declared on demand by `RequiredVersion`),
+  config_set member paths, chroot and staging_dir. Argv and content never
+  expand. Unknown `${…}`, and an empty or relative home, are hard errors.
+  Controller-side sources refuse the token at declaration.
 - Maps ops to existing resource `Ensure` helpers (`file`, `dir`, `link`,
   `cmd`, `pkg`, …) — same semantics as direct resource APIs.
 

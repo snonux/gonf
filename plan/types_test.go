@@ -23,22 +23,23 @@ func TestSupportsVersion(t *testing.T) {
 }
 
 // TestSchemaBumpsArePinned pins the config_set, sensitive, keyed_lines,
-// sync_dir glob and service flags bumps: a merge that loses one would let an older destination
+// sync_dir glob, service flags and home token bumps: a merge that loses one would let an older destination
 // accept a plan whose config_set op it only discovers mid-apply, after
 // earlier ops already mutated the host, apply a secret-bearing op while
 // echoing its validator's output, silently ignore a keyed line edit, or
 // tree-prune a glob sync_dir and delete unmanaged subdirectories, or skip a
-// service's WithFlags (or a noop op it does not know). Every
+// service's WithFlags (or a noop op it does not know), or reach a literal
+// ${HOME} in a config_set mid-apply. Every
 // version 1..CurrentVersion staying supported is pinned by
 // TestWhenRequireVersionPinned (require_test.go).
 func TestSchemaBumpsArePinned(t *testing.T) {
 	t.Parallel()
 	if VersionUserManageHome != 19 || VersionWhenRequire != 20 || VersionConfigSet != 21 ||
 		VersionSensitive != 22 || VersionKeyedLines != 23 || VersionSyncDirGlob != 24 ||
-		VersionServiceFlags != 25 || CurrentVersion != VersionServiceFlags {
-		t.Fatalf("versions: manage_home=%d require=%d config_set=%d sensitive=%d keyed_lines=%d sync_dir_glob=%d service_flags=%d current=%d, want 19/20/21/22/23/24/25/25",
+		VersionServiceFlags != 25 || VersionHomeToken != 26 || CurrentVersion != VersionHomeToken {
+		t.Fatalf("versions: manage_home=%d require=%d config_set=%d sensitive=%d keyed_lines=%d sync_dir_glob=%d service_flags=%d home_token=%d current=%d, want 19/20/21/22/23/24/25/26/26",
 			VersionUserManageHome, VersionWhenRequire, VersionConfigSet, VersionSensitive, VersionKeyedLines, VersionSyncDirGlob,
-			VersionServiceFlags, CurrentVersion)
+			VersionServiceFlags, VersionHomeToken, CurrentVersion)
 	}
 }
 

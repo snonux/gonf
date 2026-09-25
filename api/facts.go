@@ -1,10 +1,10 @@
 package api
 
 import (
-	"bufio"
 	"os"
 	"runtime"
-	"strings"
+
+	"github.com/snonux/gonf/internal/hostfacts"
 )
 
 // Facts describes the host used to evaluate task When predicates.
@@ -32,11 +32,15 @@ func ProfileOverride() string {
 }
 
 // DetectFacts builds Facts from the running system and any profile override.
+// The profile comes from internal/hostfacts ("darwin" on macOS, the
+// os-release ID on Linux, "unknown" on the BSDs); the same code runs on the
+// controller (task selection) and on the destination (ApplyPlan), so both
+// agree on a host.
 func DetectFacts() Facts {
 	f := Facts{
 		GOOS:     runtime.GOOS,
 		Hostname: hostname(),
-		Profile:  detectProfile(hostname()),
+		Profile:  hostfacts.Profile(hostname(), runtime.GOOS),
 	}
 	if profileOverride != "" {
 		f.Profile = profileOverride
@@ -50,42 +54,6 @@ func hostname() string {
 		return ""
 	}
 	return h
-}
-
-func detectProfile(host string) string {
-	if strings.Contains(strings.ToLower(host), "rocky") {
-		return "rocky"
-	}
-	id := osReleaseID()
-	switch id {
-	case "fedora":
-		return "fedora"
-	case "rocky", "centos", "rhel", "almalinux":
-		return "rocky"
-	default:
-		if id != "" {
-			return id
-		}
-		return "unknown"
-	}
-}
-
-func osReleaseID() string {
-	f, err := os.Open("/etc/os-release")
-	if err != nil {
-		return ""
-	}
-	defer func() { _ = f.Close() }()
-
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := sc.Text()
-		if strings.HasPrefix(line, "ID=") {
-			v := strings.TrimPrefix(line, "ID=")
-			return strings.Trim(v, `"`)
-		}
-	}
-	return ""
 }
 
 // ProfileIs returns a When predicate that matches Facts.Profile.

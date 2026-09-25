@@ -29,7 +29,9 @@ func LinkIfExists(path, target string, opts ...options.LinkOption) Resource {
 		})
 		return resource.Multi(nil)
 	}
-	if _, err := os.Stat(filepath.Clean(t)); err != nil {
+	// Direct mode: expand a ${HOME} target (DestHome) against this host,
+	// the destination; the Link keeps the token for its own handler.
+	if _, err := os.Stat(localPath(t)); err != nil {
 		return NoLink(p, opts...)
 	}
 	return Link(p, append([]options.LinkOption{options.WithSymlink(t)}, opts...)...)

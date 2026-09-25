@@ -28,7 +28,9 @@ func WhenPathExists(path string, fn func()) {
 		plan.Record(plan.Op{Op: plan.KindWhenEnd})
 		return
 	}
-	if _, err := os.Stat(p); err != nil {
+	// Direct mode: this host is the destination, so its home resolves a
+	// ${HOME} token (DestHome) here, as the recorded predicate would there.
+	if _, err := os.Stat(localPath(p)); err != nil {
 		return
 	}
 	// See WhenHostname's non-recording branch: no per-fragment op scope to

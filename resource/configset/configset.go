@@ -115,7 +115,8 @@ func (m *member) SetGroup(group string) { m.group = group }
 func (m *member) SetSensitive() { m.sensitive = true }
 
 // build applies opts and turns the collected members into a validated spec,
-// reading WithSource members from the controller.
+// reading WithSource members from the controller. The returned spec keeps
+// its path tokens unexpanded (see spec.expanded).
 func build(name string, opts []opt.ConfigSetOption) (*ConfigSet, error) {
 	c := &ConfigSet{spec: spec{name: name}}
 	for _, o := range opts {
@@ -135,7 +136,9 @@ func build(name string, opts []opt.ConfigSetOption) (*ConfigSet, error) {
 		c.spec.members = append(c.spec.members, ms)
 		c.spec.sensitive = c.spec.sensitive || m.sensitive
 	}
-	if err := c.spec.validate(); err != nil {
+	// Validate the token-expanded copy (see spec.expanded); c.spec keeps
+	// its ${HOME} tokens for the draft, so the destination expands them.
+	if _, err := c.spec.validateExpanded(); err != nil {
 		return nil, err
 	}
 	return c, nil
@@ -265,6 +268,11 @@ func ensure(name string, sys *system, outcomes *outcomeStore, opts []opt.ConfigS
 	if err != nil {
 		return err
 	}
-	c.spec.sys, c.spec.outcomes = sys, outcomes
-	return c.spec.apply()
+	// A direct apply runs here, so ${HOME} resolves to this host's home.
+	s, err := c.spec.expanded()
+	if err != nil {
+		return err
+	}
+	s.sys, s.outcomes = sys, outcomes
+	return s.apply()
 }

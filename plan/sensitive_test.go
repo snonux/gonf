@@ -25,12 +25,12 @@ func TestSensitiveIDs(t *testing.T) {
 // TestRequiredVersion pins the on-demand header: v22 only with a sensitive
 // op, v23 with a keyed line edit (sensitive or not), v24 only with a
 // pruning glob sync_dir op, v25 with a flags-managing service op or a noop
-// op (the highest wins). It also pins CurrentVersion,
+// op, v26 with a ${HOME} token in a config_set op (the highest wins). It also pins CurrentVersion,
 // so a later bump must revisit RequiredVersion instead of silently emitting
 // too old a header.
 func TestRequiredVersion(t *testing.T) {
 	t.Parallel()
-	if CurrentVersion != VersionServiceFlags {
+	if CurrentVersion != VersionHomeToken {
 		t.Fatalf("CurrentVersion %d: extend RequiredVersion for the new schema", CurrentVersion)
 	}
 	plain := Op{Op: KindFile, Path: "/a"}
@@ -83,6 +83,13 @@ func TestRequiredVersion(t *testing.T) {
 		{"service flags after glob prune", []Op{globPrune, {Op: KindService, Name: "s", Payload: ServicePayload{HasFlags: true}}}, VersionServiceFlags},
 		{"flags payload on non-service op", []Op{{Op: KindTimer, Name: "t", Payload: ServicePayload{HasFlags: true}}}, VersionConfigSet},
 		{"noop", []Op{sensitive, {Op: KindNoop, Name: "ping", ID: "Noop[ping]"}}, VersionServiceFlags},
+		{"home token in file path", []Op{{Op: KindFile, Path: "${HOME}/.x"}}, VersionConfigSet},
+		{"home token in config_set member", []Op{homeSet(ConfigSetPayload{Members: []ConfigMember{{Key: "a", Path: "${HOME}/a"}}})}, VersionHomeToken},
+		{"home token in config_set chroot", []Op{homeSet(ConfigSetPayload{Chroot: "${HOME}/c"})}, VersionHomeToken},
+		{"home token in config_set staging", []Op{homeSet(ConfigSetPayload{StagingDir: "${HOME}/s"})}, VersionHomeToken},
+		{"home token after service flags", []Op{{Op: KindService, Name: "s", Payload: ServicePayload{HasFlags: true}}, homeSet(ConfigSetPayload{StagingDir: "${HOME}/s"})}, VersionHomeToken},
+		{"config_set without token", []Op{homeSet(ConfigSetPayload{Members: []ConfigMember{{Key: "a", Path: "/etc/a"}}})}, VersionConfigSet},
+		{"config_set payload on non-config_set op", []Op{{Op: KindFile, Path: "/f", Payload: ConfigSetPayload{Chroot: "${HOME}"}}}, VersionConfigSet},
 	}
 	for _, tc := range cases {
 		if got := RequiredVersion(tc.ops); got != tc.want {
@@ -173,4 +180,9 @@ func TestSensitiveSurvivesCodecAndSplit(t *testing.T) {
 	if !SupportsVersion(VersionSensitive-1) || !SupportsVersion(VersionSensitive) {
 		t.Fatal("v21 and v22 must both stay supported")
 	}
+}
+
+// homeSet is a config_set op carrying p, for TestRequiredVersion.
+func homeSet(p ConfigSetPayload) Op {
+	return Op{Op: KindConfigSet, Name: "s", Payload: p}
 }

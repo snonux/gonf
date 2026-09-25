@@ -128,7 +128,8 @@ func (h setHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	return s.apply()
 }
 
-// specFromOp decodes and validates a config_set op. p degrades to the zero
+// specFromOp decodes, token-expands (spec.expanded) and validates a
+// config_set op. p degrades to the zero
 // plan.ConfigSetPayload (an empty set with no chroot/staging override) for
 // an op whose Payload is nil or mistyped — an op decoded from an arbitrary
 // plan.jsonl — rather than panicking (see plan.PayloadOf's doc comment).
@@ -148,10 +149,9 @@ func specFromOp(op plan.Op) (*spec, error) {
 	for _, v := range p.Validators {
 		s.validators = append(s.validators, resource.PlanArgv{Bin: v.Bin, Args: slices.Clone(v.Args)})
 	}
-	if err := s.validate(); err != nil {
-		return nil, err
-	}
-	return s, nil
+	// Expand the destination path tokens (${HOME}, schema v26) before the
+	// checks, which compare clean absolute paths.
+	return s.validateExpanded()
 }
 
 // memberFromWire decodes one wire member. Empty content is legitimate (an

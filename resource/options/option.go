@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/snonux/gonf/internal/declerr"
+	"github.com/snonux/gonf/internal/pathtoken"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -488,8 +489,15 @@ func WithGroup(group string) groupOption {
 // It does not create the directory; use WithCreateHome to request that. An
 // existing account's home field is left alone unless WithManageHome is also
 // given (see resource/options/user.go).
+//
+// A ${HOME} path token (api.DestHome) is refused: it would name the
+// applying user's home, not the managed account's.
 func WithHome(home string) userAccountOption {
 	return userAccountOption(func(target any) {
+		if pathtoken.HasToken(home) {
+			misuse(target, fmt.Errorf("WithHome %q: a path token such as %s names the applying user's home, not the account's; give the account's home literally", home, pathtoken.Home))
+			return
+		}
 		requires(target, "WithHome", func(r Homeable) { r.SetHome(home) })
 	})
 }
@@ -543,18 +551,41 @@ func WithMode(mode os.FileMode) fileDirOption {
 	})
 }
 
-// WithSource sets the source path for a file or directory resource.
+// WithSource sets the source path for a file or directory resource. The
+// source is read on the controller (where the recipe runs), so a
+// destination path token such as ${HOME} (api.DestHome) is refused; use
+// api.Home for a controller home path.
 func WithSource(source string) fileDirOption {
 	return fileDirOption(func(target any) {
+		if refuseSourceToken(target, "WithSource", source) {
+			return
+		}
 		requires(target, "WithSource", func(r Sourced) { r.SetSource(source) })
 	})
 }
 
-// WithSourceGlob copies matching files into a directory.
+// WithSourceGlob copies matching files into a directory. Like WithSource,
+// the pattern is matched on the controller and refuses path tokens.
 func WithSourceGlob(pattern string) dirOption {
 	return dirOption(func(target any) {
+		if refuseSourceToken(target, "WithSourceGlob", pattern) {
+			return
+		}
 		requires(target, "WithSourceGlob", func(r SourceGlobable) { r.SetSourceGlob(pattern) })
 	})
+}
+
+// refuseSourceToken reports a controller-side source path carrying a
+// destination path token as misuse and returns true. Tokens only expand on
+// the destination at apply; the controller would otherwise read a literal
+// "${HOME}" directory. Refusing is safer than silently expanding the
+// controller's home, which may not be the home the recipe author meant.
+func refuseSourceToken(target any, label, p string) bool {
+	if !pathtoken.HasToken(p) {
+		return false
+	}
+	misuse(target, fmt.Errorf("%s %q: path tokens such as %s expand on the destination, but a source is read on the controller; use api.Home for the controller's home", label, p, pathtoken.Home))
+	return true
 }
 
 // WithParam overrides the template parameter used by a file resource.
@@ -590,8 +621,12 @@ func WithValidation(bin string, args []string) fileOption {
 }
 
 // WithSourceBase sets the declared source directory for a synced directory.
+// It names a controller path, so path tokens are refused as for WithSource.
 func WithSourceBase(value string) dirOption {
 	return dirOption(func(target any) {
+		if refuseSourceToken(target, "WithSourceBase", value) {
+			return
+		}
 		requires(target, "WithSourceBase", func(r SourceBaseable) { r.SetSourceBase(value) })
 	})
 }

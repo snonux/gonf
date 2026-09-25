@@ -3,6 +3,37 @@
 Release notes for gonf. Each release is also an annotated `v*` tag; for
 releases before v0.17.0 the tag message and the git log are the notes.
 
+## Unreleased
+
+macOS destinations. Plan schema 26, declared only by a `ConfigSet` with a
+`${HOME}` path; every other plan keeps its older header and encodes
+exactly as before.
+
+Paths ([docs/reference.md](docs/reference.md), "Other helpers")
+- `DestHome(elem...)` returns `${HOME}/elem...`, expanded on the
+  destination at apply. `Home` = where the recipe runs (sources), `DestHome`
+  = where the plan applies (targets). `Home` records the controller's home
+  literally, so a push from Linux to a Mac wrote into `/home/paul` there.
+- `${HOME}` already expanded in op paths, link targets, `link_if_exists`,
+  `Command` `WithDir`/`Creates` and `WhenPathExists`. It now also expands in
+  `ConfigSet` member paths, `WithChroot` and `WithStagingDir` (the schema 26
+  bit), and in the direct-mode probes of `EnsureDir`, `LinkIfExists` and
+  `WhenPathExists`.
+- `${HOME}` is the applying process's `$HOME`, falling back to its user
+  database entry; an empty or relative home fails the apply. Under sudo/doas
+  it is whatever home the elevation tool leaves.
+- The token in a controller-side source (`WithSource`, `WithSourceGlob`,
+  `WithSourceBase`, `InstallFile`/`SyncDir` sources) or in `WithHome` is a
+  declaration error.
+
+Facts and guards ([docs/reference.md](docs/reference.md), "Task options", "Facts")
+- Profile `darwin` on macOS (was `unknown`). Controller, destination and
+  template facts share one detection; Linux and BSD results are unchanged.
+- `WhenDarwin()`, `WhenFreeBSD()`, `WhenOpenBSD()`, `WhenNetBSD()`,
+  `WhenBSD()` and `WhenOS(goos...)` task guards, destination-evaluated like
+  `WhenLinux()` (several names record one `in` predicate). An unknown GOOS
+  is a declaration error. No body-level GOOS helper yet: use a task guard.
+
 ## v0.20.0 (2026-09-25)
 
 Plan schema 25, declared only by a plan that uses `WithFlags` or `Noop`;
