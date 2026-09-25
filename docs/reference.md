@@ -1,6 +1,6 @@
 # gonf quick reference
 
-Every user-facing feature in one place, current as of v0.21.1 (plan schema
+Every user-facing feature in one place, current as of v0.22.0 (plan schema
 26). Background, rationale and history live in [design/](design/README.md).
 
 ## Concepts

@@ -3,7 +3,7 @@
 Release notes for gonf. Each release is also an annotated `v*` tag; for
 releases before v0.17.0 the tag message and the git log are the notes.
 
-## Unreleased
+## v0.22.0 (2026-09-25)
 
 Recipe DSL simplifications. No plan schema change. Breaking for recipes in
 three places, marked below.
