@@ -293,7 +293,7 @@ func (badOpts) Broken()               {}
 // signature is a declaration error and Broken is not registered, so it can
 // never run unguarded; the valid sibling still registers.
 func TestRegisterMethodsWhenBadSignatureIsDeclarationError(t *testing.T) {
-	requireDeclErr(t, "RegisterMethods: WhenBroken must be func(Facts) bool", func() {
+	requireDeclErr(t, "RegisterMethods: WhenBroken must be func() TaskOption or func(Facts) bool", func() {
 		RegisterMethods(badWhen{}, WithPrefix("demo_"))
 	})
 	requireQueued(t, "demo_ping")
@@ -345,7 +345,7 @@ func TestRegisterMethodsCompanionErrorOrderIsDeterministic(t *testing.T) {
 		if err == nil {
 			t.Fatalf("iter %d: expected a declaration error, got nil", i)
 		}
-		if want := "RegisterMethods: WhenAlpha must be func(Facts) bool"; err.Error() != want {
+		if want := "RegisterMethods: WhenAlpha must be func() TaskOption or func(Facts) bool"; err.Error() != want {
 			t.Fatalf("iter %d: error = %q, want %q (alphabetically-first method)", i, err.Error(), want)
 		}
 	}
@@ -399,8 +399,8 @@ func (o structOpts) Everything() {
 
 func (o structOpts) DescSmoke() string { return "unprivileged smoke test" }
 
-// OptsSmoke opts OUT of the struct-level default: empty TaskOptions.
-func (o structOpts) OptsSmoke() TaskOptions { return TaskOptions{} }
+// OptsSmoke opts OUT of the struct-level default's Privileged.
+func (o structOpts) OptsSmoke() TaskOptions { return TaskOptions{Unprivileged()} }
 
 func (o structOpts) Smoke() {
 	File(filepath.Join(o.dir, "smoke.txt"), options.WithContent("x"))
@@ -445,11 +445,11 @@ func TestRegisterMethodsStructOptsDefault(t *testing.T) {
 		t.Fatalf("demo_smoke ops = %v", opsKinds(ops))
 	}
 	if ops[1].Elevate {
-		t.Fatalf("OptsX empty must replace (not compose) the struct default: %#v", ops[1])
+		t.Fatalf("Unprivileged in OptsX must win over the struct default: %#v", ops[1])
 	}
 }
 
-func TestRegisterMethodsStructOptsReplacedByOptsX(t *testing.T) {
+func TestRegisterMethodsStructOptsComposedWithOptsX(t *testing.T) {
 	ResetTasks()
 	resource.ResetRepository()
 	t.Cleanup(func() {
@@ -458,8 +458,8 @@ func TestRegisterMethodsStructOptsReplacedByOptsX(t *testing.T) {
 		plan.ResetRecord()
 	})
 
-	// OptsRocky REPLACES the struct default: the recorded op is gated by the
-	// hostname recipe and NOT elevated.
+	// OptsRocky COMPOSES with the struct default: the recorded op is gated
+	// by the hostname recipe and still elevated.
 	Activate(Facts{Hostname: "earth"})
 	RegisterMethods(gated{dir: t.TempDir()}, WithPrefix("demo_"))
 
@@ -473,8 +473,8 @@ func TestRegisterMethodsStructOptsReplacedByOptsX(t *testing.T) {
 	if !reflect.DeepEqual(ops[1].All[0], plan.Predicate{Fact: "hostname_contains", Eq: "rocky"}) {
 		t.Fatalf("when predicates = %#v", ops[1].All)
 	}
-	if ops[2].Elevate {
-		t.Fatalf("method OptsX must REPLACE (not compose) the struct default: %#v", ops[2])
+	if !ops[2].Elevate {
+		t.Fatalf("method OptsX must compose with (not replace) the struct default: %#v", ops[2])
 	}
 }
 
@@ -501,8 +501,8 @@ type badStruct struct{}
 func (badStruct) Opts() string { return "wrong" }
 func (badStruct) Ping()        {}
 
-// OptsRocky REPLACES the struct default: gated by the hostname recipe and
-// NOT privileged.
+// OptsRocky composes with the struct default: gated by the hostname recipe
+// and still privileged.
 type gated struct{ dir string }
 
 func (gated) Opts() TaskOptions { return TaskOptions{Privileged()} }
@@ -547,5 +547,83 @@ func TestRegisterMethodsGroupWhenComposesWithStructOpts(t *testing.T) {
 	}
 	if !ops[1].Elevate || !ops[2].Elevate {
 		t.Fatalf("WithGroupWhen + struct Opts must compose: %#v", ops)
+	}
+}
+
+// A WhenX() TaskOption companion records a serializable guard, so the task
+// stays pushable, unlike the opaque WhenX(Facts) bool form.
+type serializableWhen struct{ dir string }
+
+func (serializableWhen) WhenLinuxOnly() TaskOption { return WhenLinux() }
+
+func (s serializableWhen) LinuxOnly() {
+	File(filepath.Join(s.dir, "linux.txt"), options.WithContent("x"))
+}
+
+func TestRegisterMethodsSerializableWhenCompanion(t *testing.T) {
+	ResetTasks()
+	resource.ResetRepository()
+	t.Cleanup(func() {
+		resource.SetPlanDraftRecorder(nil)
+		plan.SetRecording(false)
+		plan.ResetRecord()
+	})
+	RegisterMethods(serializableWhen{dir: t.TempDir()}, WithPrefix("demo_"))
+
+	ops, err := RecordPlan("serializable-when", "", "demo_linux_only")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+	if len(ops) < 3 || ops[1].Op != plan.KindWhenBegin {
+		t.Fatalf("ops = %v, want a when_begin guard", opsKinds(ops))
+	}
+	if !reflect.DeepEqual(ops[1].All[0], plan.Predicate{Fact: "goos", Eq: "linux"}) {
+		t.Fatalf("when predicates = %#v", ops[1].All)
+	}
+}
+
+func TestDefaultPrefix(t *testing.T) {
+	cases := []struct {
+		v    any
+		want string
+	}{
+		{reflectHome{}, "api_reflect_home_"},
+		{&reflectHome{}, "api_reflect_home_"},
+		{homeTasks{}, "api_home_"},
+	}
+	for _, c := range cases {
+		if got := DefaultPrefix(c.v); got != c.want {
+			t.Errorf("DefaultPrefix(%T) = %q, want %q", c.v, got, c.want)
+		}
+	}
+	for _, c := range []struct{ pkg, typ, want string }{
+		{"home", "Tasks", "home_"},
+		{"freebsd", "Unattended", "freebsd_unattended_"},
+		{"tasks", "HomeTasks", "tasks_home_"},
+		{"main", "Backup", "backup_"},
+		{"frontends", "MailDNS", "frontends_mail_dns_"},
+	} {
+		if got := prefixFor(c.pkg, c.typ); got != c.want {
+			t.Errorf("prefixFor(%q, %q) = %q, want %q", c.pkg, c.typ, got, c.want)
+		}
+	}
+}
+
+type homeTasks struct{}
+
+func (homeTasks) Helix() {}
+
+func TestRegisterMethodsDefaultPrefix(t *testing.T) {
+	ResetTasks()
+	RegisterMethods(homeTasks{})
+	RegisterMethods(homeTasks{}, WithPrefix(""))
+	Activate(Facts{})
+	var names []string
+	for _, info := range Tasks() {
+		names = append(names, info.Name)
+	}
+	want := []string{"api_home_helix", "helix"}
+	if !reflect.DeepEqual(names, want) {
+		t.Fatalf("names = %v, want %v", names, want)
 	}
 }

@@ -34,14 +34,14 @@ func TestHostClusterRegistry(t *testing.T) {
 	Cluster("grp", h1, h2).Parallel(2)
 
 	got, ok := LookupHost("a")
-	if !ok || got.name != "a" {
+	if !ok || got.Name() != "a" {
 		t.Fatalf("LookupHost: %#v %v", got, ok)
 	}
-	if MustHost("a").name != "a" {
+	if MustHost("a").Name() != "a" {
 		t.Fatal("MustHost")
 	}
 	fg, ok := LookupCluster("grp")
-	if !ok || fg.name != "grp" {
+	if !ok || fg.Name() != "grp" {
 		t.Fatalf("LookupCluster: %#v %v", fg, ok)
 	}
 	infos := Hosts()
@@ -143,12 +143,11 @@ func TestFleetOfClusters(t *testing.T) {
 }
 
 func TestClusterDuplicateHostNames(t *testing.T) {
-	ResetInventory()
-	h := Host("dup", WithSSHHost("dup.example"))
-	err := checkClusterHostsUnique([]HostRef{h, {name: "dup"}})
-	if err == nil {
-		t.Fatal("expected duplicate error")
-	}
+	requireDeclErr(t, `Cluster "c": duplicate Host "dup"`, func() {
+		h := Host("dup", WithSSHHost("dup.example"))
+		dup, _ := LookupHost("dup")
+		Cluster("c", h, dup)
+	})
 }
 
 // hasPortPair reports whether argv contains an adjacent "-p port" pair.

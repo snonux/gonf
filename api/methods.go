@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"unicode"
 
 	"github.com/snonux/gonf/internal/declerr"
@@ -15,7 +16,10 @@ import (
 type RegisterOption func(*registerConfig)
 
 type registerConfig struct {
-	prefix    string
+	prefix string
+	// prefixSet is true once WithPrefix ran, so WithPrefix("") (bare method
+	// names) is told apart from no WithPrefix (the derived default prefix).
+	prefixSet bool
 	groupWhen TaskOptions
 	cluster   string
 	// guardCluster is OnCluster's cluster: besides setting cluster, every
@@ -24,9 +28,63 @@ type registerConfig struct {
 	guardCluster string
 }
 
-// WithPrefix prepends prefix to each CamelCase→snake_case method name.
+// WithPrefix prepends prefix to each CamelCase→snake_case method name,
+// replacing the default derived from the struct (see DefaultPrefix). Use it
+// when several structs share one namespace (WithPrefix("frontends_") on
+// frontends.Web and openbsd.Unattended); WithPrefix("") registers the bare
+// method names.
 func WithPrefix(prefix string) RegisterOption {
-	return func(c *registerConfig) { c.prefix = prefix }
+	return func(c *registerConfig) {
+		c.prefix = prefix
+		c.prefixSet = true
+	}
+}
+
+// DefaultPrefix returns the task-name prefix RegisterMethods uses for v when
+// the call has no WithPrefix: the struct's package name and type name in
+// snake_case, each followed by "_". A trailing "Tasks" is dropped from the
+// type name, and a type named just Tasks (or a struct in package main)
+// contributes only the other part:
+//
+//	freebsd.Unattended → "freebsd_unattended_"
+//	home.Tasks         → "home_"
+//	tasks.HomeTasks    → "tasks_home_"
+//	main.Backup        → "backup_"
+//
+// The package name keeps same-named structs of different packages
+// (openbsd.Unattended, freebsd.Unattended) apart.
+func DefaultPrefix(v any) string {
+	t := reflect.TypeOf(v)
+	for t != nil && t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t == nil {
+		return ""
+	}
+	pkg, typ := "", t.Name()
+	if i := strings.IndexByte(typ, '['); i >= 0 {
+		typ = typ[:i] // generic instantiation: Name() carries the type arguments
+	}
+	if s := t.String(); strings.Contains(s, ".") {
+		pkg = s[:strings.IndexByte(s, '.')]
+	}
+	return prefixFor(pkg, typ)
+}
+
+// prefixFor is DefaultPrefix over a package name and a type name.
+func prefixFor(pkg, typ string) string {
+	if pkg == "main" {
+		pkg = ""
+	}
+	typ = strings.TrimSuffix(typ, "Tasks")
+	var b strings.Builder
+	for _, part := range []string{pkg, camelToSnake(typ)} {
+		if part != "" {
+			b.WriteString(part)
+			b.WriteByte('_')
+		}
+	}
+	return b.String()
 }
 
 // WithCluster associates an inventory cluster with every method registered in
@@ -80,16 +138,20 @@ func WithGroupWhen(opts ...TaskOption) RegisterOption {
 
 // RegisterMethods queues tasks from exported methods on v (struct or pointer).
 //
-// Naming: method Helix → "helix", with WithPrefix("home_") → "home_helix".
-// Do not repeat the type name in methods (Unattended.Newsyslog, not
-// Unattended.UnattendedNewsyslog) — the type and WithPrefix already namespace.
+// Naming: method Helix of home.Tasks → "home_helix". Without WithPrefix the
+// prefix is derived from the package and type name (DefaultPrefix);
+// WithPrefix("x_") replaces it and WithPrefix("") drops it. Do not repeat
+// the type name in methods (Unattended.Newsyslog, not
+// Unattended.UnattendedNewsyslog) — the prefix already namespaces.
 // Companions (optional):
 //   - Opts() TaskOptions — struct-level DEFAULT TaskOptions for every
 //     method registered from this struct (e.g. a single Privileged() for
-//     an all-privileged struct); a method's own OptsX companion replaces
-//     the default for that method, so an empty TaskOptions opts out.
+//     an all-privileged struct); a method's own OptsX companion adds to
+//     the default (Unprivileged() opts a single method out of Privileged).
 //   - DescHelix() string — description (else empty)
-//   - WhenHelix(Facts) bool — per-task When predicate; appended after any
+//   - WhenHelix() TaskOption — per-task guard such as WhenLinux(), which
+//     is serializable and so works with push; or WhenHelix(Facts) bool, an
+//     opaque controller-only predicate. Either is appended after any
 //     WithGroupWhen options of the same call. A wrong signature is
 //     registration-time misuse: the task is not registered (a silently
 //     ignored companion could drop the guard and run the task on every
@@ -122,6 +184,9 @@ func RegisterMethods(v any, opts ...RegisterOption) {
 	if err != nil {
 		declerr.Report(err)
 		return
+	}
+	if !cfg.prefixSet {
+		cfg.prefix = DefaultPrefix(v)
 	}
 	registerMethodTasks(rv, rt, cfg)
 }
@@ -198,9 +263,9 @@ func registerReceiver(v any) (reflect.Value, reflect.Type, error) {
 func registerMethodTasks(rv reflect.Value, rt reflect.Type, cfg registerConfig) {
 	// Struct-level default TaskOptions: embedded StructOption markers
 	// (e.g. RequiresRoot) and/or the Opts() companion. A method's own
-	// OptsX companion replaces the combined default for that method (an
-	// empty TaskOptions opts out — e.g. an unprivileged smoke-test task on
-	// an otherwise-privileged struct).
+	// OptsX companion is appended after the combined default for that
+	// method (Unprivileged() opts out of Privileged, e.g. an unprivileged
+	// smoke-test task on an otherwise-privileged struct).
 	structOpts, err := collectStructOptions(rv, rt)
 	if err != nil {
 		declerr.Report(err)
@@ -288,33 +353,52 @@ func resolveDesc(rv reflect.Value, name string) string {
 	return ""
 }
 
-// resolveOpts returns the OptsX companion's TaskOptions if present, which
-// REPLACES the struct-level default (an empty TaskOptions is an explicit
-// opt-out), or structOpts otherwise. A wrong OptsX signature is returned as
-// an error: a silently ignored companion could drop Privileged() and lower a
-// task's privileges.
+// resolveOpts returns the struct-level default followed by the OptsX
+// companion's TaskOptions, if present. The companion adds to the default
+// rather than replacing it, so a RequiresRoot struct's OptsX that only adds
+// Needs keeps Privileged; Unprivileged() is the explicit opt-out. A wrong
+// OptsX signature is returned as an error: a silently ignored companion
+// could drop Unprivileged() or a guard.
 func resolveOpts(rv reflect.Value, name string, structOpts TaskOptions) (TaskOptions, error) {
+	merged := append(TaskOptions(nil), structOpts...)
 	o := rv.MethodByName("Opts" + name)
 	if !o.IsValid() {
-		return structOpts, nil
+		return merged, nil
 	}
-	return callTaskOptionsCompanion(o, "Opts"+name+" must be func() TaskOptions")
+	methodOpts, err := callTaskOptionsCompanion(o, "Opts"+name+" must be func() TaskOptions")
+	if err != nil {
+		return nil, err
+	}
+	return append(merged, methodOpts...), nil
 }
 
-// resolveWhen returns the TaskOption wrapping the WhenX companion's guard
-// predicate, or nil if the companion is absent. A wrong WhenX signature is
-// returned as an error: a silently ignored companion would drop the guard
-// predicate and run the task unconditionally on every host instead of only
-// the intended ones.
+// resolveWhen returns the TaskOption of the WhenX companion, or nil if the
+// companion is absent. Two signatures are accepted:
+//
+//   - WhenX() TaskOption: a guard such as WhenLinux() or WhenProfile("x").
+//     A serializable guard travels in the plan and is evaluated on the
+//     destination, so the task still works with push, cluster and fleet.
+//   - WhenX(Facts) bool: an opaque predicate, evaluated on the controller
+//     only (When). Push, cluster and fleet refuse a task guarded this way.
+//
+// Any other signature is returned as an error: a silently ignored companion
+// would drop the guard and run the task unconditionally on every host.
 func resolveWhen(rv reflect.Value, name string) (TaskOption, error) {
 	w := rv.MethodByName("When" + name)
 	if !w.IsValid() {
 		return nil, nil
 	}
 	wt := w.Type()
+	if wt.NumIn() == 0 && wt.NumOut() == 1 && wt.Out(0) == reflect.TypeOf(TaskOption(nil)) {
+		opt, _ := w.Call(nil)[0].Interface().(TaskOption)
+		if opt == nil {
+			return nil, fmt.Errorf("RegisterMethods: When%s returned a nil TaskOption", name)
+		}
+		return opt, nil
+	}
 	if wt.NumIn() != 1 || wt.In(0) != reflect.TypeOf(Facts{}) ||
 		wt.NumOut() != 1 || wt.Out(0).Kind() != reflect.Bool {
-		return nil, fmt.Errorf("RegisterMethods: When%s must be func(Facts) bool", name)
+		return nil, fmt.Errorf("RegisterMethods: When%s must be func() TaskOption or func(Facts) bool", name)
 	}
 	wMethod := w
 	return When(func(f Facts) bool {

@@ -34,7 +34,6 @@ import (
     "os"
 
     . "github.com/snonux/gonf/api"
-    . "github.com/snonux/gonf/api/options"
     "github.com/snonux/gonf/cli"
 )
 
@@ -49,8 +48,11 @@ func main() {
 }
 ```
 
-`github.com/snonux/gonf/api/options` re-exports `github.com/snonux/gonf/resource/options`.
-Both dot-imports are the intended style.
+`api` re-exports every resource option (`resource/options`), the inventory
+(package `inventory`), `Refuse` and `Dependency`, so one dot import is the
+intended style. The older `api/options` package still re-exports the options
+for qualified use; do not dot-import it next to `api` (Go rejects the
+duplicate names).
 
 ## Tasks
 
@@ -77,14 +79,16 @@ Both dot-imports are the intended style.
 | `WhenHostnameContains(s)` | Destination guard: hostname contains `s`. |
 | `When(func(Facts) bool)` | Opaque predicate, evaluated on the controller only. Cannot travel in a plan. |
 | `Privileged()` | Ops from this task apply as root (see [Privilege](#privilege)). |
+| `Unprivileged()` | Clears `Privileged()`: the opt-out for one method of a `RequiresRoot` struct. |
 | `Operational()` | Explicit action (cert request, one-shot, diagnostic). Never joins a pattern `Aggregate`. |
 | `WithTaskCluster(name)` | Bind the task to a cluster for `ClusterHosts` / `ForHosts` / `EachHost`. |
 | `Needs(tasks...)` | Record these tasks right before this one (see [Needs](#needs)). |
 
-An `OptsX` companion replaces the struct defaults (`RequiresRoot`, `Opts()`)
-for that method; it does not add to them. So when you add `Needs` to a task
-of a `RequiresRoot` struct, repeat `Privileged()`:
-`TaskOptions{Privileged(), Needs("script")}`.
+An `OptsX` companion adds to the struct defaults (`RequiresRoot`, `Opts()`)
+for that method, so `TaskOptions{Needs("script")}` on a `RequiresRoot`
+struct stays privileged. Use `Unprivileged()` to opt one method out:
+`TaskOptions{Unprivileged()}`. (Before v0.22.0 an `OptsX` replaced the
+defaults and an empty list opted out.)
 
 `TaskOptions` is an alias for `[]TaskOption`.
 
@@ -109,27 +113,37 @@ move the check into the body as `OnlyIf`/`Unless` on a `Command`.
 ### RegisterMethods
 
 ```go
-type Home struct{}
+package home
 
-func (Home) DescHelix() string        { return "Install helix" }
-func (Home) Helix()                   { Package("helix") }
-func (Home) OptsHelix() TaskOptions   { return TaskOptions{Privileged()} }
-func (Home) WhenHelix(f Facts) bool   { return f.GOOS == "linux" } // opaque
+type Tasks struct{}
 
-RegisterMethods(Home{}, WithPrefix("home_"), WithGroupWhen(WhenLinux()))
+func (Tasks) DescHelix() string      { return "Install helix" }
+func (Tasks) Helix()                 { Package("helix") }
+func (Tasks) OptsHelix() TaskOptions { return TaskOptions{Privileged()} }
+func (Tasks) WhenHelix() TaskOption  { return WhenLinux() } // serializable
+
+RegisterMethods(home.Tasks{}) // registers home_helix
 ```
 
 | Companion / option | Meaning |
 |--------------------|---------|
 | `DescFoo() string` | Description for `-list`. |
-| `OptsFoo() TaskOptions` | Per-method options. Replaces the struct default; an empty list opts out. |
-| `WhenFoo(Facts) bool` | Per-method opaque filter. |
+| `OptsFoo() TaskOptions` | Per-method options, added after the struct default. `Unprivileged()` opts out of its `Privileged()`. |
+| `WhenFoo() TaskOption` | Per-method guard such as `WhenLinux()`. A serializable guard travels in the plan, so the task still pushes. |
+| `WhenFoo(Facts) bool` | Per-method opaque filter, controller only: push, cluster and fleet refuse the task. |
 | `Opts() TaskOptions` | Struct-level default options. A method named `Opts` is never a task. |
 | embedded `StructOption` | Same as `Opts()`, declared by embedding. `RequiresRoot` ships with gonf (`type T struct{ RequiresRoot }`). |
-| `WithPrefix(p)` | Prefix for every task name. |
+| `WithPrefix(p)` | Prefix for every task name, replacing the default below. `WithPrefix("")` registers bare method names. |
 | `WithGroupWhen(opts...)` | Options applied to every method, before the struct default. |
 | `WithCluster(name)` | Bind every method to a cluster. |
 | `OnCluster(name)` | `WithCluster(name)` plus a destination guard: hostname contains one of the cluster's host names. |
+
+Without `WithPrefix`, the prefix is `DefaultPrefix(v)`: the struct's package
+and type name in snake_case, a trailing `Tasks` dropped, package `main`
+omitted. So `freebsd.Unattended` registers `freebsd_unattended_*`,
+`home.Tasks` registers `home_*` and `main.Backup` registers `backup_*`. Pass
+`WithPrefix` when several structs share one namespace, such as
+`WithPrefix("frontends_")` on `frontends.Web` and `openbsd.Unattended`.
 
 A companion with the wrong signature is a declaration error and that method
 is not registered. Name methods for the action (`Unattended.Script`, not
@@ -798,14 +812,18 @@ Fleet("homelab", edge, other)
 | Host option | Meaning |
 |-------------|---------|
 | `WithSSHUser`, `WithSSHHost`, `WithSSHPort`, `WithSSHIdentity` | SSH connection. |
+| `WithSSHDomain(d)` | SSH hostname defaults to `<name>.<d>`; an explicit `WithSSHHost` wins. |
 | `WithPrivilege(PrivilegeNone \| PrivilegeSudo \| PrivilegeDoas)` | How elevated chunks are wrapped on this host. Default none. |
 | `WithGOOS`, `WithGOARCH` | Cross-compile target for the remote binary. Default: `uname`. |
+| `WithPlatform("goos/goarch")` | Both at once, e.g. `WithPlatform("freebsd/amd64")`. |
 | `WithGonfPath(p)` | Remote install path, default `/usr/local/bin/gonf`. |
 | `WithValue(key, v)` / `h.SetValue(key, v)` | Per-host data under a string key. |
 | `WithData(v)` | Per-host data keyed by `v`'s concrete type. Use a struct type of your own. |
 | `HostDefaults(opts...)` | Bundle options into one `HostOption` (see [Host defaults](#host-defaults)). |
 | `WithPlanRecipient("age1pq...")` | Host's recipient for `plan -seal -for`. Validated at registration. |
 
+- The inventory lives in package `inventory` (its own godoc page); `api`
+  re-exports all of it.
 - `Host`, `Cluster`, `Fleet` register themselves. Duplicates are declaration
   errors.
 - Lookup: `LookupHost`/`MustHost`, `LookupCluster`/`MustCluster`,
@@ -824,8 +842,8 @@ Fleet("homelab", edge, other)
 
 ```go
 freebsd := HostDefaults(WithSSHUser("paul"), WithPrivilege(PrivilegeDoas),
-    WithData(Window{Hour: "3"}))
-Host("f0", freebsd, WithSSHHost("f0.lan"))
+    WithPlatform("freebsd/amd64"), WithSSHDomain("lan"), WithData(Window{Hour: "3"}))
+Host("f0", freebsd) // ssh f0.lan
 Host("f1", freebsd, WithData(Window{Hour: "4"})) // replaces the default
 ```
 

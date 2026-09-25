@@ -2,118 +2,11 @@ package api
 
 import (
 	"context"
-	"fmt"
 	"time"
 
-	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/internal/inventory"
 	"github.com/snonux/gonf/internal/remote"
 )
-
-// FleetRef is an opaque handle for a named set of clusters.
-// Construct with Fleet(...ClusterRef); look up with LookupFleet / MustFleet.
-type FleetRef struct {
-	name string
-}
-
-// FleetInfo is a listing row for registered fleets (lists of clusters).
-type FleetInfo struct {
-	Name     string
-	Clusters []string
-	Hosts    []string // flattened unique hosts across member clusters
-}
-
-// Fleet registers a named set of ClusterRef handles. Each cluster may appear
-// at most once. Hosts may overlap across clusters; PushFleet deduplicates.
-// Registration-time misuse is reported as a declaration error
-// (internal/declerr) and the fleet is not registered; the handle is still
-// returned.
-func Fleet(name string, clusters ...ClusterRef) FleetRef {
-	if err := addFleet(name, clusters); err != nil {
-		declerr.Report(err)
-	}
-	return FleetRef{name: name}
-}
-
-// addFleet is Fleet's checked core.
-func addFleet(name string, clusters []ClusterRef) error {
-	if name == "" {
-		return fmt.Errorf("Fleet: name must not be empty")
-	}
-	if len(clusters) == 0 {
-		return fmt.Errorf("Fleet %q: must include at least one Cluster", name)
-	}
-	seen := map[string]struct{}{}
-	names := make([]string, len(clusters))
-	for i, c := range clusters {
-		if c.name == "" {
-			return fmt.Errorf("Fleet %q: invalid empty Cluster handle", name)
-		}
-		if _, ok := seen[c.name]; ok {
-			return fmt.Errorf("Fleet %q: duplicate Cluster %q", name, c.name)
-		}
-		seen[c.name] = struct{}{}
-		names[i] = c.name
-	}
-	_, err := inventory.AddFleet(name, names)
-	return err
-}
-
-// LookupFleet returns a registered FleetRef.
-func LookupFleet(name string) (FleetRef, bool) {
-	if _, ok := inventory.LookupFleet(name); !ok {
-		return FleetRef{}, false
-	}
-	return FleetRef{name: name}, true
-}
-
-// MustFleet returns LookupFleet's handle. An unknown name is reported as a
-// declaration error (internal/declerr), like MustHost, and the zero FleetRef
-// is returned.
-func MustFleet(name string) FleetRef {
-	f, ok := LookupFleet(name)
-	if !ok {
-		declerr.Reportf("Fleet %q is not registered", name)
-	}
-	return f
-}
-
-// ClusterNames returns member cluster names in registration order. An unknown
-// fleet handle is reported as a declaration error and yields nil.
-func (f FleetRef) ClusterNames() []string {
-	rec, ok := inventory.LookupFleet(f.name)
-	if !ok {
-		declerr.Reportf("Fleet %q is not registered", f.name)
-		return nil
-	}
-	return append([]string(nil), rec.Clusters...)
-}
-
-// HostNames returns unique host inventory names across all member clusters,
-// in first-seen registration order. An unknown fleet (or member cluster) is
-// reported as a declaration error and yields nil.
-func (f FleetRef) HostNames() []string {
-	entries, err := inventory.CollectFleetHosts(f.name)
-	if err != nil {
-		declerr.Report(err)
-		return nil
-	}
-	return fleetHostNames(entries)
-}
-
-// Fleets lists registered fleets sorted by name.
-func Fleets() []FleetInfo {
-	recs := inventory.FleetInfos()
-	out := make([]FleetInfo, 0, len(recs))
-	for _, rec := range recs {
-		out = append(out, FleetInfo{
-			Name:     rec.Name,
-			Clusters: append([]string(nil), rec.Clusters...),
-			Hosts:    rec.Hosts,
-		})
-	}
-	return out
-}
 
 // PushFleet records once and fans out to every unique host across the fleet's
 // clusters (default parallelism 5).

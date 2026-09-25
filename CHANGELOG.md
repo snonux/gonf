@@ -3,6 +3,37 @@
 Release notes for gonf. Each release is also an annotated `v*` tag; for
 releases before v0.17.0 the tag message and the git log are the notes.
 
+## Unreleased
+
+Recipe DSL simplifications. No plan schema change. Breaking for recipes in
+three places, marked below.
+
+Tasks ([docs/reference.md](docs/reference.md), "RegisterMethods")
+- **Breaking:** an `OptsX` companion now adds to the struct defaults
+  (`RequiresRoot`, `Opts()`) instead of replacing them, so an `OptsX` that
+  only adds `Needs` keeps `Privileged()`. `Unprivileged()` is the new
+  opt-out; an empty `TaskOptions` no longer opts out.
+- **Breaking:** without `WithPrefix`, `RegisterMethods` prefixes task names
+  with the struct's package and type name (`DefaultPrefix`): `home.Tasks`
+  registers `home_*`, `freebsd.Unattended` registers `freebsd_unattended_*`.
+  `WithPrefix("")` keeps bare method names.
+- `WhenX() TaskOption` companions (e.g. `return WhenLinux()`) record a
+  serializable guard, so the task still pushes. `WhenX(Facts) bool` keeps
+  working as the opaque, controller-only form.
+
+Imports
+- **Breaking for a dot import of both:** `api` now re-exports every
+  resource option, the inventory, `Refuse` and `Dependency`, so
+  `import . "github.com/snonux/gonf/api"` is the only import a recipe
+  needs. Drop the dot import of `api/options`; Go rejects the duplicate
+  names. `api/options` stays for qualified use.
+- New package `inventory` holds `Host`, `Cluster`, `Fleet`, the host options
+  and lookups, with its own godoc page; `api` re-exports all of it.
+
+Inventory ([docs/reference.md](docs/reference.md), "Inventory")
+- `WithSSHDomain(d)`: the SSH hostname defaults to `<name>.<d>`.
+- `WithPlatform("goos/goarch")` sets `WithGOOS` and `WithGOARCH` at once.
+
 ## v0.21.0 (2026-09-25)
 
 macOS destinations. Plan schema 26, declared only by a `ConfigSet` with a

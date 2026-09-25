@@ -6,8 +6,6 @@ import (
 	//lint:ignore ST1001 intentional: demo tasks use the unqualified DSL, the
 	// same style client repos' own tasks are written in.
 	. "github.com/snonux/gonf/api"
-	//lint:ignore ST1001 intentional, see above.
-	. "github.com/snonux/gonf/api/options"
 )
 
 // Demo holds example task methods registered via RegisterMethods.
