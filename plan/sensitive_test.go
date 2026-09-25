@@ -25,12 +25,13 @@ func TestSensitiveIDs(t *testing.T) {
 // TestRequiredVersion pins the on-demand header: v22 only with a sensitive
 // op, v23 with a keyed line edit (sensitive or not), v24 only with a
 // pruning glob sync_dir op, v25 with a flags-managing service op or a noop
-// op, v26 with a ${HOME} token in a config_set op (the highest wins). It also pins CurrentVersion,
+// op, v26 with a ${HOME} token in a config_set op, v27 with a managed block
+// in a file op (the highest wins). It also pins CurrentVersion,
 // so a later bump must revisit RequiredVersion instead of silently emitting
 // too old a header.
 func TestRequiredVersion(t *testing.T) {
 	t.Parallel()
-	if CurrentVersion != VersionHomeToken {
+	if CurrentVersion != VersionBlocks {
 		t.Fatalf("CurrentVersion %d: extend RequiredVersion for the new schema", CurrentVersion)
 	}
 	plain := Op{Op: KindFile, Path: "/a"}
@@ -90,6 +91,12 @@ func TestRequiredVersion(t *testing.T) {
 		{"home token after service flags", []Op{{Op: KindService, Name: "s", Payload: ServicePayload{HasFlags: true}}, homeSet(ConfigSetPayload{StagingDir: "${HOME}/s"})}, VersionHomeToken},
 		{"config_set without token", []Op{homeSet(ConfigSetPayload{Members: []ConfigMember{{Key: "a", Path: "/etc/a"}}})}, VersionConfigSet},
 		{"config_set payload on non-config_set op", []Op{{Op: KindFile, Path: "/f", Payload: ConfigSetPayload{Chroot: "${HOME}"}}}, VersionConfigSet},
+		{"file without block", []Op{{Op: KindFile, Path: "/f", Payload: FilePayload{AddLines: []string{"a"}}}}, VersionConfigSet},
+		{"block", []Op{plain, blockOp("/b")}, VersionBlocks},
+		{"empty block", []Op{{Op: KindFile, Path: "/b", Payload: FilePayload{Blocks: []Block{{Name: "n"}}}}}, VersionBlocks},
+		{"block before home token", []Op{blockOp("/b"), homeSet(ConfigSetPayload{StagingDir: "${HOME}/s"})}, VersionBlocks},
+		{"home token before block", []Op{homeSet(ConfigSetPayload{StagingDir: "${HOME}/s"}), blockOp("/b")}, VersionBlocks},
+		{"block payload on non-file op", []Op{{Op: KindDir, Path: "/d", Payload: FilePayload{Blocks: []Block{{Name: "n"}}}}}, VersionConfigSet},
 	}
 	for _, tc := range cases {
 		if got := RequiredVersion(tc.ops); got != tc.want {
@@ -185,4 +192,9 @@ func TestSensitiveSurvivesCodecAndSplit(t *testing.T) {
 // homeSet is a config_set op carrying p, for TestRequiredVersion.
 func homeSet(p ConfigSetPayload) Op {
 	return Op{Op: KindConfigSet, Name: "s", Payload: p}
+}
+
+// blockOp is a file op carrying one managed block (WithBlock, schema v27).
+func blockOp(path string) Op {
+	return Op{Op: KindFile, Path: path, Payload: FilePayload{Blocks: []Block{{Name: "hosts", Lines: []string{"a", "b"}}}}}
 }

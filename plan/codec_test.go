@@ -470,6 +470,7 @@ func TestEncodeDecodeLineArraysRoundTrip(t *testing.T) {
 			AddLines:    []string{"first", "second"},
 			RemoveLines: []string{"old", "stale"},
 			KeyedLines:  []KeyedLine{{Key: "export PKG_PATH=", Line: `export PKG_PATH="https://repo/"`}},
+			Blocks:      []Block{{Name: "hosts", Lines: []string{"10.0.0.1 a", "10.0.0.2 b"}}, {Name: "empty"}},
 		},
 	}
 	raw, err := EncodeOp(want)

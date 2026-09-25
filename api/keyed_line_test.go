@@ -37,3 +37,23 @@ func TestHeaderVersionFollowsKeyedLines(t *testing.T) {
 		t.Fatalf("keyed op = %+v", op)
 	}
 }
+
+// TestHeaderVersionFollowsBlocks pins the on-demand v27 header: a plan with
+// a WithBlock managed block needs a destination that honours blocks, and the
+// block travels on the file op.
+func TestHeaderVersionFollowsBlocks(t *testing.T) {
+	ResetForTest()
+	t.Cleanup(ResetForTest)
+	Task("t", "", func() { File("/etc/hosts", options.WithBlock("fleet", "10.0.0.1 a")) })
+	ops, err := RecordPlanTo("blocks", plan.NewMemoryStore(), "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ops[0].Version != plan.VersionBlocks {
+		t.Fatalf("block plan header v%d, want v%d", ops[0].Version, plan.VersionBlocks)
+	}
+	fp, _ := opByPath(t, ops, "/etc/hosts").Payload.(plan.FilePayload)
+	if len(fp.Blocks) != 1 || fp.Blocks[0].Name != "fleet" || len(fp.Blocks[0].Lines) != 1 || fp.Blocks[0].Lines[0] != "10.0.0.1 a" {
+		t.Fatalf("block payload = %+v", fp)
+	}
+}

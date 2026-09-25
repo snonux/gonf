@@ -1,7 +1,7 @@
 # gonf quick reference
 
-Every user-facing feature in one place, current as of v0.22.0 (plan schema
-26). Background, rationale and history live in [design/](design/README.md).
+Every user-facing feature in one place, current as of v0.23.0 (plan schema
+27). Background, rationale and history live in [design/](design/README.md).
 
 ## Concepts
 
@@ -335,6 +335,7 @@ File("/etc/app.conf", WithSource("assets/app.conf.tmpl"), WithTemplateData(cfg))
 File("/etc/lines.conf", WithLines("a=1", "b=2"), WithoutLines("stale"))
 File("/root/.profile", WithKeyedLine("export PKG_PATH=", `export PKG_PATH="https://repo/"`),
     Perm(0o644, Root))
+File("/etc/hosts", WithBlock("fleet", "10.0.0.1 a", "10.0.0.2 b"), Perm(0o644, Root))
 File("/etc/httpd.conf", WithContent(conf), WithValidation("httpd", List("-n", "-f", CandidatePath)))
 NoFile("/tmp/old.txt")
 ```
@@ -347,6 +348,7 @@ NoFile("/tmp/old.txt")
 | `WithTemplateData(v)` | JSON-compatible data for the destination template; implies rendering. |
 | `WithLines(l...)` / `WithoutLines(l...)` | Ensure / remove exact lines. `WithLine`/`WithoutLine` are singular forms. |
 | `WithKeyedLine(key, line)` | Own the line starting with `key` (below). |
+| `WithBlock(name, lines...)` | Own the lines between `# BEGIN GONF <name>` and `# END GONF <name>` (below). |
 | `WithValidation(bin, args)` | Validate a candidate before publishing (below). |
 | `WithMode(m)` | Mode. Setuid/setgid/sticky accepted as raw octal or `os.Mode*` flags. Bits above `0o7777` are refused. |
 | `WithOwner(u)` / `WithGroup(g)` | Owner name; group name or numeric gid. Only explicitly set ownership is recorded. `WithOwner("u:g")` and `WithOwner(Root)` set both, like `Perm`. |
@@ -360,7 +362,7 @@ Sharp edges:
   group explicitly on shared files.
 - Line edits cannot combine with `WithContent`, `WithSource`,
   `WithValidation`, `EnsureFile` or `SecretFile`.
-- Edit order: `WithoutLines`, then keyed lines, then `WithLines`.
+- Edit order: blocks, then `WithoutLines`, then keyed lines, then `WithLines`.
 - Any line edit rewrites the file with its dominant line ending (CRLF only
   if CRLF lines outnumber LF lines). A new file gets `\n`.
 - Content up to 512 KiB travels inline (`content_b64`); larger content goes
@@ -379,6 +381,23 @@ Keyed lines:
 - A too-broad key (`"export "`) deletes unrelated lines. Drops log at Warn,
   replacements at Info. Include the delimiter: `"export PKG_PATH="`.
 - Two File declarations keying one setting differently fight; keep one owner.
+
+Managed blocks (`WithBlock`, plan schema 27, declared only by such a plan):
+
+- gonf owns the lines between `# BEGIN GONF <name>` and `# END GONF <name>`
+  and replaces them with `lines`. Lines outside the markers are never
+  touched, so another tool can keep writing its own entries into the file.
+- No markers: the block is appended with its markers (a missing file is
+  created holding the block). No `lines`: the markers stay, the region is
+  emptied.
+- Markers match after trimming surrounding whitespace. A marker twice, only
+  one of them, or END before BEGIN fails the apply without writing.
+- Refused at declaration: an empty name, a name with surrounding whitespace
+  or a line break, one name with two line sets, a block line with a line
+  break or equal to a marker, a `WithLine`/`WithoutLine` equal to a block or
+  marker line, and a keyed-line key that prefixes one.
+- The markers are `#` comments; use it only on files that treat them so.
+  Removing a block is not modelled: declare it empty, or edit the file.
 
 Validation (`WithValidation`):
 
@@ -939,7 +958,7 @@ redacted against resolved secrets.
 | `-privilege m` | `none` | `none`, `sudo` or `doas` for local elevated chunks. |
 | `-cmd-timeout d` | `5m` | Per backend command and validator. SIGTERM on expiry, SIGKILL 10s later. `0` or negative keeps the default. Non-default values are forwarded to the elevated re-exec and to remote gonf versions that accept the flag. |
 | `-version` | | Release version. |
-| `-plan-version` | | Plan schema this binary emits and applies (26). |
+| `-plan-version` | | Plan schema this binary emits and applies (27). |
 | `-strict-preview-version` | | Strict-preview capability (1). |
 | `-sealed-version` | | Sealed-plan capability (1). |
 | `-signed-version` | | Signed-envelope version (1). |

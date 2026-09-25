@@ -499,6 +499,13 @@ type FilePayload struct {
 	// and leave the legacy line (or skip the whole edit), so it must refuse
 	// v23 at the header gate.
 	KeyedLines []KeyedLine `json:"keyed_lines,omitempty"`
+	// Blocks (schema v27, VersionBlocks) are WithBlock managed blocks,
+	// applied before RemoveLines, KeyedLines and AddLines: each replaces the
+	// lines between its "# BEGIN GONF <name>" and "# END GONF <name>"
+	// markers, or is appended with its markers when the file has neither.
+	// An older destination would ignore the field and skip the block while
+	// reporting success, so it must refuse v27 at the header gate.
+	Blocks []Block `json:"blocks,omitempty"`
 	// AddLine and RemoveLine are accepted when applying pre-v14 plans.
 	// Current recording never sets them (resource.PlanDraft has no singular
 	// fields); they stay on the wire type only so old recorded plans decode
@@ -541,6 +548,7 @@ func (p FilePayload) applyToWire(w *wireOp) {
 	w.AddLines = p.AddLines
 	w.RemoveLines = p.RemoveLines
 	w.KeyedLines = p.KeyedLines
+	w.Blocks = p.Blocks
 	w.AddLine = p.AddLine
 	w.RemoveLine = p.RemoveLine
 }
@@ -786,6 +794,7 @@ var payloadConstructors = map[Kind]func(wireOp) OpPayload{
 			AddLines:       w.AddLines,
 			RemoveLines:    w.RemoveLines,
 			KeyedLines:     w.KeyedLines,
+			Blocks:         w.Blocks,
 			AddLine:        w.AddLine,
 			RemoveLine:     w.RemoveLine,
 		}

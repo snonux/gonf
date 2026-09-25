@@ -67,6 +67,9 @@ var opFieldClasses = map[string]fieldClass{
 	// A keyed line is written content; its key is a literal prefix of it, so
 	// it is payload too (a secret scan must look at both).
 	"keyed_lines[].key": classPayload, "keyed_lines[].line": classPayload,
+	// A managed block's lines are written content; its name is written into
+	// the marker lines, so it is payload too.
+	"blocks[].name": classPayload, "blocks[].lines[]": classPayload,
 	"add_line": classPayload, "remove_line": classPayload,
 	"command": classPayload, "legacy_command": classPayload, "schedule": classPayload,
 	"cron_env[]": classPayload, "on_calendar": classPayload, "on_boot_sec": classPayload,

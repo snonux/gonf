@@ -52,13 +52,14 @@ func (p *loginClassProbe) SetContent(c string) {
 	p.content, p.contentSet, p.sourceSet = c, true, false
 }
 
-func (p *loginClassProbe) SetAbsent()               { p.absent = true }
-func (p *loginClassProbe) SetAddLine(string)        { p.lineEdit = true }
-func (p *loginClassProbe) SetRemoveLine(string)     { p.lineEdit = true }
-func (p *loginClassProbe) AddLines(...string)       { p.lineEdit = true }
-func (p *loginClassProbe) RemoveLines(...string)    { p.lineEdit = true }
-func (p *loginClassProbe) SetKeyedLine(_, _ string) { p.lineEdit = true }
-func (p *loginClassProbe) hasContentOverride() bool { return p.sourceSet || p.contentSet }
+func (p *loginClassProbe) SetAbsent()                { p.absent = true }
+func (p *loginClassProbe) SetAddLine(string)         { p.lineEdit = true }
+func (p *loginClassProbe) SetRemoveLine(string)      { p.lineEdit = true }
+func (p *loginClassProbe) AddLines(...string)        { p.lineEdit = true }
+func (p *loginClassProbe) RemoveLines(...string)     { p.lineEdit = true }
+func (p *loginClassProbe) SetKeyedLine(_, _ string)  { p.lineEdit = true }
+func (p *loginClassProbe) SetBlock(string, []string) { p.lineEdit = true }
+func (p *loginClassProbe) hasContentOverride() bool  { return p.sourceSet || p.contentSet }
 
 // inspectLoginClassOptions validates class and applies opts to a probe. An
 // invalid name, an option the probe does not support (collected by the
@@ -76,7 +77,7 @@ func inspectLoginClassOptions(class string, opts []options.FileOption) (*loginCl
 		return nil, err
 	}
 	if p.lineEdit {
-		return nil, fmt.Errorf("LoginClass %q: WithLine(s)/WithoutLine(s)/WithKeyedLine are not supported; the fragment is owned as a whole file", class)
+		return nil, fmt.Errorf("LoginClass %q: WithLine(s)/WithoutLine(s)/WithKeyedLine/WithBlock are not supported; the fragment is owned as a whole file", class)
 	}
 	return p, nil
 }

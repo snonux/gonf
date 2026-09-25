@@ -90,11 +90,12 @@ type wireOp struct {
 	System              bool     `json:"system,omitempty"`
 	ManageHome          bool     `json:"manage_home,omitempty"`
 
-	// AddLines/RemoveLines/KeyedLines/AddLine/RemoveLine are also
-	// File-exclusive (plan.FilePayload, task ae2).
+	// AddLines/RemoveLines/KeyedLines/Blocks/AddLine/RemoveLine are also
+	// File-exclusive (plan.FilePayload, task ae2; Blocks since v27).
 	AddLines    []string    `json:"add_lines,omitempty"`
 	RemoveLines []string    `json:"remove_lines,omitempty"`
 	KeyedLines  []KeyedLine `json:"keyed_lines,omitempty"`
+	Blocks      []Block     `json:"blocks,omitempty"`
 	AddLine     string      `json:"add_line,omitempty"`
 	RemoveLine  string      `json:"remove_line,omitempty"`
 
@@ -198,6 +199,9 @@ func normalizeWire(w *wireOp) {
 	}
 	if len(w.KeyedLines) == 0 {
 		w.KeyedLines = nil
+	}
+	if len(w.Blocks) == 0 {
+		w.Blocks = nil
 	}
 	if len(w.ValidationArgs) == 0 {
 		w.ValidationArgs = nil

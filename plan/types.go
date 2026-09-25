@@ -92,7 +92,18 @@ import "encoding/json"
 // config_set op carries a token (RequiredVersion); every other destination
 // path field has expanded ${HOME} since schema v1, so a plan using DestHome
 // elsewhere keeps its older header.
-const CurrentVersion = 26
+// Version 27 adds blocks to file operations (WithBlock, see VersionBlocks):
+// each owns the lines between its "# BEGIN GONF <name>" and "# END GONF
+// <name>" markers. An older destination would ignore the field and report a
+// block-only edit converged without writing it, so it must refuse v27 at the
+// header gate. A recorded plan declares v27 only when a file op carries a
+// block (RequiredVersion).
+const CurrentVersion = 27
+
+// VersionBlocks is the plan schema version that introduced the file op
+// blocks field (WithBlock). Tests pin it so a merge that loses the bump (and
+// so lets an older destination silently skip a managed block) fails loudly.
+const VersionBlocks = 27
 
 // VersionHomeToken is the plan schema version that made config_set ops
 // expand ${HOME} in their member paths, chroot and staging_dir. Tests pin
@@ -145,6 +156,14 @@ type KeyedLine struct {
 	Line string `json:"line"`
 }
 
+// Block is one file-op managed block on the wire (WithBlock): Lines are the
+// exact lines between the file's "# BEGIN GONF <Name>" and "# END GONF
+// <Name>" marker lines.
+type Block struct {
+	Name  string   `json:"name"`
+	Lines []string `json:"lines,omitempty"`
+}
+
 // supportedVersions is the set of plan schema versions this binary can apply.
 // Apply must refuse plans whose version is not in this set before any mutation.
 var supportedVersions = map[int]struct{}{
@@ -173,6 +192,7 @@ var supportedVersions = map[int]struct{}{
 	23:             {},
 	24:             {},
 	25:             {},
+	26:             {},
 	CurrentVersion: {},
 }
 
@@ -468,7 +488,8 @@ type Op struct {
 	// FilePayload.RemoveLine are accepted when applying pre-v14 plans;
 	// current recording never sets them (resource.PlanDraft has no singular
 	// fields), they stay on the wire type only so old recorded plans decode
-	// and apply.
+	// and apply. FilePayload.Blocks (schema v27, VersionBlocks) are
+	// WithBlock managed blocks, applied before every other line edit.
 
 	// Name is a package name, command registry name, file resource identity,
 	// or similar label. For a named KindFile it keeps the resource ID stable

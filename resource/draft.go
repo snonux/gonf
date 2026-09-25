@@ -46,6 +46,14 @@ type KeyedLine struct {
 	Line string
 }
 
+// Block is one WithBlock managed block in a plan draft: Lines own the file's
+// lines between the "# BEGIN GONF <Name>" and "# END GONF <Name>" markers.
+// plan.Block is its wire twin.
+type Block struct {
+	Name  string
+	Lines []string
+}
+
 // DraftPayload is a per-kind extension to PlanDraft (task w62, "Layer 1" of
 // splitting the audited PlanDraft/plan.Op god structs): a resource kind that
 // has migrated off the flat kind-exclusive fields below sets Payload to its

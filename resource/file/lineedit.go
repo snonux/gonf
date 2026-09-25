@@ -19,7 +19,7 @@ import (
 )
 
 func (f *File) lineEdit() bool {
-	return len(f.addLines) != 0 || len(f.removeLines) != 0 || len(f.keyedLines) != 0
+	return len(f.addLines) != 0 || len(f.removeLines) != 0 || len(f.keyedLines) != 0 || len(f.blocks) != 0
 }
 
 func appendUniqueLines(dst []string, lines ...string) []string {
@@ -40,10 +40,14 @@ func appendUniqueLines(dst []string, lines ...string) []string {
 	return dst
 }
 
-// resolveLine applies WithoutLine, then WithKeyedLine, then WithLine to the
-// on-disk file, in that order. noop is true when the file is missing and
-// only removal was requested (already absent — nothing to write); a missing
-// file with keyed or added lines is created holding exactly those lines. A
+// resolveLine applies WithBlock, then WithoutLine, then WithKeyedLine, then
+// WithLine to the on-disk file, in that order. Blocks go first so that the
+// other edits only ever see the block's declared lines, which validateBlocks
+// keeps disjoint from them: a stale line inside an old block region is
+// replaced before a WithoutLine or keyed edit could act on it, so one pass
+// converges. noop is true when the file is missing and only removal was
+// requested (already absent — nothing to write); a missing file with
+// blocks, keyed or added lines is created holding exactly those lines. A
 // non-regular, non-symlink entry at the target (planted FIFO, socket, device
 // node, directory) is a loud user error naming the path and the entry type
 // — line edits manage regular files, and unlike the content path there is no
@@ -62,8 +66,13 @@ func (f *File) resolveLine() (path string, content []byte, noop bool, err error)
 	if err != nil {
 		return "", nil, false, err
 	}
-	if !exists && len(f.keyedLines) == 0 && len(f.addLines) == 0 {
+	if !exists && len(f.keyedLines) == 0 && len(f.addLines) == 0 && len(f.blocks) == 0 {
 		return path, nil, true, nil
+	}
+	for _, block := range f.blocks {
+		if lines, err = applyBlock(lines, block); err != nil {
+			return "", nil, false, fmt.Errorf("file %s: %w", path, err)
+		}
 	}
 
 	kept := make([]string, 0, len(lines)+len(f.keyedLines)+len(f.addLines))

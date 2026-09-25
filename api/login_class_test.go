@@ -492,7 +492,7 @@ func TestLoginClassRegistrationMisuseIsDeclarationError(t *testing.T) {
 		{"dotdb", `invalid class name "daemon.db"`},
 		{"mismatch", `defines classes ["daemon"] but not "relayd"`},
 		{"content-mismatch", `defines classes ["other"] but not "daemon"`},
-		{"lines", `WithLine(s)/WithoutLine(s)/WithKeyedLine are not supported`},
+		{"lines", `WithLine(s)/WithoutLine(s)/WithKeyedLine/WithBlock are not supported`},
 		{"no-content", `LoginClass "daemon": no content`},
 		{"unsupported-option", `*api.loginClassProbe does not support WithCommand`},
 	}

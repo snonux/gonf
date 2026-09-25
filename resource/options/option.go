@@ -128,16 +128,19 @@ type (
 	LinesAddable      interface{ AddLines(...string) }
 	LinesRemovable    interface{ RemoveLines(...string) }
 	KeyedLineSettable interface{ SetKeyedLine(key, line string) }
-	FileModed         interface{ SetFileMode(os.FileMode) }
-	Prunable          interface{ SetPrune() }
-	Absentable        interface{ SetAbsent() }
-	Latestable        interface{ SetLatest() }
-	Dependable        interface{ AddDependency(string) }
-	Named             interface{ SetName(string) }
-	Dirable           interface{ SetDir(string) }
-	Envable           interface{ SetEnv(map[string]string) }
-	Creatable         interface{ SetCreates(string) }
-	Guardable         interface {
+	BlockSettable     interface {
+		SetBlock(name string, lines []string)
+	}
+	FileModed  interface{ SetFileMode(os.FileMode) }
+	Prunable   interface{ SetPrune() }
+	Absentable interface{ SetAbsent() }
+	Latestable interface{ SetLatest() }
+	Dependable interface{ AddDependency(string) }
+	Named      interface{ SetName(string) }
+	Dirable    interface{ SetDir(string) }
+	Envable    interface{ SetEnv(map[string]string) }
+	Creatable  interface{ SetCreates(string) }
+	Guardable  interface {
 		SetUnless(*Guard)
 		SetOnlyIf(*Guard)
 	}
@@ -691,6 +694,30 @@ func WithoutLine(content string) fileOption {
 func WithKeyedLine(key, line string) fileOption {
 	return fileOption(func(target any) {
 		requires(target, "WithKeyedLine", func(r KeyedLineSettable) { r.SetKeyedLine(key, line) })
+	})
+}
+
+// WithBlock owns a managed block of a shared file: the lines between the
+// marker lines "# BEGIN GONF <name>" and "# END GONF <name>" are replaced by
+// lines, while every line outside the markers (another tool's entries, an
+// administrator's edits) is left untouched. A file without the markers gets
+// the block appended at its end (a missing file is created holding just the
+// block); lines may be empty to own an empty block. A file with a marker of
+// the block twice, only one of them, or END before BEGIN is refused at apply
+// without writing, since gonf cannot tell which lines it owns.
+//
+// Blocks apply before every other line edit of the File, and a declaration
+// is refused when ownership would overlap: an empty name or one with a line
+// break, the same name declared with different lines, a block line with a
+// line break or equal to a marker line, a WithLine/WithoutLine equal to a
+// block or marker line, or a WithKeyedLine key that prefixes one. The
+// markers are "#" comments, so the option suits files that treat "#" lines
+// as comments (/etc/hosts, shell, most configuration files). Like the other
+// line edits it cannot combine with WithContent/WithSource or
+// WithValidation.
+func WithBlock(name string, lines ...string) fileOption {
+	return fileOption(func(target any) {
+		requires(target, "WithBlock", func(r BlockSettable) { r.SetBlock(name, slices.Clone(lines)) })
 	})
 }
 

@@ -14,7 +14,7 @@ import (
 const PreviewKind Kind = "plan_preview"
 
 // RequiredVersion is the plan schema a recorded plan's header declares: the
-// lowest version whose destinations apply ops faithfully. Schemas 22 to 26
+// lowest version whose destinations apply ops faithfully. Schemas 22 to 27
 // only add fields, a kind or an expansion whose absence older destinations
 // would silently misinterpret, so each is declared only when a plan uses it:
 //   - v22 (sensitive) when an op is marked sensitive;
@@ -28,6 +28,8 @@ const PreviewKind Kind = "plan_preview"
 //   - v26 (home token) when a config_set op carries a ${...} path token
 //     (requiresHomeToken). Every other destination path field has expanded
 //     ${HOME} since v1, so DestHome paths elsewhere keep the header low.
+//   - v27 (blocks) when a file op has a managed block (WithBlock,
+//     requiresBlocks).
 //
 // Otherwise the header stays v21 and the plan still applies on a v0.15.0
 // destination. Every earlier bump was emitted unconditionally, so v21 is the
@@ -49,6 +51,8 @@ func RequiredVersion(ops []Op) int {
 // opVersion is the lowest schema that applies op faithfully on its own.
 func opVersion(op Op) int {
 	switch {
+	case requiresBlocks(op):
+		return VersionBlocks
 	case requiresHomeToken(op):
 		return VersionHomeToken
 	case requiresServiceFlags(op):
@@ -115,6 +119,13 @@ func requiresSyncDirGlob(op Op) bool {
 // it first and still needs its own correct answer regardless.
 func requiresKeyedLines(op Op) bool {
 	return op.Op == KindFile && len(PayloadOf[FilePayload](op).KeyedLines) != 0
+}
+
+// requiresBlocks reports whether op needs schema v27: a file op with a
+// managed block. Like requiresKeyedLines it checks op.Op before trusting the
+// payload, so a mistyped in-process op cannot raise the header.
+func requiresBlocks(op Op) bool {
+	return op.Op == KindFile && len(PayloadOf[FilePayload](op).Blocks) != 0
 }
 
 // requiresHomeToken reports whether op needs schema v26: a config_set op

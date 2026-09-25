@@ -3,6 +3,19 @@
 Release notes for gonf. Each release is also an annotated `v*` tag; for
 releases before v0.17.0 the tag message and the git log are the notes.
 
+## v0.23.0 (2026-09-25)
+
+Plan schema 27, declared only by a plan that uses it.
+
+Files ([docs/reference.md](docs/reference.md), "File")
+- `WithBlock(name, lines...)` owns a marked region of a shared file: the
+  lines between `# BEGIN GONF <name>` and `# END GONF <name>` are replaced,
+  every other line is left alone, and a file without the markers gets the
+  block appended. Malformed markers fail the apply without writing;
+  overlapping ownership with `WithLine`/`WithoutLine`/`WithKeyedLine` fails
+  at declaration. The block travels as the file op's `blocks` field; an
+  older destination refuses the v27 header instead of skipping the block.
+
 ## v0.22.0 (2026-09-25)
 
 Recipe DSL simplifications. No plan schema change. Breaking for recipes in

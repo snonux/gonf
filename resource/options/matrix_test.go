@@ -116,6 +116,7 @@ var optionCases = []optionCase{
 	{"WithLine", WithLine("e"), []string{"File"}, one("SetAddLine", "e")},
 	{"WithoutLine", WithoutLine("f"), []string{"File"}, one("SetRemoveLine", "f")},
 	{"WithKeyedLine", WithKeyedLine("k=", "k=v"), []string{"File"}, one("SetKeyedLine", []any{"k=", "k=v"})},
+	{"WithBlock", WithBlock("hosts", "a", "b"), []string{"File"}, one("SetBlock", []any{"hosts", []string{"a", "b"}})},
 	{"WithFileMode", WithFileMode(0o600), []string{"Dir"}, one("SetFileMode", os.FileMode(0o600))},
 	{"WithPrune", WithPrune, []string{"Dir"}, one("SetPrune", nil)},
 	{"IsAbsent", IsAbsent, famAbsent, one("SetAbsent", nil)},

@@ -31,6 +31,7 @@ NoLink("/tmp/stale-link")
 | `WithSourceGlob` | Dir | Install glob matches into the directory by basename |
 | `WithLines` / `WithoutLines` | File | Ensure / remove lines in declaration order (duplicates are ignored); singular `WithLine` / `WithoutLine` remain compatibility wrappers |
 | `WithKeyedLine(key, line)` | File | Own the one line starting with the literal prefix `key` in a shared file; see below |
+| `WithBlock(name, lines...)` | File | Own the marked region between `# BEGIN GONF <name>` and `# END GONF <name>` of a shared file; see below |
 | `WithName` | File / Command | Explicit resource identity. A named File keeps managing its supplied path but is registered and reported as `File[name]`, allowing separate line edits to one file and precise `DependsOn` / `OnChange` wiring. Without it, file IDs remain `File[path]` and duplicate registrations still fail. |
 | `WithOwner` / `WithGroup` / `WithMode` | File / Dir | Ownership and mode. Recorded in plan ops (`owner`/`group`, schema v4) and enforced on apply; owner is a user name, group is a numeric gid or group name (resolved via `os/user`). Only explicitly set ownership is recorded — the build-time default (current user) is not pushed to remote hosts, and absent files carry no ownership. `WithMode` accepts setuid/setgid/sticky: either raw octal (e.g. `0o4755`) or Go flag form (`0o755\|os.ModeSetuid`); both normalize to the flag form, lower to a four-digit plan wire mode (`"04755"`), and land on disk (apply chowns before it chmods so unprivileged chown cannot clear the special bits). Bits above `0o7777` are rejected. Modes without owner-read (e.g. `0o000`) are applied on non-root runs too: the attribute step falls back to path-based `chmod`/`chown` when the descriptor-based open is denied (never through a symlink at the target). |
 | `WithFileMode` | Dir | Mode for files created from a source tree (same setuid/setgid/sticky handling as `WithMode`) |
@@ -40,6 +41,28 @@ NoLink("/tmp/stale-link")
 | `DependsOn` | all | Apply after other resources |
 
 Helpers that wrap these: [helpers.md](helpers.md) (`InstallFile`, `SyncDir`, `EnsureDir`, `EnsureFile`, `LinkIfExists`, `SymlinkMap`). `EnsureFile` creates an empty regular file only when absent; existing regular files retain their content while explicitly supplied mode, owner, and group converge.
+
+### Managed blocks in shared files
+
+`WithBlock(name, lines...)` is for a file several writers share by region
+rather than by setting: /etc/hosts with fleet rows from gonf and VM rows
+from a provisioning tool is the motivating case. gonf owns exactly the lines
+between `# BEGIN GONF <name>` and `# END GONF <name>` (the same marker style
+as the Cron resource's crontab entries) and never reads or rewrites a line
+outside them.
+
+- The block is applied before `WithoutLines`, keyed lines and `WithLines`,
+  and declaration refuses any of those that would act on a block or marker
+  line, so a stale line left in an old block region is replaced before
+  another edit could see it and one pass converges.
+- A file without the markers gets the block appended; a missing file is
+  created with it. Anything else than one BEGIN followed by one END is
+  refused without writing: guessing the region could delete another
+  writer's lines.
+- Markers match after trimming surrounding whitespace and a matched marker
+  line is kept verbatim, so an indented marker does not churn.
+- Wire: the file op's `blocks` field (`[{"name":..,"lines":[..]}]`), plan
+  schema 27, declared on demand like `keyed_lines` (v23).
 
 ### Keyed lines in shared files
 

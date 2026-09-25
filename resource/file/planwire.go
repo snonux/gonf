@@ -43,6 +43,7 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		AddLines:       slices.Clone(p.AddLines),
 		RemoveLines:    slices.Clone(p.RemoveLines),
 		KeyedLines:     wireKeyedLines(p.KeyedLines),
+		Blocks:         wireBlocks(p.Blocks),
 	}
 	if p.TemplateDataSet {
 		if p.TemplateDataErr != nil {
@@ -110,7 +111,7 @@ func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	// build() defaults (apply-side user) identical to direct resource use.
 	ownership := plan.OwnerGroupOptions(op)
 
-	if len(p.AddLines) != 0 || len(p.RemoveLines) != 0 || len(p.KeyedLines) != 0 || p.AddLine != "" || p.RemoveLine != "" {
+	if len(p.AddLines) != 0 || len(p.RemoveLines) != 0 || len(p.KeyedLines) != 0 || len(p.Blocks) != 0 || p.AddLine != "" || p.RemoveLine != "" {
 		return applyFileLines(path, op, p, ownership)
 	}
 	return applyFileContent(path, op, p, ownership, ctx)
@@ -134,6 +135,7 @@ func validatePlanValidation(path string, op plan.Op, p plan.FilePayload) error {
 		addLines:       addLines,
 		removeLines:    removeLines,
 		keyedLines:     draftKeyedLines(p.KeyedLines),
+		blocks:         draftBlocks(p.Blocks),
 	}
 	f.Absent = op.Absent
 	return f.validateConfiguration(path)
@@ -185,11 +187,14 @@ func planLines(p plan.FilePayload) (addLines, removeLines []string) {
 
 func applyFileLines(path string, op plan.Op, p plan.FilePayload, ownership []opt.FileDirOption) error {
 	if p.ContentB64 != "" || op.Blob != "" {
-		return fmt.Errorf("file: add_line/remove_line/keyed_lines cannot combine with content_b64/blob")
+		return fmt.Errorf("file: blocks/add_line/remove_line/keyed_lines cannot combine with content_b64/blob")
 	}
 	var opts []opt.FileOption
 	if op.Name != "" {
 		opts = append(opts, opt.WithName(op.Name))
+	}
+	for _, block := range p.Blocks {
+		opts = append(opts, opt.WithBlock(block.Name, block.Lines...))
 	}
 	addLines, removeLines := planLines(p)
 	if len(removeLines) != 0 {
@@ -377,6 +382,7 @@ func (f *File) planDraft() resource.PlanDraft {
 		AddLines:       slices.Clone(f.addLines),
 		RemoveLines:    slices.Clone(f.removeLines),
 		KeyedLines:     slices.Clone(f.keyedLines),
+		Blocks:         cloneBlocks(f.blocks),
 		ValidationBin:  f.validationBin,
 		ValidationArgs: slices.Clone(f.validationArgs),
 	}

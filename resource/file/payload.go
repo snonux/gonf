@@ -64,6 +64,9 @@ type Payload struct {
 	// KeyedLines are WithKeyedLine edits: each owns the one line of the
 	// file that starts with its Key (see resource/file/lineedit.go).
 	KeyedLines []resource.KeyedLine
+	// Blocks are WithBlock managed blocks: each owns the lines between its
+	// markers (see resource/file/blockedit.go).
+	Blocks []resource.Block
 }
 
 // Clone returns a deep copy of p: every slice gets its own backing storage.
@@ -78,6 +81,7 @@ func (p Payload) Clone() resource.DraftPayload {
 	c.AddLines = slices.Clone(p.AddLines)
 	c.RemoveLines = slices.Clone(p.RemoveLines)
 	c.KeyedLines = slices.Clone(p.KeyedLines)
+	c.Blocks = cloneBlocks(p.Blocks)
 	return c
 }
 
