@@ -1,7 +1,7 @@
 # gonf quick reference
 
-Every user-facing feature in one place, current as of v0.20.0 (plan schema
-25). Background, rationale and history live in [design/](design/README.md).
+Every user-facing feature in one place, current as of v0.21.0 (plan schema
+26). Background, rationale and history live in [design/](design/README.md).
 
 ## Concepts
 

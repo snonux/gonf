@@ -3,7 +3,7 @@
 Release notes for gonf. Each release is also an annotated `v*` tag; for
 releases before v0.17.0 the tag message and the git log are the notes.
 
-## Unreleased
+## v0.21.0 (2026-09-25)
 
 macOS destinations. Plan schema 26, declared only by a `ConfigSet` with a
 `${HOME}` path; every other plan keeps its older header and encodes
