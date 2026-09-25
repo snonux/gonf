@@ -121,6 +121,19 @@ func Privileged() TaskOption {
 	return func(c *taskCandidate) { c.privileged = true }
 }
 
+// Unprivileged clears Privileged: the task's ops record without elevation.
+// It is the per-method opt-out for a struct whose default is privileged
+// (RequiresRoot or Privileged() in Opts()), because an OptsX companion adds
+// to the struct default instead of replacing it:
+//
+//	func (Unattended) OptsSmoke() TaskOptions { return TaskOptions{Unprivileged()} }
+//
+// Options apply in order, so Unprivileged wins over an earlier Privileged
+// and loses to a later one.
+func Unprivileged() TaskOption {
+	return func(c *taskCandidate) { c.privileged = false }
+}
+
 // WithTaskCluster associates an inventory fleet with this task so ClusterHosts()
 // returns that fleet's hosts while the body runs. Prefer RegisterMethods'
 // WithCluster so every method on a struct shares one fleet.

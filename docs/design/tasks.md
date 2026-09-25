@@ -121,11 +121,14 @@ Reflect over exported methods on a struct. Companion methods:
 
 - `Opts() TaskOptions` — struct-level **default** `TaskOption`s for every
   method registered from this struct (e.g. a single `Privileged()` for an
-  all-privileged struct). A method's own `OptsFoo()` companion **replaces**
-  the default for that method — an empty `TaskOptions` opts out (e.g. an
-  unprivileged smoke-test task on an otherwise-privileged struct).
-  Composition order: `WithGroupWhen` options first, then the struct
-  default (or the method's replacement). The exact name `Opts` is
+  all-privileged struct). A method's own `OptsFoo()` companion **adds to**
+  the default for that method; `Unprivileged()` opts it out of
+  `Privileged()` (e.g. an unprivileged smoke-test task on an
+  otherwise-privileged struct). Composition order: `WithGroupWhen` options
+  first, then the struct default, then the method's own options. (Before
+  v0.22.0 `OptsFoo()` replaced the default, so every `OptsFoo()` of a
+  `RequiresRoot` struct had to repeat `Privileged()`; forgetting it quietly
+  dropped root.) The exact name `Opts` is
   reserved as this companion (a method named `Opts` is no longer
   registered as a task).
 - **Embedded `StructOption` markers** — the declaration-site form of the
@@ -139,12 +142,13 @@ Reflect over exported methods on a struct. Companion methods:
   }
   ```
 
-  Markers compose with `Opts()` and are replaced by a method's own
-  `OptsFoo()`. Embed exported marker types; custom markers: define any
+  Markers compose with `Opts()` and with a method's own `OptsFoo()`. Embed exported marker types; custom markers: define any
   type implementing `StructOption` and embed it.
 - `DescFoo() string` — description for `-list`
-- `WhenFoo(Facts) bool` — per-method filter (opaque unless you also use
-  serializable `TaskOption`s via `WithGroupWhen`)
+- `WhenFoo() TaskOption` — per-method guard such as `WhenLinux()`; a
+  serializable guard is evaluated on the destination, so the task still
+  pushes. `WhenFoo(Facts) bool` is the older opaque form: controller only,
+  and push, cluster and fleet refuse the task.
 - `OptsFoo() TaskOptions` — per-method `TaskOption`s such as `Privileged()`
   or the serializable `WhenHostnameContains()` / `WhenProfile()`
   predicates; appended after any `WithGroupWhen` options of the same call.
@@ -161,6 +165,7 @@ func (Home) Helix() { /* resources */ }
 
 // Per-task options that RegisterMethods could not otherwise express:
 func (Home) OptsPkgOpenBSD() TaskOptions { return TaskOptions{Privileged()} }
+func (Home) WhenPkgOpenBSD() TaskOption  { return WhenOpenBSD() }
 func (Home) PkgOpenBSD() { Package("git") }
 // Hostname-gated and privileged, plan-serializable (when_begin recipe):
 func (Home) OptsCronBlowfish() TaskOptions {
@@ -172,8 +177,17 @@ RegisterMethods(Home{}, WithPrefix("home."), WithGroupWhen(WhenLinux()))
 ```
 
 Name methods for the *action*, not the type: `Unattended.Script`, not
-`Unattended.UnattendedScript` — `WithPrefix` and the receiver type already
-provide the namespace.
+`Unattended.UnattendedScript` — the prefix already provides the namespace.
+
+Without `WithPrefix`, `RegisterMethods` derives the prefix from the struct
+(`DefaultPrefix`): package and type name in snake_case, a trailing `Tasks`
+dropped, a type named like its package and package `main` omitted, so
+`freebsd.Unattended` registers `freebsd_unattended_script` and `home.HomeTasks`
+registers `home_helix`. The
+package name is part of it because same-named structs of different packages
+(`openbsd.Unattended`, `freebsd.Unattended`) would otherwise collide in the
+one global task list. `WithPrefix` replaces the default when several structs
+share one namespace; `WithPrefix("")` registers bare method names.
 
 `WithPrefix` namespaces task names; `WithGroupWhen` takes `TaskOption`s
 such as `WhenLinux()` / `WhenProfile(...)` so plan recording can emit

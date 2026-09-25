@@ -3,50 +3,10 @@ package api
 import (
 	"fmt"
 	"reflect"
-	"slices"
 
 	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/internal/inventory"
 )
-
-// HostDefaults bundles host options into one, so hosts sharing a setup pass
-// a single value to Host:
-//
-//	freebsd := HostDefaults(WithSSHUser("paul"), WithPrivilege(PrivilegeDoas), WithData(Unattended{Hour: "3"}))
-//	Host("f0", freebsd, WithSSHHost("f0.lan"))
-//
-// Options apply in order, bundles expanded in place, so a later option
-// overrides an earlier one: a plain field (WithSSHHost, WithPrivilege, ...)
-// is simply set again, and a WithValue key or WithData type that a bundle
-// set is replaced. A key or type set twice outside any bundle stays a
-// declaration error, as before; so a bundle placed after an explicit
-// WithValue of the same key is refused rather than silently replacing it.
-// Pass bundles first. Bundles nest. Every option runs; the first error
-// refuses the host, like any other rejected HostOption.
-func HostDefaults(opts ...HostOption) HostOption {
-	bundle := slices.Clone(opts)
-	return func(h *inventory.Host) error { return h.ApplyDefaults(bundle) }
-}
-
-// WithData stores v on the host keyed by its concrete type, the typed
-// alternative to WithValue: no string key, and the reader names the type.
-//
-//	type Unattended struct{ Hour, Minute string }
-//	Host("f0", WithData(Unattended{Hour: "3", Minute: "10"}))
-//	EachHost(func(u Unattended) { /* u is this host's value */ })
-//
-// Store a struct type of your own rather than a string or int, so two
-// recipes never collide on one type. A nil v, or a second value of the same
-// type on one host (outside HostDefaults' override rule), is a declaration
-// error and the host is not registered.
-func WithData(v any) HostOption {
-	return func(h *inventory.Host) error {
-		if err := h.PutData(v); err != nil {
-			return fmt.Errorf("WithData: %w", err)
-		}
-		return nil
-	}
-}
 
 // EachHost is ForHosts keyed by type: for every host of the current task's
 // cluster (WithCluster/OnCluster) it runs fn with that host's WithData value

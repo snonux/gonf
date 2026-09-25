@@ -29,7 +29,6 @@ import (
     "os"
 
     . "github.com/snonux/gonf/api"
-    . "github.com/snonux/gonf/api/options"
     "github.com/snonux/gonf/cli"
 )
 

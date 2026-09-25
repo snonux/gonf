@@ -1,7 +1,10 @@
 # Options cheat-sheet
 
-Options are implemented in `github.com/snonux/gonf/resource/options`; the
-older `github.com/snonux/gonf/api/options` import remains as a re-export.
+Options are implemented in `github.com/snonux/gonf/resource/options`.
+Package `api` re-exports them, so recipes need only
+`import . "github.com/snonux/gonf/api"`; the older
+`github.com/snonux/gonf/api/options` package remains as a re-export for
+qualified use (do not dot-import it next to `api`).
 Resource constructors accept typed family options (`FileOption`, `DirOption`,
 `CommandOption`, and so on), so unsupported option/resource pairs fail at
 compile time. Shared options implement each family they support.
