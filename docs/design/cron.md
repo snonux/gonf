@@ -59,24 +59,33 @@ rejects `-u` for your own account without privileges). Other users still use
 
 ## Adopting existing entries
 
-A present job adopts (removes, then writes its own block) the unmanaged
-entries that are already this job, so migrating a hand-written line into
-gonf does not leave it running twice. An entry is identical when, in the
-crontab of the job's own user only:
+A present job adopts the unmanaged entries that are already this job, so
+migrating a hand-written line into gonf does not leave it running twice.
+An entry is identical when, in the crontab of the job's own user only:
 
 - it is a portable five-field entry outside every valid Gonf block;
 - its five schedule fields equal the job's, compared as text after
   splitting on blanks (`0  6` matches `0 6`, `00 6` does not);
 - its command equals `WithCommand` exactly, byte for byte;
-- the job has no `WithCronEnv` (its lines would change the environment);
-- no environment assignment follows the entry anywhere in the table, since
-  the block is appended at the end, where a later `NAME=value` would apply.
+- the job has no `WithCronEnv` (its lines would change the environment).
+
+While the job has no block yet, the first identical entry is replaced in
+place by the job's block, so the job keeps the environment (the
+`NAME=value` lines above it, another Gonf block's `WithCronEnv` lines
+included) it ran with. Every further identical entry, and every identical
+entry once the block exists, is a duplicate run and is removed. Before
+v0.21.1 the block was always appended at the end, so an entry followed by
+any `NAME=value` line (for example another job's `WithCronEnv PATH=...`
+block) was left in place and the job ran twice. A later change to the job
+rewrites its block at the end of the table, like any changed block.
 
 Anything else is left alone. `WithLegacyCommand(cmd)` is the explicit
 opt-in for a different old command or the same command on another
 schedule: it matches the command only, whatever the schedule and the
-environment lines. Passing `WithLegacyCommand` with the job's own command
-still works exactly as before (and keeps `legacy_command` in the plan);
+environment lines, removes those entries, and appends the block at the
+end. Passing `WithLegacyCommand` with the job's own command still
+works (and keeps `legacy_command` in the plan); an entry that is also
+identical to the job is replaced in place rather than removed;
 dropping it now relies on the default, which is stricter: the old line's
 schedule must match too, and dropping it removes `legacy_command` from the
 recorded op. A malformed Gonf marker disables both kinds of adoption for

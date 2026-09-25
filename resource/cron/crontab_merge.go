@@ -1,33 +1,50 @@
 package cron
 
 // Crontab text transformations: mergeCrontab replaces or removes the named
-// Gonf block, and adoptUnmanaged drops unmanaged entries that a Gonf block
-// now owns. Both work on the text read by readCrontab (crontab.go) while
+// Gonf block, and adoptUnmanaged removes (or replaces in place with the
+// job's block) unmanaged entries that a Gonf block now owns. Both work on the text read by readCrontab (crontab.go) while
 // Cron.apply holds the crontab write lock (lock.go); marker parsing lives in
 // crontab_markers.go and entry parsing in crontab_fields.go.
 
 import "strings"
 
 // adoption selects the unmanaged crontab entries a present job takes over
-// (removes) before its own block is written. Cron.adoption builds it.
+// before its own block is written. Cron.adoption builds it.
 //
-// There are two independent matchers, and an entry matching either one is
-// adopted:
+// There are two independent matchers:
 //   - legacy (WithLegacyCommand): every entry whose parsed command equals
-//     legacy exactly, whatever its schedule. This is the explicit opt-in for
-//     a DIFFERENT old command line, or the same command on another schedule.
+//     legacy exactly, whatever its schedule, is removed; the job's block is
+//     then appended at the end of the table by mergeCrontab. This is the
+//     explicit opt-in for a DIFFERENT old command line, or the same command
+//     on another schedule.
 //   - identical (the default for every present job without WithCronEnv): an
 //     entry that is the job itself, i.e. the same five schedule fields
 //     (byte-equal after splitting on blanks, so "0  6" matches "0 6" but
 //     "00 6" does not) and exactly the same command. Such a line would
 //     otherwise keep running beside the managed block, so the job would run
-//     twice. It is only adopted while no environment assignment follows it
-//     in the table (see adoptUnmanaged): the managed block is appended at
-//     the end, and moving the entry past a later NAME=value line would
-//     change the environment it runs with.
+//     twice. While the job has no block yet, the first identical entry is
+//     REPLACED IN PLACE by block, so the job keeps exactly the environment
+//     (the NAME=value lines above it, other Gonf blocks' WithCronEnv lines
+//     included) it ran with; every further identical entry is a duplicate
+//     run and is removed. Once the job has its block, every identical entry
+//     is a duplicate of it and is removed.
+//
+// An entry matching the identical matcher is handled by it even when the
+// legacy matcher matches too (WithLegacyCommand with the job's own
+// command), since replacing it in place keeps its environment.
+//
+// Earlier versions refused identical adoption whenever any NAME=value line
+// followed the entry, because the block was always appended at the end. A
+// Gonf block with WithCronEnv (PATH=...) anywhere below the entry then left
+// the old line in place and the job ran twice; in-place replacement removes
+// the need for that guard.
 type adoption struct {
 	legacy    string
 	identical *cronEntry
+	// name and block are the job's name and its complete desired block
+	// (Cron.block); both are set whenever identical is.
+	name  string
+	block string
 }
 
 // cronEntry is one parsed crontab entry: its five schedule fields and its
@@ -44,11 +61,13 @@ func adoptLegacyCommand(current, legacyCommand string) (string, bool) {
 	return adoptUnmanaged(current, adoption{legacy: legacyCommand})
 }
 
-// adoptUnmanaged removes the unmanaged cron entries a selects (see
-// adoption). Only lines of the one crontab being rewritten are ever
-// considered, so another user's crontab is never touched. Lines inside every
-// valid Gonf block are protected, and any malformed Gonf marker disables
-// adoption for this pass rather than guessing which lines are safe to remove.
+// adoptUnmanaged removes (or, for the first identical entry of a job without
+// a block, replaces with the job's block) the unmanaged cron entries a
+// selects (see adoption). Only lines of the one crontab being rewritten are
+// ever considered, so another user's crontab is never touched. Lines inside
+// every valid Gonf block are protected, and any malformed Gonf marker
+// disables adoption for this pass rather than guessing which lines are safe
+// to remove.
 func adoptUnmanaged(current string, a adoption) (string, bool) {
 	if a.legacy == "" && a.identical == nil {
 		return current, false
@@ -59,16 +78,29 @@ func adoptUnmanaged(current string, a adoption) (string, bool) {
 	if !wellFormed {
 		return current, false
 	}
-	lastEnv := lastEnvAssignment(lines)
+	// placed says the job's block is (or now will be) in the table, so a
+	// further identical entry is only a duplicate to drop.
+	placed := a.identical == nil || hasGonfBlock(lines, a.name)
 
 	out := make([]string, 0, len(lines))
 	changed := false
 	for i, line := range lines {
-		if !protected[i] && a.adopts(line, i > lastEnv) {
-			changed = true
+		if protected[i] {
+			out = append(out, line)
 			continue
 		}
-		out = append(out, line)
+		switch a.match(line) {
+		case matchIdentical:
+			changed = true
+			if !placed {
+				out = append(out, splitKeep(a.block)...)
+				placed = true
+			}
+		case matchLegacy:
+			changed = true
+		default:
+			out = append(out, line)
+		}
 	}
 	if !changed {
 		return current, false
@@ -76,32 +108,41 @@ func adoptUnmanaged(current string, a adoption) (string, bool) {
 	return joinCrontabLines(out), true
 }
 
-// adopts reports whether a takes over line. envStable says no environment
-// assignment follows line in the table, which the identical matcher needs.
-func (a adoption) adopts(line string, envStable bool) bool {
+// entryMatch says which adoption matcher (if any) took a crontab line.
+type entryMatch uint8
+
+const (
+	matchNone entryMatch = iota
+	matchIdentical
+	matchLegacy
+)
+
+// match reports which matcher of a takes over line; identical wins over
+// legacy (see adoption).
+func (a adoption) match(line string) entryMatch {
 	fields, command, ok := cronEntryParts(line)
-	if !ok {
-		return false
+	switch {
+	case !ok:
+		return matchNone
+	case a.identical != nil && fields == a.identical.fields && command == a.identical.command:
+		return matchIdentical
+	case a.legacy != "" && command == a.legacy:
+		return matchLegacy
+	default:
+		return matchNone
 	}
-	if a.legacy != "" && command == a.legacy {
-		return true
-	}
-	return a.identical != nil && envStable &&
-		fields == a.identical.fields && command == a.identical.command
 }
 
-// lastEnvAssignment returns the index of the last line that may set a
-// crontab environment variable (isCrontabEnvAssignment), protected Gonf
-// block lines included since cron applies them to every later entry too, or
-// -1 when there is none.
-func lastEnvAssignment(lines []string) int {
-	last := -1
-	for i, line := range lines {
-		if isCrontabEnvAssignment(line) {
-			last = i
+// hasGonfBlock reports whether lines hold a BEGIN marker for the named job.
+// adoptUnmanaged calls it only after protectedGonfLines proved every marker
+// well-formed, so a BEGIN always has its END.
+func hasGonfBlock(lines []string, name string) bool {
+	for _, line := range lines {
+		if kind, n, ok := gonfMarker(line); ok && kind == markerBegin && n == name {
+			return true
 		}
 	}
-	return last
+	return false
 }
 
 // mergeCrontab replaces or removes all named GONF blocks. desired empty → remove.

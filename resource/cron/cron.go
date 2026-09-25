@@ -280,7 +280,8 @@ func (c *Cron) reconcile(id string) error {
 
 // adoption returns the unmanaged entries c takes over (see adoption): its
 // WithLegacyCommand, plus, for a present job without WithCronEnv, any
-// entry identical to its own schedule and command. A job with WithCronEnv
+// entry identical to its own schedule and command (the first one replaced
+// in place by c's block when c has none yet). A job with WithCronEnv
 // runs with extra variables, so an unmanaged line without them is not the
 // same job and is left alone (pass WithLegacyCommand to adopt it anyway).
 // An absent job adopts nothing: NoCron removes only its own block.
@@ -291,6 +292,8 @@ func (c *Cron) adoption() adoption {
 			fields:  [5]string{c.minute, c.hour, c.monthday, c.month, c.weekday},
 			command: c.command,
 		}
+		a.name = c.name
+		a.block = c.block()
 	}
 	return a
 }

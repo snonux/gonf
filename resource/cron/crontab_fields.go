@@ -60,23 +60,6 @@ func cronEntryParts(line string) ([5]string, string, bool) {
 	return fields, line[i:], true
 }
 
-// isCrontabEnvAssignment reports whether line may set a crontab environment
-// variable (NAME=value; some crons allow blanks around "="). It is
-// deliberately generous: every non-blank, non-comment line that is neither a
-// cron entry nor an @directive and contains "=" counts, because identical-
-// entry adoption (crontab_merge.go) must refuse whenever it cannot prove
-// that moving an entry to the end of the table keeps its environment.
-func isCrontabEnvAssignment(line string) bool {
-	i := skipCrontabBlanks(line, 0)
-	if i == len(line) || line[i] == '#' || line[i] == '@' {
-		return false
-	}
-	if _, _, ok := cronEntryParts(line); ok {
-		return false
-	}
-	return strings.Contains(line, "=")
-}
-
 // splitSchedule splits a five-field schedule such as "10 6 * * *" on
 // crontab blanks (space and tab) and checks every field with the same
 // portable-syntax rule the five per-field options are held to

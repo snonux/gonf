@@ -8,17 +8,25 @@ import (
 	"github.com/snonux/gonf/internal/runners"
 )
 
-// identical is the default adoption of a job "10 6 * * * /usr/local/bin/x".
-var identical = adoption{identical: &cronEntry{
-	fields:  [5]string{"10", "6", "*", "*", "*"},
-	command: "/usr/local/bin/x",
-}}
+// identical is the default adoption of a job x, "10 6 * * * /usr/local/bin/x".
+var identical = adoption{
+	identical: &cronEntry{
+		fields:  [5]string{"10", "6", "*", "*", "*"},
+		command: "/usr/local/bin/x",
+	},
+	name:  "x",
+	block: xBlock,
+}
+
+// xBlock is job x's managed block.
+const xBlock = "# BEGIN GONF Cron[x]\n10 6 * * * /usr/local/bin/x\n# END GONF Cron[x]\n"
 
 // TestAdoptIdenticalOnlyTakesTheSameJob pins what "identical" means: the
 // same five schedule fields (blank-insensitive, but not value-normalized)
 // and exactly the same command, outside every Gonf block. A line with
 // another schedule or command, a comment and a line inside another job's
-// block are all kept.
+// block are all kept. The first identical line becomes the job's block in
+// place; the second is a duplicate run and is removed.
 func TestAdoptIdenticalOnlyTakesTheSameJob(t *testing.T) {
 	current := strings.Join([]string{
 		"MAILTO=root",
@@ -36,6 +44,9 @@ func TestAdoptIdenticalOnlyTakesTheSameJob(t *testing.T) {
 	}, "\n")
 	want := strings.Join([]string{
 		"MAILTO=root",
+		"# BEGIN GONF Cron[x]",
+		"10 6 * * * /usr/local/bin/x",
+		"# END GONF Cron[x]",
 		"11 6 * * * /usr/local/bin/x",
 		"010 6 * * * /usr/local/bin/x",
 		"10 6 * * * /usr/local/bin/x --other",
@@ -52,27 +63,66 @@ func TestAdoptIdenticalOnlyTakesTheSameJob(t *testing.T) {
 	}
 }
 
-// TestAdoptIdenticalKeepsTheEnvironment pins that an identical entry with an
-// environment assignment after it is kept: the managed block is appended at
-// the end of the table, where the later assignment would apply to it. A
-// legacy (WithLegacyCommand) match is explicit and still adopts it.
+// TestAdoptIdenticalKeepsTheEnvironment pins that an identical entry
+// followed by environment assignments (a plain NAME=value line, a spaced
+// one, or another Gonf block's WithCronEnv) is adopted by replacing it with
+// the job's block in place: the job keeps the environment it ran with and
+// no longer runs twice. An explicit WithLegacyCommand for the same command
+// takes the same in-place route.
 func TestAdoptIdenticalKeepsTheEnvironment(t *testing.T) {
-	for _, current := range []string{
-		"10 6 * * * /usr/local/bin/x\nPATH=/opt/bin\n",
-		"10 6 * * * /usr/local/bin/x\nSHELL = /bin/ksh\n",
-		"10 6 * * * /usr/local/bin/x\n# BEGIN GONF Cron[e]\nFOO=1\n0 * * * * /bin/e\n# END GONF Cron[e]\n",
+	for _, tail := range []string{
+		"PATH=/opt/bin\n",
+		"SHELL = /bin/ksh\n",
+		"# BEGIN GONF Cron[e]\nFOO=1\n0 * * * * /bin/e\n# END GONF Cron[e]\n",
 	} {
-		if got, changed := adoptUnmanaged(current, identical); changed || got != current {
-			t.Fatalf("identical entry before an env line must stay:\n%q\n got %q", current, got)
+		current := "10 6 * * * /usr/local/bin/x\n" + tail
+		want := xBlock + tail
+		if got, changed := adoptUnmanaged(current, identical); !changed || got != want {
+			t.Fatalf("identical entry before an env line:\n%q\n got %q\nwant %q", current, got, want)
 		}
-		legacy := adoption{legacy: "/usr/local/bin/x", identical: identical.identical}
-		if _, changed := adoptUnmanaged(current, legacy); !changed {
-			t.Fatalf("explicit WithLegacyCommand must still adopt:\n%q", current)
+		legacy := identical
+		legacy.legacy = "/usr/local/bin/x"
+		if got, changed := adoptUnmanaged(current, legacy); !changed || got != want {
+			t.Fatalf("WithLegacyCommand of the own command:\n%q\n got %q\nwant %q", current, got, want)
 		}
 	}
 	after := "PATH=/opt/bin\n10 6 * * * /usr/local/bin/x\n0 * * * * /bin/keep\n"
-	if got, changed := adoptUnmanaged(after, identical); !changed || got != "PATH=/opt/bin\n0 * * * * /bin/keep\n" {
-		t.Fatalf("identical entry after the env line must be adopted, got %q", got)
+	if got, changed := adoptUnmanaged(after, identical); !changed || got != "PATH=/opt/bin\n"+xBlock+"0 * * * * /bin/keep\n" {
+		t.Fatalf("identical entry after the env line must become the block in place, got %q", got)
+	}
+}
+
+// TestAdoptIdenticalDropsDuplicatesOfAnExistingBlock pins the state a
+// version without in-place adoption left behind: the job's block already
+// exists (at the end, after an env line) and the old unmanaged line still
+// runs it a second time. The line is removed, the block stays where it is.
+// A legacy-only adoption (a job with WithCronEnv) never places a block.
+func TestAdoptIdenticalDropsDuplicatesOfAnExistingBlock(t *testing.T) {
+	current := "10 6 * * * /usr/local/bin/x\nPATH=/opt/bin\n" + xBlock
+	if got, changed := adoptUnmanaged(current, identical); !changed || got != "PATH=/opt/bin\n"+xBlock {
+		t.Fatalf("duplicate of an existing block must go, got %q", got)
+	}
+	if got, changed := adoptUnmanaged("PATH=/opt/bin\n"+xBlock, identical); changed || got != "PATH=/opt/bin\n"+xBlock {
+		t.Fatalf("a table without duplicates must stay unchanged, got %q", got)
+	}
+	legacyOnly := adoption{legacy: "/usr/local/bin/x"}
+	if got, changed := adoptUnmanaged("10 6 * * * /usr/local/bin/x\nPATH=/opt/bin\n", legacyOnly); !changed || got != "PATH=/opt/bin\n" {
+		t.Fatalf("legacy adoption removes the line and places nothing, got %q", got)
+	}
+}
+
+// TestAdoptIdenticalRefusesMalformedMarkers is the negative case: a
+// malformed Gonf marker disables adoption, so the identical line stays and
+// no block is placed.
+func TestAdoptIdenticalRefusesMalformedMarkers(t *testing.T) {
+	for _, current := range []string{
+		"10 6 * * * /usr/local/bin/x\n# BEGIN GONF Cron[open]\n0 * * * * /bin/e\n",
+		"10 6 * * * /usr/local/bin/x\n# END GONF Cron[x]\n",
+		"# BEGIN GONF Cron[a]\n10 6 * * * /usr/local/bin/x\n# END GONF Cron[b]\n",
+	} {
+		if got, changed := adoptUnmanaged(current, identical); changed || got != current {
+			t.Fatalf("malformed markers must disable adoption:\n%q\n got %q", current, got)
+		}
 	}
 }
 
@@ -81,7 +131,8 @@ func TestAdoptIdenticalKeepsTheEnvironment(t *testing.T) {
 // with extra variables (not the same job), and an absent job never adopts.
 func TestCronAdoptionSelection(t *testing.T) {
 	plain := newCron("j", []opt.CronOption{opt.WithSchedule("10 6 * * *"), opt.WithCommand("/usr/local/bin/x")})
-	if a := plain.adoption(); a.identical == nil || *a.identical != *identical.identical || a.legacy != "" {
+	if a := plain.adoption(); a.identical == nil || *a.identical != *identical.identical || a.legacy != "" ||
+		a.name != "j" || a.block != plain.block() {
 		t.Fatalf("plain job adoption = %+v", a)
 	}
 	withEnv := newCron("j", []opt.CronOption{opt.WithCommand("/usr/local/bin/x"), opt.WithCronEnv("A=1")})
@@ -95,7 +146,7 @@ func TestCronAdoptionSelection(t *testing.T) {
 }
 
 // TestEnsureAdoptsIdenticalLineByDefault converges a job over a crontab
-// that already runs it unmanaged: the line moves into the Gonf block
+// that already runs it unmanaged: the line becomes the Gonf block in place
 // (instead of running twice), the rest of the table is kept, and a second
 // apply is a no-op.
 func TestEnsureAdoptsIdenticalLineByDefault(t *testing.T) {
@@ -116,8 +167,9 @@ func TestEnsureAdoptsIdenticalLineByDefault(t *testing.T) {
 			t.Fatalf("EnsureWith: %v", err)
 		}
 	}
-	want := "MAILTO=root\n0 3 * * * /usr/local/bin/keep\n" +
-		"# BEGIN GONF Cron[gogios-checks]\n*/5 8-22 * * * /usr/local/bin/gogios >/dev/null 2>&1\n# END GONF Cron[gogios-checks]\n"
+	want := "MAILTO=root\n" +
+		"# BEGIN GONF Cron[gogios-checks]\n*/5 8-22 * * * /usr/local/bin/gogios >/dev/null 2>&1\n# END GONF Cron[gogios-checks]\n" +
+		"0 3 * * * /usr/local/bin/keep\n"
 	if tab != want || writes != 1 {
 		t.Fatalf("writes=%d tab:\n%s\nwant:\n%s", writes, tab, want)
 	}
