@@ -115,14 +115,14 @@ move the check into the body as `OnlyIf`/`Unless` on a `Command`.
 ```go
 package home
 
-type Tasks struct{}
+type HomeTasks struct{}
 
-func (Tasks) DescHelix() string      { return "Install helix" }
-func (Tasks) Helix()                 { Package("helix") }
-func (Tasks) OptsHelix() TaskOptions { return TaskOptions{Privileged()} }
-func (Tasks) WhenHelix() TaskOption  { return WhenLinux() } // serializable
+func (HomeTasks) DescHelix() string      { return "Install helix" }
+func (HomeTasks) Helix()                 { Package("helix") }
+func (HomeTasks) OptsHelix() TaskOptions { return TaskOptions{Privileged()} }
+func (HomeTasks) WhenHelix() TaskOption  { return WhenLinux() } // serializable
 
-RegisterMethods(home.Tasks{}) // registers home_helix
+RegisterMethods(home.HomeTasks{}) // registers home_helix
 ```
 
 | Companion / option | Meaning |
@@ -139,9 +139,11 @@ RegisterMethods(home.Tasks{}) // registers home_helix
 | `OnCluster(name)` | `WithCluster(name)` plus a destination guard: hostname contains one of the cluster's host names. |
 
 Without `WithPrefix`, the prefix is `DefaultPrefix(v)`: the struct's package
-and type name in snake_case, a trailing `Tasks` dropped, package `main`
-omitted. So `freebsd.Unattended` registers `freebsd_unattended_*`,
-`home.Tasks` registers `home_*` and `main.Backup` registers `backup_*`. Pass
+and type name in snake_case, a trailing `Tasks` dropped, a type named like
+its package and package `main` omitted. So `freebsd.Unattended` registers
+`freebsd_unattended_*`, `home.HomeTasks` registers `home_*` and `main.Backup`
+registers `backup_*`. (Under the dot import a type cannot be named `Tasks`
+or `Home`: those are api functions.) Pass
 `WithPrefix` when several structs share one namespace, such as
 `WithPrefix("frontends_")` on `frontends.Web` and `openbsd.Unattended`.
 

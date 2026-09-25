@@ -43,11 +43,12 @@ func WithPrefix(prefix string) RegisterOption {
 // DefaultPrefix returns the task-name prefix RegisterMethods uses for v when
 // the call has no WithPrefix: the struct's package name and type name in
 // snake_case, each followed by "_". A trailing "Tasks" is dropped from the
-// type name, and a type named just Tasks (or a struct in package main)
-// contributes only the other part:
+// type name; a type named like its package (garage.Garage), or just Tasks,
+// contributes nothing, and neither does package main:
 //
 //	freebsd.Unattended → "freebsd_unattended_"
-//	home.Tasks         → "home_"
+//	garage.Garage      → "garage_"
+//	home.HomeTasks     → "home_"
 //	tasks.HomeTasks    → "tasks_home_"
 //	main.Backup        → "backup_"
 //
@@ -76,9 +77,12 @@ func prefixFor(pkg, typ string) string {
 	if pkg == "main" {
 		pkg = ""
 	}
-	typ = strings.TrimSuffix(typ, "Tasks")
+	typ = camelToSnake(strings.TrimSuffix(typ, "Tasks"))
+	if typ == pkg {
+		typ = ""
+	}
 	var b strings.Builder
-	for _, part := range []string{pkg, camelToSnake(typ)} {
+	for _, part := range []string{pkg, typ} {
 		if part != "" {
 			b.WriteString(part)
 			b.WriteByte('_')
@@ -138,7 +142,7 @@ func WithGroupWhen(opts ...TaskOption) RegisterOption {
 
 // RegisterMethods queues tasks from exported methods on v (struct or pointer).
 //
-// Naming: method Helix of home.Tasks → "home_helix". Without WithPrefix the
+// Naming: method Helix of home.HomeTasks → "home_helix". Without WithPrefix the
 // prefix is derived from the package and type name (DefaultPrefix);
 // WithPrefix("x_") replaces it and WithPrefix("") drops it. Do not repeat
 // the type name in methods (Unattended.Newsyslog, not

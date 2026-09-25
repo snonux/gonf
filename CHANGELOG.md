@@ -14,7 +14,7 @@ Tasks ([docs/reference.md](docs/reference.md), "RegisterMethods")
   only adds `Needs` keeps `Privileged()`. `Unprivileged()` is the new
   opt-out; an empty `TaskOptions` no longer opts out.
 - **Breaking:** without `WithPrefix`, `RegisterMethods` prefixes task names
-  with the struct's package and type name (`DefaultPrefix`): `home.Tasks`
+  with the struct's package and type name (`DefaultPrefix`): `home.HomeTasks`
   registers `home_*`, `freebsd.Unattended` registers `freebsd_unattended_*`.
   `WithPrefix("")` keeps bare method names.
 - `WhenX() TaskOption` companions (e.g. `return WhenLinux()`) record a

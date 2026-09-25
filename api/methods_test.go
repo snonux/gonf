@@ -598,6 +598,9 @@ func TestDefaultPrefix(t *testing.T) {
 	}
 	for _, c := range []struct{ pkg, typ, want string }{
 		{"home", "Tasks", "home_"},
+		{"home", "Home", "home_"},
+		{"home", "HomeTasks", "home_"},
+		{"garage", "Garage", "garage_"},
 		{"freebsd", "Unattended", "freebsd_unattended_"},
 		{"tasks", "HomeTasks", "tasks_home_"},
 		{"main", "Backup", "backup_"},

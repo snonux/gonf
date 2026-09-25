@@ -181,8 +181,9 @@ Name methods for the *action*, not the type: `Unattended.Script`, not
 
 Without `WithPrefix`, `RegisterMethods` derives the prefix from the struct
 (`DefaultPrefix`): package and type name in snake_case, a trailing `Tasks`
-dropped and package `main` omitted, so `freebsd.Unattended` registers
-`freebsd_unattended_script` and `home.Tasks` registers `home_helix`. The
+dropped, a type named like its package and package `main` omitted, so
+`freebsd.Unattended` registers `freebsd_unattended_script` and `home.HomeTasks`
+registers `home_helix`. The
 package name is part of it because same-named structs of different packages
 (`openbsd.Unattended`, `freebsd.Unattended`) would otherwise collide in the
 one global task list. `WithPrefix` replaces the default when several structs
