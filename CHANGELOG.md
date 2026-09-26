@@ -49,6 +49,12 @@ Fixes
   `.x.go` are no longer read, and a file that needs custom tags (such as
   `// +build ignore` or `integration`) contributes only its hand-written
   `DescX`, not task methods.
+- `WhenHostnameIn` and `WhenHostnameContains` refuse an empty or
+  whitespace-only hostname fragment as a declaration error. Before,
+  `WhenHostnameIn("f0", "")` (or one fed an unset config value) recorded
+  a guard every hostname matches, so the task applied on every
+  destination. `WhenHostnameIn()` with no hosts no longer falls back to
+  that match-all guard either.
 
 Docs
 - Gonfy the beaver is gonf's mascot and new logo (`assets/logo-*.svg`).

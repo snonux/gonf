@@ -65,10 +65,16 @@ func captureList(t *testing.T) string {
 func TestCLIListMarksDestinationGuardedTasks(t *testing.T) {
 	api.ResetForTest()
 	t.Cleanup(api.ResetForTest)
+	// The guard that holds here names this controller's own hostname: an
+	// empty fragment is a declaration error since task 8b.
+	host := api.DetectFacts().Hostname
+	if host == "" {
+		t.Skip("no hostname to guard on")
+	}
 	api.Task("home_base", "Base", func() {})
 	api.Task("home_tmux_rocky", "Tmux on rocky", func() {}, api.WhenHostnameContains("no-such-host-8h2"))
 	api.Task("bare", "", func() {}, api.WhenHostnameContains("no-such-host-8h2"))
-	api.Task("here", "Here", func() {}, api.WhenHostnameContains(""))
+	api.Task("here", "Here", func() {}, api.WhenHostnameContains(host))
 	api.Task("hidden", "", func() {}, api.When(func(api.Facts) bool { return false }))
 	api.Alias("tmux_legacy", "", "home_tmux_rocky")
 

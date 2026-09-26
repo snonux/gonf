@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/snonux/gonf/internal/declerr"
@@ -200,10 +202,13 @@ func WhenProfile(profiles ...string) TaskOption {
 
 // WhenHostnameContains guards the task with Facts.Hostname containing substr
 // (case insensitive), evaluated on each destination like WhenLinux.
+//
+// An empty or whitespace-only substr is a declaration error: every hostname
+// contains "", so it would silently turn the guard into match-all (task 8b).
+// The task then gets a controller-side predicate that never holds, like
+// WhenOS, so it is never activated rather than applied unguarded.
 func WhenHostnameContains(substr string) TaskOption {
-	return func(c *taskCandidate) {
-		c.planWhen = append(c.planWhen, plan.Predicate{Fact: "hostname_contains", Eq: substr})
-	}
+	return hostnameGuard("WhenHostnameContains", []string{substr})
 }
 
 // WhenHostnameIn guards a task to the destinations whose hostname contains
@@ -216,19 +221,45 @@ func WhenHostnameContains(substr string) TaskOption {
 //
 // It records the same predicate OnCluster does (Eq for one host, In for
 // several), travels in the plan and is evaluated on each destination. It
-// adds to OnCluster's guard, so the task applies where both hold. No hosts
-// is a declaration error.
+// adds to OnCluster's guard, so the task applies where both hold. No hosts,
+// or any empty or whitespace-only entry (e.g. an unset config value), is a
+// declaration error, handled like WhenHostnameContains("") (task 8b).
 func WhenHostnameIn(hosts ...string) TaskOption {
+	return hostnameGuard("WhenHostnameIn", hosts)
+}
+
+// hostnameGuard lowers "hostname contains any of hosts" to one
+// hostname_contains predicate (factPredicate: Eq for one entry, In for
+// several). hosts is checked when the option is applied, where every other
+// When* guard reports its misuse (WhenOS): a bad list is reported as a
+// declaration error and records a never-holding opaque predicate instead
+// of the match-all guard an empty fragment would lower to.
+func hostnameGuard(fn string, hosts []string) TaskOption {
+	hosts = slices.Clone(hosts)
+	return func(c *taskCandidate) {
+		if err := checkHostnameFragments(fn, hosts); err != nil {
+			declerr.Report(err)
+			c.opaque = append(c.opaque, func(Facts) bool { return false })
+			return
+		}
+		c.planWhen = append(c.planWhen, factPredicate("hostname_contains", hosts))
+	}
+}
+
+// checkHostnameFragments refuses an empty list and any blank entry: the
+// destination matches with strings.Contains, which is true for "" on every
+// host, so a blank fragment would guard nothing (inventory's
+// WithHostnameMatch refuses one for the same reason).
+func checkHostnameFragments(fn string, hosts []string) error {
 	if len(hosts) == 0 {
-		declerr.Report(fmt.Errorf("WhenHostnameIn: no hosts"))
+		return fmt.Errorf("%s: no hosts", fn)
 	}
-	pred := plan.Predicate{Fact: "hostname_contains"}
-	if len(hosts) == 1 {
-		pred.Eq = hosts[0]
-	} else {
-		pred.In = append([]string(nil), hosts...)
+	for i, h := range hosts {
+		if strings.TrimSpace(h) == "" {
+			return fmt.Errorf("%s: hostname fragment %d (%q) must not be empty: it would match every host", fn, i+1, h)
+		}
 	}
-	return func(c *taskCandidate) { c.planWhen = append(c.planWhen, pred) }
+	return nil
 }
 
 // Task queues a named unit of work for activation. Call from init() or
