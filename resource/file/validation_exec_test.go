@@ -13,6 +13,7 @@ import (
 
 	. "github.com/snonux/gonf/api/options"
 	gexec "github.com/snonux/gonf/internal/exec"
+	"github.com/snonux/gonf/internal/testutil"
 	ivalidator "github.com/snonux/gonf/internal/validator"
 	"github.com/snonux/gonf/resource"
 )
@@ -98,7 +99,7 @@ func (c *lingeringChild) assertGone(t *testing.T) {
 		t.Fatalf("lingering child pid: %v", err)
 	}
 	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
-		if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+		if testutil.ProcessGone(pid) {
 			c.gone = true
 			return
 		}
