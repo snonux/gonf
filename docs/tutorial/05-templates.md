@@ -122,15 +122,35 @@ has `"template":true` and your `template_data`. The second has only
 
 > 🦫 **Gonfy says:** Host names and OS differences are carved at the lodge. Anything from your own data can be carved at home.
 
+The recipe sent the same `Site` data down both paths, and the run and the
+plan above show where they differ:
+
+- `site.conf` is a destination template. The plan carried the template and
+  its data, and the host rendered it while applying. That is why its first
+  line names the host (`vm`), its OS and its profile, and why
+  `-profile fedora` changed it.
+- `banner.txt` is a controller template. `RenderTemplate` rendered it while
+  your gonf recorded, so the plan only carried `*** GONFY ***` and the host
+  never saw a template.
+
+So for each file, ask whether its content depends on the host it lands on.
+If it does, as the first line of `site.conf` does, render it on the
+destination; only the host knows its own facts. If the content only comes
+from your recipe's data, as the banner does, render it on the controller:
+the plan holds exactly the text that will be written, and a render error
+shows up on the controller instead of on the host. The table sums up
+the two paths:
+
 | | Destination (`.tmpl` source, `WithTemplate`, `WithTemplateData`) | Controller (`RenderTemplate`) |
 |--|--|--|
+| In this chapter | `site.conf` | `banner.txt` |
 | Renders | while applying | while recording |
 | Data | your data, `.Gonf` facts, environment, `.Param` | your data only |
 | Result in the plan | template and data | plain content |
 | Use for | host names, OS differences | files built from recipe data, secrets |
 
-Both have the helpers `join`, `lower`, `upper`, `trim` and `replace`, and
-both fail on an unknown key instead of printing `<no value>`.
+Both paths have the helpers `join`, `lower`, `upper`, `trim` and `replace`
+(the templates above use `join` and `upper`), and both fail on an unknown key instead of printing `<no value>`.
 `WithContentFrom(RenderTemplate(...))` takes the `(string, error)` pair
 directly, so a render error refuses the file instead of writing an empty
 one.

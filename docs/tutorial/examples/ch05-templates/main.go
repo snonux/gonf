@@ -29,7 +29,7 @@ func templates() {
 	File(dir+"/site.conf", WithSource("assets/templates/site.conf.tmpl"),
 		WithTemplateData(site), WithMode(0o644))
 
-	// 2. RenderTemplate renders on the controller, while the recipe runs.
+	// 2. RenderTemplate renders on the controller, while gonf records.
 	//    Only your data is available, and the result is plain content.
 	//    WithContentFrom takes its (string, error) result directly: a render
 	//    error refuses the file.
