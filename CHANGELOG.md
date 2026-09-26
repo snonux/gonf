@@ -3,6 +3,15 @@
 Release notes for gonf. Each release is also an annotated `v*` tag; for
 releases before v0.17.0 the tag message and the git log are the notes.
 
+## Unreleased
+
+Docs
+- Gonfy the beaver is gonf's mascot and new logo (`assets/logo-*.svg`).
+  The README, the reference and the tutorial are themed around him, and
+  the tutorial's example recipes manage his things (a portrait file, a
+  lodge motd, a `gonfy` account and cron job); their outputs were
+  recaptured. The demo tasks in `examples/` write a Gonfy file too.
+
 ## v0.24.0 (2026-09-26)
 
 More recipe DSL sugar. No plan schema change: every new form records

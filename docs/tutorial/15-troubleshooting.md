@@ -3,6 +3,8 @@
 gonf sorts every failure into one of four classes, and each stops at a
 different point. Knowing the class tells you where to look.
 
+> 🦫 **Gonfy says:** When the dam leaks, read the error class first. It tells you whether the leak is in a declaration, in the recording, in the push checks or at the lodge.
+
 ![The four failure classes: declare, record, push checks, apply](img/ch15-1.svg)
 
 ## The recipe

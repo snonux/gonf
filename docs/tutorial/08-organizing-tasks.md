@@ -5,6 +5,8 @@ structs, grouped into packages, so your editor can jump to any of them.
 This chapter splits a website into a `web` package, adds a backup, and
 wires them together with aggregates, an alias and dependencies.
 
+> 🦫 **Gonfy says:** A big lodge has rooms. Put related tasks on one struct and let `RegisterMethods` name them for you.
+
 ## A struct of tasks
 
 ```go

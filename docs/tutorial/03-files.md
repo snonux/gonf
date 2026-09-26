@@ -4,6 +4,8 @@ Most configuration is files. This chapter builds a small tree below
 `~/gonf-tutorial`: inline content, copied files, a synced directory tree, a
 glob install, links, files created only once, and a file that must be gone.
 
+> 🦫 **Gonfy says:** I carry sticks from the riverbank to the lodge. The riverbank is the controller, where `Home` and `WithSource` read. The lodge is the destination, where `DestHome` points.
+
 ## The recipe
 
 ```go
@@ -62,6 +64,7 @@ recipe from, here `docs/tutorial/examples`:
 ```text
 assets/
 ├── bin/            disk, load
+├── gonfy.txt       Gonfy's portrait
 └── dotfiles/
     ├── bashrc
     └── vim/        vimrc, colors/tutorial.vim
@@ -202,7 +205,7 @@ $ cat ~/gonf-tutorial/gonfy.txt
 
 ## Drift: pruning, removal and repair
 
-Add a stray file to the synced tree, recreate the file that must be absent,
+Drop some twigs into the synced tree as a stray file, recreate the file that must be absent,
 and loosen a mode:
 
 ```text

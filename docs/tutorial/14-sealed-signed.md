@@ -6,6 +6,8 @@ safe to copy around, and sign it, so a host applies only plans you made.
 This chapter reuses the recipe from [chapter 13](13-secrets.md), run from
 `examples/ch13-secrets`.
 
+> 🦫 **Gonfy says:** Seal the blueprint so only the right lodge can read it, and sign it so the lodge knows it came from me.
+
 ## Keys
 
 Sealing needs an age identity with a post-quantum key (`age-keygen -pq`,

@@ -5,6 +5,8 @@ other, so it should be idempotent too: gonf gives you guards that decide on
 the destination whether to run it, and change gates that run it only when
 something it depends on changed.
 
+> 🦫 **Gonfy says:** A command is a stick without a shape of its own. Give it a guard, so it knows when the job is already done.
+
 ## The recipe
 
 ```go
@@ -92,7 +94,7 @@ Each command was held back for its own reason:
 | Command | Option | Why it was skipped |
 |---------|--------|--------------------|
 | `git-init` | `Creates(path)` | the path it creates already exists |
-| `git-user` | `Unless(bin, args, ExpectStdout("gonf"))` | the check printed `gonf`, so the work is done |
+| `git-user` | `Unless(bin, args, ExpectStdout("gonfy"))` | the check printed `gonfy`, so the work is done |
 | `reload-app` | `OnChange(conf)` | `app.conf` did not change in this run |
 
 `echo` and `report` have no guard, so they run every time. That is fine for
@@ -131,7 +133,7 @@ the daemon when its config changed":
 - Guards (`Creates`, `Unless`, `OnlyIf`) run on the destination.
 - `WithDir`, `Creates` and other path options expand `${HOME}`; the argv
   does not. That is why the recipe uses `Home(...)` in the git arguments.
-- `Sh("echo 'hello from Sh'")` splits the line like a shell would, but
+- `Sh("echo 'hello from Gonfy'")` splits the line like a shell would, but
   runs no shell: pipes, `$VAR` and globs are refused. For real shell syntax
   write `Command("sh", List("-c", "..."))`.
 - Without `WithName`, a command's ID is its whole argv. Name it when you

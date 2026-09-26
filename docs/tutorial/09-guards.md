@@ -5,6 +5,8 @@ task, or a part of it, applies. The important question for every guard is
 **who decides**: the destination while applying, or the controller while
 recording.
 
+> 🦫 **Gonfy says:** Always ask who decides: the lodge, when the guard travels in the plan, or the beaver at home, when it is plain Go that runs while recording.
+
 ## Facts
 
 gonf detects three facts on every machine, the same way on the controller

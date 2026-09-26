@@ -1,6 +1,8 @@
 # gonf quick reference
 
-Every user-facing feature in one place, current as of v0.24.0 (plan schema
+<img src="../assets/logo-light.svg" alt="Gonfy, the gonf beaver" width="96" align="right">
+
+Gonfy's cheat sheet: every user-facing feature in one place, current as of v0.24.0 (plan schema
 27). Background, rationale and history live in [design/](design/README.md).
 New to gonf? Start with the [tutorial](tutorial/README.md).
 
@@ -26,6 +28,10 @@ Recording runs task bodies once and emits ops. Go control flow in a body
 (`if hostname == ...`) runs on the controller and never reaches the plan; use
 the `When*` helpers for anything the destination must decide.
 
+> 🦫 **Gonfy's rule of thumb:** the controller is the riverbank where the
+> sticks are gathered (task bodies, sources, secrets); the destination is
+> the lodge where they are put in place (guards, templates, `${HOME}`).
+
 ## Minimal recipe
 
 ```go
@@ -38,7 +44,7 @@ import (
 
 func main() {
     Task("hello", "Write ~/.hello", func() {
-        File(Home(".hello"), WithContent("hi\n"), WithMode(0o644))
+        File(Home(".hello"), WithContent("Hi from Gonfy!\n"), WithMode(0o644))
     })
     Task("motd", "Install /etc/motd", func() {
         File("/etc/motd", WithContent("welcome\n"), WithMode(0o644))
@@ -108,6 +114,10 @@ guard against this host at record time and skips members that do not match.
 
 To replace an opaque predicate on a pushed task, use a serializable guard or
 move the check into the body as `OnlyIf`/`Unless` on a `Command`.
+
+> 🦫 **Gonfy asks:** who decides? A serializable guard travels in the plan
+> and the lodge decides; an opaque `When(func...)` is decided on the
+> riverbank and never leaves it.
 
 ### RegisterMethods
 
@@ -850,6 +860,9 @@ options, `.tmpl` paths, line edits and `IsAbsent` are refused.
   is refused before anything applies.
 - A metadata-only repair is not a change.
 
+> 🦫 **Gonfy's tip:** a mode or owner that drifted is patched quietly, like a
+> loose stick; only a real content change wakes up the services that watch it.
+
 ## Templates
 
 | Where | How | Data available |
@@ -1414,6 +1427,10 @@ gonf plan-verify -trusted-signers f out/plan.age | age -d -i key | gonf apply -
 - `api.Apply` refuses after any failed record until a later record
   succeeds.
 - Library code never exits the process; only `cli.CLI()`'s caller does.
+
+> 🦫 **Gonfy's tip:** find the class first. A declaration error names the
+> recipe line; a record error or push refusal means nothing was changed
+> yet; only an apply error happened at the lodge.
 
 ## Go API
 

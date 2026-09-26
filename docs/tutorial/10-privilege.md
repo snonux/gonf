@@ -4,6 +4,8 @@ gonf never guesses whether something needs root. A task is unprivileged
 unless you say otherwise, and when it is privileged you choose how to get
 root: run as root, or through `sudo` or `doas`.
 
+> 🦫 **Gonfy says:** Even a beaver needs a ladder for the roof. gonf climbs it only for the ops that need it, and comes straight back down.
+
 ## The recipe
 
 ```go
@@ -40,7 +42,9 @@ func (System) Hosts() {
 func (System) DescNote() string { return "A user file, opted out of RequiresRoot" }
 
 // Note writes into the user's home, so it opts out of root.
-func (System) Note() { File(DestHome(".tutorial-note"), WithContent("hi from gonfy\n"), WithMode(0o644)) }
+func (System) Note() {
+	File(DestHome(".tutorial-note"), WithContent("hi from gonfy\n"), WithMode(0o644))
+}
 
 // OptsNote opts the Note task out of the struct's RequiresRoot.
 func (System) OptsNote() TaskOptions { return TaskOptions{Unprivileged()} }
@@ -121,7 +125,8 @@ summary: 0 ok, 0 changed, 0 skipped, 1 would-change
 
 ## Without a helper
 
-As a normal user with the default `-privilege=none`, gonf refuses before it
+As a normal user (here `gonfy`, the account from chapter 7) with the
+default `-privilege=none`, gonf refuses before it
 changes anything:
 
 ```text

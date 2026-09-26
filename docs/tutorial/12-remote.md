@@ -5,11 +5,15 @@ hosts over ssh. gonf needs nothing installed on them except an ssh login
 and sudo or doas: it cross-compiles itself, copies the binary over and
 installs it on the first push.
 
+> 🦫 **Gonfy says:** Many lodges, one beaver. Name the hosts once in the inventory, then push the same recipe to one of them or to all of them.
+
 > **About the outputs in this chapter.** They were captured with a stand-in
 > for `ssh` and `scp` that ran each remote command locally under the
 > target's host name, with a private `/etc/motd.d`, crontab and
 > `/usr/local/bin` per host. gonf's own output is unchanged; with real hosts
-> you see the same lines.
+> you see the same lines. When Gonfy joined the welcome message, its two
+> `cat` lines were recaptured by applying `planet_motd` locally under each
+> host's name.
 
 ## Hosts, clusters and fleets
 

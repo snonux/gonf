@@ -5,6 +5,8 @@ gonf can own just a part of such a file. It can also refuse to install a
 file that does not pass a check, and install several files as one checked
 set.
 
+> 🦫 **Gonfy says:** Some lodges are shared with the muskrats. I only fix my own sticks and leave theirs where they are: that is what owned lines, keyed lines and blocks are for.
+
 ## The recipe
 
 ```go
@@ -197,8 +199,8 @@ summary: 4 ok, 0 changed, 1 skipped, 0 would-change
 ```
 
 The `run-greeter` command watches the set with `OnChange`, so it ran on the
-first apply and was skipped on the second. Change a member by hand and the
-set repairs it and fires the command again:
+first apply and was skipped on the second. Let a woodpecker take Gonfy's
+place in `main.sh`, and the set repairs it and fires the command again:
 
 ```text
 $ sed -i s/gonfy/woodpecker/ ~/gonf-tutorial/greeter/main.sh

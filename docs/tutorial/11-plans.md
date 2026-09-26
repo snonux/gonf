@@ -5,6 +5,8 @@ threw it away. `gonf plan` keeps it: you can read it, copy it to another
 machine, and apply it there with any gonf binary, no Go and no recipe
 needed.
 
+> 🦫 **Gonfy says:** A plan is my blueprint: drawn once on the controller, then followed by any gonf binary on any host.
+
 ## The recipe
 
 ```go

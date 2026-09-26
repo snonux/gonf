@@ -1,8 +1,10 @@
 # 2. Your first recipe
 
 A recipe is a normal Go module. In this chapter you create one, add a task
-that writes a file into your home directory, and run it a few times to see
+in which Gonfy writes a file into your home directory, and run it a few times to see
 how gonf reports changes.
+
+> 🦫 **Gonfy says:** Run it, then run it again. When the second run says `0 changed`, the lodge is sound.
 
 ## Create the module
 
@@ -93,8 +95,8 @@ $ ./recipe hello
 summary: 1 ok, 0 changed, 0 skipped, 0 would-change
 ```
 
-Nothing changed, because the file already matches. Now change the file
-behind gonf's back and look at the drift:
+Nothing changed, because the file already matches. Now let something
+nibble on the file behind gonf's back and look at the drift:
 
 ```text
 $ echo nibbled > ~/hello.txt
@@ -109,7 +111,7 @@ summary: 0 ok, 1 changed, 0 skipped, 0 would-change
 ```
 
 This is the core loop of gonf: declare, preview with `-n`, apply, and run
-again whenever you like.
+again whenever you like. Gonfy calls it his evening walk around the lodge.
 
 ## A few more flags
 

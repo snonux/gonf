@@ -32,7 +32,9 @@ func (System) Hosts() {
 func (System) DescNote() string { return "A user file, opted out of RequiresRoot" }
 
 // Note writes into the user's home, so it opts out of root.
-func (System) Note() { File(DestHome(".tutorial-note"), WithContent("hi from gonfy\n"), WithMode(0o644)) }
+func (System) Note() {
+	File(DestHome(".tutorial-note"), WithContent("hi from gonfy\n"), WithMode(0o644))
+}
 
 // OptsNote opts the Note task out of the struct's RequiresRoot.
 func (System) OptsNote() TaskOptions { return TaskOptions{Unprivileged()} }

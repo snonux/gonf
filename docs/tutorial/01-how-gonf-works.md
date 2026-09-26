@@ -4,6 +4,8 @@ gonf is configuration management written as a plain Go program. There is
 no agent to run, no YAML and no template language of its own: you write a
 Go `main` package that describes the state you want, build it, and run it.
 
+> 🦫 **Gonfy says:** A beaver does not rebuild his lodge every morning. He walks around it, finds the stick that moved, and puts it back. That is all gonf does with your machines, and this chapter shows how.
+
 ## The words
 
 | Word | Meaning |

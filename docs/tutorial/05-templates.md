@@ -5,6 +5,8 @@ destination while applying, or on the controller while recording. Pick the
 destination when the output depends on the host, and the controller when it
 only depends on your data.
 
+> 🦫 **Gonfy says:** You can carve a sign at the lodge, with the lodge's own facts, or at home before the trip, with only what you brought along. Both are templates; they differ in where they are carved.
+
 ## The recipe
 
 ```go
@@ -112,7 +114,7 @@ wrote redacted preview to stdout (4 ops, 0 secret-bearing; not a plan, cannot be
 
 (`plan -redacted` prints a plan for reading, chapter 11.) The first file op
 has `"template":true` and your `template_data`. The second has only
-`content_b64`, the base64 of `*** BLOG ***`.
+`content_b64`, the base64 of `*** GONFY ***`.
 
 ## Which one to use
 

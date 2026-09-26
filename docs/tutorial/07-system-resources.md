@@ -1,5 +1,7 @@
 # 7. Packages, services, timers, cron and users
 
+> 🦫 **Gonfy says:** This is the chapter where I get a real account on the machine, `gonfy`, with a home of my own. Chapter 10 logs in as me.
+
 These resources talk to the operating system's own tools. gonf picks the
 backend on the destination:
 
