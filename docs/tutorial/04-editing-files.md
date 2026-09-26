@@ -183,7 +183,39 @@ Reference: [File](../reference.md#file) (validation).
 `main.sh` sources `lib.sh`, so neither can be checked alone. A `ConfigSet`
 stages all members in a private directory, runs the validators against the
 staged copies (`MemberPath` points at the staged path during validation and
-at the live path afterwards), and only then publishes them:
+at the live path afterwards), and only then publishes them.
+
+The `greeter` task from `main.go`:
+
+```go
+func greeter() {
+	lib := "greet() { echo \"hello, $1\"; }\n"
+	main := "#!/bin/sh\n. " + MemberPath("lib.sh") + "\ngreet gonfy\n"
+	Dir(DestHome("gonf-tutorial/greeter"), WithMode(0o755))
+	set := ConfigSet("greeter",
+		ConfigFile("lib.sh", DestHome("gonf-tutorial/greeter/lib.sh"), WithContent(lib), WithMode(0o644)),
+		ConfigFile("main.sh", DestHome("gonf-tutorial/greeter/main.sh"), WithContent(main), WithMode(0o755)),
+		// Both files are staged together, then the validator runs the
+		// staged main.sh, which sources the staged lib.sh.
+		WithSetValidation("sh", List(MemberPath("main.sh"))))
+	// ${HOME} is not expanded in argv, but it is in WithDir.
+	Command("sh", List("main.sh"), WithDir(DestHome("gonf-tutorial/greeter")),
+		WithName("run-greeter"), OnChange(set))
+}
+```
+
+- `ConfigFile(name, path, options...)` declares one member. The name is how
+  the set refers to it; the path is where it is published. Its content
+  comes from `WithContent` or `WithSource`, and `WithMode`, `WithOwner` and
+  `WithGroup` work as for `File`.
+- `MemberPath("lib.sh")` is the staged `lib.sh` while the validators run and
+  the live path once published, so `main.sh` sources the right copy in both
+  cases.
+- `WithSetValidation(command, argv)` runs against the whole staged set,
+  without a shell. If it exits non-zero, no member is published.
+- `OnChange(set)` makes the command run only when some member changed.
+
+Apply it:
 
 ```text
 $ ./gonf greeter
