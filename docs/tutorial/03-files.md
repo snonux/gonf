@@ -84,25 +84,67 @@ Reference: [Body-level guards and helpers](../reference.md#body-level-guards-and
 
 ## Run it
 
+Build the recipe and preview it with `-n` on a fresh home first:
+
 ```text
 $ go build -o recipe ./ch03-files
 $ ./recipe -list
 cleanup	Remove what the files task created
 files	Files, directories and links under ~/gonf-tutorial
+$ ./recipe -n files
+2026/09/26 09:23:54 dry-run: would create directory /home/paul/gonf-tutorial
+2026/09/26 09:23:54 dry-run: would update /home/paul/gonf-tutorial/motd
+2026/09/26 09:23:54 dry-run: would update /home/paul/gonf-tutorial/bashrc
+2026/09/26 09:23:54 dry-run: would create directory /home/paul/gonf-tutorial/vim
+2026/09/26 09:23:54 dry-run: would create directory /home/paul/gonf-tutorial/vim/colors
+2026/09/26 09:23:54 dry-run: would update /home/paul/gonf-tutorial/vim/colors/tutorial.vim
+2026/09/26 09:23:54 dry-run: would update /home/paul/gonf-tutorial/vim/vimrc
+2026/09/26 09:23:54 dry-run: would create directory /home/paul/gonf-tutorial/bin
+2026/09/26 09:23:54 dry-run: would update /home/paul/gonf-tutorial/bin/disk
+2026/09/26 09:23:54 dry-run: would update /home/paul/gonf-tutorial/bin/load
+2026/09/26 09:23:54 dry-run: symlink /home/paul/gonf-tutorial/vimrc target "/home/paul/gonf-tutorial/vim/vimrc" does not exist yet; the apply refuses it unless an earlier resource creates it
+2026/09/26 09:23:54 dry-run: would create symlink /home/paul/gonf-tutorial/vimrc -> /home/paul/gonf-tutorial/vim/vimrc
+2026/09/26 09:23:54 dry-run: would create directory /home/paul/gonf-tutorial/state
+2026/09/26 09:23:54 dry-run: would update /home/paul/gonf-tutorial/state/notes.txt
+summary: 2 ok, 0 changed, 0 skipped, 13 would-change
+  would-change Directory[/home/paul/gonf-tutorial]
+  would-change File[/home/paul/gonf-tutorial/motd]
+  would-change File[/home/paul/gonf-tutorial/bashrc]
+  would-change Directory[/home/paul/gonf-tutorial/vim]
+  would-change Directory[/home/paul/gonf-tutorial/vim/colors]
+  would-change File[/home/paul/gonf-tutorial/vim/colors/tutorial.vim]
+  would-change File[/home/paul/gonf-tutorial/vim/vimrc]
+  would-change Directory[/home/paul/gonf-tutorial/bin]
+  would-change File[/home/paul/gonf-tutorial/bin/disk]
+  would-change File[/home/paul/gonf-tutorial/bin/load]
+  would-change Symlink[/home/paul/gonf-tutorial/vimrc]
+  would-change Directory[/home/paul/gonf-tutorial/state]
+  would-change EnsureFile[/home/paul/gonf-tutorial/state/notes.txt]
+```
+
+The dry run changes nothing, so the `vimrc` link's target `vim/vimrc` does
+not exist yet when the link is checked. gonf notes that an earlier resource
+of the same run may create it and previews the link as `would-change`. The
+real apply still refuses a symlink whose target is missing when it gets to
+it, so a typo in a target fails the run instead of leaving a dangling link.
+
+Now apply it:
+
+```text
 $ ./recipe files
-2026/09/26 08:23:12 created directory /home/paul/gonf-tutorial
-2026/09/26 08:23:12 updated /home/paul/gonf-tutorial/motd
-2026/09/26 08:23:12 updated /home/paul/gonf-tutorial/bashrc
-2026/09/26 08:23:12 created directory /home/paul/gonf-tutorial/vim
-2026/09/26 08:23:12 created directory /home/paul/gonf-tutorial/vim/colors
-2026/09/26 08:23:12 updated /home/paul/gonf-tutorial/vim/colors/tutorial.vim
-2026/09/26 08:23:12 updated /home/paul/gonf-tutorial/vim/vimrc
-2026/09/26 08:23:12 created directory /home/paul/gonf-tutorial/bin
-2026/09/26 08:23:12 updated /home/paul/gonf-tutorial/bin/disk
-2026/09/26 08:23:12 updated /home/paul/gonf-tutorial/bin/load
-2026/09/26 08:23:12 created symlink /home/paul/gonf-tutorial/vimrc -> /home/paul/gonf-tutorial/vim/vimrc
-2026/09/26 08:23:12 created directory /home/paul/gonf-tutorial/state
-2026/09/26 08:23:12 updated /home/paul/gonf-tutorial/state/notes.txt
+2026/09/26 09:23:54 created directory /home/paul/gonf-tutorial
+2026/09/26 09:23:54 updated /home/paul/gonf-tutorial/motd
+2026/09/26 09:23:54 updated /home/paul/gonf-tutorial/bashrc
+2026/09/26 09:23:54 created directory /home/paul/gonf-tutorial/vim
+2026/09/26 09:23:54 created directory /home/paul/gonf-tutorial/vim/colors
+2026/09/26 09:23:54 updated /home/paul/gonf-tutorial/vim/colors/tutorial.vim
+2026/09/26 09:23:54 updated /home/paul/gonf-tutorial/vim/vimrc
+2026/09/26 09:23:54 created directory /home/paul/gonf-tutorial/bin
+2026/09/26 09:23:54 updated /home/paul/gonf-tutorial/bin/disk
+2026/09/26 09:23:54 updated /home/paul/gonf-tutorial/bin/load
+2026/09/26 09:23:54 created symlink /home/paul/gonf-tutorial/vimrc -> /home/paul/gonf-tutorial/vim/vimrc
+2026/09/26 09:23:54 created directory /home/paul/gonf-tutorial/state
+2026/09/26 09:23:54 updated /home/paul/gonf-tutorial/state/notes.txt
 summary: 2 ok, 13 changed, 0 skipped, 0 would-change
   changed Directory[/home/paul/gonf-tutorial]
   changed File[/home/paul/gonf-tutorial/motd]
@@ -152,16 +194,16 @@ and loosen a mode:
 ```text
 $ echo junk > ~/gonf-tutorial/vim/stray.txt; echo old > ~/gonf-tutorial/old.conf; chmod 600 ~/gonf-tutorial/motd
 $ ./recipe -n files
-2026/09/26 08:23:12 dry-run: would prune /home/paul/gonf-tutorial/vim/stray.txt
-2026/09/26 08:23:12 dry-run: would remove /home/paul/gonf-tutorial/old.conf
+2026/09/26 09:23:54 dry-run: would prune /home/paul/gonf-tutorial/vim/stray.txt
+2026/09/26 09:23:54 dry-run: would remove /home/paul/gonf-tutorial/old.conf
 summary: 14 ok, 0 changed, 0 skipped, 2 would-change
   would-change File[/home/paul/gonf-tutorial/vim/stray.txt]
   would-change File[/home/paul/gonf-tutorial/old.conf]
 $ stat -c '%a %n' /home/paul/gonf-tutorial/motd
 600 /home/paul/gonf-tutorial/motd
 $ ./recipe files
-2026/09/26 08:23:12 pruned /home/paul/gonf-tutorial/vim/stray.txt
-2026/09/26 08:23:12 removed /home/paul/gonf-tutorial/old.conf
+2026/09/26 09:23:54 pruned /home/paul/gonf-tutorial/vim/stray.txt
+2026/09/26 09:23:54 removed /home/paul/gonf-tutorial/old.conf
 summary: 14 ok, 2 changed, 0 skipped, 0 would-change
   changed File[/home/paul/gonf-tutorial/vim/stray.txt]
   changed File[/home/paul/gonf-tutorial/old.conf]
@@ -180,7 +222,7 @@ $ stat -c '%a %n' /home/paul/gonf-tutorial/motd
 
 ```text
 $ ./recipe cleanup
-2026/09/26 08:23:12 removed /home/paul/gonf-tutorial
+2026/09/26 09:23:54 removed /home/paul/gonf-tutorial
 summary: 0 ok, 1 changed, 0 skipped, 0 would-change
   changed Directory[/home/paul/gonf-tutorial]
 ```
