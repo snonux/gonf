@@ -77,26 +77,36 @@ Service("nsd", WithFlags("-c /var/nsd/etc/nsd.conf"))
   a differing `NAME_flags` in `/etc/rc.conf.d/NAME` (it would override
   `/etc/rc.conf`).
 - NetBSD reads the files as sh(1) does (quotes, `$'...'`, nested `$(...)`,
-  `${...}` and backquotes, backslash-newlines, comments, here-documents),
-  and fails closed: anything it does not fully understand is an error
-  naming the file and line, and rc.conf is left untouched. It finds every
-  assignment: after `;`, after other assignments (the defaults' one-line
-  `NAME=YES NAME_flags="..."` style), and behind `export`/`readonly`. It
-  refuses one whose effect it cannot tell: inside `if`/`while`/`for`/`{...}`,
-  anywhere after the file's first function, `case`, subshell or `!`
-  command, in an `&&`/`||` list, a pipeline or a background job, in front
-  of a command, via `eval` or `${NAME_flags:=...}`, or followed by a `.`,
-  `source` or `eval` command, or an `unset`/`read`/`getopts`/`for` naming
+  `${...}` and backquotes, backslash-newlines, also inside a name, a line
+  ending in `&&`, `||` or `|` continuing on the next, comments,
+  here-documents), and fails closed: anything it does not fully
+  understand is an error naming the file and line, and rc.conf is left
+  untouched. It finds every assignment: after `;`, after other
+  assignments (the defaults' one-line `NAME=YES NAME_flags="..."` style),
+  and behind `export`/`readonly`. It refuses one whose effect it cannot
+  tell: inside `if`/`while`/`for`/`{...}`, anywhere after the file's first
+  function, `case`, subshell or `!` command, in an `&&`/`||` list (also one
+  continued over lines), a pipeline or a background job, in front of a
+  command, possibly assigned inside another word (`eval NAME_flags=...`,
+  `${NAME_flags:=...}`, `$((NAME_flags=1))`, even quoted text naming
+  `NAME_flags=`), or followed by a `.`, `source` or `eval` command (also
+  quoted or behind `command`), or an `unset`/`read`/`getopts`/`for` naming
   the variable (sourcing before it, like rc.conf's own
   `. /etc/defaults/rc.conf` header, is fine).
+- A file that does not assign the variable but sources other files (or
+  uses `eval`), other than that header, may set it unseen: in rc.conf or
+  the defaults it never matches, so the appended assignment settles the
+  value; in `/etc/rc.conf.d/NAME` it is refused.
 - A rewrite replaces only the first assignment word with
   `NAME_flags='FLAGS'`, keeping `export`, other statements and comments on
   its line; a later duplicate alone on its line is dropped, any other is
   set the same in place; with none, the line is appended. It refuses an
   assignment spanning several lines with a value it cannot evaluate, a
-  file ending inside a line continuation, CRLF line endings, a `case` or a
-  here-document inside `$(...)`, and any result that does not read back
-  with every assignment equal to FLAGS.
+  file ending inside a line continuation or after `&&`/`||`/`|`, CRLF line
+  endings, a `case` or a here-document inside `$(...)`, a backslash-newline
+  in an unquoted here-document body, and any result that does not read
+  back with every assignment equal to FLAGS. The stock NetBSD
+  `/etc/defaults/rc.conf` and `/etc/rc.conf` are regression fixtures.
 - `WithFlags` on `NoService`, or with a line break, is a declaration error.
 - A plan with `WithFlags` declares schema 25.
 

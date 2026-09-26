@@ -30,9 +30,12 @@ const (
 
 // rcToken is one lexed token; [start, end) are byte offsets in the source.
 // A newline token's end lies past the here-document bodies it starts.
+// joined is text without backslash-newlines, as sh(1) sees it when it
+// classifies the word (nsd_\<newline>flags=x assigns nsd_flags).
 type rcToken struct {
 	kind       rcTokenKind
 	text       string
+	joined     string
 	start, end int
 }
 
@@ -48,6 +51,7 @@ func isRcBlank(c byte) bool { return c == ' ' || c == '\t' }
 type rcHeredoc struct {
 	delim     string
 	stripTabs bool
+	quoted    bool // a quoted delimiter: the body is literal
 	start     int
 }
 
@@ -83,7 +87,10 @@ func (l *rcLexer) fail(off int, what string) error {
 }
 
 func (l *rcLexer) emit(kind rcTokenKind, start int) {
-	l.tokens = append(l.tokens, rcToken{kind: kind, text: l.src[start:l.pos], start: start, end: l.pos})
+	text := l.src[start:l.pos]
+	l.tokens = append(l.tokens, rcToken{
+		kind: kind, text: text, joined: strings.ReplaceAll(text, "\\\n", ""), start: start, end: l.pos,
+	})
 }
 
 func (l *rcLexer) next() error {
@@ -142,14 +149,18 @@ func (l *rcLexer) heredocDelimiter(start int, stripTabs bool) error {
 	if err := l.word(); err != nil {
 		return err
 	}
-	delim := strings.NewReplacer(`\`, "", `'`, "", `"`, "").Replace(l.tokens[len(l.tokens)-1].text)
-	l.heredocs = append(l.heredocs, rcHeredoc{delim: delim, stripTabs: stripTabs, start: start})
+	word := l.tokens[len(l.tokens)-1].text
+	delim := strings.NewReplacer(`\`, "", `'`, "", `"`, "").Replace(word)
+	l.heredocs = append(l.heredocs, rcHeredoc{
+		delim: delim, stripTabs: stripTabs, quoted: delim != word, start: start,
+	})
 	return nil
 }
 
 // skipHeredocBodies skips the bodies of the queued here-documents, which
 // start right after the newline just lexed, and extends that newline token
-// over them.
+// over them. A backslash-newline in an unquoted body joins lines before
+// sh(1) looks for the delimiter; that is not modelled, so it is refused.
 func (l *rcLexer) skipHeredocBodies() error {
 	for _, h := range l.heredocs {
 		for {
@@ -160,6 +171,9 @@ func (l *rcLexer) skipHeredocBodies() error {
 			l.pos = len(l.src) - len(rest)
 			if !found {
 				l.pos = len(l.src)
+			}
+			if !h.quoted && strings.HasSuffix(line, `\`) {
+				return l.fail(l.pos-1, "backslash-newline in an unquoted here-document body is not supported")
 			}
 			if h.stripTabs {
 				line = strings.TrimLeft(line, "\t")
@@ -293,7 +307,19 @@ func (l *rcLexer) parameterExpansion(inDouble bool) error {
 func (l *rcLexer) commandSubstitution() error {
 	arithmetic := strings.HasPrefix(l.src[l.pos:], "$((")
 	depth, wordStart, commandPosition := 1, true, true
-	return l.until(l.pos+2, "unterminated $(...)", func(c byte) (bool, error) {
+	// An escaped character (not a backslash-newline, which sh removes)
+	// starts or continues a word, and a word starting with one is no
+	// reserved word: "\ #" is no comment, "\case" no case.
+	escaped := func(c byte) {
+		if c == '\n' {
+			return
+		}
+		if wordStart {
+			commandPosition = false
+		}
+		wordStart = false
+	}
+	return l.untilEscaping(l.pos+2, "unterminated $(...)", escaped, func(c byte) (bool, error) {
 		atWord := wordStart
 		wordStart = isRcBlank(c) || strings.IndexByte("\n;&|()", c) >= 0
 		if atWord && !wordStart && !arithmetic {
@@ -371,11 +397,20 @@ func (l *rcLexer) continuation() error {
 // past the character. Reaching the end of the source fails with what at
 // the construct's start.
 func (l *rcLexer) until(from int, what string, step func(c byte) (bool, error)) error {
+	return l.untilEscaping(from, what, nil, step)
+}
+
+// untilEscaping is until, also telling onEscape (when set) each character
+// a backslash escapes.
+func (l *rcLexer) untilEscaping(from int, what string, onEscape func(c byte), step func(c byte) (bool, error)) error {
 	start := l.pos
 	l.pos = from
 	for l.pos < len(l.src) {
 		c := l.src[l.pos]
 		if c == '\\' {
+			if onEscape != nil && l.pos+1 < len(l.src) {
+				onEscape(l.src[l.pos+1])
+			}
 			l.pos += 2
 			continue
 		}

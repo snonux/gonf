@@ -3,50 +3,12 @@ package service
 import (
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/snonux/gonf/resource"
 )
-
-// shellSyntax runs a syntax-only check (-n) over content and returns its
-// failure. It prefers a strict POSIX shell (dash, busybox sh) close to
-// NetBSD's sh; without one it falls back to sh, which is bash on some
-// hosts (Rocky Linux) and so accepts a few bash-only forms NetBSD's sh
-// would not. None of the rc.conf texts under test depend on that
-// difference. It skips when no shell is installed.
-func shellSyntax(t *testing.T, content string) error {
-	t.Helper()
-	var argv []string
-	for _, candidate := range [][]string{{"dash"}, {"busybox", "sh"}, {"sh"}} {
-		if path, err := exec.LookPath(candidate[0]); err == nil {
-			argv = append([]string{path}, candidate[1:]...)
-			break
-		}
-	}
-	if argv == nil {
-		t.Skip("no sh(1) installed; cannot check rc.conf syntax")
-	}
-	path := filepath.Join(t.TempDir(), "rc.conf")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	out, err := exec.Command(argv[0], append(argv[1:], "-n", path)...).CombinedOutput()
-	if err != nil {
-		return errors.New(strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-// requireShellSyntax fails t unless the shell accepts content (-n).
-func requireShellSyntax(t *testing.T, content string) {
-	t.Helper()
-	if err := shellSyntax(t, content); err != nil {
-		t.Fatalf("sh -n rejects the result: %v\n%s", err, content)
-	}
-}
 
 // TestShellSyntaxCatchesOrphanedContinuation proves requireShellSyntax has
 // teeth: the rc.conf the old line-by-line rewrite left behind (task 7b), a
@@ -85,14 +47,12 @@ func TestNetBSDFlagsRewrite(t *testing.T) {
 			"nsd_flags='-a\n-b'\n", "-a\n-b", "nsd_flags='-a\n-b'\n"},
 		{"unquoted continuation matches",
 			"nsd_flags=-a\\\nb\n", "-ab", "nsd_flags=-a\\\nb\n"},
-		{"assignment inside another quoted value is not one",
-			"motd='hi\nnsd_flags=-9\n'\nnsd_flags=-4\n", "-x", "motd='hi\nnsd_flags=-9\n'\nnsd_flags='-x'\n"},
-		{"assignment inside another quoted value does not match",
-			"motd='hi\nnsd_flags=-9\n'\nnsd_flags=-4\n", "-4", "motd='hi\nnsd_flags=-9\n'\nnsd_flags=-4\n"},
+		{"statement inside another quoted value is not one",
+			"motd='hi\nnsd=NO # x\n'\nnsd_flags=-4\n", "-x", "motd='hi\nnsd=NO # x\n'\nnsd_flags='-x'\n"},
 		{"apostrophe in a comment opens no quote",
 			"# don't touch\nnsd_flags=-4 # it's set\nb=2\n", "-x", "# don't touch\nnsd_flags='-x' # it's set\nb=2\n"},
 		{"hash inside a word is no comment",
-			"motd=a#'\nnsd_flags=-4\n'\nnsd_flags=-6\n", "-x", "motd=a#'\nnsd_flags=-4\n'\nnsd_flags='-x'\n"},
+			"motd=a#'\nnsd=NO\n'\nnsd_flags=-6\n", "-x", "motd=a#'\nnsd=NO\n'\nnsd_flags='-x'\n"},
 		{"dollar-single-quoted escape",
 			"nsd_flags=$'-a\\'b'\nnsd=YES\nsshd=YES\n# don't edit below\nx=1\n", "-x",
 			"nsd_flags='-x'\nnsd=YES\nsshd=YES\n# don't edit below\nx=1\n"},
@@ -132,6 +92,19 @@ func TestNetBSDFlagsRewrite(t *testing.T) {
 		{"appended after a file without a final newline", "a=1", "-x", "a=1\nnsd_flags='-x'\n"},
 		{"sourcing before the assignment", ". /etc/rc.conf.local\nnsd_flags=-4\n", "-x", ". /etc/rc.conf.local\nnsd_flags='-x'\n"},
 		{"unset of another variable after it", "nsd_flags=-4\nunset nsd_flags_x\n", "-x", "nsd_flags='-x'\nunset nsd_flags_x\n"},
+		{"escaped blank before # in a command substitution",
+			"nsd_flags=-4\nx=$(echo \\ #) ; y='\\n' ; nsd_flags=-9 ; z=')' #'\n", "-x",
+			"nsd_flags='-x'\nx=$(echo \\ #) ; y='\\n' ; nsd_flags='-x' ; z=')' #'\n"},
+		{"escaped blank before # in a command substitution, matching",
+			"nsd_flags=-4\nx=$(echo \\ #) ; y='\\n' ; nsd_flags=-9 ; z=')' #'\n", "-9",
+			"nsd_flags=-4\nx=$(echo \\ #) ; y='\\n' ; nsd_flags=-9 ; z=')' #'\n"},
+		{"list continued over a line without assignments",
+			"true &&\n  : ok\nnsd_flags=-4\n", "-x", "true &&\n  : ok\nnsd_flags='-x'\n"},
+		{"backslash-newline inside the name", "a=1\nnsd_\\\nflags=-9\n", "-x", "a=1\nnsd_flags='-x'\n"},
+		{"arithmetic comparison is no assignment",
+			"x=$((nsd_flags==1))\nnsd_flags=-4\n", "-x", "x=$((nsd_flags==1))\nnsd_flags='-x'\n"},
+		{"quoted here-document body with a backslash",
+			": <<'EOF'\na \\\nEOF\nnsd_flags=-4\n", "-x", ": <<'EOF'\na \\\nEOF\nnsd_flags='-x'\n"},
 		{"variable reference is no assignment",
 			"x=\"$nsd_flags ${nsd_flags}\"\nnsd_flags_extra=1\nnsd_flags=-4\n", "-x",
 			"x=\"$nsd_flags ${nsd_flags}\"\nnsd_flags_extra=1\nnsd_flags='-x'\n"},
@@ -197,6 +170,20 @@ func TestNetBSDFlagsFailsClosed(t *testing.T) {
 		{"append after a continued command", "echo hi \\\n", "", "", errRcSyntax, rcConfPath, "line 1"},
 		{"append after a backslash at end of file", "a=1\\", "", "", errRcSyntax, rcConfPath, "line 1"},
 		{"CRLF line endings", "a=1\nnsd_flags=-4\r\n", "", "", errRcSyntax, rcConfPath, "line 2"},
+		{"assignment in a quoted value", "motd='hi nsd_flags=-9'\nnsd_flags=-4\n", "", "", errRcUnmanaged, rcConfPath, "line 1"},
+		{"assigning arithmetic", "x=$((nsd_flags=9))\n", "", "", errRcUnmanaged, rcConfPath, "line 1"},
+		{"assigning arithmetic operator", "nsd_flags=-4\nx=$((nsd_flags+=1))\n", "", "", errRcUnmanaged, rcConfPath, "line 2"},
+		{"and list continued on the next line", "nsd_flags=-4\nfalse &&\nnsd_flags=-6\n", "", "", errRcUnmanaged, rcConfPath, "line 3"},
+		{"or list continued on the next line", "nsd_flags=-4\ntrue ||\nnsd_flags=-6\n", "", "", errRcUnmanaged, rcConfPath, "line 3"},
+		{"list continued then more", "nsd_flags=-4\nfalse &&\nnsd_flags=-6\nsshd=YES", "", "", errRcUnmanaged, rcConfPath, "line 3"},
+		{"pipeline continued on the next line", "true |\n\nnsd_flags=-6\n", "", "", errRcUnmanaged, rcConfPath, "line 3"},
+		{"file ends after &&", "a=1\ntrue &&\n", "", "", errRcSyntax, rcConfPath, "line 2"},
+		{"escaped dot command after it", "nsd_flags=-4\n\\. ./inc\n", "", "", errRcUnmanaged, rcConfPath, "line 2"},
+		{"quoted dot command after it", "nsd_flags=-4\n\".\" ./inc\n", "", "", errRcUnmanaged, rcConfPath, "line 2"},
+		{"command dot after it", "nsd_flags=-4\ncommand . ./inc\n", "", "", errRcUnmanaged, rcConfPath, "line 2"},
+		{"continued unset after it", "nsd_flags=-4\nuns\\\net nsd_flags\n", "", "", errRcUnmanaged, rcConfPath, "line 2"},
+		{"continued line in an unquoted here-document", ": <<EOF\na \\\nEOF\nEOF\nnsd_flags=-4\n", "", "",
+			errRcSyntax, rcConfPath, "line 2"},
 		{"assigning expansion", "x=${nsd_flags:=-6}\n", "", "", errRcUnmanaged, rcConfPath, "line 1"},
 		{"unterminated double quote", "a=1\nb=2\nnsd_flags=\"-a \\\n-b\n", "", "",
 			errRcSyntax, rcConfPath, "line 3"},
@@ -246,6 +233,38 @@ func TestNetBSDFlagsOverrideAfterOtherStatement(t *testing.T) {
 		if err := s.applyWith(b); err == nil || !strings.Contains(err.Error(), "overrides") {
 			t.Errorf("override %q must be refused, err = %v", override, err)
 		}
+	}
+}
+
+// TestNetBSDFlagsIncludes pins that a file sourcing other files (or using
+// eval) and not assigning the variable itself is not trusted to leave it
+// unset: rc.conf and the defaults then never match (the appended
+// assignment settles the value), and such an override is refused. The
+// stock rc.conf header sourcing /etc/defaults/rc.conf is trusted.
+func TestNetBSDFlagsIncludes(t *testing.T) {
+	for _, tt := range []struct{ name, rcConf, defaults, want string }{
+		{"rc.conf sources another file", ". /etc/rc.conf.local\n", "nsd_flags=-x\n", ". /etc/rc.conf.local\nnsd_flags='-x'\n"},
+		{"rc.conf evals", "eval a=1\n", "nsd_flags=-x\n", "eval a=1\nnsd_flags='-x'\n"},
+		{"defaults source another file", "", ". /etc/defaults/md.conf\n", "nsd_flags='-x'\n"},
+		{"stock header is trusted", netbsdRcDefaultsHeader, "nsd_flags=-x\n", netbsdRcDefaultsHeader},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resource.ResetReport()
+			b := netbsdFlagsBackend(t, tt.rcConf, tt.defaults, "")
+			s := withFlagsSvc(Service{name: "nsd"}, "-x")
+			if err := s.applyWith(b); err != nil {
+				t.Fatalf("applyWith: %v", err)
+			}
+			if got, _ := os.ReadFile(b.rcConf); string(got) != tt.want {
+				t.Fatalf("rc.conf = %q, want %q", got, tt.want)
+			}
+		})
+	}
+	resource.ResetReport()
+	b := netbsdFlagsBackend(t, "nsd_flags=-x\n", "", "nsd=YES\n. /etc/nsd.rc\n")
+	s := withFlagsSvc(Service{name: "nsd"}, "-x")
+	if err := s.applyWith(b); err == nil || !strings.Contains(err.Error(), "sources other files") {
+		t.Fatalf("an override sourcing other files must be refused, err = %v", err)
 	}
 }
 
@@ -318,25 +337,31 @@ func TestLexRcWords(t *testing.T) {
 // arbitrary text. Whenever the file reads cleanly it checks that found
 // assignments lie inside the file; that a rewrite reads back with every
 // assignment evaluating to the wanted flags; that a second rewrite is a
-// no-op; and, when the known line is the only assignment, that the result
-// is exactly the input with that one word replaced (an oracle built
-// independently of replaceRcAssignment).
+// no-op; that a rewrite of a file passing sh -n passes it too (with a
+// POSIX shell installed); and, when the known line is the only
+// assignment, that the result is exactly the input with that one word
+// replaced (an oracle built independently of replaceRcAssignment).
 func FuzzReplaceRcAssignment(f *testing.F) {
 	for _, seed := range [][2]string{
 		{"a=1", "b=2"}, {"echo hi \\", ""}, {"", "\\"}, {"x=\"$(echo \"", "\")\""},
 		{"nsd_flags=\"-a \\", "-b\""}, {"f() { :; }", ""}, {"(", ")"}, {"case x in fi) ;; esac", ""},
 		{"if true; then", "fi"}, {"cat <<-E\n\tx\n\tE", "nsd_flags=1"}, {"a=$(echo \"$(b)\" `c`)", ""},
 		{"x=$'\\''", ""}, {"nsd=YES", "nsd_flags=-6; a=1"}, {"# it's", ". /x"}, {"a=1 \\", ""},
+		{"false &&", "sshd=YES"}, {"true ||", ""}, {"true |", ""}, {"x=$(echo \\ #) ; y='", "' ; z=')' #'"},
+		{"nsd_\\", "flags=1"}, {": <<EOF\na \\", "EOF\nEOF"},
 	} {
 		f.Add(seed[0], seed[1])
 	}
 	const name, flags = "nsd_flags", "-x 'y'"
+	shell := posixShell() // input passes sh -n => output passes sh -n
+	dir := f.TempDir()
 	f.Fuzz(func(t *testing.T, before, after string) {
 		content := before + "\nnsd_flags=-4\n" + after
-		found, err := findRcAssignments(content, name)
+		scan, err := scanRcAssignments(content, name)
 		if err != nil {
 			return
 		}
+		found := scan.found
 		lineCount := strings.Count(content, "\n") + 1
 		for _, a := range found {
 			if a.first < 0 || a.first > a.line || a.line >= a.lastEnd || a.lastEnd > lineCount ||
@@ -348,7 +373,8 @@ func FuzzReplaceRcAssignment(f *testing.F) {
 		if err != nil {
 			return
 		}
-		again, err := findRcAssignments(updated, name)
+		rescan, err := scanRcAssignments(updated, name)
+		again := rescan.found
 		if err != nil || len(again) == 0 {
 			t.Fatalf("rewrite of %q does not read back: %q, %v", content, updated, err)
 		}
@@ -359,6 +385,11 @@ func FuzzReplaceRcAssignment(f *testing.F) {
 		}
 		if second, err := replaceRcAssignment(updated, name, flags); err != nil || second != updated {
 			t.Fatalf("second rewrite of %q is no no-op: %q, %v", updated, second, err)
+		}
+		if shell != nil && checkShellSyntax(shell, dir, content) == nil {
+			if err := checkShellSyntax(shell, dir, updated); err != nil {
+				t.Fatalf("rewrite of %q (valid sh) = %q fails sh -n: %v", content, updated, err)
+			}
 		}
 		if len(found) == 1 && found[0].start == len(before)+1 {
 			if want := before + "\nnsd_flags=" + shellQuote(flags) + "\n" + after; updated != want || len(again) != 1 {

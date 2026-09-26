@@ -34,31 +34,37 @@ var _ flagger = netbsdBackend{}
 
 // flagsMatch reports whether the effective NAME_flags value equals want.
 // A value it cannot evaluate (an expansion, a command substitution) never
-// matches, so setFlags rewrites it when that is safe.
+// matches, so setFlags rewrites it when that is safe. Neither does an
+// unset one in rc.conf or the defaults that source other files (or eval),
+// which may set it unseen: the assignment setFlags appends settles it.
 func (b netbsdBackend) flagsMatch(u unit, want string) (bool, error) {
 	name, err := flagsVar(u.name)
 	if err != nil {
 		return false, err
 	}
 	override := filepath.Join(b.rcConfD, u.name)
-	value, found, err := lastRcAssignment(override, name)
-	if err != nil {
+	value, err := readRcAssignment(override, name)
+	switch {
+	case err != nil:
 		return false, err
-	}
-	if found {
-		if value.parsed && value.value == want {
-			return true, nil
-		}
+	case value.found && value.parsed && value.value == want:
+		return true, nil
+	case value.found:
 		return false, fmt.Errorf("service[%s]: %s is set in %s, which overrides %s; remove it there to let WithFlags manage it",
 			u.name, name, override, b.rcConf)
+	case value.includesOther:
+		return false, fmt.Errorf("service[%s]: %s sources other files or uses eval, which may set %s over %s; WithFlags cannot tell its value",
+			u.name, override, name, b.rcConf)
 	}
 	for _, path := range []string{b.rcConf, b.rcConfDefaults} {
-		value, found, err := lastRcAssignment(path, name)
-		if err != nil {
+		value, err := readRcAssignment(path, name)
+		switch {
+		case err != nil:
 			return false, err
-		}
-		if found {
+		case value.found:
 			return value.parsed && value.value == want, nil
+		case value.includesOther:
+			return false, nil
 		}
 	}
 	return want == "", nil // unset everywhere: the daemon gets no flags
@@ -91,35 +97,39 @@ func (b netbsdBackend) describeFlags(u unit, flags string) (would, did string) {
 	return desc, desc
 }
 
-// rcValue is one parsed rc.conf assignment value; parsed is false when the
-// shell word used syntax this parser does not evaluate.
+// rcValue is what one rc.conf-style file says about a variable: whether
+// it assigns it (found), the last value (parsed is false when the shell
+// word used syntax this parser does not evaluate), and whether the file
+// sources other files or uses eval (includesOther), which may set it
+// unseen.
 type rcValue struct {
-	value  string
-	parsed bool
+	value         string
+	parsed, found bool
+	includesOther bool
 }
 
-// lastRcAssignment returns the last assignment to name in the rc.conf-style
+// readRcAssignment reads the last assignment to name in the rc.conf-style
 // file at path. A missing file has no assignment. The file is read as
 // sh(1) reads it (see rcconf.go): an assignment may span several physical
 // lines or follow others on its line, and text it cannot bound, or an
 // assignment whose effect it cannot tell, is an error naming the line.
-func lastRcAssignment(path, name string) (rcValue, bool, error) {
+func readRcAssignment(path, name string) (rcValue, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return rcValue{}, false, nil
+		return rcValue{}, nil
 	}
 	if err != nil {
-		return rcValue{}, false, fmt.Errorf("read %s: %w", path, err)
+		return rcValue{}, fmt.Errorf("read %s: %w", path, err)
 	}
-	found, err := findRcAssignments(string(data), name)
+	scan, err := scanRcAssignments(string(data), name)
 	if err != nil {
-		return rcValue{}, false, fmt.Errorf("parse %s: %w", path, err)
+		return rcValue{}, fmt.Errorf("parse %s: %w", path, err)
 	}
-	if len(found) == 0 {
-		return rcValue{}, false, nil
+	if len(scan.found) == 0 {
+		return rcValue{includesOther: scan.includesOther}, nil
 	}
-	value, parsed := parseShellWord(found[len(found)-1].value)
-	return rcValue{value: value, parsed: parsed}, true, nil
+	value, parsed := parseShellWord(scan.found[len(scan.found)-1].value)
+	return rcValue{value: value, parsed: parsed, found: true, includesOther: scan.includesOther}, nil
 }
 
 // readRcConf returns rc.conf's content and mode; a missing file is empty
