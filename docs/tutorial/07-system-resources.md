@@ -69,7 +69,7 @@ nor a running systemd, so `webserver` and `backup` cannot apply here. A plan
 preview shows what they would do on a Fedora host:
 
 ```text
-$ ./recipe plan -redacted webserver backup
+$ ./gonf plan -redacted webserver backup
 {"op":"plan_preview","version":21,"id":"plan"}
 {"op":"package","id":"Package[nginx]","name":"nginx","elevate":true}
 {"op":"file","id":"File[/etc/nginx/conf.d/gonfy.conf]","path":"/etc/nginx/conf.d/gonfy.conf","mode":"0644","owner":"root","group":"0","content_b64":"c2VydmVyIHsgbGlzdGVuIDgwODA7IH0K","has_content":true,"elevate":true,"deps":["Package[nginx]"]}
@@ -96,7 +96,7 @@ comments, and leaves the rest of the crontab alone:
 $ crontab -l
 no crontab for root
 [exit status 1]
-$ ./recipe cron
+$ ./gonf cron
 2026/09/26 08:23:14 updated crontab for root (job gonfy-uptime)
 summary: 0 ok, 1 changed, 0 skipped, 0 would-change
   changed Cron[root/gonfy-uptime]
@@ -104,7 +104,7 @@ $ crontab -l
 # BEGIN GONF Cron[gonfy-uptime]
 */15 * * * * uptime >> /tmp/uptime.log
 # END GONF Cron[gonfy-uptime]
-$ ./recipe cron
+$ ./gonf cron
 summary: 1 ok, 0 changed, 0 skipped, 0 would-change
 ```
 
@@ -114,20 +114,20 @@ summary: 1 ok, 0 changed, 0 skipped, 0 would-change
 sets passwords.
 
 ```text
-$ ./recipe -n account
+$ ./gonf -n account
 2026/09/26 08:23:14 dry-run: would run groupadd -- gonfy
 2026/09/26 08:23:14 dry-run: would run useradd --create-home --gid gonfy --home /home/gonfy --shell /bin/sh -- gonfy
 summary: 0 ok, 0 changed, 0 skipped, 2 would-change
   would-change Group[gonfy]
   would-change User[gonfy]
-$ ./recipe account
+$ ./gonf account
 summary: 0 ok, 2 changed, 0 skipped, 0 would-change
   changed Group[gonfy]
   changed User[gonfy]
 ```
 
 ```text
-$ ./recipe account
+$ ./gonf account
 summary: 1 ok, 0 changed, 0 skipped, 0 would-change
 $ id gonfy
 uid=1001(gonfy) gid=1002(gonfy) groups=1002(gonfy)

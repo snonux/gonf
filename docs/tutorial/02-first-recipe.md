@@ -53,22 +53,27 @@ until the next release is tagged (then `@latest` works too):
 $ go get github.com/snonux/gonf@main
 go: added github.com/snonux/gonf v0.23.1-0.20260926080836-0c49fa3f3fef
 $ go mod tidy
-$ go build -o recipe .
+$ go build -o gonf .
 ```
+
+The result is your own `gonf`: gonf's full command line with your tasks
+compiled in. There is no separate gonf program that reads recipes; every
+recipe repository builds its own binary like this one. The tutorial runs it
+as `./gonf`.
 
 ## List, preview, apply
 
 `-list` prints every task with its description:
 
 ```text
-$ ./recipe -list
+$ ./gonf -list
 hello	Gonfy writes ~/hello.txt
 ```
 
 `-n` (or `-dry-run`) shows what would change, without changing anything:
 
 ```text
-$ ./recipe -n hello
+$ ./gonf -n hello
 2026/09/26 08:25:12 dry-run: would update /home/paul/hello.txt
 summary: 0 ok, 0 changed, 0 skipped, 1 would-change
   would-change File[/home/paul/hello.txt]
@@ -80,7 +85,7 @@ summary lists the IDs of everything that is not `ok`.
 Now apply it by naming the task:
 
 ```text
-$ ./recipe hello
+$ ./gonf hello
 2026/09/26 08:25:12 updated /home/paul/hello.txt
 summary: 0 ok, 1 changed, 0 skipped, 0 would-change
   changed File[/home/paul/hello.txt]
@@ -91,7 +96,7 @@ Hello from Gonfy the beaver!
 ## Run it again
 
 ```text
-$ ./recipe hello
+$ ./gonf hello
 summary: 1 ok, 0 changed, 0 skipped, 0 would-change
 ```
 
@@ -100,11 +105,11 @@ nibble on the file behind gonf's back and look at the drift:
 
 ```text
 $ echo nibbled > ~/hello.txt
-$ ./recipe -n hello
+$ ./gonf -n hello
 2026/09/26 08:25:12 dry-run: would update /home/paul/hello.txt
 summary: 0 ok, 0 changed, 0 skipped, 1 would-change
   would-change File[/home/paul/hello.txt]
-$ ./recipe hello
+$ ./gonf hello
 2026/09/26 08:25:12 updated /home/paul/hello.txt
 summary: 0 ok, 1 changed, 0 skipped, 0 would-change
   changed File[/home/paul/hello.txt]
@@ -116,9 +121,9 @@ again whenever you like. Gonfy calls it his evening walk around the lodge.
 ## A few more flags
 
 ```text
-$ ./recipe -quiet hello
+$ ./gonf -quiet hello
 summary: 1 ok, 0 changed, 0 skipped, 0 would-change
-$ ./recipe -version
+$ ./gonf -version
 0.24.0
 ```
 

@@ -116,19 +116,19 @@ func main() {
   task further.
 
 ```text
-$ ./recipe -list
+$ ./gonf -list
 planet_earth_only	Only on earth, within the cluster [destination-guarded: hostname_contains=earth|mars && hostname_contains=earth]
 planet_maintenance	Per-host maintenance window [destination-guarded: hostname_contains=earth|mars]
 planet_mirror	Mirror job, on hosts with a Mirror [destination-guarded: hostname_contains=earth|mars]
 planet_motd	Greet with the host's name [destination-guarded: hostname_contains=earth|mars]
-$ ./recipe hosts
+$ ./gonf hosts
 earth	paul@earth.lan
 mars	paul@mars.lan
 pluto	paul@pluto.example.org
-$ ./recipe clusters
+$ ./gonf clusters
 inner	j=2	earth,mars
 outer	j=5	pluto
-$ ./recipe fleets
+$ ./gonf fleets
 solar	clusters=inner,outer	hosts=earth,mars,pluto
 ```
 
@@ -138,7 +138,7 @@ solar	clusters=inner,outer	hosts=earth,mars,pluto
 there. `-n` previews:
 
 ```text
-$ ./recipe push -privilege=sudo -n paul@earth.lan planet_motd planet_maintenance
+$ ./gonf push -privilege=sudo -n paul@earth.lan planet_motd planet_maintenance
 2026/09/26 08:23:17 push paul@earth.lan: remote plan schema 0 < 27 — syncing gonf binary
 2026/09/26 08:23:19 push paul@earth.lan: remote gonf plan schema now 27
 2026/09/26 08:23:19 dry-run: would update /etc/motd.d/welcome
@@ -148,7 +148,7 @@ summary: 1 ok, 0 changed, 0 skipped, 2 would-change
   would-change Cron[root/maintenance]
 applied stdin (10 ops)
 pushed push (10 ops) to paul@earth.lan
-$ ./recipe push -privilege=sudo paul@earth.lan planet_motd planet_maintenance
+$ ./gonf push -privilege=sudo paul@earth.lan planet_motd planet_maintenance
 2026/09/26 08:23:20 updated /etc/motd.d/welcome
 2026/09/26 08:23:20 updated crontab for root (job maintenance)
 summary: 1 ok, 2 changed, 0 skipped, 0 would-change
@@ -177,7 +177,7 @@ host name, and `EachHost` gave earth its own hour.
 here):
 
 ```text
-$ ./recipe cluster -n -j 1 inner planet_motd planet_maintenance
+$ ./gonf cluster -n -j 1 inner planet_motd planet_maintenance
 summary: 3 ok, 0 changed, 0 skipped, 0 would-change
 applied stdin (13 ops)
 2026/09/26 08:23:20 push paul@mars.lan: remote plan schema 0 < 27 — syncing gonf binary
@@ -189,7 +189,7 @@ summary: 1 ok, 0 changed, 0 skipped, 2 would-change
   would-change Cron[root/maintenance]
 applied stdin (13 ops)
 pushed cluster-inner (13 ops) to inner (2/2 hosts)
-$ ./recipe cluster -j 1 inner planet_motd planet_maintenance
+$ ./gonf cluster -j 1 inner planet_motd planet_maintenance
 summary: 3 ok, 0 changed, 0 skipped, 0 would-change
 applied stdin (13 ops)
 2026/09/26 08:23:20 updated /etc/motd.d/welcome
@@ -210,7 +210,7 @@ $ ssh paul@mars.lan sudo crontab -l
 The optional data and the narrowed task:
 
 ```text
-$ ./recipe cluster -j 1 inner planet_mirror planet_earth_only
+$ ./gonf cluster -j 1 inner planet_mirror planet_earth_only
 2026/09/26 08:23:21 updated crontab for root (job mirror)
 2026/09/26 08:23:21 updated /etc/motd.d/earth
 summary: 0 ok, 2 changed, 0 skipped, 0 would-change
@@ -240,11 +240,11 @@ out the `earth` fragment.
 host. `fleet` pushes to every cluster of a fleet:
 
 ```text
-$ ./recipe push -privilege=sudo -preview paul@mars.lan planet_motd
+$ ./gonf push -privilege=sudo -preview paul@mars.lan planet_motd
 summary: 2 ok, 0 changed, 0 skipped, 0 would-change
 previewed stdin (5 ops)
 previewed push (5 ops) on paul@mars.lan
-$ ./recipe fleet -n -j 1 solar planet_motd
+$ ./gonf fleet -n -j 1 solar planet_motd
 2026/09/26 08:23:21 push paul@pluto.example.org: remote plan schema 0 < 27 — syncing gonf binary
 summary: 2 ok, 0 changed, 0 skipped, 0 would-change
 applied stdin (5 ops)
@@ -266,7 +266,7 @@ Per-host fragments become `when_begin` blocks on the host name, inside the
 task's own cluster guard:
 
 ```text
-$ ./recipe plan -redacted planet_maintenance planet_earth_only
+$ ./gonf plan -redacted planet_maintenance planet_earth_only
 {"op":"plan_preview","version":21,"id":"plan"}
 {"op":"when_begin","id":"when.planet_maintenance","elevate":true,"all":[{"fact":"hostname_contains","in":["earth","mars"]}]}
 {"op":"when_begin","id":"when.hostname:earth","all":[{"fact":"hostname_contains","eq":"earth"}]}

@@ -66,7 +66,7 @@ server {{ .Name }} {
 ## Run it
 
 ```text
-$ ./recipe templates
+$ ./gonf templates
 2026/09/26 08:23:13 created directory /home/paul/gonf-tutorial/templates
 2026/09/26 08:23:13 updated /home/paul/gonf-tutorial/templates/site.conf
 2026/09/26 08:23:13 updated /home/paul/gonf-tutorial/templates/banner.txt
@@ -89,7 +89,7 @@ and `.Gonf.Profile` are that host's facts, and `.Param` is the declared
 source path. `-profile` overrides the detected profile for a local run:
 
 ```text
-$ ./recipe -profile fedora templates
+$ ./gonf -profile fedora templates
 2026/09/26 08:23:13 updated /home/paul/gonf-tutorial/templates/site.conf
 summary: 2 ok, 1 changed, 0 skipped, 0 would-change
   changed File[/home/paul/gonf-tutorial/templates/site.conf]
@@ -104,7 +104,7 @@ rendered text. A controller template is plain content by the time it is
 recorded:
 
 ```text
-$ ./recipe plan -redacted templates
+$ ./gonf plan -redacted templates
 {"op":"plan_preview","version":21,"id":"plan"}
 {"op":"dir","id":"Directory[${HOME}/gonf-tutorial/templates]","path":"${HOME}/gonf-tutorial/templates","mode":"0755"}
 {"op":"file","id":"File[${HOME}/gonf-tutorial/templates/site.conf]","path":"${HOME}/gonf-tutorial/templates/site.conf","mode":"0644","content_b64":"IyB7eyAuUGFyYW0gfX0gcmVuZGVyZWQgb24ge3sgLkdvbmYuSG9zdG5hbWUgfX0gKHt7IC5Hb25mLkdPT1MgfX0sIHByb2ZpbGUge3sgLkdvbmYuUHJvZmlsZSB9fSkKc2VydmVyIHt7IC5OYW1lIH19IHsKICBsaXN0ZW4ge3sgLlBvcnQgfX0KICBiYWNrZW5kcyB7eyBqb2luIC5CYWNrZW5kICIsICIgfX0KfQo=","has_content":true,"template":true,"template_param":"assets/templates/site.conf.tmpl","template_data":{"Name":"gonfy","Port":8080,"Backend":["10.0.0.1","10.0.0.2"]}}

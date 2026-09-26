@@ -36,7 +36,7 @@ func main() {
 ## Write a plan
 
 ```text
-$ ./recipe plan -o out dotfiles
+$ ./gonf plan -o out dotfiles
 wrote out/plan.jsonl (6 ops)
 $ find out | sort
 out
@@ -70,9 +70,10 @@ say `${HOME}`: the destination fills them in.
 
 ## Apply it
 
-`gonf` here is the stand-alone binary
-(`go install github.com/snonux/gonf/cmd/gonf@main`); the recipe binary has
-the same `apply` subcommand.
+`gonf` without `./` is any gonf binary on the `PATH`, such as the
+stand-alone one (`go install github.com/snonux/gonf/cmd/gonf@main`) or a
+copy of your own `./gonf`: every gonf binary has the same `apply`
+subcommand, and applying needs no recipe.
 
 ```text
 $ gonf apply -n out/plan.jsonl
@@ -116,14 +117,14 @@ A plan without blobs can go through a pipe, for example into `ssh host gonf
 apply -`:
 
 ```text
-$ ./recipe plan -stdout dotfiles
+$ ./gonf plan -stdout dotfiles
 plan: -stdout cannot emit plans that need blobs/; use -o <dir>
 [exit status 1]
-$ ./recipe plan -stdout greeting
+$ ./gonf plan -stdout greeting
 {"op":"plan","version":21,"id":"plan"}
 {"op":"file","id":"File[${HOME}/gonf-tutorial/greeting]","path":"${HOME}/gonf-tutorial/greeting","mode":"0644","content_b64":"aGkgZnJvbSBnb25meQo=","has_content":true}
 wrote stdout (2 ops)
-$ ./recipe plan -stdout greeting | gonf apply -
+$ ./gonf plan -stdout greeting | gonf apply -
 wrote stdout (2 ops)
 2026/09/26 08:23:16 updated /home/paul/gonf-tutorial/greeting
 summary: 0 ok, 1 changed, 0 skipped, 0 would-change

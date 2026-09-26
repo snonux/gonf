@@ -57,7 +57,7 @@ func commands() {
 ## First run
 
 ```text
-$ ./recipe commands
+$ ./gonf commands
 2026/09/26 08:26:52 created directory /home/paul/gonf-tutorial/commands
 2026/09/26 08:26:52 running Command[git-init]: git init -q repo
 2026/09/26 08:26:52 running Command[git-user]: git -C /home/paul/gonf-tutorial/commands/repo config user.name gonfy
@@ -78,7 +78,7 @@ summary: 1 ok, 7 changed, 0 skipped, 0 would-change
 ## Second run
 
 ```text
-$ ./recipe commands
+$ ./gonf commands
 2026/09/26 08:26:52 skipping Command[git-init]: /home/paul/gonf-tutorial/commands/repo/.git already exists
 2026/09/26 08:26:52 skipping Command[git-user]: unless guard succeeded
 2026/09/26 08:26:52 running Command[echo]: echo hello from Gonfy
@@ -104,7 +104,7 @@ a harmless `echo`; for real work, add a guard.
 
 ```text
 $ echo workers=8 > ~/gonf-tutorial/commands/app.conf
-$ ./recipe commands
+$ ./gonf commands
 2026/09/26 08:26:52 skipping Command[git-init]: /home/paul/gonf-tutorial/commands/repo/.git already exists
 2026/09/26 08:26:52 skipping Command[git-user]: unless guard succeeded
 2026/09/26 08:26:52 running Command[echo]: echo hello from Gonfy

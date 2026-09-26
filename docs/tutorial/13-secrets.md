@@ -67,7 +67,7 @@ func main() {
 Run it from the recipe's directory, so `secrets/` is found:
 
 ```text
-$ ./recipe app
+$ ./gonf app
 2026/09/26 08:23:22 created directory /home/paul/gonf-tutorial/secrets
 2026/09/26 08:23:22 updated /home/paul/gonf-tutorial/secrets/api-token
 2026/09/26 08:23:22 updated /home/paul/gonf-tutorial/secrets/app.conf
@@ -87,16 +87,16 @@ Ops that contain one are marked sensitive, and that changes how plans are
 written:
 
 ```text
-$ ./recipe plan -stdout app
+$ ./gonf plan -stdout app
 plan: -stdout refused: the plan carries secret material in File[${HOME}/gonf-tutorial/secrets/api-token], File[${HOME}/gonf-tutorial/secrets/app.conf]; use -o <dir> (plan.jsonl is written 0600), -redacted for a human preview, or -stdout -with-secrets to print it anyway
 [exit status 1]
-$ ./recipe plan -redacted app
+$ ./gonf plan -redacted app
 {"op":"plan_preview","version":22,"id":"plan"}
 {"op":"dir","id":"Directory[${HOME}/gonf-tutorial/secrets]","path":"${HOME}/gonf-tutorial/secrets","mode":"0700"}
 {"op":"file","id":"File[${HOME}/gonf-tutorial/secrets/api-token]","path":"${HOME}/gonf-tutorial/secrets/api-token","mode":"0600","content_b64":"[redacted]","has_content":true,"sensitive":true}
 {"op":"file","id":"File[${HOME}/gonf-tutorial/secrets/app.conf]","path":"${HOME}/gonf-tutorial/secrets/app.conf","mode":"0600","content_b64":"[redacted]","has_content":true,"sensitive":true}
 wrote redacted preview to stdout (4 ops, 2 secret-bearing; not a plan, cannot be applied)
-$ ./recipe plan -o out app
+$ ./gonf plan -o out app
 wrote out/plan.jsonl (4 ops)
 plan: out/plan.jsonl carries secret material in clear text (File[${HOME}/gonf-tutorial/secrets/api-token], File[${HOME}/gonf-tutorial/secrets/app.conf]); it is an executable secret artifact (mode 0600, base64 is not encryption): delete it once applied
 $ ls -l out
@@ -114,7 +114,7 @@ A missing secret stops the record before anything is applied:
 
 ```text
 $ mv secrets/app/db-password /tmp/
-$ ./recipe app
+$ ./gonf app
 error: secret "app/db-password" is missing
 error: declared at /home/paul/gonf/docs/tutorial/examples/ch13-secrets/main.go:20
 [exit status 1]

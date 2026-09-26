@@ -31,7 +31,7 @@ With a recipients file in place, `plan -o` of a plan with secrets writes an
 encrypted `plan.age` instead of `plan.jsonl`:
 
 ```text
-$ ./recipe plan -o out app
+$ ./gonf plan -o out app
 wrote out/plan.age (4 ops, 1 recipients)
   recipient age1pq1…fcse0wl4 sha256:df690bc75e349537
 plan: sealed by default: the plan carries secret material in File[${HOME}/gonf-tutorial/secrets/api-token], File[${HOME}/gonf-tutorial/secrets/app.conf] and the recipients file /home/paul/.config/gonf/recipients exists, so out/plan.age was written instead of a plaintext plan.jsonl; decrypt it with gonf apply -identity <file>, or pass -plaintext to write plaintext instead
@@ -70,7 +70,7 @@ wrote signer secret key /home/paul/.config/gonf/signer (mode 0600; keep it priva
 add the line below to each destination's trusted-signers file:
 $ cat /home/paul/.config/gonf/trusted-signers
 gonf-signer-ed25519 gZtuqeESJ+fbncDh2+s0vUuhOAj2AsutBXaZUy6TUdA
-$ ./recipe plan -o out -seal -sign /home/paul/.config/gonf/signer app
+$ ./gonf plan -o out -seal -sign /home/paul/.config/gonf/signer app
 wrote out/plan.age (4 ops, 1 recipients, signed 2026-09-26T08:23:23Z)
   recipient age1pq1…fcse0wl4 sha256:df690bc75e349537
   signer gonf-signer-ed25519 gZtuqeESJ+fbncDh2+s0vUuhOAj2AsutBXaZUy6TUdA sha256:3823f1059a5a8135
@@ -90,7 +90,7 @@ $ gonf apply -identity /home/paul/.config/gonf/identity -trusted-signers /home/p
 apply: out/plan.age: signature verified: trusted signer gonf-signer-ed25519 gZtuqeESJ+fbncDh2+s0vUuhOAj2AsutBXaZUy6TUdA sha256:3823f1059a5a8135, signed 2026-09-26T08:23:23Z (within -max-signed-age 24h0m0s)
 summary: 3 ok, 0 changed, 0 skipped, 0 would-change
 decrypted and applied out/plan.age (4 ops)
-$ ./recipe plan -o plain -plaintext app
+$ ./gonf plan -o plain -plaintext app
 wrote plain/plan.jsonl (4 ops)
 plan: plain/plan.jsonl carries secret material in clear text (File[${HOME}/gonf-tutorial/secrets/api-token], File[${HOME}/gonf-tutorial/secrets/app.conf]); it is an executable secret artifact (mode 0600, base64 is not encryption): delete it once applied
 $ gonf apply -identity /home/paul/.config/gonf/identity -trusted-signers /home/paul/.config/gonf/trusted-signers -require-signed plain/plan.jsonl

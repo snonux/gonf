@@ -154,7 +154,7 @@ func main() {
 ```
 
 ```text
-$ ./recipe -list
+$ ./gonf -list
 all	The website, then its backup
 backup_nightly	Nightly backup job
 backup_restore	Restore the site from the last backup
@@ -180,7 +180,7 @@ web_logrotate	Rotates the web server logs (OpenBSD only) [destination-guarded: g
 Run a single task, and what it needs is recorded first:
 
 ```text
-$ ./recipe web_config
+$ ./gonf web_config
 2026/09/26 08:23:14 created directory /home/paul/gonf-tutorial/site/htdocs
 2026/09/26 08:23:14 updated /home/paul/gonf-tutorial/site/site.conf
 summary: 0 ok, 2 changed, 0 skipped, 0 would-change
@@ -193,14 +193,14 @@ summary: 0 ok, 2 changed, 0 skipped, 0 would-change
 ## Aggregates
 
 ```text
-$ ./recipe -verbose all    # debug lines trimmed
+$ ./gonf -verbose all    # debug lines trimmed
 2026/09/26 08:23:14 aggregate web: skipping "web_logrotate": its guard goos=openbsd does not hold on this host
 2026/09/26 08:23:14 updated /home/paul/gonf-tutorial/site/htdocs/index.html
 2026/09/26 08:23:14 updated crontab for root (job backup)
 summary: 2 ok, 2 changed, 0 skipped, 0 would-change
   changed File[/home/paul/gonf-tutorial/site/htdocs/index.html]
   changed Cron[root/backup]
-$ ./recipe deploy
+$ ./gonf deploy
 summary: 3 ok, 0 changed, 0 skipped, 0 would-change
 ```
 
@@ -209,7 +209,7 @@ The aggregate skipped `web_logrotate` locally because its guard does not
 hold here; in a plan for other hosts it travels inside its guard:
 
 ```text
-$ ./recipe plan -redacted web
+$ ./gonf plan -redacted web
 {"op":"plan_preview","version":21,"id":"plan"}
 {"op":"dir","id":"Directory[${HOME}/gonf-tutorial/site/htdocs]","path":"${HOME}/gonf-tutorial/site/htdocs","mode":"0755"}
 {"op":"file","id":"File[${HOME}/gonf-tutorial/site/site.conf]","path":"${HOME}/gonf-tutorial/site/site.conf","mode":"0644","content_b64":"ZG9jcm9vdCBodGRvY3MK","has_content":true}
