@@ -15,6 +15,12 @@ if ! command -v git >/dev/null 2>&1; then
 fi
 GONF_RUN_BSD_PACKAGE_TESTS=1
 GONF_RUN_BSD_SERVICE_TESTS=1
+if [ "$(uname -s)" = NetBSD ]; then
+	# pi0.lan runs pkgsrc's bozohttpd; the VM has the same daemon in base
+	# as httpd.
+	GONF_LIVE_SERVICE=httpd
+	export GONF_LIVE_SERVICE
+fi
 export PATH GOTOOLCHAIN GONF_RUN_BSD_PACKAGE_TESTS GONF_RUN_BSD_SERVICE_TESTS
 go version
 go test -count=1 ./...

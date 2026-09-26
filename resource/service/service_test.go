@@ -289,6 +289,9 @@ func TestLiveUptimedRestart(t *testing.T) {
 }
 
 func liveServiceName() string {
+	if name := os.Getenv("GONF_LIVE_SERVICE"); name != "" {
+		return name // e.g. base httpd on a NetBSD without pkgsrc's bozohttpd
+	}
 	if runtime.GOOS == "netbsd" {
 		return "bozohttpd" // small daemon present on pi0.lan
 	}
