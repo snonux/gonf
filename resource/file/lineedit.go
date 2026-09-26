@@ -69,6 +69,9 @@ func (f *File) resolveLine() (path string, content []byte, noop bool, err error)
 	if !exists && len(f.keyedLines) == 0 && len(f.addLines) == 0 && len(f.blocks) == 0 {
 		return path, nil, true, nil
 	}
+	if err := refuseNestedBlocks(lines, f.blocks); err != nil {
+		return "", nil, false, fmt.Errorf("file %s: %w", path, err)
+	}
 	for _, block := range f.blocks {
 		if lines, err = applyBlock(lines, block); err != nil {
 			return "", nil, false, fmt.Errorf("file %s: %w", path, err)
@@ -119,6 +122,10 @@ func (f *File) currentLines(path string) (lines []string, term string, exists bo
 	}
 	lines = []string{}
 	scanner := bufio.NewScanner(bytes.NewReader(raw))
+	// No line of an existing file may be too long to edit: the default
+	// 64 KiB token limit would refuse every line edit of a file holding one
+	// longer line. A line is never longer than the whole file.
+	scanner.Buffer(make([]byte, 0, bufio.MaxScanTokenSize), len(raw)+1)
 	for scanner.Scan() {
 		lines = append(lines, scanner.Text())
 	}

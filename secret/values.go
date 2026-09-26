@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -185,7 +186,16 @@ func (v *Values) Add(data []byte) {
 	// The three whole-secret forms share the trimmed secret's mode (so the
 	// TrimRight form of "       ab\n" stays as weak as "ab"); only the lines
 	// of a multi-line secret are judged on their own, as redact-only forms.
-	for _, form := range []string{raw, trimmed, strings.TrimRight(raw, "\r\n")} {
+	//
+	// The raw form (e.g. "hunter22!\n") is only needed for whole-payload
+	// matching of a short secret: as a substring pattern it would redact
+	// the line break after the secret too, joining two output lines, and
+	// the TrimRight form already covers every such occurrence.
+	forms := []string{trimmed, strings.TrimRight(raw, "\r\n")}
+	if !mode.contained {
+		forms = append(forms, raw)
+	}
+	for _, form := range forms {
 		v.addForm(form, mode)
 	}
 	for _, line := range strongLines(trimmed) {
@@ -194,19 +204,28 @@ func (v *Values) Add(data []byte) {
 	v.sorted = nil
 }
 
-// addForm tracks form and its JSON escaping with mode, merged with the mode
-// of any secret already sharing it. The caller holds v.mu.
+// addForm tracks form, its JSON escaping and its Go %q escaping (errors and
+// logs quote line content with %q, which escapes differently from JSON)
+// with mode, merged with the mode of any secret already sharing it. The
+// caller holds v.mu.
 func (v *Values) addForm(form string, mode formMode) {
 	if form == "" {
 		return
 	}
-	for _, f := range []string{form, jsonEscaped(form)} {
+	for _, f := range []string{form, jsonEscaped(form), goQuoted(form)} {
 		if old, ok := v.forms[f]; ok {
 			v.forms[f] = old.merge(mode)
 		} else {
 			v.forms[f] = mode
 		}
 	}
+}
+
+// goQuoted returns form as strconv.Quote (and so %q) writes it, without
+// the surrounding quotes.
+func goQuoted(form string) string {
+	q := strconv.Quote(form)
+	return q[1 : len(q)-1]
 }
 
 // strongLines returns the strong lines (isStrong, surrounding whitespace

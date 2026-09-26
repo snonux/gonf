@@ -174,6 +174,58 @@ func TestAbsentStopsAndDisables(t *testing.T) {
 	}
 }
 
+// TestAbsentDisableFollowsEnablementState pins that NoTimer disables only an
+// enablement disable can change: is-enabled exits 0 for a static unit too,
+// and disable exits 0 for it without changing anything, so disabling it
+// would report a change on every apply. enabled-runtime is removed with
+// disable --runtime.
+func TestAbsentDisableFollowsEnablementState(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Timer is Linux-only")
+	}
+	tests := []struct {
+		state      string
+		wantAction string // joined argv of the one expected mutation; "" for none
+	}{
+		{"static", ""},
+		{"indirect", ""},
+		{"enabled-runtime", "disable --runtime fstrim.timer"},
+		{"enabled", "disable fstrim.timer"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.state, func(t *testing.T) {
+			resource.ResetRepository()
+			resource.ResetReport()
+			var saw []string
+			rs := systemdSet(func(name string, args ...string) (string, string, int, error) {
+				switch {
+				case contains(args, "is-active"):
+					return "inactive\n", "", 3, nil
+				case contains(args, "is-enabled"):
+					return tt.state + "\n", "", 0, nil
+				}
+				saw = append(saw, join(args))
+				return "", "", 0, nil
+			})
+
+			Absent("fstrim")
+			if err := testapply.ApplyWithRunners(rs); err != nil {
+				t.Fatal(err)
+			}
+			var want []string
+			if tt.wantAction != "" {
+				want = []string{tt.wantAction}
+			}
+			if strings.Join(saw, "|") != strings.Join(want, "|") {
+				t.Fatalf("mutations = %v, want %v", saw, want)
+			}
+			if got := resource.AnyChanged("Timer[fstrim.timer]"); got != (tt.wantAction != "") {
+				t.Errorf("changed = %v, want %v", got, tt.wantAction != "")
+			}
+		})
+	}
+}
+
 func TestWithRestartIssuesRestart(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Timer is Linux-only")

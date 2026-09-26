@@ -1440,13 +1440,15 @@ func prepareStickyApplyDir(applyDir string, wipe bool) error {
 		return fmt.Errorf("apply: apply-dir: %w", err)
 	}
 	// Loud: the sticky path under /tmp is predictable, so a local attacker on
-	// the remote host can pre-create it foreign-owned. Failing Chmod or the
-	// ownership check prevents staging blobs into an attacker-writable dir.
-	if err := os.Chmod(applyDir, 0o700); err != nil {
-		return fmt.Errorf("apply: apply-dir %s: %w", applyDir, err)
-	}
+	// the remote host can pre-create it foreign-owned. Failing the ownership
+	// check or Chmod prevents staging blobs into an attacker-writable dir.
+	// The check comes first and the chmod goes through a no-follow handle:
+	// os.Chmod on a pre-planted symlink would change its target's mode.
 	if err := verifyStickyDirOwned(applyDir); err != nil {
 		return fmt.Errorf("apply: %w", err)
+	}
+	if err := chmodDirNoFollow(applyDir, 0o700); err != nil {
+		return fmt.Errorf("apply: apply-dir %s: %w", applyDir, err)
 	}
 	// The directory slot is reused across pushes, but its contents must not
 	// be reused: otherwise stale blobs could resurrect files removed from the
@@ -1499,6 +1501,18 @@ func wipeDirContents(dir string) error {
 // loudly — a non-root pre-plant is therefore refused before any chunk runs,
 // and only a root attacker could plant or chown a dir past it. Platforms
 // without syscall.Stat_t (none of gonf's targets) cannot verify and pass.
+// chmodDirNoFollow sets the mode of the directory path without following a
+// symlink at path (a symlink swapped in after verifyStickyDirOwned fails the
+// open instead of redirecting the chmod).
+func chmodDirNoFollow(path string, mode os.FileMode) error {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_DIRECTORY, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.Chmod(mode)
+}
+
 func verifyStickyDirOwned(path string) error {
 	info, err := os.Lstat(path)
 	if err != nil {

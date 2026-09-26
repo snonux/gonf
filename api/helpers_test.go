@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/snonux/gonf/api/options"
+	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -145,5 +146,33 @@ func TestGitGlobalRegisters(t *testing.T) {
 	defer resource.SetDryRun(false)
 	if err := Apply(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// GitGlobal guards with ExpectStdout only for values it can compare: an
+// empty value would make the guard skip whenever the key is set, and a value
+// with surrounding whitespace would never match the trimmed output.
+func TestGitGlobalGuardsOnlyComparableValues(t *testing.T) {
+	for val, wantGuard := range map[string]bool{"vim": true, "": false, "v ": false} {
+		ResetTasks()
+		resource.ResetRepository()
+		Task("git", "", func() { GitGlobal("core.editor", val) })
+		ops, err := RecordPlan("git", "", "git")
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, op := range ops {
+			if op.Op != plan.KindCommand {
+				continue
+			}
+			found = true
+			if got := op.Payload.(plan.CommandPayload).Unless != nil; got != wantGuard {
+				t.Errorf("GitGlobal(%q): guarded = %v, want %v", val, got, wantGuard)
+			}
+		}
+		if !found {
+			t.Fatalf("GitGlobal(%q): no command op", val)
+		}
 	}
 }

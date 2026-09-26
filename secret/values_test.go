@@ -1786,3 +1786,25 @@ func isSubsequence(sub, s string) bool {
 	}
 	return i == len(sub)
 }
+
+// A secret quoted with %q (as errors quote line content) is redacted even
+// when %q and JSON escape it differently.
+func TestRedactGoQuotedSecret(t *testing.T) {
+	var v Values
+	v.Add([]byte("Tr0ub<4dor\"3\n"))
+	got := v.Redact(fmt.Sprintf("line %q is owned", "pw=Tr0ub<4dor\"3"))
+	if strings.Contains(got, "Tr0ub") {
+		t.Fatalf("secret leaked: %s", got)
+	}
+}
+
+// Redacting a secret read with its trailing newline keeps the line break
+// after it.
+func TestRedactKeepsNewlineAfterSecret(t *testing.T) {
+	var v Values
+	v.Add([]byte("hunter22!\n"))
+	got := v.Redact("password is hunter22!\nnext line\n")
+	if strings.Contains(got, "hunter22") || !strings.Contains(got, "\nnext line") {
+		t.Fatalf("redacted = %q", got)
+	}
+}

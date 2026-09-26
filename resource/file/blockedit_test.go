@@ -113,6 +113,69 @@ func TestWithBlockRefusesMalformedMarkers(t *testing.T) {
 	}
 }
 
+// TestWithBlockRefusesNestedBlocks pins that a file nesting one declared
+// block's markers inside another declared block's region is refused without
+// writing, in either declaration order: applying the blocks one after the
+// other would let the outer block swallow the inner one's markers, deleting
+// the inner block on this apply and appending it again on the next.
+func TestWithBlockRefusesNestedBlocks(t *testing.T) {
+	before := loopback + "# BEGIN GONF outer\n# BEGIN GONF inner\nold\n# END GONF inner\n# END GONF outer\n"
+	orders := map[string][]FileOption{
+		"inner first": {WithBlock("inner", "i"), WithBlock("outer", "o")},
+		"outer first": {WithBlock("outer", "o"), WithBlock("inner", "i")},
+	}
+	for name, opts := range orders {
+		t.Run(name, func(t *testing.T) {
+			resource.ResetRepository()
+			path := filepath.Join(t.TempDir(), "hosts")
+			writeTestFile(t, path, before)
+			err := Ensure(path, append(opts, WithMode(0o644))...)
+			if err == nil || !strings.Contains(err.Error(), "nested blocks") {
+				t.Fatalf("err = %v, want a nested-blocks refusal", err)
+			}
+			if got := readTestFile(t, path); got != before {
+				t.Fatalf("refused apply rewrote the file: %q", got)
+			}
+		})
+	}
+}
+
+// TestWithBlockAcceptsSiblingBlocks pins that the nesting refusal leaves
+// ordinary, disjoint blocks alone, whatever their order in the file.
+func TestWithBlockAcceptsSiblingBlocks(t *testing.T) {
+	resource.ResetRepository()
+	path := filepath.Join(t.TempDir(), "hosts")
+	writeTestFile(t, path, "# BEGIN GONF b\nold\n# END GONF b\n"+loopback+"# BEGIN GONF a\n# END GONF a\n")
+	want := "# BEGIN GONF b\nB\n# END GONF b\n" + loopback + "# BEGIN GONF a\nA\n# END GONF a\n"
+	for run := 1; run <= 2; run++ {
+		if err := Ensure(path, WithBlock("a", "A"), WithBlock("b", "B"), WithMode(0o644)); err != nil {
+			t.Fatalf("run %d: Ensure: %v", run, err)
+		}
+		if got := readTestFile(t, path); got != want {
+			t.Fatalf("run %d: content = %q, want %q", run, got, want)
+		}
+	}
+}
+
+// TestLineEditHandlesLinesLongerThanScannerDefault pins that a line edit of
+// a file holding a line longer than bufio.Scanner's default 64 KiB token
+// limit converges instead of failing with "token too long" on every apply.
+func TestLineEditHandlesLinesLongerThanScannerDefault(t *testing.T) {
+	resource.ResetRepository()
+	path := filepath.Join(t.TempDir(), "authorized_keys")
+	long := strings.Repeat("x", 70000) + "\n"
+	writeTestFile(t, path, long)
+	want := long + "# BEGIN GONF fleet\nkey\n# END GONF fleet\nadded\n"
+	for run := 1; run <= 2; run++ {
+		if err := Ensure(path, WithBlock("fleet", "key"), WithLine("added"), WithMode(0o644)); err != nil {
+			t.Fatalf("run %d: Ensure: %v", run, err)
+		}
+		if got := readTestFile(t, path); got != want {
+			t.Fatalf("run %d: content has %d bytes, want %d", run, len(got), len(want))
+		}
+	}
+}
+
 // TestWithBlockRefusesAmbiguousOwnership pins the declaration-time conflicts:
 // each would leave two owners for one line or never converge.
 func TestWithBlockRefusesAmbiguousOwnership(t *testing.T) {

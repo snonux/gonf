@@ -89,3 +89,29 @@ func TestGenerateNothing(t *testing.T) {
 		t.Fatalf("Generate = %q, %v; want nil, nil", got, err)
 	}
 }
+
+// A method defined per GOOS gets a single companion, else desc_gen.go
+// declares DescX twice and the package no longer builds.
+func TestGeneratePerOSMethodOnce(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("s.go", "package recipe\n\ntype S struct{}\n")
+	write("s_linux.go", "package recipe\n\n// Setup installs the service.\nfunc (S) Setup() {}\n")
+	write("s_freebsd.go", "package recipe\n\n// Setup installs the service.\nfunc (S) Setup() {}\n")
+	out, err := Generate(dir, DefaultFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(out), "DescSetup"); n != 1 {
+		t.Fatalf("DescSetup declared %d times:\n%s", n, out)
+	}
+	write("s_freebsd.go", "package recipe\n\n// Setup installs the rc.d service.\nfunc (S) Setup() {}\n")
+	if _, err := Generate(dir, DefaultFile); err == nil {
+		t.Fatal("differing per-OS doc comments: want an error")
+	}
+}

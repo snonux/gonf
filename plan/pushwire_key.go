@@ -134,8 +134,13 @@ func DecodePushWithKey(r io.Reader, planDir string) (*PushPayload, error) {
 // per-push ephemeral key. The apply CLI uses it, with PushHasBlobs, to
 // decide how to stage a frame before decoding it; the decoder itself stays
 // the authority on whether the frame is well-formed.
+//
+// The magic line is compared trimmed, exactly as readPushHeader does, so a
+// frame the decoder treats as keyed (e.g. "GONF-PUSH/2\r\n") is never
+// reported as unkeyed.
 func PushIsKeyed(data []byte) bool {
-	return bytes.HasPrefix(data, []byte(pushMagicV2+"\n"))
+	line, _, found := bytes.Cut(data, []byte("\n"))
+	return found && strings.TrimSpace(string(line)) == pushMagicV2
 }
 
 // readPushKeyLine reads a GONF-PUSH/2 key line. It strips exactly the "\n"

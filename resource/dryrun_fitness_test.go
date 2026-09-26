@@ -888,11 +888,11 @@ func dryRunServiceFreeBSD(t *testing.T, tmp string) {
 
 func dryRunServiceNetBSD(t *testing.T, tmp string) {
 	dryRunServiceBackend(t, "netbsd", func(args []string) string {
-		// netbsd.go probes with "service NAME status" and "service -e NAME".
+		// netbsd.go probes with "service NAME onestatus" and "service -e NAME".
 		// enabled=true here deliberately avoids ever exercising the
 		// enable/disable action, which writes to netbsdRcConfD (default
 		// /etc/rc.conf.d) directly instead of through this runner seam.
-		if len(args) == 2 && args[1] == "status" {
+		if len(args) == 2 && args[1] == "onestatus" {
 			return "running"
 		}
 		if len(args) == 2 && args[0] == "-e" {

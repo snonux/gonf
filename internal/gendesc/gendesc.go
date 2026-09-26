@@ -54,7 +54,10 @@ func Generate(dir, out string) ([]byte, error) {
 	if len(files) == 0 {
 		return nil, fmt.Errorf("%s: no Go files", dir)
 	}
-	methods := collect(files)
+	methods, err := collect(files)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", dir, err)
+	}
 	if len(methods) == 0 {
 		return nil, nil
 	}
@@ -78,8 +81,11 @@ func buildable(f *ast.File) bool {
 }
 
 // collect returns the DescX companions to generate, sorted by receiver and
-// method name.
-func collect(files []*ast.File) []method {
+// method name. A method defined in several build-constrained files (e.g.
+// s_linux.go and s_freebsd.go) gets one companion, since desc_gen.go has no
+// build constraint; differing doc comments are an error, as either
+// description would be wrong on the other platform.
+func collect(files []*ast.File) ([]method, error) {
 	type key struct{ recv, name string }
 	have := map[key]bool{}
 	var candidates []method
@@ -104,10 +110,20 @@ func collect(files []*ast.File) []method {
 		}
 	}
 	var out []method
+	seen := map[key]string{}
 	for _, m := range candidates {
-		if !have[key{m.recv, "Desc" + m.name}] {
-			out = append(out, m)
+		if have[key{m.recv, "Desc" + m.name}] {
+			continue
 		}
+		k := key{m.recv, m.name}
+		if prev, ok := seen[k]; ok {
+			if prev != m.desc {
+				return nil, fmt.Errorf("%s.%s has different doc comments in different files; write Desc%s by hand", m.recv, m.name, m.name)
+			}
+			continue
+		}
+		seen[k] = m.desc
+		out = append(out, m)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].recv != out[j].recv {
@@ -115,7 +131,7 @@ func collect(files []*ast.File) []method {
 		}
 		return out[i].name < out[j].name
 	})
-	return out
+	return out, nil
 }
 
 // receiverName returns the type name of a method receiver (T or *T), and

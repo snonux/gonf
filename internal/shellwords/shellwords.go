@@ -132,3 +132,12 @@ func (s *splitter) endWord() {
 	s.cur.Reset()
 	s.inWord = false
 }
+
+// Quote returns s as one POSIX shell word: unchanged when it holds only
+// characters no shell treats specially, else single-quoted.
+func Quote(s string) string {
+	if s != "" && strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-+,:=@%") == "" {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}

@@ -12,9 +12,14 @@ func (freebsdBackend) installed(run runner, name string) (bool, error) {
 
 func (freebsdBackend) installCmd(name string) command { return freebsdCmd("install", "-y", name) }
 
-// upgradeCmd runs pkg upgrade regardless of the probe; pkg upgrade of an
-// up-to-date package is a no-op that is still reported as a change.
-func (freebsdBackend) upgradeCmd(name string, _ bool) command {
+// upgradeCmd runs pkg upgrade for an installed package (pkg upgrade of an
+// up-to-date package is a no-op that is still reported as a change). A
+// missing package is installed with pkg install instead: pkg-upgrade(8)
+// "will not install new packages".
+func (b freebsdBackend) upgradeCmd(name string, installed bool) command {
+	if !installed {
+		return b.installCmd(name)
+	}
 	return freebsdCmd("upgrade", "-y", name)
 }
 

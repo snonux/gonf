@@ -316,8 +316,14 @@ func methodTaskName(key, prefix string) (string, bool) {
 	if len(tasks) == 1 {
 		return tasks[0], true
 	}
+	if prefix == "" {
+		return "", false
+	}
+	// Match the exact name, not a prefix: with registrations under "a_" and
+	// "a_b_", "a_b_base" also starts with "a_".
+	want := prefix + camelToSnake(key[strings.LastIndexByte(key, '.')+1:])
 	for _, t := range tasks {
-		if prefix != "" && strings.HasPrefix(t, prefix) {
+		if t == want {
 			return t, true
 		}
 	}

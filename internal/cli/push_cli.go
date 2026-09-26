@@ -150,6 +150,8 @@ func splitSSHOptsAndPositional(args []string) (sshOpts, pos []string) {
 	return sshOpts, args[i:]
 }
 
+// sshOptTakesValue reports whether ssh(1) option -b takes a value: ssh's
+// getopt string "46ab:c:e:fgi:kl:m:no:p:qstvxAB:CD:E:F:GI:J:KL:MNO:P:Q:R:S:TVw:W:XYy".
 func sshOptTakesValue(b byte) bool {
-	return strings.ContainsRune("pilFoJcDLRWbeS", rune(b))
+	return strings.ContainsRune("bceilmopBDEFIJLOPQRSwW", rune(b))
 }
