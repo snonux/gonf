@@ -25,8 +25,8 @@ import (
 )
 
 func main() {
-	Task("hello", "Write ~/hello.txt", func() {
-		File(DestHome("hello.txt"), WithContent("Hello from gonf!\n"), WithMode(0o644))
+	Task("hello", "Gonfy writes ~/hello.txt", func() {
+		File(DestHome("hello.txt"), WithContent("Hello from Gonfy the beaver!\n"), WithMode(0o644))
 	})
 	cli.Main()
 }
@@ -60,7 +60,7 @@ $ go build -o recipe .
 
 ```text
 $ ./recipe -list
-hello	Write ~/hello.txt
+hello	Gonfy writes ~/hello.txt
 ```
 
 `-n` (or `-dry-run`) shows what would change, without changing anything:
@@ -83,7 +83,7 @@ $ ./recipe hello
 summary: 0 ok, 1 changed, 0 skipped, 0 would-change
   changed File[/home/paul/hello.txt]
 $ cat ~/hello.txt
-Hello from gonf!
+Hello from Gonfy the beaver!
 ```
 
 ## Run it again
@@ -97,7 +97,7 @@ Nothing changed, because the file already matches. Now change the file
 behind gonf's back and look at the drift:
 
 ```text
-$ echo tampered > ~/hello.txt
+$ echo nibbled > ~/hello.txt
 $ ./recipe -n hello
 2026/09/26 08:25:12 dry-run: would update /home/paul/hello.txt
 summary: 0 ok, 0 changed, 0 skipped, 1 would-change

@@ -36,9 +36,9 @@ func (Web) Config() {
 // Needs takes the method itself, so an editor can jump to it.
 func (Web) OptsConfig() TaskOptions { return TaskOptions{Needs(Web.Docroot)} }
 
-// Content publishes the start page.
+// Content publishes Gonfy's start page.
 func (Web) Content() {
-	File(root+"/htdocs/index.html", WithContent("<h1>Hello</h1>\n"), WithMode(0o644))
+	File(root+"/htdocs/index.html", WithContent("<h1>Welcome to Gonfy's lodge</h1>\n"), WithMode(0o644))
 }
 
 // OptsContent adds task options: the document root is created first.
@@ -85,7 +85,7 @@ package web
 
 func (Web) DescConfig() string { return "Writes the web server config" }
 
-func (Web) DescContent() string { return "Publishes the start page" }
+func (Web) DescContent() string { return "Publishes Gonfy's start page" }
 
 func (Web) DescDocroot() string { return "Creates the document root" }
 
@@ -159,7 +159,7 @@ backup_restore	Restore the site from the last backup
 deploy	alias of web
 web	Run all web_* tasks
 web_config	Writes the web server config
-web_content	Publishes the start page
+web_content	Publishes Gonfy's start page
 web_docroot	Creates the document root
 web_logrotate	Rotates the web server logs (OpenBSD only) [destination-guarded: goos=openbsd]
 ```
@@ -211,7 +211,7 @@ $ ./recipe plan -redacted web
 {"op":"plan_preview","version":21,"id":"plan"}
 {"op":"dir","id":"Directory[${HOME}/gonf-tutorial/site/htdocs]","path":"${HOME}/gonf-tutorial/site/htdocs","mode":"0755"}
 {"op":"file","id":"File[${HOME}/gonf-tutorial/site/site.conf]","path":"${HOME}/gonf-tutorial/site/site.conf","mode":"0644","content_b64":"ZG9jcm9vdCBodGRvY3MK","has_content":true}
-{"op":"file","id":"File[${HOME}/gonf-tutorial/site/htdocs/index.html]","path":"${HOME}/gonf-tutorial/site/htdocs/index.html","mode":"0644","content_b64":"PGgxPkhlbGxvPC9oMT4K","has_content":true}
+{"op":"file","id":"File[${HOME}/gonf-tutorial/site/htdocs/index.html]","path":"${HOME}/gonf-tutorial/site/htdocs/index.html","mode":"0644","content_b64":"PGgxPldlbGNvbWUgdG8gR29uZnkncyBsb2RnZTwvaDE+Cg==","has_content":true}
 {"op":"when_begin","id":"when.web_logrotate","all":[{"fact":"goos","eq":"openbsd"}]}
 {"op":"file","id":"File[${HOME}/gonf-tutorial/site/newsyslog.conf]","path":"${HOME}/gonf-tutorial/site/newsyslog.conf","mode":"0644","add_lines":["access.log 644 7 * @T00 Z"]}
 {"op":"when_end"}

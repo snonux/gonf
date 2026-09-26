@@ -25,7 +25,7 @@ func main() {
 		Dir(base+"/vim", WithSource("assets/dotfiles/vim"), WithPrune, WithFileMode(0o644))
 	}, WhenLinux())
 	Task("greeting", "A small plan without blobs", func() {
-		File(DestHome("gonf-tutorial/greeting"), WithContent("hi\n"), WithMode(0o644))
+		File(DestHome("gonf-tutorial/greeting"), WithContent("hi from gonfy\n"), WithMode(0o644))
 	})
 	cli.Main()
 }
@@ -48,7 +48,7 @@ $ cat out/plan.jsonl
 {"op":"plan","version":21,"id":"plan"}
 {"op":"when_begin","id":"when.dotfiles","all":[{"fact":"goos","eq":"linux"}]}
 {"op":"dir","id":"Directory[${HOME}/gonf-tutorial/plans]","path":"${HOME}/gonf-tutorial/plans","mode":"0755"}
-{"op":"file","id":"File[${HOME}/gonf-tutorial/plans/bashrc]","path":"${HOME}/gonf-tutorial/plans/bashrc","mode":"0644","content_b64":"IyB+Ly5iYXNocmMgbWFuYWdlZCBieSBnb25mCmV4cG9ydCBFRElUT1I9dmltCmFsaWFzIGxsPSdscyAtbCcK","has_content":true}
+{"op":"file","id":"File[${HOME}/gonf-tutorial/plans/bashrc]","path":"${HOME}/gonf-tutorial/plans/bashrc","mode":"0644","content_b64":"IyB+Ly5iYXNocmMgbWFuYWdlZCBieSBnb25mCiMgR29uZnkgc2F5czogZG90ZmlsZXMgYXJlIGxvZGdlcywga2VlcCB0aGVtIGNvbnZlcmdlZApleHBvcnQgRURJVE9SPXZpbQphbGlhcyBsbD0nbHMgLWwnCg==","has_content":true}
 {"op":"sync_dir","id":"Directory[${HOME}/gonf-tutorial/plans/vim]","path":"${HOME}/gonf-tutorial/plans/vim","mode":"0750","file_mode":"0644","blob":"blobs/vim-cccecec5","source_dir":"assets/dotfiles/vim","prune":true}
 {"op":"when_end"}
 ```
@@ -119,7 +119,7 @@ plan: -stdout cannot emit plans that need blobs/; use -o <dir>
 [exit status 1]
 $ ./recipe plan -stdout greeting
 {"op":"plan","version":21,"id":"plan"}
-{"op":"file","id":"File[${HOME}/gonf-tutorial/greeting]","path":"${HOME}/gonf-tutorial/greeting","mode":"0644","content_b64":"aGkK","has_content":true}
+{"op":"file","id":"File[${HOME}/gonf-tutorial/greeting]","path":"${HOME}/gonf-tutorial/greeting","mode":"0644","content_b64":"aGkgZnJvbSBnb25meQo=","has_content":true}
 wrote stdout (2 ops)
 $ ./recipe plan -stdout greeting | gonf apply -
 wrote stdout (2 ops)

@@ -28,19 +28,19 @@ func main() {
 func lines() {
 	File(DestHome("gonf-tutorial/app.conf"),
 		// Exact lines: added when missing, removed when present.
-		WithLines("log_level=info", "color=yes"),
+		WithLines("log_level=info", "color=yes", "mascot=gonfy"),
 		WithoutLines("debug=true"),
 		// Own "the line starting with port=", whatever its value is today.
 		WithKeyedLine("port=", "port=8080"),
 		// Own everything between # BEGIN GONF peers and # END GONF peers.
 		WithBlock("peers", "peer=10.0.0.1", "peer=10.0.0.2"),
-		// Own an rc.conf-style shell variable: greeting="hello world".
-		WithShellVar("greeting", "hello world"),
+		// Own an rc.conf-style shell variable: greeting="hello from gonfy".
+		WithShellVar("greeting", "hello from gonfy"),
 		WithMode(0o644))
 }
 
 func script() {
-	body := envOr("GREETING_SCRIPT", "#!/bin/sh\necho hello\n")
+	body := envOr("GREETING_SCRIPT", "#!/bin/sh\necho hello from gonfy\n")
 	// WithValidation needs an absolute path, and DestHome records the
 	// placeholder ${HOME}. Home is the controller's home: the same machine
 	// for a local run like this one.
@@ -53,7 +53,7 @@ func script() {
 
 func greeter() {
 	lib := "greet() { echo \"hello, $1\"; }\n"
-	main := "#!/bin/sh\n. " + MemberPath("lib.sh") + "\ngreet world\n"
+	main := "#!/bin/sh\n. " + MemberPath("lib.sh") + "\ngreet gonfy\n"
 	Dir(DestHome("gonf-tutorial/greeter"), WithMode(0o755))
 	set := ConfigSet("greeter",
 		ConfigFile("lib.sh", DestHome("gonf-tutorial/greeter/lib.sh"), WithContent(lib), WithMode(0o644)),
@@ -102,9 +102,10 @@ user=paul
 peer=10.0.0.1
 peer=10.0.0.2
 # END GONF peers
-greeting="hello world"
+greeting="hello from gonfy"
 log_level=info
 color=yes
+mascot=gonfy
 $ ./recipe lines
 summary: 1 ok, 0 changed, 0 skipped, 0 would-change
 ```
@@ -129,9 +130,10 @@ user=paul
 peer=10.0.0.1
 peer=10.0.0.2
 # END GONF peers
-greeting="hello world"
+greeting="hello from gonfy"
 log_level=info
 color=yes
+mascot=gonfy
 peer=10.0.0.9
 note=mine
 ```
@@ -156,11 +158,11 @@ summary: 0 ok, 1 changed, 0 skipped, 0 would-change
   changed File[/home/paul/gonf-tutorial/hello.sh]
 $ GREETING_SCRIPT="$(printf "#!/bin/sh\nif then\n")" ./recipe script
 summary: 0 ok, 0 changed, 0 skipped, 0 would-change
-error: chunk 0: plan: apply line 2: file /home/paul/gonf-tutorial/hello.sh: validation by sh failed: exit status 2: validator output: /home/paul/gonf-tutorial/hello.sh.gonfvalidate741399796: 2: Syntax error: "then" unexpected
+error: chunk 0: plan: apply line 2: file /home/paul/gonf-tutorial/hello.sh: validation by sh failed: exit status 2: validator output: /home/paul/gonf-tutorial/hello.sh.gonfvalidate963692649: 2: Syntax error: "then" unexpected
 [exit status 1]
 $ cat /home/paul/gonf-tutorial/hello.sh
 #!/bin/sh
-echo hello
+echo hello from gonfy
 ```
 
 The broken script never reached `hello.sh`. Use this for anything a typo can
@@ -199,7 +201,7 @@ first apply and was skipped on the second. Change a member by hand and the
 set repairs it and fires the command again:
 
 ```text
-$ sed -i s/world/gonf/ ~/gonf-tutorial/greeter/main.sh
+$ sed -i s/gonfy/woodpecker/ ~/gonf-tutorial/greeter/main.sh
 $ ./recipe -verbose greeter
 2026/09/26 08:23:12 Registered resource Directory[${HOME}/gonf-tutorial/greeter]
 2026/09/26 08:23:12 Registered resource ConfigSet[greeter]
@@ -213,14 +215,14 @@ $ ./recipe -verbose greeter
 2026/09/26 08:23:12 config set greeter: validator sh accepted the staged set
 2026/09/26 08:23:12 set owner root:0 for /home/paul/gonf-tutorial/greeter/lib.sh
 2026/09/26 08:23:12 set mode -rw-r--r-- for /home/paul/gonf-tutorial/greeter/lib.sh
-2026/09/26 08:23:12 created temporary file /home/paul/gonf-tutorial/greeter/main.sh.gonftmp3808662794
-2026/09/26 08:23:12 renaming /home/paul/gonf-tutorial/greeter/main.sh.gonftmp3808662794 to /home/paul/gonf-tutorial/greeter/main.sh
+2026/09/26 08:23:12 created temporary file /home/paul/gonf-tutorial/greeter/main.sh.gonftmp411991458
+2026/09/26 08:23:12 renaming /home/paul/gonf-tutorial/greeter/main.sh.gonftmp411991458 to /home/paul/gonf-tutorial/greeter/main.sh
 2026/09/26 08:23:12 synced directory /home/paul/gonf-tutorial/greeter to make the rename durable
 2026/09/26 08:23:12 set owner root:0 for /home/paul/gonf-tutorial/greeter/main.sh
 2026/09/26 08:23:12 set mode -rwxr-xr-x for /home/paul/gonf-tutorial/greeter/main.sh
 2026/09/26 08:23:12 config set greeter: published /home/paul/gonf-tutorial/greeter/main.sh
 2026/09/26 08:23:12 running Command[run-greeter]: sh main.sh
-2026/09/26 08:23:12 Command[run-greeter] stdout: hello, world
+2026/09/26 08:23:12 Command[run-greeter] stdout: hello, gonfy
 summary: 2 ok, 3 changed, 0 skipped, 0 would-change
   changed ConfigSet[greeter]
   changed ConfigSetMember[greeter/main.sh]

@@ -1,3 +1,4 @@
 # ~/.bashrc managed by gonf
+# Gonfy says: dotfiles are lodges, keep them converged
 export EDITOR=vim
 alias ll='ls -l'

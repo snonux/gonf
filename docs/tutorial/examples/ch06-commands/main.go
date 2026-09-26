@@ -25,12 +25,12 @@ func commands() {
 	// not ${HOME}-expanded, so this uses Home (the controller's home, the
 	// same machine for a local run).
 	repo := Home("gonf-tutorial/commands/repo")
-	Command("git", List("-C", repo, "config", "user.name", "gonf"), WithName("git-user"),
+	Command("git", List("-C", repo, "config", "user.name", "gonfy"), WithName("git-user"),
 		OnlyIf("test", List("-d", repo)),
-		Unless("git", List("-C", repo, "config", "user.name"), ExpectStdout("gonf")))
+		Unless("git", List("-C", repo, "config", "user.name"), ExpectStdout("gonfy")))
 
 	// Sh splits a command line like a shell would, but runs no shell.
-	Sh("echo 'hello from Sh'", WithName("echo"))
+	Sh("echo 'hello from Gonfy'", WithName("echo"))
 
 	// A change gate: the command runs only when the file changed.
 	conf := File(dir+"/app.conf", WithContent("workers=4\n"), WithMode(0o644))
@@ -39,5 +39,5 @@ func commands() {
 
 	// DependsOn orders resources without gating them.
 	done := Noop("commands-done")
-	Command("sh", List("-c", "echo all set"), WithName("report"), DependsOn(done))
+	Command("sh", List("-c", "echo Gonfy says all set"), WithName("report"), DependsOn(done))
 }

@@ -16,7 +16,7 @@ func main() {
 		Dir(base+"/vim", WithSource("assets/dotfiles/vim"), WithPrune, WithFileMode(0o644))
 	}, WhenLinux())
 	Task("greeting", "A small plan without blobs", func() {
-		File(DestHome("gonf-tutorial/greeting"), WithContent("hi\n"), WithMode(0o644))
+		File(DestHome("gonf-tutorial/greeting"), WithContent("hi from gonfy\n"), WithMode(0o644))
 	})
 	cli.Main()
 }

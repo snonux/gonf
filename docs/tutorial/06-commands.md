@@ -34,12 +34,12 @@ func commands() {
 	// not ${HOME}-expanded, so this uses Home (the controller's home, the
 	// same machine for a local run).
 	repo := Home("gonf-tutorial/commands/repo")
-	Command("git", List("-C", repo, "config", "user.name", "gonf"), WithName("git-user"),
+	Command("git", List("-C", repo, "config", "user.name", "gonfy"), WithName("git-user"),
 		OnlyIf("test", List("-d", repo)),
-		Unless("git", List("-C", repo, "config", "user.name"), ExpectStdout("gonf")))
+		Unless("git", List("-C", repo, "config", "user.name"), ExpectStdout("gonfy")))
 
 	// Sh splits a command line like a shell would, but runs no shell.
-	Sh("echo 'hello from Sh'", WithName("echo"))
+	Sh("echo 'hello from Gonfy'", WithName("echo"))
 
 	// A change gate: the command runs only when the file changed.
 	conf := File(dir+"/app.conf", WithContent("workers=4\n"), WithMode(0o644))
@@ -48,7 +48,7 @@ func commands() {
 
 	// DependsOn orders resources without gating them.
 	done := Noop("commands-done")
-	Command("sh", List("-c", "echo all set"), WithName("report"), DependsOn(done))
+	Command("sh", List("-c", "echo Gonfy says all set"), WithName("report"), DependsOn(done))
 }
 ```
 
@@ -58,11 +58,11 @@ func commands() {
 $ ./recipe commands
 2026/09/26 08:26:52 created directory /home/paul/gonf-tutorial/commands
 2026/09/26 08:26:52 running Command[git-init]: git init -q repo
-2026/09/26 08:26:52 running Command[git-user]: git -C /home/paul/gonf-tutorial/commands/repo config user.name gonf
-2026/09/26 08:26:52 running Command[echo]: echo hello from Sh
+2026/09/26 08:26:52 running Command[git-user]: git -C /home/paul/gonf-tutorial/commands/repo config user.name gonfy
+2026/09/26 08:26:52 running Command[echo]: echo hello from Gonfy
 2026/09/26 08:26:52 updated /home/paul/gonf-tutorial/commands/app.conf
 2026/09/26 08:26:52 running Command[reload-app]: sh -c echo reloading app; wc -l app.conf
-2026/09/26 08:26:52 running Command[report]: sh -c echo all set
+2026/09/26 08:26:52 running Command[report]: sh -c echo Gonfy says all set
 summary: 1 ok, 7 changed, 0 skipped, 0 would-change
   changed Directory[/home/paul/gonf-tutorial/commands]
   changed Command[git-init]
@@ -79,9 +79,9 @@ summary: 1 ok, 7 changed, 0 skipped, 0 would-change
 $ ./recipe commands
 2026/09/26 08:26:52 skipping Command[git-init]: /home/paul/gonf-tutorial/commands/repo/.git already exists
 2026/09/26 08:26:52 skipping Command[git-user]: unless guard succeeded
-2026/09/26 08:26:52 running Command[echo]: echo hello from Sh
+2026/09/26 08:26:52 running Command[echo]: echo hello from Gonfy
 2026/09/26 08:26:52 skipping Command[reload-app]: no watched dependency changed
-2026/09/26 08:26:52 running Command[report]: sh -c echo all set
+2026/09/26 08:26:52 running Command[report]: sh -c echo Gonfy says all set
 summary: 3 ok, 2 changed, 3 skipped, 0 would-change
   changed Command[echo]
   changed Command[report]
@@ -105,10 +105,10 @@ $ echo workers=8 > ~/gonf-tutorial/commands/app.conf
 $ ./recipe commands
 2026/09/26 08:26:52 skipping Command[git-init]: /home/paul/gonf-tutorial/commands/repo/.git already exists
 2026/09/26 08:26:52 skipping Command[git-user]: unless guard succeeded
-2026/09/26 08:26:52 running Command[echo]: echo hello from Sh
+2026/09/26 08:26:52 running Command[echo]: echo hello from Gonfy
 2026/09/26 08:26:52 updated /home/paul/gonf-tutorial/commands/app.conf
 2026/09/26 08:26:52 running Command[reload-app]: sh -c echo reloading app; wc -l app.conf
-2026/09/26 08:26:52 running Command[report]: sh -c echo all set
+2026/09/26 08:26:52 running Command[report]: sh -c echo Gonfy says all set
 summary: 2 ok, 4 changed, 2 skipped, 0 would-change
   changed Command[echo]
   changed File[/home/paul/gonf-tutorial/commands/app.conf]

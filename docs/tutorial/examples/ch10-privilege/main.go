@@ -17,7 +17,7 @@ func (System) DescMotd() string { return "Write /etc/motd.d/gonf-tutorial" }
 // Motd writes a message of the day fragment.
 func (System) Motd() {
 	EnsureDir("/etc/motd.d", RootOwned)
-	File("/etc/motd.d/gonf-tutorial", WithContent("Managed by gonf.\n"), RootOwned)
+	File("/etc/motd.d/gonf-tutorial", WithContent("Managed by gonf. Gonfy keeps this lodge tidy.\n"), RootOwned)
 }
 
 // DescHosts returns the -list description of the Hosts task.
@@ -32,7 +32,7 @@ func (System) Hosts() {
 func (System) DescNote() string { return "A user file, opted out of RequiresRoot" }
 
 // Note writes into the user's home, so it opts out of root.
-func (System) Note() { File(DestHome(".tutorial-note"), WithContent("hi\n"), WithMode(0o644)) }
+func (System) Note() { File(DestHome(".tutorial-note"), WithContent("hi from gonfy\n"), WithMode(0o644)) }
 
 // OptsNote opts the Note task out of the struct's RequiresRoot.
 func (System) OptsNote() TaskOptions { return TaskOptions{Unprivileged()} }

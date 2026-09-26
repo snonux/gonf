@@ -19,19 +19,19 @@ func main() {
 func lines() {
 	File(DestHome("gonf-tutorial/app.conf"),
 		// Exact lines: added when missing, removed when present.
-		WithLines("log_level=info", "color=yes"),
+		WithLines("log_level=info", "color=yes", "mascot=gonfy"),
 		WithoutLines("debug=true"),
 		// Own "the line starting with port=", whatever its value is today.
 		WithKeyedLine("port=", "port=8080"),
 		// Own everything between # BEGIN GONF peers and # END GONF peers.
 		WithBlock("peers", "peer=10.0.0.1", "peer=10.0.0.2"),
-		// Own an rc.conf-style shell variable: greeting="hello world".
-		WithShellVar("greeting", "hello world"),
+		// Own an rc.conf-style shell variable: greeting="hello from gonfy".
+		WithShellVar("greeting", "hello from gonfy"),
 		WithMode(0o644))
 }
 
 func script() {
-	body := envOr("GREETING_SCRIPT", "#!/bin/sh\necho hello\n")
+	body := envOr("GREETING_SCRIPT", "#!/bin/sh\necho hello from gonfy\n")
 	// WithValidation needs an absolute path, and DestHome records the
 	// placeholder ${HOME}. Home is the controller's home: the same machine
 	// for a local run like this one.
@@ -44,7 +44,7 @@ func script() {
 
 func greeter() {
 	lib := "greet() { echo \"hello, $1\"; }\n"
-	main := "#!/bin/sh\n. " + MemberPath("lib.sh") + "\ngreet world\n"
+	main := "#!/bin/sh\n. " + MemberPath("lib.sh") + "\ngreet gonfy\n"
 	Dir(DestHome("gonf-tutorial/greeter"), WithMode(0o755))
 	set := ConfigSet("greeter",
 		ConfigFile("lib.sh", DestHome("gonf-tutorial/greeter/lib.sh"), WithContent(lib), WithMode(0o644)),

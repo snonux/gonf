@@ -25,7 +25,7 @@ func (System) DescMotd() string { return "Write /etc/motd.d/gonf-tutorial" }
 // Motd writes a message of the day fragment.
 func (System) Motd() {
 	EnsureDir("/etc/motd.d", RootOwned)
-	File("/etc/motd.d/gonf-tutorial", WithContent("Managed by gonf.\n"), RootOwned)
+	File("/etc/motd.d/gonf-tutorial", WithContent("Managed by gonf. Gonfy keeps this lodge tidy.\n"), RootOwned)
 }
 
 // DescHosts returns the -list description of the Hosts task.
@@ -40,7 +40,7 @@ func (System) Hosts() {
 func (System) DescNote() string { return "A user file, opted out of RequiresRoot" }
 
 // Note writes into the user's home, so it opts out of root.
-func (System) Note() { File(DestHome(".tutorial-note"), WithContent("hi\n"), WithMode(0o644)) }
+func (System) Note() { File(DestHome(".tutorial-note"), WithContent("hi from gonfy\n"), WithMode(0o644)) }
 
 // OptsNote opts the Note task out of the struct's RequiresRoot.
 func (System) OptsNote() TaskOptions { return TaskOptions{Unprivileged()} }
@@ -75,8 +75,8 @@ The plan marks privileged ops with `"elevate":true`:
 $ ./recipe plan -redacted system_motd system_note dotfile
 {"op":"plan_preview","version":21,"id":"plan"}
 {"op":"ensure_dir","id":"EnsureDir[/etc/motd.d]","path":"/etc/motd.d","mode":"0755","owner":"root","group":"0","elevate":true}
-{"op":"file","id":"File[/etc/motd.d/gonf-tutorial]","path":"/etc/motd.d/gonf-tutorial","mode":"0644","owner":"root","group":"0","content_b64":"TWFuYWdlZCBieSBnb25mLgo=","has_content":true,"elevate":true}
-{"op":"file","id":"File[${HOME}/.tutorial-note]","path":"${HOME}/.tutorial-note","mode":"0644","content_b64":"aGkK","has_content":true}
+{"op":"file","id":"File[/etc/motd.d/gonf-tutorial]","path":"/etc/motd.d/gonf-tutorial","mode":"0644","owner":"root","group":"0","content_b64":"TWFuYWdlZCBieSBnb25mLiBHb25meSBrZWVwcyB0aGlzIGxvZGdlIHRpZHkuCg==","has_content":true,"elevate":true}
+{"op":"file","id":"File[${HOME}/.tutorial-note]","path":"${HOME}/.tutorial-note","mode":"0644","content_b64":"aGkgZnJvbSBnb25meQo=","has_content":true}
 {"op":"file","id":"File[${HOME}/.tutorial-inputrc]","path":"${HOME}/.tutorial-inputrc","mode":"0644","content_b64":"c2V0IGVkaXRpbmctbW9kZSB2aQo=","has_content":true}
 {"op":"command","id":"Command[whoami-as-root]","name":"whoami-as-root","bin":"id","args":["-un"],"elevate":true}
 wrote redacted preview to stdout (6 ops, 0 secret-bearing; not a plan, cannot be applied)
@@ -94,7 +94,7 @@ $ ./recipe -privilege=sudo system_motd system_note dotfile
 2026/09/26 08:23:16 updated /etc/motd.d/gonf-tutorial
 summary: 1 ok, 1 changed, 0 skipped, 0 would-change
   changed File[/etc/motd.d/gonf-tutorial]
-applied /tmp/gonf-plan-983425784/chunk-elevated.jsonl (3 ops)
+applied /tmp/gonf-plan-3273471858/chunk-elevated.jsonl (3 ops)
 2026/09/26 08:23:16 updated /home/paul/.tutorial-note
 2026/09/26 08:23:16 updated /home/paul/.tutorial-inputrc
 summary: 0 ok, 2 changed, 0 skipped, 0 would-change
@@ -103,9 +103,9 @@ summary: 0 ok, 2 changed, 0 skipped, 0 would-change
 2026/09/26 08:23:16 running Command[whoami-as-root]: id -un
 summary: 0 ok, 1 changed, 0 skipped, 0 would-change
   changed Command[whoami-as-root]
-applied /tmp/gonf-plan-983425784/chunk-elevated.jsonl (2 ops)
+applied /tmp/gonf-plan-3273471858/chunk-elevated.jsonl (2 ops)
 $ cat /etc/motd.d/gonf-tutorial
-Managed by gonf.
+Managed by gonf. Gonfy keeps this lodge tidy.
 ```
 
 Three summaries, one per chunk; the elevated ones end with the `applied ... chunk-elevated.jsonl` line of the `sudo` child. `/etc/hosts` is a shared file, so the
@@ -126,7 +126,7 @@ changes anything:
 
 ```text
 $ whoami
-tutorial
+gonfy
 $ ./recipe system_motd
 error: privileged ops EnsureDir[/etc/motd.d], File[/etc/motd.d/gonf-tutorial] need elevation, but the privilege mode is none and this process is not root: set -privilege sudo|doas (api.SetPrivilege) or run as root
 [exit status 1]

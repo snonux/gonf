@@ -27,10 +27,11 @@ func files() {
 	// A directory, then a file with inline content inside it. gonf orders
 	// the file after its parent directory on its own.
 	Dir(base, WithMode(0o755))
-	File(base+"/motd", WithContent("Welcome to the gonf tutorial!\n"), WithMode(0o644))
+	File(base+"/motd", WithContent("Welcome to Gonfy's lodge!\n"), WithMode(0o644))
 
 	// Copy a file from the recipe's working directory (the controller).
 	File(base+"/bashrc", WithSource("assets/dotfiles/bashrc"), WithMode(0o644))
+	File(base+"/gonfy.txt", WithSource("assets/gonfy.txt"), WithMode(0o644))
 
 	// Mirror a whole directory tree, removing anything not in the source.
 	Dir(base+"/vim", WithSource("assets/dotfiles/vim"), WithPrune, WithFileMode(0o644))
@@ -95,6 +96,7 @@ $ ./recipe -n files
 2026/09/26 09:23:54 dry-run: would create directory /home/paul/gonf-tutorial
 2026/09/26 09:23:54 dry-run: would update /home/paul/gonf-tutorial/motd
 2026/09/26 09:23:54 dry-run: would update /home/paul/gonf-tutorial/bashrc
+2026/09/26 09:23:54 dry-run: would update /home/paul/gonf-tutorial/gonfy.txt
 2026/09/26 09:23:54 dry-run: would create directory /home/paul/gonf-tutorial/vim
 2026/09/26 09:23:54 dry-run: would create directory /home/paul/gonf-tutorial/vim/colors
 2026/09/26 09:23:54 dry-run: would update /home/paul/gonf-tutorial/vim/colors/tutorial.vim
@@ -106,10 +108,11 @@ $ ./recipe -n files
 2026/09/26 09:23:54 dry-run: would create symlink /home/paul/gonf-tutorial/vimrc -> /home/paul/gonf-tutorial/vim/vimrc
 2026/09/26 09:23:54 dry-run: would create directory /home/paul/gonf-tutorial/state
 2026/09/26 09:23:54 dry-run: would update /home/paul/gonf-tutorial/state/notes.txt
-summary: 2 ok, 0 changed, 0 skipped, 13 would-change
+summary: 2 ok, 0 changed, 0 skipped, 14 would-change
   would-change Directory[/home/paul/gonf-tutorial]
   would-change File[/home/paul/gonf-tutorial/motd]
   would-change File[/home/paul/gonf-tutorial/bashrc]
+  would-change File[/home/paul/gonf-tutorial/gonfy.txt]
   would-change Directory[/home/paul/gonf-tutorial/vim]
   would-change Directory[/home/paul/gonf-tutorial/vim/colors]
   would-change File[/home/paul/gonf-tutorial/vim/colors/tutorial.vim]
@@ -135,6 +138,7 @@ $ ./recipe files
 2026/09/26 09:23:54 created directory /home/paul/gonf-tutorial
 2026/09/26 09:23:54 updated /home/paul/gonf-tutorial/motd
 2026/09/26 09:23:54 updated /home/paul/gonf-tutorial/bashrc
+2026/09/26 09:23:54 updated /home/paul/gonf-tutorial/gonfy.txt
 2026/09/26 09:23:54 created directory /home/paul/gonf-tutorial/vim
 2026/09/26 09:23:54 created directory /home/paul/gonf-tutorial/vim/colors
 2026/09/26 09:23:54 updated /home/paul/gonf-tutorial/vim/colors/tutorial.vim
@@ -145,10 +149,11 @@ $ ./recipe files
 2026/09/26 09:23:54 created symlink /home/paul/gonf-tutorial/vimrc -> /home/paul/gonf-tutorial/vim/vimrc
 2026/09/26 09:23:54 created directory /home/paul/gonf-tutorial/state
 2026/09/26 09:23:54 updated /home/paul/gonf-tutorial/state/notes.txt
-summary: 2 ok, 13 changed, 0 skipped, 0 would-change
+summary: 2 ok, 14 changed, 0 skipped, 0 would-change
   changed Directory[/home/paul/gonf-tutorial]
   changed File[/home/paul/gonf-tutorial/motd]
   changed File[/home/paul/gonf-tutorial/bashrc]
+  changed File[/home/paul/gonf-tutorial/gonfy.txt]
   changed Directory[/home/paul/gonf-tutorial/vim]
   changed Directory[/home/paul/gonf-tutorial/vim/colors]
   changed File[/home/paul/gonf-tutorial/vim/colors/tutorial.vim]
@@ -167,13 +172,14 @@ is `ok`:
 
 ```text
 $ ./recipe files
-summary: 15 ok, 0 changed, 0 skipped, 0 would-change
+summary: 16 ok, 0 changed, 0 skipped, 0 would-change
 $ find ~/gonf-tutorial | sort
 /home/paul/gonf-tutorial
 /home/paul/gonf-tutorial/bashrc
 /home/paul/gonf-tutorial/bin
 /home/paul/gonf-tutorial/bin/disk
 /home/paul/gonf-tutorial/bin/load
+/home/paul/gonf-tutorial/gonfy.txt
 /home/paul/gonf-tutorial/motd
 /home/paul/gonf-tutorial/state
 /home/paul/gonf-tutorial/state/notes.txt
@@ -184,6 +190,14 @@ $ find ~/gonf-tutorial | sort
 /home/paul/gonf-tutorial/vimrc
 $ readlink ~/gonf-tutorial/vimrc
 /home/paul/gonf-tutorial/vim/vimrc
+$ cat ~/gonf-tutorial/gonfy.txt
+     __         __
+    /  \.-"""-./  \
+    \    -   -    /
+     |   o   o   |      Hi, I'm Gonfy the beaver!
+     \  .-'''-.  /      I keep this lodge converged.
+      '-\__Y__/-'
+          [||]
 ```
 
 ## Drift: pruning, removal and repair
@@ -192,11 +206,11 @@ Add a stray file to the synced tree, recreate the file that must be absent,
 and loosen a mode:
 
 ```text
-$ echo junk > ~/gonf-tutorial/vim/stray.txt; echo old > ~/gonf-tutorial/old.conf; chmod 600 ~/gonf-tutorial/motd
+$ echo twigs > ~/gonf-tutorial/vim/stray.txt; echo old > ~/gonf-tutorial/old.conf; chmod 600 ~/gonf-tutorial/motd
 $ ./recipe -n files
 2026/09/26 09:23:54 dry-run: would prune /home/paul/gonf-tutorial/vim/stray.txt
 2026/09/26 09:23:54 dry-run: would remove /home/paul/gonf-tutorial/old.conf
-summary: 14 ok, 0 changed, 0 skipped, 2 would-change
+summary: 15 ok, 0 changed, 0 skipped, 2 would-change
   would-change File[/home/paul/gonf-tutorial/vim/stray.txt]
   would-change File[/home/paul/gonf-tutorial/old.conf]
 $ stat -c '%a %n' /home/paul/gonf-tutorial/motd
@@ -204,7 +218,7 @@ $ stat -c '%a %n' /home/paul/gonf-tutorial/motd
 $ ./recipe files
 2026/09/26 09:23:54 pruned /home/paul/gonf-tutorial/vim/stray.txt
 2026/09/26 09:23:54 removed /home/paul/gonf-tutorial/old.conf
-summary: 14 ok, 2 changed, 0 skipped, 0 would-change
+summary: 15 ok, 2 changed, 0 skipped, 0 would-change
   changed File[/home/paul/gonf-tutorial/vim/stray.txt]
   changed File[/home/paul/gonf-tutorial/old.conf]
 $ stat -c '%a %n' /home/paul/gonf-tutorial/motd

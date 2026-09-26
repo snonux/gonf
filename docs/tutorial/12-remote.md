@@ -42,7 +42,7 @@ func (Planet) DescMotd() string { return "Greet with the host's name" }
 // the destination's own facts, so every host renders its own name.
 func (Planet) Motd() {
 	EnsureDir("/etc/motd.d", RootOwned)
-	File("/etc/motd.d/welcome", WithContent("Welcome to {{ .Gonf.Hostname }}!\n"), WithTemplate,
+	File("/etc/motd.d/welcome", WithContent("Welcome to {{ .Gonf.Hostname }}! Gonfy waves hello.\n"), WithTemplate,
 		RootOwned)
 }
 
@@ -153,7 +153,7 @@ summary: 1 ok, 2 changed, 0 skipped, 0 would-change
 applied stdin (10 ops)
 pushed push (10 ops) to paul@earth.lan
 $ ssh paul@earth.lan cat /etc/motd.d/welcome
-Welcome to earth!
+Welcome to earth! Gonfy waves hello.
 $ ssh paul@earth.lan sudo crontab -l
 # BEGIN GONF Cron[maintenance]
 0 3 * * * /usr/local/bin/maintenance
@@ -196,7 +196,7 @@ summary: 1 ok, 2 changed, 0 skipped, 0 would-change
 applied stdin (13 ops)
 pushed cluster-inner (13 ops) to inner (2/2 hosts)
 $ ssh paul@mars.lan cat /etc/motd.d/welcome
-Welcome to mars!
+Welcome to mars! Gonfy waves hello.
 $ ssh paul@mars.lan sudo crontab -l
 # BEGIN GONF Cron[maintenance]
 0 4 * * * /usr/local/bin/maintenance

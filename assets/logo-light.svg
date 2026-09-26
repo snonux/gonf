@@ -1,19 +1,62 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
-  <title id="title">Gonf logo</title>
-  <desc id="desc">Nested configuration layers: concentric rotated squares representing layered configuration management</desc>
-  <rect width="256" height="256" rx="36" fill="#f4f0e8"/>
-  <circle cx="128" cy="128" r="108" fill="#18212b"/>
-  <rect x="60" y="60" width="136" height="136"
-        fill="none" stroke="#dce5eb" stroke-width="12" stroke-linejoin="round"
-        transform="rotate(45 128 128)"/>
-  <rect x="75" y="75" width="106" height="106"
-        fill="none" stroke="#7f8e99" stroke-width="11" stroke-linejoin="round"
-        transform="rotate(30 128 128)"/>
-  <rect x="88" y="88" width="80" height="80"
-        fill="none" stroke="#dce5eb" stroke-width="10" stroke-linejoin="round"
-        transform="rotate(15 128 128)"/>
-  <rect x="100" y="100" width="56" height="56"
-        fill="none" stroke="#7f8e99" stroke-width="9" stroke-linejoin="round"/>
-  <circle cx="128" cy="128" r="48" fill="none" stroke="#06b6d4" stroke-width="12"/>
-  <circle cx="128" cy="128" r="10" fill="#f4f0e8"/>
+  <title id="title">Gonfy, the gonf beaver</title>
+  <desc id="desc">Gonfy, a cute brown beaver with big front teeth and a flat tail, holding a log for his lodge</desc>
+  <rect width="256" height="256" rx="36" fill="#f6efe3"/>
+  <circle cx="128" cy="128" r="112" fill="#d9f3f7"/>
+  <defs><clipPath id="badge"><circle cx="128" cy="128" r="108"/></clipPath></defs>
+  <g clip-path="url(#badge)">
+  <!-- tail -->
+  <g transform="translate(-12 -6) rotate(-30 190 196)">
+    <ellipse cx="200" cy="196" rx="44" ry="22" fill="#5b3b27"/>
+    <path d="M166 186 L234 186 M162 196 L238 196 M166 206 L234 206 M180 176 L180 216 M200 174 L200 218 M220 176 L220 216" stroke="#7a5238" stroke-width="3"/>
+  </g>
+  <!-- body -->
+  <ellipse cx="128" cy="184" rx="58" ry="50" fill="#a86b3f"/>
+  <ellipse cx="128" cy="192" rx="38" ry="36" fill="#e7c49a"/>
+  <!-- feet -->
+  <ellipse cx="98" cy="230" rx="18" ry="9" fill="#5b3b27"/>
+  <ellipse cx="158" cy="230" rx="18" ry="9" fill="#5b3b27"/>
+  <!-- ears -->
+  <circle cx="82" cy="72" r="16" fill="#8f5a34"/>
+  <circle cx="82" cy="72" r="8" fill="#e9a6a0"/>
+  <circle cx="174" cy="72" r="16" fill="#8f5a34"/>
+  <circle cx="174" cy="72" r="8" fill="#e9a6a0"/>
+  <!-- head -->
+  <ellipse cx="128" cy="112" rx="58" ry="54" fill="#b37446"/>
+  <!-- builder's hard hat -->
+  <path d="M84 78 Q86 38 128 36 Q170 38 172 78 Z" fill="#f5b82e"/>
+  <rect x="76" y="74" width="104" height="10" rx="5" fill="#e09a12"/>
+  <rect x="122" y="38" width="12" height="38" rx="5" fill="#ffd45c"/>
+  <!-- muzzle -->
+  <ellipse cx="128" cy="134" rx="30" ry="22" fill="#f1dcbf"/>
+  <!-- eyes -->
+  <circle cx="104" cy="106" r="10" fill="#22170f"/>
+  <circle cx="152" cy="106" r="10" fill="#22170f"/>
+  <circle cx="107" cy="102" r="3.8" fill="#fff"/>
+  <circle cx="155" cy="102" r="3.8" fill="#fff"/>
+  <circle cx="101" cy="110" r="1.6" fill="#fff"/>
+  <circle cx="149" cy="110" r="1.6" fill="#fff"/>
+  <!-- cheeks -->
+  <ellipse cx="88" cy="128" rx="10" ry="6" fill="#f08f86" opacity="0.55"/>
+  <ellipse cx="168" cy="128" rx="10" ry="6" fill="#f08f86" opacity="0.55"/>
+  <!-- nose -->
+  <ellipse cx="128" cy="124" rx="11" ry="7.5" fill="#3a261a"/>
+  <ellipse cx="124" cy="121.5" rx="3.5" ry="2" fill="#fff" opacity="0.6"/>
+  <!-- mouth -->
+  <path d="M118 134 Q128 141 138 134" fill="none" stroke="#3a261a" stroke-width="2.5" stroke-linecap="round"/>
+  <!-- teeth -->
+  <path d="M119.5 137 h8 v12 a3 3 0 0 1 -3 3 h-2 a3 3 0 0 1 -3 -3 z" fill="#fffdf6" stroke="#3a261a" stroke-width="2"/>
+  <path d="M128.5 137 h8 v12 a3 3 0 0 1 -3 3 h-2 a3 3 0 0 1 -3 -3 z" fill="#fffdf6" stroke="#3a261a" stroke-width="2"/>
+  <!-- log held in paws -->
+  <g transform="rotate(-8 128 186)">
+    <rect x="78" y="176" width="100" height="22" rx="11" fill="#c8894f"/>
+    <path d="M96 182 h40 M110 191 h48" stroke="#9a6334" stroke-width="2.5" stroke-linecap="round"/>
+    <ellipse cx="178" cy="187" rx="8" ry="11" fill="#e8b77d" stroke="#9a6334" stroke-width="2.5"/>
+    <circle cx="178" cy="187" r="3.5" fill="none" stroke="#9a6334" stroke-width="2"/>
+  </g>
+  <!-- paws -->
+  <ellipse cx="100" cy="186" rx="12" ry="9" fill="#8f5a34"/>
+  <ellipse cx="152" cy="180" rx="12" ry="9" fill="#8f5a34"/>
+  </g>
+  <circle cx="128" cy="128" r="112" fill="none" stroke="#06b6d4" stroke-width="8"/>
 </svg>

@@ -17,7 +17,8 @@ func (Demo) DescFiles() string { return "Demo file and directory resources" }
 // Files demonstrates file and directory resources: content, modes, source
 // copies, absence with pruning, and line edits.
 func (Demo) Files() {
-	File("/tmp/gonf_hello.txt", WithContent("Hello World!"))
+	File("/tmp/gonf_hello.txt", WithContent("Hello from Gonfy the beaver!"))
+	File("/tmp/gonfy_lodge.txt", WithContent("Gonfy the beaver keeps this lodge converged.\n"), WithMode(0o644))
 	InstallFile("/tmp/gonf_example.conf", "assets/testfiles/test.tmpl")
 	File("/tmp/gonf_secret.txt", WithContent("top secret"), WithMode(0o600))
 	Dir("/tmp/gonf_dir", WithMode(0o755))
@@ -67,7 +68,7 @@ func (Demo) DescLinks() string { return "Demo symlink and hardlink resources" }
 
 // Links demonstrates symlink, hardlink, and LinkIfExists resources.
 func (Demo) Links() {
-	File("/tmp/gonf_hello.txt", WithContent("Hello World!"))
+	File("/tmp/gonf_hello.txt", WithContent("Hello from Gonfy the beaver!"))
 
 	Link("/tmp/gonf_link", WithSymlink("/tmp/gonf_hello.txt"))
 	Link("/tmp/gonf_hardlink", WithHardlink("/tmp/gonf_hello.txt"))

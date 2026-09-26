@@ -27,13 +27,13 @@ func main() {
 	Task("webserver", "Install, configure and run nginx", webserver, Privileged())
 	Task("backup", "Nightly backup as a systemd timer", backup, Privileged(), WhenLinux())
 	Task("cron", "A cron job in the current user's crontab", cronJob)
-	Task("account", "A service account", account, Privileged())
+	Task("account", "A service account for Gonfy", account, Privileged())
 	cli.Main()
 }
 
 func webserver() {
 	pkg := Package("nginx")
-	conf := File("/etc/nginx/conf.d/tutorial.conf",
+	conf := File("/etc/nginx/conf.d/gonfy.conf",
 		WithContent("server { listen 8080; }\n"), RootOwned, DependsOn(pkg))
 	// Started and enabled on every apply; restarted only when conf changed.
 	Service("nginx", WithRestart, OnChange(conf))
@@ -47,13 +47,13 @@ func backup() {
 }
 
 func cronJob() {
-	CronAt("tutorial-uptime", "*/15 * * * *", "uptime >> /tmp/uptime.log",
+	CronAt("gonfy-uptime", "*/15 * * * *", "uptime >> /tmp/uptime.log",
 		WithCronUser("root"))
 }
 
 func account() {
-	User("tutorial", WithPrimaryGroup("tutorial"), WithShell("/bin/sh"),
-		WithHome("/home/tutorial"), WithCreateHome)
+	User("gonfy", WithPrimaryGroup("gonfy"), WithShell("/bin/sh"),
+		WithHome("/home/gonfy"), WithCreateHome)
 }
 ```
 
@@ -70,8 +70,8 @@ preview shows what they would do on a Fedora host:
 $ ./recipe plan -redacted webserver backup
 {"op":"plan_preview","version":21,"id":"plan"}
 {"op":"package","id":"Package[nginx]","name":"nginx","elevate":true}
-{"op":"file","id":"File[/etc/nginx/conf.d/tutorial.conf]","path":"/etc/nginx/conf.d/tutorial.conf","mode":"0644","owner":"root","group":"0","content_b64":"c2VydmVyIHsgbGlzdGVuIDgwODA7IH0K","has_content":true,"elevate":true,"deps":["Package[nginx]"]}
-{"op":"service","id":"Service[nginx]","name":"nginx","restart":true,"if_changed":true,"watch":["File[/etc/nginx/conf.d/tutorial.conf]"],"elevate":true,"deps":["File[/etc/nginx/conf.d/tutorial.conf]"]}
+{"op":"file","id":"File[/etc/nginx/conf.d/gonfy.conf]","path":"/etc/nginx/conf.d/gonfy.conf","mode":"0644","owner":"root","group":"0","content_b64":"c2VydmVyIHsgbGlzdGVuIDgwODA7IH0K","has_content":true,"elevate":true,"deps":["Package[nginx]"]}
+{"op":"service","id":"Service[nginx]","name":"nginx","restart":true,"if_changed":true,"watch":["File[/etc/nginx/conf.d/gonfy.conf]"],"elevate":true,"deps":["File[/etc/nginx/conf.d/gonfy.conf]"]}
 {"op":"when_begin","id":"when.backup","elevate":true,"all":[{"fact":"goos","eq":"linux"}]}
 {"op":"systemd_timer","id":"SystemdTimer[backup]","name":"backup","command":"/usr/local/bin/backup.sh","on_calendar":"*-*-* 03:00:00","persistent":true,"description":"Nightly backup","elevate":true}
 {"op":"when_end","elevate":true}
@@ -95,13 +95,13 @@ $ crontab -l
 no crontab for root
 [exit status 1]
 $ ./recipe cron
-2026/09/26 08:23:14 updated crontab for root (job tutorial-uptime)
+2026/09/26 08:23:14 updated crontab for root (job gonfy-uptime)
 summary: 0 ok, 1 changed, 0 skipped, 0 would-change
-  changed Cron[root/tutorial-uptime]
+  changed Cron[root/gonfy-uptime]
 $ crontab -l
-# BEGIN GONF Cron[tutorial-uptime]
+# BEGIN GONF Cron[gonfy-uptime]
 */15 * * * * uptime >> /tmp/uptime.log
-# END GONF Cron[tutorial-uptime]
+# END GONF Cron[gonfy-uptime]
 $ ./recipe cron
 summary: 1 ok, 0 changed, 0 skipped, 0 would-change
 ```
@@ -113,22 +113,22 @@ sets passwords.
 
 ```text
 $ ./recipe -n account
-2026/09/26 08:04:01 dry-run: would run groupadd -- tutorial
-2026/09/26 08:04:01 dry-run: would run useradd --create-home --gid tutorial --home /home/tutorial --shell /bin/sh -- tutorial
+2026/09/26 08:23:14 dry-run: would run groupadd -- gonfy
+2026/09/26 08:23:14 dry-run: would run useradd --create-home --gid gonfy --home /home/gonfy --shell /bin/sh -- gonfy
 summary: 0 ok, 0 changed, 0 skipped, 2 would-change
-  would-change Group[tutorial]
-  would-change User[tutorial]
+  would-change Group[gonfy]
+  would-change User[gonfy]
 $ ./recipe account
 summary: 0 ok, 2 changed, 0 skipped, 0 would-change
-  changed Group[tutorial]
-  changed User[tutorial]
+  changed Group[gonfy]
+  changed User[gonfy]
 ```
 
 ```text
 $ ./recipe account
 summary: 1 ok, 0 changed, 0 skipped, 0 would-change
-$ id tutorial
-uid=1001(tutorial) gid=1002(tutorial) groups=1002(tutorial)
+$ id gonfy
+uid=1001(gonfy) gid=1002(gonfy) groups=1002(gonfy)
 ```
 
 ## More system resources

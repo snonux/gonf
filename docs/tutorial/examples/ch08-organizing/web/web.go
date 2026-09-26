@@ -27,9 +27,9 @@ func (Web) Config() {
 // Needs takes the method itself, so an editor can jump to it.
 func (Web) OptsConfig() TaskOptions { return TaskOptions{Needs(Web.Docroot)} }
 
-// Content publishes the start page.
+// Content publishes Gonfy's start page.
 func (Web) Content() {
-	File(root+"/htdocs/index.html", WithContent("<h1>Hello</h1>\n"), WithMode(0o644))
+	File(root+"/htdocs/index.html", WithContent("<h1>Welcome to Gonfy's lodge</h1>\n"), WithMode(0o644))
 }
 
 // OptsContent adds task options: the document root is created first.
