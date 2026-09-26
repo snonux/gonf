@@ -3,7 +3,7 @@
 Release notes for gonf. Each release is also an annotated `v*` tag; for
 releases before v0.17.0 the tag message and the git log are the notes.
 
-## Unreleased
+## v0.24.0 (2026-09-26)
 
 More recipe DSL sugar. No plan schema change: every new form records
 exactly the plan of the long form it replaces. Nothing breaks in recipes.

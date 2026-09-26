@@ -117,7 +117,7 @@ again whenever you like.
 $ ./recipe -quiet hello
 summary: 1 ok, 0 changed, 0 skipped, 0 would-change
 $ ./recipe -version
-0.23.0
+0.24.0
 ```
 
 - `-quiet` keeps only warnings, errors and the summary.
