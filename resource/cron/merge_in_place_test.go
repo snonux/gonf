@@ -83,6 +83,34 @@ func TestMergeHandEditedBlockAppends(t *testing.T) {
 	}
 }
 
+// Blank and comment lines inside an otherwise unchanged block do not touch
+// the environment, so they must not force the block to the end.
+func TestMergeCommentInBlockStillInPlace(t *testing.T) {
+	old := strings.Replace(jobBlock("0", "FOO=1"), "FOO=1\n", "  # keep FOO for the backup\nFOO=1\n\n\t\n", 1)
+	tail := "PATH=/opt/other/bin\n0 * * * * /bin/echo after\n"
+	out, changed := mergeCrontab(old+tail, "job", jobBlock("5", "FOO=1"))
+	if want := jobBlock("5", "FOO=1") + tail; !changed || out != want {
+		t.Fatalf("changed=%v\n got %q\nwant %q", changed, out, want)
+	}
+}
+
+// A CRLF crontab takes the in-place path too and is written back with LF.
+func TestMergeCRLFInPlace(t *testing.T) {
+	head := "MAILTO=root\n"
+	tail := "PATH=/opt/other/bin\n0 * * * * /bin/echo after\n"
+	crlf := strings.ReplaceAll(head+jobBlock("0")+tail, "\n", "\r\n")
+	out, changed := mergeCrontab(crlf, "job", jobBlock("5"))
+	if want := head + jobBlock("5") + tail; !changed || out != want {
+		t.Fatalf("changed=%v\n got %q\nwant %q", changed, out, want)
+	}
+
+	// An unchanged block in a CRLF crontab is left alone.
+	same := strings.ReplaceAll(head+jobBlock("5")+tail, "\n", "\r\n")
+	if out, changed := mergeCrontab(same, "job", jobBlock("5")); changed || out != same {
+		t.Fatalf("unchanged CRLF block rewritten: changed=%v out=%q", changed, out)
+	}
+}
+
 func TestMergeInPlaceWithoutTrailingNewline(t *testing.T) {
 	out, changed := mergeCrontab(jobBlock("0")+"PATH=/x", "job", jobBlock("5"))
 	if want := jobBlock("5") + "PATH=/x\n"; !changed || out != want {

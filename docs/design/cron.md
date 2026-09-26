@@ -72,7 +72,10 @@ The block goes to the end of the table instead when the job has no closed
 block yet, or when its `WithCronEnv` lines change (added, removed,
 reordered, or a value changed). Rewriting such a block in place would apply
 the new values to every entry below it; at the end they reach no other
-entry. Up to v0.23.0 every changed block was moved to the end, so
+entry. A `WithCronEnv` change still affects other entries, however it
+were placed: the entries that followed the old block stop inheriting its
+old values, and any block appended later (a new job, or another job whose
+environment changes) starts below it and so inherits its new values. Up to v0.23.0 every changed block was moved to the end, so
 environment lines that followed the old block started applying to the job.
 
 ## Adopting existing entries

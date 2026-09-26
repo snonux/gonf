@@ -236,17 +236,16 @@ func findBlockEnd(lines []string, from int, begin, end string) int {
 	return -1
 }
 
-// blockEnvLines returns the lines of a Gonf block that are neither markers,
-// blank, nor cron entries: the WithCronEnv NAME=value lines Cron.block
-// writes. Anything else found in a hand-edited block is kept too, so an
-// unexpected line makes the comparison in mergeCrontab fail safe (append).
+// blockEnvLines returns the lines of a Gonf block that are neither blank,
+// comments (markers included), nor cron entries: the WithCronEnv NAME=value
+// lines Cron.block writes. Blank and comment lines do not affect the
+// environment, so they never force a move. Any other line found in a
+// hand-edited block (an @reboot entry, say) is kept, so it makes the
+// comparison in mergeCrontab fail safe (append).
 func blockEnvLines(lines []string) []string {
 	var env []string
 	for _, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		if _, _, marker := gonfMarker(line); marker {
+		if rest := strings.TrimLeft(line, " \t"); rest == "" || rest[0] == '#' {
 			continue
 		}
 		if _, _, entry := cronEntryParts(line); entry {
