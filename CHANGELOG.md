@@ -3,6 +3,39 @@
 Release notes for gonf. Each release is also an annotated `v*` tag; for
 releases before v0.17.0 the tag message and the git log are the notes.
 
+## Unreleased
+
+More recipe DSL sugar. No plan schema change: every new form records
+exactly the plan of the long form it replaces. Nothing breaks in recipes.
+
+Tasks ([docs/reference.md](docs/reference.md), "RegisterMethods", "Needs")
+- `Needs(Unattended.Script)` takes method expressions (and method values)
+  besides names, resolved to the task `RegisterMethods` registered for the
+  method, so an editor can jump to and rename a need.
+- `gonf-desc` (`//go:generate go run github.com/snonux/gonf/cmd/gonf-desc`)
+  writes the `DescX` companions from the task methods' doc comments.
+- `RegisterMethods` takes a `TaskOption` directly, as `WithGroupWhen` does.
+- `RegisterOnCluster(cluster, structs...)` registers several structs on
+  one cluster, each under its default prefix.
+- `WhenHostnameIn(hosts...)` guards a task to part of its cluster.
+- `AggregatePrefix("x")` is the `^x_` pattern aggregate.
+- `DefaultPrefix` keeps `WireGuard` one word (`wireguard_`).
+
+Resources ([docs/reference.md](docs/reference.md), "Shared options", "File", "Link")
+- `RootOwned`, `RootExec`, `RootPrivate`: `Perm(..., Root)` with the usual
+  file and directory modes.
+- `WithContentFrom(render(...))`: a render error refuses the file.
+- `WithShellVar("vm_enable", "YES")` owns an rc.conf-style `key="value"` line.
+- `Symlink(path, target)` is `Link(path, WithSymlink(target))`.
+
+Inventory and hosts ([docs/reference.md](docs/reference.md), "Inventory", "Per-host fragments")
+- `WithHostnameMatch(f)` sets the hostname fragment a host's cluster
+  guards match on (default: the inventory name).
+- `EachHostWith[T]` skips members without a `T` value.
+
+CLI
+- `cli.Main()` is `os.Exit(cli.CLI())`.
+
 ## v0.23.0 (2026-09-25)
 
 Plan schema 27, declared only by a plan that uses it.

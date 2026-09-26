@@ -2,6 +2,8 @@ package api
 
 import (
 	"fmt"
+	"regexp"
+	"strings"
 
 	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/internal/logger"
@@ -44,6 +46,20 @@ func Aggregate(name, description, pattern string) {
 		recordAggregate(name, patternMembers(name, pattern),
 			fmt.Sprintf("pattern %q matched no tasks (after excluding itself and operational tasks)", pattern))
 	}, asAggregate(nil))
+}
+
+// AggregatePrefix is the pattern Aggregate of every task under a
+// RegisterMethods prefix: AggregatePrefix("freebsd") is
+//
+//	Aggregate("freebsd", "Run all freebsd_* tasks", "^freebsd_")
+//
+// An optional description replaces the default one.
+func AggregatePrefix(name string, description ...string) {
+	desc := "Run all " + name + "_* tasks"
+	if len(description) > 0 {
+		desc = strings.Join(description, " ")
+	}
+	Aggregate(name, desc, "^"+regexp.QuoteMeta(name)+"_")
 }
 
 // AggregateTasks registers a task that runs the listed member tasks in the

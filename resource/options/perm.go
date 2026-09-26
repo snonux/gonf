@@ -92,3 +92,35 @@ func setMode(target any, label string, mode os.FileMode) {
 		r.SetMode(normalized)
 	})
 }
+
+// RootOwned is Perm(0o644, Root) on a file and Perm(0o755, Root) on a
+// directory: the usual root-owned, world-readable configuration file or
+// directory. RootExec and RootPrivate are its executable and private
+// siblings; Perm stays for any other mode or owner.
+//
+//	InstallFile("/etc/unattended-upgrade-services", list, RootOwned)
+//	EnsureDir("/usr/local/sbin", RootOwned)
+var RootOwned = rootPerm(0o644, 0o755)
+
+// RootExec is Perm(0o755, Root): a root-owned executable (or, on a
+// directory, the same 0755 as RootOwned).
+var RootExec = rootPerm(0o755, 0o755)
+
+// RootPrivate is Perm(0o600, Root) on a file and Perm(0o700, Root) on a
+// directory: readable by root only (keys, secrets, state directories).
+var RootPrivate = rootPerm(0o600, 0o700)
+
+// rootPerm returns the Perm option for Root with fileMode on files and
+// dirMode on directories. A directory target is one that takes a
+// WithFileMode (resource/dir's Dir, which EnsureDir, Dir and SyncDir
+// build); every other target (File, EnsureFile, InstallFile, a config-set
+// member) is a file.
+func rootPerm(fileMode, dirMode os.FileMode) fileDirOption {
+	return fileDirOption(func(target any) {
+		mode := fileMode
+		if _, isDir := target.(FileModed); isDir {
+			mode = dirMode
+		}
+		Perm(mode, Root)(target)
+	})
+}

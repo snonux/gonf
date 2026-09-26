@@ -28,6 +28,9 @@ func WithSSHHost(host string) HostOption { return pubinv.WithSSHHost(host) }
 // WithSSHDomain is inventory.WithSSHDomain.
 func WithSSHDomain(domain string) HostOption { return pubinv.WithSSHDomain(domain) }
 
+// WithHostnameMatch is inventory.WithHostnameMatch.
+func WithHostnameMatch(fragment string) HostOption { return pubinv.WithHostnameMatch(fragment) }
+
 // WithSSHPort is inventory.WithSSHPort.
 func WithSSHPort(port int) HostOption { return pubinv.WithSSHPort(port) }
 

@@ -31,8 +31,6 @@ the `When*` helpers for anything the destination must decide.
 package main
 
 import (
-    "os"
-
     . "github.com/snonux/gonf/api"
     "github.com/snonux/gonf/cli"
 )
@@ -44,7 +42,7 @@ func main() {
     Task("motd", "Install /etc/motd", func() {
         File("/etc/motd", WithContent("welcome\n"), WithMode(0o644))
     }, Privileged()) // gonf -privilege=sudo motd
-    os.Exit(cli.CLI())
+    cli.Main()
 }
 ```
 
@@ -127,7 +125,7 @@ RegisterMethods(home.HomeTasks{}) // registers home_helix
 
 | Companion / option | Meaning |
 |--------------------|---------|
-| `DescFoo() string` | Description for `-list`. |
+| `DescFoo() string` | Description for `-list`. Or let `gonf-desc` write it from the doc comment (below). |
 | `OptsFoo() TaskOptions` | Per-method options, added after the struct default. `Unprivileged()` opts out of its `Privileged()`. |
 | `WhenFoo() TaskOption` | Per-method guard such as `WhenLinux()`. A serializable guard travels in the plan, so the task still pushes. |
 | `WhenFoo(Facts) bool` | Per-method opaque filter, controller only: push, cluster and fleet refuse the task. |
@@ -135,6 +133,7 @@ RegisterMethods(home.HomeTasks{}) // registers home_helix
 | embedded `StructOption` | Same as `Opts()`, declared by embedding. `RequiresRoot` ships with gonf (`type T struct{ RequiresRoot }`). |
 | `WithPrefix(p)` | Prefix for every task name, replacing the default below. `WithPrefix("")` registers bare method names. |
 | `WithGroupWhen(opts...)` | Options applied to every method, before the struct default. |
+| any `TaskOption` | Same as `WithGroupWhen(opt)`: `RegisterMethods(pkg.Pkg{}, WhenProfile("fedora"))`. |
 | `WithCluster(name)` | Bind every method to a cluster. |
 | `OnCluster(name)` | `WithCluster(name)` plus a destination guard: hostname contains one of the cluster's host names. |
 
@@ -142,10 +141,45 @@ Without `WithPrefix`, the prefix is `DefaultPrefix(v)`: the struct's package
 and type name in snake_case, a trailing `Tasks` dropped, a type named like
 its package and package `main` omitted. So `freebsd.Unattended` registers
 `freebsd_unattended_*`, `home.HomeTasks` registers `home_*` and `main.Backup`
-registers `backup_*`. (Under the dot import a type cannot be named `Tasks`
+registers `backup_*`. `WireGuard` counts as one word (`rnodes.WireGuard`
+registers `rnodes_wireguard_*`). (Under the dot import a type cannot be named `Tasks`
 or `Home`: those are api functions.) Pass
 `WithPrefix` when several structs share one namespace, such as
 `WithPrefix("frontends_")` on `frontends.Web` and `openbsd.Unattended`.
+
+`RegisterOnCluster(name, structs...)` is `RegisterMethods(v, OnCluster(name))`
+for each struct, each under its own default prefix. A `RegisterOption` or
+`TaskOption` in the list applies to all of them; `WithPrefix` is refused
+(use `RegisterMethods` for a shared prefix):
+
+```go
+RegisterOnCluster(cluster.NameFreeBSD,
+    freebsd.Carp{}, freebsd.NFS{}, freebsd.Relayd{}, freebsd.Zrepl{})
+```
+
+A task that applies to only part of its cluster narrows in its `WhenX`
+companion with `WhenHostnameIn(hosts...)` (hostname contains any of them,
+`Eq` for one, `In` for several), which adds to the `OnCluster` guard:
+
+```go
+func (Carp) WhenFailbackCron() TaskOption { return WhenHostnameIn("f0") }
+```
+
+Descriptions from doc comments: add one line per recipe package and run
+`go generate ./...`:
+
+```go
+//go:generate go run github.com/snonux/gonf/cmd/gonf-desc
+
+// StampDir ensures the /var/lib/unattended-upgrade stamp directory.
+func (Unattended) StampDir() { EnsureDir("/var/lib/unattended-upgrade", RootPrivate) }
+```
+
+`gonf-desc` writes `desc_gen.go` with a `DescX` for every task method that
+has a doc comment and no hand-written `DescX`: the first sentence, method
+name and final period dropped, first letter upper case ("Ensures the
+/var/lib/unattended-upgrade stamp directory"). A hand-written `DescX` wins.
+`gonf-desc -check` exits 1 when the file is stale.
 
 A companion with the wrong signature is a declaration error and that method
 is not registered. Name methods for the action (`Unattended.Script`, not
@@ -169,6 +203,9 @@ RegisterMethods(Unattended{}, WithPrefix("freebsd_"), OnCluster("freebsd"))
   and registers nothing.
 
 ### Aggregates and aliases
+
+`AggregatePrefix("freebsd")` is `Aggregate("freebsd", "Run all freebsd_*
+tasks", "^freebsd_")`; a second argument replaces the description.
 
 - Within one aggregate tree (the aggregate, nested aggregates and aliases
   they list) a task is recorded once, at its first position. A plain task
@@ -200,6 +237,7 @@ Run("base", "web") // base, pf, web
 | Rule | Behaviour |
 |------|-----------|
 | Resolution | Under `RegisterMethods(..., WithPrefix("fe_"))`, `"pf"` tries `fe_pf`, then `pf`. Elsewhere a full name. Aliases resolve to their target. Resolved at record time. |
+| Method expressions | `Needs(Unattended.Script, (*T).Method)` names the task `RegisterMethods` gave that method, whatever its prefix: jump-to-definition and rename work, a typo does not compile. A struct registered twice resolves within the dependent's prefix, else the need is ambiguous and fails the record. |
 | Order | Needs record before the task, in declaration order, their own needs first. |
 | Guards | A need records with its own guards and privilege, outside the task's `when_begin`. |
 | Dedupe | Once per `Run(...)` list or aggregate tree; a later explicit name a need already recorded is skipped. A body's own `Run` starts a new scope. |
@@ -301,6 +339,7 @@ resource is not registered.
 | `WatchChanges(ids...)` | same | Gate on resource IDs, no ordering. |
 | `Perm(mode, owner)` | File, Dir and every wrapper taking their options (`EnsureFile`, `InstallFile`, `SecretFile`, `EnsureDir`, `SyncDir`, `ConfigFile`) | `WithMode` + `WithOwner` + `WithGroup` in one: `owner` is `"user:group"`, `"user"` or `":group"`. Records the exact same plan. A malformed owner is a declaration error. |
 | `Root` | owner spec for `Perm` and `WithOwner` | root and the destination's root group (root on Linux, wheel on the BSDs and macOS). Recorded as group `0`, so the destination picks the name, never the controller. |
+| `RootOwned`, `RootExec`, `RootPrivate` | same as `Perm` | `Perm(0o644, Root)` / `Perm(0o755, Root)` / `Perm(0o600, Root)` on a file; on a directory `RootOwned` and `RootExec` are `0o755`, `RootPrivate` is `0o700`. Record exactly the `Perm` plan. |
 
 Parent directories are ordered for you. A resource creating something
 inside a directory the same plan creates (`Dir`, `SyncDir`, `EnsureDir`)
@@ -343,11 +382,13 @@ NoFile("/tmp/old.txt")
 | Option | Meaning |
 |--------|---------|
 | `WithContent(s)` | Inline content. |
+| `WithContentFrom(s, err)` | `WithContent` for a render that can fail: `WithContentFrom(render(data))`. A non-nil `err` refuses the file (declaration error). |
 | `WithSource(path)` | Copy a controller file. A `.tmpl` suffix renders it on the destination. |
 | `WithTemplate` | Force template rendering without a `.tmpl` suffix. |
 | `WithTemplateData(v)` | JSON-compatible data for the destination template; implies rendering. |
 | `WithLines(l...)` / `WithoutLines(l...)` | Ensure / remove exact lines. `WithLine`/`WithoutLine` are singular forms. |
 | `WithKeyedLine(key, line)` | Own the line starting with `key` (below). |
+| `WithShellVar(key, value)` | `WithKeyedLine(key+"=", key+"=\"value\"")` for rc.conf-style files, with `\ " $` and backquote escaped in the value. `key` must be a shell name (dots allowed, for loader.conf). |
 | `WithBlock(name, lines...)` | Own the lines between `# BEGIN GONF <name>` and `# END GONF <name>` (below). |
 | `WithValidation(bin, args)` | Validate a candidate before publishing (below). |
 | `WithMode(m)` | Mode. Setuid/setgid/sticky accepted as raw octal or `os.Mode*` flags. Bits above `0o7777` are refused. |
@@ -457,6 +498,7 @@ and devices in a source tree fail the record.
 
 ```go
 Link("/usr/local/bin/tool", WithSymlink("/opt/tool/bin/tool"))
+Symlink("/usr/local/bin/tool", "/opt/tool/bin/tool") // the same
 Link("/var/lib/app/data", WithHardlink("/data/app"))
 NoLink("/tmp/stale-link")
 ```
@@ -834,6 +876,7 @@ Fleet("homelab", edge, other)
 |-------------|---------|
 | `WithSSHUser`, `WithSSHHost`, `WithSSHPort`, `WithSSHIdentity` | SSH connection. |
 | `WithSSHDomain(d)` | SSH hostname defaults to `<name>.<d>`; an explicit `WithSSHHost` wins. |
+| `WithHostnameMatch(f)` | The hostname fragment `OnCluster`, `EachHost` and `ForHosts` guard this host on. Default: the inventory name, so inventory names must be substrings of the hostnames unless this is set. |
 | `WithPrivilege(PrivilegeNone \| PrivilegeSudo \| PrivilegeDoas)` | How elevated chunks are wrapped on this host. Default none. |
 | `WithGOOS`, `WithGOARCH` | Cross-compile target for the remote binary. Default: `uname`. |
 | `WithPlatform("goos/goarch")` | Both at once, e.g. `WithPlatform("freebsd/amd64")`. |
@@ -892,6 +935,8 @@ func (Edge) Cron() {
 - `EachHost[T](func(v T))` does the same with each host's `WithData` value
   of type `T`; `EachHostNamed[T](func(host string, v T))` also passes the
   name. Everything below applies to both.
+- `EachHostWith[T](func(v T))` is `EachHost` that skips a member without a
+  `T` value instead of failing, for data only some hosts carry.
 - Every member's value is type-checked before any fragment is recorded.
 - Misuse (no cluster, empty key, nil `fn`, missing or mistyped value, an
   interface `T`) fails the record. A member without a value is an error,
@@ -1369,7 +1414,8 @@ gonf plan-verify -trusted-signers f out/plan.age | age -d -i key | gonf apply -
 
 | API | Meaning |
 |-----|---------|
-| `cli.CLI() int` | The full CLI; `os.Exit(cli.CLI())` in `main`. |
+| `cli.Main()` | The full CLI, exiting with its code; the last line of `main`. |
+| `cli.CLI() int` | The same, returning the exit code instead. |
 | `Run`, `RunContext` | Record and apply. |
 | `RecordPlan(id, dir, tasks...)` | Record into `dir` with the output-directory rules. |
 | `RecordPlanTo(id, store, tasks...)` | Record into a caller-owned `plan.BlobStore`. |

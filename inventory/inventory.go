@@ -86,6 +86,24 @@ func WithSSHDomain(domain string) HostOption {
 	}
 }
 
+// WithHostnameMatch sets the hostname fragment that identifies the host on
+// the destination. OnCluster guards a task, and EachHost/ForHosts a host's
+// fragment, on "the live hostname contains <fragment>" (case insensitive);
+// by default the fragment is the inventory name, so inventory names must be
+// substrings of the hostnames. Set it when they differ, or to pin the match
+// to the full hostname so a rename cannot silently skip the host:
+//
+//	Host("f0", fhost, WithHostnameMatch("f0.lan.buetow.org"))
+func WithHostnameMatch(fragment string) HostOption {
+	return func(h *inv.Host) error {
+		if strings.TrimSpace(fragment) == "" {
+			return fmt.Errorf("WithHostnameMatch: fragment must not be empty")
+		}
+		h.HostnameMatch = fragment
+		return nil
+	}
+}
+
 // WithSSHPort sets the SSH port (0 → omit -p).
 func WithSSHPort(port int) HostOption {
 	return func(h *inv.Host) error { h.Port = port; return nil }

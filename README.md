@@ -26,8 +26,6 @@ itself there.
 package main
 
 import (
-    "os"
-
     . "github.com/snonux/gonf/api"
     "github.com/snonux/gonf/cli"
 )
@@ -40,7 +38,7 @@ func main() {
 
     Host("web", WithSSHUser("rex"), WithSSHHost("web.example"),
         WithPrivilege(PrivilegeDoas))
-    os.Exit(cli.CLI())
+    cli.Main()
 }
 ```
 
