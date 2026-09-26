@@ -37,7 +37,16 @@ type rcScan struct {
 	// rc.conf's own ". /etc/defaults/rc.conf": a file (or string) that
 	// may set the variable without this scan seeing it.
 	includesOther bool
+	// namedHazard reports an unset, read, getopts or for naming the
+	// variable, which may change it without an assignment.
+	namedHazard bool
+	// includesDefaults reports rc.conf's own ". /etc/defaults/rc.conf".
+	includesDefaults bool
 }
+
+// unseen reports that the file may set the variable without an
+// assignment this scan reads.
+func (s rcScan) unseen() bool { return s.includesOther || s.namedHazard }
 
 // rcDefaultsInclude is the file rc.conf's stock header sources first.
 const rcDefaultsInclude = "/etc/defaults/rc.conf"
@@ -73,7 +82,9 @@ func scanRcAssignments(src, name string) (rcScan, error) {
 			return rcScan{}, err
 		}
 	}
-	return rcScan{found: w.found, includesOther: w.includesOther}, w.checkHazards()
+	return rcScan{
+		found: w.found, includesOther: w.includesOther, namedHazard: w.namedHazard, includesDefaults: w.includesDefaults,
+	}, w.checkHazards()
 }
 
 // endsInListOperator reports whether tokens end in &&, || or |, after
@@ -99,9 +110,9 @@ type rcWalker struct {
 	// hazards are commands that may change name behind the walker's back
 	// (., source, eval; unset, read, getopts or for naming it); one after
 	// the last assignment makes the value unknowable.
-	hazards       []rcToken
-	includesOther bool
-	found         []rcFoundAssignment
+	hazards                                      []rcToken
+	includesOther, namedHazard, includesDefaults bool
+	found                                        []rcFoundAssignment
 }
 
 // logicalLine walks the tokens of the logical line spanning byte offsets
@@ -216,13 +227,16 @@ func (w *rcWalker) noteCommand(command []rcToken) {
 	switch rcUnquote(command[0].joined) {
 	case ".", "source", "eval":
 		w.hazards = append(w.hazards, command[0])
-		if len(args) != 1 || rcUnquote(args[0].joined) != rcDefaultsInclude || rcUnquote(command[0].joined) != "." {
+		if len(args) == 1 && rcUnquote(args[0].joined) == rcDefaultsInclude && rcUnquote(command[0].joined) == "." {
+			w.includesDefaults = true
+		} else {
 			w.includesOther = true
 		}
 	case "unset", "read", "getopts":
 		for _, arg := range args {
 			if rcUnquote(arg.joined) == w.name {
 				w.hazards = append(w.hazards, command[0])
+				w.namedHazard = true
 				return
 			}
 		}
@@ -261,6 +275,7 @@ func (w *rcWalker) reservedWords(words []rcToken) (rest []rcToken, done bool) {
 			w.depth++
 			if len(words) > 1 && rcUnquote(words[1].joined) == w.name {
 				w.hazards = append(w.hazards, words[0])
+				w.namedHazard = true
 			}
 			return words[1:], true
 		case "case", "esac", "!":
@@ -347,6 +362,9 @@ func replaceRcAssignment(content, name, value string) (string, error) {
 		return "", err
 	}
 	found := scan.found
+	if err := refuseIntermediateReads(content, name, found); err != nil {
+		return "", err
+	}
 	assignment := name + "=" + shellQuote(value)
 	var updated string
 	if len(found) == 0 {
@@ -366,6 +384,40 @@ func replaceRcAssignment(content, name, value string) (string, error) {
 		return "", err
 	}
 	return updated, nil
+}
+
+// refuseIntermediateReads refuses a rewrite when anything between the
+// first and the last assignment (besides the assignment words themselves)
+// reads the variable: rewriting the first assignment would change what it
+// reads. The raw text is searched, comments and here-documents included,
+// erring on the side of refusing.
+func refuseIntermediateReads(content, name string, found []rcFoundAssignment) error {
+	for i := 0; i+1 < len(found); i++ {
+		between := content[found[i].end:found[i+1].start]
+		if at := rcReference(between, name); at >= 0 {
+			lines := newRcLineIndex(content)
+			return fmt.Errorf("line %d: %s is read between its assignments on lines %d and %d, so rewriting would change what is read there: %w",
+				lines.line(found[i].end+at)+1, name, found[0].line+1, found[len(found)-1].line+1, errRcUnmanaged)
+		}
+	}
+	return nil
+}
+
+// rcReference returns the offset of the first $name or ${name in text, or
+// -1.
+func rcReference(text, name string) int {
+	for i := 0; ; {
+		j := strings.IndexByte(text[i:], '$')
+		if j < 0 {
+			return -1
+		}
+		at := i + j
+		i = at + 1
+		rest := strings.TrimPrefix(text[at+1:], "{")
+		if strings.HasPrefix(rest, name) && (len(rest) == len(name) || !isShellNameChar(rest[len(name)])) {
+			return at
+		}
+	}
 }
 
 // rcEdit replaces the bytes [start, end) of a source with text.

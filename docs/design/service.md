@@ -94,9 +94,14 @@ Service("nsd", WithFlags("-c /var/nsd/etc/nsd.conf"))
   the variable (sourcing before it, like rc.conf's own
   `. /etc/defaults/rc.conf` header, is fine).
 - A file that does not assign the variable but sources other files (or
-  uses `eval`), other than that header, may set it unseen: in rc.conf or
-  the defaults it never matches, so the appended assignment settles the
-  value; in `/etc/rc.conf.d/NAME` it is refused.
+  uses `eval`), other than that header, or unsets, reads, `getopts` or
+  `for`-loops the variable, may set it unseen: in rc.conf or the defaults
+  it never matches, so the appended assignment settles the value; in
+  `/etc/rc.conf.d/NAME` it is refused. The defaults count only when
+  rc.conf sources them (the stock header); otherwise an unset variable is
+  empty flags.
+- A value with an unquoted `~` at its start or after an unquoted `:`
+  (tilde expansion) is not evaluated, so it never matches.
 - A rewrite replaces only the first assignment word with
   `NAME_flags='FLAGS'`, keeping `export`, other statements and comments on
   its line; a later duplicate alone on its line is dropped, any other is
@@ -104,7 +109,9 @@ Service("nsd", WithFlags("-c /var/nsd/etc/nsd.conf"))
   assignment spanning several lines with a value it cannot evaluate, a
   file ending inside a line continuation or after `&&`/`||`/`|`, CRLF line
   endings, a `case` or a here-document inside `$(...)`, a backslash-newline
-  in an unquoted here-document body, and any result that does not read
+  in an unquoted here-document body, a rewrite of several assignments when
+  anything between them reads `$NAME_flags` (it would read the new
+  value), and any result that does not read
   back with every assignment equal to FLAGS. The stock NetBSD
   `/etc/defaults/rc.conf` and `/etc/rc.conf` are regression fixtures.
 - `WithFlags` on `NoService`, or with a line break, is a declaration error.

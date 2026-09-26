@@ -105,6 +105,9 @@ func TestNetBSDFlagsRewrite(t *testing.T) {
 			"x=$((nsd_flags==1))\nnsd_flags=-4\n", "-x", "x=$((nsd_flags==1))\nnsd_flags='-x'\n"},
 		{"quoted here-document body with a backslash",
 			": <<'EOF'\na \\\nEOF\nnsd_flags=-4\n", "-x", ": <<'EOF'\na \\\nEOF\nnsd_flags='-x'\n"},
+		{"final value read after the last assignment",
+			"nsd_flags=-a\nnsd_flags=\"$nsd_flags -b\"\nx=\"$nsd_flags\"\n", "-x",
+			"nsd_flags='-x'\nx=\"$nsd_flags\"\n"},
 		{"variable reference is no assignment",
 			"x=\"$nsd_flags ${nsd_flags}\"\nnsd_flags_extra=1\nnsd_flags=-4\n", "-x",
 			"x=\"$nsd_flags ${nsd_flags}\"\nnsd_flags_extra=1\nnsd_flags='-x'\n"},
@@ -184,6 +187,12 @@ func TestNetBSDFlagsFailsClosed(t *testing.T) {
 		{"continued unset after it", "nsd_flags=-4\nuns\\\net nsd_flags\n", "", "", errRcUnmanaged, rcConfPath, "line 2"},
 		{"continued line in an unquoted here-document", ": <<EOF\na \\\nEOF\nEOF\nnsd_flags=-4\n", "", "",
 			errRcSyntax, rcConfPath, "line 2"},
+		{"intermediate value read", "nsd_flags=\"-a\"\nx=\"$nsd_flags -b\"\nnsd_flags=\"-c\"\n", "", "",
+			errRcUnmanaged, rcConfPath, "line 2"},
+		{"intermediate value read on the same line", "nsd_flags=-a\nnsd_flags=-b x=\"${nsd_flags}\"\nnsd_flags=-c\n", "", "",
+			errRcUnmanaged, rcConfPath, "line 2"},
+		{"intermediate value read by a here-document", "nsd_flags=-a\ncat >/dev/null <<EOF\n$nsd_flags\nEOF\nnsd_flags=-c\n", "", "",
+			errRcUnmanaged, rcConfPath, "line 3"},
 		{"assigning expansion", "x=${nsd_flags:=-6}\n", "", "", errRcUnmanaged, rcConfPath, "line 1"},
 		{"unterminated double quote", "a=1\nb=2\nnsd_flags=\"-a \\\n-b\n", "", "",
 			errRcSyntax, rcConfPath, "line 3"},
@@ -195,7 +204,7 @@ func TestNetBSDFlagsFailsClosed(t *testing.T) {
 			errRcSyntax, rcConfPath, "line 1"},
 		{"unterminated quote in the override", "nsd_flags=-4\n", "", "a=1\nb=2\nnsd_flags='x\n",
 			errRcSyntax, overridePath, "line 3"},
-		{"unterminated quote in the defaults", "", "a=1\nb=2\nnsd_flags=\"x\n", "",
+		{"unterminated quote in the defaults", netbsdRcDefaultsHeader, "a=1\nb=2\nnsd_flags=\"x\n", "",
 			errRcSyntax, defaultsPath, "line 3"},
 		{"conditional assignment in the override", "nsd_flags=-4\n", "", "if true; then nsd_flags=-6; fi\n",
 			errRcUnmanaged, overridePath, "line 1"},
@@ -236,16 +245,22 @@ func TestNetBSDFlagsOverrideAfterOtherStatement(t *testing.T) {
 	}
 }
 
-// TestNetBSDFlagsIncludes pins that a file sourcing other files (or using
-// eval) and not assigning the variable itself is not trusted to leave it
-// unset: rc.conf and the defaults then never match (the appended
-// assignment settles the value), and such an override is refused. The
-// stock rc.conf header sourcing /etc/defaults/rc.conf is trusted.
+// TestNetBSDFlagsIncludes pins that a file not assigning the variable but
+// sourcing other files, using eval, or unsetting or reading the variable
+// is not trusted to leave it unset: rc.conf and the defaults then never
+// match (the appended assignment settles the value), and such an override
+// is refused. The stock rc.conf header sourcing /etc/defaults/rc.conf is
+// trusted.
 func TestNetBSDFlagsIncludes(t *testing.T) {
 	for _, tt := range []struct{ name, rcConf, defaults, want string }{
 		{"rc.conf sources another file", ". /etc/rc.conf.local\n", "nsd_flags=-x\n", ". /etc/rc.conf.local\nnsd_flags='-x'\n"},
 		{"rc.conf evals", "eval a=1\n", "nsd_flags=-x\n", "eval a=1\nnsd_flags='-x'\n"},
-		{"defaults source another file", "", ". /etc/defaults/md.conf\n", "nsd_flags='-x'\n"},
+		{"defaults source another file", netbsdRcDefaultsHeader, ". /etc/defaults/md.conf\n", netbsdRcDefaultsHeader + "nsd_flags='-x'\n"},
+		{"rc.conf unsets it", netbsdRcDefaultsHeader + "unset nsd_flags\n", "nsd_flags=-x\n",
+			netbsdRcDefaultsHeader + "unset nsd_flags\nnsd_flags='-x'\n"},
+		{"rc.conf reads it", netbsdRcDefaultsHeader + "read nsd_flags </dev/null\n", "nsd_flags=-x\n",
+			netbsdRcDefaultsHeader + "read nsd_flags </dev/null\nnsd_flags='-x'\n"},
+		{"defaults unset it", netbsdRcDefaultsHeader, "unset nsd_flags\n", netbsdRcDefaultsHeader + "nsd_flags='-x'\n"},
 		{"stock header is trusted", netbsdRcDefaultsHeader, "nsd_flags=-x\n", netbsdRcDefaultsHeader},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -260,11 +275,13 @@ func TestNetBSDFlagsIncludes(t *testing.T) {
 			}
 		})
 	}
-	resource.ResetReport()
-	b := netbsdFlagsBackend(t, "nsd_flags=-x\n", "", "nsd=YES\n. /etc/nsd.rc\n")
-	s := withFlagsSvc(Service{name: "nsd"}, "-x")
-	if err := s.applyWith(b); err == nil || !strings.Contains(err.Error(), "sources other files") {
-		t.Fatalf("an override sourcing other files must be refused, err = %v", err)
+	for _, override := range []string{"nsd=YES\n. /etc/nsd.rc\n", "unset nsd_flags\n", "for nsd_flags in -x; do :; done\n"} {
+		resource.ResetReport()
+		b := netbsdFlagsBackend(t, "nsd_flags=-x\n", "", override)
+		s := withFlagsSvc(Service{name: "nsd"}, "-x")
+		if err := s.applyWith(b); err == nil || !strings.Contains(err.Error(), "WithFlags cannot tell its value") {
+			t.Errorf("override %q must be refused, err = %v", override, err)
+		}
 	}
 }
 

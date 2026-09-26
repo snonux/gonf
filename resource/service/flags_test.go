@@ -216,9 +216,12 @@ func TestNetBSDFlags(t *testing.T) {
 	}{
 		{"unset matches empty", "hostname=x\n", "", "", "hostname=x\n"},
 		{"quoted value matches", "nsd_flags=\"-c /etc/nsd.conf\" # main\n", "", "-c /etc/nsd.conf", "nsd_flags=\"-c /etc/nsd.conf\" # main\n"},
-		{"defaults value matches", "", "nsd_flags='-4'\n", "-4", ""},
+		{"defaults value matches", netbsdRcDefaultsHeader, "nsd_flags='-4'\n", "-4", netbsdRcDefaultsHeader},
 		{"replace in place", "a=1\nnsd_flags=-4\nb=2\n  nsd_flags=\"-6\"\n", "", "-c 'x'", "a=1\nnsd_flags='-c '\\''x'\\'''\nb=2\n"},
-		{"append", "a=1\n", "nsd_flags=-4\n", "", "a=1\nnsd_flags=''\n"},
+		{"append", netbsdRcDefaultsHeader + "a=1\n", "nsd_flags=-4\n", "", netbsdRcDefaultsHeader + "a=1\nnsd_flags=''\n"},
+		{"defaults not sourced by rc.conf, empty matches", "a=1\n", "nsd_flags=-4\n", "", "a=1\n"},
+		{"defaults not sourced by rc.conf, value appended", "a=1\n", "nsd_flags=-4\n", "-4", "a=1\nnsd_flags='-4'\n"},
+		{"tilde is not evaluated", "nsd_flags=~/x\n", "", "~/x", "nsd_flags='~/x'\n"},
 		{"unparseable is rewritten", "nsd_flags=\"$X\"\n", "", "$X", "nsd_flags='$X'\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -254,13 +257,13 @@ func TestParseShellWord(t *testing.T) {
 		``: ``, `-v`: `-v`, `'-a -b'`: `-a -b`, `"-a \"b\" \$c"`: `-a "b" $c`, `a\ b`: `a b`,
 		`"x"'y'z`: `xyz`, `-v # comment`: `-v`, `"a\nb"`: `a\nb`,
 		"\"-a \\\n-b\"": `-a -b`, "'a\nb'": "a\nb", "\"a\nb\"": "a\nb", "-a\\\nb": `-ab`,
-		"'a\\\nb'": "a\\\nb",
+		"'a\\\nb'": "a\\\nb", `'~'`: `~`, `\~`: `~`, `a~`: `a~`, `"a:~"`: `a:~`, `a\:~`: `a:~`,
 	} {
 		if got, ok := parseShellWord(raw); !ok || got != want {
 			t.Errorf("parseShellWord(%q) = %q, %v; want %q", raw, got, ok, want)
 		}
 	}
-	for _, raw := range []string{`$X`, `"$X"`, "`id`", `-v; rm -rf /`, `'open`, `"open`, `a b`, `x\`, "-a \\\nb"} {
+	for _, raw := range []string{`$X`, `"$X"`, "`id`", `-v; rm -rf /`, `'open`, `"open`, `a b`, `x\`, "-a \\\nb", `~`, `~/x`, `a:~`, `a:~/x`, "a:\\\n~", `-a:b:~`, `'a':~`} {
 		if _, ok := parseShellWord(raw); ok {
 			t.Errorf("parseShellWord(%q) must refuse", raw)
 		}

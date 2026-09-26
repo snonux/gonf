@@ -35,8 +35,10 @@ var _ flagger = netbsdBackend{}
 // flagsMatch reports whether the effective NAME_flags value equals want.
 // A value it cannot evaluate (an expansion, a command substitution) never
 // matches, so setFlags rewrites it when that is safe. Neither does an
-// unset one in rc.conf or the defaults that source other files (or eval),
-// which may set it unseen: the assignment setFlags appends settles it.
+// unset one in rc.conf or the defaults that may be set unseen (the file
+// sources other files, uses eval, or unsets/reads the variable): the
+// assignment setFlags appends settles it. The defaults count only when
+// rc.conf sources them (its stock ". /etc/defaults/rc.conf" header).
 func (b netbsdBackend) flagsMatch(u unit, want string) (bool, error) {
 	name, err := flagsVar(u.name)
 	if err != nil {
@@ -52,8 +54,8 @@ func (b netbsdBackend) flagsMatch(u unit, want string) (bool, error) {
 	case value.found:
 		return false, fmt.Errorf("service[%s]: %s is set in %s, which overrides %s; remove it there to let WithFlags manage it",
 			u.name, name, override, b.rcConf)
-	case value.includesOther:
-		return false, fmt.Errorf("service[%s]: %s sources other files or uses eval, which may set %s over %s; WithFlags cannot tell its value",
+	case value.unseen:
+		return false, fmt.Errorf("service[%s]: %s sources other files, uses eval or unsets or reads %s, which may override %s; WithFlags cannot tell its value",
 			u.name, override, name, b.rcConf)
 	}
 	for _, path := range []string{b.rcConf, b.rcConfDefaults} {
@@ -63,8 +65,10 @@ func (b netbsdBackend) flagsMatch(u unit, want string) (bool, error) {
 			return false, err
 		case value.found:
 			return value.parsed && value.value == want, nil
-		case value.includesOther:
+		case value.unseen:
 			return false, nil
+		case path == b.rcConf && !value.includesDefaults:
+			return want == "", nil // rc.conf never loads the defaults
 		}
 	}
 	return want == "", nil // unset everywhere: the daemon gets no flags
@@ -99,13 +103,13 @@ func (b netbsdBackend) describeFlags(u unit, flags string) (would, did string) {
 
 // rcValue is what one rc.conf-style file says about a variable: whether
 // it assigns it (found), the last value (parsed is false when the shell
-// word used syntax this parser does not evaluate), and whether the file
-// sources other files or uses eval (includesOther), which may set it
-// unseen.
+// word used syntax this parser does not evaluate), whether it may set it
+// unseen (it sources other files, uses eval, or unsets or reads it), and
+// whether it sources /etc/defaults/rc.conf (includesDefaults).
 type rcValue struct {
-	value         string
-	parsed, found bool
-	includesOther bool
+	value                    string
+	parsed, found            bool
+	unseen, includesDefaults bool
 }
 
 // readRcAssignment reads the last assignment to name in the rc.conf-style
@@ -125,11 +129,12 @@ func readRcAssignment(path, name string) (rcValue, error) {
 	if err != nil {
 		return rcValue{}, fmt.Errorf("parse %s: %w", path, err)
 	}
-	if len(scan.found) == 0 {
-		return rcValue{includesOther: scan.includesOther}, nil
+	value := rcValue{unseen: scan.unseen(), includesDefaults: scan.includesDefaults}
+	if n := len(scan.found); n > 0 {
+		value.value, value.parsed = parseShellWord(scan.found[n-1].value)
+		value.found = true
 	}
-	value, parsed := parseShellWord(scan.found[len(scan.found)-1].value)
-	return rcValue{value: value, parsed: parsed, found: true, includesOther: scan.includesOther}, nil
+	return value, nil
 }
 
 // readRcConf returns rc.conf's content and mode; a missing file is empty
@@ -185,11 +190,20 @@ func shellQuote(s string) string {
 // not evaluate: parameter expansion, command substitution, or more text
 // after the word (a second statement). raw may span several lines: a
 // quoted newline is kept, and a backslash-newline outside single quotes is
-// a line continuation that sh(1) removes.
+// a line continuation that sh(1) removes. An unquoted ~ at the start or
+// right after an unquoted ':' is tilde-expanded in an assignment, so it is
+// not evaluated either.
 func parseShellWord(raw string) (string, bool) {
 	var b strings.Builder
+	tilde := true // an unquoted ~ here would be tilde-expanded
 	for i := 0; i < len(raw); i++ {
-		switch c := raw[i]; c {
+		c := raw[i]
+		if c == '~' && tilde {
+			return "", false
+		}
+		afterColon := tilde
+		tilde = false
+		switch c {
 		case ' ', '\t':
 			rest := strings.TrimLeft(raw[i:], " \t")
 			return b.String(), rest == "" || rest[0] == '#'
@@ -213,11 +227,14 @@ func parseShellWord(raw string) (string, bool) {
 			i++
 			if raw[i] != '\n' {
 				b.WriteByte(raw[i])
+			} else {
+				tilde = afterColon // sh removes the backslash-newline first
 			}
 		case '$', '`', ';', '&', '|', '<', '>', '(', ')':
 			return "", false
 		default:
 			b.WriteByte(c)
+			tilde = c == ':'
 		}
 	}
 	return b.String(), true
