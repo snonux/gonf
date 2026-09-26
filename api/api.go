@@ -96,6 +96,12 @@ func Link[T Path](path T, opts ...options.LinkOption) Resource {
 	}
 }
 
+// Symlink is Link(path, WithSymlink(target), opts...): path becomes a
+// symbolic link to target.
+func Symlink(path, target string, opts ...options.LinkOption) Resource {
+	return link.Present(path, append([]options.LinkOption{options.WithSymlink(target)}, opts...)...)
+}
+
 // Links is Link for a list of paths: it returns one Multi resource
 // containing a link resource per path.
 func Links(paths []string, opts ...options.LinkOption) Resource {

@@ -164,30 +164,31 @@ func (t *Timer) apply() error {
 	if err != nil {
 		return err
 	}
-	enabled, err := t.client.IsEnabled(t.name, t.user)
+	enablement, err := t.client.Enablement(t.name, t.user)
 	if err != nil {
 		return err
 	}
 
-	actions, held := t.actions(id, active, enabled)
+	actions, held := t.actions(id, active, enablement)
 	return resource.Converge(id, actions, held)
 }
 
 // actions returns the ordered systemctl actions that move t from the
 // probed state to its desired state. Absent stops (unless enable-only)
-// before disabling; present enables before starting. held reports that the
-// change gate suppressed the restart.
-func (t *Timer) actions(id string, active, enabled bool) (actions []resource.Action, held bool) {
+// before disabling (only an enablement disable can change, see
+// systemd.Enablement.DisableOp); present enables before starting. held
+// reports that the change gate suppressed the restart.
+func (t *Timer) actions(id string, active bool, enablement systemd.Enablement) (actions []resource.Action, held bool) {
 	if t.Absent {
 		if !t.enableOnly && active {
 			actions = append(actions, t.command("stop"))
 		}
-		if enabled {
-			actions = append(actions, t.command("disable"))
+		if op := enablement.DisableOp(); op != nil {
+			actions = append(actions, t.command(op...))
 		}
 		return actions, false
 	}
-	if !enabled {
+	if !enablement.Enabled {
 		actions = append(actions, t.command("enable"))
 	}
 	if t.enableOnly {
@@ -211,10 +212,11 @@ func (t *Timer) actions(id string, active, enabled bool) (actions []resource.Act
 	return actions, held
 }
 
-// command returns the systemctl Action performing verb on t's unit, on the
-// --user bus when WithUser is set.
-func (t *Timer) command(verb string) resource.Action {
-	return t.client.Command(systemd.Args(t.user, verb, t.name))
+// command returns the systemctl Action performing op (a verb, possibly with
+// flags such as disable --runtime) on t's unit, on the --user bus when
+// WithUser is set.
+func (t *Timer) command(op ...string) resource.Action {
+	return t.client.Command(systemd.Args(t.user, append(slices.Clone(op), t.name)...))
 }
 
 // validate is Timer-specific: unlike Service, timer unit names are checked

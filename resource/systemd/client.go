@@ -13,6 +13,7 @@ package systemd
 import (
 	"fmt"
 	"runtime"
+	"strings"
 
 	"github.com/snonux/gonf/internal/exec"
 	"github.com/snonux/gonf/internal/runners"
@@ -66,16 +67,59 @@ func (c Client) IsActive(name string, user bool) (bool, error) {
 	return code == 0, nil
 }
 
-// IsEnabled reports whether the unit is enabled at boot through c's runner.
-// A non-zero exit of systemctl is-enabled (unit disabled) is a normal
-// false, not an error.
+// IsEnabled reports whether the unit is enabled at boot through c's runner
+// (Enablement's Enabled). A non-zero exit of systemctl is-enabled (unit
+// disabled) is a normal false, not an error.
 func (c Client) IsEnabled(name string, user bool) (bool, error) {
-	args := Args(user, "is-enabled", "--quiet", name)
-	_, _, code, err := c.runCmd("systemctl", args...)
+	e, err := c.Enablement(name, user)
+	return e.Enabled, err
+}
+
+// Enablement is a unit's probed boot-time enablement: what systemctl
+// is-enabled printed and whether it exited 0.
+type Enablement struct {
+	// State is the state is-enabled printed ("enabled", "static",
+	// "enabled-runtime", ...), trimmed; empty when it printed nothing.
+	State string
+	// Enabled is is-enabled's exit status 0. systemctl exits 0 not only for
+	// "enabled" but also for "enabled-runtime", "static", "indirect",
+	// "generated", "alias" and "transient": the unit needs no enable.
+	Enabled bool
+}
+
+// Enablement probes the unit with systemctl is-enabled through c's runner.
+// Unlike IsActive it does not pass --quiet: the printed state is what tells
+// a unit disable can change from one it cannot (DisableOp).
+func (c Client) Enablement(name string, user bool) (Enablement, error) {
+	args := Args(user, "is-enabled", name)
+	stdout, _, code, err := c.runCmd("systemctl", args...)
 	if err != nil {
-		return false, fmt.Errorf("systemctl is-enabled %s: %w", name, err)
+		return Enablement{}, fmt.Errorf("systemctl is-enabled %s: %w", name, err)
 	}
-	return code == 0, nil
+	state, _, _ := strings.Cut(strings.TrimSpace(stdout), "\n")
+	return Enablement{State: strings.TrimSpace(state), Enabled: code == 0}, nil
+}
+
+// DisableOp returns the systemctl operation (before the unit name, without
+// --user) that removes e's boot-time enablement, or nil when there is none
+// to remove. A unit whose enablement disable cannot change ("static",
+// "indirect", "generated", "alias", "transient") gets nil: systemctl disable
+// exits 0 for it without changing anything, so disabling it would report a
+// change on every apply. A runtime enablement ("enabled-runtime") is only
+// removed by disable --runtime. Any other state that exited 0 ("enabled",
+// or no printed state) is disabled plainly.
+func (e Enablement) DisableOp() []string {
+	if !e.Enabled {
+		return nil
+	}
+	switch e.State {
+	case "static", "indirect", "generated", "alias", "transient":
+		return nil
+	case "enabled-runtime":
+		return []string{"disable", "--runtime"}
+	default:
+		return []string{"disable"}
+	}
 }
 
 // Run executes systemctl with args through c's runner and fails on a

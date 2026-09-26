@@ -825,3 +825,70 @@ func TestDryRunRefusesConversionWithExistingOldBackup(t *testing.T) {
 		t.Errorf("the dry-run must not convert the file: %v", err)
 	}
 }
+
+// TestSymlinkRelativeTargetResolvesThroughSymlinkedParent pins that the
+// dangling-link check resolves a relative target from the link's directory
+// the way the kernel does: through a symlinked parent, not by cleaning ".."
+// lexically. With lnk -> real/sub, "lnk/x -> ../t" points at real/t, so it
+// is valid when real/t exists and dangling when only a sibling t of lnk
+// does.
+func TestSymlinkRelativeTargetResolvesThroughSymlinkedParent(t *testing.T) {
+	setup := func(t *testing.T) (base, path string) {
+		t.Helper()
+		resource.ResetRepository()
+		base = t.TempDir()
+		if err := os.MkdirAll(filepath.Join(base, "real", "sub"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join(base, "real", "sub"), filepath.Join(base, "lnk")); err != nil {
+			t.Fatal(err)
+		}
+		return base, filepath.Join(base, "lnk", "x")
+	}
+
+	t.Run("valid link accepted", func(t *testing.T) {
+		base, path := setup(t)
+		if err := os.WriteFile(filepath.Join(base, "real", "t"), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := Ensure(path, WithSymlink("../t")); err != nil {
+			t.Fatalf("Ensure refused a valid link: %v", err)
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("link does not resolve: %v", err)
+		}
+	})
+
+	t.Run("dangling link refused", func(t *testing.T) {
+		base, path := setup(t)
+		if err := os.WriteFile(filepath.Join(base, "t"), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		err := Ensure(path, WithSymlink("../t"))
+		if err == nil || !strings.Contains(err.Error(), "refusing broken link") {
+			t.Fatalf("err = %v, want a broken-link refusal", err)
+		}
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("a dangling link was created: %v", err)
+		}
+	})
+}
+
+// TestSymlinkDryRunToleratesTargetCreatedEarlier pins that a dry run
+// previews a symlink whose target does not exist yet (an earlier resource of
+// the same plan would create it) instead of failing the whole preview.
+func TestSymlinkDryRunToleratesTargetCreatedEarlier(t *testing.T) {
+	resource.ResetRepository()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "link")
+	resource.SetDryRun(true)
+	t.Cleanup(func() { resource.SetDryRun(false) })
+
+	Present(path, WithSymlink(filepath.Join(dir, "created-later")))
+	if err := testapply.Apply(); err != nil {
+		t.Fatalf("dry run refused a symlink to a not-yet-created target: %v", err)
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatal("the dry run created the symlink")
+	}
+}

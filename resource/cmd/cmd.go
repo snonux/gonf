@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/snonux/gonf/internal/exec"
@@ -253,12 +254,13 @@ func (c *Cmd) apply() error {
 	}
 
 	if c.creates != "" {
-		if _, err := os.Stat(c.creates); err == nil {
-			logger.Info("skipping %s: %s already exists", c.id(), c.creates)
+		creates := c.createsPath()
+		if _, err := os.Stat(creates); err == nil {
+			logger.Info("skipping %s: %s already exists", c.id(), creates)
 			resource.Note(c.id(), resource.StatusSkipped)
 			return nil
 		} else if !os.IsNotExist(err) {
-			return fmt.Errorf("creates check for %s: %w", c.creates, err)
+			return fmt.Errorf("creates check for %s: %w", creates, err)
 		}
 	}
 
@@ -287,6 +289,16 @@ func (c *Cmd) apply() error {
 	}
 
 	return c.run()
+}
+
+// createsPath is the path the Creates guard checks: a relative Creates is
+// resolved against WithDir, the directory the command runs (and so creates
+// it) in, not against Gonf's own working directory.
+func (c *Cmd) createsPath() string {
+	if c.dir != "" && !filepath.IsAbs(c.creates) {
+		return filepath.Join(c.dir, c.creates)
+	}
+	return c.creates
 }
 
 // id is the resource ID the command registers and reports under.

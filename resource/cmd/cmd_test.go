@@ -459,6 +459,44 @@ func TestCreatesMissingInvokesRunnerOnce(t *testing.T) {
 	}
 }
 
+// A relative Creates path is resolved against WithDir, where the command
+// runs and so creates it, not against Gonf's own working directory: an
+// existing <dir>/<creates> skips the command, a missing one runs it.
+func TestCreatesRelativeResolvesAgainstDir(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		existing bool
+		wantRuns int
+	}{
+		{name: "existing skips", existing: true, wantRuns: 0},
+		{name: "missing runs", existing: false, wantRuns: 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resource.ResetRepository()
+			dir := t.TempDir()
+			if tt.existing {
+				if err := os.WriteFile(filepath.Join(dir, "build.done"), nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			runs := 0
+			rs := &runners.Set{Command: &runners.CommandRunners{Run: func(opts exec.Opts, name string, args ...string) (string, string, int, error) {
+				runs++
+				return "", "", 0, nil
+			}}}
+
+			Present("true", nil, opt.WithDir(dir), opt.Creates("build.done"), opt.WithName("creates-relative"))
+			if err := testapply.ApplyWithRunners(rs); err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if runs != tt.wantRuns {
+				t.Fatalf("runner invoked %d times, want %d", runs, tt.wantRuns)
+			}
+		})
+	}
+}
+
 // The happy path must plumb argv, Dir, and the merged Env into the runner.
 func TestRunPlumbsArgsEnvDirToRunner(t *testing.T) {
 	resource.ResetRepository()

@@ -103,6 +103,12 @@ var optionCases = []optionCase{
 		{method: "SetOwner", value: "svc"},
 		{method: "SetGroup", value: "staff"},
 	}},
+	// The matrix recorder implements every setter, SetFileMode included, so
+	// the Root* options see a directory; api's TestRootPermSugar pins the
+	// file modes against real File and Dir resources.
+	{"RootOwned", RootOwned, famFileDir, rootPermCalls(0o755)},
+	{"RootExec", RootExec, famFileDir, rootPermCalls(0o755)},
+	{"RootPrivate", RootPrivate, famFileDir, rootPermCalls(0o700)},
 	{"WithSource", WithSource("/srv/src"), famFileDir, one("SetSource", "/srv/src")},
 	{"WithSourceGlob", WithSourceGlob("*.conf"), []string{"Dir"}, one("SetSourceGlob", "*.conf")},
 	{"WithParam", WithParam("stable"), []string{"File"}, one("SetParam", "stable")},
@@ -111,6 +117,8 @@ var optionCases = []optionCase{
 	{"WithValidation", WithValidation("nginx", []string{"-t", CandidatePath}), []string{"File"}, one("SetValidation", []any{"nginx", []string{"-t", CandidatePath}})},
 	{"WithSourceBase", WithSourceBase("assets"), []string{"Dir"}, one("SetSourceBase", "assets")},
 	{"WithContent", WithContent("hello"), []string{"File"}, one("SetContent", "hello")},
+	{"WithContentFrom", WithContentFrom("hello", nil), []string{"File"}, one("SetContent", "hello")},
+	{"WithShellVar", WithShellVar("k", "v"), []string{"File"}, one("SetKeyedLine", []any{"k=", `k="v"`})},
 	{"WithLines", WithLines("a", "b"), []string{"File"}, one("AddLines", []string{"a", "b"})},
 	{"WithoutLines", WithoutLines("c", "d"), []string{"File"}, one("RemoveLines", []string{"c", "d"})},
 	{"WithLine", WithLine("e"), []string{"File"}, one("SetAddLine", "e")},
@@ -194,5 +202,14 @@ func TestOptionFamilyMatrix(t *testing.T) {
 				t.Errorf("families = %v, want %v", accepted, tc.families)
 			}
 		})
+	}
+}
+
+// rootPermCalls is the setter sequence of Perm(mode, Root).
+func rootPermCalls(mode os.FileMode) []setterCall {
+	return []setterCall{
+		{method: "SetMode", value: mode},
+		{method: "SetOwner", value: "root"},
+		{method: "SetGroup", value: "0"},
 	}
 }

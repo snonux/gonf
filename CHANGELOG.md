@@ -3,6 +3,78 @@
 Release notes for gonf. Each release is also an annotated `v*` tag; for
 releases before v0.17.0 the tag message and the git log are the notes.
 
+## Unreleased
+
+More recipe DSL sugar. No plan schema change: every new form records
+exactly the plan of the long form it replaces. Nothing breaks in recipes.
+
+Tasks ([docs/reference.md](docs/reference.md), "RegisterMethods", "Needs")
+- `Needs(Unattended.Script)` takes method expressions (and method values)
+  besides names, resolved to the task `RegisterMethods` registered for the
+  method, so an editor can jump to and rename a need.
+- `gonf-desc` (`//go:generate go run github.com/snonux/gonf/cmd/gonf-desc`)
+  writes the `DescX` companions from the task methods' doc comments.
+- `RegisterMethods` takes a `TaskOption` directly, as `WithGroupWhen` does.
+- `RegisterOnCluster(cluster, structs...)` registers several structs on
+  one cluster, each under its default prefix.
+- `WhenHostnameIn(hosts...)` guards a task to part of its cluster.
+- `AggregatePrefix("x")` is the `^x_` pattern aggregate.
+- `DefaultPrefix` keeps `WireGuard` one word (`wireguard_`).
+
+Resources ([docs/reference.md](docs/reference.md), "Shared options", "File", "Link")
+- `RootOwned`, `RootExec`, `RootPrivate`: `Perm(..., Root)` with the usual
+  file and directory modes.
+- `WithContentFrom(render(...))`: a render error refuses the file.
+- `WithShellVar("vm_enable", "YES")` owns an rc.conf-style `key="value"` line.
+- `Symlink(path, target)` is `Link(path, WithSymlink(target))`.
+
+Inventory and hosts ([docs/reference.md](docs/reference.md), "Inventory", "Per-host fragments")
+- `WithHostnameMatch(f)` sets the hostname fragment a host's cluster
+  guards match on (default: the inventory name).
+- `EachHostWith[T]` skips members without a `T` value.
+
+CLI
+- `cli.Main()` is `os.Exit(cli.CLI())`.
+
+Fixes
+- An `OnChange` (or `SystemdUnits` `FanIn`) watching a `DestHome` resource
+  now fires when that resource changed. Before, the gate compared the
+  recorded `File[${HOME}/...]` id with the expanded path the apply noted,
+  and never fired.
+- A local run selects hosts by their `WithHostnameMatch` fragment, so their
+  `EachHost`/`ForHosts` bodies apply on the machine the fragment matches.
+- `Needs(T.Method)` resolves the exact task under the dependent's prefix
+  when one registration's prefix starts with another's.
+- `gonf-desc` writes one `DescX` for a method defined in per-GOOS files.
+- `gonf push -- <ssh-opts>` keeps the value of every value-taking ssh
+  option (`-E`, `-m`, `-B`, ...) instead of reading it as the host.
+- `WithGonfPath` is shell-quoted in remote apply and install commands; the
+  remote gonf-sync staging dir is removed after a cancelled push too.
+- Security: the sticky `-apply-dir`, the apply staging root and blob tar
+  extraction no longer follow a planted symlink; the staging root avoids a
+  shared `gonf-apply` dir owned by another user.
+- A symlinked `WithSource` directory is synced (it synced nothing and, with
+  `WithPrune` on the plan path, emptied the destination).
+- `EnsureDir` on the plan path leaves an existing directory alone.
+- `WithBlock` refuses nested block markers; line edits handle lines over
+  64 KiB.
+- A dry run previews a `Symlink` whose target an earlier resource of the
+  plan creates; relative symlink targets resolve through a symlinked
+  parent like the kernel does.
+- A secret quoted with `%q` in an error is redacted; redaction keeps the
+  line break after a secret read with a trailing newline.
+- `GitGlobal` applies an empty value and settles on one with surrounding
+  whitespace.
+- `IsLatest` installs a missing package on dnf and FreeBSD; NetBSD services
+  use the `one*` verbs so disabled running daemons are handled;
+  `NoService`/`NoTimer` settle on static, indirect, generated, alias and
+  runtime-enabled systemd units; a relative `Creates` is resolved against
+  `WithDir`.
+
+Docs
+- [docs/tutorial/](docs/tutorial/README.md): a step-by-step tutorial in 15
+  chapters, with runnable example recipes and captured output.
+
 ## v0.23.0 (2026-09-25)
 
 Plan schema 27, declared only by a plan that uses it.

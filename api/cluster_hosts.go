@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 
@@ -135,7 +136,7 @@ func ForHosts[T any](key string, fn func(host string, value T)) {
 // before the nil-fn check. Any failure records nothing and is reported as a
 // declaration error prefixed with caller.
 func visitClusterHosts[T any](caller string, argErr error, fn func(host string, v T), lookup func(host string) (T, error)) {
-	hosts, values, err := clusterHostValues(argErr, fn != nil, lookup)
+	hosts, values, skipped, err := clusterHostValues(argErr, fn != nil, lookup)
 	if err != nil {
 		// Captured into the current recording session (the record then
 		// fails with it, see stashBodyError) or, outside recording, kept
@@ -144,35 +145,44 @@ func visitClusterHosts[T any](caller string, argErr error, fn func(host string, 
 		return
 	}
 	for i, host := range hosts {
-		if !hostSelected(host) {
+		if !hostSelected(host) || skipped[i] {
 			continue
 		}
-		whenHostnameOne(host, func() { fn(host, values[i]) })
+		whenHostnameOne(hostnameMatch(host), func() { fn(host, values[i]) })
 	}
 }
+
+// errSkipHost is returned by a visitClusterHosts lookup for a member the
+// visit leaves out without an error (EachHostWith's member without a value).
+var errSkipHost = errors.New("skip host")
 
 // clusterHostValues validates the arguments and resolves every current
 // cluster member's value, in member order. Resolving all values first means
 // a bad entry for a later host can never leave a partially recorded set of
 // fragments behind it.
-func clusterHostValues[T any](argErr error, haveFn bool, lookup func(host string) (T, error)) ([]string, []T, error) {
+func clusterHostValues[T any](argErr error, haveFn bool, lookup func(host string) (T, error)) ([]string, []T, []bool, error) {
 	if argErr != nil {
-		return nil, nil, argErr
+		return nil, nil, nil, argErr
 	}
 	if !haveFn {
-		return nil, nil, fmt.Errorf("fn must not be nil")
+		return nil, nil, nil, fmt.Errorf("fn must not be nil")
 	}
 	hosts, err := currentClusterHosts()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	values := make([]T, len(hosts))
+	skipped := make([]bool, len(hosts))
 	for i, host := range hosts {
-		if values[i], err = lookup(host); err != nil {
-			return nil, nil, err
+		values[i], err = lookup(host)
+		switch {
+		case errors.Is(err, errSkipHost):
+			skipped[i] = true
+		case err != nil:
+			return nil, nil, nil, err
 		}
 	}
-	return hosts, values, nil
+	return hosts, values, skipped, nil
 }
 
 // hostSelection is the record-time set of inventory host names the current

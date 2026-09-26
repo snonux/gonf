@@ -187,3 +187,13 @@ func TestWrapArgvModes(t *testing.T) {
 // WrapArgv serves the LOCAL re-exec path: as root, None+elevate unwraps
 // (apply runs in-process); as non-root it errors. The local decision must
 // keep depending on the controller's euid.
+
+func TestWrapApplyBinCmdQuotesBin(t *testing.T) {
+	got, err := WrapApplyBinCmd(Sudo, true, "/opt/my tools/gonf", "apply -relayed -")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "sudo -n '/opt/my tools/gonf' apply -relayed -"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}

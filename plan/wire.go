@@ -202,6 +202,30 @@ func normalizeWire(w *wireOp) {
 	}
 	if len(w.Blocks) == 0 {
 		w.Blocks = nil
+	} else {
+		// Copy before normalizing nested slices (see Unless below).
+		w.Blocks = append([]Block(nil), w.Blocks...)
+		for i := range w.Blocks {
+			if len(w.Blocks[i].Lines) == 0 {
+				w.Blocks[i].Lines = nil
+			}
+		}
+	}
+	if len(w.Validators) > 0 {
+		w.Validators = append([]Argv(nil), w.Validators...)
+		for i := range w.Validators {
+			if len(w.Validators[i].Args) == 0 {
+				w.Validators[i].Args = nil
+			}
+		}
+	}
+	if len(w.All) > 0 {
+		w.All = append([]Predicate(nil), w.All...)
+		for i := range w.All {
+			if len(w.All[i].In) == 0 {
+				w.All[i].In = nil
+			}
+		}
 	}
 	if len(w.ValidationArgs) == 0 {
 		w.ValidationArgs = nil

@@ -1958,3 +1958,66 @@ func TestPresentCollisionDoesNotOverwriteFirstDeclarationsDraft(t *testing.T) {
 		t.Fatalf("mode = %o, want %o (the first declaration's, not the refused second one's)", got, 0o700)
 	}
 }
+
+// symlinkedSourceTree builds a source tree reached through a symlink
+// (current -> real, holding f1 = "new") and a destination that already
+// holds a stale f1 and an unmanaged extra file.
+func symlinkedSourceTree(t *testing.T) (src, dst string) {
+	t.Helper()
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real")
+	src = filepath.Join(dir, "current")
+	dst = filepath.Join(dir, "dst")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "f1"), []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, src); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dst, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{"f1": "old", "extra": "x"} {
+		if err := os.WriteFile(filepath.Join(dst, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return src, dst
+}
+
+// TestSourceCopyFollowsSymlinkedSourceDir pins that a WithSource directory
+// which is itself a symlink to a directory is copied through the link, on
+// the direct path and on the plan path, and that WithPrune on the plan path
+// prunes only what the source lacks. filepath.WalkDir does not descend into
+// a symlinked root: the direct copy used to install nothing, and the plan
+// path packaged an empty tree, so its prune removed every destination file.
+func TestSourceCopyFollowsSymlinkedSourceDir(t *testing.T) {
+	t.Run("direct", func(t *testing.T) {
+		resource.ResetRepository()
+		src, dst := symlinkedSourceTree(t)
+		if err := Ensure(dst, WithSource(src)); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := os.ReadFile(filepath.Join(dst, "f1")); err != nil || string(got) != "new" {
+			t.Fatalf("f1 = %q (%v), want \"new\"", got, err)
+		}
+	})
+
+	t.Run("plan with prune", func(t *testing.T) {
+		resource.ResetRepository()
+		src, dst := symlinkedSourceTree(t)
+		Present(dst, WithSource(src), WithPrune)
+		if err := testapply.Apply(); err != nil {
+			t.Fatalf("Apply failed: %v", err)
+		}
+		if got, err := os.ReadFile(filepath.Join(dst, "f1")); err != nil || string(got) != "new" {
+			t.Fatalf("f1 = %q (%v), want \"new\"", got, err)
+		}
+		if _, err := os.Stat(filepath.Join(dst, "extra")); !os.IsNotExist(err) {
+			t.Fatalf("expected extra to be pruned, stat err = %v", err)
+		}
+	})
+}

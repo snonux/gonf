@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" xml:space="preserve" viewBox="0 0 860 400" width="860" height="400" font-family="Helvetica, Arial, sans-serif" font-size="14">
+  <title>How gonf works: a recipe records a plan on the controller, and destinations apply it</title>
+  <style>
+    .box { fill: #f5f7fa; stroke: #4a5568; stroke-width: 1.5; }
+    .ctl { fill: #e6f0ff; stroke: #2b6cb0; stroke-width: 1.5; }
+    .dst { fill: #e9f7ef; stroke: #2f855a; stroke-width: 1.5; }
+    .plan { fill: #fff8e1; stroke: #b7791f; stroke-width: 1.5; }
+    .h { font-weight: bold; font-size: 15px; }
+    .s { font-size: 12px; fill: #2d3748; }
+    .m { font-family: Menlo, Consolas, monospace; font-size: 12px; fill: #1a202c; }
+    .a { stroke: #4a5568; stroke-width: 1.5; fill: none; marker-end: url(#arrow); }
+    .l { font-size: 12px; fill: #4a5568; }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4a5568"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="860" height="400" fill="#ffffff"/>
+
+  <!-- controller -->
+  <rect class="ctl" x="20" y="20" width="300" height="360" rx="10"/>
+  <text class="h" x="40" y="48">Controller</text>
+  <text class="s" x="40" y="66">where you run the recipe binary</text>
+  <rect class="box" x="40" y="84" width="260" height="110" rx="6"/>
+  <text class="h" x="55" y="106">recipe (main.go)</text>
+  <text class="m" x="55" y="128">Task("hello", ..., func() {</text>
+  <text class="m" x="55" y="146">&#160;&#160;File(..., WithContent(...))</text>
+  <text class="m" x="55" y="164">&#160;&#160;Service("nginx", ...)</text>
+  <text class="m" x="55" y="182">})</text>
+  <path class="a" d="M170,194 L170,226"/>
+  <text class="l" x="180" y="215">record</text>
+  <rect class="box" x="40" y="230" width="260" height="130" rx="6"/>
+  <text class="h" x="55" y="252">what runs here</text>
+  <text class="s" x="55" y="274">task bodies and Go control flow</text>
+  <text class="s" x="55" y="294">secrets (MustSecret, SecretFile)</text>
+  <text class="s" x="55" y="314">RenderTemplate, opaque When(...)</text>
+  <text class="s" x="55" y="334">reading WithSource files</text>
+
+  <!-- plan -->
+  <rect class="plan" x="360" y="120" width="160" height="160" rx="10"/>
+  <text class="h" x="380" y="148">Plan</text>
+  <text class="m" x="380" y="172">plan.jsonl</text>
+  <text class="m" x="380" y="192">blobs/</text>
+  <text class="s" x="380" y="218">versioned ops,</text>
+  <text class="s" x="380" y="236">guards as data</text>
+  <text class="s" x="380" y="254">(or sealed plan.age)</text>
+  <path class="a" d="M320,200 L356,200"/>
+
+  <!-- destinations -->
+  <rect class="dst" x="560" y="20" width="280" height="360" rx="10"/>
+  <text class="h" x="580" y="48">Destinations</text>
+  <text class="s" x="580" y="66">where the plan is applied</text>
+
+  <rect class="box" x="580" y="84" width="240" height="70" rx="6"/>
+  <text class="h" x="595" y="106">this host</text>
+  <text class="m" x="595" y="128">./recipe hello</text>
+  <text class="s" x="595" y="146">record and apply in one go</text>
+
+  <rect class="box" x="580" y="170" width="240" height="70" rx="6"/>
+  <text class="h" x="595" y="192">any host with gonf</text>
+  <text class="m" x="595" y="214">gonf apply out/plan.jsonl</text>
+  <text class="s" x="595" y="232">copy the plan, apply it later</text>
+
+  <rect class="box" x="580" y="256" width="240" height="104" rx="6"/>
+  <text class="h" x="595" y="278">remote hosts over ssh</text>
+  <text class="m" x="595" y="300">./recipe push user@host t</text>
+  <text class="m" x="595" y="318">./recipe cluster edge t</text>
+  <text class="m" x="595" y="336">./recipe fleet homelab t</text>
+  <text class="s" x="595" y="352">gonf installs itself there</text>
+
+  <path class="a" d="M520,170 L576,120"/>
+  <path class="a" d="M520,200 L576,205"/>
+  <path class="a" d="M520,230 L576,300"/>
+  <text class="l" x="365" y="305">facts, guards,</text>
+  <text class="l" x="365" y="321">${HOME} resolve</text>
+  <text class="l" x="365" y="337">on the destination</text>
+</svg>

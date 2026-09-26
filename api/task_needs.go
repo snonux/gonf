@@ -2,9 +2,13 @@ package api
 
 import (
 	"fmt"
+	"reflect"
+	"runtime"
 	"slices"
 	"strings"
+	"sync"
 
+	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/internal/logger"
 )
 
@@ -37,13 +41,37 @@ import (
 //   - A task that needs Operational work counts as operational for pattern
 //     aggregates (containsOperational), so a pattern cannot pull it in.
 //
+// A need can also be a method expression of a RegisterMethods struct
+// instead of a string, which an editor can jump to and rename, and a typo in
+// which is a compile error:
+//
+//	func (Unattended) OptsCron() TaskOptions {
+//		return TaskOptions{Needs(Unattended.Script, Unattended.StampDir)}
+//	}
+//
+// It names the task RegisterMethods registered for that method, whatever
+// prefix it got. A struct registered more than once (under two prefixes)
+// resolves to the registration sharing the dependent's prefix, else the
+// need is ambiguous and fails the record like an unknown name. A method
+// value (u.Script) works the same way. Any other argument type is a
+// declaration error.
+//
 // Errors: an empty name, a task that needs itself, or a Needs cycle
 // (a → b → a, aliases followed) is a declaration error at registration and
 // the task is not queued. A need naming no registered task fails the record
 // that reaches it, like an unknown AggregateTasks member; so does a need
 // whose opaque When fails on the controller.
-func Needs(tasks ...string) TaskOption {
-	return func(c *taskCandidate) { c.needs = append(c.needs, tasks...) }
+func Needs(tasks ...any) TaskOption {
+	names := make([]string, 0, len(tasks))
+	for _, t := range tasks {
+		name, err := needName(t)
+		if err != nil {
+			declerr.Report(err)
+			continue
+		}
+		names = append(names, name)
+	}
+	return func(c *taskCandidate) { c.needs = append(c.needs, names...) }
 }
 
 // needsPrefix sets the RegisterMethods prefix relative Needs names resolve
@@ -55,6 +83,10 @@ func needsPrefix(prefix string) TaskOption {
 // resolveNeedName returns the task a Needs entry n names: prefix+n when that
 // exists, else n itself when that exists.
 func resolveNeedName(prefix, n string, exists func(string) bool) (string, bool) {
+	if key, ok := strings.CutPrefix(n, methodNeedPrefix); ok {
+		name, ok := methodTaskName(key, prefix)
+		return name, ok && exists(name)
+	}
 	if prefix != "" && exists(prefix+n) {
 		return prefix + n, true
 	}
@@ -173,7 +205,7 @@ func recordNeeds(name string) error {
 	for _, n := range c.needs {
 		need, ok := resolveNeedName(c.needsPrefix, n, candidateExists)
 		if !ok {
-			return fmt.Errorf("task %q needs unknown task %q", name, n)
+			return fmt.Errorf("task %q needs unknown task %q", name, needLabel(n))
 		}
 		target, _, err := resolveAlias(need)
 		if err != nil {
@@ -235,4 +267,115 @@ func skipNeeded(name string) bool {
 	}
 	logger.Debug("Run: skipping %q: a Needs earlier in the list already recorded it", name)
 	return true
+}
+
+// methodNeedPrefix marks a Needs entry that is a method reference (the
+// normalized runtime name of a method expression) rather than a task name.
+// A NUL byte never occurs in a task name, so the two cannot collide.
+const methodNeedPrefix = "\x00method:"
+
+// methodTasks maps a registered method (methodKey) to the task names
+// RegisterMethods gave it, in registration order.
+var (
+	methodTasksMu sync.Mutex
+	methodTasks   = map[string][]string{}
+)
+
+// resetMethodTasks forgets every registered method (ResetTasks).
+func resetMethodTasks() {
+	methodTasksMu.Lock()
+	defer methodTasksMu.Unlock()
+	methodTasks = map[string][]string{}
+}
+
+// methodKey is the key of method name of the struct type t in methodTasks,
+// in the form a method expression's runtime name normalizes to.
+func methodKey(t reflect.Type, name string) string {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	return t.PkgPath() + "." + t.Name() + "." + name
+}
+
+// noteMethodTask records that RegisterMethods registered task for method
+// name of t, for Needs(T.Method).
+func noteMethodTask(t reflect.Type, name, task string) {
+	key := methodKey(t, name)
+	methodTasksMu.Lock()
+	defer methodTasksMu.Unlock()
+	methodTasks[key] = append(methodTasks[key], task)
+}
+
+// methodTaskName returns the task registered for the method key: the only
+// one, or the one under prefix when the struct was registered more than
+// once.
+func methodTaskName(key, prefix string) (string, bool) {
+	methodTasksMu.Lock()
+	tasks := methodTasks[key]
+	methodTasksMu.Unlock()
+	if len(tasks) == 1 {
+		return tasks[0], true
+	}
+	if prefix == "" {
+		return "", false
+	}
+	// Match the exact name, not a prefix: with registrations under "a_" and
+	// "a_b_", "a_b_base" also starts with "a_".
+	want := prefix + camelToSnake(key[strings.LastIndexByte(key, '.')+1:])
+	for _, t := range tasks {
+		if t == want {
+			return t, true
+		}
+	}
+	return "", false
+}
+
+// needName returns the Needs entry of t: a string as written, or the
+// method reference of a method expression (T.Method, (*T).Method) or a
+// method value (v.Method).
+func needName(t any) (string, error) {
+	switch v := t.(type) {
+	case string:
+		return v, nil
+	case nil:
+		return "", fmt.Errorf("Needs: nil task")
+	}
+	rv := reflect.ValueOf(t)
+	if rv.Kind() != reflect.Func || rv.IsNil() {
+		return "", fmt.Errorf("Needs: want a task name or a method expression such as Unattended.Script, got %T", t)
+	}
+	fn := runtime.FuncForPC(rv.Pointer())
+	if fn == nil {
+		return "", fmt.Errorf("Needs: cannot resolve %T to a method", t)
+	}
+	return methodNeedPrefix + normalizeMethodName(fn.Name()), nil
+}
+
+// normalizeMethodName turns a method's runtime name into methodKey's form:
+// "pkg.(*T).M" and the method value wrapper "pkg.T.M-fm" both become
+// "pkg.T.M".
+func normalizeMethodName(n string) string {
+	n = strings.TrimSuffix(n, "-fm")
+	if i := strings.Index(n, "(*"); i >= 0 {
+		if j := strings.IndexByte(n[i:], ')'); j >= 0 {
+			n = n[:i] + n[i+2:i+j] + n[i+j+1:]
+		}
+	}
+	return n
+}
+
+// needLabel is how an error names the Needs entry n: a task name as
+// written, a method reference as "T.Method".
+func needLabel(n string) string {
+	key, ok := strings.CutPrefix(n, methodNeedPrefix)
+	if !ok {
+		return n
+	}
+	if i := strings.LastIndexByte(key, '/'); i >= 0 {
+		key = key[i+1:]
+	}
+	if _, rest, ok := strings.Cut(key, "."); ok {
+		return rest
+	}
+	return key
 }

@@ -54,7 +54,15 @@ func scanTree(srcDir string) ([]BlobEntry, error) {
 		return nil, blobErrorf("package tree %s: not a directory", srcDir)
 	}
 	var out []BlobEntry
-	walkErr := filepath.WalkDir(srcDir, func(path string, entry fs.DirEntry, err error) error {
+	// Walk from srcDir plus a trailing separator: filepath.WalkDir never
+	// descends into a root that is a symlink, so a symlinked source directory
+	// (which the os.Stat above accepts) would package as an empty tree, and
+	// a WithPrune sync_dir would then prune every destination entry.
+	root := filepath.Clean(srcDir)
+	if !strings.HasSuffix(root, string(filepath.Separator)) {
+		root += string(filepath.Separator)
+	}
+	walkErr := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

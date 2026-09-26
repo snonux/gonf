@@ -30,33 +30,77 @@ const runDirPrefix = "run-"
 // apply via doas/sudo as root — so it is created (and, when owned, chmod'd)
 // like /tmp itself: without this, a root-created root would lock out later
 // unprivileged applies on mixed-privilege hosts.
+//
+// The sticky bit does not stop the shared root's owner from renaming or
+// replacing entries, so the shared root is only used when it is a real
+// directory owned by root or by the current user; otherwise (e.g. created by
+// the SSH login user, and this is root's elevated apply) the per-uid root is
+// $TMPDIR/gonf-apply-<uid> directly under $TMPDIR instead. Either way the
+// per-uid root must be a real directory (not a symlink) owned by the current
+// user, and it is chmod'ed without following a symlink.
 func ApplyStagingRoot() (string, error) {
 	uid := strconv.Itoa(os.Getuid())
 	if u, err := user.Current(); err == nil && u.Uid != "" {
 		uid = u.Uid
 	}
-	root := filepath.Join(os.TempDir(), "gonf-apply", uid)
-	if err := os.MkdirAll(root, 0o700); err != nil {
+	shared := filepath.Join(os.TempDir(), "gonf-apply")
+	if err := os.Mkdir(shared, 0o777); err != nil && !errors.Is(err, os.ErrExist) {
 		return "", fmt.Errorf("plan apply staging: %w", err)
 	}
-	if err := os.Chmod(root, 0o700); err != nil {
+	root := filepath.Join(shared, uid)
+	if ownedDir(shared, true) {
+		// Best effort: the shared parent must stay writable for every uid
+		// that may apply here. Failures are expected on pre-existing dirs
+		// the current user does not own.
+		//
+		// The sticky bit must be set via os.ModeSticky, not the raw octal
+		// literal 0o1777: os.Chmod's Unix path reads the ModeSetuid/
+		// ModeSetgid/ModeSticky FileMode flag bits (each a high bit, e.g.
+		// ModeSticky is 1<<20) off the mode value, not the low-order 0o1000
+		// octal bit a plain integer literal sets. Passing 0o1777 therefore
+		// silently drops the sticky bit and leaves the shared root
+		// world-writable without it, letting any local user rename another
+		// uid's per-uid subdirectory out of the way (task ee2).
+		_ = chmodDirNoFollow(shared, os.ModeSticky|0o777)
+	} else {
+		root = filepath.Join(os.TempDir(), "gonf-apply-"+uid)
+	}
+	if err := os.Mkdir(root, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return "", fmt.Errorf("plan apply staging: %w", err)
+	}
+	if !ownedDir(root, false) {
+		return "", fmt.Errorf("plan apply staging: %s is not a directory owned by the current user (pre-planted?)", root)
+	}
+	if err := chmodDirNoFollow(root, 0o700); err != nil {
 		return "", fmt.Errorf("plan apply staging chmod: %w", err)
 	}
-	// Best effort: the shared parent must stay writable for every uid that
-	// may apply here. Failures are expected on pre-existing dirs the current
-	// user does not own; the one-time cleanup is a host-side root action.
-	//
-	// The sticky bit must be set via os.ModeSticky, not the raw octal
-	// literal 0o1777: os.Chmod's Unix path reads the ModeSetuid/ModeSetgid/
-	// ModeSticky FileMode flag bits (each a high bit, e.g. ModeSticky is
-	// 1<<20) off the mode value, not the low-order 0o1000 octal bit a plain
-	// integer literal sets. Passing 0o1777 therefore silently drops the
-	// sticky bit and leaves the shared root world-writable without it,
-	// letting any local user rename another uid's per-uid subdirectory out
-	// of the way (task ee2).
-	shared := filepath.Dir(root)
-	_ = os.Chmod(shared, os.ModeSticky|0o777)
 	return root, nil
+}
+
+// ownedDir reports whether path is a real directory (not a symlink) owned by
+// the effective user, or also by root when rootOK is set.
+func ownedDir(path string, rootOK bool) bool {
+	info, err := os.Lstat(path)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return true
+	}
+	euid := uint32(os.Geteuid())
+	return st.Uid == euid || rootOK && st.Uid == 0
+}
+
+// chmodDirNoFollow sets the mode of the directory path through a handle
+// opened without following a symlink at path.
+func chmodDirNoFollow(path string, mode os.FileMode) error {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_DIRECTORY, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.Chmod(mode)
 }
 
 // SweepApplyStaging removes run directories under root whose modification

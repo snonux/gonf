@@ -28,6 +28,40 @@ func EachHost[T any](fn func(v T)) {
 	visitClusterHosts("EachHost", dataTypeError[T](), named, lookupHostData[T])
 }
 
+// EachHostWith is EachHost for data only some members carry: a member with
+// no WithData value of type T is skipped instead of being an error, so the
+// type says which hosts a body applies to:
+//
+//	EachHostWith(func(c UPSClient) { ... }) // only hosts WithData(UPSClient{...})
+//
+// Everything else (member order, host selection, a missing cluster, a nil
+// fn or an interface T being an error) is EachHost's. Keep EachHost where
+// every member must have the value: there a missing one is a recipe bug.
+func EachHostWith[T any](fn func(v T)) {
+	var named func(string, T)
+	if fn != nil {
+		named = func(_ string, v T) { fn(v) }
+	}
+	visitClusterHosts("EachHostWith", dataTypeError[T](), named, lookupOptionalHostData[T])
+}
+
+// lookupOptionalHostData is lookupHostData with a missing value reported as
+// errSkipHost (EachHostWith). An unregistered host is still an error.
+func lookupOptionalHostData[T any](host string) (T, error) {
+	var zero T
+	if err := dataTypeError[T](); err != nil {
+		return zero, err
+	}
+	raw, hostFound, found := inventory.HostData(host, reflect.TypeFor[T]())
+	switch {
+	case !hostFound:
+		return zero, fmt.Errorf("Host %q is not registered", host)
+	case !found:
+		return zero, errSkipHost
+	}
+	return raw.(T), nil
+}
+
 // EachHostNamed is EachHost for the rare body that also needs the host's
 // inventory name.
 func EachHostNamed[T any](fn func(host string, v T)) {

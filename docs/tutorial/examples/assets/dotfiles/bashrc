@@ -1,0 +1,3 @@
+# ~/.bashrc managed by gonf
+export EDITOR=vim
+alias ll='ls -l'

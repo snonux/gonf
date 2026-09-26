@@ -1,6 +1,8 @@
 package systemd
 
 import (
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/snonux/gonf/internal/runners"
@@ -36,5 +38,55 @@ func TestNewClientInjectsRunner(t *testing.T) {
 	}
 	if len(saw) != 1 || saw[0] != "systemctl" {
 		t.Fatalf("injected runner not reached: %v", saw)
+	}
+}
+
+// TestEnablementDisableOp pins how the is-enabled state maps to the
+// operation that removes it. systemctl is-enabled exits 0 for static,
+// indirect, generated, alias and transient units too, and disable exits 0
+// for them without changing anything, so disabling them would report a
+// change on every apply: they get no operation. A runtime enablement is
+// only removed by disable --runtime. No printed state (a fake runner) with
+// exit 0 is disabled plainly.
+func TestEnablementDisableOp(t *testing.T) {
+	tests := []struct {
+		stdout      string
+		code        int
+		wantEnabled bool
+		wantOp      []string
+	}{
+		{"enabled\n", 0, true, []string{"disable"}},
+		{"enabled-runtime\n", 0, true, []string{"disable", "--runtime"}},
+		{"static\n", 0, true, nil},
+		{"indirect\n", 0, true, nil},
+		{"generated\n", 0, true, nil},
+		{"alias\n", 0, true, nil},
+		{"transient\n", 0, true, nil},
+		{"", 0, true, []string{"disable"}},
+		{"disabled\n", 1, false, nil},
+		{"masked\n", 1, false, nil},
+		{"linked\n", 1, false, nil},
+	}
+	for _, tt := range tests {
+		t.Run(strings.TrimSpace(tt.stdout), func(t *testing.T) {
+			var saw []string
+			c := NewClient(&runners.SystemdRunners{Run: func(name string, args ...string) (string, string, int, error) {
+				saw = args
+				return tt.stdout, "", tt.code, nil
+			}})
+			e, err := c.Enablement("x.service", true)
+			if err != nil {
+				t.Fatalf("Enablement: %v", err)
+			}
+			if want := []string{"--user", "is-enabled", "x.service"}; !slices.Equal(saw, want) {
+				t.Errorf("argv = %v, want %v", saw, want)
+			}
+			if e.Enabled != tt.wantEnabled {
+				t.Errorf("Enabled = %v, want %v", e.Enabled, tt.wantEnabled)
+			}
+			if got := e.DisableOp(); !slices.Equal(got, tt.wantOp) {
+				t.Errorf("DisableOp = %v, want %v", got, tt.wantOp)
+			}
+		})
 	}
 }

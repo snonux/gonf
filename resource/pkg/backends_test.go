@@ -115,9 +115,10 @@ func TestApplyFreeBSDPkgFake(t *testing.T) {
 			wantNote:  resource.StatusChanged,
 		},
 		{
-			name:     "latest upgrades when not installed",
+			// pkg-upgrade(8) "will not install new packages".
+			name:     "latest installs when not installed",
 			pkg:      withLatest(Package{name: "rsync"}),
-			wantRun:  []string{"pkg", "upgrade", "-y", "rsync"},
+			wantRun:  []string{"pkg", "install", "-y", "rsync"},
 			wantNote: resource.StatusChanged,
 		},
 		{

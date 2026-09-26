@@ -28,10 +28,15 @@ import (
 // packages raw bytes for transport and fails loudly on non-regular
 // entries. Keep the entry-kind dispatch aligned between the two by hand;
 // only the GLOB match rule is shared as code (GlobMatchCounts).
+//
+// The walk starts at walkRoot(d.source), so a source that is itself a
+// symlink to a directory (e.g. assets/current -> v2) is walked through, the
+// way scanTree packages it for the plan path: filepath.WalkDir never
+// descends into a symlinked root, which would copy nothing.
 func copySourceTree(d *Dir) error {
 	logger.Debug("installing files from source %s to %s", d.source, d.path)
 
-	return filepath.WalkDir(d.source, func(path string, entry fs.DirEntry, err error) error {
+	return filepath.WalkDir(walkRoot(d.source), func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -55,6 +60,18 @@ func copySourceTree(d *Dir) error {
 			return copySourceFile(d, path, target)
 		}
 	})
+}
+
+// walkRoot returns dir with a trailing separator, so filepath.WalkDir
+// resolves a symlinked root through the link (its root Lstat then follows
+// it) instead of reporting the link itself and stopping. WalkDir joins every
+// child with filepath.Join, so the paths it hands out stay clean ("src/a").
+func walkRoot(dir string) string {
+	clean := filepath.Clean(dir)
+	if strings.HasSuffix(clean, string(filepath.Separator)) {
+		return clean // the filesystem root
+	}
+	return clean + string(filepath.Separator)
 }
 
 func copySourceDir(d *Dir, target string) error {
@@ -144,8 +161,8 @@ func createSourceDir(d *Dir, id, target string) error {
 // raw target against the SOURCE tree (sourceSymlinkTargetExists) and, when
 // it resolves there, mirrors link.Ensure's note flow itself
 // (noteSourceSymlinkDryRun). When the raw target is missing in the source
-// tree too, the link is dangling by construction and the delegation keeps
-// link.Ensure's documented refusal — identical in both modes, since nothing
+// tree too, the link is dangling by construction and the dry run returns
+// link.Ensure's documented refusal itself — identical in both modes, since nothing
 // ever materializes a target that has no source counterpart.
 //
 // Pre-existing walk-order limitation, unchanged here: the walk applies in
@@ -162,8 +179,14 @@ func copySourceSymlink(sourcePath, target string) error {
 
 	// Absolute raw targets are out of scope: link.Ensure's assert stats the
 	// raw path directly on the host, identically in both modes.
-	if resource.DryRun() && !filepath.IsAbs(rawTarget) &&
-		sourceSymlinkTargetExists(sourcePath, rawTarget) {
+	if resource.DryRun() && !filepath.IsAbs(rawTarget) {
+		if !sourceSymlinkTargetExists(sourcePath, rawTarget) {
+			// link.Ensure's dry run tolerates a missing target (an earlier
+			// resource may create it), but a source-tree link whose target
+			// has no source entry is dangling by construction: refuse it as
+			// the real run does.
+			return fmt.Errorf("symlink %s: refusing broken link to %q (target does not exist)", target, rawTarget)
+		}
 		return noteSourceSymlinkDryRun(target, rawTarget)
 	}
 
@@ -174,9 +197,12 @@ func copySourceSymlink(sourcePath, target string) error {
 // symlink at sourcePath resolves to an existing entry in the SOURCE tree.
 // Lstat (not Stat) is deliberate: each symlink entry of the tree is
 // recreated as a symlink judged independently, so a sibling that is itself
-// a symlink counts by its own entry, never by what it resolves to.
+// a symlink counts by its own entry, never by what it resolves to. The path
+// is concatenated, not filepath.Join'ed: Join cleans ".." lexically, while
+// the kernel (and link.Ensure's assert) follows it through a symlinked
+// directory of the source tree.
 func sourceSymlinkTargetExists(sourcePath, rawTarget string) bool {
-	_, err := os.Lstat(filepath.Join(filepath.Dir(sourcePath), rawTarget))
+	_, err := os.Lstat(filepath.Dir(sourcePath) + string(filepath.Separator) + rawTarget)
 	return err == nil
 }
 

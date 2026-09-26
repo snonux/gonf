@@ -72,17 +72,17 @@ func fakeFreeBSDSvc(running, enabled, probeErr, enabledErr, failAction, actionEr
 	}
 }
 
-// fakeNetBSDSvc fakes service(8) on NetBSD: [name status] and [-e name]
+// fakeNetBSDSvc fakes service(8) on NetBSD: [name onestatus] and [-e name]
 // probes report state; mutations are recorded and succeed.
 func fakeNetBSDSvc(running, enabled, probeErr, enabledErr, failAction, actionErr bool, calls *[]svcCall) func(string, ...string) (string, string, int, error) {
 	return func(bin string, args ...string) (string, string, int, error) {
 		*calls = append(*calls, svcCall{bin: bin, args: args})
-		probe := len(args) == 2 && (args[1] == "status" || args[0] == "-e")
+		probe := len(args) == 2 && (args[1] == "onestatus" || args[0] == "-e")
 		if probe {
-			if (args[1] == "status" && probeErr) || (args[0] == "-e" && enabledErr) {
+			if (args[1] == "onestatus" && probeErr) || (args[0] == "-e" && enabledErr) {
 				return "", "", -1, errors.New("exec: service not found")
 			}
-			if (args[1] == "status" && running) || (args[0] == "-e" && enabled) {
+			if (args[1] == "onestatus" && running) || (args[0] == "-e" && enabled) {
 				return "", "", 0, nil
 			}
 			return "", "", 1, nil
@@ -322,6 +322,140 @@ func TestApplySystemdFake(t *testing.T) {
 	}
 }
 
+// TestApplySystemdEnablementStates pins that the systemd backend acts on the
+// state systemctl is-enabled prints, not only its exit status: is-enabled
+// exits 0 for static, indirect, generated, alias and transient units, which
+// disable cannot change (it exits 0 and changes nothing), so NoService must
+// not disable them or it reports a change on every apply. enabled-runtime
+// is removed with disable --runtime. A present service never enables such a
+// unit either.
+func TestApplySystemdEnablementStates(t *testing.T) {
+	oldDry := resource.DryRun()
+	defer resource.SetDryRun(oldDry)
+	resource.SetDryRun(false)
+
+	tests := []struct {
+		name     string
+		svc      Service
+		state    string // is-enabled stdout; exit 0 unless "disabled"
+		want     [][]string
+		wantNote resource.Status
+	}{
+		{name: "absent static stays ok", svc: withAbsentSvc(Service{name: "dbus"}), state: "static", wantNote: resource.StatusOK},
+		{name: "absent indirect stays ok", svc: withAbsentSvc(Service{name: "dbus"}), state: "indirect", wantNote: resource.StatusOK},
+		{name: "absent generated stays ok", svc: withAbsentSvc(Service{name: "dbus"}), state: "generated", wantNote: resource.StatusOK},
+		{name: "absent alias stays ok", svc: withAbsentSvc(Service{name: "dbus"}), state: "alias", wantNote: resource.StatusOK},
+		{name: "absent transient stays ok", svc: withAbsentSvc(Service{name: "dbus"}), state: "transient", wantNote: resource.StatusOK},
+		{
+			name: "absent enabled-runtime disables the runtime enablement", svc: withAbsentSvc(Service{name: "dbus"}), state: "enabled-runtime",
+			want: [][]string{{"systemctl", "disable", "--runtime", "dbus"}}, wantNote: resource.StatusChanged,
+		},
+		{
+			name: "absent enabled disables", svc: withAbsentSvc(Service{name: "dbus"}), state: "enabled",
+			want: [][]string{{"systemctl", "disable", "dbus"}}, wantNote: resource.StatusChanged,
+		},
+		{name: "absent disabled stays ok", svc: withAbsentSvc(Service{name: "dbus"}), state: "disabled", wantNote: resource.StatusOK},
+		{
+			name: "present static only starts", svc: Service{name: "dbus"}, state: "static",
+			want: [][]string{{"systemctl", "start", "dbus"}}, wantNote: resource.StatusChanged,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resource.ResetReport()
+			var calls []svcCall
+			fake := func(bin string, args ...string) (string, string, int, error) {
+				calls = append(calls, svcCall{bin: bin, args: args})
+				switch {
+				case contains(args, "is-active"):
+					return "inactive\n", "", 3, nil
+				case contains(args, "is-enabled") && tt.state == "disabled":
+					return "disabled\n", "", 1, nil
+				case contains(args, "is-enabled"):
+					return tt.state + "\n", "", 0, nil
+				default:
+					return "", "", 0, nil
+				}
+			}
+			if err := tt.svc.applyWith(systemdBackend{client: systemd.NewClient(&runners.SystemdRunners{Run: fake})}); err != nil {
+				t.Fatalf("systemd applyWith: %v", err)
+			}
+			assertSvcActions(t, calls, tt.want, func(args []string) bool {
+				return contains(args, "is-active") || contains(args, "is-enabled")
+			})
+			assertSvcNote(t, tt.svc.name, tt.wantNote)
+		})
+	}
+}
+
+// TestApplyNetBSDDisabledRunningDaemon pins that the NetBSD backend uses the
+// one* rc.d directives. Its fake models NetBSD rc.subr (run_rc_command):
+// while the rcvar is not YES every plain directive, status included, exits 1
+// ("$sshd is not enabled"), and start of a running daemon exits 1 ("already
+// running?"). A daemon started by hand while disabled must still be seen as
+// running: NoService stops it, and Service enables it without a failing
+// start.
+func TestApplyNetBSDDisabledRunningDaemon(t *testing.T) {
+	oldDry := resource.DryRun()
+	defer resource.SetDryRun(oldDry)
+	resource.SetDryRun(false)
+
+	tests := []struct {
+		name        string
+		svc         Service
+		want        [][]string
+		wantRunning bool
+		wantFile    string
+	}{
+		{name: "absent stops it", svc: withAbsentSvc(Service{name: "sshd"}), want: [][]string{{netbsdService, "sshd", "onestop"}}},
+		{name: "present only enables it", svc: Service{name: "sshd"}, wantRunning: true, wantFile: "sshd=YES\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resource.ResetReport()
+			rcConfD := t.TempDir()
+			running := true
+			var calls []svcCall
+			run := func(bin string, args ...string) (string, string, int, error) {
+				calls = append(calls, svcCall{bin: bin, args: args})
+				if args[0] == "-e" {
+					return "", "", 1, nil // not enabled until the override is written
+				}
+				enabled := false
+				if data, err := os.ReadFile(filepath.Join(rcConfD, "sshd")); err == nil {
+					enabled = string(data) == "sshd=YES\n"
+				}
+				switch action, one := strings.CutPrefix(args[1], "one"); {
+				case !one && !enabled:
+					return "", "$sshd is not enabled", 1, nil
+				case action == "status" && !running, action == "start" && running:
+					return "", "", 1, nil
+				case action == "stop":
+					running = false
+				case action == "start":
+					running = true
+				}
+				return "", "", 0, nil
+			}
+			if err := tt.svc.applyWith(netbsdBackend{run: run, rcConfD: rcConfD}); err != nil {
+				t.Fatalf("netbsd applyWith: %v", err)
+			}
+			assertSvcActions(t, calls, tt.want, func(args []string) bool {
+				return args[0] == "-e" || args[1] == "onestatus"
+			})
+			if running != tt.wantRunning {
+				t.Errorf("daemon running = %v, want %v", running, tt.wantRunning)
+			}
+			if tt.wantFile != "" {
+				data, err := os.ReadFile(filepath.Join(rcConfD, "sshd"))
+				if err != nil || string(data) != tt.wantFile {
+					t.Errorf("rc.conf.d/sshd = %q, %v; want %q", data, err, tt.wantFile)
+				}
+			}
+		})
+	}
+}
+
 // TestApplyFreeBSDFake pins the FreeBSD service(8) backend: status/enabled
 // probes gate enable/start or stop/disable, and reload precedes restart. The
 // fake runner is handed to the backend itself; no package seam is patched.
@@ -491,7 +625,7 @@ func TestApplyNetBSDFake(t *testing.T) {
 		{
 			name:     "present enables via rc.conf.d and starts",
 			svc:      Service{name: "sshd"},
-			wantSvc:  [][]string{{netbsdService, "sshd", "start"}},
+			wantSvc:  [][]string{{netbsdService, "sshd", "onestart"}},
 			wantNote: resource.StatusChanged,
 			wantFile: "sshd=YES\n",
 		},
@@ -499,7 +633,7 @@ func TestApplyNetBSDFake(t *testing.T) {
 			name:     "present starts when enabled but stopped",
 			svc:      Service{name: "sshd"},
 			state:    svcState{enabled: true},
-			wantSvc:  [][]string{{netbsdService, "sshd", "start"}},
+			wantSvc:  [][]string{{netbsdService, "sshd", "onestart"}},
 			wantNote: resource.StatusChanged,
 		},
 		{
@@ -513,21 +647,21 @@ func TestApplyNetBSDFake(t *testing.T) {
 			name:     "reload wins while running",
 			svc:      withReloadSvc(Service{name: "sshd"}),
 			state:    svcState{running: true, enabled: true},
-			wantSvc:  [][]string{{netbsdService, "sshd", "reload"}},
+			wantSvc:  [][]string{{netbsdService, "sshd", "onereload"}},
 			wantNote: resource.StatusChanged,
 		},
 		{
 			name:     "restart when running without reload",
 			svc:      withRestartSvc(Service{name: "sshd"}),
 			state:    svcState{running: true, enabled: true},
-			wantSvc:  [][]string{{netbsdService, "sshd", "restart"}},
+			wantSvc:  [][]string{{netbsdService, "sshd", "onerestart"}},
 			wantNote: resource.StatusChanged,
 		},
 		{
 			name:     "absent stops and disables via rc.conf.d",
 			svc:      withAbsentSvc(Service{name: "sshd"}),
 			state:    svcState{running: true, enabled: true},
-			wantSvc:  [][]string{{netbsdService, "sshd", "stop"}},
+			wantSvc:  [][]string{{netbsdService, "sshd", "onestop"}},
 			wantNote: resource.StatusChanged,
 			wantFile: "sshd=NO\n",
 		},
@@ -547,7 +681,7 @@ func TestApplyNetBSDFake(t *testing.T) {
 			name:    "probe start failure is an error",
 			svc:     Service{name: "sshd"},
 			state:   svcState{probeErr: true},
-			wantErr: "service sshd status",
+			wantErr: "service sshd onestatus",
 		},
 		{
 			name:    "enabled probe start failure is an error",
@@ -559,15 +693,15 @@ func TestApplyNetBSDFake(t *testing.T) {
 			name:    "action start failure is an error",
 			svc:     Service{name: "sshd"},
 			state:   svcState{actionErr: true},
-			wantSvc: [][]string{{netbsdService, "sshd", "start"}},
-			wantErr: "service sshd start: exec: service not found",
+			wantSvc: [][]string{{netbsdService, "sshd", "onestart"}},
+			wantErr: "service sshd onestart: exec: service not found",
 		},
 		{
 			name:    "action failure is an error",
 			svc:     Service{name: "sshd"},
 			state:   svcState{failAction: true},
-			wantSvc: [][]string{{netbsdService, "sshd", "start"}},
-			wantErr: "service sshd start failed (exit 3)",
+			wantSvc: [][]string{{netbsdService, "sshd", "onestart"}},
+			wantErr: "service sshd onestart failed (exit 3)",
 		},
 	}
 
@@ -593,7 +727,7 @@ func TestApplyNetBSDFake(t *testing.T) {
 			}
 
 			assertSvcActions(t, calls, tt.wantSvc, func(args []string) bool {
-				return len(args) == 2 && (args[1] == "status" || args[0] == "-e")
+				return len(args) == 2 && (args[1] == "onestatus" || args[0] == "-e")
 			})
 			assertSvcNote(t, tt.svc.name, tt.wantNote)
 

@@ -174,10 +174,14 @@ func TestBackendCommands(t *testing.T) {
 		want []string // bin followed by args
 	}{
 		{"dnf install", dnfBackend{}.installCmd("x"), []string{"dnf", "install", "-y", "x"}},
-		{"dnf upgrade", dnfBackend{}.upgradeCmd("x", false), []string{"dnf", "update", "-y", "x"}},
+		// dnf update and pkg upgrade cannot install, so a missing package
+		// is installed instead (like pkg_add below).
+		{"dnf upgrade installed", dnfBackend{}.upgradeCmd("x", true), []string{"dnf", "update", "-y", "x"}},
+		{"dnf upgrade missing", dnfBackend{}.upgradeCmd("x", false), []string{"dnf", "install", "-y", "x"}},
 		{"dnf remove", dnfBackend{}.removeCmd("x"), []string{"dnf", "remove", "-y", "x"}},
 		{"freebsd install", freebsdBackend{}.installCmd("x"), []string{"pkg", "install", "-y", "x"}},
-		{"freebsd upgrade", freebsdBackend{}.upgradeCmd("x", false), []string{"pkg", "upgrade", "-y", "x"}},
+		{"freebsd upgrade installed", freebsdBackend{}.upgradeCmd("x", true), []string{"pkg", "upgrade", "-y", "x"}},
+		{"freebsd upgrade missing", freebsdBackend{}.upgradeCmd("x", false), []string{"pkg", "install", "-y", "x"}},
 		{"freebsd remove", freebsdBackend{}.removeCmd("x"), []string{"pkg", "remove", "-y", "x"}},
 		{"netbsd install", netbsdBackend{}.installCmd("x"), []string{netbsdPkgin, "-y", "install", "x"}},
 		{"netbsd upgrade", netbsdBackend{}.upgradeCmd("x", true), []string{netbsdPkgin, "-y", "install", "x"}},
