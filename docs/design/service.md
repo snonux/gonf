@@ -75,11 +75,25 @@ Service("nsd", WithFlags("-c /var/nsd/etc/nsd.conf"))
   fires the restart too.
 - FreeBSD and NetBSD treat an unset variable as empty flags. NetBSD refuses
   a differing `NAME_flags` in `/etc/rc.conf.d/NAME` (it would override
-  `/etc/rc.conf`), and rewrites an assignment it cannot evaluate
-  (expansions, several statements). It reads the files as sh(1) does, one
-  logical line at a time: an assignment spanning several lines (a quoted
-  newline, a backslash-newline) is evaluated and replaced as a whole, and a
-  file whose quote never closes is refused with its line named, unchanged.
+  `/etc/rc.conf`).
+- NetBSD reads the files as sh(1) does (quotes, `$'...'`, nested `$(...)`,
+  `${...}` and backquotes, backslash-newlines, comments, here-documents),
+  and fails closed: anything it does not fully understand is an error
+  naming the file and line, and rc.conf is left untouched. It finds every
+  assignment, also after `;`, after other assignments on a continued line,
+  and behind `export`/`readonly`; one it cannot tell takes effect (inside
+  `if`/`while`/`case`/`{...}`/a subshell or function, in an `&&`/`||`
+  list, a pipeline or a background job, in front of a command, via `eval`
+  or `${NAME_flags:=...}`) is refused. A differing
+  value is replaced with one `NAME_flags='FLAGS'` line only when the
+  assignment is alone on its logical line; its lines (all of them, for a
+  value spanning several) are replaced and every other line is kept byte
+  for byte. It refuses to rewrite an assignment sharing its logical line
+  with other shell text (`NAME_flags=-4; NAME=YES`), or spanning several
+  lines with a value it cannot evaluate (a substitution). A single-line
+  value it cannot evaluate (`NAME_flags="$X"`) never matches and is
+  rewritten. A `case` or a here-document inside `$(...)` is not supported
+  and refused.
 - `WithFlags` on `NoService`, or with a line break, is a declaration error.
 - A plan with `WithFlags` declares schema 25.
 

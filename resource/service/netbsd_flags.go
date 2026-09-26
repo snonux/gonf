@@ -9,6 +9,10 @@ package service
 // flagsMatch reads them in that precedence; setFlags writes /etc/rc.conf
 // only. An assignment in /etc/rc.conf.d/NAME that differs is refused
 // instead of shadowed, since writing rc.conf could never take effect.
+//
+// The files are read as sh(1) reads them (rcconf_lex.go, rcconf.go), and
+// the edit fails closed: whatever the parser does not fully understand is
+// an error naming the file and line, never deleted or rewritten.
 
 import (
 	"errors"
@@ -29,8 +33,8 @@ const (
 var _ flagger = netbsdBackend{}
 
 // flagsMatch reports whether the effective NAME_flags value equals want.
-// An assignment it cannot parse (an expansion, a command substitution, a
-// second statement on the line) never matches, so setFlags rewrites it.
+// A value it cannot evaluate (an expansion, a command substitution) never
+// matches, so setFlags rewrites it when that is safe.
 func (b netbsdBackend) flagsMatch(u unit, want string) (bool, error) {
 	name, err := flagsVar(u.name)
 	if err != nil {
@@ -62,8 +66,10 @@ func (b netbsdBackend) flagsMatch(u unit, want string) (bool, error) {
 
 // setFlags replaces every NAME_flags assignment in rc.conf with one
 // single-quoted NAME_flags='FLAGS' line, at the first assignment's place,
-// or appends it when there is none. The file is replaced atomically and
-// keeps its mode.
+// or appends it when there is none. It refuses, leaving rc.conf alone, when
+// replacing an assignment's lines could drop or orphan other shell text
+// (see replaceRcAssignment). The file is replaced atomically and keeps its
+// mode.
 func (b netbsdBackend) setFlags(u unit, flags string) error {
 	name, err := flagsVar(u.name)
 	if err != nil {
@@ -75,7 +81,7 @@ func (b netbsdBackend) setFlags(u unit, flags string) error {
 	}
 	updated, err := replaceRcAssignment(content, name, name+"="+shellQuote(flags))
 	if err != nil {
-		return fmt.Errorf("parse %s: %w", b.rcConf, err)
+		return fmt.Errorf("rewrite %s: %w", b.rcConf, err)
 	}
 	return writeFileAtomic(b.rcConf, []byte(updated), mode)
 }
@@ -93,9 +99,10 @@ type rcValue struct {
 }
 
 // lastRcAssignment returns the last assignment to name in the rc.conf-style
-// file at path. A missing file has no assignment. An assignment may span
-// several physical lines (a multi-line quoted value, a backslash-newline);
-// a quote left open at the end of the file is an error naming its line.
+// file at path. A missing file has no assignment. The file is read as
+// sh(1) reads it (see rcconf.go): an assignment may span several physical
+// lines or follow others on its line, and text it cannot bound, or an
+// assignment whose effect it cannot tell, is an error naming the line.
 func lastRcAssignment(path, name string) (rcValue, bool, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -104,47 +111,55 @@ func lastRcAssignment(path, name string) (rcValue, bool, error) {
 	if err != nil {
 		return rcValue{}, false, fmt.Errorf("read %s: %w", path, err)
 	}
-	statements, err := splitRcStatements(rcLines(string(data)))
+	found, err := findRcAssignments(string(data), name)
 	if err != nil {
 		return rcValue{}, false, fmt.Errorf("parse %s: %w", path, err)
 	}
-	var last rcValue
-	found := false
-	for _, st := range statements {
-		if raw, ok := rcAssignment(st.text, name); ok {
-			value, parsed := parseShellWord(raw)
-			last, found = rcValue{value: value, parsed: parsed}, true
-		}
+	if len(found) == 0 {
+		return rcValue{}, false, nil
 	}
-	return last, found, nil
-}
-
-// rcAssignment returns the text after "name=" when statement assigns name.
-func rcAssignment(statement, name string) (string, bool) {
-	return strings.CutPrefix(strings.TrimLeft(statement, " \t"), name+"=")
+	value, parsed := parseShellWord(found[len(found)-1].value)
+	return rcValue{value: value, parsed: parsed}, true, nil
 }
 
 // replaceRcAssignment rewrites content so that its only assignment to name
-// is assignment, placed where the first one was (or appended). Every
-// physical line of a multi-line assignment is replaced, so no continuation
-// line is left behind; content with a quote left open is refused unchanged.
+// is assignment, placed where the first one was (or appended). It fails
+// closed: every other line is kept byte for byte, and it refuses (leaving
+// content to the caller unchanged) when an assignment shares its logical
+// line with other shell text, or spans several physical lines with a value
+// it cannot evaluate, since replacing its lines could then drop or orphan
+// text it does not understand.
 func replaceRcAssignment(content, name, assignment string) (string, error) {
-	lines := rcLines(content)
-	statements, err := splitRcStatements(lines)
+	found, err := findRcAssignments(content, name)
 	if err != nil {
 		return "", err
 	}
+	replaced := make(map[int]int, len(found)) // first line -> end line
+	for _, a := range found {
+		if !a.alone {
+			return "", fmt.Errorf("line %d: %s shares its line with other shell text, which a rewrite would drop: %w",
+				a.line+1, name, errRcUnmanaged)
+		}
+		if _, parsed := parseShellWord(a.value); !parsed && a.end-a.first > 1 {
+			return "", fmt.Errorf("line %d: %s spans lines %d-%d with a value WithFlags cannot evaluate: %w",
+				a.line+1, name, a.first+1, a.end, errRcUnmanaged)
+		}
+		replaced[a.first] = a.end
+	}
+	lines := rcLines(content)
 	out := make([]string, 0, len(lines)+1)
 	placed := false
-	for _, st := range statements {
-		if _, ok := rcAssignment(st.text, name); !ok {
-			out = append(out, lines[st.first:st.end]...)
+	for i := 0; i < len(lines); i++ {
+		end, ok := replaced[i]
+		if !ok {
+			out = append(out, lines[i])
 			continue
 		}
 		if !placed {
 			out = append(out, assignment)
 			placed = true
 		}
+		i = end - 1
 	}
 	if !placed {
 		out = append(out, assignment)
@@ -159,116 +174,6 @@ func rcLines(content string) []string {
 		return nil
 	}
 	return strings.Split(strings.TrimSuffix(content, "\n"), "\n")
-}
-
-// errUnterminatedQuote reports an rc.conf statement whose quote is still
-// open at the end of the file: sh(1) refuses the file, and rewriting part
-// of such a statement could only shift the damage elsewhere.
-var errUnterminatedQuote = errors.New("unterminated quote")
-
-// rcStatement is one logical line of an rc.conf-style file: the physical
-// lines [first, end) that sh(1) reads as one, joined with newlines.
-type rcStatement struct {
-	first, end int
-	text       string
-}
-
-// splitRcStatements groups lines into the logical lines sh(1) reads: a
-// statement continues onto the next physical line while a quote is open
-// or the line ends in an unquoted backslash. Comments are skipped while
-// scanning, so an apostrophe in one never opens a quote.
-func splitRcStatements(lines []string) ([]rcStatement, error) {
-	var (
-		statements []rcStatement
-		scan       rcScanner
-		first      int
-	)
-	for i, line := range lines {
-		if !scan.open() {
-			first, scan.wordStart = i, true
-		}
-		scan.scanLine(line)
-		if !scan.open() {
-			statements = append(statements, rcStatement{first: first, end: i + 1, text: strings.Join(lines[first:i+1], "\n")})
-		}
-	}
-	if scan.quote != rcUnquoted {
-		return nil, fmt.Errorf("line %d: %w", first+1, errUnterminatedQuote)
-	}
-	if scan.continued { // a backslash-newline right before EOF: sh drops it
-		statements = append(statements, rcStatement{first: first, end: len(lines), text: strings.Join(lines[first:], "\n")})
-	}
-	return statements, nil
-}
-
-// rcQuote is the quoting context an rcScanner is in.
-type rcQuote int
-
-const (
-	rcUnquoted rcQuote = iota
-	rcSingleQuoted
-	rcDoubleQuoted
-)
-
-// rcScanner tracks sh(1) quoting across physical lines, just far enough to
-// tell where a statement ends: the open quote, whether the last line ended
-// in a backslash-newline, and whether the next character starts a word (so
-// a '#' there starts a comment).
-type rcScanner struct {
-	quote     rcQuote
-	continued bool
-	wordStart bool
-}
-
-// open reports whether the statement scanned so far goes on past the end
-// of the last scanned line.
-func (s *rcScanner) open() bool { return s.quote != rcUnquoted || s.continued }
-
-// scanLine advances the scanner over one physical line.
-func (s *rcScanner) scanLine(line string) {
-	s.continued = false
-	for i := 0; i < len(line); i++ {
-		switch c := line[i]; {
-		case s.quote == rcSingleQuoted:
-			if c == '\'' {
-				s.quote = rcUnquoted
-			}
-		case s.quote == rcDoubleQuoted:
-			if c == '"' {
-				s.quote = rcUnquoted
-			} else if c == '\\' {
-				i++ // the escaped character (or newline) cannot close the quote
-			}
-		case c == '\\' && i+1 == len(line):
-			s.continued = true // backslash-newline: the statement goes on
-			return
-		case c == '\\':
-			i++ // the escaped character is literal
-			s.wordStart = false
-		case c == '#' && s.wordStart:
-			return // a comment runs to the end of the line
-		default:
-			s.scanUnquoted(c)
-		}
-	}
-	if s.quote == rcUnquoted {
-		s.wordStart = true // an unquoted newline separates words
-	}
-}
-
-// scanUnquoted handles an unquoted character other than a backslash or a
-// comment-starting '#'.
-func (s *rcScanner) scanUnquoted(c byte) {
-	switch c {
-	case '\'':
-		s.quote, s.wordStart = rcSingleQuoted, false
-	case '"':
-		s.quote, s.wordStart = rcDoubleQuoted, false
-	case ' ', '\t', ';', '&', '|', '(', ')', '<', '>':
-		s.wordStart = true
-	default:
-		s.wordStart = false
-	}
 }
 
 // readRcConf returns rc.conf's content and mode; a missing file is empty
