@@ -48,6 +48,10 @@ type Host struct {
 	GOOS     string
 	GOARCH   string
 	GonfPath string
+	// HostnameMatch is the hostname fragment OnCluster, EachHost and
+	// ForHosts guard this host's work on (hostname_contains, case
+	// insensitive). Empty means the inventory name (HostnameMatchFor).
+	HostnameMatch string
 	// PlanRecipient is this host's age1pq recipient for `gonf plan -seal
 	// -for` (task 4b2, w82 phase 2, docs/design/plan-encryption.md "Keys"): the
 	// destination decrypts a plan sealed to it with the matching identity
@@ -133,6 +137,18 @@ func AddHost(name string, opts ...HostOption) (Host, error) {
 	}
 	hosts[name] = rec
 	return rec, nil
+}
+
+// HostnameMatchFor returns the hostname fragment that selects host name on
+// a destination: its WithHostnameMatch, else the name itself (also for an
+// unregistered name).
+func HostnameMatchFor(name string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	if rec, ok := hosts[name]; ok && rec.HostnameMatch != "" {
+		return rec.HostnameMatch
+	}
+	return name
 }
 
 // SetHostValue stores value under key on an already-registered host (same

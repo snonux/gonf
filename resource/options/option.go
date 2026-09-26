@@ -641,6 +641,25 @@ func WithContent(content string) fileOption {
 	})
 }
 
+// WithContentFrom is WithContent for content produced by a function that
+// can fail, typically a template render:
+//
+//	File("/etc/httpd.conf", WithContentFrom(renderHTTPD(data)), RootOwned)
+//
+// Go passes both of render's results straight through. A non-nil err
+// refuses the resource with that error (a declaration error, like any other
+// option misuse), so nothing depending on it applies; a nil err sets content
+// exactly as WithContent does.
+func WithContentFrom(content string, err error) fileOption {
+	return fileOption(func(target any) {
+		if err != nil {
+			misuse(target, fmt.Errorf("WithContentFrom: %w", err))
+			return
+		}
+		requires(target, "WithContentFrom", func(r Contented) { r.SetContent(content) })
+	})
+}
+
 // WithLines appends each line of file content when it is missing.
 func WithLines(lines ...string) fileOption {
 	return fileOption(func(target any) {
@@ -695,6 +714,47 @@ func WithKeyedLine(key, line string) fileOption {
 	return fileOption(func(target any) {
 		requires(target, "WithKeyedLine", func(r KeyedLineSettable) { r.SetKeyedLine(key, line) })
 	})
+}
+
+// WithShellVar owns the shell variable assignment key="value" of a shared
+// sh-style file (rc.conf, rc.conf.local, loader.conf, periodic.conf): it
+// is WithKeyedLine(key+"=", key+`="`+value+`"`), with the characters sh
+// would interpret inside double quotes (\ " $ `) escaped with a backslash:
+//
+//	File("/etc/rc.conf", WithShellVar("vm_enable", "YES"), WithShellVar("vm_dir", "zfs:zroot/bhyve"))
+//
+// An existing key= line (whatever its quoting) is replaced in place, a
+// missing one is appended. key must be a shell variable name ([A-Za-z_]
+// followed by [A-Za-z0-9_.]; the dot for loader.conf's kern.x names);
+// anything else is option misuse.
+func WithShellVar(key, value string) fileOption {
+	return fileOption(func(target any) {
+		if !validShellVarName(key) {
+			misuse(target, fmt.Errorf("WithShellVar: %q is not a shell variable name", key))
+			return
+		}
+		line := key + `="` + shellVarEscaper.Replace(value) + `"`
+		requires(target, "WithShellVar", func(r KeyedLineSettable) { r.SetKeyedLine(key+"=", line) })
+	})
+}
+
+// shellVarEscaper escapes what sh expands or ends inside double quotes.
+var shellVarEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`, `$`, `\$`, "`", "\\`")
+
+// validShellVarName reports whether key is a WithShellVar key.
+func validShellVarName(key string) bool {
+	if key == "" {
+		return false
+	}
+	for i, r := range key {
+		switch {
+		case r == '_', r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z':
+		case i > 0 && (r >= '0' && r <= '9' || r == '.'):
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // WithBlock owns a managed block of a shared file: the lines between the

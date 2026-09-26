@@ -9,11 +9,26 @@ import (
 
 	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/internal/inventory"
-	"github.com/snonux/gonf/plan"
 )
 
-// RegisterOption configures RegisterMethods.
-type RegisterOption func(*registerConfig)
+// RegisterOption configures RegisterMethods: WithPrefix, OnCluster,
+// WithCluster, WithGroupWhen, or any TaskOption, which applies to every
+// method of the call exactly like WithGroupWhen(opt):
+//
+//	RegisterMethods(pkg.Pkg{}, WhenProfile("fedora"))
+type RegisterOption interface {
+	applyRegister(c *registerConfig)
+}
+
+// registerOptionFunc is the RegisterOption of a plain config function.
+type registerOptionFunc func(*registerConfig)
+
+func (f registerOptionFunc) applyRegister(c *registerConfig) { f(c) }
+
+// applyRegister makes a TaskOption a RegisterOption: WithGroupWhen(o).
+func (o TaskOption) applyRegister(c *registerConfig) {
+	c.groupWhen = append(c.groupWhen, o)
+}
 
 type registerConfig struct {
 	prefix string
@@ -34,10 +49,10 @@ type registerConfig struct {
 // frontends.Web and openbsd.Unattended); WithPrefix("") registers the bare
 // method names.
 func WithPrefix(prefix string) RegisterOption {
-	return func(c *registerConfig) {
+	return registerOptionFunc(func(c *registerConfig) {
 		c.prefix = prefix
 		c.prefixSet = true
-	}
+	})
 }
 
 // DefaultPrefix returns the task-name prefix RegisterMethods uses for v when
@@ -51,6 +66,7 @@ func WithPrefix(prefix string) RegisterOption {
 //	home.HomeTasks     → "home_"
 //	tasks.HomeTasks    → "tasks_home_"
 //	main.Backup        → "backup_"
+//	rnodes.WireGuard   → "rnodes_wireguard_"
 //
 // The package name keeps same-named structs of different packages
 // (openbsd.Unattended, freebsd.Unattended) apart.
@@ -72,12 +88,16 @@ func DefaultPrefix(v any) string {
 	return prefixFor(pkg, typ)
 }
 
+// prefixWords are product names spelled in CamelCase that stay one word in
+// a derived prefix: WireGuard → "wireguard_", not "wire_guard_".
+var prefixWords = strings.NewReplacer("WireGuard", "Wireguard")
+
 // prefixFor is DefaultPrefix over a package name and a type name.
 func prefixFor(pkg, typ string) string {
 	if pkg == "main" {
 		pkg = ""
 	}
-	typ = camelToSnake(strings.TrimSuffix(typ, "Tasks"))
+	typ = camelToSnake(prefixWords.Replace(strings.TrimSuffix(typ, "Tasks")))
 	if typ == pkg {
 		typ = ""
 	}
@@ -95,7 +115,7 @@ func prefixFor(pkg, typ string) string {
 // this call so recipes can use ClusterHosts() / MustHostValue without naming
 // the cluster again. The cluster must already be registered.
 func WithCluster(name string) RegisterOption {
-	return func(c *registerConfig) { c.cluster = name }
+	return registerOptionFunc(func(c *registerConfig) { c.cluster = name })
 }
 
 // OnCluster is WithCluster plus a destination guard: every method registered
@@ -125,19 +145,19 @@ func WithCluster(name string) RegisterOption {
 // WithCluster naming another cluster, is a declaration error and registers
 // nothing of v.
 func OnCluster(name string) RegisterOption {
-	return func(c *registerConfig) {
+	return registerOptionFunc(func(c *registerConfig) {
 		c.cluster = name
 		c.guardCluster = name
-	}
+	})
 }
 
 // WithGroupWhen applies TaskOptions (typically When*) to every method
 // registered in the call. Prefer WhenProfile / WhenLinux so plan recording
 // can emit when_begin recipes.
 func WithGroupWhen(opts ...TaskOption) RegisterOption {
-	return func(c *registerConfig) {
+	return registerOptionFunc(func(c *registerConfig) {
 		c.groupWhen = append(c.groupWhen, opts...)
-	}
+	})
 }
 
 // RegisterMethods queues tasks from exported methods on v (struct or pointer).
@@ -195,13 +215,55 @@ func RegisterMethods(v any, opts ...RegisterOption) {
 	registerMethodTasks(rv, rt, cfg)
 }
 
+// RegisterOnCluster registers several structs on one cluster: it is
+// RegisterMethods(v, OnCluster(cluster)) for every struct v, each under its
+// own DefaultPrefix, so a cluster's recipe groups read as one list:
+//
+//	RegisterOnCluster(cluster.NameFreeBSD,
+//		freebsd.Carp{}, freebsd.NFS{}, freebsd.Relayd{}, freebsd.Zrepl{})
+//
+// An item that is a RegisterOption (WithPrefix aside) or a TaskOption
+// applies to every struct of the call, wherever it appears in the list:
+//
+//	RegisterOnCluster(cluster.NameFreeBSD, freebsd.Debug{}, Operational())
+//
+// WithPrefix is refused (a declaration error, nothing registered): a prefix
+// shared by several structs belongs on each RegisterMethods call, and one
+// per struct is the default already. Any other item is a struct or pointer
+// to one, checked as RegisterMethods checks it.
+func RegisterOnCluster(cluster string, items ...any) {
+	var opts []RegisterOption
+	var structs []any
+	for _, item := range items {
+		if o, ok := item.(RegisterOption); ok {
+			opts = append(opts, o)
+			continue
+		}
+		structs = append(structs, item)
+	}
+	var probe registerConfig
+	for _, o := range opts {
+		o.applyRegister(&probe)
+	}
+	if probe.prefixSet {
+		declerr.Report(fmt.Errorf("RegisterOnCluster(%q): WithPrefix is not allowed; use RegisterMethods for a shared prefix", cluster))
+		return
+	}
+	opts = append(opts, OnCluster(cluster))
+	for _, v := range structs {
+		RegisterMethods(v, opts...)
+	}
+}
+
 // registerConfigFor applies opts and resolves OnCluster's guard into
 // groupWhen, so every method of the call carries it. An unknown OnCluster
 // cluster, or one contradicting WithCluster, is returned as an error.
 func registerConfigFor(opts []RegisterOption) (registerConfig, error) {
 	cfg := registerConfig{}
 	for _, o := range opts {
-		o(&cfg)
+		if o != nil {
+			o.applyRegister(&cfg)
+		}
 	}
 	if cfg.guardCluster == "" {
 		return cfg, nil
@@ -228,13 +290,17 @@ func clusterGuard(name string) (TaskOption, error) {
 	if !ok {
 		return nil, fmt.Errorf("Cluster %q is not registered", name)
 	}
-	pred := plan.Predicate{Fact: "hostname_contains"}
-	if len(rec.Hosts) == 1 {
-		pred.Eq = rec.Hosts[0]
-	} else {
-		pred.In = append([]string(nil), rec.Hosts...)
+	matches := make([]string, len(rec.Hosts))
+	for i, h := range rec.Hosts {
+		matches[i] = hostnameMatch(h)
 	}
-	return func(c *taskCandidate) { c.planWhen = append(c.planWhen, pred) }, nil
+	return WhenHostnameIn(matches...), nil
+}
+
+// hostnameMatch is the hostname fragment selecting inventory host name on a
+// destination (WithHostnameMatch, else the name).
+func hostnameMatch(name string) string {
+	return inventory.HostnameMatchFor(name)
 }
 
 // registerReceiver returns the addressable receiver RegisterMethods reads
@@ -308,7 +374,9 @@ func registerMethodTasks(rv reflect.Value, rt reflect.Type, cfg registerConfig) 
 			declerr.Report(err)
 			continue
 		}
-		Task(cfg.prefix+camelToSnake(name), resolveDesc(rv, name), method.Interface().(func()), taskOpts...)
+		task := cfg.prefix + camelToSnake(name)
+		noteMethodTask(rt, name, task)
+		Task(task, resolveDesc(rv, name), method.Interface().(func()), taskOpts...)
 	}
 }
 

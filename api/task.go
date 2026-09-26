@@ -206,6 +206,31 @@ func WhenHostnameContains(substr string) TaskOption {
 	}
 }
 
+// WhenHostnameIn guards a task to the destinations whose hostname contains
+// any of hosts (case insensitive), the multi-host WhenHostnameContains: a
+// task of an OnCluster struct that applies to only part of the cluster
+// narrows with it in its WhenX companion instead of wrapping its body:
+//
+//	func (Carp) WhenFailback() TaskOption { return WhenHostnameIn("f0") }
+//	func (Carp) WhenScript() TaskOption   { return WhenHostnameIn("f0", "f1") }
+//
+// It records the same predicate OnCluster does (Eq for one host, In for
+// several), travels in the plan and is evaluated on each destination. It
+// adds to OnCluster's guard, so the task applies where both hold. No hosts
+// is a declaration error.
+func WhenHostnameIn(hosts ...string) TaskOption {
+	if len(hosts) == 0 {
+		declerr.Report(fmt.Errorf("WhenHostnameIn: no hosts"))
+	}
+	pred := plan.Predicate{Fact: "hostname_contains"}
+	if len(hosts) == 1 {
+		pred.Eq = hosts[0]
+	} else {
+		pred.In = append([]string(nil), hosts...)
+	}
+	return func(c *taskCandidate) { c.planWhen = append(c.planWhen, pred) }
+}
+
 // Task queues a named unit of work for activation. Call from init() or
 // RegisterMethods. An empty name, a nil fn or a duplicate name — tasks,
 // aggregates and aliases share one namespace — is registration-time misuse,
@@ -396,6 +421,7 @@ func ResetTasks() {
 	tasks = map[string]task{}
 	activated = false
 	resetTaskCluster()
+	resetMethodTasks()
 }
 
 // activateLocked rebuilds the active task map. Real tasks are activated by

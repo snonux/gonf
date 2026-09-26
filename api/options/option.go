@@ -152,6 +152,11 @@ var (
 	WithValidation   = resourceoptions.WithValidation
 	WithSourceBase   = resourceoptions.WithSourceBase
 	WithContent      = resourceoptions.WithContent
+	WithContentFrom  = resourceoptions.WithContentFrom
+	WithShellVar     = resourceoptions.WithShellVar
+	RootOwned        = resourceoptions.RootOwned
+	RootExec         = resourceoptions.RootExec
+	RootPrivate      = resourceoptions.RootPrivate
 	WithLines        = resourceoptions.WithLines
 	WithoutLines     = resourceoptions.WithoutLines
 	WithLine         = resourceoptions.WithLine
