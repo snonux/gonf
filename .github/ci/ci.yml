@@ -1,0 +1,120 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+# Each job's logic lives in .github/ci/*.sh, so it can change without
+# touching this file.
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        # gonf and conf are checked out side by side (see checkout-conf.sh).
+        working-directory: gonf
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: gonf
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: gonf/go.mod
+          cache-dependency-path: gonf/go.sum
+      - name: Check out the conf consumer
+        run: .github/ci/checkout-conf.sh "${{ github.head_ref || github.ref_name }}"
+      - name: Lint
+        run: |
+          # Mirrors Magefile.go's Lint target: gofmt formatting check, go
+          # vet, then staticcheck (pinned via the "tool" line in go.mod, so
+          # "go tool staticcheck" resolves the same version as local runs).
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt -l found unformatted files (run 'gofmt -w'):"
+            echo "$unformatted"
+            exit 1
+          fi
+          go vet ./...
+          go tool staticcheck ./...
+      - name: Unit tests
+        run: .github/ci/test.sh
+      - name: Plan codec coverage gate
+        run: |
+          go test ./plan/ -coverprofile=/tmp/plan.cov -count=1
+          # Average statement coverage of codec.go + types.go must be >= 90%.
+          avg=$(go tool cover -func=/tmp/plan.cov | awk '
+            /\/plan\/codec\.go:/ || /\/plan\/types\.go:/ {
+              gsub(/%/,"",$NF); sum+=$NF; n++
+            }
+            END { if (n==0) { print "0"; exit 1 } printf "%.1f", sum/n }
+          ')
+          echo "plan codec coverage=${avg}%"
+          awk -v t="$avg" 'BEGIN { exit !(t+0 >= 90) }'
+      - name: Plan fuzz (30s each)
+        env:
+          GONF_FUZZTIME: 30s
+        run: |
+          for t in FuzzDecodeOp FuzzDecodePlan FuzzRoundTripOpJSON; do
+            echo "fuzz $t"
+            go test ./plan/ -fuzz="$t" -fuzztime="${GONF_FUZZTIME}"
+          done
+
+  linux-live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: .github/ci/linux-live.sh
+
+  remote-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: .github/ci/remote-smoke.sh
+
+  fedora:
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - run: dnf install -y git
+      - uses: actions/checkout@v4
+      - run: .github/ci/fedora.sh
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test -count=1 ./...
+
+  bsd:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [freebsd, openbsd, netbsd]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - if: matrix.os == 'freebsd'
+        uses: vmactions/freebsd-vm@v1
+        with:
+          usesh: true
+          run: sh .github/ci/bsd-test.sh
+      - if: matrix.os == 'openbsd'
+        uses: vmactions/openbsd-vm@v1
+        with:
+          usesh: true
+          run: sh .github/ci/bsd-test.sh
+      - if: matrix.os == 'netbsd'
+        uses: vmactions/netbsd-vm@v1
+        with:
+          usesh: true
+          run: sh .github/ci/bsd-test.sh
