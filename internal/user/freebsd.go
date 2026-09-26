@@ -8,9 +8,14 @@ import (
 	"strings"
 )
 
-// freeBSDNoUserExit is sysexits.h's EX_NOUSER. pw(8) uses it when usershow or
-// groupshow cannot find the requested database entry.
+// freeBSDNoUserExit is sysexits.h's EX_NOUSER. pw(8) uses it when usershow
+// cannot find the requested account.
 const freeBSDNoUserExit = 67
+
+// freeBSDDataErrExit is sysexits.h's EX_DATAERR. pw(8) groupshow exits with
+// it, printing "unknown group", when the group does not exist; the message
+// tells that apart from every other data error.
+const freeBSDDataErrExit = 65
 
 // FreeBSD reconciles DesiredUser values with FreeBSD's pw(8) utility. It
 // creates only missing groups and users, and adds only missing supplementary
@@ -136,7 +141,8 @@ func (b FreeBSD) addUser(want DesiredUser) error {
 }
 
 // pwShow runs pw <show> -n name (usershow or groupshow) and returns the
-// record it printed. EX_NOUSER means the entry does not exist.
+// record it printed. EX_NOUSER, or groupshow's EX_DATAERR "unknown group",
+// means the entry does not exist.
 func (b FreeBSD) pwShow(show, name string) (string, bool, error) {
 	stdout, stderr, code, err := b.run("pw", show, "-n", name)
 	if err != nil {
@@ -147,6 +153,11 @@ func (b FreeBSD) pwShow(show, name string) (string, bool, error) {
 		return stdout, true, nil
 	case freeBSDNoUserExit:
 		return "", false, nil
+	case freeBSDDataErrExit:
+		if show == "groupshow" && strings.Contains(stderr, "unknown group") {
+			return "", false, nil
+		}
+		return "", false, commandError("pw", []string{show, "-n", name}, code, stdout, stderr)
 	default:
 		return "", false, commandError("pw", []string{show, "-n", name}, code, stdout, stderr)
 	}

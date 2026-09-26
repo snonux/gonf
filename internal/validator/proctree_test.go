@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	gexec "github.com/snonux/gonf/internal/exec"
+	"github.com/snonux/gonf/internal/testutil"
 )
 
 // These tests pin the timeout kill of a validator's descendants (task b82):
@@ -69,7 +70,7 @@ func waitGone(t *testing.T, p *trackedPid) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if err := unix.Kill(p.pid, 0); errors.Is(err, unix.ESRCH) {
+		if testutil.ProcessGone(p.pid) {
 			p.gone = true
 			return
 		}

@@ -27,7 +27,7 @@ func writeFakeElevatedChild(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	script := filepath.Join(dir, "fake-elevated-child.sh")
-	content := "#!/bin/bash\n" +
+	content := "#!/bin/sh\n" +
 		"trap 'echo sigterm >> \"$1\"' TERM\n" +
 		"cat >/dev/null\n" +
 		"echo eof >> \"$1\"\n" +

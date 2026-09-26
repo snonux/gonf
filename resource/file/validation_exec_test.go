@@ -13,6 +13,7 @@ import (
 
 	. "github.com/snonux/gonf/api/options"
 	gexec "github.com/snonux/gonf/internal/exec"
+	"github.com/snonux/gonf/internal/testutil"
 	ivalidator "github.com/snonux/gonf/internal/validator"
 	"github.com/snonux/gonf/resource"
 )
@@ -98,7 +99,7 @@ func (c *lingeringChild) assertGone(t *testing.T) {
 		t.Fatalf("lingering child pid: %v", err)
 	}
 	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
-		if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+		if testutil.ProcessGone(pid) {
 			c.gone = true
 			return
 		}
@@ -334,7 +335,7 @@ func assertCappedOutputErr(t *testing.T, err error, target, validator, wantStart
 func TestValidationFailureCapsHugeOutput(t *testing.T) {
 	resource.ResetRepository()
 	target := filepath.Join(privateValidationDir(t), "service.conf")
-	validator := writeValidationScript(t, `head -c 1000000 /dev/zero | tr '\0' 'x'
+	validator := writeValidationScript(t, `dd if=/dev/zero bs=1000 count=1000 2>/dev/null | tr '\0' 'x'
 exit 2`)
 	err := Ensure(target, WithContent("candidate"), WithValidation(validator, []string{CandidatePath}))
 	assertCappedOutputErr(t, err, target, validator, "xxxx", 1000000)
@@ -380,7 +381,7 @@ func TestValidationStartFailureIsReported(t *testing.T) {
 func TestValidationFailureWithoutPrintableOutput(t *testing.T) {
 	resource.ResetRepository()
 	target := filepath.Join(privateValidationDir(t), "service.conf")
-	validator := writeValidationScript(t, `head -c 5000 /dev/zero | tr '\0' ' '
+	validator := writeValidationScript(t, `dd if=/dev/zero bs=5000 count=1 2>/dev/null | tr '\0' ' '
 echo x
 exit 2`)
 	err := Ensure(target, WithContent("candidate"), WithValidation(validator, []string{CandidatePath}))

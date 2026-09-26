@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -238,7 +239,11 @@ func TestRecordedValidPlansStillRecordAndApply(t *testing.T) {
 	if err := ApplyChunks(ops, t.TempDir(), privilege.Sudo); err != nil {
 		t.Fatalf("ApplyChunks of the recorded plan: %v", err)
 	}
-	for _, name := range []string{"a", "b", "m1", "m2", "fan-in", "g1", "g2", "root", "after-root", "present"} {
+	applied := []string{"a", "b", "m1", "m2", "fan-in", "root", "after-root", "present"}
+	if runtime.GOOS == "linux" {
+		applied = append(applied, "g1", "g2") // guarded_valid is WhenLinux
+	}
+	for _, name := range applied {
 		if _, err := os.Stat(p(name)); err != nil {
 			t.Fatalf("expected %s to be applied: %v", name, err)
 		}

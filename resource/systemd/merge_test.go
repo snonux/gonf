@@ -130,6 +130,7 @@ func TestMergedGateSemantics(t *testing.T) {
 // the plan engine (testapply.Apply): a change of only the second declaration's
 // input must fire the reload, which is what the merge adds.
 func TestPresentMergedReloadAppliesOnSecondInput(t *testing.T) {
+	requireLinux(t)
 	resource.ResetRepository()
 	resource.ResetReport()
 	t.Cleanup(resource.ResetReport)

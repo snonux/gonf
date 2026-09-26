@@ -1089,7 +1089,18 @@ const (
 	linearScaleFactor  = 8
 	maxLinearCostRatio = 20
 	linearCostSlack    = 150 * time.Millisecond
+	linearCostAttempts = 3
 )
+
+// historicalShapeRelayCost measures one fresh relay run of shape sh at size.
+func historicalShapeRelayCost(t *testing.T, sh historicalShape, size int) time.Duration {
+	t.Helper()
+	v, filler, tail := sh.build(size)
+	data := append(append([]byte(nil), filler...), tail...)
+	return measureCost(t, func() {
+		simulateRelay(v, data, historicalShapeChunk)
+	})
+}
 
 // checkHistoricalShapeLinearCost is invariant (B)'s cost check. It compares
 // relayCost, the relay run at size, against a fresh relay run of the same
@@ -1108,12 +1119,18 @@ const (
 func checkHistoricalShapeLinearCost(t *testing.T, sh historicalShape, size int, relayCost time.Duration) {
 	t.Helper()
 	baseSize := size / linearScaleFactor
-	v, filler, tail := sh.build(baseSize)
-	data := append(append([]byte(nil), filler...), tail...)
-	baseCost := measureCost(t, func() {
-		simulateRelay(v, data, historicalShapeChunk)
-	})
+	baseCost := historicalShapeRelayCost(t, sh, baseSize)
+	for range linearCostAttempts - 1 {
+		baseCost = min(baseCost, historicalShapeRelayCost(t, sh, baseSize))
+	}
 	limit := maxLinearCostRatio*baseCost + linearCostSlack
+	// A VM whose host steals time mid-run can inflate one measurement
+	// several-fold (seen on the OpenBSD CI VM). Re-measure the large run
+	// before failing and keep the cheapest: noise only ever adds cost,
+	// while a quadratic blow-up exceeds the limit on every attempt.
+	for i := 1; i < linearCostAttempts && relayCost > limit; i++ {
+		relayCost = min(relayCost, historicalShapeRelayCost(t, sh, size))
+	}
 	t.Logf("relay cost: %s for %d bytes vs %s for %d bytes (ratio %.2f, limit %s)", relayCost, size, baseCost, baseSize, float64(relayCost)/float64(max(baseCost, 1)), limit)
 	if relayCost > limit {
 		t.Errorf("invariant (B) violated: relay cost %s for %d bytes exceeds %dx the %s for %d bytes plus %s slack (limit %s): cost grows faster than linearly (quadratic?)", relayCost, size, maxLinearCostRatio, baseCost, baseSize, linearCostSlack, limit)

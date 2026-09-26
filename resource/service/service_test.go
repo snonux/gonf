@@ -100,7 +100,7 @@ func TestWithRestartIssuesRestart(t *testing.T) {
 		})
 	case "netbsd":
 		rs = bothRunnerSet(func(name string, args ...string) (string, string, int, error) {
-			if name == netbsdService && contains(args, "restart") {
+			if name == netbsdService && contains(args, "onerestart") {
 				sawRestart = true
 			}
 			return fakeNetBSDAlreadyOK(name, args...)
@@ -149,7 +149,7 @@ func TestOnChangeGatesRestartButNotServiceConvergence(t *testing.T) {
 				})
 			case "netbsd":
 				rs = bothRunnerSet(func(name string, args ...string) (string, string, int, error) {
-					sawRestart = sawRestart || name == netbsdService && contains(args, "restart")
+					sawRestart = sawRestart || name == netbsdService && contains(args, "onerestart")
 					return fakeNetBSDAlreadyOK(name, args...)
 				})
 			default:
@@ -239,10 +239,11 @@ func fakeNetBSDAlreadyOK(name string, args ...string) (string, string, int, erro
 	if len(args) >= 1 && args[0] == "-e" {
 		return "/etc/rc.d/uptimed\n", "", 0, nil
 	}
-	if contains(args, "status") {
+	// The backend runs the one* directives (onestatus, onerestart, ...).
+	if contains(args, "onestatus") {
 		return "", "", 0, nil
 	}
-	if contains(args, "restart") || contains(args, "reload") {
+	if contains(args, "onerestart") || contains(args, "onereload") {
 		return "", "", 0, nil
 	}
 	return "", "unexpected service " + join(args), 1, nil
@@ -288,6 +289,9 @@ func TestLiveUptimedRestart(t *testing.T) {
 }
 
 func liveServiceName() string {
+	if name := os.Getenv("GONF_LIVE_SERVICE"); name != "" {
+		return name // e.g. base httpd on a NetBSD without pkgsrc's bozohttpd
+	}
 	if runtime.GOOS == "netbsd" {
 		return "bozohttpd" // small daemon present on pi0.lan
 	}

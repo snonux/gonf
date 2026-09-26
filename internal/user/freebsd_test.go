@@ -206,3 +206,30 @@ func TestNewFreeBSDUsesDefaultRunner(t *testing.T) {
 		t.Fatal("NewFreeBSD(nil) left runner nil")
 	}
 }
+
+// TestFreeBSDGroupshowUnknownGroupIsMissing pins real pw(8) behavior:
+// groupshow reports a missing group with EX_DATAERR and "unknown group", not
+// EX_NOUSER, so the group must be created rather than failing the apply.
+func TestFreeBSDGroupshowUnknownGroupIsMissing(t *testing.T) {
+	calls := []scriptedCall{
+		{command: "pw", args: []string{"usershow", "-n", "svc"}, code: freeBSDNoUserExit},
+		{command: "pw", args: []string{"groupshow", "-n", "svc"}, code: freeBSDDataErrExit, stderr: "pw: unknown group `svc'\n"},
+		{command: "pw", args: []string{"groupadd", "-n", "svc"}},
+		{command: "pw", args: []string{"useradd", "-n", "svc", "-g", "svc"}},
+	}
+	if err := ensureAs(NewFreeBSD(scriptedRunner(t, calls)), DesiredUser{Name: "svc"}); err != nil {
+		t.Fatalf("Ensure() = %v", err)
+	}
+}
+
+// TestFreeBSDGroupshowOtherDataErrorFails keeps every other EX_DATAERR an
+// error: only the "unknown group" message means the group is missing.
+func TestFreeBSDGroupshowOtherDataErrorFails(t *testing.T) {
+	calls := []scriptedCall{
+		{command: "pw", args: []string{"usershow", "-n", "svc"}, code: freeBSDNoUserExit},
+		{command: "pw", args: []string{"groupshow", "-n", "svc"}, code: freeBSDDataErrExit, stderr: "pw: group database corrupt\n"},
+	}
+	if err := ensureAs(NewFreeBSD(scriptedRunner(t, calls)), DesiredUser{Name: "svc"}); err == nil {
+		t.Fatal("Ensure() = nil, want the groupshow data error")
+	}
+}
