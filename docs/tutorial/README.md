@@ -65,4 +65,5 @@ module, so they keep up with the DSL.
 
 Your tasks are compiled into your gonf. After you change a recipe, run
 `go build` again before the next `./gonf`, or the old binary runs the old
-tasks.
+tasks. Only the controller needs the rebuild: remote hosts receive plans,
+not your recipe.

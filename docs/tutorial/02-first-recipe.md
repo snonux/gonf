@@ -151,6 +151,11 @@ While you iterate, `go run . -n hello` builds and runs in one step. The
 rest of this book builds once per chapter; rebuild whenever you change a
 recipe.
 
+You rebuild only on the controller, the machine where you run your gonf.
+Remote hosts (chapter 12) never see your recipe: your gonf records a plan
+and ships that, and gonf keeps the binary on each host up to date by
+itself.
+
 ## A few more flags
 
 > 🦫 **Gonfy says:** `-quiet` is for when you trust me and only want the summary.
