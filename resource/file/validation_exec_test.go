@@ -335,7 +335,7 @@ func assertCappedOutputErr(t *testing.T, err error, target, validator, wantStart
 func TestValidationFailureCapsHugeOutput(t *testing.T) {
 	resource.ResetRepository()
 	target := filepath.Join(privateValidationDir(t), "service.conf")
-	validator := writeValidationScript(t, `head -c 1000000 /dev/zero | tr '\0' 'x'
+	validator := writeValidationScript(t, `dd if=/dev/zero bs=1000 count=1000 2>/dev/null | tr '\0' 'x'
 exit 2`)
 	err := Ensure(target, WithContent("candidate"), WithValidation(validator, []string{CandidatePath}))
 	assertCappedOutputErr(t, err, target, validator, "xxxx", 1000000)
@@ -381,7 +381,7 @@ func TestValidationStartFailureIsReported(t *testing.T) {
 func TestValidationFailureWithoutPrintableOutput(t *testing.T) {
 	resource.ResetRepository()
 	target := filepath.Join(privateValidationDir(t), "service.conf")
-	validator := writeValidationScript(t, `head -c 5000 /dev/zero | tr '\0' ' '
+	validator := writeValidationScript(t, `dd if=/dev/zero bs=5000 count=1 2>/dev/null | tr '\0' ' '
 echo x
 exit 2`)
 	err := Ensure(target, WithContent("candidate"), WithValidation(validator, []string{CandidatePath}))

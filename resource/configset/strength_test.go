@@ -171,7 +171,7 @@ func TestInlineContentBoundary(t *testing.T) {
 func TestSetValidatorUsesSharedBoundedRunner(t *testing.T) {
 	f := newParallelFixture(t)
 	opts := append(f.options("root: paul\n"),
-		opt.WithSetValidation("sh", []string{"-c", "head -c 20000 /dev/zero; exit 3"}))
+		opt.WithSetValidation("sh", []string{"-c", "dd if=/dev/zero bs=20000 count=1 2>/dev/null; exit 3"}))
 	err := f.ensure("mail", opts...)
 	if err == nil || !strings.Contains(err.Error(), "validator output: ????") || !strings.Contains(err.Error(), "[output truncated, 20000 bytes in total]") {
 		t.Fatalf("apply error = %v, want the capped shared-runner output", err)
