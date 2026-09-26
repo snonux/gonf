@@ -1,6 +1,6 @@
 # gonf quick reference
 
-Every user-facing feature in one place, current as of v0.23.0 (plan schema
+Every user-facing feature in one place, current as of v0.24.0 (plan schema
 27). Background, rationale and history live in [design/](design/README.md).
 New to gonf? Start with the [tutorial](tutorial/README.md).
 
