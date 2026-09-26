@@ -170,6 +170,12 @@ The first push found no gonf on earth, built one for its platform and
 installed it (`syncing gonf binary`). The template rendered earth's own
 host name, and `EachHost` gave earth its own hour.
 
+The gonf on earth is gonf's plain command, not your recipe: it only
+applies the plans your gonf sends it. So after you change a recipe, you
+rebuild your gonf on the controller and push again. Nothing needs
+rebuilding on the hosts; gonf replaces their binary itself only when your
+gonf is newer.
+
 ![Sequence of a push to earth: record, probe, build and install gonf, apply over ssh](img/ch12-2.svg)
 
 ## Push to a cluster

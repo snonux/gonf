@@ -120,6 +120,42 @@ summary: 0 ok, 1 changed, 0 skipped, 0 would-change
 This is the core loop of gonf: declare, preview with `-n`, apply, and run
 again whenever you like. Gonfy calls it his evening walk around the lodge.
 
+## Change the recipe, then rebuild
+
+Your tasks are compiled into your gonf, so editing `main.go` changes
+nothing until you build again. Change the greeting in `main.go` to
+`"Hello from Gonfy and the whole lodge!\n"` and run the old binary:
+
+```text
+$ ./gonf -n hello
+summary: 1 ok, 0 changed, 0 skipped, 0 would-change
+```
+
+The old binary still carries the old greeting, so it sees nothing to do.
+Rebuild, and the change shows up:
+
+```text
+$ go build -o gonf .
+$ ./gonf -n hello
+2026/09/26 08:25:13 dry-run: would update /home/paul/hello.txt
+summary: 0 ok, 0 changed, 0 skipped, 1 would-change
+  would-change File[/home/paul/hello.txt]
+$ ./gonf hello
+2026/09/26 08:25:13 updated /home/paul/hello.txt
+summary: 0 ok, 1 changed, 0 skipped, 0 would-change
+  changed File[/home/paul/hello.txt]
+```
+
+So the full loop after every edit is: rebuild, preview with `-n`, apply.
+While you iterate, `go run . -n hello` builds and runs in one step. The
+rest of this book builds once per chapter; rebuild whenever you change a
+recipe.
+
+You rebuild only on the controller, the machine where you run your gonf.
+Remote hosts (chapter 12) never see your recipe: your gonf records a plan
+and ships that, and gonf keeps the binary on each host up to date by
+itself.
+
 ## A few more flags
 
 > 🦫 **Gonfy says:** `-quiet` is for when you trust me and only want the summary.
