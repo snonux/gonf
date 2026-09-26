@@ -29,3 +29,19 @@ func TestRedirectUnprefixed(t *testing.T) {
 		t.Errorf("capture kept writing after restore: %q", got)
 	}
 }
+
+func TestLevelFlag(t *testing.T) {
+	for _, tc := range []struct {
+		level Level
+		want  string
+	}{
+		{LevelError, "-quiet"},
+		{LevelWarn, "-quiet"},
+		{LevelInfo, ""},
+		{LevelDebug, "-verbose"},
+	} {
+		if got := LevelFlag(tc.level); got != tc.want {
+			t.Errorf("LevelFlag(%d) = %q, want %q", tc.level, got, tc.want)
+		}
+	}
+}

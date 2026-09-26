@@ -59,6 +59,22 @@ func GetLevel() Level {
 	return level
 }
 
+// LevelFlag returns the global gonf flag that selects l in a child gonf
+// process: "-verbose" for LevelDebug, "-quiet" for LevelWarn and LevelError
+// (the closest a flag gets), and "" for the default LevelInfo. The local
+// elevated re-exec and the remote apply pass it before "apply", so the child
+// logs at the controller's level instead of its own default.
+func LevelFlag(l Level) string {
+	switch {
+	case l >= LevelDebug:
+		return "-verbose"
+	case l <= LevelWarn:
+		return "-quiet"
+	default:
+		return ""
+	}
+}
+
 // RedirectUnprefixed sends log output to w at level l, with no timestamp or
 // other prefix, until restore reinstates the previous destination and level.
 // It is test-oriented: the missing prefix lets captured lines be compared

@@ -5,6 +5,13 @@ releases before v0.17.0 the tag message and the git log are the notes.
 
 ## Unreleased
 
+Fixes
+- `-quiet` and `-verbose` now reach the remote `gonf apply` of `push`,
+  `cluster` and `fleet`, and the local sudo/doas re-exec of privileged
+  chunks. Before, those children logged at their default level, so
+  `-quiet` still printed every remote or privileged change. A
+  fixed-argument sudoers/doas rule must now allow these flags too.
+
 Docs
 - Gonfy the beaver is gonf's mascot and new logo (`assets/logo-*.svg`).
   The README, the reference and the tutorial are themed around him, and

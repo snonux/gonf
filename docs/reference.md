@@ -1012,8 +1012,8 @@ does not narrow.
   carries its own deadline.
 - The elevated path requires the program to run through `cli.CLI()`.
 - Fixed-argument sudoers/doas rules must allow `-cancel-pipe` (local
-  re-exec) and `-relayed` (remote apply), plus `-cmd-timeout` and
-  `-profile` when those are not at their defaults. A loose
+  re-exec) and `-relayed` (remote apply), plus `-cmd-timeout`,
+  `-profile`, `-verbose` and `-quiet` when those are not at their defaults. A loose
   `gonf apply *`-style match on the tail is simpler.
 
 ## CLI
@@ -1029,8 +1029,8 @@ redacted against resolved secrets.
 |------|---------|---------|
 | `-list` | | Print activated tasks (`name<TAB>desc`), destination-guarded ones marked. |
 | `-n`, `-dry-run` | off | Preview without changing anything. |
-| `-verbose` | off | Debug logging. |
-| `-quiet` | off | Warnings and errors only; the summary still prints. |
+| `-verbose` | off | Debug logging. Passed on to the elevated re-exec and the remote apply. |
+| `-quiet` | off | Warnings and errors only; the summary still prints. Passed on like `-verbose`. |
 | `-profile p` | detected | Override `Facts.Profile`. Not forwarded to pushed destinations. |
 | `-privilege m` | `none` | `none`, `sudo` or `doas` for local elevated chunks. |
 | `-cmd-timeout d` | `5m` | Per backend command and validator. SIGTERM on expiry, SIGKILL 10s later. `0` or negative keeps the default. Non-default values are forwarded to the elevated re-exec and to remote gonf versions that accept the flag. |

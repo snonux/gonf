@@ -65,8 +65,8 @@ var errNoCLIHost = errors.New("privileged apply re-executes this binary as `<bin
 type chunkLabel func(i int, ch plan.Chunk) string
 
 // elevatedApplyArgv builds the un-wrapped re-exec argv for the elevated
-// child ("gonf [-profile=<override>] [-cmd-timeout=<d>] apply -cancel-pipe
-// [-n] <path>"). Split out from defaultElevatedApply so the dry-run,
+// child ("gonf [-verbose|-quiet] [-profile=<override>] [-cmd-timeout=<d>]
+// apply -cancel-pipe [-n] <path>"). Split out from defaultElevatedApply so the dry-run,
 // profile-override and command-timeout propagation can be
 // asserted by a unit test without spawning sudo/doas: dryRun must mirror
 // resource.DryRun() at the call site (see remoteApplyCmd in
@@ -118,8 +118,17 @@ type chunkLabel func(i int, ch plan.Chunk) string
 // sudoers rules. elevatedCancelGrace() relies on the forwarding that does
 // go through: the child's validators are bound by the same timeout the
 // grace is derived from.
-func elevatedApplyArgv(exe, path string, dryRun bool, profileOverride string, cmdTimeout time.Duration) []string {
+//
+// logLevel must mirror logger.GetLevel() at the call site, or the child logs
+// at its default level: its lines are relayed as they are, so "gonf -quiet"
+// would still print every privileged change and "gonf -verbose" none of the
+// privileged debug lines. logger.LevelFlag turns it into the global
+// "-verbose"/"-quiet" flag, or nothing at the default level.
+func elevatedApplyArgv(exe, path string, dryRun bool, profileOverride string, cmdTimeout time.Duration, logLevel logger.Level) []string {
 	argv := []string{exe}
+	if flag := logger.LevelFlag(logLevel); flag != "" {
+		argv = append(argv, flag)
+	}
 	if profileOverride != "" {
 		argv = append(argv, "-profile="+profileOverride)
 	}
@@ -152,7 +161,7 @@ func defaultElevatedApply(ctx context.Context, mode privilege.Mode, ops []plan.O
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		return err
 	}
-	argv := elevatedApplyArgv(exe, path, resource.DryRun(), ProfileOverride(), CommandTimeout())
+	argv := elevatedApplyArgv(exe, path, resource.DryRun(), ProfileOverride(), CommandTimeout(), logger.GetLevel())
 	argv, err = privilege.WrapArgv(mode, true, argv)
 	if err != nil {
 		return err

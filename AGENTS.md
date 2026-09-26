@@ -17,6 +17,13 @@ docs for a follow-up.
 - `README.md` when the overview or quick start is affected, and
   `docs/design/` when a design decision changes.
 
+New docs content follows the Gonfy theme (Gonfy the beaver, gonf's
+mascot): examples manage his things (his lodge, his start page, a `gonfy`
+account) where that fits, and a new section or chapter may get one short
+quote from him, in the existing form
+`> 🦫 **Gonfy says:** ...`. Keep it to one quote per section, and let it
+add a tip or a memorable picture, not repeat the prose.
+
 Before finishing, grep the docs for the old name or behaviour so no stale
 mention is left.
 

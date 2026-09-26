@@ -1555,7 +1555,12 @@ gonf fleet -j 2 garage garage_deploy
 ```
 
 Global flags (`-profile`, `-verbose`, `-quiet`, `-dry-run` / `-n`) still apply
-on the controller. `-profile` is not forwarded to the destination: it only
+on the controller. `-verbose` and `-quiet` are also passed on, before
+`apply`, to every remote `gonf apply` and to the local elevated re-exec
+(`logger.LevelFlag`): the child's log lines are relayed as they are, so
+without them `-quiet` would still print every remote or privileged change.
+They need no capability probe, being part of gonf's first command line.
+`-profile` is not forwarded to the destination: it only
 affects controller-side (record-time) evaluation such as opaque `When*`
 checks, while the remote `gonf apply` evaluates `when_begin` guards and
 renders `.Gonf` template facts from the destination's own detected facts.
@@ -1596,8 +1601,9 @@ still matches that argv. The LOCAL elevated re-exec (`api.elevatedApplyArgv`,
 wrapped with `privilege.WrapArgv` and run by `api`'s `defaultElevatedApply`/
 `runElevatedCmd` — the `Privileged()` task path, re-executing this same
 binary as `gonf apply -cancel-pipe <path>`) has no probe at all — it always
-adds a non-default `-cmd-timeout` and any `-profile` override before
-`apply`, because the child is this very binary and always understands both
+adds a non-default `-cmd-timeout`, any `-profile` override and a
+`-verbose`/`-quiet` log level before `apply` (the remote apply adds the
+log level too), because the child is this very binary and always understands both
 flags. A sudoers/doas rule restricted to a fixed command line (e.g. `gonf
 apply *`) matches on the full argument list, not just flag support, so once
 either flag lands in argv before `apply` the whole elevated re-exec is
