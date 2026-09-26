@@ -10,7 +10,7 @@ a fleet, with Gonfy the beaver as your guide. Every chapter builds a small
 recipe, runs it, and shows the real commands and their output. Each section ends with links into the
 [reference](../reference.md), which has every option and every sharp edge.
 
-![How gonf works: a recipe records a plan on the controller, and destinations apply it](img/overview.svg)
+![How gonf works: your gonf records a plan on the controller, and destinations apply it](img/overview.svg)
 
 ## Meet Gonfy
 

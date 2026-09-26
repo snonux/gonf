@@ -1,4 +1,4 @@
-// Command recipe manages files, directories and links (tutorial chapter 3).
+// Command gonf manages files, directories and links (tutorial chapter 3).
 package main
 
 import (

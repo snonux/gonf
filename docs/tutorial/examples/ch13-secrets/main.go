@@ -1,4 +1,4 @@
-// Command recipe uses secrets (tutorial chapter 13).
+// Command gonf uses secrets (tutorial chapter 13).
 package main
 
 import (

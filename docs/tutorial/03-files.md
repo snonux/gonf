@@ -9,7 +9,7 @@ glob install, links, files created only once, and a file that must be gone.
 ## The recipe
 
 ```go
-// Command recipe manages files, directories and links (tutorial chapter 3).
+// Command gonf manages files, directories and links (tutorial chapter 3).
 package main
 
 import (
@@ -58,8 +58,8 @@ func cleanup() {
 }
 ```
 
-The source paths (`assets/...`) are relative to the directory you run the
-recipe from, here `docs/tutorial/examples`:
+The source paths (`assets/...`) are relative to the directory you run
+`./gonf` from, here `docs/tutorial/examples`:
 
 ```text
 assets/
@@ -90,7 +90,7 @@ Reference: [Body-level guards and helpers](../reference.md#body-level-guards-and
 
 > 🦫 **Gonfy says:** Always look before you gnaw: `-n` shows every change and makes none.
 
-Build the recipe and preview it with `-n` on a fresh home first:
+Build your gonf and preview it with `-n` on a fresh home first:
 
 ```text
 $ go build -o gonf ./ch03-files

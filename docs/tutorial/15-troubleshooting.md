@@ -12,7 +12,7 @@ different point. Knowing the class tells you where to look.
 It works normally, and `BREAK` lets you trigger each class:
 
 ```go
-// Command recipe shows gonf's error classes (tutorial chapter 15). Set
+// Command gonf shows gonf's error classes (tutorial chapter 15). Set
 // BREAK to one of decl, record or apply to trigger one of them.
 package main
 

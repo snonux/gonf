@@ -6,8 +6,8 @@
 </picture>
 
 KISS configuration management in plain Go, for personal use, looked after by
-Gonfy the beaver. A recipe is a
-Go program: it registers tasks, each task declares resources (files,
+Gonfy the beaver. A recipe is Go code built
+into your own `gonf` program: it registers tasks, each task declares resources (files,
 packages, services, cron jobs, users, ...), and gonf records them into a
 versioned plan and applies it, locally or over SSH on Linux, OpenBSD,
 FreeBSD and NetBSD hosts. Built with the help of AI, but designed, reviewed

@@ -9,7 +9,7 @@ root: run as root, or through `sudo` or `doas`.
 ## The recipe
 
 ```go
-// Command recipe mixes unprivileged and root work (tutorial chapter 10).
+// Command gonf mixes unprivileged and root work (tutorial chapter 10).
 package main
 
 import (

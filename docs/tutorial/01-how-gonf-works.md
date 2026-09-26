@@ -12,10 +12,10 @@ Go `main` package that describes the state you want, build it, and run it.
 
 | Word | Meaning |
 |------|---------|
-| **recipe** | Your Go program. It registers tasks and ends with `cli.Main()`. |
+| **recipe** | Your task code: a Go module that registers tasks. Built with `go build`, it is your own `gonf` program (its `main` ends with `cli.Main()`). |
 | **task** | A named function. Its body declares resources. `./gonf -list` shows the tasks. |
 | **resource** | One thing to converge: a file, a directory, a package, a service, a cron job, a user, a command. |
-| **controller** | The machine where the recipe runs. Task bodies, secrets and Go `if`s run here. |
+| **controller** | The machine where you run your `gonf`. Task bodies, secrets and Go `if`s run here. |
 | **destination** | The machine that applies the result. Often the same machine, sometimes a remote host. |
 | **plan** | The recorded result: versioned JSON lines, one op per resource, plus a blob store for big files. |
 
@@ -28,7 +28,7 @@ Running a task never touches the system while your Go code runs. gonf first
 declare becomes an op in a plan. Then it **applies** the plan: for each op
 it checks the current state, and changes only what differs.
 
-![Sequence: you run the recipe, it records the task into a plan, and the destination applies it op by op](img/ch01-1.svg)
+![Sequence: you run your gonf, it records the task into a plan, and the destination applies it op by op](img/ch01-1.svg)
 
 Because the plan is data, the same plan can be applied in three ways:
 

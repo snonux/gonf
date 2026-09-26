@@ -16,7 +16,7 @@ backend on the destination:
 ## The recipe
 
 ```go
-// Command recipe manages packages, services, timers, cron jobs and users
+// Command gonf manages packages, services, timers, cron jobs and users
 // (tutorial chapter 7).
 package main
 

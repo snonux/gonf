@@ -60,7 +60,7 @@ $ go build -o gonf .
 
 The result is your own `gonf`: gonf's full command line with your tasks
 compiled in. There is no separate gonf program that reads recipes; every
-recipe repository builds its own binary like this one. The tutorial runs it
+recipe repository builds its own gonf like this one. The tutorial runs it
 as `./gonf`.
 
 ## List, preview, apply
@@ -133,7 +133,7 @@ $ ./gonf -version
 
 - `-quiet` keeps only warnings, errors and the summary.
 - `-verbose` logs every step (chapter 15).
-- `-version` prints the gonf release your recipe was built with.
+- `-version` prints the gonf release your gonf was built with.
 
 Reference: [Minimal recipe](../reference.md#minimal-recipe),
 [Global flags](../reference.md#global-flags),

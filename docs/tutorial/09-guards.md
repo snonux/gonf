@@ -23,7 +23,7 @@ and on the destination:
 ## The recipe
 
 ```go
-// Command recipe decides where tasks and resources apply (tutorial
+// Command gonf decides where tasks and resources apply (tutorial
 // chapter 9).
 package main
 

@@ -107,7 +107,7 @@ rename it. `Needs("web_docroot")` with a string works too.
 ## The main package
 
 ```go
-// Command recipe organises tasks with structs, aggregates, aliases and
+// Command gonf organises tasks with structs, aggregates, aliases and
 // dependencies (tutorial chapter 8).
 package main
 

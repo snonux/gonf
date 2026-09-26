@@ -1,4 +1,4 @@
-// Command recipe is the first recipe of the gonf tutorial (chapter 2).
+// Command gonf is the first recipe of the gonf tutorial (chapter 2).
 package main
 
 import (

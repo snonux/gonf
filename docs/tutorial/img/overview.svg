@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" xml:space="preserve" viewBox="0 0 860 400" width="860" height="400" font-family="Helvetica, Arial, sans-serif" font-size="14">
-  <title>How gonf works: a recipe records a plan on the controller, and destinations apply it</title>
+  <title>How gonf works: your gonf records a plan on the controller, and destinations apply it</title>
   <style>
     .box { fill: #f5f7fa; stroke: #4a5568; stroke-width: 1.5; }
     .ctl { fill: #e6f0ff; stroke: #2b6cb0; stroke-width: 1.5; }
@@ -21,7 +21,7 @@
   <!-- controller -->
   <rect class="ctl" x="20" y="20" width="300" height="360" rx="10"/>
   <text class="h" x="40" y="48">Controller</text>
-  <text class="s" x="40" y="66">where you run the recipe binary</text>
+  <text class="s" x="40" y="66">where you run your gonf</text>
   <rect class="box" x="40" y="84" width="260" height="110" rx="6"/>
   <text class="h" x="55" y="106">recipe (main.go)</text>
   <text class="m" x="55" y="128">Task("hello", ..., func() {</text>
