@@ -9,6 +9,8 @@ Resource constructors accept typed family options (`FileOption`, `DirOption`,
 `CommandOption`, and so on), so unsupported option/resource pairs fail at
 compile time. Shared options implement each family they support.
 
+> 🦫 **Gonfy says:** My tool belt. Every option hangs here, and the api package hands them all to you in one import.
+
 `options.Option` remains a callable erased compatibility seam. It does not
 carry the family check; prefer typed options and constructors. If
 an older recipe stores options in `[]options.Option`, convert it explicitly

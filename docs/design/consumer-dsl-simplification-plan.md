@@ -4,6 +4,8 @@ Date: 2026-09-20. Status: investigation and proposal. The P0 baseline is
 recorded below; it authorizes neither implementation nor deployment. Later
 work packages remain separately scoped.
 
+> 🦫 **Gonfy says:** Fewer words, same lodge. This plan looked at real recipes to find where the DSL could say more with less.
+
 Status update (2026-09-24, closure gate `662`): tasks `b52`–`z52`,
 `062`–`562` and the native verification `y42` are completed. conf `v42`
 retired Rex in conf (see "Rex retirement status" below). One part of P9 is

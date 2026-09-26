@@ -2,6 +2,8 @@
 
 OS-agnostic service/daemon management. The backend is selected automatically:
 
+> 🦫 **Gonfy says:** Keep the fire in the lodge burning: started, enabled, and restarted only when its config really changed.
+
 | Detected OS | Backend |
 |-------------|---------|
 | Linux (systemd) | `systemctl` |

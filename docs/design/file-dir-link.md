@@ -2,6 +2,8 @@
 
 Core filesystem resources. Paths may be a single `string` or `List(...)`.
 
+> 🦫 **Gonfy says:** Files, directories and links are the sticks, walls and tunnels of every lodge. Most of my work happens here.
+
 ```go
 File("/etc/motd", WithContent("hello\n"), WithMode(0o644))
 File("/etc/app.conf", WithSource("assets/app.conf.tmpl"))

@@ -6,6 +6,8 @@ candidate set is staged and validated **before any live file changes**, and
 every member gets its own change handle, so a gate can react to one member
 instead of to the whole set.
 
+> 🦫 **Gonfy says:** Some sticks only hold when they go in together. A ConfigSet checks the whole bundle before any of it touches the lodge.
+
 ```go
 aliases := assets("etc/mail/aliases")
 mail := ConfigSet("smtpd",

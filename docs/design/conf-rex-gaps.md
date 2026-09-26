@@ -10,6 +10,8 @@ fleet SSH transport (`push` / `cluster` / `fleet`) and the `Privileged()` +
 unattended-upgrades migration already runs on top of them (see
 [The conf/gonf consumer](#the-confgonf-consumer)).
 
+> 🦫 **Gonfy says:** Moving house from Rex to gonf, one room at a time. This is the list of rooms still to carry over.
+
 **Where things stand:** gonf is a full match for conf Rex on transport, privilege,
 packages, services, cron, accounts, secrets, and file/line primitives. The
 former feature gaps — a **secrets convention** (Rex `$secrets`), **custom

@@ -2,6 +2,8 @@
 
 Puppet-inspired crontab management for Linux, FreeBSD, NetBSD, and OpenBSD.
 
+> 🦫 **Gonfy says:** I have my own little alarm clock in the crontab, between marker comments, and I never touch anybody else's lines.
+
 ```go
 Cron("backup",
     WithCommand("/usr/local/bin/backup.sh"),
