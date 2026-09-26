@@ -15,7 +15,7 @@ export XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS GONF_RUN_CRON_TESTS GONF_RUN_TIM
 systemctl --user is-system-running || true
 
 echo "== live tests as $(id -un)"
-go test -count=1 -v -run 'TestLive' ./resource/cron/ ./resource/timer/
+go test -count=1 -v -run 'TestLiveCronPerUser|TestLiveUserTimer' ./resource/cron/ ./resource/timer/
 
 echo "== full suite as root"
 sudo env "PATH=$PATH" GONF_RUN_CRON_TESTS=1 GONF_RUN_TIMER_TESTS=1 go test -count=1 ./...

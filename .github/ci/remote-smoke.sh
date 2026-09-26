@@ -15,5 +15,10 @@ chmod 600 ~/.ssh/authorized_keys
 chmod go-w ~
 ssh-keyscan -H localhost >> ~/.ssh/known_hosts 2>/dev/null
 ssh -o BatchMode=yes localhost 'doas -n true' && echo "ssh + doas to localhost ok"
+# The remote side runs "gonf apply" from PATH ($HOME/bin for the user
+# push; doas resets PATH, so root finds it in /usr/local/bin).
+mkdir -p ~/bin
+go build -o ~/bin/gonf ./cmd/gonf
+sudo install -m 0755 ~/bin/gonf /usr/local/bin/gonf
 GONF_REMOTE_HOST="$me@localhost" GONF_REMOTE_PRIVILEGE=doas \
 	go test -tags remote_smoke -count=1 -v -run RemoteSmoke ./internal/remote/
