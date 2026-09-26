@@ -192,11 +192,20 @@ func (Unattended) StampDir() { EnsureDir("/var/lib/unattended-upgrade", RootPriv
 has a doc comment and no hand-written `DescX`: the first sentence, method
 name and final period dropped, first letter upper case ("Ensures the
 /var/lib/unattended-upgrade stamp directory"). A hand-written `DescX` wins.
-`gonf-desc -check` exits 1 when the file is stale. `desc_gen.go` has no
-build constraint, so `gonf-desc` refuses a documented task method whose
-receiver type is declared only in build-constrained files (`s_linux.go`,
-`s_arm64.go`, or a `//go:build` line): other platforms would not build.
-Write that `DescX` by hand next to the type.
+`gonf-desc -check` exits 1 when the file is stale.
+
+The generated file has no build constraint line, so it builds wherever its
+name lets it: `desc_gen.go` on every platform, `-o desc_linux.go` on linux
+(and android). `gonf-desc` refuses a documented task method whose receiver
+type is missing on one of those platforms, with or without cgo, because it
+is declared only in files that do not build there: a GOOS/GOARCH name
+suffix (`s_linux.go`, `s_arm64.go`), a `//go:build` or `// +build` line, or
+`import "C"`. It lists every refused method and where its type is missing;
+write that `DescX` by hand next to the type. Accepted: a type declared in
+complementary files (`s_linux.go` plus a `//go:build !linux` file, or a
+`cgo`/`!cgo` pair), and a linux-only package generated with
+`-o desc_linux.go`. Files that `go build` never picks without custom
+`-tags` (`_x.go`, `.x.go`, `//go:build ignore`) are not read.
 
 A companion with the wrong signature is a declaration error and that method
 is not registered. Name methods for the action (`Unattended.Script`, not

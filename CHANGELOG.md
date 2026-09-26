@@ -40,10 +40,14 @@ Fixes
   when `Needs` is called. Before, it failed only a record that reached
   the task, with "needs unknown task".
 - `gonf-desc` refuses a documented task method whose receiver type is
-  declared only in build-constrained files (`s_linux.go`, `//go:build`),
-  asking for a hand-written `DescX`. Before, it wrote the companion into the
-  unconstrained `desc_gen.go`, which then failed to build on other
-  platforms (`undefined: S`).
+  missing on a platform where the generated file builds (the type is
+  declared only in `s_linux.go`, behind `//go:build`, or in a cgo file),
+  listing each one and asking for a hand-written `DescX`. Before, it wrote
+  the companion into `desc_gen.go`, which then failed to build on other
+  platforms (`undefined: S`). Types split over complementary files, and
+  `-o desc_linux.go` for a linux-only package, are accepted. `_x.go`,
+  `.x.go` and files no platform builds without custom tags (such as
+  `// +build ignore`) are no longer read.
 
 Docs
 - Gonfy the beaver is gonf's mascot and new logo (`assets/logo-*.svg`).

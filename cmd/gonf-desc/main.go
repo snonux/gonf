@@ -19,11 +19,16 @@
 // and one with a hand-written DescX companion in the package, gets no
 // generated description; the hand-written one wins.
 //
-// desc_gen.go has no build constraint, so gonf-desc refuses a documented
-// task method whose receiver type is declared only in build-constrained
-// files (a GOOS/GOARCH file name suffix such as s_linux.go, or a //go:build
-// line): the companion would name an undefined type on other platforms.
-// Write that DescX by hand next to the type instead.
+// The generated file has no build constraint line, so it builds wherever
+// its name lets it (desc_gen.go everywhere, -o desc_linux.go on linux and
+// android). gonf-desc refuses a documented task method whose receiver type
+// is missing on one of those platforms, with or without cgo: declared only
+// in files that do not build there (a GOOS/GOARCH name suffix, a build
+// constraint line, import "C"). A type declared in complementary files
+// (s_linux.go and a //go:build !linux file) is present everywhere. Write a
+// refused DescX by hand next to the type instead. Files go build never
+// picks without custom -tags (_x.go, .x.go, //go:build ignore) are not
+// read.
 //
 // Flags: -o names the output file (default desc_gen.go); -check writes
 // nothing and exits 1 when the file is not up to date, for CI.

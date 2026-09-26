@@ -7,13 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"go/ast"
-	"go/build"
-	"go/build/constraint"
 	"go/doc/comment"
 	"go/format"
 	"go/parser"
 	"go/token"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -31,19 +28,18 @@ type method struct {
 	recv, name, desc string
 }
 
-// srcFile is one parsed Go file of the package.
+// srcFile is one Go file of the package that some plain go build selects.
 type srcFile struct {
-	name string
-	ast  *ast.File
-	// constrained is set when the file builds only for some GOOS, GOARCH
-	// or build tags: its name has a GOOS/GOARCH suffix (s_linux.go) or it
-	// carries a build constraint line.
-	constrained bool
+	name   string
+	ast    *ast.File
+	builds targetSet // where go build selects the file
 }
 
 // Generate returns the formatted source of the generated file for the
 // package in dir, or nil when no task method there needs a description.
-// out, the generated file's name, is skipped when reading the package.
+// out, the generated file's name, is skipped when reading the package, and
+// so is every file go build never selects without custom -tags: _x.go and
+// .x.go, and files whose constraint no platform satisfies (ignore).
 func Generate(dir, out string) ([]byte, error) {
 	fset := token.NewFileSet()
 	entries, err := os.ReadDir(dir)
@@ -53,81 +49,55 @@ func Generate(dir, out string) ([]byte, error) {
 	var files []srcFile
 	for _, e := range entries {
 		n := e.Name()
-		if e.IsDir() || !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") || n == out {
+		if e.IsDir() || !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") || n == out ||
+			strings.HasPrefix(n, "_") || strings.HasPrefix(n, ".") {
 			continue
 		}
-		f, err := parser.ParseFile(fset, filepath.Join(dir, n), nil, parser.ParseComments|parser.SkipObjectResolution)
+		path := filepath.Join(dir, n)
+		src, err := os.ReadFile(path)
 		if err != nil {
 			return nil, err
 		}
-		ignored, tagged := buildLines(f)
-		if ignored {
+		builds, err := buildTargets(n, src)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", dir, err)
+		}
+		if builds.none() {
 			continue
 		}
-		files = append(files, srcFile{name: n, ast: f, constrained: tagged || nameConstrained(n)})
+		f, err := parser.ParseFile(fset, path, src, parser.ParseComments|parser.SkipObjectResolution)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, srcFile{name: n, ast: f, builds: builds})
 	}
 	if len(files) == 0 {
 		return nil, fmt.Errorf("%s: no Go files", dir)
 	}
 	methods, err := collect(files)
-	if err == nil {
-		err = checkReceivers(files, methods, out)
-	}
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", dir, err)
 	}
 	if len(methods) == 0 {
 		return nil, nil
 	}
+	// The generated file carries no constraint line and imports nothing,
+	// so only out's name limits where it builds.
+	outBuilds, err := buildTargets(out, []byte("package p\n"))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", dir, err)
+	}
+	if err := checkCoverage(files, methods, out, outBuilds); err != nil {
+		return nil, fmt.Errorf("%s: %w", dir, err)
+	}
 	return render(files[0].ast.Name.Name, methods)
-}
-
-// buildLines reads the build constraint lines above f's package clause.
-// ignored is set for a file that excludes itself from every build
-// (//go:build ignore), such as another generator; tagged for any other
-// constraint, whatever it tests.
-func buildLines(f *ast.File) (ignored, tagged bool) {
-	for _, cg := range f.Comments {
-		if cg.Pos() >= f.Package {
-			break
-		}
-		for _, c := range cg.List {
-			switch {
-			case c.Text == "//go:build ignore":
-				return true, false
-			case constraint.IsGoBuild(c.Text) || constraint.IsPlusBuild(c.Text):
-				tagged = true
-			}
-		}
-	}
-	return false, tagged
-}
-
-// nameConstrained reports whether file name has a GOOS and/or GOARCH suffix
-// (s_linux.go, s_arm64.go, s_linux_arm64.go). It asks go/build, so the list
-// of known systems is the running toolchain's: no real GOOS or GOARCH is
-// "gonfdesc", so only such a suffix makes the name miss that context. A
-// name go build always ignores (_x.go, .x.go) counts too: a type declared
-// only there exists nowhere. The file's content is not read (OpenFile
-// yields a bare package clause).
-func nameConstrained(name string) bool {
-	ctxt := build.Context{
-		GOOS:     "gonfdesc",
-		GOARCH:   "gonfdesc",
-		Compiler: "gc",
-		OpenFile: func(string) (io.ReadCloser, error) {
-			return io.NopCloser(strings.NewReader("package p\n")), nil
-		},
-	}
-	ok, err := ctxt.MatchFile(".", name)
-	return err != nil || !ok
 }
 
 // collect returns the DescX companions to generate, sorted by receiver and
 // method name. A method defined in several build-constrained files (e.g.
-// s_linux.go and s_freebsd.go) gets one companion, since desc_gen.go has no
-// build constraint; differing doc comments are an error, as either
-// description would be wrong on the other platform.
+// s_linux.go and s_freebsd.go) gets one companion, since the generated file
+// has no build constraint line; differing doc comments are an error, as
+// either description would be wrong on the other platform.
 func collect(files []srcFile) ([]method, error) {
 	type key struct{ recv, name string }
 	have := map[key]bool{}
@@ -177,16 +147,18 @@ func collect(files []srcFile) ([]method, error) {
 	return out, nil
 }
 
-// checkReceivers refuses a companion whose receiver type is declared only
-// in build-constrained files: the generated file out has no build
-// constraint, so on another platform it would name an undefined type and
-// break the build. The companion belongs next to the type instead,
-// hand-written, where it shares the type's constraint (a hand-written DescX
-// wins, so none is generated). Every such method is reported, in methods'
-// order.
-func checkReceivers(files []srcFile, methods []method, out string) error {
-	everywhere := map[string]bool{}
-	only := map[string][]string{} // type -> constrained files declaring it
+// checkCoverage refuses a companion whose receiver type is missing on a
+// target where the generated file out builds: there the companion names an
+// undefined type and breaks the build. A type is present on a target when
+// at least one file declaring it builds there, so a type split over
+// complementary files (s_linux.go and a //go:build !linux file) is
+// covered, and so is a linux-only package written to -o desc_linux.go. A
+// refused companion belongs next to the type, hand-written, where it shares
+// the type's constraint (a hand-written DescX wins, so none is generated).
+// Every refused method is reported, in methods' order.
+func checkCoverage(files []srcFile, methods []method, out string, outBuilds targetSet) error {
+	present := map[string]targetSet{}
+	declared := map[string][]string{} // type -> files declaring it
 	for _, f := range files {
 		for _, d := range f.ast.Decls {
 			gd, ok := d.(*ast.GenDecl)
@@ -199,23 +171,39 @@ func checkReceivers(files []srcFile, methods []method, out string) error {
 					continue
 				}
 				name := ts.Name.Name
-				if f.constrained {
-					only[name] = append(only[name], f.name)
-				} else {
-					everywhere[name] = true
+				if present[name] == nil {
+					present[name] = make(targetSet, len(targets))
 				}
+				present[name].union(f.builds)
+				declared[name] = append(declared[name], f.name)
 			}
 		}
 	}
-	var errs []error
+	var refused []string
 	for _, m := range methods {
-		if everywhere[m.recv] || len(only[m.recv]) == 0 {
+		have, ok := present[m.recv]
+		if !ok {
+			continue // not declared at all: the package does not build anyway
+		}
+		missing := outBuilds.minus(have)
+		if missing.none() {
 			continue
 		}
-		errs = append(errs, fmt.Errorf("%s.%s: %s is declared only in build-constrained files (%s) but %s builds everywhere; write Desc%s by hand next to %s",
-			m.recv, m.name, m.recv, strings.Join(only[m.recv], ", "), out, m.name, m.recv))
+		where := fmt.Sprintf("%s builds everywhere, but %s (declared in %s) is missing on %s",
+			out, m.recv, strings.Join(declared[m.recv], ", "), missing)
+		if !outBuilds.all() {
+			where = fmt.Sprintf("%s builds on %s, where %s (declared in %s) is missing",
+				out, missing, m.recv, strings.Join(declared[m.recv], ", "))
+		}
+		refused = append(refused, fmt.Sprintf("%s.%s: %s; write Desc%s by hand next to %s", m.recv, m.name, where, m.name, m.recv))
 	}
-	return errors.Join(errs...)
+	switch len(refused) {
+	case 0:
+		return nil
+	case 1:
+		return errors.New(refused[0])
+	}
+	return fmt.Errorf("%d task methods refused:\n\t%s", len(refused), strings.Join(refused, "\n\t"))
 }
 
 // receiverName returns the type name of a method receiver (T or *T), and
