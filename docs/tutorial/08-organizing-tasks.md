@@ -209,6 +209,9 @@ summary: 3 ok, 0 changed, 0 skipped, 0 would-change
 ```
 
 Within one run a task is recorded once, even when several tasks need it.
+
+## What the plan carries
+
 The aggregate skipped `web_logrotate` locally because its guard does not
 hold here; in a plan for other hosts it travels inside its guard:
 

@@ -114,7 +114,7 @@ $ ./gonf plan -redacted templates
 wrote redacted preview to stdout (4 ops, 0 secret-bearing; not a plan, cannot be applied)
 ```
 
-(`plan -redacted` prints a plan for reading, chapter 11.) The first file op
+The first file op
 has `"template":true` and your `template_data`. The second has only
 `content_b64`, the base64 of `*** GONFY ***`.
 

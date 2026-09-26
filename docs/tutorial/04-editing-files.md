@@ -270,6 +270,28 @@ summary: 2 ok, 3 changed, 0 skipped, 0 would-change
 Reference: [ConfigSet](../reference.md#configset),
 [Change gates](../reference.md#change-gates).
 
+## What the plan carries
+
+```text
+$ ./gonf plan -redacted lines greeter
+{"op":"plan_preview","version":27,"id":"plan"}
+{"op":"file","id":"File[${HOME}/gonf-tutorial/app.conf]","path":"${HOME}/gonf-tutorial/app.conf","mode":"0644","add_lines":["log_level=info","color=yes","mascot=gonfy"],"remove_lines":["debug=true"],"keyed_lines":[{"key":"port=","line":"port=8080"},{"key":"greeting=","line":"greeting=\"hello from gonfy\""}],"blocks":[{"name":"peers","lines":["peer=10.0.0.1","peer=10.0.0.2"]}]}
+{"op":"dir","id":"Directory[${HOME}/gonf-tutorial/greeter]","path":"${HOME}/gonf-tutorial/greeter","mode":"0755"}
+{"op":"config_set","id":"ConfigSet[greeter]","name":"greeter","members":[{"key":"lib.sh","path":"${HOME}/gonf-tutorial/greeter/lib.sh","content_b64":"Z3JlZXQoKSB7IGVjaG8gImhlbGxvLCAkMSI7IH0K","mode":"0644"},{"key":"main.sh","path":"${HOME}/gonf-tutorial/greeter/main.sh","content_b64":"IyEvYmluL3NoCi4gAGdvbmYtbWVtYmVyLXBhdGg6bGliLnNoAApncmVldCBnb25meQo=","mode":"0755"}],"validators":[{"bin":"sh","args":["\u0000gonf-member-path:main.sh\u0000"]}]}
+{"op":"config_set_member","id":"ConfigSetMember[greeter/lib.sh]","path":"${HOME}/gonf-tutorial/greeter/lib.sh","name":"greeter","member":"lib.sh","deps":["ConfigSet[greeter]"]}
+{"op":"config_set_member","id":"ConfigSetMember[greeter/main.sh]","path":"${HOME}/gonf-tutorial/greeter/main.sh","name":"greeter","member":"main.sh","deps":["ConfigSet[greeter]"]}
+{"op":"command","id":"Command[run-greeter]","name":"run-greeter","bin":"sh","args":["main.sh"],"dir":"${HOME}/gonf-tutorial/greeter","if_changed":true,"watch":["ConfigSet[greeter]"],"deps":["ConfigSet[greeter]"]}
+wrote redacted preview to stdout (7 ops, 0 secret-bearing; not a plan, cannot be applied)
+```
+
+The line edits travel as edits, not as a whole file: `add_lines`,
+`remove_lines`, `keyed_lines` and `blocks` are applied to whatever
+`app.conf` holds on the destination. The config set is one `config_set` op
+with its members and validators; `MemberPath` is still a placeholder,
+filled in on the destination when the set is staged and published. Each
+member also gets its own `config_set_member` op, which is what
+`ConfigSetMember[...]` in the summaries refers to.
+
 ---
 
 ← [3. Files, directories and links](03-files.md) · [Contents](README.md) · Next: [5. Templates](05-templates.md) →
