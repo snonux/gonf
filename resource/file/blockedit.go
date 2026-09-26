@@ -57,6 +57,56 @@ func applyBlock(lines []string, block resource.Block) ([]string, error) {
 	}
 }
 
+// refuseNestedBlocks refuses a file in which a marker of one declared block
+// sits inside another declared block's region (between that block's BEGIN
+// and END lines). applyBlock checks each block's own markers in isolation,
+// so nesting would otherwise pass: whichever block applies later replaces
+// the other's markers with its own lines, which (depending on declaration
+// order) deletes the inner block and appends it again on the next apply,
+// never converging in one pass. Like any other ambiguous marker layout, gonf
+// cannot tell which lines it owns, so it refuses without writing. Only
+// blocks with exactly one BEGIN before one END have a region; every other
+// layout is applyBlock's to refuse.
+func refuseNestedBlocks(lines []string, blocks []resource.Block) error {
+	type region struct{ begin, end int }
+	regions := make(map[string]region, len(blocks))
+	positions := make(map[string][]int, len(blocks))
+	for _, block := range blocks {
+		begin, end := blockMarkers(block.Name)
+		var begins, ends []int
+		for i, line := range lines {
+			switch strings.TrimSpace(line) {
+			case begin:
+				begins = append(begins, i)
+			case end:
+				ends = append(ends, i)
+			}
+		}
+		positions[block.Name] = slices.Concat(begins, ends)
+		if len(begins) == 1 && len(ends) == 1 && begins[0] < ends[0] {
+			regions[block.Name] = region{begins[0], ends[0]}
+		}
+	}
+	for _, outer := range blocks {
+		r, ok := regions[outer.Name]
+		if !ok {
+			continue
+		}
+		for _, inner := range blocks {
+			if inner.Name == outer.Name {
+				continue
+			}
+			for _, i := range positions[inner.Name] {
+				if r.begin < i && i < r.end {
+					return fmt.Errorf("managed block %q: a marker of managed block %q sits inside its region (nested blocks); move the %q block out of it",
+						outer.Name, inner.Name, inner.Name)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // endBeforeBegin explains the one-each layout applyBlock still refuses.
 func endBeforeBegin(begins, ends []int) string {
 	if len(begins) == 1 && len(ends) == 1 {

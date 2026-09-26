@@ -1,9 +1,11 @@
 package link
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource"
@@ -21,7 +23,15 @@ func ensureSymlink(l *Link) error {
 	}
 
 	if err := assertSymlinkTargetExists(l.path, l.target); err != nil {
-		return err
+		// A dry run applies nothing, so a target that an earlier resource
+		// of the same plan creates (a Dir, a File, a Package) is still
+		// missing here: preview the link instead of failing the whole dry
+		// run. The real apply still refuses a dangling link.
+		// Every branch below only notes and logs under dry-run.
+		if !resource.DryRun() || !errors.Is(err, errTargetMissing) {
+			return err
+		}
+		logger.Info("dry-run: symlink %s target %q does not exist yet; the apply refuses it unless an earlier resource creates it", l.path, l.target)
 	}
 
 	info, err := os.Lstat(l.path)
@@ -101,20 +111,31 @@ func createSymlink(l *Link, id string) error {
 	return nil
 }
 
+// errTargetMissing marks assertSymlinkTargetExists's "target does not exist"
+// refusal, which a dry run downgrades to would-change.
+var errTargetMissing = errors.New("target does not exist")
+
 // assertSymlinkTargetExists reports an error if resolving target from linkPath
 // would yield a dangling symlink. Relative targets are resolved against the
-// link's directory. filepath.Clean is applied so Rex-style trailing slashes
-// still resolve when the cleaned path exists.
+// link's directory the way the kernel resolves them: the link's directory
+// and target are concatenated and handed to os.Stat unchanged, never
+// cleaned lexically, because filepath.Clean would fold a ".." against the
+// path's own spelling while the kernel follows it from wherever a symlinked
+// parent actually points (lnk -> real/sub, target "../t" is real/t, not t).
+// Trailing slashes of target are trimmed so Rex-style "dir/" and "file/"
+// targets still resolve when the entry exists.
 func assertSymlinkTargetExists(linkPath, target string) error {
-	resolved := target
-	if !filepath.IsAbs(target) {
-		resolved = filepath.Join(filepath.Dir(linkPath), target)
+	resolved := strings.TrimRight(target, "/")
+	if resolved == "" {
+		resolved = "/" // target is the filesystem root
 	}
-	resolved = filepath.Clean(resolved)
+	if !filepath.IsAbs(target) {
+		resolved = filepath.Dir(linkPath) + string(filepath.Separator) + resolved
+	}
 
 	if _, err := os.Stat(resolved); err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("symlink %s: refusing broken link to %q (target does not exist)", linkPath, target)
+			return fmt.Errorf("symlink %s: refusing broken link to %q (%w)", linkPath, target, errTargetMissing)
 		}
 		return fmt.Errorf("symlink %s: cannot stat target %q: %w", linkPath, target, err)
 	}

@@ -357,8 +357,15 @@ func (ensureDirHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 	}, nil
 }
 
-// Apply ensures the destination directory exists with the recorded
-// mode/ownership, mirroring EnsureDir's own option handling exactly.
+// Apply creates the destination directory with the recorded mode/ownership
+// only when it is missing, the destination-side twin of direct-mode
+// api.EnsureDir: a path that already is a directory (a symlink to one
+// counts, as os.Stat follows it) is left exactly as it is, neither chmod'ed
+// to the recorded mode (which is build()'s 0750 default unless the recipe
+// set one) nor chown'ed, nor refused for being a symlink. It is noted ok
+// under the same Directory[path] id dir.Ensure notes an existing directory
+// with. Anything else (missing, or not a directory) goes through dir.Ensure,
+// which creates it or reports the conflict.
 func (ensureDirHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	path, err := plan.ExpandPath(op.Path)
 	if err != nil {
@@ -366,6 +373,10 @@ func (ensureDirHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
 	}
 	if path == "" {
 		return fmt.Errorf("ensure_dir: missing path")
+	}
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		resource.Note(resource.FormatID("Directory", path), resource.StatusOK)
+		return nil
 	}
 	var opts []opt.DirOption
 	if op.Mode != "" {

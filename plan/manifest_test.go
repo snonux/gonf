@@ -169,6 +169,24 @@ func TestScanTree(t *testing.T) {
 	assertManifestEntries(t, entries)
 }
 
+// TestScanTreeFollowsSymlinkedRoot pins that a source directory which is
+// itself a symlink to a directory (assets/current -> v2) packages the tree
+// it points at. filepath.WalkDir does not descend into a symlinked root, so
+// the tree used to package empty, and a WithPrune sync_dir then pruned every
+// destination entry.
+func TestScanTreeFollowsSymlinkedRoot(t *testing.T) {
+	src := buildManifestSourceTree(t)
+	link := filepath.Join(t.TempDir(), "current")
+	if err := os.Symlink(src, link); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := scanTree(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertManifestEntries(t, entries)
+}
+
 func TestScanTreeMissingAndNotADir(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "nope")
 	if _, err := scanTree(missing); err == nil || !strings.Contains(err.Error(), "package tree") {
