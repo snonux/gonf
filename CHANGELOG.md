@@ -45,9 +45,10 @@ Fixes
   listing each one and asking for a hand-written `DescX`. Before, it wrote
   the companion into `desc_gen.go`, which then failed to build on other
   platforms (`undefined: S`). Types split over complementary files, and
-  `-o desc_linux.go` for a linux-only package, are accepted. `_x.go`,
-  `.x.go` and files no platform builds without custom tags (such as
-  `// +build ignore`) are no longer read.
+  `-o desc_linux.go` for a linux-only package, are accepted. `_x.go` and
+  `.x.go` are no longer read, and a file that needs custom tags (such as
+  `// +build ignore` or `integration`) contributes only its hand-written
+  `DescX`, not task methods.
 
 Docs
 - Gonfy the beaver is gonf's mascot and new logo (`assets/logo-*.svg`).

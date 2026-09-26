@@ -38,8 +38,11 @@ type srcFile struct {
 // Generate returns the formatted source of the generated file for the
 // package in dir, or nil when no task method there needs a description.
 // out, the generated file's name, is skipped when reading the package, and
-// so is every file go build never selects without custom -tags: _x.go and
-// .x.go, and files whose constraint no platform satisfies (ignore).
+// so are _x.go and .x.go, which go build never selects. A file of the
+// package that builds only with custom -tags (//go:build integration, or
+// ignore) is read just for its method names: its hand-written DescX still
+// suppresses a generated one, which would be declared twice under those
+// tags, but its task methods get no companion.
 func Generate(dir, out string) ([]byte, error) {
 	fset := token.NewFileSet()
 	entries, err := os.ReadDir(dir)
@@ -47,6 +50,7 @@ func Generate(dir, out string) ([]byte, error) {
 		return nil, err
 	}
 	var files []srcFile
+	var tagOnly []*ast.File
 	for _, e := range entries {
 		n := e.Name()
 		if e.IsDir() || !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") || n == out ||
@@ -62,19 +66,20 @@ func Generate(dir, out string) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", dir, err)
 		}
-		if builds.none() {
-			continue
-		}
 		f, err := parser.ParseFile(fset, path, src, parser.ParseComments|parser.SkipObjectResolution)
 		if err != nil {
 			return nil, err
+		}
+		if builds.none() {
+			tagOnly = append(tagOnly, f)
+			continue
 		}
 		files = append(files, srcFile{name: n, ast: f, builds: builds})
 	}
 	if len(files) == 0 {
 		return nil, fmt.Errorf("%s: no Go files", dir)
 	}
-	methods, err := collect(files)
+	methods, err := collect(files, samePackage(tagOnly, files[0].ast.Name.Name))
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", dir, err)
 	}
@@ -97,10 +102,20 @@ func Generate(dir, out string) ([]byte, error) {
 // method name. A method defined in several build-constrained files (e.g.
 // s_linux.go and s_freebsd.go) gets one companion, since the generated file
 // has no build constraint line; differing doc comments are an error, as
-// either description would be wrong on the other platform.
-func collect(files []srcFile) ([]method, error) {
+// either description would be wrong on the other platform. The methods of
+// tagOnly only count as hand-written companions.
+func collect(files []srcFile, tagOnly []*ast.File) ([]method, error) {
 	type key struct{ recv, name string }
 	have := map[key]bool{}
+	for _, f := range tagOnly {
+		for _, d := range f.Decls {
+			if fd, ok := d.(*ast.FuncDecl); ok && fd.Recv != nil && len(fd.Recv.List) == 1 {
+				if recv, ok := receiverName(fd.Recv.List[0].Type); ok {
+					have[key{recv, fd.Name.Name}] = true
+				}
+			}
+		}
+	}
 	var candidates []method
 	for _, f := range files {
 		for _, d := range f.ast.Decls {
@@ -145,6 +160,18 @@ func collect(files []srcFile) ([]method, error) {
 		return out[i].name < out[j].name
 	})
 	return out, nil
+}
+
+// samePackage returns the files of package pkg, leaving out others such as
+// a //go:build ignore generator in package main.
+func samePackage(files []*ast.File, pkg string) []*ast.File {
+	var same []*ast.File
+	for _, f := range files {
+		if f.Name.Name == pkg {
+			same = append(same, f)
+		}
+	}
+	return same
 }
 
 // checkCoverage refuses a companion whose receiver type is missing on a

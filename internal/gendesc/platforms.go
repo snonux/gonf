@@ -71,11 +71,44 @@ var platforms = []platform{
 	{"windows", "arm64", true},
 }
 
+// archLevels are the architecture-level tags go build sets by default for
+// a GOARCH (GO386=sse2, GOAMD64=v1, GOARM=7, GOARM64=v8.0,
+// GOMIPS(64)=hardfloat, GOPPC64=power8, GORISCV64=rva20u64, wasm's
+// always-on features), cumulative as in internal/buildcfg.
+var archLevels = map[string][]string{
+	"386":      {"386.sse2"},
+	"amd64":    {"amd64.v1"},
+	"arm":      {"arm.5", "arm.6", "arm.7"},
+	"arm64":    {"arm64.v8.0"},
+	"mips":     {"mips.hardfloat"},
+	"mipsle":   {"mipsle.hardfloat"},
+	"mips64":   {"mips64.hardfloat"},
+	"mips64le": {"mips64le.hardfloat"},
+	"ppc64":    {"ppc64.power8"},
+	"ppc64le":  {"ppc64le.power8"},
+	"riscv64":  {"riscv64.rva20u64"},
+	"wasm":     {"wasm.satconv", "wasm.signext"},
+}
+
+// experiments are the running toolchain's default goexperiment.* tags.
+var experiments = func() []string {
+	var tags []string
+	for _, t := range build.Default.ToolTags {
+		if strings.HasPrefix(t, "goexperiment.") {
+			tags = append(tags, t)
+		}
+	}
+	return tags
+}()
+
 // target is one configuration a plain go build can select files for: a
 // port with CGO_ENABLED=0, or, where the port supports it, =1.
 type target struct {
 	p   platform
 	cgo bool
+	// toolTags are the tool tags a default go build sets there: the
+	// port's architecture levels and the default experiments.
+	toolTags []string
 }
 
 // targets are every port without cgo, each followed by the same port with
@@ -83,9 +116,10 @@ type target struct {
 var targets = func() []target {
 	var ts []target
 	for _, p := range platforms {
-		ts = append(ts, target{p, false})
+		tags := append(append([]string(nil), archLevels[p.goarch]...), experiments...)
+		ts = append(ts, target{p, false, tags})
 		if p.cgo {
-			ts = append(ts, target{p, true})
+			ts = append(ts, target{p, true, tags})
 		}
 	}
 	return ts
@@ -97,9 +131,11 @@ type targetSet []bool
 // buildTargets returns the targets on which go build, without custom
 // -tags, selects the file name with content src: its GOOS/GOARCH name
 // suffix, its //go:build (or legacy +build) constraint and, when it imports
-// "C", cgo all count. Release tags (go1.N) are the running toolchain's;
-// no custom or tool tags (amd64.v3, goexperiment.*) are set, so a file
-// needing one, or ignore, selects no target, and src is not parsed further.
+// "C", cgo all count. Release tags (go1.N) and default experiments
+// (goexperiment.*) are the running toolchain's, and each port has its
+// default architecture level (see archLevels). A file needing a custom tag
+// (ignore, integration) or a non-default level (amd64.v3) selects no
+// target, and src is not parsed further.
 func buildTargets(name string, src []byte) (targetSet, error) {
 	set := make(targetSet, len(targets))
 	for i, t := range targets {
@@ -109,13 +145,14 @@ func buildTargets(name string, src []byte) (targetSet, error) {
 			CgoEnabled:  t.cgo,
 			Compiler:    "gc",
 			ReleaseTags: build.Default.ReleaseTags,
+			ToolTags:    t.toolTags,
 			OpenFile: func(string) (io.ReadCloser, error) {
 				return io.NopCloser(bytes.NewReader(src)), nil
 			},
 		}
 		ok, err := ctxt.MatchFile(".", name)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", name, err)
+			return nil, err // it names the file
 		}
 		set[i] = ok
 	}

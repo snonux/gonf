@@ -214,6 +214,7 @@ func TestGenerateSkipsUnbuiltFiles(t *testing.T) {
 		"integ.go":    "//go:build integration\n\n" + gen,
 		"notyet.go":   "//go:build go1.999\n\n" + gen,
 		"nowhere.go":  "//go:build linux && windows\n\n" + gen,
+		"v3.go":       "//go:build amd64.v3\n\n" + gen,
 		"_s_linux.go": fileS,
 	})
 	got, err := Generate(dir, DefaultFile)
@@ -302,6 +303,10 @@ func TestGenerateComplementarySplit(t *testing.T) {
 			"s_cgo.go":   "//go:build cgo\n\npackage recipe\n\nimport \"C\"\n\n" + declS,
 			"s_nocgo.go": "//go:build !cgo\n\n" + fileS,
 		},
+		"arch level": {
+			"s_v1.go":    "//go:build amd64.v1\n\n" + fileS,
+			"s_other.go": "//go:build !amd64\n\n" + fileS,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := writeFiles(t, files)
@@ -351,6 +356,55 @@ func TestGenerateOutputNameConstraint(t *testing.T) {
 	}
 }
 
+// The default architecture levels count as set, cumulatively; a higher
+// level counts as a custom tag.
+func TestBuildTargetsToolTags(t *testing.T) {
+	src := []byte("//go:build amd64.v1 || arm.6 || riscv64.rva20u64 || wasm.signext\n\npackage p\n")
+	got, err := buildTargets("x.go", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, tg := range targets {
+		want := tg.p.goarch == "amd64" || tg.p.goarch == "arm" || tg.p.goarch == "riscv64" || tg.p.goarch == "wasm"
+		if got[i] != want {
+			t.Errorf("%s (cgo %v): builds = %v, want %v", tg.p, tg.cgo, got[i], want)
+		}
+	}
+	got, err = buildTargets("x.go", []byte("//go:build amd64.v2 || arm64.v8.1\n\npackage p\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.none() {
+		t.Errorf("non-default levels build on %s, want nowhere", got)
+	}
+}
+
+// A file building only with custom tags still contributes its hand-written
+// DescX: generating one too would declare it twice under -tags integration.
+// Its own task methods get no companion, and a file of another package
+// (a //go:build ignore generator) contributes nothing.
+func TestGenerateTagOnlyHandWritten(t *testing.T) {
+	dir := writeFiles(t, map[string]string{
+		"t.go": fileT,
+		"d.go": "//go:build integration\n\npackage recipe\n\n" +
+			"func (T) DescBar() string { return \"Hand-written\" }\n\n// Qux installs qux.\nfunc (T) Qux() {}\n",
+	})
+	src, err := Generate(dir, DefaultFile)
+	if err != nil || src != nil {
+		t.Fatalf("Generate = %q, %v; want nil, nil (DescBar is hand-written)", src, err)
+	}
+	typeCheck(t, dir, "linux", "integration")
+
+	dir = writeFiles(t, map[string]string{
+		"t.go":   fileT,
+		"gen.go": "//go:build ignore\n\npackage main\n\ntype T struct{}\n\nfunc (T) DescBar() string { return \"other\" }\n",
+	})
+	src, err = Generate(dir, DefaultFile)
+	if err != nil || !strings.Contains(string(src), "func (T) DescBar()") {
+		t.Fatalf("Generate = %q, %v; want DescBar generated", src, err)
+	}
+}
+
 // A receiver missing somewhere is fine when nothing is generated for it: its
 // DescX is hand-written next to it, or its task has no doc comment. The
 // generated file then type-checks on every platform, including those that
@@ -388,12 +442,12 @@ func TestGenerateConstrainedReceiverHandWritten(t *testing.T) {
 }
 
 // typeCheck type-checks the import-free package in dir as it builds for
-// goos/amd64 without cgo, i.e. with the files go build would pick there. A
-// package with no file there passes.
-func typeCheck(t *testing.T, dir, goos string) {
+// goos/amd64 without cgo and with -tags tags, i.e. with the files go build
+// would pick there. A package with no file there passes.
+func typeCheck(t *testing.T, dir, goos string, tags ...string) {
 	t.Helper()
 	ctxt := build.Default
-	ctxt.GOOS, ctxt.GOARCH, ctxt.CgoEnabled = goos, "amd64", false
+	ctxt.GOOS, ctxt.GOARCH, ctxt.CgoEnabled, ctxt.BuildTags = goos, "amd64", false, tags
 	pkg, err := ctxt.ImportDir(dir, 0)
 	var none *build.NoGoError
 	if errors.As(err, &none) {
