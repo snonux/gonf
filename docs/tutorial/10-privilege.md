@@ -85,13 +85,7 @@ wrote redacted preview to stdout (6 ops, 0 secret-bearing; not a plan, cannot be
 When a run mixes both kinds, gonf splits the plan into ordered **chunks**
 and applies each with the right privilege. Chunks are never reordered.
 
-```mermaid
-flowchart TB
-    C0["<b>chunk 0, elevated</b> (sudo -n gonf apply)<br/>EnsureDir /etc/motd.d<br/>File /etc/motd.d/gonf-tutorial"]
-    C1["<b>chunk 1, as you</b><br/>File ~/.tutorial-note<br/>File ~/.tutorial-inputrc"]
-    C2["<b>chunk 2, elevated</b><br/>Command id -un"]
-    C0 --> C1 --> C2
-```
+![A plan split into privilege chunks: elevated, as you, elevated](img/ch10-1.svg)
 
 Pick the helper with `-privilege`:
 

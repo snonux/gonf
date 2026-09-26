@@ -119,12 +119,7 @@ summary: 2 ok, 4 changed, 2 skipped, 0 would-change
 `app.conf` changed, so `reload-app` ran. This is the pattern for "restart
 the daemon when its config changed":
 
-```mermaid
-flowchart LR
-    F["File app.conf"] -- "changed?" --> G{change gate}
-    G -- yes --> R["Command reload-app runs"]
-    G -- no --> S["skipped: no watched dependency changed"]
-```
+![A change gate: reload-app runs only when app.conf changed](img/ch06-1.svg)
 
 `OnChange` also orders: `reload-app` always applies after `app.conf`. Use
 `DependsOn` when you want only the ordering, as `report` does with the

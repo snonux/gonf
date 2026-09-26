@@ -1,0 +1,10 @@
+flowchart TB
+    C0["`**chunk 0, elevated** (sudo -n gonf apply)
+        EnsureDir /etc/motd.d
+        File /etc/motd.d/gonf-tutorial`"]
+    C1["`**chunk 1, as you**
+        File ~/.tutorial-note
+        File ~/.tutorial-inputrc`"]
+    C2["`**chunk 2, elevated**
+        Command id -un`"]
+    C0 --> C1 --> C2

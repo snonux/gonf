@@ -1,0 +1,11 @@
+sequenceDiagram
+    participant You
+    participant Recipe as recipe binary (controller)
+    participant Plan
+    participant Dest as destination
+    You->>Recipe: ./recipe hello
+    Recipe->>Recipe: run the body of task "hello"
+    Recipe->>Plan: File(...) becomes {"op":"file", ...}
+    Plan->>Dest: apply op by op
+    Dest->>Dest: compare, change only what differs
+    Dest-->>You: summary: 0 ok, 1 changed

@@ -78,18 +78,7 @@ func envOr(key, def string) string {
 
 ## Owning parts of a file
 
-```mermaid
-flowchart TB
-    subgraph app.conf
-        A["# app.conf  (untouched)"]
-        B["port=8080  (WithKeyedLine: owns the line starting with port=)"]
-        C["user=paul  (untouched)"]
-        D["# BEGIN GONF peers ... # END GONF peers  (WithBlock: owns the region)"]
-        E["log_level=info, color=yes  (WithLines: must exist)"]
-        F["greeting=&quot;hello world&quot;  (WithShellVar)"]
-        G["debug=true  (WithoutLines: must not exist)"]
-    end
-```
+![Which line-edit option owns which part of app.conf](img/ch04-1.svg)
 
 Start from a file someone else wrote, then apply `lines`:
 
@@ -177,12 +166,7 @@ echo hello
 The broken script never reached `hello.sh`. Use this for anything a typo can
 take down: `sshd -t`, `nginx -t`, `httpd -n`, `visudo -c`.
 
-```mermaid
-flowchart LR
-    C[write candidate] --> V{validator exits 0?}
-    V -- yes --> R[atomic rename over the live file]
-    V -- no --> K[keep the live file, report the error]
-```
+![WithValidation: the candidate replaces the live file only when the validator exits 0](img/ch04-2.svg)
 
 Reference: [File](../reference.md#file) (validation).
 

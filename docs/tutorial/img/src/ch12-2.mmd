@@ -1,0 +1,10 @@
+sequenceDiagram
+    participant C as controller
+    participant E as earth
+    C->>C: record plan (EachHost per-host fragments)
+    C->>E: ssh: gonf -plan-version?
+    E-->>C: missing
+    C->>C: go build for earth's GOOS/GOARCH
+    C->>E: scp + install /usr/local/bin/gonf
+    C->>E: ssh: sudo gonf apply - (plan on stdin)
+    E-->>C: log lines and summary

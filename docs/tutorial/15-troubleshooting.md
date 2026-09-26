@@ -3,10 +3,7 @@
 gonf sorts every failure into one of four classes, and each stops at a
 different point. Knowing the class tells you where to look.
 
-```mermaid
-flowchart LR
-    D["<b>1. declare</b><br/>main runs<br/><i>declaration error</i>"] --> R["<b>2. record</b><br/>task bodies run<br/><i>record error</i>"] --> P["<b>3. push checks</b><br/>before any ssh<br/><i>push refusal</i>"] --> A["<b>4. apply</b><br/>on the destination<br/><i>apply error</i>"]
-```
+![The four failure classes: declare, record, push checks, apply](img/ch15-1.svg)
 
 ## The recipe
 

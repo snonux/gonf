@@ -1,0 +1,11 @@
+flowchart TB
+    subgraph Serializable["Serializable: the destination decides"]
+        A["WhenLinux, WhenBSD, WhenOS(...)"]
+        B["WhenProfile(...)"]
+        C["WhenHostnameContains, WhenHostnameIn"]
+        D["WhenHostname(list, fn), WhenPathExists(path, fn)"]
+    end
+    subgraph Opaque["Opaque: the controller decides"]
+        E["When(func(Facts) bool)"]
+        F["if ... in a task body"]
+    end

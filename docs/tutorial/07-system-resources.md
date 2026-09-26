@@ -83,11 +83,7 @@ then keep `nginx` started and enabled, restarting it only when the config
 changed (`if_changed` with `watch`). The timer sits inside a
 `when_begin`/`when_end` block, so a non-Linux destination skips it.
 
-```mermaid
-flowchart LR
-    P["Package nginx"] --> F["File tutorial.conf"]
-    F -- "OnChange" --> S["Service nginx: started, enabled, restart on change"]
-```
+![Package, then config file, then a service restarted on change](img/ch07-1.svg)
 
 ## Cron
 

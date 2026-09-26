@@ -13,14 +13,7 @@ installs it on the first push.
 
 ## Hosts, clusters and fleets
 
-```mermaid
-flowchart TB
-    solar[Fleet solar] --> inner[Cluster inner, parallel 2]
-    solar --> outer[Cluster outer]
-    inner --> earth["earth: paul@earth.lan, Window 3, Mirror"]
-    inner --> mars["mars: paul@mars.lan, Window 4"]
-    outer --> pluto["pluto: paul@pluto.example.org, Window 5"]
-```
+![The solar fleet: clusters inner and outer and their hosts](img/ch12-1.svg)
 
 ```go
 // Command recipe describes an inventory and pushes to it (tutorial
@@ -171,18 +164,7 @@ The first push found no gonf on earth, built one for its platform and
 installed it (`syncing gonf binary`). The template rendered earth's own
 host name, and `EachHost` gave earth its own hour.
 
-```mermaid
-sequenceDiagram
-    participant C as controller
-    participant E as earth
-    C->>C: record plan (EachHost per-host fragments)
-    C->>E: ssh: gonf -plan-version?
-    E-->>C: missing
-    C->>C: go build for earth's GOOS/GOARCH
-    C->>E: scp + install /usr/local/bin/gonf
-    C->>E: ssh: sudo gonf apply - (plan on stdin)
-    E-->>C: log lines and summary
-```
+![Sequence of a push to earth: record, probe, build and install gonf, apply over ssh](img/ch12-2.svg)
 
 ## Push to a cluster
 

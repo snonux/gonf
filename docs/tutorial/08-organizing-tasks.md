@@ -186,15 +186,7 @@ summary: 0 ok, 2 changed, 0 skipped, 0 would-change
   changed File[/home/paul/gonf-tutorial/site/site.conf]
 ```
 
-```mermaid
-flowchart LR
-    all --> web
-    all --> backup_nightly
-    web --> web_docroot & web_config & web_content & web_logrotate
-    web_config -. Needs .-> web_docroot
-    web_content -. Needs .-> web_docroot
-    deploy == alias ==> web
-```
+![Task graph of the chapter 8 recipe: all, web and its subtasks, Needs edges and the deploy alias](img/ch08-1.svg)
 
 ## Aggregates
 

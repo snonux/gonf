@@ -1,0 +1,4 @@
+flowchart TB
+    R["./recipe plan -o out dotfiles"] --> O["out/plan.jsonl + out/blobs/"]
+    O -- "scp, rsync, USB stick" --> H["other host"]
+    H --> A["gonf apply out/plan.jsonl"]
