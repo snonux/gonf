@@ -1,4 +1,4 @@
-// Command recipe renders templates (tutorial chapter 5).
+// Command gonf renders templates (tutorial chapter 5).
 package main
 
 import (

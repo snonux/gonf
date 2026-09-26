@@ -1,4 +1,4 @@
-// Command recipe edits and validates files (tutorial chapter 4).
+// Command gonf edits and validates files (tutorial chapter 4).
 package main
 
 import (

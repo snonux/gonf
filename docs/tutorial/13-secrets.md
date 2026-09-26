@@ -27,7 +27,7 @@ checks in two fake ones so the example runs.) Other providers, such as the
 ## The recipe
 
 ```go
-// Command recipe uses secrets (tutorial chapter 13).
+// Command gonf uses secrets (tutorial chapter 13).
 package main
 
 import (

@@ -1,4 +1,4 @@
-// Command recipe shows gonf's error classes (tutorial chapter 15). Set
+// Command gonf shows gonf's error classes (tutorial chapter 15). Set
 // BREAK to one of decl, record or apply to trigger one of them.
 package main
 

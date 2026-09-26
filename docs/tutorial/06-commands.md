@@ -10,7 +10,7 @@ something it depends on changed.
 ## The recipe
 
 ```go
-// Command recipe runs commands and wires change gates (tutorial chapter 6).
+// Command gonf runs commands and wires change gates (tutorial chapter 6).
 package main
 
 import (

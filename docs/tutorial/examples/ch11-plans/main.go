@@ -1,4 +1,4 @@
-// Command recipe records plans to apply later or elsewhere (tutorial
+// Command gonf records plans to apply later or elsewhere (tutorial
 // chapter 11).
 package main
 

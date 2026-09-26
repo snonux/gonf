@@ -1,4 +1,4 @@
-// Command recipe describes an inventory and pushes to it (tutorial
+// Command gonf describes an inventory and pushes to it (tutorial
 // chapter 12).
 package main
 

@@ -10,9 +10,9 @@ New to gonf? Start with the [tutorial](tutorial/README.md).
 
 | Term | Meaning |
 |------|---------|
-| recipe | A Go program that registers tasks and calls `cli.CLI()` from `main`. |
+| recipe | Your task code: a Go module that registers tasks. `go build` turns it into your own `gonf` program, whose `main` ends with `cli.Main()`. |
 | task | A named function whose body declares resources. Options on the task say where and as whom it applies. |
-| controller | The host running the recipe binary. Task bodies, secrets and opaque predicates run here. |
+| controller | The host running your `gonf`. Task bodies, secrets and opaque predicates run here. |
 | destination | The host that applies the plan. Serializable guards, templates and `${HOME}` resolve here. |
 | plan | Versioned JSONL of resource ops, plus a blob store for large files and synced trees. |
 | apply | Interpreting a plan. There is one engine: local runs, `gonf apply`, push, cluster and fleet all go through it. |
@@ -308,13 +308,13 @@ Other helpers:
 
 | API | Meaning |
 |-----|---------|
-| `Home(elem...)` | `$HOME/elem...` of the controller, where the recipe runs. For sources. |
+| `Home(elem...)` | `$HOME/elem...` of the controller, where gonf runs. For sources. |
 | `DestHome(elem...)` | `${HOME}/elem...`, expanded on the destination at apply. For targets. An element escaping the home (`..`) is a declaration error. |
 | `Expand(p)` | Expand a leading `~` (controller home, like `Home`). |
 | `List(a, b, ...)` | `[]string` for multi-path resources, `Command` args and key/value lists. |
 | `${HOME}` in a path | Expanded on the destination at apply. Any other `${...}` is an apply error. |
 
-The rule: `Home` = where the recipe runs (sources), `DestHome` = where the
+The rule: `Home` = where gonf runs (sources), `DestHome` = where the
 plan applies (targets). `Home` records the controller's home literally, so a
 push from `/home/paul` to a Mac would write into `/home/paul` there.
 

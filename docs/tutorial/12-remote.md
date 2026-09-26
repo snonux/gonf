@@ -20,7 +20,7 @@ installs it on the first push.
 ![The solar fleet: clusters inner and outer and their hosts](img/ch12-1.svg)
 
 ```go
-// Command recipe describes an inventory and pushes to it (tutorial
+// Command gonf describes an inventory and pushes to it (tutorial
 // chapter 12).
 package main
 
