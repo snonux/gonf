@@ -939,7 +939,10 @@ Host("f0", freebsd) // ssh f0.lan
 Host("f1", freebsd, WithData(Window{Hour: "4"})) // replaces the default
 ```
 
-- Options apply in order, bundles expanded in place: later wins.
+- Options apply in order, bundles expanded in place: later wins. One
+  exception: the last `WithSSHHost`, if non-empty, beats every
+  `WithSSHDomain` regardless of order (`WithSSHHost("")` restores the
+  default); otherwise the last `WithSSHDomain` applies.
 - A `WithValue` key or `WithData` type a bundle set may be replaced by any
   later option. Set twice outside a bundle, or by a bundle after an explicit
   option, is still a declaration error: pass bundles first.

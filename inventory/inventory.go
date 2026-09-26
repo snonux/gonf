@@ -393,7 +393,10 @@ func ResetInventory() {
 // Options apply in order, bundles expanded in place, so a later option
 // overrides an earlier one: a plain field (WithSSHHost, WithPrivilege, ...)
 // is simply set again, and a WithValue key or WithData type that a bundle
-// set is replaced. A key or type set twice outside any bundle stays a
+// set is replaced. The SSH hostname is the one exception: the last
+// WithSSHHost, if non-empty, beats every WithSSHDomain regardless of order
+// (WithSSHHost("") restores the default); otherwise the last WithSSHDomain
+// applies. A key or type set twice outside any bundle stays a
 // declaration error, as before; so a bundle placed after an explicit
 // WithValue of the same key is refused rather than silently replacing it.
 // Pass bundles first. Bundles nest. Every option runs; the first error
