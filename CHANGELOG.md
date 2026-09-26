@@ -41,6 +41,35 @@ Fixes
   now fires when that resource changed. Before, the gate compared the
   recorded `File[${HOME}/...]` id with the expanded path the apply noted,
   and never fired.
+- A local run selects hosts by their `WithHostnameMatch` fragment, so their
+  `EachHost`/`ForHosts` bodies apply on the machine the fragment matches.
+- `Needs(T.Method)` resolves the exact task under the dependent's prefix
+  when one registration's prefix starts with another's.
+- `gonf-desc` writes one `DescX` for a method defined in per-GOOS files.
+- `gonf push -- <ssh-opts>` keeps the value of every value-taking ssh
+  option (`-E`, `-m`, `-B`, ...) instead of reading it as the host.
+- `WithGonfPath` is shell-quoted in remote apply and install commands; the
+  remote gonf-sync staging dir is removed after a cancelled push too.
+- Security: the sticky `-apply-dir`, the apply staging root and blob tar
+  extraction no longer follow a planted symlink; the staging root avoids a
+  shared `gonf-apply` dir owned by another user.
+- A symlinked `WithSource` directory is synced (it synced nothing and, with
+  `WithPrune` on the plan path, emptied the destination).
+- `EnsureDir` on the plan path leaves an existing directory alone.
+- `WithBlock` refuses nested block markers; line edits handle lines over
+  64 KiB.
+- A dry run previews a `Symlink` whose target an earlier resource of the
+  plan creates; relative symlink targets resolve through a symlinked
+  parent like the kernel does.
+- A secret quoted with `%q` in an error is redacted; redaction keeps the
+  line break after a secret read with a trailing newline.
+- `GitGlobal` applies an empty value and settles on one with surrounding
+  whitespace.
+- `IsLatest` installs a missing package on dnf and FreeBSD; NetBSD services
+  use the `one*` verbs so disabled running daemons are handled;
+  `NoService`/`NoTimer` settle on static, indirect, generated, alias and
+  runtime-enabled systemd units; a relative `Creates` is resolved against
+  `WithDir`.
 
 Docs
 - [docs/tutorial/](docs/tutorial/README.md): a step-by-step tutorial in 15
