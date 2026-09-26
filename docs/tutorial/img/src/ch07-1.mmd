@@ -1,0 +1,3 @@
+flowchart LR
+    P["Package nginx"] --> F["File tutorial.conf"]
+    F -- "OnChange" --> S["Service nginx: started, enabled, restart on change"]

@@ -64,12 +64,7 @@ A plan directory holds:
 The `dotfiles` guard became a `when_begin`/`when_end` pair, and paths still
 say `${HOME}`: the destination fills them in.
 
-```mermaid
-flowchart TB
-    R["./recipe plan -o out dotfiles"] --> O["out/plan.jsonl + out/blobs/"]
-    O -- "scp, rsync, USB stick" --> H["other host"]
-    H --> A["gonf apply out/plan.jsonl"]
-```
+![Record a plan to a directory, copy it to another host, apply it there](img/ch11-1.svg)
 
 ## Apply it
 

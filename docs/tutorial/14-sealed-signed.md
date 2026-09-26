@@ -106,14 +106,7 @@ summary: 3 ok, 0 changed, 0 skipped, 0 would-change
 applied stdin (4 ops)
 ```
 
-```mermaid
-flowchart TB
-    R["./recipe plan -seal -sign signer"] --> E["plan.age: GONF-SIGNED-PLAN/1 + age ciphertext"]
-    E --> V{"signature trusted<br/>and fresh (24h)?"}
-    V -- no --> X["refused, nothing decrypted"]
-    V -- yes --> D{"identity<br/>decrypts?"}
-    D -- yes --> A["apply"]
-```
+![Sealed and signed plan: verify the signature, then decrypt, then apply](img/ch14-1.svg)
 
 ## One artifact per host
 

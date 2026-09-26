@@ -1,0 +1,6 @@
+flowchart TB
+    solar[Fleet solar] --> inner[Cluster inner, parallel 2]
+    solar --> outer[Cluster outer]
+    inner --> earth["earth: paul@earth.lan, Window 3, Mirror"]
+    inner --> mars["mars: paul@mars.lan, Window 4"]
+    outer --> pluto["pluto: paul@pluto.example.org, Window 5"]

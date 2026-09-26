@@ -1,0 +1,7 @@
+flowchart LR
+    all --> web
+    all --> backup_nightly
+    web --> web_docroot & web_config & web_content & web_logrotate
+    web_config -. Needs .-> web_docroot
+    web_content -. Needs .-> web_docroot
+    deploy == alias ==> web

@@ -1,0 +1,4 @@
+flowchart LR
+    C[write candidate] --> V{validator exits 0?}
+    V -- yes --> R[atomic rename over the live file]
+    V -- no --> K[keep the live file, report the error]

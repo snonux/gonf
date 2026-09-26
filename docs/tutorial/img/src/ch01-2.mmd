@@ -1,0 +1,12 @@
+flowchart LR
+    C["`**Controller**, while recording
+        task bodies and Go control flow
+        secrets are resolved
+        RenderTemplate, opaque When predicates
+        WithSource files are read`"]
+    D["`**Destination**, while applying
+        When... guards are evaluated
+        .tmpl templates render with local facts
+        ${HOME} from DestHome expands
+        commands and their guards run`"]
+    C -- plan --> D

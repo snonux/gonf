@@ -24,19 +24,7 @@ Running a task never touches the system while your Go code runs. gonf first
 declare becomes an op in a plan. Then it **applies** the plan: for each op
 it checks the current state, and changes only what differs.
 
-```mermaid
-sequenceDiagram
-    participant You
-    participant Recipe as recipe binary (controller)
-    participant Plan
-    participant Dest as destination
-    You->>Recipe: ./recipe hello
-    Recipe->>Recipe: run the body of task "hello"
-    Recipe->>Plan: File(...) becomes {"op":"file", ...}
-    Plan->>Dest: apply op by op
-    Dest->>Dest: compare, change only what differs
-    Dest-->>You: summary: 0 ok, 1 changed
-```
+![Sequence: you run the recipe, it records the task into a plan, and the destination applies it op by op](img/ch01-1.svg)
 
 Because the plan is data, the same plan can be applied in three ways:
 
@@ -55,12 +43,7 @@ locally, from a file and over ssh.
 This split is the one thing to keep in mind while reading the rest of the
 book.
 
-```mermaid
-flowchart LR
-    C["<b>Controller</b>, while recording<br/>task bodies and Go control flow<br/>secrets are resolved<br/>RenderTemplate, opaque When predicates<br/>WithSource files are read"]
-    D["<b>Destination</b>, while applying<br/>When* guards are evaluated<br/>.tmpl templates render with local facts<br/>${HOME} from DestHome expands<br/>commands and their guards run"]
-    C -- plan --> D
-```
+![What happens on the controller while recording, and what happens on the destination while applying](img/ch01-2.svg)
 
 An `if hostname == "web"` in a task body runs on the controller and never
 reaches the plan. To let the destination decide, use a guard such as

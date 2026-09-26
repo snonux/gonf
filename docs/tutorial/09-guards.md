@@ -154,19 +154,7 @@ $ ./recipe plan -redacted bsd big mixed
 wrote redacted preview to stdout (15 ops, 0 secret-bearing; not a plan, cannot be applied)
 ```
 
-```mermaid
-flowchart TB
-    subgraph Serializable["Serializable: the destination decides"]
-        A["WhenLinux, WhenBSD, WhenOS(...)"]
-        B["WhenProfile(...)"]
-        C["WhenHostnameContains, WhenHostnameIn"]
-        D["WhenHostname(list, fn), WhenPathExists(path, fn)"]
-    end
-    subgraph Opaque["Opaque: the controller decides"]
-        E["When(func(Facts) bool)"]
-        F["if ... in a task body"]
-    end
-```
+![Serializable guards decided on the destination versus opaque guards decided on the controller](img/ch09-1.svg)
 
 This matters as soon as you push (chapter 12): gonf refuses to push a task
 whose only guard is opaque, because the remote machine could not evaluate

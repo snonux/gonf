@@ -1,0 +1,4 @@
+flowchart LR
+    F["File app.conf"] -- "changed?" --> G{change gate}
+    G -- yes --> R["Command reload-app runs"]
+    G -- no --> S["skipped: no watched dependency changed"]

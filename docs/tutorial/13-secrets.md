@@ -118,13 +118,7 @@ error: declared at /home/paul/gonf/docs/tutorial/examples/ch13-secrets/main.go:2
 [exit status 1]
 ```
 
-```mermaid
-flowchart TB
-    P["secrets/app/db-password"] -- "MustSecret while recording" --> R[recipe]
-    R --> O["op marked sensitive"]
-    O --> A["-stdout refused, -redacted withholds, logs redacted"]
-    O --> S["plan -o: sealed when a recipients file exists"]
-```
+![How a secret flows from the secrets tree into a sensitive op](img/ch13-1.svg)
 
 Keep secrets out of resource names: an unnamed `Command` whose argv holds a
 secret is refused, so give it `WithName`.

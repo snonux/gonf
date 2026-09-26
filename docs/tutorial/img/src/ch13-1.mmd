@@ -1,0 +1,5 @@
+flowchart TB
+    P["secrets/app/db-password"] -- "MustSecret while recording" --> R[recipe]
+    R --> O["op marked sensitive"]
+    O --> A["-stdout refused, -redacted withholds, logs redacted"]
+    O --> S["plan -o: sealed when a recipients file exists"]
