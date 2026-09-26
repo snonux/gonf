@@ -30,7 +30,7 @@ func (s *Service) applyWith(b backend) error {
 	if err != nil {
 		return err
 	}
-	enabled, err := b.enabled(u)
+	enabled, disable, err := probeEnablement(b, u)
 	if err != nil {
 		return err
 	}
@@ -40,12 +40,13 @@ func (s *Service) applyWith(b backend) error {
 	}
 
 	id := resource.FormatID("Service", s.name)
-	verbs, held := s.actions(id, running, enabled, flags != nil)
+	verbs, held := s.actions(id, running, enabled, disable, flags != nil)
 	return runActions(id, sequence(b, u, verbs, flags), held)
 }
 
 // actions returns the ordered verbs that move s from the probed state to
-// its desired state. Absent stops before disabling; present enables before
+// its desired state. Absent stops before disabling (with disable, the verb
+// probeEnablement chose; "" when nothing can be disabled); present enables before
 // starting. A running present service gets its restart/reload (reload wins
 // when both are set) unless the change gate holds it (embed.ChangeGate.Holds:
 // armed by OnChange and no watched resource changed this apply), which is
@@ -54,13 +55,13 @@ func (s *Service) applyWith(b backend) error {
 // would hold: that is what the File(rc.conf.local line) + OnChange(line)
 // spelling it replaces did. State convergence (enable/start/stop/disable)
 // is never gated — only the once-per-change action is.
-func (s *Service) actions(id string, running, enabled, flagsChanged bool) (verbs []verb, held bool) {
+func (s *Service) actions(id string, running, enabled bool, disable verb, flagsChanged bool) (verbs []verb, held bool) {
 	if s.Absent {
 		if running {
 			verbs = append(verbs, verbStop)
 		}
-		if enabled {
-			verbs = append(verbs, verbDisable)
+		if disable != "" {
+			verbs = append(verbs, disable)
 		}
 		return verbs, false
 	}

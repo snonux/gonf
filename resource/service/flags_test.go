@@ -185,7 +185,7 @@ func netbsdFlagsBackend(t *testing.T, rcConf, defaults, override string) netbsdB
 	dir := t.TempDir()
 	b := netbsdBackend{
 		run: recordingRunner(map[string]string{
-			netbsdService + " nsd status": "", netbsdService + " -e nsd": "",
+			netbsdService + " nsd onestatus": "", netbsdService + " -e nsd": "",
 		}, new([][]string)),
 		rcConfD:        filepath.Join(dir, "rc.conf.d"),
 		rcConf:         filepath.Join(dir, "rc.conf"),

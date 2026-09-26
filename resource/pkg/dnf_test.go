@@ -162,9 +162,11 @@ func TestApplyDNFFake(t *testing.T) {
 			wantNote:  resource.StatusChanged,
 		},
 		{
-			name:     "latest updates when not installed",
+			// dnf update of a package that is not installed fails with
+			// "No packages marked for upgrade.", so it is installed instead.
+			name:     "latest installs when not installed",
 			pkg:      withLatest(Package{name: "rsync"}),
-			wantDNF:  []string{"update", "-y", "rsync"},
+			wantDNF:  []string{"install", "-y", "rsync"},
 			wantNote: resource.StatusChanged,
 		},
 		{

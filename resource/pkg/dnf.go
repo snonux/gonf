@@ -17,10 +17,16 @@ func (dnfBackend) installed(run runner, name string) (bool, error) {
 
 func (dnfBackend) installCmd(name string) command { return dnfCmd("install", "-y", name) }
 
-// upgradeCmd runs dnf update whether or not the package is installed, as the
-// dnf backend did before the backend interface existed; the installed probe
-// is deliberately ignored so this refactor does not change dnf behaviour.
-func (dnfBackend) upgradeCmd(name string, _ bool) command { return dnfCmd("update", "-y", name) }
+// upgradeCmd runs dnf update for an installed package; a missing package is
+// installed with dnf install instead, because dnf update cannot install:
+// for a package that is not installed it fails with "No packages marked for
+// upgrade." (exit 1).
+func (b dnfBackend) upgradeCmd(name string, installed bool) command {
+	if !installed {
+		return b.installCmd(name)
+	}
+	return dnfCmd("update", "-y", name)
+}
 
 func (dnfBackend) removeCmd(name string) command { return dnfCmd("remove", "-y", name) }
 

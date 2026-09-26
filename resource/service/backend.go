@@ -16,6 +16,10 @@ const (
 	verbDisable verb = "disable"
 	verbRestart verb = "restart"
 	verbReload  verb = "reload"
+	// verbDisableRuntime removes a runtime-only enablement (systemctl
+	// disable --runtime). Only the systemd backend's enablement probe asks
+	// for it (see enablementProber).
+	verbDisableRuntime verb = "disable --runtime"
 )
 
 var _ resource.Action = backendAction{}
@@ -86,6 +90,31 @@ type backend interface {
 	// describe returns the log text for v: would follows "dry-run: would "
 	// in a dry run, did is logged once the action succeeded.
 	describe(u unit, v verb) (would, did string)
+}
+
+// enablementProber is an optional backend capability for a manager whose
+// "enabled at boot" probe can be true for a unit that disable cannot change
+// (a systemd static unit), or whose enablement needs another verb to remove
+// (systemd enabled-runtime). The policy then probes through it instead of
+// backend.enabled: enabled says the unit needs no enable, disable is the
+// verb that removes its enablement ("" when there is nothing disable can
+// change).
+type enablementProber interface {
+	enablement(u unit) (enabled bool, disable verb, err error)
+}
+
+// probeEnablement probes u's boot-time enablement through b: its
+// enablementProber when it has one, otherwise backend.enabled, whose true
+// is removed by verbDisable.
+func probeEnablement(b backend, u unit) (enabled bool, disable verb, err error) {
+	if p, ok := b.(enablementProber); ok {
+		return p.enablement(u)
+	}
+	enabled, err = b.enabled(u)
+	if enabled {
+		disable = verbDisable
+	}
+	return enabled, disable, err
 }
 
 // backendAction adapts one verb on a backend to the shared runner's

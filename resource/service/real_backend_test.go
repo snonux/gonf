@@ -84,7 +84,7 @@ func TestRealBackendLogLines(t *testing.T) {
 		{"freebsd", freebsdBackend{}, sys, verbReload,
 			"dry-run: would run service [sshd reload]", "service [sshd reload]"},
 		{"netbsd service verb", netbsdBackend{}, sys, verbStop,
-			"dry-run: would service sshd stop", "service sshd stop"},
+			"dry-run: would service sshd onestop", "service sshd onestop"},
 		{"netbsd enable", netbsdBackend{}, sys, verbEnable,
 			"dry-run: would enable sshd", "enable sshd"},
 		{"netbsd disable", netbsdBackend{}, sys, verbDisable,

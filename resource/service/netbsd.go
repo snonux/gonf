@@ -29,9 +29,13 @@ var _ backend = netbsdBackend{}
 // userSupport refuses WithUser: service(8) has no per-user services.
 func (netbsdBackend) userSupport() error { return errUserNeedsSystemd }
 
-// running asks service NAME status, which exits 0 while the daemon runs.
+// running asks service NAME onestatus, which exits 0 while the daemon runs.
+// NetBSD rc.subr refuses every directive but rcvar with exit 1 ("$NAME is
+// not enabled") while the service's rcvar is not YES, status included, so
+// plain status would report a running but disabled daemon as stopped. The
+// one* form skips that check.
 func (b netbsdBackend) running(u unit) (bool, error) {
-	return probeExitZero(b.run, "service "+u.name+" status", netbsdService, u.name, "status")
+	return probeExitZero(b.run, "service "+u.name+" onestatus", netbsdService, u.name, "onestatus")
 }
 
 // enabled asks service -e NAME, which exits 0 when the service is enabled.
@@ -46,14 +50,21 @@ func (b netbsdBackend) do(u unit, v verb) error {
 	case verbDisable:
 		return b.setEnabled(u.name, false)
 	default:
-		return b.svcRun(u.name, string(v))
+		return b.svcRun(u.name, rcAction(v))
 	}
 }
 
+// rcAction is the rc.d directive performing v: its one* form, which rc.subr
+// runs whatever the service's rcvar says. Plain stop (or start, restart,
+// reload) exits 1 for a service that is not enabled, so an absent service
+// started by hand could never be stopped, and ordering does not guarantee
+// the rcvar is already YES when a present service starts.
+func rcAction(v verb) string { return "one" + string(v) }
+
 // describe names rc.conf.d edits as "enable NAME"/"disable NAME" and
-// service(8) calls as "service NAME VERB", in both dry-run and apply logs.
+// service(8) calls as "service NAME oneVERB", in both dry-run and apply logs.
 func (netbsdBackend) describe(u unit, v verb) (would, did string) {
-	desc := "service " + u.name + " " + string(v)
+	desc := "service " + u.name + " " + rcAction(v)
 	if v == verbEnable || v == verbDisable {
 		desc = string(v) + " " + u.name
 	}

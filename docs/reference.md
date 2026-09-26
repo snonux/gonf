@@ -526,7 +526,7 @@ Noop("ping")                                      // changes nothing, reports ok
 
 | Option | Meaning |
 |--------|---------|
-| `Creates(path)` | Skip when `path` exists. |
+| `Creates(path)` | Skip when `path` exists (a relative `path` is resolved against `WithDir`). |
 | `Unless(bin, args, ExpectExit(n), ExpectStdout(s))` | Skip when the guard succeeds: exit 0 by default, or the given exit code and trimmed stdout. |
 | `OnlyIf(bin, args, ...)` | Run only when the guard succeeds. |
 | `WithName(n)` | ID `Command[n]`. Without it the ID is the whole argv. |
@@ -567,7 +567,8 @@ NoPackage("oldpkg")
 | NetBSD | `pkgin` (+ `pkg_info`) |
 
 `IsLatest` runs the upgrade path (`dnf update`, `pkg upgrade`, `pkg_add -u`,
-`pkgin install`). `WithEnv` applies to probes and mutations. Needs root.
+`pkgin install`); a package that is not installed yet is installed instead
+(`dnf install`, `pkg install`, `pkg_add`). `WithEnv` applies to probes and mutations. Needs root.
 `Packages(names...)` takes no options; pass them via `Package(List(...), ...)`.
 
 ### Service and DaemonReload
