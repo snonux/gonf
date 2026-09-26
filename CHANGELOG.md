@@ -39,6 +39,11 @@ Fixes
   a function literal, or the closure above) is now a declaration error
   when `Needs` is called. Before, it failed only a record that reached
   the task, with "needs unknown task".
+- `gonf-desc` refuses a documented task method whose receiver type is
+  declared only in build-constrained files (`s_linux.go`, `//go:build`),
+  asking for a hand-written `DescX`. Before, it wrote the companion into the
+  unconstrained `desc_gen.go`, which then failed to build on other
+  platforms (`undefined: S`).
 
 Docs
 - Gonfy the beaver is gonf's mascot and new logo (`assets/logo-*.svg`).

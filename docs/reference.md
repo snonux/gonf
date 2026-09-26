@@ -192,7 +192,11 @@ func (Unattended) StampDir() { EnsureDir("/var/lib/unattended-upgrade", RootPriv
 has a doc comment and no hand-written `DescX`: the first sentence, method
 name and final period dropped, first letter upper case ("Ensures the
 /var/lib/unattended-upgrade stamp directory"). A hand-written `DescX` wins.
-`gonf-desc -check` exits 1 when the file is stale.
+`gonf-desc -check` exits 1 when the file is stale. `desc_gen.go` has no
+build constraint, so `gonf-desc` refuses a documented task method whose
+receiver type is declared only in build-constrained files (`s_linux.go`,
+`s_arm64.go`, or a `//go:build` line): other platforms would not build.
+Write that `DescX` by hand next to the type.
 
 A companion with the wrong signature is a declaration error and that method
 is not registered. Name methods for the action (`Unattended.Script`, not

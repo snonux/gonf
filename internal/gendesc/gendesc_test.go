@@ -1,6 +1,11 @@
 package gendesc
 
 import (
+	"go/ast"
+	"go/build"
+	"go/parser"
+	"go/token"
+	"go/types"
 	"os"
 	"path/filepath"
 	"strings"
@@ -113,5 +118,144 @@ func TestGeneratePerOSMethodOnce(t *testing.T) {
 	write("s_freebsd.go", "package recipe\n\n// Setup installs the rc.d service.\nfunc (S) Setup() {}\n")
 	if _, err := Generate(dir, DefaultFile); err == nil {
 		t.Fatal("differing per-OS doc comments: want an error")
+	}
+}
+
+func TestNameConstrained(t *testing.T) {
+	for name, want := range map[string]bool{
+		"s.go":             false,
+		"linux.go":         false, // a bare GOOS name is no suffix
+		"s_unix.go":        false, // unix is a build tag, not a file suffix
+		"s_helper.go":      false,
+		"s_linux.go":       true,
+		"s_darwin.go":      true,
+		"s_arm64.go":       true,
+		"s_linux_amd64.go": true,
+		"a_b_freebsd.go":   true,
+	} {
+		if got := nameConstrained(name); got != want {
+			t.Errorf("nameConstrained(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+// writeFiles writes name -> content into a new temporary directory.
+func writeFiles(t *testing.T, files map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// A receiver type declared only in build-constrained files gets no
+// companion in the unconstrained desc_gen.go, which would not build on
+// another platform: gonf-desc refuses and asks for a hand-written DescX.
+func TestGenerateRefusesConstrainedReceiver(t *testing.T) {
+	const other = "package recipe\n\ntype T struct{}\n\n// Bar installs bar.\nfunc (T) Bar() {}\n"
+	const s = "type S struct{}\n\n// Foo installs foo.\nfunc (*S) Foo() {}\n"
+	for name, tc := range map[string]struct{ file, body string }{
+		"GOOS suffix":      {"s_linux.go", "package recipe\n\n" + s},
+		"GOARCH suffix":    {"s_arm64.go", "package recipe\n\n" + s},
+		"GOOS_GOARCH":      {"s_darwin_arm64.go", "package recipe\n\n" + s},
+		"go:build line":    {"s.go", "//go:build linux\n\npackage recipe\n\n" + s},
+		"negated go:build": {"s.go", "//go:build !windows\n\npackage recipe\n\n" + s},
+		"+build line":      {"s.go", "// +build linux\n\npackage recipe\n\n" + s},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := writeFiles(t, map[string]string{"t.go": other, tc.file: tc.body})
+			out, err := Generate(dir, DefaultFile)
+			if err == nil {
+				t.Fatalf("Generate = nil error, want a refusal; output:\n%s", out)
+			}
+			for _, want := range []string{"S.Foo", tc.file, "write DescFoo by hand"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not mention %q", err, want)
+				}
+			}
+			if strings.Contains(err.Error(), "T.Bar") {
+				t.Errorf("error %q blames the unconstrained T.Bar", err)
+			}
+		})
+	}
+}
+
+// Every offending method is reported, not just the first.
+func TestGenerateRefusesEveryConstrainedReceiver(t *testing.T) {
+	dir := writeFiles(t, map[string]string{
+		"s_linux.go":   "package recipe\n\ntype S struct{}\n\n// Foo installs foo.\nfunc (S) Foo() {}\n\n// Baz installs baz.\nfunc (S) Baz() {}\n",
+		"u_freebsd.go": "package recipe\n\ntype U struct{}\n\n// Qux installs qux.\nfunc (U) Qux() {}\n",
+	})
+	_, err := Generate(dir, "descs.go")
+	if err == nil {
+		t.Fatal("Generate = nil error, want a refusal")
+	}
+	for _, want := range []string{"S.Baz", "S.Foo", "U.Qux", "u_freebsd.go", "descs.go builds everywhere"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+}
+
+// A constrained receiver is fine when nothing is generated for it: its
+// DescX is hand-written next to it, or its task has no doc comment. The
+// generated file then type-checks on every platform, including those that
+// leave the constrained files out.
+func TestGenerateConstrainedReceiverHandWritten(t *testing.T) {
+	dir := writeFiles(t, map[string]string{
+		"t.go":         "package recipe\n\ntype T struct{}\n\n// Bar installs bar.\nfunc (T) Bar() {}\n",
+		"t_freebsd.go": "package recipe\n\n// Baz installs baz on FreeBSD.\nfunc (T) Baz() {}\n",
+		"t_linux.go":   "package recipe\n\n// Baz installs baz on FreeBSD.\nfunc (T) Baz() {}\n",
+		"s_linux.go": "package recipe\n\ntype S struct{}\n\n// Foo installs foo.\nfunc (S) Foo() {}\n\n" +
+			"func (S) DescFoo() string { return \"Installs foo\" }\n\nfunc (S) NoDoc() {}\n",
+		"v.go": "//go:build darwin\n\npackage recipe\n\ntype V struct{}\n\nfunc (V) NoDoc() {}\n",
+	})
+	src, err := Generate(dir, DefaultFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(src)
+	for _, want := range []string{"func (T) DescBar()", "func (T) DescBaz()"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output lacks %q:\n%s", want, got)
+		}
+	}
+	for _, bad := range []string{"(S)", "(V)"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("output has a companion for constrained %s:\n%s", bad, got)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, DefaultFile), src, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, goos := range []string{"linux", "darwin", "freebsd", "openbsd", "windows"} {
+		typeCheck(t, dir, goos)
+	}
+}
+
+// typeCheck type-checks the import-free package in dir as it builds for
+// goos/amd64, i.e. with the files go build would pick for that platform.
+func typeCheck(t *testing.T, dir, goos string) {
+	t.Helper()
+	ctxt := build.Default
+	ctxt.GOOS, ctxt.GOARCH, ctxt.CgoEnabled = goos, "amd64", false
+	pkg, err := ctxt.ImportDir(dir, 0)
+	if err != nil {
+		t.Fatalf("GOOS=%s: %v", goos, err)
+	}
+	fset := token.NewFileSet()
+	var files []*ast.File
+	for _, n := range pkg.GoFiles {
+		f, err := parser.ParseFile(fset, filepath.Join(dir, n), nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, f)
+	}
+	if _, err := new(types.Config).Check(pkg.Name, fset, files, nil); err != nil {
+		t.Errorf("GOOS=%s: %v (files %v)", goos, err, pkg.GoFiles)
 	}
 }

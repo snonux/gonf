@@ -19,6 +19,12 @@
 // and one with a hand-written DescX companion in the package, gets no
 // generated description; the hand-written one wins.
 //
+// desc_gen.go has no build constraint, so gonf-desc refuses a documented
+// task method whose receiver type is declared only in build-constrained
+// files (a GOOS/GOARCH file name suffix such as s_linux.go, or a //go:build
+// line): the companion would name an undefined type on other platforms.
+// Write that DescX by hand next to the type instead.
+//
 // Flags: -o names the output file (default desc_gen.go); -check writes
 // nothing and exits 1 when the file is not up to date, for CI.
 package main

@@ -4,12 +4,16 @@ package gendesc
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"go/ast"
+	"go/build"
+	"go/build/constraint"
 	"go/doc/comment"
 	"go/format"
 	"go/parser"
 	"go/token"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -27,6 +31,16 @@ type method struct {
 	recv, name, desc string
 }
 
+// srcFile is one parsed Go file of the package.
+type srcFile struct {
+	name string
+	ast  *ast.File
+	// constrained is set when the file builds only for some GOOS, GOARCH
+	// or build tags: its name has a GOOS/GOARCH suffix (s_linux.go) or it
+	// carries a build constraint line.
+	constrained bool
+}
+
 // Generate returns the formatted source of the generated file for the
 // package in dir, or nil when no task method there needs a description.
 // out, the generated file's name, is skipped when reading the package.
@@ -36,7 +50,7 @@ func Generate(dir, out string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	var files []*ast.File
+	var files []srcFile
 	for _, e := range entries {
 		n := e.Name()
 		if e.IsDir() || !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") || n == out {
@@ -46,38 +60,67 @@ func Generate(dir, out string) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		if !buildable(f) {
+		ignored, tagged := buildLines(f)
+		if ignored {
 			continue
 		}
-		files = append(files, f)
+		files = append(files, srcFile{name: n, ast: f, constrained: tagged || nameConstrained(n)})
 	}
 	if len(files) == 0 {
 		return nil, fmt.Errorf("%s: no Go files", dir)
 	}
 	methods, err := collect(files)
+	if err == nil {
+		err = checkReceivers(files, methods, out)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", dir, err)
 	}
 	if len(methods) == 0 {
 		return nil, nil
 	}
-	return render(files[0].Name.Name, methods)
+	return render(files[0].ast.Name.Name, methods)
 }
 
-// buildable leaves out files that exclude themselves from every build
-// (//go:build ignore), such as other generators.
-func buildable(f *ast.File) bool {
+// buildLines reads the build constraint lines above f's package clause.
+// ignored is set for a file that excludes itself from every build
+// (//go:build ignore), such as another generator; tagged for any other
+// constraint, whatever it tests.
+func buildLines(f *ast.File) (ignored, tagged bool) {
 	for _, cg := range f.Comments {
 		if cg.Pos() >= f.Package {
 			break
 		}
 		for _, c := range cg.List {
-			if c.Text == "//go:build ignore" {
-				return false
+			switch {
+			case c.Text == "//go:build ignore":
+				return true, false
+			case constraint.IsGoBuild(c.Text) || constraint.IsPlusBuild(c.Text):
+				tagged = true
 			}
 		}
 	}
-	return true
+	return false, tagged
+}
+
+// nameConstrained reports whether file name has a GOOS and/or GOARCH suffix
+// (s_linux.go, s_arm64.go, s_linux_arm64.go). It asks go/build, so the list
+// of known systems is the running toolchain's: no real GOOS or GOARCH is
+// "gonfdesc", so only such a suffix makes the name miss that context. A
+// name go build always ignores (_x.go, .x.go) counts too: a type declared
+// only there exists nowhere. The file's content is not read (OpenFile
+// yields a bare package clause).
+func nameConstrained(name string) bool {
+	ctxt := build.Context{
+		GOOS:     "gonfdesc",
+		GOARCH:   "gonfdesc",
+		Compiler: "gc",
+		OpenFile: func(string) (io.ReadCloser, error) {
+			return io.NopCloser(strings.NewReader("package p\n")), nil
+		},
+	}
+	ok, err := ctxt.MatchFile(".", name)
+	return err != nil || !ok
 }
 
 // collect returns the DescX companions to generate, sorted by receiver and
@@ -85,12 +128,12 @@ func buildable(f *ast.File) bool {
 // s_linux.go and s_freebsd.go) gets one companion, since desc_gen.go has no
 // build constraint; differing doc comments are an error, as either
 // description would be wrong on the other platform.
-func collect(files []*ast.File) ([]method, error) {
+func collect(files []srcFile) ([]method, error) {
 	type key struct{ recv, name string }
 	have := map[key]bool{}
 	var candidates []method
 	for _, f := range files {
-		for _, d := range f.Decls {
+		for _, d := range f.ast.Decls {
 			fd, ok := d.(*ast.FuncDecl)
 			if !ok || fd.Recv == nil || len(fd.Recv.List) != 1 {
 				continue
@@ -132,6 +175,47 @@ func collect(files []*ast.File) ([]method, error) {
 		return out[i].name < out[j].name
 	})
 	return out, nil
+}
+
+// checkReceivers refuses a companion whose receiver type is declared only
+// in build-constrained files: the generated file out has no build
+// constraint, so on another platform it would name an undefined type and
+// break the build. The companion belongs next to the type instead,
+// hand-written, where it shares the type's constraint (a hand-written DescX
+// wins, so none is generated). Every such method is reported, in methods'
+// order.
+func checkReceivers(files []srcFile, methods []method, out string) error {
+	everywhere := map[string]bool{}
+	only := map[string][]string{} // type -> constrained files declaring it
+	for _, f := range files {
+		for _, d := range f.ast.Decls {
+			gd, ok := d.(*ast.GenDecl)
+			if !ok || gd.Tok != token.TYPE {
+				continue
+			}
+			for _, sp := range gd.Specs {
+				ts, ok := sp.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				name := ts.Name.Name
+				if f.constrained {
+					only[name] = append(only[name], f.name)
+				} else {
+					everywhere[name] = true
+				}
+			}
+		}
+	}
+	var errs []error
+	for _, m := range methods {
+		if everywhere[m.recv] || len(only[m.recv]) == 0 {
+			continue
+		}
+		errs = append(errs, fmt.Errorf("%s.%s: %s is declared only in build-constrained files (%s) but %s builds everywhere; write Desc%s by hand next to %s",
+			m.recv, m.name, m.recv, strings.Join(only[m.recv], ", "), out, m.name, m.recv))
+	}
+	return errors.Join(errs...)
 }
 
 // receiverName returns the type name of a method receiver (T or *T), and
