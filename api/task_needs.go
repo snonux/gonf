@@ -54,19 +54,28 @@ import (
 // prefix it got. A struct registered more than once (under two prefixes)
 // resolves to the registration sharing the dependent's prefix, else the
 // need is ambiguous and fails the record like an unknown name. A method
-// value (u.Script) works the same way. So do the methods of a generic
-// struct, with one limit: the runtime does not tell instantiations apart,
-// so G[int].Script and G[string].Script name the same method, and inside a
-// generic method a method expression over the type parameter (G[X].Script)
-// is a closure the runtime cannot name, a declaration error: write a
-// concrete instantiation (G[int].Script) or the task name there. Any other
-// argument type is a declaration error.
+// value (u.Script) works the same way, with one catch: a method value of a
+// method promoted from an embedded struct names the embedded type's method
+// (Outer{}.Base is Inner.Base), so write the method expression Outer.Base
+// for those.
+//
+// The methods of a generic struct work too, with two limits. The runtime
+// does not tell instantiations apart, so G[int].Script and G[string].Script
+// name the same method: with one instantiation registered, either names
+// its task. And inside a generic method, a method expression or method
+// value over the type parameter (G[X].Script, g.Script) compiles to a
+// closure the runtime cannot name: write a concrete instantiation
+// (G[int].Script) or the task name there.
 //
 // Errors: an empty name, a task that needs itself, or a Needs cycle
 // (a → b → a, aliases followed) is a declaration error at registration and
-// the task is not queued. A need naming no registered task fails the record
-// that reaches it, like an unknown AggregateTasks member; so does a need
-// whose opaque When fails on the controller.
+// the task is not queued. A func that does not name an exported method of
+// a struct (a package function, an unexported method, a function literal,
+// a closure such as G[X].Script above), or an argument that is neither a
+// string nor a func, is a declaration error when Needs is called. A need naming no
+// registered task fails the record that reaches it, like an unknown
+// AggregateTasks member; so does a need whose opaque When fails on the
+// controller.
 func Needs(tasks ...any) TaskOption {
 	names := make([]string, 0, len(tasks))
 	for _, t := range tasks {
@@ -366,16 +375,51 @@ func needName(t any) (string, error) {
 	if fn == nil {
 		return "", fmt.Errorf("Needs: cannot resolve %T to a method", t)
 	}
-	key := normalizeMethodName(fn.Name())
-	if !token.IsExported(key[strings.LastIndexByte(key, '.')+1:]) {
-		// RegisterMethods registers exported methods only. A function
-		// literal is a closure, and so is a method expression or value
-		// over a type parameter inside a generic method (G[X].M, g.M): the
-		// runtime cannot name the method behind it.
-		return "", fmt.Errorf("Needs: %s is not a method expression (in a generic method, name a concrete instantiation such as G[int].M, or the task)",
-			needLabel(methodNeedPrefix+key))
+	raw := fn.Name()
+	key := normalizeMethodName(raw)
+	if !namesExportedMethod(key) {
+		return "", notMethodError(raw, key)
 	}
 	return methodNeedPrefix + key, nil
+}
+
+// namesExportedMethod reports whether the normalized runtime name key is
+// "pkgpath.Type.Method" with an exported Method, the only shape
+// RegisterMethods registers a task for. A package function ("pkg.Setup"),
+// an unexported method ("pkg.U.helper") and a closure ("pkg.T.M.func1",
+// "pkg.init.func1") are not.
+func namesExportedMethod(key string) bool {
+	_, rest, ok := strings.Cut(key[strings.LastIndexByte(key, '/')+1:], ".")
+	if !ok {
+		return false
+	}
+	typ, method, ok := strings.Cut(rest, ".")
+	return ok && token.IsIdentifier(typ) && token.IsIdentifier(method) && token.IsExported(method)
+}
+
+// notMethodError is the declaration error of a Needs func that names no
+// exported method (namesExportedMethod). A closure compiled inside a
+// generic method (raw carries "[...]") gets a hint: there, a method
+// expression or method value over the type parameter (G[X].M, g.M) is such
+// a closure, whose method the runtime cannot name.
+func notMethodError(raw, key string) error {
+	err := fmt.Errorf("Needs: %s does not name an exported method of a struct", needLabel(methodNeedPrefix+key))
+	if strings.Contains(raw, "[...]") && hasClosureSegment(key) {
+		return fmt.Errorf("%w (inside a generic method, G[X].M and g.M over the type parameter are closures: "+
+			"name a concrete instantiation such as G[int].M, or the task)", err)
+	}
+	return err
+}
+
+// hasClosureSegment reports whether a dot-separated segment of the runtime
+// name n is a closure's "funcN".
+func hasClosureSegment(n string) bool {
+	for _, seg := range strings.Split(n, ".") {
+		if num, ok := strings.CutPrefix(seg, "func"); ok && num != "" && strings.Trim(num, "0123456789") == "" {
+			return true
+		}
+	}
+	return false
 }
 
 // normalizeMethodName turns a method's runtime name into methodKey's form:

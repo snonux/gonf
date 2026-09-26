@@ -250,7 +250,8 @@ Run("base", "web") // base, pf, web
 | Rule | Behaviour |
 |------|-----------|
 | Resolution | Under `RegisterMethods(..., WithPrefix("fe_"))`, `"pf"` tries `fe_pf`, then `pf`. Elsewhere a full name. Aliases resolve to their target. Resolved at record time. |
-| Method expressions | `Needs(Unattended.Script, (*T).Method)` names the task `RegisterMethods` gave that method, whatever its prefix: jump-to-definition and rename work, a typo does not compile. A struct registered twice resolves within the dependent's prefix, else the need is ambiguous and fails the record. |
+| Method expressions | `Needs(Unattended.Script, (*T).Method)` names the task `RegisterMethods` gave that method, whatever its prefix: jump-to-definition and rename work, a typo does not compile. A struct registered twice resolves within the dependent's prefix, else the need is ambiguous and fails the record. A method value (`u.Script`) works too, but for a method promoted from an embedded struct it names the embedded type's method: write `Outer.Base` there. |
+| Generic structs | `Needs(G[int].Script)` works. Instantiations share one method name, so two registered instantiations resolve like a struct registered twice. Inside a generic method, `G[X].Script` or `g.Script` over the type parameter is a closure: name a concrete instantiation or the task. |
 | Order | Needs record before the task, in declaration order, their own needs first. |
 | Guards | A need records with its own guards and privilege, outside the task's `when_begin`. |
 | Dedupe | Once per `Run(...)` list or aggregate tree; a later explicit name a need already recorded is skipped. A body's own `Run` starts a new scope. |
@@ -260,6 +261,9 @@ Run("base", "web") // base, pf, web
 An unknown need fails the record. An empty name, a self need or a cycle
 (`a -> b -> a`, aliases followed) is a declaration error and the task is not
 registered.
+A func that does not name an exported method of a struct (a package
+function, an unexported method, a function literal or such a closure) is a
+declaration error too.
 
 ### Facts
 

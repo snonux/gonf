@@ -192,7 +192,7 @@ func TestNeedsMethodExpressionsOnGenericStruct(t *testing.T) {
 // TestNeedsGenericMethodAmbiguousOutsidePrefix (task eb, negative): the
 // runtime cannot tell G[int].M from G[string].M, so two instantiations are
 // two registrations of one struct: a dependent under neither prefix gets a
-// "needs unknown task" error naming the method, never the wrong task.
+// "needs unknown task" error naming the method rather than a guess.
 func TestNeedsGenericMethodAmbiguousOutsidePrefix(t *testing.T) {
 	resetForHostsState(t)
 	RegisterMethods(genericSugar[int]{}, WithPrefix("a_"))
@@ -208,6 +208,20 @@ func TestNeedsGenericMethodAmbiguousOutsidePrefix(t *testing.T) {
 	}
 }
 
+// TestNeedsGenericMethodSingleRegistrationAnyInstantiation (task eb) pins
+// the documented limit: with one instantiation registered, a method
+// expression of ANY instantiation names its task, since the runtime name
+// carries no type arguments.
+func TestNeedsGenericMethodSingleRegistrationAnyInstantiation(t *testing.T) {
+	resetForHostsState(t)
+	RegisterMethods(genericSugar[int]{}, WithPrefix("g_"))
+	Task("free", "", func() {}, Needs(genericSugar[string].Script))
+	c, _ := findCandidate("free")
+	if got, want := c.resolvedNeeds(), []string{"g_script"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("free needs = %v, want %v", got, want)
+	}
+}
+
 // genericClosureNeed needs its own method over the type parameter X, which
 // the compiler turns into a closure the runtime cannot name.
 type genericClosureNeed[X any] struct{}
@@ -219,20 +233,78 @@ func (genericClosureNeed[X]) OptsWeb() TaskOptions {
 }
 func (g genericClosureNeed[X]) OptsBase() TaskOptions { return TaskOptions{Needs(g.Web)} }
 
+// genericClosureHint is the hint only a closure compiled inside a generic
+// method gets.
+const genericClosureHint = "inside a generic method, G[X].M and g.M over the type parameter are closures"
+
 // TestNeedsGenericTypeParamClosureIsDeclError (task eb, negative): a method
-// expression or method value over a type parameter, and a function literal,
-// are declaration errors naming the closure, not a record-time "unknown
-// task" nobody can match to the recipe.
+// expression or method value over a type parameter is a declaration error
+// naming the closure, with the generic-method hint, not a record-time
+// "unknown task" nobody can match to the recipe.
 func TestNeedsGenericTypeParamClosureIsDeclError(t *testing.T) {
-	requireDeclErr(t, "Needs: genericClosureNeed.OptsBase.func1 is not a method expression", func() {
+	requireDeclErr(t, "Needs: genericClosureNeed.OptsBase.func1 does not name an exported method of a struct ("+genericClosureHint, func() {
 		RegisterMethods(genericClosureNeed[int]{}, WithPrefix("c_"))
 	})
-	requireDeclErr(t, "Needs: genericClosureNeed.OptsWeb.func1 is not a method expression", func() {
+	requireDeclErr(t, "Needs: genericClosureNeed.OptsWeb.func1 does not name an exported method of a struct ("+genericClosureHint, func() {
 		_ = genericClosureNeed[int]{}.OptsWeb()
 	})
-	requireDeclErr(t, "is not a method expression", func() {
-		Task("x", "", func() {}, Needs(func() {}))
-	})
+}
+
+// NeedsPackageFunc is an exported package function, not a method.
+func NeedsPackageFunc() {}
+
+// needsHelper has an unexported method, which RegisterMethods never
+// registers as a task.
+type needsHelper struct{}
+
+func (needsHelper) helper() {}
+
+// TestNeedsNonMethodFuncIsDeclError (task eb, negative): a func that does
+// not name an exported method of a struct is refused at declaration, with
+// no generic-method hint outside a generic method.
+func TestNeedsNonMethodFuncIsDeclError(t *testing.T) {
+	for _, c := range []struct {
+		label string
+		need  any
+	}{
+		{"NeedsPackageFunc", NeedsPackageFunc},
+		{"needsHelper.helper", needsHelper.helper},
+		{"TestNeedsNonMethodFuncIsDeclError.func1", func() {}},
+	} {
+		requireDeclErr(t, "Needs: "+c.label+" does not name an exported method of a struct", func() {
+			Task("x", "", func() {}, Needs(c.need))
+		})
+		if err := declerr.First(); strings.Contains(err.Error(), genericClosureHint) {
+			t.Fatalf("Needs(%s): unexpected generic-method hint: %v", c.label, err)
+		}
+	}
+}
+
+// needsInner's Base is promoted into needsOuter.
+type needsInner struct{}
+
+func (needsInner) Base() {}
+
+type needsOuter struct{ needsInner }
+
+func (needsOuter) Web() {}
+
+// TestNeedsPromotedMethod (task eb) pins the documented embedding rule: a
+// method expression of a promoted method names the outer struct's task,
+// while its method value names the embedded type's method.
+func TestNeedsPromotedMethod(t *testing.T) {
+	resetForHostsState(t)
+	RegisterMethods(needsOuter{}, WithPrefix("o_"))
+	Task("expr", "", func() {}, Needs(needsOuter.Base))
+	Task("value", "", func() {}, Needs(needsOuter{}.Base))
+	c, _ := findCandidate("expr")
+	if got, want := c.resolvedNeeds(), []string{"o_base"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("expr needs = %v, want %v", got, want)
+	}
+	if _, err := RecordPlan("sugar", "", "value"); err == nil ||
+		!strings.Contains(err.Error(), `needs unknown task "needsInner.Base"`) {
+		t.Fatalf("promoted method value: err = %v", err)
+	}
 }
 
 func TestRegisterMethodsTakesTaskOptions(t *testing.T) {

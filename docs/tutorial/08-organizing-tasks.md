@@ -104,10 +104,14 @@ to catch a stale file.
 method. It is checked by the compiler and your editor can jump to it and
 rename it. `Needs("web_docroot")` with a string works too.
 
+A method value such as `w.Docroot` works too. There is one catch: if
+`Docroot` is promoted from an embedded struct, the method value names the
+embedded type's method. Write the method expression `Web.Docroot` for those.
+
 On a generic struct, name a concrete instantiation: `Needs(Web[int].Docroot)`.
-Inside a generic method, `Web[T].Docroot` over the type parameter does not
-work (Go compiles it to a closure), so gonf refuses it. Use the concrete
-instantiation or the task name there.
+Inside a generic method, `Web[T].Docroot` or `w.Docroot` over the type
+parameter does not work (Go compiles both to a closure), so gonf refuses
+it. Use the concrete instantiation or the task name there.
 
 ## The main package
 
