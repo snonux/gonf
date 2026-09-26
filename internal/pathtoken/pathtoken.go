@@ -30,6 +30,16 @@ func HasToken(p string) bool { return strings.Contains(p, marker) }
 // Expand replaces every ${TOKEN} in p with its value on the running host.
 // Unknown, empty or unclosed tokens are errors, never passed through
 // literally: a literal "${HOME}" directory is never what a recipe meant.
+//
+// Each token value is cleaned (filepath.Clean) before substitution, so a
+// trailing or duplicate separator in the environment (HOME=/home/paul/)
+// never leaks into the result, and a value that is the root "/" absorbs the
+// separator following the token: with HOME=/, ${HOME}/x expands to /x, not
+// //x. A clean token path (api.DestHome) therefore expands to a clean path,
+// which callers such as config sets require. Cleaning is purely lexical: a
+// ".." in a token value is resolved against the preceding element, not
+// against the filesystem, so symlinks in the value are not followed. The
+// text around the tokens is copied verbatim.
 func Expand(p string) (string, error) {
 	if !HasToken(p) {
 		return p, nil
@@ -51,8 +61,12 @@ func Expand(p string) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		val = filepath.Clean(val)
 		b.WriteString(val)
 		i = end + 1
+		if strings.HasSuffix(val, "/") && strings.HasPrefix(p[i:], "/") {
+			i++
+		}
 	}
 	return b.String(), nil
 }

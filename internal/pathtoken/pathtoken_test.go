@@ -30,6 +30,47 @@ func TestExpandHome(t *testing.T) {
 	}
 }
 
+// TestExpandHomeIsCleaned: a valid but unclean home (HOME=/ for service
+// accounts, trailing or duplicate separators, "." or ".." elements) expands
+// a clean token path to a clean path (task fb). Text around the token is
+// copied verbatim, so an already unclean input stays unclean.
+func TestExpandHomeIsCleaned(t *testing.T) {
+	cases := []struct{ home, in, want string }{
+		{"/", Home, "/"},
+		{"/", Home + "/x", "/x"},
+		{"/", Home + "/.config/app", "/.config/app"},
+		{"/", Home + "/", "/"},
+		{"/", Home + "x", "/x"},
+		{"//", Home + "/x", "/x"},
+		{"/home/paul/", Home, "/home/paul"},
+		{"/home/paul/", Home + "/x", "/home/paul/x"},
+		{"/home/paul//", Home + "/x", "/home/paul/x"},
+		{"/home//paul/./", Home + "/x", "/home/paul/x"},
+		{"/home/other/../paul", Home + "/x", "/home/paul/x"},
+		{"/home/paul/", "a/" + Home + "/b", "a//home/paul/b"},
+		// Verbatim surroundings: only the token's value is normalised,
+		// and the root absorbs exactly one following separator.
+		{"/home/paul/", Home + "//x", "/home/paul//x"},
+		{"/", Home + "//x", "//x"},
+	}
+	for _, tc := range cases {
+		t.Setenv("HOME", tc.home)
+		got, err := Expand(tc.in)
+		if err != nil || got != tc.want {
+			t.Errorf("HOME=%q: Expand(%q) = %q, %v; want %q", tc.home, tc.in, got, err, tc.want)
+		}
+	}
+}
+
+// TestExpandCleansUserDatabaseHome: the passwd fallback is cleaned too.
+func TestExpandCleansUserDatabaseHome(t *testing.T) {
+	t.Setenv("HOME", "")
+	stubUserHome(t, "/", nil)
+	if got, err := Expand(Home + "/x"); err != nil || got != "/x" {
+		t.Fatalf("Expand = %q, %v; want /x", got, err)
+	}
+}
+
 // TestExpandHomeFallsBackToUserDatabase: with $HOME unset the applying
 // user's passwd entry supplies the home.
 func TestExpandHomeFallsBackToUserDatabase(t *testing.T) {

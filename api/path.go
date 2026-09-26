@@ -67,13 +67,16 @@ func localPath(p string) string {
 	return out
 }
 
+// homeDir returns the controller's cleaned home directory, so a trailing
+// slash in the environment (HOME=/home/paul/) never leaks into Expand("~").
+// It returns "" (not filepath.Clean's ".") when no home directory is known.
 func homeDir() string {
 	if h := os.Getenv("HOME"); h != "" {
-		return h
+		return filepath.Clean(h)
 	}
 	h, err := os.UserHomeDir()
-	if err != nil {
+	if err != nil || h == "" {
 		return ""
 	}
-	return h
+	return filepath.Clean(h)
 }

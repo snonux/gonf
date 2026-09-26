@@ -9,8 +9,11 @@ import (
 // ExpandPath expands ${TOKEN} placeholders in plan paths for the destination
 // host. ${HOME} resolves to the applying process's $HOME (else its user
 // database entry; empty or relative is refused); unknown or malformed tokens
-// return an error. The token rules live in internal/pathtoken, shared with
-// the controller-side source-path refusal and api.DestHome.
+// return an error. Token values are cleaned lexically before substitution,
+// so a clean token path expands to a clean path even for HOME=/ or a HOME
+// with a trailing slash (see pathtoken.Expand). The token rules live in
+// internal/pathtoken, shared with the controller-side source-path refusal
+// and api.DestHome.
 //
 // Every destination path field is expanded by its handler before use: the
 // path of every filesystem kind, link symlink/hardlink targets,

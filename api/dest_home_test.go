@@ -185,6 +185,28 @@ func TestDestHomeRecordsTokenAndExpandsOnDestination(t *testing.T) {
 	f.check(t, f.dest)
 }
 
+// TestDestHomeTrailingSlashHomeExpandsClean applies the recorded fixture
+// with the destination HOME spelled with a trailing slash: every expanded
+// path, including the literal symlink targets check compares, must be the
+// clean spelling rather than home + "//name" (task fb).
+func TestDestHomeTrailingSlashHomeExpandsClean(t *testing.T) {
+	f := newDestHomeFixture(t)
+	ResetForTest()
+	t.Cleanup(ResetForTest)
+	t.Setenv("HOME", f.controller)
+	Task("home", "", f.declare)
+	planDir := testutil.PrivateTempDir(t)
+	ops, err := RecordPlan("home", planDir, "home")
+	if err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+	t.Setenv("HOME", f.dest+"/")
+	if err := ApplyPlan(ops, planDir); err != nil {
+		t.Fatalf("ApplyPlan: %v", err)
+	}
+	f.check(t, f.dest)
+}
+
 // TestDestHomeDirectApplyExpandsLocally: without recording, this host is
 // the destination, so the direct-mode probes (EnsureDir, LinkIfExists,
 // WhenPathExists) expand ${HOME} here too.
@@ -211,6 +233,19 @@ func TestDestHomeDirectApplyExpandsLocally(t *testing.T) {
 // staging directory sit under DestHome: the header declares v26
 // (VersionHomeToken) and the destination publishes under its own home.
 func TestDestHomeConfigSet(t *testing.T) {
+	testDestHomeConfigSet(t, "")
+}
+
+// TestDestHomeConfigSetTrailingSlashHome: a destination HOME with a
+// trailing slash still expands to clean paths, which the config set's
+// clean-absolute-path validation requires (task fb).
+func TestDestHomeConfigSetTrailingSlashHome(t *testing.T) {
+	testDestHomeConfigSet(t, "/")
+}
+
+// testDestHomeConfigSet applies the recorded set with the destination
+// $HOME spelled as its directory plus homeSuffix.
+func testDestHomeConfigSet(t *testing.T, homeSuffix string) {
 	controller, dest := t.TempDir(), t.TempDir()
 	if err := os.Mkdir(filepath.Join(dest, ".app"), 0o700); err != nil {
 		t.Fatal(err)
@@ -245,7 +280,7 @@ func TestDestHomeConfigSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("HOME", dest)
+	t.Setenv("HOME", dest+homeSuffix)
 	if err := ApplyPlan(decoded, ""); err != nil {
 		t.Fatalf("ApplyPlan: %v", err)
 	}

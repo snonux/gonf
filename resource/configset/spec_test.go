@@ -85,6 +85,55 @@ func TestSpecValidationRejectsMisconfiguration(t *testing.T) {
 	}
 }
 
+// TestValidateExpandedAcceptsUncleanHome: a set declared under the ${HOME}
+// token (api.DestHome) validates for HOME=/ (service accounts) and a HOME
+// with a trailing slash, because the expansion is clean; before task fb the
+// clean-path check rejected //etc/app/a.conf and /home/paul//etc/app/a.conf.
+func TestValidateExpandedAcceptsUncleanHome(t *testing.T) {
+	for home, root := range map[string]string{"/": "", "/home/paul/": "/home/paul", "/home//paul": "/home/paul"} {
+		t.Setenv("HOME", home)
+		s := validSpec()
+		s.chroot = "${HOME}"
+		s.stagingDir = "${HOME}/etc/app"
+		for i := range s.members {
+			s.members[i].path = "${HOME}" + s.members[i].path
+		}
+		exp, err := s.validateExpanded()
+		if err != nil {
+			t.Errorf("HOME=%q: validateExpanded: %v", home, err)
+			continue
+		}
+		wantChroot := root
+		if wantChroot == "" {
+			wantChroot = "/"
+		}
+		if exp.chroot != wantChroot || exp.stagingDir != root+"/etc/app" ||
+			exp.members[0].path != root+"/etc/app/a.conf" || exp.members[1].path != root+"/etc/app/keys/b.conf" {
+			t.Errorf("HOME=%q: expanded chroot=%q staging=%q members=%q,%q", home,
+				exp.chroot, exp.stagingDir, exp.members[0].path, exp.members[1].path)
+		}
+	}
+}
+
+// TestValidateExpandedStillRejectsUncleanLiteral: cleaning applies to the
+// token value only, so an unclean literal part of a member path is still a
+// validation error, as is an unusable (relative) home.
+func TestValidateExpandedStillRejectsUncleanLiteral(t *testing.T) {
+	t.Setenv("HOME", "/home/paul/")
+	s := validSpec()
+	s.members[0].path = "${HOME}/etc/app//a.conf"
+	if _, err := s.validateExpanded(); err == nil || !strings.Contains(err.Error(), "not a clean path") {
+		t.Fatalf("validateExpanded = %v, want not a clean path", err)
+	}
+
+	t.Setenv("HOME", "rel/home")
+	s = validSpec()
+	s.members[0].path = "${HOME}/a.conf"
+	if _, err := s.validateExpanded(); err == nil || !strings.Contains(err.Error(), "not absolute") {
+		t.Fatalf("validateExpanded = %v, want not absolute home", err)
+	}
+}
+
 func TestChrootAndRelativeLayoutAreStaged(t *testing.T) {
 	resource.ResetForTest()
 	t.Cleanup(resource.ResetForTest)

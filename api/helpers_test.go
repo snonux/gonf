@@ -24,6 +24,33 @@ func TestExpandAndHome(t *testing.T) {
 	}
 }
 
+// TestExpandAndHomeCleanHome: a controller HOME with a trailing slash (or
+// HOME=/) never leaks a separator into Expand("~") or doubles one in
+// Expand("~/a") and Home (task fb).
+func TestExpandAndHomeCleanHome(t *testing.T) {
+	cases := []struct{ home, tilde, sub string }{
+		{"/tmp/x/", "/tmp/x", "/tmp/x/a"},
+		{"/tmp//x//", "/tmp/x", "/tmp/x/a"},
+		{"/", "/", "/a"},
+	}
+	for _, tc := range cases {
+		t.Setenv("HOME", tc.home)
+		if got := Expand("~"); got != tc.tilde {
+			t.Errorf("HOME=%q: Expand(~) = %q, want %q", tc.home, got, tc.tilde)
+		}
+		if got := Expand("~/a"); got != tc.sub {
+			t.Errorf("HOME=%q: Expand(~/a) = %q, want %q", tc.home, got, tc.sub)
+		}
+		if got := Home("a"); got != tc.sub {
+			t.Errorf("HOME=%q: Home(a) = %q, want %q", tc.home, got, tc.sub)
+		}
+	}
+	// "~user" is not a home reference: it stays literal (cleaned).
+	if got := Expand("~a/b/"); got != "~a/b" {
+		t.Errorf("Expand(~a/b/) = %q, want ~a/b", got)
+	}
+}
+
 func TestAndOr(t *testing.T) {
 	linux := func(f Facts) bool { return f.GOOS == "linux" }
 	fedora := ProfileIs("fedora")
