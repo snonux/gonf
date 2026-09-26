@@ -253,3 +253,32 @@ func TestDestHomeConfigSet(t *testing.T) {
 		t.Fatalf("member = %q (%v), want it published under the destination home", got, err)
 	}
 }
+
+// TestDestHomeOnChangeFires: a change gate watching a DestHome resource
+// fires when that resource changed. The plan records File[${HOME}/...],
+// the apply notes the expanded path; the gate must match them, and a
+// second, converged apply must hold it.
+func TestDestHomeOnChangeFires(t *testing.T) {
+	ResetForTest()
+	t.Cleanup(ResetForTest)
+	home := testutil.PrivateTempDir(t)
+	t.Setenv("HOME", home)
+	marker := filepath.Join(home, "fired")
+	Task("gate", "", func() {
+		conf := File(DestHome("app.conf"), options.WithContent("a=1\n"))
+		Command("sh", []string{"-c", `printf 'x' >> "$1"`, "gonf", marker},
+			options.WithName("reload"), options.OnChange(conf))
+	})
+	for i, want := range []string{"x", "x"} {
+		if err := Run("gate"); err != nil {
+			t.Fatalf("Run %d: %v", i, err)
+		}
+		got, err := os.ReadFile(marker)
+		if err != nil {
+			t.Fatalf("run %d: gated command did not run: %v", i, err)
+		}
+		if string(got) != want {
+			t.Fatalf("run %d: marker = %q, want %q", i, got, want)
+		}
+	}
+}
