@@ -132,7 +132,7 @@ $ ./gonf bsd
 summary: 1 ok, 0 changed, 0 skipped, 0 would-change
 ```
 
-## Guards in the plan
+## What the plan carries
 
 > 🦫 **Gonfy says:** The guards that travel ride inside the plan, so every lodge can decide for itself.
 

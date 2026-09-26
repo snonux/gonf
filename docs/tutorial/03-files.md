@@ -248,6 +248,37 @@ summary: 0 ok, 1 changed, 0 skipped, 0 would-change
   changed Directory[/home/paul/gonf-tutorial]
 ```
 
+## What the plan carries
+
+Every run records the task into a plan before applying it (chapter 1).
+`plan -redacted` prints that plan for reading, with secret values masked,
+and changes nothing. From here on each chapter shows the plan of its
+example, so you can see what reaches the destination:
+
+```text
+$ ./gonf plan -redacted files
+{"op":"plan_preview","version":21,"id":"plan"}
+{"op":"dir","id":"Directory[${HOME}/gonf-tutorial]","path":"${HOME}/gonf-tutorial","mode":"0755"}
+{"op":"file","id":"File[${HOME}/gonf-tutorial/motd]","path":"${HOME}/gonf-tutorial/motd","mode":"0644","content_b64":"V2VsY29tZSB0byBHb25meSdzIGxvZGdlIQo=","has_content":true}
+{"op":"file","id":"File[${HOME}/gonf-tutorial/bashrc]","path":"${HOME}/gonf-tutorial/bashrc","mode":"0644","content_b64":"IyB+Ly5iYXNocmMgbWFuYWdlZCBieSBnb25mCiMgR29uZnkgc2F5czogZG90ZmlsZXMgYXJlIGxvZGdlcywga2VlcCB0aGVtIGNvbnZlcmdlZApleHBvcnQgRURJVE9SPXZpbQphbGlhcyBsbD0nbHMgLWwnCg==","has_content":true}
+{"op":"file","id":"File[${HOME}/gonf-tutorial/gonfy.txt]","path":"${HOME}/gonf-tutorial/gonfy.txt","mode":"0644","content_b64":"ICAgICBfXyAgICAgICAgIF9fCiAgICAvICBcLi0iIiItLi8gIFwKICAgIFwgICAgLSAgIC0gICAgLwogICAgIHwgICBvICAgbyAgIHwgICAgICBIaSwgSSdtIEdvbmZ5IHRoZSBiZWF2ZXIhCiAgICAgXCAgLi0nJyctLiAgLyAgICAgIEkga2VlcCB0aGlzIGxvZGdlIGNvbnZlcmdlZC4KICAgICAgJy1cX19ZX18vLScKICAgICAgICAgIFt8fF0K","has_content":true}
+{"op":"sync_dir","id":"Directory[${HOME}/gonf-tutorial/vim]","path":"${HOME}/gonf-tutorial/vim","mode":"0750","file_mode":"0644","blob":"blobs/vim-e0196428","source_dir":"assets/dotfiles/vim","prune":true}
+{"op":"sync_dir","id":"Directory[${HOME}/gonf-tutorial/bin]","path":"${HOME}/gonf-tutorial/bin","mode":"0755","file_mode":"0755","blob":"blobs/bin-6a4cd2c0","source_dir":"assets/bin","glob":true}
+{"op":"link","id":"Symlink[${HOME}/gonf-tutorial/vimrc]","path":"${HOME}/gonf-tutorial/vimrc","symlink":"${HOME}/gonf-tutorial/vim/vimrc"}
+{"op":"link_if_exists","id":"LinkIfExists[${HOME}/gonf-tutorial/gitconfig]","path":"${HOME}/gonf-tutorial/gitconfig","target":"${HOME}/.gitconfig"}
+{"op":"ensure_dir","id":"EnsureDir[${HOME}/gonf-tutorial/state]","path":"${HOME}/gonf-tutorial/state","mode":"0700"}
+{"op":"ensure_file","id":"EnsureFile[${HOME}/gonf-tutorial/state/notes.txt]","path":"${HOME}/gonf-tutorial/state/notes.txt","mode":"0600"}
+{"op":"file","id":"File[${HOME}/gonf-tutorial/old.conf]","path":"${HOME}/gonf-tutorial/old.conf","mode":"0640","absent":true}
+wrote redacted preview to stdout (12 ops, 0 secret-bearing; not a plan, cannot be applied)
+```
+
+Read it one line at a time: each line is an op with the resource `id` you
+saw in the summaries. `${HOME}` is still a placeholder, because `DestHome`
+is expanded on the destination. Content travels as `content_b64` (base64),
+while a synced tree such as `vim` travels as a `blob` next to the plan.
+`LinkIfExists`, `EnsureDir` and `EnsureFile` are ops of their own because
+the destination decides what they do. Chapter 11 covers the format in full.
+
 ## The resources in this chapter
 
 | Call | What it converges |

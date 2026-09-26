@@ -132,6 +132,28 @@ the daemon when its config changed":
 `Noop` marker. The same `OnChange` works on `Service` (restart or reload),
 `Timer` and `DaemonReload` (chapter 7).
 
+## What the plan carries
+
+```text
+$ ./gonf plan -redacted commands
+{"op":"plan_preview","version":25,"id":"plan"}
+{"op":"dir","id":"Directory[${HOME}/gonf-tutorial/commands]","path":"${HOME}/gonf-tutorial/commands","mode":"0755"}
+{"op":"command","id":"Command[git-init]","name":"git-init","bin":"git","args":["init","-q","repo"],"dir":"${HOME}/gonf-tutorial/commands","creates":"${HOME}/gonf-tutorial/commands/repo/.git"}
+{"op":"command","id":"Command[git-user]","name":"git-user","bin":"git","args":["-C","/home/paul/gonf-tutorial/commands/repo","config","user.name","gonfy"],"unless":{"bin":"git","args":["-C","/home/paul/gonf-tutorial/commands/repo","config","user.name"],"expect_stdout":"gonfy"},"only_if":{"bin":"test","args":["-d","/home/paul/gonf-tutorial/commands/repo"]}}
+{"op":"command","id":"Command[echo]","name":"echo","bin":"echo","args":["hello from Gonfy"]}
+{"op":"file","id":"File[${HOME}/gonf-tutorial/commands/app.conf]","path":"${HOME}/gonf-tutorial/commands/app.conf","mode":"0644","content_b64":"d29ya2Vycz00Cg==","has_content":true}
+{"op":"command","id":"Command[reload-app]","name":"reload-app","bin":"sh","args":["-c","echo reloading app; wc -l app.conf"],"dir":"${HOME}/gonf-tutorial/commands","if_changed":true,"watch":["File[${HOME}/gonf-tutorial/commands/app.conf]"],"deps":["File[${HOME}/gonf-tutorial/commands/app.conf]"]}
+{"op":"noop","id":"Noop[commands-done]","name":"commands-done"}
+{"op":"command","id":"Command[report]","name":"report","bin":"sh","args":["-c","echo Gonfy says all set"],"deps":["Noop[commands-done]"]}
+wrote redacted preview to stdout (9 ops, 0 secret-bearing; not a plan, cannot be applied)
+```
+
+Each guard travels with its command (`creates`, `unless`, `only_if`), so
+the destination checks it just before running. `OnChange(conf)` becomes
+`if_changed` plus `watch`, and `DependsOn` becomes `deps`. The git arguments
+hold `/home/paul`, not `${HOME}`, because the argv is not expanded (next
+section).
+
 ## Guards and arguments
 
 - Guards (`Creates`, `Unless`, `OnlyIf`) run on the destination.
