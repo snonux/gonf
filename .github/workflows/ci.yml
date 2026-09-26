@@ -1,18 +1,35 @@
 name: ci
 
+# Every push to any branch (a PR's branch included, so its checks come from
+# the push run), plus manual runs.
 on:
   push:
-    branches: [main, master]
-  pull_request:
+  workflow_dispatch:
 
+# A newer push to the same branch supersedes a still-running one.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Each job's logic lives in .github/ci/*.sh, so it can change without
+# touching this file.
 jobs:
   test:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        # gonf and conf are checked out side by side (see checkout-conf.sh).
+        working-directory: gonf
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: gonf
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version-file: gonf/go.mod
+          cache-dependency-path: gonf/go.sum
+      - name: Check out the conf consumer
+        run: .github/ci/checkout-conf.sh "${{ github.ref_name }}"
       - name: Lint
         run: |
           # Mirrors Magefile.go's Lint target: gofmt formatting check, go
@@ -27,7 +44,7 @@ jobs:
           go vet ./...
           go tool staticcheck ./...
       - name: Unit tests
-        run: go test -race -shuffle=on -count=1 ./...
+        run: .github/ci/test.sh
       - name: Plan codec coverage gate
         run: |
           go test ./plan/ -coverprofile=/tmp/plan.cov -count=1
@@ -48,3 +65,62 @@ jobs:
             echo "fuzz $t"
             go test ./plan/ -fuzz="$t" -fuzztime="${GONF_FUZZTIME}"
           done
+
+  linux-live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: .github/ci/linux-live.sh
+
+  remote-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: .github/ci/remote-smoke.sh
+
+  fedora:
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - run: dnf install -y git
+      - uses: actions/checkout@v4
+      - run: .github/ci/fedora.sh
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test -count=1 ./...
+
+  bsd:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [freebsd, openbsd, netbsd]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - if: matrix.os == 'freebsd'
+        uses: vmactions/freebsd-vm@v1
+        with:
+          usesh: true
+          run: sh .github/ci/bsd-test.sh
+      - if: matrix.os == 'openbsd'
+        uses: vmactions/openbsd-vm@v1
+        with:
+          usesh: true
+          run: sh .github/ci/bsd-test.sh
+      - if: matrix.os == 'netbsd'
+        uses: vmactions/netbsd-vm@v1
+        with:
+          usesh: true
+          run: sh .github/ci/bsd-test.sh
