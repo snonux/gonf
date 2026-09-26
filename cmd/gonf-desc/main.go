@@ -26,8 +26,10 @@
 // in files that do not build there (a GOOS/GOARCH name suffix, a build
 // constraint line, import "C"). A type declared in complementary files
 // (s_linux.go and a //go:build !linux file) is present everywhere. Write a
-// refused DescX by hand next to the type instead. Default architecture
-// levels (amd64.v1, arm64.v8.0, ...) and experiments count as set. A file
+// refused DescX by hand next to the type instead. Each platform's default
+// architecture levels (amd64.v1, arm64.v8.0, ...) and experiments
+// (goexperiment.regabiargs only where the register ABI is on, dwarf5 not on
+// darwin, GOEXPERIMENT applied) count as set. A file
 // needing custom -tags (integration, ignore) gets no companions, but its
 // hand-written DescX still counts; _x.go and .x.go are not read.
 //

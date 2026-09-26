@@ -204,9 +204,10 @@ suffix (`s_linux.go`, `s_arm64.go`), a `//go:build` or `// +build` line, or
 write that `DescX` by hand next to the type. Accepted: a type declared in
 complementary files (`s_linux.go` plus a `//go:build !linux` file, or a
 `cgo`/`!cgo` pair), and a linux-only package generated with
-`-o desc_linux.go`. The default architecture levels (`amd64.v1`,
-`arm64.v8.0`, ...) and experiments count as set; higher levels count as
-custom tags. A file that needs custom `-tags` (`integration`, `ignore`)
+`-o desc_linux.go`. Each platform's default architecture levels
+(`amd64.v1`, `arm64.v8.0`, ...) and experiments (`goexperiment.regabiargs`
+only where the register ABI is on, `goexperiment.dwarf5` not on darwin,
+`GOEXPERIMENT` applied) count as set; higher levels count as custom tags. A file that needs custom `-tags` (`integration`, `ignore`)
 gets no generated `DescX`, but a hand-written one there still wins.
 `_x.go` and `.x.go` are not read.
 

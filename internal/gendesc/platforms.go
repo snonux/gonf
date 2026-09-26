@@ -7,6 +7,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
+	"os"
 	"strings"
 )
 
@@ -90,16 +91,60 @@ var archLevels = map[string][]string{
 	"wasm":     {"wasm.satconv", "wasm.signext"},
 }
 
-// experiments are the running toolchain's default goexperiment.* tags.
-var experiments = func() []string {
+// experimentTags returns the goexperiment.* tool tags a go build for
+// goos/goarch sets. host are the running toolchain's tool tags, for the host
+// platform and with goexp (the GOEXPERIMENT environment) applied. Most
+// experiments do not depend on the platform and are taken from host as
+// they are; the ones that do are redone as internal/buildcfg's
+// ParseGOEXPERIMENT (Go 1.26) does: regabiwrappers and regabiargs are on
+// where the register ABI is supported (always on amd64, arm64, loong64,
+// ppc64, ppc64le and riscv64; by default, overridable, on s390x), dwarf5
+// is on except on darwin, ios and aix, and goexp's X or noX (and the regabi
+// alias, and none) wins over those defaults.
+func experimentTags(host []string, goexp, goos, goarch string) []string {
+	const regabiWrappers, regabiArgs, dwarf5 = "regabiwrappers", "regabiargs", "dwarf5"
 	var tags []string
-	for _, t := range build.Default.ToolTags {
-		if strings.HasPrefix(t, "goexperiment.") {
+	for _, t := range host {
+		name, ok := strings.CutPrefix(t, "goexperiment.")
+		if ok && name != regabiWrappers && name != regabiArgs && name != dwarf5 {
 			tags = append(tags, t)
 		}
 	}
+	var alwaysOn, supported bool
+	switch goarch {
+	case "amd64", "arm64", "loong64", "ppc64", "ppc64le", "riscv64":
+		alwaysOn, supported = true, true
+	case "s390x":
+		supported = true
+	}
+	on := map[string]bool{
+		regabiWrappers: supported,
+		regabiArgs:     supported,
+		dwarf5:         goos != "darwin" && goos != "ios" && goos != "aix",
+	}
+	for _, f := range strings.Split(goexp, ",") {
+		if f == "none" {
+			clear(on)
+			continue
+		}
+		name, off := strings.CutPrefix(f, "no")
+		switch name {
+		case "regabi":
+			on[regabiWrappers], on[regabiArgs] = !off, !off
+		case regabiWrappers, regabiArgs, dwarf5:
+			on[name] = !off
+		}
+	}
+	if alwaysOn || !supported {
+		on[regabiWrappers], on[regabiArgs] = alwaysOn, alwaysOn
+	}
+	for _, name := range []string{regabiWrappers, regabiArgs, dwarf5} {
+		if on[name] {
+			tags = append(tags, "goexperiment."+name)
+		}
+	}
 	return tags
-}()
+}
 
 // target is one configuration a plain go build can select files for: a
 // port with CGO_ENABLED=0, or, where the port supports it, =1.
@@ -107,7 +152,7 @@ type target struct {
 	p   platform
 	cgo bool
 	// toolTags are the tool tags a default go build sets there: the
-	// port's architecture levels and the default experiments.
+	// port's architecture levels and its experiments.
 	toolTags []string
 }
 
@@ -116,7 +161,8 @@ type target struct {
 var targets = func() []target {
 	var ts []target
 	for _, p := range platforms {
-		tags := append(append([]string(nil), archLevels[p.goarch]...), experiments...)
+		tags := append(append([]string(nil), archLevels[p.goarch]...),
+			experimentTags(build.Default.ToolTags, os.Getenv("GOEXPERIMENT"), p.goos, p.goarch)...)
 		ts = append(ts, target{p, false, tags})
 		if p.cgo {
 			ts = append(ts, target{p, true, tags})
@@ -131,9 +177,9 @@ type targetSet []bool
 // buildTargets returns the targets on which go build, without custom
 // -tags, selects the file name with content src: its GOOS/GOARCH name
 // suffix, its //go:build (or legacy +build) constraint and, when it imports
-// "C", cgo all count. Release tags (go1.N) and default experiments
-// (goexperiment.*) are the running toolchain's, and each port has its
-// default architecture level (see archLevels). A file needing a custom tag
+// "C", cgo all count. Release tags (go1.N) are the running toolchain's,
+// and each port has its default architecture level (see archLevels) and
+// experiments (see experimentTags). A file needing a custom tag
 // (ignore, integration) or a non-default level (amd64.v3) selects no
 // target, and src is not parsed further.
 func buildTargets(name string, src []byte) (targetSet, error) {

@@ -379,6 +379,62 @@ func TestBuildTargetsToolTags(t *testing.T) {
 	}
 }
 
+func TestExperimentTags(t *testing.T) {
+	host := []string{"goexperiment.regabiwrappers", "goexperiment.regabiargs", "goexperiment.dwarf5",
+		"goexperiment.greenteagc", "amd64.v1"}
+	const rw, ra, d5, gc = "goexperiment.regabiwrappers", "goexperiment.regabiargs", "goexperiment.dwarf5", "goexperiment.greenteagc"
+	for _, tc := range []struct {
+		goexp, goos, goarch string
+		want                []string
+	}{
+		{"", "linux", "amd64", []string{gc, rw, ra, d5}},
+		{"", "linux", "386", []string{gc, d5}},
+		{"", "linux", "arm", []string{gc, d5}},
+		{"", "linux", "s390x", []string{gc, rw, ra, d5}},
+		{"", "darwin", "arm64", []string{gc, rw, ra}},
+		{"", "ios", "arm64", []string{gc, rw, ra}},
+		{"", "aix", "ppc64", []string{gc, rw, ra}},
+		{"noregabi", "linux", "s390x", []string{gc, d5}},
+		{"noregabi", "linux", "amd64", []string{gc, rw, ra, d5}}, // always on
+		{"regabi", "linux", "386", []string{gc, d5}},             // unsupported
+		{"nodwarf5", "linux", "amd64", []string{gc, rw, ra}},
+		{"dwarf5", "darwin", "amd64", []string{gc, rw, ra, d5}},
+		{"none", "linux", "s390x", []string{gc}},
+	} {
+		got := experimentTags(host, tc.goexp, tc.goos, tc.goarch)
+		if strings.Join(got, " ") != strings.Join(tc.want, " ") {
+			t.Errorf("GOEXPERIMENT=%q %s/%s: %v, want %v", tc.goexp, tc.goos, tc.goarch, got, tc.want)
+		}
+	}
+}
+
+// The platform-dependent experiments follow each target, not the host: a
+// type declared only behind goexperiment.regabiargs is missing on 386 and
+// arm, and goexperiment.dwarf5 is off on darwin.
+func TestGeneratePerTargetExperiments(t *testing.T) {
+	dir := writeFiles(t, map[string]string{"s.go": "//go:build goexperiment.regabiargs\n\n" + fileS})
+	_, err := Generate(dir, DefaultFile)
+	if err == nil || !strings.Contains(err.Error(), "is missing on android/386, android/arm, ") {
+		t.Errorf("error %v, want S missing on android/386 and android/arm", err)
+	}
+	got, err := buildTargets("x.go", []byte("//go:build goexperiment.dwarf5\n\npackage p\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, tg := range targets {
+		switch tg.p.goos {
+		case "darwin", "ios", "aix":
+			if got[i] {
+				t.Errorf("goexperiment.dwarf5 set on %s", tg.p)
+			}
+		case "linux":
+			if !got[i] && os.Getenv("GOEXPERIMENT") == "" {
+				t.Errorf("goexperiment.dwarf5 not set on %s", tg.p)
+			}
+		}
+	}
+}
+
 // A file building only with custom tags still contributes its hand-written
 // DescX: generating one too would declare it twice under -tags integration.
 // Its own task methods get no companion, and a file of another package
