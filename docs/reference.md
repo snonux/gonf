@@ -512,6 +512,9 @@ NoLink("/tmp/stale-link")
 - A non-empty directory aside cannot be removed: the link stays, the apply
   errors naming the backup, the next apply succeeds.
 - Repointing an existing symlink never uses the aside.
+- A symlink whose target does not exist is refused, so a typo fails the
+  apply instead of leaving a dangling link. A dry run previews it as
+  `would-change` instead, because an earlier resource may create the target.
 - No owner or mode options.
 
 ### Command
