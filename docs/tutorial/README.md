@@ -62,3 +62,7 @@ with that status; it is not printed by the command itself.
 
 The examples are compiled by gonf's CI together with the rest of the
 module, so they keep up with the DSL.
+
+Your tasks are compiled into your gonf. After you change a recipe, run
+`go build` again before the next `./gonf`, or the old binary runs the old
+tasks.
