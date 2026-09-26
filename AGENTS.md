@@ -1,5 +1,25 @@
 # Agent Guidelines
 
+## Documentation
+Every change that a user can notice updates the docs in the same PR: the DSL
+(a new, renamed or removed function, option or resource, or a changed
+default), command-line flags and subcommands, plan or apply behaviour, log
+and summary output, inventory, secrets and remote push. Do not leave the
+docs for a follow-up.
+- `docs/reference.md`: the complete reference. Add or change the entry for
+  every public API, option and flag you touch, including its tables.
+- `docs/tutorial/`: the guide. Update every chapter that shows or explains
+  what changed: its code, its prose and its captured outputs (recapture
+  them by running the example rather than editing by hand). The chapter
+  recipes in `docs/tutorial/examples/` are compiled by CI; keep the code
+  shown in a chapter identical to its example.
+- `CHANGELOG.md`: a line under `## Unreleased`.
+- `README.md` when the overview or quick start is affected, and
+  `docs/design/` when a design decision changes.
+
+Before finishing, grep the docs for the old name or behaviour so no stale
+mention is left.
+
 ## Resource Management
 Resource packages expose (a subset of) the same constructor trio, and the name says
 whether the constructor registers:
