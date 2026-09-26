@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/internal/pathtoken"
 )
 
 // Status is the outcome of applying a resource.
@@ -149,18 +150,38 @@ func ChangedSince(anchor string, ids ...string) bool {
 // change note of the id itself, or for a Directory[path] id also of a File
 // under that path (watchCovers). The caller holds reportMu.
 func anyChangedIn(log []note, ids []string) bool {
-	for _, id := range ids {
-		_, isDir := directoryNotePath(id)
-		for _, n := range log {
-			if !isChangeStatus(n.st) {
-				continue
-			}
-			if n.id == id || (isDir && watchCovers(id, n.id)) {
-				return true
+	for _, watch := range ids {
+		for _, id := range watchForms(watch) {
+			_, isDir := directoryNotePath(id)
+			for _, n := range log {
+				if !isChangeStatus(n.st) {
+					continue
+				}
+				if n.id == id || (isDir && watchCovers(id, n.id)) {
+					return true
+				}
 			}
 		}
 	}
 	return false
+}
+
+// watchForms returns the ids a watch on id matches: id itself and, when it
+// carries a destination path token (a DestHome path, File[${HOME}/x]), its
+// expanded form too. A plan records resource ids unexpanded, but the apply
+// expands the path before it converges the resource, and every kind notes
+// its outcome under the id of the path it actually touched
+// (File[/home/paul/x]). Without the expanded form an OnChange on a DestHome
+// resource never fired. A token that cannot expand here leaves only id.
+func watchForms(id string) []string {
+	if !pathtoken.HasToken(id) {
+		return []string{id}
+	}
+	expanded, err := pathtoken.Expand(id)
+	if err != nil || expanded == id {
+		return []string{id}
+	}
+	return []string{id, expanded}
 }
 
 // watchCovers reports whether a change of id fires a gate watching watch:
