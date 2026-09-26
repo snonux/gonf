@@ -11,6 +11,10 @@ Docs
   the tutorial's example recipes manage his things (a portrait file, a
   lodge motd, a `gonfy` account and cron job); their outputs were
   recaptured. The demo tasks in `examples/` write a Gonfy file too.
+- A final tutorial chapter, "A web fleet", sets up Apache httpd on three
+  Linux front ends with one recipe (`docs/tutorial/examples/ch16-web-fleet`),
+  using the inventory, `ConfigSet` validation, secrets, per-host timers
+  and change gates together.
 
 ## v0.24.0 (2026-09-26)
 

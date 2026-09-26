@@ -1,0 +1,10 @@
+#!/bin/sh
+# Rotate Gonfy's httpd logs, keeping one old copy, then let httpd reopen them.
+set -eu
+cd /var/log/httpd
+for log in access_log error_log; do
+	if [ -f "$log" ]; then
+		mv -f "$log" "$log.1"
+	fi
+done
+exec systemctl reload httpd

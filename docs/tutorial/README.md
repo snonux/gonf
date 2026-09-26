@@ -40,6 +40,7 @@ lodge's message of the day, his start page and even a `gonfy` user account.
 | 13 | [Secrets](13-secrets.md) | Secret providers, `MustSecret`, `SecretFile`, sensitive plans |
 | 14 | [Sealed and signed plans](14-sealed-signed.md) | age encryption, signer keys, verified apply |
 | 15 | [When things go wrong](15-troubleshooting.md) | Error classes, exit codes, `-verbose` |
+| 16 | [A web fleet](16-web-fleet.md) | Everything together: httpd on three Linux front ends |
 
 ## How to follow along
 
