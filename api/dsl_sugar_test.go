@@ -145,6 +145,96 @@ func TestNeedsMethodExpressionErrors(t *testing.T) {
 	}
 }
 
+// genericSugar is a generic RegisterMethods struct (task eb): Needs of its
+// methods by method expression (value and pointer receiver) and by method
+// value must resolve like on a plain struct, although the runtime names a
+// generic method G[...].M while reflect names the type G[int]. The
+// instantiation in OptsCron is concrete: over the type parameter X it
+// would be a closure (see TestNeedsGenericTypeParamClosureIsDeclError).
+type genericSugar[X any] struct{}
+
+func (genericSugar[X]) Script()    {}
+func (*genericSugar[X]) StampDir() {}
+func (genericSugar[X]) Cron()      {}
+func (genericSugar[X]) OptsCron() TaskOptions {
+	return TaskOptions{Needs(genericSugar[int].Script, (*genericSugar[int]).StampDir)}
+}
+
+// TestNeedsMethodExpressionsOnGenericStruct (task eb): method expressions
+// and method values of a generic struct name its registered tasks, also
+// for an instantiation whose type argument comes from another package.
+func TestNeedsMethodExpressionsOnGenericStruct(t *testing.T) {
+	resetForHostsState(t)
+	RegisterMethods(genericSugar[int]{}, WithPrefix("g_"))
+	Task("g_free", "", func() {}, Needs(genericSugar[int]{}.Script, (&genericSugar[int]{}).StampDir))
+	if err := declerr.First(); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"g_cron", "g_free"} {
+		c, _ := findCandidate(name)
+		if got, want := c.resolvedNeeds(), []string{"g_script", "g_stamp_dir"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s needs = %v, want %v", name, got, want)
+		}
+	}
+	if _, err := RecordPlan("sugar", "", "g_cron"); err != nil {
+		t.Fatalf("RecordPlan(g_cron): %v", err)
+	}
+
+	// Another instantiation under the derived default prefix shares the
+	// method key and resolves within its own prefix.
+	RegisterMethods(&genericSugar[map[string]plan.Op]{})
+	c, _ := findCandidate("api_generic_sugar_cron")
+	if got, want := c.resolvedNeeds(), []string{"api_generic_sugar_script", "api_generic_sugar_stamp_dir"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("api_generic_sugar_cron needs = %v, want %v", got, want)
+	}
+}
+
+// TestNeedsGenericMethodAmbiguousOutsidePrefix (task eb, negative): the
+// runtime cannot tell G[int].M from G[string].M, so two instantiations are
+// two registrations of one struct: a dependent under neither prefix gets a
+// "needs unknown task" error naming the method, never the wrong task.
+func TestNeedsGenericMethodAmbiguousOutsidePrefix(t *testing.T) {
+	resetForHostsState(t)
+	RegisterMethods(genericSugar[int]{}, WithPrefix("a_"))
+	RegisterMethods(genericSugar[string]{}, WithPrefix("b_"))
+	Task("free", "", func() {}, Needs(genericSugar[bool].Script))
+	if _, err := RecordPlan("sugar", "", "free"); err == nil ||
+		!strings.Contains(err.Error(), `needs unknown task "genericSugar.Script"`) {
+		t.Fatalf("ambiguous generic need: err = %v", err)
+	}
+	c, _ := findCandidate("b_cron")
+	if got, want := c.resolvedNeeds(), []string{"b_script", "b_stamp_dir"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("b_cron needs = %v, want %v", got, want)
+	}
+}
+
+// genericClosureNeed needs its own method over the type parameter X, which
+// the compiler turns into a closure the runtime cannot name.
+type genericClosureNeed[X any] struct{}
+
+func (genericClosureNeed[X]) Base() {}
+func (genericClosureNeed[X]) Web()  {}
+func (genericClosureNeed[X]) OptsWeb() TaskOptions {
+	return TaskOptions{Needs(genericClosureNeed[X].Base)}
+}
+func (g genericClosureNeed[X]) OptsBase() TaskOptions { return TaskOptions{Needs(g.Web)} }
+
+// TestNeedsGenericTypeParamClosureIsDeclError (task eb, negative): a method
+// expression or method value over a type parameter, and a function literal,
+// are declaration errors naming the closure, not a record-time "unknown
+// task" nobody can match to the recipe.
+func TestNeedsGenericTypeParamClosureIsDeclError(t *testing.T) {
+	requireDeclErr(t, "Needs: genericClosureNeed.OptsBase.func1 is not a method expression", func() {
+		RegisterMethods(genericClosureNeed[int]{}, WithPrefix("c_"))
+	})
+	requireDeclErr(t, "Needs: genericClosureNeed.OptsWeb.func1 is not a method expression", func() {
+		_ = genericClosureNeed[int]{}.OptsWeb()
+	})
+	requireDeclErr(t, "is not a method expression", func() {
+		Task("x", "", func() {}, Needs(func() {}))
+	})
+}
+
 func TestRegisterMethodsTakesTaskOptions(t *testing.T) {
 	resetForHostsState(t)
 	RegisterMethods(otherRecipe{}, WithPrefix("a_"), WhenProfile("fedora"))

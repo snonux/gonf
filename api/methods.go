@@ -78,10 +78,7 @@ func DefaultPrefix(v any) string {
 	if t == nil {
 		return ""
 	}
-	pkg, typ := "", t.Name()
-	if i := strings.IndexByte(typ, '['); i >= 0 {
-		typ = typ[:i] // generic instantiation: Name() carries the type arguments
-	}
+	pkg, typ := "", genericBaseName(t.Name())
 	if s := t.String(); strings.Contains(s, ".") {
 		pkg = s[:strings.IndexByte(s, '.')]
 	}

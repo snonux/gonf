@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"go/token"
 	"reflect"
 	"runtime"
 	"slices"
@@ -53,8 +54,13 @@ import (
 // prefix it got. A struct registered more than once (under two prefixes)
 // resolves to the registration sharing the dependent's prefix, else the
 // need is ambiguous and fails the record like an unknown name. A method
-// value (u.Script) works the same way. Any other argument type is a
-// declaration error.
+// value (u.Script) works the same way. So do the methods of a generic
+// struct, with one limit: the runtime does not tell instantiations apart,
+// so G[int].Script and G[string].Script name the same method, and inside a
+// generic method a method expression over the type parameter (G[X].Script)
+// is a closure the runtime cannot name, a declaration error: write a
+// concrete instantiation (G[int].Script) or the task name there. Any other
+// argument type is a declaration error.
 //
 // Errors: an empty name, a task that needs itself, or a Needs cycle
 // (a → b → a, aliases followed) is a declaration error at registration and
@@ -289,12 +295,24 @@ func resetMethodTasks() {
 }
 
 // methodKey is the key of method name of the struct type t in methodTasks,
-// in the form a method expression's runtime name normalizes to.
+// in the form a method expression's runtime name normalizes to. A generic
+// struct's type arguments are dropped (G[int] → G), as the runtime name
+// carries none: every instantiation of a generic struct shares one key, so
+// two registered instantiations resolve like one struct registered twice.
 func methodKey(t reflect.Type, name string) string {
 	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
-	return t.PkgPath() + "." + t.Name() + "." + name
+	return t.PkgPath() + "." + genericBaseName(t.Name()) + "." + name
+}
+
+// genericBaseName is a reflect type name without a generic instantiation's
+// type arguments: "G[int]" and "G[map[string]pkg/path.T]" become "G".
+func genericBaseName(name string) string {
+	if i := strings.IndexByte(name, '['); i >= 0 {
+		return name[:i]
+	}
+	return name
 }
 
 // noteMethodTask records that RegisterMethods registered task for method
@@ -348,14 +366,25 @@ func needName(t any) (string, error) {
 	if fn == nil {
 		return "", fmt.Errorf("Needs: cannot resolve %T to a method", t)
 	}
-	return methodNeedPrefix + normalizeMethodName(fn.Name()), nil
+	key := normalizeMethodName(fn.Name())
+	if !token.IsExported(key[strings.LastIndexByte(key, '.')+1:]) {
+		// RegisterMethods registers exported methods only. A function
+		// literal is a closure, and so is a method expression or value
+		// over a type parameter inside a generic method (G[X].M, g.M): the
+		// runtime cannot name the method behind it.
+		return "", fmt.Errorf("Needs: %s is not a method expression (in a generic method, name a concrete instantiation such as G[int].M, or the task)",
+			needLabel(methodNeedPrefix+key))
+	}
+	return methodNeedPrefix + key, nil
 }
 
 // normalizeMethodName turns a method's runtime name into methodKey's form:
 // "pkg.(*T).M" and the method value wrapper "pkg.T.M-fm" both become
-// "pkg.T.M".
+// "pkg.T.M", and so does a generic struct's "pkg.T[...].M" (the runtime
+// writes every instantiation's type arguments as "[...]").
 func normalizeMethodName(n string) string {
 	n = strings.TrimSuffix(n, "-fm")
+	n = strings.ReplaceAll(n, "[...]", "")
 	if i := strings.Index(n, "(*"); i >= 0 {
 		if j := strings.IndexByte(n[i:], ')'); j >= 0 {
 			n = n[:i] + n[i+2:i+j] + n[i+j+1:]

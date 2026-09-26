@@ -25,6 +25,13 @@ Fixes
   `WithGOARCH` and `WithPlatform` likewise refuse a GOARCH that is not
   lower case (`"AMD64"`). All of them, and push's `uname -s` probe, now
   share one list of supported operating systems.
+- `Needs(T.Method)` now resolves for the methods of a generic struct
+  (`Needs(G[int].Base)`). Before, the need never matched the registered
+  task, so the record failed with "needs unknown task". Inside a generic
+  method, a method expression or value over the type parameter
+  (`G[X].Base`) compiles to a closure that cannot be matched to a method.
+  That, or passing a function literal, is now a declaration error with a
+  hint, not a record-time "unknown task".
 
 Docs
 - Gonfy the beaver is gonf's mascot and new logo (`assets/logo-*.svg`).
