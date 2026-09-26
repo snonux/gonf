@@ -9,6 +9,7 @@ import (
 	"time"
 
 	gexec "github.com/snonux/gonf/internal/exec"
+	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -19,7 +20,7 @@ import (
 // sudo/doas WITHOUT "-n": the elevated child then applied for real. dry-run
 // must add "-n" right after "apply"; non-dry-run must not add it at all.
 func TestElevatedApplyArgvDryRun(t *testing.T) {
-	got := elevatedApplyArgv("/usr/local/bin/gonf", "/tmp/plan/chunk-elevated.jsonl", true, "", gexec.BuiltinDefaultTimeout)
+	got := elevatedApplyArgv("/usr/local/bin/gonf", "/tmp/plan/chunk-elevated.jsonl", true, "", gexec.BuiltinDefaultTimeout, logger.LevelInfo)
 	want := []string{"/usr/local/bin/gonf", "apply", "-cancel-pipe", "-n", "/tmp/plan/chunk-elevated.jsonl"}
 	if len(got) != len(want) {
 		t.Fatalf("dry-run argv = %v, want %v", got, want)
@@ -30,7 +31,7 @@ func TestElevatedApplyArgvDryRun(t *testing.T) {
 		}
 	}
 
-	got = elevatedApplyArgv("/usr/local/bin/gonf", "/tmp/plan/chunk-elevated.jsonl", false, "", gexec.BuiltinDefaultTimeout)
+	got = elevatedApplyArgv("/usr/local/bin/gonf", "/tmp/plan/chunk-elevated.jsonl", false, "", gexec.BuiltinDefaultTimeout, logger.LevelInfo)
 	want = []string{"/usr/local/bin/gonf", "apply", "-cancel-pipe", "/tmp/plan/chunk-elevated.jsonl"}
 	if len(got) != len(want) {
 		t.Fatalf("non-dry-run argv = %v, want %v", got, want)
@@ -60,7 +61,7 @@ func TestElevatedApplyArgvDryRun(t *testing.T) {
 // preserving auto-detect. Both dry-run and profile-override must be able to
 // combine, with "-profile" before "apply" and "-n" right after it.
 func TestElevatedApplyArgvProfileOverride(t *testing.T) {
-	got := elevatedApplyArgv("/usr/local/bin/gonf", "/tmp/plan/chunk-elevated.jsonl", false, "rocky", gexec.BuiltinDefaultTimeout)
+	got := elevatedApplyArgv("/usr/local/bin/gonf", "/tmp/plan/chunk-elevated.jsonl", false, "rocky", gexec.BuiltinDefaultTimeout, logger.LevelInfo)
 	want := []string{"/usr/local/bin/gonf", "-profile=rocky", "apply", "-cancel-pipe", "/tmp/plan/chunk-elevated.jsonl"}
 	if len(got) != len(want) {
 		t.Fatalf("profile-override argv = %v, want %v", got, want)
@@ -71,14 +72,14 @@ func TestElevatedApplyArgvProfileOverride(t *testing.T) {
 		}
 	}
 
-	got = elevatedApplyArgv("/usr/local/bin/gonf", "/tmp/plan/chunk-elevated.jsonl", false, "", gexec.BuiltinDefaultTimeout)
+	got = elevatedApplyArgv("/usr/local/bin/gonf", "/tmp/plan/chunk-elevated.jsonl", false, "", gexec.BuiltinDefaultTimeout, logger.LevelInfo)
 	for _, arg := range got {
 		if strings.HasPrefix(arg, "-profile=") {
 			t.Fatalf("no-override argv must not contain -profile: %v", got)
 		}
 	}
 
-	got = elevatedApplyArgv("/usr/local/bin/gonf", "/tmp/plan/chunk-elevated.jsonl", true, "rocky", gexec.BuiltinDefaultTimeout)
+	got = elevatedApplyArgv("/usr/local/bin/gonf", "/tmp/plan/chunk-elevated.jsonl", true, "rocky", gexec.BuiltinDefaultTimeout, logger.LevelInfo)
 	want = []string{"/usr/local/bin/gonf", "-profile=rocky", "apply", "-cancel-pipe", "-n", "/tmp/plan/chunk-elevated.jsonl"}
 	if len(got) != len(want) {
 		t.Fatalf("dry-run+profile-override argv = %v, want %v", got, want)
@@ -111,7 +112,32 @@ func TestElevatedApplyArgvCmdTimeout(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := elevatedApplyArgv(exe, path, tt.dryRun, tt.profile, tt.timeout)
+			got := elevatedApplyArgv(exe, path, tt.dryRun, tt.profile, tt.timeout, logger.LevelInfo)
+			if strings.Join(got, " ") != strings.Join(tt.want, " ") {
+				t.Fatalf("argv = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestElevatedApplyArgvLogLevel pins that the controller's -verbose/-quiet
+// reaches the elevated child as a global flag ahead of every other one: the
+// child's log lines are relayed as they are, so without it "gonf -quiet"
+// still printed every privileged change.
+func TestElevatedApplyArgvLogLevel(t *testing.T) {
+	const exe, path = "/usr/local/bin/gonf", "/tmp/plan/chunk-elevated.jsonl"
+	tests := []struct {
+		name  string
+		level logger.Level
+		want  []string
+	}{
+		{"quiet", logger.LevelWarn, []string{exe, "-quiet", "-profile=rocky", "-cmd-timeout=30s", "apply", "-cancel-pipe", path}},
+		{"verbose", logger.LevelDebug, []string{exe, "-verbose", "-profile=rocky", "-cmd-timeout=30s", "apply", "-cancel-pipe", path}},
+		{"default omitted", logger.LevelInfo, []string{exe, "-profile=rocky", "-cmd-timeout=30s", "apply", "-cancel-pipe", path}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := elevatedApplyArgv(exe, path, false, "rocky", 30*time.Second, tt.level)
 			if strings.Join(got, " ") != strings.Join(tt.want, " ") {
 				t.Fatalf("argv = %v, want %v", got, tt.want)
 			}

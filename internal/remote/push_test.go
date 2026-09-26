@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/plan"
 )
@@ -39,6 +40,35 @@ func TestRemoteApplyCmdPrivilegeNoneElevateErrors(t *testing.T) {
 				}
 				return
 			}
+			if err != nil || got != tc.want {
+				t.Fatalf("got %q, %v; want %q", got, err, tc.want)
+			}
+		})
+	}
+}
+
+// TestRemoteApplyCmdForwardsLogLevel pins that the controller's
+// -verbose/-quiet reaches the remote gonf ahead of -cmd-timeout and inside
+// the sudo/doas wrapper: the remote apply's lines are relayed as they are,
+// so without it "gonf -quiet push" still printed every remote change.
+func TestRemoteApplyCmdForwardsLogLevel(t *testing.T) {
+	prev := logger.GetLevel()
+	t.Cleanup(func() { logger.SetLevel(prev) })
+	fwd := cmdTimeoutForward{flag: "-cmd-timeout=30s", login: true, elevated: true}
+	tests := []struct {
+		name    string
+		level   logger.Level
+		elevate bool
+		want    string
+	}{
+		{"quiet", logger.LevelWarn, false, "gonf -quiet -cmd-timeout=30s apply -relayed -"},
+		{"verbose_sudo", logger.LevelDebug, true, "sudo -n gonf -verbose -cmd-timeout=30s apply -relayed -"},
+		{"default", logger.LevelInfo, true, "sudo -n gonf -cmd-timeout=30s apply -relayed -"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			logger.SetLevel(tc.level)
+			got, err := remoteApplyCmd(tc.elevate, PushTarget{Privilege: privilege.Sudo}, "", Push, fwd)
 			if err != nil || got != tc.want {
 				t.Fatalf("got %q, %v; want %q", got, err, tc.want)
 			}

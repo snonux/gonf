@@ -330,7 +330,7 @@ func partialApplyError(err error, chunks []plan.Chunk, i int) error {
 
 // remoteApplyCmd builds the remote shell command for one apply session in
 // the given delivery mode (Mode.applyStdinArg picks the stdin argument):
-// "gonf [-cmd-timeout=<d>] apply -relayed [-apply-dir <dir>] <stdin arg>",
+// "gonf [-verbose|-quiet] [-cmd-timeout=<d>] apply -relayed [-apply-dir <dir>] <stdin arg>",
 // wrapped in sudo/doas for an elevated session. fwd decides whether the
 // global -cmd-timeout flag precedes "apply" for this session's privilege
 // context (see cmdtimeout.go); its zero value never adds it. The
@@ -375,7 +375,23 @@ func partialApplyError(err error, chunks []plan.Chunk, i int) error {
 // trailed the controller's own exact release).
 func remoteApplyCmd(elevate bool, t PushTarget, applyDir string, mode Mode, fwd cmdTimeoutForward) (string, error) {
 	args := "apply " + applyproto.RelayedArgs(applyDir, mode.applyStdinArg())
-	return privilege.WrapApplyBinCmd(t.privilegeMode(), elevate, remoteGonfBin(t), fwd.prefix(elevate)+args)
+	return privilege.WrapApplyBinCmd(t.privilegeMode(), elevate, remoteGonfBin(t), logLevelPrefix()+fwd.prefix(elevate)+args)
+}
+
+// logLevelPrefix returns the controller's -verbose or -quiet as a "<flag> "
+// prefix for the remote gonf command line, or "" at the default level. The
+// remote apply's log lines are relayed as they are, so without it
+// "gonf -quiet push" still printed every remote change and "gonf -verbose
+// push" none of the remote debug lines. Unlike -cmd-timeout it needs no
+// capability probe: both flags belong to gonf's first command line
+// (docs/design/tasks.md), so every remote gonf that passes the 0.16.3 floor
+// an apply already requires (RequireRemoteRelayed) parses them. A
+// fixed-argument sudoers/doas rule must allow them, like -cmd-timeout.
+func logLevelPrefix() string {
+	if flag := logger.LevelFlag(logger.GetLevel()); flag != "" {
+		return flag + " "
+	}
+	return ""
 }
 
 // pushRemoveStickyTimeout bounds the best-effort sticky-dir removal below.

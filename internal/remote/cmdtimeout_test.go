@@ -491,7 +491,9 @@ func TestCmdTimeoutProbeSSHFailureIsBestEffort(t *testing.T) {
 	}
 	t.Cleanup(func() { defaultPusher.CmdTimeoutProber = oldProber })
 
-	out := testutil.CaptureLog(t, logger.LevelWarn)
+	// LevelInfo, not LevelWarn: the capture sets the controller's level,
+	// and a Warn level would forward "-quiet" into the commands below.
+	out := testutil.CaptureLog(t, logger.LevelInfo)
 	ops := []plan.Op{
 		{Op: plan.KindPlan, Version: plan.CurrentVersion, ID: "p"},
 		{Op: plan.KindFile, Path: "/tmp/unpriv-out", Mode: "0600", Payload: plan.FilePayload{ContentB64: "aGVsbG8K"}},
