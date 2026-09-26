@@ -312,7 +312,27 @@ func methodKey(t reflect.Type, name string) string {
 	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
-	return t.PkgPath() + "." + genericBaseName(t.Name()) + "." + name
+	return runtimePkgPath(t.PkgPath()) + "." + genericBaseName(t.Name()) + "." + name
+}
+
+// runtimePkgPath is import path p escaped the way the Go toolchain writes
+// it into runtime function names (cmd/internal/objabi.PathToPrefix): a '.'
+// in the last element (gopkg.in/yaml.v3 → yaml%2ev3), and '%', '"', control
+// characters, space and non-ASCII bytes anywhere, become %xx. Keeping the
+// escaped form leaves the first '.' after the last '/' the separator
+// between package and type, which namesExportedMethod and needLabel rely on.
+func runtimePkgPath(p string) string {
+	const hex = "0123456789abcdef"
+	slash := strings.LastIndexByte(p, '/')
+	var b strings.Builder
+	for i := 0; i < len(p); i++ {
+		if c := p[i]; c <= ' ' || (c == '.' && i > slash) || c == '%' || c == '"' || c >= 0x7F {
+			b.Write([]byte{'%', hex[c>>4], hex[c&0xF]})
+		} else {
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
 }
 
 // genericBaseName is a reflect type name without a generic instantiation's
@@ -399,27 +419,40 @@ func namesExportedMethod(key string) bool {
 
 // notMethodError is the declaration error of a Needs func that names no
 // exported method (namesExportedMethod). A closure compiled inside a
-// generic method (raw carries "[...]") gets a hint: there, a method
-// expression or method value over the type parameter (G[X].M, g.M) is such
-// a closure, whose method the runtime cannot name.
+// generic method gets a hint: there, a method expression or method value
+// over the type parameter (G[X].M, g.M) is such a closure, whose method the
+// runtime cannot name.
 func notMethodError(raw, key string) error {
 	err := fmt.Errorf("Needs: %s does not name an exported method of a struct", needLabel(methodNeedPrefix+key))
-	if strings.Contains(raw, "[...]") && hasClosureSegment(key) {
+	if inGenericMethodClosure(raw) {
 		return fmt.Errorf("%w (inside a generic method, G[X].M and g.M over the type parameter are closures: "+
 			"name a concrete instantiation such as G[int].M, or the task)", err)
 	}
 	return err
 }
 
-// hasClosureSegment reports whether a dot-separated segment of the runtime
-// name n is a closure's "funcN".
-func hasClosureSegment(n string) bool {
-	for _, seg := range strings.Split(n, ".") {
-		if num, ok := strings.CutPrefix(seg, "func"); ok && num != "" && strings.Trim(num, "0123456789") == "" {
-			return true
-		}
+// inGenericMethodClosure reports whether the runtime name raw is a closure
+// compiled directly in a method of a generic type: "pkg.G[...].M.funcN" or
+// "pkg.(*G[...]).M.funcN". A closure in a generic function
+// ("pkg.F[...].funcN", "pkg.F[...].funcN.funcM") is not.
+func inGenericMethodClosure(raw string) bool {
+	i := strings.Index(raw, "[...]")
+	if i < 0 {
+		return false
 	}
-	return false
+	// After the type arguments (and a pointer receiver's ")"): ".M.funcN".
+	rest := strings.TrimPrefix(raw[i+len("[...]"):], ")")
+	segs := strings.Split(rest, ".")
+	if len(segs) < 3 || segs[0] != "" {
+		return false
+	}
+	return token.IsIdentifier(segs[1]) && !isClosureSegment(segs[1]) && isClosureSegment(segs[2])
+}
+
+// isClosureSegment reports whether seg is a closure's "funcN".
+func isClosureSegment(seg string) bool {
+	num, ok := strings.CutPrefix(seg, "func")
+	return ok && num != "" && strings.Trim(num, "0123456789") == ""
 }
 
 // normalizeMethodName turns a method's runtime name into methodKey's form:

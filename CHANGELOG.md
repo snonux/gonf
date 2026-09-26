@@ -31,6 +31,9 @@ Fixes
   method, a method expression or method value over the type parameter
   (`G[X].Base`, `g.Base`) compiles to a closure gonf cannot match to a
   method: name a concrete instantiation or the task there.
+- `Needs(T.Method)` now resolves for a struct from a package whose last
+  path element contains a dot (`gopkg.in/yaml.v3` style). The runtime
+  writes that dot as `%2e` in method names, so the need never matched.
 - Behaviour change: a func passed to `Needs` that does not name an
   exported method of a struct (a package function, an unexported method,
   a function literal, or the closure above) is now a declaration error

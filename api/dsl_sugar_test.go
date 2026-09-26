@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snonux/gonf/api/internal/needsfixture.v1"
 	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/plan"
 )
@@ -248,6 +249,81 @@ func TestNeedsGenericTypeParamClosureIsDeclError(t *testing.T) {
 	requireDeclErr(t, "Needs: genericClosureNeed.OptsWeb.func1 does not name an exported method of a struct ("+genericClosureHint, func() {
 		_ = genericClosureNeed[int]{}.OptsWeb()
 	})
+}
+
+// genericFuncClosure returns a closure compiled in a generic FUNCTION
+// (runtime name F[...].funcN), and a closure nested in it.
+func genericFuncClosure[X any]() (func(), func()) {
+	outer := func() func() { return func() {} }
+	return func() {}, outer()
+}
+
+// TestNeedsGenericFunctionClosureHasNoMethodHint (task eb, negative): a
+// closure of a generic function is refused without the generic-METHOD
+// hint, which would point at a method expression that is not there.
+func TestNeedsGenericFunctionClosureHasNoMethodHint(t *testing.T) {
+	direct, nested := genericFuncClosure[int]()
+	for _, f := range []func(){direct, nested} {
+		requireDeclErr(t, "does not name an exported method of a struct", func() {
+			Task("x", "", func() {}, Needs(f))
+		})
+		if err := declerr.First(); strings.Contains(err.Error(), genericClosureHint) {
+			t.Fatalf("generic function closure: unexpected generic-method hint: %v", err)
+		}
+	}
+}
+
+// TestInGenericMethodClosure pins which runtime names get the hint: only a
+// funcN directly inside a method of a generic type.
+func TestInGenericMethodClosure(t *testing.T) {
+	for raw, want := range map[string]bool{
+		"example.com/p.G[...].OptsCron.func1":       true,
+		"example.com/p.(*G[...]).OptsCron.func2":    true,
+		"example.com/p.G[...].OptsCron.func1.func2": true,
+		"example.com/p%2ev1.G[...].OptsCron.func1":  true,
+		"example.com/p.Setup[...].func1":            false,
+		"example.com/p.Setup[...].func1.func2":      false,
+		"example.com/p.(*G[...]).func1":             false,
+		"example.com/p.G[...].Base":                 false,
+		"example.com/p.G[...].Base-fm":              false,
+		"example.com/p.G[...].OptsCron.funcA":       false,
+		"example.com/p.T.OptsCron.func1":            false,
+		"example.com/p.TestX.func1":                 false,
+	} {
+		if got := inGenericMethodClosure(raw); got != want {
+			t.Errorf("inGenericMethodClosure(%q) = %v, want %v", raw, got, want)
+		}
+	}
+}
+
+// TestNeedsMethodExpressionDottedPackagePath (task eb): a struct from a
+// package whose last path element contains a dot (like gopkg.in/yaml.v3)
+// resolves, although the runtime escapes that dot as %2e and reflect's
+// PkgPath does not.
+func TestNeedsMethodExpressionDottedPackagePath(t *testing.T) {
+	resetForHostsState(t)
+	RegisterMethods(needsfixture.Recipe{}, WithPrefix("y_"))
+	Task("y_user", "", func() {}, Needs(needsfixture.Recipe.Base, needsfixture.Recipe{}.Web))
+	if err := declerr.First(); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := findCandidate("y_user")
+	if got, want := c.resolvedNeeds(), []string{"y_base", "y_web"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("y_user needs = %v, want %v", got, want)
+	}
+	if _, err := RecordPlan("sugar", "", "y_user"); err != nil {
+		t.Fatalf("RecordPlan(y_user): %v", err)
+	}
+	for p, want := range map[string]string{
+		"gopkg.in/yaml.v3":      "gopkg.in/yaml%2ev3",
+		"example.com/a.b/c":     "example.com/a.b/c",
+		"example.com/x%y/\"q\"": "example.com/x%25y/%22q%22",
+		"main":                  "main",
+	} {
+		if got := runtimePkgPath(p); got != want {
+			t.Errorf("runtimePkgPath(%q) = %q, want %q", p, got, want)
+		}
+	}
 }
 
 // NeedsPackageFunc is an exported package function, not a method.
