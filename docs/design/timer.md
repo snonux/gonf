@@ -4,6 +4,8 @@ Linux **systemd** timer management (Fedora and other systemd hosts). Enables and
 starts `.timer` units, or stops and disables them. The `.timer` suffix is added
 automatically when omitted.
 
+> 🦫 **Gonfy says:** This timer is already built. I just switch it on, or off again.
+
 ```go
 Timer("fstrim")                      // enable + start fstrim.timer
 Timer("fstrim.timer", WithRestart)   // converge, then restart once

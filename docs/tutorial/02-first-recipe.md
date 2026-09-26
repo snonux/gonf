@@ -8,6 +8,8 @@ how gonf reports changes.
 
 ## Create the module
 
+> 🦫 **Gonfy says:** A recipe is just a Go module. No special tools, only Go.
+
 ```text
 $ mkdir myconf
 $ cd myconf
@@ -119,6 +121,8 @@ This is the core loop of gonf: declare, preview with `-n`, apply, and run
 again whenever you like. Gonfy calls it his evening walk around the lodge.
 
 ## A few more flags
+
+> 🦫 **Gonfy says:** `-quiet` is for when you trust me and only want the summary.
 
 ```text
 $ ./gonf -quiet hello

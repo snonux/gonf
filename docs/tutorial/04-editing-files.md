@@ -148,6 +148,8 @@ Reference: [File](../reference.md#file) (keyed lines and managed blocks).
 
 ## Validate before installing
 
+> 🦫 **Gonfy says:** I test every new stick before it goes into the dam. A broken one never replaces a working one.
+
 `WithValidation` writes a candidate next to the target, runs your validator
 on it, and replaces the live file only when the validator exits 0. The
 recipe feeds the script body from `GREETING_SCRIPT`, so you can try a
@@ -175,6 +177,8 @@ take down: `sshd -t`, `nginx -t`, `httpd -n`, `visudo -c`.
 Reference: [File](../reference.md#file) (validation).
 
 ## Several files, one check: ConfigSet
+
+> 🦫 **Gonfy says:** Two sticks that only hold together are checked together, before either touches the lodge.
 
 `main.sh` sources `lib.sh`, so neither can be checked alone. A `ConfigSet`
 stages all members in a private directory, runs the validators against the

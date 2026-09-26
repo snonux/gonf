@@ -77,6 +77,8 @@ summary: 1 ok, 7 changed, 0 skipped, 0 would-change
 
 ## Second run
 
+> 🦫 **Gonfy says:** Skipped does not mean failed. It means the job was already done.
+
 ```text
 $ ./gonf commands
 2026/09/26 08:26:52 skipping Command[git-init]: /home/paul/gonf-tutorial/commands/repo/.git already exists
@@ -101,6 +103,8 @@ Each command was held back for its own reason:
 a harmless `echo`; for real work, add a guard.
 
 ## Change the config
+
+> 🦫 **Gonfy says:** A new stick in `app.conf`, so the reload runs. No change, no reload.
 
 ```text
 $ echo workers=8 > ~/gonf-tutorial/commands/app.conf

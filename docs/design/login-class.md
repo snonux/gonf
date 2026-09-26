@@ -4,6 +4,8 @@
 `/etc/login.conf.d/<class>`, and returns a change handle for the daemon that
 must be restarted to pick up new limits. `NoLoginClass` removes it.
 
+> 🦫 **Gonfy says:** On OpenBSD every class of guest gets its own room card in login.conf.d. I write one card per class.
+
 Status: implemented in core (released in v0.15.0). Native OpenBSD verification is
 still pending; the platform behaviour below is documentation-based.
 

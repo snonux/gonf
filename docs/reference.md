@@ -61,6 +61,8 @@ duplicate names).
 
 ## Tasks
 
+> 🦫 **Gonfy says:** A task is one chore on my list. The options on it say where the chore applies and whether I need the ladder.
+
 ### Registering
 
 | API | Effect |
@@ -281,6 +283,8 @@ Predicate helpers for `When`: `ProfileIs(p...)`, `And(...)`, `Or(...)`.
 
 ## Body-level guards and helpers
 
+> 🦫 **Gonfy says:** Inside a chore I can still pick which sticks go where: these guards wrap just part of a body.
+
 | API | Plan form | Direct (non-recording) form |
 |-----|-----------|-----------------------------|
 | `WhenPathExists(path, fn)` | `when_begin{path_exists}` around `fn` | probes the local filesystem now |
@@ -331,6 +335,8 @@ sources) and `WithHome` refuse the token as a declaration error.
 | `RenderTemplate(path, data)` | Render a template on the controller (see [Templates](#templates)). |
 
 ## Resources
+
+> 🦫 **Gonfy says:** Every resource is one stick in the lodge, described as it should end up, not as a step to take.
 
 Constructors return a `Resource` (pass it to `DependsOn`/`OnChange`).
 Constructors with a `Path` type parameter accept a `string` or `List(...)`;
@@ -865,6 +871,8 @@ options, `.tmpl` paths, line edits and `IsAbsent` are refused.
 
 ## Templates
 
+> 🦫 **Gonfy says:** Carve the sign at the lodge with the lodge's own facts, or at home with only your data. Both refuse an unknown key.
+
 | Where | How | Data available |
 |-------|-----|----------------|
 | destination | `.tmpl` source or path, `WithTemplate`, `WithTemplateData` | environment, `.Param`, `WithTemplateData` keys at the root and as `.Data`, `.Gonf.GOOS`, `.Gonf.Profile`, `.Gonf.Hostname` |
@@ -882,6 +890,8 @@ options, `.tmpl` paths, line edits and `IsAbsent` are refused.
 - `RenderTemplate` errors have resolved secret values redacted.
 
 ## Inventory
+
+> 🦫 **Gonfy says:** My map of the river: every lodge, which clusters they belong to, and how to swim to each.
 
 ```go
 web := Host("web", WithSSHUser("rex"), WithSSHHost("web.example"), WithSSHPort(2),
@@ -982,6 +992,8 @@ does not narrow.
 
 ## Privilege
 
+> 🦫 **Gonfy says:** Even a beaver needs a ladder for the roof. gonf climbs it only for the ops that ask for it.
+
 | Knob | API | Meaning |
 |------|-----|---------|
 | needs root | `Task(..., Privileged())`, `RequiresRoot` embed, `WithElevate` on a Command | ops marked `elevate` |
@@ -1005,6 +1017,8 @@ does not narrow.
   `gonf apply *`-style match on the tail is simpler.
 
 ## CLI
+
+> 🦫 **Gonfy says:** The whistles I answer to. Every flag and subcommand is here.
 
 Exit codes: 0 success, 1 failure, 2 usage error. Every stderr line is
 redacted against resolved secrets.
@@ -1096,6 +1110,8 @@ Output directory rules:
   `elevate` is ignored. Run it under sudo/doas for privileged plans.
 
 ## Plans and remote push
+
+> 🦫 **Gonfy says:** A plan is my blueprint. I can hand it over as a file, or carry it across the river over ssh.
 
 ### Plan format
 
@@ -1230,6 +1246,8 @@ Before the first apply chunk, every push probes the remote gonf:
 
 ## Secrets
 
+> 🦫 **Gonfy says:** Secrets live in my cheek pouch on the controller and only come out where a task uses them.
+
 ### Resolving
 
 | API | Behaviour |
@@ -1306,6 +1324,8 @@ and crontab lines hold the secret in clear text; Go memory is not zeroed.
 
 ## Sealed plans
 
+> 🦫 **Gonfy says:** Seal the blueprint, and only the lodge that holds the key can read it.
+
 Encrypt a plan at rest with [age](https://age-encryption.org), hybrid
 post-quantum recipients only.
 
@@ -1367,6 +1387,8 @@ ssh rex@blowfish sudo gonf apply -identity /etc/gonf/identity plan-blowfish.age
 - Generate destination keys on the destination. Never copy a private key.
 
 ## Signed plans
+
+> 🦫 **Gonfy says:** My paw print on the blueprint, so the lodge can tell it really came from me.
 
 Ed25519 signature around a sealed artifact. Optional; unsigned `plan.age`
 stays valid for interactive apply.
@@ -1434,6 +1456,8 @@ gonf plan-verify -trusted-signers f out/plan.age | age -d -i key | gonf apply -
 
 ## Go API
 
+> 🦫 **Gonfy says:** For beavers who like to build their own tools: the library behind the CLI.
+
 | API | Meaning |
 |-----|---------|
 | `cli.Main()` | The full CLI, exiting with its code; the last line of `main`. |
@@ -1456,6 +1480,8 @@ Record one plan at a time: recording is single-goroutine.
 
 ## Build and test
 
+> 🦫 **Gonfy says:** Before I trust a new tool, I test it on a practice dam.
+
 ```text
 go build ./...
 go install ./cmd/gonf            # or: mage install
@@ -1469,6 +1495,8 @@ Live tests are opt-in: `GONF_RUN_TIMER_TESTS=1`, `GONF_RUN_CRON_TESTS=1`,
 [design/](design/README.md)).
 
 ## Release checklist
+
+> 🦫 **Gonfy says:** Before a new lodge opens, I walk every item on this list.
 
 - [ ] Bump `internal.Version`. In the same commit, update the version and
       schema lines in [design/conf-rex-gaps.md](design/conf-rex-gaps.md)

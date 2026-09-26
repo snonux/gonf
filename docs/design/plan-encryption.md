@@ -12,6 +12,8 @@ was declined. Signing (`7b2`, [plan-signing.md](plan-signing.md)) is
 implemented through its phase 3 (v0.18.0). The "Phased implementation"
 table at the end of this document tracks exact status per task.
 
+> 🦫 **Gonfy says:** A sealed blueprint can only be opened at the lodge it was meant for.
+
 **Builds on 062.** This design builds on task 062 (secret-aware plans, plan
 schema v22), merged before any of its phases. The secrets.md sections cited
 below ("What reaches the plan", "Limits of the scan", "Where a sensitive plan

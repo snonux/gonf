@@ -10,6 +10,8 @@ This chapter reuses the recipe from [chapter 13](13-secrets.md), run from
 
 ## Keys
 
+> 🦫 **Gonfy says:** A key for opening the blueprint and a key for signing it. Keep both somewhere safe.
+
 Sealing needs an age identity with a post-quantum key (`age-keygen -pq`,
 age 1.3 or newer). Its public half goes into the recipients file:
 
@@ -58,6 +60,8 @@ memory and applies. As a normal user the default identity path
 `-seal` forces sealing for any plan, and `-plaintext` opts out.
 
 ## Signing
+
+> 🦫 **Gonfy says:** My paw print tells the lodge who drew the blueprint.
 
 A sealed plan proves nothing about who made it, because recipients are
 public. Signing adds that. Create a signer key; its public line goes into

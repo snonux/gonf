@@ -3,6 +3,8 @@
 gonf has **one** mutation engine: a versioned JSONL **plan** of resource ops,
 interpreted by `plan.Apply`. Local and remote both use it.
 
+> 🦫 **Gonfy says:** Every job starts as a blueprint. One engine reads it, whether the lodge is right here or across the river.
+
 ```text
 gonf <task>…              RecordPlan → Apply          (local one-shot)
 gonf plan -o dir …        RecordPlan → write plan.jsonl (+ blobs/)

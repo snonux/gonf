@@ -3,6 +3,8 @@
 Convenience wrappers used heavily by laptop/dotfiles configs. Import
 `github.com/snonux/gonf/api` (often with a dot-import).
 
+> 🦫 **Gonfy says:** Small tools for everyday gnawing: paths, homes and the other shortcuts the dotfiles recipes lean on.
+
 ## Paths
 
 ```go

@@ -3,6 +3,8 @@
 Runs an external command during `Apply`. Prefer first-class resources
 (`Package`, `Service`, `File`, …) when they fit; use `Command` for one-offs.
 
+> 🦫 **Gonfy says:** A command is a stick with no shape of its own. Reach for a real resource first; when you do need a command, give it a guard so it knows when the job is done.
+
 ```go
 Command("touch", List("/tmp/marker"),
     Creates("/tmp/marker"),

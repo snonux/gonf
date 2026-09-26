@@ -4,6 +4,8 @@ gonf configs are Go programs: register **tasks**, then run them via `cli.CLI()` 
 `Run(...)`. Execution always goes through the **plan → apply** engine — see
 [plan.md](plan.md).
 
+> 🦫 **Gonfy says:** A task is one chore on my list. Name it, give it a body, and run it whenever the lodge needs it.
+
 ## Task
 
 ```go

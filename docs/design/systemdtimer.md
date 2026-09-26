@@ -5,6 +5,8 @@ Declarative install of a Linux **systemd** `.timer` plus a companion oneshot
 writes the unit files, runs `daemon-reload` when they change, then enables and
 starts the timer.
 
+> 🦫 **Gonfy says:** I write the timer and its service myself, reload systemd when they change, and set the alarm.
+
 ```go
 SystemdTimer("backup",
     WithCommand("/usr/local/bin/backup.sh"),

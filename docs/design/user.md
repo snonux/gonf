@@ -6,6 +6,8 @@ compatible tools (`getent`, `id`, and `groupadd`/`useradd`/`usermod` with GNU
 long options); the stock tools of Rocky, Fedora, and Debian qualify. Notes
 below that name Rocky describe its stock configuration.
 
+> 🦫 **Gonfy says:** Every lodge needs residents. I add them and their groups, but I never throw anybody out.
+
 It is intentionally additive by default: gonf never deletes an account or a
 group, removes a supplementary membership, or rewrites an existing
 account's primary group, shell, login class, or system-account setting. An

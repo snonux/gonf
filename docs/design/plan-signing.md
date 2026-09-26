@@ -18,6 +18,8 @@ of "Recommended design". Nothing here lifts plan-encryption.md's gate: no
 unattended entry point exists, and none is planned (see "The unblocking
 condition"). The phases and their status are listed in the last section.
 
+> 🦫 **Gonfy says:** I sign every blueprint with my paw print, so a lodge can refuse plans that did not come from me.
+
 **Relationship to plan-encryption.md.** That design (task `w82`, phases
 `0b2`-`3b2` implemented and merged) gives sealed plans (`plan.age`)
 *confidentiality*: only a holder of a recipient's private key can read one.

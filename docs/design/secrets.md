@@ -8,6 +8,8 @@ through one **secret provider**, configured once per process, and every
 value they return makes the plan ops carrying it sensitive (see the last
 section).
 
+> 🦫 **Gonfy says:** Secrets stay in my cheek pouch on the controller, and only come out where a recipe actually uses them.
+
 ## Default: the file provider
 
 Without configuration the provider is `secret.FileProvider{}`: it reads the

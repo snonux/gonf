@@ -2,6 +2,8 @@
 
 OS-agnostic package install/remove. Backend is selected automatically:
 
+> 🦫 **Gonfy says:** Whether the shop is dnf, pkg_add, pkg or pkgin, I just ask for the timber by name.
+
 | OS | Backend |
 |----|---------|
 | Linux (Fedora/RHEL/Rocky) | `dnf` |

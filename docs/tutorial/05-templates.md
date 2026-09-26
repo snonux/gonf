@@ -65,6 +65,8 @@ server {{ .Name }} {
 
 ## Run it
 
+> 🦫 **Gonfy says:** Look at the banner: my name, in capitals, carved at home before the trip.
+
 ```text
 $ ./gonf templates
 2026/09/26 08:23:13 created directory /home/paul/gonf-tutorial/templates
@@ -117,6 +119,8 @@ has `"template":true` and your `template_data`. The second has only
 `content_b64`, the base64 of `*** GONFY ***`.
 
 ## Which one to use
+
+> 🦫 **Gonfy says:** Host names and OS differences are carved at the lodge. Anything from your own data can be carved at home.
 
 | | Destination (`.tmpl` source, `WithTemplate`, `WithTemplateData`) | Controller (`RenderTemplate`) |
 |--|--|--|

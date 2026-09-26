@@ -177,6 +177,8 @@ web_logrotate	Rotates the web server logs (OpenBSD only) [destination-guarded: g
 
 ## Needs pulls in dependencies
 
+> 🦫 **Gonfy says:** You can't hang the door before the wall is up. `Needs` builds the wall first.
+
 Run a single task, and what it needs is recorded first:
 
 ```text
@@ -191,6 +193,8 @@ summary: 0 ok, 2 changed, 0 skipped, 0 would-change
 ![Task graph of the chapter 8 recipe: all, web and its subtasks, Needs edges and the deploy alias](img/ch08-1.svg)
 
 ## Aggregates
+
+> 🦫 **Gonfy says:** One whistle, and the whole crew gets to work.
 
 ```text
 $ ./gonf -verbose all    # debug lines trimmed

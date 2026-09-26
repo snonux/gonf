@@ -89,6 +89,8 @@ changed (`if_changed` with `watch`). The timer sits inside a
 
 ## Cron
 
+> 🦫 **Gonfy says:** My little alarm clock lives between the marker comments. Everybody else's lines stay as they are.
+
 `CronAt(name, schedule, command)` owns one job in a crontab, between marker
 comments, and leaves the rest of the crontab alone:
 
@@ -109,6 +111,8 @@ summary: 1 ok, 0 changed, 0 skipped, 0 would-change
 ```
 
 ## Users
+
+> 🦫 **Gonfy says:** I get my own account in this section. gonf only ever adds accounts; it never throws anybody out.
 
 `User` only adds: it never deletes accounts, removes group memberships or
 sets passwords.

@@ -25,6 +25,8 @@ day and a `gonfy` user account.
 
 ## Install
 
+> 🦫 **Gonfy says:** One `go install` and I'm ready to build.
+
 ```text
 go install github.com/snonux/gonf/cmd/gonf@latest   # the demo binary
 go get github.com/snonux/gonf@latest                # in your recipe module
@@ -35,6 +37,8 @@ remote host needs Go on the controller: gonf cross-compiles and installs
 itself there.
 
 ## A minimal recipe
+
+> 🦫 **Gonfy says:** Every lodge starts with one stick. This recipe writes one file, installs one package and names one host to push to.
 
 ```go
 package main
@@ -58,6 +62,8 @@ func main() {
 
 ## Common commands
 
+> 🦫 **Gonfy says:** Preview with `-n` before you gnaw. A dry run changes nothing.
+
 ```text
 gonf -list                               # registered tasks
 gonf -n -privilege=sudo dotfiles         # dry run locally
@@ -72,6 +78,8 @@ gonf apply -identity ~/.config/gonf/identity out/plan.age
 ```
 
 ## Docs
+
+> 🦫 **Gonfy says:** New here? Start with the tutorial and I'll show you around the lodge.
 
 - [docs/tutorial/](docs/tutorial/README.md): the tutorial, a book of
   step-by-step chapters with runnable examples, commands and their output.
