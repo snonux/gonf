@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -71,40 +72,115 @@ func TestCheckRefuses(t *testing.T) {
 	}
 }
 
-// consumers are the files that accept or derive a GOOS. They must take the
-// names from this package: none may spell a managed GOOS as a string
-// literal of its own (task cb), so a new OS cannot be added in one place
-// and forgotten in another.
+// TestFromUname maps the kernel names uname -s really prints, in any case.
+func TestFromUname(t *testing.T) {
+	t.Parallel()
+	for sys, want := range map[string]string{
+		"Linux": "linux", "Darwin": "darwin", "FreeBSD": "freebsd",
+		"OpenBSD": "openbsd", "NetBSD": "netbsd",
+		"LINUX": "linux", "freebsd": "freebsd", " NetBSD\n": "netbsd",
+	} {
+		if got, ok := FromUname(sys); !ok || got != want {
+			t.Errorf("FromUname(%q) = %q, %v; want %q", sys, got, ok, want)
+		}
+	}
+	for _, sys := range []string{"", "SunOS", "Windows_NT", "DragonFly", "GNU/Linux"} {
+		if got, ok := FromUname(sys); ok {
+			t.Errorf("FromUname(%q) = %q, want unsupported", sys, got)
+		}
+	}
+}
+
+// TestUnameTableCoversSupported: the kernel-name table maps onto supported
+// exactly, so a new OS cannot be added to one and forgotten in the other.
+func TestUnameTableCoversSupported(t *testing.T) {
+	t.Parallel()
+	var goos []string
+	for _, n := range unameNames {
+		goos = append(goos, n.goos)
+	}
+	if !slices.Equal(goos, supported) {
+		t.Fatalf("unameNames GOOS = %v, want %v", goos, supported)
+	}
+}
+
+func TestCheckGOARCHCase(t *testing.T) {
+	t.Parallel()
+	for _, a := range []string{"", "amd64", "arm64", "386", "riscv64"} {
+		if err := CheckGOARCHCase(a); err != nil {
+			t.Errorf("CheckGOARCHCase(%q) = %v", a, err)
+		}
+	}
+	for in, want := range map[string]string{
+		"AMD64": `GOARCH "AMD64" is not lower case: did you mean "amd64"?`,
+		"Arm64": `did you mean "arm64"?`,
+	} {
+		if err := CheckGOARCHCase(in); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("CheckGOARCHCase(%q) = %v, want %q", in, err, want)
+		}
+	}
+}
+
+// scanRoots are the trees whose code accepts, derives or requires a GOOS.
+// Their production code must take GOOS names from this package: none may
+// spell a managed GOOS (or its uname -s kernel name) as a string literal of
+// its own (task cb), so a new OS cannot be added in one place and
+// forgotten in another. Comments are not scanned.
+var scanRoots = []string{"api", "inventory", filepath.Join("internal", "remote")}
+
+// consumers must import this package (the shared list's direct users).
 var consumers = []string{
 	"api/task_goos.go",
+	"api/login_class.go",
 	"inventory/inventory.go",
 	"internal/remote/sync_probe.go",
 }
 
-// TestConsumersUseSharedList pins that no consumer hard-codes a managed
-// GOOS name; each must import this package instead.
+// TestConsumersUseSharedList pins that no production file under scanRoots
+// hard-codes a managed GOOS name and that each consumer imports this
+// package. filepath.WalkDir visits in lexical order, so the report is
+// deterministic.
 func TestConsumersUseSharedList(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join("..", "..")
 	fset := token.NewFileSet()
-	for _, rel := range consumers {
-		f, err := parser.ParseFile(fset, filepath.Join(root, rel), nil, 0)
+	imports := map[string]bool{}
+	scanned := 0
+	for _, dir := range scanRoots {
+		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return err
+			}
+			f, err := parser.ParseFile(fset, path, nil, 0)
+			if err != nil {
+				return err
+			}
+			scanned++
+			rel, _ := filepath.Rel(root, path)
+			imports[filepath.ToSlash(rel)] = importsPlatform(f)
+			ast.Inspect(f, func(n ast.Node) bool {
+				lit, ok := n.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					return true
+				}
+				if v, err := strconv.Unquote(lit.Value); err == nil && IsSupported(strings.ToLower(v)) {
+					t.Errorf("%s: hard-coded GOOS literal %s; use internal/platform", fset.Position(lit.Pos()), lit.Value)
+				}
+				return true
+			})
+			return nil
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !importsPlatform(f) {
-			t.Errorf("%s does not import internal/platform", rel)
+	}
+	if scanned == 0 {
+		t.Fatal("scanned no files")
+	}
+	for _, c := range consumers {
+		if !imports[c] {
+			t.Errorf("%s does not import internal/platform", c)
 		}
-		ast.Inspect(f, func(n ast.Node) bool {
-			lit, ok := n.(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				return true
-			}
-			if v, err := strconv.Unquote(lit.Value); err == nil && IsSupported(strings.ToLower(v)) {
-				t.Errorf("%s: hard-coded GOOS literal %s; use internal/platform", fset.Position(lit.Pos()), lit.Value)
-			}
-			return true
-		})
 	}
 }
 

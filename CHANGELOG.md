@@ -19,11 +19,12 @@ Fixes
 - A `WithSSHDomain` option shared by concurrent `Host` calls no longer
   data-races.
 - `WithGOOS` now validates its GOOS like `WithPlatform` and `WhenOS` do:
-  a name gonf does not manage, an empty one, or a wrongly cased one
-  (`"Linux"`, with a lower-case suggestion) is a declaration error instead
-  of a cross-compile failure at push time. Omit `WithGOOS` to probe
-  `uname -s`. All three, and push's `uname -s` probe, now share one list
-  of supported operating systems.
+  a name gonf does not manage or a wrongly cased one (`"Linux"`, with a
+  lower-case suggestion) is a declaration error instead of a cross-compile
+  failure at push time. `WithGOOS("")` still resets to probing `uname -s`.
+  `WithGOARCH` and `WithPlatform` likewise refuse a GOARCH that is not
+  lower case (`"AMD64"`). All of them, and push's `uname -s` probe, now
+  share one list of supported operating systems.
 
 Docs
 - Gonfy the beaver is gonf's mascot and new logo (`assets/logo-*.svg`).

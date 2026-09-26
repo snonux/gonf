@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/snonux/gonf/internal/declerr"
+	"github.com/snonux/gonf/internal/platform"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/file"
 	"github.com/snonux/gonf/resource/options"
@@ -80,7 +81,7 @@ func LoginClass(class, src string, opts ...options.FileOption) Resource {
 	fileOpts = append(fileOpts, slices.Clone(opts)...)
 
 	var handle resource.Multi
-	requireGOOS("openbsd", loginClassID(class), loginClassRequirement, func() {
+	requireGOOS(platform.OpenBSD, loginClassID(class), loginClassRequirement, func() {
 		handle = resource.Multi{
 			loginClassStaleDB(class),
 			file.Present(filepath.Join(loginClassDir, class), fileOpts...),
@@ -116,7 +117,7 @@ func NoLoginClass(class string, opts ...options.FileOption) Resource {
 // to the fragment removal.
 func loginClassRemoval(class string, opts []options.FileOption) Resource {
 	var handle resource.Multi
-	requireGOOS("openbsd", loginClassID(class), loginClassRequirement, func() {
+	requireGOOS(platform.OpenBSD, loginClassID(class), loginClassRequirement, func() {
 		handle = resource.Multi{
 			loginClassStaleDB(class),
 			file.Present(filepath.Join(loginClassDir, class), opts...),

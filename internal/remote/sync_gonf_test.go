@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,17 +41,23 @@ func TestMapUname(t *testing.T) {
 	}
 }
 
-// TestMapUnameGOOSCoversPlatform pins task cb: the uname -s mapping takes
-// its GOOS list from internal/platform, so every managed GOOS maps from its
-// kernel name in any case, and nothing else maps.
+// TestMapUnameGOOSCoversPlatform pins task cb: the uname -s mapping goes
+// through internal/platform's kernel-name table, so the real kernel names of
+// every managed OS map, and nothing else does.
 func TestMapUnameGOOSCoversPlatform(t *testing.T) {
 	t.Parallel()
-	for _, want := range platform.Supported() {
-		for _, sys := range []string{want, strings.ToUpper(want), strings.ToUpper(want[:1]) + want[1:]} {
-			if got, err := mapUnameGOOS(sys); err != nil || got != want {
-				t.Errorf("mapUnameGOOS(%q) = %q, %v; want %q", sys, got, err, want)
-			}
+	kernelNames := map[string]string{"Linux": "linux", "Darwin": "darwin", "FreeBSD": "freebsd", "OpenBSD": "openbsd", "NetBSD": "netbsd"}
+	var mapped []string
+	for sys, want := range kernelNames {
+		got, err := mapUnameGOOS(sys)
+		if err != nil || got != want {
+			t.Errorf("mapUnameGOOS(%q) = %q, %v; want %q", sys, got, err, want)
 		}
+		mapped = append(mapped, got)
+	}
+	slices.Sort(mapped)
+	if want := slices.Sorted(slices.Values(platform.Supported())); !slices.Equal(mapped, want) {
+		t.Errorf("real kernel names map to %v, want every supported GOOS %v", mapped, want)
 	}
 	for _, sys := range []string{"", "SunOS", "Windows_NT", "plan9"} {
 		if got, err := mapUnameGOOS(sys); err == nil || !strings.Contains(err.Error(), "set Host WithGOOS") {

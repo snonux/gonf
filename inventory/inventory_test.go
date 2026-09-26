@@ -128,9 +128,25 @@ func TestWithGOOSAndPlatformAcceptEverySupportedGOOS(t *testing.T) {
 	}
 }
 
-// TestWithGOOSAndPlatformRefuseUnsupported is the negative case: an unknown,
-// empty or wrongly cased GOOS refuses the host with a clear error, also from
-// inside a bundle.
+// TestWithGOOSResetsToProbe: an empty WithGOOS/WithGOARCH is not misuse; it
+// undoes a bundle's platform so push probes uname again.
+func TestWithGOOSResetsToProbe(t *testing.T) {
+	ResetInventory()
+	t.Cleanup(ResetInventory)
+	bundle := HostDefaults(WithPlatform("freebsd/arm64"))
+	if _, err := inv.AddHost("reset", bundle, WithGOOS(""), WithGOARCH("")); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := inv.LookupHost("reset")
+	if rec.GOOS != "" || rec.GOARCH != "" {
+		t.Fatalf("platform = %q/%q, want both reset to empty", rec.GOOS, rec.GOARCH)
+	}
+}
+
+// TestWithGOOSAndPlatformRefuseUnsupported is the negative case: an unknown
+// or wrongly cased GOOS, an empty GOOS in WithPlatform, or a GOARCH that is
+// not lower case refuses the host with a clear error, also from inside a
+// bundle.
 func TestWithGOOSAndPlatformRefuseUnsupported(t *testing.T) {
 	ResetInventory()
 	t.Cleanup(ResetInventory)
@@ -139,12 +155,13 @@ func TestWithGOOSAndPlatformRefuseUnsupported(t *testing.T) {
 		want string
 	}{
 		"goos-unknown":      {WithGOOS("plan9"), `WithGOOS: unsupported GOOS "plan9" (want one of linux, darwin, freebsd, openbsd, netbsd)`},
-		"goos-empty":        {WithGOOS(""), `WithGOOS: empty GOOS (want one of linux, darwin, freebsd, openbsd, netbsd)`},
 		"goos-case":         {WithGOOS("Linux"), `WithGOOS: unsupported GOOS "Linux" (GOOS names are lower case: did you mean "linux"?)`},
 		"goos-bundle":       {HostDefaults(WithGOOS("FreeBSD")), `WithGOOS: unsupported GOOS "FreeBSD" (GOOS names are lower case: did you mean "freebsd"?)`},
 		"platform-unknown":  {WithPlatform("windows/amd64"), `WithPlatform("windows/amd64"): unsupported GOOS "windows" (want one of`},
 		"platform-empty-os": {WithPlatform("/amd64"), `WithPlatform("/amd64"): empty GOOS (want one of`},
 		"platform-case":     {WithPlatform("OpenBSD/amd64"), `WithPlatform("OpenBSD/amd64"): unsupported GOOS "OpenBSD" (GOOS names are lower case: did you mean "openbsd"?)`},
+		"platform-arch":     {WithPlatform("linux/AMD64"), `WithPlatform("linux/AMD64"): GOARCH "AMD64" is not lower case: did you mean "amd64"?`},
+		"goarch-case":       {WithGOARCH("Arm64"), `WithGOARCH: GOARCH "Arm64" is not lower case: did you mean "arm64"?`},
 	}
 	for name, tc := range cases {
 		_, err := inv.AddHost(name, tc.opt)

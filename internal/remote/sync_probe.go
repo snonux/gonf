@@ -335,12 +335,10 @@ func parseUname(out string) (goos, goarch string, err error) {
 	return "", "", err
 }
 
-// mapUnameGOOS maps a "uname -s" line to its GOOS. For every OS gonf
-// manages (internal/platform) the GOOS is the lower-cased kernel name
-// (Linux, Darwin, FreeBSD, OpenBSD, NetBSD), so the managed list alone
-// decides; TestMapUnameGOOSCoversPlatform pins that each name round-trips.
+// mapUnameGOOS maps a "uname -s" line to its GOOS through
+// internal/platform's kernel-name table.
 func mapUnameGOOS(s string) (string, error) {
-	if goos := strings.ToLower(s); platform.IsSupported(goos) {
+	if goos, ok := platform.FromUname(s); ok {
 		return goos, nil
 	}
 	return "", fmt.Errorf("unsupported uname -s %q (set Host WithGOOS)", s)

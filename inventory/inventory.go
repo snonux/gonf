@@ -169,14 +169,17 @@ func WithPlanRecipient(recipient string) HostOption {
 }
 
 // WithGOOS sets the GOOS used when push syncs a newer gonf binary to this
-// host. Without it push probes the remote uname -s. The GOOS must be one gonf
-// supports (linux, darwin, freebsd, openbsd, netbsd), spelled in lower case
-// as Go spells it; anything else, including "", is a declaration error (omit
-// the option to probe instead).
+// host. Empty (the default) probes the remote uname -s; WithGOOS("") resets
+// a GOOS an earlier option (e.g. a HostDefaults bundle) set. A non-empty
+// GOOS must be one gonf supports (linux, darwin, freebsd, openbsd, netbsd),
+// spelled in lower case as Go spells it; anything else is a declaration
+// error.
 func WithGOOS(goos string) HostOption {
 	return func(h *inv.Host) error {
-		if err := platform.Check(goos); err != nil {
-			return fmt.Errorf("WithGOOS: %w", err)
+		if goos != "" {
+			if err := platform.Check(goos); err != nil {
+				return fmt.Errorf("WithGOOS: %w", err)
+			}
 		}
 		h.GOOS = goos
 		return nil
@@ -184,16 +187,25 @@ func WithGOOS(goos string) HostOption {
 }
 
 // WithGOARCH sets the GOARCH used when push syncs a newer gonf binary.
-// Empty (default) probes via remote uname -m.
+// Empty (the default) probes the remote uname -m; WithGOARCH("") resets a
+// GOARCH an earlier option set. A GOARCH that is not lower case ("AMD64") is
+// a declaration error.
 func WithGOARCH(goarch string) HostOption {
-	return func(h *inv.Host) error { h.GOARCH = goarch; return nil }
+	return func(h *inv.Host) error {
+		if err := platform.CheckGOARCHCase(goarch); err != nil {
+			return fmt.Errorf("WithGOARCH: %w", err)
+		}
+		h.GOARCH = goarch
+		return nil
+	}
 }
 
 // WithPlatform sets GOOS and GOARCH from one "goos/goarch" string, the
 // form `go tool dist list` prints: WithPlatform("freebsd/amd64") is
 // WithGOOS("freebsd") plus WithGOARCH("amd64"). The GOOS must be one gonf
 // supports (linux, darwin, freebsd, openbsd, netbsd) and the GOARCH must
-// not be empty; anything else is a declaration error.
+// not be empty; both must be lower case. Anything else is a declaration
+// error.
 func WithPlatform(spec string) HostOption {
 	return func(h *inv.Host) error {
 		goos, goarch, ok := strings.Cut(spec, "/")
@@ -201,6 +213,9 @@ func WithPlatform(spec string) HostOption {
 			return fmt.Errorf("WithPlatform(%q): want \"goos/goarch\", e.g. \"linux/amd64\"", spec)
 		}
 		if err := platform.Check(goos); err != nil {
+			return fmt.Errorf("WithPlatform(%q): %w", spec, err)
+		}
+		if err := platform.CheckGOARCHCase(goarch); err != nil {
 			return fmt.Errorf("WithPlatform(%q): %w", spec, err)
 		}
 		h.GOOS, h.GOARCH = goos, goarch
