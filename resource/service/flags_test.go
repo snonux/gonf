@@ -253,12 +253,14 @@ func TestParseShellWord(t *testing.T) {
 	for raw, want := range map[string]string{
 		``: ``, `-v`: `-v`, `'-a -b'`: `-a -b`, `"-a \"b\" \$c"`: `-a "b" $c`, `a\ b`: `a b`,
 		`"x"'y'z`: `xyz`, `-v # comment`: `-v`, `"a\nb"`: `a\nb`,
+		"\"-a \\\n-b\"": `-a -b`, "'a\nb'": "a\nb", "\"a\nb\"": "a\nb", "-a\\\nb": `-ab`,
+		"'a\\\nb'": "a\\\nb",
 	} {
 		if got, ok := parseShellWord(raw); !ok || got != want {
 			t.Errorf("parseShellWord(%q) = %q, %v; want %q", raw, got, ok, want)
 		}
 	}
-	for _, raw := range []string{`$X`, `"$X"`, "`id`", `-v; rm -rf /`, `'open`, `"open`, `a b`, `x\`} {
+	for _, raw := range []string{`$X`, `"$X"`, "`id`", `-v; rm -rf /`, `'open`, `"open`, `a b`, `x\`, "-a \\\nb"} {
 		if _, ok := parseShellWord(raw); ok {
 			t.Errorf("parseShellWord(%q) must refuse", raw)
 		}

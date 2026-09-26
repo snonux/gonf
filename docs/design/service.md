@@ -76,7 +76,10 @@ Service("nsd", WithFlags("-c /var/nsd/etc/nsd.conf"))
 - FreeBSD and NetBSD treat an unset variable as empty flags. NetBSD refuses
   a differing `NAME_flags` in `/etc/rc.conf.d/NAME` (it would override
   `/etc/rc.conf`), and rewrites an assignment it cannot evaluate
-  (expansions, several statements).
+  (expansions, several statements). It reads the files as sh(1) does, one
+  logical line at a time: an assignment spanning several lines (a quoted
+  newline, a backslash-newline) is evaluated and replaced as a whole, and a
+  file whose quote never closes is refused with its line named, unchanged.
 - `WithFlags` on `NoService`, or with a line break, is a declaration error.
 - A plan with `WithFlags` declares schema 25.
 
