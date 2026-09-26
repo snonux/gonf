@@ -76,7 +76,7 @@ and `0700`). `Root` means user root and the destination's root group
 The plan marks privileged ops with `"elevate":true`:
 
 ```text
-$ ./recipe plan -redacted system_motd system_note dotfile
+$ ./gonf plan -redacted system_motd system_note dotfile
 {"op":"plan_preview","version":21,"id":"plan"}
 {"op":"ensure_dir","id":"EnsureDir[/etc/motd.d]","path":"/etc/motd.d","mode":"0755","owner":"root","group":"0","elevate":true}
 {"op":"file","id":"File[/etc/motd.d/gonf-tutorial]","path":"/etc/motd.d/gonf-tutorial","mode":"0644","owner":"root","group":"0","content_b64":"TWFuYWdlZCBieSBnb25mLiBHb25meSBrZWVwcyB0aGlzIGxvZGdlIHRpZHkuCg==","has_content":true,"elevate":true}
@@ -94,7 +94,7 @@ and applies each with the right privilege. Chunks are never reordered.
 Pick the helper with `-privilege`:
 
 ```text
-$ ./recipe -privilege=sudo system_motd system_note dotfile
+$ ./gonf -privilege=sudo system_motd system_note dotfile
 2026/09/26 08:23:16 updated /etc/motd.d/gonf-tutorial
 summary: 1 ok, 1 changed, 0 skipped, 0 would-change
   changed File[/etc/motd.d/gonf-tutorial]
@@ -117,7 +117,7 @@ Three summaries, one per chunk; the elevated ones end with the `applied ... chun
 apply it:
 
 ```text
-$ ./recipe -n system_hosts
+$ ./gonf -n system_hosts
 2026/09/26 08:23:16 dry-run: would update /etc/hosts
 summary: 0 ok, 0 changed, 0 skipped, 1 would-change
   would-change File[/etc/hosts]
@@ -132,7 +132,7 @@ changes anything:
 ```text
 $ whoami
 gonfy
-$ ./recipe system_motd
+$ ./gonf system_motd
 error: privileged ops EnsureDir[/etc/motd.d], File[/etc/motd.d/gonf-tutorial] need elevation, but the privilege mode is none and this process is not root: set -privilege sudo|doas (api.SetPrivilege) or run as root
 [exit status 1]
 ```

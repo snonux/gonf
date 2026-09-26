@@ -77,7 +77,7 @@ func main() {
 ```text
 $ hostname
 vm
-$ ./recipe -list
+$ ./gonf -list
 big	Only when the controller has 4+ CPUs
 bsd	Only on the BSDs [destination-guarded: goos=freebsd|openbsd|netbsd]
 dir	Create ~/gonf-tutorial/guards
@@ -95,7 +95,7 @@ destination may match.
 ## Run everything
 
 ```text
-$ ./recipe everything
+$ ./gonf everything
 2026/09/26 08:23:15 created directory /home/paul/gonf-tutorial/guards
 2026/09/26 08:23:15 updated /home/paul/gonf-tutorial/guards/big
 2026/09/26 08:23:15 updated /home/paul/gonf-tutorial/guards/linux
@@ -122,11 +122,11 @@ CPUs. Both body-level guards matched (`vm` is in the host list, and
 Override the profile, or name a guarded task directly:
 
 ```text
-$ ./recipe -profile fedora fedora
+$ ./gonf -profile fedora fedora
 2026/09/26 08:23:15 updated /home/paul/gonf-tutorial/guards/fedora
 summary: 1 ok, 1 changed, 0 skipped, 0 would-change
   changed File[/home/paul/gonf-tutorial/guards/fedora]
-$ ./recipe bsd
+$ ./gonf bsd
 summary: 1 ok, 0 changed, 0 skipped, 0 would-change
 ```
 
@@ -137,7 +137,7 @@ block, and the destination evaluates it. An opaque `When(func)` does not:
 it ran on the controller, and `big` appears in the plan with no guard at all.
 
 ```text
-$ ./recipe plan -redacted bsd big mixed
+$ ./gonf plan -redacted bsd big mixed
 {"op":"plan_preview","version":21,"id":"plan"}
 {"op":"dir","id":"Directory[${HOME}/gonf-tutorial/guards]","path":"${HOME}/gonf-tutorial/guards","mode":"0755"}
 {"op":"when_begin","id":"when.bsd","all":[{"fact":"goos","in":["freebsd","openbsd","netbsd"]}]}

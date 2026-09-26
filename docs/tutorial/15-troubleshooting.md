@@ -54,7 +54,7 @@ func needed(brk string) string {
 ```
 
 ```text
-$ ./recipe app
+$ ./gonf app
 2026/09/26 08:23:23 created directory /home/paul/gonf-tutorial/trouble
 2026/09/26 08:23:23 updated /home/paul/gonf-tutorial/trouble/app.conf
 summary: 0 ok, 2 changed, 0 skipped, 0 would-change
@@ -69,7 +69,7 @@ error names your source line, and every command refuses to run, even
 `-list`:
 
 ```text
-$ BREAK=decl ./recipe -list
+$ BREAK=decl ./gonf -list
 2026/09/26 08:23:23 file /tmp/broken.conf: WithLine(s)/WithoutLine(s)/WithKeyedLine/WithBlock cannot be combined with WithContent/WithSource
 2026/09/26 08:23:23 declared at /home/paul/gonf/docs/tutorial/examples/ch15-troubleshooting/main.go:19
 [exit status 1]
@@ -81,7 +81,7 @@ The recipe compiles and declares fine, but recording the task fails, so
 nothing is applied:
 
 ```text
-$ BREAK=record ./recipe app
+$ BREAK=record ./gonf app
 error: task "app" needs unknown task "setpu"
 [exit status 1]
 ```
@@ -90,7 +90,7 @@ Other record errors: an unknown task on the command line, a dependency
 cycle, a missing secret (chapter 13).
 
 ```text
-$ ./recipe nosuchtask
+$ ./gonf nosuchtask
 error: unknown task "nosuchtask"
 [exit status 1]
 ```
@@ -101,7 +101,7 @@ A resource failed on the destination. The ops before it were applied, the
 error names the plan line, and the exit status is 1:
 
 ```text
-$ BREAK=apply ./recipe app
+$ BREAK=apply ./gonf app
 2026/09/26 08:23:23 running Command[always-fails]: false 
 summary: 2 ok, 0 changed, 0 skipped, 0 would-change
 error: chunk 0: plan: apply line 4: false exited 1
@@ -119,7 +119,7 @@ stderr:
 | 2 | usage error, such as an unknown flag |
 
 ```text
-$ ./recipe -n app; echo "exit $?"
+$ ./gonf -n app; echo "exit $?"
 summary: 2 ok, 0 changed, 0 skipped, 0 would-change
 exit 0
 ```

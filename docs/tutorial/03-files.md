@@ -91,11 +91,11 @@ Reference: [Body-level guards and helpers](../reference.md#body-level-guards-and
 Build the recipe and preview it with `-n` on a fresh home first:
 
 ```text
-$ go build -o recipe ./ch03-files
-$ ./recipe -list
+$ go build -o gonf ./ch03-files
+$ ./gonf -list
 cleanup	Remove what the files task created
 files	Files, directories and links under ~/gonf-tutorial
-$ ./recipe -n files
+$ ./gonf -n files
 2026/09/26 09:23:54 dry-run: would create directory /home/paul/gonf-tutorial
 2026/09/26 09:23:54 dry-run: would update /home/paul/gonf-tutorial/motd
 2026/09/26 09:23:54 dry-run: would update /home/paul/gonf-tutorial/bashrc
@@ -137,7 +137,7 @@ it, so a typo in a target fails the run instead of leaving a dangling link.
 Now apply it:
 
 ```text
-$ ./recipe files
+$ ./gonf files
 2026/09/26 09:23:54 created directory /home/paul/gonf-tutorial
 2026/09/26 09:23:54 updated /home/paul/gonf-tutorial/motd
 2026/09/26 09:23:54 updated /home/paul/gonf-tutorial/bashrc
@@ -174,7 +174,7 @@ gonf creates them first without a `DependsOn`. Run it again and everything
 is `ok`:
 
 ```text
-$ ./recipe files
+$ ./gonf files
 summary: 16 ok, 0 changed, 0 skipped, 0 would-change
 $ find ~/gonf-tutorial | sort
 /home/paul/gonf-tutorial
@@ -210,7 +210,7 @@ and loosen a mode:
 
 ```text
 $ echo twigs > ~/gonf-tutorial/vim/stray.txt; echo old > ~/gonf-tutorial/old.conf; chmod 600 ~/gonf-tutorial/motd
-$ ./recipe -n files
+$ ./gonf -n files
 2026/09/26 09:23:54 dry-run: would prune /home/paul/gonf-tutorial/vim/stray.txt
 2026/09/26 09:23:54 dry-run: would remove /home/paul/gonf-tutorial/old.conf
 summary: 15 ok, 0 changed, 0 skipped, 2 would-change
@@ -218,7 +218,7 @@ summary: 15 ok, 0 changed, 0 skipped, 2 would-change
   would-change File[/home/paul/gonf-tutorial/old.conf]
 $ stat -c '%a %n' /home/paul/gonf-tutorial/motd
 600 /home/paul/gonf-tutorial/motd
-$ ./recipe files
+$ ./gonf files
 2026/09/26 09:23:54 pruned /home/paul/gonf-tutorial/vim/stray.txt
 2026/09/26 09:23:54 removed /home/paul/gonf-tutorial/old.conf
 summary: 15 ok, 2 changed, 0 skipped, 0 would-change
@@ -238,7 +238,7 @@ $ stat -c '%a %n' /home/paul/gonf-tutorial/motd
 `cleanup` removes the whole tree:
 
 ```text
-$ ./recipe cleanup
+$ ./gonf cleanup
 2026/09/26 09:23:54 removed /home/paul/gonf-tutorial
 summary: 0 ok, 1 changed, 0 skipped, 0 would-change
   changed Directory[/home/paul/gonf-tutorial]

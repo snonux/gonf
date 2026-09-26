@@ -50,8 +50,8 @@ module of your own. From chapter 3 on, every chapter's recipe is in
 ```text
 $ git clone https://github.com/snonux/gonf
 $ cd gonf/docs/tutorial/examples
-$ go build -o recipe ./ch03-files
-$ ./recipe -list
+$ go build -o gonf ./ch03-files
+$ ./gonf -list
 ```
 
 The examples write below `~/gonf-tutorial`, except where a chapter says it

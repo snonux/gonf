@@ -1,5 +1,5 @@
 flowchart TB
-    R["./recipe plan -seal -sign signer"] --> E["plan.age: GONF-SIGNED-PLAN/1 + age ciphertext"]
+    R["./gonf plan -seal -sign signer"] --> E["plan.age: GONF-SIGNED-PLAN/1 + age ciphertext"]
     E --> V{"signature trusted<br/>and fresh (24h)?"}
     V -- no --> X["refused, nothing decrypted"]
     V -- yes --> D{"identity<br/>decrypts?"}

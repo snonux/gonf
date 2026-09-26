@@ -11,7 +11,7 @@ Go `main` package that describes the state you want, build it, and run it.
 | Word | Meaning |
 |------|---------|
 | **recipe** | Your Go program. It registers tasks and ends with `cli.Main()`. |
-| **task** | A named function. Its body declares resources. `./recipe -list` shows the tasks. |
+| **task** | A named function. Its body declares resources. `./gonf -list` shows the tasks. |
 | **resource** | One thing to converge: a file, a directory, a package, a service, a cron job, a user, a command. |
 | **controller** | The machine where the recipe runs. Task bodies, secrets and Go `if`s run here. |
 | **destination** | The machine that applies the result. Often the same machine, sometimes a remote host. |
@@ -31,10 +31,10 @@ it checks the current state, and changes only what differs.
 Because the plan is data, the same plan can be applied in three ways:
 
 ```text
-./recipe hello                   record and apply here, in one go
-./recipe plan -o out hello       write out/plan.jsonl, apply it later with
-gonf apply out/plan.jsonl        ... any gonf binary, on any host
-./recipe push user@host hello    record here, stream it over ssh, apply there
+./gonf hello                  record and apply here, in one go
+./gonf plan -o out hello      write out/plan.jsonl, apply it later with
+gonf apply out/plan.jsonl       ... any gonf binary, on any host
+./gonf push user@host hello   record here, stream it over ssh, apply there
 ```
 
 There is one apply engine behind all of them, so a task behaves the same

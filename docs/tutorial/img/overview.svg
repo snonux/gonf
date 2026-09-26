@@ -54,7 +54,7 @@
 
   <rect class="box" x="580" y="84" width="240" height="70" rx="6"/>
   <text class="h" x="595" y="106">this host</text>
-  <text class="m" x="595" y="128">./recipe hello</text>
+  <text class="m" x="595" y="128">./gonf hello</text>
   <text class="s" x="595" y="146">record and apply in one go</text>
 
   <rect class="box" x="580" y="170" width="240" height="70" rx="6"/>
@@ -64,9 +64,9 @@
 
   <rect class="box" x="580" y="256" width="240" height="104" rx="6"/>
   <text class="h" x="595" y="278">remote hosts over ssh</text>
-  <text class="m" x="595" y="300">./recipe push user@host t</text>
-  <text class="m" x="595" y="318">./recipe cluster edge t</text>
-  <text class="m" x="595" y="336">./recipe fleet homelab t</text>
+  <text class="m" x="595" y="300">./gonf push user@host t</text>
+  <text class="m" x="595" y="318">./gonf cluster edge t</text>
+  <text class="m" x="595" y="336">./gonf fleet homelab t</text>
   <text class="s" x="595" y="352">gonf installs itself there</text>
 
   <path class="a" d="M520,170 L576,120"/>
