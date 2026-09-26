@@ -91,7 +91,7 @@ $ cat /home/paul/gonf-tutorial/app.conf
 port=22
 debug=true
 user=paul
-$ ./recipe lines
+$ ./gonf lines
 2026/09/26 08:23:12 file /home/paul/gonf-tutorial/app.conf: keyed line "port=" replaces 1 existing line(s)
 2026/09/26 08:23:12 updated /home/paul/gonf-tutorial/app.conf
 summary: 0 ok, 1 changed, 0 skipped, 0 would-change
@@ -108,7 +108,7 @@ greeting="hello from gonfy"
 log_level=info
 color=yes
 mascot=gonfy
-$ ./recipe lines
+$ ./gonf lines
 summary: 1 ok, 0 changed, 0 skipped, 0 would-change
 ```
 
@@ -122,7 +122,7 @@ Lines outside gonf's ownership stay untouched on later runs too:
 
 ```text
 $ echo "peer=10.0.0.9" >> ~/gonf-tutorial/app.conf; echo "note=mine" >> ~/gonf-tutorial/app.conf
-$ ./recipe lines
+$ ./gonf lines
 summary: 1 ok, 0 changed, 0 skipped, 0 would-change
 $ cat /home/paul/gonf-tutorial/app.conf
 # app.conf
@@ -154,11 +154,11 @@ recipe feeds the script body from `GREETING_SCRIPT`, so you can try a
 broken one:
 
 ```text
-$ ./recipe script
+$ ./gonf script
 2026/09/26 08:23:12 updated /home/paul/gonf-tutorial/hello.sh
 summary: 0 ok, 1 changed, 0 skipped, 0 would-change
   changed File[/home/paul/gonf-tutorial/hello.sh]
-$ GREETING_SCRIPT="$(printf "#!/bin/sh\nif then\n")" ./recipe script
+$ GREETING_SCRIPT="$(printf "#!/bin/sh\nif then\n")" ./gonf script
 summary: 0 ok, 0 changed, 0 skipped, 0 would-change
 error: chunk 0: plan: apply line 2: file /home/paul/gonf-tutorial/hello.sh: validation by sh failed: exit status 2: validator output: /home/paul/gonf-tutorial/hello.sh.gonfvalidate963692649: 2: Syntax error: "then" unexpected
 [exit status 1]
@@ -182,7 +182,7 @@ staged copies (`MemberPath` points at the staged path during validation and
 at the live path afterwards), and only then publishes them:
 
 ```text
-$ ./recipe greeter
+$ ./gonf greeter
 2026/09/26 08:23:12 created directory /home/paul/gonf-tutorial/greeter
 2026/09/26 08:23:12 config set greeter: published /home/paul/gonf-tutorial/greeter/lib.sh
 2026/09/26 08:23:12 config set greeter: published /home/paul/gonf-tutorial/greeter/main.sh
@@ -193,7 +193,7 @@ summary: 0 ok, 5 changed, 0 skipped, 0 would-change
   changed ConfigSetMember[greeter/lib.sh]
   changed ConfigSetMember[greeter/main.sh]
   changed Command[run-greeter]
-$ ./recipe greeter
+$ ./gonf greeter
 2026/09/26 08:23:12 skipping Command[run-greeter]: no watched dependency changed
 summary: 4 ok, 0 changed, 1 skipped, 0 would-change
 ```
@@ -204,7 +204,7 @@ place in `main.sh`, and the set repairs it and fires the command again:
 
 ```text
 $ sed -i s/gonfy/woodpecker/ ~/gonf-tutorial/greeter/main.sh
-$ ./recipe -verbose greeter
+$ ./gonf -verbose greeter
 2026/09/26 08:23:12 Registered resource Directory[${HOME}/gonf-tutorial/greeter]
 2026/09/26 08:23:12 Registered resource ConfigSet[greeter]
 2026/09/26 08:23:12 Registered resource ConfigSetMember[greeter/lib.sh]
