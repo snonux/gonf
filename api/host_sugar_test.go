@@ -36,4 +36,5 @@ func TestWithSSHDomainAndPlatformMisuse(t *testing.T) {
 	requireDeclErr(t, "WithSSHDomain: domain must not be empty", func() { Host("x", WithSSHDomain(".")) })
 	requireDeclErr(t, `WithPlatform("linux"): want "goos/goarch", e.g. "linux/amd64"`, func() { Host("x", WithPlatform("linux")) })
 	requireDeclErr(t, `WithPlatform("plan9/amd64"): unsupported GOOS "plan9"`, func() { Host("x", WithPlatform("plan9/amd64")) })
+	requireDeclErr(t, `WithGOOS: unsupported GOOS "Linux" (GOOS names are lower case: did you mean "linux"?)`, func() { Host("x", WithGOOS("Linux")) })
 }

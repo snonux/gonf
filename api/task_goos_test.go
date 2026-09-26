@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/snonux/gonf/internal/platform"
 	"github.com/snonux/gonf/plan"
 )
 
@@ -48,7 +49,7 @@ func TestGOOSGuardsEvaluateOnDestination(t *testing.T) {
 		"WhenOS(linux,darwin)": {"linux", "darwin"},
 	}
 	for _, g := range goosGuards {
-		for _, goos := range supportedGOOS {
+		for _, goos := range platform.Supported() {
 			ok, err := plan.EvalPredicates([]plan.Predicate{g.want}, plan.Facts{GOOS: goos})
 			if err != nil {
 				t.Fatal(err)
@@ -100,8 +101,10 @@ func TestGOOSGuardRecordsWhenBegin(t *testing.T) {
 // a declaration error, and the task is never activated.
 func TestWhenOSRefusesUnknownGOOS(t *testing.T) {
 	for name, opt := range map[string]TaskOption{
-		"unknown": WhenOS("linux", "windows"),
-		"empty":   WhenOS(),
+		"unknown":    WhenOS("linux", "windows"),
+		"wrong-case": WhenOS("Linux"),
+		"blank-name": WhenOS(""),
+		"empty":      WhenOS(),
 	} {
 		t.Run(name, func(t *testing.T) {
 			requireDeclErr(t, "WhenOS:", func() {
@@ -111,5 +114,25 @@ func TestWhenOSRefusesUnknownGOOS(t *testing.T) {
 				t.Fatalf("a refused WhenOS task must not activate: %v", got)
 			}
 		})
+	}
+}
+
+// TestWhenOSAcceptsEverySupportedGOOS pins task cb: WhenOS takes its names
+// from internal/platform, so every managed GOOS (and only those) is
+// accepted, and WhenBSD matches exactly platform.BSD().
+func TestWhenOSAcceptsEverySupportedGOOS(t *testing.T) {
+	for _, goos := range platform.Supported() {
+		if err := checkGOOS([]string{goos}); err != nil {
+			t.Errorf("WhenOS(%q): %v", goos, err)
+		}
+	}
+	if err := checkGOOS(platform.Supported()); err != nil {
+		t.Errorf("WhenOS(all supported): %v", err)
+	}
+	var c taskCandidate
+	WhenBSD()(&c)
+	want := []plan.Predicate{{Fact: "goos", In: platform.BSD()}}
+	if !reflect.DeepEqual(c.planWhen, want) {
+		t.Errorf("WhenBSD planWhen = %+v, want %+v", c.planWhen, want)
 	}
 }

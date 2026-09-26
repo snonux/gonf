@@ -18,6 +18,12 @@ Fixes
   instead of being ignored, so push connects to the intended host.
 - A `WithSSHDomain` option shared by concurrent `Host` calls no longer
   data-races.
+- `WithGOOS` now validates its GOOS like `WithPlatform` and `WhenOS` do:
+  a name gonf does not manage, an empty one, or a wrongly cased one
+  (`"Linux"`, with a lower-case suggestion) is a declaration error instead
+  of a cross-compile failure at push time. Omit `WithGOOS` to probe
+  `uname -s`. All three, and push's `uname -s` probe, now share one list
+  of supported operating systems.
 
 Docs
 - Gonfy the beaver is gonf's mascot and new logo (`assets/logo-*.svg`).

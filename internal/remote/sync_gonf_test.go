@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snonux/gonf/internal/platform"
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/internal/testutil"
 	"github.com/snonux/gonf/plan"
@@ -35,6 +36,25 @@ func TestMapUname(t *testing.T) {
 		goarch, err := mapUnameGOARCH(tc.mach)
 		if err != nil || goarch != tc.wantArch {
 			t.Fatalf("GOARCH(%q)=%q %v, want %q", tc.mach, goarch, err, tc.wantArch)
+		}
+	}
+}
+
+// TestMapUnameGOOSCoversPlatform pins task cb: the uname -s mapping takes
+// its GOOS list from internal/platform, so every managed GOOS maps from its
+// kernel name in any case, and nothing else maps.
+func TestMapUnameGOOSCoversPlatform(t *testing.T) {
+	t.Parallel()
+	for _, want := range platform.Supported() {
+		for _, sys := range []string{want, strings.ToUpper(want), strings.ToUpper(want[:1]) + want[1:]} {
+			if got, err := mapUnameGOOS(sys); err != nil || got != want {
+				t.Errorf("mapUnameGOOS(%q) = %q, %v; want %q", sys, got, err, want)
+			}
+		}
+	}
+	for _, sys := range []string{"", "SunOS", "Windows_NT", "plan9"} {
+		if got, err := mapUnameGOOS(sys); err == nil || !strings.Contains(err.Error(), "set Host WithGOOS") {
+			t.Errorf("mapUnameGOOS(%q) = %q, %v; want an unsupported error", sys, got, err)
 		}
 	}
 }

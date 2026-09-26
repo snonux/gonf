@@ -906,8 +906,8 @@ Fleet("homelab", edge, other)
 | `WithSSHDomain(d)` | SSH hostname defaults to `<name>.<d>`; an explicit `WithSSHHost` wins in any order, a later `WithSSHDomain` replaces an earlier one. |
 | `WithHostnameMatch(f)` | The hostname fragment `OnCluster`, `EachHost` and `ForHosts` guard this host on. Default: the inventory name, so inventory names must be substrings of the hostnames unless this is set. |
 | `WithPrivilege(PrivilegeNone \| PrivilegeSudo \| PrivilegeDoas)` | How elevated chunks are wrapped on this host. Default none. |
-| `WithGOOS`, `WithGOARCH` | Cross-compile target for the remote binary. Default: `uname`. |
-| `WithPlatform("goos/goarch")` | Both at once, e.g. `WithPlatform("freebsd/amd64")`. |
+| `WithGOOS`, `WithGOARCH` | Cross-compile target for the remote binary. Default: `uname`. The GOOS must be one gonf manages, in lower case: `linux`, `darwin`, `freebsd`, `openbsd` or `netbsd`; anything else (also `""` or `"Linux"`) is a declaration error. |
+| `WithPlatform("goos/goarch")` | Both at once, e.g. `WithPlatform("freebsd/amd64")`. Same GOOS rule as `WithGOOS`. |
 | `WithGonfPath(p)` | Remote install path, default `/usr/local/bin/gonf`. |
 | `WithValue(key, v)` / `h.SetValue(key, v)` | Per-host data under a string key. |
 | `WithData(v)` | Per-host data keyed by `v`'s concrete type. Use a struct type of your own. |

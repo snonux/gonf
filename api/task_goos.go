@@ -3,18 +3,11 @@ package api
 import (
 	"fmt"
 	"slices"
-	"strings"
 
 	"github.com/snonux/gonf/internal/declerr"
+	"github.com/snonux/gonf/internal/platform"
 	"github.com/snonux/gonf/plan"
 )
-
-// supportedGOOS are the operating systems gonf manages, in the order the
-// declaration error lists them. WhenOS accepts only these names.
-var supportedGOOS = []string{"linux", "darwin", "freebsd", "openbsd", "netbsd"}
-
-// bsdGOOS are the BSDs WhenBSD matches.
-var bsdGOOS = []string{"freebsd", "openbsd", "netbsd"}
 
 // WhenOS guards the task with the destination's GOOS being one of goos,
 // e.g. WhenOS("linux", "darwin"). Like every serializable guard it travels
@@ -23,7 +16,7 @@ var bsdGOOS = []string{"freebsd", "openbsd", "netbsd"}
 // not hide the task on a controller of another OS (see
 // TaskInfo.DestinationGuard).
 //
-// A name gonf does not manage (see supportedGOOS), or no name at all, is
+// A name gonf does not manage (see internal/platform), or no name at all, is
 // recipe misuse: it is reported as a declaration error (internal/declerr),
 // and the task gets a controller-side predicate that never holds, so it is
 // never activated rather than applied unguarded.
@@ -39,32 +32,32 @@ func WhenOS(goos ...string) TaskOption {
 }
 
 // WhenLinux guards the task with goos == linux (see WhenOS).
-func WhenLinux() TaskOption { return WhenOS("linux") }
+func WhenLinux() TaskOption { return WhenOS(platform.Linux) }
 
 // WhenDarwin guards the task with goos == darwin, i.e. macOS (see WhenOS).
-func WhenDarwin() TaskOption { return WhenOS("darwin") }
+func WhenDarwin() TaskOption { return WhenOS(platform.Darwin) }
 
 // WhenFreeBSD guards the task with goos == freebsd (see WhenOS).
-func WhenFreeBSD() TaskOption { return WhenOS("freebsd") }
+func WhenFreeBSD() TaskOption { return WhenOS(platform.FreeBSD) }
 
 // WhenOpenBSD guards the task with goos == openbsd (see WhenOS).
-func WhenOpenBSD() TaskOption { return WhenOS("openbsd") }
+func WhenOpenBSD() TaskOption { return WhenOS(platform.OpenBSD) }
 
 // WhenNetBSD guards the task with goos == netbsd (see WhenOS).
-func WhenNetBSD() TaskOption { return WhenOS("netbsd") }
+func WhenNetBSD() TaskOption { return WhenOS(platform.NetBSD) }
 
 // WhenBSD guards the task with goos being freebsd, openbsd or netbsd (see
 // WhenOS).
-func WhenBSD() TaskOption { return WhenOS(bsdGOOS...) }
+func WhenBSD() TaskOption { return WhenOS(platform.BSD()...) }
 
-// checkGOOS refuses an empty list and any name outside supportedGOOS.
+// checkGOOS refuses an empty list and any name platform.Check refuses.
 func checkGOOS(goos []string) error {
 	if len(goos) == 0 {
-		return fmt.Errorf("WhenOS: needs at least one GOOS (%s)", strings.Join(supportedGOOS, ", "))
+		return fmt.Errorf("WhenOS: needs at least one GOOS (%s)", platform.List())
 	}
 	for _, g := range goos {
-		if !slices.Contains(supportedGOOS, g) {
-			return fmt.Errorf("WhenOS: unknown GOOS %q (want one of %s)", g, strings.Join(supportedGOOS, ", "))
+		if err := platform.Check(g); err != nil {
+			return fmt.Errorf("WhenOS: %w", err)
 		}
 	}
 	return nil

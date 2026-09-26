@@ -11,6 +11,7 @@ import (
 
 	"github.com/snonux/gonf/internal"
 	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/internal/platform"
 	"github.com/snonux/gonf/internal/privilege"
 )
 
@@ -334,21 +335,15 @@ func parseUname(out string) (goos, goarch string, err error) {
 	return "", "", err
 }
 
+// mapUnameGOOS maps a "uname -s" line to its GOOS. For every OS gonf
+// manages (internal/platform) the GOOS is the lower-cased kernel name
+// (Linux, Darwin, FreeBSD, OpenBSD, NetBSD), so the managed list alone
+// decides; TestMapUnameGOOSCoversPlatform pins that each name round-trips.
 func mapUnameGOOS(s string) (string, error) {
-	switch strings.ToLower(s) {
-	case "linux":
-		return "linux", nil
-	case "openbsd":
-		return "openbsd", nil
-	case "netbsd":
-		return "netbsd", nil
-	case "freebsd":
-		return "freebsd", nil
-	case "darwin":
-		return "darwin", nil
-	default:
-		return "", fmt.Errorf("unsupported uname -s %q (set Host WithGOOS)", s)
+	if goos := strings.ToLower(s); platform.IsSupported(goos) {
+		return goos, nil
 	}
+	return "", fmt.Errorf("unsupported uname -s %q (set Host WithGOOS)", s)
 }
 
 func mapUnameGOARCH(s string) (string, error) {

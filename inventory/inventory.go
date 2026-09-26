@@ -18,6 +18,7 @@ import (
 
 	"github.com/snonux/gonf/internal/declerr"
 	inv "github.com/snonux/gonf/internal/inventory"
+	"github.com/snonux/gonf/internal/platform"
 	"github.com/snonux/gonf/internal/privilege"
 	"github.com/snonux/gonf/plan/seal"
 )
@@ -167,10 +168,19 @@ func WithPlanRecipient(recipient string) HostOption {
 	}
 }
 
-// WithGOOS sets the GOOS used when push syncs a newer gonf binary to this host.
-// Empty (default) probes via remote uname -s.
+// WithGOOS sets the GOOS used when push syncs a newer gonf binary to this
+// host. Without it push probes the remote uname -s. The GOOS must be one gonf
+// supports (linux, darwin, freebsd, openbsd, netbsd), spelled in lower case
+// as Go spells it; anything else, including "", is a declaration error (omit
+// the option to probe instead).
 func WithGOOS(goos string) HostOption {
-	return func(h *inv.Host) error { h.GOOS = goos; return nil }
+	return func(h *inv.Host) error {
+		if err := platform.Check(goos); err != nil {
+			return fmt.Errorf("WithGOOS: %w", err)
+		}
+		h.GOOS = goos
+		return nil
+	}
 }
 
 // WithGOARCH sets the GOARCH used when push syncs a newer gonf binary.
@@ -184,16 +194,14 @@ func WithGOARCH(goarch string) HostOption {
 // WithGOOS("freebsd") plus WithGOARCH("amd64"). The GOOS must be one gonf
 // supports (linux, darwin, freebsd, openbsd, netbsd) and the GOARCH must
 // not be empty; anything else is a declaration error.
-func WithPlatform(platform string) HostOption {
+func WithPlatform(spec string) HostOption {
 	return func(h *inv.Host) error {
-		goos, goarch, ok := strings.Cut(platform, "/")
+		goos, goarch, ok := strings.Cut(spec, "/")
 		if !ok || goarch == "" || strings.Contains(goarch, "/") {
-			return fmt.Errorf("WithPlatform(%q): want \"goos/goarch\", e.g. \"linux/amd64\"", platform)
+			return fmt.Errorf("WithPlatform(%q): want \"goos/goarch\", e.g. \"linux/amd64\"", spec)
 		}
-		switch goos {
-		case "linux", "darwin", "freebsd", "openbsd", "netbsd":
-		default:
-			return fmt.Errorf("WithPlatform(%q): unsupported GOOS %q", platform, goos)
+		if err := platform.Check(goos); err != nil {
+			return fmt.Errorf("WithPlatform(%q): %w", spec, err)
 		}
 		h.GOOS, h.GOARCH = goos, goarch
 		return nil

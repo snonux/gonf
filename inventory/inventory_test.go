@@ -2,10 +2,12 @@ package inventory
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
 	inv "github.com/snonux/gonf/internal/inventory"
+	"github.com/snonux/gonf/internal/platform"
 )
 
 // sshHostOf returns the registered SSHHost of name via the public listing.
@@ -100,6 +102,57 @@ func TestSharedSSHDomainBundleConcurrent(t *testing.T) {
 		name := fmt.Sprintf("h%d", i)
 		if got, want := sshHostOf(t, name), name+".lan"; got != want {
 			t.Errorf("%s: SSHHost = %q, want %q", name, got, want)
+		}
+	}
+}
+
+// TestWithGOOSAndPlatformAcceptEverySupportedGOOS pins task cb: both options
+// validate against internal/platform, so every managed GOOS is accepted.
+func TestWithGOOSAndPlatformAcceptEverySupportedGOOS(t *testing.T) {
+	ResetInventory()
+	t.Cleanup(ResetInventory)
+	for _, goos := range platform.Supported() {
+		for name, opt := range map[string]HostOption{
+			"goos-" + goos:     WithGOOS(goos),
+			"platform-" + goos: WithPlatform(goos + "/amd64"),
+		} {
+			if _, err := inv.AddHost(name, opt); err != nil {
+				t.Errorf("%s: %v", name, err)
+				continue
+			}
+			rec, _ := inv.LookupHost(name)
+			if rec.GOOS != goos {
+				t.Errorf("%s: GOOS = %q, want %q", name, rec.GOOS, goos)
+			}
+		}
+	}
+}
+
+// TestWithGOOSAndPlatformRefuseUnsupported is the negative case: an unknown,
+// empty or wrongly cased GOOS refuses the host with a clear error, also from
+// inside a bundle.
+func TestWithGOOSAndPlatformRefuseUnsupported(t *testing.T) {
+	ResetInventory()
+	t.Cleanup(ResetInventory)
+	cases := map[string]struct {
+		opt  HostOption
+		want string
+	}{
+		"goos-unknown":      {WithGOOS("plan9"), `WithGOOS: unsupported GOOS "plan9" (want one of linux, darwin, freebsd, openbsd, netbsd)`},
+		"goos-empty":        {WithGOOS(""), `WithGOOS: empty GOOS (want one of linux, darwin, freebsd, openbsd, netbsd)`},
+		"goos-case":         {WithGOOS("Linux"), `WithGOOS: unsupported GOOS "Linux" (GOOS names are lower case: did you mean "linux"?)`},
+		"goos-bundle":       {HostDefaults(WithGOOS("FreeBSD")), `WithGOOS: unsupported GOOS "FreeBSD" (GOOS names are lower case: did you mean "freebsd"?)`},
+		"platform-unknown":  {WithPlatform("windows/amd64"), `WithPlatform("windows/amd64"): unsupported GOOS "windows" (want one of`},
+		"platform-empty-os": {WithPlatform("/amd64"), `WithPlatform("/amd64"): empty GOOS (want one of`},
+		"platform-case":     {WithPlatform("OpenBSD/amd64"), `WithPlatform("OpenBSD/amd64"): unsupported GOOS "OpenBSD" (GOOS names are lower case: did you mean "openbsd"?)`},
+	}
+	for name, tc := range cases {
+		_, err := inv.AddHost(name, tc.opt)
+		if err == nil || !strings.HasPrefix(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want prefix %q", name, err, tc.want)
+		}
+		if _, ok := LookupHost(name); ok {
+			t.Errorf("%s: refused host was registered", name)
 		}
 	}
 }
