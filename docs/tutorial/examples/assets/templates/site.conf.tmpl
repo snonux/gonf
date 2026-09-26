@@ -1,0 +1,5 @@
+# {{ .Param }} rendered on {{ .Gonf.Hostname }} ({{ .Gonf.GOOS }}, profile {{ .Gonf.Profile }})
+server {{ .Name }} {
+  listen {{ .Port }}
+  backends {{ join .Backend ", " }}
+}

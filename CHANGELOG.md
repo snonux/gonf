@@ -36,6 +36,16 @@ Inventory and hosts ([docs/reference.md](docs/reference.md), "Inventory", "Per-h
 CLI
 - `cli.Main()` is `os.Exit(cli.CLI())`.
 
+Fixes
+- An `OnChange` (or `SystemdUnits` `FanIn`) watching a `DestHome` resource
+  now fires when that resource changed. Before, the gate compared the
+  recorded `File[${HOME}/...]` id with the expanded path the apply noted,
+  and never fired.
+
+Docs
+- [docs/tutorial/](docs/tutorial/README.md): a step-by-step tutorial in 15
+  chapters, with runnable example recipes and captured output.
+
 ## v0.23.0 (2026-09-25)
 
 Plan schema 27, declared only by a plan that uses it.

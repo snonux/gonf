@@ -59,6 +59,8 @@ gonf apply -identity ~/.config/gonf/identity out/plan.age
 
 ## Docs
 
+- [docs/tutorial/](docs/tutorial/README.md): the tutorial, a book of
+  step-by-step chapters with runnable examples, commands and their output.
 - [docs/reference.md](docs/reference.md): the quick reference, every
   feature, flag and option.
 - [CHANGELOG.md](CHANGELOG.md): release notes.
