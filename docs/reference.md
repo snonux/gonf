@@ -84,6 +84,7 @@ duplicate names).
 | `WhenOS(goos...)` | Destination guard: `goos` is one of the names, e.g. `WhenOS("linux", "darwin")`. Names other than `linux`, `darwin`, `freebsd`, `openbsd`, `netbsd`, or none at all, are a declaration error. |
 | `WhenProfile(p...)` | Destination guard: `Facts.Profile` is one of `p`. `WhenProfile()` with no profile never matches, and naming such a task fails the record. |
 | `WhenHostnameContains(s)` | Destination guard: hostname contains `s` (case insensitive). An empty or whitespace-only `s` is a declaration error, never a match-all guard. |
+| `WhenHostnameIn(hosts...)` | Destination guard: hostname contains any of `hosts` (case insensitive; `Eq` for one, `In` for several). No hosts, or an empty or whitespace-only entry (such as an unset config value), is a declaration error, never a match-all guard. |
 | `When(func(Facts) bool)` | Opaque predicate, evaluated on the controller only. Cannot travel in a plan. |
 | `Privileged()` | Ops from this task apply as root (see [Privilege](#privilege)). |
 | `Unprivileged()` | Clears `Privileged()`: the opt-out for one method of a `RequiresRoot` struct. |

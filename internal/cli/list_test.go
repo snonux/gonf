@@ -3,6 +3,7 @@ package cli
 import (
 	"io"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/snonux/gonf/api"
@@ -68,7 +69,7 @@ func TestCLIListMarksDestinationGuardedTasks(t *testing.T) {
 	// The guard that holds here names this controller's own hostname: an
 	// empty fragment is a declaration error since task 8b.
 	host := api.DetectFacts().Hostname
-	if host == "" {
+	if strings.TrimSpace(host) == "" {
 		t.Skip("no hostname to guard on")
 	}
 	api.Task("home_base", "Base", func() {})

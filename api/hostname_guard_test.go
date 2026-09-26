@@ -1,7 +1,10 @@
 package api
 
 import (
+	"fmt"
 	"reflect"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/snonux/gonf/internal/declerr"
@@ -24,14 +27,14 @@ func TestHostnameGuardRefusesBlankFragment(t *testing.T) {
 		opt  func() TaskOption
 		want string
 	}{
-		{"contains empty", func() TaskOption { return WhenHostnameContains("") }, `WhenHostnameContains: hostname fragment 1 ("") must not be empty`},
-		{"contains whitespace", func() TaskOption { return WhenHostnameContains(" \t") }, `WhenHostnameContains: hostname fragment 1 (" \t") must not be empty`},
+		{"contains empty", func() TaskOption { return WhenHostnameContains("") }, `WhenHostnameContains: hostname fragment 1 ("") must not be empty or whitespace-only`},
+		{"contains whitespace", func() TaskOption { return WhenHostnameContains(" \t") }, `WhenHostnameContains: hostname fragment 1 (" \t") must not be empty or whitespace-only`},
 		{"in no hosts", func() TaskOption { return WhenHostnameIn() }, "WhenHostnameIn: no hosts"},
-		{"in single empty", func() TaskOption { return WhenHostnameIn("") }, `WhenHostnameIn: hostname fragment 1 ("") must not be empty`},
-		{"in single whitespace", func() TaskOption { return WhenHostnameIn("  ") }, `WhenHostnameIn: hostname fragment 1 ("  ") must not be empty`},
-		{"in valid then empty", func() TaskOption { return WhenHostnameIn("f0", "") }, `WhenHostnameIn: hostname fragment 2 ("") must not be empty`},
-		{"in empty then valid", func() TaskOption { return WhenHostnameIn("", "f1") }, `WhenHostnameIn: hostname fragment 1 ("") must not be empty`},
-		{"in valid then whitespace", func() TaskOption { return WhenHostnameIn("f0", "f1", " ") }, `WhenHostnameIn: hostname fragment 3 (" ") must not be empty`},
+		{"in single empty", func() TaskOption { return WhenHostnameIn("") }, `WhenHostnameIn: hostname fragment 1 ("") must not be empty or whitespace-only`},
+		{"in single whitespace", func() TaskOption { return WhenHostnameIn("  ") }, `WhenHostnameIn: hostname fragment 1 ("  ") must not be empty or whitespace-only`},
+		{"in valid then empty", func() TaskOption { return WhenHostnameIn("f0", "") }, `WhenHostnameIn: hostname fragment 2 ("") must not be empty or whitespace-only`},
+		{"in empty then valid", func() TaskOption { return WhenHostnameIn("", "f1") }, `WhenHostnameIn: hostname fragment 1 ("") must not be empty or whitespace-only`},
+		{"in valid then whitespace", func() TaskOption { return WhenHostnameIn("f0", "f1", " ") }, `WhenHostnameIn: hostname fragment 3 (" ") must not be empty or whitespace-only`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -66,6 +69,50 @@ func TestHostnameGuardRefusesBlankFragment(t *testing.T) {
 				t.Fatalf("%s written despite the refused guard", path)
 			}
 		})
+	}
+}
+
+// blankHostGuard is a RegisterMethods recipe whose WhenBase companion
+// narrows with a blank hostname fragment; blankHostGuardLine is the line
+// of its runtime.Caller, so the WhenHostnameIn call is the line after.
+type blankHostGuard struct{}
+
+var blankHostGuardLine int
+
+func (blankHostGuard) Base() {}
+
+func (blankHostGuard) WhenBase() TaskOption {
+	_, _, blankHostGuardLine, _ = runtime.Caller(0)
+	return WhenHostnameIn("f0", "")
+}
+
+// TestHostnameGuardBlankInCompanionReportsCompanionLine: the refusal is
+// reported where the guard is written (the WhenX companion line), not at
+// the RegisterMethods call that applies it, and the method's task is still
+// never activated or recorded.
+func TestHostnameGuardBlankInCompanionReportsCompanionLine(t *testing.T) {
+	requireDeclErr(t, `WhenHostnameIn: hostname fragment 2 ("") must not be empty or whitespace-only`, func() {
+		RegisterMethods(blankHostGuard{}, WithPrefix("blank_"))
+	})
+	want := fmt.Sprintf("hostname_guard_test.go:%d", blankHostGuardLine+1)
+	if loc := declerr.Location(declerr.First()); !strings.HasSuffix(loc, want) {
+		t.Fatalf("declaration error location = %q, want the companion line (…%s)", loc, want)
+	}
+
+	if err := resource.ResetDeclarationError(); err == nil {
+		t.Fatal("ResetDeclarationError returned nil, want the reported error")
+	}
+	if c, ok := findCandidate("blank_base"); !ok || len(c.planWhen) != 0 {
+		t.Fatalf("blank_base candidate = %+v (queued %v), want queued with no plan guard", c, ok)
+	}
+	Activate(DetectFacts())
+	for _, info := range Tasks() {
+		if info.Name == "blank_base" {
+			t.Fatal("a method whose companion guard was refused must never be activated")
+		}
+	}
+	if _, err := RecordPlan("8b", "", "blank_base"); err == nil {
+		t.Fatal("RecordPlan must refuse the method whose companion guard was refused")
 	}
 }
 

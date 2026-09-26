@@ -230,18 +230,21 @@ func WhenHostnameIn(hosts ...string) TaskOption {
 
 // hostnameGuard lowers "hostname contains any of hosts" to one
 // hostname_contains predicate (factPredicate: Eq for one entry, In for
-// several). hosts is checked when the option is applied, where every other
-// When* guard reports its misuse (WhenOS): a bad list is reported as a
-// declaration error and records a never-holding opaque predicate instead
-// of the match-all guard an empty fragment would lower to.
+// several). hosts is checked when the option is BUILT, so a declaration
+// error points at the recipe line that wrote the guard (a Task call or a
+// WhenX/OptsX companion) rather than at the RegisterMethods call that
+// later applies it. A refused list then applies as a never-holding opaque
+// predicate instead of the match-all guard a blank fragment would lower
+// to, so the task stays inert even once the error is cleared.
 func hostnameGuard(fn string, hosts []string) TaskOption {
-	hosts = slices.Clone(hosts)
-	return func(c *taskCandidate) {
-		if err := checkHostnameFragments(fn, hosts); err != nil {
-			declerr.Report(err)
+	if err := checkHostnameFragments(fn, hosts); err != nil {
+		declerr.Report(err)
+		return func(c *taskCandidate) {
 			c.opaque = append(c.opaque, func(Facts) bool { return false })
-			return
 		}
+	}
+	hosts = slices.Clone(hosts) // the caller may reuse its slice
+	return func(c *taskCandidate) {
 		c.planWhen = append(c.planWhen, factPredicate("hostname_contains", hosts))
 	}
 }
@@ -256,7 +259,7 @@ func checkHostnameFragments(fn string, hosts []string) error {
 	}
 	for i, h := range hosts {
 		if strings.TrimSpace(h) == "" {
-			return fmt.Errorf("%s: hostname fragment %d (%q) must not be empty: it would match every host", fn, i+1, h)
+			return fmt.Errorf("%s: hostname fragment %d (%q) must not be empty or whitespace-only: it would match every host", fn, i+1, h)
 		}
 	}
 	return nil
