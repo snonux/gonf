@@ -2,6 +2,7 @@ package api
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -137,6 +138,9 @@ func TestSyncDirAndInstallFile(t *testing.T) {
 }
 
 func TestGitGlobalRegisters(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed (the dry run still probes git config)")
+	}
 	ResetTasks()
 	resource.ResetRepository()
 	GitGlobal("user.email", "test@example.com")

@@ -25,6 +25,9 @@ NetBSD)
 	for p in go rsync; do
 		/usr/sbin/pkg_info -e "$p" >/dev/null || /usr/sbin/pkg_add "$p"
 	done
+	# The live service tests drive pkgsrc's bozohttpd, as on pi0.lan.
+	/usr/sbin/pkg_info -e bozohttpd >/dev/null || PKG_RCD_SCRIPTS=YES /usr/sbin/pkg_add bozohttpd
+	[ -f /etc/rc.d/bozohttpd ] || cp /usr/pkg/share/examples/rc.d/bozohttpd /etc/rc.d/bozohttpd
 	;;
 esac
 # The live service tests expect a settled daemon, as on the fleet; right
