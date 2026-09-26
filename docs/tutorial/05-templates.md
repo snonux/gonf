@@ -5,6 +5,8 @@ destination while applying, or on the controller while recording. Pick the
 destination when the output depends on the host, and the controller when it
 only depends on your data.
 
+> 🦫 **Gonfy says:** You can carve a sign at the lodge, with the lodge's own facts, or at home before the trip, with only what you brought along. Both are templates; they differ in where they are carved.
+
 ## The recipe
 
 ```go
@@ -29,7 +31,7 @@ func main() {
 }
 
 func templates() {
-	site := Site{Name: "blog", Port: 8080, Backend: []string{"10.0.0.1", "10.0.0.2"}}
+	site := Site{Name: "gonfy", Port: 8080, Backend: []string{"10.0.0.1", "10.0.0.2"}}
 	dir := DestHome("gonf-tutorial/templates")
 	Dir(dir, WithMode(0o755))
 
@@ -74,12 +76,12 @@ summary: 0 ok, 3 changed, 0 skipped, 0 would-change
   changed File[/home/paul/gonf-tutorial/templates/banner.txt]
 $ cat /home/paul/gonf-tutorial/templates/site.conf
 # assets/templates/site.conf.tmpl rendered on vm (linux, profile ubuntu)
-server blog {
+server gonfy {
   listen 8080
   backends 10.0.0.1, 10.0.0.2
 }
 $ cat /home/paul/gonf-tutorial/templates/banner.txt
-*** BLOG ***
+*** GONFY ***
 ```
 
 `site.conf` was rendered on the destination: `.Gonf.Hostname`, `.Gonf.GOOS`
@@ -105,14 +107,14 @@ recorded:
 $ ./recipe plan -redacted templates
 {"op":"plan_preview","version":21,"id":"plan"}
 {"op":"dir","id":"Directory[${HOME}/gonf-tutorial/templates]","path":"${HOME}/gonf-tutorial/templates","mode":"0755"}
-{"op":"file","id":"File[${HOME}/gonf-tutorial/templates/site.conf]","path":"${HOME}/gonf-tutorial/templates/site.conf","mode":"0644","content_b64":"IyB7eyAuUGFyYW0gfX0gcmVuZGVyZWQgb24ge3sgLkdvbmYuSG9zdG5hbWUgfX0gKHt7IC5Hb25mLkdPT1MgfX0sIHByb2ZpbGUge3sgLkdvbmYuUHJvZmlsZSB9fSkKc2VydmVyIHt7IC5OYW1lIH19IHsKICBsaXN0ZW4ge3sgLlBvcnQgfX0KICBiYWNrZW5kcyB7eyBqb2luIC5CYWNrZW5kICIsICIgfX0KfQo=","has_content":true,"template":true,"template_param":"assets/templates/site.conf.tmpl","template_data":{"Name":"blog","Port":8080,"Backend":["10.0.0.1","10.0.0.2"]}}
-{"op":"file","id":"File[${HOME}/gonf-tutorial/templates/banner.txt]","path":"${HOME}/gonf-tutorial/templates/banner.txt","mode":"0644","content_b64":"KioqIEJMT0cgKioqCg==","has_content":true}
+{"op":"file","id":"File[${HOME}/gonf-tutorial/templates/site.conf]","path":"${HOME}/gonf-tutorial/templates/site.conf","mode":"0644","content_b64":"IyB7eyAuUGFyYW0gfX0gcmVuZGVyZWQgb24ge3sgLkdvbmYuSG9zdG5hbWUgfX0gKHt7IC5Hb25mLkdPT1MgfX0sIHByb2ZpbGUge3sgLkdvbmYuUHJvZmlsZSB9fSkKc2VydmVyIHt7IC5OYW1lIH19IHsKICBsaXN0ZW4ge3sgLlBvcnQgfX0KICBiYWNrZW5kcyB7eyBqb2luIC5CYWNrZW5kICIsICIgfX0KfQo=","has_content":true,"template":true,"template_param":"assets/templates/site.conf.tmpl","template_data":{"Name":"gonfy","Port":8080,"Backend":["10.0.0.1","10.0.0.2"]}}
+{"op":"file","id":"File[${HOME}/gonf-tutorial/templates/banner.txt]","path":"${HOME}/gonf-tutorial/templates/banner.txt","mode":"0644","content_b64":"KioqIEdPTkZZICoqKgo=","has_content":true}
 wrote redacted preview to stdout (4 ops, 0 secret-bearing; not a plan, cannot be applied)
 ```
 
 (`plan -redacted` prints a plan for reading, chapter 11.) The first file op
 has `"template":true` and your `template_data`. The second has only
-`content_b64`, the base64 of `*** BLOG ***`.
+`content_b64`, the base64 of `*** GONFY ***`.
 
 ## Which one to use
 

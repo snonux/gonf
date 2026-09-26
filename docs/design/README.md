@@ -1,6 +1,9 @@
 # Design notes
 
-Long-form design notes, background and history behind gonf's features.
+<img src="../../assets/logo-light.svg" alt="Gonfy, the gonf beaver" width="96" align="right">
+
+Long-form design notes, background and history behind gonf's features:
+Gonfy's blueprints for the lodge.
 The terse quick reference is [../reference.md](../reference.md).
 
 ## Documentation index

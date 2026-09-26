@@ -8,8 +8,8 @@ import (
 )
 
 func main() {
-	Task("hello", "Write ~/hello.txt", func() {
-		File(DestHome("hello.txt"), WithContent("Hello from gonf!\n"), WithMode(0o644))
+	Task("hello", "Gonfy writes ~/hello.txt", func() {
+		File(DestHome("hello.txt"), WithContent("Hello from Gonfy the beaver!\n"), WithMode(0o644))
 	})
 	cli.Main()
 }

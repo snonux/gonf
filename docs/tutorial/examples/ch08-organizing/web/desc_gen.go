@@ -4,7 +4,7 @@ package web
 
 func (Web) DescConfig() string { return "Writes the web server config" }
 
-func (Web) DescContent() string { return "Publishes the start page" }
+func (Web) DescContent() string { return "Publishes Gonfy's start page" }
 
 func (Web) DescDocroot() string { return "Creates the document root" }
 

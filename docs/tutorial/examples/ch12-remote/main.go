@@ -25,7 +25,7 @@ func (Planet) DescMotd() string { return "Greet with the host's name" }
 // the destination's own facts, so every host renders its own name.
 func (Planet) Motd() {
 	EnsureDir("/etc/motd.d", RootOwned)
-	File("/etc/motd.d/welcome", WithContent("Welcome to {{ .Gonf.Hostname }}!\n"), WithTemplate,
+	File("/etc/motd.d/welcome", WithContent("Welcome to {{ .Gonf.Hostname }}! Gonfy waves hello.\n"), WithTemplate,
 		RootOwned)
 }
 

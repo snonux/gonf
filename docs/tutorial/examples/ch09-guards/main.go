@@ -13,7 +13,7 @@ import (
 func main() {
 	dir := DestHome("gonf-tutorial/guards")
 	note := func(name string) func() {
-		return func() { File(dir+"/"+name, WithContent(name+"\n"), WithMode(0o644)) }
+		return func() { File(dir+"/"+name, WithContent("Gonfy was here: "+name+"\n"), WithMode(0o644)) }
 	}
 
 	// Every task below Needs this one, so the directory exists first.

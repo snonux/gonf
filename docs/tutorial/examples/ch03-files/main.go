@@ -19,10 +19,11 @@ func files() {
 	// A directory, then a file with inline content inside it. gonf orders
 	// the file after its parent directory on its own.
 	Dir(base, WithMode(0o755))
-	File(base+"/motd", WithContent("Welcome to the gonf tutorial!\n"), WithMode(0o644))
+	File(base+"/motd", WithContent("Welcome to Gonfy's lodge!\n"), WithMode(0o644))
 
 	// Copy a file from the recipe's working directory (the controller).
 	File(base+"/bashrc", WithSource("assets/dotfiles/bashrc"), WithMode(0o644))
+	File(base+"/gonfy.txt", WithSource("assets/gonfy.txt"), WithMode(0o644))
 
 	// Mirror a whole directory tree, removing anything not in the source.
 	Dir(base+"/vim", WithSource("assets/dotfiles/vim"), WithPrune, WithFileMode(0o644))

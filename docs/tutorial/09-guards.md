@@ -5,6 +5,8 @@ task, or a part of it, applies. The important question for every guard is
 **who decides**: the destination while applying, or the controller while
 recording.
 
+> 🦫 **Gonfy says:** Always ask who decides: the lodge, when the guard travels in the plan, or the beaver at home, when it is plain Go that runs while recording.
+
 ## Facts
 
 gonf detects three facts on every machine, the same way on the controller
@@ -35,7 +37,7 @@ import (
 func main() {
 	dir := DestHome("gonf-tutorial/guards")
 	note := func(name string) func() {
-		return func() { File(dir+"/"+name, WithContent(name+"\n"), WithMode(0o644)) }
+		return func() { File(dir+"/"+name, WithContent("Gonfy was here: "+name+"\n"), WithMode(0o644)) }
 	}
 
 	// Every task below Needs this one, so the directory exists first.
@@ -139,9 +141,9 @@ $ ./recipe plan -redacted bsd big mixed
 {"op":"plan_preview","version":21,"id":"plan"}
 {"op":"dir","id":"Directory[${HOME}/gonf-tutorial/guards]","path":"${HOME}/gonf-tutorial/guards","mode":"0755"}
 {"op":"when_begin","id":"when.bsd","all":[{"fact":"goos","in":["freebsd","openbsd","netbsd"]}]}
-{"op":"file","id":"File[${HOME}/gonf-tutorial/guards/bsd]","path":"${HOME}/gonf-tutorial/guards/bsd","mode":"0644","content_b64":"YnNkCg==","has_content":true}
+{"op":"file","id":"File[${HOME}/gonf-tutorial/guards/bsd]","path":"${HOME}/gonf-tutorial/guards/bsd","mode":"0644","content_b64":"R29uZnkgd2FzIGhlcmU6IGJzZAo=","has_content":true}
 {"op":"when_end"}
-{"op":"file","id":"File[${HOME}/gonf-tutorial/guards/big]","path":"${HOME}/gonf-tutorial/guards/big","mode":"0644","content_b64":"YmlnCg==","has_content":true}
+{"op":"file","id":"File[${HOME}/gonf-tutorial/guards/big]","path":"${HOME}/gonf-tutorial/guards/big","mode":"0644","content_b64":"R29uZnkgd2FzIGhlcmU6IGJpZwo=","has_content":true}
 {"op":"when_begin","id":"when.hostname:vm","all":[{"fact":"hostname_contains","eq":"vm"}]}
 {"op":"file","id":"File[${HOME}/gonf-tutorial/guards/hostname-match]","path":"${HOME}/gonf-tutorial/guards/hostname-match","mode":"0644","content_b64":"dm0gb3IgbGFwdG9wCg==","has_content":true}
 {"op":"when_end"}

@@ -20,7 +20,7 @@ func main() {
 }
 
 func templates() {
-	site := Site{Name: "blog", Port: 8080, Backend: []string{"10.0.0.1", "10.0.0.2"}}
+	site := Site{Name: "gonfy", Port: 8080, Backend: []string{"10.0.0.1", "10.0.0.2"}}
 	dir := DestHome("gonf-tutorial/templates")
 	Dir(dir, WithMode(0o755))
 

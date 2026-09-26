@@ -1,13 +1,27 @@
 # gonf
 
-<img src="assets/logo-light.svg" alt="Gonf logo" width="140">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+  <img src="assets/logo-light.svg" alt="Gonfy, the gonf beaver, in a yellow hard hat holding a log" width="160">
+</picture>
 
-KISS configuration management in plain Go, for personal use. A recipe is a
+KISS configuration management in plain Go, for personal use, looked after by
+Gonfy the beaver. A recipe is a
 Go program: it registers tasks, each task declares resources (files,
 packages, services, cron jobs, users, ...), and gonf records them into a
 versioned plan and applies it, locally or over SSH on Linux, OpenBSD,
 FreeBSD and NetBSD hosts. Built with the help of AI, but designed, reviewed
 and tested by a human.
+
+## Meet Gonfy
+
+Gonfy is gonf's mascot: a small, cheerful beaver in a yellow hard hat.
+A beaver builds its lodge to a plan and, whenever the river moves a stick,
+swims out and puts it back. gonf does the same with your hosts. You declare
+the lodge once, and every run converges it again, changing only what
+drifted. Gonfy guides you through the [tutorial](docs/tutorial/README.md),
+where the example recipes manage his portrait, his lodge's message of the
+day and a `gonfy` user account.
 
 ## Install
 
@@ -32,7 +46,7 @@ import (
 
 func main() {
     Task("dotfiles", "Shell setup", func() {
-        File(Home(".hello"), WithContent("hi\n"), WithMode(0o644))
+        File(Home(".hello"), WithContent("Hi from Gonfy!\n"), WithMode(0o644))
         Package("tmux")
     }, Privileged())
 

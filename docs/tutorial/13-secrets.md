@@ -4,6 +4,8 @@ Passwords and tokens should not live in your recipe's source. gonf resolves
 them from a secret provider while recording, notices where they end up in
 the plan, and keeps them out of logs and previews.
 
+> 🦫 **Gonfy says:** Secrets stay in my cheek pouch until the moment they are needed. gonf marks every op that carries one as sensitive.
+
 ## Where secrets come from
 
 The default provider reads `secrets/<ref>` below the directory you run the

@@ -1,11 +1,25 @@
 # The gonf tutorial
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../../assets/logo-dark.svg">
+  <img src="../../assets/logo-light.svg" alt="Gonfy, the gonf beaver" width="120" align="right">
+</picture>
+
 A step-by-step book about gonf, from a first recipe to sealed plans pushed to
-a fleet. Every chapter builds a small recipe, runs it, and shows the real
-commands and their output. Each section ends with links into the
+a fleet, with Gonfy the beaver as your guide. Every chapter builds a small
+recipe, runs it, and shows the real commands and their output. Each section ends with links into the
 [reference](../reference.md), which has every option and every sharp edge.
 
 ![How gonf works: a recipe records a plan on the controller, and destinations apply it](img/overview.svg)
+
+## Meet Gonfy
+
+Gonfy is gonf's mascot, a small beaver in a yellow hard hat. Beavers build
+their lodge to a plan and patch it whenever the river moves a stick, which
+is exactly what gonf does with your machines: declare the lodge, then
+converge it again and again. Gonfy shows up in every chapter with a tip
+(look for 🦫), and the example recipes manage his things: his portrait, his
+lodge's message of the day, his start page and even a `gonfy` user account.
 
 ## Chapters
 
