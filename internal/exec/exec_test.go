@@ -29,8 +29,8 @@ func TestRun(t *testing.T) {
 		},
 		{
 			name:         "fail-exit-code",
-			cmd:          "ls",
-			args:         []string{"/non-existent-directory-12345"},
+			cmd:          "sh",
+			args:         []string{"-c", "echo failed >&2; exit 2"},
 			wantStdout:   "",
 			wantStderr:   "",
 			wantExitCode: 2,

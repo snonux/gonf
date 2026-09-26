@@ -3,7 +3,8 @@
 # dnf round trip (install/upgrade/remove tig) as root.
 set -eu
 cd "$(dirname "$0")/../.."
-dnf install -y golang git rpm findutils diffutils which >/dev/null
+# systemd provides systemctl, which the timer unit tests expect on Linux.
+dnf install -y golang git rpm findutils diffutils which systemd >/dev/null
 id tester >/dev/null 2>&1 || useradd -m tester
 chown -R tester .
 echo "== full suite as tester"

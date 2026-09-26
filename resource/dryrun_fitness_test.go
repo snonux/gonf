@@ -169,6 +169,9 @@ func TestDryRunFitness(t *testing.T) {
 // platform probes reach the mutation decisions; resource.Mutate must then
 // suppress group/user creation while still reporting the pending change.
 func dryRunUser(t *testing.T, _ string) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("User has no darwin backend")
+	}
 	name := fmt.Sprintf("gonf-dryrun-user-%d", os.Getpid())
 	api.User(name,
 		opt.WithPrimaryGroup(name),

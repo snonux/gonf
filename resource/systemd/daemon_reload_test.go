@@ -1,6 +1,7 @@
 package systemd
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 
@@ -18,6 +19,7 @@ func systemdSet(fake RunFunc) *runners.Set {
 }
 
 func TestDaemonReloadRunsSystemctl(t *testing.T) {
+	requireLinux(t)
 	resource.ResetRepository()
 
 	var saw []string
@@ -36,6 +38,7 @@ func TestDaemonReloadRunsSystemctl(t *testing.T) {
 }
 
 func TestDaemonReloadWithUser(t *testing.T) {
+	requireLinux(t)
 	resource.ResetRepository()
 
 	var saw string
@@ -54,6 +57,7 @@ func TestDaemonReloadWithUser(t *testing.T) {
 }
 
 func TestDaemonReloadIfChangedSkips(t *testing.T) {
+	requireLinux(t)
 	resource.ResetRepository()
 
 	called := false
@@ -73,6 +77,7 @@ func TestDaemonReloadIfChangedSkips(t *testing.T) {
 }
 
 func TestDaemonReloadIfChangedRuns(t *testing.T) {
+	requireLinux(t)
 	resource.ResetRepository()
 
 	called := false
@@ -92,6 +97,7 @@ func TestDaemonReloadIfChangedRuns(t *testing.T) {
 }
 
 func TestDaemonReloadOnChangeAndWithWatchMergeRegardlessOfOptionOrder(t *testing.T) {
+	requireLinux(t)
 	for _, tc := range []struct {
 		name string
 		opts func(resource.Resource, resource.Resource) []opt.DaemonReloadOption
@@ -131,6 +137,7 @@ func TestDaemonReloadOnChangeAndWithWatchMergeRegardlessOfOptionOrder(t *testing
 }
 
 func TestDaemonReloadIfChangedSeesDirectoryChildFile(t *testing.T) {
+	requireLinux(t)
 	resource.ResetRepository()
 
 	called := false
@@ -155,6 +162,7 @@ func TestDaemonReloadIfChangedSeesDirectoryChildFile(t *testing.T) {
 }
 
 func TestDaemonReloadDryRun(t *testing.T) {
+	requireLinux(t)
 	resource.ResetRepository()
 	resource.SetDryRun(true)
 	t.Cleanup(func() { resource.SetDryRun(false) })
@@ -166,5 +174,14 @@ func TestDaemonReloadDryRun(t *testing.T) {
 	Present()
 	if err := testapply.ApplyWithRunners(rs); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// requireLinux skips t off Linux: applying DaemonReload refuses every other
+// GOOS, so tests that apply one only make sense on a systemd platform.
+func requireLinux(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skipf("DaemonReload applies only on Linux (GOOS=%s)", runtime.GOOS)
 	}
 }

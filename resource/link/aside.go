@@ -117,7 +117,7 @@ func moveAsideNoReplace(path, old string) error {
 // removes it after a successful conversion, and rollback (rename old back
 // to path) keeps it either way.
 func moveAsideHardlink(path, old string) error {
-	if err := os.Link(path, old); err != nil {
+	if err := linkEntry(path, old); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return fmt.Errorf("existing backup %s appeared during conversion (pre-planted?): %w", old, err)
 		}

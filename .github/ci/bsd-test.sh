@@ -7,8 +7,10 @@ if ! command -v go >/dev/null 2>&1; then
 	# pkgsrc installs go under /usr/pkg/go<version>/bin.
 	PATH="$(ls -d /usr/pkg/go*/bin | tail -1):$PATH"
 fi
+# The packaged Go can be older than go.mod's; fetch the pinned toolchain.
+GOTOOLCHAIN=auto
 GONF_RUN_BSD_PACKAGE_TESTS=1
 GONF_RUN_BSD_SERVICE_TESTS=1
-export PATH GONF_RUN_BSD_PACKAGE_TESTS GONF_RUN_BSD_SERVICE_TESTS
+export PATH GOTOOLCHAIN GONF_RUN_BSD_PACKAGE_TESTS GONF_RUN_BSD_SERVICE_TESTS
 go version
 go test -count=1 ./...

@@ -126,6 +126,7 @@ func lowerReload(t *testing.T, opts []opt.DaemonReloadOption) plan.Op {
 // through Ensure: WithWatch never arms the gate, so it is an ungated
 // reload and reloads although nothing changed.
 func TestEmptyWithWatchReloadsUnconditionally(t *testing.T) {
+	requireLinux(t)
 	resource.ResetReport()
 	t.Cleanup(resource.ResetReport)
 	called := false
@@ -157,6 +158,7 @@ func TestReloadArmedWithNothingToWatchRefused(t *testing.T) {
 // op fires on a watched change, and an ungated op ignores its recorded
 // watch ids.
 func TestPlanHandlerRecordedGate(t *testing.T) {
+	requireLinux(t)
 	resource.ResetReport()
 	t.Cleanup(resource.ResetReport)
 	calls := 0
@@ -194,6 +196,7 @@ func (d dep) Dependencies() []string { return []string{string(d)} }
 // Ensure path on purpose: the plan pre-flight refuses a dangling watch before
 // apply, so the gate's own rule is only reachable there.
 func TestDaemonReloadUnknownWatchSkips(t *testing.T) {
+	requireLinux(t)
 	resource.ResetReport()
 	called := false
 	sr := &runners.SystemdRunners{Run: func(string, ...string) (string, string, int, error) {

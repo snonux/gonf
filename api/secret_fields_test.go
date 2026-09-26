@@ -419,7 +419,7 @@ func TestRunSummaryAndLogsRedactWeakSecretInID(t *testing.T) {
 	t.Cleanup(ResetForTest)
 	useSecretWorkDir(t)
 	writeSecret(t, "svc/pin", "tok123\n")
-	Task("t", "", func() { Command("/bin/true", List(strings.TrimSpace(MustSecret("svc/pin")))) })
+	Task("t", "", func() { Command("true", List(strings.TrimSpace(MustSecret("svc/pin")))) })
 	var runErr error
 	stderr := testutil.CaptureStderr(t, func() { runErr = Run("t") })
 	if runErr != nil {
