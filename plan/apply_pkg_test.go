@@ -12,6 +12,7 @@ package plan_test
 
 import (
 	"context"
+	"os/exec"
 	"testing"
 
 	"github.com/snonux/gonf/internal/runners"
@@ -33,6 +34,10 @@ func applyPkgOps(ops []plan.Op, pr *runners.PackageRunners) error {
 func dnfManager() (string, error) { return "dnf", nil }
 
 func TestApplyPackageDryRun(t *testing.T) {
+	// The dnf backend queries the real rpm database even in dry-run mode.
+	if _, err := exec.LookPath("rpm"); err != nil {
+		t.Skip("rpm is not installed")
+	}
 	resource.SetDryRun(true)
 	t.Cleanup(func() { resource.SetDryRun(false) })
 	ops := []plan.Op{

@@ -602,6 +602,9 @@ func TestCLIApplyRootWithIdentitySucceeds(t *testing.T) {
 // TestCLIApplySealedDefaultIdentityPath: without -identity, a non-root
 // invocation reads ${XDG_CONFIG_HOME}/gonf/identity.
 func TestCLIApplySealedDefaultIdentityPath(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root has no default identity path (-identity is required)")
+	}
 	isolateSealedStagingRoot(t)
 	identityLine, recipientLine := sealedKeyPair(t)
 	xdg := t.TempDir()

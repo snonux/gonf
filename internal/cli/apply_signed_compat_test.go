@@ -59,6 +59,9 @@ func TestCLIApplyPlainAndSealedWithoutNewFlagsUnchanged(t *testing.T) {
 // ${XDG_CONFIG_HOME}/gonf/trusted-signers, and refused before decryption
 // when that file is missing. It is never unwrapped unchecked.
 func TestCLIApplySignedWithoutFlagsUsesDefaultTrust(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root has no default trusted-signers path (-trusted-signers is required)")
+	}
 	fx := newSignedFixture(t)
 	config := filepath.Join(fx.dir, "config")
 	t.Setenv("XDG_CONFIG_HOME", config)

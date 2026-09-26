@@ -1,0 +1,10 @@
+#!/bin/sh
+# CI stand-in for foostore: answers the machine read contract v1 probe and
+# reports every reference as not found (exit 4), so gonf's fallback provider
+# reads the fixture's synthetic secrets from gonf/secrets/.
+if [ "$1" = read ] && [ "$2" = --help ]; then
+	echo "usage: foostore read <reference>"
+	echo "4 not found (the only suppressible code)"
+	exit 0
+fi
+exit 4
