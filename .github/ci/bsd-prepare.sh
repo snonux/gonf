@@ -20,7 +20,9 @@ OpenBSD)
 	rcctl check uptimed || rcctl start uptimed
 	;;
 NetBSD)
-	for p in go git rsync; do
+	# No git: its pcre2 dependency is newer than the image's and pkg_add
+	# will not upgrade it; bsd-test.sh turns off VCS stamping instead.
+	for p in go rsync; do
 		/usr/sbin/pkg_info -e "$p" >/dev/null || /usr/sbin/pkg_add "$p"
 	done
 	;;

@@ -9,6 +9,10 @@ if ! command -v go >/dev/null 2>&1; then
 fi
 # The packaged Go can be older than go.mod's; fetch the pinned toolchain.
 GOTOOLCHAIN=auto
+if ! command -v git >/dev/null 2>&1; then
+	GOFLAGS=-buildvcs=false
+	export GOFLAGS
+fi
 GONF_RUN_BSD_PACKAGE_TESTS=1
 GONF_RUN_BSD_SERVICE_TESTS=1
 export PATH GOTOOLCHAIN GONF_RUN_BSD_PACKAGE_TESTS GONF_RUN_BSD_SERVICE_TESTS
