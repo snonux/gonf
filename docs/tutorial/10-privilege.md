@@ -73,6 +73,8 @@ and `0700`). `Root` means user root and the destination's root group
 
 ## Chunks
 
+> 🦫 **Gonfy says:** Up the ladder, down the ladder, up again. The order of the ops never changes.
+
 The plan marks privileged ops with `"elevate":true`:
 
 ```text
@@ -124,6 +126,8 @@ summary: 0 ok, 0 changed, 0 skipped, 1 would-change
 ```
 
 ## Without a helper
+
+> 🦫 **Gonfy says:** Without sudo or doas I don't even start climbing: gonf refuses before it changes anything.
 
 As a normal user (here `gonfy`, the account from chapter 7) with the
 default `-privilege=none`, gonf refuses before it

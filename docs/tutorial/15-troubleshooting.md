@@ -77,6 +77,8 @@ $ BREAK=decl ./gonf -list
 
 ## Record errors
 
+> 🦫 **Gonfy says:** A record error stops me before I pick up a single stick. Nothing was changed.
+
 The recipe compiles and declares fine, but recording the task fails, so
 nothing is applied:
 
@@ -96,6 +98,8 @@ error: unknown task "nosuchtask"
 ```
 
 ## Apply errors
+
+> 🦫 **Gonfy says:** An apply error happened at the lodge. The ops before it were already applied, and the error names the plan line that sprang the leak.
 
 A resource failed on the destination. The ops before it were applied, the
 error names the plan line, and the exit status is 1:
@@ -125,6 +129,8 @@ exit 0
 ```
 
 ## Tools for digging
+
+> 🦫 **Gonfy says:** When in doubt, `-verbose` shows every step I take.
 
 | Tool | Use it to |
 |------|-----------|

@@ -74,6 +74,8 @@ func main() {
 
 ## -list knows the guards
 
+> 🦫 **Gonfy says:** `-list` tells you which chores would be skipped on this lodge, and why.
+
 ```text
 $ hostname
 vm
@@ -131,6 +133,8 @@ summary: 1 ok, 0 changed, 0 skipped, 0 would-change
 ```
 
 ## Guards in the plan
+
+> 🦫 **Gonfy says:** The guards that travel ride inside the plan, so every lodge can decide for itself.
 
 A serializable guard travels in the plan as a `when_begin` / `when_end`
 block, and the destination evaluates it. An opaque `When(func)` does not:

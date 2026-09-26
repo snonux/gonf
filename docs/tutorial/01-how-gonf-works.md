@@ -8,6 +8,8 @@ Go `main` package that describes the state you want, build it, and run it.
 
 ## The words
 
+> 🦫 **Gonfy says:** Six words and you can talk shop with any beaver.
+
 | Word | Meaning |
 |------|---------|
 | **recipe** | Your Go program. It registers tasks and ends with `cli.Main()`. |
@@ -42,6 +44,8 @@ locally, from a file and over ssh.
 
 ## What runs where
 
+> 🦫 **Gonfy says:** The riverbank is where I gather sticks, the lodge is where they go. Keep the two apart in your head and nothing here will surprise you.
+
 This split is the one thing to keep in mind while reading the rest of the
 book.
 
@@ -55,6 +59,8 @@ Reference: [Concepts](../reference.md#concepts),
 [Where guards are evaluated](../reference.md#where-guards-are-evaluated).
 
 ## Idempotence
+
+> 🦫 **Gonfy says:** I describe the lodge, not the chores. That is why a second walk around it finds nothing to do.
 
 Every resource describes an end state ("this file has this content and mode
 0644"), not an action ("write this file"). Running the same task twice

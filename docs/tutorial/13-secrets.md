@@ -8,6 +8,8 @@ the plan, and keeps them out of logs and previews.
 
 ## Where secrets come from
 
+> 🦫 **Gonfy says:** Secrets come from a provider on the controller. They never sit in the recipe itself.
+
 The default provider reads `secrets/<ref>` below the directory you run the
 recipe from. The chapter's recipe directory has two:
 
@@ -81,6 +83,8 @@ db_password=correct-horse-battery
 ```
 
 ## Sensitive ops
+
+> 🦫 **Gonfy says:** An op that carries a secret is marked sensitive, and a redacted preview hides it from prying eyes.
 
 gonf remembers every resolved value and scans the recorded plan for it.
 Ops that contain one are marked sensitive, and that changes how plans are

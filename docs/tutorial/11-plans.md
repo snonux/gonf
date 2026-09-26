@@ -35,6 +35,8 @@ func main() {
 
 ## Write a plan
 
+> 🦫 **Gonfy says:** Draw the blueprint once and keep it. The big sticks go into the blob store next to it.
+
 ```text
 $ ./gonf plan -o out dotfiles
 wrote out/plan.jsonl (6 ops)
@@ -69,6 +71,8 @@ say `${HOME}`: the destination fills them in.
 ![Record a plan to a directory, copy it to another host, apply it there](img/ch11-1.svg)
 
 ## Apply it
+
+> 🦫 **Gonfy says:** Any gonf binary can follow the blueprint, even one that never saw the recipe.
 
 `gonf` without `./` is any gonf binary on the `PATH`, such as the
 stand-alone one (`go install github.com/snonux/gonf/cmd/gonf@main`) or a

@@ -134,6 +134,8 @@ solar	clusters=inner,outer	hosts=earth,mars,pluto
 
 ## Push to one host
 
+> 🦫 **Gonfy says:** The first time I swim to a new lodge I bring my own tools, a gonf binary built for it.
+
 `push` records the plan on your machine, streams it over ssh and applies it
 there. `-n` previews:
 
@@ -171,6 +173,8 @@ host name, and `EachHost` gave earth its own hour.
 ![Sequence of a push to earth: record, probe, build and install gonf, apply over ssh](img/ch12-2.svg)
 
 ## Push to a cluster
+
+> 🦫 **Gonfy says:** One blueprint, recorded once, delivered to every lodge in the cluster.
 
 `cluster` records once and pushes to every member, `-j` hosts at a time
 (the cluster's `.Parallel(2)` by default; `-j 1` keeps the output in order
@@ -235,6 +239,8 @@ On mars, `EachHostWith` left out the mirror job and `WhenHostnameIn` left
 out the `earth` fragment.
 
 ## Strict preview and fleets
+
+> 🦫 **Gonfy says:** `-preview` is a look through the window. It never installs or upgrades anything on the host.
 
 `-preview` is a dry run that never installs or upgrades anything on the
 host. `fleet` pushes to every cluster of a fleet:

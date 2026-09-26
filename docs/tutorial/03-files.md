@@ -88,6 +88,8 @@ Reference: [Body-level guards and helpers](../reference.md#body-level-guards-and
 
 ## Run it
 
+> 🦫 **Gonfy says:** Always look before you gnaw: `-n` shows every change and makes none.
+
 Build the recipe and preview it with `-n` on a fresh home first:
 
 ```text
@@ -204,6 +206,8 @@ $ cat ~/gonf-tutorial/gonfy.txt
 ```
 
 ## Drift: pruning, removal and repair
+
+> 🦫 **Gonfy says:** Twigs in the wrong room get swept out, and the stick that must not be there gets pulled.
 
 Drop some twigs into the synced tree as a stray file, recreate the file that must be absent,
 and loosen a mode:
