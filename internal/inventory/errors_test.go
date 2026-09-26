@@ -88,3 +88,26 @@ func TestAddHostFirstOptionErrorWins(t *testing.T) {
 		t.Error("host with a rejected option was stored")
 	}
 }
+
+// TestAddHostStoresNoSSHDomainScratch pins that AddHost resolves a pending
+// SSH domain into SSHHost and clears the scratch field before storing, so
+// the stored record (and a copy handed out by LookupHost) is pure data.
+func TestAddHostStoresNoSSHDomainScratch(t *testing.T) {
+	Reset()
+	t.Cleanup(Reset)
+	rec, err := AddHost("d", func(h *Host) error { h.SetSSHDomain("lan"); return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := LookupHost("d")
+	for _, h := range []Host{rec, stored} {
+		if h.SSHHost != "d.lan" || h.sshDomain != "" || h.defaults != nil {
+			t.Errorf("record = {SSHHost:%q sshDomain:%q defaults:%v}, want d.lan with no scratch", h.SSHHost, h.sshDomain, h.defaults)
+		}
+	}
+	// SetSSHDomain("") clears a pending domain: the name is the default again.
+	rec, err = AddHost("e", func(h *Host) error { h.SetSSHDomain("lan"); h.SetSSHDomain(""); return nil })
+	if err != nil || rec.SSHHost != "e" {
+		t.Errorf("cleared domain: SSHHost = %q, err = %v; want %q", rec.SSHHost, err, "e")
+	}
+}

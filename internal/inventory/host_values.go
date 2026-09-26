@@ -41,6 +41,26 @@ func (h *Host) ApplyDefaults(opts []HostOption) error {
 	return first
 }
 
+// SetSSHDomain records domain as the pending SSH domain during option
+// application: unless an option sets SSHHost explicitly, AddHost defaults it
+// to "<name>.<domain>" once every option ran. A later call replaces an
+// earlier one (a HostDefaults bundle's domain, say); "" clears it. The
+// caller (inventory.WithSSHDomain) validates and normalizes domain.
+func (h *Host) SetSSHDomain(domain string) { h.sshDomain = domain }
+
+// resolveSSHHost fills in the default SSHHost after every option ran: an
+// explicit (non-empty) SSHHost wins whatever the option order, else
+// "<name>.<domain>" under a pending SSH domain, else the inventory name.
+func (h *Host) resolveSSHHost() {
+	switch {
+	case h.SSHHost != "":
+	case h.sshDomain != "":
+		h.SSHHost = h.Name + "." + h.sshDomain
+	default:
+		h.SSHHost = h.Name
+	}
+}
+
 // PutValue stores value under key during option application. A key already
 // set is an error unless a defaults bundle set it (then it is replaced).
 func (h *Host) PutValue(key string, value any) error {

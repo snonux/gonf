@@ -29,10 +29,11 @@ const DefaultClusterParallelism = 5
 // the value LookupHost/HostInfos return and that gets copied into the hosts
 // map has no transient validation-error channel and no way to reach one —
 // registration-time misuse is threaded through HostOption's own return value
-// instead (see AddHost), never stashed on a Host field. The one transient
-// field, defaults (which WithValue/WithData keys a HostDefaults bundle set,
-// so a later option may override them), lives only while AddHost applies
-// options and is cleared before the record is stored.
+// instead (see AddHost), never stashed on a Host field. The transient
+// fields, defaults (which WithValue/WithData keys a HostDefaults bundle set,
+// so a later option may override them) and sshDomain (the pending
+// WithSSHDomain), live only while AddHost applies options and are cleared
+// before the record is stored.
 type Host struct {
 	Name      string
 	User      string
@@ -66,6 +67,10 @@ type Host struct {
 	// defaults is option-application scratch state (see hostDefaults), set
 	// only while AddHost applies options and always nil in a stored record.
 	defaults *hostDefaults
+	// sshDomain is option-application scratch state too: the domain of the
+	// last SetSSHDomain call, which AddHost turns into the SSHHost default
+	// once every option ran (see resolveSSHHost). Always "" when stored.
+	sshDomain string
 }
 
 // HostOption configures a Host at registration (mirrors api.HostOption). An
@@ -115,19 +120,20 @@ func AddHost(name string, opts ...HostOption) (Host, error) {
 	if name == "" {
 		return Host{}, fmt.Errorf("Host: name must not be empty")
 	}
-	rec := Host{Name: name, SSHHost: name}
+	// SSHHost starts empty ("not set explicitly") and is only defaulted once
+	// every option ran, so the outcome does not depend on option order.
+	rec := Host{Name: name}
 	var optErr error
 	for _, o := range opts {
 		if err := o(&rec); err != nil && optErr == nil {
 			optErr = err
 		}
 	}
-	rec.defaults = nil // the stored record carries no option scratch state
+	rec.resolveSSHHost()
+	// The stored record carries no option scratch state.
+	rec.defaults, rec.sshDomain = nil, ""
 	if optErr != nil {
 		return Host{}, optErr
-	}
-	if rec.SSHHost == "" {
-		rec.SSHHost = name
 	}
 
 	mu.Lock()

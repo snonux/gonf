@@ -903,7 +903,7 @@ Fleet("homelab", edge, other)
 | Host option | Meaning |
 |-------------|---------|
 | `WithSSHUser`, `WithSSHHost`, `WithSSHPort`, `WithSSHIdentity` | SSH connection. |
-| `WithSSHDomain(d)` | SSH hostname defaults to `<name>.<d>`; an explicit `WithSSHHost` wins. |
+| `WithSSHDomain(d)` | SSH hostname defaults to `<name>.<d>`; an explicit `WithSSHHost` wins in any order, a later `WithSSHDomain` replaces an earlier one. |
 | `WithHostnameMatch(f)` | The hostname fragment `OnCluster`, `EachHost` and `ForHosts` guard this host on. Default: the inventory name, so inventory names must be substrings of the hostnames unless this is set. |
 | `WithPrivilege(PrivilegeNone \| PrivilegeSudo \| PrivilegeDoas)` | How elevated chunks are wrapped on this host. Default none. |
 | `WithGOOS`, `WithGOARCH` | Cross-compile target for the remote binary. Default: `uname`. |

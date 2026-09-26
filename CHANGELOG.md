@@ -11,6 +11,13 @@ Fixes
   chunks. Before, those children logged at their default level, so
   `-quiet` still printed every remote or privileged change. A
   fixed-argument sudoers/doas rule must now allow these flags too.
+- The SSH hostname no longer depends on host option order: it is derived
+  once every host option ran. An explicit `WithSSHHost` now wins even when
+  it comes before a `HostDefaults` bundle with `WithSSHDomain` (or equals
+  the inventory name), and a later `WithSSHDomain` replaces a bundle's
+  instead of being ignored, so push connects to the intended host.
+- A `WithSSHDomain` option shared by concurrent `Host` calls no longer
+  data-races.
 
 Docs
 - Gonfy the beaver is gonf's mascot and new logo (`assets/logo-*.svg`).

@@ -61,7 +61,8 @@ func WithSSHUser(user string) HostOption {
 }
 
 // WithSSHHost sets the SSH hostname (default: inventory name, or
-// "<name>.<domain>" under WithSSHDomain).
+// "<name>.<domain>" under WithSSHDomain). A later WithSSHHost replaces an
+// earlier one; an empty host restores the default.
 func WithSSHHost(host string) HostOption {
 	return func(h *inv.Host) error { h.SSHHost = host; return nil }
 }
@@ -72,16 +73,23 @@ func WithSSHHost(host string) HostOption {
 //	lan := HostDefaults(WithSSHDomain("lan.buetow.org"))
 //	Host("r0", lan) // ssh r0.lan.buetow.org
 //
-// An explicit WithSSHHost wins, whichever order the options come in.
+// An explicit WithSSHHost wins, whichever order the options come in, and a
+// later WithSSHDomain replaces an earlier one (such as a bundle's):
+//
+//	Host("r1", lan, WithSSHDomain("wg0")) // ssh r1.wg0
+//
+// The hostname is derived once all options ran. Leading and trailing dots
+// are trimmed; a domain that is empty after trimming is a declaration error.
 func WithSSHDomain(domain string) HostOption {
+	// Normalize once, here: the returned option may be shared (a HostDefaults
+	// bundle used by several Host calls, possibly concurrently), so it must
+	// only read its captured domain, never assign it.
+	domain = strings.Trim(domain, ".")
 	return func(h *inv.Host) error {
-		domain = strings.Trim(domain, ".")
 		if domain == "" {
 			return fmt.Errorf("WithSSHDomain: domain must not be empty")
 		}
-		if h.SSHHost == h.Name {
-			h.SSHHost = h.Name + "." + domain
-		}
+		h.SetSSHDomain(domain)
 		return nil
 	}
 }
