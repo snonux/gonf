@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/snonux/gonf/internal/shellwords"
 )
 
 // Mode selects how privileged gonf apply invocations are wrapped.
@@ -69,7 +71,9 @@ func WrapApplyBinCmd(mode Mode, elevate bool, bin, applyArgs string) (string, er
 	if bin == "" {
 		bin = "gonf"
 	}
-	cmd := bin + " " + strings.TrimSpace(applyArgs)
+	// bin comes from WithGonfPath and is not validated: quote it for the
+	// remote shell ("/opt/my tools/gonf" is one word).
+	cmd := shellwords.Quote(bin) + " " + strings.TrimSpace(applyArgs)
 	if !elevate {
 		return cmd, nil
 	}

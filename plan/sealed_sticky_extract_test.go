@@ -173,11 +173,12 @@ func TestKeyedChunkSealedOps(t *testing.T) {
 // PushIsKeyed recognises only the GONF-PUSH/2 magic line.
 func TestPushIsKeyed(t *testing.T) {
 	for data, want := range map[string]bool{
-		"GONF-PUSH/2\nkey x\n": true,
-		"GONF-PUSH/2":          false,
-		"GONF-PUSH/1\n":        false,
-		"GONF-PUSH/20\n":       false,
-		"{\"op\":\"plan\"}\n":  false,
+		"GONF-PUSH/2\nkey x\n":   true,
+		"GONF-PUSH/2\r\nkey x\n": true,
+		"GONF-PUSH/2":            false,
+		"GONF-PUSH/1\n":          false,
+		"GONF-PUSH/20\n":         false,
+		"{\"op\":\"plan\"}\n":    false,
 	} {
 		if got := PushIsKeyed([]byte(data)); got != want {
 			t.Fatalf("PushIsKeyed(%q) = %v, want %v", data, got, want)

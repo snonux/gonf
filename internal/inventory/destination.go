@@ -70,7 +70,8 @@ func SelectionForDestination(user, host string, port int, hasExtraSSH bool) []st
 }
 
 // SelectionForLocalHostname returns the host selection for a local run on a
-// machine called hostname: every registered name the hostname contains (case
+// machine called hostname: every registered host whose hostname fragment
+// (WithHostnameMatch, else its name) the hostname contains (case
 // insensitive). That is exactly the set whose hostname_contains guard the
 // local apply accepts, so the other hosts' ForHosts bodies could never apply
 // here. The result is non-nil even when empty: no name matches, so no
@@ -80,8 +81,12 @@ func SelectionForLocalHostname(hostname string) []string {
 	mu.Lock()
 	defer mu.Unlock()
 	names := []string{}
-	for name := range hosts {
-		if strings.Contains(lower, strings.ToLower(name)) {
+	for name, rec := range hosts {
+		frag := rec.HostnameMatch
+		if frag == "" {
+			frag = name
+		}
+		if strings.Contains(lower, strings.ToLower(frag)) {
 			names = append(names, name)
 		}
 	}
@@ -126,8 +131,9 @@ func portsCompatible(a, b int) bool {
 //     Different explicit ports on one SSH host (f3.lan:2201 and
 //     f3.lan:2202, e.g. VMs behind port forwards) are different machines, so
 //     they are not aliases.
-//  2. Substrings: every N contained (case insensitive) in ANY name or SSHHost
-//     of those machines ("r0" in "r0-wg" or "r0.lan", "pi1" in "pi10"),
+//  2. Substrings: every N whose hostname fragment (WithHostnameMatch, else
+//     N) is contained (case insensitive) in ANY name, SSHHost or hostname
+//     fragment of those machines ("r0" in "r0-wg" or "r0.lan", "pi1" in "pi10"),
 //     since the guard is a substring test on the destination's hostname and,
 //     by the documented assumption, that hostname may be built from any of
 //     the machine's names. Probing aliases too (not only the targets) makes
@@ -147,10 +153,17 @@ func expandSelectionLocked(targets []string) []string {
 		probes = append(probes, strings.ToLower(name))
 		if rec, ok := hosts[name]; ok {
 			probes = append(probes, strings.ToLower(rec.SSHHost))
+			if rec.HostnameMatch != "" {
+				probes = append(probes, strings.ToLower(rec.HostnameMatch))
+			}
 		}
 	}
-	for name := range hosts {
-		if containedInAny(name, probes) {
+	for name, rec := range hosts {
+		frag := rec.HostnameMatch
+		if frag == "" {
+			frag = name
+		}
+		if containedInAny(frag, probes) {
 			seen[name] = struct{}{}
 		}
 	}

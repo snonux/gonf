@@ -627,8 +627,11 @@ func extractTarFile(target string, r io.Reader, size int64, written *int64, max 
 		return err
 	}
 	// O_NONBLOCK turns a planted FIFO at the target into a loud error instead
-	// of allowing OpenFile to block while waiting for a reader.
-	f, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY|syscall.O_NONBLOCK, 0o600)
+	// of allowing OpenFile to block while waiting for a reader. O_NOFOLLOW
+	// refuses a symlink at the target itself (e.g. a crafted TypeSymlink
+	// "blobs/x" -> /etc/passwd followed by a regular "blobs/x"), which
+	// ensureNoAncestorSymlink does not cover.
+	f, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return err
 	}

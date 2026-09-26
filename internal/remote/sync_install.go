@@ -8,6 +8,7 @@ import (
 
 	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/internal/privilege"
+	"github.com/snonux/gonf/internal/shellwords"
 	"github.com/snonux/gonf/plan"
 )
 
@@ -43,7 +44,13 @@ func (p *Pusher) installRemoteBinary(ctx context.Context, t PushTarget, localBin
 	if err != nil {
 		return fmt.Errorf("ensure gonf: mktemp: %w", err)
 	}
-	defer removeRemoteStagingDir(ctx, t, remoteDir)
+	// Detached from ctx: a push timed out or cancelled mid-scp must still
+	// remove the staging dir (as pushRemoveSticky does for the sticky dir).
+	defer func() {
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), pushRemoveStickyTimeout)
+		defer cancel()
+		removeRemoteStagingDir(cctx, t, remoteDir)
+	}()
 
 	remoteTmp := remoteDir + "/gonf"
 	if err := p.SCPRunner(ctx, localBin, t, remoteTmp); err != nil {
@@ -80,7 +87,7 @@ func remoteInstallCmd(t PushTarget, src, dst string) (string, error) {
 	// install(1) is portable enough on OpenBSD/NetBSD/Linux. Cleanup of src
 	// is handled by removeRemoteStagingDir (rm -rf on the whole staging
 	// dir), so this stays a single simple command with no "&&" chaining.
-	inner := fmt.Sprintf("install -m 755 %s %s", src, dst)
+	inner := fmt.Sprintf("install -m 755 %s %s", shellwords.Quote(src), shellwords.Quote(dst))
 	if t.User == "root" || t.User == "" && strings.HasPrefix(t.Host, "root@") {
 		return inner, nil
 	}
