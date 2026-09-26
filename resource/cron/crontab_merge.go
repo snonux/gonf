@@ -1,22 +1,28 @@
 package cron
 
-// Crontab text transformations: mergeCrontab replaces or removes the named
-// Gonf block, and adoptUnmanaged removes (or replaces in place with the
-// job's block) unmanaged entries that a Gonf block now owns. Both work on the text read by readCrontab (crontab.go) while
-// Cron.apply holds the crontab write lock (lock.go); marker parsing lives in
-// crontab_markers.go and entry parsing in crontab_fields.go.
+// Crontab text transformations: mergeCrontab replaces (in place when it
+// can, see mergeCrontab) or removes the named Gonf block, and adoptUnmanaged
+// removes (or replaces in place with the job's block) unmanaged entries that
+// a Gonf block now owns. Both work on the text read by readCrontab
+// (crontab.go) while Cron.apply holds the crontab write lock (lock.go);
+// marker parsing lives in crontab_markers.go and entry parsing in
+// crontab_fields.go.
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // adoption selects the unmanaged crontab entries a present job takes over
 // before its own block is written. Cron.adoption builds it.
 //
 // There are two independent matchers:
 //   - legacy (WithLegacyCommand): every entry whose parsed command equals
-//     legacy exactly, whatever its schedule, is removed; the job's block is
-//     then appended at the end of the table by mergeCrontab. This is the
-//     explicit opt-in for a DIFFERENT old command line, or the same command
-//     on another schedule.
+//     legacy exactly, whatever its schedule, is removed; mergeCrontab then
+//     appends the job's block at the end of the table if it has none yet
+//     (an existing block is rewritten where it stands, see mergeCrontab).
+//     This is the explicit opt-in for a DIFFERENT old command line, or the
+//     same command on another schedule.
 //   - identical (the default for every present job without WithCronEnv): an
 //     entry that is the job itself, i.e. the same five schedule fields
 //     (byte-equal after splitting on blanks, so "0  6" matches "0 6" but
@@ -147,60 +153,108 @@ func hasGonfBlock(lines []string, name string) bool {
 
 // mergeCrontab replaces or removes all named GONF blocks. desired empty → remove.
 // An unclosed BEGIN for name is healed by dropping only that marker line (tail kept).
+//
+// A changed block is rewritten where the first well-formed old block stood,
+// not appended at the end: cron applies NAME=value lines (PATH=, MAILTO=,
+// other blocks' WithCronEnv) to every entry below them, so moving the block
+// down would silently change the job's environment. That holds only while
+// the block's own environment lines are unchanged; if they differ, splicing
+// in place would apply the new values to every line below the block, so the
+// block is appended at the end instead (as it is when no closed block
+// existed).
 func mergeCrontab(current, name, desired string) (string, bool) {
-	begin := beginMarker(name)
-	end := endMarker(name)
-
-	lines := splitKeep(current)
-	var out []string
-	found := 0
-	healed := false
-	i := 0
-	for i < len(lines) {
-		trim := strings.TrimSpace(lines[i])
-		if trim != begin {
-			out = append(out, lines[i])
-			i++
-			continue
-		}
-		endIdx := -1
-		for j := i + 1; j < len(lines); j++ {
-			t := strings.TrimSpace(lines[j])
-			if t == begin {
-				break
-			}
-			if t == end {
-				endIdx = j
-				break
-			}
-		}
-		if endIdx < 0 {
-			// Corrupt/unclosed marker: drop BEGIN only so we never wipe the crontab.
-			found++
-			healed = true
-			i++
-			continue
-		}
-		found++
-		i = endIdx + 1
-	}
-
-	body := joinCrontabLines(out)
+	s := stripNamedBlocks(splitKeep(current), beginMarker(name), endMarker(name))
 
 	if desired == "" {
-		if found == 0 {
+		if s.found == 0 {
 			return current, false
 		}
-		return body, true
+		return joinCrontabLines(s.lines), true
 	}
 
-	if found == 1 && !healed {
-		oldBlock := extractBlock(current, name)
-		if oldBlock == desired {
-			return current, false
+	if s.found == 1 && !s.healed && extractBlock(current, name) == desired {
+		return current, false
+	}
+	desiredLines := splitKeep(desired)
+	if s.at < 0 || !slices.Equal(s.firstEnv, blockEnvLines(desiredLines)) {
+		return joinCrontabLines(s.lines) + desired, true
+	}
+	out := make([]string, 0, len(s.lines)+len(desiredLines))
+	out = append(out, s.lines[:s.at]...)
+	out = append(out, desiredLines...)
+	out = append(out, s.lines[s.at:]...)
+	return joinCrontabLines(out), true
+}
+
+// strippedCrontab is a crontab with every block of one job removed.
+type strippedCrontab struct {
+	lines    []string // remaining lines, in original order
+	at       int      // index in lines where the first closed block stood; -1 if none
+	firstEnv []string // blockEnvLines of that first closed block
+	found    int      // closed blocks plus unclosed BEGIN markers removed
+	healed   bool     // an unclosed BEGIN marker was dropped
+}
+
+// stripNamedBlocks removes every begin..end block from lines. An unclosed
+// begin (no end before EOF or before the next begin) loses only its marker
+// line, so a corrupt crontab is never wiped.
+func stripNamedBlocks(lines []string, begin, end string) strippedCrontab {
+	s := strippedCrontab{at: -1}
+	for i := 0; i < len(lines); {
+		if strings.TrimSpace(lines[i]) != begin {
+			s.lines = append(s.lines, lines[i])
+			i++
+			continue
+		}
+		s.found++
+		endIdx := findBlockEnd(lines, i+1, begin, end)
+		if endIdx < 0 {
+			s.healed = true
+			i++
+			continue
+		}
+		if s.at < 0 {
+			s.at = len(s.lines)
+			s.firstEnv = blockEnvLines(lines[i+1 : endIdx])
+		}
+		i = endIdx + 1
+	}
+	return s
+}
+
+// findBlockEnd returns the index of the first end marker at or after from,
+// or -1 if a begin marker or the end of lines comes first.
+func findBlockEnd(lines []string, from int, begin, end string) int {
+	for j := from; j < len(lines); j++ {
+		switch strings.TrimSpace(lines[j]) {
+		case begin:
+			return -1
+		case end:
+			return j
 		}
 	}
-	return body + desired, true
+	return -1
+}
+
+// blockEnvLines returns the lines of a Gonf block that are neither markers,
+// blank, nor cron entries: the WithCronEnv NAME=value lines Cron.block
+// writes. Anything else found in a hand-edited block is kept too, so an
+// unexpected line makes the comparison in mergeCrontab fail safe (append).
+func blockEnvLines(lines []string) []string {
+	var env []string
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if _, _, marker := gonfMarker(line); marker {
+			continue
+		}
+		if _, _, entry := cronEntryParts(line); entry {
+			continue
+		}
+		env = append(env, line)
+	}
+	return env
 }
 
 func extractBlock(current, name string) string {

@@ -59,6 +59,22 @@ rejects `-u` for your own account without privileges). Other users still use
 | `WithLegacyCommand` | Remove unmanaged entries with this exact command, on any schedule, before creating this job; cannot be used with `NoCron` |
 | `IsAbsent` / `NoCron` | Remove the named job |
 
+## Changing a job
+
+cron applies a `NAME=value` line (`PATH=`, `MAILTO=`, another job's
+`WithCronEnv`) to every entry below it, so a block's position is part of
+the job's environment. When a job changes, its block is rewritten where
+its first well-formed old block stood, keeping the environment it ran with
+and leaving the lines around it untouched. Duplicate blocks of the job and
+an unclosed `# BEGIN` marker are removed in the same pass.
+
+The block goes to the end of the table instead when the job has no closed
+block yet, or when its `WithCronEnv` lines change (added, removed,
+reordered, or a value changed). Rewriting such a block in place would apply
+the new values to every entry below it; at the end they reach no other
+entry. Up to v0.23.0 every changed block was moved to the end, so
+environment lines that followed the old block started applying to the job.
+
 ## Adopting existing entries
 
 A present job adopts the unmanaged entries that are already this job, so
@@ -79,13 +95,14 @@ entry once the block exists, is a duplicate run and is removed. Before
 v0.21.1 the block was always appended at the end, so an entry followed by
 any `NAME=value` line (for example another job's `WithCronEnv PATH=...`
 block) was left in place and the job ran twice. A later change to the job
-rewrites its block at the end of the table, like any changed block.
+rewrites its block where it stands, like any changed block (see
+[Changing a job](#changing-a-job)).
 
 Anything else is left alone. `WithLegacyCommand(cmd)` is the explicit
 opt-in for a different old command or the same command on another
 schedule: it matches the command only, whatever the schedule and the
 environment lines, removes those entries, and appends the block at the
-end. Passing `WithLegacyCommand` with the job's own command still
+end if the job has none yet. Passing `WithLegacyCommand` with the job's own command still
 works (and keeps `legacy_command` in the plan); an entry that is also
 identical to the job is replaced in place rather than removed;
 dropping it now relies on the default, which is stricter: the old line's
