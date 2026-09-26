@@ -1,9 +1,15 @@
 name: ci
 
+# Every push to any branch (a PR's branch included, so its checks come from
+# the push run), plus manual runs.
 on:
   push:
-    branches: [main, master]
-  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch supersedes a still-running one.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 # Each job's logic lives in .github/ci/*.sh, so it can change without
 # touching this file.
@@ -23,7 +29,7 @@ jobs:
           go-version-file: gonf/go.mod
           cache-dependency-path: gonf/go.sum
       - name: Check out the conf consumer
-        run: .github/ci/checkout-conf.sh "${{ github.head_ref || github.ref_name }}"
+        run: .github/ci/checkout-conf.sh "${{ github.ref_name }}"
       - name: Lint
         run: |
           # Mirrors Magefile.go's Lint target: gofmt formatting check, go
