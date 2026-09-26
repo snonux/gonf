@@ -590,6 +590,10 @@ func TestDefaultPrefix(t *testing.T) {
 		{reflectHome{}, "api_reflect_home_"},
 		{&reflectHome{}, "api_reflect_home_"},
 		{homeTasks{}, "api_home_"},
+		// Generic instantiations drop their type arguments, even ones
+		// naming other packages (task eb).
+		{genericNeedsRecipe[int]{}, "api_generic_needs_recipe_"},
+		{&genericNeedsRecipe[map[string]plan.Op]{}, "api_generic_needs_recipe_"},
 	}
 	for _, c := range cases {
 		if got := DefaultPrefix(c.v); got != c.want {

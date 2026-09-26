@@ -171,3 +171,52 @@ func TestNeedsNestedRunIsItsOwnScope(t *testing.T) {
 
 	requirePaths(t, dir, []string{"base", "guarded"}, "base", "base", "web")
 }
+
+// genericNeedsRecipe is a generic RegisterMethods receiver (task eb): its
+// method set, companions and task names must behave exactly like a plain
+// struct's, whatever the type arguments.
+type genericNeedsRecipe[X any] struct{}
+
+func (genericNeedsRecipe[X]) Base() {
+	File(filepath.Join(needsDir, "g_base"), options.WithContent("b"))
+}
+func (genericNeedsRecipe[X]) Web() { File(filepath.Join(needsDir, "g_web"), options.WithContent("w")) }
+
+// OptsWeb needs Base relatively, so it resolves against the call's prefix.
+func (genericNeedsRecipe[X]) OptsWeb() TaskOptions { return TaskOptions{Needs("base")} }
+
+// genericNeedsMissing is a generic receiver whose Needs names nothing.
+type genericNeedsMissing[X any] struct{}
+
+func (genericNeedsMissing[X]) Web()                 {}
+func (genericNeedsMissing[X]) OptsWeb() TaskOptions { return TaskOptions{Needs("missing")} }
+
+// TestNeedsResolvesInGenericStruct (task eb): a relative Needs in an OptsX
+// companion of a generic struct resolves against the call's prefix, both an
+// explicit WithPrefix and the derived DefaultPrefix (which strips the type
+// arguments), so the needed method task records first.
+func TestNeedsResolvesInGenericStruct(t *testing.T) {
+	dir := resetAliasTest(t)
+	needsDir = dir
+	RegisterMethods(genericNeedsRecipe[int]{}, WithPrefix("g_"))
+	if got, want := recordedFilePaths(t, "g_web"), needsPaths(dir, "g_base", "g_web"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Run(g_web) records %v, want %v", got, want)
+	}
+
+	dir = resetAliasTest(t)
+	needsDir = dir
+	RegisterMethods(&genericNeedsRecipe[map[string]plan.Op]{})
+	if got, want := recordedFilePaths(t, "api_generic_needs_recipe_web"),
+		needsPaths(dir, "g_base", "g_web"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Run(api_generic_needs_recipe_web) records %v, want %v", got, want)
+	}
+}
+
+// TestNeedsGenericStructUnknownNeedFails (task eb, negative): a relative
+// Needs of a generic struct naming no task fails the record with the name
+// as written, like on a plain struct.
+func TestNeedsGenericStructUnknownNeedFails(t *testing.T) {
+	resetAliasTest(t)
+	RegisterMethods(genericNeedsMissing[string]{}, WithPrefix("g_"))
+	wantErrContains(t, recordErr(t, "g_web"), `task "g_web" needs unknown task "missing"`)
+}
