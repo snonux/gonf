@@ -64,12 +64,12 @@ func (b netbsdBackend) flagsMatch(u unit, want string) (bool, error) {
 	return want == "", nil // unset everywhere: the daemon gets no flags
 }
 
-// setFlags replaces every NAME_flags assignment in rc.conf with one
-// single-quoted NAME_flags='FLAGS' line, at the first assignment's place,
-// or appends it when there is none. It refuses, leaving rc.conf alone, when
-// replacing an assignment's lines could drop or orphan other shell text
-// (see replaceRcAssignment). The file is replaced atomically and keeps its
-// mode.
+// setFlags sets NAME_flags='FLAGS' in rc.conf: the first assignment's word
+// is replaced in place (keeping export, other statements and comments on
+// its line), later duplicates alone on their line are dropped, or the line
+// is appended when there is none. It refuses, leaving rc.conf alone, when
+// the result would not read back as exactly FLAGS (see
+// replaceRcAssignment). The file is replaced atomically and keeps its mode.
 func (b netbsdBackend) setFlags(u unit, flags string) error {
 	name, err := flagsVar(u.name)
 	if err != nil {
@@ -79,7 +79,7 @@ func (b netbsdBackend) setFlags(u unit, flags string) error {
 	if err != nil {
 		return err
 	}
-	updated, err := replaceRcAssignment(content, name, name+"="+shellQuote(flags))
+	updated, err := replaceRcAssignment(content, name, flags)
 	if err != nil {
 		return fmt.Errorf("rewrite %s: %w", b.rcConf, err)
 	}
@@ -120,60 +120,6 @@ func lastRcAssignment(path, name string) (rcValue, bool, error) {
 	}
 	value, parsed := parseShellWord(found[len(found)-1].value)
 	return rcValue{value: value, parsed: parsed}, true, nil
-}
-
-// replaceRcAssignment rewrites content so that its only assignment to name
-// is assignment, placed where the first one was (or appended). It fails
-// closed: every other line is kept byte for byte, and it refuses (leaving
-// content to the caller unchanged) when an assignment shares its logical
-// line with other shell text, or spans several physical lines with a value
-// it cannot evaluate, since replacing its lines could then drop or orphan
-// text it does not understand.
-func replaceRcAssignment(content, name, assignment string) (string, error) {
-	found, err := findRcAssignments(content, name)
-	if err != nil {
-		return "", err
-	}
-	replaced := make(map[int]int, len(found)) // first line -> end line
-	for _, a := range found {
-		if !a.alone {
-			return "", fmt.Errorf("line %d: %s shares its line with other shell text, which a rewrite would drop: %w",
-				a.line+1, name, errRcUnmanaged)
-		}
-		if _, parsed := parseShellWord(a.value); !parsed && a.end-a.first > 1 {
-			return "", fmt.Errorf("line %d: %s spans lines %d-%d with a value WithFlags cannot evaluate: %w",
-				a.line+1, name, a.first+1, a.end, errRcUnmanaged)
-		}
-		replaced[a.first] = a.end
-	}
-	lines := rcLines(content)
-	out := make([]string, 0, len(lines)+1)
-	placed := false
-	for i := 0; i < len(lines); i++ {
-		end, ok := replaced[i]
-		if !ok {
-			out = append(out, lines[i])
-			continue
-		}
-		if !placed {
-			out = append(out, assignment)
-			placed = true
-		}
-		i = end - 1
-	}
-	if !placed {
-		out = append(out, assignment)
-	}
-	return strings.Join(out, "\n") + "\n", nil
-}
-
-// rcLines splits content into its physical lines; a final newline does not
-// start another (empty) line.
-func rcLines(content string) []string {
-	if content == "" {
-		return nil
-	}
-	return strings.Split(strings.TrimSuffix(content, "\n"), "\n")
 }
 
 // readRcConf returns rc.conf's content and mode; a missing file is empty

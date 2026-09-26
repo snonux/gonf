@@ -63,8 +63,10 @@ const netbsdRcDefaultsHeader = "if [ -r /etc/defaults/rc.conf ]; then\n\t. /etc/
 // TestNetBSDFlagsRewrite pins WithFlags over rc.conf texts it reads as
 // sh(1) does (task 7b): a value spanning lines is read across them (so an
 // equal one changes nothing) and replaced as a whole, quoting forms and
-// here-documents never make it misplace a statement boundary, and every
-// line but the assignment is kept byte for byte. Every result is valid sh.
+// here-documents never make it misplace a statement boundary, and only the
+// assignment word changes: export, other statements and comments sharing
+// its line, and every other line, are kept byte for byte. Every result is
+// valid sh.
 func TestNetBSDFlagsRewrite(t *testing.T) {
 	for _, tt := range []struct {
 		name, rcConf, flags, want string
@@ -74,7 +76,7 @@ func TestNetBSDFlagsRewrite(t *testing.T) {
 		{"single-quoted newline replaced whole",
 			"nsd_flags='-a\n-b'\nb=2\n", "-x", "nsd_flags='-x'\nb=2\n"},
 		{"unquoted continuation replaced whole",
-			"nsd_flags=-a\\\n-b # x\nb=2\n", "-x", "nsd_flags='-x'\nb=2\n"},
+			"nsd_flags=-a\\\n-b # x\nb=2\n", "-x", "nsd_flags='-x' # x\nb=2\n"},
 		{"later multi-line assignment dropped whole",
 			"nsd_flags=-4\nb=2\nnsd_flags=\"-a\n-b\"\nc=3\n", "-x", "nsd_flags='-x'\nb=2\nc=3\n"},
 		{"double-quoted continuation matches",
@@ -88,11 +90,9 @@ func TestNetBSDFlagsRewrite(t *testing.T) {
 		{"assignment inside another quoted value does not match",
 			"motd='hi\nnsd_flags=-9\n'\nnsd_flags=-4\n", "-4", "motd='hi\nnsd_flags=-9\n'\nnsd_flags=-4\n"},
 		{"apostrophe in a comment opens no quote",
-			"# don't touch\nnsd_flags=-4 # it's set\nb=2\n", "-x", "# don't touch\nnsd_flags='-x'\nb=2\n"},
+			"# don't touch\nnsd_flags=-4 # it's set\nb=2\n", "-x", "# don't touch\nnsd_flags='-x' # it's set\nb=2\n"},
 		{"hash inside a word is no comment",
 			"motd=a#'\nnsd_flags=-4\n'\nnsd_flags=-6\n", "-x", "motd=a#'\nnsd_flags=-4\n'\nnsd_flags='-x'\n"},
-		{"continuation at end of file",
-			"b=2\nnsd_flags=-4\\\n", "-x", "b=2\nnsd_flags='-x'\n"},
 		{"dollar-single-quoted escape",
 			"nsd_flags=$'-a\\'b'\nnsd=YES\nsshd=YES\n# don't edit below\nx=1\n", "-x",
 			"nsd_flags='-x'\nnsd=YES\nsshd=YES\n# don't edit below\nx=1\n"},
@@ -101,8 +101,9 @@ func TestNetBSDFlagsRewrite(t *testing.T) {
 		{"single-line command substitution with nested quotes",
 			"motd=\"$(echo \")\" 'x')\"\nnsd_flags=\"$(echo \"a b\")\"\nc=1\n", "-x",
 			"motd=\"$(echo \")\" 'x')\"\nnsd_flags='-x'\nc=1\n"},
-		{"backquotes and arithmetic",
-			"a=`echo \"'\"`\nb=$((1+(2)))\nnsd_flags=-4\n", "-x", "a=`echo \"'\"`\nb=$((1+(2)))\nnsd_flags='-x'\n"},
+		{"backquotes, arithmetic and case as an argument",
+			"a=`echo \"'\"`\nb=$((1+(2)))\nc=$((1<<2))\nd=$(echo case)\nnsd_flags=-4\n", "-x",
+			"a=`echo \"'\"`\nb=$((1+(2)))\nc=$((1<<2))\nd=$(echo case)\nnsd_flags='-x'\n"},
 		{"here-document body skipped",
 			"cat >/dev/null <<EOF\nit's\nnsd_flags=-9\nEOF\nnsd_flags=-4\n", "-x",
 			"cat >/dev/null <<EOF\nit's\nnsd_flags=-9\nEOF\nnsd_flags='-x'\n"},
@@ -117,6 +118,20 @@ func TestNetBSDFlagsRewrite(t *testing.T) {
 		{"exported, matching", "export nsd_flags=-6\n", "-6", "export nsd_flags=-6\n"},
 		{"readonly, matching", "readonly a=1 nsd_flags=-6\n", "-6", "readonly a=1 nsd_flags=-6\n"},
 		{"other statement sharing the line, matching", "nsd_flags=-4; nsd=YES\n", "-4", "nsd_flags=-4; nsd=YES\n"},
+		{"defaults style: enable and flags on one line",
+			"nsd=YES nsd_flags=\"-4\" # see nsd(8)\nsshd=YES\n", "-x", "nsd=YES nsd_flags='-x' # see nsd(8)\nsshd=YES\n"},
+		{"after a semicolon", "a=1; nsd_flags=-6 # c\n", "-x", "a=1; nsd_flags='-x' # c\n"},
+		{"before a semicolon", "nsd_flags=-4; nsd=YES\n", "-x", "nsd_flags='-x'; nsd=YES\n"},
+		{"before a continued assignment", "a=1\nnsd_flags=-4 \\\nnsd=YES\n", "-x", "a=1\nnsd_flags='-x' \\\nnsd=YES\n"},
+		{"after a continued assignment", "foo=bar \\\nnsd_flags=-6\n", "-x", "foo=bar \\\nnsd_flags='-x'\n"},
+		{"exported", "export nsd_flags=-6 # e\n", "-x", "export nsd_flags='-x' # e\n"},
+		{"with a redirection", "nsd_flags=-6 >/dev/null\n", "-x", "nsd_flags='-x' >/dev/null\n"},
+		{"later duplicates: alone dropped, shared set in place",
+			"nsd_flags=-4 # first\na=1; nsd_flags=-6\nnsd_flags=-8 # dup\nb=2\n", "-x",
+			"nsd_flags='-x' # first\na=1; nsd_flags='-x'\nb=2\n"},
+		{"appended after a file without a final newline", "a=1", "-x", "a=1\nnsd_flags='-x'\n"},
+		{"sourcing before the assignment", ". /etc/rc.conf.local\nnsd_flags=-4\n", "-x", ". /etc/rc.conf.local\nnsd_flags='-x'\n"},
+		{"unset of another variable after it", "nsd_flags=-4\nunset nsd_flags_x\n", "-x", "nsd_flags='-x'\nunset nsd_flags_x\n"},
 		{"variable reference is no assignment",
 			"x=\"$nsd_flags ${nsd_flags}\"\nnsd_flags_extra=1\nnsd_flags=-4\n", "-x",
 			"x=\"$nsd_flags ${nsd_flags}\"\nnsd_flags_extra=1\nnsd_flags='-x'\n"},
@@ -155,14 +170,6 @@ func TestNetBSDFlagsFailsClosed(t *testing.T) {
 			errRcUnmanaged, rcConfPath, "line 1"},
 		{"multi-line unevaluable value", "a=1\nnsd_flags=\"$X\n-b\"\n", "", "",
 			errRcUnmanaged, rcConfPath, "line 2"},
-		{"semicolon statement after it", "nsd_flags=-4; nsd=YES\n", "", "",
-			errRcUnmanaged, rcConfPath, "line 1"},
-		{"continued statement after it", "a=1\nnsd_flags=-4 \\\nnsd=YES\n", "", "",
-			errRcUnmanaged, rcConfPath, "line 2"},
-		{"after another assignment", "foo=bar \\\nnsd_flags=-6\n", "", "",
-			errRcUnmanaged, rcConfPath, "line 2"},
-		{"exported", "export nsd_flags=-6\n", "", "", errRcUnmanaged, rcConfPath, "line 1"},
-		{"redirection on its line", "nsd_flags=-6 >/dev/null\n", "", "", errRcUnmanaged, rcConfPath, "line 1"},
 		{"prefix of a command", "nsd_flags=-6 /bin/true\n", "", "", errRcUnmanaged, rcConfPath, "line 1"},
 		{"inside if on one line", "if true; then nsd_flags=-6; fi\n", "", "", errRcUnmanaged, rcConfPath, "line 1"},
 		{"inside if block", "if true; then\n  nsd_flags=-6\nfi\n", "", "", errRcUnmanaged, rcConfPath, "line 2"},
@@ -174,6 +181,22 @@ func TestNetBSDFlagsFailsClosed(t *testing.T) {
 		{"or list", "nsd_flags=-6 || true\n", "", "", errRcUnmanaged, rcConfPath, "line 1"},
 		{"background job", "a=1\nnsd_flags=-6 &\n", "", "", errRcUnmanaged, rcConfPath, "line 2"},
 		{"pipeline", "true | nsd_flags=-6\n", "", "", errRcUnmanaged, rcConfPath, "line 1"},
+		{"after a function definition", "f() { :; }\nnsd_flags=-4\n", "", "", errRcUnmanaged, rcConfPath, "line 2"},
+		{"after a case with a fi) pattern", "case x in fi) ;; esac\nnsd_flags=-4\n", "", "", errRcUnmanaged, rcConfPath, "line 2"},
+		{"after a subshell", "(cd /)\nnsd_flags=-4\n", "", "", errRcUnmanaged, rcConfPath, "line 2"},
+		{"subshell after then", "if true; then (\n:\n) fi\nnsd_flags=-4\n", "", "", errRcUnmanaged, rcConfPath, "line 4"},
+		{"after a !-command", "! false\nnsd_flags=-4\n", "", "", errRcUnmanaged, rcConfPath, "line 2"},
+		{"sourcing after it", "nsd_flags=-4\n. /etc/rc.conf.local\n", "", "", errRcUnmanaged, rcConfPath, "line 2"},
+		{"source after it", "nsd_flags=-4\nsource /x\n", "", "", errRcUnmanaged, rcConfPath, "line 2"},
+		{"eval after it", "nsd_flags=-4\neval x=1\n", "", "", errRcUnmanaged, rcConfPath, "line 2"},
+		{"unset after it", "nsd_flags=-4\nunset nsd_flags\n", "", "", errRcUnmanaged, rcConfPath, "line 2"},
+		{"read after it", "nsd_flags=-4\nread nsd_flags </dev/null\n", "", "", errRcUnmanaged, rcConfPath, "line 2"},
+		{"for after it", "nsd_flags=-4\nfor nsd_flags in a; do :; done\n", "", "", errRcUnmanaged, rcConfPath, "line 2"},
+		{"sourcing after it in the override", "nsd_flags=-4\n", "", "nsd_flags=-4\n. /x\n", errRcUnmanaged, overridePath, "line 2"},
+		{"continuation at end of file", "b=2\nnsd_flags=-4\\\n", "", "", errRcSyntax, rcConfPath, "line 2"},
+		{"append after a continued command", "echo hi \\\n", "", "", errRcSyntax, rcConfPath, "line 1"},
+		{"append after a backslash at end of file", "a=1\\", "", "", errRcSyntax, rcConfPath, "line 1"},
+		{"CRLF line endings", "a=1\nnsd_flags=-4\r\n", "", "", errRcSyntax, rcConfPath, "line 2"},
 		{"assigning expansion", "x=${nsd_flags:=-6}\n", "", "", errRcUnmanaged, rcConfPath, "line 1"},
 		{"unterminated double quote", "a=1\nb=2\nnsd_flags=\"-a \\\n-b\n", "", "",
 			errRcSyntax, rcConfPath, "line 3"},
@@ -231,7 +254,8 @@ func TestNetBSDFlagsOverrideAfterOtherStatement(t *testing.T) {
 func TestNetBSDSetFlagsRefusesOnItsOwn(t *testing.T) {
 	for content, wantErr := range map[string]error{
 		"nsd_flags=\"-a \\\n-b\n":          errRcSyntax,
-		"nsd_flags=-4; nsd=YES\n":          errRcUnmanaged,
+		"if true; then nsd_flags=-4; fi\n": errRcUnmanaged,
+		"echo \\\n":                        errRcSyntax,
 		"nsd_flags=\"$(echo \"a\nb\")\"\n": errRcUnmanaged,
 	} {
 		b := netbsdFlagsBackend(t, content, "", "")
@@ -290,48 +314,56 @@ func TestLexRcWords(t *testing.T) {
 	}
 }
 
-// FuzzReplaceRcAssignment checks that no input panics the lexer or the
-// analyzer, that every assignment found lies within the file's lines, and
-// that a rewrite keeps every line outside the replaced ones.
+// FuzzReplaceRcAssignment surrounds one known assignment line with
+// arbitrary text. Whenever the file reads cleanly it checks that found
+// assignments lie inside the file; that a rewrite reads back with every
+// assignment evaluating to the wanted flags; that a second rewrite is a
+// no-op; and, when the known line is the only assignment, that the result
+// is exactly the input with that one word replaced (an oracle built
+// independently of replaceRcAssignment).
 func FuzzReplaceRcAssignment(f *testing.F) {
-	for _, seed := range []string{
-		"nsd_flags=\"-a \\\n-b\"\nb=2\n", "nsd_flags=$'-a\\'b'\n", "x=\"${X:-\"it's\"}\"\n",
-		"cat <<-E\n\tx\n\tE\nnsd_flags=1", "a=$(echo \"$(b)\" `c`)\n", "if x; then\n(\n)\nfi\n", "\\", "$", "'",
+	for _, seed := range [][2]string{
+		{"a=1", "b=2"}, {"echo hi \\", ""}, {"", "\\"}, {"x=\"$(echo \"", "\")\""},
+		{"nsd_flags=\"-a \\", "-b\""}, {"f() { :; }", ""}, {"(", ")"}, {"case x in fi) ;; esac", ""},
+		{"if true; then", "fi"}, {"cat <<-E\n\tx\n\tE", "nsd_flags=1"}, {"a=$(echo \"$(b)\" `c`)", ""},
+		{"x=$'\\''", ""}, {"nsd=YES", "nsd_flags=-6; a=1"}, {"# it's", ". /x"}, {"a=1 \\", ""},
 	} {
-		f.Add(seed)
+		f.Add(seed[0], seed[1])
 	}
-	f.Fuzz(func(t *testing.T, content string) {
-		found, err := findRcAssignments(content, "nsd_flags")
+	const name, flags = "nsd_flags", "-x 'y'"
+	f.Fuzz(func(t *testing.T, before, after string) {
+		content := before + "\nnsd_flags=-4\n" + after
+		found, err := findRcAssignments(content, name)
 		if err != nil {
 			return
 		}
-		lines := rcLines(content)
-		inRange := make([]bool, len(lines))
+		lineCount := strings.Count(content, "\n") + 1
 		for _, a := range found {
-			if a.first < 0 || a.first > a.line || a.line >= a.end || a.end > len(lines) {
-				t.Fatalf("assignment %+v outside the %d lines of %q", a, len(lines), content)
-			}
-			for i := a.first; i < a.end; i++ {
-				inRange[i] = true
+			if a.first < 0 || a.first > a.line || a.line >= a.lastEnd || a.lastEnd > lineCount ||
+				a.start < 0 || a.start >= a.end || a.end > len(content) {
+				t.Fatalf("assignment %+v outside %q", a, content)
 			}
 		}
-		updated, err := replaceRcAssignment(content, "nsd_flags", "nsd_flags='-x'")
+		updated, err := replaceRcAssignment(content, name, flags)
 		if err != nil {
 			return
 		}
-		out := rcLines(updated)
-		j := 0
-		for i, line := range lines {
-			if inRange[i] {
-				continue
+		again, err := findRcAssignments(updated, name)
+		if err != nil || len(again) == 0 {
+			t.Fatalf("rewrite of %q does not read back: %q, %v", content, updated, err)
+		}
+		for _, a := range again {
+			if got, ok := parseShellWord(a.value); !ok || got != flags {
+				t.Fatalf("rewrite of %q reads back %s=%s", content, name, a.value)
 			}
-			for j < len(out) && out[j] != line {
-				j++
+		}
+		if second, err := replaceRcAssignment(updated, name, flags); err != nil || second != updated {
+			t.Fatalf("second rewrite of %q is no no-op: %q, %v", updated, second, err)
+		}
+		if len(found) == 1 && found[0].start == len(before)+1 {
+			if want := before + "\nnsd_flags=" + shellQuote(flags) + "\n" + after; updated != want || len(again) != 1 {
+				t.Fatalf("rewrite of %q = %q, want %q", content, updated, want)
 			}
-			if j == len(out) {
-				t.Fatalf("line %d %q of %q lost in %q", i+1, line, content, updated)
-			}
-			j++
 		}
 	})
 }

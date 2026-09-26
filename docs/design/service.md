@@ -80,20 +80,23 @@ Service("nsd", WithFlags("-c /var/nsd/etc/nsd.conf"))
   `${...}` and backquotes, backslash-newlines, comments, here-documents),
   and fails closed: anything it does not fully understand is an error
   naming the file and line, and rc.conf is left untouched. It finds every
-  assignment, also after `;`, after other assignments on a continued line,
-  and behind `export`/`readonly`; one it cannot tell takes effect (inside
-  `if`/`while`/`case`/`{...}`/a subshell or function, in an `&&`/`||`
-  list, a pipeline or a background job, in front of a command, via `eval`
-  or `${NAME_flags:=...}`) is refused. A differing
-  value is replaced with one `NAME_flags='FLAGS'` line only when the
-  assignment is alone on its logical line; its lines (all of them, for a
-  value spanning several) are replaced and every other line is kept byte
-  for byte. It refuses to rewrite an assignment sharing its logical line
-  with other shell text (`NAME_flags=-4; NAME=YES`), or spanning several
-  lines with a value it cannot evaluate (a substitution). A single-line
-  value it cannot evaluate (`NAME_flags="$X"`) never matches and is
-  rewritten. A `case` or a here-document inside `$(...)` is not supported
-  and refused.
+  assignment: after `;`, after other assignments (the defaults' one-line
+  `NAME=YES NAME_flags="..."` style), and behind `export`/`readonly`. It
+  refuses one whose effect it cannot tell: inside `if`/`while`/`for`/`{...}`,
+  anywhere after the file's first function, `case`, subshell or `!`
+  command, in an `&&`/`||` list, a pipeline or a background job, in front
+  of a command, via `eval` or `${NAME_flags:=...}`, or followed by a `.`,
+  `source` or `eval` command, or an `unset`/`read`/`getopts`/`for` naming
+  the variable (sourcing before it, like rc.conf's own
+  `. /etc/defaults/rc.conf` header, is fine).
+- A rewrite replaces only the first assignment word with
+  `NAME_flags='FLAGS'`, keeping `export`, other statements and comments on
+  its line; a later duplicate alone on its line is dropped, any other is
+  set the same in place; with none, the line is appended. It refuses an
+  assignment spanning several lines with a value it cannot evaluate, a
+  file ending inside a line continuation, CRLF line endings, a `case` or a
+  here-document inside `$(...)`, and any result that does not read back
+  with every assignment equal to FLAGS.
 - `WithFlags` on `NoService`, or with a line break, is a declaration error.
 - A plan with `WithFlags` declares schema 25.
 

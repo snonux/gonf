@@ -63,6 +63,9 @@ type rcLexer struct {
 // token.
 func lexRc(src string) ([]rcToken, error) {
 	l := &rcLexer{src: src}
+	if i := strings.Index(src, "\r\n"); i >= 0 {
+		return nil, l.fail(i, "CRLF line endings are not supported")
+	}
 	for l.pos < len(l.src) {
 		if err := l.next(); err != nil {
 			return nil, err
@@ -88,7 +91,7 @@ func (l *rcLexer) next() error {
 	case isRcBlank(c):
 		l.pos++
 	case strings.HasPrefix(l.src[l.pos:], "\\\n"):
-		l.pos += 2
+		return l.continuation()
 	case c == '#':
 		l.skipComment()
 	case c == '\n':
@@ -191,7 +194,7 @@ func (l *rcLexer) word() error {
 func (l *rcLexer) wordUnit() error {
 	switch l.src[l.pos] {
 	case '\\':
-		l.pos = min(l.pos+2, len(l.src))
+		return l.continuation()
 	case '\'':
 		return l.singleQuoted()
 	case '"':
@@ -288,10 +291,21 @@ func (l *rcLexer) parameterExpansion(inDouble bool) error {
 // a here-document inside is refused: their unbalanced ')' and bodies are
 // not modelled.
 func (l *rcLexer) commandSubstitution() error {
-	depth, wordStart := 1, true
+	arithmetic := strings.HasPrefix(l.src[l.pos:], "$((")
+	depth, wordStart, commandPosition := 1, true, true
 	return l.until(l.pos+2, "unterminated $(...)", func(c byte) (bool, error) {
 		atWord := wordStart
 		wordStart = isRcBlank(c) || strings.IndexByte("\n;&|()", c) >= 0
+		if atWord && !wordStart && !arithmetic {
+			word := rcBareWord(l.src[l.pos:])
+			if commandPosition && word == "case" {
+				return false, l.fail(l.pos, "case inside $(...) is not supported")
+			}
+			commandPosition = commandPosition && rcCommandPrefixWords[word]
+		}
+		if strings.IndexByte("\n;&|(", c) >= 0 {
+			commandPosition = true
+		}
 		switch c {
 		case '(':
 			depth++
@@ -307,20 +321,47 @@ func (l *rcLexer) commandSubstitution() error {
 		case '$':
 			return false, l.dollar(false)
 		case '#':
-			if atWord {
+			if atWord && !arithmetic {
 				l.skipComment() // stops at the newline, which is scanned next
 			}
 		case '<':
-			if strings.HasPrefix(l.src[l.pos:], "<<") {
+			if !arithmetic && strings.HasPrefix(l.src[l.pos:], "<<") {
 				return false, l.fail(l.pos, "here-document inside $(...) is not supported")
-			}
-		case 'c':
-			if atWord && isRcKeywordAt(l.src[l.pos:], "case") {
-				return false, l.fail(l.pos, "case inside $(...) is not supported")
 			}
 		}
 		return false, nil
 	})
+}
+
+// rcCommandPrefixWords are the reserved words after which the next word is
+// still in command position.
+var rcCommandPrefixWords = map[string]bool{
+	"if": true, "then": true, "else": true, "elif": true, "do": true,
+	"while": true, "until": true, "{": true, "!": true,
+}
+
+// rcBareWord returns the unquoted word s starts with, up to a blank, a
+// newline or an operator character.
+func rcBareWord(s string) string {
+	end := strings.IndexFunc(s, func(r rune) bool {
+		return r < 0x80 && (isRcBlank(byte(r)) || r == '\n' || isRcOperatorChar(byte(r)))
+	})
+	if end < 0 {
+		return s
+	}
+	return s[:end]
+}
+
+// continuation consumes a backslash and the character it escapes. A
+// backslash that ends the file, or a backslash-newline that does, is an
+// error: the next thing appended to the file would be glued onto the
+// statement it continues.
+func (l *rcLexer) continuation() error {
+	if l.pos+1 == len(l.src) || (l.src[l.pos+1] == '\n' && l.pos+2 == len(l.src)) {
+		return l.fail(l.pos, "the file ends inside a line continuation")
+	}
+	l.pos += 2
+	return nil
 }
 
 // until scans from from until step reports the closing character. A
@@ -353,16 +394,6 @@ func (l *rcLexer) until(from int, what string, step func(c byte) (bool, error)) 
 	return l.fail(start, what)
 }
 
-// isRcKeywordAt reports whether s starts with the reserved word kw as a
-// whole word.
-func isRcKeywordAt(s, kw string) bool {
-	if !strings.HasPrefix(s, kw) {
-		return false
-	}
-	rest := s[len(kw):]
-	return rest == "" || isRcBlank(rest[0]) || strings.IndexByte("\n;&|()", rest[0]) >= 0
-}
-
 // rcLineIndex maps byte offsets of a source to 0-based physical lines.
 type rcLineIndex []int
 
@@ -379,4 +410,13 @@ func newRcLineIndex(src string) rcLineIndex {
 // line returns the 0-based physical line holding byte offset off.
 func (x rcLineIndex) line(off int) int {
 	return sort.Search(len(x), func(i int) bool { return x[i] > off }) - 1
+}
+
+// start returns the byte offset where 0-based line k of src starts, or
+// len(src) for a line past its end.
+func (x rcLineIndex) start(k int, src string) int {
+	if k < len(x) {
+		return x[k]
+	}
+	return len(src)
 }
