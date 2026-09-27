@@ -191,7 +191,9 @@ func WithGroupWhen(opts ...TaskOption) RegisterOption {
 // wrong signature, a nil option (a nil RegisterOption or TaskOption among
 // opts, or inside WithGroupWhen), a nil TaskOption returned by a companion
 // or StructOption marker, a nil marker (pointer or interface), a companion
-// or task method promoted through a nil embedded pointer, an unknown
+// promoted through a nil embedded pointer or interface (for a task method
+// or WhenX(Facts) predicate, which run later, only when v is passed by
+// value: a struct passed by pointer may set the embed later), an unknown
 // OnCluster cluster — is reported as a declaration error (internal/declerr,
 // which RecordPlan, Run, Apply and the CLI refuse to run with). A bad
 // receiver, option, OnCluster, marker or struct-level companion registers
@@ -214,7 +216,10 @@ func RegisterMethods(v any, opts ...RegisterOption) {
 	if !cfg.prefixSet {
 		cfg.prefix = DefaultPrefix(v)
 	}
-	registerMethodTasks(rv, rt, cfg)
+	// A struct passed by value is registered as a private copy that can
+	// never change; one passed by pointer may still be initialised later.
+	byValue := reflect.ValueOf(v).Kind() == reflect.Struct
+	registerMethodTasks(rv, rt, cfg, byValue)
 }
 
 // RegisterOnCluster registers several structs on one cluster: it is
@@ -377,8 +382,9 @@ func registerReceiver(v any) (reflect.Value, reflect.Type, error) {
 // registerMethodTasks queues one Task per exported func() method of rv. A
 // companion misuse is reported as a declaration error naming the struct
 // type ("RegisterMethods(pkg.Type): ..."): a struct-level one registers
-// nothing, a per-method one skips that method.
-func registerMethodTasks(rv reflect.Value, rt reflect.Type, cfg registerConfig) {
+// nothing, a per-method one skips that method. byValue is true when v was
+// passed by value (see checkDeferred).
+func registerMethodTasks(rv reflect.Value, rt reflect.Type, cfg registerConfig, byValue bool) {
 	// rt is always a pointer type (registerReceiver); name its struct.
 	misuse := func(err error) {
 		declerr.Report(fmt.Errorf("RegisterMethods(%s): %w", rt.Elem(), err))
@@ -422,12 +428,12 @@ func registerMethodTasks(rv reflect.Value, rt reflect.Type, cfg registerConfig) 
 		}
 
 		// A task method promoted through a nil embedded field would panic
-		// when its task runs; refuse it now, like a nil companion.
-		if _, err := checkPromoted(rv, name); err != nil {
+		// when its task runs (checkDeferred).
+		if err := checkDeferred(rv, name, byValue); err != nil {
 			misuse(err)
 			continue
 		}
-		taskOpts, err := methodTaskOptions(rv, name, cfg, structOpts)
+		taskOpts, err := methodTaskOptions(rv, name, cfg, structOpts, byValue)
 		if err != nil {
 			misuse(err)
 			continue
@@ -448,7 +454,7 @@ func registerMethodTasks(rv reflect.Value, rt reflect.Type, cfg registerConfig) 
 // the call's prefix for resolving relative Needs names, then its OptsX
 // companion (or the struct-level default) and its WhenX guard. A companion
 // with the wrong signature is returned as an error.
-func methodTaskOptions(rv reflect.Value, name string, cfg registerConfig, structOpts TaskOptions) (TaskOptions, error) {
+func methodTaskOptions(rv reflect.Value, name string, cfg registerConfig, structOpts TaskOptions, byValue bool) (TaskOptions, error) {
 	var taskOpts TaskOptions
 	taskOpts = append(taskOpts, cfg.groupWhen...)
 	if cfg.cluster != "" {
@@ -462,7 +468,7 @@ func methodTaskOptions(rv reflect.Value, name string, cfg registerConfig, struct
 		return nil, err
 	}
 	taskOpts = append(taskOpts, methodOpts...)
-	whenOpt, err := resolveWhen(rv, name)
+	whenOpt, err := resolveWhen(rv, name, byValue)
 	if err != nil {
 		return nil, err
 	}
@@ -525,7 +531,7 @@ func resolveOpts(rv reflect.Value, name string, structOpts TaskOptions) (TaskOpt
 //
 // Any other signature is returned as an error: a silently ignored companion
 // would drop the guard and run the task unconditionally on every host.
-func resolveWhen(rv reflect.Value, name string) (TaskOption, error) {
+func resolveWhen(rv reflect.Value, name string, byValue bool) (TaskOption, error) {
 	w := rv.MethodByName("When" + name)
 	if !w.IsValid() {
 		return nil, nil
@@ -548,14 +554,29 @@ func resolveWhen(rv reflect.Value, name string) (TaskOption, error) {
 		wt.NumOut() != 1 || wt.Out(0).Kind() != reflect.Bool {
 		return nil, fmt.Errorf("When%s must be func() TaskOption or func(Facts) bool", name)
 	}
-	// The predicate runs at activation; refuse a nil embed on its chain now.
-	if _, err := checkPromoted(rv, "When"+name); err != nil {
+	// The predicate runs at activation, not now (checkDeferred).
+	if err := checkDeferred(rv, "When"+name, byValue); err != nil {
 		return nil, err
 	}
 	wMethod := w
 	return When(func(f Facts) bool {
 		return wMethod.Call([]reflect.Value{reflect.ValueOf(f)})[0].Bool()
 	}), nil
+}
+
+// checkDeferred checks a method of rv that runs later, not during
+// RegisterMethods (a task method, a WhenX(Facts) predicate), for a nil
+// embedded pointer or interface on its promotion chain (checkPromoted).
+// Only a struct registered by value is checked: that copy can never
+// change, so the call would certainly panic. A struct registered by pointer
+// reads its fields when the method runs, so an embed the recipe sets after
+// RegisterMethods is fine and is not refused.
+func checkDeferred(rv reflect.Value, name string, byValue bool) error {
+	if !byValue {
+		return nil
+	}
+	_, err := checkPromoted(rv, name)
+	return err
 }
 
 func isCompanionName(name string) bool {

@@ -174,9 +174,10 @@ func joinFieldPath(path, field string) string {
 // callNilReceiver runs call. nilRecv is the path of the nil pointer the
 // called method runs on (nilEmbed with refuse false), or "" for a non-nil
 // receiver, where call runs as is. A nil receiver is legal Go, but a
-// method that does not handle one dereferences it: that nil pointer
-// dereference is reported through onNil instead of crashing the recipe.
-// Any other panic is not about the nil receiver and propagates unchanged.
+// method that does not handle one dereferences it. Fail-safe, any nil
+// pointer dereference of the call is reported through onNil instead of
+// crashing the recipe (most likely, though not certainly, the nil
+// receiver's); every other panic propagates unchanged.
 func callNilReceiver[T any](nilRecv string, onNil func(r any) error, call func() (T, error)) (res T, err error) {
 	if nilRecv == "" {
 		return call()
@@ -212,7 +213,7 @@ func callPromoted[T any](rv reflect.Value, name string, fn func() (T, error)) (T
 		return zero, err
 	}
 	return callNilReceiver(nilRecv, func(r any) error {
-		return fmt.Errorf("%s is called on the nil embedded field %s and does not handle a nil receiver: %v", name, nilRecv, r)
+		return fmt.Errorf("%s is called on the nil embedded field %s and panicked with a nil pointer dereference (probably its nil receiver): %v", name, nilRecv, r)
 	}, fn)
 }
 

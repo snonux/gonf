@@ -76,9 +76,10 @@ Fixes
   deeper in the embedded chain (`struct{ Base }` with
   `Base struct{ *RequiresRoot }`). A nil pointer to a marker with a
   pointer-receiver `StructTaskOptions` is still called, as before, since
-  that is legal Go and the method may handle a nil receiver; only if it
-  dereferences that nil receiver is it reported as a nil marker (any
-  other panic propagates unchanged). Among `RegisterMethods` options
+  that is legal Go and the method may handle a nil receiver. If that call
+  panics with a nil pointer dereference (probably of its nil receiver),
+  the panic is reported as a nil marker, fail-safe; every other panic
+  propagates unchanged. Among `RegisterMethods` options
   (directly or inside `WithGroupWhen`) a nil TaskOption registers nothing
   of the struct, and in `RegisterOnCluster` nothing of any struct of the
   call.
@@ -101,13 +102,17 @@ Fixes
   `Opts()`, so a later-wins option flips: a marker's `Privileged()` with
   an `Opts()` returning `Unprivileged()` was privileged and is now
   unprivileged.
-- A companion (`Opts`, `OptsX`, `WhenX`, `DescX`) or task method promoted
-  through a nil embedded pointer (`struct{ *Base }` with `Base` nil and
+- A companion called during `RegisterMethods` (`Opts`, `OptsX`,
+  `WhenX()`, `DescX`) promoted through a nil embedded pointer or
+  interface (`struct{ *Base }` with `Base` nil and
   `func (Base) Opts() TaskOptions`) is a declaration error instead of a
-  panic at registration (or, for a task method or a `WhenX(Facts)`
-  predicate, when it runs): `Opts` refuses the struct, the others skip
-  that task. A nil pointer to a pointer-receiver companion is still
-  called, like a nil-safe marker.
+  panic: `Opts` refuses the struct, the others skip that task. A task
+  method or `WhenX(Facts)` predicate, which run later, is refused the
+  same way only when the struct is registered by value (a copy whose nil
+  embed can never be set, so its task would panic when it runs); a struct
+  registered by pointer reads the embed when the method runs, so it may
+  still be set after `RegisterMethods`. A nil pointer to a
+  pointer-receiver companion is still called, like a nil-safe marker.
 - `RegisterMethods` no longer slows down exponentially on recursive
   embedded types (types embedding each other by pointer): the promotion
   chain of a marker or companion is found with a breadth-first search

@@ -155,10 +155,11 @@ func markerStructOptions(rv reflect.Value, rt reflect.Type) (TaskOptions, bool, 
 }
 
 // nilMarkerPanic reports a nil marker at path whose pointer-receiver
-// StructTaskOptions dereferenced its nil receiver (callNilReceiver).
+// StructTaskOptions panicked with a nil pointer dereference
+// (callNilReceiver).
 func nilMarkerPanic(path string) func(r any) error {
 	return func(r any) error {
-		return fmt.Errorf("marker %s is nil and its StructTaskOptions does not handle a nil receiver: %v", path, r)
+		return fmt.Errorf("marker %s is nil and its StructTaskOptions panicked with a nil pointer dereference (probably its nil receiver): %v", path, r)
 	}
 }
 

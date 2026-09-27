@@ -244,9 +244,48 @@ func TestRegisterMethodsNilSafePromotedCompanion(t *testing.T) {
 	}
 
 	var line int
-	requireDeclErrAt(t, "RegisterMethods(api.nilDerefCompanion): Opts is called on the nil embedded field DerefCompBase and does not handle a nil receiver", &line, func() {
+	requireDeclErrAt(t, "RegisterMethods(api.nilDerefCompanion): Opts is called on the nil embedded field DerefCompBase and panicked with a nil pointer dereference (probably its nil receiver)", &line, func() {
 		line = thisLine() + 1
 		RegisterMethods(nilDerefCompanion{}, WithPrefix("nd_"))
 	})
 	requireRefusedAfterClear(t, "nd_ping")
+}
+
+// LateBase carries a task method and its WhenX(Facts) predicate, both of
+// which run after RegisterMethods; lateStruct embeds it by pointer.
+type LateBase struct{ ran *bool }
+
+func (b LateBase) Pong()             { *b.ran = true }
+func (LateBase) WhenPong(Facts) bool { return true }
+
+type lateStruct struct{ *LateBase }
+
+// TestRegisterMethodsLateInitialisedEmbed: a struct registered by pointer
+// reads its embedded fields when a task method or WhenX(Facts) predicate
+// runs, so an embed set after RegisterMethods is fine; the same struct
+// registered by value is a copy whose nil embed can never be set, so it is
+// refused.
+func TestRegisterMethodsLateInitialisedEmbed(t *testing.T) {
+	resetForHostsState(t)
+	var l lateStruct
+	RegisterMethods(&l, WithPrefix("lt_"))
+	if err := declerr.First(); err != nil {
+		t.Fatal(err)
+	}
+	ran := false
+	l.LateBase = &LateBase{ran: &ran}
+	Activate(DetectFacts())
+	if _, err := RecordPlan("hb-late", "", "lt_pong"); err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+	if !ran {
+		t.Fatal("lt_pong's body did not run")
+	}
+
+	var line int
+	requireDeclErrAt(t, "RegisterMethods(api.lateStruct): Pong is promoted through the nil embedded field LateBase", &line, func() {
+		line = thisLine() + 1
+		RegisterMethods(lateStruct{}, WithPrefix("lv_"))
+	})
+	requireRefusedAfterClear(t, "lv_pong")
 }
