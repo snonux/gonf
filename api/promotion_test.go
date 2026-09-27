@@ -384,3 +384,45 @@ func TestRegisterMethodsByValueInterfaceEmbed(t *testing.T) {
 		}
 	})
 }
+
+// SafePong declares the task method and its WhenX(Facts) predicate on a
+// pointer receiver and handles a nil one; safePonger exposes both, so they
+// are promoted through the embedded interface.
+type SafePong struct{}
+
+var safePongRan, safePongGuarded bool
+
+func (p *SafePong) Pong() { safePongRan = true }
+
+func (p *SafePong) WhenPong(Facts) bool {
+	safePongGuarded = true
+	return true
+}
+
+type safePonger interface {
+	Pong()
+	WhenPong(Facts) bool
+}
+
+type ifaceSafePonger struct{ safePonger }
+
+// TestRegisterMethodsByValueInterfaceNilSafe: a typed nil pointer held in
+// an embedded interface of a by-value copy is still called when its type
+// declares the task method and WhenX(Facts) predicate on a pointer
+// receiver — the nil-safe exception, as for markers and companions.
+func TestRegisterMethodsByValueInterfaceNilSafe(t *testing.T) {
+	resetForHostsState(t)
+	safePongRan, safePongGuarded = false, false
+	t.Cleanup(func() { safePongRan, safePongGuarded = false, false })
+	RegisterMethods(ifaceSafePonger{safePonger: (*SafePong)(nil)}, WithPrefix("e1_"))
+	if err := declerr.First(); err != nil {
+		t.Fatal(err)
+	}
+	Activate(DetectFacts())
+	if _, err := RecordPlan("hb-nil-safe", "", "e1_pong"); err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+	if !safePongGuarded || !safePongRan {
+		t.Fatalf("WhenPong ran=%v, Pong ran=%v; want both called on the nil receiver", safePongGuarded, safePongRan)
+	}
+}

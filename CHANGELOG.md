@@ -112,10 +112,12 @@ Fixes
   is held in that copy itself (directly, in a by-value embedded struct,
   or in an embedded interface, including a typed nil pointer or a struct
   value it holds): it can never be set, so the task would panic when it
-  runs. Only a non-nil pointer, embedded directly or held in an
-  interface, makes what is behind it shared with the recipe, and a struct
-  registered by pointer reads its embeds when the method runs, so either
-  may still be set after `RegisterMethods`. A nil pointer to a
+  runs. The exception, as for the nil-safe companions: a nil pointer
+  whose type declares the task method or the `WhenX(Facts)` predicate on
+  a pointer receiver is still called. Only a non-nil pointer, embedded
+  directly or held in an interface, makes what is behind it shared with
+  the recipe, and a struct registered by pointer reads its embeds when
+  the method runs, so either may still be set after `RegisterMethods`. A nil pointer to a
   pointer-receiver companion is still called, like a nil-safe marker.
 - `RegisterMethods` no longer slows down exponentially on recursive
   embedded types (types embedding each other by pointer): the promotion

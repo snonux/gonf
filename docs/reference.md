@@ -242,10 +242,13 @@ the nil embedded field Base`): `Opts` registers nothing of the struct,
 the others skip that task. A task method or `WhenX(Facts)` predicate runs
 later, so it is refused this way only when the struct is passed by value
 and the nil embed is held in the copy itself (directly, in a by-value
-embedded struct, or in an embedded interface's value). Only a non-nil
-pointer, embedded directly or held in an interface, makes what is behind
-it shared: a nil embed there, or any embed of a struct passed by pointer
-(`RegisterMethods(&l)`), may still be set after registering. Name methods for the action (`Unattended.Script`, not
+embedded struct, or in an embedded interface's value), except a nil
+pointer whose type declares that method on a pointer receiver, which is
+called like a nil-safe companion. Only a non-nil pointer, embedded
+directly or held in an interface, makes what is behind it shared: a nil
+embed there, or any embed of a struct passed by pointer
+(`RegisterMethods(&l)`), may still be set after registering. Name methods
+for the action (`Unattended.Script`, not
 `Unattended.UnattendedScript`).
 
 `OnCluster` replaces the `WhenHostname(ClusterHosts(), func() { ... })`
