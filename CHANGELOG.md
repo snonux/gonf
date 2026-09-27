@@ -119,10 +119,6 @@ Fixes
   the recipe, and a struct registered by pointer reads its embeds when
   the method runs, so either may still be set after `RegisterMethods`. A nil pointer to a
   pointer-receiver companion is still called, like a nil-safe marker.
-- `RegisterMethods` no longer slows down exponentially on recursive
-  embedded types (types embedding each other by pointer): the promotion
-  chain of a marker or companion is found with a breadth-first search
-  that visits each type once.
 - Behaviour change: a struct that declares its own `StructTaskOptions`
   overrides its embedded markers, as in Go method resolution: only its
   own method's options apply. Before, a value-receiver marker next to it
