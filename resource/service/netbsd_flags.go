@@ -21,6 +21,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/snonux/gonf/internal/atomicfile"
 )
 
 // Production rc.conf paths of the NetBSD flags support. Tests build a
@@ -79,21 +81,27 @@ func (b netbsdBackend) flagsMatch(u unit, want string) (bool, error) {
 // its line), later duplicates alone on their line are dropped, or the line
 // is appended when there is none. It refuses, leaving rc.conf alone, when
 // the result would not read back as exactly FLAGS (see
-// replaceRcAssignment). The file is replaced atomically and keeps its mode.
+// replaceRcAssignment). The file is replaced durably and atomically
+// (atomicfile.Write: fsync, rename, directory fsync) and keeps its mode and
+// ownership; a symlinked rc.conf stays a symlink, its target is replaced.
 func (b netbsdBackend) setFlags(u unit, flags string) error {
 	name, err := flagsVar(u.name)
 	if err != nil {
 		return err
 	}
-	content, mode, err := readRcConf(b.rcConf)
+	rc, err := readRcConf(b.rcConf)
 	if err != nil {
 		return err
 	}
-	updated, err := replaceRcAssignment(content, name, flags)
+	updated, err := replaceRcAssignment(rc.content, name, flags)
 	if err != nil {
 		return fmt.Errorf("rewrite %s: %w", b.rcConf, err)
 	}
-	return writeFileAtomic(b.rcConf, []byte(updated), mode)
+	var opts []atomicfile.Option
+	if rc.owner != nil {
+		opts = append(opts, atomicfile.WithOwner(*rc.owner))
+	}
+	return atomicfile.Write(rc.path, []byte(updated), rc.mode, opts...)
 }
 
 func (b netbsdBackend) describeFlags(u unit, flags string) (would, did string) {
@@ -137,46 +145,48 @@ func readRcAssignment(path, name string) (rcValue, error) {
 	return value, nil
 }
 
-// readRcConf returns rc.conf's content and mode; a missing file is empty
-// with mode 0644.
-func readRcConf(path string) (string, fs.FileMode, error) {
-	info, err := os.Stat(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return "", 0o644, nil
-	}
-	if err != nil {
-		return "", 0, fmt.Errorf("stat %s: %w", path, err)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", 0, fmt.Errorf("read %s: %w", path, err)
-	}
-	return string(data), info.Mode().Perm(), nil
+// rcConfFile is rc.conf as setFlags found it: the file to replace (path,
+// the symlink target when rc.conf is a symlink), its content, and the mode
+// and ownership its replacement keeps (owner is nil for a new rc.conf,
+// which gets the writer's).
+type rcConfFile struct {
+	path    string
+	content string
+	mode    fs.FileMode
+	owner   *atomicfile.Owner
 }
 
-// writeFileAtomic writes data to a temporary file beside path and renames
-// it over path, so rc(8) never reads a half-written rc.conf.
-func writeFileAtomic(path string, data []byte, mode fs.FileMode) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".gonf-*")
+// readRcConf reads rc.conf at path, following a symlink to the file it
+// names so the edit replaces that file rather than the link. A missing
+// rc.conf is empty with mode 0644 and the writer's ownership; a dangling
+// symlink is an error, not a file to create over the link.
+func readRcConf(path string) (rcConfFile, error) {
+	target, err := filepath.EvalSymlinks(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		if _, lerr := os.Lstat(path); lerr == nil {
+			return rcConfFile{}, fmt.Errorf("resolve %s: %w", path, err)
+		}
+		return rcConfFile{path: path, mode: 0o644}, nil
+	case err != nil:
+		return rcConfFile{}, fmt.Errorf("resolve %s: %w", path, err)
+	}
+	info, err := os.Stat(target)
 	if err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
+		return rcConfFile{}, fmt.Errorf("stat %s: %w", path, err)
 	}
-	defer func() { _ = os.Remove(tmp.Name()) }()
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write %s: %w", path, err)
+	if !info.Mode().IsRegular() {
+		return rcConfFile{}, fmt.Errorf("%s is not a regular file (%v)", path, info.Mode().Type())
 	}
-	if err := tmp.Chmod(mode); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("chmod %s: %w", path, err)
+	data, err := os.ReadFile(target)
+	if err != nil {
+		return rcConfFile{}, fmt.Errorf("read %s: %w", path, err)
 	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
+	rc := rcConfFile{path: target, content: string(data), mode: info.Mode().Perm()}
+	if owner, ok := atomicfile.OwnerOf(info); ok {
+		rc.owner = &owner
 	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
-		return fmt.Errorf("rename to %s: %w", path, err)
-	}
-	return nil
+	return rc, nil
 }
 
 // shellQuote single-quotes s for sh(1), so rc.conf assigns it literally.

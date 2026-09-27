@@ -7,6 +7,7 @@ import (
 	"io"
 	"path/filepath"
 
+	"github.com/snonux/gonf/internal/atomicfile"
 	"github.com/snonux/gonf/internal/safepath"
 	opt "github.com/snonux/gonf/resource/options"
 	"golang.org/x/sys/unix"
@@ -109,7 +110,7 @@ func readRegularNoFollow(path string) ([]byte, error) {
 // beside it, fsync, rename, directory fsync) and then applies the configured
 // ownership and mode to the new inode, exactly like a changed File.
 func (t *Target) Write(content []byte) error {
-	if err := atomicWrite(t.f.path, content, t.f.mode); err != nil {
+	if err := atomicfile.Write(t.f.path, content, t.f.mode); err != nil {
 		return err
 	}
 	return t.f.applyAttributesTo(t.f.path)

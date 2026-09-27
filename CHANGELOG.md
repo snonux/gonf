@@ -6,6 +6,11 @@ releases before v0.17.0 the tag message and the git log are the notes.
 ## Unreleased
 
 Fixes
+- NetBSD `WithFlags` now writes `/etc/rc.conf` durably (fsync before the
+  rename and of `/etc` after it), like a managed `File`, so a power loss
+  can no longer leave an empty rc.conf. It also keeps rc.conf's owner,
+  edits the file a symlinked rc.conf points to instead of replacing the
+  link, and refuses a dangling symlink or a non-regular rc.conf.
 - `-quiet` and `-verbose` now reach the remote `gonf apply` of `push`,
   `cluster` and `fleet`, and the local sudo/doas re-exec of privileged
   chunks. Before, those children logged at their default level, so

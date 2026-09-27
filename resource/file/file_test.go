@@ -43,56 +43,6 @@ func TestGetChecksum(t *testing.T) {
 	}
 }
 
-func TestAtomicWriteCreatesFileWithContentAndMode(t *testing.T) {
-	resource.ResetRepository()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "created.txt")
-	content := []byte("atomic content")
-
-	if err := atomicWrite(path, content, 0o644); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading file: %v", err)
-	}
-	if string(got) != string(content) {
-		t.Errorf("expected %q, got %q", content, got)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o644 {
-		t.Errorf("expected mode 0o644, got %v", info.Mode().Perm())
-	}
-	// No temporary file may be left behind.
-	assertNoLeftoverTempFiles(t, dir)
-}
-
-func TestAtomicWriteOverwritesExistingFile(t *testing.T) {
-	resource.ResetRepository()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.txt")
-	if err := os.WriteFile(path, []byte("old content"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := atomicWrite(path, []byte("new content"), 0o644); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading target file: %v", err)
-	}
-	if string(got) != "new content" {
-		t.Errorf("expected 'new content', got %q", got)
-	}
-	assertNoLeftoverTempFiles(t, dir)
-}
-
 // TestEnsureWithPlantedTmpSymlinkDoesNotClobberVictim is a regression test
 // for the TOCTOU/symlink vulnerability where updates were written through
 // the predictable path+".tmp" location: a local attacker able to write the
@@ -666,64 +616,6 @@ func TestConcurrentEnsureWritersDoNotInterfere(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("target content %q is none of the written contents (torn write?)", got)
-	}
-	assertNoLeftoverTempFiles(t, dir)
-}
-
-// TestAtomicWriteCleansUpWhenRenameFails pins the error-path guarantee: if
-// the final rename cannot succeed (here because a directory occupies the
-// target path), the temporary file must be removed.
-func TestAtomicWriteCleansUpWhenRenameFails(t *testing.T) {
-	resource.ResetRepository()
-	dir := t.TempDir()
-	// A directory at the target path makes os.Rename fail.
-	target := filepath.Join(dir, "occupied")
-	if err := os.Mkdir(target, 0o750); err != nil {
-		t.Fatal(err)
-	}
-
-	err := atomicWrite(target, []byte("content"), 0o640)
-	if err == nil {
-		t.Fatal("expected an error when the target path is a directory")
-	}
-	if !strings.Contains(err.Error(), target) {
-		t.Errorf("error should mention the target path: %v", err)
-	}
-	assertNoLeftoverTempFiles(t, dir)
-}
-
-// TestAtomicWriteLongBaseName proves temp names stay within NAME_MAX for
-// base names that are themselves legal but leave little room for a suffix
-// (the old path+".tmp" scheme also fit; the longer ".gonftmp" marker would
-// not without truncating the base).
-func TestAtomicWriteLongBaseName(t *testing.T) {
-	resource.ResetRepository()
-	dir := t.TempDir()
-	// 250 chars + ".conf": legal as a plain file, but 250+8+10 random
-	// characters would exceed NAME_MAX (255) without base truncation.
-	base := strings.Repeat("l", 250)
-	target := filepath.Join(dir, base)
-	// Probe whether the target name itself is creatable on this filesystem;
-	// skip only if even a plain file of that name exceeds NAME_MAX here.
-	probe, err := os.Create(target)
-	if err != nil {
-		if strings.Contains(err.Error(), "file name too long") {
-			t.Skip("filesystem NAME_MAX too small for this test")
-		}
-		t.Fatalf("probing NAME_MAX: %v", err)
-	}
-	_ = probe.Close()
-	_ = os.Remove(target)
-
-	if err := atomicWrite(target, []byte("long name content"), 0o640); err != nil {
-		t.Fatalf("atomicWrite with 250-char base name: %v", err)
-	}
-	got, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatalf("reading target: %v", err)
-	}
-	if string(got) != "long name content" {
-		t.Errorf("unexpected content %q", got)
 	}
 	assertNoLeftoverTempFiles(t, dir)
 }

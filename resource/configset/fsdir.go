@@ -82,7 +82,7 @@ func openMember(path string) (dirfd int, f *os.File, err error) {
 // because such a filesystem has no durability to offer and failing would only
 // make the set alternate between failing and half-succeeding. Every other
 // error (EIO, ...) is returned. The member rename's own directory fsync is
-// done by the File write path (atomicWrite) and follows its ignore-all rule.
+// done by the File write path (atomicfile.Write) and follows its ignore-all rule.
 // The fsync itself is sys.fsyncFD, so a test can simulate either kind of
 // filesystem.
 func (sys *system) fsyncDir(fd int, dir string) error {

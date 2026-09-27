@@ -114,6 +114,12 @@ Service("nsd", WithFlags("-c /var/nsd/etc/nsd.conf"))
   value), and any result that does not read
   back with every assignment equal to FLAGS. The stock NetBSD
   `/etc/defaults/rc.conf` and `/etc/rc.conf` are regression fixtures.
+- The edited rc.conf is written like a managed `File`: a temporary file
+  beside it, fsync, rename, directory fsync (`internal/atomicfile`), so a
+  crash leaves the old or the new rc.conf, never a truncated one. It keeps
+  its mode and ownership; a symlinked rc.conf stays a symlink and the file
+  it names is replaced; a dangling symlink or a non-regular rc.conf is an
+  error.
 - `WithFlags` on `NoService`, or with a line break, is a declaration error.
 - A plan with `WithFlags` declares schema 25.
 

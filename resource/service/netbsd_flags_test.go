@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snonux/gonf/internal/atomicfile"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -414,4 +415,179 @@ func FuzzReplaceRcAssignment(f *testing.F) {
 			}
 		}
 	})
+}
+
+// TestNetBSDSetFlagsKeepsModeOwnerAndSymlink pins the durable rc.conf
+// replacement (task bb): the new rc.conf keeps the old one's mode and
+// ownership, a symlinked rc.conf stays a symlink with its target
+// rewritten, and no temporary file is left beside either.
+func TestNetBSDSetFlagsKeepsModeOwnerAndSymlink(t *testing.T) {
+	t.Run("plain file", func(t *testing.T) {
+		b := netbsdFlagsBackend(t, "nsd_flags=-4\n", "", "")
+		if err := os.Chmod(b.rcConf, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.setFlags(unit{name: "nsd"}, "-x"); err != nil {
+			t.Fatalf("setFlags: %v", err)
+		}
+		requireRcConf(t, b.rcConf, "nsd_flags='-x'\n", 0o600)
+		requireNoRcTempFiles(t, filepath.Dir(b.rcConf))
+	})
+	t.Run("symlink", func(t *testing.T) {
+		b := netbsdFlagsBackend(t, "", "", "")
+		realPath := filepath.Join(t.TempDir(), "rc.conf.real")
+		if err := os.WriteFile(realPath, []byte("nsd_flags=-4\n"), 0o640); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(realPath, b.rcConf); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.setFlags(unit{name: "nsd"}, "-x"); err != nil {
+			t.Fatalf("setFlags: %v", err)
+		}
+		if info, err := os.Lstat(b.rcConf); err != nil || info.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("rc.conf is no longer a symlink (%v, %v)", info, err)
+		}
+		requireRcConf(t, realPath, "nsd_flags='-x'\n", 0o640)
+		requireNoRcTempFiles(t, filepath.Dir(realPath))
+		requireNoRcTempFiles(t, filepath.Dir(b.rcConf))
+	})
+	t.Run("supplementary group", func(t *testing.T) {
+		gid, ok := supplementaryGroup()
+		if !ok {
+			t.Skip("the caller has no supplementary group")
+		}
+		b := netbsdFlagsBackend(t, "nsd_flags=-4\n", "", "")
+		if err := os.Chown(b.rcConf, -1, gid); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.setFlags(unit{name: "nsd"}, "-x"); err != nil {
+			t.Fatalf("setFlags: %v", err)
+		}
+		info, err := os.Stat(b.rcConf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if owner, _ := atomicfile.OwnerOf(info); owner.GID != gid || owner.UID != os.Getuid() {
+			t.Errorf("rc.conf owner = %+v, want uid %d gid %d", owner, os.Getuid(), gid)
+		}
+	})
+	t.Run("owner carried to the write", func(t *testing.T) {
+		b := netbsdFlagsBackend(t, "nsd_flags=-4\n", "", "")
+		rc, err := readRcConf(b.rcConf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := atomicfile.Owner{UID: os.Getuid(), GID: os.Getgid()}
+		if rc.owner == nil || *rc.owner != want {
+			t.Fatalf("readRcConf owner = %v, want %+v", rc.owner, want)
+		}
+		if err := b.setFlags(unit{name: "nsd"}, "-x"); err != nil {
+			t.Fatalf("setFlags: %v", err)
+		}
+		info, err := os.Stat(b.rcConf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if owner, _ := atomicfile.OwnerOf(info); owner != want {
+			t.Errorf("rc.conf owner = %+v, want %+v", owner, want)
+		}
+	})
+	t.Run("missing rc.conf created 0644", func(t *testing.T) {
+		b := netbsdFlagsBackend(t, "", "", "")
+		if err := b.setFlags(unit{name: "nsd"}, "-x"); err != nil {
+			t.Fatalf("setFlags: %v", err)
+		}
+		requireRcConf(t, b.rcConf, "nsd_flags='-x'\n", 0o644)
+	})
+}
+
+// TestNetBSDSetFlagsWriteFailureKeepsRcConf pins the negative paths of the
+// rc.conf replacement: a write that cannot complete (a read-only /etc) or a
+// rc.conf that is a dangling symlink or not a regular file fails with the
+// path named, and the original is left as it was, with no temporary file.
+func TestNetBSDSetFlagsWriteFailureKeepsRcConf(t *testing.T) {
+	t.Run("read-only directory", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root ignores directory permissions")
+		}
+		b := netbsdFlagsBackend(t, "nsd_flags=-4\n", "", "")
+		dir := filepath.Dir(b.rcConf)
+		if err := os.Chmod(dir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+		if err := b.setFlags(unit{name: "nsd"}, "-x"); err == nil || !strings.Contains(err.Error(), b.rcConf) {
+			t.Fatalf("setFlags err = %v, want an error naming %s", err, b.rcConf)
+		}
+		requireRcConf(t, b.rcConf, "nsd_flags=-4\n", 0o640)
+		requireNoRcTempFiles(t, dir)
+	})
+	t.Run("dangling symlink", func(t *testing.T) {
+		b := netbsdFlagsBackend(t, "", "", "")
+		if err := os.Symlink(filepath.Join(t.TempDir(), "gone"), b.rcConf); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.setFlags(unit{name: "nsd"}, "-x"); err == nil || !strings.Contains(err.Error(), b.rcConf) {
+			t.Fatalf("setFlags err = %v, want an error naming %s", err, b.rcConf)
+		}
+		if info, err := os.Lstat(b.rcConf); err != nil || info.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("dangling rc.conf symlink replaced (%v, %v)", info, err)
+		}
+	})
+	t.Run("not a regular file", func(t *testing.T) {
+		b := netbsdFlagsBackend(t, "", "", "")
+		if err := os.Mkdir(b.rcConf, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.setFlags(unit{name: "nsd"}, "-x"); err == nil || !strings.Contains(err.Error(), b.rcConf) {
+			t.Fatalf("setFlags err = %v, want an error naming %s", err, b.rcConf)
+		}
+		requireNoRcTempFiles(t, filepath.Dir(b.rcConf))
+	})
+}
+
+func requireRcConf(t *testing.T, path, content string, mode os.FileMode) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != content {
+		t.Errorf("%s = %q, want %q", path, got, content)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != mode {
+		t.Errorf("%s mode = %v, want %v", path, info.Mode().Perm(), mode)
+	}
+}
+
+func requireNoRcTempFiles(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".gonftmp") {
+			t.Errorf("leftover temporary file %s in %s", e.Name(), dir)
+		}
+	}
+}
+
+// supplementaryGroup returns a group of the caller other than its primary.
+func supplementaryGroup() (int, bool) {
+	groups, err := os.Getgroups()
+	if err != nil {
+		return 0, false
+	}
+	for _, g := range groups {
+		if g != os.Getgid() {
+			return g, true
+		}
+	}
+	return 0, false
 }
