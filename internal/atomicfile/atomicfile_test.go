@@ -172,19 +172,24 @@ func TestWriteAttributesSetBeforeRename(t *testing.T) {
 }
 
 // TestWriteWithOwnerUnsetIDs pins os.Chown's -1 convention: an unset id
-// stays the writer's, so WithOwner(-1, -1) needs no privilege at all.
+// stays what the new temporary file got, so WithOwner(-1, -1) needs no
+// privilege at all. A new file's group is the directory's on the BSDs and
+// darwin (and under a set-gid directory on Linux), the writer's otherwise;
+// the directory's own group is the same expectation everywhere, since the
+// test created it.
 func TestWriteWithOwnerUnsetIDs(t *testing.T) {
 	dir := t.TempDir()
-	for name, owner := range map[string]Owner{
-		"both unset": {UID: -1, GID: -1},
-		"uid unset":  {UID: -1, GID: os.Getgid()},
-		"gid unset":  {UID: os.Getuid(), GID: -1},
+	created := newFileOwner(t, dir)
+	for name, tt := range map[string]struct{ owner, want Owner }{
+		"both unset": {Owner{UID: -1, GID: -1}, created},
+		"uid unset":  {Owner{UID: -1, GID: os.Getgid()}, Owner{UID: os.Getuid(), GID: os.Getgid()}},
+		"gid unset":  {Owner{UID: os.Getuid(), GID: -1}, created},
 	} {
 		path := filepath.Join(dir, strings.ReplaceAll(name, " ", "-"))
-		if err := Write(path, []byte("x"), 0o640, WithOwner(owner)); err != nil {
+		if err := Write(path, []byte("x"), 0o640, WithOwner(tt.owner)); err != nil {
 			t.Fatalf("%s: Write: %v", name, err)
 		}
-		requireOwner(t, path, Owner{UID: os.Getuid(), GID: os.Getgid()})
+		requireOwner(t, path, tt.want)
 	}
 }
 
@@ -200,13 +205,21 @@ func TestWriteWithOwnerFailureLeavesOriginalUntouched(t *testing.T) {
 	if err := os.WriteFile(path, []byte("original"), 0o640); err != nil {
 		t.Fatal(err)
 	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, ok := OwnerOf(info)
+	if !ok {
+		t.Fatalf("no ownership in the stat of %s", path)
+	}
 
-	err := Write(path, []byte("replacement"), 0o644, WithOwner(Owner{UID: 0, GID: 0}))
+	err = Write(path, []byte("replacement"), 0o644, WithOwner(Owner{UID: 0, GID: 0}))
 	if err == nil || !strings.Contains(err.Error(), path) {
 		t.Fatalf("Write with a root owner err = %v, want an error naming %s", err, path)
 	}
 	requireFile(t, path, "original", 0o640)
-	requireOwner(t, path, Owner{UID: os.Getuid(), GID: os.Getgid()})
+	requireOwner(t, path, original)
 	requireNoTempFiles(t, dir)
 }
 
@@ -232,6 +245,22 @@ func TestWriteLongBaseName(t *testing.T) {
 	}
 	requireFile(t, target, "long name content", 0o640)
 	requireNoTempFiles(t, dir)
+}
+
+// newFileOwner is the ownership a file the caller creates in dir gets: the
+// caller's uid and dir's group, which the caller's own new directory shares
+// with the files in it on every supported OS.
+func newFileOwner(t *testing.T, dir string) Owner {
+	t.Helper()
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, ok := OwnerOf(info)
+	if !ok {
+		t.Fatalf("no ownership in the stat of %s", dir)
+	}
+	return Owner{UID: os.Getuid(), GID: owner.GID}
 }
 
 // otherGroup returns a group of the caller other than its primary one.
