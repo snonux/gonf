@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
@@ -25,11 +26,12 @@ func thisLine() int {
 }
 
 // requireDeclErrAt is requireDeclErr that also pins the reported location
-// to line of this file.
+// to line of the calling test file.
 func requireDeclErrAt(t *testing.T, want string, line *int, declare func()) {
 	t.Helper()
+	_, file, _, _ := runtime.Caller(1)
 	requireDeclErr(t, want, declare)
-	suffix := fmt.Sprintf("nil_task_option_test.go:%d", *line)
+	suffix := fmt.Sprintf("%s:%d", filepath.Base(file), *line)
 	if loc := declerr.Location(declerr.First()); !strings.HasSuffix(loc, suffix) {
 		t.Fatalf("declaration error location = %q, want the DSL call (…%s)", loc, suffix)
 	}
@@ -438,13 +440,29 @@ type nilSafeByValueOpts struct{ NilSafe }
 func (nilSafeByValueOpts) Opts() TaskOptions { return TaskOptions{Unprivileged()} }
 func (nilSafeByValueOpts) Ping()             {}
 
+// nilSafePtrOpts embeds a (non-nil) pointer-receiver marker by pointer,
+// and nilSafeInnerOpts reaches one by value through the exported embed
+// NilSafeInner: both are marker fields and compose before Opts().
+type nilSafePtrOpts struct{ *NilSafe }
+
+func (nilSafePtrOpts) Opts() TaskOptions { return TaskOptions{Unprivileged()} }
+func (nilSafePtrOpts) Ping()             {}
+
+type NilSafeInner struct{ NilSafe }
+
+type nilSafeInnerOpts struct{ NilSafeInner }
+
+func (nilSafeInnerOpts) Opts() TaskOptions { return TaskOptions{Unprivileged()} }
+func (nilSafeInnerOpts) Ping()             {}
+
 // TestRegisterMethodsStructDefaultsResolve pins the struct-level defaults
 // of cases that must register cleanly: a nil pointer-receiver marker that
 // handles a nil receiver (embedded, nested, or held in a StructOption
 // field), a nil marker next to the struct's own StructTaskOptions or behind
 // an intermediate type declaring its own, ambiguous same-depth markers (no
-// options), and a by-value pointer-receiver marker, which composes before
-// Opts() so Opts()'s Unprivileged() wins.
+// options), and a pointer-receiver marker embedded by value, by pointer or
+// through an exported embed, which composes before Opts() so Opts()'s
+// Unprivileged() wins.
 func TestRegisterMethodsStructDefaultsResolve(t *testing.T) {
 	cases := []struct {
 		name            string
@@ -460,6 +478,8 @@ func TestRegisterMethodsStructDefaultsResolve(t *testing.T) {
 		{"intermediate own method before nil marker", ownBaseChain{}, false, true},
 		{"ambiguous same-depth markers", ambiguousMarkers{}, false, false},
 		{"by-value pointer-receiver marker then Opts", nilSafeByValueOpts{}, false, false},
+		{"pointer-embedded pointer-receiver marker then Opts", nilSafePtrOpts{NilSafe: &NilSafe{}}, false, false},
+		{"pointer-receiver marker promoted through an exported embed then Opts", nilSafeInnerOpts{}, false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

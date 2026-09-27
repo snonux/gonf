@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"runtime"
 )
 
 // StructOption can be embedded in (or added as a field to) a struct that is
@@ -52,7 +51,7 @@ func (RequiresRoot) StructTaskOptions() TaskOptions { return TaskOptions{Privile
 // (single marker only; multiple same-depth markers are an ambiguous
 // selector and are not in the method set).
 //
-// A struct-level companion with the wrong signature, a nil marker (nilPath),
+// A struct-level companion with the wrong signature, a nil marker (nilEmbed),
 // or a marker or companion returning a nil TaskOption, is returned as an
 // error: RegisterMethods then registers no task of the struct, because
 // silently ignoring the companion (or the nil option) could drop
@@ -69,7 +68,9 @@ func collectStructOptions(rv reflect.Value, rt reflect.Type) (TaskOptions, error
 		}
 	}
 	if o := rv.MethodByName("Opts"); o.IsValid() {
-		companion, err := callTaskOptionsCompanion(o, "Opts", "Opts must be func() TaskOptions (the struct-level default companion)")
+		companion, err := callPromoted(rv, "Opts", func() (TaskOptions, error) {
+			return callTaskOptionsCompanion(o, "Opts", "Opts must be func() TaskOptions (the struct-level default companion)")
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -82,13 +83,13 @@ func collectStructOptions(rv reflect.Value, rt reflect.Type) (TaskOptions, error
 		if m := rv.MethodByName("StructTaskOptions"); m.IsValid() {
 			nilRecv := ""
 			if !own {
-				path, refuse := nilPath(rv, "")
+				path, refuse := nilEmbed(rv, "", "StructTaskOptions")
 				if refuse {
 					return nil, fmt.Errorf("marker %s is nil", path)
 				}
 				nilRecv = path
 			}
-			companion, err := callNilReceiver(nilRecv, func() (TaskOptions, error) {
+			companion, err := callNilReceiver(nilRecv, nilMarkerPanic(nilRecv), func() (TaskOptions, error) {
 				return callTaskOptionsCompanion(m, "StructTaskOptions", "StructTaskOptions must be func() TaskOptions")
 			})
 			if err != nil {
@@ -106,7 +107,7 @@ func collectStructOptions(rv reflect.Value, rt reflect.Type) (TaskOptions, error
 // pointer to it, implements StructOption (isMarkerField), so a marker with
 // a pointer-receiver StructTaskOptions counts too: it is called through the
 // field's address (rv is a pointer, so the field is addressable). A nil
-// marker (nilPath), or a nil TaskOption in a marker's result, is returned
+// marker (nilEmbed), or a nil TaskOption in a marker's result, is returned
 // as an error.
 func markerStructOptions(rv reflect.Value, rt reflect.Type) (TaskOptions, bool, error) {
 	var opts TaskOptions
@@ -129,7 +130,7 @@ func markerStructOptions(rv reflect.Value, rt reflect.Type) (TaskOptions, bool, 
 		found = true
 		// Exported marker field: the field value is accessible.
 		fv := rv.Elem().Field(i)
-		path, refuse := nilPath(fv, f.Name)
+		path, refuse := nilEmbed(fv, f.Name, "StructTaskOptions")
 		if refuse {
 			// Calling the marker through a nil pointer or interface would
 			// panic, and skipping it would drop its options (e.g.
@@ -139,7 +140,7 @@ func markerStructOptions(rv reflect.Value, rt reflect.Type) (TaskOptions, bool, 
 		if !fv.Type().Implements(structOptionType) {
 			fv = fv.Addr() // pointer-receiver StructTaskOptions
 		}
-		markerOpts, err := callNilReceiver(path, func() (TaskOptions, error) {
+		markerOpts, err := callNilReceiver(path, nilMarkerPanic(path), func() (TaskOptions, error) {
 			return fv.Interface().(StructOption).StructTaskOptions(), nil
 		})
 		if err != nil {
@@ -153,6 +154,14 @@ func markerStructOptions(rv reflect.Value, rt reflect.Type) (TaskOptions, bool, 
 	return opts, found, nil
 }
 
+// nilMarkerPanic reports a nil marker at path whose pointer-receiver
+// StructTaskOptions dereferenced its nil receiver (callNilReceiver).
+func nilMarkerPanic(path string) func(r any) error {
+	return func(r any) error {
+		return fmt.Errorf("marker %s is nil and its StructTaskOptions does not handle a nil receiver: %v", path, r)
+	}
+}
+
 // isMarkerField reports whether a field of type ft is a StructOption
 // marker: ft implements it (a value-receiver marker, a pointer to any
 // marker, or the StructOption interface itself), or *ft does (a value field
@@ -163,160 +172,6 @@ func isMarkerField(ft reflect.Type) bool {
 	}
 	return ft.Kind() != reflect.Pointer && ft.Kind() != reflect.Interface &&
 		reflect.PointerTo(ft).Implements(structOptionType)
-}
-
-// maxPromotionDepth bounds the embedded-field walks below; real marker
-// chains are one or two levels deep, and the bound also stops a recursive
-// type (type A struct{ *A }).
-const maxPromotionDepth = 16
-
-// nilPath follows the chain of embedded fields that StructTaskOptions is
-// promoted through, starting at v (named name, "" for the registered
-// struct itself), and returns the dotted field path to the first nil
-// pointer or interface on it — which calling the method would dereference
-// — or "" when there is none: v is a nil marker field, an interface holding
-// a nil pointer, or a struct such as Base in
-// type Base struct{ *RequiresRoot } whose promoting field is nil.
-//
-// refuse is true for such a path. A nil pointer to a type that declares
-// StructTaskOptions on its pointer receiver is returned with refuse false:
-// calling it dereferences nothing on the way (it is legal Go) and the
-// method may handle a nil receiver itself, so the caller calls it through
-// callNilReceiver. That can only be the last hop, since the declaration
-// ends the chain.
-func nilPath(v reflect.Value, name string) (path string, refuse bool) {
-	path = name
-	for range maxPromotionDepth {
-		for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
-			if v.IsNil() {
-				if v.Kind() == reflect.Pointer {
-					if declared, ptrRecv := structTaskOptionsDecl(v.Type().Elem()); declared && ptrRecv {
-						return path, false
-					}
-				}
-				return path, true
-			}
-			v = v.Elem()
-		}
-		if v.Kind() != reflect.Struct || declaresStructTaskOptions(v.Type()) {
-			return "", false
-		}
-		i, ok := promotingField(v.Type())
-		if !ok {
-			return "", false
-		}
-		if path != "" {
-			path += "."
-		}
-		path += v.Type().Field(i).Name
-		v = v.Field(i)
-	}
-	return "", false
-}
-
-// callNilReceiver runs call, which calls a StructTaskOptions. nilRecv is
-// the path of the nil pointer the method is called on (nilPath with refuse
-// false), or "" for a non-nil receiver, where call runs as is. A nil
-// receiver is legal Go, but a method that does not handle one panics; that
-// panic is reported as a nil marker rather than crashing the recipe.
-func callNilReceiver(nilRecv string, call func() (TaskOptions, error)) (opts TaskOptions, err error) {
-	if nilRecv == "" {
-		return call()
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			opts, err = nil, fmt.Errorf("marker %s is nil and its StructTaskOptions does not handle a nil receiver: %v", nilRecv, r)
-		}
-	}()
-	return call()
-}
-
-// promotingField returns the index of struct type t's embedded field that
-// StructTaskOptions is promoted through: the one reaching a declaration at
-// the shallowest depth, as Go's selector rule picks it. It reports false
-// when no embedded field provides the method or the shallowest depth is
-// ambiguous (the method is then not in t's method set at all).
-func promotingField(t reflect.Type) (int, bool) {
-	best, bestDepth, tie := -1, 0, false
-	for i := 0; i < t.NumField(); i++ {
-		f := t.Field(i)
-		if !f.Anonymous {
-			continue
-		}
-		d := promotionDepth(f.Type, maxPromotionDepth)
-		switch {
-		case d < 0:
-		case best < 0 || d < bestDepth:
-			best, bestDepth, tie = i, d, false
-		case d == bestDepth:
-			tie = true
-		}
-	}
-	return best, best >= 0 && !tie
-}
-
-// promotionDepth returns how many embedded fields below t (or *t) the
-// declaration of StructTaskOptions is (0: t declares it), or -1 when t does
-// not provide the method within budget levels.
-func promotionDepth(t reflect.Type, budget int) int {
-	if t.Kind() == reflect.Pointer {
-		t = t.Elem()
-	}
-	if declaresStructTaskOptions(t) {
-		return 0
-	}
-	if t.Kind() != reflect.Struct || budget == 0 {
-		return -1
-	}
-	best := -1
-	for i := 0; i < t.NumField(); i++ {
-		f := t.Field(i)
-		if !f.Anonymous {
-			continue
-		}
-		if d := promotionDepth(f.Type, budget-1); d >= 0 && (best < 0 || d+1 < best) {
-			best = d + 1
-		}
-	}
-	return best
-}
-
-// declaresStructTaskOptions reports whether t itself declares a method
-// named StructTaskOptions (any signature, value or pointer receiver), as
-// opposed to promoting one from an embedded field; an interface type counts
-// when it has the method.
-func declaresStructTaskOptions(t reflect.Type) bool {
-	declared, _ := structTaskOptionsDecl(t)
-	return declared
-}
-
-// structTaskOptionsDecl reports whether t itself declares StructTaskOptions
-// (see declaresStructTaskOptions) and whether that declaration has a
-// pointer receiver. A method set cannot tell a declared method from a
-// promoted one, so this asks the runtime where the method's code is: a
-// promoted method is a compiler-generated wrapper whose file is
-// "<autogenerated>".
-func structTaskOptionsDecl(t reflect.Type) (declared, pointerReceiver bool) {
-	if t.Kind() == reflect.Interface {
-		_, ok := t.MethodByName("StructTaskOptions")
-		return ok, false
-	}
-	// A value-receiver method is in both method sets, so T is checked
-	// first; one found only on *T has a pointer receiver.
-	for i, mt := range []reflect.Type{t, reflect.PointerTo(t)} {
-		m, ok := mt.MethodByName("StructTaskOptions")
-		if !ok {
-			continue
-		}
-		fn := runtime.FuncForPC(m.Func.Pointer())
-		if fn == nil {
-			return false, false
-		}
-		file, _ := fn.FileLine(fn.Entry())
-		declared = file != "<autogenerated>"
-		return declared, declared && i == 1
-	}
-	return false, false
 }
 
 // callTaskOptionsCompanion calls m, the companion named name, which must be

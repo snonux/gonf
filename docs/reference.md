@@ -226,11 +226,19 @@ embedded chain the marker's method is promoted through, as in
 `struct{ Base }` with `type Base struct{ *RequiresRoot }`), registers
 nothing of the struct; so does a `nil` option passed to `RegisterMethods`
 (a `RegisterOption`, a `TaskOption` or one inside `WithGroupWhen`), since
-it may stand for a guard such as `OnCluster`. The error names the struct
-type and the option's position. A nil pointer to a marker whose
-`StructTaskOptions` has a pointer receiver is called, not refused (a
-nil receiver is legal Go); it is a nil-marker error only if that call
-panics. Name methods for the action (`Unattended.Script`, not
+it may stand for a guard such as `OnCluster`. A nil option error gives
+its position (`RegisterMethods: option 2 is a nil TaskOption`); a nil
+companion result or nil marker error names the struct type
+(`RegisterMethods(pkg.Type): OptsPing returned a nil TaskOption (option
+2)`, `RegisterMethods(pkg.Type): marker RequiresRoot is nil`). A nil
+pointer to a marker whose `StructTaskOptions` has a pointer receiver is
+called, not refused (a nil receiver is legal Go); it is a nil-marker
+error only if that call dereferences the nil receiver. Likewise a
+companion (`Opts`, `OptsX`, `WhenX`, `DescX`) or task method promoted
+through a nil embedded pointer is a declaration error
+(`RegisterMethods(pkg.Type): Opts is promoted through the nil embedded
+field Base`): `Opts` registers nothing of the struct, the others skip
+that task. Name methods for the action (`Unattended.Script`, not
 `Unattended.UnattendedScript`).
 
 `OnCluster` replaces the `WhenHostname(ClusterHosts(), func() { ... })`

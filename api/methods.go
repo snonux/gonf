@@ -190,11 +190,13 @@ func WithGroupWhen(opts ...TaskOption) RegisterOption {
 // Misuse — v not a struct or non-nil pointer to one, a companion with the
 // wrong signature, a nil option (a nil RegisterOption or TaskOption among
 // opts, or inside WithGroupWhen), a nil TaskOption returned by a companion
-// or StructOption marker, a nil marker (pointer or interface), an unknown
+// or StructOption marker, a nil marker (pointer or interface), a companion
+// or task method promoted through a nil embedded pointer, an unknown
 // OnCluster cluster — is reported as a declaration error (internal/declerr,
 // which RecordPlan, Run, Apply and the CLI refuse to run with). A bad
 // receiver, option, OnCluster, marker or struct-level companion registers
-// nothing of v; a bad per-method companion skips only that method's task.
+// nothing of v; a bad per-method companion or task method skips only that
+// method's task.
 //
 // A Needs("x") in an OptsX companion (or WithGroupWhen) is resolved relative
 // to this call's WithPrefix first: see Needs.
@@ -419,14 +421,25 @@ func registerMethodTasks(rv reflect.Value, rt reflect.Type, cfg registerConfig) 
 			continue // only func()
 		}
 
+		// A task method promoted through a nil embedded field would panic
+		// when its task runs; refuse it now, like a nil companion.
+		if _, err := checkPromoted(rv, name); err != nil {
+			misuse(err)
+			continue
+		}
 		taskOpts, err := methodTaskOptions(rv, name, cfg, structOpts)
+		if err != nil {
+			misuse(err)
+			continue
+		}
+		desc, err := resolveDesc(rv, name)
 		if err != nil {
 			misuse(err)
 			continue
 		}
 		task := cfg.prefix + camelToSnake(name)
 		noteMethodTask(rt, name, task)
-		Task(task, resolveDesc(rv, name), method.Interface().(func()), taskOpts...)
+		Task(task, desc, method.Interface().(func()), taskOpts...)
 	}
 }
 
@@ -462,17 +475,22 @@ func methodTaskOptions(rv reflect.Value, name string, cfg registerConfig, struct
 // resolveDesc returns the DescX companion's description, or "" if the
 // companion is absent or has the wrong signature. Unlike OptsX/WhenX, a
 // missing description has no safety consequence, so a mismatched signature
-// degrades gracefully instead of refusing the task.
-func resolveDesc(rv reflect.Value, name string) string {
+// degrades gracefully instead of refusing the task. A companion promoted
+// through a nil embedded field is returned as an error (callPromoted), as
+// for every other companion: it is a nil declaration, and calling it
+// would panic.
+func resolveDesc(rv reflect.Value, name string) (string, error) {
 	d := rv.MethodByName("Desc" + name)
 	if !d.IsValid() {
-		return ""
+		return "", nil
 	}
 	dt := d.Type()
-	if dt.NumIn() == 0 && dt.NumOut() == 1 && dt.Out(0).Kind() == reflect.String {
-		return d.Call(nil)[0].String()
+	if dt.NumIn() != 0 || dt.NumOut() != 1 || dt.Out(0).Kind() != reflect.String {
+		return "", nil
 	}
-	return ""
+	return callPromoted(rv, "Desc"+name, func() (string, error) {
+		return d.Call(nil)[0].String(), nil
+	})
 }
 
 // resolveOpts returns the struct-level default followed by the OptsX
@@ -487,7 +505,9 @@ func resolveOpts(rv reflect.Value, name string, structOpts TaskOptions) (TaskOpt
 	if !o.IsValid() {
 		return merged, nil
 	}
-	methodOpts, err := callTaskOptionsCompanion(o, "Opts"+name, "Opts"+name+" must be func() TaskOptions")
+	methodOpts, err := callPromoted(rv, "Opts"+name, func() (TaskOptions, error) {
+		return callTaskOptionsCompanion(o, "Opts"+name, "Opts"+name+" must be func() TaskOptions")
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -512,7 +532,13 @@ func resolveWhen(rv reflect.Value, name string) (TaskOption, error) {
 	}
 	wt := w.Type()
 	if wt.NumIn() == 0 && wt.NumOut() == 1 && wt.Out(0) == reflect.TypeOf(TaskOption(nil)) {
-		opt, _ := w.Call(nil)[0].Interface().(TaskOption)
+		opt, err := callPromoted(rv, "When"+name, func() (TaskOption, error) {
+			opt, _ := w.Call(nil)[0].Interface().(TaskOption)
+			return opt, nil
+		})
+		if err != nil {
+			return nil, err
+		}
 		if opt == nil {
 			return nil, fmt.Errorf("When%s returned a nil TaskOption", name)
 		}
@@ -521,6 +547,10 @@ func resolveWhen(rv reflect.Value, name string) (TaskOption, error) {
 	if wt.NumIn() != 1 || wt.In(0) != reflect.TypeOf(Facts{}) ||
 		wt.NumOut() != 1 || wt.Out(0).Kind() != reflect.Bool {
 		return nil, fmt.Errorf("When%s must be func() TaskOption or func(Facts) bool", name)
+	}
+	// The predicate runs at activation; refuse a nil embed on its chain now.
+	if _, err := checkPromoted(rv, "When"+name); err != nil {
+		return nil, err
 	}
 	wMethod := w
 	return When(func(f Facts) bool {

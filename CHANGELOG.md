@@ -77,7 +77,8 @@ Fixes
   `Base struct{ *RequiresRoot }`). A nil pointer to a marker with a
   pointer-receiver `StructTaskOptions` is still called, as before, since
   that is legal Go and the method may handle a nil receiver; only if it
-  panics is it reported as a nil marker. Among `RegisterMethods` options
+  dereferences that nil receiver is it reported as a nil marker (any
+  other panic propagates unchanged). Among `RegisterMethods` options
   (directly or inside `WithGroupWhen`) a nil TaskOption registers nothing
   of the struct, and in `RegisterOnCluster` nothing of any struct of the
   call.
@@ -86,16 +87,31 @@ Fixes
   pointer), is a declaration error and registers nothing. Before,
   `RegisterMethods` skipped it silently, so a guard such as `OnCluster`
   built as nil registered the methods unguarded.
-- A `StructOption` marker with a pointer-receiver `StructTaskOptions`,
-  embedded by value next to another marker, is now collected. Before,
-  only value-receiver markers were found, so its options (such as a
+- A `StructOption` marker with a pointer-receiver `StructTaskOptions` is
+  now a marker field wherever it is embedded: by value (`struct{ PM }`),
+  by pointer (`struct{ *PM }`), or promoted by value through an exported
+  embed (`struct{ Inner }` with `type Inner struct{ PM }`). Before, only
+  fields whose own type (or pointed-to type) implemented `StructOption`
+  counted, so next to another marker such a marker's options (such as a
   guard) were silently dropped and the tasks registered without them.
-- Behaviour change: such a marker, embedded by value as a struct's only
-  marker, now composes before the `Opts()` companion, like every other
-  marker ("markers first, then `Opts()`"). Before, it was reached through
-  the promoted method after `Opts()`, so for a later-wins option the
-  result flips: a marker's `Privileged()` with an `Opts()` returning
-  `Unprivileged()` was privileged and is now unprivileged.
+- Behaviour change: for the same three forms as a struct's only marker,
+  its options now compose before the `Opts()` companion, like every
+  other marker ("markers first, then `Opts()`"). Before, they were
+  reached through the struct's promoted `StructTaskOptions` after
+  `Opts()`, so a later-wins option flips: a marker's `Privileged()` with
+  an `Opts()` returning `Unprivileged()` was privileged and is now
+  unprivileged.
+- A companion (`Opts`, `OptsX`, `WhenX`, `DescX`) or task method promoted
+  through a nil embedded pointer (`struct{ *Base }` with `Base` nil and
+  `func (Base) Opts() TaskOptions`) is a declaration error instead of a
+  panic at registration (or, for a task method or a `WhenX(Facts)`
+  predicate, when it runs): `Opts` refuses the struct, the others skip
+  that task. A nil pointer to a pointer-receiver companion is still
+  called, like a nil-safe marker.
+- `RegisterMethods` no longer slows down exponentially on recursive
+  embedded types (types embedding each other by pointer): the promotion
+  chain of a marker or companion is found with a breadth-first search
+  that visits each type once.
 - Behaviour change: a struct that declares its own `StructTaskOptions`
   overrides its embedded markers, as in Go method resolution: only its
   own method's options apply. Before, a value-receiver marker next to it
