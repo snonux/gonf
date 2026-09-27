@@ -240,9 +240,11 @@ companion called during registration (`Opts`, `OptsX`, `WhenX()`,
 declaration error (`RegisterMethods(pkg.Type): Opts is promoted through
 the nil embedded field Base`): `Opts` registers nothing of the struct,
 the others skip that task. A task method or `WhenX(Facts)` predicate runs
-later, so it is refused this way only when the struct is passed by value;
-a struct passed by pointer (`RegisterMethods(&l)`) may set the embed after
-registering. Name methods for the action (`Unattended.Script`, not
+later, so it is refused this way only when the struct is passed by value
+and the nil embed is held in the copy itself (directly or in a by-value
+embedded struct). A nil embed behind a non-nil embedded pointer or
+interface, or any embed of a struct passed by pointer
+(`RegisterMethods(&l)`), may still be set after registering. Name methods for the action (`Unattended.Script`, not
 `Unattended.UnattendedScript`).
 
 `OnCluster` replaces the `WhenHostname(ClusterHosts(), func() { ... })`

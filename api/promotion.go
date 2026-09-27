@@ -129,8 +129,14 @@ func promotionPath(t reflect.Type, name string) ([]int, bool) {
 // (it is legal Go) and the method may handle a nil receiver itself, so the
 // caller calls it through callNilReceiver. That can only be the last hop,
 // since the declaration ends the chain.
-func nilEmbed(v reflect.Value, name, method string) (path string, refuse bool) {
+//
+// With ownedOnly, only the part of the chain held in v's own memory is
+// checked: the walk stops (reporting nothing) where it would follow a
+// non-nil pointer or interface other than v itself, since the fields
+// behind it are shared and may still be set later (checkDeferred).
+func nilEmbed(v reflect.Value, name, method string, ownedOnly bool) (path string, refuse bool) {
 	path = name
+	start := true // v itself may be dereferenced even with ownedOnly
 	for range maxInterfaceHops {
 		for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
 			if v.IsNil() {
@@ -141,8 +147,12 @@ func nilEmbed(v reflect.Value, name, method string) (path string, refuse bool) {
 				}
 				return path, true
 			}
+			if ownedOnly && !start {
+				return "", false
+			}
 			v = v.Elem()
 		}
+		start = false
 		index, ok := promotionPath(v.Type(), method)
 		if !ok || len(index) == 0 {
 			return "", false // not promoted: nothing to dereference
@@ -153,6 +163,9 @@ func nilEmbed(v reflect.Value, name, method string) (path string, refuse bool) {
 			if n < len(index)-1 && v.Kind() == reflect.Pointer {
 				if v.IsNil() {
 					return path, true // an intermediate embed is nil
+				}
+				if ownedOnly {
+					return "", false
 				}
 				v = v.Elem()
 			}
@@ -207,7 +220,7 @@ func isNilDereference(r any) bool {
 // on it is returned as an error instead of letting the call panic, and a
 // nil pointer-receiver declaration is called through callNilReceiver.
 func callPromoted[T any](rv reflect.Value, name string, fn func() (T, error)) (T, error) {
-	nilRecv, err := checkPromoted(rv, name)
+	nilRecv, err := checkPromoted(rv, name, false)
 	if err != nil {
 		var zero T
 		return zero, err
@@ -218,10 +231,11 @@ func callPromoted[T any](rv reflect.Value, name string, fn func() (T, error)) (T
 }
 
 // checkPromoted returns an error when calling the method name of rv would
-// dereference a nil embedded field, else the nil-receiver path for
-// callNilReceiver ("" for a non-nil receiver).
-func checkPromoted(rv reflect.Value, name string) (string, error) {
-	path, refuse := nilEmbed(rv, "", name)
+// dereference a nil embedded field (only one held in rv's own memory with
+// ownedOnly, see nilEmbed), else the nil-receiver path for callNilReceiver
+// ("" for a non-nil receiver).
+func checkPromoted(rv reflect.Value, name string, ownedOnly bool) (string, error) {
+	path, refuse := nilEmbed(rv, "", name, ownedOnly)
 	if refuse {
 		return "", fmt.Errorf("%s is promoted through the nil embedded field %s", name, path)
 	}

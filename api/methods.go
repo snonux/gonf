@@ -192,8 +192,8 @@ func WithGroupWhen(opts ...TaskOption) RegisterOption {
 // opts, or inside WithGroupWhen), a nil TaskOption returned by a companion
 // or StructOption marker, a nil marker (pointer or interface), a companion
 // promoted through a nil embedded pointer or interface (for a task method
-// or WhenX(Facts) predicate, which run later, only when v is passed by
-// value: a struct passed by pointer may set the embed later), an unknown
+// or WhenX(Facts) predicate, which run later, only a nil embed held in a
+// by-value copy of v: see checkDeferred), an unknown
 // OnCluster cluster — is reported as a declaration error (internal/declerr,
 // which RecordPlan, Run, Apply and the CLI refuse to run with). A bad
 // receiver, option, OnCluster, marker or struct-level companion registers
@@ -567,15 +567,18 @@ func resolveWhen(rv reflect.Value, name string, byValue bool) (TaskOption, error
 // checkDeferred checks a method of rv that runs later, not during
 // RegisterMethods (a task method, a WhenX(Facts) predicate), for a nil
 // embedded pointer or interface on its promotion chain (checkPromoted).
-// Only a struct registered by value is checked: that copy can never
-// change, so the call would certainly panic. A struct registered by pointer
-// reads its fields when the method runs, so an embed the recipe sets after
-// RegisterMethods is fine and is not refused.
+// Only a struct registered by value is checked, and only the fields held
+// in that private copy (directly, or in its by-value embedded structs):
+// they can never change, so the call would certainly panic. Fields behind
+// a non-nil embedded pointer or interface are shared with the recipe, and
+// a struct registered by pointer reads all its fields when the method
+// runs, so an embed the recipe sets after RegisterMethods is fine there
+// and is not refused.
 func checkDeferred(rv reflect.Value, name string, byValue bool) error {
 	if !byValue {
 		return nil
 	}
-	_, err := checkPromoted(rv, name)
+	_, err := checkPromoted(rv, name, true)
 	return err
 }
 

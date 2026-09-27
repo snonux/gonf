@@ -289,3 +289,49 @@ func TestRegisterMethodsLateInitialisedEmbed(t *testing.T) {
 	})
 	requireRefusedAfterClear(t, "lv_pong")
 }
+
+// ReproInner is reached from reproOuter through two embedded pointers;
+// only the inner one is nil at registration.
+type ReproInner struct{ ran *bool }
+
+func (i ReproInner) Pong()             { *i.ran = true }
+func (ReproInner) WhenPong(Facts) bool { return true }
+
+type ReproMid struct{ *ReproInner }
+
+type reproOuter struct{ *ReproMid }
+
+// LateHolder holds the nil *LateBase by value inside the registered copy.
+type LateHolder struct{ *LateBase }
+
+type byValueNested struct{ LateHolder }
+
+// TestRegisterMethodsByValueSharedEmbed: a by-value registration copies
+// only the struct itself; a nil embed behind a non-nil embedded pointer is
+// shared with the recipe and may still be set, so it is not refused (as on
+// main), while a nil embed held in the copy, directly or in a by-value
+// embedded struct, is.
+func TestRegisterMethodsByValueSharedEmbed(t *testing.T) {
+	resetForHostsState(t)
+	mid := &ReproMid{}
+	RegisterMethods(reproOuter{mid}, WithPrefix("rp_"))
+	if err := declerr.First(); err != nil {
+		t.Fatal(err)
+	}
+	ran := false
+	mid.ReproInner = &ReproInner{ran: &ran}
+	Activate(DetectFacts())
+	if _, err := RecordPlan("hb-repro", "", "rp_pong"); err != nil {
+		t.Fatalf("RecordPlan: %v", err)
+	}
+	if !ran {
+		t.Fatal("rp_pong's body did not run")
+	}
+
+	var line int
+	requireDeclErrAt(t, "RegisterMethods(api.byValueNested): Pong is promoted through the nil embedded field LateHolder.LateBase", &line, func() {
+		line = thisLine() + 1
+		RegisterMethods(byValueNested{}, WithPrefix("bn_"))
+	})
+	requireRefusedAfterClear(t, "bn_pong")
+}

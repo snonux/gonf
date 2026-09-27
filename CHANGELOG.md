@@ -108,10 +108,12 @@ Fixes
   `func (Base) Opts() TaskOptions`) is a declaration error instead of a
   panic: `Opts` refuses the struct, the others skip that task. A task
   method or `WhenX(Facts)` predicate, which run later, is refused the
-  same way only when the struct is registered by value (a copy whose nil
-  embed can never be set, so its task would panic when it runs); a struct
-  registered by pointer reads the embed when the method runs, so it may
-  still be set after `RegisterMethods`. A nil pointer to a
+  same way only when the struct is registered by value and the nil embed
+  is held in that copy itself (directly, or in a by-value embedded
+  struct): it can never be set, so the task would panic when it runs. A
+  nil embed behind a non-nil embedded pointer or interface is shared with
+  the recipe, and a struct registered by pointer reads its embeds when
+  the method runs, so either may still be set after `RegisterMethods`. A nil pointer to a
   pointer-receiver companion is still called, like a nil-safe marker.
 - `RegisterMethods` no longer slows down exponentially on recursive
   embedded types (types embedding each other by pointer): the promotion

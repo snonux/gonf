@@ -83,7 +83,7 @@ func collectStructOptions(rv reflect.Value, rt reflect.Type) (TaskOptions, error
 		if m := rv.MethodByName("StructTaskOptions"); m.IsValid() {
 			nilRecv := ""
 			if !own {
-				path, refuse := nilEmbed(rv, "", "StructTaskOptions")
+				path, refuse := nilEmbed(rv, "", "StructTaskOptions", false)
 				if refuse {
 					return nil, fmt.Errorf("marker %s is nil", path)
 				}
@@ -130,7 +130,7 @@ func markerStructOptions(rv reflect.Value, rt reflect.Type) (TaskOptions, bool, 
 		found = true
 		// Exported marker field: the field value is accessible.
 		fv := rv.Elem().Field(i)
-		path, refuse := nilEmbed(fv, f.Name, "StructTaskOptions")
+		path, refuse := nilEmbed(fv, f.Name, "StructTaskOptions", false)
 		if refuse {
 			// Calling the marker through a nil pointer or interface would
 			// panic, and skipping it would drop its options (e.g.
