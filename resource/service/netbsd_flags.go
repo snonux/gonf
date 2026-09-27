@@ -89,7 +89,7 @@ func (b netbsdBackend) setFlags(u unit, flags string) error {
 	if err != nil {
 		return err
 	}
-	rc, err := readRcConf(b.rcConf)
+	rc, err := readRcFile(b.rcConf)
 	if err != nil {
 		return err
 	}
@@ -97,14 +97,7 @@ func (b netbsdBackend) setFlags(u unit, flags string) error {
 	if err != nil {
 		return fmt.Errorf("rewrite %s: %w", b.rcConf, err)
 	}
-	var opts []atomicfile.Option
-	if rc.owner != nil {
-		opts = append(opts, atomicfile.WithOwner(*rc.owner))
-	}
-	if err := atomicfile.Write(rc.path, []byte(updated), rc.mode, opts...); err != nil {
-		return fmt.Errorf("write %s: %w", b.rcConf, err)
-	}
-	return nil
+	return rc.replace(b.rcConf, updated)
 }
 
 func (b netbsdBackend) describeFlags(u unit, flags string) (would, did string) {
@@ -148,46 +141,62 @@ func readRcAssignment(path, name string) (rcValue, error) {
 	return value, nil
 }
 
-// rcConfFile is rc.conf as setFlags found it: the file to replace (path,
-// the symlink target when rc.conf is a symlink), its content, and the mode
-// and ownership its replacement keeps (owner is nil for a new rc.conf,
-// which gets the writer's).
-type rcConfFile struct {
+// rcFile is an rc.conf-style file (rc.conf for setFlags, rc.conf.d/NAME
+// for setEnabled) as it was found: the file to replace (path, the symlink
+// target when the file is a symlink), its content, and the mode and
+// ownership its replacement keeps (owner is nil for a new file, which gets
+// the writer's).
+type rcFile struct {
 	path    string
 	content string
 	mode    fs.FileMode
 	owner   *atomicfile.Owner
 }
 
-// readRcConf reads rc.conf at path, following a symlink to the file it
-// names so the edit replaces that file rather than the link. A missing
-// rc.conf is empty with mode 0644 and the writer's ownership; a dangling
-// symlink is an error, not a file to create over the link.
-func readRcConf(path string) (rcConfFile, error) {
+// replace installs content as rc's file durably and atomically
+// (atomicfile.Write: fsync, rename, directory fsync) with rc's mode and
+// ownership. name is the path the caller asked for (the symlink, not its
+// target), which a write error names.
+func (rc rcFile) replace(name, content string) error {
+	var opts []atomicfile.Option
+	if rc.owner != nil {
+		opts = append(opts, atomicfile.WithOwner(*rc.owner))
+	}
+	if err := atomicfile.Write(rc.path, []byte(content), rc.mode, opts...); err != nil {
+		return fmt.Errorf("write %s: %w", name, err)
+	}
+	return nil
+}
+
+// readRcFile reads the rc.conf-style file at path, following a symlink to
+// the file it names so the edit replaces that file rather than the link. A
+// missing file is empty with mode 0644 and the writer's ownership; a
+// dangling symlink is an error, not a file to create over the link.
+func readRcFile(path string) (rcFile, error) {
 	target, err := filepath.EvalSymlinks(path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		if _, lerr := os.Lstat(path); lerr == nil {
-			return rcConfFile{}, fmt.Errorf("resolve %s: %w", path, err)
+			return rcFile{}, fmt.Errorf("resolve %s: %w", path, err)
 		}
-		return rcConfFile{path: path, mode: 0o644}, nil
+		return rcFile{path: path, mode: 0o644}, nil
 	case err != nil:
-		return rcConfFile{}, fmt.Errorf("resolve %s: %w", path, err)
+		return rcFile{}, fmt.Errorf("resolve %s: %w", path, err)
 	}
 	info, err := os.Stat(target)
 	if err != nil {
-		return rcConfFile{}, fmt.Errorf("stat %s: %w", path, err)
+		return rcFile{}, fmt.Errorf("stat %s: %w", path, err)
 	}
 	if !info.Mode().IsRegular() {
-		return rcConfFile{}, fmt.Errorf("%s is not a regular file (%v)", path, info.Mode().Type())
+		return rcFile{}, fmt.Errorf("%s is not a regular file (%v)", path, info.Mode().Type())
 	}
 	data, err := os.ReadFile(target)
 	if err != nil {
-		return rcConfFile{}, fmt.Errorf("read %s: %w", path, err)
+		return rcFile{}, fmt.Errorf("read %s: %w", path, err)
 	}
 	// Keep the set-id and sticky bits too, not only the permissions.
 	const modeBits = fs.ModePerm | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky
-	rc := rcConfFile{path: target, content: string(data), mode: info.Mode() & modeBits}
+	rc := rcFile{path: target, content: string(data), mode: info.Mode() & modeBits}
 	if owner, ok := atomicfile.OwnerOf(info); ok {
 		rc.owner = &owner
 	}

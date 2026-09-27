@@ -82,7 +82,12 @@ func (b netbsdBackend) svcRun(name, action string) error {
 	return nil
 }
 
-// setEnabled writes rcConfD/NAME with NAME=YES|NO (overrides rc.conf).
+// setEnabled writes rcConfD/NAME with NAME=YES|NO (overrides rc.conf),
+// creating rcConfD (0755) when it is missing. The file is replaced like
+// rc.conf in setFlags (readRcFile, rcFile.replace): durably and atomically,
+// keeping an existing file's mode and ownership (a new one is 0644, owned
+// by the writer); a symlinked file stays a symlink and its target is
+// replaced; a dangling symlink or a non-regular file is an error.
 func (b netbsdBackend) setEnabled(name string, enabled bool) error {
 	if err := os.MkdirAll(b.rcConfD, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", b.rcConfD, err)
@@ -91,10 +96,10 @@ func (b netbsdBackend) setEnabled(name string, enabled bool) error {
 	if enabled {
 		val = "YES"
 	}
-	content := name + "=" + val + "\n"
 	path := filepath.Join(b.rcConfD, name)
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
+	rc, err := readRcFile(path)
+	if err != nil {
+		return err
 	}
-	return nil
+	return rc.replace(path, name+"="+val+"\n")
 }

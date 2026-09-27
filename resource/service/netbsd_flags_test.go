@@ -504,7 +504,7 @@ func TestNetBSDSetFlagsKeepsModeOwnerAndSymlink(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := atomicfile.Owner{UID: os.Getuid(), GID: gid}
-		if rc, err := readRcConf(b.rcConf); err != nil || rc.owner == nil || *rc.owner != want {
+		if rc, err := readRcFile(b.rcConf); err != nil || rc.owner == nil || *rc.owner != want {
 			t.Fatalf("readRcConf owner = %v (%v), want %+v", rc.owner, err, want)
 		}
 		if err := b.setFlags(unit{name: "nsd"}, "-x"); err != nil {

@@ -11,6 +11,12 @@ Fixes
   can no longer leave an empty rc.conf. It also keeps rc.conf's owner,
   edits the file a symlinked rc.conf points to instead of replacing the
   link, and refuses a dangling symlink or a non-regular rc.conf.
+- NetBSD service enable/disable now writes `/etc/rc.conf.d/NAME` the same
+  durable way (temporary file, fsync, rename, directory fsync), so a
+  power loss can no longer leave an empty override. An existing override
+  keeps its mode and owner, a symlinked one has its target replaced, and
+  a dangling symlink or a non-regular override is refused instead of
+  written through.
 - A changed `File` with `WithOwner`/`WithGroup` gets its owner and group
   on the temporary file before the rename, so a set-id file never
   appears, even briefly, owned by the user running gonf (e.g. root). An

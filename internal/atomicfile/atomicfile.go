@@ -2,8 +2,8 @@
 // temporary file beside the target, fsync, rename over the target, fsync of
 // the parent directory. It is the one such writer in gonf; every resource
 // that rewrites a whole file in place (resource/file's File and Target, the
-// NetBSD rc.conf edit in resource/service) uses it rather than restating the
-// steps, so none of them can forget one of the syncs.
+// NetBSD rc.conf and rc.conf.d edits in resource/service) uses it rather
+// than restating the steps, so none of them can forget one of the syncs.
 package atomicfile
 
 import (

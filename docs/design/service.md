@@ -11,6 +11,13 @@ OS-agnostic service/daemon management. The backend is selected automatically:
 | FreeBSD | `service`(8) |
 | NetBSD | `service`(8) + `/etc/rc.conf.d` for enable |
 
+On NetBSD, enable and disable write `/etc/rc.conf.d/NAME` (`NAME=YES` or
+`NAME=NO`, creating `/etc/rc.conf.d` when missing) the way the `WithFlags`
+rc.conf edit is written (see [Startup flags](#startup-flags)): durably and
+atomically via `internal/atomicfile`, keeping an existing override's mode
+and ownership (a new one is 0644), replacing the target of a symlinked
+override, and refusing a dangling symlink or a non-regular file.
+
 ```go
 Service("httpd")                    // started + enabled at boot
 Service("httpd", WithRestart)       // converge, then restart once
