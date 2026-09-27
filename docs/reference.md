@@ -164,7 +164,9 @@ or `Home`: those are api functions.) Pass
 `RegisterOnCluster(name, structs...)` is `RegisterMethods(v, OnCluster(name))`
 for each struct, each under its own default prefix. A `RegisterOption` or
 `TaskOption` in the list applies to all of them; `WithPrefix` is refused
-(use `RegisterMethods` for a shared prefix):
+(use `RegisterMethods` for a shared prefix), and so is a `nil` item or a
+`nil` TaskOption: either is a declaration error and registers none of the
+structs:
 
 ```go
 RegisterOnCluster(cluster.NameFreeBSD,
@@ -216,10 +218,14 @@ gets no generated `DescX`, but a hand-written one there still wins.
 `_x.go` and `.x.go` are not read.
 
 A companion with the wrong signature is a declaration error and that method
-is not registered. So is a `nil` TaskOption: in an `OptsX` companion it
-skips that method; passed to `RegisterMethods` (directly or in
-`WithGroupWhen`), or returned by `Opts()` or a `StructOption` marker, it
-registers nothing of the struct. Name methods for the action (`Unattended.Script`, not
+is not registered. So is a `nil` TaskOption returned by an `OptsX`
+companion. A `nil` returned by `Opts()`, a `StructOption` marker or a
+struct's own `StructTaskOptions`, or a marker embedded as a nil pointer
+(`struct{ *RequiresRoot }`), registers nothing of the struct; so does a
+`nil` option passed to `RegisterMethods` (a `RegisterOption`, a
+`TaskOption` or one inside `WithGroupWhen`), since it may stand for a
+guard such as `OnCluster`. The error names the struct type and the
+option's position. Name methods for the action (`Unattended.Script`, not
 `Unattended.UnattendedScript`).
 
 `OnCluster` replaces the `WhenHostname(ClusterHosts(), func() { ... })`

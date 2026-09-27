@@ -110,14 +110,22 @@ type nilDirectStructOpts struct{}
 func (nilDirectStructOpts) Ping()                          {}
 func (nilDirectStructOpts) StructTaskOptions() TaskOptions { return TaskOptions{nil} }
 
+// nilPtrMarkerStruct embeds the RequiresRoot marker through a nil pointer.
+type nilPtrMarkerStruct struct {
+	*RequiresRoot
+}
+
+func (nilPtrMarkerStruct) Ping() {}
+
 // TestRegisterMethodsNilCompanionOptionIsDeclarationError: a nil returned
-// by a companion is reported at the RegisterMethods call (like a companion
-// with the wrong signature). A per-method OptsX skips only that method; a
+// by a companion, or a nil-pointer marker, is reported at the
+// RegisterMethods call naming the struct type (like a companion with the
+// wrong signature). A per-method OptsX skips only that method; a
 // struct-level Opts, marker or StructTaskOptions registers nothing of the
 // struct.
 func TestRegisterMethodsNilCompanionOptionIsDeclarationError(t *testing.T) {
 	var line int
-	requireDeclErrAt(t, "RegisterMethods: OptsBroken returned a nil TaskOption (option 2)", &line, func() {
+	requireDeclErrAt(t, "RegisterMethods(api.nilOptsMethod): OptsBroken returned a nil TaskOption (option 2)", &line, func() {
 		line = thisLine() + 1
 		RegisterMethods(nilOptsMethod{}, WithPrefix("nm_"))
 	})
@@ -129,9 +137,11 @@ func TestRegisterMethodsNilCompanionOptionIsDeclarationError(t *testing.T) {
 		v    any
 		want string
 	}{
-		{"struct Opts", nilOptsStruct{}, "RegisterMethods: Opts returned a nil TaskOption (option 1)"},
-		{"marker", nilMarkerStruct{}, "RegisterMethods: marker NilMarker: StructTaskOptions returned a nil TaskOption (option 3)"},
-		{"direct StructTaskOptions", nilDirectStructOpts{}, "RegisterMethods: StructTaskOptions returned a nil TaskOption (option 1)"},
+		{"struct Opts", nilOptsStruct{}, "RegisterMethods(api.nilOptsStruct): Opts returned a nil TaskOption (option 1)"},
+		{"marker", nilMarkerStruct{}, "RegisterMethods(api.nilMarkerStruct): marker NilMarker: StructTaskOptions returned a nil TaskOption (option 3)"},
+		{"nil-pointer marker", nilPtrMarkerStruct{}, "RegisterMethods(api.nilPtrMarkerStruct): marker RequiresRoot is a nil pointer"},
+		{"nil-pointer marker via pointer", &nilPtrMarkerStruct{}, "RegisterMethods(api.nilPtrMarkerStruct): marker RequiresRoot is a nil pointer"},
+		{"direct StructTaskOptions", nilDirectStructOpts{}, "RegisterMethods(api.nilDirectStructOpts): StructTaskOptions returned a nil TaskOption (option 1)"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -145,45 +155,66 @@ func TestRegisterMethodsNilCompanionOptionIsDeclarationError(t *testing.T) {
 	}
 }
 
-// nilGroup is the struct the group-option cases register.
+// nilGroup and nilGroupB are the structs the group-option cases register.
 type nilGroup struct{}
 
 func (nilGroup) Ping() {}
 func (nilGroup) Pong() {}
 
-// TestRegisterMethodsNilGroupOptionIsDeclarationError: a nil TaskOption
-// passed as a RegisterOption, or inside WithGroupWhen, is reported at the
-// RegisterMethods (or RegisterOnCluster) call with its position, and no
-// method of the struct is registered.
+type nilGroupB struct{}
+
+func (nilGroupB) Ping() {}
+
+// TestRegisterMethodsNilGroupOptionIsDeclarationError: a nil
+// RegisterOption, a nil TaskOption passed as one, or a nil inside
+// WithGroupWhen is reported at the RegisterMethods (or RegisterOnCluster)
+// call with its position, and no method of any struct of the call is
+// registered — a nil option may stand for a guard such as OnCluster, so
+// skipping it would register the methods unguarded.
 func TestRegisterMethodsNilGroupOptionIsDeclarationError(t *testing.T) {
 	var nilOpt TaskOption
+	var nilReg RegisterOption
 	cases := []struct {
 		name    string
 		want    string
 		declare func(line *int)
 	}{
-		{"direct", "RegisterMethods: option 2: nil TaskOption (passed directly or inside WithGroupWhen)", func(line *int) {
+		{"nil TaskOption", "RegisterMethods: option 2 is a nil TaskOption", func(line *int) {
 			*line = thisLine() + 1
 			RegisterMethods(nilGroup{}, WithPrefix("ng_"), nilOpt, WhenLinux())
 		}},
-		{"WithGroupWhen", "RegisterMethods: option 1: nil TaskOption (passed directly or inside WithGroupWhen)", func(line *int) {
+		{"nil RegisterOption", "RegisterMethods: option 2 is a nil RegisterOption", func(line *int) {
+			Cluster("nilc", Host("n1"))
+			*line = thisLine() + 1
+			RegisterMethods(nilGroup{}, WithPrefix("ng_"), nilReg, OnCluster("nilc"))
+		}},
+		{"WithGroupWhen", "RegisterMethods: option 1 is WithGroupWhen with a nil TaskOption (option 2)", func(line *int) {
 			*line = thisLine() + 1
 			RegisterMethods(nilGroup{}, WithGroupWhen(WhenLinux(), nil), WithPrefix("ng_"))
 		}},
-		{"RegisterOnCluster", `RegisterOnCluster("nilc"): item 2: nil TaskOption (passed directly or inside WithGroupWhen)`, func(line *int) {
+		{"RegisterOnCluster nil TaskOption", `RegisterOnCluster("nilc"): item 3 is a nil TaskOption`, func(line *int) {
+			Cluster("nilc", Host("n1"))
 			*line = thisLine() + 1
-			RegisterOnCluster("nilc", nilGroup{}, nilOpt)
+			RegisterOnCluster("nilc", nilGroup{}, nilGroupB{}, nilOpt)
 		}},
-		{"RegisterOnCluster WithGroupWhen", `RegisterOnCluster("nilc"): item 3: nil TaskOption (passed directly or inside WithGroupWhen)`, func(line *int) {
+		{"RegisterOnCluster WithGroupWhen", `RegisterOnCluster("nilc"): item 3 is WithGroupWhen with a nil TaskOption (option 1)`, func(line *int) {
+			Cluster("nilc", Host("n1"))
 			*line = thisLine() + 1
-			RegisterOnCluster("nilc", nilGroup{}, Operational(), WithGroupWhen(nil))
+			RegisterOnCluster("nilc", nilGroup{}, Operational(), WithGroupWhen(nil), nilGroupB{})
+		}},
+		{"RegisterOnCluster nil item", `RegisterOnCluster("nilc"): item 2 is nil`, func(line *int) {
+			Cluster("nilc", Host("n1"))
+			*line = thisLine() + 1
+			RegisterOnCluster("nilc", nilGroup{}, nilReg, nilGroupB{})
 		}},
 	}
+	refused := []string{"ng_ping", "ng_pong",
+		DefaultPrefix(nilGroup{}) + "ping", DefaultPrefix(nilGroup{}) + "pong", DefaultPrefix(nilGroupB{}) + "ping"}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var line int
 			requireDeclErrAt(t, tc.want, &line, func() { tc.declare(&line) })
-			requireRefusedAfterClear(t, "ng_ping", "ng_pong", DefaultPrefix(nilGroup{})+"ping", DefaultPrefix(nilGroup{})+"pong")
+			requireRefusedAfterClear(t, refused...)
 		})
 	}
 }

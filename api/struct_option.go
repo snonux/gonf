@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 )
@@ -42,11 +43,11 @@ func (RequiresRoot) StructTaskOptions() TaskOptions { return TaskOptions{Privile
 // method on the outer type (single marker only; multiple same-depth
 // markers are an ambiguous selector and are not in the method set).
 //
-// A struct-level companion with the wrong signature, or a marker or
-// companion returning a nil TaskOption, is returned as an error:
-// RegisterMethods then registers no task of the struct, because silently
-// ignoring the companion (or the nil option) could drop Privileged() and
-// lower every task's privileges.
+// A struct-level companion with the wrong signature, a nil-pointer marker,
+// or a marker or companion returning a nil TaskOption, is returned as an
+// error: RegisterMethods then registers no task of the struct, because
+// silently ignoring the companion (or the nil option) could drop
+// Privileged() and lower every task's privileges.
 func collectStructOptions(rv reflect.Value, rt reflect.Type) (TaskOptions, error) {
 	opts, foundMarkerField, err := markerStructOptions(rv, rt)
 	if err != nil {
@@ -78,8 +79,9 @@ func collectStructOptions(rv reflect.Value, rt reflect.Type) (TaskOptions, error
 // markerStructOptions collects the TaskOptions of the exported embedded
 // StructOption marker fields, in declaration order, and reports whether the
 // struct has any such field. Markers implement StructOption, so their
-// StructTaskOptions signature is guaranteed by the compiler; a nil
-// TaskOption in a marker's result is returned as an error.
+// StructTaskOptions signature is guaranteed by the compiler; a nil-pointer
+// marker field, or a nil TaskOption in a marker's result, is returned as an
+// error.
 func markerStructOptions(rv reflect.Value, rt reflect.Type) (TaskOptions, bool, error) {
 	var opts TaskOptions
 	found := false
@@ -104,10 +106,16 @@ func markerStructOptions(rv reflect.Value, rt reflect.Type) (TaskOptions, bool, 
 		}
 		found = true
 		// Exported embedded marker: the field value is accessible.
-		if m := rv.Elem().Field(i).MethodByName("StructTaskOptions"); m.IsValid() {
+		fv := rv.Elem().Field(i)
+		if fv.Kind() == reflect.Pointer && fv.IsNil() {
+			// Calling the marker through a nil pointer would panic, and
+			// skipping it would drop its options (e.g. Privileged()).
+			return nil, true, fmt.Errorf("marker %s is a nil pointer", f.Name)
+		}
+		if m := fv.MethodByName("StructTaskOptions"); m.IsValid() {
 			markerOpts := m.Call(nil)[0].Interface().([]TaskOption)
 			if bad := nilOptionIndex(markerOpts); bad != 0 {
-				return nil, true, fmt.Errorf("RegisterMethods: marker %s: StructTaskOptions returned a nil TaskOption (option %d)", f.Name, bad)
+				return nil, true, fmt.Errorf("marker %s: StructTaskOptions returned a nil TaskOption (option %d)", f.Name, bad)
 			}
 			opts = append(opts, markerOpts...)
 		}
@@ -117,16 +125,17 @@ func markerStructOptions(rv reflect.Value, rt reflect.Type) (TaskOptions, bool, 
 
 // callTaskOptionsCompanion calls m, the companion named name, which must be
 // func() TaskOptions, and returns its result. Any other signature is
-// registration-time misuse, returned as "RegisterMethods: <want>"; so is a
-// nil TaskOption in the result, which Task would panic applying.
+// registration-time misuse, returned as the error <want>; so is a nil
+// TaskOption in the result, which Task would refuse. registerMethodTasks
+// prefixes both with "RegisterMethods(<struct type>): ".
 func callTaskOptionsCompanion(m reflect.Value, name, want string) (TaskOptions, error) {
 	mt := m.Type()
 	if mt.NumIn() != 0 || mt.NumOut() != 1 || mt.Out(0) != reflect.TypeOf(TaskOptions(nil)) {
-		return nil, fmt.Errorf("RegisterMethods: %s", want)
+		return nil, errors.New(want)
 	}
 	opts := m.Call(nil)[0].Interface().(TaskOptions)
 	if bad := nilOptionIndex(opts); bad != 0 {
-		return nil, fmt.Errorf("RegisterMethods: %s returned a nil TaskOption (option %d)", name, bad)
+		return nil, fmt.Errorf("%s returned a nil TaskOption (option %d)", name, bad)
 	}
 	return opts, nil
 }

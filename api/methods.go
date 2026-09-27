@@ -25,9 +25,8 @@ type registerOptionFunc func(*registerConfig)
 
 func (f registerOptionFunc) applyRegister(c *registerConfig) { f(c) }
 
-// applyRegister makes a TaskOption a RegisterOption: WithGroupWhen(o). A
-// nil o is queued as is: applyRegisterOptions spots it and the call is
-// refused with a declaration error.
+// applyRegister makes a TaskOption a RegisterOption: WithGroupWhen(o).
+// applyRegisterOptions refuses a nil o before it gets here.
 func (o TaskOption) applyRegister(c *registerConfig) {
 	c.groupWhen = append(c.groupWhen, o)
 }
@@ -189,12 +188,13 @@ func WithGroupWhen(opts ...TaskOption) RegisterOption {
 // Methods named Desc*, When*, or Opts* are not registered as tasks.
 //
 // Misuse — v not a struct or non-nil pointer to one, a companion with the
-// wrong signature, a nil TaskOption (among opts, inside WithGroupWhen, or
-// returned by a companion or StructOption marker), an unknown OnCluster
-// cluster — is reported as a declaration error (internal/declerr, which
-// RecordPlan, Run, Apply and the CLI refuse to run with). A bad receiver,
-// option, OnCluster or struct-level companion registers nothing of v; a bad
-// per-method companion skips only that method's task.
+// wrong signature, a nil option (a nil RegisterOption or TaskOption among
+// opts, or inside WithGroupWhen), a nil TaskOption returned by a companion
+// or StructOption marker, a marker embedded as a nil pointer, an unknown
+// OnCluster cluster — is reported as a declaration error (internal/declerr,
+// which RecordPlan, Run, Apply and the CLI refuse to run with). A bad
+// receiver, option, OnCluster, marker or struct-level companion registers
+// nothing of v; a bad per-method companion skips only that method's task.
 //
 // A Needs("x") in an OptsX companion (or WithGroupWhen) is resolved relative
 // to this call's WithPrefix first: see Needs.
@@ -229,13 +229,21 @@ func RegisterMethods(v any, opts ...RegisterOption) {
 //
 // WithPrefix is refused (a declaration error, nothing registered): a prefix
 // shared by several structs belongs on each RegisterMethods call, and one
-// per struct is the default already. Any other item is a struct or pointer
-// to one, checked as RegisterMethods checks it.
+// per struct is the default already. So is a nil item or a nil TaskOption
+// (directly or inside WithGroupWhen): no struct of the call is registered.
+// Any other item is a struct or pointer to one, checked as RegisterMethods
+// checks it.
 func RegisterOnCluster(cluster string, items ...any) {
 	var opts []RegisterOption
 	var optItems []int // optItems[i] is opts[i]'s 1-based position in items
 	var structs []any
 	for i, item := range items {
+		if item == nil {
+			// Refuse up front: RegisterMethods(nil) would refuse only this
+			// item while registering the others.
+			declerr.Reportf("RegisterOnCluster(%q): item %d is nil", cluster, i+1)
+			return
+		}
 		if o, ok := item.(RegisterOption); ok {
 			opts = append(opts, o)
 			optItems = append(optItems, i+1)
@@ -244,8 +252,8 @@ func RegisterOnCluster(cluster string, items ...any) {
 		structs = append(structs, item)
 	}
 	var probe registerConfig
-	if bad := applyRegisterOptions(&probe, opts); bad != 0 {
-		declerr.Reportf("RegisterOnCluster(%q): item %d: %s", cluster, optItems[bad-1], nilGroupOptionMsg)
+	if bad, why := applyRegisterOptions(&probe, opts); bad != 0 {
+		declerr.Reportf("RegisterOnCluster(%q): item %d %s", cluster, optItems[bad-1], why)
 		return
 	}
 	if probe.prefixSet {
@@ -258,37 +266,37 @@ func RegisterOnCluster(cluster string, items ...any) {
 	}
 }
 
-// nilGroupOptionMsg is the misuse message of a RegisterOption that adds a
-// nil TaskOption to the group options (applyRegisterOptions).
-const nilGroupOptionMsg = "nil TaskOption (passed directly or inside WithGroupWhen)"
-
-// applyRegisterOptions applies opts to cfg in order; a nil RegisterOption is
-// a no-op. It stops at the first option that adds a nil TaskOption to the
-// group options — a TaskOption(nil) passed as a RegisterOption, or a nil
-// inside WithGroupWhen — and returns that option's 1-based position, since
-// Task would panic applying it; it returns 0 when every option applied.
-func applyRegisterOptions(cfg *registerConfig, opts []RegisterOption) int {
+// applyRegisterOptions applies opts to cfg in order. It stops at the first
+// nil option and returns its 1-based position with what is wrong with it,
+// or 0 and "" when every option applied. A nil option is refused rather
+// than skipped, since it may stand for a guard such as OnCluster the recipe
+// failed to build: a nil RegisterOption, a TaskOption(nil) passed as one, or
+// a WithGroupWhen holding a nil TaskOption (which Task would refuse).
+func applyRegisterOptions(cfg *registerConfig, opts []RegisterOption) (int, string) {
 	for i, o := range opts {
 		if o == nil {
-			continue
+			return i + 1, "is a nil RegisterOption"
+		}
+		if to, ok := o.(TaskOption); ok && to == nil {
+			return i + 1, "is a nil TaskOption"
 		}
 		n := len(cfg.groupWhen)
 		o.applyRegister(cfg)
-		if nilOptionIndex(cfg.groupWhen[n:]) != 0 {
-			return i + 1
+		if j := nilOptionIndex(cfg.groupWhen[n:]); j != 0 {
+			return i + 1, fmt.Sprintf("is WithGroupWhen with a nil TaskOption (option %d)", j)
 		}
 	}
-	return 0
+	return 0, ""
 }
 
 // registerConfigFor applies opts and resolves OnCluster's guard into
-// groupWhen, so every method of the call carries it. A nil TaskOption among
-// the group options, an unknown OnCluster cluster, or one contradicting
+// groupWhen, so every method of the call carries it. A nil option (see
+// applyRegisterOptions), an unknown OnCluster cluster, or one contradicting
 // WithCluster, is returned as an error.
 func registerConfigFor(opts []RegisterOption) (registerConfig, error) {
 	cfg := registerConfig{}
-	if bad := applyRegisterOptions(&cfg, opts); bad != 0 {
-		return cfg, fmt.Errorf("RegisterMethods: option %d: %s", bad, nilGroupOptionMsg)
+	if bad, why := applyRegisterOptions(&cfg, opts); bad != 0 {
+		return cfg, fmt.Errorf("RegisterMethods: option %d %s", bad, why)
 	}
 	if cfg.guardCluster == "" {
 		return cfg, nil
@@ -353,9 +361,14 @@ func registerReceiver(v any) (reflect.Value, reflect.Type, error) {
 }
 
 // registerMethodTasks queues one Task per exported func() method of rv. A
-// companion misuse is reported as a declaration error: a struct-level one
-// registers nothing, a per-method one skips that method.
+// companion misuse is reported as a declaration error naming the struct
+// type ("RegisterMethods(pkg.Type): ..."): a struct-level one registers
+// nothing, a per-method one skips that method.
 func registerMethodTasks(rv reflect.Value, rt reflect.Type, cfg registerConfig) {
+	// rt is always a pointer type (registerReceiver); name its struct.
+	misuse := func(err error) {
+		declerr.Report(fmt.Errorf("RegisterMethods(%s): %w", rt.Elem(), err))
+	}
 	// Struct-level default TaskOptions: embedded StructOption markers
 	// (e.g. RequiresRoot) and/or the Opts() companion. A method's own
 	// OptsX companion is appended after the combined default for that
@@ -363,7 +376,7 @@ func registerMethodTasks(rv reflect.Value, rt reflect.Type, cfg registerConfig) 
 	// smoke-test task on an otherwise-privileged struct).
 	structOpts, err := collectStructOptions(rv, rt)
 	if err != nil {
-		declerr.Report(err)
+		misuse(err)
 		return
 	}
 
@@ -396,7 +409,7 @@ func registerMethodTasks(rv reflect.Value, rt reflect.Type, cfg registerConfig) 
 
 		taskOpts, err := methodTaskOptions(rv, name, cfg, structOpts)
 		if err != nil {
-			declerr.Report(err)
+			misuse(err)
 			continue
 		}
 		task := cfg.prefix + camelToSnake(name)
@@ -489,13 +502,13 @@ func resolveWhen(rv reflect.Value, name string) (TaskOption, error) {
 	if wt.NumIn() == 0 && wt.NumOut() == 1 && wt.Out(0) == reflect.TypeOf(TaskOption(nil)) {
 		opt, _ := w.Call(nil)[0].Interface().(TaskOption)
 		if opt == nil {
-			return nil, fmt.Errorf("RegisterMethods: When%s returned a nil TaskOption", name)
+			return nil, fmt.Errorf("When%s returned a nil TaskOption", name)
 		}
 		return opt, nil
 	}
 	if wt.NumIn() != 1 || wt.In(0) != reflect.TypeOf(Facts{}) ||
 		wt.NumOut() != 1 || wt.Out(0).Kind() != reflect.Bool {
-		return nil, fmt.Errorf("RegisterMethods: When%s must be func() TaskOption or func(Facts) bool", name)
+		return nil, fmt.Errorf("When%s must be func() TaskOption or func(Facts) bool", name)
 	}
 	wMethod := w
 	return When(func(f Facts) bool {

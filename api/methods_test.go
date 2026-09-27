@@ -258,7 +258,7 @@ func TestRegisterMethodsOptsComposesWithGroupWhen(t *testing.T) {
 // must not register with the companion silently dropped); the valid sibling
 // still registers.
 func TestRegisterMethodsOptsBadSignatureIsDeclarationError(t *testing.T) {
-	requireDeclErr(t, "RegisterMethods: OptsBroken must be func() TaskOptions", func() {
+	requireDeclErr(t, "RegisterMethods(api.badOpts): OptsBroken must be func() TaskOptions", func() {
 		RegisterMethods(badOpts{}, WithPrefix("demo_"))
 	})
 	requireQueued(t, "demo_ping")
@@ -293,7 +293,7 @@ func (badOpts) Broken()               {}
 // signature is a declaration error and Broken is not registered, so it can
 // never run unguarded; the valid sibling still registers.
 func TestRegisterMethodsWhenBadSignatureIsDeclarationError(t *testing.T) {
-	requireDeclErr(t, "RegisterMethods: WhenBroken must be func() TaskOption or func(Facts) bool", func() {
+	requireDeclErr(t, "RegisterMethods(api.badWhen): WhenBroken must be func() TaskOption or func(Facts) bool", func() {
 		RegisterMethods(badWhen{}, WithPrefix("demo_"))
 	})
 	requireQueued(t, "demo_ping")
@@ -345,7 +345,7 @@ func TestRegisterMethodsCompanionErrorOrderIsDeterministic(t *testing.T) {
 		if err == nil {
 			t.Fatalf("iter %d: expected a declaration error, got nil", i)
 		}
-		if want := "RegisterMethods: WhenAlpha must be func() TaskOption or func(Facts) bool"; err.Error() != want {
+		if want := "RegisterMethods(api.twoBrokenWhens): WhenAlpha must be func() TaskOption or func(Facts) bool"; err.Error() != want {
 			t.Fatalf("iter %d: error = %q, want %q (alphabetically-first method)", i, err.Error(), want)
 		}
 	}
@@ -482,7 +482,7 @@ func TestRegisterMethodsStructOptsComposedWithOptsX(t *testing.T) {
 // struct-level Opts registers no task of the struct (the default could have
 // been Privileged()).
 func TestRegisterMethodsStructOptsBadSignatureIsDeclarationError(t *testing.T) {
-	requireDeclErr(t, "RegisterMethods: Opts must be func() TaskOptions", func() {
+	requireDeclErr(t, "RegisterMethods(api.badStruct): Opts must be func() TaskOptions", func() {
 		RegisterMethods(badStruct{}, WithPrefix("demo_"))
 	})
 	requireNotQueued(t, "demo_ping")

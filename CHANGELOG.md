@@ -65,11 +65,21 @@ Fixes
   a guard every hostname matches, so the task applied on every
   destination. `WhenHostnameIn()` with no hosts no longer falls back to
   that match-all guard either.
-- A `nil` TaskOption is a declaration error instead of a panic: in
-  `Task(...)`, among `RegisterMethods`/`RegisterOnCluster` options or
-  `WithGroupWhen`, or returned by an `Opts()`/`OptsX()` companion or a
-  `StructOption` marker. The task (or the struct) is not registered, since
-  the missing option may have been a guard or `Privileged()`.
+- A `nil` TaskOption is a declaration error instead of a panic, since the
+  missing option may have been a guard or `Privileged()`. In `Task(...)`
+  the task is not registered; returned by an `OptsX()` companion, only
+  that method is skipped; returned by `Opts()`, a `StructOption` marker or
+  a struct's own `StructTaskOptions`, no task of the struct is
+  registered, and a marker embedded as a nil pointer is refused the same
+  way instead of panicking. Among `RegisterMethods` options (directly or
+  inside `WithGroupWhen`) it registers nothing of the struct, and in
+  `RegisterOnCluster` nothing of any struct of the call.
+- Behaviour change: a `nil` `RegisterOption` passed to `RegisterMethods`,
+  or a `nil` item in `RegisterOnCluster`, is a declaration error and
+  registers nothing. Before, `RegisterMethods` skipped it silently, so a
+  guard such as `OnCluster` built as nil registered the methods unguarded.
+- `RegisterMethods` companion errors name the struct type:
+  `RegisterMethods(pkg.Type): OptsX must be func() TaskOptions`.
 
 Docs
 - Gonfy the beaver is gonf's mascot and new logo (`assets/logo-*.svg`).
