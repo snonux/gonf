@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -42,45 +43,83 @@ func perfHangGuard() time.Duration {
 }
 
 // timedSample runs fn once, in its own goroutine, bounded by perfHangGuard,
-// and returns its wall-clock duration. If fn does not return within the
-// guard, or returns a non-nil error (a correctness check inside fn
-// failed), the test fails immediately naming label -- always on the test's
-// own goroutine, via t.Fatalf here, never inside fn's goroutine, since
-// FailNow must run on the goroutine executing the test. Without a
-// per-sample bound, a single catastrophically slow sample (a reintroduced
-// quadratic/cubic orderForPrivilegeSplit can take minutes even at the
-// smaller of the two sizes these tests compare) would run to completion --
-// or past Go's own test-binary timeout, aborting the whole run with an
-// unlabelled panic dump instead of this test's named failure -- before
-// growthRatioSamples ever got to look at it. This is the one early exit
-// assertGrowsSubQuadratically relies on: a hang ends the test immediately,
-// without waiting for the rest of the samples at either size. On timeout,
-// fn's goroutine is abandoned (Go cannot cancel a running goroutine); that
-// is safe here because fn only reads its captured plan, and it is
-// acceptable because the test has already failed.
+// and returns how much CPU time that goroutine's OS thread spent on it (see
+// sampleCost). If fn does not return within the guard, or returns a non-nil
+// error (a correctness check inside fn failed), the test fails immediately
+// naming label -- always on the test's own goroutine, via t.Fatalf here,
+// never inside fn's goroutine, since FailNow must run on the goroutine
+// executing the test. Without a per-sample bound, a single catastrophically
+// slow sample (a reintroduced quadratic/cubic orderForPrivilegeSplit can
+// take minutes even at the smaller of the two sizes these tests compare)
+// would run to completion -- or past Go's own test-binary timeout, aborting
+// the whole run with an unlabelled panic dump instead of this test's named
+// failure -- before growthRatioSamples ever got to look at it. This is the
+// one early exit assertGrowsSubQuadratically relies on: a hang ends the test
+// immediately, without waiting for the rest of the samples at either size.
+// The guard itself is wall-clock, since a hang must end the test however
+// little CPU it gets. On timeout, fn's goroutine is abandoned (Go cannot
+// cancel a running goroutine); that is safe here because fn only reads its
+// captured plan, and it is acceptable because the test has already failed.
 func timedSample(t *testing.T, label string, fn func() error) time.Duration {
 	t.Helper()
-	start := time.Now()
-	done := make(chan error, 1)
-	go func() { done <- fn() }()
+	type sample struct {
+		cost time.Duration
+		err  error
+	}
+	done := make(chan sample, 1)
+	go func() {
+		cost, err := sampleCost(fn)
+		done <- sample{cost, err}
+	}()
 	guard := perfHangGuard()
 	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("%s: %v", label, err)
+	case s := <-done:
+		if s.err != nil {
+			t.Fatalf("%s: %v", label, s.err)
 		}
-		return time.Since(start)
+		return s.cost
 	case <-time.After(guard):
 		t.Fatalf("%s did not return within the %v hang guard (a hang, or a quadratic/cubic regression)", label, guard)
 		return 0 // unreached: t.Fatalf ends this goroutine
 	}
 }
 
+// sampleCost runs fn on the calling goroutine, locked to its OS thread, and
+// returns the CPU time that thread consumed meanwhile (threadCPUTime), or
+// fn's wall-clock duration where no per-thread CPU clock can be read.
+//
+// Wall-clock time is what made these growth checks flaky on a busy host
+// (the 4x-size run of TestCycleErrorLongChainBeforeCycle measured 15-21x
+// its base size, against a 12x bound, while neighbouring -race suites ran):
+// a sample of a few milliseconds often fits inside one scheduler time
+// slice, while one of tens of milliseconds is almost always preempted, so
+// CPU contention inflates the LARGE size's samples far more than the small
+// size's -- in every sample, which the minimum estimator cannot undo. The
+// thread's own CPU clock does not advance while the thread is descheduled,
+// so contention drops out of the measurement: under eight busy loops on
+// four cores, the same 10k -> 40k step measured 4.3-5.8x in thread CPU
+// time against 4.8-30x in wall-clock time. What remains is the algorithm's
+// own cost (plus any GC mark assist charged to this goroutine), which is
+// what the growth ratio is meant to compare. fn must do its work on the
+// calling goroutine for this to count it, as orderForPrivilegeSplit does.
+func sampleCost(fn func() error) (time.Duration, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	wallStart := time.Now()
+	cpuStart, cpuOK := threadCPUTime()
+	err := fn()
+	cpuEnd, cpuEndOK := threadCPUTime()
+	if cpuOK && cpuEndOK {
+		return cpuEnd - cpuStart, err
+	}
+	return time.Since(wallStart), err
+}
+
 // growthRatioSamples runs small and large interleaved -- one small sample,
 // then one large sample, repeated perfRuns times -- rather than all of
 // small's samples followed by all of large's. A load burst confined to
-// part of the run (a neighbouring worktree's -race suite starting up, a GC
-// sweep, the kernel scheduling this goroutine off a busy core) then falls
+// part of the run (a neighbouring worktree's -race suite starting up and
+// thrashing the shared caches, a GC sweep) then falls
 // across both sizes instead of landing entirely inside one size's batch
 // and skewing its samples relative to the other's.
 //
@@ -115,11 +154,12 @@ func growthRatioSamples(t *testing.T, smallLabel string, small func() error, lar
 // as small, at 4x its input size) and fails if large's minimum time grew
 // more than perfRatioBound times small's minimum time (see
 // growthRatioSamples for how the two sizes are sampled and estimated).
-// Growth, not an absolute wall-clock bound, is what is asserted, so the
-// check stays valid on a heavily loaded machine (both runs slow down
-// together) while still catching a quadratic or worse regression, such as
-// the historic fixpoint solver and the per-watch deletion-trial search the
-// two callers guard against.
+// Growth, not an absolute bound, is what is asserted, and each sample's
+// time is the CPU time of the thread running it (see sampleCost), not
+// wall-clock time, so the check stays valid on a heavily loaded machine
+// while still catching a quadratic or worse regression, such as the
+// historic fixpoint solver, the per-watch deletion-trial search and the
+// fixed-point cycle peel its callers guard against.
 //
 // A single measurement that comes in over the bound is retried once, with
 // an entirely fresh set of interleaved samples, before the test is failed:
@@ -336,10 +376,10 @@ func refusedWatchPlan(n, w int) []plan.Op {
 // does not). An absolute wall-clock bound is flaky under machine load (it
 // failed twice at a load average of ~24), so this instead measures the same
 // plan shape at a base size and at 4x that size and asserts the time grows
-// well below quadratic (see assertGrowsSubQuadratically). Both the
-// per-sample hang guard and the majority-based early exit it uses mean a
-// reintroduced regression fails within about one hang guard of its first
-// slow sample, not after running every sample at both sizes to completion.
+// well below quadratic (see assertGrowsSubQuadratically). Its per-sample
+// hang guard means a reintroduced regression slow enough to hang fails
+// within about one hang guard of that sample, not after running every
+// sample at both sizes to completion.
 // Two base sizes, a moderate one and one four times larger, are checked to
 // cover both regimes the old bounds did.
 func TestOrderForPrivilegeSplitLargeRefusedPlanIsFast(t *testing.T) {

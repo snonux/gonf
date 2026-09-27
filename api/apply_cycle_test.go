@@ -96,7 +96,10 @@ func chainBeforeCycle(n int) []plan.Op {
 // old peel produces the same text, just slowly -- so, like the ab2/pb2 perf
 // guards in api/apply_order_test.go, this also measures the same shape at a
 // base size and at 4x that size and asserts the time grows well below
-// quadratic (see assertGrowsSubQuadratically).
+// quadratic (see assertGrowsSubQuadratically). That time is the sampling
+// thread's CPU time (see sampleCost): in wall-clock time the 4x size grew
+// 15-21x on a busy host, past the 12x bound, because CPU contention
+// preempts its longer samples far more than the base size's short ones.
 func TestCycleErrorLongChainBeforeCycle(t *testing.T) {
 	want := "Apply: circular dependency: Command[x] -> Command[y] -> Command[x] (each depends on the next); " +
 		"refused before anything is applied"
