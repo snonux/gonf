@@ -568,12 +568,12 @@ func resolveWhen(rv reflect.Value, name string, byValue bool) (TaskOption, error
 // RegisterMethods (a task method, a WhenX(Facts) predicate), for a nil
 // embedded pointer or interface on its promotion chain (checkPromoted).
 // Only a struct registered by value is checked, and only the fields held
-// in that private copy (directly, or in its by-value embedded structs):
-// they can never change, so the call would certainly panic. Fields behind
-// a non-nil embedded pointer or interface are shared with the recipe, and
-// a struct registered by pointer reads all its fields when the method
-// runs, so an embed the recipe sets after RegisterMethods is fine there
-// and is not refused.
+// in that private copy (directly, in its by-value embedded structs, or in
+// its embedded interfaces' values): they can never change, so the call
+// would certainly panic. Fields behind a non-nil pointer (embedded or held
+// in an interface) are shared with the recipe, and a struct registered by
+// pointer reads all its fields when the method runs, so an embed the
+// recipe sets after RegisterMethods is fine there and is not refused.
 func checkDeferred(rv reflect.Value, name string, byValue bool) error {
 	if !byValue {
 		return nil

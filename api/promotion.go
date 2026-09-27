@@ -132,8 +132,11 @@ func promotionPath(t reflect.Type, name string) ([]int, bool) {
 //
 // With ownedOnly, only the part of the chain held in v's own memory is
 // checked: the walk stops (reporting nothing) where it would follow a
-// non-nil pointer or interface other than v itself, since the fields
-// behind it are shared and may still be set later (checkDeferred).
+// non-nil pointer other than v itself — directly or held in an interface
+// — since what is behind it is shared and may still be set later
+// (checkDeferred). An interface value is owned: a nil one, or one holding
+// a nil pointer, is checked as above, and one holding a non-pointer value
+// is walked into as owned memory.
 func nilEmbed(v reflect.Value, name, method string, ownedOnly bool) (path string, refuse bool) {
 	path = name
 	start := true // v itself may be dereferenced even with ownedOnly
@@ -147,7 +150,7 @@ func nilEmbed(v reflect.Value, name, method string, ownedOnly bool) (path string
 				}
 				return path, true
 			}
-			if ownedOnly && !start {
+			if ownedOnly && !start && v.Kind() == reflect.Pointer {
 				return "", false
 			}
 			v = v.Elem()

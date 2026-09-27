@@ -109,11 +109,13 @@ Fixes
   panic: `Opts` refuses the struct, the others skip that task. A task
   method or `WhenX(Facts)` predicate, which run later, is refused the
   same way only when the struct is registered by value and the nil embed
-  is held in that copy itself (directly, or in a by-value embedded
-  struct): it can never be set, so the task would panic when it runs. A
-  nil embed behind a non-nil embedded pointer or interface is shared with
-  the recipe, and a struct registered by pointer reads its embeds when
-  the method runs, so either may still be set after `RegisterMethods`. A nil pointer to a
+  is held in that copy itself (directly, in a by-value embedded struct,
+  or in an embedded interface, including a typed nil pointer or a struct
+  value it holds): it can never be set, so the task would panic when it
+  runs. Only a non-nil pointer, embedded directly or held in an
+  interface, makes what is behind it shared with the recipe, and a struct
+  registered by pointer reads its embeds when the method runs, so either
+  may still be set after `RegisterMethods`. A nil pointer to a
   pointer-receiver companion is still called, like a nil-safe marker.
 - `RegisterMethods` no longer slows down exponentially on recursive
   embedded types (types embedding each other by pointer): the promotion

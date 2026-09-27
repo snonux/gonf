@@ -335,3 +335,52 @@ func TestRegisterMethodsByValueSharedEmbed(t *testing.T) {
 	})
 	requireRefusedAfterClear(t, "bn_pong")
 }
+
+// ponger is an embedded interface that Pong is promoted through.
+type ponger interface{ Pong() }
+
+type ifacePonger struct{ ponger }
+
+// TestRegisterMethodsByValueInterfaceEmbed: an interface held in a
+// by-value copy is owned, since its dynamic value cannot change later. A
+// typed nil pointer to a value-receiver type in it, or a struct value in it
+// whose embed is nil, is refused; a non-nil pointer in it is shared, so a
+// nil embed behind that pointer may still be set.
+func TestRegisterMethodsByValueInterfaceEmbed(t *testing.T) {
+	cases := []struct {
+		name string
+		v    any
+		want string
+	}{
+		{"typed nil pointer", ifacePonger{ponger: (*LateBase)(nil)}, "RegisterMethods(api.ifacePonger): Pong is promoted through the nil embedded field ponger"},
+		{"struct value with nil embed", ifacePonger{ponger: LateHolder{}}, "RegisterMethods(api.ifacePonger): Pong is promoted through the nil embedded field ponger.LateBase"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var line int
+			requireDeclErrAt(t, tc.want, &line, func() {
+				line = thisLine() + 1
+				RegisterMethods(tc.v, WithPrefix("ip_"))
+			})
+			requireRefusedAfterClear(t, "ip_pong")
+		})
+	}
+
+	t.Run("non-nil pointer set later", func(t *testing.T) {
+		resetForHostsState(t)
+		holder := &LateHolder{}
+		RegisterMethods(ifacePonger{ponger: holder}, WithPrefix("ip_"))
+		if err := declerr.First(); err != nil {
+			t.Fatal(err)
+		}
+		ran := false
+		holder.LateBase = &LateBase{ran: &ran}
+		Activate(DetectFacts())
+		if _, err := RecordPlan("hb-iface", "", "ip_pong"); err != nil {
+			t.Fatalf("RecordPlan: %v", err)
+		}
+		if !ran {
+			t.Fatal("ip_pong's body did not run")
+		}
+	})
+}
