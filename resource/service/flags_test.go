@@ -198,9 +198,7 @@ func netbsdFlagsBackend(t *testing.T, rcConf, defaults, override string) netbsdB
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(path, []byte(content), 0o640); err != nil {
-			t.Fatal(err)
-		}
+		writeRcTestFile(t, path, content, 0o640)
 	}
 	return b
 }

@@ -25,12 +25,7 @@ func writeOverride(t *testing.T, b netbsdBackend, content string, mode os.FileMo
 		t.Fatal(err)
 	}
 	path := filepath.Join(b.rcConfD, "sshd")
-	if err := os.WriteFile(path, []byte(content), mode); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(path, mode); err != nil { // not subject to the umask
-		t.Fatal(err)
-	}
+	writeRcTestFile(t, path, content, mode)
 	return path
 }
 
@@ -134,9 +129,7 @@ func TestNetBSDSetEnabledKeepsModeOwnerAndSymlink(t *testing.T) {
 		}
 		realDir := t.TempDir()
 		realPath := filepath.Join(realDir, "sshd")
-		if err := os.WriteFile(realPath, []byte("sshd=NO\n"), 0o640); err != nil {
-			t.Fatal(err)
-		}
+		writeRcTestFile(t, realPath, "sshd=NO\n", 0o640)
 		link := filepath.Join(b.rcConfD, "sshd")
 		if err := os.Symlink(realPath, link); err != nil {
 			t.Fatal(err)
@@ -191,9 +184,7 @@ func TestNetBSDSetEnabledMissingDir(t *testing.T) {
 	})
 	t.Run("cannot be created", func(t *testing.T) {
 		parent := filepath.Join(t.TempDir(), "etc")
-		if err := os.WriteFile(parent, []byte("not a directory"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		writeRcTestFile(t, parent, "not a directory", 0o644)
 		b := netbsdBackend{rcConfD: filepath.Join(parent, "rc.conf.d")}
 		err := b.setEnabled("sshd", true)
 		if err == nil || !strings.Contains(err.Error(), b.rcConfD) {
@@ -269,16 +260,12 @@ func TestNetBSDSetEnabledWriteFailureKeepsOverride(t *testing.T) {
 	})
 	t.Run("not a regular file", func(t *testing.T) {
 		b := netbsdEnableBackend(t)
-		path := filepath.Join(b.rcConfD, "sshd")
-		if err := os.MkdirAll(path, 0o755); err != nil {
+		if err := os.MkdirAll(b.rcConfD, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := b.setEnabled("sshd", true); err == nil || !strings.Contains(err.Error(), path) {
-			t.Fatalf("setEnabled err = %v, want an error naming %s", err, path)
-		}
-		if info, err := os.Stat(path); err != nil || !info.IsDir() {
-			t.Errorf("override directory replaced (%v, %v)", info, err)
-		}
+		requireFIFORefusedPromptly(t, filepath.Join(b.rcConfD, "sshd"), func() error {
+			return b.setEnabled("sshd", true)
+		})
 		requireNoRcTempFiles(t, b.rcConfD)
 	})
 }

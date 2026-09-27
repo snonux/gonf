@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/snonux/gonf/internal/atomicfile"
 	"github.com/snonux/gonf/resource"
@@ -436,9 +438,7 @@ func TestNetBSDSetFlagsKeepsModeOwnerAndSymlink(t *testing.T) {
 	t.Run("symlink", func(t *testing.T) {
 		b := netbsdFlagsBackend(t, "", "", "")
 		realPath := filepath.Join(t.TempDir(), "rc.conf.real")
-		if err := os.WriteFile(realPath, []byte("nsd_flags=-4\n"), 0o640); err != nil {
-			t.Fatal(err)
-		}
+		writeRcTestFile(t, realPath, "nsd_flags=-4\n", 0o640)
 		if err := os.Symlink(realPath, b.rcConf); err != nil {
 			t.Fatal(err)
 		}
@@ -455,9 +455,7 @@ func TestNetBSDSetFlagsKeepsModeOwnerAndSymlink(t *testing.T) {
 	t.Run("relative symlink", func(t *testing.T) {
 		b := netbsdFlagsBackend(t, "", "", "")
 		dir := filepath.Dir(b.rcConf)
-		if err := os.WriteFile(filepath.Join(dir, "rc.conf.real"), []byte("nsd_flags=-4\n"), 0o640); err != nil {
-			t.Fatal(err)
-		}
+		writeRcTestFile(t, filepath.Join(dir, "rc.conf.real"), "nsd_flags=-4\n", 0o640)
 		if err := os.Symlink("rc.conf.real", b.rcConf); err != nil {
 			t.Fatal(err)
 		}
@@ -472,9 +470,7 @@ func TestNetBSDSetFlagsKeepsModeOwnerAndSymlink(t *testing.T) {
 		b := netbsdFlagsBackend(t, "", "", "")
 		realDir := t.TempDir()
 		realPath := filepath.Join(realDir, "rc.conf")
-		if err := os.WriteFile(realPath, []byte("nsd_flags=-4\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		writeRcTestFile(t, realPath, "nsd_flags=-4\n", 0o600)
 		middle := filepath.Join(filepath.Dir(b.rcConf), "rc.conf.link")
 		if err := os.Symlink(realPath, middle); err != nil {
 			t.Fatal(err)
@@ -565,14 +561,40 @@ func TestNetBSDSetFlagsWriteFailureKeepsRcConf(t *testing.T) {
 	})
 	t.Run("not a regular file", func(t *testing.T) {
 		b := netbsdFlagsBackend(t, "", "", "")
-		if err := os.Mkdir(b.rcConf, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := b.setFlags(unit{name: "nsd"}, "-x"); err == nil || !strings.Contains(err.Error(), b.rcConf) {
-			t.Fatalf("setFlags err = %v, want an error naming %s", err, b.rcConf)
-		}
+		requireFIFORefusedPromptly(t, b.rcConf, func() error {
+			return b.setFlags(unit{name: "nsd"}, "-x")
+		})
 		requireNoRcTempFiles(t, filepath.Dir(b.rcConf))
 	})
+}
+
+// requireFIFORefusedPromptly makes path a FIFO and requires call to refuse
+// it as not a regular file, naming path, without blocking: reading a FIFO
+// waits for a writer, so without the regular-file check the call would
+// hang. A call still running after a timeout fails the test instead, and a
+// writer is opened to release it. The FIFO must be left in place.
+func requireFIFORefusedPromptly(t *testing.T, path string, call func() error) {
+	t.Helper()
+	if err := syscall.Mkfifo(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- call() }()
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(5 * time.Second):
+		if w, oerr := os.OpenFile(path, os.O_WRONLY|syscall.O_NONBLOCK, 0); oerr == nil {
+			_ = w.Close() // EOF releases the blocked reader
+		}
+		t.Fatalf("call on the FIFO %s did not return within 5s: it read the FIFO instead of refusing it", path)
+	}
+	if err == nil || !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("err = %v, want a \"not a regular file\" error naming %s", err, path)
+	}
+	if info, lerr := os.Lstat(path); lerr != nil || info.Mode()&os.ModeNamedPipe == 0 {
+		t.Errorf("FIFO %s replaced (%v, %v)", path, info, lerr)
+	}
 }
 
 func requireRcConf(t *testing.T, path, content string, mode os.FileMode) {
@@ -590,6 +612,19 @@ func requireRcConf(t *testing.T, path, content string, mode os.FileMode) {
 	}
 	if info.Mode().Perm() != mode {
 		t.Errorf("%s mode = %v, want %v", path, info.Mode().Perm(), mode)
+	}
+}
+
+// writeRcTestFile writes content to path with exactly mode: os.WriteFile
+// applies the umask, so the file is chmodded after, or a test asserting
+// that mode is kept would fail under a strict umask (077, 027).
+func writeRcTestFile(t *testing.T, path, content string, mode os.FileMode) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), mode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, mode); err != nil {
+		t.Fatal(err)
 	}
 }
 
