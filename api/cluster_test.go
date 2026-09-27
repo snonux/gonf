@@ -662,19 +662,29 @@ func TestPushFleetFailureCancelsOtherClusters(t *testing.T) {
 // original sleep-based version flaked with "maxFlight=1, want 2" under load
 // because the sleeping pushes of a group did not always overlap): every
 // stubbed push blocks until the test has seen j pushes in flight in EACH
-// cluster, and only then are they all released. With a correct limit of j
-// per group that is exactly j+j in flight whatever the scheduling. An
-// ignored override either leaves "one" short of the barrier (Parallel(1):
-// one in flight, a clear barrier failure) or lets "five" overshoot
-// (Parallel(5): three in flight, a maxFlight failure). Only the barrier wait
-// has a deadline, a generous one so a regression fails instead of hanging;
-// the push itself runs without one, so a slow -race run on a loaded machine
-// cannot trip it.
+// cluster. With a correct limit of j per group that is exactly j+j in
+// flight whatever the scheduling, so a limit below j (e.g. an ignored
+// override leaving "one" at Parallel(1)) deterministically fails the
+// barrier. Only then, still before release, the test waits overshootWindow
+// for one EXTRA push to start in either cluster: with a limit above j
+// (e.g. "five" left at Parallel(5)) the group's third push is already
+// unblocked by its semaphore and starts within the window, failing with
+// maxFlight > j; with a correct limit none can start, so the window must
+// time out and only then are the pushes released. Undershoot detection is
+// deterministic; overshoot detection relies on the extra push reaching SSH
+// within the window, which it does in practice even on a loaded -race run
+// (a scheduler stall past the window would miss it, never cause a false
+// failure). The barrier wait has a generous deadline so a regression fails
+// instead of hanging; the push itself runs without one, so a slow -race run
+// on a loaded machine cannot trip it.
 func TestPushFleetParallelOverrideAppliesToAllGroups(t *testing.T) {
 	const (
 		j              = 2 // the -j override under test
 		hostsPerGroup  = 3 // > j, so an over-limit group can overshoot j
 		barrierTimeout = 10 * time.Second
+		// overshootWindow bounds the post-barrier wait for an extra push;
+		// a correct run always spends exactly this long in it.
+		overshootWindow = 300 * time.Millisecond
 	)
 	ResetInventory()
 	ResetTasks()
@@ -701,9 +711,11 @@ func TestPushFleetParallelOverrideAppliesToAllGroups(t *testing.T) {
 	})
 
 	// flight tracks one cluster's pushes: how many are in flight now, the
-	// most ever in flight at once, and one started signal per push that
-	// reached the barrier (buffered for every host, so a send never blocks
-	// even when a broken limit lets more than j pushes start).
+	// most ever in flight at once, and a started signal per push that
+	// reached the barrier. The send is non-blocking, so extra SSH calls per
+	// host or a broken limit starting more pushes than the buffer holds can
+	// never hang the stub; a dropped signal loses nothing, as a full buffer
+	// already holds more than the j (+1 overshoot) signals the test reads.
 	type flight struct {
 		inFlight, maxFlight atomic.Int32
 		started             chan struct{}
@@ -725,7 +737,10 @@ func TestPushFleetParallelOverrideAppliesToAllGroups(t *testing.T) {
 				break
 			}
 		}
-		f.started <- struct{}{}
+		select {
+		case f.started <- struct{}{}:
+		default:
+		}
 		select {
 		case <-release:
 			return nil
@@ -771,6 +786,15 @@ func TestPushFleetParallelOverrideAppliesToAllGroups(t *testing.T) {
 					g.name, started, j, barrierTimeout, j)
 			}
 		}
+	}
+	select {
+	case <-one.started:
+		t.Fatalf("cluster %q maxFlight=%d, want %d: a push beyond -j %d started: -j must override its Parallel(1)",
+			"one", one.maxFlight.Load(), j, j)
+	case <-five.started:
+		t.Fatalf("cluster %q maxFlight=%d, want %d: a push beyond -j %d started: -j must override its Parallel(5)",
+			"five", five.maxFlight.Load(), j, j)
+	case <-time.After(overshootWindow):
 	}
 	if err := finish(); err != nil {
 		t.Fatal(err)
