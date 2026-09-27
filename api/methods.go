@@ -25,7 +25,9 @@ type registerOptionFunc func(*registerConfig)
 
 func (f registerOptionFunc) applyRegister(c *registerConfig) { f(c) }
 
-// applyRegister makes a TaskOption a RegisterOption: WithGroupWhen(o).
+// applyRegister makes a TaskOption a RegisterOption: WithGroupWhen(o). A
+// nil o is queued as is: applyRegisterOptions spots it and the call is
+// refused with a declaration error.
 func (o TaskOption) applyRegister(c *registerConfig) {
 	c.groupWhen = append(c.groupWhen, o)
 }
@@ -187,11 +189,12 @@ func WithGroupWhen(opts ...TaskOption) RegisterOption {
 // Methods named Desc*, When*, or Opts* are not registered as tasks.
 //
 // Misuse — v not a struct or non-nil pointer to one, a companion with the
-// wrong signature, an unknown OnCluster cluster — is reported as a
-// declaration error (internal/declerr, which RecordPlan, Run, Apply and the
-// CLI refuse to run with). A bad receiver, OnCluster or struct-level
-// companion registers nothing of v; a bad per-method companion skips only
-// that method's task.
+// wrong signature, a nil TaskOption (among opts, inside WithGroupWhen, or
+// returned by a companion or StructOption marker), an unknown OnCluster
+// cluster — is reported as a declaration error (internal/declerr, which
+// RecordPlan, Run, Apply and the CLI refuse to run with). A bad receiver,
+// option, OnCluster or struct-level companion registers nothing of v; a bad
+// per-method companion skips only that method's task.
 //
 // A Needs("x") in an OptsX companion (or WithGroupWhen) is resolved relative
 // to this call's WithPrefix first: see Needs.
@@ -230,17 +233,20 @@ func RegisterMethods(v any, opts ...RegisterOption) {
 // to one, checked as RegisterMethods checks it.
 func RegisterOnCluster(cluster string, items ...any) {
 	var opts []RegisterOption
+	var optItems []int // optItems[i] is opts[i]'s 1-based position in items
 	var structs []any
-	for _, item := range items {
+	for i, item := range items {
 		if o, ok := item.(RegisterOption); ok {
 			opts = append(opts, o)
+			optItems = append(optItems, i+1)
 			continue
 		}
 		structs = append(structs, item)
 	}
 	var probe registerConfig
-	for _, o := range opts {
-		o.applyRegister(&probe)
+	if bad := applyRegisterOptions(&probe, opts); bad != 0 {
+		declerr.Reportf("RegisterOnCluster(%q): item %d: %s", cluster, optItems[bad-1], nilGroupOptionMsg)
+		return
 	}
 	if probe.prefixSet {
 		declerr.Report(fmt.Errorf("RegisterOnCluster(%q): WithPrefix is not allowed; use RegisterMethods for a shared prefix", cluster))
@@ -252,15 +258,37 @@ func RegisterOnCluster(cluster string, items ...any) {
 	}
 }
 
+// nilGroupOptionMsg is the misuse message of a RegisterOption that adds a
+// nil TaskOption to the group options (applyRegisterOptions).
+const nilGroupOptionMsg = "nil TaskOption (passed directly or inside WithGroupWhen)"
+
+// applyRegisterOptions applies opts to cfg in order; a nil RegisterOption is
+// a no-op. It stops at the first option that adds a nil TaskOption to the
+// group options — a TaskOption(nil) passed as a RegisterOption, or a nil
+// inside WithGroupWhen — and returns that option's 1-based position, since
+// Task would panic applying it; it returns 0 when every option applied.
+func applyRegisterOptions(cfg *registerConfig, opts []RegisterOption) int {
+	for i, o := range opts {
+		if o == nil {
+			continue
+		}
+		n := len(cfg.groupWhen)
+		o.applyRegister(cfg)
+		if nilOptionIndex(cfg.groupWhen[n:]) != 0 {
+			return i + 1
+		}
+	}
+	return 0
+}
+
 // registerConfigFor applies opts and resolves OnCluster's guard into
-// groupWhen, so every method of the call carries it. An unknown OnCluster
-// cluster, or one contradicting WithCluster, is returned as an error.
+// groupWhen, so every method of the call carries it. A nil TaskOption among
+// the group options, an unknown OnCluster cluster, or one contradicting
+// WithCluster, is returned as an error.
 func registerConfigFor(opts []RegisterOption) (registerConfig, error) {
 	cfg := registerConfig{}
-	for _, o := range opts {
-		if o != nil {
-			o.applyRegister(&cfg)
-		}
+	if bad := applyRegisterOptions(&cfg, opts); bad != 0 {
+		return cfg, fmt.Errorf("RegisterMethods: option %d: %s", bad, nilGroupOptionMsg)
 	}
 	if cfg.guardCluster == "" {
 		return cfg, nil
@@ -434,7 +462,7 @@ func resolveOpts(rv reflect.Value, name string, structOpts TaskOptions) (TaskOpt
 	if !o.IsValid() {
 		return merged, nil
 	}
-	methodOpts, err := callTaskOptionsCompanion(o, "Opts"+name+" must be func() TaskOptions")
+	methodOpts, err := callTaskOptionsCompanion(o, "Opts"+name, "Opts"+name+" must be func() TaskOptions")
 	if err != nil {
 		return nil, err
 	}

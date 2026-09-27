@@ -67,7 +67,7 @@ duplicate names).
 
 | API | Effect |
 |-----|--------|
-| `Task(name, desc, fn, opts...)` | Register a task. |
+| `Task(name, desc, fn, opts...)` | Register a task. A `nil` option is a declaration error and the task is not registered. |
 | `RegisterMethods(v, opts...)` | Register every exported method of struct `v` as a task. |
 | `Aggregate(name, desc, regex)` | Task that records every activated task matching `regex`, sorted by name. |
 | `AggregateTasks(name, desc, members...)` | Task that records the listed tasks in the listed order. |
@@ -216,7 +216,10 @@ gets no generated `DescX`, but a hand-written one there still wins.
 `_x.go` and `.x.go` are not read.
 
 A companion with the wrong signature is a declaration error and that method
-is not registered. Name methods for the action (`Unattended.Script`, not
+is not registered. So is a `nil` TaskOption: in an `OptsX` companion it
+skips that method; passed to `RegisterMethods` (directly or in
+`WithGroupWhen`), or returned by `Opts()` or a `StructOption` marker, it
+registers nothing of the struct. Name methods for the action (`Unattended.Script`, not
 `Unattended.UnattendedScript`).
 
 `OnCluster` replaces the `WhenHostname(ClusterHosts(), func() { ... })`

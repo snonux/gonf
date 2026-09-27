@@ -65,6 +65,11 @@ Fixes
   a guard every hostname matches, so the task applied on every
   destination. `WhenHostnameIn()` with no hosts no longer falls back to
   that match-all guard either.
+- A `nil` TaskOption is a declaration error instead of a panic: in
+  `Task(...)`, among `RegisterMethods`/`RegisterOnCluster` options or
+  `WithGroupWhen`, or returned by an `Opts()`/`OptsX()` companion or a
+  `StructOption` marker. The task (or the struct) is not registered, since
+  the missing option may have been a guard or `Privileged()`.
 
 Docs
 - Gonfy the beaver is gonf's mascot and new logo (`assets/logo-*.svg`).

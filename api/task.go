@@ -91,6 +91,19 @@ type taskCandidate struct {
 // TaskOption configures a deferred task candidate.
 type TaskOption func(*taskCandidate)
 
+// nilOptionIndex returns the 1-based position of the first nil TaskOption
+// in opts, or 0 when there is none. Applying a nil option would panic, so
+// every path that collects options (Task, RegisterMethods' group options
+// and its companions) refuses one with a declaration error naming it.
+func nilOptionIndex(opts []TaskOption) int {
+	for i, o := range opts {
+		if o == nil {
+			return i + 1
+		}
+	}
+	return 0
+}
+
 // TaskOptions is a list of task options; an alias for []TaskOption so
 // signatures read concisely (e.g. OptsHelix() TaskOptions in the
 // RegisterMethods companion convention). Being an alias, it is the
@@ -266,11 +279,12 @@ func checkHostnameFragments(fn string, hosts []string) error {
 }
 
 // Task queues a named unit of work for activation. Call from init() or
-// RegisterMethods. An empty name, a nil fn or a duplicate name — tasks,
-// aggregates and aliases share one namespace — is registration-time misuse,
-// always a recipe bug: it is reported as a declaration error
-// (internal/declerr), the task is not queued, and RecordPlan, Run, Apply and
-// the CLI refuse to run with the error; so is a bad Needs list (checkNeeds).
+// RegisterMethods. An empty name, a nil fn, a nil option or a duplicate
+// name — tasks, aggregates and aliases share one namespace — is
+// registration-time misuse, always a recipe bug: it is reported as a
+// declaration error (internal/declerr), the task is not queued, and
+// RecordPlan, Run, Apply and the CLI refuse to run with the error; so is a
+// bad Needs list (checkNeeds).
 // Activation (filtering by the opaque When predicates only) happens in
 // Activate / CLI / Run.
 func Task(name, description string, fn func(), opts ...TaskOption) {
@@ -280,6 +294,14 @@ func Task(name, description string, fn func(), opts ...TaskOption) {
 	}
 	if fn == nil {
 		declerr.Reportf("Task %q: fn must not be nil", name)
+		return
+	}
+
+	if i := nilOptionIndex(opts); i != 0 {
+		// Refuse the whole task rather than skip the option: a nil option
+		// may stand for a guard or Privileged() the recipe failed to build,
+		// and running the task without it could widen where or how it runs.
+		declerr.Reportf("Task %q: option %d is a nil TaskOption", name, i)
 		return
 	}
 
