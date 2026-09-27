@@ -144,7 +144,7 @@ RegisterMethods(home.HomeTasks{}) // registers home_helix
 | `WhenFoo() TaskOption` | Per-method guard such as `WhenLinux()`. A serializable guard travels in the plan, so the task still pushes. |
 | `WhenFoo(Facts) bool` | Per-method opaque filter, controller only: push, cluster and fleet refuse the task. |
 | `Opts() TaskOptions` | Struct-level default options. A method named `Opts` is never a task. |
-| embedded `StructOption` | Same as `Opts()`, declared by embedding. `RequiresRoot` ships with gonf (`type T struct{ RequiresRoot }`). A custom marker may implement `StructTaskOptions` with a value or a pointer receiver; every embedded marker counts. |
+| embedded `StructOption` | Same as `Opts()`, declared by embedding. `RequiresRoot` ships with gonf (`type T struct{ RequiresRoot }`). A custom marker may implement `StructTaskOptions` with a value or a pointer receiver; every embedded marker counts. A struct that declares its own `StructTaskOptions` overrides its markers, as in Go method resolution: only that method's options apply (call a marker from it to keep its options). |
 | `WithPrefix(p)` | Prefix for every task name, replacing the default below. `WithPrefix("")` registers bare method names. |
 | `WithGroupWhen(opts...)` | Options applied to every method, before the struct default. |
 | any `TaskOption` | Same as `WithGroupWhen(opt)`: `RegisterMethods(pkg.Pkg{}, WhenProfile("fedora"))`. |
@@ -220,11 +220,13 @@ gets no generated `DescX`, but a hand-written one there still wins.
 A companion with the wrong signature is a declaration error and that method
 is not registered. So is a `nil` TaskOption returned by an `OptsX`
 companion. A `nil` returned by `Opts()`, a `StructOption` marker or a
-struct's own `StructTaskOptions`, or a nil marker (`struct{ *RequiresRoot }`
-or `struct{ StructOption }` left unset), registers nothing of the struct; so does a
-`nil` option passed to `RegisterMethods` (a `RegisterOption`, a
-`TaskOption` or one inside `WithGroupWhen`), since it may stand for a
-guard such as `OnCluster`. The error names the struct type and the
+struct's own `StructTaskOptions`, or a nil marker (`struct{ *RequiresRoot }`,
+`struct{ StructOption }` left unset, or a nil pointer deeper in the
+embedded chain the marker's method is promoted through, as in
+`struct{ Base }` with `type Base struct{ *RequiresRoot }`), registers
+nothing of the struct; so does a `nil` option passed to `RegisterMethods`
+(a `RegisterOption`, a `TaskOption` or one inside `WithGroupWhen`), since
+it may stand for a guard such as `OnCluster`. The error names the struct type and the
 option's position. Name methods for the action (`Unattended.Script`, not
 `Unattended.UnattendedScript`).
 

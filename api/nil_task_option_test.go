@@ -141,6 +141,23 @@ type nilPtrRecvMarkerStruct struct {
 
 func (nilPtrRecvMarkerStruct) Ping() {}
 
+// NilBase is an exported marker by promotion from its embedded
+// *RequiresRoot; nilBase is the unexported twin.
+type NilBase struct{ *RequiresRoot }
+
+type nilBase struct{ *RequiresRoot }
+
+// nestedNilMarker reaches RequiresRoot through the exported marker field
+// NilBase; nestedNilUnexported through the unexported nilBase, i.e. the
+// promoted-method fallback.
+type nestedNilMarker struct{ NilBase }
+
+func (nestedNilMarker) Ping() {}
+
+type nestedNilUnexported struct{ nilBase }
+
+func (nestedNilUnexported) Ping() {}
+
 // TestRegisterMethodsNilCompanionOptionIsDeclarationError: a nil returned
 // by a companion, or a nil-pointer marker, is reported at the
 // RegisterMethods call naming the struct type (like a companion with the
@@ -166,6 +183,8 @@ func TestRegisterMethodsNilCompanionOptionIsDeclarationError(t *testing.T) {
 		{"nil-pointer marker", nilPtrMarkerStruct{}, "RegisterMethods(api.nilPtrMarkerStruct): marker RequiresRoot is nil"},
 		{"nil-pointer marker via pointer", &nilPtrMarkerStruct{}, "RegisterMethods(api.nilPtrMarkerStruct): marker RequiresRoot is nil"},
 		{"nil pointer-receiver marker", nilPtrRecvMarkerStruct{}, "RegisterMethods(api.nilPtrRecvMarkerStruct): marker PtrMarker is nil"},
+		{"nested nil marker", nestedNilMarker{}, "RegisterMethods(api.nestedNilMarker): marker NilBase.RequiresRoot is nil"},
+		{"nested nil unexported marker", nestedNilUnexported{}, "RegisterMethods(api.nestedNilUnexported): marker nilBase.RequiresRoot is nil"},
 		{"nil interface marker", ifaceMarkerStruct{}, "RegisterMethods(api.ifaceMarkerStruct): marker StructOption is nil"},
 		{"interface marker holding nil pointer", ifaceMarkerStruct{StructOption: (*RequiresRoot)(nil)}, "RegisterMethods(api.ifaceMarkerStruct): marker StructOption is nil"},
 		{"direct StructTaskOptions", nilDirectStructOpts{}, "RegisterMethods(api.nilDirectStructOpts): StructTaskOptions returned a nil TaskOption (option 1)"},
@@ -290,5 +309,56 @@ func TestRegisterMethodsPointerReceiverMarkerCollected(t *testing.T) {
 	want := []plan.Predicate{{Fact: "profile", Eq: "gonfy"}}
 	if !c.privileged || !reflect.DeepEqual(c.planWhen, want) {
 		t.Fatalf("tm_ping: privileged=%v planWhen=%+v, want privileged and %+v", c.privileged, c.planWhen, want)
+	}
+}
+
+// ptrMarkerOverride, valueMarkerOverride and ptrRecvOverride declare their
+// own StructTaskOptions next to an embedded marker: Go method resolution
+// picks the struct's own method, so the markers are not collected.
+type ptrMarkerOverride struct{ PtrMarker }
+
+func (ptrMarkerOverride) StructTaskOptions() TaskOptions { return TaskOptions{Privileged()} }
+func (ptrMarkerOverride) Ping()                          {}
+
+type valueMarkerOverride struct{ RequiresRoot }
+
+func (valueMarkerOverride) StructTaskOptions() TaskOptions { return TaskOptions{Operational()} }
+func (valueMarkerOverride) Ping()                          {}
+
+type ptrRecvOverride struct{ RequiresRoot }
+
+func (*ptrRecvOverride) StructTaskOptions() TaskOptions { return TaskOptions{Operational()} }
+func (ptrRecvOverride) Ping()                           {}
+
+// TestRegisterMethodsOwnStructTaskOptionsOverridesMarkers: a struct's own
+// StructTaskOptions (value or pointer receiver) is the only struct-level
+// default; the embedded markers' options are not added.
+func TestRegisterMethodsOwnStructTaskOptionsOverridesMarkers(t *testing.T) {
+	cases := []struct {
+		name            string
+		v               any
+		wantPrivileged  bool
+		wantOperational bool
+	}{
+		{"pointer marker + own", ptrMarkerOverride{PtrMarker: PtrMarker{profile: "gonfy"}}, true, false},
+		{"value marker + own", valueMarkerOverride{}, false, true},
+		{"value marker + own pointer receiver", ptrRecvOverride{}, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resetForHostsState(t)
+			RegisterMethods(tc.v, WithPrefix("ov_"))
+			if err := declerr.First(); err != nil {
+				t.Fatal(err)
+			}
+			c, ok := findCandidate("ov_ping")
+			if !ok {
+				t.Fatal("ov_ping not queued")
+			}
+			if c.privileged != tc.wantPrivileged || c.operational != tc.wantOperational || len(c.planWhen) != 0 {
+				t.Fatalf("ov_ping: privileged=%v operational=%v planWhen=%+v, want privileged=%v operational=%v and no guard",
+					c.privileged, c.operational, c.planWhen, tc.wantPrivileged, tc.wantOperational)
+			}
+		})
 	}
 }

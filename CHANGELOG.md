@@ -71,18 +71,25 @@ Fixes
   that method is skipped; returned by `Opts()`, a `StructOption` marker or
   a struct's own `StructTaskOptions`, no task of the struct is
   registered, and a nil marker (an embedded `*RequiresRoot` or
-  `StructOption` left unset) is refused the same way instead of
-  panicking. Among `RegisterMethods` options (directly or
+  `StructOption` left unset, also deeper in the embedded chain as in
+  `struct{ Base }` with `Base struct{ *RequiresRoot }`) is refused the
+  same way instead of panicking. Among `RegisterMethods` options (directly or
   inside `WithGroupWhen`) it registers nothing of the struct, and in
   `RegisterOnCluster` nothing of any struct of the call.
 - Behaviour change: a `nil` `RegisterOption` passed to `RegisterMethods`,
   or a `nil` item in `RegisterOnCluster` (untyped or a nil struct
-  pointer), is a declaration error and registers nothing. Before, `RegisterMethods` skipped it silently, so a
-  guard such as `OnCluster` built as nil registered the methods unguarded.
+  pointer), is a declaration error and registers nothing. Before,
+  `RegisterMethods` skipped it silently, so a guard such as `OnCluster`
+  built as nil registered the methods unguarded.
 - A `StructOption` marker with a pointer-receiver `StructTaskOptions`,
   embedded by value next to another marker, is now collected. Before,
   only value-receiver markers were found, so its options (such as a
   guard) were silently dropped and the tasks registered without them.
+- Behaviour change: a struct that declares its own `StructTaskOptions`
+  overrides its embedded markers, as in Go method resolution: only its
+  own method's options apply. Before, a value-receiver marker next to it
+  replaced the struct's own method, so `struct{ RequiresRoot }` with its
+  own `StructTaskOptions` got `Privileged()` and lost its own options.
 - `RegisterMethods` companion errors name the struct type:
   `RegisterMethods(pkg.Type): OptsX must be func() TaskOptions`.
 
