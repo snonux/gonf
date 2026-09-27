@@ -433,6 +433,10 @@ type ambiguousMarkers struct {
 
 func (ambiguousMarkers) Ping() {}
 
+// RegisterMethods only reaches the ambiguous markers through reflection;
+// reference them so the unused-code linter sees them as used.
+var _ = []any{ambiguousMarkers{}.amb1.StructTaskOptions, ambiguousMarkers{}.amb2.StructTaskOptions}
+
 // nilSafeByValueOpts embeds a pointer-receiver marker by value and has an
 // Opts() companion: the marker composes first, Opts() after it.
 type nilSafeByValueOpts struct{ NilSafe }

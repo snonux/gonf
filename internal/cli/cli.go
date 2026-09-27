@@ -1509,7 +1509,7 @@ func chmodDirNoFollow(path string, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read-only handle; Chmod's error is what matters
 	return f.Chmod(mode)
 }
 

@@ -546,12 +546,14 @@ func resolveWhen(rv reflect.Value, name string, byValue bool) (TaskOption, error
 			return nil, err
 		}
 		if opt == nil {
+			//lint:ignore ST1005 the message starts with the Go method name
 			return nil, fmt.Errorf("When%s returned a nil TaskOption", name)
 		}
 		return opt, nil
 	}
 	if wt.NumIn() != 1 || wt.In(0) != reflect.TypeOf(Facts{}) ||
 		wt.NumOut() != 1 || wt.Out(0).Kind() != reflect.Bool {
+		//lint:ignore ST1005 the message starts with the Go method name
 		return nil, fmt.Errorf("When%s must be func() TaskOption or func(Facts) bool", name)
 	}
 	// The predicate runs at activation, not now (checkDeferred).
