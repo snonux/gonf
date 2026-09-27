@@ -300,3 +300,43 @@ func TestWhenHostnameValidFragmentsGuardOnDestination(t *testing.T) {
 		t.Fatal("destination ROCKY did not apply the WhenHostname(rocky) fragment")
 	}
 }
+
+// TestWhenHostnameEmptyListIsNoOp: a list with no fragments at all —
+// List() or a nil []string, e.g. an empty cluster's host list — is not a
+// blank fragment: it is no declaration error and simply runs nothing, on
+// both the direct path and the recording path (which records no block).
+func TestWhenHostnameEmptyListIsNoOp(t *testing.T) {
+	for name, hosts := range map[string][]string{"List()": List(), "nil": nil} {
+		t.Run(name, func(t *testing.T) {
+			dir := resetAliasTest(t)
+			ran := false
+			WhenHostname(hosts, func() { ran = true })
+			if err := declerr.First(); err != nil {
+				t.Fatalf("direct WhenHostname(%s) reported %v", name, err)
+			}
+			if ran {
+				t.Fatalf("direct WhenHostname(%s) ran fn", name)
+			}
+
+			Task("empty_list", "", func() {
+				WhenHostname(hosts, func() {
+					ran = true
+					File(filepath.Join(dir, "x"), options.WithContent("x"))
+				})
+			})
+			ops, err := RecordPlan("bc", "", "empty_list")
+			if err != nil {
+				t.Fatalf("RecordPlan with WhenHostname(%s) = %v, want no error", name, err)
+			}
+			if err := declerr.First(); err != nil {
+				t.Fatalf("recorded WhenHostname(%s) reported %v", name, err)
+			}
+			if ran {
+				t.Fatalf("recorded WhenHostname(%s) ran fn", name)
+			}
+			if kinds := opsKinds(ops); len(ops) != 1 || ops[0].Op != plan.KindPlan {
+				t.Fatalf("recorded ops = %v, want only the plan header", kinds)
+			}
+		})
+	}
+}

@@ -210,15 +210,17 @@ func TestWhenHostnameDirectCollisionNamesConditions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("os.Hostname: %v", err)
 	}
-	if len(host) < 2 {
+	runes := []rune(host)
+	if len(runes) < 2 {
 		t.Skipf("hostname %q is too short for two distinct matching substrings", host)
 	}
 	out := filepath.Join(t.TempDir(), "out.txt")
 
 	// Two distinct, independently-true conditions for this host: its
-	// first character and its whole name. (An empty substring is no longer
-	// a match-all condition but a declaration error, task bc.)
-	prefix := host[:1]
+	// first character (a whole rune, never a partial UTF-8 byte) and its
+	// whole name. (An empty substring is no longer a match-all condition
+	// but a declaration error, task bc.)
+	prefix := string(runes[:1])
 	WhenHostname(prefix, func() { File(out, options.WithContent("A")) })
 	WhenHostname(host, func() { File(out, options.WithContent("B")) })
 

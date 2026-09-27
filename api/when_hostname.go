@@ -9,15 +9,15 @@ import (
 	"github.com/snonux/gonf/resource"
 )
 
-// WhenHostname runs fn when the local hostname contains substr (case
-// insensitive). It is the body-level
-// counterpart of the WhenHostnameContains TaskOption: in plan-record mode it
-// emits when_begin(hostname_contains)/when_end around fn instead of probing
-// the controller — so one recorded plan can carry several host-gated
+// WhenHostname runs fn when the local hostname contains hosts (case
+// insensitive). It is the body-level counterpart of the
+// WhenHostnameContains TaskOption: in plan-record mode it emits
+// when_begin(hostname_contains)/when_end around fn instead of probing the
+// controller — so one recorded plan can carry several host-gated
 // fragments, each evaluated on the destination at apply time.
 //
-// Pass List(...) to expand into one fragment per entry (same as looping
-// WhenHostname yourself), so identical per-host bodies stay DRY:
+// Pass List(...) as hosts to expand into one fragment per entry (same as
+// looping WhenHostname yourself), so identical per-host bodies stay DRY:
 //
 //	WhenHostname(List("pi2", "pi3"), func() { Package("ksh") })
 //
