@@ -657,7 +657,25 @@ func TestPushFleetFailureCancelsOtherClusters(t *testing.T) {
 // groups was previously code-traced only (PushFleetRun's `if
 // parallelOverride > 0 { limit = parallelOverride }` inside the per-group
 // loop) with no direct regression test.
+//
+// Concurrency is measured with a barrier, never by sleep overlap (the
+// original sleep-based version flaked with "maxFlight=1, want 2" under load
+// because the sleeping pushes of a group did not always overlap): every
+// stubbed push blocks until the test has seen j pushes in flight in EACH
+// cluster, and only then are they all released. With a correct limit of j
+// per group that is exactly j+j in flight whatever the scheduling. An
+// ignored override either leaves "one" short of the barrier (Parallel(1):
+// one in flight, a clear barrier failure) or lets "five" overshoot
+// (Parallel(5): three in flight, a maxFlight failure). Only the barrier wait
+// has a deadline, a generous one so a regression fails instead of hanging;
+// the push itself runs without one, so a slow -race run on a loaded machine
+// cannot trip it.
 func TestPushFleetParallelOverrideAppliesToAllGroups(t *testing.T) {
+	const (
+		j              = 2 // the -j override under test
+		hostsPerGroup  = 3 // > j, so an over-limit group can overshoot j
+		barrierTimeout = 10 * time.Second
+	)
 	ResetInventory()
 	ResetTasks()
 	resource.ResetRepository()
@@ -682,66 +700,85 @@ func TestPushFleetParallelOverrideAppliesToAllGroups(t *testing.T) {
 		restoreProbe()
 	})
 
-	var oneInFlight, oneMaxFlight, fiveInFlight, fiveMaxFlight atomic.Int32
-	ready := make(chan struct{}, 4)
-	oneRelease := make(chan struct{})
-	fiveRelease := make(chan struct{})
-	track := func(ctx context.Context, dest string, inFlight, maxFlight *atomic.Int32, release <-chan struct{}) error {
-		n := inFlight.Add(1)
+	// flight tracks one cluster's pushes: how many are in flight now, the
+	// most ever in flight at once, and one started signal per push that
+	// reached the barrier (buffered for every host, so a send never blocks
+	// even when a broken limit lets more than j pushes start).
+	type flight struct {
+		inFlight, maxFlight atomic.Int32
+		started             chan struct{}
+	}
+	one := &flight{started: make(chan struct{}, hostsPerGroup)}
+	five := &flight{started: make(chan struct{}, hostsPerGroup)}
+	release := make(chan struct{})
+	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
+		_, _ = io.Copy(io.Discard, stdin)
+		f := five
+		if strings.HasPrefix(argv[len(argv)-2], "o") {
+			f = one
+		}
+		n := f.inFlight.Add(1)
+		defer f.inFlight.Add(-1)
 		for {
-			cur := maxFlight.Load()
-			if n <= cur || maxFlight.CompareAndSwap(cur, n) {
+			cur := f.maxFlight.Load()
+			if n <= cur || f.maxFlight.CompareAndSwap(cur, n) {
 				break
 			}
 		}
-		defer inFlight.Add(-1)
-		ready <- struct{}{}
+		f.started <- struct{}{}
 		select {
 		case <-release:
+			return nil
 		case <-ctx.Done():
 			return ctx.Err()
 		}
-		_ = dest
-		return nil
-	}
-	remote.SSHRunner = func(ctx context.Context, stdin io.Reader, argv []string) error {
-		_, _ = io.Copy(io.Discard, stdin)
-		dest := argv[len(argv)-2]
-		if strings.HasPrefix(dest, "o") {
-			return track(ctx, dest, &oneInFlight, &oneMaxFlight, oneRelease)
-		}
-		return track(ctx, dest, &fiveInFlight, &fiveMaxFlight, fiveRelease)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	var releaseOnce sync.Once
-	release := func() {
-		releaseOnce.Do(func() {
-			close(oneRelease)
-			close(fiveRelease)
-		})
-	}
-	defer release()
+	ctx, cancel := context.WithCancel(context.Background())
 	errs := make(chan error, 1)
 	go func() {
-		errs <- PushFleetRun(ctx, "over", "", 2, remote.DefaultHostTimeout, "fleet_override")
+		errs <- PushFleetRun(ctx, "over", "", j, remote.DefaultHostTimeout, "fleet_override")
 	}()
-	for range 4 {
-		select {
-		case <-ready:
-		case <-ctx.Done():
-			t.Fatal("-j did not start two pushes in each cluster")
+	// finish opens the barrier and waits for the push to return, exactly
+	// once. The cleanup (registered after, so run before, the SSHRunner
+	// restore) also covers a t.Fatal path: it cancels the push first, so the
+	// push goroutine never outlives the stub it is calling.
+	var finishOnce sync.Once
+	var pushErr error
+	finish := func() error {
+		finishOnce.Do(func() {
+			close(release)
+			pushErr = <-errs
+		})
+		return pushErr
+	}
+	t.Cleanup(func() {
+		cancel()
+		_ = finish()
+	})
+
+	timeout := time.NewTimer(barrierTimeout)
+	defer timeout.Stop()
+	for _, g := range []struct {
+		name string
+		f    *flight
+	}{{"one", one}, {"five", five}} {
+		for started := 0; started < j; started++ {
+			select {
+			case <-g.f.started:
+			case <-timeout.C:
+				t.Fatalf("cluster %q: only %d of %d pushes in flight at once after %v: -j %d must override its Parallel(n)",
+					g.name, started, j, barrierTimeout, j)
+			}
 		}
 	}
-	release()
-	if err := <-errs; err != nil {
+	if err := finish(); err != nil {
 		t.Fatal(err)
 	}
-	if oneMaxFlight.Load() != 2 {
-		t.Fatalf("cluster %q maxFlight=%d, want 2: -j must override its Parallel(1)", "one", oneMaxFlight.Load())
+	if got := one.maxFlight.Load(); got != j {
+		t.Fatalf("cluster %q maxFlight=%d, want %d: -j must override its Parallel(1)", "one", got, j)
 	}
-	if fiveMaxFlight.Load() != 2 {
-		t.Fatalf("cluster %q maxFlight=%d, want 2: -j must override its Parallel(5)", "five", fiveMaxFlight.Load())
+	if got := five.maxFlight.Load(); got != j {
+		t.Fatalf("cluster %q maxFlight=%d, want %d: -j must override its Parallel(5)", "five", got, j)
 	}
 }
