@@ -69,7 +69,7 @@ func (f *File) ensureFile(path string, content []byte) error {
 	}
 
 	return resource.Mutate(id, fmt.Sprintf("update %s", path), func() error {
-		if err := atomicfile.Write(path, content, f.mode); err != nil {
+		if err := f.writeAtomic(path, content); err != nil {
 			return err
 		}
 		logger.Info("updated %s", path)
@@ -91,4 +91,36 @@ func nonRegularEntryAt(path string) (needsReplace bool, entryType os.FileMode) {
 		return false, 0
 	}
 	return !info.Mode().IsRegular(), info.Mode().Type()
+}
+
+// writeAtomic replaces path with content through atomicfile.Write, giving
+// the temporary file f's configured owner and group before its mode and the
+// rename: a set-id file therefore never appears at path, even briefly,
+// owned by the writer (e.g. root) instead of the configured owner. An unset
+// owner or group stays the writer's, as before. applyAttributesTo still
+// runs afterwards on the final path (it also repairs unchanged content).
+func (f *File) writeAtomic(path string, content []byte) error {
+	owner, ok, err := f.tempOwner()
+	if err != nil {
+		return err
+	}
+	var opts []atomicfile.Option
+	if ok {
+		opts = append(opts, atomicfile.WithOwner(owner))
+	}
+	return atomicfile.Write(path, content, f.mode, opts...)
+}
+
+// tempOwner is the ownership writeAtomic gives the temporary file: f's
+// resolved ids, -1 for an unset one (the writer's); ok is false when
+// neither is configured.
+func (f *File) tempOwner() (owner atomicfile.Owner, ok bool, err error) {
+	uid, gid, err := f.ownerIDs()
+	if err != nil {
+		return atomicfile.Owner{}, false, err
+	}
+	if uid == -1 && gid == -1 {
+		return atomicfile.Owner{}, false, nil
+	}
+	return atomicfile.Owner{UID: uid, GID: gid}, true, nil
 }

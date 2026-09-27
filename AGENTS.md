@@ -333,7 +333,9 @@ that clients cannot import (`internal/clihost.SetForTest`,
 `internal/remote.AssumeRemoteSealedStickyForTest` (task 0g2: lets
 `internal/cli`'s end-to-end sealed push test pass the sealed-sticky release
 floor, v0.17.0, without an ssh release probe), `internal/testapply.
-ApplyWithRunners`). `resource.ResetDeclarationError` (task oe2) is not one of
+ApplyWithRunners`, `internal/atomicfile.ObserveBeforeRenameForTest` (task
+bb: lets `resource/file` pin that the temporary file carries its final
+owner and mode before the rename)). `resource.ResetDeclarationError` (task oe2) is not one of
 these: it is not named `*ForTest` and is a real production API — the
 supported way for a library embedder to clear the sticky declaration-error
 refusal (see "Registration-time contract") without going through the

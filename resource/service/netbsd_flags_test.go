@@ -452,7 +452,46 @@ func TestNetBSDSetFlagsKeepsModeOwnerAndSymlink(t *testing.T) {
 		requireNoRcTempFiles(t, filepath.Dir(realPath))
 		requireNoRcTempFiles(t, filepath.Dir(b.rcConf))
 	})
-	t.Run("supplementary group", func(t *testing.T) {
+	t.Run("relative symlink", func(t *testing.T) {
+		b := netbsdFlagsBackend(t, "", "", "")
+		dir := filepath.Dir(b.rcConf)
+		if err := os.WriteFile(filepath.Join(dir, "rc.conf.real"), []byte("nsd_flags=-4\n"), 0o640); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("rc.conf.real", b.rcConf); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.setFlags(unit{name: "nsd"}, "-x"); err != nil {
+			t.Fatalf("setFlags: %v", err)
+		}
+		requireRcSymlink(t, b.rcConf, "rc.conf.real")
+		requireRcConf(t, filepath.Join(dir, "rc.conf.real"), "nsd_flags='-x'\n", 0o640)
+		requireNoRcTempFiles(t, dir)
+	})
+	t.Run("chained symlinks", func(t *testing.T) {
+		b := netbsdFlagsBackend(t, "", "", "")
+		realDir := t.TempDir()
+		realPath := filepath.Join(realDir, "rc.conf")
+		if err := os.WriteFile(realPath, []byte("nsd_flags=-4\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		middle := filepath.Join(filepath.Dir(b.rcConf), "rc.conf.link")
+		if err := os.Symlink(realPath, middle); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("rc.conf.link", b.rcConf); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.setFlags(unit{name: "nsd"}, "-x"); err != nil {
+			t.Fatalf("setFlags: %v", err)
+		}
+		requireRcSymlink(t, b.rcConf, "rc.conf.link")
+		requireRcSymlink(t, middle, realPath)
+		requireRcConf(t, realPath, "nsd_flags='-x'\n", 0o600)
+		requireNoRcTempFiles(t, realDir)
+		requireNoRcTempFiles(t, filepath.Dir(b.rcConf))
+	})
+	t.Run("supplementary group and set-gid mode", func(t *testing.T) {
 		gid, ok := supplementaryGroup()
 		if !ok {
 			t.Skip("the caller has no supplementary group")
@@ -461,26 +500,12 @@ func TestNetBSDSetFlagsKeepsModeOwnerAndSymlink(t *testing.T) {
 		if err := os.Chown(b.rcConf, -1, gid); err != nil {
 			t.Fatal(err)
 		}
-		if err := b.setFlags(unit{name: "nsd"}, "-x"); err != nil {
-			t.Fatalf("setFlags: %v", err)
-		}
-		info, err := os.Stat(b.rcConf)
-		if err != nil {
+		if err := os.Chmod(b.rcConf, 0o640|os.ModeSetgid); err != nil {
 			t.Fatal(err)
 		}
-		if owner, _ := atomicfile.OwnerOf(info); owner.GID != gid || owner.UID != os.Getuid() {
-			t.Errorf("rc.conf owner = %+v, want uid %d gid %d", owner, os.Getuid(), gid)
-		}
-	})
-	t.Run("owner carried to the write", func(t *testing.T) {
-		b := netbsdFlagsBackend(t, "nsd_flags=-4\n", "", "")
-		rc, err := readRcConf(b.rcConf)
-		if err != nil {
-			t.Fatal(err)
-		}
-		want := atomicfile.Owner{UID: os.Getuid(), GID: os.Getgid()}
-		if rc.owner == nil || *rc.owner != want {
-			t.Fatalf("readRcConf owner = %v, want %+v", rc.owner, want)
+		want := atomicfile.Owner{UID: os.Getuid(), GID: gid}
+		if rc, err := readRcConf(b.rcConf); err != nil || rc.owner == nil || *rc.owner != want {
+			t.Fatalf("readRcConf owner = %v (%v), want %+v", rc.owner, err, want)
 		}
 		if err := b.setFlags(unit{name: "nsd"}, "-x"); err != nil {
 			t.Fatalf("setFlags: %v", err)
@@ -491,6 +516,9 @@ func TestNetBSDSetFlagsKeepsModeOwnerAndSymlink(t *testing.T) {
 		}
 		if owner, _ := atomicfile.OwnerOf(info); owner != want {
 			t.Errorf("rc.conf owner = %+v, want %+v", owner, want)
+		}
+		if info.Mode()&os.ModeSetgid == 0 {
+			t.Errorf("rc.conf mode = %v, lost its set-gid bit", info.Mode())
 		}
 	})
 	t.Run("missing rc.conf created 0644", func(t *testing.T) {
@@ -562,6 +590,17 @@ func requireRcConf(t *testing.T, path, content string, mode os.FileMode) {
 	}
 	if info.Mode().Perm() != mode {
 		t.Errorf("%s mode = %v, want %v", path, info.Mode().Perm(), mode)
+	}
+}
+
+func requireRcSymlink(t *testing.T, path, target string) {
+	t.Helper()
+	got, err := os.Readlink(path)
+	if err != nil {
+		t.Fatalf("%s is no longer a symlink: %v", path, err)
+	}
+	if got != target {
+		t.Errorf("%s -> %s, want -> %s", path, got, target)
 	}
 }
 

@@ -11,6 +11,11 @@ Fixes
   can no longer leave an empty rc.conf. It also keeps rc.conf's owner,
   edits the file a symlinked rc.conf points to instead of replacing the
   link, and refuses a dangling symlink or a non-regular rc.conf.
+- A changed `File` with `WithOwner`/`WithGroup` gets its owner and group
+  on the temporary file before the rename, so a set-id file never
+  appears, even briefly, owned by the user running gonf (e.g. root). An
+  owner or group that does not resolve now fails before the content is
+  replaced instead of after.
 - `-quiet` and `-verbose` now reach the remote `gonf apply` of `push`,
   `cluster` and `fleet`, and the local sudo/doas re-exec of privileged
   chunks. Before, those children logged at their default level, so

@@ -101,7 +101,10 @@ func (b netbsdBackend) setFlags(u unit, flags string) error {
 	if rc.owner != nil {
 		opts = append(opts, atomicfile.WithOwner(*rc.owner))
 	}
-	return atomicfile.Write(rc.path, []byte(updated), rc.mode, opts...)
+	if err := atomicfile.Write(rc.path, []byte(updated), rc.mode, opts...); err != nil {
+		return fmt.Errorf("write %s: %w", b.rcConf, err)
+	}
+	return nil
 }
 
 func (b netbsdBackend) describeFlags(u unit, flags string) (would, did string) {
@@ -182,7 +185,9 @@ func readRcConf(path string) (rcConfFile, error) {
 	if err != nil {
 		return rcConfFile{}, fmt.Errorf("read %s: %w", path, err)
 	}
-	rc := rcConfFile{path: target, content: string(data), mode: info.Mode().Perm()}
+	// Keep the set-id and sticky bits too, not only the permissions.
+	const modeBits = fs.ModePerm | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky
+	rc := rcConfFile{path: target, content: string(data), mode: info.Mode() & modeBits}
 	if owner, ok := atomicfile.OwnerOf(info); ok {
 		rc.owner = &owner
 	}

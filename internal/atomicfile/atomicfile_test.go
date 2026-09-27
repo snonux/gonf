@@ -119,10 +119,11 @@ func TestWriteWithOwnerKeepsOwnOwnership(t *testing.T) {
 	requireOwner(t, path, own)
 }
 
-// TestWriteWithOwnerAppliesSupplementaryGroup pins that WithOwner really
-// chowns the temporary file: a group the caller belongs to but that is not
-// its primary one ends up on the target.
-func TestWriteWithOwnerAppliesSupplementaryGroup(t *testing.T) {
+// TestWriteWithOwnerKeepsSetGIDAfterChown pins that WithOwner really
+// chowns the temporary file, and chowns it before the chmod: a group the
+// caller belongs to but that is not its primary one ends up on the target
+// together with a set-gid bit, which a chown after the chmod would clear.
+func TestWriteWithOwnerKeepsSetGIDAfterChown(t *testing.T) {
 	gid, ok := otherGroup()
 	if !ok {
 		t.Skip("the caller has no supplementary group")
@@ -130,12 +131,61 @@ func TestWriteWithOwnerAppliesSupplementaryGroup(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "grouped")
 	want := Owner{UID: os.Getuid(), GID: gid}
+	mode := 0o750 | os.ModeSetgid
 
-	if err := Write(path, []byte("x"), 0o640, WithOwner(want)); err != nil {
+	if err := Write(path, []byte("x"), mode, WithOwner(want)); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 	requireOwner(t, path, want)
-	requireFile(t, path, "x", 0o640)
+	requireMode(t, path, mode)
+}
+
+// TestWriteAttributesSetBeforeRename pins that the temporary file carries
+// its final content, set-id mode and ownership while still unrenamed, so
+// the target never shows up with the writer's ownership or a wrong mode.
+func TestWriteAttributesSetBeforeRename(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "setid")
+	if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	own := Owner{UID: os.Getuid(), GID: os.Getgid()}
+	mode := 0o750 | os.ModeSetuid | os.ModeSetgid
+	var observed int
+	restore := ObserveBeforeRenameForTest(func(tmp string) {
+		observed++
+		requireFile(t, tmp, "new", mode.Perm())
+		requireMode(t, tmp, mode)
+		requireOwner(t, tmp, own)
+		requireFile(t, path, "old", 0o600)
+	})
+	defer restore()
+
+	if err := Write(path, []byte("new"), mode, WithOwner(own)); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if observed != 1 {
+		t.Fatalf("observer ran %d times, want 1", observed)
+	}
+	requireMode(t, path, mode)
+	requireOwner(t, path, own)
+}
+
+// TestWriteWithOwnerUnsetIDs pins os.Chown's -1 convention: an unset id
+// stays the writer's, so WithOwner(-1, -1) needs no privilege at all.
+func TestWriteWithOwnerUnsetIDs(t *testing.T) {
+	dir := t.TempDir()
+	for name, owner := range map[string]Owner{
+		"both unset": {UID: -1, GID: -1},
+		"uid unset":  {UID: -1, GID: os.Getgid()},
+		"gid unset":  {UID: os.Getuid(), GID: -1},
+	} {
+		path := filepath.Join(dir, strings.ReplaceAll(name, " ", "-"))
+		if err := Write(path, []byte("x"), 0o640, WithOwner(owner)); err != nil {
+			t.Fatalf("%s: Write: %v", name, err)
+		}
+		requireOwner(t, path, Owner{UID: os.Getuid(), GID: os.Getgid()})
+	}
 }
 
 // TestWriteWithOwnerFailureLeavesOriginalUntouched pins the refusal of a
@@ -213,6 +263,18 @@ func requireFile(t *testing.T, path, content string, mode os.FileMode) {
 	}
 	if info.Mode().Perm() != mode {
 		t.Errorf("%s mode = %v, want %v", path, info.Mode().Perm(), mode)
+	}
+}
+
+func requireMode(t *testing.T, path string, mode os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const bits = os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky
+	if got := info.Mode() & bits; got != mode {
+		t.Errorf("%s mode = %v, want %v", path, got, mode)
 	}
 }
 

@@ -11,12 +11,14 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/snonux/gonf/internal/logger"
 )
 
-// Owner is a numeric file ownership.
+// Owner is a numeric file ownership. A -1 id leaves that id as the
+// writer's, like os.Chown's -1.
 type Owner struct {
 	UID, GID int
 }
@@ -31,6 +33,20 @@ func OwnerOf(info fs.FileInfo) (owner Owner, ok bool) {
 	return Owner{UID: int(st.Uid), GID: int(st.Gid)}, true
 }
 
+// beforeRename holds the ObserveBeforeRenameForTest observer, if any.
+var beforeRename atomic.Pointer[func(tmpPath string)]
+
+// ObserveBeforeRenameForTest is a test seam: until the returned restore
+// func runs, every Write calls seen with its finished temporary file's path
+// right before the rename, so a test can check what the temporary file
+// carries (content, mode, ownership) before it becomes visible at the
+// target. It swaps package state, so tests using it must not run in
+// parallel with other writes they do not expect to observe.
+func ObserveBeforeRenameForTest(seen func(tmpPath string)) (restore func()) {
+	old := beforeRename.Swap(&seen)
+	return func() { beforeRename.Store(old) }
+}
+
 // Option adjusts one Write.
 type Option func(*options)
 
@@ -38,10 +54,11 @@ type options struct {
 	owner *Owner
 }
 
-// WithOwner gives the temporary file owner before the rename, so path never
-// briefly exists with the wrong ownership. A chown the caller may not make
-// (changing the owner without privilege) fails the write and leaves path
-// untouched; one that changes nothing is skipped.
+// WithOwner gives the temporary file owner before the rename (and before
+// its mode, so a set-id bit is never set on a file the wrong user owns), so
+// path never briefly exists with the wrong ownership. A chown the caller may
+// not make (changing the owner without privilege) fails the write and
+// leaves path untouched; one that changes nothing is skipped.
 func WithOwner(owner Owner) Option {
 	return func(o *options) { o.owner = &owner }
 }
@@ -132,6 +149,9 @@ func Write(path string, content []byte, mode os.FileMode, opts ...Option) (err e
 		return fmt.Errorf("failed to close temporary file %s: %w", tmpPath, err)
 	}
 
+	if seen := beforeRename.Load(); seen != nil {
+		(*seen)(tmpPath)
+	}
 	logger.Debug("renaming %s to %s", tmpPath, path)
 	if err = os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("failed to move temporary file %s into place at %s: %w", tmpPath, path, err)
@@ -151,10 +171,21 @@ func chownTemp(tmp *os.File, owner *Owner) error {
 	if err != nil {
 		return err
 	}
-	if cur, ok := OwnerOf(info); ok && cur == *owner {
+	if cur, ok := OwnerOf(info); ok && cur == owner.resolve(cur) {
 		return nil
 	}
 	return tmp.Chown(owner.UID, owner.GID)
+}
+
+// resolve returns o with each -1 id replaced by cur's.
+func (o Owner) resolve(cur Owner) Owner {
+	if o.UID == -1 {
+		o.UID = cur.UID
+	}
+	if o.GID == -1 {
+		o.GID = cur.GID
+	}
+	return o
 }
 
 // syncDir makes the rename to path durable by syncing its parent directory
