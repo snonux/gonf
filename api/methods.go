@@ -229,18 +229,18 @@ func RegisterMethods(v any, opts ...RegisterOption) {
 //
 // WithPrefix is refused (a declaration error, nothing registered): a prefix
 // shared by several structs belongs on each RegisterMethods call, and one
-// per struct is the default already. So is a nil item or a nil TaskOption
-// (directly or inside WithGroupWhen): no struct of the call is registered.
-// Any other item is a struct or pointer to one, checked as RegisterMethods
-// checks it.
+// per struct is the default already. So is a nil item (untyped, or a nil
+// struct pointer) or a nil TaskOption (directly or inside WithGroupWhen):
+// no struct of the call is registered. Any other item is a struct or
+// pointer to one, checked as RegisterMethods checks it.
 func RegisterOnCluster(cluster string, items ...any) {
 	var opts []RegisterOption
 	var optItems []int // optItems[i] is opts[i]'s 1-based position in items
 	var structs []any
 	for i, item := range items {
-		if item == nil {
-			// Refuse up front: RegisterMethods(nil) would refuse only this
-			// item while registering the others.
+		if isNilItem(item) {
+			// Refuse up front: RegisterMethods would refuse only this item
+			// while registering the others.
 			declerr.Reportf("RegisterOnCluster(%q): item %d is nil", cluster, i+1)
 			return
 		}
@@ -264,6 +264,18 @@ func RegisterOnCluster(cluster string, items ...any) {
 	for _, v := range structs {
 		RegisterMethods(v, opts...)
 	}
+}
+
+// isNilItem reports whether a RegisterOnCluster item is nil: untyped nil (a
+// nil RegisterOption passed as any) or a typed nil pointer such as
+// (*Foo)(nil). A nil TaskOption is left to applyRegisterOptions, which names
+// it.
+func isNilItem(item any) bool {
+	if item == nil {
+		return true
+	}
+	v := reflect.ValueOf(item)
+	return v.Kind() == reflect.Pointer && v.IsNil()
 }
 
 // applyRegisterOptions applies opts to cfg in order. It stops at the first

@@ -76,9 +76,13 @@ Fixes
   inside `WithGroupWhen`) it registers nothing of the struct, and in
   `RegisterOnCluster` nothing of any struct of the call.
 - Behaviour change: a `nil` `RegisterOption` passed to `RegisterMethods`,
-  or a `nil` item in `RegisterOnCluster`, is a declaration error and
-  registers nothing. Before, `RegisterMethods` skipped it silently, so a
+  or a `nil` item in `RegisterOnCluster` (untyped or a nil struct
+  pointer), is a declaration error and registers nothing. Before, `RegisterMethods` skipped it silently, so a
   guard such as `OnCluster` built as nil registered the methods unguarded.
+- A `StructOption` marker with a pointer-receiver `StructTaskOptions`,
+  embedded by value next to another marker, is now collected. Before,
+  only value-receiver markers were found, so its options (such as a
+  guard) were silently dropped and the tasks registered without them.
 - `RegisterMethods` companion errors name the struct type:
   `RegisterMethods(pkg.Type): OptsX must be func() TaskOptions`.
 

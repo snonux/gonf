@@ -38,7 +38,8 @@ func (RequiresRoot) StructTaskOptions() TaskOptions { return TaskOptions{Privile
 // order), then the Opts() companion if the struct defines one. A method's
 // own OptsX companion is appended to the whole combined struct-level set.
 //
-// Markers must be embedded (or added as) EXPORTED types: unexported
+// Markers may implement StructTaskOptions with a value or a pointer
+// receiver, and must be embedded (or added as) EXPORTED types: unexported
 // embedded markers are skipped here and fall through to their promoted
 // method on the outer type (single marker only; multiple same-depth
 // markers are an ambiguous selector and are not in the method set).
@@ -78,9 +79,11 @@ func collectStructOptions(rv reflect.Value, rt reflect.Type) (TaskOptions, error
 
 // markerStructOptions collects the TaskOptions of the exported embedded
 // StructOption marker fields, in declaration order, and reports whether the
-// struct has any such field. Markers implement StructOption, so their
-// StructTaskOptions signature is guaranteed by the compiler; a nil marker
-// field (isNilMarker), or a nil TaskOption in a marker's result, is
+// struct has any such field. A field is a marker when its type, or a
+// pointer to it, implements StructOption (isMarkerField), so a marker with
+// a pointer-receiver StructTaskOptions counts too: it is called through the
+// field's address (rv is a pointer, so the field is addressable). A nil
+// marker field (isNilMarker), or a nil TaskOption in a marker's result, is
 // returned as an error.
 func markerStructOptions(rv reflect.Value, rt reflect.Type) (TaskOptions, bool, error) {
 	var opts TaskOptions
@@ -97,15 +100,11 @@ func markerStructOptions(rv reflect.Value, rt reflect.Type) (TaskOptions, bool, 
 		if !f.IsExported() {
 			continue
 		}
-		ft := f.Type
-		if ft.Kind() == reflect.Pointer {
-			ft = ft.Elem()
-		}
-		if !ft.Implements(structOptionType) {
+		if !isMarkerField(f.Type) {
 			continue
 		}
 		found = true
-		// Exported embedded marker: the field value is accessible.
+		// Exported marker field: the field value is accessible.
 		fv := rv.Elem().Field(i)
 		if isNilMarker(fv) {
 			// Calling the marker through a nil pointer or interface would
@@ -113,15 +112,28 @@ func markerStructOptions(rv reflect.Value, rt reflect.Type) (TaskOptions, bool, 
 			// Privileged()).
 			return nil, true, fmt.Errorf("marker %s is nil", f.Name)
 		}
-		if m := fv.MethodByName("StructTaskOptions"); m.IsValid() {
-			markerOpts := m.Call(nil)[0].Interface().([]TaskOption)
-			if bad := nilOptionIndex(markerOpts); bad != 0 {
-				return nil, true, fmt.Errorf("marker %s: StructTaskOptions returned a nil TaskOption (option %d)", f.Name, bad)
-			}
-			opts = append(opts, markerOpts...)
+		if !fv.Type().Implements(structOptionType) {
+			fv = fv.Addr() // pointer-receiver StructTaskOptions
 		}
+		markerOpts := fv.Interface().(StructOption).StructTaskOptions()
+		if bad := nilOptionIndex(markerOpts); bad != 0 {
+			return nil, true, fmt.Errorf("marker %s: StructTaskOptions returned a nil TaskOption (option %d)", f.Name, bad)
+		}
+		opts = append(opts, markerOpts...)
 	}
 	return opts, found, nil
+}
+
+// isMarkerField reports whether a field of type ft is a StructOption
+// marker: ft implements it (a value-receiver marker, a pointer to any
+// marker, or the StructOption interface itself), or *ft does (a value field
+// of a pointer-receiver marker).
+func isMarkerField(ft reflect.Type) bool {
+	if ft.Implements(structOptionType) {
+		return true
+	}
+	return ft.Kind() != reflect.Pointer && ft.Kind() != reflect.Interface &&
+		reflect.PointerTo(ft).Implements(structOptionType)
 }
 
 // isNilMarker reports whether marker field fv is a nil pointer, a nil

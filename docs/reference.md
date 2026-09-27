@@ -144,7 +144,7 @@ RegisterMethods(home.HomeTasks{}) // registers home_helix
 | `WhenFoo() TaskOption` | Per-method guard such as `WhenLinux()`. A serializable guard travels in the plan, so the task still pushes. |
 | `WhenFoo(Facts) bool` | Per-method opaque filter, controller only: push, cluster and fleet refuse the task. |
 | `Opts() TaskOptions` | Struct-level default options. A method named `Opts` is never a task. |
-| embedded `StructOption` | Same as `Opts()`, declared by embedding. `RequiresRoot` ships with gonf (`type T struct{ RequiresRoot }`). |
+| embedded `StructOption` | Same as `Opts()`, declared by embedding. `RequiresRoot` ships with gonf (`type T struct{ RequiresRoot }`). A custom marker may implement `StructTaskOptions` with a value or a pointer receiver; every embedded marker counts. |
 | `WithPrefix(p)` | Prefix for every task name, replacing the default below. `WithPrefix("")` registers bare method names. |
 | `WithGroupWhen(opts...)` | Options applied to every method, before the struct default. |
 | any `TaskOption` | Same as `WithGroupWhen(opt)`: `RegisterMethods(pkg.Pkg{}, WhenProfile("fedora"))`. |
@@ -164,9 +164,9 @@ or `Home`: those are api functions.) Pass
 `RegisterOnCluster(name, structs...)` is `RegisterMethods(v, OnCluster(name))`
 for each struct, each under its own default prefix. A `RegisterOption` or
 `TaskOption` in the list applies to all of them; `WithPrefix` is refused
-(use `RegisterMethods` for a shared prefix), and so is a `nil` item or a
-`nil` TaskOption: either is a declaration error and registers none of the
-structs:
+(use `RegisterMethods` for a shared prefix), and so is a `nil` item (also
+a nil struct pointer such as `(*Carp)(nil)`) or a `nil` TaskOption: either
+is a declaration error and registers none of the structs:
 
 ```go
 RegisterOnCluster(cluster.NameFreeBSD,

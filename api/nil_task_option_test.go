@@ -2,11 +2,13 @@ package api
 
 import (
 	"fmt"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/snonux/gonf/internal/declerr"
+	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -125,6 +127,20 @@ type ifaceMarkerStruct struct {
 
 func (ifaceMarkerStruct) Ping() {}
 
+// PtrMarker is a marker with a pointer-receiver StructTaskOptions.
+type PtrMarker struct{ profile string }
+
+func (m *PtrMarker) StructTaskOptions() TaskOptions {
+	return TaskOptions{WhenProfile(m.profile)} // dereferences m
+}
+
+// nilPtrRecvMarkerStruct embeds a nil pointer-receiver marker.
+type nilPtrRecvMarkerStruct struct {
+	*PtrMarker
+}
+
+func (nilPtrRecvMarkerStruct) Ping() {}
+
 // TestRegisterMethodsNilCompanionOptionIsDeclarationError: a nil returned
 // by a companion, or a nil-pointer marker, is reported at the
 // RegisterMethods call naming the struct type (like a companion with the
@@ -149,6 +165,7 @@ func TestRegisterMethodsNilCompanionOptionIsDeclarationError(t *testing.T) {
 		{"marker", nilMarkerStruct{}, "RegisterMethods(api.nilMarkerStruct): marker NilMarker: StructTaskOptions returned a nil TaskOption (option 3)"},
 		{"nil-pointer marker", nilPtrMarkerStruct{}, "RegisterMethods(api.nilPtrMarkerStruct): marker RequiresRoot is nil"},
 		{"nil-pointer marker via pointer", &nilPtrMarkerStruct{}, "RegisterMethods(api.nilPtrMarkerStruct): marker RequiresRoot is nil"},
+		{"nil pointer-receiver marker", nilPtrRecvMarkerStruct{}, "RegisterMethods(api.nilPtrRecvMarkerStruct): marker PtrMarker is nil"},
 		{"nil interface marker", ifaceMarkerStruct{}, "RegisterMethods(api.ifaceMarkerStruct): marker StructOption is nil"},
 		{"interface marker holding nil pointer", ifaceMarkerStruct{StructOption: (*RequiresRoot)(nil)}, "RegisterMethods(api.ifaceMarkerStruct): marker StructOption is nil"},
 		{"direct StructTaskOptions", nilDirectStructOpts{}, "RegisterMethods(api.nilDirectStructOpts): StructTaskOptions returned a nil TaskOption (option 1)"},
@@ -217,6 +234,11 @@ func TestRegisterMethodsNilGroupOptionIsDeclarationError(t *testing.T) {
 			*line = thisLine() + 1
 			RegisterOnCluster("nilc", nilGroup{}, nilReg, nilGroupB{})
 		}},
+		{"RegisterOnCluster nil struct pointer", `RegisterOnCluster("nilc"): item 3 is nil`, func(line *int) {
+			Cluster("nilc", Host("n1"))
+			*line = thisLine() + 1
+			RegisterOnCluster("nilc", nilGroup{}, nilGroupB{}, (*nilGroup)(nil))
+		}},
 	}
 	refused := []string{"ng_ping", "ng_pong",
 		DefaultPrefix(nilGroup{}) + "ping", DefaultPrefix(nilGroup{}) + "pong", DefaultPrefix(nilGroupB{}) + "ping"}
@@ -240,5 +262,33 @@ func TestRegisterMethodsInterfaceMarkerSet(t *testing.T) {
 	}
 	if c, ok := findCandidate("im_ping"); !ok || !c.privileged {
 		t.Fatalf("im_ping candidate = %+v (queued %v), want queued and privileged", c, ok)
+	}
+}
+
+// twoMarkerStruct embeds a value-receiver marker and a pointer-receiver one
+// by value; both markers' options apply.
+type twoMarkerStruct struct {
+	RequiresRoot
+	PtrMarker
+}
+
+func (twoMarkerStruct) Ping() {}
+
+// TestRegisterMethodsPointerReceiverMarkerCollected: a value field whose
+// marker has a pointer-receiver StructTaskOptions is a marker too, so its
+// guard is not silently dropped next to another marker.
+func TestRegisterMethodsPointerReceiverMarkerCollected(t *testing.T) {
+	resetForHostsState(t)
+	RegisterMethods(twoMarkerStruct{PtrMarker: PtrMarker{profile: "gonfy"}}, WithPrefix("tm_"))
+	if err := declerr.First(); err != nil {
+		t.Fatal(err)
+	}
+	c, ok := findCandidate("tm_ping")
+	if !ok {
+		t.Fatal("tm_ping not queued")
+	}
+	want := []plan.Predicate{{Fact: "profile", Eq: "gonfy"}}
+	if !c.privileged || !reflect.DeepEqual(c.planWhen, want) {
+		t.Fatalf("tm_ping: privileged=%v planWhen=%+v, want privileged and %+v", c.privileged, c.planWhen, want)
 	}
 }
