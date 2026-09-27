@@ -65,6 +65,11 @@ Fixes
   a guard every hostname matches, so the task applied on every
   destination. `WhenHostnameIn()` with no hosts no longer falls back to
   that match-all guard either.
+- The body-level `WhenHostname` likewise refuses an empty or
+  whitespace-only fragment as a declaration error, alone or in a
+  `List(...)`. Before, `WhenHostname("", fn)` (e.g. `WhenHostname(cfg.Host,
+  fn)` with an unset value) ran `fn` on every destination. A refused call
+  runs and records none of its fragments.
 - A `nil` TaskOption is a declaration error instead of a panic, since the
   missing option may have been a guard or `Privileged()`. In `Task(...)`
   the task is not registered; returned by an `OptsX()` companion, only

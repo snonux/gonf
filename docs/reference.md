@@ -345,7 +345,7 @@ Predicate helpers for `When`: `ProfileIs(p...)`, `And(...)`, `Or(...)`.
 | API | Plan form | Direct (non-recording) form |
 |-----|-----------|-----------------------------|
 | `WhenPathExists(path, fn)` | `when_begin{path_exists}` around `fn` | probes the local filesystem now |
-| `WhenHostname(s \| List(...), fn)` | `when_begin{hostname_contains}` around `fn`; a list gives one block per entry | runs `fn` when the local hostname matches |
+| `WhenHostname(s \| List(...), fn)` | `when_begin{hostname_contains}` around `fn`; a list gives one block per entry. An empty or whitespace-only entry is a declaration error, never a match-all guard: the whole call then records and runs nothing | runs `fn` when the local hostname contains `s` (case insensitive) |
 | `EnsureDir(path, opts...)` | `ensure_dir`: destination creates it only if missing | `Dir` only when the path is not already a directory |
 | `EnsureFile(path, opts...)` | `ensure_file`: creates an empty regular file if missing; keeps existing bytes, converges explicit mode/owner/group | same |
 | `LinkIfExists(path, target)` | `link_if_exists` | `Link` if `target` exists, else `NoLink` |

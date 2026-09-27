@@ -262,14 +262,23 @@ func hostnameGuard(fn string, hosts []string) TaskOption {
 	}
 }
 
-// checkHostnameFragments refuses an empty list and any blank entry: the
-// destination matches with strings.Contains, which is true for "" on every
-// host, so a blank fragment would guard nothing (inventory's
-// WithHostnameMatch refuses one for the same reason).
+// checkHostnameFragments refuses an empty list and any blank entry
+// (checkBlankHostnameFragments): an option-level guard with no hosts would
+// otherwise lower to the same match-all predicate.
 func checkHostnameFragments(fn string, hosts []string) error {
 	if len(hosts) == 0 {
 		return fmt.Errorf("%s: no hosts", fn)
 	}
+	return checkBlankHostnameFragments(fn, hosts)
+}
+
+// checkBlankHostnameFragments refuses any empty or whitespace-only entry:
+// the destination matches with strings.Contains, which is true for "" on
+// every host, so a blank fragment would guard nothing (inventory's
+// WithHostnameMatch refuses one for the same reason). It is shared by the
+// option-level guards (hostnameGuard) and the body-level WhenHostname, so
+// both refuse the same spellings with the same message.
+func checkBlankHostnameFragments(fn string, hosts []string) error {
 	for i, h := range hosts {
 		if strings.TrimSpace(h) == "" {
 			return fmt.Errorf("%s: hostname fragment %d (%q) must not be empty or whitespace-only: it would match every host", fn, i+1, h)

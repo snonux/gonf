@@ -97,10 +97,6 @@ func TestWhenHostnameLocal(t *testing.T) {
 	if ran {
 		t.Fatal("expected fn NOT to run for a non-matching hostname")
 	}
-	WhenHostname("", func() { ran = true })
-	if !ran {
-		t.Fatal("empty substr must always match")
-	}
 }
 
 func TestRecordPlanWhenHostnameSlice(t *testing.T) {
@@ -190,9 +186,9 @@ func TestRecordPlanWhenHostnameFragmentScopes(t *testing.T) {
 
 // TestWhenHostnameDirectCollisionNamesConditions is WhenHostname's analogue
 // of api/when_path_test.go's WhenPathExists collision test: two independent
-// WhenHostname fragments that both match this local host (an empty substr
-// always matches, so it overlaps with any other matching substr the same
-// way two overlapping non-empty substrings would in a real recipe) run
+// WhenHostname fragments that both match this local host (a prefix of the
+// hostname and the hostname itself, overlapping the same way two
+// overlapping substrings would in a real recipe) run
 // their fn() bodies, one after the other, into the SAME repository on the
 // direct (non-recording) api.Apply path -- unlike the recording path, which
 // gives each fragment its own scope (see
@@ -214,11 +210,16 @@ func TestWhenHostnameDirectCollisionNamesConditions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("os.Hostname: %v", err)
 	}
+	if len(host) < 2 {
+		t.Skipf("hostname %q is too short for two distinct matching substrings", host)
+	}
 	out := filepath.Join(t.TempDir(), "out.txt")
 
-	// Two distinct, independently-true conditions for this host: the empty
-	// substring (always matches) and the host's own name (matches itself).
-	WhenHostname("", func() { File(out, options.WithContent("A")) })
+	// Two distinct, independently-true conditions for this host: its
+	// first character and its whole name. (An empty substring is no longer
+	// a match-all condition but a declaration error, task bc.)
+	prefix := host[:1]
+	WhenHostname(prefix, func() { File(out, options.WithContent("A")) })
 	WhenHostname(host, func() { File(out, options.WithContent("B")) })
 
 	applyErr := Apply()
@@ -228,7 +229,7 @@ func TestWhenHostnameDirectCollisionNamesConditions(t *testing.T) {
 	if !strings.Contains(applyErr.Error(), "already registered") {
 		t.Fatalf("error = %q, want it to mention \"already registered\"", applyErr)
 	}
-	wantA := `WhenHostname("")`
+	wantA := fmt.Sprintf("WhenHostname(%q)", prefix)
 	wantB := fmt.Sprintf("WhenHostname(%q)", host)
 	if !strings.Contains(applyErr.Error(), wantA) {
 		t.Fatalf("error = %q, want it to name the first colliding condition %q", applyErr, wantA)

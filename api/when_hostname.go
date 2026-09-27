@@ -4,12 +4,13 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 )
 
 // WhenHostname runs fn when the local hostname contains substr (case
-// insensitive; an empty substr always matches). It is the body-level
+// insensitive). It is the body-level
 // counterpart of the WhenHostnameContains TaskOption: in plan-record mode it
 // emits when_begin(hostname_contains)/when_end around fn instead of probing
 // the controller — so one recorded plan can carry several host-gated
@@ -19,19 +20,32 @@ import (
 // WhenHostname yourself), so identical per-host bodies stay DRY:
 //
 //	WhenHostname(List("pi2", "pi3"), func() { Package("ksh") })
+//
+// An empty or whitespace-only fragment (e.g. an unset config value) is a
+// declaration error, the same check WhenHostnameIn/WhenHostnameContains
+// apply (checkBlankHostnameFragments): every hostname contains "", so it
+// would run fn on every destination. The whole call is then skipped — no
+// fragment of it records or runs — so a List with one blank entry never
+// half-applies. An empty List() has no fragments and runs nothing.
 func WhenHostname[T Path](hosts T, fn func()) {
 	if fn == nil {
 		return
 	}
+	var substrs []string
 	switch v := any(hosts).(type) {
 	case string:
-		whenHostnameOne(v, fn)
+		substrs = []string{v}
 	case []string:
-		for _, substr := range v {
-			whenHostnameOne(substr, fn)
-		}
+		substrs = v
 	default:
 		panic("unreachable: WhenHostname: Path is string or []string") // see Path
+	}
+	if err := checkBlankHostnameFragments("WhenHostname", substrs); err != nil {
+		declerr.Report(err)
+		return
+	}
+	for _, substr := range substrs {
+		whenHostnameOne(substr, fn)
 	}
 }
 

@@ -2,11 +2,14 @@ package api
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/snonux/gonf/api/options"
 	"github.com/snonux/gonf/internal/declerr"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -175,5 +178,125 @@ func TestHostnameGuardCopiesHosts(t *testing.T) {
 	c, _ := findCandidate("copied")
 	if want := []plan.Predicate{{Fact: "hostname_contains", In: []string{"f0", "f1"}}}; !reflect.DeepEqual(c.planWhen, want) {
 		t.Fatalf("guard = %v, want %v", c.planWhen, want)
+	}
+}
+
+// Task bc regression tests: the body-level WhenHostname used to document
+// and honour "an empty substr always matches", so WhenHostname(cfg.Host,
+// fn) with an unset value ran fn on every destination — the hazard task 8b
+// closed for the option-level guards. It now shares their blank check.
+
+// TestWhenHostnameRefusesBlankFragment: every blank spelling, alone or in
+// a List next to entries that do match this host, is a declaration error
+// at the recipe line, and no fragment of the call runs — not even the
+// matching ones, so a half-blank list never half-applies.
+func TestWhenHostnameRefusesBlankFragment(t *testing.T) {
+	host, err := os.Hostname()
+	if err != nil {
+		t.Fatalf("os.Hostname: %v", err)
+	}
+	cases := []struct {
+		name  string
+		hosts []string // nil: the single-string form with blank
+		blank string
+		want  string
+	}{
+		{"string empty", nil, "", `WhenHostname: hostname fragment 1 ("") must not be empty or whitespace-only`},
+		{"string whitespace", nil, " \t", `WhenHostname: hostname fragment 1 (" \t") must not be empty or whitespace-only`},
+		{"list empty first", []string{"", host}, "", `WhenHostname: hostname fragment 1 ("") must not be empty or whitespace-only`},
+		{"list whitespace last", []string{host, "f0", "  "}, "", `WhenHostname: hostname fragment 3 ("  ") must not be empty or whitespace-only`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ran := 0
+			var line int
+			requireDeclErrAt(t, tc.want, &line, func() {
+				if tc.hosts == nil {
+					line = thisLine() + 1
+					WhenHostname(tc.blank, func() { ran++ })
+					return
+				}
+				line = thisLine() + 1
+				WhenHostname(List(tc.hosts...), func() { ran++ })
+			})
+			if ran != 0 {
+				t.Fatalf("fn ran %d time(s) despite the refused fragment", ran)
+			}
+		})
+	}
+}
+
+// TestWhenHostnameBlankFragmentFailsRecord: inside a recorded task body a
+// blank fragment fails that record with the declaration error instead of
+// recording a when_begin(hostname_contains "") block every destination
+// would enter, and the body under it is never recorded.
+func TestWhenHostnameBlankFragmentFailsRecord(t *testing.T) {
+	dir := resetAliasTest(t)
+	bodyRan := false
+	Task("blank_body", "", func() {
+		WhenHostname(List("f0", " "), func() {
+			bodyRan = true
+			File(filepath.Join(dir, "x"), options.WithContent("x"))
+		})
+	})
+
+	ops, err := RecordPlan("bc", "", "blank_body")
+	want := `WhenHostname: hostname fragment 2 (" ") must not be empty or whitespace-only`
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("RecordPlan = %v (ops %v), want the declaration error %q", err, opsKinds(ops), want)
+	}
+	if loc := declerr.Location(err); !strings.Contains(loc, "hostname_guard_test.go:") {
+		t.Fatalf("error location = %q, want the WhenHostname line in this file", loc)
+	}
+	if bodyRan {
+		t.Fatal("the body of a refused WhenHostname ran")
+	}
+}
+
+// TestWhenHostnameValidFragmentsGuardOnDestination: non-blank fragments
+// still record one hostname_contains block each and apply only where the
+// destination's hostname contains the fragment (case insensitive).
+func TestWhenHostnameValidFragmentsGuardOnDestination(t *testing.T) {
+	dir := resetAliasTest(t)
+	pair := filepath.Join(dir, "pair")
+	rocky := filepath.Join(dir, "rocky")
+	Task("body_guards", "", func() {
+		WhenHostname(List("f0", "F1"), func() { File(pair, options.WithContent("p")) })
+		WhenHostname("rocky", func() { File(rocky, options.WithContent("r")) })
+	})
+
+	ops, err := RecordPlan("bc", "", "body_guards")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := declerr.First(); err != nil {
+		t.Fatalf("valid WhenHostname fragments reported %v", err)
+	}
+	var guards []plan.Predicate
+	for _, op := range ops {
+		if op.Op == plan.KindWhenBegin {
+			guards = append(guards, op.All...)
+		}
+	}
+	want := []plan.Predicate{
+		{Fact: "hostname_contains", Eq: "f0"},
+		{Fact: "hostname_contains", Eq: "F1"},
+		{Fact: "hostname_contains", Eq: "rocky"},
+	}
+	if !reflect.DeepEqual(guards, want) {
+		t.Fatalf("recorded guards = %#v, want %#v", guards, want)
+	}
+
+	applyWithHostname(t, ops, "earth.lan")
+	if exists(pair) || exists(rocky) {
+		t.Fatalf("non-matching destination applied: pair=%v rocky=%v", exists(pair), exists(rocky))
+	}
+	applyWithHostname(t, ops, "f1.lan.example")
+	if !exists(pair) || exists(rocky) {
+		t.Fatalf("destination f1: pair written=%v (want true), rocky written=%v (want false)", exists(pair), exists(rocky))
+	}
+	applyWithHostname(t, ops, "ROCKY")
+	if !exists(rocky) {
+		t.Fatal("destination ROCKY did not apply the WhenHostname(rocky) fragment")
 	}
 }
