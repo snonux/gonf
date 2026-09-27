@@ -70,12 +70,17 @@ Fixes
   the task is not registered; returned by an `OptsX()` companion, only
   that method is skipped; returned by `Opts()`, a `StructOption` marker or
   a struct's own `StructTaskOptions`, no task of the struct is
-  registered, and a nil marker (an embedded `*RequiresRoot` or
-  `StructOption` left unset, also deeper in the embedded chain as in
-  `struct{ Base }` with `Base struct{ *RequiresRoot }`) is refused the
-  same way instead of panicking. Among `RegisterMethods` options (directly or
-  inside `WithGroupWhen`) it registers nothing of the struct, and in
-  `RegisterOnCluster` nothing of any struct of the call.
+  registered. A nil marker is refused the same way instead of panicking:
+  a nil pointer to a value-receiver marker such as an embedded
+  `*RequiresRoot`, a `StructOption` field left unset, or a nil pointer
+  deeper in the embedded chain (`struct{ Base }` with
+  `Base struct{ *RequiresRoot }`). A nil pointer to a marker with a
+  pointer-receiver `StructTaskOptions` is still called, as before, since
+  that is legal Go and the method may handle a nil receiver; only if it
+  panics is it reported as a nil marker. Among `RegisterMethods` options
+  (directly or inside `WithGroupWhen`) a nil TaskOption registers nothing
+  of the struct, and in `RegisterOnCluster` nothing of any struct of the
+  call.
 - Behaviour change: a `nil` `RegisterOption` passed to `RegisterMethods`,
   or a `nil` item in `RegisterOnCluster` (untyped or a nil struct
   pointer), is a declaration error and registers nothing. Before,
@@ -85,6 +90,12 @@ Fixes
   embedded by value next to another marker, is now collected. Before,
   only value-receiver markers were found, so its options (such as a
   guard) were silently dropped and the tasks registered without them.
+- Behaviour change: such a marker, embedded by value as a struct's only
+  marker, now composes before the `Opts()` companion, like every other
+  marker ("markers first, then `Opts()`"). Before, it was reached through
+  the promoted method after `Opts()`, so for a later-wins option the
+  result flips: a marker's `Privileged()` with an `Opts()` returning
+  `Unprivileged()` was privileged and is now unprivileged.
 - Behaviour change: a struct that declares its own `StructTaskOptions`
   overrides its embedded markers, as in Go method resolution: only its
   own method's options apply. Before, a value-receiver marker next to it

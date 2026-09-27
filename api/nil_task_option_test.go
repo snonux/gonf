@@ -127,7 +127,8 @@ type ifaceMarkerStruct struct {
 
 func (ifaceMarkerStruct) Ping() {}
 
-// PtrMarker is a marker with a pointer-receiver StructTaskOptions.
+// PtrMarker is a marker with a pointer-receiver StructTaskOptions that
+// does not handle a nil receiver.
 type PtrMarker struct{ profile string }
 
 func (m *PtrMarker) StructTaskOptions() TaskOptions {
@@ -158,6 +159,37 @@ type nestedNilUnexported struct{ nilBase }
 
 func (nestedNilUnexported) Ping() {}
 
+// NilSafe is a pointer-receiver marker that handles a nil receiver, which
+// is legal Go: a nil *NilSafe is called, not refused.
+type NilSafe struct{ operational bool }
+
+func (m *NilSafe) StructTaskOptions() TaskOptions {
+	if m == nil {
+		return TaskOptions{Privileged()}
+	}
+	if m.operational {
+		return TaskOptions{Privileged(), Operational()}
+	}
+	return TaskOptions{Privileged()}
+}
+
+// NilSafeBase promotes NilSafe through an embedded nil-able pointer.
+type NilSafeBase struct{ *NilSafe }
+
+type nilSafeEmbed struct{ *NilSafe }
+
+func (nilSafeEmbed) Ping() {}
+
+type nilSafeNested struct{ NilSafeBase }
+
+func (nilSafeNested) Ping() {}
+
+// nilBeforeNilSafe has a nil pointer EARLIER in the chain than the
+// nil-safe marker: reaching NilSafeBase's field dereferences it.
+type nilBeforeNilSafe struct{ *NilSafeBase }
+
+func (nilBeforeNilSafe) Ping() {}
+
 // TestRegisterMethodsNilCompanionOptionIsDeclarationError: a nil returned
 // by a companion, or a nil-pointer marker, is reported at the
 // RegisterMethods call naming the struct type (like a companion with the
@@ -182,9 +214,11 @@ func TestRegisterMethodsNilCompanionOptionIsDeclarationError(t *testing.T) {
 		{"marker", nilMarkerStruct{}, "RegisterMethods(api.nilMarkerStruct): marker NilMarker: StructTaskOptions returned a nil TaskOption (option 3)"},
 		{"nil-pointer marker", nilPtrMarkerStruct{}, "RegisterMethods(api.nilPtrMarkerStruct): marker RequiresRoot is nil"},
 		{"nil-pointer marker via pointer", &nilPtrMarkerStruct{}, "RegisterMethods(api.nilPtrMarkerStruct): marker RequiresRoot is nil"},
-		{"nil pointer-receiver marker", nilPtrRecvMarkerStruct{}, "RegisterMethods(api.nilPtrRecvMarkerStruct): marker PtrMarker is nil"},
+		{"nil pointer-receiver marker", nilPtrRecvMarkerStruct{}, "RegisterMethods(api.nilPtrRecvMarkerStruct): marker PtrMarker is nil and its StructTaskOptions does not handle a nil receiver"},
 		{"nested nil marker", nestedNilMarker{}, "RegisterMethods(api.nestedNilMarker): marker NilBase.RequiresRoot is nil"},
 		{"nested nil unexported marker", nestedNilUnexported{}, "RegisterMethods(api.nestedNilUnexported): marker nilBase.RequiresRoot is nil"},
+		{"StructOption field holding a nil pointer-receiver marker", ifaceMarkerStruct{StructOption: (*PtrMarker)(nil)}, "RegisterMethods(api.ifaceMarkerStruct): marker StructOption is nil and its StructTaskOptions does not handle a nil receiver"},
+		{"nil pointer before a nil-safe marker", nilBeforeNilSafe{}, "RegisterMethods(api.nilBeforeNilSafe): marker NilSafeBase is nil"},
 		{"nil interface marker", ifaceMarkerStruct{}, "RegisterMethods(api.ifaceMarkerStruct): marker StructOption is nil"},
 		{"interface marker holding nil pointer", ifaceMarkerStruct{StructOption: (*RequiresRoot)(nil)}, "RegisterMethods(api.ifaceMarkerStruct): marker StructOption is nil"},
 		{"direct StructTaskOptions", nilDirectStructOpts{}, "RegisterMethods(api.nilDirectStructOpts): StructTaskOptions returned a nil TaskOption (option 1)"},
@@ -358,6 +392,89 @@ func TestRegisterMethodsOwnStructTaskOptionsOverridesMarkers(t *testing.T) {
 			if c.privileged != tc.wantPrivileged || c.operational != tc.wantOperational || len(c.planWhen) != 0 {
 				t.Fatalf("ov_ping: privileged=%v operational=%v planWhen=%+v, want privileged=%v operational=%v and no guard",
 					c.privileged, c.operational, c.planWhen, tc.wantPrivileged, tc.wantOperational)
+			}
+		})
+	}
+}
+
+// ownWithNilMarker declares its own StructTaskOptions next to a nil
+// *RequiresRoot, which is then never called.
+type ownWithNilMarker struct{ *RequiresRoot }
+
+func (ownWithNilMarker) StructTaskOptions() TaskOptions { return TaskOptions{Operational()} }
+func (ownWithNilMarker) Ping()                          {}
+
+// OwnBase declares its own StructTaskOptions, which ends the promotion
+// chain before its nil *RequiresRoot.
+type OwnBase struct{ *RequiresRoot }
+
+func (OwnBase) StructTaskOptions() TaskOptions { return TaskOptions{Operational()} }
+
+type ownBaseChain struct{ OwnBase }
+
+func (ownBaseChain) Ping() {}
+
+// amb1 and amb2 are same-depth unexported markers: the promoted selector
+// is ambiguous, so the struct has no StructTaskOptions at all.
+type amb1 struct{}
+
+func (amb1) StructTaskOptions() TaskOptions { return TaskOptions{Privileged()} }
+
+type amb2 struct{}
+
+func (amb2) StructTaskOptions() TaskOptions { return TaskOptions{Privileged()} }
+
+type ambiguousMarkers struct {
+	amb1
+	amb2
+}
+
+func (ambiguousMarkers) Ping() {}
+
+// nilSafeByValueOpts embeds a pointer-receiver marker by value and has an
+// Opts() companion: the marker composes first, Opts() after it.
+type nilSafeByValueOpts struct{ NilSafe }
+
+func (nilSafeByValueOpts) Opts() TaskOptions { return TaskOptions{Unprivileged()} }
+func (nilSafeByValueOpts) Ping()             {}
+
+// TestRegisterMethodsStructDefaultsResolve pins the struct-level defaults
+// of cases that must register cleanly: a nil pointer-receiver marker that
+// handles a nil receiver (embedded, nested, or held in a StructOption
+// field), a nil marker next to the struct's own StructTaskOptions or behind
+// an intermediate type declaring its own, ambiguous same-depth markers (no
+// options), and a by-value pointer-receiver marker, which composes before
+// Opts() so Opts()'s Unprivileged() wins.
+func TestRegisterMethodsStructDefaultsResolve(t *testing.T) {
+	cases := []struct {
+		name            string
+		v               any
+		wantPrivileged  bool
+		wantOperational bool
+	}{
+		{"nil-safe marker embedded", nilSafeEmbed{}, true, false},
+		{"nil-safe marker nested", nilSafeNested{}, true, false},
+		{"nil-safe marker in StructOption field", ifaceMarkerStruct{StructOption: (*NilSafe)(nil)}, true, false},
+		{"non-nil pointer-receiver marker", nilSafeEmbed{NilSafe: &NilSafe{operational: true}}, true, true},
+		{"own method next to nil marker", ownWithNilMarker{}, false, true},
+		{"intermediate own method before nil marker", ownBaseChain{}, false, true},
+		{"ambiguous same-depth markers", ambiguousMarkers{}, false, false},
+		{"by-value pointer-receiver marker then Opts", nilSafeByValueOpts{}, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resetForHostsState(t)
+			RegisterMethods(tc.v, WithPrefix("sd_"))
+			if err := declerr.First(); err != nil {
+				t.Fatal(err)
+			}
+			c, ok := findCandidate("sd_ping")
+			if !ok {
+				t.Fatal("sd_ping not queued")
+			}
+			if c.privileged != tc.wantPrivileged || c.operational != tc.wantOperational {
+				t.Fatalf("sd_ping: privileged=%v operational=%v, want privileged=%v operational=%v",
+					c.privileged, c.operational, tc.wantPrivileged, tc.wantOperational)
 			}
 		})
 	}

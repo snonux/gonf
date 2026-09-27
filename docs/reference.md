@@ -144,7 +144,7 @@ RegisterMethods(home.HomeTasks{}) // registers home_helix
 | `WhenFoo() TaskOption` | Per-method guard such as `WhenLinux()`. A serializable guard travels in the plan, so the task still pushes. |
 | `WhenFoo(Facts) bool` | Per-method opaque filter, controller only: push, cluster and fleet refuse the task. |
 | `Opts() TaskOptions` | Struct-level default options. A method named `Opts` is never a task. |
-| embedded `StructOption` | Same as `Opts()`, declared by embedding. `RequiresRoot` ships with gonf (`type T struct{ RequiresRoot }`). A custom marker may implement `StructTaskOptions` with a value or a pointer receiver; every embedded marker counts. A struct that declares its own `StructTaskOptions` overrides its markers, as in Go method resolution: only that method's options apply (call a marker from it to keep its options). |
+| embedded `StructOption` | Same as `Opts()`, declared by embedding. `RequiresRoot` ships with gonf (`type T struct{ RequiresRoot }`). A custom marker may implement `StructTaskOptions` with a value or a pointer receiver; every embedded marker counts. A struct that declares its own `StructTaskOptions` overrides its markers, as in Go method resolution: only that method's options apply (call a marker from it to keep its options). Order: markers in field order, then `Opts()`, then a struct's own `StructTaskOptions` (or one promoted from an unexported embed); a later option wins, so `Unprivileged()` in `Opts()` overrides a marker's `Privileged()`. |
 | `WithPrefix(p)` | Prefix for every task name, replacing the default below. `WithPrefix("")` registers bare method names. |
 | `WithGroupWhen(opts...)` | Options applied to every method, before the struct default. |
 | any `TaskOption` | Same as `WithGroupWhen(opt)`: `RegisterMethods(pkg.Pkg{}, WhenProfile("fedora"))`. |
@@ -226,8 +226,11 @@ embedded chain the marker's method is promoted through, as in
 `struct{ Base }` with `type Base struct{ *RequiresRoot }`), registers
 nothing of the struct; so does a `nil` option passed to `RegisterMethods`
 (a `RegisterOption`, a `TaskOption` or one inside `WithGroupWhen`), since
-it may stand for a guard such as `OnCluster`. The error names the struct type and the
-option's position. Name methods for the action (`Unattended.Script`, not
+it may stand for a guard such as `OnCluster`. The error names the struct
+type and the option's position. A nil pointer to a marker whose
+`StructTaskOptions` has a pointer receiver is called, not refused (a
+nil receiver is legal Go); it is a nil-marker error only if that call
+panics. Name methods for the action (`Unattended.Script`, not
 `Unattended.UnattendedScript`).
 
 `OnCluster` replaces the `WhenHostname(ClusterHosts(), func() { ... })`
