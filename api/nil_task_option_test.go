@@ -117,6 +117,14 @@ type nilPtrMarkerStruct struct {
 
 func (nilPtrMarkerStruct) Ping() {}
 
+// ifaceMarkerStruct embeds the StructOption interface itself, which may be
+// left unset or hold a nil pointer.
+type ifaceMarkerStruct struct {
+	StructOption
+}
+
+func (ifaceMarkerStruct) Ping() {}
+
 // TestRegisterMethodsNilCompanionOptionIsDeclarationError: a nil returned
 // by a companion, or a nil-pointer marker, is reported at the
 // RegisterMethods call naming the struct type (like a companion with the
@@ -139,8 +147,10 @@ func TestRegisterMethodsNilCompanionOptionIsDeclarationError(t *testing.T) {
 	}{
 		{"struct Opts", nilOptsStruct{}, "RegisterMethods(api.nilOptsStruct): Opts returned a nil TaskOption (option 1)"},
 		{"marker", nilMarkerStruct{}, "RegisterMethods(api.nilMarkerStruct): marker NilMarker: StructTaskOptions returned a nil TaskOption (option 3)"},
-		{"nil-pointer marker", nilPtrMarkerStruct{}, "RegisterMethods(api.nilPtrMarkerStruct): marker RequiresRoot is a nil pointer"},
-		{"nil-pointer marker via pointer", &nilPtrMarkerStruct{}, "RegisterMethods(api.nilPtrMarkerStruct): marker RequiresRoot is a nil pointer"},
+		{"nil-pointer marker", nilPtrMarkerStruct{}, "RegisterMethods(api.nilPtrMarkerStruct): marker RequiresRoot is nil"},
+		{"nil-pointer marker via pointer", &nilPtrMarkerStruct{}, "RegisterMethods(api.nilPtrMarkerStruct): marker RequiresRoot is nil"},
+		{"nil interface marker", ifaceMarkerStruct{}, "RegisterMethods(api.ifaceMarkerStruct): marker StructOption is nil"},
+		{"interface marker holding nil pointer", ifaceMarkerStruct{StructOption: (*RequiresRoot)(nil)}, "RegisterMethods(api.ifaceMarkerStruct): marker StructOption is nil"},
 		{"direct StructTaskOptions", nilDirectStructOpts{}, "RegisterMethods(api.nilDirectStructOpts): StructTaskOptions returned a nil TaskOption (option 1)"},
 	}
 	for _, tc := range cases {
@@ -216,5 +226,19 @@ func TestRegisterMethodsNilGroupOptionIsDeclarationError(t *testing.T) {
 			requireDeclErrAt(t, tc.want, &line, func() { tc.declare(&line) })
 			requireRefusedAfterClear(t, refused...)
 		})
+	}
+}
+
+// TestRegisterMethodsInterfaceMarkerSet: the nil-marker guard does not
+// refuse an embedded StructOption interface that holds a real marker; its
+// options still apply.
+func TestRegisterMethodsInterfaceMarkerSet(t *testing.T) {
+	resetForHostsState(t)
+	RegisterMethods(ifaceMarkerStruct{StructOption: RequiresRoot{}}, WithPrefix("im_"))
+	if err := declerr.First(); err != nil {
+		t.Fatal(err)
+	}
+	if c, ok := findCandidate("im_ping"); !ok || !c.privileged {
+		t.Fatalf("im_ping candidate = %+v (queued %v), want queued and privileged", c, ok)
 	}
 }

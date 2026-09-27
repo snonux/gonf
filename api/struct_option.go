@@ -43,7 +43,7 @@ func (RequiresRoot) StructTaskOptions() TaskOptions { return TaskOptions{Privile
 // method on the outer type (single marker only; multiple same-depth
 // markers are an ambiguous selector and are not in the method set).
 //
-// A struct-level companion with the wrong signature, a nil-pointer marker,
+// A struct-level companion with the wrong signature, a nil marker,
 // or a marker or companion returning a nil TaskOption, is returned as an
 // error: RegisterMethods then registers no task of the struct, because
 // silently ignoring the companion (or the nil option) could drop
@@ -79,9 +79,9 @@ func collectStructOptions(rv reflect.Value, rt reflect.Type) (TaskOptions, error
 // markerStructOptions collects the TaskOptions of the exported embedded
 // StructOption marker fields, in declaration order, and reports whether the
 // struct has any such field. Markers implement StructOption, so their
-// StructTaskOptions signature is guaranteed by the compiler; a nil-pointer
-// marker field, or a nil TaskOption in a marker's result, is returned as an
-// error.
+// StructTaskOptions signature is guaranteed by the compiler; a nil marker
+// field (isNilMarker), or a nil TaskOption in a marker's result, is
+// returned as an error.
 func markerStructOptions(rv reflect.Value, rt reflect.Type) (TaskOptions, bool, error) {
 	var opts TaskOptions
 	found := false
@@ -107,10 +107,11 @@ func markerStructOptions(rv reflect.Value, rt reflect.Type) (TaskOptions, bool, 
 		found = true
 		// Exported embedded marker: the field value is accessible.
 		fv := rv.Elem().Field(i)
-		if fv.Kind() == reflect.Pointer && fv.IsNil() {
-			// Calling the marker through a nil pointer would panic, and
-			// skipping it would drop its options (e.g. Privileged()).
-			return nil, true, fmt.Errorf("marker %s is a nil pointer", f.Name)
+		if isNilMarker(fv) {
+			// Calling the marker through a nil pointer or interface would
+			// panic, and skipping it would drop its options (e.g.
+			// Privileged()).
+			return nil, true, fmt.Errorf("marker %s is nil", f.Name)
 		}
 		if m := fv.MethodByName("StructTaskOptions"); m.IsValid() {
 			markerOpts := m.Call(nil)[0].Interface().([]TaskOption)
@@ -121,6 +122,23 @@ func markerStructOptions(rv reflect.Value, rt reflect.Type) (TaskOptions, bool, 
 		}
 	}
 	return opts, found, nil
+}
+
+// isNilMarker reports whether marker field fv is a nil pointer, a nil
+// interface (an embedded StructOption left unset), or an interface holding
+// a nil pointer (StructOption((*RequiresRoot)(nil))).
+func isNilMarker(fv reflect.Value) bool {
+	switch fv.Kind() {
+	case reflect.Pointer:
+		return fv.IsNil()
+	case reflect.Interface:
+		if fv.IsNil() {
+			return true
+		}
+		e := fv.Elem()
+		return e.Kind() == reflect.Pointer && e.IsNil()
+	}
+	return false
 }
 
 // callTaskOptionsCompanion calls m, the companion named name, which must be

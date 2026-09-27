@@ -70,8 +70,9 @@ Fixes
   the task is not registered; returned by an `OptsX()` companion, only
   that method is skipped; returned by `Opts()`, a `StructOption` marker or
   a struct's own `StructTaskOptions`, no task of the struct is
-  registered, and a marker embedded as a nil pointer is refused the same
-  way instead of panicking. Among `RegisterMethods` options (directly or
+  registered, and a nil marker (an embedded `*RequiresRoot` or
+  `StructOption` left unset) is refused the same way instead of
+  panicking. Among `RegisterMethods` options (directly or
   inside `WithGroupWhen`) it registers nothing of the struct, and in
   `RegisterOnCluster` nothing of any struct of the call.
 - Behaviour change: a `nil` `RegisterOption` passed to `RegisterMethods`,

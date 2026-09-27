@@ -190,7 +190,7 @@ func WithGroupWhen(opts ...TaskOption) RegisterOption {
 // Misuse — v not a struct or non-nil pointer to one, a companion with the
 // wrong signature, a nil option (a nil RegisterOption or TaskOption among
 // opts, or inside WithGroupWhen), a nil TaskOption returned by a companion
-// or StructOption marker, a marker embedded as a nil pointer, an unknown
+// or StructOption marker, a nil marker (pointer or interface), an unknown
 // OnCluster cluster — is reported as a declaration error (internal/declerr,
 // which RecordPlan, Run, Apply and the CLI refuse to run with). A bad
 // receiver, option, OnCluster, marker or struct-level companion registers

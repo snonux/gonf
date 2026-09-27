@@ -220,8 +220,8 @@ gets no generated `DescX`, but a hand-written one there still wins.
 A companion with the wrong signature is a declaration error and that method
 is not registered. So is a `nil` TaskOption returned by an `OptsX`
 companion. A `nil` returned by `Opts()`, a `StructOption` marker or a
-struct's own `StructTaskOptions`, or a marker embedded as a nil pointer
-(`struct{ *RequiresRoot }`), registers nothing of the struct; so does a
+struct's own `StructTaskOptions`, or a nil marker (`struct{ *RequiresRoot }`
+or `struct{ StructOption }` left unset), registers nothing of the struct; so does a
 `nil` option passed to `RegisterMethods` (a `RegisterOption`, a
 `TaskOption` or one inside `WithGroupWhen`), since it may stand for a
 guard such as `OnCluster`. The error names the struct type and the
