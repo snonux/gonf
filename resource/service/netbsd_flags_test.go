@@ -568,6 +568,50 @@ func TestNetBSDSetFlagsWriteFailureKeepsRcConf(t *testing.T) {
 	})
 }
 
+// The normal service apply probes flags before trying to write them. A
+// non-regular file must be refused there too, even when the desired flags
+// would otherwise appear to match and setFlags would not run.
+func TestNetBSDFlagsProbeRefusesNonRegularFiles(t *testing.T) {
+	for _, tt := range []struct {
+		name, rcConf, want string
+		path               func(netbsdBackend) string
+	}{
+		{"rc.conf", "", "", func(b netbsdBackend) string { return b.rcConf }},
+		{"override", "nsd_flags=-x\n", "-x", func(b netbsdBackend) string { return filepath.Join(b.rcConfD, "nsd") }},
+		{"defaults", netbsdRcDefaultsHeader, "", func(b netbsdBackend) string { return b.rcConfDefaults }},
+	} {
+		t.Run(tt.name+" FIFO", func(t *testing.T) {
+			b := netbsdFlagsBackend(t, tt.rcConf, "", "")
+			path := tt.path(b)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			requireFIFORefusedPromptly(t, path, func() error {
+				s := withFlagsSvc(Service{name: "nsd"}, tt.want)
+				return s.applyWith(b)
+			})
+		})
+		t.Run(tt.name+" dangling symlink", func(t *testing.T) {
+			b := netbsdFlagsBackend(t, tt.rcConf, "", "")
+			path := tt.path(b)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Join(t.TempDir(), "gone"), path); err != nil {
+				t.Fatal(err)
+			}
+			s := withFlagsSvc(Service{name: "nsd"}, tt.want)
+			err := s.applyWith(b)
+			if err == nil || !strings.Contains(err.Error(), path) {
+				t.Fatalf("applyWith err = %v, want an error naming %s", err, path)
+			}
+			if info, lerr := os.Lstat(path); lerr != nil || info.Mode()&os.ModeSymlink == 0 {
+				t.Fatalf("dangling symlink replaced (%v, %v)", info, lerr)
+			}
+		})
+	}
+}
+
 // requireFIFORefusedPromptly makes path a FIFO and requires call to refuse
 // it as not a regular file, naming path, without blocking: reading a FIFO
 // waits for a writer, so without the regular-file check the call would

@@ -2,8 +2,9 @@
 
 <img src="../assets/logo-light.svg" alt="Gonfy, the gonf beaver" width="96" align="right">
 
-Gonfy's cheat sheet: every user-facing feature in one place, current as of v0.24.0 (plan schema
-27). Background, rationale and history live in [design/](design/README.md).
+Gonfy's cheat sheet: every user-facing feature in one place, current as of
+v0.24.1 (plan schema 27). Background, rationale and history live in
+[design/](design/README.md).
 New to gonf? Start with the [tutorial](tutorial/README.md).
 
 ## Concepts
@@ -370,6 +371,9 @@ Other helpers:
 | `Expand(p)` | Expand a leading `~` (controller home, like `Home`). |
 | `List(a, b, ...)` | `[]string` for multi-path resources, `Command` args and key/value lists. |
 | `${HOME}` in a path | Expanded on the destination at apply. Any other `${...}` is an apply error. |
+| `EachKV(list, fn)` | Call `fn(k, v)` per pair. Odd length is a declaration error and calls nothing. |
+| `ParseKV(list)` | Same, returning `[][2]string, error`. |
+| `RenderTemplate(path, data)` | Render a template on the controller (see [Templates](#templates)). |
 
 The rule: `Home` = where gonf runs (sources), `DestHome` = where the
 plan applies (targets). `Home` records the controller's home literally, so a
@@ -380,16 +384,15 @@ link, sync and ensure op, `WithSymlink`/`WithHardlink` targets,
 `LinkIfExists`/`SymlinkMap` targets, `WithDir` and `Creates` of a `Command`,
 `WhenPathExists`, and `ConfigSet` member paths, `WithChroot` and
 `WithStagingDir` (schema 26, declared only by such a set; older binaries
-refuse it). It does not expand in argv (`Command` args, validators) or file
-content. It is the applying process's `$HOME`, else its user database entry;
-an empty or relative home fails the apply. In an elevated chunk (sudo/doas)
-that is whatever home the elevation tool leaves, usually root's, so keep
-`DestHome` targets in unprivileged tasks. Controller-side sources
-(`WithSource`, `WithSourceGlob`, `WithSourceBase`, `InstallFile`/`SyncDir`
-sources) and `WithHome` refuse the token as a declaration error.
-| `EachKV(list, fn)` | Call `fn(k, v)` per pair. Odd length is a declaration error and calls nothing. |
-| `ParseKV(list)` | Same, returning `[][2]string, error`. |
-| `RenderTemplate(path, data)` | Render a template on the controller (see [Templates](#templates)). |
+refuse it). Expansion cleans the home value and avoids a double slash when
+the home is `/` or ends in `/`. It does not expand in argv (`Command` args,
+validators) or file content. It is the applying process's `$HOME`, else its
+user database entry; an empty or relative home fails the apply. In an elevated
+chunk (sudo/doas) that is whatever home the elevation tool leaves, usually
+root's, so keep `DestHome` targets in unprivileged tasks. Controller-side
+sources (`WithSource`, `WithSourceGlob`, `WithSourceBase`,
+`InstallFile`/`SyncDir` sources) and `WithHome` refuse the token as a
+declaration error.
 
 ## Resources
 
@@ -682,6 +685,16 @@ flags (e.g. nsd): empty never converges there. `WithRestart` without
 `OnChange` restarts on every apply, so keep an `OnChange` on the daemon's
 config. Needs a schema 25 destination.
 
+On NetBSD, `WithFlags` reads shell assignments in `/etc/rc.conf.d/NAME`,
+`/etc/rc.conf` and `/etc/defaults/rc.conf`. It replaces each manageable
+`NAME_flags` assignment in `/etc/rc.conf` and verifies the result; syntax it
+cannot safely interpret is an error and leaves the file untouched. Every
+config path the probe reads must resolve to a regular file if present; a
+FIFO or dangling symlink is refused. The write uses a temporary file,
+fsync and rename, preserving mode, ownership and symlinks. NetBSD
+enable/disable writes `/etc/rc.conf.d/NAME` with the same durability and
+file-type checks.
+
 `DaemonReload(opts...)` (Linux) runs `systemctl daemon-reload`:
 
 ```go
@@ -792,6 +805,12 @@ CronAt("backup", "0 2 * * *", "/usr/local/bin/backup.sh", WithCronUser("root")) 
   twice: the block takes the entry's place, so the job keeps its
   environment. Not when the job has `WithCronEnv`. `WithLegacyCommand` is
   only needed for a different command or schedule.
+- A changed job keeps the position of its first complete managed block,
+  preserving the environment inherited from earlier crontab lines. If its
+  `WithCronEnv` lines change, or it has no complete block and no identical
+  unmanaged entry to adopt, the block goes to the end instead. Comments
+  among its environment lines do not force a changed block to move to the
+  end.
 - Own user: no `crontab -u`. Other users: `crontab -u USER`, needs root.
 - An advisory lock covers read/merge/write per crontab, between gonf
   processes only.

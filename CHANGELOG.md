@@ -5,7 +5,26 @@ releases before v0.17.0 the tag message and the git log are the notes.
 
 ## Unreleased
 
+## v0.24.1 (2026-09-28)
+
+Safer recipe declarations and more durable file writes. The plan schema stays
+at version 27.
+
 Fixes
+- A changed `Cron` now rewrites its managed block in place, keeping its
+  position relative to unmanaged crontab entries, unless `WithCronEnv`
+  changes; then the block moves to the end so its new environment does not
+  reach later entries. Comments among a block's environment lines no longer
+  force a changed block to move to the end.
+- `${HOME}` path expansion now handles a home directory of `/` or a home
+  path with a trailing slash without producing a double slash. This also
+  fixes `DestHome` and `ConfigSet` destinations built from those paths.
+- NetBSD `WithFlags` now replaces an existing `NAME_flags` value by shell
+  word, including assignments continued across lines. It refuses rc.conf
+  syntax it cannot safely interpret or verify after writing, instead of
+  risking a changed value or a misleading success report. Its flags probe
+  also refuses FIFOs and dangling symlinks in any of the rc.conf, rc.conf.d
+  and defaults paths it reads, even when the flags would match.
 - NetBSD `WithFlags` now writes `/etc/rc.conf` durably (fsync before the
   rename and of `/etc` after it), like a managed `File`, so a power loss
   can no longer leave an empty rc.conf. It also keeps rc.conf's owner,

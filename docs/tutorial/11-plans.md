@@ -75,7 +75,7 @@ say `${HOME}`: the destination fills them in.
 > 🦫 **Gonfy says:** Any gonf binary can follow the blueprint, even one that never saw the recipe.
 
 `gonf` without `./` is any gonf binary on the `PATH`, such as the
-stand-alone one (`go install github.com/snonux/gonf/cmd/gonf@main`) or a
+stand-alone one (`go install github.com/snonux/gonf/cmd/gonf@v0.24.1`) or a
 copy of your own `./gonf`: every gonf binary has the same `apply`
 subcommand, and applying needs no recipe.
 

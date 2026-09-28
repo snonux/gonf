@@ -48,12 +48,12 @@ Line by line:
 - `cli.Main()` hands over to gonf's command line, which parses flags, runs
   the tasks you name and exits with a status code.
 
-Fetch gonf and build. This book follows gonf's main branch, so use `@main`
-until the next release is tagged (then `@latest` works too):
+Fetch this release of gonf and build. To follow newer releases later, use
+`@latest` instead of the version shown here:
 
 ```text
-$ go get github.com/snonux/gonf@main
-go: added github.com/snonux/gonf v0.23.1-0.20260926080836-0c49fa3f3fef
+$ go get github.com/snonux/gonf@v0.24.1
+go: added github.com/snonux/gonf v0.24.1
 $ go mod tidy
 $ go build -o gonf .
 ```
@@ -164,7 +164,7 @@ itself.
 $ ./gonf -quiet hello
 summary: 1 ok, 0 changed, 0 skipped, 0 would-change
 $ ./gonf -version
-0.24.0
+0.24.1
 ```
 
 - `-quiet` keeps only warnings, errors and the summary.

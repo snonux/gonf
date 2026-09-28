@@ -122,14 +122,11 @@ type rcValue struct {
 // lines or follow others on its line, and text it cannot bound, or an
 // assignment whose effect it cannot tell, is an error naming the line.
 func readRcAssignment(path, name string) (rcValue, error) {
-	data, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return rcValue{}, nil
-	}
+	rc, err := readRcFile(path)
 	if err != nil {
-		return rcValue{}, fmt.Errorf("read %s: %w", path, err)
+		return rcValue{}, err
 	}
-	scan, err := scanRcAssignments(string(data), name)
+	scan, err := scanRcAssignments(rc.content, name)
 	if err != nil {
 		return rcValue{}, fmt.Errorf("parse %s: %w", path, err)
 	}

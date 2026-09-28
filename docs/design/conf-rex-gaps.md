@@ -1,7 +1,7 @@
 # Replacing `~/git/conf` Rex with gonf — gap audit
 
-Refreshed 2026-09-25 against **gonf v0.21.0**; this release uses plan schema 26.
-This document is the canonical plan for porting the
+Refreshed 2026-09-28 against **gonf v0.24.1**; this release uses plan schema
+27. This document is the canonical plan for porting the
 [`~/git/conf`](https://codeberg.org/snonux/conf)
 Rexfiles to gonf. Earlier revisions claimed gonf "still lacks Rex-style sudo/doas"
 and that pkg/service/cron "fleet still needs transport" — both are **stale**:
@@ -32,7 +32,7 @@ compute any content Perl closures could (see
   `gonf/secrets` root resolves, and passes its arguments through verbatim;
   it works from any directory, conf 63e83a8).
 - **One consumer module per repository**, depending on `github.com/snonux/gonf`
-  (conf pins v0.22.0, dotfiles v0.23.0; any later consumer upgrade is a
+  (conf and dotfiles currently pin v0.24.0; any later consumer upgrade is a
   deliberate compatibility change). Multi-Rexfile composition maps to Go
   packages + `RegisterMethods` + `Aggregate` / `AggregateTasks` (in conf's
   `gonf/tasks/tasks.go`), not to multiple Rexfiles.
@@ -84,9 +84,9 @@ One plan engine serves local and remote runs, so a recipe cannot diverge between
 
 ## Current capability matrix
 
-Status against every conf Rex primitive in v0.21.0 (plan schema 26):
+Status against every conf Rex primitive in v0.24.1 (plan schema 27):
 
-| Conf Rex capability | gonf v0.21.0 | Status |
+| Conf Rex capability | gonf v0.24.1 | Status |
 |---------------------|--------------|--------|
 | `group x => 'h:2', …`, `user`, `parallelism 5` | `Host(name, WithSSHUser, WithSSHHost, WithSSHPort, WithSSHIdentity)` + `Cluster(name, hosts…)`, `cluster.Parallel(n)`; `gonf hosts`/`clusters`/`fleets` | **Done** |
 | `sudo TRUE` / `auth for => group (user, sudo)` | `Task(…, Privileged())` (or `RequiresRoot`) + `Host(WithPrivilege(PrivilegeSudo|Doas|None))`; apply splits plain/elevated chunks; remote elevated chunk wraps `sudo -n gonf apply` / `doas gonf apply`; `-privilege=none` + elevated op refuses to push | **Done** |
@@ -104,7 +104,7 @@ Status against every conf Rex primitive in v0.21.0 (plan schema 26):
 | Rex `cron add => user, {…}` | `Cron` / `NoCron`: marker-managed per-user crontabs, full schedule fields, `WithCronEnv`, `WithCronUser` | **Done** (`@reboot` nice-to-have) |
 | Raw crontab surgery via `run` (rsync, nsd_failover, pf rebuild root crontab) | superseded by `Cron` (marker-based, idempotent, no temp-file race) | **Done** (gonf is ahead) |
 | Multi-Rexfile `require` composition | one Go module + `RegisterMethods(…, WithPrefix, WithCluster)` + `Aggregate`; proven by `~/git/conf/gonf` and `~/git/dotfiles/gonf` | **Done** |
-| `adduser -batch _dserver … unless id _dserver`, `usermod -d` | additive `User` for creation-time group/class/home attributes; `WithManageHome` converges an existing account's passwd home field | **Done**: account creation in v0.14.0, `WithManageHome` in v0.15.0 (plan v19). conf pins v0.15.0 and its frontend service accounts use it (task s52, conf 7bc33b3); the guarded `usermod -d` command is gone |
+| `adduser -batch _dserver … unless id _dserver`, `usermod -d` | additive `User` for creation-time group/class/home attributes; `WithManageHome` converges an existing account's passwd home field | **Done**: account creation in v0.14.0, `WithManageHome` in v0.15.0 (plan v19). conf's frontend service accounts use it (task s52, conf 7bc33b3); the guarded `usermod -d` command is gone |
 | `/etc/login.conf.d` fragment (Rex relayd also ran `rm -f /etc/login.conf.db && cap_mkdb`; Rex inetd ran none) | `LoginClass(class, src)`: the fragment inside an OpenBSD-only plan requirement (schema 20) plus removal of a stale `<class>.db`; no `cap_mkdb`, which never reads fragments (see [login-class.md](login-class.md)). conf's inetd and relayd use it (task t52, conf 7ec3015); their former `cap_mkdb` rebuild, a no-op for fragment changes, is gone | Implemented in core (v0.15.0); native OpenBSD verification pending |
 | Garage config deployment | `RequiresRoot` task + direct `InstallFile("/usr/local/etc/garage.toml", …, root:garage, 0640, WithTemplateData(...))` + `Service("garage", WithRestart, OnChange(config))`; the host's `PrivilegeDoas` wraps the one privileged chunk | **Done** |
 | Deferred `on_change` flag (`$restart = TRUE` … `service restart if $restart`) | `OnChange` supports multi-resource fan-in and carries ordering dependencies | **Done** |
@@ -146,7 +146,7 @@ dangling, or cross-privilege-chunk watches fail before a plan is written,
 pushed, or applied. Legacy `IfChanged`/`WithWatch` remain compatible for
 DaemonReload (after v0.15.0 they feed the same gate as `OnChange`; see
 [options.md](options.md#change-gate-changes-after-v0150) for the
-unreleased pre-1.0 changes).
+later pre-1.0 compatibility changes).
 
 ### Implemented: secrets convention (`$secrets`)
 
@@ -240,11 +240,11 @@ with the move flag) when it differs from `WithHome`. It never moves, creates,
 or chowns the directory, and never touches passwords, lock state, shell, login
 class, or memberships. It replaces the earlier migration-local guarded
 `Command("usermod", List("-d", …), Unless("sh", … awk … /etc/passwd))`
-workaround; conf pins v0.15.0 and its `_gorum`, `_dserver` and `_gogios`
-accounts use it (task s52, conf 7bc33b3), so that guarded command is gone. These homes live under `/var/run`,
-which does not survive a reboot on OpenBSD; managing the passwd field does not
-recreate the directory, so the ports keep their separate boot-time handling
-(see the `/var/run` caveat in [user.md](user.md)).
+workaround; conf's `_gorum`, `_dserver` and `_gogios` accounts use it (task
+s52, conf 7bc33b3), so that guarded command is gone. These homes live under
+`/var/run`, which does not survive a reboot on OpenBSD; managing the passwd
+field does not recreate the directory, so the ports keep their separate
+boot-time handling (see the `/var/run` caveat in [user.md](user.md)).
 
 ### Templates (rich data + closures)
 
@@ -451,7 +451,7 @@ so the plan has no login-owned `/tmp` secret staging step.
 For this document:
 
 - Every capability row names the gonf API that exists today (verified
-  against v0.21.0, plan schema 26) — no "fleet needs transport" or
+  against v0.24.1, plan schema 27) — no "fleet needs transport" or
   missing-feature claims survive.
 - All Rexfiles (four tracked, plus the retired `f3s/garage` one) are
   inventoried and every task appears exactly once in the

@@ -88,7 +88,9 @@ Service("nsd", WithFlags("-c /var/nsd/etc/nsd.conf"))
   ending in `&&`, `||` or `|` continuing on the next, comments,
   here-documents), and fails closed: anything it does not fully
   understand is an error naming the file and line, and rc.conf is left
-  untouched. It finds every assignment: after `;`, after other
+  untouched. Each config path the flags probe reads is checked for a
+  regular file, including through symlinks; a FIFO or dangling symlink is
+  refused. It finds every assignment: after `;`, after other
   assignments (the defaults' one-line `NAME=YES NAME_flags="..."` style),
   and behind `export`/`readonly`. It refuses one whose effect it cannot
   tell: inside `if`/`while`/`for`/`{...}`, anywhere after the file's first
