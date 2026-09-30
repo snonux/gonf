@@ -18,7 +18,11 @@ and on the destination:
 | `Profile` | `fedora`, `rocky`, `darwin`, the `/etc/os-release` ID (`ubuntu`, `debian`, ...), or `unknown` |
 | `Hostname` | the host name |
 
-`-profile` overrides the profile for a local run.
+The BSDs have no `/etc/os-release`, so their profile is `unknown`.
+`-profile` overrides the profile for a local run; it is not passed on to
+hosts you push to (chapter 12). A recipe can set the same override itself
+with `SetProfileOverride("fedora")` in `main`, before `cli.Main()`, and
+clear it again with `SetProfileOverride("")`.
 
 ## The recipe
 
@@ -69,7 +73,7 @@ func main() {
 }
 ```
 
-(The `cpus` helper at the end of the file just counts lines in
+(The `cpus` helper at the end of the file counts the `processor` lines in
 `/proc/cpuinfo`.)
 
 ## -list knows the guards
@@ -121,7 +125,9 @@ with profile `ubuntu`. `big` ran because the controller has at least four
 CPUs. Both body-level guards matched (`vm` is in the host list, and
 `/etc/debian_version` exists).
 
-Override the profile, or name a guarded task directly:
+Override the profile, or name a guarded task directly. A task you name is
+recorded with its guard, and this host still checks it: `bsd` writes
+nothing here, and only the `dir` task it needs is reported (`1 ok`).
 
 ```text
 $ ./gonf -profile fedora fedora
@@ -136,9 +142,12 @@ summary: 1 ok, 0 changed, 0 skipped, 0 would-change
 
 > 🦫 **Gonfy says:** The guards that travel ride inside the plan, so every lodge can decide for itself.
 
-A serializable guard travels in the plan as a `when_begin` / `when_end`
-block, and the destination evaluates it. An opaque `When(func)` does not:
-it ran on the controller, and `big` appears in the plan with no guard at all.
+A guard such as `WhenBSD()` is plain data (a fact name and the values it
+may have), so gonf can write it into the plan. The reference calls these
+*serializable* guards. Each travels as a `when_begin` / `when_end` block
+around the ops it guards, and the destination evaluates it while applying.
+An opaque `When(func)` is Go code, which cannot be written into a plan: it
+ran on the controller, and `big` appears in the plan with no guard at all.
 
 ```text
 $ ./gonf plan -redacted bsd big mixed
@@ -169,12 +178,21 @@ really are about the controller.
 
 | Guard | Where you write it | Scope |
 |-------|--------------------|-------|
-| `WhenLinux()`, `WhenOpenBSD()`, `WhenBSD()`, `WhenOS(...)` | task option or `WhenX` companion | whole task |
+| `WhenLinux()`, `WhenDarwin()`, `WhenFreeBSD()`, `WhenOpenBSD()`, `WhenNetBSD()`, `WhenBSD()`, `WhenOS(...)` | task option | whole task |
 | `WhenProfile("fedora", "rocky")` | task option | whole task |
 | `WhenHostnameContains("web")`, `WhenHostnameIn("f0", "f1")` | task option | whole task |
 | `WhenHostname(List(...), func() {...})` | task body | the resources inside |
 | `WhenPathExists(path, func() {...})` | task body | the resources inside |
 | `When(func(Facts) bool)` | task option | whole task, controller only |
+
+Every task-level guard can also come from a `WhenX` companion method
+(chapter 8). The helpers `ProfileIs(...)`, `And(...)` and `Or(...)` build
+predicates for `When`, so they are controller-only too.
+
+The hostname guards match when the host name *contains* the fragment,
+ignoring case. They refuse an empty fragment: `WhenHostnameIn("f0", "")`,
+or `WhenHostname(host, ...)` with a variable that was never set, is a
+declaration error (chapter 15) instead of a guard that matches every host.
 
 Reference: [Task options](../reference.md#task-options),
 [Where guards are evaluated](../reference.md#where-guards-are-evaluated),

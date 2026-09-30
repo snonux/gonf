@@ -25,22 +25,23 @@ lodge's message of the day, his start page and even a `gonfy` user account.
 
 | # | Chapter | You learn |
 |---|---------|-----------|
-| 1 | [How gonf works](01-how-gonf-works.md) | Recipes, tasks, resources, plans, controller and destination |
+| 1 | [How gonf works](01-how-gonf-works.md) | Why configuration management, recipes, tasks, resources, plans, controller and destination |
 | 2 | [Your first recipe](02-first-recipe.md) | A Go module, `-list`, dry runs, applying, idempotence |
-| 3 | [Files, directories and links](03-files.md) | `File`, `Dir`, tree and glob syncs, pruning, `Symlink`, `EnsureFile` |
-| 4 | [Editing and validating files](04-editing-files.md) | Owned lines, keyed lines, shell variables, blocks, validators, `ConfigSet` |
-| 5 | [Templates](05-templates.md) | Destination templates, facts, `RenderTemplate`, `WithContentFrom` |
+| 3 | [Files, directories and links](03-files.md) | `File`, `Dir`, tree and glob syncs, pruning, `Symlink`, `EnsureFile`, shorthand helpers such as `InstallFile` and `GitGlobal` |
+| 4 | [Editing and validating files](04-editing-files.md) | Owned lines, keyed lines, shell variables, blocks, validators, `ConfigSet`, sets in a chroot |
+| 5 | [Templates](05-templates.md) | Destination templates, facts, `.Data`, `RenderTemplate`, `WithContentFrom` |
 | 6 | [Commands and change gates](06-commands.md) | `Command`, `Sh`, guards, `OnChange`, `DependsOn`, `Noop` |
 | 7 | [Packages, services, timers, cron and users](07-system-resources.md) | The system resources and how to preview them |
-| 8 | [Organizing tasks](08-organizing-tasks.md) | `RegisterMethods`, companions, `gonf-desc`, aggregates, aliases, `Needs` |
+| 8 | [Organizing tasks](08-organizing-tasks.md) | `RegisterMethods`, companions, `gonf-desc`, aggregates, aliases, `Needs`, `Run` in a body |
 | 9 | [Guards and facts](09-guards.md) | `WhenLinux`, `WhenProfile`, hostname and path guards, opaque predicates |
 | 10 | [Privilege](10-privilege.md) | `Privileged`, `RequiresRoot`, root permissions, sudo and doas |
 | 11 | [Plans](11-plans.md) | `gonf plan`, the plan format, blobs, `gonf apply` |
-| 12 | [Inventory and remote hosts](12-remote.md) | Hosts, clusters, fleets, per-host data, `push`, `cluster`, `fleet` |
+| 12 | [Inventory and remote hosts](12-remote.md) | Hosts, clusters, fleets, per-host data, `push`, `cluster`, `fleet`, `OnCluster` and `WithCluster` |
 | 13 | [Secrets](13-secrets.md) | Secret providers, `MustSecret`, `SecretFile`, sensitive plans |
-| 14 | [Sealed and signed plans](14-sealed-signed.md) | age encryption, signer keys, verified apply |
-| 15 | [When things go wrong](15-troubleshooting.md) | Error classes, exit codes, `-verbose` |
+| 14 | [Sealed and signed plans](14-sealed-signed.md) | age encryption, signer keys, verified apply, one sealed plan per host |
+| 15 | [When things go wrong](15-troubleshooting.md) | Error classes, push refusals, exit codes, Ctrl-C, timeouts, `-verbose` |
 | 16 | [A web fleet](16-web-fleet.md) | Everything together: httpd on three Linux front ends |
+| 17 | [gonf from Go](17-go-api.md) | `RunContext`, `RecordPlanTo`, `PushTo` and the rest of the Go API, every subcommand |
 
 ## How to follow along
 

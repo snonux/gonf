@@ -13,6 +13,8 @@ func main() {
 	Task("lines", "Own single lines and a block of ~/gonf-tutorial/app.conf", lines)
 	Task("script", "Install a shell script only if it parses", script)
 	Task("greeter", "Install two scripts that must work together", greeter)
+	Task("shared", "Two declarations share ~/gonf-tutorial/lodge/hosts", shared)
+	Task("jail", "A config set for a program in a chroot", jail)
 	cli.Main()
 }
 
@@ -55,6 +57,32 @@ func greeter() {
 	// ${HOME} is not expanded in argv, but it is in WithDir.
 	Command("sh", List("main.sh"), WithDir(DestHome("gonf-tutorial/greeter")),
 		WithName("run-greeter"), OnChange(set))
+}
+
+func shared() {
+	path := DestHome("gonf-tutorial/lodge/hosts")
+	Dir(DestHome("gonf-tutorial/lodge"), WithMode(0o755))
+	// Two declarations edit one file. WithName gives each its own ID;
+	// without it, both would be File[<path>] and clash.
+	File(path, WithLine("10.0.0.1 lodge"), WithName("hosts-lodge"), WithMode(0o644))
+	File(path, WithLine("10.0.0.2 dam"), WithoutLine("10.0.0.9 old-dam"),
+		WithName("hosts-dam"), WithMode(0o644))
+}
+
+func jail() {
+	// A program chrooted to ~/gonf-tutorial/jail sees that directory as /.
+	root := DestHome("gonf-tutorial/jail")
+	Dir(root+"/etc", WithMode(0o755))
+	ConfigSet("jail",
+		ConfigFile("zones", root+"/etc/zones.conf", WithContent("zone lodge\n"), WithMode(0o644)),
+		// MemberChrootPath is the member's path as the chrooted program
+		// sees it: /etc/zones.conf.
+		ConfigFile("main", root+"/etc/main.conf",
+			WithContent("include \""+MemberChrootPath("zones")+"\"\n"), WithMode(0o644)),
+		WithChroot(root),
+		// Stage the candidates in the chroot itself instead of in etc/.
+		WithStagingDir(root),
+		WithSetValidation("grep", List("-q", "zone", MemberPath("zones"))))
 }
 
 // envOr returns the environment variable key, or def when it is unset.

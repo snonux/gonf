@@ -5,6 +5,12 @@ releases before v0.17.0 the tag message and the git log are the notes.
 
 ## Unreleased
 
+Docs
+- The tutorial explains why configuration management helps, covers every
+  DSL feature (new chapter 17, gonf from Go, and a sealed per-host example
+  in chapter 14), and its outputs were recaptured against v0.24.1. The
+  reference gained the missing schema rows, timeouts and Go API entries.
+
 ## v0.24.1 (2026-09-28)
 
 Safer recipe declarations and more durable file writes. The plan schema stays

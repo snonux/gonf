@@ -24,6 +24,8 @@ func main() {
 	Task("lines", "Own single lines and a block of ~/gonf-tutorial/app.conf", lines)
 	Task("script", "Install a shell script only if it parses", script)
 	Task("greeter", "Install two scripts that must work together", greeter)
+	Task("shared", "Two declarations share ~/gonf-tutorial/lodge/hosts", shared)
+	Task("jail", "A config set for a program in a chroot", jail)
 	cli.Main()
 }
 
@@ -66,6 +68,32 @@ func greeter() {
 	// ${HOME} is not expanded in argv, but it is in WithDir.
 	Command("sh", List("main.sh"), WithDir(DestHome("gonf-tutorial/greeter")),
 		WithName("run-greeter"), OnChange(set))
+}
+
+func shared() {
+	path := DestHome("gonf-tutorial/lodge/hosts")
+	Dir(DestHome("gonf-tutorial/lodge"), WithMode(0o755))
+	// Two declarations edit one file. WithName gives each its own ID;
+	// without it, both would be File[<path>] and clash.
+	File(path, WithLine("10.0.0.1 lodge"), WithName("hosts-lodge"), WithMode(0o644))
+	File(path, WithLine("10.0.0.2 dam"), WithoutLine("10.0.0.9 old-dam"),
+		WithName("hosts-dam"), WithMode(0o644))
+}
+
+func jail() {
+	// A program chrooted to ~/gonf-tutorial/jail sees that directory as /.
+	root := DestHome("gonf-tutorial/jail")
+	Dir(root+"/etc", WithMode(0o755))
+	ConfigSet("jail",
+		ConfigFile("zones", root+"/etc/zones.conf", WithContent("zone lodge\n"), WithMode(0o644)),
+		// MemberChrootPath is the member's path as the chrooted program
+		// sees it: /etc/zones.conf.
+		ConfigFile("main", root+"/etc/main.conf",
+			WithContent("include \""+MemberChrootPath("zones")+"\"\n"), WithMode(0o644)),
+		WithChroot(root),
+		// Stage the candidates in the chroot itself instead of in etc/.
+		WithStagingDir(root),
+		WithSetValidation("grep", List("-q", "zone", MemberPath("zones"))))
 }
 
 // envOr returns the environment variable key, or def when it is unset.
@@ -169,7 +197,10 @@ $ cat /home/paul/gonf-tutorial/hello.sh
 echo hello from gonfy
 ```
 
-The broken script never reached `hello.sh`. Use this for anything a typo can
+The broken script never reached `hello.sh`. The error names the file, the
+validator and what it printed. The `chunk 0: plan: apply line 2` prefix
+says where in the plan the apply stopped; you can ignore it for now
+(chapter 15 reads such errors in detail). Use this for anything a typo can
 take down: `sshd -t`, `nginx -t`, `httpd -n`, `visudo -c`.
 
 ![WithValidation: the candidate replaces the live file only when the validator exits 0](img/ch04-2.svg)
@@ -214,6 +245,8 @@ func greeter() {
 - `WithSetValidation(command, argv)` runs against the whole staged set,
   without a shell. If it exits non-zero, no member is published.
 - `OnChange(set)` makes the command run only when some member changed.
+  To react to one member only, watch `set.Member("main.sh")` instead, or
+  `set.Members("lib.sh", "main.sh")...` for several.
 
 Apply it:
 
@@ -269,6 +302,99 @@ summary: 2 ok, 3 changed, 0 skipped, 0 would-change
 
 Reference: [ConfigSet](../reference.md#configset),
 [Change gates](../reference.md#change-gates).
+
+## Two declarations, one file
+
+> 🦫 **Gonfy says:** The lodge's hosts list has room for my line and for the dam crew's line. We each sign our own.
+
+A resource's ID is normally its kind and path, such as `File[/etc/hosts]`,
+and two resources with one ID clash. When two parts of a recipe each own a
+line of the same file, give each declaration its own name with
+`WithName`. The `shared` task does that, and uses the singular forms
+`WithLine` and `WithoutLine` (the same as `WithLines` and `WithoutLines`
+with one line):
+
+```go
+func shared() {
+	path := DestHome("gonf-tutorial/lodge/hosts")
+	Dir(DestHome("gonf-tutorial/lodge"), WithMode(0o755))
+	// Two declarations edit one file. WithName gives each its own ID;
+	// without it, both would be File[<path>] and clash.
+	File(path, WithLine("10.0.0.1 lodge"), WithName("hosts-lodge"), WithMode(0o644))
+	File(path, WithLine("10.0.0.2 dam"), WithoutLine("10.0.0.9 old-dam"),
+		WithName("hosts-dam"), WithMode(0o644))
+}
+```
+
+```text
+$ mkdir -p ~/gonf-tutorial/lodge && printf "127.0.0.1 localhost\n10.0.0.9 old-dam\n" > ~/gonf-tutorial/lodge/hosts
+$ ./gonf shared
+2026/09/30 04:13:29 updated /home/paul/gonf-tutorial/lodge/hosts
+2026/09/30 04:13:29 updated /home/paul/gonf-tutorial/lodge/hosts
+summary: 1 ok, 2 changed, 0 skipped, 0 would-change
+  changed File[hosts-lodge]
+  changed File[hosts-dam]
+$ cat ~/gonf-tutorial/lodge/hosts
+127.0.0.1 localhost
+10.0.0.1 lodge
+10.0.0.2 dam
+```
+
+The summary shows the two names. Both still manage the same path, so give
+them the same mode, or they will change it back and forth. Two
+declarations that key the same setting with `WithKeyedLine` fight the same
+way; keep one owner per line.
+
+Reference: [File](../reference.md#file).
+
+## A config set in a chroot
+
+A chroot is a directory that a program is locked into: after `chroot(2)`,
+the program sees that directory as `/`. Daemons such as nsd or OpenBSD's
+httpd run this way, so their config must name files by their path inside
+the chroot. `WithChroot(dir)` tells a config set about it:
+
+```go
+func jail() {
+	// A program chrooted to ~/gonf-tutorial/jail sees that directory as /.
+	root := DestHome("gonf-tutorial/jail")
+	Dir(root+"/etc", WithMode(0o755))
+	ConfigSet("jail",
+		ConfigFile("zones", root+"/etc/zones.conf", WithContent("zone lodge\n"), WithMode(0o644)),
+		// MemberChrootPath is the member's path as the chrooted program
+		// sees it: /etc/zones.conf.
+		ConfigFile("main", root+"/etc/main.conf",
+			WithContent("include \""+MemberChrootPath("zones")+"\"\n"), WithMode(0o644)),
+		WithChroot(root),
+		// Stage the candidates in the chroot itself instead of in etc/.
+		WithStagingDir(root),
+		WithSetValidation("grep", List("-q", "zone", MemberPath("zones"))))
+}
+```
+
+- `MemberChrootPath(key)` is like `MemberPath`, but relative to the
+  chroot.
+- Every member, and the staging directory, must be below the chroot.
+  The validators themselves are not chrooted.
+- `WithStagingDir(dir)` picks where the set stages its candidates. The
+  default is the deepest directory all members share (here `etc/`). The
+  directory must exist and contain every member.
+
+```text
+$ ./gonf jail
+2026/09/30 04:13:29 created directory /home/paul/gonf-tutorial/jail/etc
+2026/09/30 04:13:29 config set jail: published /home/paul/gonf-tutorial/jail/etc/zones.conf
+2026/09/30 04:13:29 config set jail: published /home/paul/gonf-tutorial/jail/etc/main.conf
+summary: 0 ok, 4 changed, 0 skipped, 0 would-change
+  changed Directory[/home/paul/gonf-tutorial/jail/etc]
+  changed ConfigSet[jail]
+  changed ConfigSetMember[jail/zones]
+  changed ConfigSetMember[jail/main]
+$ cat ~/gonf-tutorial/jail/etc/main.conf
+include "/etc/zones.conf"
+```
+
+Reference: [ConfigSet](../reference.md#configset).
 
 ## What the plan carries
 
