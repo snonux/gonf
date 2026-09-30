@@ -3,6 +3,9 @@
 package main
 
 import (
+	"fmt"
+	"strings"
+
 	//lint:ignore ST1001 recipes use the unqualified gonf DSL.
 	. "github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/cli"
@@ -34,6 +37,19 @@ func (Backup) Restore() {
 // ever picks it up.
 func (Backup) OptsRestore() TaskOptions { return TaskOptions{Operational()} }
 
+// sitemap calls Run inside a task body: the web_* tasks' ops join this
+// plan. Matching and Tasks read the registered tasks while recording.
+func sitemap() {
+	_ = Run(Matching("^web_")...) // a failure also fails this record
+	var list strings.Builder
+	for _, t := range Tasks() {
+		if strings.HasPrefix(t.Name, "web_") {
+			fmt.Fprintf(&list, "%s: %s\n", t.Name, t.Description)
+		}
+	}
+	File(DestHome("gonf-tutorial/site/htdocs/tasks.txt"), WithContent(list.String()), WithMode(0o644))
+}
+
 func main() {
 	RegisterMethods(web.Web{}) // web_docroot, web_config, web_content, web_logrotate
 	RegisterMethods(Backup{})  // backup_nightly, backup_restore
@@ -41,5 +57,6 @@ func main() {
 	AggregatePrefix("web") // the task "web" runs every web_* task
 	AggregateTasks("all", "The website, then its backup", "web", "backup_nightly")
 	Alias("deploy", "", "web")
+	Task("sitemap", "Run every web_* task, then list them in the site", sitemap)
 	cli.Main()
 }

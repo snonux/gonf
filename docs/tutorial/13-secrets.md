@@ -20,9 +20,14 @@ secrets/app/db-password
 ```
 
 (Keep `secrets/` out of version control in a real recipe. The tutorial
-checks in two fake ones so the example runs.) Other providers, such as the
-`foostore` KeePass provider or your own `secret.ProviderFunc`, plug in with
-`SetSecretProvider`.
+checks in two fake ones so the example runs.)
+
+Other providers, such as the `foostore` KeePass provider or your own
+`secret.ProviderFunc`, plug in with `SetSecretProvider` in `main`. Wrap
+such a provider in `secret.NewSnapshot(...)` so each secret is fetched only
+once per run. To move from files to a store one secret at a time,
+`secret.NewFallback(store, secret.FileProvider{})` asks the store first and
+falls back to the file.
 
 ## The recipe
 
@@ -63,6 +68,13 @@ func main() {
 | `SecretFile(path, ref)` | a file that is exactly the secret, mode `0600` by default |
 | `MustSecret(ref)` | the value; a missing secret fails the record |
 | `OptionalSecret(ref)` | `("", false)` when the secret does not exist |
+
+`OptionalSecret` forgives only a missing secret: any other failure, such as
+a missing `secrets/` directory, still fails the record. For Go code outside
+a task body, such as a start-up check, `ResolveSecret(ctx, ref)` returns
+the value and an error instead; test the error with
+`secret.IsNotFound(err)`. gonf protects its value like the others (see
+[Sensitive ops](#sensitive-ops) below).
 
 ## Run it
 
@@ -108,11 +120,15 @@ total 4
 -rw------- 1 root root 605 Sep 26 08:23 plan.jsonl
 ```
 
-- `plan -stdout` refuses a plan with secrets (override with `-with-secrets`).
+- `plan -stdout` refuses a plan with secrets. `plan -stdout -with-secrets`
+  prints it anyway, for a pipe such as `| ssh host gonf apply -`.
 - `plan -redacted` withholds the content of sensitive ops.
 - `plan -o` writes `plan.jsonl` with mode `0600` and warns: base64 is not
   encryption. Chapter 14 encrypts it instead.
 - Log lines, errors and push output are redacted against resolved values.
+- gonf finds a secret only as it was resolved. If you transform it (base64,
+  a hash, part of it) or sync it in a directory tree, mark the resource
+  with `WithSensitive` yourself.
 
 A missing secret stops the record before anything is applied:
 

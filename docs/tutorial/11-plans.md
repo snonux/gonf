@@ -59,14 +59,31 @@ $ cat out/plan.jsonl
 
 A plan directory holds:
 
-- `plan.jsonl`: one JSON object per line. The first line is the header with
-  the schema `version` the plan needs; a destination with an older gonf
-  refuses it before changing anything.
-- `blobs/`: large files and synced trees. Small file content travels inline
-  as `content_b64`.
+- `plan.jsonl`: one JSON object per line (JSON Lines). The first line is
+  the header. Its `version` is the plan format (schema) version the plan
+  needs; a destination whose gonf only knows older versions refuses the
+  plan before changing anything. `id` names the plan (`-id` sets it).
+- `blobs/`: larger files (over 512 KiB) and synced trees. Smaller file
+  content travels inline, base64-encoded, as `content_b64`.
+
+`./gonf -plan-version` prints the newest schema version a gonf can apply
+(27 for v0.24.1). The header above says 21 because gonf writes the lowest
+version that can carry the plan, so older gonf binaries can still apply it.
 
 The `dotfiles` guard became a `when_begin`/`when_end` pair, and paths still
 say `${HOME}`: the destination fills them in.
+
+A plan says what to change on a machine, so gonf keeps it private:
+`plan.jsonl` gets mode `0600` and a new directory `0700`. It refuses an
+output directory that other users can write to, such as `/tmp` itself:
+
+```text
+$ ./gonf plan -o /tmp greeting
+plan: RecordPlan: plan dir: /tmp is world-writable (mode 1777); refusing to store plan output where any user can replace it: choose a private directory you own (-o <private dir>)
+[exit status 1]
+```
+
+When recording fails, gonf leaves the output directory as it was.
 
 ![Record a plan to a directory, copy it to another host, apply it there](img/ch11-1.svg)
 
@@ -147,6 +164,10 @@ secrets withheld (you saw it in earlier chapters). It is not a plan and
 | `plan -redacted tasks...` | a human preview, secrets `[redacted]` |
 | `plan -o dir -seal tasks...` | an encrypted `dir/plan.age` (chapter 14) |
 | `apply [-n] file` | apply a plan file, `-` for stdin |
+
+`gonf apply` runs every op of a plan file in its own process, as the user
+who started it: it ignores the `elevate` marks of chapter 10. Run it with
+`sudo` (or as root) for a plan with privileged ops.
 
 Reference: [plan flags](../reference.md#plan-flags),
 [apply flags](../reference.md#apply-flags),

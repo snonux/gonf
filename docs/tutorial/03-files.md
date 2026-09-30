@@ -1,8 +1,10 @@
 # 3. Files, directories and links
 
 Most configuration is files. This chapter builds a small tree below
-`~/gonf-tutorial`: inline content, copied files, a synced directory tree, a
-glob install, links, files created only once, and a file that must be gone.
+`~/gonf-tutorial`: inline content, copied files, a synced directory tree,
+files picked by a wildcard pattern (a glob such as `bin/*`), links, files
+created only once, and a file that must be gone. A second task tries the
+shorthand helpers.
 
 > 🦫 **Gonfy says:** I carry sticks from the riverbank to the lodge. The riverbank is the controller, where `Home` and `WithSource` read. The lodge is the destination, where `DestHome` points.
 
@@ -19,6 +21,8 @@ import (
 
 func main() {
 	Task("files", "Files, directories and links under ~/gonf-tutorial", files)
+	Task("toolbox", "More file helpers under ~/gonf-tutorial/toolbox", toolbox)
+	Task("git", "Gonfy's global git settings", git)
 	Task("cleanup", "Remove what the files task created", cleanup)
 	cli.Main()
 }
@@ -51,6 +55,29 @@ func files() {
 
 	// Make sure something is gone.
 	NoFile(base + "/old.conf")
+}
+
+func toolbox() {
+	box := DestHome("gonf-tutorial/toolbox")
+	Dir(box, WithMode(0o755))
+
+	// InstallFile is File with WithSource, and the default mode 0640.
+	InstallFile(box+"/gonfy.txt", "assets/gonfy.txt", WithMode(0o644))
+
+	// Dirs, Files and Links declare several paths with the same options.
+	Dirs(List(box+"/logs", box+"/cache"), WithMode(0o755))
+
+	// SyncDir spelled as Dir: the same glob sync, with Dir's defaults.
+	Dir(box+"/scripts", WithSourceGlob("assets/bin/*"), WithFileMode(0o755))
+
+	// One LinkIfExists per name and target pair, below one directory.
+	SymlinkMap(box, "portrait", box+"/gonfy.txt", "gitconfig", DestHome(".gitconfig"))
+}
+
+func git() {
+	// One "git config --global" command per key and value pair, skipped
+	// when git already has that value.
+	GitGlobal("user.name", "Gonfy", "init.defaultBranch", "main")
 }
 
 func cleanup() {
@@ -97,6 +124,8 @@ $ go build -o gonf ./ch03-files
 $ ./gonf -list
 cleanup	Remove what the files task created
 files	Files, directories and links under ~/gonf-tutorial
+git	Gonfy's global git settings
+toolbox	More file helpers under ~/gonf-tutorial/toolbox
 $ ./gonf -n files
 2026/09/26 09:23:54 dry-run: would create directory /home/paul/gonf-tutorial
 2026/09/26 09:23:54 dry-run: would update /home/paul/gonf-tutorial/motd
@@ -272,12 +301,82 @@ $ ./gonf plan -redacted files
 wrote redacted preview to stdout (12 ops, 0 secret-bearing; not a plan, cannot be applied)
 ```
 
-Read it one line at a time: each line is an op with the resource `id` you
-saw in the summaries. `${HOME}` is still a placeholder, because `DestHome`
-is expanded on the destination. Content travels as `content_b64` (base64),
-while a synced tree such as `vim` travels as a `blob` next to the plan.
-`LinkIfExists`, `EnsureDir` and `EnsureFile` are ops of their own because
-the destination decides what they do. Chapter 11 covers the format in full.
+Read it one line at a time: each line is an op (one operation for the
+destination to carry out) with the resource `id` you saw in the summaries.
+`${HOME}` is still a placeholder, because `DestHome` is expanded on the
+destination. Content travels as `content_b64` (base64), while a synced tree
+such as `vim` travels as a `blob` next to the plan. `LinkIfExists`,
+`EnsureDir` and `EnsureFile` are ops of their own because the destination
+decides what they do. Chapter 11 covers the format in full.
+
+## Shorthand helpers: the toolbox task
+
+> 🦫 **Gonfy says:** A good toolbox saves trips to the riverbank. Each helper here is a short way to write something you already know.
+
+The `toolbox` task uses helpers that record the same resources as the long
+forms above:
+
+- `InstallFile(dst, src)` is `File(dst, WithSource(src))`, with mode `0640`
+  unless you pass `WithMode`.
+- `Dirs`, `Files` and `Links` take a list of paths and give every path the
+  same options. `Dir(List(...))` does the same.
+- `Dir(dst, WithSourceGlob(glob))` is the glob sync that `SyncDir` wraps.
+  Only the default modes differ: `Dir` makes the directory `0750`,
+  `SyncDir` makes it `0700`, and both copy files as `0640`.
+- `SymlinkMap(parent, name, target, ...)` takes name and target pairs and
+  declares one `LinkIfExists` per pair, below `parent`.
+
+```text
+$ ./gonf toolbox
+2026/09/30 04:12:19 created directory /home/paul/gonf-tutorial/toolbox
+2026/09/30 04:12:19 updated /home/paul/gonf-tutorial/toolbox/gonfy.txt
+2026/09/30 04:12:19 created directory /home/paul/gonf-tutorial/toolbox/logs
+2026/09/30 04:12:19 created directory /home/paul/gonf-tutorial/toolbox/cache
+2026/09/30 04:12:19 created directory /home/paul/gonf-tutorial/toolbox/scripts
+2026/09/30 04:12:19 updated /home/paul/gonf-tutorial/toolbox/scripts/disk
+2026/09/30 04:12:19 updated /home/paul/gonf-tutorial/toolbox/scripts/load
+2026/09/30 04:12:19 created symlink /home/paul/gonf-tutorial/toolbox/portrait -> /home/paul/gonf-tutorial/toolbox/gonfy.txt
+summary: 1 ok, 8 changed, 0 skipped, 0 would-change
+  changed Directory[/home/paul/gonf-tutorial/toolbox]
+  changed File[/home/paul/gonf-tutorial/toolbox/gonfy.txt]
+  changed Directory[/home/paul/gonf-tutorial/toolbox/logs]
+  changed Directory[/home/paul/gonf-tutorial/toolbox/cache]
+  changed Directory[/home/paul/gonf-tutorial/toolbox/scripts]
+  changed File[/home/paul/gonf-tutorial/toolbox/scripts/disk]
+  changed File[/home/paul/gonf-tutorial/toolbox/scripts/load]
+  changed Symlink[/home/paul/gonf-tutorial/toolbox/portrait]
+$ ./gonf toolbox
+summary: 9 ok, 0 changed, 0 skipped, 0 would-change
+$ ls -F ~/gonf-tutorial/toolbox
+cache/
+gonfy.txt
+logs/
+portrait@
+scripts/
+```
+
+`portrait` became a link because `gonfy.txt` exists by the time the link is
+checked. There is no `~/.gitconfig` on this machine, so there is no
+`gitconfig` link: that is the `1 ok` in the first summary.
+
+`GitGlobal(key, value, ...)` is another helper that takes pairs. It
+declares one `git config --global` command per pair, named `git.<key>`,
+with a guard that skips it when git already prints that value. The `git`
+task changes your real `~/.gitconfig`, so here is only its dry run:
+
+```text
+$ ./gonf -n git
+2026/09/30 04:12:19 dry-run: would run git config --global user.name Gonfy
+2026/09/30 04:12:19 dry-run: would run git config --global init.defaultBranch main
+summary: 0 ok, 0 changed, 0 skipped, 2 would-change
+  would-change Command[git.user.name]
+  would-change Command[git.init.defaultBranch]
+```
+
+Your own helpers can take pairs the same way: `EachKV(list, fn)` calls
+`fn(key, value)` for each pair and refuses a list of odd length.
+
+Reference: [Body-level guards and helpers](../reference.md#body-level-guards-and-helpers).
 
 ## The resources in this chapter
 
@@ -287,16 +386,22 @@ the destination decides what they do. Chapter 11 covers the format in full.
 | `File(path, WithSource(p))` | a copy of a controller file |
 | `Dir(path)` | a directory |
 | `Dir(path, WithSource(dir), WithPrune)` | a mirrored tree, extra entries removed |
+| `WithFileMode(m)` on a synced `Dir` or `SyncDir` | the mode of the copied files (`WithMode` is the directory's own) |
 | `SyncDir(dst, glob)` | every file matching the glob, installed by basename |
 | `Symlink(path, target)` | a symlink (short for `Link(path, WithSymlink(target))`) |
-| `LinkIfExists(path, target)` | a symlink only while the target exists, otherwise no link |
+| `Link(path, WithHardlink(target))` | a hard link to `target` |
+| `LinkIfExists(path, target)` | a symlink while the target exists; when it does not, any link at `path` is removed |
 | `EnsureDir`, `EnsureFile` | created when missing, never overwritten |
 | `NoFile`, `NoDir`, `NoLink` | the path is gone |
-| `WithMode`, `WithOwner`, `Perm(mode, owner)` | permissions (default file mode `0640`, directory `0750`) |
+| `Files`, `Dirs`, `Links`, `InstallFile`, `SymlinkMap`, `GitGlobal` | the shorthand helpers of the `toolbox` and `git` tasks |
+| `WithMode`, `WithOwner`, `WithGroup`, `Perm(mode, owner)` | permissions (default file mode `0640`, directory `0750`); `WithOwner("paul:staff")` sets the owner and the group |
+| `RootOwned`, `RootExec`, `RootPrivate` | owned by root with mode `0644`, `0755` or `0600` (directories `0755`, `0755`, `0700`); changing an owner needs root (chapter 10) |
+| `WithName(n)` on a `File` | the ID becomes `File[n]`, so two declarations can edit one file (chapter 4) |
 
 Two defaults worth knowing: a `File` without `WithMode` still gets `0640`,
 and a `List(...)` path declares several files with the same options at once
-(`File(List("/a", "/b"), ...)`).
+(`File(List("/a", "/b"), ...)`). For source paths, `Expand("~/x")` turns a
+leading `~` into the controller's home, like `Home("x")`.
 
 Reference: [Resources](../reference.md#resources),
 [Shared options](../reference.md#shared-options),

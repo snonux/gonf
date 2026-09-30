@@ -1,5 +1,6 @@
 // Command gonf shows gonf's error classes (tutorial chapter 15). Set
-// BREAK to one of decl, record or apply to trigger one of them.
+// BREAK to one of decl, record or apply to trigger one of them; pushing
+// the note task triggers a push refusal.
 package main
 
 import (
@@ -27,6 +28,11 @@ func main() {
 			Command("false", nil, WithName("always-fails"))
 		}
 	}, Needs(needed(brk)))
+	// An opaque guard: plain Go that only the controller can evaluate, so
+	// push refuses this task. WhenLinux() would travel in the plan.
+	Task("note", "Write a note on Linux", func() {
+		File(dir+"/note", WithContent("Gonfy was here\n"), WithMode(0o644))
+	}, When(func(f Facts) bool { return f.GOOS == "linux" }), Needs("setup"))
 	cli.Main()
 }
 
