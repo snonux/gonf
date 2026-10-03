@@ -1,6 +1,6 @@
 # 16. A web fleet
 
-The last chapter puts the book together. Gonfy's website runs on three
+This chapter puts the book together. Gonfy's website runs on three
 Linux front ends with Apache httpd, and one recipe sets up everything on
 them: the package, a deploy account, the site's files, a validated httpd
 configuration with a password-protected status page, kernel tuning, the
@@ -11,11 +11,12 @@ time.
 
 > **About the outputs in this chapter.** They were captured on three
 > Red Hat Enterprise Linux 8 containers named `fe1`, `fe2` and `fe3`, with
-> systemd running and httpd already installed. A stand-in for `ssh` and `scp` ran each remote command in
-> the container of the same name, as root, so `sudo` passed straight
-> through. gonf's own output is unchanged; with real hosts you see the same
-> lines. Where an output repeats itself for every front end, `[...]` marks
-> the part left out.
+> systemd running and httpd already installed. A stand-in for `ssh` and
+> `scp` ran each remote command in the container of the same name, as
+> root, and a small `sudo` stand-in in each container ran its command
+> directly. gonf's own output is unchanged; with real hosts you see the
+> same lines. Where an output repeats itself for every front end, `[...]`
+> marks the part left out.
 
 ## The fleet
 
@@ -293,7 +294,14 @@ pushed push (35 ops) to paul@fe1.lan
 `Package[httpd]` and `Package[httpd-tools]` are the two `ok` ops: httpd is
 already installed. The firewall block does not show up, because `fe1` has
 no `/usr/bin/firewall-cmd`. The preview also installed gonf on `fe1`
-(`syncing gonf binary`); use `-preview` for a look that installs nothing.
+(`syncing gonf binary`). `-preview` (chapter 12) would install nothing, but
+it cannot carry the synced site, so it refuses this plan:
+
+```text
+$ ./gonf push -privilege=sudo -preview paul@fe1.lan frontend
+push: remote preview: plan "push" has blobs; strict preview does not stage remote data, use push -n for the compatible dry-run path
+[exit status 1]
+```
 
 ## Push to the cluster
 
@@ -472,9 +480,10 @@ wrote redacted preview to stdout (31 ops, 1 secret-bearing; not a plan, cannot b
 
 ## Where to go from here
 
-You have used most of gonf by now. The [reference](../reference.md) has
-every option and sharp edge, and [chapter 15](15-troubleshooting.md) helps
-when a push fails. Gonfy wishes you a tidy lodge.
+You have used most of gonf by now. [Chapter 17](17-go-api.md) shows how to
+drive gonf from a Go program of your own. The [reference](../reference.md)
+has every option and sharp edge, and [chapter 15](15-troubleshooting.md)
+helps when a push fails. Gonfy wishes you a tidy lodge.
 
 Reference: [Inventory](../reference.md#inventory),
 [RegisterMethods](../reference.md#registermethods),
@@ -489,4 +498,4 @@ Reference: [Inventory](../reference.md#inventory),
 
 ---
 
-← [15. When things go wrong](15-troubleshooting.md) · [Contents](README.md)
+← [15. When things go wrong](15-troubleshooting.md) · [Contents](README.md) · Next: [17. gonf from Go](17-go-api.md) →

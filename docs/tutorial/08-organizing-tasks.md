@@ -70,6 +70,12 @@ Task names come from the package and type: `web.Web` registers `web_*`
 `freebsd_carp_*`, and a type in package `main` uses just its type name.
 `WithPrefix("x_")` overrides that when several structs share one namespace.
 
+`RegisterMethods` also takes options for every method of the struct.
+`RegisterMethods(Tools{}, WithGroupWhen(WhenLinux(), Privileged()))`
+guards every `tools_*` task and runs it as root; a plain task option
+(`RegisterMethods(Tools{}, WhenLinux())`) is the same as wrapping it in
+`WithGroupWhen`. A method's own `OptsX` and `WhenX` still add to them.
+
 ### Descriptions from doc comments
 
 `web.go` has no `DescX` methods. The `//go:generate` line runs `gonf-desc`,
@@ -98,20 +104,19 @@ A hand-written `DescX` always wins; `Backup` below uses them. Run
 `go generate ./...` after editing a doc comment, or `gonf-desc -check` in CI
 to catch a stale file.
 
+If a package's task structs are declared only for one OS (in files such as
+`tasks_linux.go`), write the generated file for that OS too:
+`gonf-desc -o desc_linux.go` makes a file that Go builds only on Linux.
+
 ### Needs with method expressions
 
 `Needs(Web.Docroot)` names the task that `RegisterMethods` created for that
-method. It is checked by the compiler and your editor can jump to it and
-rename it. `Needs("web_docroot")` with a string works too.
-
-A method value such as `w.Docroot` works too. There is one catch: if
-`Docroot` is promoted from an embedded struct, the method value names the
-embedded type's method. Write the method expression `Web.Docroot` for those.
-
-On a generic struct, name a concrete instantiation: `Needs(Web[int].Docroot)`.
-Inside a generic method, `Web[T].Docroot` or `w.Docroot` over the type
-parameter does not work (Go compiles both to a closure), so gonf refuses
-it. Use the concrete instantiation or the task name there.
+method. `Web.Docroot` is a Go method expression: the method named through
+its type. The compiler checks it, a typo does not build, and your editor
+can jump to the method and rename it. `Needs("web_docroot")` with the task
+name as a string works too. A few edge cases (methods of embedded or
+generic structs) are listed under [Needs](../reference.md#needs) in the
+reference.
 
 ## The main package
 
@@ -121,6 +126,9 @@ it. Use the concrete instantiation or the task name there.
 package main
 
 import (
+	"fmt"
+	"strings"
+
 	. "github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/cli"
 	"github.com/snonux/gonf/docs/tutorial/examples/ch08-organizing/web"
@@ -151,6 +159,19 @@ func (Backup) Restore() {
 // ever picks it up.
 func (Backup) OptsRestore() TaskOptions { return TaskOptions{Operational()} }
 
+// sitemap calls Run inside a task body: the web_* tasks' ops join this
+// plan. Matching and Tasks read the registered tasks while recording.
+func sitemap() {
+	_ = Run(Matching("^web_")...) // a failure also fails this record
+	var list strings.Builder
+	for _, t := range Tasks() {
+		if strings.HasPrefix(t.Name, "web_") {
+			fmt.Fprintf(&list, "%s: %s\n", t.Name, t.Description)
+		}
+	}
+	File(DestHome("gonf-tutorial/site/htdocs/tasks.txt"), WithContent(list.String()), WithMode(0o644))
+}
+
 func main() {
 	RegisterMethods(web.Web{}) // web_docroot, web_config, web_content, web_logrotate
 	RegisterMethods(Backup{})  // backup_nightly, backup_restore
@@ -158,6 +179,7 @@ func main() {
 	AggregatePrefix("web") // the task "web" runs every web_* task
 	AggregateTasks("all", "The website, then its backup", "web", "backup_nightly")
 	Alias("deploy", "", "web")
+	Task("sitemap", "Run every web_* task, then list them in the site", sitemap)
 	cli.Main()
 }
 ```
@@ -168,6 +190,7 @@ all	The website, then its backup
 backup_nightly	Nightly backup job
 backup_restore	Restore the site from the last backup
 deploy	alias of web
+sitemap	Run every web_* task, then list them in the site
 web	Run all web_* tasks
 web_config	Writes the web server config
 web_content	Publishes Gonfy's start page
@@ -176,7 +199,8 @@ web_logrotate	Rotates the web server logs (OpenBSD only) [destination-guarded: g
 ```
 
 - `AggregatePrefix("web")` registered the task `web`, which runs every
-  `web_*` task.
+  `web_*` task. It is short for `Aggregate("web", "Run all web_* tasks",
+  "^web_")`; `Aggregate` takes any regular expression over task names.
 - `AggregateTasks("all", ...)` runs exactly the listed tasks, in that order.
 - `Alias("deploy", "", "web")` is a second name for `web`.
 - `backup_restore` is `Operational()`: an explicit action that no pattern
@@ -203,6 +227,9 @@ summary: 0 ok, 2 changed, 0 skipped, 0 would-change
 
 > 🦫 **Gonfy says:** One whistle, and the whole crew gets to work.
 
+`all` includes `backup_nightly`, which edits root's crontab like the cron
+job in chapter 7, so it needs root; this output was captured as root:
+
 ```text
 $ ./gonf -verbose all    # debug lines trimmed
 2026/09/26 08:23:14 aggregate web: skipping "web_logrotate": its guard goos=openbsd does not hold on this host
@@ -214,6 +241,39 @@ summary: 3 ok, 0 changed, 0 skipped, 0 would-change
 ```
 
 Within one run a task is recorded once, even when several tasks need it.
+
+## Run inside a task body
+
+> 🦫 **Gonfy says:** Sometimes I read my own chore list before I pick up a stick.
+
+A task body is Go code, so it can look at the other tasks and record
+them. The `sitemap` task in `main.go` does both:
+
+- `Matching("^web_")` returns the names of the registered tasks that match
+  a regular expression, sorted.
+- `Run(names...)` inside a body does not apply anything by itself. It
+  records those tasks into the current plan, where the body stands, with
+  their needs and guards. If one fails, the whole record fails, even
+  though the body ignores the error.
+- `Tasks()` returns every task with its name, its description, the task
+  it is an alias of, and the guard that does not hold on this host, if
+  any. `-list` prints the same data.
+
+```text
+$ ./gonf sitemap
+2026/09/30 04:16:06 updated /home/paul/gonf-tutorial/site/htdocs/tasks.txt
+summary: 3 ok, 1 changed, 0 skipped, 0 would-change
+$ cat ~/gonf-tutorial/site/htdocs/tasks.txt
+web_config: Writes the web server config
+web_content: Publishes Gonfy's start page
+web_docroot: Creates the document root
+web_logrotate: Rotates the web server logs (OpenBSD only)
+```
+
+`web_logrotate` is on the list, but its ops were skipped: `Run` recorded
+them inside their OpenBSD guard. To give a task a second name, prefer
+`Alias` over a body that only calls `Run`: an aggregate then records the
+target once.
 
 ## What the plan carries
 
@@ -232,7 +292,7 @@ $ ./gonf plan -redacted web
 wrote redacted preview to stdout (7 ops, 0 secret-bearing; not a plan, cannot be applied)
 ```
 
-Reference: [Tasks](../reference.md#tasks),
+Reference: [Tasks](../reference.md#tasks) (`Run`, `Tasks`, `Matching`),
 [RegisterMethods](../reference.md#registermethods),
 [Aggregates and aliases](../reference.md#aggregates-and-aliases),
 [Needs](../reference.md#needs).

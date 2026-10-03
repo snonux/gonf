@@ -9,6 +9,8 @@ import (
 
 func main() {
 	Task("files", "Files, directories and links under ~/gonf-tutorial", files)
+	Task("toolbox", "More file helpers under ~/gonf-tutorial/toolbox", toolbox)
+	Task("git", "Gonfy's global git settings", git)
 	Task("cleanup", "Remove what the files task created", cleanup)
 	cli.Main()
 }
@@ -41,6 +43,29 @@ func files() {
 
 	// Make sure something is gone.
 	NoFile(base + "/old.conf")
+}
+
+func toolbox() {
+	box := DestHome("gonf-tutorial/toolbox")
+	Dir(box, WithMode(0o755))
+
+	// InstallFile is File with WithSource, and the default mode 0640.
+	InstallFile(box+"/gonfy.txt", "assets/gonfy.txt", WithMode(0o644))
+
+	// Dirs, Files and Links declare several paths with the same options.
+	Dirs(List(box+"/logs", box+"/cache"), WithMode(0o755))
+
+	// SyncDir spelled as Dir: the same glob sync, with Dir's defaults.
+	Dir(box+"/scripts", WithSourceGlob("assets/bin/*"), WithFileMode(0o755))
+
+	// One LinkIfExists per name and target pair, below one directory.
+	SymlinkMap(box, "portrait", box+"/gonfy.txt", "gitconfig", DestHome(".gitconfig"))
+}
+
+func git() {
+	// One "git config --global" command per key and value pair, skipped
+	// when git already has that value.
+	GitGlobal("user.name", "Gonfy", "init.defaultBranch", "main")
 }
 
 func cleanup() {

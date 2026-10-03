@@ -115,9 +115,18 @@ the daemon when its config changed":
 ![A change gate: reload-app runs only when app.conf changed](img/ch06-1.svg)
 
 `OnChange` also orders: `reload-app` always applies after `app.conf`. Use
-`DependsOn` when you want only the ordering, as `report` does with the
-`Noop` marker. The same `OnChange` works on `Service` (restart or reload),
+`DependsOn` when you want only the ordering, as `report` does. It depends
+on `Noop("commands-done")`, a resource that does nothing and always
+reports `ok`: a named point in the run that other resources can depend
+on. The same `OnChange` works on `Service` (restart or reload),
 `Timer` and `DaemonReload` (chapter 7).
+
+`WatchChanges(ids...)` is the low-level form of the same gate. It takes
+resource IDs as strings, such as
+`WatchChanges("File[${HOME}/gonf-tutorial/commands/app.conf]")`, and adds
+no ordering. In a recipe prefer `OnChange`: it takes the resource itself,
+so a typo does not compile, and it orders the command after what it
+watches.
 
 ## What the plan carries
 
@@ -143,7 +152,13 @@ section).
 
 ## Guards and arguments
 
-- Guards (`Creates`, `Unless`, `OnlyIf`) run on the destination.
+- Guards (`Creates`, `Unless`, `OnlyIf`) run on the destination. `Unless`
+  and `OnlyIf` succeed on exit status 0; `ExpectExit(n)` expects another
+  status, and `ExpectStdout(s)` also requires the output (trimmed) to be `s`.
+- `WithEnv(map[string]string{...})` adds environment variables for the
+  command.
+- `WithElevate` runs this one command as root (through sudo or doas) while
+  the rest of the task runs as you. Chapter 10 covers privilege.
 - `WithDir`, `Creates` and other path options expand `${HOME}`; the argv
   does not. That is why the recipe uses `Home(...)` in the git arguments.
 - `Sh("echo 'hello from Gonfy'")` splits the line like a shell would, but

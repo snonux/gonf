@@ -97,27 +97,34 @@ Pick the helper with `-privilege`:
 
 ```text
 $ ./gonf -privilege=sudo system_motd system_note dotfile
-2026/09/26 08:23:16 updated /etc/motd.d/gonf-tutorial
-summary: 1 ok, 1 changed, 0 skipped, 0 would-change
-applied /tmp/gonf-plan-3273471858/chunk-elevated.jsonl (3 ops)
-2026/09/26 08:23:16 updated /home/paul/.tutorial-note
-2026/09/26 08:23:16 updated /home/paul/.tutorial-inputrc
+2026/09/30 04:01:19 created directory /etc/motd.d
+2026/09/30 04:01:19 updated /etc/motd.d/gonf-tutorial
 summary: 0 ok, 2 changed, 0 skipped, 0 would-change
-2026/09/26 08:23:16 running Command[whoami-as-root]: id -un
+applied /tmp/gonf-plan-1880475442/chunk-elevated.jsonl (3 ops)
+2026/09/30 04:01:19 updated /home/paul/.tutorial-note
+2026/09/30 04:01:19 updated /home/paul/.tutorial-inputrc
+summary: 0 ok, 2 changed, 0 skipped, 0 would-change
+2026/09/30 04:01:19 running Command[whoami-as-root]: id -un
 summary: 0 ok, 1 changed, 0 skipped, 0 would-change
-applied /tmp/gonf-plan-3273471858/chunk-elevated.jsonl (2 ops)
+applied /tmp/gonf-plan-1880475442/chunk-elevated.jsonl (2 ops)
 $ cat /etc/motd.d/gonf-tutorial
 Managed by gonf. Gonfy keeps this lodge tidy.
 ```
 
-Three summaries, one per chunk; the elevated ones end with the `applied ... chunk-elevated.jsonl` line of the `sudo` child. `/etc/hosts` is a shared file, so the
-`hosts` task owns only a block of it (chapter 4); preview it before you
-apply it:
+Three summaries, one per chunk. Each elevated chunk runs in a second gonf
+process started through `sudo`, and its summary ends with that process's
+`applied ... chunk-elevated.jsonl` line. `-privilege=doas` works the same
+way with `doas`.
+
+`/etc/hosts` is a shared file, so the `hosts` task owns only a block of it
+(chapter 4); preview it before you apply it. A dry run of a privileged task
+goes through `sudo` too, because reading root's files can need root:
 
 ```text
-$ ./gonf -n system_hosts
-2026/09/26 08:23:16 dry-run: would update /etc/hosts
+$ ./gonf -privilege=sudo -n system_hosts
+2026/09/30 04:01:24 dry-run: would update /etc/hosts
 summary: 0 ok, 0 changed, 0 skipped, 1 would-change
+applied /tmp/gonf-plan-86422186/chunk-elevated.jsonl (2 ops)
 ```
 
 ## Without a helper
@@ -125,8 +132,7 @@ summary: 0 ok, 0 changed, 0 skipped, 1 would-change
 > 🦫 **Gonfy says:** Without sudo or doas I don't even start climbing: gonf refuses before it changes anything.
 
 As a normal user (here `gonfy`, the account from chapter 7) with the
-default `-privilege=none`, gonf refuses before it
-changes anything:
+default `-privilege=none`, gonf refuses before it changes anything:
 
 ```text
 $ whoami
@@ -136,10 +142,19 @@ error: privileged ops EnsureDir[/etc/motd.d], File[/etc/motd.d/gonf-tutorial] ne
 [exit status 1]
 ```
 
+Run as root with the default `-privilege=none`, gonf needs no helper: the
+elevated chunks run in the same process. The helper always comes from
+`-privilege`: `cli.Main()` sets it from the flag, so a `SetPrivilege` call
+in `main` does not change it.
+
 For remote hosts the helper is part of the inventory
-(`WithPrivilege(PrivilegeSudo)`, chapter 12). If you use fixed-argument
-sudoers or doas rules, allow `gonf apply` with any arguments; the reference
-lists the flags gonf passes.
+(`WithPrivilege(PrivilegeSudo)`, chapter 12).
+
+The `sudo` or `doas` child gets your `-quiet`, `-verbose`, `-profile` and
+`-cmd-timeout` flags, so it behaves like the rest of the run, and it is
+stopped after 10 minutes. If your sudoers or doas rules allow only a fixed
+command line, these extra flags make them refuse it: allow the gonf binary
+with any arguments instead. The reference lists every flag gonf passes.
 
 Reference: [Privilege](../reference.md#privilege),
 [Shared options](../reference.md#shared-options) (`Perm`, `Root`, `RootOwned`).

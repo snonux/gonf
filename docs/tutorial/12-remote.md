@@ -2,18 +2,19 @@
 
 Everything so far ran on one machine. Now the same recipe manages other
 hosts over ssh. gonf needs nothing installed on them except an ssh login
-and sudo or doas: it cross-compiles itself, copies the binary over and
-installs it on the first push.
+and sudo or doas: on the first push, your gonf builds gonf's plain command
+for the host's operating system and CPU (Go on the controller does the
+build), copies it over with `scp` and installs it.
 
 > 🦫 **Gonfy says:** Many lodges, one beaver. Name the hosts once in the inventory, then push the same recipe to one of them or to all of them.
 
-> **About the outputs in this chapter.** They were captured with a stand-in
-> for `ssh` and `scp` that ran each remote command locally under the
-> target's host name, with a private `/etc/motd.d`, crontab and
-> `/usr/local/bin` per host. gonf's own output is unchanged; with real hosts
-> you see the same lines. When Gonfy joined the welcome message, its two
-> `cat` lines were recaptured by applying `planet_motd` locally under each
-> host's name.
+> **About the outputs in this chapter.** They were captured on three
+> Linux containers named `earth`, `mars` and `pluto`, each with an empty
+> `/etc/motd.d`. A stand-in for `ssh` and `scp` ran each remote command in
+> the container of the same name, as root; small stand-ins for `sudo` (run
+> the command directly) and `crontab` (one file per user) filled in for
+> tools the containers lack. gonf's own output is unchanged; with real
+> hosts you see the same lines.
 
 ## Hosts, clusters and fleets
 
@@ -25,6 +26,8 @@ installs it on the first push.
 package main
 
 import (
+	"strings"
+
 	. "github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/cli"
 )
@@ -98,6 +101,13 @@ func main() {
 	// Every Planet method binds to the inner cluster (planet_* tasks), and
 	// only applies on hosts whose name contains one of its members.
 	RegisterOnCluster("inner", Planet{}, Privileged())
+
+	// A plain Task bound to the inner cluster, but with no guard: it
+	// applies wherever you push it, and ClusterHosts lists the members.
+	Task("neighbours", "List the inner planets", func() {
+		File("/etc/motd.d/neighbours",
+			WithContent("Inner planets: "+strings.Join(ClusterHosts(), ", ")+"\n"), RootOwned)
+	}, WithTaskCluster("inner"), Privileged())
 	cli.Main()
 }
 ```
@@ -105,7 +115,9 @@ func main() {
 - `Host(name, options...)` describes how to reach a host.
   `HostDefaults(...)` bundles options several hosts share; a later option
   replaces one from the bundle (mars overrides the `Window`).
-- `WithSSHDomain("lan")` makes the ssh host `<name>.lan`.
+- `WithSSHDomain("lan")` makes the ssh host `<name>.lan`. An explicit
+  `WithSSHHost`, as on pluto, always wins, wherever it stands among the
+  options.
 - `WithData(v)` attaches a value of your own type to a host. `EachHost[T]`
   visits the cluster's hosts and hands your function each one's `T`;
   `EachHostWith[T]` skips hosts without a `T` (only earth has a `Mirror`).
@@ -114,9 +126,12 @@ func main() {
   `planet_*` tasks on the cluster, with a guard that the destination's host
   name contains `earth` or `mars`. `WhenHostnameIn("earth")` narrows one
   task further.
+- `neighbours` is a plain `Task` bound to the cluster without a guard
+  (see [Tasks and clusters](#tasks-and-clusters) below).
 
 ```text
 $ ./gonf -list
+neighbours	List the inner planets
 planet_earth_only	Only on earth, within the cluster [destination-guarded: hostname_contains=earth|mars && hostname_contains=earth]
 planet_maintenance	Per-host maintenance window [destination-guarded: hostname_contains=earth|mars]
 planet_mirror	Mirror job, on hosts with a Mirror [destination-guarded: hostname_contains=earth|mars]
@@ -171,6 +186,10 @@ applies the plans your gonf sends it. So after you change a recipe, you
 rebuild your gonf on the controller and push again. Nothing needs
 rebuilding on the hosts; gonf replaces their binary itself only when your
 gonf is newer.
+
+The plan travels over ssh's standard input, so nothing is written to your
+disk. The host unpacks it below `$TMPDIR/gonf-apply/` and removes it after
+the apply.
 
 ![Sequence of a push to earth: record, probe, build and install gonf, apply over ssh](img/ch12-2.svg)
 
@@ -239,13 +258,25 @@ out the `earth` fragment.
 > 🦫 **Gonfy says:** `-preview` is a look through the window. It never installs or upgrades anything on the host.
 
 `-preview` is a dry run that never installs or upgrades anything on the
-host. `fleet` pushes to every cluster of a fleet:
+host. In return it needs a gonf on the host at least as new as yours, and
+it refuses plans with blobs (chapter 11); use `-n` for those.
+`-strict-preview-version` prints which version of this preview a gonf
+supports, so you can compare the host's with yours:
 
 ```text
+$ ./gonf -strict-preview-version
+1
+$ ssh paul@mars.lan gonf -strict-preview-version
+1
 $ ./gonf push -privilege=sudo -preview paul@mars.lan planet_motd
 summary: 2 ok, 0 changed, 0 skipped, 0 would-change
 previewed stdin (5 ops)
 previewed push (5 ops) on paul@mars.lan
+```
+
+`fleet` pushes to every cluster of a fleet:
+
+```text
 $ ./gonf fleet -n -j 1 solar planet_motd
 2026/09/26 08:23:21 push paul@pluto.example.org: remote plan schema 0 < 27 — syncing gonf binary
 summary: 2 ok, 0 changed, 0 skipped, 0 would-change
@@ -261,6 +292,59 @@ pushed fleet-solar (5 ops) to outer (1/1 hosts)
 
 pluto is in the fleet but not in `inner`, so the `planet_motd` guard skipped
 everything there: `0 ok, 0 changed`.
+
+`-quiet` and `-verbose` go before the subcommand and reach the gonf on
+every host. With `-quiet` only the summaries are left, and a summary then
+names what changed by its ID. Here mars had lost its welcome message:
+
+```text
+$ ssh paul@mars.lan sudo rm /etc/motd.d/welcome
+$ ./gonf -quiet cluster -j 1 inner planet_motd
+summary: 2 ok, 0 changed, 0 skipped, 0 would-change
+applied stdin (5 ops)
+summary: 1 ok, 1 changed, 0 skipped, 0 would-change
+  changed File[/etc/motd.d/welcome]
+applied stdin (5 ops)
+pushed cluster-inner (5 ops) to inner (2/2 hosts)
+```
+
+## Tasks and clusters
+
+> 🦫 **Gonfy says:** Binding a chore to a cluster tells it which lodges are its neighbours. Guarding it decides which lodges it may touch.
+
+A task can know its cluster, and it can be guarded to that cluster's
+hosts. These are two separate things:
+
+| Declaration | Knows its cluster | Guarded to its hosts |
+|-------------|-------------------|----------------------|
+| `RegisterOnCluster(name, structs...)` | yes | yes |
+| `RegisterMethods(v, OnCluster(name))` | yes | yes |
+| `RegisterMethods(v, WithCluster(name))` | yes | no |
+| `Task(..., WithTaskCluster(name))` | yes | no |
+
+`RegisterOnCluster` is `RegisterMethods(v, OnCluster(name))` for each
+struct, each with its own default prefix. A task that knows its cluster can
+use `EachHost`, `ForHosts` and `ClusterHosts()`; without a cluster they
+fail the record. `ClusterHosts()` returns the member names for a loop of
+your own. Unlike `EachHost`, it always lists every member, whichever host
+you push to.
+
+`neighbours` knows its cluster but has no guard, so it applies wherever
+you push it, even on pluto, which is not in `inner`:
+
+```text
+$ ./gonf push -privilege=sudo paul@pluto.example.org neighbours
+2026/09/30 04:15:00 updated /etc/motd.d/neighbours
+summary: 0 ok, 1 changed, 0 skipped, 0 would-change
+applied stdin (2 ops)
+pushed push (2 ops) to paul@pluto.example.org
+$ ssh paul@pluto.example.org cat /etc/motd.d/neighbours
+Inner planets: earth, mars
+```
+
+Use `OnCluster` (or `RegisterOnCluster`) for tasks that belong on the
+cluster's hosts only, and `WithCluster` for tasks that merely need to know
+the members, such as a monitoring host that watches them.
 
 ## What the plan carries
 
@@ -286,14 +370,28 @@ wrote redacted preview to stdout (12 ops, 0 secret-bearing; not a plan, cannot b
 
 | Command | What it does |
 |---------|--------------|
-| `push [-n\|-preview] [-privilege m] user@host tasks...` | one host, privilege from the flag |
+| `push [-n\|-preview] [-privilege m] [-- ssh-args...] user@host tasks...` | one host, privilege from the flag |
 | `cluster [-n\|-preview] [-j N] name tasks...` | every host of a cluster, privilege from the inventory |
 | `fleet [-n\|-preview] [-j N] name tasks...` | every host of a fleet |
 | `hosts`, `clusters`, `fleets` | list the inventory |
 
 A failing host cancels the others; `-host-timeout` (default 10m) bounds
-each host. If your inventory names are not part of the machines' host
-names, set `WithHostnameMatch` on the host.
+each host's whole push, and a single `push` gets 10 minutes too.
+`-id name` sets the plan's id (chapter 11).
+
+More host options, for hosts that differ from the planets:
+
+| Option | Use it when |
+|--------|-------------|
+| `WithSSHPort(2222)`, `WithSSHIdentity(path)` | ssh needs a port or a key file |
+| `WithHostnameMatch("web-01")` | the inventory name is not part of the machine's host name (the cluster guards and `EachHost` match on it) |
+| `WithPlatform("freebsd/amd64")`, `WithGOOS`, `WithGOARCH` | you want to name the platform gonf builds for instead of asking `uname` on the host; names are lower case (`linux`, not `Linux`) |
+| `WithGonfPath(path)` | gonf should live somewhere else than `/usr/local/bin/gonf` |
+| `WithValue(key, v)` with `ForHosts(key, fn)` | per-host data under a string key, instead of a type (`WithData`) |
+| `MustHostValue[T](host, key)`, `HostData[T](host)` | you need one host's value outside a per-host loop |
+| `WithPlanRecipient("age1pq1...")` | the host gets its own sealed plan file (chapter 14) |
+
+`EachHostNamed` is `EachHost` that also passes the host's name.
 
 Reference: [Inventory](../reference.md#inventory),
 [Host defaults](../reference.md#host-defaults),

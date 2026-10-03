@@ -35,4 +35,11 @@ func templates() {
 	//    error refuses the file.
 	File(dir+"/banner.txt",
 		WithContentFrom(RenderTemplate("assets/templates/banner.tmpl", site)), WithMode(0o644))
+
+	// 3. Inline content is a destination template too once it has data.
+	//    Data that is not a struct or a map, like this list, has no keys:
+	//    reach it as .Data. WithParam replaces {{ .Param }}.
+	File(dir+"/backends.txt",
+		WithContent("# {{ .Param }}\n{{ range .Data }}backend {{ . }}\n{{ end }}"),
+		WithTemplateData(site.Backend), WithParam("Gonfy's backends"), WithMode(0o644))
 }

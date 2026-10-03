@@ -3,6 +3,8 @@
 package main
 
 import (
+	"strings"
+
 	//lint:ignore ST1001 recipes use the unqualified gonf DSL.
 	. "github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/cli"
@@ -77,5 +79,12 @@ func main() {
 	// Every Planet method binds to the inner cluster (planet_* tasks), and
 	// only applies on hosts whose name contains one of its members.
 	RegisterOnCluster("inner", Planet{}, Privileged())
+
+	// A plain Task bound to the inner cluster, but with no guard: it
+	// applies wherever you push it, and ClusterHosts lists the members.
+	Task("neighbours", "List the inner planets", func() {
+		File("/etc/motd.d/neighbours",
+			WithContent("Inner planets: "+strings.Join(ClusterHosts(), ", ")+"\n"), RootOwned)
+	}, WithTaskCluster("inner"), Privileged())
 	cli.Main()
 }

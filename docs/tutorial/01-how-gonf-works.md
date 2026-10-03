@@ -6,6 +6,46 @@ Go `main` package that describes the state you want, build it, and run it.
 
 > 🦫 **Gonfy says:** A beaver does not rebuild his lodge every morning. He walks around it, finds the stick that moved, and puts it back. That is all gonf does with your machines, and this chapter shows how.
 
+## Why configuration management?
+
+Setting up one machine by hand is easy: install a package, edit a config
+file, start a service. The trouble starts later.
+
+- **You forget what you did.** Six months on, nobody remembers which file
+  was edited, which package was added, or why. Rebuilding the machine after
+  a disk failure turns into archaeology.
+- **Machines drift apart.** You have three web servers that should be
+  identical. One got a hotfix at 2 a.m., another missed the last update.
+  They now behave differently, and the difference only shows up when
+  something breaks.
+- **Manual changes do not scale.** Changing one line on one server takes a
+  minute. Changing it on thirty servers, the same way, without a typo on
+  server seventeen, takes an afternoon and a lot of luck.
+- **Shell scripts are not enough.** A script says *what to do*, so running
+  it twice may append a line twice or restart a service for nothing, and
+  it cannot tell you what it *would* change before you run it.
+
+A configuration management tool fixes this by turning "how the machine
+should look" into code:
+
+- **One source of truth.** The desired state lives in version control,
+  reviewed like any other code. The history tells you who changed what and
+  why.
+- **Repeatable.** The same code builds the same machine every time, so a
+  new or rebuilt server is one command away.
+- **Safe to re-run.** The tool compares the machine with the code and
+  changes only what differs. Running it again when nothing drifted changes
+  nothing, so you can run it as often as you like to repair drift.
+- **Preview first.** A dry run shows what would change before anything
+  does.
+
+Tools such as Ansible, Puppet, Chef and Salt do this with their own
+languages or YAML. gonf does it in plain Go: your editor, compiler, tests
+and type checker already understand your configuration, and the result is
+a single binary. Remote machines need only ssh: gonf installs its small
+apply binary there when it is missing or older, and no daemon keeps
+running between runs.
+
 ## The words
 
 > 🦫 **Gonfy says:** Six words and you can talk shop with any beaver.

@@ -21,6 +21,7 @@ Write `main.go` (it is also in
 [examples/ch02-first-recipe](examples/ch02-first-recipe/main.go)):
 
 ```go
+// Command gonf is the first recipe of the gonf tutorial (chapter 2).
 package main
 
 import (

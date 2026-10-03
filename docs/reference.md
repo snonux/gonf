@@ -74,7 +74,7 @@ duplicate names).
 | `AggregateTasks(name, desc, members...)` | Task that records the listed tasks in the listed order. |
 | `Alias(name, desc, target)` | Second public name for `target`. Empty `desc` lists as `alias of <target>`. |
 | `Run(names...)` / `RunContext(ctx, names...)` | Record and apply, same as `gonf <task>`. Inside a body, appends the other task's ops to the current plan. |
-| `Tasks()`, `Matching(regex)` | List activated tasks (`TaskInfo`), or names matching a regex. |
+| `Tasks()`, `Matching(regex)` | List activated tasks sorted by name (`TaskInfo`: `Name`, `Description`, `AliasOf`, `DestinationGuard`), or names matching a regex. |
 
 ### Task options
 
@@ -374,6 +374,7 @@ Other helpers:
 | `EachKV(list, fn)` | Call `fn(k, v)` per pair. Odd length is a declaration error and calls nothing. |
 | `ParseKV(list)` | Same, returning `[][2]string, error`. |
 | `RenderTemplate(path, data)` | Render a template on the controller (see [Templates](#templates)). |
+| `Refuse(kind, id, err)` | Report `err` as the declaration error of a resource `kind[id]` you could not build (a failed render, bad input) and get back an unregistered `Resource`, so the record fails instead of declaring empty content. |
 
 The rule: `Home` = where gonf runs (sources), `DestHome` = where the
 plan applies (targets). `Home` records the controller's home literally, so a
@@ -439,9 +440,22 @@ InstallFile("/usr/local/sbin/x", src, WithMode(0o755)) // no DependsOn needed
 - Done at apply time, so plan files do not change. An older destination
   gonf applies in declared order.
 
+Option families: each constructor takes its own option type, `FileOption`,
+`DirOption`, `LinkOption`, `PackageOption`, `ServiceOption`, `TimerOption`,
+`SystemdTimerOption`, `DaemonReloadOption`, `CronOption`, `CommandOption`,
+`LocalUserOption` (`User`) or `ConfigSetOption`. One option value can belong
+to several families (`WithMode` is a `FileOption` and a `DirOption`), which
+is what the "Applies to" columns list. Store options in a slice of the
+family type (`[]FileOption{WithMode(0o600)}`). The small `*able` interfaces
+(`Moded`, `UserService`, ...) are the setters a resource implements; a
+recipe does not need them.
+
 `options.Option` (`func(any)`) is the untyped legacy form. Convert a stored
-`[]options.Option` with `ToFileOptions`, `ToDirOptions`, and so on; the
-adapter cannot check the family.
+`[]options.Option` with `ToFileOptions`, `ToDirOptions`, `ToLinkOptions`,
+`ToPackageOptions`, `ToServiceOptions`, `ToTimerOptions`,
+`ToSystemdTimerOptions`, `ToDaemonReloadOptions`, `ToCronOptions`,
+`ToCommandOptions` or `ToLocalUserOptions`; the adapter cannot check the
+family, so a misfit option is a declaration error when it is applied.
 
 ### File
 
@@ -478,6 +492,10 @@ Sharp edges:
 - Mode defaults to `0640` and is applied even when `WithMode` is not given.
   A bare line edit on a `0644` file makes it `0640`. Pass mode, owner and
   group explicitly on shared files.
+- With `WithOwner`/`WithGroup`, a changed file gets its owner and group on
+  the temporary file before the rename, so a set-id file never appears
+  owned by the applying user. An owner or group that does not resolve
+  fails before the content is replaced.
 - Line edits cannot combine with `WithContent`, `WithSource`,
   `WithValidation`, `EnsureFile` or `SecretFile`.
 - Edit order: blocks, then `WithoutLines`, then keyed lines, then `WithLines`.
@@ -509,7 +527,9 @@ Managed blocks (`WithBlock`, plan schema 27, declared only by such a plan):
   created holding the block). No `lines`: the markers stay, the region is
   emptied.
 - Markers match after trimming surrounding whitespace. A marker twice, only
-  one of them, or END before BEGIN fails the apply without writing.
+  one of them, END before BEGIN, or a marker of another declared block
+  inside this block's region (nested blocks) fails the apply without
+  writing.
 - Refused at declaration: an empty name, a name with surrounding whitespace
   or a line break, one name with two line sets, a block line with a line
   break or equal to a marker, a `WithLine`/`WithoutLine` equal to a block or
@@ -995,7 +1015,13 @@ Fleet("homelab", edge, other)
 - `Host`, `Cluster`, `Fleet` register themselves. Duplicates are declaration
   errors.
 - Lookup: `LookupHost`/`MustHost`, `LookupCluster`/`MustCluster`,
-  `LookupFleet`/`MustFleet`. `Hosts()`, `Clusters()`, `Fleets()` list them.
+  `LookupFleet`/`MustFleet` (`Must*` on an unknown name is a declaration
+  error). Handles: `HostRef.Name()`, `ClusterRef.Name()`/`.HostNames()`,
+  `FleetRef.Name()`/`.ClusterNames()`/`.HostNames()` (deduplicated).
+- Listing: `Hosts()` returns `[]HostInfo` (`Name`, `User`, `SSHHost`,
+  `Port`, `Identity`, `Privilege`), `Clusters()` `[]ClusterInfo` (`Name`,
+  `Hosts`, `Parallelism`), `Fleets()` `[]FleetInfo` (`Name`, `Clusters`,
+  `Hosts`). `gonf hosts`, `gonf clusters` and `gonf fleets` print them.
 - `Cluster` takes `HostRef`s, each at most once. `.Parallel(n)` sets fan-out
   (default 5, `n < 1` means all at once).
 - `Fleet` takes `ClusterRef`s. Hosts are deduplicated; each member cluster
@@ -1087,12 +1113,14 @@ does not narrow.
   or drop `Privileged()` when the SSH login is root.
 - `gonf push user@host` uses `-privilege`, not the inventory's
   `WithPrivilege`. `cluster` and `fleet` use each host's `WithPrivilege`.
-- A local elevated chunk has a 10-minute timeout unless the context
-  carries its own deadline.
+- A local elevated chunk has a 10-minute timeout (`DefaultChunkTimeout`)
+  unless the context carries its own deadline.
 - The elevated path requires the program to run through `cli.CLI()`.
 - Fixed-argument sudoers/doas rules must allow `-cancel-pipe` (local
   re-exec) and `-relayed` (remote apply), plus `-cmd-timeout`,
-  `-profile`, `-verbose` and `-quiet` when those are not at their defaults. A loose
+  `-profile`, `-verbose` and `-quiet` when those are not at their
+  defaults, `-n` for a dry run, `-n -strict-preview` for `-preview` and
+  `-apply-dir <dir>` for a multi-chunk push with blobs. A loose
   `gonf apply *`-style match on the tail is simpler.
 
 ## CLI
@@ -1167,8 +1195,8 @@ summary: 25 ok, 4 changed, 0 skipped, 0 would-change
 | `-id name` | Plan id in the header, default `plan`. |
 | `-stdout` | JSONL to stdout. Refused for a plan with sensitive ops or blobs (use `-o`). |
 | `-with-secrets` | With `-stdout`: print a sensitive plan anyway. |
-| `-redacted` | Human preview to stdout, header op `plan_preview`, secrets `[redacted]`. Not applicable. Not with `-stdout`, `-with-secrets`, `-o`. |
-| `-seal` | Write `dir/plan.age` (or sealed bytes to stdout with `-stdout`). |
+| `-redacted` | Human preview to stdout, header op `plan_preview`, secrets `[redacted]`. Not applicable. Not with `-stdout`, `-with-secrets`, `-o`, `-seal`. |
+| `-seal` | Write `dir/plan.age` (or sealed bytes to stdout with `-stdout`). Not with `-with-secrets`. |
 | `-recipient r` | Extra `age1pq` recipient, repeatable. |
 | `-recipients-file f` | Use this file instead of the default. Missing is an error. |
 | `-no-default-recipients` | Ignore the default recipients file. |
@@ -1225,8 +1253,8 @@ Output directory rules:
 ```
 
 - The header version is the lowest schema that can carry the plan. A plan
-  without sensitive ops, keyed lines, pruning glob syncs, service flags or
-  noops declares 21.
+  without sensitive ops, keyed lines, pruning glob syncs, service flags,
+  noops, `${HOME}` in a ConfigSet path or managed blocks declares 21.
 - A destination refuses a newer schema before any change.
 - Ops apply in dependency order within each run between `when_*`
   boundaries, parent directories included (see [Shared options](#shared-options));
@@ -1264,6 +1292,8 @@ Schema versions (what an older destination refuses):
 | 23 | `file.keyed_lines` (only when present) |
 | 24 | `sync_dir.glob` (only for a pruning glob sync) |
 | 25 | `service.flags`/`has_flags`, `noop` (only when present) |
+| 26 | `${HOME}` in `config_set` member paths, `chroot`, `staging_dir` (only when present) |
+| 27 | `file.blocks` (`WithBlock`, only when present) |
 
 ### Pre-flight
 
@@ -1327,12 +1357,15 @@ Before the first apply chunk, every push probes the remote gonf:
 
 | Knob | Bounds | Default |
 |------|--------|---------|
-| `-host-timeout` (cluster, fleet) | one host's whole push, all chunks | `10m`, `0` unlimited |
+| `-host-timeout` (cluster, fleet) | one host's whole push, all chunks | `10m`, `0` or negative unlimited |
+| `gonf push`, `PushTo`, `PreviewTo`, `PushPayload` | the whole push | `10m` when the context has no deadline; not a flag |
 | `ConnectTimeout` in the ssh argv | TCP/SSH handshake only | 15s; an explicit `-o ConnectTimeout` in ssh args wins |
+| `ServerAliveInterval`/`ServerAliveCountMax` in the ssh argv | a silent network path | 15s x 4, so ssh drops a dead link after about 60s |
 | `-cmd-timeout` | one backend command or validator | `5m` |
-| elevated local chunk | one sudo/doas re-exec | `10m` |
+| elevated local chunk | one sudo/doas re-exec | `10m` (`DefaultChunkTimeout`) |
 
-- No overall timeout on a remote apply.
+- These timeouts kill only the local ssh; the remote `gonf apply` has no
+  overall timeout of its own.
 - A failing host cancels in-flight and not-yet-started hosts across the
   whole fleet; the error reports the abort once. A host killed by its own
   timeout says `(host timeout after ...)`.
@@ -1369,22 +1402,34 @@ clear text in the plan; base64 is not encryption.
 | `secret.FileProvider{}` (default) | Reads `secrets/<ref>` below the working directory. Bytes exact. A leading `/` stays inside `secrets/`. Symlinks, escapes and non-regular files are refused. `Dir: "vault"` picks another single directory. |
 | `secret.NewSnapshot(p)` | Resolve each reference at most once per process; caches values and not-found. Wrap every non-file provider in it. |
 | `secret.NewFallback(primary, secondary)` | Ask `secondary` only when `primary` says not-found. Any other `primary` failure is returned. For migrating one secret at a time. |
-| `foostore.New(foostore.Config{Lookup: items})` | Runs the `foostore` binary against a KeePass store. `foostore.Items(map)` maps refs to `foostore.Field(entry, field)` or `foostore.Attachment(path)`. Unmapped refs are not-found. |
+| `foostore.New(foostore.Config{Lookup: items})` | Runs the `foostore` binary against a KeePass store. `foostore.Items(map)` maps refs (compared canonically) to `foostore.Field(entry, field)` or `foostore.Attachment(path)`. Unmapped refs are not-found. Both `New` and `Items` return an error to check. |
 | `secret.ProviderFunc` | Adapt a function. Implement `Resolve(ctx, secret.Ref) ([]byte, error)`. |
 
 ```go
 api.SetSecretProvider(secret.NewSnapshot(secret.NewFallback(vault, secret.FileProvider{})))
 ```
 
-Error kinds (`*secret.Error`): `ErrNotFound`, `ErrInvalid`, `ErrUnreadable`,
-`ErrUnavailable`. Decide with `secret.IsNotFound(err)` on the returned error,
-not `errors.Is`. A missing `secrets/` directory is `ErrUnavailable`, so
-`OptionalSecret` fails instead of silently dropping fragments.
+Error kinds (`*secret.Error`, fields `Kind`, `Ref`, `Msg`, `Err`):
+`ErrNotFound`, `ErrInvalid`, `ErrUnreadable`, `ErrUnavailable`. Decide with
+`secret.IsNotFound(err)` on the returned error, not `errors.Is`;
+`secret.KindOf(err)` returns the kind of a top-level `*secret.Error` only
+(nil for a wrapped one). A missing `secrets/` directory is `ErrUnavailable`,
+so `OptionalSecret` fails instead of silently dropping fragments.
 
-foostore details: timeout 30s (`Config.Timeout`), value cap 16 MiB, no
-terminal and only `HOME` in the child environment, passphrase via
-`kdbx_pass_file` or `Config.Passphrase` over fd 3. `~/.config/foostore.json`
-must set `kdbx_pass_file`; the pass file must be `0600` or `0400`.
+Writing a provider: call it through `secret.Resolve(ctx, p, ref)`, which
+turns any unclassified error, a wrapped typed error or one naming another
+reference into `ErrUnavailable`, so a broken store never reads as
+not-found. `secret.CanonicalRef(ref)` gives the form `FileProvider` reads
+(`/a/b`, `\a/b` and `x/../a/b` are all `a/b`); look refs up by it.
+`secret.Redacted` is the `[redacted]` replacement string.
+
+foostore details: timeout 30s (`Config.Timeout`), value cap 16 MiB
+(`Config.MaxBytes`), binary `foostore` from `PATH` (`Config.Binary`), its
+configured store unless `Config.KDBXPath`, no terminal and only `HOME` in
+the child environment, passphrase via `kdbx_pass_file` or
+`Config.Passphrase` over fd 3. Without `Config.Passphrase`,
+`~/.config/foostore.json` must set `kdbx_pass_file`; the pass file must be
+`0600` or `0400`.
 
 ### Sensitive ops
 
@@ -1567,14 +1612,20 @@ gonf plan-verify -trusted-signers f out/plan.age | age -d -i key | gonf apply -
 | `RecordPlan(id, dir, tasks...)` | Record into `dir` with the output-directory rules. |
 | `RecordPlanTo(id, store, tasks...)` | Record into a caller-owned `plan.BlobStore`. |
 | `RecordPlanForHost(host, id, store, tasks...)` | Record with one host's `ForHosts` selection. |
+| `RecordPlanDeferred(id, dir, tasks...)` | Check `dir` like `RecordPlan`, record into memory and return a `*DeferredPlan` (`Ops`, `Blobs`); write nothing until you seal it or call `CommitBlobs()` (how `plan -o` decides on sealing after recording). |
 | `ApplyPlan`, `ApplyPlanContext` | Apply one chunk (no pre-flight, no privilege split). |
 | `ApplyChunks`, `ApplyChunksContext` | Apply a recorded plan with the privilege split. |
 | `Apply()` | Apply resources registered outside tasks, through the plan engine, with the privilege split. |
-| `PushTo`, `PushHost`, `PushCluster`, `PushClusterRun`, `PushFleet`, `PushFleetRun` | Push (the `*Run`/`*Context` forms take a context, plan id and parallelism override). |
-| `PreviewTo`, `PreviewHost`, `PreviewClusterRun`, `PreviewFleetRun` | Strict preview. |
+| `PushTo`, `PushToContext`, `PushHost`, `PushCluster`, `PushClusterRun`, `PushFleet`, `PushFleetRun` | Push. `PushToContext` takes a context; `PushClusterRun`/`PushFleetRun` take a context, plan id (`""` for the default), parallelism override (`> 0`) and host timeout (`<= 0` unlimited). |
+| `PreviewTo`, `PreviewToContext`, `PreviewHost`, `PreviewClusterRun`, `PreviewFleetRun` | Strict preview. |
+| `PushTarget{User, Host, Port, Identity, ExtraSSH, Privilege, GOOS, GOARCH, GonfPath}` | One SSH destination for `PushTo`/`PreviewTo`/`PushPayload`; `Host` may be `user@host`. |
 | `PushPayload`, `PushPayloadContext` | Ship an encoded payload as one chunk. |
-| `SetCommandTimeout`, `SetPrivilege`, `SetProfileOverride` | Programmatic forms of the flags. |
-| `RedactSecrets(s)`, `SensitiveOpNames(ops)` | Redaction helpers. |
+| `RefuseOpaqueOnlyPush(action)` | After your own `RecordPlanTo`, refuse a plan with an opaque-only task before shipping it, as the push functions do. |
+| `SetCommandTimeout`, `SetPrivilege`, `SetProfileOverride` | Programmatic forms of the flags; `CommandTimeout()`, `Privilege()`, `ProfileOverride()` read them back. |
+| `Activate(facts)` | Re-evaluate opaque `When` predicates against `facts` (recording, `Tasks` and `Matching` activate with `DetectFacts()` when nothing has yet). |
+| `HostPlanRecipient(name)`, `PlanRecipientTargetHosts(name)` | A host's `WithPlanRecipient`, and the hosts `plan -seal -for name` would seal for (host, cluster, then fleet). |
+| `RedactSecrets(s)`, `SensitiveOpNames(ops)`, `EncodeRedactedPreview(ops)` | Redaction helpers; the last is the `plan -redacted` output. |
+| `ModeToWire(m)`, `ModeToFlags(m)` | A mode as the plan writes it, and raw octal set-id/sticky bits as `os.FileMode` flags. |
 | `ResetTasks`, `ResetInventory`, `ResetForTest` | Clear registries. |
 
 Record one plan at a time: recording is single-goroutine.
