@@ -328,7 +328,9 @@ $ cat ~/gonf-tutorial/lodge/hosts
 10.0.0.2 dam
 ```
 
-The summary shows the two names. Both still manage the same path, so give
+The log names the path twice, once per declaration; under `-quiet` the
+summary lists the two names instead, `File[hosts-lodge]` and
+`File[hosts-dam]`. Both still manage the same path, so give
 them the same mode, or they will change it back and forth. Two
 declarations that key the same setting with `WithKeyedLine` fight the same
 way; keep one owner per line.
