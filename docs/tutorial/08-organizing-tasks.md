@@ -195,8 +195,6 @@ $ ./gonf web_config
 2026/09/26 08:23:14 created directory /home/paul/gonf-tutorial/site/htdocs
 2026/09/26 08:23:14 updated /home/paul/gonf-tutorial/site/site.conf
 summary: 0 ok, 2 changed, 0 skipped, 0 would-change
-  changed Directory[/home/paul/gonf-tutorial/site/htdocs]
-  changed File[/home/paul/gonf-tutorial/site/site.conf]
 ```
 
 ![Task graph of the chapter 8 recipe: all, web and its subtasks, Needs edges and the deploy alias](img/ch08-1.svg)
@@ -211,8 +209,6 @@ $ ./gonf -verbose all    # debug lines trimmed
 2026/09/26 08:23:14 updated /home/paul/gonf-tutorial/site/htdocs/index.html
 2026/09/26 08:23:14 updated crontab for root (job backup)
 summary: 2 ok, 2 changed, 0 skipped, 0 would-change
-  changed File[/home/paul/gonf-tutorial/site/htdocs/index.html]
-  changed Cron[root/backup]
 $ ./gonf deploy
 summary: 3 ok, 0 changed, 0 skipped, 0 would-change
 ```

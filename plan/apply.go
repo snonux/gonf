@@ -101,8 +101,10 @@ func ApplyWithContext(ctx context.Context, ops []Op, facts Facts, planDir string
 	// The summary is what the report machinery exists for: every apply ends
 	// with the collected outcomes, and a refused plan (sort errors) prints an
 	// empty summary making clear nothing was applied. Deferred so partial
-	// results are reported on error paths too.
-	defer resource.PrintSummary(os.Stderr)
+	// results are reported on error paths too. PrintApplySummary names the
+	// changed ids only under -quiet: otherwise each change already logged
+	// its own line, and listing the ids again showed every change twice.
+	defer resource.PrintApplySummary(os.Stderr)
 
 	// Sorting (and its dangling/cycle checks) runs before any mutation so a
 	// refused plan leaves the destination untouched.

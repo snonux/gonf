@@ -101,7 +101,6 @@ no crontab for root
 $ ./gonf cron
 2026/09/26 08:23:14 updated crontab for root (job gonfy-uptime)
 summary: 0 ok, 1 changed, 0 skipped, 0 would-change
-  changed Cron[root/gonfy-uptime]
 $ crontab -l
 # BEGIN GONF Cron[gonfy-uptime]
 */15 * * * * uptime >> /tmp/uptime.log
@@ -122,12 +121,10 @@ $ ./gonf -n account
 2026/09/26 08:23:14 dry-run: would run groupadd -- gonfy
 2026/09/26 08:23:14 dry-run: would run useradd --create-home --gid gonfy --home /home/gonfy --shell /bin/sh -- gonfy
 summary: 0 ok, 0 changed, 0 skipped, 2 would-change
-  would-change Group[gonfy]
-  would-change User[gonfy]
 $ ./gonf account
+2026/09/26 08:23:14 ran groupadd -- gonfy
+2026/09/26 08:23:14 ran useradd --create-home --gid gonfy --home /home/gonfy --shell /bin/sh -- gonfy
 summary: 0 ok, 2 changed, 0 skipped, 0 would-change
-  changed Group[gonfy]
-  changed User[gonfy]
 ```
 
 ```text

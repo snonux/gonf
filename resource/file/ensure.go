@@ -72,6 +72,7 @@ func (f *File) ensurePresent() error {
 	}
 	if resource.DryRun() {
 		resource.Note(id, resource.StatusWouldChange)
+		logger.Info("dry-run: would update attributes of %s", path)
 		return nil
 	}
 
@@ -89,5 +90,8 @@ func (f *File) ensurePresent() error {
 		return err
 	}
 	resource.Note(id, resource.StatusChanged)
+	// The apply summary names no ids at Info level, so this line is what
+	// tells the operator which file changed.
+	logger.Info("updated attributes of %s", path)
 	return nil
 }

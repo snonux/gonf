@@ -75,7 +75,7 @@ say `${HOME}`: the destination fills them in.
 > 🦫 **Gonfy says:** Any gonf binary can follow the blueprint, even one that never saw the recipe.
 
 `gonf` without `./` is any gonf binary on the `PATH`, such as the
-stand-alone one (`go install github.com/snonux/gonf/cmd/gonf@v0.24.1`) or a
+stand-alone one (`go install github.com/snonux/gonf/cmd/gonf@v0.24.2`) or a
 copy of your own `./gonf`: every gonf binary has the same `apply`
 subcommand, and applying needs no recipe.
 
@@ -88,12 +88,6 @@ $ gonf apply -n out/plan.jsonl
 2026/09/26 08:23:16 dry-run: would update /home/paul/gonf-tutorial/plans/vim/colors/tutorial.vim
 2026/09/26 08:23:16 dry-run: would update /home/paul/gonf-tutorial/plans/vim/vimrc
 summary: 0 ok, 0 changed, 0 skipped, 6 would-change
-  would-change Directory[/home/paul/gonf-tutorial/plans]
-  would-change File[/home/paul/gonf-tutorial/plans/bashrc]
-  would-change Directory[/home/paul/gonf-tutorial/plans/vim]
-  would-change Directory[/home/paul/gonf-tutorial/plans/vim/colors]
-  would-change File[/home/paul/gonf-tutorial/plans/vim/colors/tutorial.vim]
-  would-change File[/home/paul/gonf-tutorial/plans/vim/vimrc]
 applied out/plan.jsonl (6 ops)
 $ gonf apply out/plan.jsonl
 2026/09/26 08:23:16 created directory /home/paul/gonf-tutorial/plans
@@ -103,12 +97,6 @@ $ gonf apply out/plan.jsonl
 2026/09/26 08:23:16 updated /home/paul/gonf-tutorial/plans/vim/colors/tutorial.vim
 2026/09/26 08:23:16 updated /home/paul/gonf-tutorial/plans/vim/vimrc
 summary: 0 ok, 6 changed, 0 skipped, 0 would-change
-  changed Directory[/home/paul/gonf-tutorial/plans]
-  changed File[/home/paul/gonf-tutorial/plans/bashrc]
-  changed Directory[/home/paul/gonf-tutorial/plans/vim]
-  changed Directory[/home/paul/gonf-tutorial/plans/vim/colors]
-  changed File[/home/paul/gonf-tutorial/plans/vim/colors/tutorial.vim]
-  changed File[/home/paul/gonf-tutorial/plans/vim/vimrc]
 applied out/plan.jsonl (6 ops)
 $ gonf apply out/plan.jsonl
 summary: 6 ok, 0 changed, 0 skipped, 0 would-change
@@ -132,7 +120,6 @@ $ ./gonf plan -stdout greeting | gonf apply -
 wrote stdout (2 ops)
 2026/09/26 08:23:16 updated /home/paul/gonf-tutorial/greeting
 summary: 0 ok, 1 changed, 0 skipped, 0 would-change
-  changed File[/home/paul/gonf-tutorial/greeting]
 applied stdin (2 ops)
 ```
 

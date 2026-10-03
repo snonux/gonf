@@ -927,7 +927,10 @@ func TestApplyPrintsSummary(t *testing.T) {
 	if !strings.Contains(out, "summary: 0 ok, 1 changed") {
 		t.Errorf("expected a changed summary on stderr, got %q", out)
 	}
-	if !strings.Contains(out, "changed File[") {
-		t.Errorf("expected the changed file id in the summary, got %q", out)
+	// At the default Info level the file's own "updated <path>" log line
+	// names the change (on the logger's destination, not this pipe), so the
+	// summary must not list the id a second time.
+	if strings.Contains(out, "changed File[") {
+		t.Errorf("summary repeats the changed file id the log line already named, got %q", out)
 	}
 }

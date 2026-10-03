@@ -66,13 +66,6 @@ $ ./gonf commands
 2026/09/26 08:26:52 running Command[reload-app]: sh -c echo reloading app; wc -l app.conf
 2026/09/26 08:26:52 running Command[report]: sh -c echo Gonfy says all set
 summary: 1 ok, 7 changed, 0 skipped, 0 would-change
-  changed Directory[/home/paul/gonf-tutorial/commands]
-  changed Command[git-init]
-  changed Command[git-user]
-  changed Command[echo]
-  changed File[/home/paul/gonf-tutorial/commands/app.conf]
-  changed Command[reload-app]
-  changed Command[report]
 ```
 
 ## Second run
@@ -87,8 +80,6 @@ $ ./gonf commands
 2026/09/26 08:26:52 skipping Command[reload-app]: no watched dependency changed
 2026/09/26 08:26:52 running Command[report]: sh -c echo Gonfy says all set
 summary: 3 ok, 2 changed, 3 skipped, 0 would-change
-  changed Command[echo]
-  changed Command[report]
 ```
 
 Each command was held back for its own reason:
@@ -116,10 +107,6 @@ $ ./gonf commands
 2026/09/26 08:26:52 running Command[reload-app]: sh -c echo reloading app; wc -l app.conf
 2026/09/26 08:26:52 running Command[report]: sh -c echo Gonfy says all set
 summary: 2 ok, 4 changed, 2 skipped, 0 would-change
-  changed Command[echo]
-  changed File[/home/paul/gonf-tutorial/commands/app.conf]
-  changed Command[reload-app]
-  changed Command[report]
 ```
 
 `app.conf` changed, so `reload-app` ran. This is the pattern for "restart

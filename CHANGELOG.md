@@ -5,6 +5,22 @@ releases before v0.17.0 the tag message and the git log are the notes.
 
 ## Unreleased
 
+## v0.24.2 (2026-10-03)
+
+Quieter apply output. The plan schema stays at version 27.
+
+Changes
+- The apply summary no longer lists the ID of every changed or would-change
+  resource below its counts line: each change already logs its own line
+  while it is applied (`updated ...`, `dry-run: would ...`), so every change
+  was shown twice. Under `-quiet`, where those log lines are hidden, the
+  summary still lists the IDs.
+- So that no change goes unnamed without the ID list, two changes that used
+  to be silent now log a line: an account command of `User` (`ran useradd
+  ...`, also for the group it creates) and an attributes-only update of an
+  `EnsureFile` (`updated attributes of ...`, with its `dry-run: would ...`
+  counterpart).
+
 ## v0.24.1 (2026-09-28)
 
 Safer recipe declarations and more durable file writes. The plan schema stays

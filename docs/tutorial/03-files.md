@@ -114,20 +114,6 @@ $ ./gonf -n files
 2026/09/26 09:23:54 dry-run: would create directory /home/paul/gonf-tutorial/state
 2026/09/26 09:23:54 dry-run: would update /home/paul/gonf-tutorial/state/notes.txt
 summary: 2 ok, 0 changed, 0 skipped, 14 would-change
-  would-change Directory[/home/paul/gonf-tutorial]
-  would-change File[/home/paul/gonf-tutorial/motd]
-  would-change File[/home/paul/gonf-tutorial/bashrc]
-  would-change File[/home/paul/gonf-tutorial/gonfy.txt]
-  would-change Directory[/home/paul/gonf-tutorial/vim]
-  would-change Directory[/home/paul/gonf-tutorial/vim/colors]
-  would-change File[/home/paul/gonf-tutorial/vim/colors/tutorial.vim]
-  would-change File[/home/paul/gonf-tutorial/vim/vimrc]
-  would-change Directory[/home/paul/gonf-tutorial/bin]
-  would-change File[/home/paul/gonf-tutorial/bin/disk]
-  would-change File[/home/paul/gonf-tutorial/bin/load]
-  would-change Symlink[/home/paul/gonf-tutorial/vimrc]
-  would-change Directory[/home/paul/gonf-tutorial/state]
-  would-change EnsureFile[/home/paul/gonf-tutorial/state/notes.txt]
 ```
 
 The dry run changes nothing, so the `vimrc` link's target `vim/vimrc` does
@@ -155,20 +141,6 @@ $ ./gonf files
 2026/09/26 09:23:54 created directory /home/paul/gonf-tutorial/state
 2026/09/26 09:23:54 updated /home/paul/gonf-tutorial/state/notes.txt
 summary: 2 ok, 14 changed, 0 skipped, 0 would-change
-  changed Directory[/home/paul/gonf-tutorial]
-  changed File[/home/paul/gonf-tutorial/motd]
-  changed File[/home/paul/gonf-tutorial/bashrc]
-  changed File[/home/paul/gonf-tutorial/gonfy.txt]
-  changed Directory[/home/paul/gonf-tutorial/vim]
-  changed Directory[/home/paul/gonf-tutorial/vim/colors]
-  changed File[/home/paul/gonf-tutorial/vim/colors/tutorial.vim]
-  changed File[/home/paul/gonf-tutorial/vim/vimrc]
-  changed Directory[/home/paul/gonf-tutorial/bin]
-  changed File[/home/paul/gonf-tutorial/bin/disk]
-  changed File[/home/paul/gonf-tutorial/bin/load]
-  changed Symlink[/home/paul/gonf-tutorial/vimrc]
-  changed Directory[/home/paul/gonf-tutorial/state]
-  changed EnsureFile[/home/paul/gonf-tutorial/state/notes.txt]
 ```
 
 `Dir`, `SyncDir` and `EnsureDir` are parents of the files inside them, so
@@ -218,16 +190,12 @@ $ ./gonf -n files
 2026/09/26 09:23:54 dry-run: would prune /home/paul/gonf-tutorial/vim/stray.txt
 2026/09/26 09:23:54 dry-run: would remove /home/paul/gonf-tutorial/old.conf
 summary: 15 ok, 0 changed, 0 skipped, 2 would-change
-  would-change File[/home/paul/gonf-tutorial/vim/stray.txt]
-  would-change File[/home/paul/gonf-tutorial/old.conf]
 $ stat -c '%a %n' /home/paul/gonf-tutorial/motd
 600 /home/paul/gonf-tutorial/motd
 $ ./gonf files
 2026/09/26 09:23:54 pruned /home/paul/gonf-tutorial/vim/stray.txt
 2026/09/26 09:23:54 removed /home/paul/gonf-tutorial/old.conf
 summary: 15 ok, 2 changed, 0 skipped, 0 would-change
-  changed File[/home/paul/gonf-tutorial/vim/stray.txt]
-  changed File[/home/paul/gonf-tutorial/old.conf]
 $ stat -c '%a %n' /home/paul/gonf-tutorial/motd
 644 /home/paul/gonf-tutorial/motd
 ```
@@ -245,7 +213,6 @@ $ stat -c '%a %n' /home/paul/gonf-tutorial/motd
 $ ./gonf cleanup
 2026/09/26 09:23:54 removed /home/paul/gonf-tutorial
 summary: 0 ok, 1 changed, 0 skipped, 0 would-change
-  changed Directory[/home/paul/gonf-tutorial]
 ```
 
 ## What the plan carries

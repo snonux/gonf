@@ -58,8 +58,6 @@ $ ./gonf app
 2026/09/26 08:23:23 created directory /home/paul/gonf-tutorial/trouble
 2026/09/26 08:23:23 updated /home/paul/gonf-tutorial/trouble/app.conf
 summary: 0 ok, 2 changed, 0 skipped, 0 would-change
-  changed Directory[/home/paul/gonf-tutorial/trouble]
-  changed File[/home/paul/gonf-tutorial/trouble/app.conf]
 ```
 
 ## Declaration errors

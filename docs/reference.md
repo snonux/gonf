@@ -3,7 +3,7 @@
 <img src="../assets/logo-light.svg" alt="Gonfy, the gonf beaver" width="96" align="right">
 
 Gonfy's cheat sheet: every user-facing feature in one place, current as of
-v0.24.1 (plan schema 27). Background, rationale and history live in
+v0.24.2 (plan schema 27). Background, rationale and history live in
 [design/](design/README.md).
 New to gonf? Start with the [tutorial](tutorial/README.md).
 
@@ -1109,7 +1109,7 @@ redacted against resolved secrets.
 | `-list` | | Print activated tasks (`name<TAB>desc`), destination-guarded ones marked. |
 | `-n`, `-dry-run` | off | Preview without changing anything. |
 | `-verbose` | off | Debug logging. Passed on to the elevated re-exec and the remote apply. |
-| `-quiet` | off | Warnings and errors only; the summary still prints. Passed on like `-verbose`. |
+| `-quiet` | off | Warnings and errors only; the summary still prints and then also lists the ID of every changed or would-change resource (see "Apply output"). Passed on like `-verbose`. |
 | `-profile p` | detected | Override `Facts.Profile`. Not forwarded to pushed destinations. |
 | `-privilege m` | `none` | `none`, `sudo` or `doas` for local elevated chunks. |
 | `-cmd-timeout d` | `5m` | Per backend command and validator. SIGTERM on expiry, SIGKILL 10s later. `0` or negative keeps the default. Non-default values are forwarded to the elevated re-exec and to remote gonf versions that accept the flag. |
@@ -1120,6 +1120,28 @@ redacted against resolved secrets.
 | `-signed-version` | | Signed-envelope version (1). |
 
 Settings changed by flags are scoped to one `cli.CLI()` call.
+
+### Apply output
+
+> 🦫 **Gonfy says:** I tell you about each log I move once, while I move it. No need to hear it again at the end of the day.
+
+Every apply, local, elevated or remote, logs one line per change while it
+makes it (`updated /etc/motd`, `created directory ...`, `ran useradd ...`,
+`systemctl [restart httpd]`; with `-n`, `dry-run: would ...`) and ends with
+one summary line:
+
+```text
+summary: 25 ok, 4 changed, 0 skipped, 0 would-change
+```
+
+The summary does not repeat the changes the log lines already named. Only
+under `-quiet`, where those lines are hidden, it lists the ID of every
+changed or would-change resource below the counts:
+
+```text
+summary: 25 ok, 4 changed, 0 skipped, 0 would-change
+  changed File[/home/gonfy/lodge/motd]
+```
 
 ### Subcommands
 

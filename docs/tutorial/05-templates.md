@@ -73,9 +73,6 @@ $ ./gonf templates
 2026/09/26 08:23:13 updated /home/paul/gonf-tutorial/templates/site.conf
 2026/09/26 08:23:13 updated /home/paul/gonf-tutorial/templates/banner.txt
 summary: 0 ok, 3 changed, 0 skipped, 0 would-change
-  changed Directory[/home/paul/gonf-tutorial/templates]
-  changed File[/home/paul/gonf-tutorial/templates/site.conf]
-  changed File[/home/paul/gonf-tutorial/templates/banner.txt]
 $ cat /home/paul/gonf-tutorial/templates/site.conf
 # assets/templates/site.conf.tmpl rendered on vm (linux, profile ubuntu)
 server gonfy {
@@ -94,7 +91,6 @@ source path. `-profile` overrides the detected profile for a local run:
 $ ./gonf -profile fedora templates
 2026/09/26 08:23:13 updated /home/paul/gonf-tutorial/templates/site.conf
 summary: 2 ok, 1 changed, 0 skipped, 0 would-change
-  changed File[/home/paul/gonf-tutorial/templates/site.conf]
 $ head -1 /home/paul/gonf-tutorial/templates/site.conf
 # assets/templates/site.conf.tmpl rendered on vm (linux, profile fedora)
 ```

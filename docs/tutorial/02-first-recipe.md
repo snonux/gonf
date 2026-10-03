@@ -52,8 +52,8 @@ Fetch this release of gonf and build. To follow newer releases later, use
 `@latest` instead of the version shown here:
 
 ```text
-$ go get github.com/snonux/gonf@v0.24.1
-go: added github.com/snonux/gonf v0.24.1
+$ go get github.com/snonux/gonf@v0.24.2
+go: added github.com/snonux/gonf v0.24.2
 $ go mod tidy
 $ go build -o gonf .
 ```
@@ -78,11 +78,13 @@ hello	Gonfy writes ~/hello.txt
 $ ./gonf -n hello
 2026/09/26 08:25:12 dry-run: would update /home/paul/hello.txt
 summary: 0 ok, 0 changed, 0 skipped, 1 would-change
-  would-change File[/home/paul/hello.txt]
 ```
 
-Every resource has an **ID** such as `File[/home/paul/hello.txt]`. The
-summary lists the IDs of everything that is not `ok`.
+The log line names each change as it happens (or, with `-n`, would
+happen), and the summary counts the outcomes. Every resource also has an
+**ID** such as `File[/home/paul/hello.txt]`; the summary lists the IDs of
+everything that is not `ok` only under `-quiet`, where the log lines are
+hidden.
 
 Now apply it by naming the task:
 
@@ -90,7 +92,6 @@ Now apply it by naming the task:
 $ ./gonf hello
 2026/09/26 08:25:12 updated /home/paul/hello.txt
 summary: 0 ok, 1 changed, 0 skipped, 0 would-change
-  changed File[/home/paul/hello.txt]
 $ cat ~/hello.txt
 Hello from Gonfy the beaver!
 ```
@@ -110,11 +111,9 @@ $ echo nibbled > ~/hello.txt
 $ ./gonf -n hello
 2026/09/26 08:25:12 dry-run: would update /home/paul/hello.txt
 summary: 0 ok, 0 changed, 0 skipped, 1 would-change
-  would-change File[/home/paul/hello.txt]
 $ ./gonf hello
 2026/09/26 08:25:12 updated /home/paul/hello.txt
 summary: 0 ok, 1 changed, 0 skipped, 0 would-change
-  changed File[/home/paul/hello.txt]
 ```
 
 This is the core loop of gonf: declare, preview with `-n`, apply, and run
@@ -139,11 +138,9 @@ $ go build -o gonf .
 $ ./gonf -n hello
 2026/09/26 08:25:13 dry-run: would update /home/paul/hello.txt
 summary: 0 ok, 0 changed, 0 skipped, 1 would-change
-  would-change File[/home/paul/hello.txt]
 $ ./gonf hello
 2026/09/26 08:25:13 updated /home/paul/hello.txt
 summary: 0 ok, 1 changed, 0 skipped, 0 would-change
-  changed File[/home/paul/hello.txt]
 ```
 
 So the full loop after every edit is: rebuild, preview with `-n`, apply.
@@ -164,10 +161,12 @@ itself.
 $ ./gonf -quiet hello
 summary: 1 ok, 0 changed, 0 skipped, 0 would-change
 $ ./gonf -version
-0.24.1
+0.24.2
 ```
 
-- `-quiet` keeps only warnings, errors and the summary.
+- `-quiet` keeps only warnings, errors and the summary. With the log lines
+  gone, the summary then names each change by its ID, such as
+  `changed File[/home/paul/hello.txt]`.
 - `-verbose` logs every step (chapter 15).
 - `-version` prints the gonf release your gonf was built with.
 

@@ -104,11 +104,6 @@ $ ./gonf everything
 2026/09/26 08:23:15 updated /home/paul/gonf-tutorial/guards/hostname-match
 2026/09/26 08:23:15 updated /home/paul/gonf-tutorial/guards/debian-family
 summary: 0 ok, 5 changed, 0 skipped, 0 would-change
-  changed Directory[/home/paul/gonf-tutorial/guards]
-  changed File[/home/paul/gonf-tutorial/guards/big]
-  changed File[/home/paul/gonf-tutorial/guards/linux]
-  changed File[/home/paul/gonf-tutorial/guards/hostname-match]
-  changed File[/home/paul/gonf-tutorial/guards/debian-family]
 $ ls /home/paul/gonf-tutorial/guards
 big
 debian-family
@@ -127,7 +122,6 @@ Override the profile, or name a guarded task directly:
 $ ./gonf -profile fedora fedora
 2026/09/26 08:23:15 updated /home/paul/gonf-tutorial/guards/fedora
 summary: 1 ok, 1 changed, 0 skipped, 0 would-change
-  changed File[/home/paul/gonf-tutorial/guards/fedora]
 $ ./gonf bsd
 summary: 1 ok, 0 changed, 0 skipped, 0 would-change
 ```

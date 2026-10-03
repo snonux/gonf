@@ -99,16 +99,12 @@ Pick the helper with `-privilege`:
 $ ./gonf -privilege=sudo system_motd system_note dotfile
 2026/09/26 08:23:16 updated /etc/motd.d/gonf-tutorial
 summary: 1 ok, 1 changed, 0 skipped, 0 would-change
-  changed File[/etc/motd.d/gonf-tutorial]
 applied /tmp/gonf-plan-3273471858/chunk-elevated.jsonl (3 ops)
 2026/09/26 08:23:16 updated /home/paul/.tutorial-note
 2026/09/26 08:23:16 updated /home/paul/.tutorial-inputrc
 summary: 0 ok, 2 changed, 0 skipped, 0 would-change
-  changed File[/home/paul/.tutorial-note]
-  changed File[/home/paul/.tutorial-inputrc]
 2026/09/26 08:23:16 running Command[whoami-as-root]: id -un
 summary: 0 ok, 1 changed, 0 skipped, 0 would-change
-  changed Command[whoami-as-root]
 applied /tmp/gonf-plan-3273471858/chunk-elevated.jsonl (2 ops)
 $ cat /etc/motd.d/gonf-tutorial
 Managed by gonf. Gonfy keeps this lodge tidy.
@@ -122,7 +118,6 @@ apply it:
 $ ./gonf -n system_hosts
 2026/09/26 08:23:16 dry-run: would update /etc/hosts
 summary: 0 ok, 0 changed, 0 skipped, 1 would-change
-  would-change File[/etc/hosts]
 ```
 
 ## Without a helper

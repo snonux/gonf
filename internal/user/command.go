@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	gonfexec "github.com/snonux/gonf/internal/exec"
+	"github.com/snonux/gonf/internal/logger"
 	"github.com/snonux/gonf/resource"
 )
 
@@ -49,11 +50,18 @@ func (c commands) probe(command string, args ...string) (string, error) {
 }
 
 // mutate runs one account-changing command under resource.Mutate, which
-// records id as changed and suppresses the command in dry-run mode.
+// records id as changed and suppresses the command in dry-run mode. A
+// command that succeeded is logged at Info, mirroring the dry-run line: the
+// apply summary names no ids at that level, so this line is what tells the
+// operator which account command ran.
 func (c commands) mutate(id, command string, args ...string) error {
-	return resource.Mutate(id, "run "+command+" "+strings.Join(args, " "), func() error {
-		_, err := c.probe(command, args...)
-		return err
+	line := command + " " + strings.Join(args, " ")
+	return resource.Mutate(id, "run "+line, func() error {
+		if _, err := c.probe(command, args...); err != nil {
+			return err
+		}
+		logger.Info("ran %s", line)
+		return nil
 	})
 }
 

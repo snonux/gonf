@@ -213,8 +213,27 @@ func directoryNotePath(id string) (string, bool) {
 	return id[len(prefix) : len(id)-1], true
 }
 
-// PrintSummary writes counts and non-OK resource ids to w.
+// PrintSummary writes counts and the ids of every changed or would-change
+// resource to w. It is the complete report; an apply prints
+// PrintApplySummary instead.
 func PrintSummary(w io.Writer) {
+	printSummary(w, true)
+}
+
+// PrintApplySummary writes the summary that ends an apply: the counts line
+// and, only when Info logging is off (-quiet), the changed and would-change
+// ids. At Info level and above every change already logged its own line
+// while it was applied ("updated /etc/motd", "dry-run: would ..."), so
+// repeating the ids below the counts showed each change twice; under -quiet
+// those lines are suppressed and the id list is the only place a change is
+// named.
+func PrintApplySummary(w io.Writer) {
+	printSummary(w, logger.GetLevel() < logger.LevelInfo)
+}
+
+// printSummary writes the counts line to w, followed by the changed and
+// would-change ids when withIDs is set.
+func printSummary(w io.Writer, withIDs bool) {
 	reportMu.Lock()
 	defer reportMu.Unlock()
 
@@ -237,6 +256,9 @@ func PrintSummary(w io.Writer) {
 
 	_, _ = fmt.Fprintf(w, "summary: %d ok, %d changed, %d skipped, %d would-change\n",
 		ok, changed, skipped, would)
+	if !withIDs {
+		return
+	}
 	// IDs pass through the logger's redactor (the controller's secret
 	// registry, see logger.SetRedactor): recording refuses a strong secret in
 	// an identity, but a weak one may remain there.

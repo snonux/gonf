@@ -48,9 +48,6 @@ $ gonf apply -identity /home/paul/.config/gonf/identity out/plan.age
 2026/09/26 08:23:23 updated /home/paul/gonf-tutorial/secrets/api-token
 2026/09/26 08:23:23 updated /home/paul/gonf-tutorial/secrets/app.conf
 summary: 0 ok, 3 changed, 0 skipped, 0 would-change
-  changed Directory[/home/paul/gonf-tutorial/secrets]
-  changed File[/home/paul/gonf-tutorial/secrets/api-token]
-  changed File[/home/paul/gonf-tutorial/secrets/app.conf]
 decrypted and applied out/plan.age (4 ops)
 ```
 

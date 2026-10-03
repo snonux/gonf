@@ -286,25 +286,6 @@ $ ./gonf push -privilege=sudo -n paul@fe1.lan frontend
 2026/09/26 17:53:56 dry-run: would update /etc/sysctl.d/90-gonfy-web.conf
 2026/09/26 17:53:56 dry-run: would run sysctl -p /etc/sysctl.d/90-gonfy-web.conf
 summary: 2 ok, 0 changed, 0 skipped, 19 would-change
-  would-change Group[gonfy-deploy]
-  would-change User[gonfy-deploy]
-  would-change Directory[/var/www/gonfy]
-  would-change Directory[/var/www/gonfy/htdocs]
-  would-change File[/var/www/gonfy/htdocs/gonfy.txt]
-  would-change File[/var/www/gonfy/htdocs/index.html]
-  would-change File[/etc/httpd/gonfy.htpasswd]
-  would-change ConfigSet[httpd]
-  would-change ConfigSetMember[httpd/httpd.conf]
-  would-change ConfigSetMember[httpd/gonfy.conf]
-  would-change Service[httpd]
-  would-change File[/usr/local/sbin/gonfy-rotate]
-  would-change File[/etc/systemd/system/gonfy-rotate.service]
-  would-change File[/etc/systemd/system/gonfy-rotate.timer]
-  would-change DaemonReload[system]
-  would-change Timer[gonfy-rotate.timer]
-  would-change SystemdTimer[gonfy-rotate]
-  would-change File[/etc/sysctl.d/90-gonfy-web.conf]
-  would-change Command[sysctl-web]
 applied stdin+blobs (35 ops)
 pushed push (35 ops) to paul@fe1.lan
 ```
@@ -321,6 +302,8 @@ keeps the output in host order:
 
 ```text
 $ ./gonf cluster -j 1 frontends frontend
+2026/09/26 17:53:57 ran groupadd -- gonfy-deploy
+2026/09/26 17:53:57 ran useradd --no-create-home --system --gid gonfy-deploy --home /var/www/gonfy --shell /sbin/nologin -- gonfy-deploy
 2026/09/26 17:53:57 created directory /var/www/gonfy
 2026/09/26 17:53:57 created directory /var/www/gonfy/htdocs
 2026/09/26 17:53:57 updated /var/www/gonfy/htdocs/gonfy.txt
@@ -339,25 +322,6 @@ $ ./gonf cluster -j 1 frontends frontend
 2026/09/26 17:53:57 updated /etc/sysctl.d/90-gonfy-web.conf
 2026/09/26 17:53:57 running Command[sysctl-web]: sysctl -p /etc/sysctl.d/90-gonfy-web.conf
 summary: 2 ok, 19 changed, 0 skipped, 0 would-change
-  changed Group[gonfy-deploy]
-  changed User[gonfy-deploy]
-  changed Directory[/var/www/gonfy]
-  changed Directory[/var/www/gonfy/htdocs]
-  changed File[/var/www/gonfy/htdocs/gonfy.txt]
-  changed File[/var/www/gonfy/htdocs/index.html]
-  changed File[/etc/httpd/gonfy.htpasswd]
-  changed ConfigSet[httpd]
-  changed ConfigSetMember[httpd/httpd.conf]
-  changed ConfigSetMember[httpd/gonfy.conf]
-  changed Service[httpd]
-  changed File[/usr/local/sbin/gonfy-rotate]
-  changed File[/etc/systemd/system/gonfy-rotate.service]
-  changed File[/etc/systemd/system/gonfy-rotate.timer]
-  changed DaemonReload[system]
-  changed Timer[gonfy-rotate.timer]
-  changed SystemdTimer[gonfy-rotate]
-  changed File[/etc/sysctl.d/90-gonfy-web.conf]
-  changed Command[sysctl-web]
 applied stdin+blobs (41 ops)
 [... fe2 and fe3 print the same, each after syncing its gonf binary ...]
 pushed cluster-frontends (41 ops) to frontends (3/3 hosts)
@@ -422,7 +386,6 @@ summary: 5 ok, 0 changed, 0 skipped, 0 would-change
 applied stdin+blobs (8 ops)
 2026/09/26 17:54:02 updated /var/www/gonfy/htdocs/index.html
 summary: 4 ok, 1 changed, 0 skipped, 0 would-change
-  changed File[/var/www/gonfy/htdocs/index.html]
 applied stdin+blobs (8 ops)
 pushed cluster-frontends (8 ops) to frontends (3/3 hosts)
 ```

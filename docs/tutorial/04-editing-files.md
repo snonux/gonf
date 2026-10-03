@@ -95,7 +95,6 @@ $ ./gonf lines
 2026/09/26 08:23:12 file /home/paul/gonf-tutorial/app.conf: keyed line "port=" replaces 1 existing line(s)
 2026/09/26 08:23:12 updated /home/paul/gonf-tutorial/app.conf
 summary: 0 ok, 1 changed, 0 skipped, 0 would-change
-  changed File[/home/paul/gonf-tutorial/app.conf]
 $ cat /home/paul/gonf-tutorial/app.conf
 # app.conf
 port=8080
@@ -159,7 +158,6 @@ broken one:
 $ ./gonf script
 2026/09/26 08:23:12 updated /home/paul/gonf-tutorial/hello.sh
 summary: 0 ok, 1 changed, 0 skipped, 0 would-change
-  changed File[/home/paul/gonf-tutorial/hello.sh]
 $ GREETING_SCRIPT="$(printf "#!/bin/sh\nif then\n")" ./gonf script
 summary: 0 ok, 0 changed, 0 skipped, 0 would-change
 error: chunk 0: plan: apply line 2: file /home/paul/gonf-tutorial/hello.sh: validation by sh failed: exit status 2: validator output: /home/paul/gonf-tutorial/hello.sh.gonfvalidate963692649: 2: Syntax error: "then" unexpected
@@ -224,11 +222,6 @@ $ ./gonf greeter
 2026/09/26 08:23:12 config set greeter: published /home/paul/gonf-tutorial/greeter/main.sh
 2026/09/26 08:23:12 running Command[run-greeter]: sh main.sh
 summary: 0 ok, 5 changed, 0 skipped, 0 would-change
-  changed Directory[/home/paul/gonf-tutorial/greeter]
-  changed ConfigSet[greeter]
-  changed ConfigSetMember[greeter/lib.sh]
-  changed ConfigSetMember[greeter/main.sh]
-  changed Command[run-greeter]
 $ ./gonf greeter
 2026/09/26 08:23:12 skipping Command[run-greeter]: no watched dependency changed
 summary: 4 ok, 0 changed, 1 skipped, 0 would-change
@@ -262,9 +255,6 @@ $ ./gonf -verbose greeter
 2026/09/26 08:23:12 running Command[run-greeter]: sh main.sh
 2026/09/26 08:23:12 Command[run-greeter] stdout: hello, gonfy
 summary: 2 ok, 3 changed, 0 skipped, 0 would-change
-  changed ConfigSet[greeter]
-  changed ConfigSetMember[greeter/main.sh]
-  changed Command[run-greeter]
 ```
 
 Reference: [ConfigSet](../reference.md#configset),

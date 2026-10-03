@@ -146,16 +146,12 @@ $ ./gonf push -privilege=sudo -n paul@earth.lan planet_motd planet_maintenance
 2026/09/26 08:23:19 dry-run: would update /etc/motd.d/welcome
 2026/09/26 08:23:19 dry-run: would update crontab for root (job maintenance)
 summary: 1 ok, 0 changed, 0 skipped, 2 would-change
-  would-change File[/etc/motd.d/welcome]
-  would-change Cron[root/maintenance]
 applied stdin (10 ops)
 pushed push (10 ops) to paul@earth.lan
 $ ./gonf push -privilege=sudo paul@earth.lan planet_motd planet_maintenance
 2026/09/26 08:23:20 updated /etc/motd.d/welcome
 2026/09/26 08:23:20 updated crontab for root (job maintenance)
 summary: 1 ok, 2 changed, 0 skipped, 0 would-change
-  changed File[/etc/motd.d/welcome]
-  changed Cron[root/maintenance]
 applied stdin (10 ops)
 pushed push (10 ops) to paul@earth.lan
 $ ssh paul@earth.lan cat /etc/motd.d/welcome
@@ -195,8 +191,6 @@ applied stdin (13 ops)
 2026/09/26 08:23:20 dry-run: would update /etc/motd.d/welcome
 2026/09/26 08:23:20 dry-run: would update crontab for root (job maintenance)
 summary: 1 ok, 0 changed, 0 skipped, 2 would-change
-  would-change File[/etc/motd.d/welcome]
-  would-change Cron[root/maintenance]
 applied stdin (13 ops)
 pushed cluster-inner (13 ops) to inner (2/2 hosts)
 $ ./gonf cluster -j 1 inner planet_motd planet_maintenance
@@ -205,8 +199,6 @@ applied stdin (13 ops)
 2026/09/26 08:23:20 updated /etc/motd.d/welcome
 2026/09/26 08:23:20 updated crontab for root (job maintenance)
 summary: 1 ok, 2 changed, 0 skipped, 0 would-change
-  changed File[/etc/motd.d/welcome]
-  changed Cron[root/maintenance]
 applied stdin (13 ops)
 pushed cluster-inner (13 ops) to inner (2/2 hosts)
 $ ssh paul@mars.lan cat /etc/motd.d/welcome
@@ -224,8 +216,6 @@ $ ./gonf cluster -j 1 inner planet_mirror planet_earth_only
 2026/09/26 08:23:21 updated crontab for root (job mirror)
 2026/09/26 08:23:21 updated /etc/motd.d/earth
 summary: 0 ok, 2 changed, 0 skipped, 0 would-change
-  changed Cron[root/mirror]
-  changed File[/etc/motd.d/earth]
 applied stdin (9 ops)
 summary: 0 ok, 0 changed, 0 skipped, 0 would-change
 applied stdin (9 ops)

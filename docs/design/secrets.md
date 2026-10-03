@@ -348,7 +348,7 @@ added unclassified):
 | metadata | op kind, blob reference, mode, owner, group, groups, shell, login class, cron user, predicate fact name | a strong secret marks the op sensitive; a weak match is ignored; never refuses |
 
 Only identity fields refuse. Identities are logged and reported on every
-host — apply log lines, the `changed ...` summary, errors — so a secret in
+host — apply log lines, the `-quiet` summary's `changed ...` list, errors — so a secret in
 one is a leak that marking cannot contain on the destination. Whether a
 match refuses depends on the secret's **strength**: a strong secret — at
 least `secret.MinStrongLen` (8) bytes after trimming, and not word-like
@@ -371,7 +371,7 @@ On the controller these outputs pass through the registry:
 
 - log lines (`logger.SetRedactor`), e.g. a `-verbose` registration line or
   a misuse message;
-- the apply summary (`changed Command[...]`), CLI error and warning
+- the apply summary (`changed Command[...]` under `-quiet`), CLI error and warning
   messages (every CLI write to stderr), and the push/preview summary lines
   — single-host and cluster/fleet — which all go through one writer
   (`api`'s `pushOutput` seam);

@@ -412,26 +412,43 @@ func TestLogLinesAreRedacted(t *testing.T) {
 
 // The review probe: an unnamed Command with a weak (6-byte) secret argument
 // is not refused, so its ID holds the secret; running it locally must not
-// print the secret in the log lines or the apply summary.
+// print the secret in the log lines or the apply summary. The two never name
+// the ID in the same run: the "running Command[...]" line is logged at Info
+// and above, and the summary lists the changed ids only under -quiet (where
+// that line is suppressed), so each level pins the place that names it.
 func TestRunSummaryAndLogsRedactWeakSecretInID(t *testing.T) {
-	output := testutil.CaptureLog(t, logger.LevelDebug)
-	ResetForTest()
-	t.Cleanup(ResetForTest)
-	useSecretWorkDir(t)
-	writeSecret(t, "svc/pin", "tok123\n")
-	Task("t", "", func() { Command("true", List(strings.TrimSpace(MustSecret("svc/pin")))) })
-	var runErr error
-	stderr := testutil.CaptureStderr(t, func() { runErr = Run("t") })
-	if runErr != nil {
-		t.Fatalf("Run: %v", runErr)
-	}
-	if !strings.Contains(stderr, "changed Command[") {
-		t.Fatalf("test premise: the summary names the command:\n%s", stderr)
-	}
-	for what, text := range map[string]string{"summary": stderr, "log": output()} {
-		if strings.Contains(text, "tok123") {
-			t.Fatalf("%s leaks the secret:\n%s", what, text)
-		}
+	for _, tc := range []struct {
+		name        string
+		level       logger.Level
+		wantSummary bool // the summary lists the command id, else the log does
+	}{
+		{name: "verbose log line", level: logger.LevelDebug},
+		{name: "quiet summary", level: logger.LevelWarn, wantSummary: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			output := testutil.CaptureLog(t, tc.level)
+			ResetForTest()
+			t.Cleanup(ResetForTest)
+			useSecretWorkDir(t)
+			writeSecret(t, "svc/pin", "tok123\n")
+			Task("t", "", func() { Command("true", List(strings.TrimSpace(MustSecret("svc/pin")))) })
+			var runErr error
+			stderr := testutil.CaptureStderr(t, func() { runErr = Run("t") })
+			if runErr != nil {
+				t.Fatalf("Run: %v", runErr)
+			}
+			if got := strings.Contains(stderr, "changed Command["); got != tc.wantSummary {
+				t.Fatalf("test premise: summary names the command = %v, want %v:\n%s", got, tc.wantSummary, stderr)
+			}
+			if got := strings.Contains(output(), "running Command["); got == tc.wantSummary {
+				t.Fatalf("test premise: log names the command = %v, want %v:\n%s", got, !tc.wantSummary, output())
+			}
+			for what, text := range map[string]string{"summary": stderr, "log": output()} {
+				if strings.Contains(text, "tok123") {
+					t.Fatalf("%s leaks the secret:\n%s", what, text)
+				}
+			}
+		})
 	}
 }
 
