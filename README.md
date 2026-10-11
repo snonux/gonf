@@ -83,6 +83,9 @@ gonf apply -identity ~/.config/gonf/identity out/plan.age
 
 - [docs/tutorial/](docs/tutorial/README.md): the tutorial, a book of
   step-by-step chapters with runnable examples, commands and their output.
+  The [DSL shortcuts](docs/tutorial/README.md#shortcuts-beside-the-original-recipes)
+  show bulk edits, shared registration and explicit host policies beside
+  the original recipes.
 - [docs/reference.md](docs/reference.md): the quick reference, every
   feature, flag and option.
 - [CHANGELOG.md](CHANGELOG.md): release notes.

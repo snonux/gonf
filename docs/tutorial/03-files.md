@@ -15,6 +15,7 @@ shorthand helpers.
 package main
 
 import (
+	//lint:ignore ST1001 recipes use the unqualified gonf DSL.
 	. "github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/cli"
 )
@@ -365,10 +366,6 @@ Reference: [Resources](../reference.md#resources),
 [File](../reference.md#file), [Dir](../reference.md#dir),
 [Link](../reference.md#link).
 
----
-
-← [2. Your first recipe](02-first-recipe.md) · [Contents](README.md) · Next: [4. Editing and validating files](04-editing-files.md) →
-
 ## Optional and required controller sources
 
 A source checkout belongs to the controller that builds the plan. It may be
@@ -489,6 +486,15 @@ removed. Exclusion does not delete files already installed there: declare
 Root directory attributes remain managed. An invalid pattern or exclusions
 on a directory without a present source sync refuse the declaration.
 
+Build this extra recipe from `docs/tutorial/examples` with
+`go build -o gonf ./ch03-exclusions`. To reproduce the capture, prepare the
+chosen temporary home's `gonf-tutorial/source` directory with a
+`banner.txt` containing `Public postcard from Gonfy` and a newline, a
+`private` subdirectory and a file ending in `.tmp`. Under that home's
+`gonf-tutorial/postcards`, create `private/local.txt` containing
+`Keep my local note` and a newline, plus `stale.txt`. The private source
+and `.tmp` file will be omitted, and the private destination note preserved.
+
 The following capture uses a temporary home. Gonfy owns the public banner
 but keeps his local private note and removes an unrelated stale file.
 
@@ -505,3 +511,7 @@ summary: 2 ok, 0 changed, 0 skipped, 0 would-change
 ```
 
 Reference: [Dir](../reference.md#dir), including pruning and symlink rules.
+
+---
+
+← [2. Your first recipe](02-first-recipe.md) · [Contents](README.md) · Next: [4. Editing and validating files](04-editing-files.md) →

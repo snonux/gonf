@@ -16,6 +16,7 @@ package web
 //go:generate go run github.com/snonux/gonf/cmd/gonf-desc
 
 import (
+	//lint:ignore ST1001 recipes use the unqualified gonf DSL.
 	. "github.com/snonux/gonf/api"
 )
 
@@ -129,6 +130,7 @@ import (
 	"fmt"
 	"strings"
 
+	//lint:ignore ST1001 recipes use the unqualified gonf DSL.
 	. "github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/cli"
 	"github.com/snonux/gonf/docs/tutorial/examples/ch08-organizing/web"

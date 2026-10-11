@@ -26,6 +26,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	//lint:ignore ST1001 recipes use the unqualified gonf DSL.
 	. "github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/plan"
 )

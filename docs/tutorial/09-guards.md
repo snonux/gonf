@@ -34,6 +34,7 @@ package main
 import (
 	"os"
 
+	//lint:ignore ST1001 recipes use the unqualified gonf DSL.
 	. "github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/cli"
 )
@@ -70,6 +71,33 @@ func main() {
 
 	Aggregate("everything", "Every guarded task", "^(linux|bsd|fedora|laptop|big|mixed)$")
 	cli.Main()
+}
+
+// cpus counts the controller's CPUs.
+func cpus() int {
+	b, err := os.ReadFile("/proc/cpuinfo")
+	if err != nil {
+		return 1
+	}
+	n := 0
+	for _, line := range splitLines(string(b)) {
+		if len(line) >= 9 && line[:9] == "processor" {
+			n++
+		}
+	}
+	return n
+}
+
+func splitLines(s string) []string {
+	var out []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			out = append(out, s[start:i])
+			start = i + 1
+		}
+	}
+	return out
 }
 ```
 

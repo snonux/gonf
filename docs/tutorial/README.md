@@ -43,6 +43,28 @@ lodge's message of the day, his start page and even a `gonfy` user account.
 | 16 | [A web fleet](16-web-fleet.md) | Everything together: httpd on three Linux front ends |
 | 17 | [gonf from Go](17-go-api.md) | `RunContext`, `RecordPlanTo`, `PushTo` and the rest of the Go API, every subcommand |
 
+## Shortcuts beside the original recipes
+
+These additions keep the earlier recipes available and show the shorter form
+or the extra policy beside them:
+
+| Goal | Start here | Example package |
+|------|------------|-----------------|
+| Own several shell settings | [Bulk shell variables](04-editing-files.md#owning-parts-of-a-file) | `ch04-editing` (`shellvars`) |
+| Share options across task structs | [Registration groups](08-organizing-tasks.md#sharing-registration-options) | `ch08-group` |
+| Manage persistent and live kernel settings | [Sysctls](07-system-resources.md#persistent-and-live-kernel-settings) | `ch07-sysctls` |
+| Check controller checkouts before packaging | [Optional and required sources](03-files.md#optional-and-required-controller-sources) | `ch03-controller-sources` |
+| Keep private files out of a sync | [Sync exclusions](03-files.md#keeping-parts-of-a-source-tree-out-of-a-sync) | `ch03-exclusions` |
+| Enable services while another tool owns runtime state | [Boot policy](07-system-resources.md#leaving-runtime-state-to-gonfy) | `ch07-system` (`boot-policy`) |
+| Converge an existing account's shell | [Managed login shells](07-system-resources.md#managing-gonfys-existing-login-shell) | `ch07-system` (`shell-account`) |
+| Exclude destination operating systems | [Negated OS guards](09-guards.md#excluding-an-os) | `ch09-not-os` |
+
+From `docs/tutorial/examples`, build a named package with
+`go build -o gonf ./ch08-group`, for example, then follow its chapter.
+Choose one alternative task where two examples manage the same resource.
+For plans and remote hosts, check the
+[compatibility table](11-plans.md#write-a-plan) before applying the new options.
+
 ## How to follow along
 
 You need Go and a Linux, macOS or BSD machine. Chapter 2 starts a recipe
@@ -57,8 +79,9 @@ $ ./gonf -list
 ```
 
 The examples write below `~/gonf-tutorial`, except where a chapter says it
-needs root. The outputs in this book were captured on a Linux machine named
-`vm`, with `HOME=/home/paul`. Your timestamps, host name and paths will
+needs root. Most outputs in this book were captured on a Linux machine named
+`vm`, with `HOME=/home/paul`; the added examples state when they use a
+temporary home instead. Your timestamps, host name and paths will
 differ. A line `[exit status 1]` in an output marks a command that exited
 with that status; it is not printed by the command itself.
 

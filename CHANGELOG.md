@@ -19,6 +19,9 @@ Changes
 - `WithShellVars(k, v, ...)` composes ordered shell-variable edits in one file option, with the same quoting and ownership checks as `WithShellVar`.
 
 Docs
+- Add guide entry points for the eight DSL additions, explain their plan
+  compatibility and remote behavior, and align every chapter recipe with
+  its compiled example.
 - The tutorial explains why configuration management helps, covers every
   DSL feature (new chapter 17, gonf from Go, and a sealed per-host example
   in chapter 14), and its outputs were recaptured against v0.24.1. The

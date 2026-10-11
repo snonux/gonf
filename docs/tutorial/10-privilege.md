@@ -13,6 +13,7 @@ root: run as root, or through `sudo` or `doas`.
 package main
 
 import (
+	//lint:ignore ST1001 recipes use the unqualified gonf DSL.
 	. "github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/cli"
 )

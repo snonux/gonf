@@ -379,10 +379,6 @@ Reference: [Package](../reference.md#package),
 [SystemdTimer](../reference.md#systemdtimer), [Cron](../reference.md#cron),
 [User](../reference.md#user), [LoginClass](../reference.md#loginclass).
 
----
-
-← [6. Commands and change gates](06-commands.md) · [Contents](README.md) · Next: [8. Organizing tasks](08-organizing-tasks.md) →
-
 ## Persistent and live kernel settings
 
 `Sysctls` combines a boot-time config file and live `sysctl` settings. The
@@ -455,3 +451,7 @@ summary: 1 ok, 0 changed, 1 skipped, 0 would-change
 
 Reference: [Sysctls](../reference.md#sysctls), including input constraints,
 error behavior, dry-run and command IDs.
+
+---
+
+← [6. Commands and change gates](06-commands.md) · [Contents](README.md) · Next: [8. Organizing tasks](08-organizing-tasks.md) →

@@ -15,6 +15,7 @@ needed.
 package main
 
 import (
+	//lint:ignore ST1001 recipes use the unqualified gonf DSL.
 	. "github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/cli"
 )
@@ -67,8 +68,26 @@ A plan directory holds:
   content travels inline, base64-encoded, as `content_b64`.
 
 `./gonf -plan-version` prints the newest schema version a gonf can apply
-(27 for v0.24.2). The header above says 21 because gonf writes the lowest
-version that can carry the plan, so older gonf binaries can still apply it.
+(31 with the additions under Unreleased; v0.24.2 supports 27). The header
+above says 21 because gonf writes the lowest version that can carry the
+plan, so older gonf binaries can still apply it.
+
+The newer DSL additions raise that minimum only when the plan uses them:
+
+| Feature | Required schema | Runnable example |
+|---------|-----------------|------------------|
+| Directory-sync `WithExclude` | 28 | [Filtered postcards](03-files.md#keeping-parts-of-a-source-tree-out-of-a-sync) |
+| Service `WithEnableOnly` | 29 | [Boot policy](07-system-resources.md#leaving-runtime-state-to-gonfy) |
+| User `WithManageShell` | 30 | [Gonfy's login shell](07-system-resources.md#managing-gonfys-existing-login-shell) |
+| `WhenNotOS` | 31 | [Exclude macOS](09-guards.md#excluding-an-os) |
+
+`WithShellVars`, `RegisterGroup`, `Sysctls` and the controller source checks
+compose existing operations and add no schema requirement of their own.
+The reference lists [every schema floor](../reference.md#plan-format).
+For a saved plan, use an applying binary that supports its header's version;
+a v0.24.2 applying binary cannot apply schemas 28–31. Remote push handles
+this check as described in
+[chapter 12](12-remote.md#push-to-one-host).
 
 The `dotfiles` guard became a `when_begin`/`when_end` pair, and paths still
 say `${HOME}`: the destination fills them in.

@@ -66,6 +66,7 @@ and backend limits.
 | `WithUserGroup` / `WithSupplementaryGroups` | Add one or several supplementary memberships; never remove existing memberships |
 | `WithHome` / `WithCreateHome` | Creation-time home path and optional creation |
 | `WithManageHome` | Opt-in: also converge an existing account's passwd home field to `WithHome` (no move, create, or chown; see [user.md](user.md)) |
+| `WithManageShell` | Opt-in: also converge an existing account's login shell to `WithShell`; leaves other account fields alone (schema 30; see [user.md](user.md)) |
 | `WithShell` / `WithLoginClass` / `WithSystem` | Creation-time account attributes |
 
 ## Service / Timer / DaemonReload / SystemdTimer

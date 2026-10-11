@@ -5,7 +5,9 @@
 Gonfy's cheat sheet: every user-facing feature in one place, current as of
 the development tree after v0.24.2 (plan schema 31). Background, rationale and history live in
 [design/](design/README.md).
-New to gonf? Start with the [tutorial](tutorial/README.md).
+New to gonf? Start with the [tutorial](tutorial/README.md). Its
+[DSL shortcuts](tutorial/README.md#shortcuts-beside-the-original-recipes)
+index links runnable examples of the newer helpers and policy options.
 
 ## Concepts
 

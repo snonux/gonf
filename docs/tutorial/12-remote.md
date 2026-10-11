@@ -28,6 +28,7 @@ package main
 import (
 	"strings"
 
+	//lint:ignore ST1001 recipes use the unqualified gonf DSL.
 	. "github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/cli"
 )
@@ -187,6 +188,16 @@ rebuild your gonf on the controller and push again. Nothing needs
 rebuilding on the hosts; gonf replaces their binary itself only when your
 gonf is newer.
 
+Push also compares the destination's supported schema with the controller's
+current schema. The captures above used schema 27 binaries; today's binary
+supports 31. A plan with directory exclusions, service enable-only,
+managed user shells or a negated OS guard needs the
+corresponding floor in [chapter 11](11-plans.md#write-a-plan). Push upgrades
+a destination whose supported schema is below the controller's, even when
+the particular plan uses an older floor. The controller source checks from [chapter 3](03-files.md#optional-and-required-controller-sources)
+still run before transport: missing required sources fail the record, and
+excluded source bytes never enter the shipped blob store.
+
 The plan travels over ssh's standard input, so nothing is written to your
 disk. The host unpacks it below `$TMPDIR/gonf-apply/` and removes it after
 the apply.
@@ -319,7 +330,9 @@ hosts. These are two separate things:
 |-------------|-------------------|----------------------|
 | `RegisterOnCluster(name, structs...)` | yes | yes |
 | `RegisterMethods(v, OnCluster(name))` | yes | yes |
+| `RegisterGroup(items, OnCluster(name))` | yes | yes |
 | `RegisterMethods(v, WithCluster(name))` | yes | no |
+| `RegisterGroup(items, WithCluster(name))` | yes | no |
 | `Task(..., WithTaskCluster(name))` | yes | no |
 
 `RegisterOnCluster` is `RegisterMethods(v, OnCluster(name))` for each
@@ -328,6 +341,13 @@ use `EachHost`, `ForHosts` and `ClusterHosts()`; without a cluster they
 fail the record. `ClusterHosts()` returns the member names for a loop of
 your own. Unlike `EachHost`, it always lists every member, whichever host
 you push to.
+
+For several structs sharing further options, `RegisterGroup` applies those
+options to every struct; [chapter 8](08-organizing-tasks.md#sharing-registration-options)
+shows the helper beside equivalent separate `RegisterMethods` calls. Both
+cluster forms above keep each struct's default task prefix unless you add
+`WithPrefix`. Combining `OnCluster(name)` with `WhenNotOS("darwin")` adds
+the OS guard to the cluster guard: both must hold on the destination.
 
 `neighbours` knows its cluster but has no guard, so it applies wherever
 you push it, even on pluto, which is not in `inner`:
