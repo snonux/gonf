@@ -5,6 +5,10 @@ releases before v0.17.0 the tag message and the git log are the notes.
 
 ## Unreleased
 
+- BSD CI selects the exact Go release in `go.mod`, including when the VM
+  packages a newer compiler, to keep option introspection tests compatible
+  with the pinned `golang.org/x/tools` export-data reader.
+
 ## v0.25.0 (2026-10-11)
 
 DSL composition and explicit destination policies. Plans require schema 28

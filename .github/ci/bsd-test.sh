@@ -7,8 +7,15 @@ if ! command -v go >/dev/null 2>&1; then
 	# pkgsrc installs go under /usr/pkg/go<version>/bin.
 	PATH="$(ls -d /usr/pkg/go*/bin | tail -1):$PATH"
 fi
-# The packaged Go can be older than go.mod's; fetch the pinned toolchain.
-GOTOOLCHAIN=auto
+# Use go.mod's exact compiler, even when the packaged Go is newer: auto
+# can produce export data that our pinned x/tools cannot read.
+GOTOOLCHAIN=$(awk \
+	'$1 == "go" && $2 ~ /^[0-9]+\.[0-9]+\.[0-9]+$/ { print "go" $2 }' \
+	go.mod)
+if [ -z "$GOTOOLCHAIN" ]; then
+	echo 'bsd-test: go.mod must declare an exact Go release (go X.Y.Z)' >&2
+	exit 1
+fi
 if ! command -v git >/dev/null 2>&1; then
 	GOFLAGS=-buildvcs=false
 	export GOFLAGS

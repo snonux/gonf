@@ -1816,6 +1816,12 @@ Live tests are opt-in: `GONF_RUN_TIMER_TESTS=1`, `GONF_RUN_CRON_TESTS=1`,
 `GONF_RUN_BSD_SERVICE_TESTS=1` (see the resource docs in
 [design/](design/README.md)).
 
+BSD CI runs `.github/ci/bsd-test.sh` with the exact Go release from the
+`go X.Y.Z` directive in `go.mod`, downloading it when needed. This also
+selects that release when the VM's packaged Go is newer, keeping compiler
+export data compatible with the pinned `golang.org/x/tools` used by tests.
+The script refuses a missing or non-release Go directive.
+
 ## Release checklist
 
 > 🦫 **Gonfy says:** Before a new lodge opens, I walk every item on this list.
