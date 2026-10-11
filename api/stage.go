@@ -60,6 +60,7 @@ type lazyStage struct {
 }
 
 var _ plan.BlobStore = (*lazyStage)(nil)
+var _ plan.FilteredBlobStore = (*lazyStage)(nil)
 
 // open returns the underlying store, creating the staging directory first when
 // this is the first write. os.MkdirTemp makes it 0700.
@@ -120,6 +121,24 @@ func (l *lazyStage) WriteGlob(name, pattern string) (string, error) {
 		return "", err
 	}
 	return s.WriteGlob(name, pattern)
+}
+
+// WriteTreeFiltered implements plan.FilteredBlobStore.
+func (l *lazyStage) WriteTreeFiltered(name, srcDir string, exclude []string) (string, error) {
+	s, err := l.open()
+	if err != nil {
+		return "", err
+	}
+	return s.WriteTreeFiltered(name, srcDir, exclude)
+}
+
+// WriteGlobFiltered implements plan.FilteredBlobStore.
+func (l *lazyStage) WriteGlobFiltered(name, pattern string, exclude []string) (string, error) {
+	s, err := l.open()
+	if err != nil {
+		return "", err
+	}
+	return s.WriteGlobFiltered(name, pattern, exclude)
 }
 
 // checkPlanDirUsable is the cheap up-front counterpart of commitStagedBlobs's

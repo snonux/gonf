@@ -1455,6 +1455,9 @@ and `WriteGlobFiltered(name, glob, patterns)`. The ordinary `WriteTree` and
 sourceDir, sourceGlob, patterns)` chooses glob or tree packaging and requires
 the filtered extension for non-empty exclusions; a custom store lacking it
 is refused rather than packaging excluded bytes.
+`RecordPlan` and plaintext `gonf plan -o dir` apply the same exclusions while
+staging tree and glob blobs, before reading excluded file bytes. A failure
+while recording removes the staging directory without committing output blobs.
 
 ### Pre-flight
 

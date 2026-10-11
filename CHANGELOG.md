@@ -12,6 +12,7 @@ releases before v0.17.0 the tag message and the git log are the notes.
 - Add `WithManageShell` to opt in to reconciling an existing account's login shell; `WithShell` stays creation-only by default (plan schema 30).
 
 Changes
+- Fix plaintext `gonf plan -o dir` and `RecordPlan` recording of tree and glob sources with `WithExclude`: staged packaging now honors exclusions instead of refusing the blob store.
 - `WithExclude(patterns...)` filters directory-sync sources before blob packaging and preserves matching destination paths during copy and pruning. Plans using exclusions require schema 28; other plans keep their existing compatibility floor.
 - `OptionalControllerDir` and `RequireControllerFile` check optional directory and required file sources on the controller, reporting unreadable sources and wrong types as declaration errors.
 - `Sysctls(path, kv, opts...)` composes persistent keyed-line settings with live-value checks on every apply, including drift when the file is unchanged.
