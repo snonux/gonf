@@ -104,13 +104,17 @@ func unmetGuard(preds []plan.Predicate, facts Facts) string {
 func formatGuard(preds []plan.Predicate) string {
 	terms := make([]string, 0, len(preds))
 	for _, p := range preds {
+		op := "="
+		if p.Not {
+			op = "!="
+		}
 		switch {
 		case p.PathExists != "":
 			terms = append(terms, "path_exists="+p.PathExists)
 		case len(p.In) > 0:
-			terms = append(terms, p.Fact+"="+strings.Join(p.In, "|"))
+			terms = append(terms, p.Fact+op+strings.Join(p.In, "|"))
 		default:
-			terms = append(terms, p.Fact+"="+p.Eq)
+			terms = append(terms, p.Fact+op+p.Eq)
 		}
 	}
 	return strings.Join(terms, " && ")

@@ -135,6 +135,9 @@ func ValidateChunks(chunks []Chunk) error {
 	for i, ch := range chunks {
 		bodies[i] = ch.Ops
 	}
+	if err := validateNegatedOSChunks(bodies); err != nil {
+		return err
+	}
 	if err := ValidateServiceEnableOnly(bodies); err != nil {
 		return err
 	}

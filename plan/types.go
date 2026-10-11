@@ -103,7 +103,11 @@ import "encoding/json"
 // Version 29 adds enable_only on service ops: older destinations would
 // start or stop the service. Only plans using it declare v29.
 // Version 30 adds explicit existing-account login-shell management.
-const CurrentVersion = 30
+// Version 31 adds negated GOOS predicates; only plans using them declare v31.
+const CurrentVersion = 31
+
+// VersionWhenNotOS introduced destination-side negated GOOS task guards.
+const VersionWhenNotOS = 31
 
 // VersionServiceEnableOnly introduced runtime-preserving service enablement.
 const VersionServiceEnableOnly = 29
@@ -210,6 +214,7 @@ var supportedVersions = map[int]struct{}{
 	27:             {},
 	28:             {},
 	29:             {},
+	30:             {},
 	CurrentVersion: {},
 }
 
@@ -316,7 +321,7 @@ func IsControlKind(k Kind) bool {
 // Predicate is one conjunct in a when_begin "all" list.
 // Exactly one of the path/fact forms should be set per predicate, and Eq/In
 // are mutually exclusive alternatives for the fact form (In wins if both are
-// somehow set).
+// somehow set). Not negates a valid GOOS fact predicate only.
 type Predicate struct {
 	// Fact names a host fact: "goos", "profile", or "hostname_contains".
 	Fact string `json:"fact,omitempty"`
@@ -328,6 +333,9 @@ type Predicate struct {
 	// WhenProfile(a, b) lowers to {Fact: "profile", In: []string{a, b}}
 	// rather than being treated as opaque.
 	In []string `json:"in,omitempty"`
+	// Not negates the GOOS Eq/In match (schema 31). Other facts, mixed
+	// forms and empty or unsupported GOOS values are refused.
+	Not bool `json:"not,omitempty"`
 	// PathExists succeeds when the expanded path exists on the destination.
 	PathExists string `json:"path_exists,omitempty"`
 }

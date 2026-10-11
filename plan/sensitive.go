@@ -14,7 +14,7 @@ import (
 const PreviewKind Kind = "plan_preview"
 
 // RequiredVersion is the plan schema a recorded plan's header declares: the
-// lowest version whose destinations apply ops faithfully. Schemas 22 to 30
+// lowest version whose destinations apply ops faithfully. Schemas 22 to 31
 // only add fields, a kind or an expansion whose absence older destinations
 // would silently misinterpret, so each is declared only when a plan uses it:
 //
@@ -43,6 +43,8 @@ const PreviewKind Kind = "plan_preview"
 //
 //   - v30 (manage_shell) when a user explicitly manages its login shell.
 //
+//   - v31 (OS negation) when a when_begin carries a negated GOOS predicate.
+//
 // Otherwise the header stays v21 and the plan still applies on a v0.15.0
 // destination. Every earlier bump was emitted unconditionally, so v21 is the
 // floor. The header is the highest version any op needs (opVersion); once
@@ -63,6 +65,8 @@ func RequiredVersion(ops []Op) int {
 // opVersion is the lowest schema that applies op faithfully on its own.
 func opVersion(op Op) int {
 	switch {
+	case requiresWhenNotOS(op):
+		return VersionWhenNotOS
 	case op.Op == KindService && op.EnableOnly:
 		return VersionServiceEnableOnly
 	case op.Op == KindUser && PayloadOf[UserPayload](op).ManageShell:
@@ -224,4 +228,17 @@ func SensitiveElevatedBlobs(chunks []Chunk) []string {
 		}
 	}
 	return ops
+}
+
+// requiresWhenNotOS reports whether a condition carries destination negation.
+func requiresWhenNotOS(op Op) bool {
+	if op.Op != KindWhenBegin {
+		return false
+	}
+	for _, p := range op.All {
+		if p.Not {
+			return true
+		}
+	}
+	return false
 }

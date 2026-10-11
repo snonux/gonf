@@ -3,7 +3,7 @@
 <img src="../assets/logo-light.svg" alt="Gonfy, the gonf beaver" width="96" align="right">
 
 Gonfy's cheat sheet: every user-facing feature in one place, current as of
-the development tree after v0.24.2 (plan schema 30). Background, rationale and history live in
+the development tree after v0.24.2 (plan schema 31). Background, rationale and history live in
 [design/](design/README.md).
 New to gonf? Start with the [tutorial](tutorial/README.md).
 
@@ -84,6 +84,7 @@ duplicate names).
 | `WhenLinux()`, `WhenDarwin()`, `WhenFreeBSD()`, `WhenOpenBSD()`, `WhenNetBSD()` | Destination guard: `goos` is that OS. |
 | `WhenBSD()` | Destination guard: `goos` is `freebsd`, `openbsd` or `netbsd`. |
 | `WhenOS(goos...)` | Destination guard: `goos` is one of the names, e.g. `WhenOS("linux", "darwin")`. Names other than `linux`, `darwin`, `freebsd`, `openbsd`, `netbsd`, or none at all, are a declaration error. |
+| `WhenNotOS(goos...)` | Destination guard: `goos` is none of the names, e.g. `WhenNotOS("darwin")`. Uses the same supported names and declaration-error checks as `WhenOS`; adds to other guards with AND. Travels as a negated GOOS predicate (schema 31), stays listed on every controller OS. |
 | `WhenProfile(p...)` | Destination guard: `Facts.Profile` is one of `p`. `WhenProfile()` with no profile never matches, and naming such a task fails the record. |
 | `WhenHostnameContains(s)` | Destination guard: hostname contains `s` (case insensitive). An empty or whitespace-only `s` is a declaration error, never a match-all guard. |
 | `WhenHostnameIn(hosts...)` | Destination guard: hostname contains any of `hosts` (case insensitive; `Eq` for one, `In` for several). No hosts, or an empty or whitespace-only entry (such as an unset config value), is a declaration error, never a match-all guard. |
@@ -93,6 +94,9 @@ duplicate names).
 | `Operational()` | Explicit action (cert request, one-shot, diagnostic). Never joins a pattern `Aggregate`. |
 | `WithTaskCluster(name)` | Bind the task to a cluster for `ClusterHosts` / `ForHosts` / `EachHost`. |
 | `Needs(tasks...)` | Record these tasks right before this one (see [Needs](#needs)). |
+
+`WhenOS` and `WhenNotOS` snapshot their names when the option is built, so
+reusing or changing the caller's slice cannot alter the guard.
 
 An `OptsX` companion adds to the struct defaults (`RequiresRoot`, `Opts()`)
 for that method, so `TaskOptions{Needs("script")}` on a `RequiresRoot`
@@ -1267,7 +1271,7 @@ redacted against resolved secrets.
 | `-privilege m` | `none` | `none`, `sudo` or `doas` for local elevated chunks. |
 | `-cmd-timeout d` | `5m` | Per backend command and validator. SIGTERM on expiry, SIGKILL 10s later. `0` or negative keeps the default. Non-default values are forwarded to the elevated re-exec and to remote gonf versions that accept the flag. |
 | `-version` | | Release version. |
-| `-plan-version` | | Plan schema this binary emits and applies (30). |
+| `-plan-version` | | Plan schema this binary emits and applies (31). |
 | `-strict-preview-version` | | Strict-preview capability (1). |
 | `-sealed-version` | | Sealed-plan capability (1). |
 | `-signed-version` | | Signed-envelope version (1). |
@@ -1423,6 +1427,18 @@ Schema versions (what an older destination refuses):
 | 28 | `sync_dir.exclude` (`WithExclude`, only when present) |
 | 29 | `service.enable_only` (`WithEnableOnly` on Service, only when present) |
 | 30 | `user.manage_shell` (`WithManageShell`, only when present) |
+| 31 | `not` on GOOS `when_begin` predicates (`WhenNotOS`) |
+
+A `plan.Predicate` with `Not: true` (`"not":true`) negates the complete
+GOOS `Eq` or `In` membership test, leaving the other `All` predicates as
+AND conditions. `Not: false` or omitted preserves existing positive
+matching; an empty `All` remains unconditional. Negation only accepts
+`Fact: "goos"`, exactly one non-empty Eq or In form, and supported GOOS
+values. Other facts, mixed path/fact forms, empty/unknown values, and a
+missing or unsupported destination GOOS are refused. Whole-plan preflight
+checks malformed negation even inside inactive blocks before mutation or
+shipping; direct apply repeats the check. Only negated guards raise the
+header to 31, protecting older destinations from ignoring the field.
 
 `sync_dir.exclude` is an array of relative exclusion patterns with the rules
 above. A plan carrying a non-empty list declares schema 28 so older
@@ -1446,6 +1462,7 @@ is refused rather than packaging excluded bytes.
 - a dependency on a later privilege chunk;
 - a change watch across chunks;
 - a `require` block nested under a non-host-fact condition;
+- a malformed negated GOOS predicate, even inside an inactive block;
 - a service combining `enable_only` with restart, reload or a change gate.
 
 It runs at record time, in `ApplyChunks`, before every push delivery, and in

@@ -76,6 +76,60 @@ func main() {
 (The `cpus` helper at the end of the file counts the `processor` lines in
 `/proc/cpuinfo`.)
 
+## Excluding an OS
+
+The additional recipe at `examples/ch09-not-os/main.go` shows the positive list for every managed OS except macOS.
+Beside `unix`, `not-mac` expresses the same policy with `WhenNotOS("darwin")`.
+Multiple names exclude the whole list: `WhenNotOS("darwin", "linux")`
+matches the BSDs. Other task guards still add with AND, so combining this
+with `WhenProfile("lodge")` also requires that destination profile.
+
+Both forms stay listed and recordable on a macOS controller. The destination
+checks its own GOOS, rather than inheriting the controller's answer. Empty
+lists, empty names and unknown names are declaration errors. A negated
+predicate also refuses an absent or unsupported destination GOOS fact.
+Only the negated form needs schema 31; positive guards keep their existing
+floor.
+
+```go
+// Command gonf leaves Gonfy's macOS Git settings alone (chapter 9).
+package main
+
+import (
+	//lint:ignore ST1001 recipes use the unqualified gonf DSL.
+	. "github.com/snonux/gonf/api"
+	"github.com/snonux/gonf/cli"
+)
+
+func main() {
+	note := func(name string) func() {
+		return func() {
+			File(DestHome("gonfy-"+name), WithContent("Gonfy's portable settings\n"), WithMode(0o644))
+		}
+	}
+	// The positive spelling remains valid.
+	Task("unix", "All managed OSes except macOS", note("unix"),
+		WhenOS("linux", "freebsd", "openbsd", "netbsd"))
+	// The exclusion spelling records the destination's decision too.
+	Task("not-mac", "Gonfy's portable settings except macOS", note("not-mac"),
+		WhenNotOS("darwin"))
+	cli.Main()
+}
+```
+
+```text
+$ go build -p 1 -o /tmp/gonf-ch09-not-os ./docs/tutorial/examples/ch09-not-os
+$ /tmp/gonf-ch09-not-os -list
+not-mac	Gonfy's portable settings except macOS
+unix	All managed OSes except macOS
+$ /tmp/gonf-ch09-not-os plan -redacted not-mac
+{"op":"plan_preview","version":31,"id":"plan"}
+{"op":"when_begin","id":"when.not-mac","all":[{"fact":"goos","eq":"darwin","not":true}]}
+{"op":"file","id":"File[${HOME}/gonfy-not-mac]","path":"${HOME}/gonfy-not-mac","mode":"0644","content_b64":"R29uZnkncyBwb3J0YWJsZSBzZXR0aW5ncwo=","has_content":true}
+{"op":"when_end"}
+wrote redacted preview to stdout (4 ops, 0 secret-bearing; not a plan, cannot be applied)
+```
+
 ## -list knows the guards
 
 > 🦫 **Gonfy says:** `-list` tells you which chores would be skipped on this lodge, and why.
@@ -172,7 +226,7 @@ really are about the controller.
 
 | Guard | Where you write it | Scope |
 |-------|--------------------|-------|
-| `WhenLinux()`, `WhenDarwin()`, `WhenFreeBSD()`, `WhenOpenBSD()`, `WhenNetBSD()`, `WhenBSD()`, `WhenOS(...)` | task option | whole task |
+| `WhenLinux()`, `WhenDarwin()`, `WhenFreeBSD()`, `WhenOpenBSD()`, `WhenNetBSD()`, `WhenBSD()`, `WhenOS(...)`, `WhenNotOS(...)` | task option | whole task |
 | `WhenProfile("fedora", "rocky")` | task option | whole task |
 | `WhenHostnameContains("web")`, `WhenHostnameIn("f0", "f1")` | task option | whole task |
 | `WhenHostname(List(...), func() {...})` | task body | the resources inside |

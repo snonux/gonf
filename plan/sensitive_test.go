@@ -31,7 +31,7 @@ func TestSensitiveIDs(t *testing.T) {
 // too old a header.
 func TestRequiredVersion(t *testing.T) {
 	t.Parallel()
-	if CurrentVersion != VersionUserManageShell {
+	if CurrentVersion != VersionWhenNotOS {
 		t.Fatalf("CurrentVersion %d: extend RequiredVersion for the new schema", CurrentVersion)
 	}
 	plain := Op{Op: KindFile, Path: "/a"}

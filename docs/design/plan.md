@@ -2239,3 +2239,24 @@ raises only plans containing this intent to `VersionUserManageShell` (30),
 so older destinations cannot silently drop the option. Record-time lowering
 and destination reconstruction share the validated resource path. User
 backend commands can be injected per apply through `internal/runners.Set.User`.
+
+
+## Negated OS task guards (schema 31)
+
+`WhenNotOS(goos...)` shares supported-name validation with `WhenOS` and
+records the same GOOS Eq/In predicate with `Not: true`. Negation inverts the
+whole membership test; other task predicates remain conjunctive. Tasks
+remain activated, listed (with `goos!=darwin` when unmet), aliased and
+included in remote pattern aggregates regardless of controller GOOS. The
+existing local aggregate selection evaluates the same destination predicate.
+Needs still records dependencies outside the task's guarded block.
+
+The `not` predicate field requires schema 31 on demand: an older destination
+could otherwise ignore the field and apply precisely on the excluded OS.
+Positive predicates keep their existing floor and schemas 1–30 remain
+supported. Negation is intentionally limited to supported GOOS membership,
+with exactly one non-empty Eq/In form; profile/path negation and mixed forms
+are refused. Shared whole-plan and direct-apply preflight validates every
+negated predicate, even in an inactive block, before mutation or shipping.
+Evaluation also rejects missing or unsupported destination GOOS facts,
+rather than treating an undefined fact as outside the excluded list.

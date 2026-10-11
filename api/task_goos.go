@@ -20,16 +20,12 @@ import (
 // recipe misuse: it is reported as a declaration error (internal/declerr),
 // and the task gets a controller-side predicate that never holds, so it is
 // never activated rather than applied unguarded.
-func WhenOS(goos ...string) TaskOption {
-	return func(c *taskCandidate) {
-		if err := checkGOOS(goos); err != nil {
-			declerr.Report(err)
-			c.opaque = append(c.opaque, func(Facts) bool { return false })
-			return
-		}
-		c.planWhen = append(c.planWhen, factPredicate("goos", goos))
-	}
-}
+func WhenOS(goos ...string) TaskOption { return goosGuard("WhenOS", false, goos) }
+
+// WhenNotOS guards the task with the destination's GOOS being none of goos.
+// It travels in the plan and adds to other task guards (AND), just like
+// WhenOS. Empty lists and unsupported names are declaration errors.
+func WhenNotOS(goos ...string) TaskOption { return goosGuard("WhenNotOS", true, goos) }
 
 // WhenLinux guards the task with goos == linux (see WhenOS).
 func WhenLinux() TaskOption { return WhenOS(platform.Linux) }
@@ -50,14 +46,29 @@ func WhenNetBSD() TaskOption { return WhenOS(platform.NetBSD) }
 // WhenOS).
 func WhenBSD() TaskOption { return WhenOS(platform.BSD()...) }
 
+// goosGuard shares validation and serializable lowering for both OS guards.
+func goosGuard(name string, not bool, goos []string) TaskOption {
+	goos = slices.Clone(goos)
+	return func(c *taskCandidate) {
+		if err := checkGOOS(goos); err != nil {
+			declerr.Report(fmt.Errorf("%s: %w", name, err))
+			c.opaque = append(c.opaque, func(Facts) bool { return false })
+			return
+		}
+		p := factPredicate("goos", goos)
+		p.Not = not
+		c.planWhen = append(c.planWhen, p)
+	}
+}
+
 // checkGOOS refuses an empty list and any name platform.Check refuses.
 func checkGOOS(goos []string) error {
 	if len(goos) == 0 {
-		return fmt.Errorf("WhenOS: needs at least one GOOS (%s)", platform.List())
+		return fmt.Errorf("needs at least one GOOS (%s)", platform.List())
 	}
 	for _, g := range goos {
 		if err := platform.Check(g); err != nil {
-			return fmt.Errorf("WhenOS: %w", err)
+			return err
 		}
 	}
 	return nil

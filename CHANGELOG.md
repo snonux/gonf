@@ -5,6 +5,8 @@ releases before v0.17.0 the tag message and the git log are the notes.
 
 ## Unreleased
 
+- `WhenNotOS(goos...)` excludes named destination operating systems with a serializable task guard, composing with other guards and remaining listed on any controller OS. Only plans with negation require schema 31; malformed negated predicates refuse before mutation.
+
 - Service accepts `WithEnableOnly` to manage boot enablement while preserving runtime state on all backends; incompatible restart, reload and change gates are refused. Such plans require schema 29.
 
 - Add `WithManageShell` to opt in to reconciling an existing account's login shell; `WithShell` stays creation-only by default (plan schema 30).

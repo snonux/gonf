@@ -15,6 +15,8 @@ var goosGuards = []struct {
 	opt  TaskOption
 	want plan.Predicate
 }{
+	{"WhenNotOS(darwin)", WhenNotOS("darwin"), plan.Predicate{Fact: "goos", Eq: "darwin", Not: true}},
+	{"WhenNotOS(linux,darwin)", WhenNotOS("linux", "darwin"), plan.Predicate{Fact: "goos", In: []string{"linux", "darwin"}, Not: true}},
 	{"WhenLinux", WhenLinux(), plan.Predicate{Fact: "goos", Eq: "linux"}},
 	{"WhenDarwin", WhenDarwin(), plan.Predicate{Fact: "goos", Eq: "darwin"}},
 	{"WhenFreeBSD", WhenFreeBSD(), plan.Predicate{Fact: "goos", Eq: "freebsd"}},
@@ -40,13 +42,15 @@ func TestGOOSGuardsRecordGoosPredicate(t *testing.T) {
 // exactly the intended GOOS set under the plan engine's own rules.
 func TestGOOSGuardsEvaluateOnDestination(t *testing.T) {
 	matches := map[string][]string{
-		"WhenLinux":            {"linux"},
-		"WhenDarwin":           {"darwin"},
-		"WhenFreeBSD":          {"freebsd"},
-		"WhenOpenBSD":          {"openbsd"},
-		"WhenNetBSD":           {"netbsd"},
-		"WhenBSD":              {"freebsd", "openbsd", "netbsd"},
-		"WhenOS(linux,darwin)": {"linux", "darwin"},
+		"WhenNotOS(darwin)":       {"linux", "freebsd", "openbsd", "netbsd"},
+		"WhenNotOS(linux,darwin)": {"freebsd", "openbsd", "netbsd"},
+		"WhenLinux":               {"linux"},
+		"WhenDarwin":              {"darwin"},
+		"WhenFreeBSD":             {"freebsd"},
+		"WhenOpenBSD":             {"openbsd"},
+		"WhenNetBSD":              {"netbsd"},
+		"WhenBSD":                 {"freebsd", "openbsd", "netbsd"},
+		"WhenOS(linux,darwin)":    {"linux", "darwin"},
 	}
 	for _, g := range goosGuards {
 		for _, goos := range platform.Supported() {

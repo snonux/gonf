@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	gexec "github.com/snonux/gonf/internal/exec"
+	"github.com/snonux/gonf/internal/platform"
 	"github.com/snonux/gonf/internal/runners"
 	"github.com/snonux/gonf/internal/sealeddir"
 	"github.com/snonux/gonf/resource"
@@ -85,6 +86,17 @@ func ApplyWithContext(ctx context.Context, ops []Op, facts Facts, planDir string
 	}
 	if err := ValidateHeader(ops[0]); err != nil {
 		return err
+	}
+	if err := validateNegatedOSChunks([][]Op{ops}); err != nil {
+		return err
+	}
+	for _, op := range ops {
+		if requiresWhenNotOS(op) {
+			if err := platform.Check(facts.GOOS); err != nil {
+				return fmt.Errorf("negated OS destination fact: %w", err)
+			}
+			break
+		}
 	}
 	if err := ValidateServiceEnableOnly([][]Op{ops}); err != nil {
 		return err
@@ -482,6 +494,15 @@ func evalAll(preds []Predicate, facts Facts) (bool, error) {
 }
 
 func evalPredicate(p Predicate, facts Facts) (bool, error) {
+	if p.Not {
+		if err := validateNegatedOS(p); err != nil {
+			return false, err
+		}
+		if err := platform.Check(facts.GOOS); err != nil {
+			return false, fmt.Errorf("negated OS destination fact: %w", err)
+		}
+		return !matchesEqOrIn(facts.GOOS, p.Eq, p.In), nil
+	}
 	switch {
 	case p.PathExists != "":
 		path, err := ExpandPath(p.PathExists)
