@@ -7,6 +7,8 @@ releases before v0.17.0 the tag message and the git log are the notes.
 
 - Service accepts `WithEnableOnly` to manage boot enablement while preserving runtime state on all backends; incompatible restart, reload and change gates are refused. Such plans require schema 29.
 
+- Add `WithManageShell` to opt in to reconciling an existing account's login shell; `WithShell` stays creation-only by default (plan schema 30).
+
 Changes
 - `WithExclude(patterns...)` filters directory-sync sources before blob packaging and preserves matching destination paths during copy and pruning. Plans using exclusions require schema 28; other plans keep their existing compatibility floor.
 - `OptionalControllerDir` and `RequireControllerFile` check optional directory and required file sources on the controller, reporting unreadable sources and wrong types as declaration errors.

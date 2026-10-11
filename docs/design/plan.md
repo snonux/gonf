@@ -793,7 +793,7 @@ each disjoint in the kinds it touches so they can run in parallel.
 **Layer 2 follow-up (task 6e2): `user`.** The second of six sibling
 follow-up tasks (5e2, 6e2, 7e2, 8e2, 9e2, ae2) migrated `user`'s exclusive
 fields onto `UserPayload` (`PrimaryGroup`, `SupplementaryGroups`, `Home`,
-`CreateHome`, `Shell`, `LoginClass`, `System`, `ManageHome`), the same
+`CreateHome`, `Shell`, `LoginClass`, `System`, `ManageHome`, `ManageShell`), the same
 pattern yd2's first slice established: `wireOp`'s field block keeps its
 frozen wire position (only a comment was added there, since reordering it
 would break the byte-for-byte invariant), `payloadFromWire` and
@@ -2229,3 +2229,13 @@ Service declaration checks, whole-plan chunk preflight, direct apply
 preflight and the decoded handler reject combining this mode with restart,
 reload or a change gate. Malformed plans refuse before any earlier op or
 privilege chunk mutates the host; dependency ordering remains allowed.
+
+## Existing-account login-shell intent (schema 30)
+
+The user payload carries `manage_shell` alongside its creation-time `shell`.
+It opts in to updating exactly the existing account's login-shell field;
+without it `WithShell` keeps its creation-only meaning. `RequiredVersion`
+raises only plans containing this intent to `VersionUserManageShell` (30),
+so older destinations cannot silently drop the option. Record-time lowering
+and destination reconstruction share the validated resource path. User
+backend commands can be injected per apply through `internal/runners.Set.User`.

@@ -159,10 +159,11 @@ func NoPackage[T Path](name T, opts ...options.PackageOption) Resource {
 	return Package(name, append(slices.Clone(opts), options.IsAbsent)...)
 }
 
-// User ensures a local account exists. It is deliberately additive-only:
-// creation attributes apply only to a missing account, and existing accounts
-// may receive missing supplementary group memberships but are never removed
-// or rewritten.
+// User ensures a local account exists. It is additive by default: creation
+// attributes apply only to a missing account and supplementary memberships
+// are added without removing existing ones. WithManageHome and WithManageShell
+// opt in to converging their respective passwd fields on existing accounts.
+// It never deletes an account or sets passwords; home contents are untouched.
 func User(name string, opts ...options.LocalUserOption) Resource {
 	return user.Present(name, opts...)
 }

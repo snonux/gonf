@@ -341,3 +341,10 @@ type Dependency = resource.Dependency
 // that failed to render) as a refused resource of kind and id, so the plan
 // fails with err instead of declaring a resource with empty content.
 var Refuse = resource.Refuse
+
+// ShellManageable is implemented by resources accepting WithManageShell.
+type ShellManageable = resourceoptions.ShellManageable
+
+// WithManageShell converges an existing account's login shell to WithShell.
+// WithShell remains creation-only unless this option is set.
+var WithManageShell = resourceoptions.WithManageShell

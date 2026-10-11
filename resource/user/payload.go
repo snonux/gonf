@@ -21,16 +21,19 @@ type Payload struct {
 	// Home, CreateHome, Shell, LoginClass, and System are creation-time
 	// account attributes, retained on the wire so destination apply makes
 	// the same decision for a missing account as a direct resource apply.
-	// Home is also used for an existing account when ManageHome opts in.
+	// Home and Shell are also used for existing accounts with their respective
+	// ManageHome and ManageShell opt-ins.
 	Home       string
 	CreateHome bool
 	Shell      string
 	LoginClass string
 	System     bool
-	// ManageHome is the one opt-in exception to creation-only attributes:
+	// ManageHome is an opt-in exception to creation-only attributes:
 	// it converges an existing account's passwd home field to Home,
 	// without moving, creating, or chowning the directory.
 	ManageHome bool
+	// ManageShell converges only the existing login-shell field to Shell.
+	ManageShell bool
 }
 
 // Clone returns a deep copy of p, giving SupplementaryGroups its own

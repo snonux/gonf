@@ -15,8 +15,8 @@ import (
 // available. Optional creation attributes are applied only while creating a
 // missing account. Existing accounts are never removed by this model; by
 // default backends may only add missing supplementary group memberships. The
-// single explicit exception is ManageHome, which lets a backend rewrite the
-// passwd home field of an existing account (never its contents).
+// explicit exceptions are ManageShell and ManageHome, which rewrite only
+// their respective passwd fields (never home contents).
 type DesiredUser struct {
 	// Name is the local account name.
 	Name string
@@ -36,7 +36,7 @@ type DesiredUser struct {
 	// DesiredUser never creates a home directory.
 	CreateHome bool
 	// Shell is the account's login shell when creating it. Empty selects the
-	// platform default.
+	// platform default. ManageShell also converges an existing shell to this value.
 	Shell string
 	// LoginClass selects the platform login class when creating the account.
 	// Empty selects the platform default.
@@ -49,6 +49,8 @@ type DesiredUser struct {
 	// chowns the directory, and never touches passwords, locks, the shell, or
 	// memberships. It requires Home to be an absolute, clean path.
 	ManageHome bool
+	// ManageShell converges only the existing login-shell field to Shell.
+	ManageShell bool
 }
 
 // Validate reports malformed account or group names before a backend executes
@@ -80,7 +82,12 @@ func (u DesiredUser) Validate() error {
 		return fmt.Errorf("user %q: login class contains NUL", u.Name)
 	}
 	if u.ManageHome {
-		return ValidateManagedHome(u.Name, u.Home)
+		if err := ValidateManagedHome(u.Name, u.Home); err != nil {
+			return err
+		}
+	}
+	if u.ManageShell {
+		return ValidateManagedShell(u.Name, u.Shell)
 	}
 	return nil
 }

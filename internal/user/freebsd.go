@@ -20,9 +20,10 @@ const freeBSDDataErrExit = 65
 // FreeBSD reconciles DesiredUser values with FreeBSD's pw(8) utility. It
 // creates only missing groups and users, and adds only missing supplementary
 // memberships. It never deletes an account or group, removes a membership, or
-// changes an existing account's primary group, shell, or login class. An
+// changes an existing account's primary group or login class. An
 // existing account's home field changes only when DesiredUser.ManageHome opts
 // in, and then only via pw usermod -d without -m.
+// The login shell changes only with DesiredUser.ManageShell.
 type FreeBSD struct {
 	commands
 }
@@ -45,7 +46,7 @@ func (b FreeBSD) Ensure(id string, want DesiredUser) error {
 // no system-account flag, the supplementary-group list has no gonf-side
 // limit, and pw useradd -m must not be pointed at a relative or root home.
 func (FreeBSD) Capabilities() Capabilities {
-	return Capabilities{Platform: "FreeBSD", LoginClass: true, CreateHomeNeedsSafeHome: true}
+	return Capabilities{Platform: "FreeBSD", ManageShell: true, LoginClass: true, CreateHomeNeedsSafeHome: true}
 }
 
 // lookupUser reads the account's pw usershow record (master.passwd layout).
@@ -54,13 +55,21 @@ func (b FreeBSD) lookupUser(name string) (string, bool, error) {
 }
 
 // ensureExistingUser adds missing memberships and then, only when opted in,
-// converges the passwd home field. record is the pw usershow line read
-// before any mutation; a membership update never alters the home field.
+// converges the passwd home and shell fields. record is the pw usershow line read
+// before any mutation; memberships do not alter these fields.
 func (b FreeBSD) ensureExistingUser(record string, want DesiredUser) error {
+	if want.ManageShell {
+		if _, err := passwdShell(record, want.Name, freeBSDHomeField); err != nil {
+			return err
+		}
+	}
 	if err := b.addMissingMemberships(record, want); err != nil {
 		return err
 	}
-	return b.ensureHomeField(record, want)
+	if err := b.ensureHomeField(record, want); err != nil {
+		return err
+	}
+	return b.ensureShellField(record, want, freeBSDHomeField, "pw", "usermod", "-n", want.Name, "-s", want.Shell)
 }
 
 // ensureHomeField rewrites only the passwd home field. pw usermod -d without

@@ -16,6 +16,8 @@ func main() {
 	Task("extras", "More system options, for a plan preview", extras, Privileged(), WhenLinux())
 	Task("daemon", "An OpenBSD daemon account in its own login class", daemon, Privileged(), WhenOpenBSD())
 	Task("boot-policy", "Boot enablement while Gonfy owns runtime state", bootPolicy, Privileged())
+	Task("shell-command", "Gonfy chooses fish through a guarded command", shellCommand, Privileged(), WhenLinux())
+	Task("shell-account", "Gonfy chooses fish through his account", shellAccount, Privileged(), WhenLinux())
 	cli.Main()
 }
 
@@ -94,4 +96,16 @@ func bootPolicy() {
 	// Gonfy's failover manager decides when these services run.
 	Service("gonfy-tunnel", WithEnableOnly)
 	NoService("gonfy-old-tunnel", WithEnableOnly)
+}
+
+func shellCommand() {
+	pkg := Package("fish")
+	Command("usermod", List("-s", "/usr/bin/fish", "gonfy"),
+		WithName("gonfy-fish-shell"), DependsOn(pkg),
+		Unless("sh", List("-c", `[ "$(getent passwd gonfy | cut -d: -f7)" = /usr/bin/fish ]`)))
+}
+
+func shellAccount() {
+	pkg := Package("fish")
+	User("gonfy", WithShell("/usr/bin/fish"), WithManageShell, DependsOn(pkg))
 }

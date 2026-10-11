@@ -30,7 +30,7 @@ type Backend interface {
 //
 // A refusal is enforced at one of two points, and both happen before any
 // mutating command:
-//   - request refusals (LoginClass, MaxSupplementaryGroups,
+//   - request refusals (ManageShell, LoginClass, MaxSupplementaryGroups,
 //     CreateHomeNeedsSafeHome) right after DesiredUser.Validate, before the
 //     account probe, because they do not depend on the destination state;
 //   - creation refusals (SystemAccount) after the account probe and only for
@@ -40,6 +40,8 @@ type Backend interface {
 // The target GOOS is unknown when a plan is recorded, so a record-time check
 // can only reject what every backend refuses (see ValidateForAnyBackend).
 type Capabilities struct {
+	// ManageShell reports support for explicit existing-account shell management.
+	ManageShell bool
 	// Platform names the platform in refusal messages ("Linux", "BSD" for
 	// the shared OpenBSD/NetBSD backend, "FreeBSD").
 	Platform string
@@ -75,6 +77,9 @@ func (c Capabilities) checkRequest(want DesiredUser) error {
 // requestRefusal returns why the request refusals reject want, without the
 // account prefix, or "" when they accept it.
 func (c Capabilities) requestRefusal(want DesiredUser) string {
+	if want.ManageShell && !c.ManageShell {
+		return "existing-account shell management is not supported on " + c.Platform
+	}
 	if want.LoginClass != "" && !c.LoginClass {
 		return "login classes are not supported on " + c.Platform
 	}

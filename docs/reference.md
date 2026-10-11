@@ -3,7 +3,7 @@
 <img src="../assets/logo-light.svg" alt="Gonfy, the gonf beaver" width="96" align="right">
 
 Gonfy's cheat sheet: every user-facing feature in one place, current as of
-the development tree after v0.24.2 (plan schema 29). Background, rationale and history live in
+the development tree after v0.24.2 (plan schema 30). Background, rationale and history live in
 [design/](design/README.md).
 New to gonf? Start with the [tutorial](tutorial/README.md).
 
@@ -956,7 +956,7 @@ CronAt("backup", "0 2 * * *", "/usr/local/bin/backup.sh", WithCronUser("root")) 
 ### User
 
 Additive only: never deletes accounts or groups, never removes memberships,
-never changes an existing account's primary group, shell, class or system
+never changes an existing account's primary group, class or system
 flag, never sets a password.
 
 ```go
@@ -970,9 +970,10 @@ User("_svc", WithPrimaryGroup("_svc"), WithSupplementaryGroups("audio", "video")
 | `WithUserGroup(g)` / `WithSupplementaryGroups(g...)` | Add memberships (also to existing accounts). |
 | `WithHome(h)` | Home at creation. Does not create the directory. |
 | `WithCreateHome` | Create the home at creation. |
-| `WithShell(s)` | Shell at creation. |
+| `WithShell(s)` | Shell at creation; also the managed value with `WithManageShell`. |
 | `WithLoginClass(c)` | BSD login class at creation. `WithClass` is an alias. Refused on Linux. |
 | `WithSystem` | Linux system account. Refused on the BSDs. |
+| `WithManageShell` | Also rewrite an existing account's login shell to `WithShell`. |
 | `WithManageHome` | Also rewrite an existing account's passwd home field to `WithHome`. |
 
 - Backends: Linux shadow-utils (`useradd`/`usermod`/`groupadd` with GNU long
@@ -983,6 +984,14 @@ User("_svc", WithPrimaryGroup("_svc"), WithSupplementaryGroups("audio", "video")
   `WithHome` must be absolute and clean, without `:`, newline or NUL. Pair
   it with a `Dir(home, WithOwner(...), DependsOn(account))`. Linux `usermod`
   may refuse while the account has processes.
+- `WithManageShell` requires a nonempty absolute, clean, non-root shell path,
+  without `:` or control characters. Invalid requests refuse registration and
+  fail plan recording. Linux uses `usermod --shell`; OpenBSD/NetBSD use
+  `usermod -s`; FreeBSD uses `pw usermod -s`. Passwords, lock state, home
+  contents and other account fields stay as they are. Without the opt-in,
+  `WithShell` remains creation-only. Missing users are created normally.
+  The destination tools decide whether the shell is available and permitted;
+  unsupported destinations refuse clearly. Plans using this option need schema 30.
 - Requests no platform accepts (bad names, NUL bytes) fail `gonf plan`.
   Platform-specific refusals come from the destination, before any mutating
   command. One invalid `User` aborts a whole `api.Apply`.
@@ -1258,7 +1267,7 @@ redacted against resolved secrets.
 | `-privilege m` | `none` | `none`, `sudo` or `doas` for local elevated chunks. |
 | `-cmd-timeout d` | `5m` | Per backend command and validator. SIGTERM on expiry, SIGKILL 10s later. `0` or negative keeps the default. Non-default values are forwarded to the elevated re-exec and to remote gonf versions that accept the flag. |
 | `-version` | | Release version. |
-| `-plan-version` | | Plan schema this binary emits and applies (29). |
+| `-plan-version` | | Plan schema this binary emits and applies (30). |
 | `-strict-preview-version` | | Strict-preview capability (1). |
 | `-sealed-version` | | Sealed-plan capability (1). |
 | `-signed-version` | | Signed-envelope version (1). |
@@ -1413,6 +1422,7 @@ Schema versions (what an older destination refuses):
 | 27 | `file.blocks` (`WithBlock`, only when present) |
 | 28 | `sync_dir.exclude` (`WithExclude`, only when present) |
 | 29 | `service.enable_only` (`WithEnableOnly` on Service, only when present) |
+| 30 | `user.manage_shell` (`WithManageShell`, only when present) |
 
 `sync_dir.exclude` is an array of relative exclusion patterns with the rules
 above. A plan carrying a non-empty list declares schema 28 so older

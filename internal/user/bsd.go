@@ -42,9 +42,10 @@ const (
 // OpenBSD reconciles DesiredUser values using OpenBSD's user-management
 // utilities. It creates only missing groups and users, and adds only missing
 // supplementary memberships. It never deletes an account or group, removes a
-// membership, or changes an existing account's primary group, shell, or login
+// membership, or changes an existing account's primary group or login
 // class. An existing account's home field changes only when
 // DesiredUser.ManageHome opts in, and then only via usermod -d without -m.
+// The login shell changes only with DesiredUser.ManageShell.
 // Missing memberships are passed alone to usermod -G, which OpenBSD
 // documents as appending (see appendMissing).
 type OpenBSD struct {
@@ -54,9 +55,10 @@ type OpenBSD struct {
 // NetBSD reconciles DesiredUser values using NetBSD's user-management
 // utilities. It creates only missing groups and users, and adds only missing
 // supplementary memberships. It never deletes an account or group, removes a
-// membership, or changes an existing account's primary group, shell, or login
+// membership, or changes an existing account's primary group or login
 // class. An existing account's home field changes only when
 // DesiredUser.ManageHome opts in, and then only via usermod -d without -m.
+// The login shell changes only with DesiredUser.ManageShell.
 // Because NetBSD does not document whether usermod -G appends or replaces,
 // missing memberships are added by passing the full union of the existing
 // explicit memberships and the missing groups (see membershipUnion).
@@ -99,7 +101,7 @@ func (b bsd) Ensure(id string, want DesiredUser) error {
 // system-account flag, and at most maxBSDSupplementaryGroups supplementary
 // groups are accepted. OpenBSD and NetBSD expose it through embedding.
 func (bsd) Capabilities() Capabilities {
-	return Capabilities{Platform: "BSD", LoginClass: true, MaxSupplementaryGroups: maxBSDSupplementaryGroups}
+	return Capabilities{Platform: "BSD", ManageShell: true, LoginClass: true, MaxSupplementaryGroups: maxBSDSupplementaryGroups}
 }
 
 // lookupUser reads the account's getent passwd record.
@@ -108,14 +110,19 @@ func (b bsd) lookupUser(name string) (string, bool, error) {
 }
 
 // ensureExistingUser adds missing memberships and then, only when opted in,
-// converges the passwd home field. record is the getent passwd line read
-// before any mutation; membership changes never alter the home field.
+// converges the passwd home and shell fields. record is the getent passwd line read
+// before any mutation; memberships do not alter these fields.
 //
 // The usermod -G argument is computed and validated (membership probes,
 // NetBSD group enumeration, name checks, group limit) before the first
 // groupadd, so a refused membership update mutates nothing rather than
 // leaving freshly created groups behind on every failing run.
 func (b bsd) ensureExistingUser(record string, want DesiredUser) error {
+	if want.ManageShell {
+		if _, err := passwdShell(record, want.Name, getentHomeField); err != nil {
+			return err
+		}
+	}
 	groups, err := b.membershipArgument(want)
 	if err != nil {
 		return err
@@ -128,7 +135,10 @@ func (b bsd) ensureExistingUser(record string, want DesiredUser) error {
 			return err
 		}
 	}
-	return b.ensureHomeField(record, want)
+	if err := b.ensureHomeField(record, want); err != nil {
+		return err
+	}
+	return b.ensureShellField(record, want, getentHomeField, "usermod", "-s", want.Shell, want.Name)
 }
 
 // ensureHomeField rewrites only the passwd home field. OpenBSD and NetBSD

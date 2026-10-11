@@ -31,7 +31,7 @@ func TestSensitiveIDs(t *testing.T) {
 // too old a header.
 func TestRequiredVersion(t *testing.T) {
 	t.Parallel()
-	if CurrentVersion != VersionServiceEnableOnly {
+	if CurrentVersion != VersionUserManageShell {
 		t.Fatalf("CurrentVersion %d: extend RequiredVersion for the new schema", CurrentVersion)
 	}
 	plain := Op{Op: KindFile, Path: "/a"}
@@ -200,4 +200,20 @@ func homeSet(p ConfigSetPayload) Op {
 // blockOp is a file op carrying one managed block (WithBlock, schema v27).
 func blockOp(path string) Op {
 	return Op{Op: KindFile, Path: path, Payload: FilePayload{Blocks: []Block{{Name: "hosts", Lines: []string{"a", "b"}}}}}
+}
+
+func TestManageShellRequiredVersion(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		op   Op
+		want int
+	}{
+		{Op{Op: KindUser, Payload: UserPayload{ManageShell: true}}, 30},
+		{Op{Op: KindUser, Payload: UserPayload{Shell: "/bin/sh"}}, VersionConfigSet},
+		{Op{Op: KindFile, Payload: UserPayload{ManageShell: true}}, VersionConfigSet},
+	} {
+		if got := RequiredVersion([]Op{tc.op}); got != tc.want {
+			t.Fatalf("RequiredVersion(%v) = %d, want %d", tc.op, got, tc.want)
+		}
+	}
 }

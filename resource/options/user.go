@@ -20,3 +20,15 @@ type HomeManageable interface{ SetManageHome() }
 var WithManageHome = userAccountOption(func(target any) {
 	requires(target, "WithManageHome", func(r HomeManageable) { r.SetManageHome() })
 })
+
+// ShellManageable is implemented by resources managing an existing login shell.
+type ShellManageable interface{ SetManageShell() }
+
+// WithManageShell opts a User in to converging an existing account's login
+// shell to WithShell. Without it, WithShell remains creation-only. The shell
+// must be a nonempty absolute, clean path without passwd separators or control
+// characters. Only that field changes; passwords, locks, other account fields
+// and home contents are retained. Missing accounts use normal account creation.
+var WithManageShell = userAccountOption(func(target any) {
+	requires(target, "WithManageShell", func(r ShellManageable) { r.SetManageShell() })
+})

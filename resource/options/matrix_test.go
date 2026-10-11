@@ -89,6 +89,7 @@ var optionCases = []optionCase{
 	{"WithGroup", WithGroup("wheel"), famGroup, one("SetGroup", "wheel")},
 	{"WithHome", WithHome("/var/lib/svc"), []string{"LocalUser"}, one("SetHome", "/var/lib/svc")},
 	{"WithCreateHome", WithCreateHome, []string{"LocalUser"}, one("SetCreateHome", nil)},
+	{"WithManageShell", WithManageShell, []string{"LocalUser"}, one("SetManageShell", nil)},
 	{"WithManageHome", WithManageHome, []string{"LocalUser"}, one("SetManageHome", nil)},
 	{"WithShell", WithShell("/sbin/nologin"), []string{"LocalUser"}, one("SetShell", "/sbin/nologin")},
 	{"WithLoginClass", WithLoginClass("daemon"), []string{"LocalUser"}, one("SetLoginClass", "daemon")},

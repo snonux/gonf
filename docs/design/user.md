@@ -10,9 +10,10 @@ below that name Rocky describe its stock configuration.
 
 It is intentionally additive by default: gonf never deletes an account or a
 group, removes a supplementary membership, or rewrites an existing
-account's primary group, shell, login class, or system-account setting. An
+account's primary group, login class, or system-account setting. An
 existing account's home field is rewritten only when the recipe explicitly
-opts in with `WithManageHome` (see below).
+opts in with `WithManageHome` (see below). Its login shell changes only with
+`WithManageShell`.
 
 ```go
 User("_svc",
@@ -30,7 +31,8 @@ adds several. Existing supplementary memberships not requested by the recipe
 are retained.
 
 `WithHome`, `WithCreateHome`, `WithShell`, `WithLoginClass`, and `WithSystem`
-are creation-time settings. `WithHome` alone does not create a directory; add
+are creation-time settings by default. `WithManageHome` and `WithManageShell`
+opt in to managing their respective existing fields. `WithHome` alone does not create a directory; add
 `WithCreateHome` to create the configured (or platform-default) home directory.
 The Linux backend rejects login classes. The BSD backends reject
 `WithSystem`, since their portable user-management mode has no supported
@@ -40,13 +42,13 @@ translates one into the other.
 
 Each platform backend declares these differences as a capability set (login
 classes, system accounts, the supplementary-group limit, and FreeBSD's
-created-home check; see the table below), and one shared code path enforces
+created-home check, plus explicit shell-management support; see the table below), and one shared code path enforces
 it, so every refusal happens before any mutating command. A recorded plan does
 not know its destination's platform, so `gonf plan` rejects only requests
 that no platform accepts: malformed account or group names, NUL bytes, a
 `WithManageHome` home that breaks its contract (see
 [Managing an existing account's home field](#managing-an-existing-accounts-home-field)),
-or a combination every platform refuses. Every other refusal is reported by
+a managed shell that breaks its contract, or a combination every platform refuses. Every other refusal is reported by
 the destination. The error names the task and the resource, for example
 `RecordPlan: task "svc": draft "User[-bad]": user name "-bad" starts with -`.
 
@@ -86,6 +88,7 @@ Commands issued for a missing account (verified in gonf's unit tests):
 | `WithLoginClass` | rejected before any command | `-L CLASS` | `-L CLASS` |
 | `WithSystem` | `--system` | rejected after the account probe, before any mutation | rejected after the account probe, before any mutation |
 | More than 16 supplementary groups | allowed | rejected before any command | allowed |
+| `WithManageShell` on an existing account | `usermod --shell SHELL -- NAME` | `usermod -s SHELL NAME` | `pw usermod -n NAME -s SHELL` |
 | `WithCreateHome` with a relative or root `WithHome` | passed as given | passed as given | rejected before any command |
 
 What the tools then do (per platform documentation, not verified natively):
@@ -250,3 +253,45 @@ the home update.
 
 See also: [options.md](options.md), [plan.md](plan.md), and the
 [documentation index](README.md).
+
+## Opting in to an existing login shell
+
+`User("gonfy", WithShell("/usr/bin/fish"), WithManageShell)` converges the
+login-shell field even when Gonfy already has an account. `WithShell` by
+itself remains creation-only. Missing accounts use the ordinary creation
+command with the requested shell; the opt-in adds no second mutation.
+
+Linux shadow-utils use `usermod --shell SHELL -- NAME`; OpenBSD and NetBSD
+use `usermod -s SHELL NAME`; FreeBSD uses `pw usermod -n NAME -s SHELL`.
+These commands change only the shell: passwords, lock state, primary group,
+login class and home contents are untouched. Supplementary memberships and
+an opted-in managed home are independently reconciled only when requested.
+Unsupported destination platforms refuse the request rather than ignoring it.
+The capability contract declares shell-management support explicitly.
+
+The opt-in requires a nonempty absolute, clean, non-root path. Passwd
+separators (`:`) and control characters are rejected before registration,
+recording and destination commands. Creation-only shells keep their previous
+validation. Gonf does not require the path to exist on the controller or
+consult its `/etc/shells`; the destination account tools enforce their own
+rules. Install the shell first and depend on its `Package` resource.
+
+The existing-account probe must contain one complete passwd record for the
+requested name. A malformed or mismatched response fails before any account
+mutation. Matching shells do nothing; differing shells report one changed
+`User` resource. Dry-run still probes the destination but only reports the
+shell update it would execute. Tool failures propagate unchanged in meaning.
+
+`manage_shell` is carried through the user draft, `plan.UserPayload` and
+JSON wire. `RequiredVersion` raises the header to schema 30 only when a user
+op has `manage_shell: true`; recipes without it retain their old minimum.
+An older destination refuses the header before applying any resource.
+
+Tests inject `internal/runners.Set.User` for one plan apply, with a command
+runner and optional GOOS; nil fields keep the real platform and runner.
+In-package direct tests retain `newUserWith` backend injection. There are no
+process-global account fakes or public test setters.
+
+Backend shell flags are documented by [OpenBSD usermod(8)](https://man.openbsd.org/usermod.8),
+[NetBSD usermod(8)](https://man.netbsd.org/usermod.8), and
+[FreeBSD pw(8)](https://man.freebsd.org/cgi/man.cgi?query=pw&sektion=8).

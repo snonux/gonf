@@ -148,7 +148,8 @@ type UserPayload struct {
 	SupplementaryGroups []string `json:"supplementary_groups,omitempty"`
 	// Home, CreateHome, Shell, LoginClass, and System are only used when a
 	// KindUser operation creates a missing account; Home is additionally the
-	// target of an existing account's home field when ManageHome is set.
+	// target of an existing account's home field when ManageHome is set, and
+	// Shell is its login-shell target when ManageShell is set.
 	Home       string `json:"home,omitempty"`
 	CreateHome bool   `json:"create_home,omitempty"`
 	Shell      string `json:"shell,omitempty"`
@@ -158,6 +159,8 @@ type UserPayload struct {
 	// operation in to converging an existing account's passwd home field to
 	// Home. It never moves, creates, or chowns the directory.
 	ManageHome bool `json:"manage_home,omitempty"`
+	// ManageShell (schema v30) converges only the login-shell field.
+	ManageShell bool `json:"manage_shell,omitempty"`
 }
 
 func (p UserPayload) applyToWire(w *wireOp) {
@@ -169,6 +172,7 @@ func (p UserPayload) applyToWire(w *wireOp) {
 	w.LoginClass = p.LoginClass
 	w.System = p.System
 	w.ManageHome = p.ManageHome
+	w.ManageShell = p.ManageShell
 }
 
 // ServicePayload holds the wire fields exclusive to KindService (schema
@@ -741,6 +745,7 @@ var payloadConstructors = map[Kind]func(wireOp) OpPayload{
 			LoginClass:          w.LoginClass,
 			System:              w.System,
 			ManageHome:          w.ManageHome,
+			ManageShell:         w.ManageShell,
 		}
 	},
 	KindService: func(w wireOp) OpPayload {

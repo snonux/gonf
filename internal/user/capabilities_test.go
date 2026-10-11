@@ -165,6 +165,12 @@ func conformanceFields() map[string]conformanceField {
 		}},
 		// ManageHome is exercised on top of Home (it requires one): creation
 		// is unchanged and an existing account's differing home is updated.
+		"ManageShell": {set: func(u *DesiredUser) { u.Shell, u.ManageShell = "/sentinel/shell", true }, sentinel: "/sentinel/shell", updates: true, treatment: func(c Capabilities) fieldTreatment {
+			if c.ManageShell {
+				return honoured
+			}
+			return requestRefused
+		}},
 		"ManageHome": {set: func(u *DesiredUser) { u.Home, u.ManageHome = "/srv/sentinel-home", true }, sentinel: "/srv/sentinel-home", updates: true, treatment: honouredEverywhere},
 	}
 }
@@ -215,6 +221,9 @@ func checkHonouredOnCreate(t *testing.T, goos, name string, field conformanceFie
 	if name == "ManageHome" {
 		base.Home = want.Home // creation must be exactly the Home-only creation
 	}
+	if name == "ManageShell" {
+		base.Shell = want.Shell
+	}
 	baseHost, err := conformanceRun(t, goos, false, base)
 	if err != nil {
 		t.Fatalf("baseline Ensure() = %v", err)
@@ -224,7 +233,7 @@ func checkHonouredOnCreate(t *testing.T, goos, name string, field conformanceFie
 		t.Fatalf("declared honoured, Ensure() = %v", err)
 	}
 	got, baseline := host.mutations(), baseHost.mutations()
-	if name == "ManageHome" {
+	if name == "ManageHome" || name == "ManageShell" {
 		if !slices.Equal(got, baseline) {
 			t.Fatalf("ManageHome changed creation: %q, want %q", got, baseline)
 		}
@@ -396,10 +405,10 @@ func conformanceGroups(count int) []string {
 // unnoticed.
 func TestDeclaredCapabilities(t *testing.T) {
 	want := map[string]Capabilities{
-		"linux":   {Platform: "Linux", SystemAccount: true},
-		"openbsd": {Platform: "BSD", LoginClass: true, MaxSupplementaryGroups: 16},
-		"netbsd":  {Platform: "BSD", LoginClass: true, MaxSupplementaryGroups: 16},
-		"freebsd": {Platform: "FreeBSD", LoginClass: true, CreateHomeNeedsSafeHome: true},
+		"linux":   {ManageShell: true, Platform: "Linux", SystemAccount: true},
+		"openbsd": {ManageShell: true, Platform: "BSD", LoginClass: true, MaxSupplementaryGroups: 16},
+		"netbsd":  {ManageShell: true, Platform: "BSD", LoginClass: true, MaxSupplementaryGroups: 16},
+		"freebsd": {ManageShell: true, Platform: "FreeBSD", LoginClass: true, CreateHomeNeedsSafeHome: true},
 	}
 	if got := SupportedGOOS(); !slices.Equal(got, []string{"freebsd", "linux", "netbsd", "openbsd"}) {
 		t.Fatalf("SupportedGOOS() = %v", got)

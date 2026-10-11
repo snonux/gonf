@@ -2,8 +2,10 @@ package user
 
 import (
 	"fmt"
+	"runtime"
 	"slices"
 
+	"github.com/snonux/gonf/internal/runners"
 	internaluser "github.com/snonux/gonf/internal/user"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
@@ -64,18 +66,28 @@ func draftOp(d resource.PlanDraft, p Payload) plan.Op {
 			LoginClass:          p.LoginClass,
 			System:              p.System,
 			ManageHome:          p.ManageHome,
+			ManageShell:         p.ManageShell,
 		},
 	}
 }
 
 // Apply ensures the recorded account exists without destructive account
 // changes, mirroring the direct resource path.
-func (h planHandler) Apply(op plan.Op, _ plan.ApplyContext) error {
+func (h planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 	if op.Name == "" {
 		return fmt.Errorf("user: missing name")
 	}
 	if op.Absent {
 		return fmt.Errorf("user %q: absence is not supported", op.Name)
+	}
+	if h.backend == nil {
+		if ur := runners.UserOf(ctx.Runners); ur != nil {
+			goos := ur.GOOS
+			if goos == "" {
+				goos = runtime.GOOS
+			}
+			h.backend = backendForGOOS(goos, internaluser.Runner(ur.Run))
+		}
 	}
 	return h.newUser(op).apply()
 }
@@ -121,6 +133,9 @@ func opOptions(op plan.Op) []opt.LocalUserOption {
 	}
 	if p.ManageHome {
 		opts = append(opts, opt.WithManageHome)
+	}
+	if p.ManageShell {
+		opts = append(opts, opt.WithManageShell)
 	}
 	return opts
 }

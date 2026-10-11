@@ -79,6 +79,7 @@ func (r *recorder) SetCreateHome()                { r.record("SetCreateHome", ni
 func (r *recorder) SetShell(v string)             { r.record("SetShell", v) }
 func (r *recorder) SetLoginClass(v string)        { r.record("SetLoginClass", v) }
 func (r *recorder) SetSystem()                    { r.record("SetSystem", nil) }
+func (r *recorder) SetManageShell()               { r.record("SetManageShell", nil) }
 func (r *recorder) SetManageHome()                { r.record("SetManageHome", nil) }
 func (r *recorder) SetOnCalendar(v string)        { r.record("SetOnCalendar", v) }
 func (r *recorder) SetOnBootSec(v string)         { r.record("SetOnBootSec", v) }

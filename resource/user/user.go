@@ -24,14 +24,15 @@ var (
 	_ opt.Classable              = (*User)(nil)
 	_ opt.Systemable             = (*User)(nil)
 	_ opt.SupplementaryGroupable = (*User)(nil)
+	_ opt.ShellManageable        = (*User)(nil)
 	_ opt.HomeManageable         = (*User)(nil)
 	_ opt.MisuseReporter         = (*User)(nil)
 )
 
 // User ensures a local account exists. Creation attributes are used only for
 // a missing account; for an existing account only missing supplementary group
-// memberships may be added and, when WithManageHome opts in, the passwd home
-// field may be rewritten to WithHome. It never removes accounts, groups, or
+// memberships may be added, WithManageHome may rewrite the passwd home field,
+// and WithManageShell may rewrite the login shell. It never removes accounts, groups, or
 // memberships, and never moves, creates, or chowns an existing home.
 type User struct {
 	embed.DependsOn
@@ -45,6 +46,7 @@ type User struct {
 	loginClass          string
 	system              bool
 	manageHome          bool
+	manageShell         bool
 	// backend converges the desired account on this host. newUser selects
 	// the backend for the running GOOS; tests inject a fake through
 	// newUserWith instead of swapping package-level variables.
@@ -78,6 +80,11 @@ func Present(name string, opts ...opt.LocalUserOption) resource.Resource {
 	if err := u.MisuseErr(); err != nil {
 		return resource.Refuse(resourceType, name, err)
 	}
+	if u.manageShell {
+		if err := internaluser.ValidateManagedShell(name, u.shell); err != nil {
+			return resource.Refuse(resourceType, name, err)
+		}
+	}
 	r, ok := resource.Register(resourceType, u.name, u, u.DependsOn.IDs...)
 	if ok {
 		resource.RecordPlanDraft(u.planDraft(r.ID()))
@@ -105,7 +112,7 @@ func (u *User) SetHome(home string) { u.home = home }
 // SetCreateHome requests creation of the home directory for a missing user.
 func (u *User) SetCreateHome() { u.createHome = true }
 
-// SetShell sets the creation-time login shell.
+// SetShell sets the creation-time login shell, also managed with WithManageShell.
 func (u *User) SetShell(shell string) { u.shell = shell }
 
 // SetLoginClass sets the creation-time platform login class.
@@ -116,6 +123,9 @@ func (u *User) SetSystem() { u.system = true }
 
 // SetManageHome opts in to converging an existing account's home field.
 func (u *User) SetManageHome() { u.manageHome = true }
+
+// SetManageShell opts in to converging an existing account's login shell.
+func (u *User) SetManageShell() { u.manageShell = true }
 
 // AddSupplementaryGroups adds desired supplementary memberships.
 func (u *User) AddSupplementaryGroups(groups ...string) {
@@ -149,6 +159,7 @@ func (u *User) planDraft(id string) resource.PlanDraft {
 			LoginClass:          u.loginClass,
 			System:              u.system,
 			ManageHome:          u.manageHome,
+			ManageShell:         u.manageShell,
 		},
 		Deps: u.DependsOn.SortedIDs(),
 	}
@@ -186,6 +197,7 @@ func (u *User) desired() internaluser.DesiredUser {
 		LoginClass:          u.loginClass,
 		System:              u.system,
 		ManageHome:          u.manageHome,
+		ManageShell:         u.manageShell,
 	}
 }
 

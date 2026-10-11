@@ -509,6 +509,7 @@ func WithHome(home string) userAccountOption {
 }
 
 // WithShell sets a user's login shell when creating a missing account.
+// WithManageShell also converges an existing account's shell to this value.
 func WithShell(shell string) userAccountOption {
 	return userAccountOption(func(target any) {
 		requires(target, "WithShell", func(r Shellable) { r.SetShell(shell) })

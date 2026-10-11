@@ -21,6 +21,7 @@ destination, gonf picks the right tool (its backend) for each resource:
 package main
 
 import (
+	//lint:ignore ST1001 recipes use the unqualified gonf DSL.
 	. "github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/cli"
 )
@@ -33,6 +34,8 @@ func main() {
 	Task("extras", "More system options, for a plan preview", extras, Privileged(), WhenLinux())
 	Task("daemon", "An OpenBSD daemon account in its own login class", daemon, Privileged(), WhenOpenBSD())
 	Task("boot-policy", "Boot enablement while Gonfy owns runtime state", bootPolicy, Privileged())
+	Task("shell-command", "Gonfy chooses fish through a guarded command", shellCommand, Privileged(), WhenLinux())
+	Task("shell-account", "Gonfy chooses fish through his account", shellAccount, Privileged(), WhenLinux())
 	cli.Main()
 }
 
@@ -111,6 +114,18 @@ func bootPolicy() {
 	// Gonfy's failover manager decides when these services run.
 	Service("gonfy-tunnel", WithEnableOnly)
 	NoService("gonfy-old-tunnel", WithEnableOnly)
+}
+
+func shellCommand() {
+	pkg := Package("fish")
+	Command("usermod", List("-s", "/usr/bin/fish", "gonfy"),
+		WithName("gonfy-fish-shell"), DependsOn(pkg),
+		Unless("sh", List("-c", `[ "$(getent passwd gonfy | cut -d: -f7)" = /usr/bin/fish ]`)))
+}
+
+func shellAccount() {
+	pkg := Package("fish")
+	User("gonfy", WithShell("/usr/bin/fish"), WithManageShell, DependsOn(pkg))
 }
 ```
 
@@ -235,6 +250,44 @@ wrote redacted preview to stdout (3 ops, 0 secret-bearing; not a plan, cannot be
 Only service enable-only plans require schema 29; the existing start and
 enable recipe and timer examples keep their older compatibility floors.
 
+## Managing Gonfy's existing login shell
+
+`WithShell` alone sets the shell when creating an account. Add
+`WithManageShell` to keep that field converged for an existing account too.
+The `shell-command` task shows the existing valid Linux guarded-command
+recipe beside `shell-account`, which handles the comparison through `User`.
+Choose one of these tasks: both depend on the fish package, while the account
+resource also creates Gonfy's account if it is missing. No home contents,
+passwords, locks or other account fields change during a shell-only update.
+
+The managed value must be a nonempty absolute, clean path, without passwd
+separators or control characters. Install the shell before changing the account;
+the destination's tools enforce whether the shell is permitted. Shell management
+works with the Linux, OpenBSD, NetBSD and FreeBSD account backends; these two
+examples use Linux's fish path and the command example uses Linux's `usermod`.
+
+```text
+$ ./gonf plan -redacted shell-command
+{"op":"plan_preview","version":21,"id":"plan"}
+{"op":"when_begin","id":"when.shell-command","elevate":true,"all":[{"fact":"goos","eq":"linux"}]}
+{"op":"package","id":"Package[fish]","name":"fish","elevate":true}
+{"op":"command","id":"Command[gonfy-fish-shell]","name":"gonfy-fish-shell","bin":"usermod","args":["-s","/usr/bin/fish","gonfy"],"unless":{"bin":"sh","args":["-c","[ \"$(getent passwd gonfy | cut -d: -f7)\" = /usr/bin/fish ]"]},"elevate":true,"deps":["Package[fish]"]}
+{"op":"when_end","elevate":true}
+wrote redacted preview to stdout (5 ops, 0 secret-bearing; not a plan, cannot be applied)
+$ ./gonf plan -redacted shell-account
+{"op":"plan_preview","version":30,"id":"plan"}
+{"op":"when_begin","id":"when.shell-account","elevate":true,"all":[{"fact":"goos","eq":"linux"}]}
+{"op":"package","id":"Package[fish]","name":"fish","elevate":true}
+{"op":"user","id":"User[gonfy]","shell":"/usr/bin/fish","manage_shell":true,"name":"gonfy","elevate":true,"deps":["Package[fish]"]}
+{"op":"when_end","elevate":true}
+wrote redacted preview to stdout (5 ops, 0 secret-bearing; not a plan, cannot be applied)
+```
+
+The managed-shell plan needs schema 30. A destination with an older gonf
+refuses it before changing anything. Applying it to a Gonfy account already
+using `/usr/bin/fish` reports the account as unchanged; dry-run probes the
+current shell and reports a differing shell as a change it would make.
+
 ## More options, previewed
 
 > 🦫 **Gonfy says:** I moved house once. gonf changed my address in the account book, but I still had to carry the sticks myself.
@@ -316,7 +369,7 @@ Reference: [Package](../reference.md#package),
 | `SystemdUnits(FanIn(units), ActivateTimer(...))` | your own unit files, one shared daemon-reload after they change, then the timers and services that use them (`ActivateService`, `WithUserBus()`) |
 | `Cron(name, WithSchedule(...), WithCronEnv(...))` | the long form of `CronAt` |
 | `User(name, WithSupplementaryGroups(...))`, `WithUserGroup(g)`, `WithSystem` | extra group memberships (also for an existing account); a Linux system account |
-| `User(name, WithManageHome)`, `WithLoginClass(c)` | change an existing account's home; a BSD login class at creation |
+| `User(name, WithManageShell)`, `WithManageHome`, `WithLoginClass(c)` | manage an existing account's shell or home; a BSD login class at creation |
 | `LoginClass(class, src)`, `NoLoginClass(class)` | an OpenBSD login class fragment |
 | `No*` (`NoPackage`, `NoService`, `NoCron`, ...) | make sure it is gone |
 

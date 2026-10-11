@@ -91,6 +91,7 @@ type wireOp struct {
 	LoginClass          string   `json:"login_class,omitempty"`
 	System              bool     `json:"system,omitempty"`
 	ManageHome          bool     `json:"manage_home,omitempty"`
+	ManageShell         bool     `json:"manage_shell,omitempty"`
 
 	// AddLines/RemoveLines/KeyedLines/Blocks/AddLine/RemoveLine are also
 	// File-exclusive (plan.FilePayload, task ae2; Blocks since v27).

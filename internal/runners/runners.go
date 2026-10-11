@@ -42,6 +42,8 @@ import (
 // touch point adds its own field here (see docs/design/plan.md's Test seams note
 // and AGENTS.md's Test seams section).
 type Set struct {
+	// User overrides account commands and optionally the destination GOOS.
+	User *UserRunners
 	// Command overrides resource/cmd's Cmd (the "command" plan kind).
 	Command *CommandRunners
 	// Systemd overrides resource/systemd's shared systemctl Client (task
@@ -189,4 +191,19 @@ func PackageOf(s *Set) *PackageRunners {
 		return nil
 	}
 	return s.Package
+}
+
+// UserRunners overrides resource/user's destination account backend commands.
+// GOOS defaults to the running platform when empty; Run defaults to real commands.
+type UserRunners struct {
+	Run  func(name string, args ...string) (stdout, stderr string, exitCode int, err error)
+	GOOS string
+}
+
+// UserOf returns s.User, nil-safe for a nil s.
+func UserOf(s *Set) *UserRunners {
+	if s == nil {
+		return nil
+	}
+	return s.User
 }

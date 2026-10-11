@@ -14,7 +14,7 @@ import (
 const PreviewKind Kind = "plan_preview"
 
 // RequiredVersion is the plan schema a recorded plan's header declares: the
-// lowest version whose destinations apply ops faithfully. Schemas 22 to 29
+// lowest version whose destinations apply ops faithfully. Schemas 22 to 30
 // only add fields, a kind or an expansion whose absence older destinations
 // would silently misinterpret, so each is declared only when a plan uses it:
 //
@@ -41,6 +41,8 @@ const PreviewKind Kind = "plan_preview"
 //
 //   - v29 (service enable-only) when a service op leaves runtime state alone.
 //
+//   - v30 (manage_shell) when a user explicitly manages its login shell.
+//
 // Otherwise the header stays v21 and the plan still applies on a v0.15.0
 // destination. Every earlier bump was emitted unconditionally, so v21 is the
 // floor. The header is the highest version any op needs (opVersion); once
@@ -63,6 +65,8 @@ func opVersion(op Op) int {
 	switch {
 	case op.Op == KindService && op.EnableOnly:
 		return VersionServiceEnableOnly
+	case op.Op == KindUser && PayloadOf[UserPayload](op).ManageShell:
+		return VersionUserManageShell
 	case op.Op == KindSyncDir && len(PayloadOf[SyncDirPayload](op).Exclude) > 0:
 		return VersionSyncDirExclude
 	case requiresBlocks(op):

@@ -11,9 +11,10 @@ import "strings"
 //
 // It creates only missing groups and users, and adds only missing
 // supplementary memberships. It never deletes an account or group, removes a
-// membership, or changes an existing account's primary group or shell. An
+// membership, or changes an existing account's primary group. An
 // existing account's home field changes only when DesiredUser.ManageHome
 // opts in, and then only via usermod --home without --move-home.
+// The login shell changes only with DesiredUser.ManageShell.
 type Linux struct {
 	commands
 }
@@ -36,7 +37,7 @@ func (r Linux) Ensure(id string, want DesiredUser) error {
 // system accounts, and there is no login-class concept, so a login class is
 // refused before any command.
 func (Linux) Capabilities() Capabilities {
-	return Capabilities{Platform: "Linux", SystemAccount: true}
+	return Capabilities{Platform: "Linux", ManageShell: true, SystemAccount: true}
 }
 
 // lookupUser reads the account's getent passwd record.
@@ -45,17 +46,24 @@ func (r Linux) lookupUser(name string) (string, bool, error) {
 }
 
 // ensureExistingUser adds missing memberships and then, only when opted in,
-// converges the passwd home field. record is the getent passwd line read
-// before any mutation; membership changes never alter the home field, so it
-// stays accurate for the home comparison.
+// converges the passwd home and shell fields. record is the getent passwd line read
+// before any mutation; memberships do not alter these fields.
 func (r Linux) ensureExistingUser(record string, want DesiredUser) error {
+	if want.ManageShell {
+		if _, err := passwdShell(record, want.Name, getentHomeField); err != nil {
+			return err
+		}
+	}
 	if err := ensureEach(want.Supplementary(), r.ensureGroup); err != nil {
 		return err
 	}
 	if err := r.addMissingMemberships(want); err != nil {
 		return err
 	}
-	return r.ensureHomeField(record, want)
+	if err := r.ensureHomeField(record, want); err != nil {
+		return err
+	}
+	return r.ensureShellField(record, want, getentHomeField, "usermod", "--shell", want.Shell, "--", want.Name)
 }
 
 // ensureHomeField rewrites only the passwd home field. shadow-utils usermod

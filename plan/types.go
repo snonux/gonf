@@ -102,10 +102,14 @@ import "encoding/json"
 // excluded paths during pruning or filter arbitrary supplied blobs.
 // Version 29 adds enable_only on service ops: older destinations would
 // start or stop the service. Only plans using it declare v29.
-const CurrentVersion = 29
+// Version 30 adds explicit existing-account login-shell management.
+const CurrentVersion = 30
 
 // VersionServiceEnableOnly introduced runtime-preserving service enablement.
 const VersionServiceEnableOnly = 29
+
+// VersionUserManageShell introduced the user manage_shell field.
+const VersionUserManageShell = 30
 
 // VersionSyncDirExclude introduced sync_dir exclusion patterns.
 const VersionSyncDirExclude = 28
@@ -205,6 +209,7 @@ var supportedVersions = map[int]struct{}{
 	26:             {},
 	27:             {},
 	28:             {},
+	29:             {},
 	CurrentVersion: {},
 }
 

@@ -36,10 +36,10 @@ func TestSchemaBumpsArePinned(t *testing.T) {
 	t.Parallel()
 	if VersionUserManageHome != 19 || VersionWhenRequire != 20 || VersionConfigSet != 21 ||
 		VersionSensitive != 22 || VersionKeyedLines != 23 || VersionSyncDirGlob != 24 ||
-		VersionServiceFlags != 25 || VersionHomeToken != 26 || VersionBlocks != 27 || VersionSyncDirExclude != 28 || VersionServiceEnableOnly != 29 || CurrentVersion != VersionServiceEnableOnly {
-		t.Fatalf("versions: manage_home=%d require=%d config_set=%d sensitive=%d keyed_lines=%d sync_dir_glob=%d service_flags=%d home_token=%d blocks=%d exclude=%d service_enable_only=%d current=%d, want 19/20/21/22/23/24/25/26/27/28/29/29",
+		VersionServiceFlags != 25 || VersionHomeToken != 26 || VersionBlocks != 27 || VersionSyncDirExclude != 28 || VersionServiceEnableOnly != 29 || VersionUserManageShell != 30 || CurrentVersion != VersionUserManageShell {
+		t.Fatalf("versions: manage_home=%d require=%d config_set=%d sensitive=%d keyed_lines=%d sync_dir_glob=%d service_flags=%d home_token=%d blocks=%d exclude=%d service_enable_only=%d manage_shell=%d current=%d, want 19/20/21/22/23/24/25/26/27/28/29/30/30",
 			VersionUserManageHome, VersionWhenRequire, VersionConfigSet, VersionSensitive, VersionKeyedLines, VersionSyncDirGlob,
-			VersionServiceFlags, VersionHomeToken, VersionBlocks, VersionSyncDirExclude, VersionServiceEnableOnly, CurrentVersion)
+			VersionServiceFlags, VersionHomeToken, VersionBlocks, VersionSyncDirExclude, VersionServiceEnableOnly, VersionUserManageShell, CurrentVersion)
 	}
 }
 
