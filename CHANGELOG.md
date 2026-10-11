@@ -20,6 +20,7 @@ Changes
 - `WithShellVars(k, v, ...)` composes ordered shell-variable edits in one file option, with the same quoting and ownership checks as `WithShellVar`.
 
 Docs
+- Add a disposable DSL E2E recipe and real CLI verifier for packaged exclusions, guards, dependencies, dry-run, convergence, drift repair and declaration refusal.
 - Add guide entry points for the eight DSL additions, explain their plan
   compatibility and remote behavior, and align every chapter recipe with
   its compiled example.

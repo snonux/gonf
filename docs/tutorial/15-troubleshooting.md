@@ -228,6 +228,11 @@ A few things that often surprise:
 - An `if` in a task body runs on the controller; use a guard (chapter 9).
 - `Home` is the controller's home; for targets use `DestHome`.
 
+For a disposable recipe that checks packaging and destination convergence,
+see [Gonfy's DSL E2E fixture](../../examples/dsl-e2e/README.md). Its local
+runner verifies dry-run, repeat apply, drift repair and refusal without
+changing your home or system configuration.
+
 Reference: [Error handling](../reference.md#error-handling),
 [CLI](../reference.md#cli).
 

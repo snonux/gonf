@@ -1833,3 +1833,13 @@ Live tests are opt-in: `GONF_RUN_TIMER_TESTS=1`, `GONF_RUN_CRON_TESTS=1`,
 - [ ] Tag only after the doc edits are on the tagged branch, with the
       CHANGELOG entry as the annotated tag message. A pushed tag cannot be
       fixed.
+
+## Disposable end-to-end verification
+
+[examples/dsl-e2e](../examples/dsl-e2e/README.md) exercises the new DSL helpers
+through real recording, packaging and CLI application. The Python verifier
+uses a private temporary lodge and checks source filtering, dry-run without
+writes, dependency ordering, destination guards, repeated convergence,
+included drift repair, excluded-path preservation and required-source refusal.
+Its optional remote tasks use a separate receiver binary and disposable
+account/service names; the fixture README documents setup and cleanup.
