@@ -17,6 +17,7 @@ import (
 
 var (
 	_ opt.Absentable      = (*Service)(nil)
+	_ opt.EnableOnlyable  = (*Service)(nil)
 	_ opt.Restartable     = (*Service)(nil)
 	_ opt.Reloadable      = (*Service)(nil)
 	_ opt.UserService     = (*Service)(nil)
@@ -32,10 +33,11 @@ type Service struct {
 	embed.Absence
 	embed.ChangeGate
 	embed.Misuse
-	name    string
-	restart bool
-	reload  bool
-	user    bool // systemd --user only
+	enableOnly bool
+	name       string
+	restart    bool
+	reload     bool
+	user       bool // systemd --user only
 	// flags and hasFlags back WithFlags: hasFlags says the flags are managed
 	// at all, so WithFlags("") (manage them to empty) differs from no
 	// WithFlags (leave them alone).
@@ -75,6 +77,9 @@ func newServiceWith(sr *runners.ServiceRunners, sysR *runners.SystemdRunners, na
 	return s
 }
 
+// SetEnableOnly leaves runtime state untouched and manages only boot enablement.
+func (s *Service) SetEnableOnly() { s.enableOnly = true }
+
 // SetRestart requests a restart of an already-running present service on
 // each apply (subject to the OnChange gate). SetReload wins when both are set.
 func (s *Service) SetRestart() { s.restart = true }
@@ -93,16 +98,20 @@ func (s *Service) SetFlags(flags string) {
 	s.hasFlags = true
 }
 
-// declarationErr returns the first option misuse, or the WithFlags
-// declaration check (checkFlagsDeclaration), for Present and EnsureWith.
+// declarationErr checks option misuse, enable-only runtime conflicts and
+// flags declarations for Present and EnsureWith.
 func (s *Service) declarationErr() error {
 	if err := s.MisuseErr(); err != nil {
 		return err
 	}
+	if s.enableOnly && (s.restart || s.reload || s.Gated) {
+		return fmt.Errorf("service %s: WithEnableOnly cannot be combined with WithRestart, WithReload or OnChange", s.name)
+	}
 	return s.checkFlagsDeclaration()
 }
 
-// Present registers a service that should be running and enabled at boot. An
+// Present registers a service that should be running and enabled at boot.
+// WithEnableOnly manages boot enablement without changing runtime state. An
 // option misuse is reported as a declaration error (resource.Refuse) and
 // nothing is registered.
 func Present(name string, opts ...opt.ServiceOption) resource.Resource {
@@ -139,6 +148,7 @@ func EnsureWith(sr *runners.ServiceRunners, sysR *runners.SystemdRunners, name s
 }
 
 // Absent registers a service that should be stopped and disabled.
+// WithEnableOnly disables boot enablement without stopping it.
 func Absent(name string, opts ...opt.ServiceOption) resource.Resource {
 	opts = append(slices.Clone(opts), opt.IsAbsent)
 	return Present(name, opts...)
@@ -176,14 +186,15 @@ func (s *Service) detectManager() (string, error) {
 // exclusive fields, travel in Payload (see Payload, task w62 Layer 1).
 func (s *Service) planDraft(id string) resource.PlanDraft {
 	d := resource.PlanDraft{
-		Kind:    "service",
-		ID:      id,
-		Name:    s.name,
-		Absent:  s.Absent,
-		Restart: s.restart,
-		Payload: Payload{Reload: s.reload, Flags: s.flags, HasFlags: s.hasFlags},
-		User:    s.user,
-		Deps:    s.DependsOn.SortedIDs(),
+		Kind:       "service",
+		ID:         id,
+		Name:       s.name,
+		Absent:     s.Absent,
+		Restart:    s.restart,
+		EnableOnly: s.enableOnly,
+		Payload:    Payload{Reload: s.reload, Flags: s.flags, HasFlags: s.hasFlags},
+		User:       s.user,
+		Deps:       s.DependsOn.SortedIDs(),
 	}
 	d.IfChanged, d.Watch = s.DraftGate()
 	return d

@@ -59,7 +59,7 @@ func TestEveryExportedOptionHasAResourceFamily(t *testing.T) {
 		{"WithReload", func() { acceptService(WithReload) }},
 		{"WithUser", func() { acceptDaemonReload(WithUser) }},
 		{"WithElevate", func() { acceptCommand(WithElevate) }},
-		{"WithEnableOnly", func() { acceptTimer(WithEnableOnly) }},
+		{"WithEnableOnly", func() { acceptTimer(WithEnableOnly); acceptService(WithEnableOnly) }},
 		{"IfChanged", func() { acceptDaemonReload(IfChanged) }},
 		{"WithWatch", func() { acceptDaemonReload(WithWatch("id")) }},
 		{"OnChange", func() { acceptCommand(OnChange(resource.Resource{Type: "File", Name: "unit"})) }},

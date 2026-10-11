@@ -3,7 +3,7 @@
 <img src="../assets/logo-light.svg" alt="Gonfy, the gonf beaver" width="96" align="right">
 
 Gonfy's cheat sheet: every user-facing feature in one place, current as of
-the development tree after v0.24.2 (plan schema 28). Background, rationale and history live in
+the development tree after v0.24.2 (plan schema 29). Background, rationale and history live in
 [design/](design/README.md).
 New to gonf? Start with the [tutorial](tutorial/README.md).
 
@@ -781,6 +781,8 @@ NoPackage("oldpkg")
 Service("httpd")                                  // started + enabled
 Service("httpd", WithRestart, OnChange(conf))     // restart only when conf changed
 Service("httpd", WithReload)
+Service("gonfy-tunnel", WithEnableOnly)              // boot enablement only
+NoService("gonfy-old-tunnel", WithEnableOnly)         // boot disablement only
 Service("foo", WithUser)                          // systemctl --user
 Service("httpd", WithFlags(""), WithRestart)      // BSD rc flags
 NoService("olddaemon")                            // stopped + disabled
@@ -797,8 +799,17 @@ NoService("olddaemon")                            // stopped + disabled
 |--------|---------|
 | `WithRestart` | Restart once when already running. |
 | `WithReload` | Reload once when already running. No restart fallback. |
+| `WithEnableOnly` | Enable/disable boot state without probing or changing runtime state; refuses `WithRestart`, `WithReload` and `OnChange` on Service. |
 | `WithUser` | systemd user bus. Refused on BSD backends. |
 | `WithFlags(f)` | BSD startup flags: `rcctl set NAME flags f`, `sysrc NAME_flags=f`, NetBSD `NAME_flags='f'` in `/etc/rc.conf`. Refused on systemd at apply. |
+
+`WithEnableOnly` works on every Service backend, including the systemd user
+bus. `Service` enables and `NoService` disables, preserving whether the
+daemon is running. Use `DependsOn` for ordering; boot convergence is never
+change-gated. BSD `WithFlags` can still set startup flags for the next start
+without restarting; `WithFlags` remains refused on absent services and on
+systemd. Plans using service `enable_only` require schema 29; ordinary
+services and enable-only timers retain their older schema floors.
 
 `WithFlags` sets the flags after enable and before start, only when they
 differ. A flags change counts as a change of the service: it fires
@@ -1247,7 +1258,7 @@ redacted against resolved secrets.
 | `-privilege m` | `none` | `none`, `sudo` or `doas` for local elevated chunks. |
 | `-cmd-timeout d` | `5m` | Per backend command and validator. SIGTERM on expiry, SIGKILL 10s later. `0` or negative keeps the default. Non-default values are forwarded to the elevated re-exec and to remote gonf versions that accept the flag. |
 | `-version` | | Release version. |
-| `-plan-version` | | Plan schema this binary emits and applies (28). |
+| `-plan-version` | | Plan schema this binary emits and applies (29). |
 | `-strict-preview-version` | | Strict-preview capability (1). |
 | `-sealed-version` | | Sealed-plan capability (1). |
 | `-signed-version` | | Signed-envelope version (1). |
@@ -1359,7 +1370,7 @@ Output directory rules:
 
 - The header version is the lowest schema that can carry the plan. A plan
   without sensitive ops, keyed lines, pruning glob syncs, service flags,
-  noops, `${HOME}` in a ConfigSet path, managed blocks or sync exclusions
+  noops, `${HOME}` in a ConfigSet path, managed blocks, sync exclusions or enable-only services
   declares 21.
 - A destination refuses a newer schema before any change.
 - Ops apply in dependency order within each run between `when_*`
@@ -1401,6 +1412,7 @@ Schema versions (what an older destination refuses):
 | 26 | `${HOME}` in `config_set` member paths, `chroot`, `staging_dir` (only when present) |
 | 27 | `file.blocks` (`WithBlock`, only when present) |
 | 28 | `sync_dir.exclude` (`WithExclude`, only when present) |
+| 29 | `service.enable_only` (`WithEnableOnly` on Service, only when present) |
 
 `sync_dir.exclude` is an array of relative exclusion patterns with the rules
 above. A plan carrying a non-empty list declares schema 28 so older
@@ -1423,11 +1435,16 @@ is refused rather than packaging excluded bytes.
 - a `DependsOn` or watch naming no recorded resource;
 - a dependency on a later privilege chunk;
 - a change watch across chunks;
-- a `require` block nested under a non-host-fact condition.
+- a `require` block nested under a non-host-fact condition;
+- a service combining `enable_only` with restart, reload or a change gate.
 
 It runs at record time, in `ApplyChunks`, before every push delivery, and in
 `api.Apply`. Executing a single chunk (`gonf apply`, `ApplyPlan`,
-`PushPayload`) does not re-run it.
+`PushPayload`) does not re-run it in full; single-chunk apply still checks
+change gates and incompatible enable-only service options before any
+mutation. `plan.ValidateServiceEnableOnly(chunks [][]plan.Op)` exposes the
+latter check, returning a `plan.Refusal` for any service combining
+`EnableOnly` with `Restart`, `Reload` or `IfChanged`.
 
 ### Push wire
 

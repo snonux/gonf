@@ -14,24 +14,32 @@ import (
 const PreviewKind Kind = "plan_preview"
 
 // RequiredVersion is the plan schema a recorded plan's header declares: the
-// lowest version whose destinations apply ops faithfully. Schemas 22 to 28
+// lowest version whose destinations apply ops faithfully. Schemas 22 to 29
 // only add fields, a kind or an expansion whose absence older destinations
 // would silently misinterpret, so each is declared only when a plan uses it:
+//
 //   - v22 (sensitive) when an op is marked sensitive;
+//
 //   - v23 (keyed_lines) when a file op has a keyed line edit (WithKeyedLine);
+//
 //   - v24 (sync_dir glob) when a glob sync_dir op prunes — an older
 //     destination would tree-prune it and delete unmanaged subdirectories.
 //     A non-pruning glob sync_dir installs the same files under both
 //     semantics, so it does not raise the header.
+//
 //   - v25 (service flags, noop kind) when a service op has WithFlags or the
 //     plan has a noop op (requiresServiceFlags).
+//
 //   - v26 (home token) when a config_set op carries a ${...} path token
 //     (requiresHomeToken). Every other destination path field has expanded
 //     ${HOME} since v1, so DestHome paths elsewhere keep the header low.
+//
 //   - v27 (blocks) when a file op has a managed block (WithBlock,
 //     requiresBlocks).
 //
 //   - v28 (sync_dir exclude) when a sync_dir op carries exclusions.
+//
+//   - v29 (service enable-only) when a service op leaves runtime state alone.
 //
 // Otherwise the header stays v21 and the plan still applies on a v0.15.0
 // destination. Every earlier bump was emitted unconditionally, so v21 is the
@@ -53,6 +61,8 @@ func RequiredVersion(ops []Op) int {
 // opVersion is the lowest schema that applies op faithfully on its own.
 func opVersion(op Op) int {
 	switch {
+	case op.Op == KindService && op.EnableOnly:
+		return VersionServiceEnableOnly
 	case op.Op == KindSyncDir && len(PayloadOf[SyncDirPayload](op).Exclude) > 0:
 		return VersionSyncDirExclude
 	case requiresBlocks(op):

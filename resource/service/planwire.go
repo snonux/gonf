@@ -32,15 +32,16 @@ func (planHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 		return plan.Op{}, fmt.Errorf("service: draft missing service.Payload (got %T)", d.Payload)
 	}
 	op := plan.Op{
-		Op:      plan.KindService,
-		ID:      d.ID,
-		Name:    d.Name,
-		Absent:  d.Absent,
-		Restart: d.Restart,
-		Reload:  p.Reload,
-		User:    d.User,
-		Deps:    slices.Clone(d.Deps),
-		Payload: plan.ServicePayload{Flags: p.Flags, HasFlags: p.HasFlags},
+		Op:         plan.KindService,
+		ID:         d.ID,
+		Name:       d.Name,
+		Absent:     d.Absent,
+		Restart:    d.Restart,
+		EnableOnly: d.EnableOnly,
+		Reload:     p.Reload,
+		User:       d.User,
+		Deps:       slices.Clone(d.Deps),
+		Payload:    plan.ServicePayload{Flags: p.Flags, HasFlags: p.HasFlags},
 	}
 	// Change gate (schema v11): OnChange arms IfChanged with the watched ids.
 	if d.IfChanged {
@@ -59,6 +60,9 @@ func (planHandler) Apply(op plan.Op, ctx plan.ApplyContext) error {
 		return fmt.Errorf("service: missing name")
 	}
 	var opts []opt.ServiceOption
+	if op.EnableOnly {
+		opts = append(opts, opt.WithEnableOnly)
+	}
 	if op.Absent {
 		opts = append(opts, opt.IsAbsent)
 	}

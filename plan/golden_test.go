@@ -19,6 +19,7 @@ var goldenPlans = []string{
 	"pkg_fedora.jsonl",
 	"mini_e2e.jsonl",
 	"change_gate.jsonl",
+	"service_enable_only.jsonl",
 }
 
 func TestGoldenDecodeReencode(t *testing.T) {

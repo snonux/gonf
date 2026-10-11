@@ -1,0 +1,3 @@
+{"op":"plan","version":29,"id":"plan"}
+{"op":"service","id":"Service[gonfy-tunnel]","name":"gonfy-tunnel","enable_only":true,"elevate":true}
+{"op":"service","id":"Service[gonfy-old-tunnel]","absent":true,"name":"gonfy-old-tunnel","enable_only":true,"elevate":true}

@@ -168,6 +168,7 @@ func User(name string, opts ...options.LocalUserOption) Resource {
 }
 
 // Service ensures one or more OS services are running and enabled at boot.
+// WithEnableOnly manages boot enablement without changing runtime state.
 // The backend is selected automatically: systemd on Linux, rcctl on OpenBSD,
 // service(8) on FreeBSD and NetBSD.
 func Service[T Path](name T, opts ...options.ServiceOption) Resource {
@@ -192,6 +193,7 @@ func Services(names []string, opts ...options.ServiceOption) Resource {
 }
 
 // NoService ensures one or more OS services are stopped and disabled.
+// WithEnableOnly disables boot enablement without stopping them.
 func NoService[T Path](name T, opts ...options.ServiceOption) Resource {
 	return Service(name, append(slices.Clone(opts), options.IsAbsent)...)
 }

@@ -78,7 +78,8 @@ var WithElevate = commandOption(func(target any) {
 	requires(target, "WithElevate", func(r Elevatable) { r.SetElevate() })
 })
 
-// WithEnableOnly makes a timer converge enable/disable without start/stop.
+// WithEnableOnly manages service or timer enablement without runtime actions.
+// Service refuses combining it with WithRestart, WithReload or OnChange.
 var WithEnableOnly = enableOnlyOption(func(target any) {
 	requires(target, "WithEnableOnly", func(r EnableOnlyable) { r.SetEnableOnly() })
 })
@@ -296,6 +297,7 @@ type (
 		DaemonReloadOption
 	}
 	EnableOnlyOption interface {
+		ServiceOption
 		TimerOption
 		SystemdTimerOption
 	}
@@ -1139,6 +1141,7 @@ func (userOption) serviceOption()                  {}
 func (userOption) timerOption()                    {}
 func (userOption) systemdTimerOption()             {}
 func (userOption) daemonReloadOption()             {}
+func (enableOnlyOption) serviceOption()            {}
 func (enableOnlyOption) timerOption()              {}
 func (enableOnlyOption) systemdTimerOption()       {}
 func (cronSystemdTimerOption) cronOption()         {}

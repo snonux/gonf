@@ -31,7 +31,7 @@ func TestSensitiveIDs(t *testing.T) {
 // too old a header.
 func TestRequiredVersion(t *testing.T) {
 	t.Parallel()
-	if CurrentVersion != VersionSyncDirExclude {
+	if CurrentVersion != VersionServiceEnableOnly {
 		t.Fatalf("CurrentVersion %d: extend RequiredVersion for the new schema", CurrentVersion)
 	}
 	plain := Op{Op: KindFile, Path: "/a"}
@@ -79,6 +79,9 @@ func TestRequiredVersion(t *testing.T) {
 		{"glob prune", []Op{plain, globPrune}, VersionSyncDirGlob},
 		{"glob prune before sensitive", []Op{globPrune, sensitive}, VersionSyncDirGlob},
 		{"sensitive before glob prune", []Op{sensitive, globPrune}, VersionSyncDirGlob},
+		{"service enable only", []Op{{Op: KindService, EnableOnly: true}}, VersionServiceEnableOnly},
+		{"timer enable only unchanged", []Op{{Op: KindTimer, EnableOnly: true}}, VersionConfigSet},
+		{"service enable only highest", []Op{{Op: KindService, EnableOnly: true}, {Op: KindSyncDir, Payload: SyncDirPayload{Exclude: []string{"cache"}}}}, VersionServiceEnableOnly},
 		{"service without flags", []Op{{Op: KindService, Name: "s", Payload: ServicePayload{}}}, VersionConfigSet},
 		{"service flags", []Op{plain, {Op: KindService, Name: "s", Payload: ServicePayload{HasFlags: true}}}, VersionServiceFlags},
 		{"service flags after glob prune", []Op{globPrune, {Op: KindService, Name: "s", Payload: ServicePayload{HasFlags: true}}}, VersionServiceFlags},

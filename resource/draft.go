@@ -196,7 +196,7 @@ type PlanDraft struct {
 	// Restart restarts the unit once when it is already running
 	// (service or timer drafts).
 	Restart bool
-	// EnableOnly skips start/stop for timer present (enable/disable only).
+	// EnableOnly skips runtime actions for service/timer (enable/disable only).
 	EnableOnly bool
 	// IfChanged arms the draft's change gate (the OnChange option): a gated
 	// command is skipped entirely, a service/timer's restart/reload action

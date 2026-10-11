@@ -9,7 +9,8 @@ import (
 // applyWith converges s through backend b. This is the one copy of the
 // service policy shared by every OS backend: reject WithUser where the
 // backend has no per-user manager and WithFlags where it has no flags
-// setting, probe running/enabled (and the flags), derive the action list,
+// setting, probe enabled (and runtime state unless enable-only), read flags,
+// derive the action list,
 // honour the change gate and dry-run, run the actions in order, and note
 // the result. Tests call it directly with a fake backend, so no detector or
 // runner global has to be patched to exercise the policy.
@@ -26,9 +27,13 @@ func (s *Service) applyWith(b backend) error {
 		return err
 	}
 	u := unit{name: s.name, user: s.user}
-	running, err := b.running(u)
-	if err != nil {
-		return err
+	var running bool
+	if !s.enableOnly {
+		var err error
+		running, err = b.running(u)
+		if err != nil {
+			return err
+		}
 	}
 	enabled, disable, err := probeEnablement(b, u)
 	if err != nil {
@@ -54,10 +59,11 @@ func (s *Service) applyWith(b backend) error {
 // the service itself, so it fires the restart/reload even while the gate
 // would hold: that is what the File(rc.conf.local line) + OnChange(line)
 // spelling it replaces did. State convergence (enable/start/stop/disable)
-// is never gated — only the once-per-change action is.
+// is never gated — only the once-per-change action is. WithEnableOnly
+// omits every runtime action; flags still converge for the next start.
 func (s *Service) actions(id string, running, enabled bool, disable verb, flagsChanged bool) (verbs []verb, held bool) {
 	if s.Absent {
-		if running {
+		if running && !s.enableOnly {
 			verbs = append(verbs, verbStop)
 		}
 		if disable != "" {
@@ -67,6 +73,9 @@ func (s *Service) actions(id string, running, enabled bool, disable verb, flagsC
 	}
 	if !enabled {
 		verbs = append(verbs, verbEnable)
+	}
+	if s.enableOnly {
+		return verbs, false
 	}
 	switch {
 	case !running:

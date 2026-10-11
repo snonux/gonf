@@ -32,6 +32,7 @@ func main() {
 	Task("account", "A service account for Gonfy", account, Privileged())
 	Task("extras", "More system options, for a plan preview", extras, Privileged(), WhenLinux())
 	Task("daemon", "An OpenBSD daemon account in its own login class", daemon, Privileged(), WhenOpenBSD())
+	Task("boot-policy", "Boot enablement while Gonfy owns runtime state", bootPolicy, Privileged())
 	cli.Main()
 }
 
@@ -104,6 +105,12 @@ func daemon() {
 	class := LoginClass("gonfyd", "", WithContent("gonfyd:\\\n\t:openfiles=4096:\\\n\t:tc=daemon:\n"))
 	// The account is created in that class (BSD only).
 	User("_gonfyd", WithLoginClass("gonfyd"), WithShell("/sbin/nologin"), DependsOn(class))
+}
+
+func bootPolicy() {
+	// Gonfy's failover manager decides when these services run.
+	Service("gonfy-tunnel", WithEnableOnly)
+	NoService("gonfy-old-tunnel", WithEnableOnly)
 }
 ```
 
@@ -200,6 +207,34 @@ $ id gonfy
 uid=1001(gonfy) gid=1002(gonfy) groups=1002(gonfy)
 ```
 
+## Leaving runtime state to Gonfy
+
+Gonfy's failover manager decides when his tunnel services run. The
+`boot-policy` task manages only their boot enablement, alongside the
+`webserver` example above that starts and enables nginx:
+
+- `Service("gonfy-tunnel", WithEnableOnly)` enables it without starting it.
+- `NoService("gonfy-old-tunnel", WithEnableOnly)` disables it without stopping it.
+
+Neither probes runtime state. Both retain dependency ordering with
+`DependsOn`, but reject `WithRestart`, `WithReload` and `OnChange` because
+those request runtime actions or a gate with nothing to hold. BSD
+`WithFlags` can still update flags for the next start; absent flags and
+systemd flags remain refused.
+
+Preview the new task without changing the host:
+
+```text
+$ ./gonf plan -redacted boot-policy
+{"op":"plan_preview","version":29,"id":"plan"}
+{"op":"service","id":"Service[gonfy-tunnel]","name":"gonfy-tunnel","enable_only":true,"elevate":true}
+{"op":"service","id":"Service[gonfy-old-tunnel]","absent":true,"name":"gonfy-old-tunnel","enable_only":true,"elevate":true}
+wrote redacted preview to stdout (3 ops, 0 secret-bearing; not a plan, cannot be applied)
+```
+
+Only service enable-only plans require schema 29; the existing start and
+enable recipe and timer examples keep their older compatibility floors.
+
 ## More options, previewed
 
 > 🦫 **Gonfy says:** I moved house once. gonf changed my address in the account book, but I still had to carry the sticks myself.
@@ -273,6 +308,7 @@ Reference: [Package](../reference.md#package),
 |------|--------------|
 | `Packages("git", "tmux")`, `Package(name, IsLatest)` | several packages, or keep one upgraded |
 | `Service(name, WithReload)`, `WithFlags(...)` | reload instead of restart; BSD rc flags |
+| `Service(name, WithEnableOnly)`, `NoService(name, WithEnableOnly)` | enable/disable boot state; preserve runtime state |
 | `Service(name, WithUser)` | a systemd user service (`systemctl --user`) |
 | `Timer(name)` | enable and start an existing `.timer` unit |
 | `SystemdTimer(name, ...)` | write a `.timer` and a `.service` that runs the command once per trigger, reload systemd, enable and start the timer |

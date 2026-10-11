@@ -27,7 +27,8 @@ execute **single privilege chunks**, whose deps legitimately live in an earlier
 chunk, so a dep missing from the body must count as satisfied there. The same
 is true of every chunk-level entry point: `api.ApplyPlan`, `api.PushPayload`
 and `api.PushPayloadContext` (an already-encoded payload plus an elevate flag)
-run no pre-flight at all. The check
+run no whole-plan dependency pre-flight; single-chunk apply still checks
+change gates and enable-only service conflicts. The dependency check
 (`plan.ValidateChunks`, built on `plan.ValidateChunkDeps`) therefore runs
 wherever the **whole plan** is in hand, before anything is applied or uploaded:
 
@@ -36,10 +37,10 @@ wherever the **whole plan** is in hand, before anything is applied or uploaded:
 | record time (`api.RecordPlanTo`) | `gonf <task>`, `gonf plan`, push, cluster, fleet — dangling and forward cross-chunk deps, and cross-chunk change watches; the refused plan is never shipped or applied, and `gonf plan -o dir` writes nothing (see below) |
 | `api.ApplyChunks` | local apply of an already-recorded plan (same checks) |
 | `remote.Delivery.ToHost` | every SSH push and strict preview (single target, cluster, fleet), before any SSH traffic (same checks) |
-| `api.Apply` | registered resources, split into privilege chunks like `Run` after a dependency sort (see "Low-level `Apply()`"); without elevated ops the plan is one chunk, so only dangling deps and watches can fail; with them a dependency cycle and a watch crossing the privilege boundary are refused too |
+| `api.Apply` | registered resources, split into privilege chunks like `Run` after a dependency sort (see "Low-level `Apply()`"); without elevated ops the plan is one chunk, so dangling deps, watches and incompatible service enable-only requests can fail; with them a dependency cycle and a watch crossing the privilege boundary are refused too |
 
-All four run the one helper `plan.ValidateChunks` (dependency direction, then
-change-gate locality), so the checks cannot drift apart. `Run` therefore
+All four run the one helper `plan.ValidateChunks` (enable-only service
+conflicts, dependency direction, change-gate locality and requirement scopes), so the checks cannot drift apart. `Run` therefore
 validates twice on purpose: at record time, and again in `ApplyChunks`, which
 is a public entry point that cannot assume its ops came from a record in this
 process (they may be decoded from a file or written by an older gonf). Both
@@ -2215,3 +2216,16 @@ capability; a legacy custom store is refused when patterns are supplied,
 rather than reading and transporting bytes the recipe excludes. Disk and
 memory stores scan the same filtered manifest, so transport retains the
 same symlink/empty-directory policy as the direct path.
+
+## Service boot enablement (schema 29)
+
+`service.enable_only` leaves runtime state untouched while converging boot
+enablement. This reuses the timer wire field but adds service semantics:
+older service handlers ignore it and start or stop the daemon.
+`RequiredVersion` therefore raises only a service op carrying this field to
+29, so older destinations refuse before mutating anything. Ordinary
+services, enable-only timers and schemas 1–28 remain supported.
+Service declaration checks, whole-plan chunk preflight, direct apply
+preflight and the decoded handler reject combining this mode with restart,
+reload or a change gate. Malformed plans refuse before any earlier op or
+privilege chunk mutates the host; dependency ordering remains allowed.

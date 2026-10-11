@@ -86,6 +86,9 @@ func ApplyWithContext(ctx context.Context, ops []Op, facts Facts, planDir string
 	if err := ValidateHeader(ops[0]); err != nil {
 		return err
 	}
+	if err := ValidateServiceEnableOnly([][]Op{ops}); err != nil {
+		return err
+	}
 	// A direct `gonf apply` receives one privilege chunk (or an unsplit local
 	// plan), so it must enforce the same change-gate safety contract as the
 	// controller record/chunk/push paths. In particular, a manually supplied

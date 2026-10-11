@@ -54,7 +54,7 @@ var (
 	famServiceTimer = []string{"Service", "Timer", "SystemdTimer"}
 	famUser         = []string{"Service", "Timer", "SystemdTimer", "DaemonReload"}
 	famChangeGate   = []string{"Service", "Timer", "DaemonReload", "Command"}
-	famEnableOnly   = []string{"Timer", "SystemdTimer"}
+	famEnableOnly   = []string{"Service", "Timer", "SystemdTimer"}
 	famCronTimer    = []string{"Cron", "SystemdTimer"}
 	// famSensitive lists the payload-carrying kinds WithSensitive accepts;
 	// Link, Service, Timer, DaemonReload and LocalUser carry no payload.

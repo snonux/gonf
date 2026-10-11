@@ -100,7 +100,12 @@ import "encoding/json"
 // block (RequiredVersion).
 // Version 28 adds sync_dir exclusions: older destinations cannot preserve
 // excluded paths during pruning or filter arbitrary supplied blobs.
-const CurrentVersion = 28
+// Version 29 adds enable_only on service ops: older destinations would
+// start or stop the service. Only plans using it declare v29.
+const CurrentVersion = 29
+
+// VersionServiceEnableOnly introduced runtime-preserving service enablement.
+const VersionServiceEnableOnly = 29
 
 // VersionSyncDirExclude introduced sync_dir exclusion patterns.
 const VersionSyncDirExclude = 28
@@ -199,6 +204,7 @@ var supportedVersions = map[int]struct{}{
 	25:             {},
 	26:             {},
 	27:             {},
+	28:             {},
 	CurrentVersion: {},
 }
 
@@ -523,8 +529,8 @@ type Op struct {
 	// Reload reloads KindService once when it is already running
 	// (no restart fallback).
 	Reload bool `json:"reload,omitempty"`
-	// EnableOnly skips start/stop for KindTimer / KindSystemdTimer present
-	// (enable/disable only).
+	// EnableOnly skips runtime actions for KindService (schema v29),
+	// KindTimer / KindSystemdTimer (enable/disable only).
 	EnableOnly bool `json:"enable_only,omitempty"`
 	// IfChanged gates the op's mutating action on watched dependency
 	// outcomes (schema v2 for KindDaemonReload; schema v11 extended the

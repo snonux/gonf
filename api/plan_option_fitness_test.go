@@ -373,6 +373,8 @@ func TestPlanOptionFitness_Service(t *testing.T) {
 		{"RestartAndUser", []opt.ServiceOption{opt.WithRestart, opt.WithUser}, true, true},
 		{"Reload", []opt.ServiceOption{opt.WithReload}, true, true},
 		{"EnableAndStart", nil, false, false},
+		{"EnableOnly", []opt.ServiceOption{opt.WithEnableOnly, opt.WithUser}, false, false},
+		{"DisableOnly", []opt.ServiceOption{opt.WithEnableOnly, opt.IsAbsent}, true, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

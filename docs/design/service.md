@@ -39,7 +39,33 @@ For dedicated systemd timer units, prefer [`Timer` / `NoTimer`](timer.md).
 
 `Run`, `push`, `apply`, and `fleet` all go through the one apply engine:
 Service records a `service` plan op (name, absent, restart/reload, user,
-flags) that is applied like any other resource (see [plan.md](plan.md)).
+flags, enable_only) that is applied like any other resource (see [plan.md](plan.md)).
+
+## Boot enablement without runtime ownership
+
+```go
+Service("gonfy-tunnel", WithEnableOnly)
+NoService("gonfy-old-tunnel", WithEnableOnly)
+```
+
+`WithEnableOnly` manages boot enablement while another actor, such as
+Gonfy's failover manager, owns runtime state. Present enables, absent
+disables, and neither probes runtime state nor starts, stops, restarts or
+reloads the daemon. This is shared policy in `Service.actions`, so all four
+backends keep their existing enablement mechanisms and runner injection.
+Systemd's static and runtime-only enablement handling stays the same.
+
+Combining it with `WithRestart`, `WithReload` or `OnChange` is a declaration
+error, regardless of option order or absence. A service gate controls only
+restart/reload; enabling remains unconditional, so the gate has no action
+to hold in this mode. `DependsOn` still orders boot enablement. Timer's
+existing gate behavior is unchanged. BSD startup flags can be converged
+without a runtime action; absent flags and systemd flags remain refused.
+
+The flat draft/op `EnableOnly` field records this intent. A service op with
+it needs schema 29: older handlers ignore the field and start or stop the
+service. Ordinary service ops and enable-only timers keep their existing
+floors. The new destination still applies schemas 1–28.
 
 ## Startup flags
 
@@ -63,7 +89,8 @@ Service("nsd", WithFlags("-c /var/nsd/etc/nsd.conf"))
 - A flags change is a change of the service: it notes `Service[NAME]`
   changed and fires its `WithRestart`/`WithReload` even while its
   `OnChange` gate holds. Flags are daemon arguments, so pair them with
-  `WithRestart`; a reload does not apply them.
+  `WithRestart` when gonf owns runtime state; a reload does not apply them.
+  With `WithEnableOnly`, only future starts use changed flags.
 - OpenBSD empty flags pass no argument: rcctl writes the plain `NAME_flags=`
   line for a base daemon that is off by default and has no default flags
   (httpd, relayd, inetd, ...), the line `rcctl enable` writes too, and drops

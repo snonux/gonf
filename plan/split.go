@@ -12,7 +12,8 @@ type Chunk struct {
 }
 
 // Refusal is implemented by every error ValidateChunkDeps,
-// ValidateChangeGates and ValidateRequirementScopes return, and by every
+// ValidateChangeGates, ValidateServiceEnableOnly and ValidateRequirementScopes
+// return, and by every
 // "plan: "-prefixed error of the blob store's write path (blobError:
 // Store.WriteFile, WriteTree and WriteGlob, their packaging scans, BlobRefFor
 // and the missing-plan-directory error). Reason is
@@ -122,17 +123,20 @@ func ValidateChunkDeps(chunks [][]Op) error {
 
 // ValidateChunks is the whole-plan pre-flight every controller-side entry point
 // runs over the split privilege chunks: ValidateChunkDeps (dangling and forward
-// cross-chunk dependencies), ValidateChangeGates (watches must live in the
-// gated op's own chunk) and ValidateRequirementScopes (requirement blocks may
+// cross-chunk dependencies), ValidateServiceEnableOnly (runtime policy),
+// ValidateChangeGates (watches must live in the gated op's own chunk) and ValidateRequirementScopes (requirement blocks may
 // only use and sit under host-fact conditions; this is the record-time refusal
 // of that rule). api.RecordPlanTo, api.ApplyChunks, api.Apply and
 // remote.Delivery.ToHost all call this one helper instead of each composing the
-// three checks, so a check added here reaches all of them at once. The error is
+// checks, so a check added here reaches all of them at once. The error is
 // a Refusal (see there for the exact concrete types).
 func ValidateChunks(chunks []Chunk) error {
 	bodies := make([][]Op, len(chunks))
 	for i, ch := range chunks {
 		bodies[i] = ch.Ops
+	}
+	if err := ValidateServiceEnableOnly(bodies); err != nil {
+		return err
 	}
 	if err := ValidateChunkDeps(bodies); err != nil {
 		return err

@@ -15,6 +15,7 @@ func main() {
 	Task("account", "A service account for Gonfy", account, Privileged())
 	Task("extras", "More system options, for a plan preview", extras, Privileged(), WhenLinux())
 	Task("daemon", "An OpenBSD daemon account in its own login class", daemon, Privileged(), WhenOpenBSD())
+	Task("boot-policy", "Boot enablement while Gonfy owns runtime state", bootPolicy, Privileged())
 	cli.Main()
 }
 
@@ -87,4 +88,10 @@ func daemon() {
 	class := LoginClass("gonfyd", "", WithContent("gonfyd:\\\n\t:openfiles=4096:\\\n\t:tc=daemon:\n"))
 	// The account is created in that class (BSD only).
 	User("_gonfyd", WithLoginClass("gonfyd"), WithShell("/sbin/nologin"), DependsOn(class))
+}
+
+func bootPolicy() {
+	// Gonfy's failover manager decides when these services run.
+	Service("gonfy-tunnel", WithEnableOnly)
+	NoService("gonfy-old-tunnel", WithEnableOnly)
 }

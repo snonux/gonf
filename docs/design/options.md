@@ -75,7 +75,7 @@ and backend limits.
 | `WithRestart` | Restart once when already active (Service, Timer, SystemdTimer) |
 | `WithReload` | Reload once when already active (**Service only**; no restart fallback) |
 | `WithUser` | `systemctl --user` (systemd Service/Timer/DaemonReload/SystemdTimer) |
-| `WithEnableOnly` | Timer/SystemdTimer: enable/disable only (skip start/stop) |
+| `WithEnableOnly` | Service/Timer/SystemdTimer: enable/disable only (skip runtime actions). Service refuses restart, reload and change gates; BSD flags may still converge for a future start. |
 | `OnChange(res…)` | Command: run only when watched resources changed; Service/Timer: still converge state, but fire `WithRestart`/`WithReload` only on a watched change; DaemonReload: reload only on a watched change. It also records ordering dependencies. |
 | `WatchChanges(ids…)` | The ids-level `OnChange` (same gate, no ordering dependencies); used by plan handlers and compositions |
 | `IfChanged` | Legacy DaemonReload spelling: arms the gate, watching the reload's `DependsOn` ids unless ids are named; prefer `OnChange(res…)` in recipes |
