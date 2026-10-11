@@ -16,12 +16,14 @@ package main
 import (
 	"os"
 
+	//lint:ignore ST1001 recipes use the unqualified gonf DSL.
 	. "github.com/snonux/gonf/api"
 	"github.com/snonux/gonf/cli"
 )
 
 func main() {
 	Task("lines", "Own single lines and a block of ~/gonf-tutorial/app.conf", lines)
+	Task("shellvars", "Own several settings in Gonfy’s lodge.conf", shellvars)
 	Task("script", "Install a shell script only if it parses", script)
 	Task("greeter", "Install two scripts that must work together", greeter)
 	Task("shared", "Two declarations share ~/gonf-tutorial/lodge/hosts", shared)
@@ -40,6 +42,14 @@ func lines() {
 		WithBlock("peers", "peer=10.0.0.1", "peer=10.0.0.2"),
 		// Own an rc.conf-style shell variable: greeting="hello from gonfy".
 		WithShellVar("greeting", "hello from gonfy"),
+		WithMode(0o644))
+}
+
+func shellvars() {
+	// Equivalent to WithShellVar("lodge_name", "Gonfy's lodge") and
+	// WithShellVar("lodge_open", "YES"), with less repeated option assembly.
+	File(DestHome("gonf-tutorial/lodge.conf"),
+		WithShellVars("lodge_name", "Gonfy's lodge", "lodge_open", "YES"),
 		WithMode(0o644))
 }
 
@@ -170,6 +180,27 @@ note=mine
 `WithShellVar(key, value)` is `WithKeyedLine(key+"=", key+"=\"value\"")`
 with the quoting done for you, for `rc.conf`, `rc.conf.local`,
 `loader.conf` and similar files.
+
+For several settings, `WithShellVars(k, v, ...)` groups the same edits into
+one reusable option. The `shellvars` task above shows it beside the singular
+form: pairs keep their order, and shell quoting and ownership checks stay the
+same. An empty list does nothing. Odd lists, invalid names, line breaks in
+values or different values for the same key refuse the declaration before
+any file is written. Repeating the same key and value is harmless.
+
+Running the bulk example twice creates the settings and then converges without
+changes. This capture uses a temporary home to keep the example isolated:
+
+```text
+$ HOME=/tmp/gonf-a93-home.fugxLl ./gonf shellvars
+2026/10/11 21:32:13 updated /tmp/gonf-a93-home.fugxLl/gonf-tutorial/lodge.conf
+summary: 0 ok, 1 changed, 0 skipped, 0 would-change
+$ cat /tmp/gonf-a93-home.fugxLl/gonf-tutorial/lodge.conf
+lodge_name="Gonfy's lodge"
+lodge_open="YES"
+$ HOME=/tmp/gonf-a93-home.fugxLl ./gonf shellvars
+summary: 1 ok, 0 changed, 0 skipped, 0 would-change
+```
 
 Reference: [File](../reference.md#file) (keyed lines and managed blocks).
 

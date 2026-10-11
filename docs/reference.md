@@ -3,7 +3,7 @@
 <img src="../assets/logo-light.svg" alt="Gonfy, the gonf beaver" width="96" align="right">
 
 Gonfy's cheat sheet: every user-facing feature in one place, current as of
-v0.24.2 (plan schema 27). Background, rationale and history live in
+the development tree after v0.24.2 (plan schema 28). Background, rationale and history live in
 [design/](design/README.md).
 New to gonf? Start with the [tutorial](tutorial/README.md).
 
@@ -70,6 +70,7 @@ duplicate names).
 |-----|--------|
 | `Task(name, desc, fn, opts...)` | Register a task. A `nil` option is a declaration error and the task is not registered. |
 | `RegisterMethods(v, opts...)` | Register every exported method of struct `v` as a task. |
+| `RegisterGroup(items []any, opts ...RegisterOption)` | Call `RegisterMethods` for each item in order with shared options. |
 | `Aggregate(name, desc, regex)` | Task that records every activated task matching `regex`, sorted by name. |
 | `AggregateTasks(name, desc, members...)` | Task that records the listed tasks in the listed order. |
 | `Alias(name, desc, target)` | Second public name for `target`. Empty `desc` lists as `alias of <target>`. |
@@ -162,11 +163,20 @@ or `Home`: those are api functions.) Pass
 `WithPrefix` when several structs share one namespace, such as
 `WithPrefix("frontends_")` on `frontends.Web` and `openbsd.Unattended`.
 
+`RegisterGroup(items []any, opts ...RegisterOption)` groups repeated
+`RegisterMethods` calls. It accepts the same options from the table above.
+Without `WithPrefix`, each item keeps its derived default prefix; with it,
+all items share that namespace. Cluster guards, task options, companion
+methods and `Needs` resolution work as in separate calls. An empty slice
+registers nothing. A nil or invalid item is refused while later items are
+still checked; a declaration error prevents recording or applying the tasks.
+Name collisions follow the same refusal rules as separate registrations.
+
 `RegisterOnCluster(name, structs...)` is `RegisterMethods(v, OnCluster(name))`
 for each struct, each under its own default prefix. A `RegisterOption` or
 `TaskOption` in the list applies to all of them; `WithPrefix` is refused
-(use `RegisterMethods` for a shared prefix), and so is a `nil` item (also
-a nil struct pointer such as `(*Carp)(nil)`) or a `nil` TaskOption: either
+(use `RegisterGroup` or `RegisterMethods` for a shared prefix), and so is a
+`nil` item (also a nil struct pointer such as `(*Carp)(nil)`) or a `nil` TaskOption: either
 is a declaration error and registers none of the structs:
 
 ```go
@@ -395,6 +405,37 @@ sources (`WithSource`, `WithSourceGlob`, `WithSourceBase`,
 `InstallFile`/`SyncDir` sources) and `WithHome` refuse the token as a
 declaration error.
 
+### Controller source checks
+
+These checks run immediately on the controller, even during plan recording.
+They expand `~` and `${HOME}` using the controller's home, accept symlinks to
+the required type and emit no destination guards or resources. Use the inert
+result to skip declarations depending on a refused source; later declarations
+can still be checked, but the declaration error refuses recording or apply.
+
+| Helper | Contract |
+|--------|----------|
+| `OptionalControllerDir(path, purpose string) bool` | True for a readable directory. A missing directory returns false without error; unreadable directories, wrong types and other I/O errors report a declaration error naming purpose and path and return false. |
+| `RequireControllerFile(path, purpose, hint string) string` | Returns the expanded path of a readable regular file. Missing, unreadable or wrong-type sources report a declaration error naming purpose, path and hint and return an empty string. Reads the file to check readability; an empty file is valid. |
+| Arguments | Path and purpose must be non-empty; a required file also needs a non-empty hint. |
+| Lifetime | Checks observe the source now. Source packaging reads it again; a later change or disappearance can still fail packaging. |
+
+```go
+if OptionalControllerDir(Home("git", "gonfy-postcards"), "Gonfy's postcards") {
+    Dir(DestHome("postcards"), WithSource(Home("git", "gonfy-postcards")))
+}
+source := RequireControllerFile(Home("git", "lodge", "banner.txt"),
+    "Gonfy's banner", "Restore the lodge checkout")
+if source != "" {
+    File(DestHome("banner.txt"), WithSource(source))
+}
+```
+
+`WhenPathExists` checks the destination during recorded apply instead. Use
+it for a destination condition, and these helpers for assets needed on the
+controller to build a plan. Underlying I/O causes remain available through
+`errors.Is`/`errors.As` on the recording or apply error.
+
 ## Resources
 
 > 🦫 **Gonfy says:** Every resource is one stick in the lodge, described as it should end up, not as a step to take.
@@ -480,6 +521,7 @@ NoFile("/tmp/old.txt")
 | `WithLines(l...)` / `WithoutLines(l...)` | Ensure / remove exact lines. `WithLine`/`WithoutLine` are singular forms. |
 | `WithKeyedLine(key, line)` | Own the line starting with `key` (below). |
 | `WithShellVar(key, value)` | `WithKeyedLine(key+"=", key+"=\"value\"")` for rc.conf-style files, with `\ " $` and backquote escaped in the value. `key` must be a shell name (dots allowed, for loader.conf). |
+| `WithShellVars(k, v, ...)` | Ordered alternating keys and values, each handled by `WithShellVar`. Snapshots input for reuse. Empty input does nothing; odd input, invalid keys and conflicting assignments refuse the declaration. |
 | `WithBlock(name, lines...)` | Own the lines between `# BEGIN GONF <name>` and `# END GONF <name>` (below). |
 | `WithValidation(bin, args)` | Validate a candidate before publishing (below). |
 | `WithMode(m)` | Mode. Setuid/setgid/sticky accepted as raw octal or `os.Mode*` flags. Bits above `0o7777` are refused. |
@@ -576,20 +618,46 @@ NoDir("/tmp/stale", WithPrune)
 | `WithOwner` / `WithGroup` | Ownership. |
 | `WithSource(dir)` | Tree sync: mirror the tree, symlinks and empty dirs included. |
 | `WithSourceGlob(pattern)` | Glob sync: install matching regular files by basename. Cannot combine with `WithSource`. |
+| `WithExclude(patterns...)` | Append snapshotted source exclusions; matching destination paths stay unmanaged, including with `WithPrune`. Requires a present source sync. |
 | `WithPrune` | Remove unexpected entries (below); with `NoDir`, remove a non-empty directory. |
 | `WithSourceBase(dir)` | Override the declared source directory used for `{{.Param}}`. |
 
 Prune semantics:
 
 - Tree sync removes every destination entry without a source counterpart,
-  recursively. `x` is expected when the source has `x.tmpl`.
+  recursively. `x` is expected when the source has `x.tmpl`. With exclusions,
+  matching paths and the ancestors needed to retain them are preserved.
 - Glob sync removes only non-matching regular files directly under the
   destination. Subdirectories and symlinks stay.
 - Do not prune a directory that holds ConfigSet members or staging dirs:
   pruning deletes their pending markers and backups.
 
 `.tmpl` entries in a synced tree render on the destination. FIFOs, sockets
-and devices in a source tree fail the record.
+and devices in an included source tree fail the record. Excluded entries are
+not read or traversed.
+
+Exclusions use slash-separated relative `path.Match` patterns (`*`, `?`,
+character classes). A pattern without `/` matches a component at any depth;
+a pattern with `/` matches paths relative to the sync root. Matching a
+directory excludes its entire subtree. Glob syncs are flat: patterns match
+the installed basenames. Patterns also match a name before its trailing
+`.tmpl`, and pruning protects the corresponding rendered filename when a
+pattern names the template. There is no `**` globstar or backslash escaping.
+Empty or absolute patterns, empty/`.`/`..` components and malformed patterns
+are declaration errors. Multiple calls append; an empty pattern list has no
+effect. Non-empty exclusions without a source or with `IsAbsent` are refused.
+
+Excluded paths are not copied, chmod'ed or pruned, and excluded source bytes
+never enter the plan blobs. Destination root attributes are still managed.
+Use an explicit `NoFile`/`NoDir` for intentional removal of old excluded
+paths. Existing symlink rules stay in force for included entries; excluding
+a link's target does not make a dangling included link valid.
+
+```go
+Dir(DestHome("postcards"), WithSource("assets/postcards"),
+    WithExclude("private", "*.tmp", "drafts/unfinished"), WithPrune)
+SyncDir(DestHome("bin"), "scripts/*", WithExclude("quicklog-drain-e2e"))
+```
 
 ### Link
 
@@ -647,6 +715,43 @@ in double quotes is a declaration error. For real shell syntax use
 can be a `DependsOn`/`OnChange` target. Use it instead of
 `Command("true", nil, Unless("true", nil), WithName(name))`. It needs a
 schema 25 destination.
+
+### Sysctls
+
+`Sysctls(path string, kv []string, opts ...FileOption) Resource` manages
+persistent and live sysctl values from one ordered alternating key/value list:
+
+```go
+settings := Sysctls("/etc/sysctl.d/90-gonfy.conf",
+    List("vm.swappiness", "10", "net.ipv4.ip_forward", "0"), RootOwned)
+Service("gonfy", DependsOn(settings))
+```
+
+It registers one `File` with `WithKeyedLine(key+"=", key+"="+value)` edits,
+then one `Command[sysctl.<key>]` per distinct key. Each command depends on
+the file and runs `sysctl key=value` unless `sysctl -n key` exits zero with
+trimmed stdout equal to the desired value. Probes run on every apply;
+matching values are skipped, and live drift is corrected even when the file
+is unchanged. A probe execution error fails the apply; a nonzero probe exit
+allows the setter to run, like any `Unless` guard. Setter errors fail apply.
+Dry-run probes live state and predicts file/command changes without writing
+or setting values. The returned handle includes the file and all commands
+for `DependsOn` and `OnChange`.
+
+| Input / option | Contract |
+|----------------|----------|
+| `path` | Non-empty destination config path. The recipe chooses an OS-appropriate boot config file and manages its parent directory. |
+| `kv` | Alternating keys and values in declaration order. Exact repeated pairs collapse; an empty list registers nothing. |
+| Keys | Letters, digits, underscores and dots, starting with a letter or underscore. |
+| Values | Non-empty, single-line, no `#` or NUL, no surrounding whitespace; persistent spelling is preserved verbatim. |
+| File options | Ownership, mode, name, dependencies and sensitivity configure the file. Usual keyed-line ownership checks apply; content/source/validation conflicts are refused. `IsAbsent` is refused. `WithSensitive` also marks the commands sensitive. |
+| Misuse | Odd lists, invalid keys/values, conflicting values or option misuse report a declaration error. Settings are checked before registration; a refused file creates no live commands. |
+| IDs | Live command IDs use only the key, so declaring a key twice across helper calls collides, as do duplicate file IDs. Use distinct named files for declarations sharing a config path. |
+
+This is composition of the existing file and command plan kinds, with no
+new backend or plan schema. The destination must provide `sysctl` supporting
+`-n` and `key=value`; host guards, privilege and desired settings remain recipe
+choices.
 
 ### Package
 
@@ -1142,7 +1247,7 @@ redacted against resolved secrets.
 | `-privilege m` | `none` | `none`, `sudo` or `doas` for local elevated chunks. |
 | `-cmd-timeout d` | `5m` | Per backend command and validator. SIGTERM on expiry, SIGKILL 10s later. `0` or negative keeps the default. Non-default values are forwarded to the elevated re-exec and to remote gonf versions that accept the flag. |
 | `-version` | | Release version. |
-| `-plan-version` | | Plan schema this binary emits and applies (27). |
+| `-plan-version` | | Plan schema this binary emits and applies (28). |
 | `-strict-preview-version` | | Strict-preview capability (1). |
 | `-sealed-version` | | Sealed-plan capability (1). |
 | `-signed-version` | | Signed-envelope version (1). |
@@ -1254,7 +1359,8 @@ Output directory rules:
 
 - The header version is the lowest schema that can carry the plan. A plan
   without sensitive ops, keyed lines, pruning glob syncs, service flags,
-  noops, `${HOME}` in a ConfigSet path or managed blocks declares 21.
+  noops, `${HOME}` in a ConfigSet path, managed blocks or sync exclusions
+  declares 21.
 - A destination refuses a newer schema before any change.
 - Ops apply in dependency order within each run between `when_*`
   boundaries, parent directories included (see [Shared options](#shared-options));
@@ -1294,6 +1400,21 @@ Schema versions (what an older destination refuses):
 | 25 | `service.flags`/`has_flags`, `noop` (only when present) |
 | 26 | `${HOME}` in `config_set` member paths, `chroot`, `staging_dir` (only when present) |
 | 27 | `file.blocks` (`WithBlock`, only when present) |
+| 28 | `sync_dir.exclude` (`WithExclude`, only when present) |
+
+`sync_dir.exclude` is an array of relative exclusion patterns with the rules
+above. A plan carrying a non-empty list declares schema 28 so older
+destinations refuse it before applying; the destination repeats filtering
+and protects excluded paths when pruning, even for a supplied blob that
+contains excluded entries.
+
+`plan.FilteredBlobStore` is an optional extension of the recording store:
+`Store` and `MemoryStore` implement `WriteTreeFiltered(name, src, patterns)`
+and `WriteGlobFiltered(name, glob, patterns)`. The ordinary `WriteTree` and
+`WriteGlob` methods retain their defaults. `plan.WriteSyncSource(store, name,
+sourceDir, sourceGlob, patterns)` chooses glob or tree packaging and requires
+the filtered extension for non-empty exclusions; a custom store lacking it
+is refused rather than packaging excluded bytes.
 
 ### Pre-flight
 

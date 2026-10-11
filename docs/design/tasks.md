@@ -119,6 +119,12 @@ are promoted as a whole, so body-level gates compose with `Privileged()`).
 
 ## RegisterMethods
 
+`RegisterGroup(items, opts...)` delegates to `RegisterMethods` for each item
+in order. Shared registration options require no second reflection or
+validation path. Each item retains its default prefix unless `WithPrefix`
+is supplied; invalid items do not stop checking later declarations.
+
+
 Reflect over exported methods on a struct. Companion methods:
 
 - `Opts() TaskOptions` — struct-level **default** `TaskOption`s for every

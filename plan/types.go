@@ -98,7 +98,12 @@ import "encoding/json"
 // block-only edit converged without writing it, so it must refuse v27 at the
 // header gate. A recorded plan declares v27 only when a file op carries a
 // block (RequiredVersion).
-const CurrentVersion = 27
+// Version 28 adds sync_dir exclusions: older destinations cannot preserve
+// excluded paths during pruning or filter arbitrary supplied blobs.
+const CurrentVersion = 28
+
+// VersionSyncDirExclude introduced sync_dir exclusion patterns.
+const VersionSyncDirExclude = 28
 
 // VersionBlocks is the plan schema version that introduced the file op
 // blocks field (WithBlock). Tests pin it so a merge that loses the bump (and
@@ -193,6 +198,7 @@ var supportedVersions = map[int]struct{}{
 	24:             {},
 	25:             {},
 	26:             {},
+	27:             {},
 	CurrentVersion: {},
 }
 

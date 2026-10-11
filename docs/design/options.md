@@ -37,10 +37,16 @@ contract".
 ## Filesystem
 
 See [file-dir-link.md](file-dir-link.md): `WithContent`, `WithSource`,
-`WithSourceGlob`, `WithLine`, `WithoutLine`, `WithKeyedLine`, `WithOwner`,
+`WithSourceGlob`, `WithExclude`, `WithLine`, `WithoutLine`, `WithKeyedLine`, `WithShellVar`,
+`WithShellVars`, `WithOwner`,
 `WithGroup`, `WithMode`, `WithFileMode`, `WithPrune`, `WithSymlink`, `WithHardlink`, and
 `WithName`. A named File keeps its target path but gets the explicit
 `File[name]` identity needed when several declarations edit one path.
+
+`WithShellVars(k, v, ...)` snapshots an ordered alternating key/value list
+and composes `WithShellVar` for each pair. It lowers to the existing keyed-line
+file edits, so quoting, ownership validation and the plan schema stay the same.
+Odd lists report option misuse on the target and refuse registration.
 
 ## Package
 

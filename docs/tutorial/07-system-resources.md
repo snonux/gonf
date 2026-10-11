@@ -293,3 +293,76 @@ Reference: [Package](../reference.md#package),
 ---
 
 ← [6. Commands and change gates](06-commands.md) · [Contents](README.md) · Next: [8. Organizing tasks](08-organizing-tasks.md) →
+
+## Persistent and live kernel settings
+
+`Sysctls` combines a boot-time config file and live `sysctl` settings. The
+separate recipe below shows the existing `File` plus `Command` form beside
+the helper. Both check the live value on every apply: gating only on the file
+would leave live drift uncorrected once the file converged.
+
+```go
+// Command gonf manages persistent and live sysctls (tutorial chapter 7).
+package main
+
+import (
+	"os"
+
+	//lint:ignore ST1001 recipes use the unqualified gonf DSL.
+	. "github.com/snonux/gonf/api"
+	"github.com/snonux/gonf/cli"
+)
+
+func settings() (string, string) {
+	value := os.Getenv("SYSCTL_SWAPPINESS")
+	if value == "" {
+		value = "60"
+	}
+	return DestHome("gonf-tutorial/lodge-sysctl.conf"), value
+}
+
+func separate() {
+	path, value := settings()
+	conf := File(path, WithKeyedLine("vm.swappiness=", "vm.swappiness="+value), WithMode(0o644))
+	Command("sysctl", List("vm.swappiness="+value), WithName("sysctl.vm.swappiness"), DependsOn(conf),
+		Unless("sysctl", List("-n", "vm.swappiness"), ExpectStdout(value)))
+}
+
+func combined() {
+	path, value := settings()
+	Sysctls(path, List("vm.swappiness", value), WithMode(0o644))
+}
+
+func main() {
+	Task("separate", "Manage Gonfy's setting with File and Command", separate, WhenLinux())
+	Task("combined", "Manage the same setting with Sysctls", combined, WhenLinux())
+	cli.Main()
+}
+```
+
+The tutorial file under `~/gonf-tutorial` demonstrates persistence; the OS
+does not read that path at boot. In a real recipe choose `/etc/sysctl.conf`
+or a file under `/etc/sysctl.d`, manage its parent, and set ownership and
+privilege for the host. The returned handle includes both the file and the
+commands, so other resources can use `DependsOn(settings)`.
+
+For a local demonstration that preserves the current kernel value, first
+read it into `SYSCTL_SWAPPINESS`. The capture below uses a temporary home.
+The first run creates the file, and the second reports it converged; the
+live setter is skipped on both runs because the value already matches.
+
+```text
+$ SYSCTL_SWAPPINESS=$(sysctl -n vm.swappiness)
+$ HOME=/tmp/gonf-c93-home.1GIHp3 SYSCTL_SWAPPINESS="$SYSCTL_SWAPPINESS" ./gonf combined
+2026/10/11 21:40:53 updated /tmp/gonf-c93-home.1GIHp3/gonf-tutorial/lodge-sysctl.conf
+2026/10/11 21:40:53 skipping Command[sysctl.vm.swappiness]: unless guard succeeded
+summary: 0 ok, 1 changed, 1 skipped, 0 would-change
+$ cat /tmp/gonf-c93-home.1GIHp3/gonf-tutorial/lodge-sysctl.conf
+vm.swappiness=60
+$ HOME=/tmp/gonf-c93-home.1GIHp3 SYSCTL_SWAPPINESS="$SYSCTL_SWAPPINESS" ./gonf combined
+2026/10/11 21:40:53 skipping Command[sysctl.vm.swappiness]: unless guard succeeded
+summary: 1 ok, 0 changed, 1 skipped, 0 would-change
+```
+
+Reference: [Sysctls](../reference.md#sysctls), including input constraints,
+error behavior, dry-run and command IDs.

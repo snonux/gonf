@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/snonux/gonf/internal/logger"
+	"github.com/snonux/gonf/internal/sourceexclude"
 	"github.com/snonux/gonf/plan"
 	"github.com/snonux/gonf/resource"
 	"github.com/snonux/gonf/resource/embed"
@@ -38,6 +39,7 @@ type Dir struct {
 	path       string
 	source     string
 	sourceGlob string
+	exclude    []string
 	// sourceBase is the recipe's declared source directory passed by plan
 	// apply (opt.WithSourceBase): the stable {{.Param}} base for .tmpl
 	// entries copied from a synced tree or glob blob (glob entries use
@@ -65,6 +67,9 @@ func (d *Dir) SetSource(source string) { d.source = source }
 
 // SetSourceGlob implements opt.SourceGlobable.
 func (d *Dir) SetSourceGlob(pattern string) { d.sourceGlob = pattern }
+
+// SetExclude implements opt.Excludable. Calls append snapshotted patterns.
+func (d *Dir) SetExclude(patterns []string) { d.exclude = append(d.exclude, patterns...) }
 
 // SetSourceBase implements opt.SourceBaseable. Plan apply passes the
 // recipe's declared source directory so .tmpl entries inside a synced tree
@@ -99,6 +104,7 @@ func (d *Dir) SetPrune() { d.prune = true }
 var (
 	_ opt.Sourced        = (*Dir)(nil)
 	_ opt.SourceGlobable = (*Dir)(nil)
+	_ opt.Excludable     = (*Dir)(nil)
 	_ opt.SourceBaseable = (*Dir)(nil)
 	_ opt.Sensitivable   = (*Dir)(nil)
 	_ opt.MisuseReporter = (*Dir)(nil)
@@ -128,6 +134,13 @@ func build(path string, opts ...opt.DirOption) (*Dir, error) {
 
 	if d.source != "" && d.sourceGlob != "" {
 		return nil, fmt.Errorf("directory %s: WithSource and WithSourceGlob are mutually exclusive", path)
+	}
+
+	if err := sourceexclude.Validate(d.exclude); err != nil {
+		return nil, err
+	}
+	if len(d.exclude) > 0 && (d.Absent || d.source == "" && d.sourceGlob == "") {
+		return nil, fmt.Errorf("directory %s: WithExclude requires a present source sync", path)
 	}
 
 	return d, nil
@@ -513,6 +526,7 @@ func (d *Dir) planDraft() resource.PlanDraft {
 		// the root, so the per-file param is dir(glob) + "/" + basename.
 		draft.Payload = SyncPayload{
 			SourceGlob: d.sourceGlob,
+			Exclude:    slices.Clone(d.exclude),
 			SourceDir:  filepath.ToSlash(filepath.Dir(d.sourceGlob)),
 			FileMode:   opt.ModeToWire(d.fileMode),
 		}
@@ -520,6 +534,7 @@ func (d *Dir) planDraft() resource.PlanDraft {
 		draft.Kind = "sync_dir"
 		draft.Payload = SyncPayload{
 			SourceDir: filepath.ToSlash(d.source),
+			Exclude:   slices.Clone(d.exclude),
 			FileMode:  opt.ModeToWire(d.fileMode),
 		}
 	default:

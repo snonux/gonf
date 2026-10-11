@@ -208,6 +208,78 @@ web_logrotate	Rotates the web server logs (OpenBSD only) [destination-guarded: g
 - `web_logrotate` is marked `[destination-guarded: goos=openbsd]`: its guard
   does not hold on this Linux machine.
 
+## Sharing registration options
+
+For several structs that share a prefix, cluster or guard, `RegisterGroup`
+replaces repeated `RegisterMethods` calls. This separate recipe keeps the
+existing website recipe above intact; the commented calls show the same
+registration without the helper.
+
+```go
+// Command gonf shares task registration options (tutorial chapter 8).
+package main
+
+import (
+	//lint:ignore ST1001 recipes use the unqualified gonf DSL.
+	. "github.com/snonux/gonf/api"
+	"github.com/snonux/gonf/cli"
+)
+
+// Roof holds Gonfy’s roof task.
+type Roof struct{}
+
+// Door holds Gonfy’s door task.
+type Door struct{}
+
+// Seal installs the roof setting.
+func (Roof) Seal() {
+	File(DestHome("gonf-tutorial/roof.conf"), WithContent("sealed=yes\n"), WithMode(0o644))
+}
+
+// Hang installs the door setting.
+func (Door) Hang() {
+	File(DestHome("gonf-tutorial/door.conf"), WithContent("hung=yes\n"), WithMode(0o644))
+}
+
+// OptsHang makes the roof task a prerequisite of hanging the door.
+func (Door) OptsHang() TaskOptions { return TaskOptions{Needs(Roof.Seal)} }
+
+func main() {
+	// Equivalent separate calls:
+	// RegisterMethods(Roof{}, WithPrefix("lodge_"), WhenLinux())
+	// RegisterMethods(Door{}, WithPrefix("lodge_"), WhenLinux())
+	RegisterGroup([]any{Roof{}, Door{}}, WithPrefix("lodge_"), WhenLinux())
+	AggregatePrefix("lodge")
+	cli.Main()
+}
+```
+
+The roof and door share the `lodge_` prefix and Linux guard. The door's
+`Needs(Roof.Seal)` still resolves to `lodge_seal`. Without `WithPrefix`,
+each struct keeps its own default prefix. `OnCluster(name)` can be shared
+in the same option list when that cluster is already registered.
+
+An empty group does nothing. Invalid items or options report declaration
+errors through `RegisterMethods`; later items are still checked, and the
+record or apply is refused. A shared prefix requires unique method names
+across the group, just like separate calls with that prefix.
+
+A capture from this recipe shows both the shared names and the prerequisite
+order. Applying uses a temporary home:
+
+```text
+$ ./gonf -list
+lodge	Run all lodge_* tasks
+lodge_hang
+lodge_seal
+$ HOME=/tmp/gonf-b93-home.gtzxpX ./gonf lodge_hang
+2026/10/11 21:34:18 updated /tmp/gonf-b93-home.gtzxpX/gonf-tutorial/roof.conf
+2026/10/11 21:34:18 updated /tmp/gonf-b93-home.gtzxpX/gonf-tutorial/door.conf
+summary: 0 ok, 2 changed, 0 skipped, 0 would-change
+$ HOME=/tmp/gonf-b93-home.gtzxpX ./gonf lodge_hang
+summary: 2 ok, 0 changed, 0 skipped, 0 would-change
+```
+
 ## Needs pulls in dependencies
 
 > 🦫 **Gonfy says:** You can't hang the door before the wall is up. `Needs` builds the wall first.

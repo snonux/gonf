@@ -232,9 +232,9 @@ func packageSource(op plan.Op, d resource.PlanDraft, store plan.BlobStore, name 
 		plan.SetFileContentB64(&op, "")
 		op.Blob, err = store.WriteFile(name, data)
 	case sourceGlob != "":
-		op.Blob, err = store.WriteGlob(name, sourceGlob)
+		op.Blob, err = plan.WriteSyncSource(store, name, "", sourceGlob, plan.PayloadOf[plan.SyncDirPayload](op).Exclude)
 	case sourceDir != "":
-		op.Blob, err = store.WriteTree(name, sourceDir)
+		op.Blob, err = plan.WriteSyncSource(store, name, sourceDir, "", plan.PayloadOf[plan.SyncDirPayload](op).Exclude)
 	}
 	return op, err
 }

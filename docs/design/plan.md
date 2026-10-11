@@ -375,7 +375,7 @@ ops, err := RecordPlan("my-plan", planDir, "home_helix", "home_tmux")
   subdirectories, symlinks and other entries alone — exactly what the direct
   `WithSourceGlob` path does (see
   [file-dir-link.md](file-dir-link.md#pruning-a-synced-directory)). Without
-  `glob` the op keeps tree semantics, whose prune removes every unmanaged
+  `glob` the op keeps tree semantics, whose prune removes every non-excluded unmanaged
   entry.
 - `SyncDir` packaging is one shared function (`plan.scanTree`) for both blob
   stores: directories (empty ones included) and symlinks (raw target string,
@@ -2196,3 +2196,22 @@ with the same plan handlers and applies them with `plan.Apply` after the
 same `plan.ValidateChunks` pre-flight (it refuses elevated ops, and
 `api`'s `TestTestapplyOpsMatchApply` pins that it lowers the same ops as
 `api.Apply`).
+
+## Directory-sync exclusions (schema 28)
+
+`SyncDirPayload.Exclude` records `WithExclude`'s relative patterns. The
+resource draft snapshots the list and its handler clones it onto the op.
+Both controller blob stores filter with `internal/sourceexclude` before
+reading included files; excluded directories are not traversed. Apply
+rebuilds the same option from the op and preserves excluded destination
+entries and their ancestors during pruning. This requires schema 28 for any
+non-empty exclusion list; a plan without it keeps its earlier required
+version. Versions 1–27 remain accepted by the new destination.
+
+`FilteredBlobStore` adds filtered tree/glob writers without changing the
+`BlobStore` interface or its existing methods. `WriteSyncSource` routes both
+production packaging and `internal/testapply` through that optional
+capability; a legacy custom store is refused when patterns are supplied,
+rather than reading and transporting bytes the recipe excludes. Disk and
+memory stores scan the same filtered manifest, so transport retains the
+same symlink/empty-directory policy as the direct path.

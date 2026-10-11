@@ -127,10 +127,14 @@ func (p draftPackager) packageContent(d resource.PlanDraft) (plan.Op, []byte, er
 	case sourceFilePath(d) != "":
 		return p.packageSourceFile(op, d, name)
 	case sourceGlob != "":
-		op, err = p.packageBlob(op, d, name, sourceGlob, p.writeGlob)
+		op, err = p.packageBlob(op, d, name, sourceGlob, func(name, src string) (string, error) {
+			return plan.WriteSyncSource(p.store, name, "", src, plan.PayloadOf[plan.SyncDirPayload](op).Exclude)
+		})
 		return op, nil, err
 	case sourceDir != "":
-		op, err = p.packageBlob(op, d, name, sourceDir, p.writeTree)
+		op, err = p.packageBlob(op, d, name, sourceDir, func(name, src string) (string, error) {
+			return plan.WriteSyncSource(p.store, name, src, "", plan.PayloadOf[plan.SyncDirPayload](op).Exclude)
+		})
 		return op, nil, err
 	}
 	return op, nil, nil
@@ -180,17 +184,6 @@ func (p draftPackager) packageBlob(op plan.Op, d resource.PlanDraft, name, src s
 	}
 	op.Blob = ref
 	return op, nil
-}
-
-// writeGlob and writeTree adapt the store's two sync_dir writers to
-// packageBlob's write parameter. They are only called once packageBlob has
-// checked that p.store is set.
-func (p draftPackager) writeGlob(name, glob string) (string, error) {
-	return p.store.WriteGlob(name, glob)
-}
-
-func (p draftPackager) writeTree(name, dir string) (string, error) {
-	return p.store.WriteTree(name, dir)
 }
 
 // guardBlobRef predicts the blob ref that store.Write{File,Tree,Glob} will

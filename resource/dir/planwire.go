@@ -102,6 +102,7 @@ func (syncDirHandler) ToOp(d resource.PlanDraft) (plan.Op, error) {
 			SourceDir: p.SourceDir,
 			Glob:      p.SourceGlob != "",
 			FileMode:  p.FileMode,
+			Exclude:   slices.Clone(p.Exclude),
 		},
 	}, nil
 }
@@ -174,7 +175,7 @@ func syncDirBlobTree(blob, planDir string) (string, error) {
 // plan.PayloadOf's doc comment).
 func syncDirOptions(op plan.Op, src string) ([]opt.DirOption, error) {
 	p := plan.PayloadOf[plan.SyncDirPayload](op)
-	opts := []opt.DirOption{syncDirSourceOption(p, src)}
+	opts := []opt.DirOption{syncDirSourceOption(p, src), opt.WithExclude(p.Exclude...)}
 	// source_dir is the recipe's declared source directory (the glob
 	// pattern's directory for the glob flavor): .tmpl files inside the
 	// synced tree render {{.Param}} from it instead of the ephemeral blob

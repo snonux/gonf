@@ -382,6 +382,9 @@ func (p ConfigSetMemberPayload) applyToWire(w *wireOp) {
 //
 // Field docs (unchanged from Op's pre-9e2 flat field comments):
 type SyncDirPayload struct {
+	// Exclude (schema v28) filters source entries and preserves matching
+	// destination paths when pruning, using relative slash-separated patterns.
+	Exclude []string `json:"exclude,omitempty"`
 	// SourceDir is the recipe's declared source directory for KindSyncDir
 	// (for the glob flavor, the declared glob pattern's directory). Apply
 	// passes it to the synced tree so .tmpl files inside render {{.Param}}
@@ -398,7 +401,7 @@ type SyncDirPayload struct {
 	// symlinks and other non-regular entries are left alone, exactly like
 	// the direct WithSourceGlob path (Rex prune_dir). Without Glob, Prune
 	// has tree semantics and removes every entry with no counterpart in
-	// the blob. Plans recorded before v24 carry no glob field and keep
+	// the blob, except paths protected by Exclude. Plans recorded before v24 carry no glob field and keep
 	// tree semantics.
 	Glob bool `json:"glob,omitempty"`
 	// FileMode is an octal permission string applied to files copied by
@@ -409,6 +412,7 @@ type SyncDirPayload struct {
 
 func (p SyncDirPayload) applyToWire(w *wireOp) {
 	w.SourceDir = p.SourceDir
+	w.Exclude = p.Exclude
 	w.Glob = p.Glob
 	w.FileMode = p.FileMode
 }
@@ -775,6 +779,7 @@ var payloadConstructors = map[Kind]func(wireOp) OpPayload{
 	KindSyncDir: func(w wireOp) OpPayload {
 		return SyncDirPayload{
 			SourceDir: w.SourceDir,
+			Exclude:   w.Exclude,
 			Glob:      w.Glob,
 			FileMode:  w.FileMode,
 		}

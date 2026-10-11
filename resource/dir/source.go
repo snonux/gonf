@@ -49,6 +49,13 @@ func copySourceTree(d *Dir) error {
 			return nil
 		}
 
+		if d.excluded(rel) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
 		target := filepath.Join(d.path, rel)
 
 		switch {
@@ -315,7 +322,7 @@ func sourceEntryRel(d *Dir, sourcePath string) (string, error) {
 }
 
 // pruneTree removes anything under d.path that has no counterpart in
-// d.source. A destination entry also counts as having a counterpart if
+// d.source, except paths protected by exclusions (pruneTreeExcluded). A destination entry also counts as having a counterpart if
 // d.source has the same relative path with a ".tmpl" suffix appended, since
 // copySourceFile (via file.Ensure, or file.EnsureWithPlanFacts on the plan
 // path — both share file's build()/apply()) strips that suffix when writing —
@@ -333,6 +340,9 @@ func sourceEntryRel(d *Dir, sourcePath string) (string, error) {
 // failing; the real path always finds the destination here because
 // ensureDirectorySelf created it before this runs.
 func pruneTree(d *Dir) error {
+	if len(d.exclude) > 0 {
+		return pruneTreeExcluded(d)
+	}
 	logger.Debug("pruning destination directory %s", d.path)
 
 	if resource.DryRun() {
@@ -407,6 +417,9 @@ func copySourceGlob(d *Dir) error {
 	logger.Debug("installing glob %s (%d matches) into %s", d.sourceGlob, len(matches), d.path)
 
 	for _, match := range matches {
+		if d.excluded(filepath.Base(match)) {
+			continue
+		}
 		info, err := os.Lstat(match)
 		if err != nil {
 			return fmt.Errorf("stat glob match %s: %w", match, err)
@@ -447,6 +460,9 @@ func pruneGlob(d *Dir) error {
 	}
 	keep := make(map[string]struct{}, len(matches))
 	for _, match := range matches {
+		if d.excluded(filepath.Base(match)) {
+			continue
+		}
 		info, err := os.Lstat(match)
 		if err != nil {
 			continue // an unreadable match cannot count; its basename may be pruned
@@ -479,6 +495,9 @@ func pruneGlob(d *Dir) error {
 			continue
 		}
 		name := entry.Name()
+		if d.protected(name) {
+			continue
+		}
 		if _, ok := keep[name]; ok {
 			continue
 		}

@@ -117,6 +117,7 @@ type (
 	Moded             interface{ SetMode(os.FileMode) }
 	Sourced           interface{ SetSource(string) }
 	SourceGlobable    interface{ SetSourceGlob(string) }
+	Excludable        interface{ SetExclude([]string) }
 	SourceBaseable    interface{ SetSourceBase(string) }
 	Paramable         interface{ SetParam(string) }
 	Templateable      interface{ SetTemplate() }
@@ -716,6 +717,16 @@ func WithKeyedLine(key, line string) fileOption {
 	})
 }
 
+// WithExclude excludes relative source paths from a directory sync and
+// preserves matching destination paths during pruning. Multiple calls append;
+// patterns are snapshotted. See the directory reference for the pattern rules.
+func WithExclude(patterns ...string) dirOption {
+	patterns = slices.Clone(patterns)
+	return dirOption(func(target any) {
+		requires(target, "WithExclude", func(r Excludable) { r.SetExclude(slices.Clone(patterns)) })
+	})
+}
+
 // WithShellVar owns the shell variable assignment key="value" of a shared
 // sh-style file (rc.conf, rc.conf.local, loader.conf, periodic.conf): it
 // is WithKeyedLine(key+"=", key+`="`+value+`"`), with the characters sh
@@ -735,6 +746,23 @@ func WithShellVar(key, value string) fileOption {
 		}
 		line := key + `="` + shellVarEscaper.Replace(value) + `"`
 		requires(target, "WithShellVar", func(r KeyedLineSettable) { r.SetKeyedLine(key+"=", line) })
+	})
+}
+
+// WithShellVars owns ordered shell variable assignments from alternating keys
+// and values. It snapshots its input and delegates each pair to WithShellVar,
+// preserving its quoting, name validation and keyed-line ownership rules.
+// An odd number of elements is option misuse; an empty list is a no-op.
+func WithShellVars(kv ...string) fileOption {
+	kv = slices.Clone(kv)
+	return fileOption(func(target any) {
+		if len(kv)%2 != 0 {
+			misuse(target, fmt.Errorf("WithShellVars: odd number of elements (%d)", len(kv)))
+			return
+		}
+		for i := 0; i < len(kv); i += 2 {
+			WithShellVar(kv[i], kv[i+1])(target)
+		}
 	})
 }
 

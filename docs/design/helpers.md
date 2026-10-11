@@ -200,3 +200,35 @@ GitGlobal(
 ```
 
 Registers `Command("git", …)` entries for `git config --global`.
+
+## Persistent and live sysctls
+
+`Sysctls(path, kv, opts...)` composes a keyed-line `File` and a guarded argv
+`Command` for each distinct key. Every command depends on the file; its
+`Unless("sysctl", List("-n", key), ExpectStdout(value))` probes on every apply,
+so drift is repaired without requiring a persistent-file change. There is no
+new resource kind, runner or schema. The returned `Multi` covers all members.
+
+The full settings list is validated before registration. Non-empty, trimmed,
+single-line values without `#` or NUL can be represented in the config and
+compared by `ExpectStdout`; exact repeats collapse and conflicting values
+refuse the declaration. File options use existing validation. `IsAbsent` is
+refused before registration; a failed or collided file registration produces
+no live commands. `WithSensitive` propagates from file options to commands.
+The recipe chooses the config path, settings, host guards and privilege.
+
+## Controller source checks
+
+`OptionalControllerDir` and `RequireControllerFile` deliberately check the
+controller during declaration or recording, rather than lowering a
+`WhenPathExists` destination predicate. The optional directory returns false
+only without error when missing; all other failures report declaration errors.
+The required file returns its expanded controller path or an empty string,
+with purpose/path/hint in its error. Both return inert results so recipes can
+skip dependent declarations while continuing to check later ones.
+
+Checks follow symlinks, reject wrong types before opening special files, and
+check readability (list the directory or read the regular file). They return
+errors below the DSL and preserve I/O causes when reporting at the entry point.
+They do not register sources or retain open handles: subsequent source
+packaging remains responsible for the bytes actually captured in the plan.

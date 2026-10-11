@@ -24,10 +24,12 @@ func (r *recorder) record(method string, value any) {
 	r.calls = append(r.calls, setterCall{method: method, value: value})
 }
 
-func (r *recorder) SetOwner(v string)             { r.record("SetOwner", v) }
-func (r *recorder) SetGroup(v string)             { r.record("SetGroup", v) }
-func (r *recorder) SetMode(v os.FileMode)         { r.record("SetMode", v) }
-func (r *recorder) SetSource(v string)            { r.record("SetSource", v) }
+func (r *recorder) SetOwner(v string)     { r.record("SetOwner", v) }
+func (r *recorder) SetGroup(v string)     { r.record("SetGroup", v) }
+func (r *recorder) SetMode(v os.FileMode) { r.record("SetMode", v) }
+func (r *recorder) SetSource(v string)    { r.record("SetSource", v) }
+func (r *recorder) SetExclude(v []string) { r.record("SetExclude", v) }
+
 func (r *recorder) SetSourceGlob(v string)        { r.record("SetSourceGlob", v) }
 func (r *recorder) SetSourceBase(v string)        { r.record("SetSourceBase", v) }
 func (r *recorder) SetParam(v string)             { r.record("SetParam", v) }

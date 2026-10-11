@@ -222,6 +222,19 @@ func RegisterMethods(v any, opts ...RegisterOption) {
 	registerMethodTasks(rv, rt, cfg, byValue)
 }
 
+// RegisterGroup registers each struct or pointer in items with the same options.
+// It is equivalent to calling RegisterMethods(item, opts...) in list order.
+// Without WithPrefix each item retains its DefaultPrefix; WithPrefix gives
+// every item a shared namespace. OnCluster and task options apply to every
+// item. Invalid items are refused by RegisterMethods while later items are
+// still checked and registered; the declaration error refuses record/apply.
+// Empty items register nothing.
+func RegisterGroup(items []any, opts ...RegisterOption) {
+	for _, item := range items {
+		RegisterMethods(item, opts...)
+	}
+}
+
 // RegisterOnCluster registers several structs on one cluster: it is
 // RegisterMethods(v, OnCluster(cluster)) for every struct v, each under its
 // own DefaultPrefix, so a cluster's recipe groups read as one list:
@@ -235,8 +248,8 @@ func RegisterMethods(v any, opts ...RegisterOption) {
 //	RegisterOnCluster(cluster.NameFreeBSD, freebsd.Debug{}, Operational())
 //
 // WithPrefix is refused (a declaration error, nothing registered): a prefix
-// shared by several structs belongs on each RegisterMethods call, and one
-// per struct is the default already. So is a nil item (untyped, or a nil
+// shared by several structs belongs on RegisterGroup or separate
+// RegisterMethods calls; one per struct is the default already. So is a nil item (untyped, or a nil
 // struct pointer) or a nil TaskOption (directly or inside WithGroupWhen):
 // no struct of the call is registered. Any other item is a struct or
 // pointer to one, checked as RegisterMethods checks it.
@@ -264,7 +277,7 @@ func RegisterOnCluster(cluster string, items ...any) {
 		return
 	}
 	if probe.prefixSet {
-		declerr.Report(fmt.Errorf("RegisterOnCluster(%q): WithPrefix is not allowed; use RegisterMethods for a shared prefix", cluster))
+		declerr.Report(fmt.Errorf("RegisterOnCluster(%q): WithPrefix is not allowed; use RegisterGroup or RegisterMethods for a shared prefix", cluster))
 		return
 	}
 	opts = append(opts, OnCluster(cluster))

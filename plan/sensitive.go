@@ -14,7 +14,7 @@ import (
 const PreviewKind Kind = "plan_preview"
 
 // RequiredVersion is the plan schema a recorded plan's header declares: the
-// lowest version whose destinations apply ops faithfully. Schemas 22 to 27
+// lowest version whose destinations apply ops faithfully. Schemas 22 to 28
 // only add fields, a kind or an expansion whose absence older destinations
 // would silently misinterpret, so each is declared only when a plan uses it:
 //   - v22 (sensitive) when an op is marked sensitive;
@@ -30,6 +30,8 @@ const PreviewKind Kind = "plan_preview"
 //     ${HOME} since v1, so DestHome paths elsewhere keep the header low.
 //   - v27 (blocks) when a file op has a managed block (WithBlock,
 //     requiresBlocks).
+//
+//   - v28 (sync_dir exclude) when a sync_dir op carries exclusions.
 //
 // Otherwise the header stays v21 and the plan still applies on a v0.15.0
 // destination. Every earlier bump was emitted unconditionally, so v21 is the
@@ -51,6 +53,8 @@ func RequiredVersion(ops []Op) int {
 // opVersion is the lowest schema that applies op faithfully on its own.
 func opVersion(op Op) int {
 	switch {
+	case op.Op == KindSyncDir && len(PayloadOf[SyncDirPayload](op).Exclude) > 0:
+		return VersionSyncDirExclude
 	case requiresBlocks(op):
 		return VersionBlocks
 	case requiresHomeToken(op):

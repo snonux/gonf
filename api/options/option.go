@@ -47,6 +47,7 @@ type (
 	BlockSettable          = resourceoptions.BlockSettable
 	FileModed              = resourceoptions.FileModed
 	Prunable               = resourceoptions.Prunable
+	Excludable             = resourceoptions.Excludable
 	Absentable             = resourceoptions.Absentable
 	Latestable             = resourceoptions.Latestable
 	Dependable             = resourceoptions.Dependable
@@ -154,6 +155,8 @@ var (
 	WithContent      = resourceoptions.WithContent
 	WithContentFrom  = resourceoptions.WithContentFrom
 	WithShellVar     = resourceoptions.WithShellVar
+	WithShellVars    = resourceoptions.WithShellVars
+	WithExclude      = resourceoptions.WithExclude
 	RootOwned        = resourceoptions.RootOwned
 	RootExec         = resourceoptions.RootExec
 	RootPrivate      = resourceoptions.RootPrivate

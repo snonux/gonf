@@ -68,6 +68,8 @@ type wireOp struct {
 	SourceDir string `json:"source_dir,omitempty"`
 	// SyncDir-exclusive (plan.SyncDirPayload). See its own field docs.
 	Glob bool `json:"glob,omitempty"`
+	// SyncDir-exclusive exclusion patterns (schema v28).
+	Exclude []string `json:"exclude,omitempty"`
 	// Prune stays core (not payload): KindDir genuinely shares it with
 	// KindSyncDir (see plan.Op's own Prune field doc for why).
 	Prune  bool `json:"prune,omitempty"`

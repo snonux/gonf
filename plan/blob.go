@@ -157,10 +157,16 @@ func (s *Store) WriteFile(name string, data []byte) (string, error) {
 // fail loudly. This is the same manifest MemoryStore packages, so a tree
 // applied locally matches the same tree pushed to a remote host.
 func (s *Store) WriteTree(name, srcDir string) (string, error) {
+	return s.WriteTreeFiltered(name, srcDir, nil)
+}
+
+// WriteTreeFiltered is WriteTree with validated exclusions applied before
+// reading source bytes. Excluded directories are not traversed.
+func (s *Store) WriteTreeFiltered(name, srcDir string, exclude []string) (string, error) {
 	if err := s.usable(); err != nil {
 		return "", err
 	}
-	entries, err := scanTree(srcDir)
+	entries, err := scanTree(srcDir, exclude...)
 	if err != nil {
 		return "", err
 	}
@@ -175,10 +181,16 @@ func (s *Store) WriteTree(name, srcDir string) (string, error) {
 // ops stay identical across local and remote apply. (Tree packaging via
 // WriteTree preserves symlinks instead.)
 func (s *Store) WriteGlob(name, pattern string) (string, error) {
+	return s.WriteGlobFiltered(name, pattern, nil)
+}
+
+// WriteGlobFiltered is WriteGlob with validated exclusions applied before
+// reading source bytes. Excluded directories are not traversed.
+func (s *Store) WriteGlobFiltered(name, pattern string, exclude []string) (string, error) {
 	if err := s.usable(); err != nil {
 		return "", err
 	}
-	entries, err := scanGlob(pattern)
+	entries, err := scanGlob(pattern, exclude...)
 	if err != nil {
 		return "", err
 	}

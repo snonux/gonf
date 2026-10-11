@@ -2,6 +2,7 @@ package plan
 
 import (
 	"archive/tar"
+	"github.com/snonux/gonf/internal/sourceexclude"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -45,7 +46,10 @@ type BlobEntry struct {
 // are sorted by Rel for deterministic transport. FIFOs, sockets, and
 // devices fail loudly naming the path: packaging must never silently drop
 // source content. Both blob stores package through this one function.
-func scanTree(srcDir string) ([]BlobEntry, error) {
+func scanTree(srcDir string, exclude ...string) ([]BlobEntry, error) {
+	if err := sourceexclude.Validate(exclude); err != nil {
+		return nil, err
+	}
 	info, err := os.Stat(srcDir)
 	if err != nil {
 		return nil, blobErrorf("package tree %s: %w", srcDir, err)
@@ -73,6 +77,13 @@ func scanTree(srcDir string) ([]BlobEntry, error) {
 		if rel == "." {
 			return nil
 		}
+		if sourceexclude.Matches(exclude, filepath.ToSlash(rel)) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
 		switch {
 		case entry.Type()&fs.ModeSymlink != 0:
 			target, err := os.Readlink(path)
@@ -108,13 +119,19 @@ func scanTree(srcDir string) ([]BlobEntry, error) {
 // read through into content) are packaged by content; directories, dangling
 // links and other non-regular entries are skipped, exactly like the direct
 // copySourceGlob path, so an empty tree is a valid outcome.
-func scanGlob(pattern string) ([]BlobEntry, error) {
+func scanGlob(pattern string, exclude ...string) ([]BlobEntry, error) {
+	if err := sourceexclude.Validate(exclude); err != nil {
+		return nil, err
+	}
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
 		return nil, blobErrorf("package glob %q: %w", pattern, err)
 	}
 	var out []BlobEntry
 	for _, match := range matches {
+		if sourceexclude.Matches(exclude, filepath.Base(match)) {
+			continue
+		}
 		info, err := os.Lstat(match)
 		if err != nil {
 			return nil, blobErrorf("package glob match %s: %w", match, err)

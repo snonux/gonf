@@ -368,3 +368,140 @@ Reference: [Resources](../reference.md#resources),
 ---
 
 ← [2. Your first recipe](02-first-recipe.md) · [Contents](README.md) · Next: [4. Editing and validating files](04-editing-files.md) →
+
+## Optional and required controller sources
+
+A source checkout belongs to the controller that builds the plan. It may be
+absent on a fresh laptop. `OptionalControllerDir` lets the recipe skip its
+postcards when that checkout is missing. An unreadable checkout or wrong file
+type is an error, rather than being mistaken for an optional absence.
+`RequireControllerFile` checks a required regular file and reports what needs
+it, where it was expected and how to provide it. Check its empty result before
+creating the dependent resource:
+
+```go
+// Command gonf checks controller sources (tutorial chapter 3).
+package main
+
+import (
+	//lint:ignore ST1001 recipes use the unqualified gonf DSL.
+	. "github.com/snonux/gonf/api"
+	"github.com/snonux/gonf/cli"
+)
+
+func optional() {
+	source := Home("gonf-tutorial/source")
+	if !OptionalControllerDir(source, "Gonfy's optional postcards") {
+		return
+	}
+	Dir(DestHome("gonf-tutorial/postcards"), WithSource(source), WithMode(0o755))
+}
+
+func required() {
+	source := RequireControllerFile(Home("gonf-tutorial/source/banner.txt"),
+		"Gonfy's lodge banner", "Restore banner.txt in the controller's source checkout")
+	if source == "" {
+		return
+	}
+	File(DestHome("gonf-tutorial/banner.txt"), WithSource(source), WithMode(0o644))
+}
+
+func main() {
+	Task("optional", "Copy postcards only when the controller checkout exists", optional)
+	Task("required", "Install Gonfy's required banner", required)
+	cli.Main()
+}
+```
+
+These checks run on the controller even when recording a remote plan, and
+resolve `~` and `${HOME}` there. They emit no destination guard: the recorded
+file or directory already carries its packaged content. `WhenPathExists`,
+covered in [chapter 9](09-guards.md), instead records a check that
+runs on the destination. Choose that for a condition such as whether the
+lodge's target directory exists, rather than for a controller source checkout.
+
+The capture below uses a temporary home. The optional missing directory does
+nothing; the required missing file fails with the purpose, path and hint.
+After restoring the source, the required task installs the banner.
+
+```text
+$ HOME=/tmp/gonf-d93-home.EWzs7r ./gonf optional
+summary: 0 ok, 0 changed, 0 skipped, 0 would-change
+$ HOME=/tmp/gonf-d93-home.EWzs7r ./gonf required
+error: Gonfy's lodge banner needs controller file /tmp/gonf-d93-home.EWzs7r/gonf-tutorial/source/banner.txt: stat /tmp/gonf-d93-home.EWzs7r/gonf-tutorial/source/banner.txt: no such file or directory; Restore banner.txt in the controller's source checkout
+error: declared at /home/paul/git/gonf/docs/tutorial/examples/ch03-controller-sources/main.go:19
+[exit status 1]
+$ mkdir -p /tmp/gonf-d93-home.EWzs7r/gonf-tutorial/source
+$ printf "Hello from Gonfy's lodge\n" > /tmp/gonf-d93-home.EWzs7r/gonf-tutorial/source/banner.txt
+$ HOME=/tmp/gonf-d93-home.EWzs7r ./gonf required
+2026/10/11 21:47:09 updated /tmp/gonf-d93-home.EWzs7r/gonf-tutorial/banner.txt
+summary: 0 ok, 1 changed, 0 skipped, 0 would-change
+$ cat /tmp/gonf-d93-home.EWzs7r/gonf-tutorial/banner.txt
+Hello from Gonfy's lodge
+```
+
+Reference: [Controller source checks](../reference.md#controller-source-checks).
+
+## Keeping parts of a source tree out of a sync
+
+Tree sync already copies directories recursively. `WithExclude` narrows the
+same sync: Gonfy's private postcards and scratch notes stay out of both the
+copy and the plan blobs. The ordinary tree declaration remains in the
+comment beside the new form:
+
+```go
+// Command gonf syncs a tree with exclusions (tutorial chapter 3).
+package main
+
+import (
+	//lint:ignore ST1001 recipes use the unqualified gonf DSL.
+	. "github.com/snonux/gonf/api"
+	"github.com/snonux/gonf/cli"
+)
+
+func postcards() {
+	// The ordinary tree form remains valid:
+	// Dir(DestHome("gonf-tutorial/postcards"), WithSource(Home("gonf-tutorial/source")), WithPrune)
+	// Gonfy keeps scratch notes and private postcards out of this sync.
+	Dir(DestHome("gonf-tutorial/postcards"),
+		WithSource(Home("gonf-tutorial/source")), WithExclude("private", "*.tmp"),
+		WithPrune, WithMode(0o755), WithFileMode(0o644))
+}
+
+func main() {
+	Task("postcards", "Sync Gonfy's public postcards", postcards)
+	cli.Main()
+}
+```
+
+Slashless patterns such as `private` and `*.tmp` match names at any depth;
+`drafts/unfinished` matches that relative path and its subtree. Patterns use
+`*`, `?` and character classes, with `/` as the separator; no `**` or escapes.
+A matching source directory is never traversed. For flat `SyncDir` glob
+copies, exclusions match basenames. Patterns also recognize names before a
+trailing `.tmpl`, and pruning protects the rendered output of an excluded
+template.
+
+With `WithPrune`, matching destination paths stay unmanaged. A stale parent
+holding an excluded child is kept too, while its other stale children are
+removed. Exclusion does not delete files already installed there: declare
+`NoFile` or `NoDir` separately if their old copies should be removed.
+Root directory attributes remain managed. An invalid pattern or exclusions
+on a directory without a present source sync refuse the declaration.
+
+The following capture uses a temporary home. Gonfy owns the public banner
+but keeps his local private note and removes an unrelated stale file.
+
+```text
+$ HOME=/tmp/gonf-e93-home.zo8NtF ./gonf postcards
+2026/10/11 21:56:31 updated /tmp/gonf-e93-home.zo8NtF/gonf-tutorial/postcards/banner.txt
+2026/10/11 21:56:31 pruned /tmp/gonf-e93-home.zo8NtF/gonf-tutorial/postcards/stale.txt
+summary: 1 ok, 2 changed, 0 skipped, 0 would-change
+$ cat /tmp/gonf-e93-home.zo8NtF/gonf-tutorial/postcards/banner.txt /tmp/gonf-e93-home.zo8NtF/gonf-tutorial/postcards/private/local.txt
+Public postcard from Gonfy
+Keep my local note
+$ HOME=/tmp/gonf-e93-home.zo8NtF ./gonf postcards
+summary: 2 ok, 0 changed, 0 skipped, 0 would-change
+```
+
+Reference: [Dir](../reference.md#dir), including pruning and symlink rules.

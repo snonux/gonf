@@ -5,6 +5,13 @@ releases before v0.17.0 the tag message and the git log are the notes.
 
 ## Unreleased
 
+Changes
+- `WithExclude(patterns...)` filters directory-sync sources before blob packaging and preserves matching destination paths during copy and pruning. Plans using exclusions require schema 28; other plans keep their existing compatibility floor.
+- `OptionalControllerDir` and `RequireControllerFile` check optional directory and required file sources on the controller, reporting unreadable sources and wrong types as declaration errors.
+- `Sysctls(path, kv, opts...)` composes persistent keyed-line settings with live-value checks on every apply, including drift when the file is unchanged.
+- `RegisterGroup(items, opts...)` shares registration options across task structs while preserving `RegisterMethods` naming, guards and misuse checks.
+- `WithShellVars(k, v, ...)` composes ordered shell-variable edits in one file option, with the same quoting and ownership checks as `WithShellVar`.
+
 Docs
 - The tutorial explains why configuration management helps, covers every
   DSL feature (new chapter 17, gonf from Go, and a sealed per-host example

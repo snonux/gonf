@@ -11,6 +11,7 @@ import (
 
 func main() {
 	Task("lines", "Own single lines and a block of ~/gonf-tutorial/app.conf", lines)
+	Task("shellvars", "Own several settings in Gonfy’s lodge.conf", shellvars)
 	Task("script", "Install a shell script only if it parses", script)
 	Task("greeter", "Install two scripts that must work together", greeter)
 	Task("shared", "Two declarations share ~/gonf-tutorial/lodge/hosts", shared)
@@ -29,6 +30,14 @@ func lines() {
 		WithBlock("peers", "peer=10.0.0.1", "peer=10.0.0.2"),
 		// Own an rc.conf-style shell variable: greeting="hello from gonfy".
 		WithShellVar("greeting", "hello from gonfy"),
+		WithMode(0o644))
+}
+
+func shellvars() {
+	// Equivalent to WithShellVar("lodge_name", "Gonfy's lodge") and
+	// WithShellVar("lodge_open", "YES"), with less repeated option assembly.
+	File(DestHome("gonf-tutorial/lodge.conf"),
+		WithShellVars("lodge_name", "Gonfy's lodge", "lodge_open", "YES"),
 		WithMode(0o644))
 }
 

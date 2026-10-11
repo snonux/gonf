@@ -57,8 +57,8 @@ var opFieldClasses = map[string]fieldClass{
 	"bin": classIdentity, "dir": classIdentity, "creates": classIdentity, "home": classIdentity,
 	"validation_bin": classIdentity, "validators[].bin": classIdentity,
 	"unless.bin": classIdentity, "only_if.bin": classIdentity,
-	"source_dir": classIdentity,
-	"chroot":     classIdentity, "staging_dir": classIdentity,
+	"source_dir": classIdentity, "exclude[]": classIdentity,
+	"chroot": classIdentity, "staging_dir": classIdentity,
 	"members[].key": classIdentity, "members[].path": classIdentity,
 	"all[].path_exists": classIdentity, "require": classIdentity,
 	// Payload: what the op writes, runs or compares.

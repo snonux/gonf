@@ -31,6 +31,7 @@ NoLink("/tmp/stale-link")
 | `WithValidation` | File | Validate one rendered candidate before publishing it; see below |
 | `WithSource` | File / Dir | Copy from path or template |
 | `WithSourceGlob` | Dir | Install glob matches into the directory by basename |
+| `WithExclude` | Dir | Filter source paths before copying/packaging and preserve matching destination paths during prune |
 | `WithLines` / `WithoutLines` | File | Ensure / remove lines in declaration order (duplicates are ignored); singular `WithLine` / `WithoutLine` remain compatibility wrappers |
 | `WithKeyedLine(key, line)` | File | Own the one line starting with the literal prefix `key` in a shared file; see below |
 | `WithBlock(name, lines...)` | File | Own the marked region between `# BEGIN GONF <name>` and `# END GONF <name>` of a shared file; see below |
@@ -441,3 +442,20 @@ directory planted at `path.old` then fails the conversion loudly, while a
 planted empty one is lost (the accepted residual race).
 
 See also [examples/examples.go](../../examples/examples.go).
+
+## Source exclusions
+
+`WithExclude` snapshots and appends relative patterns. Packaging, copying and
+pruning share `internal/sourceexclude`: slashless patterns match components
+at any depth, slashful patterns match relative paths, matching a directory
+protects its subtree, and `.tmpl` names also match their rendered spelling.
+Glob syncs match flat basenames. Malformed/absolute patterns, `.`/`..`/empty
+components, escapes and `**` are refused at declaration. Non-empty patterns
+require a present source sync; default sync behavior is unchanged.
+
+Excluded entries are not read, traversed, copied or chmod'ed. Pruning also
+protects template outputs and ancestors holding excluded entries. Tree prune
+with exclusions collects stale entries and removes them bottom-up, so a
+stale parent cannot recursively delete protected children. Glob prune skips
+protected basenames. The destination root stays managed. Explicit `NoFile`
+or `NoDir` declares intentional removal of obsolete excluded paths.

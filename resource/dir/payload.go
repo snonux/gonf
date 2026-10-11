@@ -1,6 +1,9 @@
 package dir
 
-import "github.com/snonux/gonf/resource"
+import (
+	"github.com/snonux/gonf/resource"
+	"slices"
+)
 
 // SyncPayload is the "sync_dir" kind's exclusive plan-draft fields (task
 // w62 Layer 1: splitting resource.PlanDraft's god struct into per-kind
@@ -16,6 +19,8 @@ import "github.com/snonux/gonf/resource"
 // reads a draft's source before ToOp is called also type-asserts it to
 // find SourceDir/SourceGlob.
 type SyncPayload struct {
+	// Exclude holds snapshotted relative source exclusion patterns.
+	Exclude []string
 	// SourceDir is a controller-local directory to package as a blob tree;
 	// it also carries the recipe's DECLARED source directory (the glob
 	// pattern's directory for the glob flavor) onto the op's source_dir
@@ -29,9 +34,9 @@ type SyncPayload struct {
 	FileMode string
 }
 
-// Clone returns p unchanged: it has no reference fields to deep-copy.
+// Clone snapshots the exclusion list.
 // Implements resource.DraftPayload.
-func (p SyncPayload) Clone() resource.DraftPayload { return p }
+func (p SyncPayload) Clone() resource.DraftPayload { p.Exclude = slices.Clone(p.Exclude); return p }
 
 // SourceDirGlob returns p's SourceDir and SourceGlob. Implements
 // resource.SourceDirPayload, so kind-neutral packaging code

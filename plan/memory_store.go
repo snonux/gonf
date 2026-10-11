@@ -78,10 +78,16 @@ func (m *MemoryStore) WriteFile(name string, data []byte) (string, error) {
 // preserved as themselves, regular files by content; other file types fail
 // loudly. This is the same manifest the disk Store packages.
 func (m *MemoryStore) WriteTree(name, srcDir string) (string, error) {
+	return m.WriteTreeFiltered(name, srcDir, nil)
+}
+
+// WriteTreeFiltered is WriteTree with validated exclusions applied before
+// reading source bytes. Excluded directories are not traversed.
+func (m *MemoryStore) WriteTreeFiltered(name, srcDir string, exclude []string) (string, error) {
 	if m == nil {
 		return "", fmt.Errorf("plan: blob store: nil memory store")
 	}
-	entries, err := scanTree(srcDir)
+	entries, err := scanTree(srcDir, exclude...)
 	if err != nil {
 		return "", err
 	}
@@ -100,10 +106,16 @@ func (m *MemoryStore) WriteTree(name, srcDir string) (string, error) {
 // dangling links and other file types skipped — the same flat regular-file
 // policy the disk Store applies.
 func (m *MemoryStore) WriteGlob(name, pattern string) (string, error) {
+	return m.WriteGlobFiltered(name, pattern, nil)
+}
+
+// WriteGlobFiltered is WriteGlob with validated exclusions applied before
+// reading source bytes. Excluded directories are not traversed.
+func (m *MemoryStore) WriteGlobFiltered(name, pattern string, exclude []string) (string, error) {
 	if m == nil {
 		return "", fmt.Errorf("plan: blob store: nil memory store")
 	}
-	entries, err := scanGlob(pattern)
+	entries, err := scanGlob(pattern, exclude...)
 	if err != nil {
 		return "", err
 	}
