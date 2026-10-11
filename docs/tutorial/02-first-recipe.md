@@ -50,8 +50,10 @@ Line by line:
 - `cli.Main()` hands over to gonf's command line, which parses flags, runs
   the tasks you name and exits with a status code.
 
-Fetch this release of gonf and build. To follow newer releases later, use
-`@latest` instead of the version shown here:
+Fetch gonf and build. This historical capture uses v0.24.2; for the newer
+DSL examples later in this tutorial, use
+`go get github.com/snonux/gonf@v0.25.0` or a later release. To follow newer
+releases, use `@latest` instead of a fixed version:
 
 ```text
 $ go get github.com/snonux/gonf@v0.24.2

@@ -1,7 +1,7 @@
 # Replacing `~/git/conf` Rex with gonf — gap audit
 
-Refreshed 2026-09-28 against **gonf v0.24.1**; this release uses plan schema
-27. This document is the canonical plan for porting the
+Refreshed 2026-10-11 against **gonf v0.25.0**; this release supports plan
+schema 31. This document is the canonical plan for porting the
 [`~/git/conf`](https://codeberg.org/snonux/conf)
 Rexfiles to gonf. Earlier revisions claimed gonf "still lacks Rex-style sudo/doas"
 and that pkg/service/cron "fleet still needs transport" — both are **stale**:
@@ -32,10 +32,10 @@ compute any content Perl closures could (see
   `gonf/secrets` root resolves, and passes its arguments through verbatim;
   it works from any directory, conf 63e83a8).
 - **One consumer module per repository**, depending on `github.com/snonux/gonf`
-  (conf and dotfiles currently pin v0.24.0; any later consumer upgrade is a
-  deliberate compatibility change). Multi-Rexfile composition maps to Go
-  packages + `RegisterMethods` + `Aggregate` / `AggregateTasks` (in conf's
-  `gonf/tasks/tasks.go`), not to multiple Rexfiles.
+  (conf and dotfiles upgrade to v0.25.0 with this release; each consumer
+  upgrade is a deliberate compatibility change). Multi-Rexfile composition
+  maps to Go packages + `RegisterMethods` / `RegisterGroup` + `Aggregate` /
+  `AggregateTasks` (in conf's `gonf/tasks/tasks.go`), not to multiple Rexfiles.
 - **Inventory lives in the consumer** (`Host` / `Cluster` / `Fleet` with
   `WithSSHUser` / `WithSSHPort` / `WithPrivilege` / `WithGOOS` / `WithGOARCH` /
   `WithValue`); the gonf library stays inventory-free.
@@ -84,9 +84,9 @@ One plan engine serves local and remote runs, so a recipe cannot diverge between
 
 ## Current capability matrix
 
-Status against every conf Rex primitive in v0.24.1 (plan schema 27):
+Status against every conf Rex primitive in v0.25.0 (plan schema 31):
 
-| Conf Rex capability | gonf v0.24.1 | Status |
+| Conf Rex capability | gonf v0.25.0 | Status |
 |---------------------|--------------|--------|
 | `group x => 'h:2', …`, `user`, `parallelism 5` | `Host(name, WithSSHUser, WithSSHHost, WithSSHPort, WithSSHIdentity)` + `Cluster(name, hosts…)`, `cluster.Parallel(n)`; `gonf hosts`/`clusters`/`fleets` | **Done** |
 | `sudo TRUE` / `auth for => group (user, sudo)` | `Task(…, Privileged())` (or `RequiresRoot`) + `Host(WithPrivilege(PrivilegeSudo|Doas|None))`; apply splits plain/elevated chunks; remote elevated chunk wraps `sudo -n gonf apply` / `doas gonf apply`; `-privilege=none` + elevated op refuses to push | **Done** |
@@ -95,7 +95,7 @@ Status against every conf Rex primitive in v0.24.1 (plan schema 27):
 | Remote binary lifecycle | push probes `gonf -plan-version`; missing/older gonf is cross-compiled (`WithGOOS`/`WithGOARCH`) and installed to `WithGonfPath` (default `/usr/local/bin/gonf`) with the host's privilege mode | **Done** |
 | `pkg … ensure => present/absent` (pkg_add, pkg, pkgin, dnf) | `Package` / `NoPackage` with OS-auto-detected backends; `IsLatest` upgrade path (plan v10 `latest`) | **Done** |
 | Custom repo / `PKG_PATH="https://pkgrepo…"` env on pkg_add | `Package(..., WithEnv(map[string]string{"PKG_PATH": …}), IsLatest)` passes the overlay to pkg probes and actions | **Done** (plan v15) |
-| `service x, ensure => started` (rcctl / systemd / FreeBSD+NetBSD `service`) | `Service` / `NoService` auto-detect, `WithRestart` (restart once when already active), `WithReload`, `WithUser` (systemd) | **Done** |
+| `service x, ensure => started` (rcctl / systemd / FreeBSD+NetBSD `service`) | `Service` / `NoService` auto-detect, `WithRestart` (restart once when already active), `WithReload`, `WithUser` (systemd); `WithEnableOnly` manages boot policy without runtime actions (schema 29) | **Done** |
 | `on_change => sub { service 'x' => 'restart' }` (restart only when a file changed) | `OnChange(res…)`: Command runs only on a watched change; Service/Timer preserve state convergence but gate requested restart/reload; DaemonReload is gated too | **Done** (plan v11) |
 | `template(...)` with arrays/loops/closures/per-server data | `.tmpl` sources render at destination apply with environment, `.Param`, structured `WithTemplateData`, and `.Gonf` host facts; Go still computes closures | **Done** |
 | `$secrets->('path')` (`read_file './secrets/…'`) | `MustSecret` / `OptionalSecret` controller helpers over the default file provider; `SetSecretProvider` / `ResolveSecret` for another store ([secrets.md](secrets.md)) | Covered |
@@ -103,8 +103,9 @@ Status against every conf Rex primitive in v0.24.1 (plan schema 27):
 | `file …, ensure => 'absent'` | `NoFile` | **Done** |
 | Rex `cron add => user, {…}` | `Cron` / `NoCron`: marker-managed per-user crontabs, full schedule fields, `WithCronEnv`, `WithCronUser` | **Done** (`@reboot` nice-to-have) |
 | Raw crontab surgery via `run` (rsync, nsd_failover, pf rebuild root crontab) | superseded by `Cron` (marker-based, idempotent, no temp-file race) | **Done** (gonf is ahead) |
-| Multi-Rexfile `require` composition | one Go module + `RegisterMethods(…, WithPrefix, WithCluster)` + `Aggregate`; proven by `~/git/conf/gonf` and `~/git/dotfiles/gonf` | **Done** |
+| Multi-Rexfile `require` composition | one Go module + `RegisterMethods(…, WithPrefix, WithCluster)` or `RegisterGroup` + `Aggregate`; proven by `~/git/conf/gonf` and `~/git/dotfiles/gonf` | **Done** |
 | `adduser -batch _dserver … unless id _dserver`, `usermod -d` | additive `User` for creation-time group/class/home attributes; `WithManageHome` converges an existing account's passwd home field | **Done**: account creation in v0.14.0, `WithManageHome` in v0.15.0 (plan v19). conf's frontend service accounts use it (task s52, conf 7bc33b3); the guarded `usermod -d` command is gone |
+| Existing-account login shell | `User(name, WithShell(path), WithManageShell)` explicitly converges the shell; `WithShell` alone remains creation-only | **Done** in v0.25.0 (schema 30); dotfiles uses it for the `paul` account |
 | `/etc/login.conf.d` fragment (Rex relayd also ran `rm -f /etc/login.conf.db && cap_mkdb`; Rex inetd ran none) | `LoginClass(class, src)`: the fragment inside an OpenBSD-only plan requirement (schema 20) plus removal of a stale `<class>.db`; no `cap_mkdb`, which never reads fragments (see [login-class.md](login-class.md)). conf's inetd and relayd use it (task t52, conf 7ec3015); their former `cap_mkdb` rebuild, a no-op for fragment changes, is gone | Implemented in core (v0.15.0); native OpenBSD verification pending |
 | Garage config deployment | `RequiresRoot` task + direct `InstallFile("/usr/local/etc/garage.toml", …, root:garage, 0640, WithTemplateData(...))` + `Service("garage", WithRestart, OnChange(config))`; the host's `PrivilegeDoas` wraps the one privileged chunk | **Done** |
 | Deferred `on_change` flag (`$restart = TRUE` … `service restart if $restart`) | `OnChange` supports multi-resource fan-in and carries ordering dependencies | **Done** |
@@ -451,7 +452,7 @@ so the plan has no login-owned `/tmp` secret staging step.
 For this document:
 
 - Every capability row names the gonf API that exists today (verified
-  against v0.24.1, plan schema 27) — no "fleet needs transport" or
+  against v0.25.0, plan schema 31) — no "fleet needs transport" or
   missing-feature claims survive.
 - All Rexfiles (four tracked, plus the retired `f3s/garage` one) are
   inventoried and every task appears exactly once in the

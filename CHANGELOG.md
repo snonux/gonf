@@ -5,6 +5,13 @@ releases before v0.17.0 the tag message and the git log are the notes.
 
 ## Unreleased
 
+## v0.25.0 (2026-10-11)
+
+DSL composition and explicit destination policies. Plans require schema 28
+for directory exclusions, 29 for service boot-only intent, 30 for managed
+account shells and 31 for negated OS guards; other plans retain their
+existing compatibility floors.
+
 - `WhenNotOS(goos...)` excludes named destination operating systems with a serializable task guard, composing with other guards and remaining listed on any controller OS. Only plans with negation require schema 31; malformed negated predicates refuse before mutation.
 
 - Service accepts `WithEnableOnly` to manage boot enablement while preserving runtime state on all backends; incompatible restart, reload and change gates are refused. Such plans require schema 29.
