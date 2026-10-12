@@ -5,6 +5,8 @@ releases before v0.17.0 the tag message and the git log are the notes.
 
 ## Unreleased
 
+## v0.25.1 (2026-10-12)
+
 - BSD CI selects the exact Go release in `go.mod`, including when the VM
   packages a newer compiler, to keep option introspection tests compatible
   with the pinned `golang.org/x/tools` export-data reader.
