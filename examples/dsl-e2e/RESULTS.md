@@ -125,10 +125,62 @@ all k3s nodes Ready. Earth WireGuard runtime states stayed wg0 inactive and wg1
 active before and after its boot-only setting changes. No roaming tunnel
 start/stop/up/down command was invoked.
 
-MacOS had offline recording coverage only; no macOS target was available.
-Other fleet members were not needed for representative coverage and were not
-changed. Production consumer convergence changes intentionally remain in place;
-the separate disposable fixture state is removed after verification.
+MacOS had offline recording coverage only; no macOS target was available. At
+this point the other fleet members were not needed for representative coverage;
+the later full-fleet pass below covers the reachable ones. Production consumer
+convergence changes intentionally remain in place; the separate disposable
+fixture state is removed after verification.
+
+## Full fleet convergence, 2026-10-12 (8b3)
+
+This later release check extends the selected live coverage above. After
+`f3sctl power on` and `f3sctl power f3 on`, f0--f3, r0--r2, fans and AC were
+online; all k3s nodes were `Ready`, f0 was CARP MASTER and its pool was
+healthy. A controller built from conf `dc2d765` with Gonf v0.25.0 applied each
+non-operational aggregate to every registered live target, once to repair
+pre-existing drift and once more for convergence. Gonf v0.25.1 contains only
+the subsequent BSD CI and release-documentation change; both consumer modules
+were then rebuilt from their published v0.25.1 dependency and reported that
+version.
+
+| Targets | Aggregate/tasks applied twice | Repeat result |
+|---|---|---|
+| f0--f3 | `freebsd` | 94/92/71/71 ok, 0 changed |
+| f0--f2 | `garage` | 1 ok, 0 changed on every host |
+| blowfish, fishfinger | `frontends` | configuration resources stable; only package refresh and zone-publication commands report actions |
+| pi0, pi1 | `pis_netbsd`, `netbsd_goprecords_uptimed`, `netbsd_goprecords_upload` | 29 ok, 0 changed on every host |
+| pi2, pi3 | `rocky_kernel_audit`, `pihole` | 13 ok, 0 changed on every host |
+| pi2, pi3, r0--r2 | `rocky` | 35/35/12/12/12 ok, 0 changed |
+| r0--r2 | `rnodes` | configuration resources stable; only unconditional `journalctl --flush` reports one command action per host |
+| earth | `home`, `home_goprecords_upload`, `pkg_fedora`, all `system_*` tasks | 136/2/10/38 ok, 0 changed across normal and elevated chunks |
+| rocky | `home`, `system_fish_shell` | 123 ok, 0 changed; 2 ok, 0 changed as root |
+
+The first pass repaired one stale f3 VM memory setting, four frontend
+configuration resources, two Earth user files and Rocky home configuration.
+The repeat produced no `updated`, `created`, `removed` or changed managed-file
+resource line. The frontend package policy (`pkg_add -u`) and NSD publication,
+and r-node journal flush, deliberately run on every apply and are command
+actions rather than configuration drift. Operational tasks were deliberately
+excluded: `wireguard_mesh_install`, `frontends_acme_invoke`,
+`frontends_irc_bouncer` and `frontends_ping`. Zen remained unreachable (`No
+route to host`), so its two hostname-guarded Dotfiles tasks retain the prior
+offline coverage and are not represented as live-tested.
+
+The conf controller commands were:
+
+```sh
+GONF_CONF_ROOT=/home/paul/git/conf /tmp/gonf-convergence-20261012/conf cluster -j 1 freebsd-hosts freebsd
+GONF_CONF_ROOT=/home/paul/git/conf /tmp/gonf-convergence-20261012/conf cluster -j 1 garage garage
+GONF_CONF_ROOT=/home/paul/git/conf /tmp/gonf-convergence-20261012/conf cluster -j 1 frontends frontends
+GONF_CONF_ROOT=/home/paul/git/conf /tmp/gonf-convergence-20261012/conf cluster -j 1 netbsd-pis pis_netbsd netbsd_goprecords_uptimed netbsd_goprecords_upload
+GONF_CONF_ROOT=/home/paul/git/conf /tmp/gonf-convergence-20261012/conf cluster -j 1 rocky-pis rocky_kernel_audit pihole
+GONF_CONF_ROOT=/home/paul/git/conf /tmp/gonf-convergence-20261012/conf cluster -j 1 rocky-all rocky
+GONF_CONF_ROOT=/home/paul/git/conf /tmp/gonf-convergence-20261012/conf cluster -j 1 rocky-k3s rnodes
+```
+
+Each command was run a second time in the same order; the table records that
+second invocation. The Dotfiles controller used the corresponding direct local
+and `push` task invocations with `GONF_DOTFILES_ROOT=/home/paul/git/dotfiles`.
 
 ## Reproduction commands and final checks
 
