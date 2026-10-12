@@ -1,0 +1,46 @@
+# Full fleet convergence, 2026-10-12 (8b3)
+
+Sanitized terminal summaries from the second (convergence) invocation.  No
+secret values, plans or payloads are included.  Commands are recorded in
+RESULTS.md beside this file.
+
+```
+conf freebsd-hosts/freebsd
+f0: summary: 94 ok, 0 changed, 20 skipped, 0 would-change
+f1: summary: 92 ok, 0 changed, 21 skipped, 0 would-change
+f2: summary: 71 ok, 0 changed, 13 skipped, 0 would-change
+f3: summary: 71 ok, 0 changed, 11 skipped, 0 would-change
+
+conf garage/garage
+f0, f1, f2: summary: 1 ok, 0 changed, 1 skipped, 0 would-change
+
+conf frontends/frontends
+blowfish: summary: 116 ok, 3 changed, 12 skipped, 0 would-change
+fishfinger: summary: 108 ok, 2 changed, 12 skipped, 0 would-change
+repeat actions: pkg_add -u dtail; pkg_add -u gogios; publish-nsd-zones
+
+conf netbsd-pis/pis_netbsd+goprecords
+pi0, pi1: summary: 29 ok, 0 changed, 4 skipped, 0 would-change
+
+conf rocky-pis/rocky_kernel_audit+pihole
+pi2, pi3: summary: 13 ok, 0 changed, 2 skipped, 0 would-change
+
+conf rocky-all/rocky
+pi2, pi3: summary: 35 ok, 0 changed, 6 skipped, 0 would-change
+r0, r1, r2: summary: 12 ok, 0 changed, 2 skipped, 0 would-change
+
+conf rocky-k3s/rnodes
+r0, r1, r2: summary: 49 ok, 1 changed, 16 skipped, 0 would-change
+repeat action: journalctl --flush
+
+dotfiles earth
+home: 136 ok, 0 changed, 16 skipped, 0 would-change
+home_goprecords_upload: 10 ok, 0 changed, 2 skipped, 0 would-change
+pkg_fedora: 38 ok, 0 changed, 0 skipped, 0 would-change
+privileged system chunk: 2 ok, 0 changed, 1 skipped, 0 would-change
+privileged system chunk: 38 ok, 0 changed, 0 skipped, 0 would-change
+
+dotfiles rocky
+home: 123 ok, 0 changed, 14 skipped, 0 would-change
+system_fish_shell as root: 2 ok, 0 changed, 0 skipped, 0 would-change
+```

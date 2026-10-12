@@ -5,6 +5,12 @@ releases before v0.17.0 the tag message and the git log are the notes.
 
 ## Unreleased
 
+## v0.25.2 (2026-10-12)
+
+- Document the full live convergence repeat across the reachable Conf and
+  Dotfiles fleet, including preserved sanitized summaries, explicit recurring
+  command actions and the unreachable Zen scope.
+
 ## v0.25.1 (2026-10-12)
 
 - BSD CI selects the exact Go release in `go.mod`, including when the VM

@@ -68,7 +68,7 @@ A plan directory holds:
   content travels inline, base64-encoded, as `content_b64`.
 
 `./gonf -plan-version` prints the newest schema version a gonf can apply
-(31 in v0.25.1; v0.24.2 supports 27). The header
+(31 in v0.25.2; v0.24.2 supports 27). The header
 above says 21 because gonf writes the lowest version that can carry the
 plan, so older gonf binaries can still apply it.
 
@@ -111,7 +111,7 @@ When recording fails, gonf leaves the output directory as it was.
 > 🦫 **Gonfy says:** Any gonf binary can follow the blueprint, even one that never saw the recipe.
 
 `gonf` without `./` is any gonf binary on the `PATH`, such as the
-stand-alone one (`go install github.com/snonux/gonf/cmd/gonf@v0.25.1`) or a
+stand-alone one (`go install github.com/snonux/gonf/cmd/gonf@v0.25.2`) or a
 copy of your own `./gonf`: every gonf binary has the same `apply`
 subcommand, and applying needs no recipe.
 

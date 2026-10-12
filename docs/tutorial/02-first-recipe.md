@@ -52,7 +52,7 @@ Line by line:
 
 Fetch gonf and build. This historical capture uses v0.24.2; for the newer
 DSL examples later in this tutorial, use
-`go get github.com/snonux/gonf@v0.25.1` or a later release. To follow newer
+`go get github.com/snonux/gonf@v0.25.2` or a later release. To follow newer
 releases, use `@latest` instead of a fixed version:
 
 ```text

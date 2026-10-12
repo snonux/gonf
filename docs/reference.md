@@ -3,7 +3,7 @@
 <img src="../assets/logo-light.svg" alt="Gonfy, the gonf beaver" width="96" align="right">
 
 Gonfy's cheat sheet: every user-facing feature in one place, current as of
-gonf v0.25.1 (plan schema 31). Background, rationale and history live in
+gonf v0.25.2 (plan schema 31). Background, rationale and history live in
 [design/](design/README.md).
 New to gonf? Start with the [tutorial](tutorial/README.md). Its
 [DSL shortcuts](tutorial/README.md#shortcuts-beside-the-original-recipes)

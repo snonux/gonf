@@ -138,10 +138,10 @@ This later release check extends the selected live coverage above. After
 online; all k3s nodes were `Ready`, f0 was CARP MASTER and its pool was
 healthy. A controller built from conf `dc2d765` with Gonf v0.25.0 applied each
 non-operational aggregate to every registered live target, once to repair
-pre-existing drift and once more for convergence. Gonf v0.25.1 contains only
-the subsequent BSD CI and release-documentation change; both consumer modules
-were then rebuilt from their published v0.25.1 dependency and reported that
-version.
+pre-existing drift and once more for convergence. Gonf v0.25.1 and v0.25.2
+contain only the subsequent BSD CI and release-documentation changes. The
+consumers' published-dependency smoke was run for v0.25.1; v0.25.2 is tagged
+after this record and then pinned by both consumers.
 
 | Targets | Aggregate/tasks applied twice | Repeat result |
 |---|---|---|
@@ -152,7 +152,7 @@ version.
 | pi2, pi3 | `rocky_kernel_audit`, `pihole` | 13 ok, 0 changed on every host |
 | pi2, pi3, r0--r2 | `rocky` | 35/35/12/12/12 ok, 0 changed |
 | r0--r2 | `rnodes` | configuration resources stable; only unconditional `journalctl --flush` reports one command action per host |
-| earth | `home`, `home_goprecords_upload`, `pkg_fedora`, all `system_*` tasks | 136/2/10/38 ok, 0 changed across normal and elevated chunks |
+| earth | `home`, `home_goprecords_upload`, `pkg_fedora`, all `system_*` tasks | 136/10/38/2/38 ok, 0 changed across normal and elevated chunks |
 | rocky | `home`, `system_fish_shell` | 123 ok, 0 changed; 2 ok, 0 changed as root |
 
 The first pass repaired one stale f3 VM memory setting, four frontend
@@ -163,8 +163,9 @@ and r-node journal flush, deliberately run on every apply and are command
 actions rather than configuration drift. Operational tasks were deliberately
 excluded: `wireguard_mesh_install`, `frontends_acme_invoke`,
 `frontends_irc_bouncer` and `frontends_ping`. Zen remained unreachable (`No
-route to host`), so its two hostname-guarded Dotfiles tasks retain the prior
-offline coverage and are not represented as live-tested.
+route to host`), so its full `home` aggregate and its three Zen-specific tasks
+(`home_goprecords_upload`, `system_uptimed`, `system_fish_shell`) retain the
+prior offline coverage and are not represented as live-tested.
 
 The conf controller commands were:
 
@@ -179,8 +180,17 @@ GONF_CONF_ROOT=/home/paul/git/conf /tmp/gonf-convergence-20261012/conf cluster -
 ```
 
 Each command was run a second time in the same order; the table records that
-second invocation. The Dotfiles controller used the corresponding direct local
-and `push` task invocations with `GONF_DOTFILES_ROOT=/home/paul/git/dotfiles`.
+second invocation. The Dotfiles commands were:
+
+```sh
+GONF_DOTFILES_ROOT=/home/paul/git/dotfiles /tmp/gonf-convergence-20261012/dotfiles -privilege=sudo home home_goprecords_upload pkg_fedora system_fish_shell system_hosts system_uptimed system_wireguard
+GONF_DOTFILES_ROOT=/home/paul/git/dotfiles /tmp/gonf-convergence-20261012/dotfiles push paul@rocky home
+GONF_DOTFILES_ROOT=/home/paul/git/dotfiles /tmp/gonf-convergence-20261012/dotfiles push -privilege=sudo root@rocky system_fish_shell
+```
+
+The first local/remote run repaired the drift summarized above; each command
+then ran once more. The sanitized command summaries are preserved in
+[`full-fleet-2026-10-12.log`](full-fleet-2026-10-12.log).
 
 ## Reproduction commands and final checks
 
