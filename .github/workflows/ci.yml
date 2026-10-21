@@ -21,7 +21,7 @@ jobs:
         # gonf and conf are checked out side by side (see checkout-conf.sh).
         working-directory: gonf
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: gonf
       - uses: actions/setup-go@v5
@@ -69,7 +69,7 @@ jobs:
   linux-live:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -78,7 +78,7 @@ jobs:
   remote-smoke:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -89,13 +89,13 @@ jobs:
     container: fedora:latest
     steps:
       - run: dnf install -y git
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: .github/ci/fedora.sh
 
   macos:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -108,7 +108,7 @@ jobs:
         os: [freebsd, openbsd, netbsd]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - if: matrix.os == 'freebsd'
         uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1.5.9
         with:
