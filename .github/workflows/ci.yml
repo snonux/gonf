@@ -110,17 +110,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - if: matrix.os == 'freebsd'
-        uses: vmactions/freebsd-vm@v1
+        uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1.5.9
         with:
           usesh: true
           run: sh .github/ci/bsd-test.sh
       - if: matrix.os == 'openbsd'
-        uses: vmactions/openbsd-vm@v1
+        uses: vmactions/openbsd-vm@f1ca8bc8ecc5b6ef7218e5b914836e067e1546d3 # v1.4.9
         with:
           usesh: true
           run: sh .github/ci/bsd-test.sh
       - if: matrix.os == 'netbsd'
-        uses: vmactions/netbsd-vm@v1
+        uses: vmactions/netbsd-vm@c8a0d7ddb84619a7a8cc4e652efa7950b3fd9f92 # v1.5.2
         with:
           usesh: true
           run: sh .github/ci/bsd-test.sh
